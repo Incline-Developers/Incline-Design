@@ -2162,6 +2162,7 @@ impl<'a> App<'a> {
             (triangulation.state.loaded && !self.editor.hidden_handles.contains(&triangulation.entity_id())).hash(&mut hasher);
             triangulation.raster_texture.hash(&mut hasher);
             triangulation.color.map(f32::to_bits).hash(&mut hasher);
+            triangulation.quality.hash(&mut hasher);
             triangulation.state.hash_row(&mut hasher);
         }
 
@@ -2313,6 +2314,7 @@ impl<'a> App<'a> {
                 color: tri.color,
                 folder: tri.state.folder,
                 section: tri.state.section,
+                quality: tri.quality.clone(),
             })
             .collect::<Vec<_>>();
         let mut block_models = self

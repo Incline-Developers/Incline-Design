@@ -24,6 +24,7 @@ use crate::{
         rbf::{self, DEFAULT_SPACING, MERGE_DISTANCE, POINT_BUDGET, RbfSurface, SteepPair},
         rbf_spans::{LatticeBox, RowRuns, SpanLattice},
         string_clean::{self, LeftOut, NotLeftOut, OddOneOut, Problem, ProblemKind},
+        triangulation::{QualityMark, unit_label},
     },
     ui::state::{StringRing, StringRingKind},
 };
@@ -326,6 +327,10 @@ impl<'a> App<'a> {
                 _ => None,
             })
             .collect();
+        let (quality, clash) = surface_quality(layers.iter().map(|id| self.scene_document.layer(*id).and_then(|layer| layer.quality.as_ref())))?;
+        if let Some(clash) = clash {
+            userspace_warn!("{clash}");
+        }
         // Not counted again here: `surface_mesh` owns that contract, and a
         // selection thinned by a layer going hidden is reported by the build
         // it fails rather than by a second count beside it.
@@ -372,12 +377,29 @@ impl<'a> App<'a> {
                 keys: &keys,
                 layers: &control_layers,
             };
-            grid_surface_from_points(points, selected, ring, spacing, &settings, settings.envelope.as_ref(), name, &stamp, cancel, progress)
+            let quality = quality.as_ref();
+            grid_surface_from_points(
+                points,
+                selected,
+                ring,
+                spacing,
+                &settings,
+                heights_within(&settings, quality),
+                quality,
+                name,
+                &stamp,
+                cancel,
+                progress,
+            )
         };
         let apply = move |app: &mut App, result: Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)>| match result {
             Ok((generated, left_out)) => {
+                let marked = generated.quality.is_some();
                 app.insert_generated_triangulation_in(generated, section);
-                app.keep_surface_source(source);
+                // A quality surface is not selected, and measures no seam.
+                if !marked {
+                    app.keep_surface_source(source);
+                }
                 // The strings left out stay selected and ringed, nothing
                 // hidden: the surface is there to look at beside them.
                 if !left_out.is_empty() {
@@ -708,7 +730,8 @@ fn control_strings(document: &crate::model::Document, ids: &[ObjectId]) -> Resul
 /// Worker half: the spline through the points and controls, gridded at
 /// `spacing`, cut to the extent or the points' outline, and reported with
 /// its run record. Refused when a height leaves the RLs of `heights_within`,
-/// `None` for a surface whose heights are not RLs.
+/// `None` for a surface whose heights are not RLs. A `quality` is held at 0
+/// wherever the spline dips below it.
 #[allow(clippy::too_many_arguments)]
 fn grid_surface_from_points(
     points: Vec<DVec3>,
@@ -717,12 +740,14 @@ fn grid_surface_from_points(
     spacing: f64,
     settings: &ModellingSettings,
     heights_within: Option<&ModelEnvelope>,
+    quality: Option<&QualityMark>,
     name: String,
     stamp: &RunStamp,
     cancel: &CancelFlag,
     progress: &Progress,
 ) -> Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)> {
-    let surface = surface_mesh(&points, controls, extent.as_deref(), spacing, settings, cancel, progress)?;
+    let mut surface = surface_mesh(&points, controls, extent.as_deref(), spacing, settings, cancel, progress)?;
+    let held = if quality.is_some() { held_at_zero(&mut surface.vertices) } else { 0 };
     if let Some(envelope) = heights_within {
         let (low, high) = surface
             .vertices
@@ -761,7 +786,7 @@ fn grid_surface_from_points(
         }
     }
     userspace_log!(
-        "{}\n{}{}",
+        "{}\n{}{}{}",
         tr!(
             "cmd-reference-surface-built-surface-name-inside-grid",
             name = name.to_string(),
@@ -806,6 +831,11 @@ fn grid_surface_from_points(
             format!("\n{}", tr!("cmd-reference-surface-outline-cut"))
         } else {
             String::new()
+        },
+        if held > 0 {
+            format!("\n{}", tr!("cmd-reference-surface-held-at-zero", count = held.to_string()))
+        } else {
+            String::new()
         }
     );
     // Each pick a control took over is named, for the geologist to explain,
@@ -834,11 +864,70 @@ fn grid_surface_from_points(
     }
     // So is every pair too steep for the grid, for the geologist to judge;
     // the surface is built from them all the same.
-    if !surface.steep.is_empty() {
-        userspace_warn!("{}", steep_report(&surface.steep, surface.settings.steep_distance, surface.settings.steep_degrees));
+    if let Some(report) = slope_warning(&surface, quality) {
+        userspace_warn!("{}", report);
     }
     let generated = session::build_generated_triangulation(name, surface.vertices, surface.faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
-    Ok((generated, surface.left_out_strings))
+    Ok((generated.with_quality(quality.cloned()), surface.left_out_strings))
+}
+
+/// The one quality the points' layers are marked with, by name, with the
+/// first unit given, and a warning when they give it in more than one;
+/// `None` when they are heights. Refused when they carry two qualities, or
+/// marks and heights together.
+pub(crate) fn surface_quality<'m>(marks: impl IntoIterator<Item = Option<&'m QualityMark>>) -> Result<(Option<QualityMark>, Option<String>)> {
+    let mut kinds: Vec<Option<&QualityMark>> = Vec::new();
+    let mut units: Vec<&str> = Vec::new();
+    for mark in marks {
+        if let Some(mark) = mark
+            && !units.contains(&mark.unit.as_str())
+        {
+            units.push(&mark.unit);
+        }
+        if !kinds.iter().any(|kind| match (kind, mark) {
+            (Some(kind), Some(mark)) => kind.same_quality(mark),
+            (kind, mark) => kind.is_none() && mark.is_none(),
+        }) {
+            kinds.push(mark);
+        }
+    }
+    let first = match kinds.as_slice() {
+        [] | [None] => return Ok((None, None)),
+        [Some(first)] => first,
+        _ => anyhow::bail!("{}", tr!("cmd-reference-surface-mixed-qualities", count = kinds.len().to_string())),
+    };
+    let mark = QualityMark {
+        name: first.name.clone(),
+        unit: units.iter().find(|unit| !unit.is_empty()).map_or_else(String::new, |unit| (*unit).to_owned()),
+    };
+    let clash = (units.len() > 1).then(|| {
+        let given = units.iter().map(|unit| unit_label(unit)).collect::<Vec<_>>().join(", ");
+        tr!("cmd-reference-surface-unit-clash", quality = mark.name.clone(), units = given, kept = mark.unit_label())
+    });
+    Ok((Some(mark), clash))
+}
+
+/// The envelope whose RLs a surface's heights must keep to: none for a
+/// quality, whose heights are not RLs. Its plan check stands either way.
+fn heights_within<'s>(settings: &'s ModellingSettings, quality: Option<&QualityMark>) -> Option<&'s ModelEnvelope> {
+    settings.envelope.as_ref().filter(|_| quality.is_none())
+}
+
+/// The steep pairs' warning, none for a quality: the check is in degrees,
+/// which a change in quality over a distance is not.
+fn slope_warning(surface: &SurfaceMesh, quality: Option<&QualityMark>) -> Option<String> {
+    (quality.is_none() && !surface.steep.is_empty()).then(|| steep_report(&surface.steep, surface.settings.steep_distance, surface.settings.steep_degrees))
+}
+
+/// Raise every vertex below 0 to 0, as a quality cannot be negative; how
+/// many were.
+fn held_at_zero(vertices: &mut [mesh_data::Vertex]) -> usize {
+    let mut held = 0;
+    for vertex in vertices.iter_mut().filter(|vertex| vertex.z < 0.0) {
+        vertex.z = 0.0;
+        held += 1;
+    }
+    held
 }
 
 /// The line saying a build thinned its copy of the control strings, and

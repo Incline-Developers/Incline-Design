@@ -13,6 +13,7 @@ use crate::{
         Command, Document, Layer, Object, ObjectColor, ObjectId, SceneEntityId, SectionKind,
         formats::csv_quality_points::{self, ParsedQualityPoints, QualityCsvError, QualityMapping, QualityPreview, QualitySet},
         project::{imported_item_name, unique_item_name},
+        triangulation::QualityMark,
     },
     userspace_log, userspace_warn,
 };
@@ -145,6 +146,10 @@ pub(crate) fn quality_layers(document: &mut Document, sets: &[QualitySet]) -> (V
             elevation: 0.0,
             folder: None,
             section: SectionKind::Designs,
+            quality: Some(QualityMark {
+                name: set.quality.clone(),
+                unit: set.unit.clone(),
+            }),
         };
         commands.push(Command::AddLayerSnapshot { layer, objects });
     }

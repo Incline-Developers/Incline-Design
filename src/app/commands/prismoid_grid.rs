@@ -13,7 +13,10 @@ use anyhow::{Context, Result};
 use crate::{
     app::{
         App,
-        commands::{raster::MAX_RASTER_PREVIEW_DIMENSION, solids::preview_triangulation, solids_view::next_view_id, thickness_points::not_a_grid_reason},
+        commands::{
+            raster::MAX_RASTER_PREVIEW_DIMENSION, solids::preview_triangulation, solids_view::next_view_id, thickness_points::not_a_grid_reason,
+            triangulation::session::refuse_quality,
+        },
         jobs::{CancelFlag, JobKey},
     },
     i18n::tr,
@@ -84,6 +87,7 @@ impl App<'_> {
                 .iter()
                 .find(|item| item.id == id && item.state.loaded)
                 .ok_or_else(|| anyhow::anyhow!("{}", tr!("cmd-thickness-points-surface-gone")))?;
+            refuse_quality(&item.name, item.quality.as_ref())?;
             Ok((item.name.clone(), Arc::clone(&item.mesh), Arc::clone(&item.spatial), item.state.section))
         };
         let (roof_name, roof_mesh, roof_spatial, roof_section) = read(roof_id)?;

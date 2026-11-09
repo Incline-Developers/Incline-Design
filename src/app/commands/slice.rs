@@ -322,6 +322,7 @@ fn section_lines_layer(document: &mut Document, surfaces: &[SurfaceLines]) -> Op
         elevation: 0.0,
         folder: None,
         section: SectionKind::natural_layer(),
+        quality: None,
     };
     let objects = surfaces
         .iter()

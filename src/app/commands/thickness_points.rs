@@ -15,7 +15,10 @@ use anyhow::{Context, Result};
 use crate::{
     app::{
         App,
-        commands::triangulation::reference_surface::seam::{self, RunProblem, SeamGrid, ThicknessRunRecord, ThicknessSample},
+        commands::triangulation::{
+            reference_surface::seam::{self, RunProblem, SeamGrid, ThicknessRunRecord, ThicknessSample},
+            session::refuse_quality,
+        },
         jobs::CancelFlag,
     },
     i18n::tr,
@@ -166,9 +169,12 @@ impl<'a> App<'a> {
     /// Read the surface as a grid in the background, so the open dialog can
     /// say whether it can be measured against before Make is pressed.
     fn check_grid(&mut self, surface: TriangulationId) {
-        let Some(read) = self.surface_read(surface) else {
-            self.set_grid_check(surface, GridCheck::Refused(tr!("cmd-thickness-points-surface-gone")));
-            return;
+        let read = match self.surface_read(surface) {
+            Ok(read) => read,
+            Err(reason) => {
+                self.set_grid_check(surface, GridCheck::Refused(reason));
+                return;
+            }
         };
         let key = crate::app::jobs::JobKey::Triangulation(surface);
         let compute = move |_: &CancelFlag| -> Result<GridCheck> {
@@ -193,10 +199,16 @@ impl<'a> App<'a> {
         }
     }
 
-    /// The surface's name, revision and geometry, when it is loaded.
-    fn surface_read(&self, surface: TriangulationId) -> Option<SurfaceRead> {
-        let triangulation = self.triangulations.iter().find(|triangulation| triangulation.id == surface && triangulation.state.loaded)?;
-        Some(SurfaceRead {
+    /// The surface's name, revision and geometry, when it is loaded and in
+    /// RL; why not, otherwise.
+    fn surface_read(&self, surface: TriangulationId) -> std::result::Result<SurfaceRead, String> {
+        let triangulation = self
+            .triangulations
+            .iter()
+            .find(|triangulation| triangulation.id == surface && triangulation.state.loaded)
+            .ok_or_else(|| tr!("cmd-thickness-points-surface-gone"))?;
+        refuse_quality(&triangulation.name, triangulation.quality.as_ref()).map_err(|error| error.to_string())?;
+        Ok(SurfaceRead {
             name: triangulation.name.clone(),
             revision: triangulation.state.revision(),
             mesh: Arc::clone(&triangulation.mesh),
@@ -253,7 +265,7 @@ impl<'a> App<'a> {
             runtime_id,
             document_revision: project.project.document.revision(),
         };
-        let read = self.surface_read(surface).with_context(|| tr!("cmd-thickness-points-surface-gone"))?;
+        let read = self.surface_read(surface).map_err(anyhow::Error::msg)?;
         let holes: Vec<DrillHoleRef> = if holes.is_empty() {
             self.drill_holes
                 .iter()
@@ -395,6 +407,7 @@ impl<'a> App<'a> {
                 elevation: 0.0,
                 folder: None,
                 section: crate::model::SectionKind::Designs,
+                quality: None,
             };
             let objects: Vec<crate::model::Object> = run
                 .points
@@ -507,7 +520,7 @@ impl<'a> App<'a> {
     /// The surface as read, the name of the surface it makes and the
     /// thickness run to grid, or the reason there is none.
     fn seam_surface_input(&self, surface: TriangulationId) -> std::result::Result<SeamInput, String> {
-        let read = self.surface_read(surface).ok_or_else(|| tr!("cmd-thickness-points-surface-gone"))?;
+        let read = self.surface_read(surface)?;
         let run = seam::current_run(read.revision, self.session.thickness_runs.get(&surface)).map_err(|problem| match problem {
             RunProblem::Missing => tr!("cmd-seam-surface-no-run", name = read.name.clone()),
             RunProblem::Stale => tr!("cmd-seam-surface-stale-run", name = read.name.clone()),

@@ -134,6 +134,9 @@ pub(crate) struct Layer {
     /// Explorer section this layer is shown under.
     #[serde(default = "SectionKind::natural_layer", skip_serializing_if = "SectionKind::is_natural_layer")]
     pub(crate) section: SectionKind,
+    /// Set when the points' heights are a quality, not RLs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) quality: Option<triangulation::QualityMark>,
 }
 
 impl Layer {
@@ -1637,6 +1640,7 @@ impl Document {
             elevation,
             folder: None,
             section: SectionKind::natural_layer(),
+            quality: None,
         });
         self.touch();
         id
@@ -2231,6 +2235,15 @@ impl Document {
         true
     }
 
+    pub(crate) fn set_layer_quality(&mut self, id: LayerId, quality: Option<triangulation::QualityMark>) {
+        if let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id)
+            && layer.quality != quality
+        {
+            layer.quality = quality;
+            self.touch();
+        }
+    }
+
     /// Show a layer under `section`. Moving it clears the folder it was in.
     pub(crate) fn set_layer_section(&mut self, id: LayerId, section: SectionKind) -> bool {
         let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id) else {
@@ -2500,6 +2513,7 @@ impl Document {
                 layer.loaded.hash(&mut hasher);
                 layer.elevation.to_bits().hash(&mut hasher);
                 layer.section.hash(&mut hasher);
+                layer.quality.hash(&mut hasher);
                 layer.folder.and_then(|id| folders.name(layer.section, id)).hash(&mut hasher);
                 payloads.get(&layer.id).hash(&mut hasher);
                 (layer.id.0 & u64::from(u32::MAX), hasher.finish())

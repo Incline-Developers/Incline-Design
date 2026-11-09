@@ -36,6 +36,7 @@ impl<'a> App<'a> {
         let shape_mesh = shape.mesh.clone();
         let topology_name = topology.name.clone();
         let shape_name = shape.name.clone();
+        let quality = session::shared_quality((&topology_name, topology.quality.as_ref()), (&shape_name, shape.quality.as_ref()))?;
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<IncludeJobOutput> {
             // The merge itself is the bulk of the work; the mesh and BVH builds
@@ -99,7 +100,7 @@ impl<'a> App<'a> {
                     )
                 );
                 for generated in output.generated {
-                    app.insert_generated_triangulation(generated);
+                    app.insert_generated_triangulation(generated.with_quality(quality.clone()));
                 }
                 // The job has finished, so unloading its source dependencies no
                 // longer risks cancelling it.

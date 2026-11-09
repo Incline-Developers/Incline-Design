@@ -39,7 +39,7 @@ use crate::{
         progress::Phase,
         project::{self, ModellingSettings, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
-        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, spatial_surface_face_order, unique_edges},
+        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, QualityMark, spatial_surface_face_order, unique_edges},
     },
     rendering::color::{linear_to_srgb_byte, rgb_bytes_to_linear_rgba},
 };
@@ -74,6 +74,8 @@ const META_FOLDER: &str = "incline:folder";
 /// file whose items are all where their kind puts them is byte for byte what
 /// it was before.
 const META_SECTION: &str = "incline:section";
+/// A surface's or a design layer's [`QualityMark`], written only when set.
+const META_QUALITY: &str = "incline:quality";
 const META_SOURCE: &str = "incline:source";
 const META_STYLE: &str = "incline:style";
 const META_ID: &str = "incline:id";
@@ -133,6 +135,7 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_FOLDERS,
     META_FOLDER,
     META_SECTION,
+    META_QUALITY,
     META_SOURCE,
     META_STYLE,
     META_ID,
@@ -236,6 +239,7 @@ pub(crate) struct ImportedTriangulation {
     pub(crate) folder: Option<FolderId>,
     /// The section this item is shown under, as its element recorded it.
     pub(crate) section: SectionKind,
+    pub(crate) quality: Option<QualityMark>,
 }
 
 pub(crate) struct ImportedBlockModel {
@@ -592,6 +596,12 @@ fn tag_section(element: &mut omf_crate::Element, kind: MemberKind, section: Sect
     }
 }
 
+fn put_quality(element: &mut omf_crate::Element, quality: Option<&QualityMark>) {
+    if let Some(quality) = quality {
+        put(element, META_QUALITY, json!({ "name": quality.name, "unit": quality.unit }));
+    }
+}
+
 fn kind(element: &omf_crate::Element) -> Option<&str> {
     element.metadata.get(META_KIND).and_then(Value::as_str)
 }
@@ -753,6 +763,7 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
         // blob denies unknown fields.
         portable_layer.folder = None;
         portable_layer.section = SectionKind::natural_layer();
+        portable_layer.quality = None;
         // The file records visibility: a hidden layer opens unloaded.
         portable_layer.loaded = layer.is_visible();
         portable_layer.hidden = false;
@@ -761,6 +772,7 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
             put(&mut element, META_FOLDER, folder);
         }
         tag_section(&mut element, MemberKind::Layer, layer.section);
+        put_quality(&mut element, layer.quality.as_ref());
         layers.push(element);
     }
     // The layers still sit inside this "Designs" composite element regardless
@@ -1029,6 +1041,7 @@ fn triangulation_element(triangulation: &OpenTriangulation, geometry: omf_crate:
             "raster_texture_id": triangulation.raster_texture.map(|id| id.0),
         }),
     );
+    put_quality(&mut element, triangulation.quality.as_ref());
     element
 }
 
@@ -2296,6 +2309,22 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .and_then(|name| self.bundle.folders.ensure(section, name))
     }
 
+    /// The quality `element`, a surface or a layer by `kind`, is marked
+    /// with. A mark that does not decode is said, and the item reads
+    /// unmarked.
+    fn element_quality(&mut self, element: &omf_crate::Element, kind: MemberKind) -> Option<QualityMark> {
+        let value = element.metadata.get(META_QUALITY)?;
+        QualityMark::deserialize(value)
+            .inspect_err(|_| {
+                let name = element.name.to_string();
+                self.bundle.warnings.push(match kind {
+                    MemberKind::Layer => tr!("omf-layer-quality-mark-unreadable", name = name),
+                    _ => tr!("omf-quality-mark-unreadable", name = name),
+                });
+            })
+            .ok()
+    }
+
     /// The section `element` says its item is shown under, or the one its kind
     /// naturally sits in when it says nothing.
     fn element_section(&mut self, element: &omf_crate::Element, kind: MemberKind) -> SectionKind {
@@ -2433,6 +2462,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
                 let section = self.element_section(element, MemberKind::Triangulation);
                 let folder = self.element_folder(element, section);
+                let quality = self.element_quality(element, MemberKind::Triangulation);
                 self.bundle.triangulations.push(ImportedTriangulation {
                     preferred_id,
                     source_name,
@@ -2462,6 +2492,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     raster_texture_id: style_value(style, "raster_texture_id"),
                     folder,
                     section,
+                    quality,
                 });
             }
             omf_crate::Geometry::PointSet(points) => {
@@ -2698,6 +2729,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             {
                 document.set_layer_folder(layer_id, Some(folder));
             }
+            document.set_layer_quality(layer_id, self.element_quality(layer_element, MemberKind::Layer));
             let children = match &layer_element.geometry {
                 omf_crate::Geometry::Composite(layer) => layer.elements.as_slice(),
                 _ => std::slice::from_ref(layer_element),
@@ -3081,6 +3113,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let color = style_value(style, "color").unwrap_or_else(|| element_color(element, [0.65, 0.68, 0.72, 1.0]));
         let section = self.element_section(element, MemberKind::Triangulation);
         let folder = self.element_folder(element, section);
+        let quality = self.element_quality(element, MemberKind::Triangulation);
         let payload_source = self.payload_locator();
         self.bundle.triangulations.push(ImportedTriangulation {
             preferred_id: element_id(element),
@@ -3108,6 +3141,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             raster_texture_id: style_value(style, "raster_texture_id"),
             folder,
             section,
+            quality,
         });
         Ok(())
     }

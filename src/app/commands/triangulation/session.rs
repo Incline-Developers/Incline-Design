@@ -80,6 +80,7 @@ impl<'a> App<'a> {
                         depth_shade: None,
                         pattern_from: None,
                         prismoid_grid: None,
+                        quality: None,
                     });
                     app.touch_active_project_content();
                     if should_fit {
@@ -195,6 +196,7 @@ impl<'a> App<'a> {
                         depth_shade: None,
                         pattern_from: None,
                         prismoid_grid: None,
+                        quality: None,
                     });
                     self.touch_active_project_content();
                     if should_fit {
@@ -368,7 +370,8 @@ impl<'a> App<'a> {
 
     /// The same, with the item's placement and colour chosen by the caller.
     /// Without `select` the selection is left alone, for tools that add many
-    /// surfaces at once; the caller then invalidates the scene once.
+    /// surfaces at once; the caller then invalidates the scene once. A
+    /// quality surface is never selected and is born hidden.
     pub(crate) fn insert_generated_triangulation_with(
         &mut self,
         built: crate::model::triangulation::GeneratedTriangulation,
@@ -383,7 +386,9 @@ impl<'a> App<'a> {
             edges,
             surface_face_order,
             surface_type,
+            quality,
         } = built;
+        let (state, select) = quality_insert(state, quality.as_ref(), select);
         let vertex_count = mesh.vertex_count();
         let face_count = mesh.face_count();
 
@@ -412,6 +417,7 @@ impl<'a> App<'a> {
             depth_shade: None,
             pattern_from: None,
             prismoid_grid: None,
+            quality: quality.clone(),
         });
         self.touch_active_project_content();
         userspace_log!(
@@ -424,6 +430,11 @@ impl<'a> App<'a> {
                 surface_type = format!("{surface_type:?}")
             )
         );
+        if let Some(quality) = quality {
+            userspace_log!("{}", tr!("cmd-session-quality-surface-hidden", name = name.clone(), quality = quality.label()));
+            // As the eye does: the draw passes go by the hidden handles.
+            self.invalidate_geometry();
+        }
         if !select {
             return id;
         }
@@ -465,6 +476,47 @@ impl<'a> App<'a> {
     }
 }
 
+/// A quality surface's state and selection: hidden, and left unselected, as
+/// its height is not an RL.
+fn quality_insert(
+    mut state: crate::model::project::ProjectItemState,
+    quality: Option<&crate::model::triangulation::QualityMark>,
+    select: bool,
+) -> (crate::model::project::ProjectItemState, bool) {
+    if quality.is_some() {
+        state.hidden = true;
+    }
+    (state, select && quality.is_none())
+}
+
+/// Refuse a quality surface where a tool takes RLs.
+pub(crate) fn refuse_quality(name: &str, quality: Option<&crate::model::triangulation::QualityMark>) -> Result<()> {
+    if let Some(quality) = quality {
+        anyhow::bail!("{}", tr!("cmd-session-quality-surface", name = name.to_owned(), quality = quality.label()));
+    }
+    Ok(())
+}
+
+/// The mark a surface made from two others carries: the first's, when both
+/// are heights or both one quality; refused when they differ.
+pub(crate) fn shared_quality(
+    (first, first_mark): (&str, Option<&crate::model::triangulation::QualityMark>),
+    (second, second_mark): (&str, Option<&crate::model::triangulation::QualityMark>),
+) -> Result<Option<crate::model::triangulation::QualityMark>> {
+    match (first_mark, second_mark) {
+        (None, None) => Ok(None),
+        (Some(mark), Some(other)) if mark.same_quality(other) => Ok(Some(mark.clone())),
+        (Some(mark), _) => anyhow::bail!(
+            "{}",
+            tr!("cmd-session-mixed-qualities", name = first.to_owned(), quality = mark.label(), other = second.to_owned())
+        ),
+        (None, Some(mark)) => anyhow::bail!(
+            "{}",
+            tr!("cmd-session-mixed-qualities", name = second.to_owned(), quality = mark.label(), other = first.to_owned())
+        ),
+    }
+}
+
 /// Worker-thread half of a generated-triangulation apply: assemble the mesh,
 /// build its BVH and edge list. Pure (no `App`), so it can run off the UI
 /// thread; the result is handed to `insert_generated_triangulation`.
@@ -489,5 +541,6 @@ pub(crate) fn build_generated_triangulation(
         edges,
         surface_face_order,
         surface_type,
+        quality: None,
     })
 }

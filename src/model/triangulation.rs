@@ -88,6 +88,14 @@ pub(crate) struct GeneratedTriangulation {
     pub(crate) edges: Vec<[u32; 2]>,
     pub(crate) surface_face_order: Arc<Vec<u32>>,
     pub(crate) surface_type: crate::ui::state::TriSurfaceType,
+    /// The source's mark, carried to what is made from it.
+    pub(crate) quality: Option<QualityMark>,
+}
+
+impl GeneratedTriangulation {
+    pub(crate) fn with_quality(self, quality: Option<QualityMark>) -> Self {
+        Self { quality, ..self }
+    }
 }
 
 /// A `GeneratedTriangulation` paired with the single completion log line to
@@ -95,6 +103,37 @@ pub(crate) struct GeneratedTriangulation {
 pub(crate) struct GeneratedTriangulationLog {
     pub(crate) generated: GeneratedTriangulation,
     pub(crate) message: String,
+}
+
+/// What the height of a surface, or of a layer's points, is when it is a
+/// quality rather than an RL: the quality's name and its unit as the file
+/// gave it, blank when it gave none.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub(crate) struct QualityMark {
+    pub(crate) name: String,
+    pub(crate) unit: String,
+}
+
+impl QualityMark {
+    /// The unit, or words saying none was given.
+    pub(crate) fn unit_label(&self) -> String {
+        unit_label(&self.unit)
+    }
+
+    /// Name and unit as one phrase, the unit left out when none was given.
+    pub(crate) fn label(&self) -> String {
+        format!("{} {}", self.name, self.unit).trim_end().to_owned()
+    }
+
+    /// Whether two marks name one quality, whatever their units say.
+    pub(crate) fn same_quality(&self, other: &Self) -> bool {
+        self.name.trim().to_lowercase() == other.name.trim().to_lowercase()
+    }
+}
+
+/// A quality's unit as shown: words saying none was given when blank.
+pub(crate) fn unit_label(unit: &str) -> String {
+    if unit.is_empty() { crate::i18n::tr!("tri-quality-unit-none") } else { unit.to_owned() }
 }
 
 #[derive(Clone, Debug)]
@@ -140,6 +179,8 @@ pub(crate) struct OpenTriangulation {
     /// Runtime only: the grid this mesh draws, which selection and visibility
     /// go by.
     pub(crate) prismoid_grid: Option<crate::model::prismoid_grid::PrismoidGridId>,
+    /// Set when the height is a quality, not an RL.
+    pub(crate) quality: Option<QualityMark>,
 }
 
 impl OpenTriangulation {

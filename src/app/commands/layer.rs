@@ -45,6 +45,7 @@ impl<'a> App<'a> {
             elevation: 0.0,
             folder: None,
             section: SectionKind::natural_layer(),
+            quality: None,
         };
         self.execute_edit(Command::AddLayerSnapshot { layer, objects: Vec::new() });
 
@@ -121,6 +122,7 @@ impl<'a> App<'a> {
             elevation: source_layer.elevation,
             folder: source_layer.folder,
             section: source_layer.section,
+            quality: source_layer.quality.clone(),
         };
         let duplicate_objects: Vec<Object> = source_objects
             .into_iter()

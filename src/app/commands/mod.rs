@@ -1012,6 +1012,12 @@ impl<'a> App<'a> {
                 };
                 let name = self.reference_surface_name(&input.points);
                 let plan_extent = crate::app::commands::triangulation::reference_surface::plan_extent(&self.scene_document, &input);
+                // Shown only when the points agree on one; a mix is refused
+                // and a unit clash warned at Build.
+                let marks = input.layers.iter().map(|id| self.scene_document.layer(*id).and_then(|layer| layer.quality.as_ref()));
+                let quality = crate::app::commands::triangulation::reference_surface::surface_quality(marks)
+                    .ok()
+                    .and_then(|(quality, _)| quality);
                 self.editor.reference_surface_dialog = Some(crate::ui::state::ReferenceSurfaceDraft {
                     name,
                     points: input.points,
@@ -1021,6 +1027,7 @@ impl<'a> App<'a> {
                     controls_label,
                     extent_label,
                     plan_extent,
+                    quality,
                 });
                 Ok(())
             }

@@ -5,6 +5,7 @@ use crate::{
     app::commands::triangulation::reference_surface::GRID_SPACINGS,
     i18n::tr,
     ui::{
+        elements::properties::read_only_row,
         state::{EditorState, UiCommand, UiProjectView},
         widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldText, selected_source_field},
     },
@@ -44,6 +45,11 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
             ui.add_space(4.0);
             selected_source_field(ui, tr!("reference-surface-extent"), draft.extent_label.clone(), tr!("reference-surface-extent-help"), width);
             ui.add_space(4.0);
+            if let Some(quality) = &draft.quality {
+                let value = tr!("tri-quality-surface-value", quality = quality.name.clone(), unit = quality.unit_label());
+                read_only_row(ui, &tr!("tri-quality-surface"), &value);
+                ui.add_space(4.0);
+            }
             let spacing_label = |spacing: f64| format!("{spacing} {}", tr!("common-m"));
             let selected = spacing_label(editor.reference_surface_spacing);
             MenuFieldCombo::new(

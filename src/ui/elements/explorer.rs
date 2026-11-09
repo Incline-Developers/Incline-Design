@@ -25,6 +25,19 @@ fn entry_label(name: &str, loaded: bool) -> egui::RichText {
     if loaded { bold(name) } else { egui::RichText::new(name) }
 }
 
+/// A surface row's text: its name, the quality its height is when it is
+/// one, and the unsaved marker.
+fn triangulation_row_text(tri: &crate::ui::UiTriangulationEntry) -> String {
+    let dirty_marker = if tri.dirty { " *" } else { "" };
+    match &tri.quality {
+        Some(quality) => {
+            let tag = tr!("explorer-quality-tag", quality = quality.name.clone(), unit = quality.unit.clone());
+            format!("{} ({}){}", tri.name, tag.trim_end(), dirty_marker)
+        }
+        None => format!("{}{}", tri.name, dirty_marker),
+    }
+}
+
 /// Section heading tints, keyed to the icons each section's entries use.
 ///
 /// One colour serves both themes: each holds at least a 3:1 contrast ratio
@@ -1133,12 +1146,14 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                 .as_deref()
                 .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
                 .unwrap_or_default();
-            let tri_path = tr!("explorer-id-triangulation-id-source", id = tri.id.0.to_string(), source = source_suffix.to_string());
+            let mut tri_path = tr!("explorer-id-triangulation-id-source", id = tri.id.0.to_string(), source = source_suffix.to_string());
+            if let Some(quality) = &tri.quality {
+                tri_path.push('\n');
+                tri_path.push_str(&tr!("explorer-quality-surface", quality = quality.name.clone(), unit = quality.unit_label()));
+            }
             let tri_id = tri.id;
 
-            let dirty_marker = if tri.dirty { " *" } else { "" };
-            let stats = format!("{}{}", tri.name, dirty_marker);
-            let label = entry_label(&stats, tri.is_loaded);
+            let label = entry_label(&triangulation_row_text(tri), tri.is_loaded);
 
             let tri_handle = SceneEntityId::Triangulation(tri_id);
             let tri_locked = frozen_handles.contains(&tri_handle);

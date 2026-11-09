@@ -25,13 +25,13 @@ impl<'a> App<'a> {
         name: String,
         unload_source: bool,
     ) -> Result<()> {
-        let (mesh, tri_name) = {
+        let (mesh, tri_name, quality) = {
             let tri = self
                 .triangulations
                 .iter()
                 .find(|t| t.id == tri_id)
                 .ok_or_else(|| anyhow::anyhow!("Triangulation not found"))?;
-            (tri.mesh.clone(), tri.name.clone())
+            (tri.mesh.clone(), tri.name.clone(), tri.quality.clone())
         };
 
         let poly_verts: Vec<glam::DVec3> = match self.scene_document.get_object(polyline_id).and_then(Object::closed_boundary) {
@@ -58,7 +58,8 @@ impl<'a> App<'a> {
                 };
                 anyhow::bail!("No surface geometry falls {retained_region} the selected polyline");
             }
-            let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
+            let generated =
+                session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?.with_quality(quality);
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
                 message: crate::i18n::tr!("cmd-cuts-clipped-surface-name-polyline-mode", name = tri_name.to_string(), mode = mode.label().to_string()),
@@ -86,21 +87,24 @@ impl<'a> App<'a> {
             anyhow::bail!("Topology and pit shell must be different triangulations");
         }
 
-        let (topology_mesh, topology_name) = {
+        let (topology_mesh, topology_name, topology_quality) = {
             let tri = self
                 .triangulations
                 .iter()
                 .find(|t| t.id == topology_id)
                 .ok_or_else(|| anyhow::anyhow!("Topology not found"))?;
-            (tri.mesh.clone(), tri.name.clone())
+            (tri.mesh.clone(), tri.name.clone(), tri.quality.as_ref())
         };
-        let pit_shell_mesh = {
+        let (pit_shell_mesh, quality) = {
             let tri = self
                 .triangulations
                 .iter()
                 .find(|t| t.id == pit_shell_id)
                 .ok_or_else(|| anyhow::anyhow!("Pit shell not found"))?;
-            tri.mesh.clone()
+            (
+                tri.mesh.clone(),
+                session::shared_quality((&topology_name, topology_quality), (&tri.name, tri.quality.as_ref()))?,
+            )
         };
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulationLog> {
@@ -120,7 +124,8 @@ impl<'a> App<'a> {
             if new_faces.is_empty() {
                 anyhow::bail!("No topology geometry falls outside the pit shell");
             }
-            let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
+            let generated =
+                session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?.with_quality(quality);
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
                 message: crate::i18n::tr!("cmd-cuts-cut-topology-name-pit-shell", name = topology_name.to_string()),
@@ -145,13 +150,13 @@ impl<'a> App<'a> {
             anyhow::bail!("Z min must be less than Z max");
         }
 
-        let (mesh, tri_name) = {
+        let (mesh, tri_name, quality) = {
             let tri = self
                 .triangulations
                 .iter()
                 .find(|t| t.id == tri_id)
                 .ok_or_else(|| anyhow::anyhow!("Triangulation not found"))?;
-            (tri.mesh.clone(), tri.name.clone())
+            (tri.mesh.clone(), tri.name.clone(), tri.quality.clone())
         };
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulationLog> {
@@ -181,7 +186,8 @@ impl<'a> App<'a> {
             if new_faces.is_empty() {
                 anyhow::bail!("No triangulation geometry lies within the specified Z range");
             }
-            let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
+            let generated =
+                session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?.with_quality(quality);
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
                 message: crate::i18n::tr!(
@@ -218,21 +224,22 @@ impl<'a> App<'a> {
             anyhow::bail!("Surface to trim and topology must be different triangulations");
         }
 
-        let (target_mesh, target_name) = {
+        let (target_mesh, target_name, target_quality) = {
             let target = self
                 .triangulations
                 .iter()
                 .find(|triangulation| triangulation.id == target_id)
                 .ok_or_else(|| anyhow::anyhow!("Surface to trim not found"))?;
-            (target.mesh.clone(), target.name.clone())
+            (target.mesh.clone(), target.name.clone(), target.quality.as_ref())
         };
-        let (reference_mesh, reference_name) = {
+        let (reference_mesh, reference_name, quality) = {
             let reference = self
                 .triangulations
                 .iter()
                 .find(|triangulation| triangulation.id == reference_id)
                 .ok_or_else(|| anyhow::anyhow!("Reference topology not found"))?;
-            (reference.mesh.clone(), reference.name.clone())
+            let quality = session::shared_quality((&target_name, target_quality), (&reference.name, reference.quality.as_ref()))?;
+            (reference.mesh.clone(), reference.name.clone(), quality)
         };
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulationLog> {
@@ -244,7 +251,8 @@ impl<'a> App<'a> {
                 let retained = side.retained_relation();
                 anyhow::bail!("No surface geometry lies {retained} the topology within its XY coverage");
             }
-            let generated = session::build_generated_triangulation(name, new_vertices, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
+            let generated =
+                session::build_generated_triangulation(name, new_vertices, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?.with_quality(quality);
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
                 message: crate::i18n::tr!(
@@ -306,6 +314,7 @@ impl<'a> App<'a> {
                 .iter()
                 .find(|item| item.id == id && item.state.loaded)
                 .ok_or_else(|| anyhow::anyhow!("{}", tr!("cmd-thickness-points-surface-gone")))?;
+            session::refuse_quality(&item.name, item.quality.as_ref())?;
             Ok((item.name.clone(), Arc::clone(&item.mesh), Arc::clone(&item.spatial)))
         };
         let surfaces = targets.iter().map(|&id| read(id)).collect::<Result<Vec<_>>>()?;

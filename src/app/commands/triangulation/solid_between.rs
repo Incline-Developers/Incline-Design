@@ -475,21 +475,22 @@ impl App<'_> {
         if design_id == topography_id {
             anyhow::bail!("A solid needs two different surfaces");
         }
-        let (design_mesh, design_name) = {
+        let (design_mesh, design_name, design_quality) = {
             let design = self
                 .triangulations
                 .iter()
                 .find(|triangulation| triangulation.id == design_id)
                 .ok_or_else(|| anyhow::anyhow!("Design surface not found"))?;
-            (design.mesh.clone(), design.name.clone())
+            (design.mesh.clone(), design.name.clone(), design.quality.as_ref())
         };
-        let (topography_mesh, topography_name) = {
+        let (topography_mesh, topography_name, quality) = {
             let topography = self
                 .triangulations
                 .iter()
                 .find(|triangulation| triangulation.id == topography_id)
                 .ok_or_else(|| anyhow::anyhow!("Topography surface not found"))?;
-            (topography.mesh.clone(), topography.name.clone())
+            let quality = session::shared_quality((&design_name, design_quality), (&topography.name, topography.quality.as_ref()))?;
+            (topography.mesh.clone(), topography.name.clone(), quality)
         };
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulationLog> {
@@ -497,7 +498,8 @@ impl App<'_> {
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }
-            let generated = session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::SolidClosed, crate::model::triangulation::unique_edges)?;
+            let generated =
+                session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::SolidClosed, crate::model::triangulation::unique_edges)?.with_quality(quality);
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
                 message: tr!(

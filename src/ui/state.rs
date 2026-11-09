@@ -7931,6 +7931,8 @@ pub(crate) struct UiTriangulationEntry {
     /// Folder the triangulation sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
+    /// Set when the surface's height is a quality, not an RL.
+    pub(crate) quality: Option<crate::model::triangulation::QualityMark>,
 }
 
 #[derive(Clone, Debug)]
@@ -10615,6 +10617,8 @@ pub(crate) struct ReferenceSurfaceDraft {
     pub(crate) controls_label: String,
     pub(crate) extent_label: String,
     pub(crate) plan_extent: Option<crate::app::commands::triangulation::reference_surface::PlanExtent>,
+    /// The quality the points are marked with, when they agree on one.
+    pub(crate) quality: Option<crate::model::triangulation::QualityMark>,
 }
 
 /// What the thickness points dialog was opened on and has chosen: the
