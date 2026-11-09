@@ -744,12 +744,13 @@ cmd-prismoid-grid-building = در حال ساخت شبکه منشورگون…
 cmd-prismoid-grid-mesh-failed = ساخت هندسه شبکه منشورگون '{ $name }' ممکن نشد
 cmd-prismoid-grid-preparing = در حال آماده‌سازی شبکه منشورگون…
 cmd-prismoid-grid-too-large-to-draw = شبکه منشورگون '{ $name }' دارای { $corners } گوشه است که از سقف { $budget } بیشتر است و ترسیم نمی‌شود. همچنان فهرست و ذخیره می‌شود.
-cmd-prismoid-grid-built = شبکه منشورگون '{ $name }' ساخته شد: { $columns } × { $rows } سلول، { $active } فعال، ضخامت عمودی از { $min } تا { $max }
+cmd-prismoid-grid-built = شبکه منشورگون '{ $name }' ساخته شد: { $columns } × { $rows } سلول { $size } متری، { $active } فعال، ضخامت عمودی از { $min } تا { $max }
 cmd-prismoid-grid-crossed = { $count } سلول از همپوشانی { $roof } و { $floor } کنار گذاشته شد، جایی که کف بالاتر از سقف است
 cmd-prismoid-grid-holes = { $count } سلول از همپوشانی { $roof } و { $floor } کنار گذاشته شد، جایی که سقف یا کف ارتفاع یا مثلث ندارد
 cmd-prismoid-grid-not-a-grid = { $name } نمی‌تواند شبکه منشورگون بسازد: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } و { $floor } روی یک شبکه نیستند: سقف و کفی با فاصله یکسان انتخاب کنید، همان‌طور که ساخت سطح و سطوح ضخامت می‌سازند
 cmd-prismoid-grid-no-overlap = { $roof } و { $floor } هیچ سلولی ندارند که هر دو آن را بپوشانند
+cmd-prismoid-grid-cell-too-large = { $roof } و { $floor } برای سلول‌های { $size } متری، که در هر ضلع دو گوشه می‌خواهند، گره‌های مشترک بسیار کمی دارند: اندازه سلول کوچک‌تری انتخاب کنید
 cmd-prismoid-grid-roof-below = { $roof } هر جا که متقاطع‌اند زیر { $floor } است: آن‌ها را برعکس انتخاب کنید
 cmd-prismoid-grid-no-thickness = { $roof } و { $floor } هر جا که هر دو پوشش دارند به هم می‌رسند: هیچ سلولی ضخامت ندارد
 cmd-prismoid-grid-same-surface = سقف و کف باید دو سطح متفاوت باشند
@@ -2163,6 +2164,11 @@ reference-surface-extent-help = خط بسته انتخاب‌شده که سطح 
 reference-surface-selected-open-strings-surface-made = خطوط باز انتخاب‌شده که سطح باید از آن‌ها بگذرد، همان‌طور که هنگام باز شدن پنجره انتخاب شده بودند. برای انتخاب دیگر، پنجره را ببندید.
 reference-surface-grids-selected-points-plan-into = نقاط انتخاب‌شده را در پلان به یک سطح جدید شبکه‌بندی می‌کند. هر ساخت یک سطح اضافه می‌کند.
 reference-surface-change-these-in-preferences = این‌ها را در ترجیحات، مدل‌سازی تغییر دهید
+reference-surface-spacing = فاصله شبکه
+reference-surface-spacing-help = فاصله میان گره‌های شبکه در x و y. اسپلاین در هر فاصله‌ای یکسان است؛ شبکه ریزتر آن را در جاهای بیشتری می‌خواند.
+reference-surface-spacing-nodes = حدود { $nodes } گره شبکه در مستطیل پیرامون گستره
+reference-surface-spacing-over-budget = حدود { $nodes } گره شبکه در مستطیل پیرامون گستره، بیش از سقف { $budget }: فاصله { $spacing } متر جا می‌شود
+reference-surface-spacing-none-fits = حدود { $nodes } گره شبکه در مستطیل پیرامون گستره، در هر فاصله پیشنهادی بیش از سقف { $budget }: گستره کوچک‌تری انتخاب کنید
 reference-surface-triangulates-selected-points-plan-in = نقاط انتخاب‌شده را در پلان به یک سطح جدید مثلث‌بندی می‌کند. هر ساخت یک سطح اضافه می‌کند.
 
 ## Screenshot strings
@@ -2601,6 +2607,10 @@ tri-build-prismoid-grid = ساخت شبکه منشورگون
 tri-build-prismoid-grid-help = یک شبکه منشورگون بین سقف و کف روی یک شبکه می‌سازد، همان‌طور که ساخت سطح و سطوح ضخامت می‌سازند. سلول‌هایی که یکی از آن‌ها ارتفاع یا مثلث ندارد، یا کف بالاتر از سقف است، کنار گذاشته می‌شوند.
 tri-prismoid-roof-help = سطح بالایی بازه: سقف لایه یا زیرلایه.
 tri-prismoid-floor-help = سطح پایینی بازه، روی همان شبکه سقف.
+tri-prismoid-cell-size = اندازه سلول
+tri-prismoid-cell-size-help = هر منشورگون در هر ضلع این تعداد از سلول‌های شبکه سطح‌ها را می‌پوشاند و هر n-امین گره را برمی‌دارد؛ چیزی درون‌یابی نمی‌شود. برای سلول‌های ریزتر، سطح‌ها را ریزتر بسازید.
+tri-prismoid-cell-size-surfaces = فاصله شبکه سطح‌ها
+tri-prismoid-cell-size-times = { $times } × فاصله شبکه سطح‌ها
 tri-name-assigned-prismoid-grid = نام شبکه منشورگون جدید.
 tri-prismoid-grid-name-hint = شبکه لایه بالایی
 

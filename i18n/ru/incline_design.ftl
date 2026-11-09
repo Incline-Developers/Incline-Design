@@ -796,7 +796,7 @@ cmd-prismoid-grid-building = Построение сетки призмоидо�
 cmd-prismoid-grid-mesh-failed = Не удалось построить геометрию сетки призмоидов '{ $name }'
 cmd-prismoid-grid-preparing = Подготовка сетки призмоидов…
 cmd-prismoid-grid-too-large-to-draw = В сетке призмоидов '{ $name }' { $corners } узлов, это больше лимита { $budget }, поэтому она не отображается. Она остаётся в списке и сохраняется.
-cmd-prismoid-grid-built = Построена сетка призмоидов '{ $name }': { $columns } × { $rows } ячеек, активных { $active }, вертикальная мощность от { $min } до { $max }
+cmd-prismoid-grid-built = Построена сетка призмоидов '{ $name }': { $columns } × { $rows } ячеек по { $size } м, активных { $active }, вертикальная мощность от { $min } до { $max }
 cmd-prismoid-grid-crossed =
     { $count ->
         [one] { $count } ячейка
@@ -810,6 +810,7 @@ cmd-prismoid-grid-holes =
 cmd-prismoid-grid-not-a-grid = { $name } не может дать сетку призмоидов: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } и { $floor } не на одной сетке: выберите кровлю и почву с одинаковым шагом, как их создают Построить поверхность и Поверхности мощности
 cmd-prismoid-grid-no-overlap = У { $roof } и { $floor } нет ячейки, покрытой обеими
+cmd-prismoid-grid-cell-too-large = У { $roof } и { $floor } слишком мало общих узлов сетки для ячеек { $size } м, которым нужны два угла на каждой стороне: выберите меньший размер ячейки
 cmd-prismoid-grid-roof-below = { $roof } лежит ниже { $floor } везде, где они пересекаются: выберите их наоборот
 cmd-prismoid-grid-no-thickness = { $roof } и { $floor } смыкаются везде, где покрывают обе: ни одна ячейка не имеет мощности
 cmd-prismoid-grid-same-surface = Кровля и почва должны быть двумя разными поверхностями
@@ -2225,6 +2226,11 @@ reference-surface-extent-help = Выбранная замкнутая линия
 reference-surface-selected-open-strings-surface-made = Выбранные разомкнутые линии, через которые проходит поверхность, — выбранные при открытии диалога. Закройте диалог, чтобы выбрать другие.
 reference-surface-grids-selected-points-plan-into = Строит по выбранным точкам в плане новую поверхность сеткой. Каждое построение добавляет поверхность.
 reference-surface-change-these-in-preferences = Измените их в Параметры, Моделирование
+reference-surface-spacing = Шаг сетки
+reference-surface-spacing-help = Расстояние между узлами сетки по x и y. Сплайн одинаков при любом шаге; более частая сетка считывает его в большем числе мест.
+reference-surface-spacing-nodes = Около { $nodes } узлов сетки в прямоугольнике вокруг области
+reference-surface-spacing-over-budget = Около { $nodes } узлов сетки в прямоугольнике вокруг области, больше лимита { $budget }: подходит шаг { $spacing } м
+reference-surface-spacing-none-fits = Около { $nodes } узлов сетки в прямоугольнике вокруг области, больше лимита { $budget } при любом предложенном шаге: выберите меньшую область
 reference-surface-triangulates-selected-points-plan-in = Триангулирует выбранные точки в плане в новую поверхность. Каждое построение добавляет поверхность.
 
 ## Screenshot strings
@@ -2663,6 +2669,10 @@ tri-build-prismoid-grid = Построить сетку призмоидов
 tri-build-prismoid-grid-help = Строит сетку призмоидов между кровлей и почвой на одной сетке, как их создают Построить поверхность и Поверхности мощности. Ячейки, где у одной из них нет высоты или треугольников либо почва лежит выше кровли, исключаются.
 tri-prismoid-roof-help = Верхняя поверхность интервала: кровля пласта или пачки.
 tri-prismoid-floor-help = Нижняя поверхность интервала, на той же сетке, что и кровля.
+tri-prismoid-cell-size = Размер ячейки
+tri-prismoid-cell-size-help = Каждый призмоид охватывает столько ячеек сетки поверхностей по каждой стороне, беря каждый n-й узел; ничего не интерполируется. Для более мелких ячеек постройте поверхности чаще.
+tri-prismoid-cell-size-surfaces = Шаг поверхностей
+tri-prismoid-cell-size-times = { $times } × шаг поверхностей
 tri-name-assigned-prismoid-grid = Имя новой сетки призмоидов.
 tri-prismoid-grid-name-hint = сетка верхнего пласта
 

@@ -267,7 +267,7 @@ impl<'a> App<'a> {
 
     /// Grid a thin plate spline through the selected points into a new
     /// surface named `name`. Every run adds a surface; nothing is replaced.
-    pub(crate) fn build_reference_surface(&mut self, points: Vec<ObjectId>, controls: Vec<ObjectId>, extent: Option<ObjectId>, name: String) -> Result<()> {
+    pub(crate) fn build_reference_surface(&mut self, points: Vec<ObjectId>, controls: Vec<ObjectId>, extent: Option<ObjectId>, spacing: f64, name: String) -> Result<()> {
         // The last refusal's rings go as the next build starts, whatever it
         // finds; a fresh refusal rings its own.
         if !self.editor.string_rings.is_empty() {
@@ -369,7 +369,7 @@ impl<'a> App<'a> {
                 keys: &keys,
                 layers: &control_layers,
             };
-            grid_surface_from_points(points, selected, ring, &settings, name, &stamp, cancel, progress)
+            grid_surface_from_points(points, selected, ring, spacing, &settings, name, &stamp, cancel, progress)
         };
         let apply = move |app: &mut App, result: Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)>| match result {
             Ok((generated, left_out)) => {
@@ -605,6 +605,70 @@ fn extent_ring(document: &crate::model::Document, id: ObjectId) -> Result<Vec<DV
     Ok(ring)
 }
 
+/// The grid spacings Build Surface offers, in metres. Each is a whole
+/// number of half metres, so every node, a whole multiple of it, is exact
+/// in f64 far from the origin and [`GridSurface::read`] finds it again.
+///
+/// [`GridSurface::read`]: crate::model::grid_surface::GridSurface::read
+pub(crate) const GRID_SPACINGS: [f64; 9] = [0.5, 1.0, 2.0, 2.5, 5.0, 10.0, 20.0, 25.0, 50.0];
+
+/// The plan box a build would grid, for the dialog's estimate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlanExtent {
+    lower: DVec2,
+    upper: DVec2,
+}
+
+impl PlanExtent {
+    fn of_ring(ring: &[DVec2]) -> Self {
+        let (lower, upper) = plan_box(ring.iter().copied());
+        Self { lower, upper }
+    }
+
+    /// The nodes of the box [`LatticeBox::covering`] lays over the extent
+    /// at `spacing`. The build lays no node outside it, and reading the
+    /// surface back counts the box of its nodes, so a count within the
+    /// budget here is within it at both.
+    pub(crate) fn nodes(self, spacing: f64) -> f64 {
+        let sides = (self.upper / spacing).ceil() - (self.lower / spacing).floor() + 1.0;
+        sides.x * sides.y
+    }
+
+    pub(crate) fn over_budget(self, spacing: f64) -> bool {
+        self.nodes(spacing) > rbf::NODE_BUDGET as f64
+    }
+
+    /// The finest of [`GRID_SPACINGS`] within the node budget.
+    pub(crate) fn finest_fitting(self) -> Option<f64> {
+        GRID_SPACINGS.into_iter().find(|&spacing| !self.over_budget(spacing))
+    }
+}
+
+/// The plan extent of `input`: its extent, else the outline its points and
+/// controls would be given. `None` when neither can be read.
+pub(crate) fn plan_extent(document: &Document, input: &SurfaceInput) -> Option<PlanExtent> {
+    let ring = match input.extent {
+        Some(id) => extent_ring(document, id).ok()?,
+        None => {
+            let mut points: Vec<DVec3> = input
+                .points
+                .iter()
+                .filter_map(|id| match document.get_object(*id) {
+                    Some(Object::Point { pos, .. }) => Some(*pos),
+                    _ => None,
+                })
+                .collect();
+            for id in &input.controls {
+                if let Some(Object::Polyline { verts, .. }) = document.get_object(*id) {
+                    points.extend(crate::model::geometry::tessellate_polyline_bulges(verts, false));
+                }
+            }
+            buffered_outline(&points).ok()?
+        }
+    };
+    Some(PlanExtent::of_ring(&ring))
+}
+
 /// The chosen control strings as 3D lines, in selection order, arcs
 /// expanded into straight segments. A string whose layer went hidden since
 /// the dialog opened is refused by its place in `ids`, like the extent, so
@@ -638,20 +702,22 @@ fn control_strings(document: &crate::model::Document, ids: &[ObjectId]) -> Resul
     Ok(strings)
 }
 
-/// Worker half: the spline through the points and controls, gridded, cut
-/// to the extent or the points' outline, and reported with its run record.
+/// Worker half: the spline through the points and controls, gridded at
+/// `spacing`, cut to the extent or the points' outline, and reported with
+/// its run record.
 #[allow(clippy::too_many_arguments)]
 fn grid_surface_from_points(
     points: Vec<DVec3>,
     controls: SelectedControls,
     extent: Option<Vec<DVec2>>,
+    spacing: f64,
     settings: &ModellingSettings,
     name: String,
     stamp: &RunStamp,
     cancel: &CancelFlag,
     progress: &Progress,
 ) -> Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)> {
-    let surface = surface_mesh(&points, controls, extent.as_deref(), settings, cancel, progress)?;
+    let surface = surface_mesh(&points, controls, extent.as_deref(), spacing, settings, cancel, progress)?;
     // What the build cleaned in its copy and the strings it left out come
     // first, each under its own heading, so the build line that follows
     // reads as what was built from them.
@@ -796,12 +862,13 @@ fn steep_report(pairs: &[SteepPair], within: f64, degrees: f64) -> String {
     report
 }
 
-/// Fit the spline through the picks and the controls, grid it over the
-/// extent, else over the points' outline plus [`OUTLINE_BUFFER`], and
-/// triangulate it cut to that ring.
+/// Fit the spline through the picks and the controls, grid it at `spacing`
+/// over the extent, else over the points' outline plus [`OUTLINE_BUFFER`],
+/// and triangulate it cut to that ring.
 ///
-/// A control enters as its vertices and its segments densified at the grid
-/// spacing, so the spline holds the whole string; a pick the string passes
+/// A control enters as its vertices and its segments densified at
+/// [`DEFAULT_SPACING`] whatever the grid's spacing, so one spline serves
+/// every spacing and the string is held whole; a pick the string passes
 /// over is left out, the string winning. When those points and the picks
 /// would pass the spline's point budget, the controls enter as their
 /// thinned copy instead, as [`within_budget`] makes it; their checks, the
@@ -814,6 +881,7 @@ fn surface_mesh(
     points: &[DVec3],
     selected: SelectedControls,
     extent: Option<&[DVec2]>,
+    spacing: f64,
     settings: &ModellingSettings,
     cancel: &CancelFlag,
     progress: &Progress,
@@ -908,7 +976,7 @@ fn surface_mesh(
     let bands = drawn.unwrap_or_else(|| RingBands::new(ring));
     // The grid is planned before the fit, so a grid over the node budget
     // is refused before the system is allocated.
-    let plan = grid_plan(ring, &bands, DEFAULT_SPACING, cancel)?;
+    let plan = grid_plan(ring, &bands, spacing, cancel)?;
     let spline = RbfSurface::fit(&fitted, cancel, &progress.phase(0.0, 0.5))?;
     // Read off the merged points, so a pair the merge settled is not named
     // again; a warning only, nothing is dropped or moved.

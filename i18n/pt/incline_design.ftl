@@ -742,7 +742,7 @@ cmd-prismoid-grid-building = Criando grade de prismoides…
 cmd-prismoid-grid-mesh-failed = Não foi possível criar a geometria da grade de prismoides '{ $name }'
 cmd-prismoid-grid-preparing = Preparando grade de prismoides…
 cmd-prismoid-grid-too-large-to-draw = A grade de prismoides '{ $name }' tem { $corners } cantos, acima do limite de { $budget }, e não é desenhada. Continua listada e salva.
-cmd-prismoid-grid-built = Grade de prismoides '{ $name }' criada: { $columns } × { $rows } células, { $active } ativas, espessura vertical de { $min } a { $max }
+cmd-prismoid-grid-built = Grade de prismoides '{ $name }' criada: { $columns } × { $rows } células de { $size } m, { $active } ativas, espessura vertical de { $min } a { $max }
 cmd-prismoid-grid-crossed =
     { $count ->
         [one] { $count } célula
@@ -756,6 +756,7 @@ cmd-prismoid-grid-holes =
 cmd-prismoid-grid-not-a-grid = { $name } não pode formar uma grade de prismoides: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } e { $floor } não estão em uma mesma grade: escolha um teto e uma lapa criados com o mesmo espaçamento, como Criar superfície e Superfícies de espessura os produzem
 cmd-prismoid-grid-no-overlap = { $roof } e { $floor } não têm nenhuma célula coberta por ambos
+cmd-prismoid-grid-cell-too-large = { $roof } e { $floor } partilham poucos nós de grade para células de { $size } m, que precisam de dois cantos por lado: escolha um tamanho de célula menor
 cmd-prismoid-grid-roof-below = { $roof } fica abaixo de { $floor } onde quer que se cruzem: escolha-os ao contrário
 cmd-prismoid-grid-no-thickness = { $roof } e { $floor } se tocam onde quer que ambos cubram: nenhuma célula tem espessura
 cmd-prismoid-grid-same-surface = O teto e a lapa devem ser duas superfícies diferentes
@@ -2169,6 +2170,11 @@ reference-surface-extent-help = A linha fechada selecionada pela qual a superfí
 reference-surface-selected-open-strings-surface-made = As linhas abertas selecionadas pelas quais a superfície é obrigada a passar, tal como selecionadas quando a caixa de diálogo abriu. Feche a caixa de diálogo para selecionar outras.
 reference-surface-grids-selected-points-plan-into = Gera em planta uma grelha com os pontos selecionados para criar uma nova superfície. Cada construção acrescenta uma superfície.
 reference-surface-change-these-in-preferences = Altere-os em Preferências, Modelação
+reference-surface-spacing = Espaçamento da grade
+reference-surface-spacing-help = Distância entre os nós da grade em x e y. A spline é a mesma em qualquer espaçamento; uma grade mais fina a lê em mais pontos.
+reference-surface-spacing-nodes = Cerca de { $nodes } nós de grade no retângulo em volta da extensão
+reference-surface-spacing-over-budget = Cerca de { $nodes } nós de grade no retângulo em volta da extensão, acima do limite de { $budget }: um espaçamento de { $spacing } m cabe
+reference-surface-spacing-none-fits = Cerca de { $nodes } nós de grade no retângulo em volta da extensão, acima do limite de { $budget } em todos os espaçamentos oferecidos: escolha uma extensão menor
 reference-surface-triangulates-selected-points-plan-in = Triangula em planta os pontos selecionados numa nova superfície. Cada construção acrescenta uma superfície.
 
 ## Screenshot strings
@@ -2607,6 +2613,10 @@ tri-build-prismoid-grid = Criar grade de prismoides
 tri-build-prismoid-grid-help = Cria uma grade de prismoides entre um teto e uma lapa em uma mesma grade, como Criar superfície e Superfícies de espessura os produzem. Células em que algum deles não tem altura ou triângulos, ou em que a lapa fica acima do teto, são omitidas.
 tri-prismoid-roof-help = A superfície superior do intervalo: o teto da camada ou leito.
 tri-prismoid-floor-help = A superfície inferior do intervalo, na mesma grade do teto.
+tri-prismoid-cell-size = Tamanho da célula
+tri-prismoid-cell-size-help = Cada prismoide abrange este número de células da grade das superfícies por lado, tomando cada n-ésimo nó; nada é interpolado. Para células mais finas, construa superfícies mais finas.
+tri-prismoid-cell-size-surfaces = O espaçamento das superfícies
+tri-prismoid-cell-size-times = { $times } × o espaçamento das superfícies
 tri-name-assigned-prismoid-grid = Nome dado à nova grade de prismoides.
 tri-prismoid-grid-name-hint = grade da camada superior
 

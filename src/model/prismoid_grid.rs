@@ -2,7 +2,7 @@
 //! on one plan lattice, with a mask of the active cells and any number of
 //! values per cell.
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use anyhow::{Result, bail};
 use glam::{DVec2, DVec3};
@@ -35,6 +35,8 @@ pub(crate) enum BuildRefusal {
     /// Fewer than two node columns or rows in common, or no cell in
     /// common that both cover.
     NoOverlap,
+    /// Fewer than two kept nodes along a side at the chosen cell size.
+    CellTooLarge,
     /// No active cell, and more cells crossed than closed.
     RoofBelow,
     /// No active cell: roof and floor meet wherever both cover.
@@ -175,11 +177,12 @@ impl PrismoidGrid {
         Ok(())
     }
 
-    /// The prismoids between `roof` and `floor` over the cells both cover.
-    /// A cell is active where both surfaces have triangles over it, none of
-    /// its corners lacks a height or has the floor above the roof, and at
-    /// least one has thickness.
-    pub(crate) fn between(roof: &GridSurface, floor: &GridSurface, cancel: &CancelFlag, progress: &Phase) -> Result<PrismoidBuild, BuildRefusal> {
+    /// The prismoids between `roof` and `floor` over the cells both cover,
+    /// each `step` of the surfaces' cells along a side and read at its four
+    /// corners only. A cell is active where both surfaces have triangles
+    /// over every surface cell inside it, none of its corners lacks a height
+    /// or has the floor above the roof, and at least one has thickness.
+    pub(crate) fn between(roof: &GridSurface, floor: &GridSurface, step: NonZeroUsize, cancel: &CancelFlag, progress: &Phase) -> Result<PrismoidBuild, BuildRefusal> {
         let spacing = roof.spacing();
         if (spacing - floor.spacing()).abs() > spacing * NODE_TOLERANCE {
             return Err(BuildRefusal::NotOneLattice);
@@ -203,14 +206,34 @@ impl PrismoidGrid {
         if columns < 2 || rows < 2 {
             return Err(BuildRefusal::NoOverlap);
         }
-        let (columns, rows) = (columns as usize, rows as usize);
         let (low_column, low_row) = (low_column as usize, low_row as usize);
-        let origin = roof_origin + DVec2::new(low_column as f64, low_row as f64) * spacing;
-        // Roof and floor heights at every node of the box, NaN where missing.
+        let first = roof_origin + DVec2::new(low_column as f64, low_row as f64) * spacing;
+        // Along each side, the first node kept and how many are kept: every
+        // `step`-th node, from a whole multiple of the cell size measured
+        // from the coordinate origin, or from the first node of a lattice
+        // off the spacing's multiples.
+        let step = step.get();
+        let kept_nodes = |at: f64, count: i64| {
+            let nodes = at / spacing;
+            let whole = nodes.round();
+            let skip = if (nodes - whole).abs() > NODE_TOLERANCE {
+                0
+            } else {
+                (step - (whole as i64).rem_euclid(step as i64) as usize) % step
+            };
+            (skip, (count as usize).saturating_sub(skip).div_ceil(step))
+        };
+        let ((skip_column, columns), (skip_row, rows)) = (kept_nodes(first.x, columns), kept_nodes(first.y, rows));
+        if columns < 2 || rows < 2 {
+            return Err(BuildRefusal::CellTooLarge);
+        }
+        let size = spacing * step as f64;
+        let origin = first + DVec2::new(skip_column as f64, skip_row as f64) * spacing;
+        // Roof and floor heights at every kept node, NaN where missing.
         let heights: Vec<(f64, f64)> = (0..rows)
             .flat_map(|row| (0..columns).map(move |column| (column, row)))
             .map(|(column, row)| {
-                let (roof_column, roof_row) = (low_column + column, low_row + row);
+                let (roof_column, roof_row) = (low_column + skip_column + column * step, low_row + skip_row + row * step);
                 let floor_column = (roof_column as i64 - shift_column) as usize;
                 let floor_row = (roof_row as i64 - shift_row) as usize;
                 let height = |surface: &GridSurface, column: usize, row: usize| surface.height(column, row).unwrap_or(f64::NAN);
@@ -221,12 +244,15 @@ impl PrismoidGrid {
             return Err(BuildRefusal::Cancelled);
         }
         progress.set_fraction(0.3);
-        // A point inside each of the cell's two triangles, whichever way its
-        // diagonal runs.
+        // Every surface cell inside the cell, at a point inside each of its
+        // two triangles, whichever way its diagonal runs.
         let covered = |column: usize, row: usize| {
-            [0.25, 0.75].into_iter().all(|across| {
-                let at = origin + DVec2::new(column as f64 + across, row as f64 + 0.5) * spacing;
-                roof.covers(at) && floor.covers(at)
+            (0..step * step).all(|inside| {
+                let (fine_column, fine_row) = ((column * step + inside % step) as f64, (row * step + inside / step) as f64);
+                [0.25, 0.75].into_iter().all(|across| {
+                    let at = origin + DVec2::new(fine_column + across, fine_row + 0.5) * spacing;
+                    roof.covers(at) && floor.covers(at)
+                })
             })
         };
         let (cell_columns, cell_rows) = (columns - 1, rows - 1);
@@ -289,11 +315,11 @@ impl PrismoidGrid {
             .collect();
         let grid = PrismoidGrid {
             lattice: Lattice {
-                origin: origin + DVec2::new(first_column as f64, first_row as f64) * spacing,
+                origin: origin + DVec2::new(first_column as f64, first_row as f64) * size,
                 u: DVec2::X,
                 v: DVec2::Y,
-                u_sizes: vec![spacing; kept_columns],
-                v_sizes: vec![spacing; kept_rows],
+                u_sizes: vec![size; kept_columns],
+                v_sizes: vec![size; kept_rows],
             },
             roof: roof_heights,
             floor: floor_heights,

@@ -4,6 +4,7 @@
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
+    num::NonZeroUsize,
     sync::Arc,
 };
 
@@ -59,7 +60,7 @@ impl App<'_> {
 
     /// Build a prismoid grid between a roof and a floor surface on the job
     /// queue; a pair that makes none is refused in words naming both.
-    pub(crate) fn build_prismoid_grid(&mut self, roof_id: TriangulationId, floor_id: TriangulationId, name: String) -> Result<()> {
+    pub(crate) fn build_prismoid_grid(&mut self, roof_id: TriangulationId, floor_id: TriangulationId, step: NonZeroUsize, name: String) -> Result<()> {
         if roof_id == floor_id {
             anyhow::bail!("{}", tr!("cmd-prismoid-grid-same-surface"));
         }
@@ -87,12 +88,21 @@ impl App<'_> {
                 .map_err(|problem| anyhow::anyhow!("{}", tr!("cmd-prismoid-grid-not-a-grid", name = roof_name.clone(), reason = not_a_grid_reason(problem))))?;
             let floor = GridSurface::read(floor_mesh, floor_spatial)
                 .map_err(|problem| anyhow::anyhow!("{}", tr!("cmd-prismoid-grid-not-a-grid", name = floor_name.clone(), reason = not_a_grid_reason(problem))))?;
-            match PrismoidGrid::between(&roof, &floor, cancel, &progress.phase(0.0, 1.0)) {
+            match PrismoidGrid::between(&roof, &floor, step, cancel, &progress.phase(0.0, 1.0)) {
                 Ok(built) => Ok(Ok(built)),
                 Err(BuildRefusal::Malformed(error)) => Ok(Err(error.context(grid_name))),
                 Err(BuildRefusal::Cancelled) => anyhow::bail!("{}", tr!("common-cancelled")),
                 Err(BuildRefusal::NotOneLattice) => anyhow::bail!("{}", tr!("cmd-prismoid-grid-not-one-lattice", roof = roof_name, floor = floor_name)),
                 Err(BuildRefusal::NoOverlap) => anyhow::bail!("{}", tr!("cmd-prismoid-grid-no-overlap", roof = roof_name, floor = floor_name)),
+                Err(BuildRefusal::CellTooLarge) => anyhow::bail!(
+                    "{}",
+                    tr!(
+                        "cmd-prismoid-grid-cell-too-large",
+                        roof = roof_name,
+                        floor = floor_name,
+                        size = cell_size(roof.spacing() * step.get() as f64)
+                    )
+                ),
                 Err(BuildRefusal::RoofBelow) => anyhow::bail!("{}", tr!("cmd-prismoid-grid-roof-below", roof = roof_name, floor = floor_name)),
                 Err(BuildRefusal::NoThickness) => anyhow::bail!("{}", tr!("cmd-prismoid-grid-no-thickness", roof = roof_name, floor = floor_name)),
             }
@@ -107,6 +117,7 @@ impl App<'_> {
                 };
                 let summary = item.summary;
                 let (min, max) = summary.vertical_thickness.unwrap_or_default();
+                let size = cell_size(item.grid.lattice.u_sizes.first().copied().unwrap_or_default());
                 userspace_log!(
                     "{}",
                     tr!(
@@ -114,6 +125,7 @@ impl App<'_> {
                         name = item.name.clone(),
                         columns = summary.columns.to_string(),
                         rows = summary.rows.to_string(),
+                        size = size,
                         active = summary.active_cells.to_string(),
                         min = format!("{min:.2}"),
                         max = format!("{max:.2}")
@@ -300,6 +312,12 @@ impl App<'_> {
         self.prismoid_rasters = self.raster_textures.iter().chain(maps).cloned().collect();
         self.prismoid_scene_key = Some(key);
     }
+}
+
+/// A cell size in metres to the centimetre: a size read off a surface's
+/// vertices carries their rounding.
+fn cell_size(size: f64) -> String {
+    ((size * 100.0).round() / 100.0).to_string()
 }
 
 /// A thickness map in the ramp's colours, as a raster the drape can draw. Its

@@ -2,10 +2,11 @@
 //! selected when it was opened, gridded into one new surface.
 
 use crate::{
+    app::commands::triangulation::reference_surface::GRID_SPACINGS,
     i18n::tr,
     ui::{
         state::{EditorState, UiCommand, UiProjectView},
-        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldText, selected_source_field},
+        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldText, selected_source_field},
     },
 };
 
@@ -18,6 +19,7 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
     // Both are read after the menu closes: `open` is borrowed by the window
     // for as long as its body runs, so neither button can clear it in place.
     let mut cancel = false;
+    let mut over_budget = false;
     DragableMenu::new("reference_surface_dialog", tr!("common-build-surface"))
         .open(&mut open)
         .min_width(380.0)
@@ -41,6 +43,34 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
             );
             ui.add_space(4.0);
             selected_source_field(ui, tr!("reference-surface-extent"), draft.extent_label.clone(), tr!("reference-surface-extent-help"), width);
+            ui.add_space(4.0);
+            let spacing_label = |spacing: f64| format!("{spacing} {}", tr!("common-m"));
+            let selected = spacing_label(editor.reference_surface_spacing);
+            MenuFieldCombo::new(
+                "reference_surface_spacing",
+                tr!("reference-surface-spacing"),
+                &mut editor.reference_surface_spacing,
+                selected,
+                GRID_SPACINGS.map(|spacing| (spacing, spacing_label(spacing).into())),
+            )
+            .help_text(tr!("reference-surface-spacing-help"))
+            .width(width)
+            .show(ui);
+            let spacing = editor.reference_surface_spacing;
+            if let Some(plan) = draft.plan_extent {
+                let nodes = plan.nodes(spacing).to_string();
+                if plan.over_budget(spacing) {
+                    over_budget = true;
+                    let budget = crate::model::rbf::NODE_BUDGET.to_string();
+                    let words = match plan.finest_fitting() {
+                        Some(fits) => tr!("reference-surface-spacing-over-budget", nodes = nodes, budget = budget, spacing = fits.to_string()),
+                        None => tr!("reference-surface-spacing-none-fits", nodes = nodes, budget = budget),
+                    };
+                    ui.colored_label(ui.visuals().warn_fg_color, words);
+                } else {
+                    ui.small(tr!("reference-surface-spacing-nodes", nodes = nodes));
+                }
+            }
             menu::menu_note(ui, tr!("reference-surface-grids-selected-points-plan-into"));
             ui.small(tr!("reference-surface-points-outside-extent-still-shape"));
             // Read only here: one place to change them, and the build uses
@@ -53,7 +83,7 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
                 .hint_text(tr!("tri-create-output-name-hint"))
                 .show(ui);
             menu::menu_actions(ui, |ui| {
-                let ready = !draft.name.trim().is_empty();
+                let ready = !draft.name.trim().is_empty() && !over_budget;
                 let confirm = ready && menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(ready)).clicked() || confirm {
                     build = true;
@@ -68,6 +98,7 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
             points: draft.points.clone(),
             controls: draft.controls.clone(),
             extent: draft.extent,
+            spacing: editor.reference_surface_spacing,
             name: draft.name.trim().to_owned(),
         });
         open = false;

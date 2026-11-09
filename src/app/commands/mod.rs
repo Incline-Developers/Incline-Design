@@ -1007,6 +1007,7 @@ impl<'a> App<'a> {
                     }
                 };
                 let name = self.reference_surface_name(&input.points);
+                let plan_extent = crate::app::commands::triangulation::reference_surface::plan_extent(&self.scene_document, &input);
                 self.editor.reference_surface_dialog = Some(crate::ui::state::ReferenceSurfaceDraft {
                     name,
                     points: input.points,
@@ -1015,10 +1016,17 @@ impl<'a> App<'a> {
                     points_label,
                     controls_label,
                     extent_label,
+                    plan_extent,
                 });
                 Ok(())
             }
-            UiCommand::BuildReferenceSurface { points, controls, extent, name } => self.build_reference_surface(points, controls, extent, name),
+            UiCommand::BuildReferenceSurface {
+                points,
+                controls,
+                extent,
+                spacing,
+                name,
+            } => self.build_reference_surface(points, controls, extent, spacing, name),
             UiCommand::OpenThicknessPoints => {
                 self.open_thickness_points();
                 Ok(())
@@ -1978,12 +1986,13 @@ impl<'a> App<'a> {
                 self.editor.tri_prismoid_open = true;
                 self.editor.tri_prismoid_roof_id = None;
                 self.editor.tri_prismoid_floor_id = None;
+                self.editor.tri_prismoid_step = std::num::NonZeroUsize::MIN;
                 self.editor.tri_prismoid_name_input.clear();
                 self.editor.tri_prismoid_name_auto = true;
                 Ok(())
             }
-            UiCommand::ExecuteBuildPrismoidGrid { roof_id, floor_id, name } => {
-                let result = self.build_prismoid_grid(roof_id, floor_id, name);
+            UiCommand::ExecuteBuildPrismoidGrid { roof_id, floor_id, step, name } => {
+                let result = self.build_prismoid_grid(roof_id, floor_id, step, name);
                 if result.is_ok() {
                     self.editor.tri_prismoid_open = false;
                 }

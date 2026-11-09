@@ -744,7 +744,7 @@ cmd-prismoid-grid-building = جارٍ بناء شبكة شبه المنشورا�
 cmd-prismoid-grid-mesh-failed = تعذر بناء هندسة شبكة شبه المنشورات '{ $name }'
 cmd-prismoid-grid-preparing = جارٍ تجهيز شبكة شبه المنشورات…
 cmd-prismoid-grid-too-large-to-draw = شبكة شبه المنشورات '{ $name }' عدد أركانها { $corners }، وهو يتجاوز الحد البالغ { $budget }، ولذلك لا تُرسم. تظل مدرجة ومحفوظة.
-cmd-prismoid-grid-built = تم بناء شبكة شبه المنشورات '{ $name }': { $columns } × { $rows } خلية، { $active } نشطة، السماكة الرأسية من { $min } إلى { $max }
+cmd-prismoid-grid-built = تم بناء شبكة شبه المنشورات '{ $name }': { $columns } × { $rows } خلية بطول { $size } م، { $active } نشطة، السماكة الرأسية من { $min } إلى { $max }
 cmd-prismoid-grid-crossed =
     { $count ->
         [one] { $count } خلية
@@ -758,6 +758,7 @@ cmd-prismoid-grid-holes =
 cmd-prismoid-grid-not-a-grid = لا يمكن لـ { $name } إنشاء شبكة شبه منشورات: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } و{ $floor } ليسا على شبكة واحدة: اختر سقفًا وأرضية مبنيين بالتباعد نفسه، كما ينشئهما بناء السطح وأسطح السماكة
 cmd-prismoid-grid-no-overlap = لا يشترك { $roof } و{ $floor } في أي خلية شبكية يغطيها كلاهما
+cmd-prismoid-grid-cell-too-large = تشترك { $roof } و { $floor } في عدد قليل جدًا من عقد الشبكة لخلايا بطول { $size } م تحتاج إلى زاويتين على كل جانب: اختر حجم خلية أصغر
 cmd-prismoid-grid-roof-below = يقع { $roof } تحت { $floor } حيثما تقاطعا: اخترهما بالترتيب المعاكس
 cmd-prismoid-grid-no-thickness = يلتقي { $roof } و{ $floor } حيثما غطّى كلاهما: لا توجد خلية ذات سماكة
 cmd-prismoid-grid-same-surface = يجب أن يكون السقف والأرضية سطحين مختلفين
@@ -2171,6 +2172,11 @@ reference-surface-extent-help = الخط المغلق المحدد الذي يُ
 reference-surface-selected-open-strings-surface-made = الخطوط المفتوحة المحددة التي يُجعل السطح يمر عبرها، كما حُددت عند فتح الحوار. أغلق الحوار لتحديد خطوط مختلفة.
 reference-surface-grids-selected-points-plan-into = يشبّك النقاط المحددة في المسقط الأفقي إلى سطح جديد. كل عملية إنشاء تضيف سطحًا.
 reference-surface-change-these-in-preferences = غيّر هذه في التفضيلات، النمذجة
+reference-surface-spacing = تباعد الشبكة
+reference-surface-spacing-help = المسافة بين عقد الشبكة على المحورين x و y. الشريحة هي نفسها عند أي تباعد؛ والشبكة الأدق تقرؤها في مواضع أكثر.
+reference-surface-spacing-nodes = نحو { $nodes } عقدة شبكة في المستطيل المحيط بالنطاق
+reference-surface-spacing-over-budget = نحو { $nodes } عقدة شبكة في المستطيل المحيط بالنطاق، فوق الحد البالغ { $budget }: يناسب تباعد { $spacing } م
+reference-surface-spacing-none-fits = نحو { $nodes } عقدة شبكة في المستطيل المحيط بالنطاق، فوق الحد البالغ { $budget } عند كل تباعد متاح: اختر نطاقًا أصغر
 reference-surface-triangulates-selected-points-plan-in = يثلّث النقاط المحددة في المسقط الأفقي إلى سطح جديد. كل عملية إنشاء تضيف سطحًا.
 
 ## Screenshot strings
@@ -2609,6 +2615,10 @@ tri-build-prismoid-grid = بناء شبكة شبه المنشورات
 tri-build-prismoid-grid-help = يبني شبكة شبه منشورات بين سقف وأرضية على شبكة واحدة، كما ينشئهما بناء السطح وأسطح السماكة. تُستبعد الخلايا التي لا يوجد فيها ارتفاع أو مثلثات لأي منهما، أو تقع فيها الأرضية فوق السقف.
 tri-prismoid-roof-help = السطح العلوي للفاصل: سقف الطبقة أو الشريحة.
 tri-prismoid-floor-help = السطح السفلي للفاصل، على الشبكة نفسها التي عليها السقف.
+tri-prismoid-cell-size = حجم الخلية
+tri-prismoid-cell-size-help = يمتد كل شبه منشور على هذا العدد من خلايا شبكة الأسطح على كل جانب، آخذًا كل عقدة رقم n؛ لا يُستكمل شيء. للحصول على خلايا أدق، ابنِ الأسطح بتباعد أدق.
+tri-prismoid-cell-size-surfaces = تباعد الأسطح
+tri-prismoid-cell-size-times = { $times } × تباعد الأسطح
 tri-name-assigned-prismoid-grid = الاسم المعطى لشبكة شبه المنشورات الجديدة.
 tri-prismoid-grid-name-hint = شبكة الطبقة العليا
 

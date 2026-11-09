@@ -770,12 +770,13 @@ cmd-prismoid-grid-building = Đang tạo lưới prismoid…
 cmd-prismoid-grid-mesh-failed = Không thể tạo hình học của lưới prismoid '{ $name }'
 cmd-prismoid-grid-preparing = Đang chuẩn bị lưới prismoid…
 cmd-prismoid-grid-too-large-to-draw = Lưới prismoid '{ $name }' có { $corners } góc, vượt giới hạn { $budget }, nên không được vẽ. Lưới vẫn được liệt kê và lưu.
-cmd-prismoid-grid-built = Đã tạo lưới prismoid '{ $name }': { $columns } × { $rows } ô, { $active } ô hoạt động, chiều dày thẳng đứng từ { $min } đến { $max }
+cmd-prismoid-grid-built = Đã tạo lưới prismoid '{ $name }': { $columns } × { $rows } ô cỡ { $size } m, { $active } ô hoạt động, chiều dày thẳng đứng từ { $min } đến { $max }
 cmd-prismoid-grid-crossed = { $count } ô trong phần chồng lấn giữa { $roof } và { $floor } bị bỏ qua nơi nền nằm trên nóc
 cmd-prismoid-grid-holes = { $count } ô trong phần chồng lấn giữa { $roof } và { $floor } bị bỏ qua nơi nóc hoặc nền không có độ cao hoặc tam giác
 cmd-prismoid-grid-not-a-grid = { $name } không thể tạo lưới prismoid: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } và { $floor } không ở trên cùng một lưới: hãy chọn nóc và nền tạo với cùng bước lưới, như Tạo bề mặt và Bề mặt chiều dày tạo ra
 cmd-prismoid-grid-no-overlap = { $roof } và { $floor } không có ô nào cả hai cùng phủ
+cmd-prismoid-grid-cell-too-large = { $roof } và { $floor } có quá ít nút lưới chung cho ô { $size } m, loại ô cần hai góc trên mỗi cạnh: hãy chọn kích thước ô nhỏ hơn
 cmd-prismoid-grid-roof-below = { $roof } nằm dưới { $floor } ở mọi nơi chúng cắt nhau: hãy chọn ngược lại
 cmd-prismoid-grid-no-thickness = { $roof } và { $floor } gặp nhau ở mọi nơi cả hai cùng phủ: không ô nào có chiều dày
 cmd-prismoid-grid-same-surface = Nóc và nền phải là hai bề mặt khác nhau
@@ -2189,6 +2190,11 @@ reference-surface-extent-help = Đường khép kín đã chọn mà bề mặt 
 reference-surface-selected-open-strings-surface-made = Các đường hở đã chọn mà bề mặt buộc phải đi qua, như đã chọn khi hộp thoại mở. Đóng hộp thoại để chọn đường khác.
 reference-surface-grids-selected-points-plan-into = Chia lưới các điểm đã chọn trong mặt bằng thành một bề mặt mới. Mỗi lần dựng thêm một bề mặt.
 reference-surface-change-these-in-preferences = Thay đổi các mục này trong Tùy chọn, Mô hình hóa
+reference-surface-spacing = Khoảng cách lưới
+reference-surface-spacing-help = Khoảng cách giữa các nút lưới theo x và y. Spline là như nhau ở mọi khoảng cách; lưới dày hơn đọc nó ở nhiều chỗ hơn.
+reference-surface-spacing-nodes = Khoảng { $nodes } nút lưới trong hình chữ nhật bao phạm vi
+reference-surface-spacing-over-budget = Khoảng { $nodes } nút lưới trong hình chữ nhật bao phạm vi, vượt giới hạn { $budget }: khoảng cách { $spacing } m vừa
+reference-surface-spacing-none-fits = Khoảng { $nodes } nút lưới trong hình chữ nhật bao phạm vi, vượt giới hạn { $budget } ở mọi khoảng cách có sẵn: hãy chọn phạm vi nhỏ hơn
 reference-surface-triangulates-selected-points-plan-in = Tạo lưới tam giác từ các điểm đã chọn trong mặt bằng thành một bề mặt mới. Mỗi lần dựng thêm một bề mặt.
 
 ## Screenshot strings
@@ -2627,6 +2633,10 @@ tri-build-prismoid-grid = Tạo lưới prismoid
 tri-build-prismoid-grid-help = Tạo lưới prismoid giữa nóc và nền trên cùng một lưới, như Tạo bề mặt và Bề mặt chiều dày tạo ra. Các ô mà một trong hai không có độ cao hoặc tam giác, hoặc nền nằm trên nóc, sẽ bị bỏ qua.
 tri-prismoid-roof-help = Bề mặt trên của khoảng: nóc của vỉa hoặc lớp.
 tri-prismoid-floor-help = Bề mặt dưới của khoảng, trên cùng lưới với nóc.
+tri-prismoid-cell-size = Kích thước ô
+tri-prismoid-cell-size-help = Mỗi prismoid trải qua số ô lưới này của các bề mặt trên mỗi cạnh, lấy mỗi nút thứ n; không nội suy gì. Muốn ô mịn hơn, hãy tạo bề mặt dày hơn.
+tri-prismoid-cell-size-surfaces = Khoảng cách lưới của các bề mặt
+tri-prismoid-cell-size-times = { $times } × khoảng cách lưới của các bề mặt
 tri-name-assigned-prismoid-grid = Tên đặt cho lưới prismoid mới.
 tri-prismoid-grid-name-hint = lưới vỉa trên
 

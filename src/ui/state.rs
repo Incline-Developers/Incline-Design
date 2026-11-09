@@ -3247,6 +3247,8 @@ pub(crate) struct EditorState {
     pub(crate) tri_prismoid_open: bool,
     pub(crate) tri_prismoid_roof_id: Option<TriangulationId>,
     pub(crate) tri_prismoid_floor_id: Option<TriangulationId>,
+    /// How many of the surfaces' cells each prismoid spans along a side.
+    pub(crate) tri_prismoid_step: std::num::NonZeroUsize,
     pub(crate) tri_prismoid_name_input: String,
     pub(crate) tri_prismoid_name_auto: bool,
     pub(crate) tri_cut_surface_unload_source: bool,
@@ -3356,6 +3358,8 @@ pub(crate) struct EditorState {
     pub(crate) reference_points_dialog: Option<ReferencePointsDraft>,
     /// The build surface dialog's snapshot of its input while it is open.
     pub(crate) reference_surface_dialog: Option<ReferenceSurfaceDraft>,
+    /// The grid spacing Build Surface last used, kept for the session.
+    pub(crate) reference_surface_spacing: f64,
     /// The thickness points dialog's surface and pairs file while it is open.
     pub(crate) thickness_points_dialog: Option<ThicknessPointsDraft>,
     /// The seam last chosen in Reference Points or Thickness Points, which
@@ -5116,6 +5120,7 @@ impl EditorState {
             tri_prismoid_open: false,
             tri_prismoid_roof_id: None,
             tri_prismoid_floor_id: None,
+            tri_prismoid_step: std::num::NonZeroUsize::MIN,
             tri_prismoid_name_input: String::new(),
             tri_prismoid_name_auto: true,
             tri_cut_surface_unload_source: true,
@@ -5184,6 +5189,7 @@ impl EditorState {
             drill_hole_color_dialog: None,
             reference_points_dialog: None,
             reference_surface_dialog: None,
+            reference_surface_spacing: crate::model::rbf::DEFAULT_SPACING,
             thickness_points_dialog: None,
             last_seam: None,
             thickness_table: None,
@@ -6505,11 +6511,12 @@ pub(crate) enum UiCommand {
     OpenReferenceSurface,
     /// A new triangulation from the selected points the command was opened
     /// on, made to pass through the selected open strings, clipped to an
-    /// optional closed-string extent.
+    /// optional closed-string extent, gridded at `spacing` metres.
     BuildReferenceSurface {
         points: Vec<ObjectId>,
         controls: Vec<ObjectId>,
         extent: Option<ObjectId>,
+        spacing: f64,
         name: String,
     },
     OpenThicknessPoints,
@@ -6897,10 +6904,12 @@ pub(crate) enum UiCommand {
     OpenBuildSolidFromSurfaces,
     /// Open the Build Prismoid Grid tool.
     OpenBuildPrismoidGrid,
-    /// Build a prismoid grid between a roof surface and a floor surface.
+    /// Build a prismoid grid between a roof surface and a floor surface,
+    /// each prismoid `step` of their cells along a side.
     ExecuteBuildPrismoidGrid {
         roof_id: TriangulationId,
         floor_id: TriangulationId,
+        step: std::num::NonZeroUsize,
         name: String,
     },
     /// Build a closed solid from a design surface and the topography it meets.
@@ -10586,6 +10595,7 @@ pub(crate) struct ReferenceSurfaceDraft {
     pub(crate) points_label: String,
     pub(crate) controls_label: String,
     pub(crate) extent_label: String,
+    pub(crate) plan_extent: Option<crate::app::commands::triangulation::reference_surface::PlanExtent>,
 }
 
 /// What the thickness points dialog was opened on and has chosen: the

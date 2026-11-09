@@ -786,12 +786,13 @@ cmd-prismoid-grid-building = Prizmoid Izgarası oluşturuluyor…
 cmd-prismoid-grid-mesh-failed = Prizmoid Izgarası '{ $name }' geometrisi oluşturulamadı
 cmd-prismoid-grid-preparing = Prizmoid Izgarası hazırlanıyor…
 cmd-prismoid-grid-too-large-to-draw = Prizmoid Izgarası '{ $name }' { $corners } köşeye sahip, { $budget } sınırını aşıyor ve çizilmiyor. Listede kalır ve kaydedilir.
-cmd-prismoid-grid-built = Prizmoid Izgarası '{ $name }' oluşturuldu: { $columns } × { $rows } hücre, { $active } etkin, düşey kalınlık { $min } ile { $max } arası
+cmd-prismoid-grid-built = Prizmoid Izgarası '{ $name }' oluşturuldu: { $size } m'lik { $columns } × { $rows } hücre, { $active } etkin, düşey kalınlık { $min } ile { $max } arası
 cmd-prismoid-grid-crossed = { $count } hücre ({ $roof } ve { $floor } örtüşmesinden) tabanın tavanın üstünde olduğu yerlerde dışarıda bırakıldı
 cmd-prismoid-grid-holes = { $count } hücre ({ $roof } ve { $floor } örtüşmesinden) tavanın veya tabanın yüksekliği ya da üçgeni olmayan yerlerde dışarıda bırakıldı
 cmd-prismoid-grid-not-a-grid = { $name } prizmoid ızgarası oluşturamaz: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } ve { $floor } aynı ızgarada değil: Yüzey Oluştur ve Kalınlık Yüzeyleri'nin yaptığı gibi aynı aralıkla oluşturulmuş bir tavan ve taban seçin
 cmd-prismoid-grid-no-overlap = { $roof } ve { $floor } için ikisinin de kapladığı hücre yok
+cmd-prismoid-grid-cell-too-large = { $roof } ve { $floor }, her kenarda iki köşe isteyen { $size } m'lik hücreler için çok az ortak ızgara düğümü paylaşıyor: daha küçük bir hücre boyutu seçin
 cmd-prismoid-grid-roof-below = { $roof } kesiştikleri her yerde { $floor } altında: ters sırayla seçin
 cmd-prismoid-grid-no-thickness = { $roof } ve { $floor } ikisinin de kapladığı her yerde birleşiyor: hiçbir hücrenin kalınlığı yok
 cmd-prismoid-grid-same-surface = Tavan ve taban iki farklı yüzey olmalıdır
@@ -2205,6 +2206,11 @@ reference-surface-extent-help = Tamamlanmış yüzeyin kırpılacağı seçili k
 reference-surface-selected-open-strings-surface-made = Yüzeyin içlerinden geçecek şekilde oluşturulduğu seçili açık dizgiler, iletişim kutusu açıldığında seçili olanlar. Farklılarını seçmek için iletişim kutusunu kapatın.
 reference-surface-grids-selected-points-plan-into = Seçili noktaları planda ağa dökerek yeni bir yüzey oluşturur. Her oluşturma bir yüzey ekler.
 reference-surface-change-these-in-preferences = Bunları Tercihler, Modelleme altında değiştirin
+reference-surface-spacing = Izgara aralığı
+reference-surface-spacing-help = Izgara düğümleri arasındaki x ve y uzaklığı. Spline her aralıkta aynıdır; daha sık bir ızgara onu daha çok yerde okur.
+reference-surface-spacing-nodes = Kapsamı çevreleyen dikdörtgende yaklaşık { $nodes } ızgara düğümü
+reference-surface-spacing-over-budget = Kapsamı çevreleyen dikdörtgende yaklaşık { $nodes } ızgara düğümü, { $budget } sınırının üzerinde: { $spacing } m aralık sığar
+reference-surface-spacing-none-fits = Kapsamı çevreleyen dikdörtgende yaklaşık { $nodes } ızgara düğümü, sunulan her aralıkta { $budget } sınırının üzerinde: daha küçük bir kapsam seçin
 reference-surface-triangulates-selected-points-plan-in = Seçili noktaları planda yeni bir yüzeye üçgenler. Her oluşturma bir yüzey ekler.
 
 ## Screenshot strings
@@ -2643,6 +2649,10 @@ tri-build-prismoid-grid = Prizmoid Izgarası Oluştur
 tri-build-prismoid-grid-help = Yüzey Oluştur ve Kalınlık Yüzeyleri'nin yaptığı gibi aynı ızgaradaki bir tavan ile taban arasında prizmoid ızgarası oluşturur. Birinde yükseklik veya üçgen olmayan ya da tabanın tavanın üstünde olduğu hücreler dışarıda bırakılır.
 tri-prismoid-roof-help = Aralığın üst yüzeyi: damarın veya katmanın tavanı.
 tri-prismoid-floor-help = Aralığın alt yüzeyi, tavanla aynı ızgarada.
+tri-prismoid-cell-size = Hücre boyutu
+tri-prismoid-cell-size-help = Her prizmoid, her kenarda yüzeylerin ızgara hücrelerinden bu kadarını kaplar ve her n'inci düğümü alır; hiçbir şey enterpole edilmez. Daha ince hücreler için yüzeyleri daha sık oluşturun.
+tri-prismoid-cell-size-surfaces = Yüzeylerin aralığı
+tri-prismoid-cell-size-times = { $times } × yüzeylerin aralığı
 tri-name-assigned-prismoid-grid = Yeni prizmoid ızgarasına verilen ad.
 tri-prismoid-grid-name-hint = üst damar ızgarası
 

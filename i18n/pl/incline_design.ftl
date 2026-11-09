@@ -814,7 +814,7 @@ cmd-prismoid-grid-building = Budowanie siatki prizmoidów…
 cmd-prismoid-grid-mesh-failed = Nie można zbudować geometrii siatki prizmoidów '{ $name }'
 cmd-prismoid-grid-preparing = Przygotowywanie siatki prizmoidów…
 cmd-prismoid-grid-too-large-to-draw = Siatka prizmoidów '{ $name }' ma { $corners } narożników, ponad limit { $budget }, i nie jest rysowana. Pozostaje na liście i jest zapisywana.
-cmd-prismoid-grid-built = Zbudowano siatkę prizmoidów '{ $name }': { $columns } × { $rows } komórek, aktywne: { $active }, grubość pionowa od { $min } do { $max }
+cmd-prismoid-grid-built = Zbudowano siatkę prizmoidów '{ $name }': { $columns } × { $rows } komórek po { $size } m, aktywne: { $active }, grubość pionowa od { $min } do { $max }
 cmd-prismoid-grid-crossed =
     { $count ->
         [one] { $count } komórka
@@ -828,6 +828,7 @@ cmd-prismoid-grid-holes =
 cmd-prismoid-grid-not-a-grid = { $name } nie może utworzyć siatki prizmoidów: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } i { $floor } nie leżą na jednej siatce: wybierz strop i spąg zbudowane z tym samym odstępem, jak robią to Zbuduj powierzchnię i Powierzchnie grubości
 cmd-prismoid-grid-no-overlap = { $roof } i { $floor } nie mają komórki pokrytej przez obie
+cmd-prismoid-grid-cell-too-large = { $roof } i { $floor } mają za mało wspólnych węzłów siatki dla komórek { $size } m, które wymagają dwóch narożników na każdym boku: wybierz mniejszy rozmiar komórki
 cmd-prismoid-grid-roof-below = { $roof } leży pod { $floor } wszędzie, gdzie się przecinają: wybierz je odwrotnie
 cmd-prismoid-grid-no-thickness = { $roof } i { $floor } stykają się wszędzie, gdzie obie pokrywają: żadna komórka nie ma grubości
 cmd-prismoid-grid-same-surface = Strop i spąg muszą być dwiema różnymi powierzchniami
@@ -2241,6 +2242,11 @@ reference-surface-extent-help = Wybrana zamknięta linia, do której przycinana 
 reference-surface-selected-open-strings-surface-made = Wybrane otwarte linie, przez które przechodzi powierzchnia, zaznaczone w chwili otwarcia okna. Zamknij okno, aby wybrać inne.
 reference-surface-grids-selected-points-plan-into = Buduje siatką nową powierzchnię z wybranych punktów w rzucie. Każda budowa dodaje powierzchnię.
 reference-surface-change-these-in-preferences = Zmień je w Preferencje, Modelowanie
+reference-surface-spacing = Rozstaw siatki
+reference-surface-spacing-help = Odległość między węzłami siatki w x i y. Spline jest taki sam przy każdym rozstawie; gęstsza siatka odczytuje go w większej liczbie miejsc.
+reference-surface-spacing-nodes = Około { $nodes } węzłów siatki w prostokącie wokół zasięgu
+reference-surface-spacing-over-budget = Około { $nodes } węzłów siatki w prostokącie wokół zasięgu, ponad limit { $budget }: mieści się rozstaw { $spacing } m
+reference-surface-spacing-none-fits = Około { $nodes } węzłów siatki w prostokącie wokół zasięgu, ponad limit { $budget } przy każdym oferowanym rozstawie: wybierz mniejszy zasięg
 reference-surface-triangulates-selected-points-plan-in = Triangulacja wybranych punktów w rzucie do nowej powierzchni. Każda budowa dodaje powierzchnię.
 
 ## Screenshot strings
@@ -2679,6 +2685,10 @@ tri-build-prismoid-grid = Zbuduj siatkę prizmoidów
 tri-build-prismoid-grid-help = Buduje siatkę prizmoidów między stropem a spągiem na jednej siatce, jak robią to Zbuduj powierzchnię i Powierzchnie grubości. Komórki, w których którakolwiek nie ma wysokości ani trójkątów lub spąg leży nad stropem, są pomijane.
 tri-prismoid-roof-help = Górna powierzchnia interwału: strop pokładu lub warstwy.
 tri-prismoid-floor-help = Dolna powierzchnia interwału, na tej samej siatce co strop.
+tri-prismoid-cell-size = Rozmiar komórki
+tri-prismoid-cell-size-help = Każdy prizmoid obejmuje tyle komórek siatki powierzchni na każdym boku, biorąc co n-ty węzeł; nic nie jest interpolowane. Dla drobniejszych komórek zbuduj gęstsze powierzchnie.
+tri-prismoid-cell-size-surfaces = Rozstaw powierzchni
+tri-prismoid-cell-size-times = { $times } × rozstaw powierzchni
 tri-name-assigned-prismoid-grid = Nazwa nowej siatki prizmoidów.
 tri-prismoid-grid-name-hint = siatka górnego pokładu
 

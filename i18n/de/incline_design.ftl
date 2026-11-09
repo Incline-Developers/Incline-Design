@@ -785,7 +785,7 @@ cmd-prismoid-grid-building = Prismoidgitter wird erstellt…
 cmd-prismoid-grid-mesh-failed = Die Geometrie des Prismoidgitters '{ $name }' konnte nicht erstellt werden
 cmd-prismoid-grid-preparing = Prismoidgitter wird vorbereitet…
 cmd-prismoid-grid-too-large-to-draw = Prismoidgitter '{ $name }' hat { $corners } Eckpunkte, mehr als das Budget von { $budget }, und wird nicht gezeichnet. Es bleibt aufgeführt und gespeichert.
-cmd-prismoid-grid-built = Prismoidgitter '{ $name }' erstellt: { $columns } × { $rows } Zellen, { $active } aktiv, vertikale Mächtigkeit { $min } bis { $max }
+cmd-prismoid-grid-built = Prismoidgitter '{ $name }' erstellt: { $columns } × { $rows } Zellen zu { $size } m, { $active } aktiv, vertikale Mächtigkeit { $min } bis { $max }
 cmd-prismoid-grid-crossed =
     { $count ->
         [one] { $count } Zelle
@@ -799,6 +799,7 @@ cmd-prismoid-grid-holes =
 cmd-prismoid-grid-not-a-grid = { $name } kann kein Prismoidgitter ergeben: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } und { $floor } liegen nicht auf einem Gitter: Wählen Sie Hangendes und Liegendes mit gleichem Abstand, wie Oberfläche erstellen und Mächtigkeitsflächen sie erzeugen
 cmd-prismoid-grid-no-overlap = { $roof } und { $floor } haben keine Gitterzelle, die beide abdecken
+cmd-prismoid-grid-cell-too-large = { $roof } und { $floor } teilen zu wenige Gitterknoten für Zellen von { $size } m, die zwei Ecken je Seite brauchen: wählen Sie eine kleinere Zellgröße
 cmd-prismoid-grid-roof-below = { $roof } liegt überall dort unter { $floor }, wo sie sich kreuzen: Wählen Sie sie andersherum
 cmd-prismoid-grid-no-thickness = { $roof } und { $floor } treffen sich überall, wo beide abdecken: Keine Zelle hat eine Mächtigkeit
 cmd-prismoid-grid-same-surface = Hangendes und Liegendes müssen zwei verschiedene Flächen sein
@@ -2212,6 +2213,11 @@ reference-surface-extent-help = Der ausgewählte geschlossene Linienzug, auf den
 reference-surface-selected-open-strings-surface-made = Die ausgewählten offenen Linienzüge, durch die die Oberfläche verläuft, wie beim Öffnen des Dialogs ausgewählt. Schließen Sie den Dialog, um andere auszuwählen.
 reference-surface-grids-selected-points-plan-into = Rastert die ausgewählten Punkte im Grundriss zu einer neuen Oberfläche. Jeder Aufbau fügt eine Oberfläche hinzu.
 reference-surface-change-these-in-preferences = Diese unter Einstellungen, Modellierung ändern
+reference-surface-spacing = Gitterabstand
+reference-surface-spacing-help = Abstand der Gitterknoten in x und y. Der Spline ist bei jedem Abstand derselbe; ein feineres Gitter liest ihn an mehr Stellen ab.
+reference-surface-spacing-nodes = Etwa { $nodes } Gitterknoten im Rechteck um die Ausdehnung
+reference-surface-spacing-over-budget = Etwa { $nodes } Gitterknoten im Rechteck um die Ausdehnung, über dem Budget von { $budget }: ein Abstand von { $spacing } m passt
+reference-surface-spacing-none-fits = Etwa { $nodes } Gitterknoten im Rechteck um die Ausdehnung, bei jedem angebotenen Abstand über dem Budget von { $budget }: wählen Sie eine kleinere Ausdehnung
 reference-surface-triangulates-selected-points-plan-in = Trianguliert die ausgewählten Punkte im Grundriss zu einer neuen Oberfläche. Jeder Aufbau fügt eine Oberfläche hinzu.
 
 ## Screenshot strings
@@ -2650,6 +2656,10 @@ tri-build-prismoid-grid = Prismoidgitter erstellen
 tri-build-prismoid-grid-help = Erstellt ein Prismoidgitter zwischen Hangendem und Liegendem auf einem Gitter, wie Oberfläche erstellen und Mächtigkeitsflächen sie erzeugen. Zellen, in denen eine Fläche keine Höhe oder keine Dreiecke hat oder das Liegende über dem Hangenden liegt, werden ausgelassen.
 tri-prismoid-roof-help = Die obere Fläche des Intervalls: das Hangende des Flözes oder der Lage.
 tri-prismoid-floor-help = Die untere Fläche des Intervalls, auf demselben Gitter wie das Hangende.
+tri-prismoid-cell-size = Zellgröße
+tri-prismoid-cell-size-help = Jedes Prismoid überspannt je Seite so viele Gitterzellen der Flächen und nimmt jeden n-ten Knoten; nichts wird interpoliert. Für feinere Zellen die Flächen feiner erstellen.
+tri-prismoid-cell-size-surfaces = Der Abstand der Flächen
+tri-prismoid-cell-size-times = { $times } × der Abstand der Flächen
 tri-name-assigned-prismoid-grid = Name des neuen Prismoidgitters.
 tri-prismoid-grid-name-hint = Gitter oberes Flöz
 

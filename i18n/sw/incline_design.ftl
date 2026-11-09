@@ -776,12 +776,13 @@ cmd-prismoid-grid-building = Inajenga Gridi ya Prismoidi…
 cmd-prismoid-grid-mesh-failed = Imeshindwa kujenga jiometri ya Gridi ya Prismoidi '{ $name }'
 cmd-prismoid-grid-preparing = Inaandaa Gridi ya Prismoidi…
 cmd-prismoid-grid-too-large-to-draw = Gridi ya Prismoidi '{ $name }' ina pembe { $corners }, zaidi ya kikomo cha { $budget }, na haichorwi. Bado imeorodheshwa na kuhifadhiwa.
-cmd-prismoid-grid-built = Gridi ya Prismoidi '{ $name }' imejengwa: seli { $columns } × { $rows }, { $active } hai, unene wima { $min } hadi { $max }
+cmd-prismoid-grid-built = Gridi ya Prismoidi '{ $name }' imejengwa: seli { $columns } × { $rows } za m { $size }, { $active } hai, unene wima { $min } hadi { $max }
 cmd-prismoid-grid-crossed = { $count } seli za mwingiliano wa { $roof } na { $floor } zimeachwa mahali sakafu iko juu ya paa
 cmd-prismoid-grid-holes = { $count } seli za mwingiliano wa { $roof } na { $floor } zimeachwa mahali paa au sakafu haina kimo au pembetatu
 cmd-prismoid-grid-not-a-grid = { $name } haiwezi kutengeneza gridi ya prismoidi: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } na { $floor } haziko kwenye gridi moja: chagua paa na sakafu zilizojengwa kwa nafasi sawa, kama Jenga Uso na Nyuso za Unene zinavyozitengeneza
 cmd-prismoid-grid-no-overlap = { $roof } na { $floor } hazina seli inayofunikwa na zote mbili
+cmd-prismoid-grid-cell-too-large = { $roof } na { $floor } zinashiriki vifundo vichache mno vya gridi kwa seli za m { $size }, zinazohitaji pembe mbili kila upande: chagua ukubwa mdogo wa seli
 cmd-prismoid-grid-roof-below = { $roof } iko chini ya { $floor } popote zinapokatana: zichague kinyume
 cmd-prismoid-grid-no-thickness = { $roof } na { $floor } zinakutana popote zote zinapofunika: hakuna seli yenye unene
 cmd-prismoid-grid-same-surface = Paa na sakafu lazima ziwe nyuso mbili tofauti
@@ -2195,6 +2196,11 @@ reference-surface-extent-help = Mfuatano uliofungwa uliochaguliwa ambao uso ulio
 reference-surface-selected-open-strings-surface-made = Mifuatano iliyo wazi iliyochaguliwa ambayo uso unafanywa kupita ndani yake, kama ilivyochaguliwa dirisha lilipofunguliwa. Funga dirisha ili kuchagua tofauti.
 reference-surface-grids-selected-points-plan-into = Hupanga vidokezo vilivyochaguliwa kwenye mpango kuwa gridi ya uso mpya. Kila ujenzi huongeza uso.
 reference-surface-change-these-in-preferences = Badilisha haya katika Mapendeleo, Uundaji wa Mifano
+reference-surface-spacing = Nafasi ya gridi
+reference-surface-spacing-help = Umbali kati ya vifundo vya gridi kwa x na y. Spline ni ileile kwa kila nafasi; gridi nyembamba zaidi huisoma mahali pengi zaidi.
+reference-surface-spacing-nodes = Takriban vifundo { $nodes } vya gridi ndani ya mstatili unaozunguka eneo
+reference-surface-spacing-over-budget = Takriban vifundo { $nodes } vya gridi ndani ya mstatili unaozunguka eneo, juu ya kikomo cha { $budget }: nafasi ya m { $spacing } inatosha
+reference-surface-spacing-none-fits = Takriban vifundo { $nodes } vya gridi ndani ya mstatili unaozunguka eneo, juu ya kikomo cha { $budget } kwa kila nafasi iliyotolewa: chagua eneo dogo zaidi
 reference-surface-triangulates-selected-points-plan-in = Hutatua vidokezo vilivyochaguliwa kwenye mpango kuwa uso mpya. Kila ujenzi huongeza uso.
 
 ## Screenshot strings
@@ -2633,6 +2639,10 @@ tri-build-prismoid-grid = Jenga Gridi ya Prismoidi
 tri-build-prismoid-grid-help = Hujenga gridi ya prismoidi kati ya paa na sakafu kwenye gridi moja, kama Jenga Uso na Nyuso za Unene zinavyozitengeneza. Seli ambapo moja haina kimo au pembetatu, au sakafu iko juu ya paa, zinaachwa.
 tri-prismoid-roof-help = Uso wa juu wa kipindi: paa la tabaka au sehemu ya tabaka.
 tri-prismoid-floor-help = Uso wa chini wa kipindi, kwenye gridi ileile ya paa.
+tri-prismoid-cell-size = Ukubwa wa seli
+tri-prismoid-cell-size-help = Kila prismoidi inafunika idadi hii ya seli za gridi ya nyuso kila upande, ikichukua kila kifundo cha n; hakuna kinachokadiriwa kati. Kwa seli ndogo zaidi, jenga nyuso kwa nafasi ndogo zaidi.
+tri-prismoid-cell-size-surfaces = Nafasi ya nyuso
+tri-prismoid-cell-size-times = { $times } × nafasi ya nyuso
 tri-name-assigned-prismoid-grid = Jina la gridi mpya ya prismoidi.
 tri-prismoid-grid-name-hint = gridi ya tabaka la juu
 

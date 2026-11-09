@@ -1525,7 +1525,7 @@ cmd-prismoid-grid-building = Building prismoid grid…
 cmd-prismoid-grid-mesh-failed = Could not build the mesh of prismoid grid '{ $name }'
 cmd-prismoid-grid-preparing = Preparing prismoid grid…
 cmd-prismoid-grid-too-large-to-draw = Prismoid grid '{ $name }' has { $corners } corners, over the budget of { $budget }, and is not drawn. It is still listed and saved.
-cmd-prismoid-grid-built = Built prismoid grid '{ $name }': { $columns } × { $rows } cells, { $active } active, vertical thickness { $min } to { $max }
+cmd-prismoid-grid-built = Built prismoid grid '{ $name }': { $columns } × { $rows } cells of { $size } m, { $active } active, vertical thickness { $min } to { $max }
 cmd-prismoid-grid-crossed =
     { $count ->
         [one] { $count } cell
@@ -1539,6 +1539,7 @@ cmd-prismoid-grid-holes =
 cmd-prismoid-grid-not-a-grid = { $name } cannot make a prismoid grid: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } and { $floor } are not on one grid: pick a roof and floor built at the same spacing, as Build Surface and Thickness Surfaces make them
 cmd-prismoid-grid-no-overlap = { $roof } and { $floor } share no grid cell that both cover
+cmd-prismoid-grid-cell-too-large = { $roof } and { $floor } share too few grid nodes for cells of { $size } m, which need two corners along each side: pick a smaller cell size
 cmd-prismoid-grid-roof-below = { $roof } lies below { $floor } wherever they cross: pick them the other way round
 cmd-prismoid-grid-no-thickness = { $roof } and { $floor } meet wherever both cover: no cell has any thickness
 cmd-prismoid-grid-same-surface = The roof and floor must be two different surfaces
@@ -3988,6 +3989,11 @@ reference-surface-extent-help = The selected closed string the finished surface 
 reference-surface-selected-open-strings-surface-made = The selected open strings the surface is made to pass through, as selected when the dialog opened. Close the dialog to select different ones.
 reference-surface-grids-selected-points-plan-into = Grids the selected points in plan into a new surface. Each build adds a surface.
 reference-surface-change-these-in-preferences = Change these in Preferences, Modelling
+reference-surface-spacing = Grid spacing
+reference-surface-spacing-help = Distance between grid nodes along x and y. The spline is the same at every spacing; a finer grid reads it at more places.
+reference-surface-spacing-nodes = About { $nodes } grid nodes in the box around the extent
+reference-surface-spacing-over-budget = About { $nodes } grid nodes in the box around the extent, over the budget of { $budget }: a spacing of { $spacing } m fits
+reference-surface-spacing-none-fits = About { $nodes } grid nodes in the box around the extent, over the budget of { $budget } at every spacing offered: pick a smaller extent
 
 ## Screenshot strings
 
@@ -4436,6 +4442,10 @@ tri-build-prismoid-grid = Build Prismoid Grid
 tri-build-prismoid-grid-help = Builds a prismoid grid between a roof and a floor on one grid, as Build Surface and Thickness Surfaces make them. Cells where either has no height or no triangles, or the floor lies above the roof, are left out.
 tri-prismoid-roof-help = The upper surface of the interval: the roof of the seam or ply.
 tri-prismoid-floor-help = The lower surface of the interval, on the same grid as the roof.
+tri-prismoid-cell-size = Cell size
+tri-prismoid-cell-size-help = Each prismoid spans this many of the surfaces' grid cells along each side, taking every n-th node; nothing is interpolated. For finer cells, build the surfaces finer.
+tri-prismoid-cell-size-surfaces = The surfaces' spacing
+tri-prismoid-cell-size-times = { $times } × the surfaces' spacing
 tri-name-assigned-prismoid-grid = Name given to the new prismoid grid.
 tri-prismoid-grid-name-hint = upper seam grid
 tri-design-surface = Design Surface

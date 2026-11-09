@@ -742,7 +742,7 @@ cmd-prismoid-grid-building = Creando malla de prismoides…
 cmd-prismoid-grid-mesh-failed = No se pudo crear la geometría de la malla de prismoides '{ $name }'
 cmd-prismoid-grid-preparing = Preparando malla de prismoides…
 cmd-prismoid-grid-too-large-to-draw = La malla de prismoides '{ $name }' tiene { $corners } esquinas, más que el límite de { $budget }, y no se dibuja. Sigue en la lista y guardada.
-cmd-prismoid-grid-built = Malla de prismoides '{ $name }' creada: { $columns } × { $rows } celdas, { $active } activas, espesor vertical de { $min } a { $max }
+cmd-prismoid-grid-built = Malla de prismoides '{ $name }' creada: { $columns } × { $rows } celdas de { $size } m, { $active } activas, espesor vertical de { $min } a { $max }
 cmd-prismoid-grid-crossed =
     { $count ->
         [one] { $count } celda
@@ -756,6 +756,7 @@ cmd-prismoid-grid-holes =
 cmd-prismoid-grid-not-a-grid = { $name } no puede formar una malla de prismoides: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } y { $floor } no están en una misma malla: elija un techo y un piso creados con el mismo espaciado, como los producen Crear superficie y Superficies de espesor
 cmd-prismoid-grid-no-overlap = { $roof } y { $floor } no comparten ninguna celda que ambos cubran
+cmd-prismoid-grid-cell-too-large = { $roof } y { $floor } comparten muy pocos nodos de malla para celdas de { $size } m, que necesitan dos esquinas por lado: elija un tamaño de celda menor
 cmd-prismoid-grid-roof-below = { $roof } queda bajo { $floor } dondequiera que se cruzan: elíjalos al revés
 cmd-prismoid-grid-no-thickness = { $roof } y { $floor } se tocan dondequiera que ambos cubren: ninguna celda tiene espesor
 cmd-prismoid-grid-same-surface = El techo y el piso deben ser dos superficies distintas
@@ -2169,6 +2170,11 @@ reference-surface-extent-help = La cadena cerrada seleccionada a la que se recor
 reference-surface-selected-open-strings-surface-made = Las cadenas abiertas seleccionadas por las que se hace pasar la superficie, tal como estaban seleccionadas al abrir el diálogo. Cierre el diálogo para seleccionar otras.
 reference-surface-grids-selected-points-plan-into = Genera en planta una cuadrícula con los puntos seleccionados para crear una superficie nueva. Cada construcción añade una superficie.
 reference-surface-change-these-in-preferences = Cámbielos en Preferencias, Modelización
+reference-surface-spacing = Espaciado de la malla
+reference-surface-spacing-help = Distancia entre nodos de la malla en x e y. El spline es el mismo con cualquier espaciado; una malla más fina lo lee en más puntos.
+reference-surface-spacing-nodes = Unos { $nodes } nodos de malla en el rectángulo que rodea la extensión
+reference-surface-spacing-over-budget = Unos { $nodes } nodos de malla en el rectángulo que rodea la extensión, por encima del límite de { $budget }: cabe un espaciado de { $spacing } m
+reference-surface-spacing-none-fits = Unos { $nodes } nodos de malla en el rectángulo que rodea la extensión, por encima del límite de { $budget } con todos los espaciados ofrecidos: elija una extensión menor
 reference-surface-triangulates-selected-points-plan-in = Triangula en planta los puntos seleccionados en una superficie nueva. Cada construcción añade una superficie.
 
 ## Screenshot strings
@@ -2607,6 +2613,10 @@ tri-build-prismoid-grid = Crear malla de prismoides
 tri-build-prismoid-grid-help = Crea una malla de prismoides entre un techo y un piso en una misma malla, como los producen Crear superficie y Superficies de espesor. Se omiten las celdas donde alguno no tiene altura o triángulos, o donde el piso queda sobre el techo.
 tri-prismoid-roof-help = La superficie superior del intervalo: el techo del manto o capa.
 tri-prismoid-floor-help = La superficie inferior del intervalo, en la misma malla que el techo.
+tri-prismoid-cell-size = Tamaño de celda
+tri-prismoid-cell-size-help = Cada prismoide abarca este número de celdas de la malla de las superficies por lado, tomando cada n-ésimo nodo; no se interpola nada. Para celdas más finas, cree las superficies más finas.
+tri-prismoid-cell-size-surfaces = El espaciado de las superficies
+tri-prismoid-cell-size-times = { $times } × el espaciado de las superficies
 tri-name-assigned-prismoid-grid = Nombre de la nueva malla de prismoides.
 tri-prismoid-grid-name-hint = malla del manto superior
 

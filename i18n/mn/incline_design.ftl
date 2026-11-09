@@ -795,12 +795,13 @@ cmd-prismoid-grid-building = Призмоид тор бүтээж байна…
 cmd-prismoid-grid-mesh-failed = Призмоид тор '{ $name }'-ийн геометрийг бүтээж чадсангүй
 cmd-prismoid-grid-preparing = Призмоид торыг бэлтгэж байна…
 cmd-prismoid-grid-too-large-to-draw = Призмоид тор '{ $name }' нь { $corners } булантай бөгөөд { $budget }-ийн хязгаараас хэтэрсэн тул зурагдахгүй. Жагсаалтад хэвээр, хадгалагдсан хэвээр байна.
-cmd-prismoid-grid-built = Призмоид тор '{ $name }' бүтээгдлээ: { $columns } × { $rows } нүд, { $active } идэвхтэй, босоо зузаан { $min }-с { $max }
+cmd-prismoid-grid-built = Призмоид тор '{ $name }' бүтээгдлээ: { $size } м-ийн { $columns } × { $rows } нүд, { $active } идэвхтэй, босоо зузаан { $min }-с { $max }
 cmd-prismoid-grid-crossed = { $count } нүд ({ $roof } ба { $floor }-ын давхцал) улын гадаргуу дээврээс дээш байгаа газарт хасагдлаа
 cmd-prismoid-grid-holes = { $count } нүд ({ $roof } ба { $floor }-ын давхцал) дээвэр эсвэл улд өндөр эсвэл гурвалжин байхгүй газарт хасагдлаа
 cmd-prismoid-grid-not-a-grid = { $name }-аас призмоид тор бүтээх боломжгүй: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } ба { $floor } нэг торон дээр биш: Гадаргуу бүтээх болон Зузааны гадаргуу бүтээдэгтэй адил ижил алхамтай дээвэр, ул сонгоно уу
 cmd-prismoid-grid-no-overlap = { $roof } ба { $floor } хоёулаа хамарсан нүд байхгүй
+cmd-prismoid-grid-cell-too-large = { $roof } ба { $floor } нь тал бүртээ хоёр булан шаарддаг { $size } м-ийн нүдэнд хэтэрхий цөөн нийтлэг торын зангилаатай: жижиг нүдний хэмжээ сонгоно уу
 cmd-prismoid-grid-roof-below = { $roof } огтлолцох бүх газарт { $floor }-с доор байна: эсрэгээр сонгоно уу
 cmd-prismoid-grid-no-thickness = { $roof } ба { $floor } хоёулаа хамарсан бүх газарт нийлж байна: зузаантай нүд алга
 cmd-prismoid-grid-same-surface = Дээвэр ба ул нь хоёр өөр гадаргуу байх ёстой
@@ -2214,6 +2215,11 @@ reference-surface-extent-help = Дууссан гадаргууг огтлох �
 reference-surface-selected-open-strings-surface-made = Гадаргууг дайрч өнгөрүүлэх сонгосон задгай шугамууд, цонх нээгдэх үед сонгогдсон ёсоор. Өөрийг сонгохын тулд цонхыг хаана уу.
 reference-surface-grids-selected-points-plan-into = Сонгосон цэгүүдийг төлөвлөгөөн дээр торлон шинэ гадаргуу үүсгэнэ. Бүтээлт бүр гадаргуу нэмнэ.
 reference-surface-change-these-in-preferences = Эдгээрийг Тохиргоо, Загварчлал хэсэгт өөрчилнө
+reference-surface-spacing = Торын алхам
+reference-surface-spacing-help = x ба y чиглэлд торын зангилааны хоорондох зай. Сплайн ямар ч алхамд ижил; нягт тор түүнийг илүү олон газар уншина.
+reference-surface-spacing-nodes = Хүрээг тойрсон тэгш өнцөгтөд ойролцоогоор { $nodes } торын зангилаа
+reference-surface-spacing-over-budget = Хүрээг тойрсон тэгш өнцөгтөд ойролцоогоор { $nodes } торын зангилаа, { $budget } хязгаараас илүү: { $spacing } м алхам багтана
+reference-surface-spacing-none-fits = Хүрээг тойрсон тэгш өнцөгтөд ойролцоогоор { $nodes } торын зангилаа, санал болгосон алхам бүрт { $budget } хязгаараас илүү: жижиг хүрээ сонгоно уу
 reference-surface-triangulates-selected-points-plan-in = Сонгосон цэгүүдийг төлөвлөгөөн дээр триангуляц хийж шинэ гадаргуу үүсгэнэ. Бүтээлт бүр гадаргуу нэмнэ.
 
 ## Screenshot strings
@@ -2652,6 +2658,10 @@ tri-build-prismoid-grid = Призмоид тор бүтээх
 tri-build-prismoid-grid-help = Гадаргуу бүтээх болон Зузааны гадаргуу бүтээдэгтэй адил нэг торон дээрх дээвэр ба улын хооронд призмоид тор бүтээнэ. Аль нэгэнд нь өндөр эсвэл гурвалжин байхгүй, эсвэл ул дээврээс дээш байгаа нүдийг хасна.
 tri-prismoid-roof-help = Завсрын дээд гадаргуу: давхарга эсвэл үеийн дээвэр.
 tri-prismoid-floor-help = Завсрын доод гадаргуу, дээвэртэй ижил торон дээр.
+tri-prismoid-cell-size = Нүдний хэмжээ
+tri-prismoid-cell-size-help = Призмоид бүр тал бүртээ гадаргуунуудын торын ийм тооны нүдийг хамарч, n дэх зангилаа бүрийг авна; юу ч интерполяцлахгүй. Нарийн нүдэнд гадаргуунуудыг нягт бүтээнэ үү.
+tri-prismoid-cell-size-surfaces = Гадаргуунуудын алхам
+tri-prismoid-cell-size-times = Гадаргуунуудын алхмын { $times } дахин
 tri-name-assigned-prismoid-grid = Шинэ призмоид торны нэр.
 tri-prismoid-grid-name-hint = дээд давхаргын тор
 

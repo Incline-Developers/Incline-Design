@@ -744,12 +744,13 @@ cmd-prismoid-grid-building = 正在构建拟柱体网格…
 cmd-prismoid-grid-mesh-failed = 无法构建拟柱体网格 '{ $name }' 的几何
 cmd-prismoid-grid-preparing = 正在准备拟柱体网格…
 cmd-prismoid-grid-too-large-to-draw = 拟柱体网格 '{ $name }' 有 { $corners } 个角点,超过预算 { $budget },因此不绘制。它仍保留在列表中并会保存。
-cmd-prismoid-grid-built = 已构建拟柱体网格 '{ $name }': { $columns } × { $rows } 个单元,{ $active } 个有效,垂直厚度 { $min } 至 { $max }
+cmd-prismoid-grid-built = 已构建拟柱体网格 '{ $name }': { $columns } × { $rows } 个 { $size } m 单元,{ $active } 个有效,垂直厚度 { $min } 至 { $max }
 cmd-prismoid-grid-crossed = { $count } 个单元 ({ $roof } 与 { $floor } 的重叠区) 在底板高于顶板处被排除
 cmd-prismoid-grid-holes = { $count } 个单元 ({ $roof } 与 { $floor } 的重叠区) 在顶板或底板无高程或无三角形处被排除
 cmd-prismoid-grid-not-a-grid = { $name } 无法生成拟柱体网格: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } 和 { $floor } 不在同一网格上: 请选择以相同间距构建的顶板和底板,如构建曲面和厚度曲面所生成的
 cmd-prismoid-grid-no-overlap = { $roof } 和 { $floor } 没有共同覆盖的网格单元
+cmd-prismoid-grid-cell-too-large = { $roof } 与 { $floor } 共有的网格节点太少,无法构成每边需要两个角点的 { $size } m 单元:请选择更小的单元尺寸
 cmd-prismoid-grid-roof-below = { $roof } 在所有交叉处都低于 { $floor }: 请反过来选择
 cmd-prismoid-grid-no-thickness = { $roof } 和 { $floor } 在共同覆盖处全部相接: 没有单元具有厚度
 cmd-prismoid-grid-same-surface = 顶板和底板必须是两个不同的曲面
@@ -2163,6 +2164,11 @@ reference-surface-extent-help = 所选闭合线，完成的曲面将裁剪到该
 reference-surface-selected-open-strings-surface-made = 曲面必须穿过的所选开放线，即打开对话框时所选的线。关闭对话框以选择其他线。
 reference-surface-grids-selected-points-plan-into = 在平面上将所选点网格化，生成新曲面。每次构建都会新增一个曲面。
 reference-surface-change-these-in-preferences = 在 偏好设置 的 建模 中更改这些
+reference-surface-spacing = 网格间距
+reference-surface-spacing-help = 网格节点在 x 和 y 方向上的间距。样条在任何间距下都相同;更细的网格在更多位置读取它。
+reference-surface-spacing-nodes = 范围外接矩形内约有 { $nodes } 个网格节点
+reference-surface-spacing-over-budget = 范围外接矩形内约有 { $nodes } 个网格节点,超过上限 { $budget }:{ $spacing } m 的间距可以容纳
+reference-surface-spacing-none-fits = 范围外接矩形内约有 { $nodes } 个网格节点,在提供的每种间距下都超过上限 { $budget }:请选择更小的范围
 reference-surface-triangulates-selected-points-plan-in = 在平面上对所选点进行三角剖分，生成新曲面。每次构建都会新增一个曲面。
 
 ## Screenshot strings
@@ -2601,6 +2607,10 @@ tri-build-prismoid-grid = 构建拟柱体网格
 tri-build-prismoid-grid-help = 在同一网格上的顶板和底板之间构建拟柱体网格,如构建曲面和厚度曲面所生成的。任一方无高程或无三角形,或底板高于顶板的单元将被排除。
 tri-prismoid-roof-help = 区间的上表面: 煤层或分层的顶板。
 tri-prismoid-floor-help = 区间的下表面,与顶板在同一网格上。
+tri-prismoid-cell-size = 单元尺寸
+tri-prismoid-cell-size-help = 每个拟柱体每边跨越表面网格的这么多个单元,每隔 n 个节点取一个;不做插值。要更细的单元,请把表面构建得更细。
+tri-prismoid-cell-size-surfaces = 表面的间距
+tri-prismoid-cell-size-times = 表面间距的 { $times } 倍
 tri-name-assigned-prismoid-grid = 新拟柱体网格的名称。
 tri-prismoid-grid-name-hint = 上部煤层网格
 

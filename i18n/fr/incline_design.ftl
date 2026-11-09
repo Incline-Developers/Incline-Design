@@ -744,7 +744,7 @@ cmd-prismoid-grid-building = Création de la grille de prismoïdes…
 cmd-prismoid-grid-mesh-failed = Impossible de construire la géométrie de la grille de prismoïdes '{ $name }'
 cmd-prismoid-grid-preparing = Préparation de la grille de prismoïdes…
 cmd-prismoid-grid-too-large-to-draw = La grille de prismoïdes '{ $name }' a { $corners } sommets, au-delà du budget de { $budget }, et n'est pas dessinée. Elle reste listée et enregistrée.
-cmd-prismoid-grid-built = Grille de prismoïdes '{ $name }' créée : { $columns } × { $rows } cellules, { $active } actives, épaisseur verticale de { $min } à { $max }
+cmd-prismoid-grid-built = Grille de prismoïdes '{ $name }' créée : { $columns } × { $rows } cellules de { $size } m, { $active } actives, épaisseur verticale de { $min } à { $max }
 cmd-prismoid-grid-crossed =
     { $count ->
         [one] { $count } cellule
@@ -758,6 +758,7 @@ cmd-prismoid-grid-holes =
 cmd-prismoid-grid-not-a-grid = { $name } ne peut pas former une grille de prismoïdes : { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } et { $floor } ne sont pas sur une même grille : choisissez un toit et un mur créés au même pas, comme les produisent Créer une surface et Surfaces d'épaisseur
 cmd-prismoid-grid-no-overlap = { $roof } et { $floor } n'ont aucune cellule couverte par les deux
+cmd-prismoid-grid-cell-too-large = { $roof } et { $floor } partagent trop peu de nœuds de grille pour des cellules de { $size } m, qui demandent deux coins par côté : choisissez une taille de cellule plus petite
 cmd-prismoid-grid-roof-below = { $roof } passe sous { $floor } partout où ils se croisent : choisissez-les dans l'autre sens
 cmd-prismoid-grid-no-thickness = { $roof } et { $floor } se touchent partout où les deux couvrent : aucune cellule n'a d'épaisseur
 cmd-prismoid-grid-same-surface = Le toit et le mur doivent être deux surfaces différentes
@@ -2171,6 +2172,11 @@ reference-surface-extent-help = La ligne fermée sélectionnée à laquelle la s
 reference-surface-selected-open-strings-surface-made = Les lignes ouvertes sélectionnées par lesquelles la surface est forcée de passer, telles que sélectionnées à l’ouverture de la boîte de dialogue. Fermez-la pour en sélectionner d’autres.
 reference-surface-grids-selected-points-plan-into = Interpole en plan les points sélectionnés sur une grille pour créer une nouvelle surface. Chaque construction ajoute une surface.
 reference-surface-change-these-in-preferences = Modifiez-les dans Préférences, Modélisation
+reference-surface-spacing = Pas de la grille
+reference-surface-spacing-help = Distance entre les nœuds de la grille en x et en y. La spline est la même à tout pas ; une grille plus fine la lit en plus d'endroits.
+reference-surface-spacing-nodes = Environ { $nodes } nœuds de grille dans le rectangle autour de l'étendue
+reference-surface-spacing-over-budget = Environ { $nodes } nœuds de grille dans le rectangle autour de l'étendue, au-delà du budget de { $budget } : un pas de { $spacing } m convient
+reference-surface-spacing-none-fits = Environ { $nodes } nœuds de grille dans le rectangle autour de l'étendue, au-delà du budget de { $budget } à chaque pas proposé : choisissez une étendue plus petite
 reference-surface-triangulates-selected-points-plan-in = Triangule en plan les points sélectionnés en une nouvelle surface. Chaque construction ajoute une surface.
 
 ## Screenshot strings
@@ -2609,6 +2615,10 @@ tri-build-prismoid-grid = Créer une grille de prismoïdes
 tri-build-prismoid-grid-help = Crée une grille de prismoïdes entre un toit et un mur sur une même grille, comme les produisent Créer une surface et Surfaces d'épaisseur. Les cellules où l'un d'eux n'a ni hauteur ni triangles, ou où le mur passe au-dessus du toit, sont écartées.
 tri-prismoid-roof-help = La surface supérieure de l'intervalle : le toit de la veine ou du lit.
 tri-prismoid-floor-help = La surface inférieure de l'intervalle, sur la même grille que le toit.
+tri-prismoid-cell-size = Taille de cellule
+tri-prismoid-cell-size-help = Chaque prismoïde couvre ce nombre de cellules de la grille des surfaces par côté, en prenant un nœud sur n ; rien n'est interpolé. Pour des cellules plus fines, construisez des surfaces plus fines.
+tri-prismoid-cell-size-surfaces = Le pas des surfaces
+tri-prismoid-cell-size-times = { $times } × le pas des surfaces
 tri-name-assigned-prismoid-grid = Nom donné à la nouvelle grille de prismoïdes.
 tri-prismoid-grid-name-hint = grille de la veine supérieure
 

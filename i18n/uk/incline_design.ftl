@@ -791,7 +791,7 @@ cmd-prismoid-grid-building = Побудова сітки призмоїдів…
 cmd-prismoid-grid-mesh-failed = Не вдалося побудувати геометрію сітки призмоїдів '{ $name }'
 cmd-prismoid-grid-preparing = Підготовка сітки призмоїдів…
 cmd-prismoid-grid-too-large-to-draw = Сітка призмоїдів '{ $name }' має { $corners } вузлів, що перевищує ліміт { $budget }, тому не відображається. Вона лишається у списку й зберігається.
-cmd-prismoid-grid-built = Побудовано сітку призмоїдів '{ $name }': { $columns } × { $rows } комірок, активних { $active }, вертикальна потужність від { $min } до { $max }
+cmd-prismoid-grid-built = Побудовано сітку призмоїдів '{ $name }': { $columns } × { $rows } комірок по { $size } м, активних { $active }, вертикальна потужність від { $min } до { $max }
 cmd-prismoid-grid-crossed =
     { $count ->
         [one] { $count } комірка
@@ -805,6 +805,7 @@ cmd-prismoid-grid-holes =
 cmd-prismoid-grid-not-a-grid = { $name } не може дати сітку призмоїдів: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } і { $floor } не на одній сітці: виберіть покрівлю й підошву з однаковим кроком, як їх створюють Побудувати поверхню та Поверхні потужності
 cmd-prismoid-grid-no-overlap = { $roof } і { $floor } не мають комірки, покритої обома
+cmd-prismoid-grid-cell-too-large = У { $roof } і { $floor } замало спільних вузлів сітки для комірок { $size } м, яким потрібні два кути на кожній стороні: виберіть менший розмір комірки
 cmd-prismoid-grid-roof-below = { $roof } лежить нижче { $floor } скрізь, де вони перетинаються: виберіть їх навпаки
 cmd-prismoid-grid-no-thickness = { $roof } і { $floor } сходяться скрізь, де покривають обидві: жодна комірка не має потужності
 cmd-prismoid-grid-same-surface = Покрівля й підошва мають бути двома різними поверхнями
@@ -2218,6 +2219,11 @@ reference-surface-extent-help = Вибрана замкнена лінія, за
 reference-surface-selected-open-strings-surface-made = Вибрані розімкнені лінії, через які проходить поверхня, як вибрано на момент відкриття діалогу. Закрийте діалог, щоб вибрати інші.
 reference-surface-grids-selected-points-plan-into = Будує за вибраними точками в плані нову поверхню сіткою. Кожна побудова додає поверхню.
 reference-surface-change-these-in-preferences = Змініть їх у Параметри, Моделювання
+reference-surface-spacing = Крок сітки
+reference-surface-spacing-help = Відстань між вузлами сітки по x і y. Сплайн однаковий за будь-якого кроку; густіша сітка зчитує його в більшій кількості місць.
+reference-surface-spacing-nodes = Близько { $nodes } вузлів сітки в прямокутнику навколо області
+reference-surface-spacing-over-budget = Близько { $nodes } вузлів сітки в прямокутнику навколо області, понад ліміт { $budget }: підходить крок { $spacing } м
+reference-surface-spacing-none-fits = Близько { $nodes } вузлів сітки в прямокутнику навколо області, понад ліміт { $budget } за кожного запропонованого кроку: виберіть меншу область
 reference-surface-triangulates-selected-points-plan-in = Тріангулює вибрані точки в плані в нову поверхню. Кожна побудова додає поверхню.
 
 ## Screenshot strings
@@ -2656,6 +2662,10 @@ tri-build-prismoid-grid = Побудувати сітку призмоїдів
 tri-build-prismoid-grid-help = Будує сітку призмоїдів між покрівлею та підошвою на одній сітці, як їх створюють Побудувати поверхню та Поверхні потужності. Комірки, де одна з них не має висоти чи трикутників або підошва лежить вище покрівлі, вилучаються.
 tri-prismoid-roof-help = Верхня поверхня інтервалу: покрівля пласта чи пачки.
 tri-prismoid-floor-help = Нижня поверхня інтервалу, на тій самій сітці, що й покрівля.
+tri-prismoid-cell-size = Розмір комірки
+tri-prismoid-cell-size-help = Кожен призмоїд охоплює стільки комірок сітки поверхонь на кожній стороні, беручи кожен n-й вузол; нічого не інтерполюється. Для дрібніших комірок побудуйте поверхні густіше.
+tri-prismoid-cell-size-surfaces = Крок поверхонь
+tri-prismoid-cell-size-times = { $times } × крок поверхонь
 tri-name-assigned-prismoid-grid = Назва нової сітки призмоїдів.
 tri-prismoid-grid-name-hint = сітка верхнього пласта
 

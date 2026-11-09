@@ -786,7 +786,7 @@ cmd-prismoid-grid-building = Creazione della griglia di prismoidi…
 cmd-prismoid-grid-mesh-failed = Impossibile creare la geometria della griglia di prismoidi '{ $name }'
 cmd-prismoid-grid-preparing = Preparazione della griglia di prismoidi…
 cmd-prismoid-grid-too-large-to-draw = La griglia di prismoidi '{ $name }' ha { $corners } vertici, oltre il limite di { $budget }, e non viene disegnata. Resta elencata e salvata.
-cmd-prismoid-grid-built = Griglia di prismoidi '{ $name }' creata: { $columns } × { $rows } celle, { $active } attive, spessore verticale da { $min } a { $max }
+cmd-prismoid-grid-built = Griglia di prismoidi '{ $name }' creata: { $columns } × { $rows } celle da { $size } m, { $active } attive, spessore verticale da { $min } a { $max }
 cmd-prismoid-grid-crossed =
     { $count ->
         [one] { $count } cella
@@ -800,6 +800,7 @@ cmd-prismoid-grid-holes =
 cmd-prismoid-grid-not-a-grid = { $name } non può formare una griglia di prismoidi: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } e { $floor } non sono su una stessa griglia: scegli un tetto e un letto creati con lo stesso passo, come li producono Crea superficie e Superfici di spessore
 cmd-prismoid-grid-no-overlap = { $roof } e { $floor } non hanno alcuna cella coperta da entrambi
+cmd-prismoid-grid-cell-too-large = { $roof } e { $floor } condividono troppo pochi nodi di griglia per celle da { $size } m, che richiedono due vertici per lato: scegli una dimensione di cella più piccola
 cmd-prismoid-grid-roof-below = { $roof } sta sotto { $floor } ovunque si incrociano: sceglili al contrario
 cmd-prismoid-grid-no-thickness = { $roof } e { $floor } si toccano ovunque entrambi coprono: nessuna cella ha spessore
 cmd-prismoid-grid-same-surface = Il tetto e il letto devono essere due superfici diverse
@@ -2213,6 +2214,11 @@ reference-surface-extent-help = La linea chiusa selezionata a cui viene ritaglia
 reference-surface-selected-open-strings-surface-made = Le linee aperte selezionate attraverso cui passa la superficie, come selezionate all'apertura della finestra. Chiudi la finestra per selezionarne altre.
 reference-surface-grids-selected-points-plan-into = Genera in pianta una griglia dai punti selezionati per creare una nuova superficie. Ogni costruzione aggiunge una superficie.
 reference-surface-change-these-in-preferences = Modificali in Preferenze, Modellazione
+reference-surface-spacing = Passo della griglia
+reference-surface-spacing-help = Distanza tra i nodi della griglia in x e y. La spline è la stessa a ogni passo; una griglia più fine la legge in più punti.
+reference-surface-spacing-nodes = Circa { $nodes } nodi di griglia nel rettangolo attorno all'estensione
+reference-surface-spacing-over-budget = Circa { $nodes } nodi di griglia nel rettangolo attorno all'estensione, oltre il limite di { $budget }: un passo di { $spacing } m rientra
+reference-surface-spacing-none-fits = Circa { $nodes } nodi di griglia nel rettangolo attorno all'estensione, oltre il limite di { $budget } con ogni passo offerto: scegli un'estensione più piccola
 reference-surface-triangulates-selected-points-plan-in = Triangola in pianta i punti selezionati in una nuova superficie. Ogni costruzione aggiunge una superficie.
 
 ## Screenshot strings
@@ -2651,6 +2657,10 @@ tri-build-prismoid-grid = Crea griglia di prismoidi
 tri-build-prismoid-grid-help = Crea una griglia di prismoidi tra un tetto e un letto su una stessa griglia, come li producono Crea superficie e Superfici di spessore. Le celle in cui uno dei due non ha quota o triangoli, o il letto sta sopra il tetto, vengono escluse.
 tri-prismoid-roof-help = La superficie superiore dell'intervallo: il tetto dello strato o del livello.
 tri-prismoid-floor-help = La superficie inferiore dell'intervallo, sulla stessa griglia del tetto.
+tri-prismoid-cell-size = Dimensione cella
+tri-prismoid-cell-size-help = Ogni prismoide copre questo numero di celle della griglia delle superfici per lato, prendendo un nodo ogni n; nulla viene interpolato. Per celle più fini, costruisci superfici più fini.
+tri-prismoid-cell-size-surfaces = Il passo delle superfici
+tri-prismoid-cell-size-times = { $times } × il passo delle superfici
 tri-name-assigned-prismoid-grid = Nome assegnato alla nuova griglia di prismoidi.
 tri-prismoid-grid-name-hint = griglia dello strato superiore
 

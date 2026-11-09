@@ -777,12 +777,13 @@ cmd-prismoid-grid-building = 프리즈모이드 격자 작성 중…
 cmd-prismoid-grid-mesh-failed = 프리즈모이드 격자 '{ $name }'의 형상을 작성할 수 없습니다
 cmd-prismoid-grid-preparing = 프리즈모이드 격자 준비 중…
 cmd-prismoid-grid-too-large-to-draw = 프리즈모이드 격자 '{ $name }'의 꼭짓점은 { $corners }개로 한도 { $budget }개를 초과하여 그려지지 않습니다. 목록과 저장에는 그대로 유지됩니다.
-cmd-prismoid-grid-built = 프리즈모이드 격자 '{ $name }' 작성됨: { $columns } × { $rows } 셀, 활성 { $active }, 수직 두께 { $min }에서 { $max }
+cmd-prismoid-grid-built = 프리즈모이드 격자 '{ $name }' 작성됨: { $size } m 셀 { $columns } × { $rows }, 활성 { $active }, 수직 두께 { $min }에서 { $max }
 cmd-prismoid-grid-crossed = { $count } 셀 ({ $roof }, { $floor } 겹침)을 하반이 상반 위에 있는 곳에서 제외했습니다
 cmd-prismoid-grid-holes = { $count } 셀 ({ $roof }, { $floor } 겹침)을 상반이나 하반에 높이나 삼각형이 없는 곳에서 제외했습니다
 cmd-prismoid-grid-not-a-grid = { $name }(으)로 프리즈모이드 격자를 만들 수 없습니다: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof }, { $floor }이(가) 한 격자에 있지 않습니다: 곡면 작성과 두께 곡면이 만드는 것처럼 같은 간격으로 작성된 상반과 하반을 선택하세요
 cmd-prismoid-grid-no-overlap = { $roof }, { $floor }이(가) 함께 덮는 셀이 없습니다
+cmd-prismoid-grid-cell-too-large = { $roof }와 { $floor }가 공유하는 격자 노드가 각 변에 모서리 두 개가 필요한 { $size } m 셀에는 너무 적습니다: 더 작은 셀 크기를 고르세요
 cmd-prismoid-grid-roof-below = 교차하는 모든 곳에서 { $roof }이(가) { $floor } 아래에 있습니다: 반대로 선택하세요
 cmd-prismoid-grid-no-thickness = 함께 덮는 모든 곳에서 { $roof }, { $floor }이(가) 맞닿습니다: 두께가 있는 셀이 없습니다
 cmd-prismoid-grid-same-surface = 상반과 하반은 서로 다른 곡면이어야 합니다
@@ -2196,6 +2197,11 @@ reference-surface-extent-help = 완성된 표면을 클립할 선택한 닫힌 �
 reference-surface-selected-open-strings-surface-made = 표면이 통과하도록 할 선택한 열린 선으로, 대화상자를 열 때 선택한 항목입니다. 다른 선을 선택하려면 대화상자를 닫으세요.
 reference-surface-grids-selected-points-plan-into = 선택한 점을 평면상에서 그리드화하여 새 표면을 만듭니다. 실행할 때마다 표면이 추가됩니다.
 reference-surface-change-these-in-preferences = 환경설정의 모델링에서 변경하십시오
+reference-surface-spacing = 격자 간격
+reference-surface-spacing-help = x와 y 방향 격자 노드 사이의 거리입니다. 스플라인은 어느 간격에서나 같으며, 더 촘촘한 격자는 더 많은 곳에서 값을 읽습니다.
+reference-surface-spacing-nodes = 범위를 둘러싼 사각형 안의 격자 노드 약 { $nodes }개
+reference-surface-spacing-over-budget = 범위를 둘러싼 사각형 안의 격자 노드 약 { $nodes }개로 한도 { $budget }을 넘습니다: { $spacing } m 간격이면 맞습니다
+reference-surface-spacing-none-fits = 범위를 둘러싼 사각형 안의 격자 노드 약 { $nodes }개로 제공되는 모든 간격에서 한도 { $budget }을 넘습니다: 더 작은 범위를 고르세요
 reference-surface-triangulates-selected-points-plan-in = 선택한 점을 평면상에서 삼각화하여 새 표면을 만듭니다. 실행할 때마다 표면이 추가됩니다.
 
 ## Screenshot strings
@@ -2634,6 +2640,10 @@ tri-build-prismoid-grid = 프리즈모이드 격자 작성
 tri-build-prismoid-grid-help = 곡면 작성과 두께 곡면이 만드는 것처럼 한 격자에 있는 상반과 하반 사이에 프리즈모이드 격자를 작성합니다. 어느 쪽이든 높이나 삼각형이 없는 셀, 또는 하반이 상반 위에 있는 셀은 제외됩니다.
 tri-prismoid-roof-help = 구간의 위쪽 곡면: 탄층 또는 분층의 상반.
 tri-prismoid-floor-help = 구간의 아래쪽 곡면으로, 상반과 같은 격자에 있습니다.
+tri-prismoid-cell-size = 셀 크기
+tri-prismoid-cell-size-help = 각 프리즈모이드는 각 변에서 면의 격자 셀을 이만큼 걸치며 n번째 노드마다 사용합니다. 보간은 하지 않습니다. 더 작은 셀을 원하면 면을 더 촘촘히 만드세요.
+tri-prismoid-cell-size-surfaces = 면의 간격
+tri-prismoid-cell-size-times = 면 간격의 { $times }배
 tri-name-assigned-prismoid-grid = 새 프리즈모이드 격자의 이름.
 tri-prismoid-grid-name-hint = 상부 탄층 격자
 

@@ -744,12 +744,13 @@ cmd-prismoid-grid-building = प्रिज़्मॉइड ग्रिड �
 cmd-prismoid-grid-mesh-failed = प्रिज़्मॉइड ग्रिड '{ $name }' की ज्यामिति नहीं बनाई जा सकी
 cmd-prismoid-grid-preparing = प्रिज़्मॉइड ग्रिड तैयार किया जा रहा है…
 cmd-prismoid-grid-too-large-to-draw = प्रिज़्मॉइड ग्रिड '{ $name }' में { $corners } कोने हैं, जो { $budget } की सीमा से अधिक हैं, इसलिए इसे नहीं खींचा गया। यह सूची में और सहेजा हुआ रहता है।
-cmd-prismoid-grid-built = प्रिज़्मॉइड ग्रिड '{ $name }' बनाया गया: { $columns } × { $rows } सेल, { $active } सक्रिय, ऊर्ध्वाधर मोटाई { $min } से { $max }
+cmd-prismoid-grid-built = प्रिज़्मॉइड ग्रिड '{ $name }' बनाया गया: { $size } मी के { $columns } × { $rows } सेल, { $active } सक्रिय, ऊर्ध्वाधर मोटाई { $min } से { $max }
 cmd-prismoid-grid-crossed = { $count } सेल { $roof } और { $floor } के ओवरलैप से छोड़ी गईं, जहाँ तल छत के ऊपर है
 cmd-prismoid-grid-holes = { $count } सेल { $roof } और { $floor } के ओवरलैप से छोड़ी गईं, जहाँ छत या तल की ऊँचाई या त्रिभुज नहीं हैं
 cmd-prismoid-grid-not-a-grid = { $name } से प्रिज़्मॉइड ग्रिड नहीं बन सकता: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } और { $floor } एक ग्रिड पर नहीं हैं: समान अंतराल पर बनी छत और तल चुनें, जैसे सतह बनाएँ और मोटाई सतहें बनाते हैं
 cmd-prismoid-grid-no-overlap = { $roof } और { $floor } का ऐसा कोई सेल नहीं है जिसे दोनों ढकते हों
+cmd-prismoid-grid-cell-too-large = { $roof } और { $floor } के साझा ग्रिड नोड { $size } मी के सेल के लिए बहुत कम हैं, जिन्हें हर भुजा पर दो कोने चाहिए: छोटा सेल आकार चुनें
 cmd-prismoid-grid-roof-below = { $roof } जहाँ भी काटता है { $floor } के नीचे है: उन्हें उलटे क्रम में चुनें
 cmd-prismoid-grid-no-thickness = { $roof } और { $floor } जहाँ दोनों ढकते हैं वहाँ मिलते हैं: किसी सेल में मोटाई नहीं है
 cmd-prismoid-grid-same-surface = छत और तल दो अलग सतहें होनी चाहिए
@@ -2163,6 +2164,11 @@ reference-surface-extent-help = चुनी गई बंद स्ट्रि
 reference-surface-selected-open-strings-surface-made = चुनी गई खुली स्ट्रिंग जिनसे होकर सतह गुज़रती है, जैसे संवाद खुलने पर चुनी गई थीं। दूसरी चुनने के लिए संवाद बंद करें।
 reference-surface-grids-selected-points-plan-into = चुने गए बिंदुओं को प्लान में ग्रिड करके नई सतह बनाता है। हर बिल्ड एक सतह जोड़ता है।
 reference-surface-change-these-in-preferences = इन्हें प्राथमिकताएँ, मॉडलिंग में बदलें
+reference-surface-spacing = ग्रिड अंतराल
+reference-surface-spacing-help = x और y में ग्रिड नोड के बीच की दूरी। हर अंतराल पर स्प्लाइन वही रहती है; महीन ग्रिड उसे अधिक स्थानों पर पढ़ता है।
+reference-surface-spacing-nodes = विस्तार के चारों ओर के आयत में लगभग { $nodes } ग्रिड नोड
+reference-surface-spacing-over-budget = विस्तार के चारों ओर के आयत में लगभग { $nodes } ग्रिड नोड, { $budget } की सीमा से अधिक: { $spacing } मी का अंतराल समाता है
+reference-surface-spacing-none-fits = विस्तार के चारों ओर के आयत में लगभग { $nodes } ग्रिड नोड, हर दिए गए अंतराल पर { $budget } की सीमा से अधिक: छोटा विस्तार चुनें
 reference-surface-triangulates-selected-points-plan-in = चुने गए बिंदुओं को प्लान में त्रिभुजित करके नई सतह बनाता है। हर बिल्ड एक सतह जोड़ता है।
 
 ## Screenshot strings
@@ -2601,6 +2607,10 @@ tri-build-prismoid-grid = प्रिज़्मॉइड ग्रिड ब�
 tri-build-prismoid-grid-help = एक ग्रिड पर छत और तल के बीच प्रिज़्मॉइड ग्रिड बनाता है, जैसे सतह बनाएँ और मोटाई सतहें बनाते हैं। जिन सेल में किसी की ऊँचाई या त्रिभुज नहीं हैं, या तल छत के ऊपर है, वे छोड़ दिए जाते हैं।
 tri-prismoid-roof-help = अंतराल की ऊपरी सतह: सीम या परत की छत।
 tri-prismoid-floor-help = अंतराल की निचली सतह, छत वाले ग्रिड पर।
+tri-prismoid-cell-size = सेल आकार
+tri-prismoid-cell-size-help = हर प्रिज़्मॉइड हर भुजा पर सतहों के इतने ग्रिड सेल घेरता है और हर n-वाँ नोड लेता है; कुछ भी इंटरपोलेट नहीं होता। महीन सेल के लिए सतहें महीन बनाएँ।
+tri-prismoid-cell-size-surfaces = सतहों का अंतराल
+tri-prismoid-cell-size-times = { $times } × सतहों का अंतराल
 tri-name-assigned-prismoid-grid = नए प्रिज़्मॉइड ग्रिड को दिया गया नाम।
 tri-prismoid-grid-name-hint = ऊपरी सीम ग्रिड
 

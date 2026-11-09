@@ -1,5 +1,7 @@
 //! Triangulation creation and processing dialogs.
 
+use std::num::NonZeroUsize;
+
 use crate::{
     i18n::tr,
     model::{Document, Object, ObjectId, SceneEntityId, triangulation::TriangulationId},
@@ -88,6 +90,10 @@ const PICK_SELECTOR_WIDTH: f32 = 210.0;
 const PICK_BUTTON_WIDTH: f32 = 52.0;
 const PICKER_DIALOG_MIN_WIDTH: f32 = 430.0;
 const PICKER_DIALOG_MAX_WIDTH: f32 = 450.0;
+
+/// The cell sizes Build Prismoid Grid offers, as multiples of the surfaces'
+/// spacing.
+const PRISMOID_CELL_STEPS: [usize; 6] = [1, 2, 3, 4, 5, 10];
 
 fn pick_button_label() -> String {
     tr!("drill-pattern-pick")
@@ -1121,6 +1127,22 @@ pub(crate) fn draw_build_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut Ed
 
             ui.add_space(4.0);
 
+            let step_label = |step: NonZeroUsize| match step.get() {
+                1 => tr!("tri-prismoid-cell-size-surfaces"),
+                times => tr!("tri-prismoid-cell-size-times", times = times.to_string()),
+            };
+            let selected = step_label(editor.tri_prismoid_step);
+            MenuFieldCombo::new(
+                "build_prismoid_cell_size",
+                tr!("tri-prismoid-cell-size"),
+                &mut editor.tri_prismoid_step,
+                selected,
+                PRISMOID_CELL_STEPS.into_iter().filter_map(NonZeroUsize::new).map(|step| (step, step_label(step).into())),
+            )
+            .help_text(tr!("tri-prismoid-cell-size-help"))
+            .width(picker_control_width(ui))
+            .show(ui);
+
             if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_prismoid_name_input)
                 .help_text(tr!("tri-name-assigned-prismoid-grid"))
                 .width(picker_control_width(ui))
@@ -1146,6 +1168,7 @@ pub(crate) fn draw_build_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut Ed
                     commands.push(UiCommand::ExecuteBuildPrismoidGrid {
                         roof_id,
                         floor_id,
+                        step: editor.tri_prismoid_step,
                         name: editor.tri_prismoid_name_input.trim().to_owned(),
                     });
                 }

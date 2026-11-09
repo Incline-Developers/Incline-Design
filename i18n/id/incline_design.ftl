@@ -744,12 +744,13 @@ cmd-prismoid-grid-building = Membuat grid prismoid…
 cmd-prismoid-grid-mesh-failed = Tidak dapat membuat geometri grid prismoid '{ $name }'
 cmd-prismoid-grid-preparing = Menyiapkan grid prismoid…
 cmd-prismoid-grid-too-large-to-draw = Grid prismoid '{ $name }' memiliki { $corners } sudut, melebihi batas { $budget }, dan tidak digambar. Grid tetap terdaftar dan tersimpan.
-cmd-prismoid-grid-built = Grid prismoid '{ $name }' dibuat: { $columns } × { $rows } sel, { $active } aktif, ketebalan vertikal { $min } hingga { $max }
+cmd-prismoid-grid-built = Grid prismoid '{ $name }' dibuat: { $columns } × { $rows } sel berukuran { $size } m, { $active } aktif, ketebalan vertikal { $min } hingga { $max }
 cmd-prismoid-grid-crossed = { $count } sel dari tumpang tindih { $roof } dan { $floor } dikecualikan di tempat lantai berada di atas atap
 cmd-prismoid-grid-holes = { $count } sel dari tumpang tindih { $roof } dan { $floor } dikecualikan di tempat atap atau lantai tidak punya ketinggian atau segitiga
 cmd-prismoid-grid-not-a-grid = { $name } tidak dapat membentuk grid prismoid: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } dan { $floor } tidak berada pada satu grid: pilih atap dan lantai yang dibuat dengan jarak yang sama, seperti yang dibuat Buat Permukaan dan Permukaan Ketebalan
 cmd-prismoid-grid-no-overlap = { $roof } dan { $floor } tidak memiliki sel yang tercakup oleh keduanya
+cmd-prismoid-grid-cell-too-large = { $roof } dan { $floor } berbagi terlalu sedikit simpul grid untuk sel { $size } m, yang memerlukan dua sudut di setiap sisi: pilih ukuran sel yang lebih kecil
 cmd-prismoid-grid-roof-below = { $roof } berada di bawah { $floor } di mana pun keduanya bersilangan: pilih sebaliknya
 cmd-prismoid-grid-no-thickness = { $roof } dan { $floor } bertemu di mana pun keduanya mencakup: tidak ada sel yang memiliki ketebalan
 cmd-prismoid-grid-same-surface = Atap dan lantai harus dua permukaan yang berbeda
@@ -2163,6 +2164,11 @@ reference-surface-extent-help = Garis tertutup terpilih yang menjadi batas pemot
 reference-surface-selected-open-strings-surface-made = Garis terbuka terpilih yang harus dilalui permukaan, sesuai pilihan saat dialog dibuka. Tutup dialog untuk memilih yang lain.
 reference-surface-grids-selected-points-plan-into = Membuat grid dari titik terpilih pada denah menjadi permukaan baru. Setiap pembangunan menambah satu permukaan.
 reference-surface-change-these-in-preferences = Ubah ini di Preferensi, Pemodelan
+reference-surface-spacing = Jarak grid
+reference-surface-spacing-help = Jarak antar simpul grid pada x dan y. Spline-nya sama di setiap jarak; grid yang lebih rapat membacanya di lebih banyak tempat.
+reference-surface-spacing-nodes = Sekitar { $nodes } simpul grid dalam kotak di sekitar cakupan
+reference-surface-spacing-over-budget = Sekitar { $nodes } simpul grid dalam kotak di sekitar cakupan, melebihi batas { $budget }: jarak { $spacing } m muat
+reference-surface-spacing-none-fits = Sekitar { $nodes } simpul grid dalam kotak di sekitar cakupan, melebihi batas { $budget } pada setiap jarak yang tersedia: pilih cakupan yang lebih kecil
 reference-surface-triangulates-selected-points-plan-in = Mentriangulasi titik terpilih dalam denah menjadi permukaan baru. Setiap pembangunan menambah satu permukaan.
 
 ## Screenshot strings
@@ -2601,6 +2607,10 @@ tri-build-prismoid-grid = Buat Grid Prismoid
 tri-build-prismoid-grid-help = Membuat grid prismoid di antara atap dan lantai pada satu grid, seperti yang dibuat Buat Permukaan dan Permukaan Ketebalan. Sel yang salah satunya tidak punya ketinggian atau segitiga, atau lantainya di atas atap, dikecualikan.
 tri-prismoid-roof-help = Permukaan atas interval: atap lapisan atau bagian lapisan.
 tri-prismoid-floor-help = Permukaan bawah interval, pada grid yang sama dengan atap.
+tri-prismoid-cell-size = Ukuran sel
+tri-prismoid-cell-size-help = Setiap prismoid mencakup sejumlah sel grid permukaan ini di setiap sisi, mengambil setiap simpul ke-n; tidak ada yang diinterpolasi. Untuk sel yang lebih halus, bangun permukaan yang lebih rapat.
+tri-prismoid-cell-size-surfaces = Jarak grid permukaan
+tri-prismoid-cell-size-times = { $times } × jarak grid permukaan
 tri-name-assigned-prismoid-grid = Nama yang diberikan untuk grid prismoid baru.
 tri-prismoid-grid-name-hint = grid lapisan atas
 

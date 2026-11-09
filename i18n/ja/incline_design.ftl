@@ -772,12 +772,13 @@ cmd-prismoid-grid-building = プリズモイドグリッドを構築中…
 cmd-prismoid-grid-mesh-failed = プリズモイドグリッド '{ $name }' の形状を構築できませんでした
 cmd-prismoid-grid-preparing = プリズモイドグリッドを準備中…
 cmd-prismoid-grid-too-large-to-draw = プリズモイドグリッド '{ $name }' の角点は { $corners } 個で、上限の { $budget } を超えているため描画されません。一覧には残り、保存もされます。
-cmd-prismoid-grid-built = プリズモイドグリッド '{ $name }' を構築しました: { $columns } × { $rows } セル、アクティブ { $active }、鉛直厚さ { $min } から { $max }
+cmd-prismoid-grid-built = プリズモイドグリッド '{ $name }' を構築しました: { $size } m の { $columns } × { $rows } セル、アクティブ { $active }、鉛直厚さ { $min } から { $max }
 cmd-prismoid-grid-crossed = { $count } セル ({ $roof } と { $floor } の重なり) を下盤が上盤より上にある箇所で除外しました
 cmd-prismoid-grid-holes = { $count } セル ({ $roof } と { $floor } の重なり) を上盤または下盤に高さか三角形がない箇所で除外しました
 cmd-prismoid-grid-not-a-grid = { $name } からプリズモイドグリッドを作れません: { $reason }
 cmd-prismoid-grid-not-one-lattice = { $roof } と { $floor } は同じグリッド上にありません: 曲面を構築と厚さ曲面が作るように、同じ間隔で作られた上盤と下盤を選んでください
 cmd-prismoid-grid-no-overlap = { $roof } と { $floor } の両方が覆うセルはありません
+cmd-prismoid-grid-cell-too-large = { $roof } と { $floor } が共有するグリッドノードが、各辺に2つの角が要る { $size } m のセルには少なすぎます: より小さいセルサイズを選んでください
 cmd-prismoid-grid-roof-below = { $roof } は交差する箇所すべてで { $floor } より下にあります: 逆に選んでください
 cmd-prismoid-grid-no-thickness = { $roof } と { $floor } は両方が覆う箇所すべてで接しています: 厚さのあるセルはありません
 cmd-prismoid-grid-same-surface = 上盤と下盤は別々の曲面にしてください
@@ -2191,6 +2192,11 @@ reference-surface-extent-help = 完成した曲面をクリップする、選択
 reference-surface-selected-open-strings-surface-made = 曲面が通過するように作られる、選択した開いたストリング。ダイアログを開いたときの選択です。別のものを選択するにはダイアログを閉じてください。
 reference-surface-grids-selected-points-plan-into = 選択した点を平面上でグリッド化し、新しい曲面を作成します。構築のたびに曲面が追加されます。
 reference-surface-change-these-in-preferences = これらは 環境設定 の モデリング で変更します
+reference-surface-spacing = グリッド間隔
+reference-surface-spacing-help = x と y 方向のグリッドノードの間隔です。スプラインはどの間隔でも同じで、細かいグリッドほど多くの位置で読み取ります。
+reference-surface-spacing-nodes = 範囲を囲む矩形内のグリッドノードは約 { $nodes }
+reference-surface-spacing-over-budget = 範囲を囲む矩形内のグリッドノードは約 { $nodes } で、上限 { $budget } を超えています: { $spacing } m の間隔なら収まります
+reference-surface-spacing-none-fits = 範囲を囲む矩形内のグリッドノードは約 { $nodes } で、どの間隔でも上限 { $budget } を超えています: より小さい範囲を選んでください
 reference-surface-triangulates-selected-points-plan-in = 選択した点を平面上で三角網化し、新しい曲面を作成します。構築のたびに曲面が追加されます。
 
 ## Screenshot strings
@@ -2629,6 +2635,10 @@ tri-build-prismoid-grid = プリズモイドグリッドを構築
 tri-build-prismoid-grid-help = 曲面を構築と厚さ曲面が作るような同じグリッド上の上盤と下盤の間にプリズモイドグリッドを構築します。どちらかに高さか三角形がないセル、または下盤が上盤より上にあるセルは除外されます。
 tri-prismoid-roof-help = 区間の上面: 炭層または分層の上盤。
 tri-prismoid-floor-help = 区間の下面: 上盤と同じグリッド上にあります。
+tri-prismoid-cell-size = セルサイズ
+tri-prismoid-cell-size-help = 各プリズモイドは各辺で面のグリッドセルをこの数だけまたぎ、n 個おきのノードを使います。補間はしません。より細かいセルには、面をより細かく構築してください。
+tri-prismoid-cell-size-surfaces = 面の間隔
+tri-prismoid-cell-size-times = 面の間隔の { $times } 倍
 tri-name-assigned-prismoid-grid = 新しいプリズモイドグリッドに付ける名前。
 tri-prismoid-grid-name-hint = 上部炭層グリッド
 
