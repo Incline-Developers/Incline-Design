@@ -15,6 +15,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use rayon::slice::ParallelSliceMut;
+
 use crate::{
     app::{commands::schedule_capture::CaptureIdentities, jobs::CancelFlag, schedule_solve::ScheduleCompletion},
     model::schedule::{
@@ -90,9 +92,9 @@ impl<'a> Lookup<'a> {
 
 /// When each execution cell starts and how long it lasts, from the solved
 /// event clock.
-fn cell_times(input: &BlendInput, solution: &BlendSolution) -> BTreeMap<(usize, usize), (f64, f64)> {
+fn cell_times(input: &BlendInput, solution: &BlendSolution) -> CellTimes {
     let segments = input.segments_per_interval.max(1);
-    let mut times = BTreeMap::new();
+    let mut times = CellTimes::with_capacity_and_hasher(input.intervals.len() * segments, Default::default());
     for interval in &input.intervals {
         let mut at = interval.start_h;
         for segment in 0..segments {
@@ -137,10 +139,13 @@ fn ordered_dig_spans(sequence: &[GroundId], tonnes: &BTreeMap<GroundId, f64>, st
     Ok(spans)
 }
 
-type DigTimes = BTreeMap<(LoaderId, TaskId, GroundId, usize, usize), (f64, f64)>;
+// Looked up once for each of a schedule's rows, which a year of hourly
+// dispatch runs to millions, and never walked in order.
+type CellTimes = HashMap<(usize, usize), (f64, f64), foldhash::fast::FixedState>;
+type DigTimes = HashMap<(LoaderId, TaskId, GroundId, usize, usize), (f64, f64), foldhash::fast::FixedState>;
 type ExecutionCellKey = (LoaderAgentId, BarId, u8, SourceKey, usize, usize);
 
-fn dig_times(input: &BlendInput, solution: &BlendSolution, replay: &ReplayReport, times: &BTreeMap<(usize, usize), (f64, f64)>) -> Result<DigTimes, String> {
+fn dig_times(input: &BlendInput, solution: &BlendSolution, replay: &ReplayReport, times: &CellTimes) -> Result<DigTimes, String> {
     let mut groups: BTreeMap<(LoaderId, TaskId, usize, usize), BTreeMap<GroundId, f64>> = BTreeMap::new();
     for (index, row) in solution.movements.iter().enumerate() {
         if row.tonnes_t <= DUST_T {
@@ -152,7 +157,7 @@ fn dig_times(input: &BlendInput, solution: &BlendSolution, replay: &ReplayReport
         *groups.entry((candidate.loader, task, row.interval, row.segment)).or_default().entry(ground).or_default() += row.tonnes_t;
     }
     let tasks: BTreeMap<_, _> = input.tasks.iter().map(|task| (task.id, task)).collect();
-    let mut result = BTreeMap::new();
+    let mut result = DigTimes::default();
     for ((loader, task, interval, segment), tonnes) in groups {
         let TaskKind::Dig { sequence } = &tasks.get(&task).ok_or_else(|| crate::i18n::tr!("err-sched-pub-dig-unknown-bar"))?.kind else {
             return Err(crate::i18n::tr!("err-sched-pub-dig-non-dig-bar"));
@@ -332,12 +337,29 @@ pub(crate) fn publish(
         merged.push(execution);
     }
 
-    deliveries.sort_by(|left, right| {
-        (left.agent, left.bar, SourceKey::of(left.source), left.destination, left.truck, left.start_h)
-            .partial_cmp(&(right.agent, right.bar, SourceKey::of(right.source), right.destination, right.truck, right.start_h))
-            .unwrap_or(std::cmp::Ordering::Equal)
+    // In key order, and rows of equal keys in the order they came, as the
+    // merge below reads them. Each key is worked out once, not on every
+    // comparison: a year of hourly dispatch has millions of rows.
+    let mut order: Vec<_> = deliveries
+        .iter()
+        .enumerate()
+        .map(|(index, delivery)| {
+            (
+                (delivery.agent, delivery.bar, SourceKey::of(delivery.source), delivery.destination, delivery.truck),
+                delivery.start_h,
+                index,
+            )
+        })
+        .collect();
+    order.par_sort_unstable_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(left.1.partial_cmp(&right.1).unwrap_or(std::cmp::Ordering::Equal))
+            .then(left.2.cmp(&right.2))
     });
     let mut merged_deliveries: Vec<Delivery> = Vec::with_capacity(deliveries.len());
+    let mut unsorted: Vec<Option<Delivery>> = deliveries.into_iter().map(Some).collect();
+    let deliveries = order.into_iter().filter_map(|(_, _, index)| unsorted[index].take());
     for delivery in deliveries {
         if let Some(last) = merged_deliveries.last_mut()
             && last.agent == delivery.agent

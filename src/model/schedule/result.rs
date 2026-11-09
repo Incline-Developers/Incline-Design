@@ -950,6 +950,38 @@ impl HourIndex {
     }
 }
 
+/// How many trucks of each class are working, as knots of (hour, units) a
+/// step function holds from.
+fn truck_use(deliveries: &[Delivery]) -> HashMap<TruckClassId, Vec<(f64, f64)>> {
+    let mut truck_use: HashMap<TruckClassId, Vec<(f64, f64)>> = HashMap::new();
+    for delivery in deliveries {
+        let duration = delivery.end_h - delivery.start_h;
+        if duration > 0.0 {
+            let units = delivery.truck_hours / duration;
+            let events = truck_use.entry(delivery.truck).or_default();
+            events.push((delivery.start_h, units));
+            events.push((delivery.end_h, -units));
+        }
+    }
+    for events in truck_use.values_mut() {
+        events.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut knots: Vec<(f64, f64)> = Vec::new();
+        let mut units = 0.0;
+        for &(hour, delta) in events.iter() {
+            units += delta;
+            if let Some(last) = knots.last_mut()
+                && last.0 == hour
+            {
+                last.1 = units.max(0.0);
+            } else {
+                knots.push((hour, units.max(0.0)));
+            }
+        }
+        *events = knots;
+    }
+    truck_use
+}
+
 /// Everything [`CalculatedSchedule::new`] indexes.
 pub(crate) struct ScheduleParts {
     pub(crate) run: u64,
@@ -1005,35 +1037,22 @@ impl CalculatedSchedule {
             by_bar.entry(execution.bar).or_default().push(index);
         }
         let by_block = parts.ground.iter().enumerate().map(|(index, balance)| (balance.block, index)).collect();
-        let periods = PeriodTotals::build(parts.requested_end_h, &executions, &parts.deliveries, &parts.piles);
-        let inventory = inventory_curves(&parts.piles, &parts.deliveries);
-        let hourly = hourly_receipts(parts.requested_end_h, parts.grades.len(), &parts.deliveries);
-        let mut truck_use: HashMap<TruckClassId, Vec<(f64, f64)>> = HashMap::new();
-        for delivery in &parts.deliveries {
-            let duration = delivery.end_h - delivery.start_h;
-            if duration > 0.0 {
-                let units = delivery.truck_hours / duration;
-                let events = truck_use.entry(delivery.truck).or_default();
-                events.push((delivery.start_h, units));
-                events.push((delivery.end_h, -units));
-            }
-        }
-        for events in truck_use.values_mut() {
-            events.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let mut knots: Vec<(f64, f64)> = Vec::new();
-            let mut units = 0.0;
-            for &(hour, delta) in events.iter() {
-                units += delta;
-                if let Some(last) = knots.last_mut()
-                    && last.0 == hour
-                {
-                    last.1 = units.max(0.0);
-                } else {
-                    knots.push((hour, units.max(0.0)));
-                }
-            }
-            *events = knots;
-        }
+        // Each a pass over every delivery, and none reads another: a year of
+        // hourly dispatch has hundreds of thousands.
+        let ((periods, inventory), (hourly, truck_use)) = rayon::join(
+            || {
+                rayon::join(
+                    || PeriodTotals::build(parts.requested_end_h, &executions, &parts.deliveries, &parts.piles),
+                    || inventory_curves(&parts.piles, &parts.deliveries),
+                )
+            },
+            || {
+                rayon::join(
+                    || hourly_receipts(parts.requested_end_h, parts.grades.len(), &parts.deliveries),
+                    || truck_use(&parts.deliveries),
+                )
+            },
+        );
         let executions_by_hour = HourIndex::build(executions.iter().map(|execution| (execution.start_h, execution.end_h)));
         let deliveries_by_hour = HourIndex::build(parts.deliveries.iter().map(|delivery| (delivery.start_h, delivery.end_h)));
         let mut receipt_ends: HashMap<DestinationId, Vec<f64>> = HashMap::new();
