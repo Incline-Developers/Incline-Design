@@ -1181,6 +1181,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         let block_tonnes: f64 = held.portions().iter().map(portion_tonnes).sum();
         let mut share_tonnes = 0.0;
         let mut sound = true;
+        // The block's, so the same for each portion: a search of every link.
+        let haul_link = source.haulage.block_link(block.solid, block.flitch.base, &block.ground);
         for (index, portion) in held.portions().iter().enumerate() {
             let tonnes = portion_tonnes(portion);
             // A share this small is below what the dispatch's solver keeps
@@ -1239,7 +1241,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     values: portion.values.clone(),
                     portion: index,
                     position: glam::DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base),
-                    haul_link: source.haulage.block_link(block.solid, block.flitch.base, &block.ground).to_vec(),
+                    haul_link: haul_link.to_vec(),
                 },
             );
         }
