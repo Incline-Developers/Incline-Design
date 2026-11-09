@@ -165,7 +165,7 @@ impl<'a> App<'a> {
         self.clear_browser_import_selection(crate::ui::state::DataMenu::CsvDrillHole);
         let display_path = crate::app::browser_source_filename(&source.display_name());
         remap_browser_source_path(&mut source, display_path);
-        let proxy = self.web_event_loop_proxy.clone().context("browser event loop is unavailable")?;
+        let proxy = self.web_event_loop_proxy.clone().with_context(|| tr!("err-drill-browser-loop-unavailable"))?;
         let (ticket, _progress) = self.begin_reported_task(tr!("cmd-drill-hole-reading-name", name = source.display_name().to_string()));
         let workspace = self.workspace_generation;
         wasm_bindgen_futures::spawn_local(async move {
@@ -253,7 +253,7 @@ impl<'a> App<'a> {
             .workspace
             .active_project()
             .map(|project| project.runtime_id)
-            .context("Open a project before importing drillholes")?;
+            .with_context(|| tr!("err-drill-open-project-first"))?;
         let key = drill_hole_load_key(source, runtime_id);
         if self.job_pending(&key) {
             userspace_log!("{}", tr!("cmd-drill-hole-name-already-loading", name = source.display_name().to_string()));
@@ -265,8 +265,8 @@ impl<'a> App<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn import_drill_hole_source(&mut self, source: DrillHoleSource) -> Result<()> {
         match &source {
-            DrillHoleSource::LegacyDhd { .. } => anyhow::bail!("DHD drillhole sources are no longer supported"),
-            DrillHoleSource::Csv { files, .. } if files.iter().any(|file| !file.path.is_file()) => anyhow::bail!("One or more drillhole CSV sources no longer exist"),
+            DrillHoleSource::LegacyDhd { .. } => anyhow::bail!(tr!("err-drill-dhd-unsupported")),
+            DrillHoleSource::Csv { files, .. } if files.iter().any(|file| !file.path.is_file()) => anyhow::bail!(tr!("err-drill-csv-sources-missing")),
             _ => {}
         }
         self.open_drill_hole_source(source)
@@ -286,9 +286,9 @@ impl<'a> App<'a> {
                 cancelled: &|| cancel.is_cancelled(),
             };
             let parsed = match &source {
-                DrillHoleSource::LegacyDhd { .. } => anyhow::bail!("DHD drillhole sources are no longer supported"),
-                DrillHoleSource::Csv { files, .. } => csv_drill_hole::parse_paths(files, control).with_context(|| "Failed to parse mapped drillhole CSV bundle")?,
-                DrillHoleSource::Omf { .. } => anyhow::bail!("OMF drillhole data is loaded through the project importer"),
+                DrillHoleSource::LegacyDhd { .. } => anyhow::bail!(tr!("err-drill-dhd-unsupported")),
+                DrillHoleSource::Csv { files, .. } => csv_drill_hole::parse_paths(files, control).with_context(|| tr!("err-drill-csv-bundle-parse-failed"))?,
+                DrillHoleSource::Omf { .. } => anyhow::bail!(tr!("err-drill-omf-via-importer")),
             };
             progress.set_fraction(1.0);
             let loaded = LoadedDrillHoleDataset {

@@ -693,13 +693,17 @@ impl ProjectFile {
 
 pub(crate) fn validate(project: &mut ProjectFile) -> Result<()> {
     if project.format_version != PROJECT_FORMAT_VERSION {
-        bail!("Unsupported legacy design format version {} (expected {})", project.format_version, PROJECT_FORMAT_VERSION);
+        bail!(tr!(
+            "err-store-project-format-version",
+            found = project.format_version.to_string(),
+            expected = PROJECT_FORMAT_VERSION.to_string()
+        ));
     }
     // Enforce model invariants before runtime namespacing: duplicate or
     // out-of-range ids would otherwise silently alias distinct records once
     // ids are masked into the 32-bit local namespace.
-    project.document.validate().context("invalid project document")?;
-    project.folders.validate().context("invalid project folders")?;
+    project.document.validate().with_context(|| tr!("err-store-project-document-invalid"))?;
+    project.folders.validate().with_context(|| tr!("err-store-project-folders-invalid"))?;
     // Serialized counters are advisory only; derive them from the actual ids.
     project.document.recompute_id_counters();
     project.folders.recompute_next_id();

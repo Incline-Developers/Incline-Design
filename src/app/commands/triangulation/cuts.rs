@@ -17,16 +17,16 @@ impl<'a> App<'a> {
                 .triangulations
                 .iter()
                 .find(|t| t.id == tri_id)
-                .ok_or_else(|| anyhow::anyhow!("Triangulation not found"))?;
+                .ok_or_else(|| anyhow::anyhow!(tr!("err-tri-triangulation-not-found")))?;
             (tri.mesh.clone(), tri.name.clone())
         };
 
         let poly_verts: Vec<glam::DVec3> = match self.scene_document.get_object(polyline_id).and_then(Object::closed_boundary) {
             Some(points) => points,
-            None => anyhow::bail!("Selected object is not a closed polyline or circle"),
+            None => anyhow::bail!(tr!("err-tri-not-closed-polyline-or-circle")),
         };
         if poly_verts.len() < 3 {
-            anyhow::bail!("Selected polyline has fewer than 3 boundary points");
+            anyhow::bail!(tr!("err-tri-polyline-fewer-than-three-points"));
         }
 
         // Run the clip + mesh/BVH build off the UI thread; the polyline and mesh
@@ -36,14 +36,13 @@ impl<'a> App<'a> {
             // single calls, so they close out the bar.
             let (new_verts, new_faces) = clip_mesh_by_polyline_xy(&mesh, &poly_verts, mode, &progress.phase(0.0, 0.8));
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             if new_faces.is_empty() {
-                let retained_region = match mode {
-                    TriPolylineClipMode::KeepInside => "inside",
-                    TriPolylineClipMode::KeepOutside => "outside",
-                };
-                anyhow::bail!("No surface geometry falls {retained_region} the selected polyline");
+                anyhow::bail!(match mode {
+                    TriPolylineClipMode::KeepInside => tr!("err-tri-no-surface-inside-polyline"),
+                    TriPolylineClipMode::KeepOutside => tr!("err-tri-no-surface-outside-polyline"),
+                });
             }
             let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
@@ -70,7 +69,7 @@ impl<'a> App<'a> {
     /// watertight closed solid; its flat crest cap never forces removal on its own.
     pub(crate) fn cut_topology_by_pit_shell(&mut self, topology_id: TriangulationId, pit_shell_id: TriangulationId, name: String, unload_source: bool) -> Result<()> {
         if topology_id == pit_shell_id {
-            anyhow::bail!("Topology and pit shell must be different triangulations");
+            anyhow::bail!(tr!("err-tri-topography-and-pit-shell-same"));
         }
 
         let (topology_mesh, topology_name) = {
@@ -78,7 +77,7 @@ impl<'a> App<'a> {
                 .triangulations
                 .iter()
                 .find(|t| t.id == topology_id)
-                .ok_or_else(|| anyhow::anyhow!("Topology not found"))?;
+                .ok_or_else(|| anyhow::anyhow!(tr!("err-tri-topography-not-found")))?;
             (tri.mesh.clone(), tri.name.clone())
         };
         let pit_shell_mesh = {
@@ -86,7 +85,7 @@ impl<'a> App<'a> {
                 .triangulations
                 .iter()
                 .find(|t| t.id == pit_shell_id)
-                .ok_or_else(|| anyhow::anyhow!("Pit shell not found"))?;
+                .ok_or_else(|| anyhow::anyhow!(tr!("err-tri-pit-shell-not-found")))?;
             tri.mesh.clone()
         };
 
@@ -95,17 +94,17 @@ impl<'a> App<'a> {
             // steps between them on weights estimating their relative cost.
             let pit_shell = prepare_pit_shell_surface(&pit_shell_mesh)?;
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             progress.set_fraction(0.2);
             let envelope = build_pit_shell_lower_envelope(&pit_shell)?;
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             progress.set_fraction(0.5);
             let (new_verts, new_faces) = clip_topology_to_pit_shell(&topology_mesh, &envelope, &progress.phase(0.5, 0.9));
             if new_faces.is_empty() {
-                anyhow::bail!("No topology geometry falls outside the pit shell");
+                anyhow::bail!(tr!("err-tri-no-topography-outside-pit-shell"));
             }
             let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
@@ -129,7 +128,7 @@ impl<'a> App<'a> {
     /// that straddle the boundary planes.
     pub(crate) fn cut_triangulation_by_z(&mut self, tri_id: TriangulationId, z_min: f64, z_max: f64, name: String, unload_source: bool) -> Result<()> {
         if z_min >= z_max {
-            anyhow::bail!("Z min must be less than Z max");
+            anyhow::bail!(tr!("err-tri-z-min-below-z-max"));
         }
 
         let (mesh, tri_name) = {
@@ -137,7 +136,7 @@ impl<'a> App<'a> {
                 .triangulations
                 .iter()
                 .find(|t| t.id == tri_id)
-                .ok_or_else(|| anyhow::anyhow!("Triangulation not found"))?;
+                .ok_or_else(|| anyhow::anyhow!(tr!("err-tri-triangulation-not-found")))?;
             (tri.mesh.clone(), tri.name.clone())
         };
 
@@ -153,7 +152,7 @@ impl<'a> App<'a> {
             for (index, face) in mesh.face_vertex_indices_iter().enumerate() {
                 if index.is_multiple_of(65_536) {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     clip.set_items(index as u64, face_count);
                 }
@@ -166,7 +165,7 @@ impl<'a> App<'a> {
             }
 
             if new_faces.is_empty() {
-                anyhow::bail!("No triangulation geometry lies within the specified Z range");
+                anyhow::bail!(tr!("err-tri-no-geometry-in-elevation-range"));
             }
             let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
@@ -202,7 +201,7 @@ impl<'a> App<'a> {
         unload_source: bool,
     ) -> Result<()> {
         if target_id == reference_id {
-            anyhow::bail!("Surface to trim and topology must be different triangulations");
+            anyhow::bail!(tr!("err-tri-trim-surface-and-topography-same"));
         }
 
         let (target_mesh, target_name) = {
@@ -210,7 +209,7 @@ impl<'a> App<'a> {
                 .triangulations
                 .iter()
                 .find(|triangulation| triangulation.id == target_id)
-                .ok_or_else(|| anyhow::anyhow!("Surface to trim not found"))?;
+                .ok_or_else(|| anyhow::anyhow!(tr!("err-tri-trim-surface-not-found")))?;
             (target.mesh.clone(), target.name.clone())
         };
         let (reference_mesh, reference_name) = {
@@ -218,18 +217,18 @@ impl<'a> App<'a> {
                 .triangulations
                 .iter()
                 .find(|triangulation| triangulation.id == reference_id)
-                .ok_or_else(|| anyhow::anyhow!("Reference topology not found"))?;
+                .ok_or_else(|| anyhow::anyhow!(tr!("err-tri-reference-topography-not-found")))?;
             (reference.mesh.clone(), reference.name.clone())
         };
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulationLog> {
             let (new_vertices, new_faces) = clip_mesh_by_surface(&target_mesh, &reference_mesh, side, &progress.phase(0.0, 0.8))?;
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             if new_faces.is_empty() {
                 let retained = side.retained_relation();
-                anyhow::bail!("No surface geometry lies {retained} the topology within its XY coverage");
+                anyhow::bail!(tr!("err-tri-no-surface-relative-topography", retained = retained));
             }
             let generated = session::build_generated_triangulation(name, new_vertices, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
@@ -1053,14 +1052,13 @@ pub(super) struct PreparedReferenceSurface {
 pub(super) fn validate_reference_surface(reference: &mesh_data::Triangulation) -> Result<PreparedReferenceSurface> {
     let prepared = prepare_reference_surface_relaxed(reference)?;
     if let Some(fold) = first_fold(&prepared, reference_xy_overlap_area_tolerance(reference)) {
-        anyhow::bail!(
-            "Reference topology overlaps itself in XY and is not single-valued \
-            (triangles {} and {} overlap by {:.6} square units with up to {:.6} Z difference)",
-            fold.first,
-            fold.second,
-            fold.area,
-            fold.z_delta
-        );
+        anyhow::bail!(tr!(
+            "err-tri-topography-overlaps-itself",
+            first = fold.first.to_string(),
+            second = fold.second.to_string(),
+            area = format!("{:.6}", fold.area),
+            z_delta = format!("{:.6}", fold.z_delta)
+        ));
     }
     Ok(prepared)
 }
@@ -1581,7 +1579,7 @@ impl SurfaceGraph {
     fn triangulate(self, prepared: &PreparedReferenceSurface) -> Result<mesh_data::Triangulation> {
         let points: Vec<spade::Point2<f64>> = self.points.iter().map(|point| spade::Point2::new(point.x, point.y)).collect();
         // Nothing is split here, so the triangulation's points are the graph's.
-        let (_, cells) = constrained_triangulation(points, self.edges.clone(), "Repaired surface", None)?;
+        let (_, cells) = constrained_triangulation(points, self.edges.clone(), &tr!("err-tri-name-repaired-surface"), None)?;
         let world = |index: usize| self.world[index];
 
         // The kept sheet over each cell, from its centroid; cells over ground
@@ -1649,7 +1647,7 @@ impl SurfaceGraph {
             }
         }
         if faces.is_empty() {
-            anyhow::bail!("Repaired surface has no XY footprint left to rebuild");
+            anyhow::bail!(tr!("err-tri-repaired-surface-no-footprint"));
         }
         Ok(mesh_data::Triangulation::from_vertices_and_faces(vertices, faces)?)
     }
@@ -1707,7 +1705,7 @@ fn overlap_z_delta(a: [mesh_data::Vertex; 3], b: [mesh_data::Vertex; 3], overlap
 pub(super) fn prepare_pit_shell_surface(pit_shell: &mesh_data::Triangulation) -> Result<PreparedReferenceSurface> {
     let vertices = pit_shell.vertices();
     if pit_shell.face_count() == 0 {
-        anyhow::bail!("Pit shell contains no faces");
+        anyhow::bail!(tr!("err-tri-pit-shell-no-faces"));
     }
 
     let mut prepared_vertices = Vec::new();
@@ -1726,7 +1724,7 @@ pub(super) fn prepare_pit_shell_surface(pit_shell: &mesh_data::Triangulation) ->
     }
 
     if triangles.is_empty() {
-        anyhow::bail!("Pit shell contains no usable (non-degenerate) faces");
+        anyhow::bail!(tr!("err-tri-pit-shell-no-usable-faces"));
     }
 
     let mesh = mesh_data::Triangulation::from_vertices_and_faces(prepared_vertices, prepared_faces)?;
@@ -1826,9 +1824,9 @@ pub(super) fn constrained_triangulation(
     let point_count = points.len();
     let mut conflicting_edges: Vec<[usize; 2]> = Vec::new();
     let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::try_bulk_load_cdt(points, edge_list, |edge| conflicting_edges.push(edge))
-        .map_err(|error| anyhow::anyhow!("{name} CDT bulk load failed: {error:?}"))?;
+        .map_err(|error| anyhow::anyhow!(tr!("err-tri-cdt-bulk-load-failed", name = name.to_string(), error = format!("{error:?}"))))?;
     if cdt.num_vertices() != point_count {
-        anyhow::bail!("{name} CDT dropped vertices unexpectedly during bulk load");
+        anyhow::bail!(tr!("err-tri-cdt-dropped-vertices", name = name.to_string()));
     }
     if let Some((site, origin)) = split {
         add_split_constraints(&mut cdt, conflicting_edges, site, origin);
@@ -1899,7 +1897,7 @@ pub(super) fn build_pit_shell_lower_envelope(pit_shell: &PreparedReferenceSurfac
         let mut indices = [0usize; 3];
         for (slot, point) in triangle.iter().enumerate() {
             if !point.x.is_finite() || !point.y.is_finite() {
-                anyhow::bail!("Pit shell contains non-finite coordinates");
+                anyhow::bail!(tr!("err-tri-pit-shell-non-finite"));
             }
             let local_x = normalized(point.x - origin.x);
             let local_y = normalized(point.y - origin.y);
@@ -1916,7 +1914,7 @@ pub(super) fn build_pit_shell_lower_envelope(pit_shell: &PreparedReferenceSurfac
             }
         }
     }
-    let cells = constrained_cells(points, edges, "Pit shell", "Pit shell envelope", origin)?;
+    let cells = constrained_cells(points, edges, &tr!("err-tri-name-pit-shell"), &tr!("err-tri-name-pit-shell-envelope"), origin)?;
     let classified: Vec<([mesh_data::Vertex; 3], bool)> = cells
         .par_iter()
         .fold(
@@ -1953,7 +1951,7 @@ pub(super) fn build_pit_shell_lower_envelope(pit_shell: &PreparedReferenceSurfac
     }
 
     if !covered.iter().any(|&is_covered| is_covered) {
-        anyhow::bail!("Pit shell has no XY footprint to build a lower envelope from");
+        anyhow::bail!(tr!("err-tri-pit-shell-no-footprint"));
     }
 
     let mesh = mesh_data::Triangulation::from_vertices_and_faces(vertices, faces)?;
@@ -2006,7 +2004,7 @@ pub(super) fn prepare_reference_surface_relaxed(reference: &mesh_data::Triangula
 fn prepare_reference_surface(reference: &mesh_data::Triangulation, xy_area_tolerance: f64) -> Result<PreparedReferenceSurface> {
     let vertices = reference.vertices();
     if reference.face_count() == 0 {
-        anyhow::bail!("Reference topology contains no faces");
+        anyhow::bail!(tr!("err-tri-topography-no-faces"));
     }
 
     // The kept faces share the reference's own points: a copy with three
@@ -2027,7 +2025,7 @@ fn prepare_reference_surface(reference: &mesh_data::Triangulation, xy_area_toler
     }
 
     if triangles.is_empty() {
-        anyhow::bail!("Reference topology must contain at least one non-vertical 2.5D face");
+        anyhow::bail!(tr!("err-tri-topography-needs-non-vertical-face"));
     }
 
     let mesh = mesh_data::Triangulation::from_vertices_and_faces(vertices.to_vec(), prepared_faces)?;

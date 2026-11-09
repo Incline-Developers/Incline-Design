@@ -124,7 +124,7 @@ pub(crate) fn compute(economics: &Economics, grid: &Grid, block_of_cell: &[u32],
         })
         .collect();
     if cancel.is_cancelled() {
-        bail!("Cancelled");
+        bail!(crate::app::jobs::Cancelled);
     }
 
     let cells = block_of_cell.len();
@@ -143,7 +143,7 @@ pub(crate) fn compute(economics: &Economics, grid: &Grid, block_of_cell: &[u32],
         values.air.extend(chunk.air);
         let mut total = *values.offsets.last().expect("starts with 0");
         for count in chunk.counts {
-            total = total.checked_add(count).ok_or_else(|| anyhow::anyhow!("too many processing routes"))?;
+            total = total.checked_add(count).ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-opt-too-many-routes")))?;
             values.offsets.push(total);
         }
         values.routes.extend(chunk.routes);

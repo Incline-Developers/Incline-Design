@@ -323,7 +323,7 @@ impl<'a> App<'a> {
                 let mut decoded = Vec::with_capacity(paths.len());
                 for (index, path) in paths.into_iter().enumerate() {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     let name = path
                         .file_name()
@@ -353,7 +353,7 @@ impl<'a> App<'a> {
                 let mut decoded = Vec::with_capacity(files.len());
                 for (index, file) in files.into_iter().enumerate() {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     let phase = progress.phase(index as f32 / total, (index + 1) as f32 / total);
                     let name = file.source.name;
@@ -695,12 +695,12 @@ impl<'a> App<'a> {
                 vec![crate::app::jobs::JobKey::Anonymous],
                 move |cancel, progress| {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     omf::to_bytes(snapshot, omf::Compression::Archive, &progress.phase(0.0, 1.0))
                 },
                 move |_app, result| match result {
-                    Ok(bytes) => Self::trigger_browser_download(default_name, bytes, "application/octet-stream", "project"),
+                    Ok(bytes) => Self::trigger_browser_download(default_name, bytes, "application/octet-stream", crate::i18n::tr!("err-file-desc-project")),
                     Err(error) => userspace_warn!("{}", tr!("cmd-omf-export-failed", error = format!("{error:#}"))),
                 },
             );
@@ -741,7 +741,7 @@ impl<'a> App<'a> {
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 if cancel.is_cancelled() {
-                    anyhow::bail!("Cancelled");
+                    anyhow::bail!(crate::app::jobs::Cancelled);
                 }
                 omf::write_path(snapshot, &path, &progress.phase(0.0, 1.0))
             },

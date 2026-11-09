@@ -147,11 +147,15 @@ pub(crate) fn reserve(bytes: usize, description: &str) -> Result<MemoryReservati
 fn claim_counted(used: &AtomicUsize, bytes: usize, limit: usize, description: &str) -> Result<(), String> {
     loop {
         let current = used.load(Ordering::Acquire);
-        let requested = current.checked_add(bytes).ok_or_else(|| format!("{description} memory estimate overflows"))?;
+        let requested = current
+            .checked_add(bytes)
+            .ok_or_else(|| crate::i18n::tr!("err-memory-estimate-overflows", what = description.to_owned()))?;
         if requested > limit {
-            return Err(format!(
-                "{description} needs {bytes} bytes, but only {} bytes remain in Incline Design's 3 GiB browser working-set budget",
-                limit.saturating_sub(current)
+            return Err(crate::i18n::tr!(
+                "err-memory-over-budget",
+                what = description.to_owned(),
+                needed = (bytes / (1 << 20)).max(1).to_string(),
+                remaining = (limit.saturating_sub(current) / (1 << 20)).to_string()
             ));
         }
         if used.compare_exchange_weak(current, requested, Ordering::AcqRel, Ordering::Acquire).is_ok() {

@@ -824,7 +824,7 @@ impl crate::app::App<'_> {
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> anyhow::Result<super::triangulation::solid_between::SolidMesh> {
             let solid = super::triangulation::solid_between::build_solid_mesh(&surface_mesh, &topography_mesh, region, &solid_name, &progress.phase(0.0, 1.0))?;
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             Ok(solid)
         };
@@ -875,15 +875,15 @@ impl crate::app::App<'_> {
     /// in the viewport, exports, and saves with the project.
     pub(crate) fn save_solid_preview_to_project(&mut self) -> anyhow::Result<()> {
         let Some(preview) = self.solid_preview.as_ref() else {
-            anyhow::bail!("No solid is being previewed");
+            anyhow::bail!(crate::i18n::tr!("err-solids-no-preview"));
         };
         let SolidPreviewStatus::Ready { mesh, volume } = &preview.status else {
-            anyhow::bail!("The solid is still being built");
+            anyhow::bail!(crate::i18n::tr!("err-solids-still-building"));
         };
         // Only a built volume is worth promoting; a lone surface preview is
         // already a project triangulation, and copying it would just duplicate it.
         let Some(volume) = *volume else {
-            anyhow::bail!("This solid has no topography yet, so its preview is the design surface itself");
+            anyhow::bail!(crate::i18n::tr!("err-solids-no-topography"));
         };
         let solid_name = self
             .workspace
@@ -1023,7 +1023,7 @@ fn cut_slabs(
     let mut cut = Vec::new();
     for (band, slab) in bands.into_iter().zip(slabs) {
         if cancel.is_cancelled() {
-            anyhow::bail!("Cancelled");
+            anyhow::bail!(crate::app::jobs::Cancelled);
         }
         if slab.1.is_empty() {
             continue;

@@ -55,7 +55,7 @@ pub(crate) fn relaxation_bound(input: &BlendInput, limit: Option<Duration>, stop
         dropped_mixing: 0,
         merge: Vec::new(),
     };
-    formulate(&mut rows, input).map_err(|_| "stopped while building the relaxation".to_owned())?;
+    formulate(&mut rows, input).map_err(|_| crate::i18n::tr!("err-sched-relaxation-stopped"))?;
     let (problem, dropped_mixing) = (rows.problem, rows.dropped_mixing);
     let value = solve(&problem, limit, stop)?;
     Ok(RelaxationBound {
@@ -144,10 +144,10 @@ fn solve(problem: &solver::Problem, limit: Option<Duration>, stop: solver::Inter
     };
     let solution = solver::solve_from(problem, &options, None, Some(stop));
     if solution.status != solver::Status::Optimal {
-        return Err(format!("the relaxation solve ended {:?}", solution.status));
+        return Err(crate::i18n::tr!("err-sched-relaxation-ended", status = format!("{:?}", solution.status)));
     }
     if !solution.objective.is_finite() {
-        return Err(format!("the relaxation reported a non-finite optimum {}", solution.objective));
+        return Err(crate::i18n::tr!("err-sched-relaxation-non-finite", objective = solution.objective.to_string()));
     }
     Ok(solution.objective)
 }

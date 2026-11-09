@@ -120,7 +120,7 @@ pub(crate) fn transform_object(transform: &crate::model::crs::SurveyTransform, o
         Object::Polyline { verts, .. } => {
             for (index, vertex) in verts.iter_mut().enumerate() {
                 if index % 4096 == 0 {
-                    anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+                    anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
                 }
                 vertex.pos = transform.point(vertex.pos)?;
             }

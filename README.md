@@ -26,7 +26,7 @@ Lay out drill patterns inside blast boundaries, then move and rotate collars to 
 
 ### Geological Modeling
 
-Import and inspect drill holes with their intervals, strata, seams and downhole geophysics. Estimate block models from drill-hole samples by ordinary kriging, threshold block models into ore triangulations, and build reference surfaces from points picked down the holes.
+Import and inspect drillholes with their intervals, strata, seams and downhole geophysics. Estimate block models from drillhole samples by ordinary kriging, threshold block models into ore triangulations, and build reference surfaces from points picked down the holes.
 
 ### Geospatial Data & Survey
 

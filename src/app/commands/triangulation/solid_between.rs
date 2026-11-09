@@ -636,14 +636,14 @@ impl App<'_> {
     /// worker; the result arrives as a normal generated triangulation.
     pub(crate) fn create_solid_from_surfaces(&mut self, design_id: TriangulationId, topography_id: TriangulationId, region: SolidRegion, name: String) -> Result<()> {
         if design_id == topography_id {
-            anyhow::bail!("A solid needs two different surfaces");
+            anyhow::bail!(crate::i18n::tr!("err-surf-solid-same-surface"));
         }
         let (design_mesh, design_name) = {
             let design = self
                 .triangulations
                 .iter()
                 .find(|triangulation| triangulation.id == design_id)
-                .ok_or_else(|| anyhow::anyhow!("Design surface not found"))?;
+                .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-surf-solid-design-missing")))?;
             (design.mesh.clone(), design.name.clone())
         };
         let (topography_mesh, topography_name) = {
@@ -651,14 +651,14 @@ impl App<'_> {
                 .triangulations
                 .iter()
                 .find(|triangulation| triangulation.id == topography_id)
-                .ok_or_else(|| anyhow::anyhow!("Topography surface not found"))?;
+                .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-surf-solid-topography-missing")))?;
             (topography.mesh.clone(), topography.name.clone())
         };
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulationLog> {
             let solid = build_solid_mesh(&design_mesh, &topography_mesh, region, "", &progress.phase(0.0, 0.95))?;
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             let volume = solid.volume;
             let generated = crate::model::triangulation::GeneratedTriangulation {
@@ -716,7 +716,7 @@ pub(crate) type Slab = (Vec<mesh_data::Vertex>, Vec<[u32; 3]>);
 /// pit at once costs one walk of the mesh rather than one per bench.
 pub(crate) fn slabs_between_elevations(mesh: &mesh_data::Triangulation, bands: &[(f64, f64)], cancel: Option<&crate::app::jobs::CancelFlag>) -> Result<Vec<Slab>> {
     if bands.iter().any(|(base, top)| !base.is_finite() || !top.is_finite() || base >= top) || bands.windows(2).any(|pair| pair[0].1 > pair[1].0 + 1e-6) {
-        anyhow::bail!("Bench bands must be finite, ascending and non-overlapping");
+        anyhow::bail!(crate::i18n::tr!("err-surf-solid-bench-bands"));
     }
     let mut slabs: Vec<Slab> = vec![(Vec::new(), Vec::new()); bands.len()];
     // A point a rounding error off a cut plane - a crest built at a bench's
@@ -742,7 +742,7 @@ pub(crate) fn slabs_between_elevations(mesh: &mesh_data::Triangulation, bands: &
         .collect();
     for (face_index, face) in mesh.face_vertex_indices_iter().enumerate() {
         if face_index % 1024 == 0 && cancel.is_some_and(|cancel| cancel.is_cancelled()) {
-            anyhow::bail!("Cancelled");
+            anyhow::bail!(crate::app::jobs::Cancelled);
         }
         let triangle = [source[face[0]], source[face[1]], source[face[2]]];
         let lowest = triangle[0].z.min(triangle[1].z).min(triangle[2].z);
@@ -779,7 +779,7 @@ pub(crate) fn slabs_between_elevations(mesh: &mesh_data::Triangulation, bands: &
             return Ok(());
         }
         if cancel.is_some_and(|cancel| cancel.is_cancelled()) {
-            anyhow::bail!("Cancelled");
+            anyhow::bail!(crate::app::jobs::Cancelled);
         }
         cap_slab(slab, *base, *top);
         Ok(())
@@ -2209,7 +2209,7 @@ impl Narrowing<'_> {
     /// plan, halving it across the longer side of `area` while that leaves
     /// some of them wholly to one side.
     fn share(&self, piece: CutPiece, area: (glam::DVec2, glam::DVec2), members: Vec<usize>) -> Result<Vec<(usize, ClippedSolid)>> {
-        anyhow::ensure!(!self.cancel.is_cancelled(), "Cancelled");
+        anyhow::ensure!(!self.cancel.is_cancelled(), crate::app::jobs::Cancelled);
         let (min, max) = area;
         let size = max - min;
         let axis = if size.x >= size.y { 0 } else { 1 };
@@ -2252,7 +2252,7 @@ impl Narrowing<'_> {
             || {
                 here.into_par_iter()
                     .map(|index| -> Result<(usize, ClippedSolid)> {
-                        anyhow::ensure!(!self.cancel.is_cancelled(), "Cancelled");
+                        anyhow::ensure!(!self.cancel.is_cancelled(), crate::app::jobs::Cancelled);
                         let (face_min, face_max) = self.bounds[index];
                         let mut cropped = None;
                         let mut cropped_area = area;
@@ -2422,7 +2422,7 @@ pub(crate) fn split_solid_by_plan(mesh: &mesh_data::Triangulation, faces: &[&[Ve
 /// order - the left half's before the right's - so the result does not depend
 /// on how the halves were scheduled.
 fn clip_region(piece: CutPiece, region: Vec<Vec<glam::DVec2>>, face: &[Vec<glam::DVec2>], floor: f64, depth: usize, cancel: &crate::app::jobs::CancelFlag) -> Result<Vec<Cell>> {
-    anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+    anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
     if piece.0.1.is_empty() {
         return Ok(Vec::new());
     }
@@ -2590,7 +2590,7 @@ fn clip_cells(piece: &CutPiece, region: &[Vec<glam::DVec2>], face: &[Vec<glam::D
     let mut triangles = Vec::new();
     earcut::Earcut::new().earcut(points.iter().map(|p| [p.x, p.y]), &holes, &mut triangles);
     let clip_cell = |cell: &Vec<usize>| -> Result<Option<Cell>> {
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+        anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
         // Not a copy of the whole piece per cell: the first cut reads it.
         let mut cut: Option<CutPiece> = None;
         for (a, b, on_boundary) in cell_edges(&points, cell, face) {

@@ -263,18 +263,13 @@ impl ReservePartition {
         for band in &self.bands {
             anyhow::ensure!(
                 band.base.is_finite() && band.top.is_finite() && band.base < band.top,
-                "Reserve band {}–{} is not a finite, non-empty elevation range",
-                band.base,
-                band.top
+                crate::i18n::tr!("err-solids-band-range", base = band.base.to_string(), top = band.top.to_string())
             );
-            anyhow::ensure!(
-                band.pieces.iter().all(|piece| piece.slot < self.slots),
-                "Reserve piece names a result slot outside the partition"
-            );
+            anyhow::ensure!(band.pieces.iter().all(|piece| piece.slot < self.slots), crate::i18n::tr!("err-solids-piece-slot"));
         }
         anyhow::ensure!(
             self.bands.windows(2).all(|pair| pair[0].top <= pair[1].base + 1e-9),
-            "Reserve bands must be ordered bottom up and must not overlap"
+            crate::i18n::tr!("err-solids-bands-order")
         );
         Ok(())
     }
@@ -492,7 +487,7 @@ pub(crate) fn compute(
     cancel: &crate::app::jobs::CancelFlag,
     progress: &super::progress::Progress,
 ) -> anyhow::Result<ReserveOutcome> {
-    anyhow::ensure!(blocks.len() == model.metadata.n_blocks, "Block geometry and attribute counts disagree");
+    anyhow::ensure!(blocks.len() == model.metadata.n_blocks, crate::i18n::tr!("err-solids-block-counts"));
     partition.validate()?;
 
     let mut resolution = ReserveResolution::default();
@@ -629,7 +624,7 @@ pub(crate) fn compute(
     let reach = partition.reach();
     let mut chunk_start = 0usize;
     while chunk_start < blocks.len() {
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+        anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
         progress.set_items(chunk_start as u64, blocks.len() as u64);
         let chunk_end = (chunk_start + MEASURED_CHUNK).min(blocks.len());
         // One scratch per worker rather than per block: the clipper's buffers
@@ -639,7 +634,9 @@ pub(crate) fn compute(
             .map_init(
                 || (intersection::Scratch::default(), Vec::new()),
                 |(scratch, nearby), index| {
-                    let bounds = blocks.get(index).ok_or_else(|| anyhow::anyhow!("Missing block geometry at {index}"))?;
+                    let bounds = blocks
+                        .get(index)
+                        .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-solids-missing-geometry", index = index.to_string())))?;
                     if intersection::Block::out_of_reach(model, bounds, reach) {
                         return Ok(BlockOverlaps { volume: 0.0, hits: Vec::new() });
                     }
@@ -659,9 +656,16 @@ pub(crate) fn compute(
                             // fraction alone names neither the piece nor the block.
                             let fraction = block.fraction(piece, scratch, cancel).map_err(|error| {
                                 let (centre, size) = ((block.min + block.max) / 2.0, block.max - block.min);
-                                error.context(format!(
-                                    "in the piece from RL {:.2} to {:.2}, against the block centred at ({:.2}, {:.2}, RL {:.2}) of {:.2} x {:.2} x {:.2}",
-                                    band.base, band.top, centre.x, centre.y, centre.z, size.x, size.y, size.z
+                                error.context(crate::i18n::tr!(
+                                    "err-solids-piece-context",
+                                    base = format!("{:.2}", band.base),
+                                    top = format!("{:.2}", band.top),
+                                    x = format!("{:.2}", centre.x),
+                                    y = format!("{:.2}", centre.y),
+                                    z = format!("{:.2}", centre.z),
+                                    size_x = format!("{:.2}", size.x),
+                                    size_y = format!("{:.2}", size.y),
+                                    size_z = format!("{:.2}", size.z)
                                 ))
                             })?;
                             if fraction > 0.0 {
@@ -728,10 +732,7 @@ pub(crate) fn compute(
             for (slot, fraction) in hits {
                 touched += 1;
                 assigned += fraction;
-                anyhow::ensure!(
-                    assigned <= 1.0 + OVERLAP_FLOOR + OVERLAP_PER_PIECE * touched as f64,
-                    "Block overlap exceeds its volume across planning pieces; the partition overlaps itself"
-                );
+                anyhow::ensure!(assigned <= 1.0 + OVERLAP_FLOOR + OVERLAP_PER_PIECE * touched as f64, crate::i18n::tr!("err-solids-overlap"));
                 if capture {
                     let accumulator = &mut slots[slot];
                     match accumulator.index.get(&row_key) {

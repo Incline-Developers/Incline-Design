@@ -188,7 +188,7 @@ impl<'a> App<'a> {
                 | UiCommand::RunOptimizationScenario(_)
         );
         if requires_project && !self.workspace.has_active_project() {
-            anyhow::bail!("Create or open a project before importing, drawing, or generating data");
+            anyhow::bail!(crate::i18n::tr!("err-surf-project-required"));
         }
         match command {
             UiCommand::Window(action) => {
@@ -1110,7 +1110,7 @@ impl<'a> App<'a> {
                         .or_else(|| model.model.numeric_variables().into_iter().find(|var| !var.special).map(|var| var.name.clone()))
                         .unwrap_or_default();
                     let stem = std::path::Path::new(&model.name).file_stem().and_then(|value| value.to_str()).unwrap_or(&model.name);
-                    self.editor.ore_name_input = format!("{stem} Ore");
+                    self.editor.ore_name_input = crate::i18n::tr!("err-surf-ore-name", stem = stem.to_string());
                 }
                 Ok(())
             }

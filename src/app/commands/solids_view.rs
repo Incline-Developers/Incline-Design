@@ -1199,7 +1199,7 @@ impl crate::app::App<'_> {
     /// it can run until that is put right. Once per failure, since the Setup
     /// preview and the Solids step build the same surfaces side by side.
     pub(crate) fn warn_solid_failed(&mut self, solid: SolidId, name: &str, message: &str) {
-        if message != "Cancelled" && self.solid_failures_warned.insert((solid, message.to_owned())) {
+        if message != crate::app::jobs::Cancelled.to_string() && self.solid_failures_warned.insert((solid, message.to_owned())) {
             crate::userspace_warn!("{}", crate::i18n::tr!("solid-build-failed", solid = name.to_owned(), reason = message.to_owned()));
         }
     }
@@ -1957,7 +1957,7 @@ fn build_solid_envelope(
     // The same mesh as the Setup page's preview of this solid, when it has
     // built one, rather than a copy of it.
     let built = super::triangulation::solid_between::build_solid_mesh(design, topo, crate::ui::state::SolidRegion::of_solid(solid.kind), &solid.name, &progress.phase(0.0, 1.0))?;
-    anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+    anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
     Ok(preview_triangulation(
         solid.name.clone(),
         built.mesh,
@@ -2042,7 +2042,7 @@ fn build_solid_body(solid: &Solid, source: &OpenTriangulation, cancel: &crate::a
 fn build_solid_blasting(solid: &Solid, body: &SolidBody, cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<SolidBlasting> {
     let mut blast_faces = Vec::new();
     for part in &body.bench_parts {
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+        anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
         let Some(outline) = body.bench_footprints.get(&part.band.selection.base.to_bits()) else {
             continue;
         };
@@ -2103,7 +2103,7 @@ fn build_solid_partition(
 
     let mut parts = Vec::new();
     for (index, flitch) in body.flitch_parts.iter().enumerate() {
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+        anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
         progress.set_items(index as u64, body.flitch_parts.len() as u64);
         let band = flitch.band;
         let bench = flitch.bench;
@@ -2112,7 +2112,7 @@ fn build_solid_partition(
         let footprint = body.flitch_footprints.get(&band.selection.base.to_bits()).map_or(&[][..], Vec::as_slice);
         let faces = super::dig_strips::dig_block_faces(footprint, strips, bench_cuts);
         let plans = super::dig_strips::dig_block_plans(&faces, &super::dig_strips::dig_block_cuts(strips, bench_cuts));
-        anyhow::ensure!(!faces.is_empty(), "Occupied flitch at RL {} has no valid dig-block footprint", band.selection.base);
+        anyhow::ensure!(!faces.is_empty(), crate::i18n::tr!("err-solids-flitch-no-footprint", rl = band.selection.base.to_string()));
         let key = band.selection.base.to_bits();
         let level = Level {
             source: &flitch.mesh,
@@ -2169,7 +2169,7 @@ fn build_blast_parts(
 ) -> anyhow::Result<Vec<SolidPart>> {
     let mut parts = Vec::new();
     for bench in &body.bench_parts {
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+        anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
         let blasts: Vec<_> = blasting.blast_faces.iter().filter(|blast| blast.bench == bench.band.selection).collect();
         if blasts.is_empty() {
             continue;
@@ -2341,7 +2341,7 @@ fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crat
             groups.entry(lot).or_default().push(index);
         }
         for (lot, members) in groups {
-            anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+            anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
             let slab = match lot {
                 None => (
                     source.mesh.vertices().to_vec(),
@@ -2563,7 +2563,7 @@ fn closed_volume(mesh: &OpenTriangulation, solid: &str, band: &CutBand) -> Optio
 fn plan_footprints(body: &[OpenTriangulation], bands: &[CutBand], cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<HashMap<u64, Vec<Vec<DVec2>>>> {
     let mut footprints = HashMap::new();
     for (mesh, band) in body.iter().zip(bands) {
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+        anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
         let rings = super::triangulation::solid_between::plan_footprint_rings(&mesh.mesh, band.selection.top)
             .into_iter()
             .map(|ring| ring.into_iter().map(|point| DVec2::new(point.x, point.y)).collect())

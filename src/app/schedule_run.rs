@@ -639,7 +639,7 @@ impl crate::app::App<'_> {
                 let stable_fingerprint = capture.stable_fingerprint;
                 let publish_completion = |completion: &super::schedule_solve::ScheduleCompletion| {
                     let (Some(solution), Some(replay)) = (completion.solution.as_ref(), completion.replay.as_ref()) else {
-                        return Err("the run holds no replayed schedule".to_owned());
+                        return Err(tr!("err-sched-no-replayed-schedule"));
                     };
                     let meta = PublishMeta {
                         run: serial,

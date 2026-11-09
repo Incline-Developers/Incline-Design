@@ -211,7 +211,7 @@ impl<'a> App<'a> {
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag| -> Result<crate::model::triangulation::GeneratedTriangulation> {
             if cancel.is_cancelled() {
-                anyhow::bail!("{}", tr!("common-cancelled"));
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             delaunay_surface_from_points(points, controls, ring, name, &|| cancel.is_cancelled())
         };
@@ -272,7 +272,7 @@ fn control_ends_where_it_starts(index: usize) -> String {
 /// Stop the build once the job it runs in has been cancelled.
 fn stop_if_cancelled(cancelled: &dyn Fn() -> bool) -> Result<()> {
     if cancelled() {
-        anyhow::bail!("{}", tr!("common-cancelled"));
+        anyhow::bail!(crate::app::jobs::Cancelled);
     }
     Ok(())
 }

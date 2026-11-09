@@ -99,7 +99,7 @@ impl LinearProgram {
         let stop: solver::Interrupt = std::sync::Arc::new(move || web_time::Instant::now() >= ends);
         let solution = solver::solve_from(&self.to_solver(), &options, None, Some(stop));
         if solution.status != solver::Status::Optimal {
-            return Err(format!("solver ended {:?}", solution.status));
+            return Err(crate::i18n::tr!("err-sched-solver-ended", status = format!("{:?}", solution.status)));
         }
         Ok(solution.col_value)
     }
@@ -176,7 +176,11 @@ impl LinearProgram {
                 }
             });
             if let Some((col, coefficient)) = terms.iter().find(|(_, coefficient)| !coefficient.is_finite()) {
-                return Err(format!("a constraint has coefficient {coefficient} on column {}", col.0));
+                return Err(crate::i18n::tr!(
+                    "err-sched-bad-coefficient",
+                    coefficient = coefficient.to_string(),
+                    column = col.0.to_string()
+                ));
             }
             terms.retain(|(_, coefficient)| *coefficient != 0.0);
             if terms.is_empty() {
@@ -185,7 +189,7 @@ impl LinearProgram {
                 // side says nothing about how close the other must be.
                 let tolerance = |bound: f64| 1e-9 * bound.abs().max(1.0);
                 if row.lower.is_nan() || row.upper.is_nan() || row.lower > tolerance(row.lower) || row.upper < -tolerance(row.upper) {
-                    return Err(format!("a constraint with no terms needs {}..{}", row.lower, row.upper));
+                    return Err(crate::i18n::tr!("err-sched-empty-constraint", lower = row.lower.to_string(), upper = row.upper.to_string()));
                 }
                 continue;
             }
@@ -216,7 +220,11 @@ impl LinearProgram {
                     if held.lower > held.upper {
                         let slack = 1e-9 * held.lower.abs().max(held.upper.abs()).max(1.0);
                         if held.lower - held.upper > slack {
-                            return Err(format!("two constraints over the same terms need {} and {}", held.lower, held.upper));
+                            return Err(crate::i18n::tr!(
+                                "err-sched-conflicting-constraints",
+                                lower = held.lower.to_string(),
+                                upper = held.upper.to_string()
+                            ));
                         }
                         held.upper = held.lower;
                     }
@@ -251,7 +259,7 @@ impl LinearProgram {
             None => solver::solve(&problem, &options),
         };
         if solution.status != solver::Status::Optimal {
-            return Err(format!("solver ended {:?}", solution.status));
+            return Err(crate::i18n::tr!("err-sched-solver-ended", status = format!("{:?}", solution.status)));
         }
         if let Some(basis) = solution.basis.take() {
             warm.keep(shape, basis);

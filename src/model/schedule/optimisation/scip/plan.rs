@@ -354,7 +354,7 @@ fn solve_relaxation(builder: &Builder, time_limit: Duration, stop: &Arc<AtomicBo
     let stop = Arc::clone(stop);
     let solution = solver::solve_from(&problem, &options, None, Some(Arc::new(move || stop.load(Ordering::Relaxed))));
     if !solution.objective.is_finite() {
-        return Err(format!("no plan found: solver status {:?}", solution.status));
+        return Err(crate::i18n::tr!("err-sched-no-plan", status = format!("{:?}", solution.status)));
     }
     // A relaxation interrupted before its optimum bounds nothing.
     Ok(Answer {
@@ -419,7 +419,7 @@ fn solve_plan(builder: &Builder, seed: Option<&[f64]>, settings: &Settings, stop
     let stop = Arc::clone(stop);
     let solution = solver::solve_mip(&problem, &settings, seed, Some(Arc::new(move || stop.load(Ordering::Relaxed))));
     if !solution.objective.is_finite() {
-        return Err(format!("no plan found: solver status {:?}", solution.status));
+        return Err(crate::i18n::tr!("err-sched-no-plan", status = format!("{:?}", solution.status)));
     }
     // A mixed-integer solve stopped inside its first relaxation bounds
     // nothing useful: its dual bound is then only what each column's own

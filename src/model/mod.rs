@@ -1127,14 +1127,14 @@ impl Object {
     pub(crate) fn validate_geometry(&self) -> Result<(), String> {
         fn require_finite_verts(verts: &[PolyVertex], what: &str) -> Result<(), String> {
             if verts.len() < 2 {
-                return Err(format!("{what} needs at least 2 vertices"));
+                return Err(crate::i18n::tr!("err-bm-polyline-min-vertices", what = what.to_string()));
             }
             for vertex in verts {
                 if !vertex.pos.is_finite() {
-                    return Err(format!("{what} contains a non-finite vertex"));
+                    return Err(crate::i18n::tr!("err-bm-polyline-bad-vertex", what = what.to_string()));
                 }
                 if !vertex.bulge.is_finite() {
-                    return Err(format!("{what} contains a non-finite bulge"));
+                    return Err(crate::i18n::tr!("err-bm-polyline-bad-bulge", what = what.to_string()));
                 }
             }
             Ok(())
@@ -1142,45 +1142,45 @@ impl Object {
         if let ObjectColor::Fixed(rgba) = self.color()
             && rgba.iter().any(|channel| !channel.is_finite())
         {
-            return Err("non-finite colour".to_string());
+            return Err(crate::i18n::tr!("err-bm-object-bad-colour"));
         }
         match self {
             Object::Point { pos, .. } => {
                 if !pos.is_finite() {
-                    return Err("non-finite point position".to_string());
+                    return Err(crate::i18n::tr!("err-bm-point-bad-position"));
                 }
             }
             Object::Polyline { verts, closed, line_weight, .. } => {
-                require_finite_verts(verts, "polyline")?;
+                require_finite_verts(verts, &crate::i18n::tr!("common-polyline"))?;
                 // Two bulged vertices form a valid closed shape (most notably
                 // the compact two-semicircle representation of a circle).
                 if *closed && verts.len() < 3 && verts.iter().all(|vertex| vertex.bulge.abs() <= f64::EPSILON) {
-                    return Err("closed polyline needs at least 3 vertices unless it contains an arc".to_string());
+                    return Err(crate::i18n::tr!("err-bm-closed-polyline-min-vertices"));
                 }
                 if !line_weight.is_finite() || *line_weight < 0.0 {
-                    return Err("invalid polyline line weight".to_string());
+                    return Err(crate::i18n::tr!("err-bm-polyline-bad-line-weight"));
                 }
             }
             Object::Circle { center, radius, line_weight, .. } => {
                 if !center.is_finite() {
-                    return Err("non-finite circle centre".to_string());
+                    return Err(crate::i18n::tr!("err-bm-circle-bad-centre"));
                 }
                 if !radius.is_finite() || *radius <= 0.0 {
-                    return Err("circle radius must be greater than zero".to_string());
+                    return Err(crate::i18n::tr!("err-bm-circle-bad-radius"));
                 }
                 if !line_weight.is_finite() || *line_weight < 0.0 {
-                    return Err("invalid circle line weight".to_string());
+                    return Err(crate::i18n::tr!("err-bm-circle-bad-line-weight"));
                 }
             }
             Object::Text { pos, height, rotation, .. } => {
                 if !pos.is_finite() {
-                    return Err("non-finite text position".to_string());
+                    return Err(crate::i18n::tr!("err-bm-text-bad-position"));
                 }
                 if !height.is_finite() || *height < 0.0 {
-                    return Err("invalid text height".to_string());
+                    return Err(crate::i18n::tr!("err-bm-text-bad-height"));
                 }
                 if !rotation.is_finite() {
-                    return Err("non-finite text rotation".to_string());
+                    return Err(crate::i18n::tr!("err-bm-text-bad-rotation"));
                 }
             }
         }
@@ -1532,22 +1532,22 @@ impl Document {
         self.haulage.clone().validate()?;
         anyhow::ensure!(
             self.haulage.nodes.iter().all(|n| n.id.0 <= LOCAL_MASK) && self.haulage.roads.iter().all(|r| r.id.0 <= LOCAL_MASK),
-            "haul ids outside project range"
+            crate::i18n::tr!("err-bm-haul-id-range")
         );
 
         let mut layer_ids = std::collections::HashSet::with_capacity(self.layers.len());
         for layer in self.layers.iter().chain(self.planning_benches().filter_map(|bench| bench.planning_layer.as_ref())) {
             if layer.id.0 > LOCAL_MASK {
-                bail!("layer '{}' has id {} outside the 32-bit project id range", layer.name, layer.id.0);
+                bail!(crate::i18n::tr!("err-bm-layer-id-range", name = layer.name.to_string(), id = layer.id.0.to_string()));
             }
             if !layer_ids.insert(layer.id) {
-                bail!("duplicate layer id {} ('{}')", layer.id.0, layer.name);
+                bail!(crate::i18n::tr!("err-bm-layer-id-duplicate", id = layer.id.0.to_string(), name = layer.name.to_string()));
             }
             if !layer.elevation.is_finite() {
-                bail!("layer '{}' has a non-finite elevation", layer.name);
+                bail!(crate::i18n::tr!("err-bm-layer-bad-elevation", name = layer.name.to_string()));
             }
             if layer.color.iter().any(|channel| !channel.is_finite()) {
-                bail!("layer '{}' has a non-finite colour", layer.name);
+                bail!(crate::i18n::tr!("err-bm-layer-bad-colour", name = layer.name.to_string()));
             }
         }
 
@@ -1555,19 +1555,26 @@ impl Document {
         for object in self.objects.iter().chain(self.planning_benches().flat_map(|bench| &bench.cuts)) {
             let id = object.id();
             if id.0 > LOCAL_MASK {
-                bail!("{} object has id {} outside the 32-bit project id range", object.kind_name(), id.0);
+                bail!(crate::i18n::tr!("err-bm-object-id-range", kind = object.kind_name().to_string(), id = id.0.to_string()));
             }
             if !object_ids.insert(id) {
-                bail!("duplicate object id {}", id.0);
+                bail!(crate::i18n::tr!("err-bm-object-id-duplicate", id = id.0.to_string()));
             }
             if !layer_ids.contains(&object.layer()) {
-                bail!("{} object {} references missing layer {}", object.kind_name(), id.0, object.layer().0);
+                bail!(crate::i18n::tr!(
+                    "err-bm-object-missing-layer",
+                    kind = object.kind_name().to_string(),
+                    id = id.0.to_string(),
+                    layer = object.layer().0.to_string()
+                ));
             }
-            object.validate_geometry().map_err(|error| anyhow::anyhow!("object {}: {error}", id.0))?;
+            object
+                .validate_geometry()
+                .map_err(|error| anyhow::anyhow!(crate::i18n::tr!("err-bm-object-invalid", id = id.0.to_string(), error = error)))?;
         }
         for id in &self.hidden_objects {
             if !object_ids.contains(id) {
-                bail!("hidden object id {} does not reference a design object", id.0);
+                bail!(crate::i18n::tr!("err-bm-hidden-object-missing", id = id.0.to_string()));
             }
         }
         Ok(())

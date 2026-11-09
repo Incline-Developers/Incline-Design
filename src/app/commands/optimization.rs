@@ -220,7 +220,7 @@ impl<'a> App<'a> {
         let file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
         #[cfg(target_arch = "wasm32")]
         match serde_json::to_vec_pretty(&file) {
-            Ok(bytes) => Self::trigger_browser_download("optimization_scenarios.json".to_owned(), bytes, "application/json", "optimization scenarios"),
+            Ok(bytes) => Self::trigger_browser_download("optimization_scenarios.json".to_owned(), bytes, "application/json", tr!("err-file-desc-opt-scenarios")),
             Err(error) => userspace_warn!("{}", tr!("opt-scenarios-save-failed", error = error.to_string())),
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -789,7 +789,7 @@ impl<'a> App<'a> {
             }
             Err(error) => {
                 self.editor.optimization.runs.remove(&id);
-                if format!("{error:#}").contains("Cancelled") {
+                if crate::app::jobs::is_cancelled(&error) {
                     userspace_log!("{}", tr!("opt-run-cancelled", name = scenario.name.clone()));
                 } else {
                     userspace_error!("{}", tr!("opt-run-failed", name = scenario.name.clone(), error = format!("{error:#}")));
@@ -959,7 +959,12 @@ impl<'a> App<'a> {
     /// left alone); in the browser, as a download.
     fn write_optimization_report(&mut self, scenario: &OptimizationScenario, bytes: Vec<u8>) {
         #[cfg(target_arch = "wasm32")]
-        Self::trigger_browser_download(format!("{}_{}", folder_name(&scenario.name), report::FILE_NAME), bytes, "text/csv", "optimization report");
+        Self::trigger_browser_download(
+            format!("{}_{}", folder_name(&scenario.name), report::FILE_NAME),
+            bytes,
+            "text/csv",
+            tr!("err-file-desc-opt-report"),
+        );
         #[cfg(not(target_arch = "wasm32"))]
         {
             let folder = std::path::Path::new(scenario.output.reports_folder.trim()).join(folder_name(&scenario.name));
@@ -991,7 +996,7 @@ impl<'a> App<'a> {
         };
         let file_name = format!("{}_{}", folder_name(&name), report::FILE_NAME);
         #[cfg(target_arch = "wasm32")]
-        Self::trigger_browser_download(file_name, bytes, "text/csv", "optimization report");
+        Self::trigger_browser_download(file_name, bytes, "text/csv", tr!("err-file-desc-opt-report"));
         #[cfg(not(target_arch = "wasm32"))]
         self.spawn_file_dialog(async move {
             let handle = rfd::AsyncFileDialog::new().add_filter("CSV", &["csv"]).set_file_name(file_name).save_file().await?;

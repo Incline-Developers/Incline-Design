@@ -40,10 +40,10 @@ impl<'a> App<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn import_block_model_source(&mut self, source: BlockModelSource) -> Result<()> {
         if source.csv_columns.is_none() {
-            anyhow::bail!("Only CSV block-model sources are supported");
+            anyhow::bail!(tr!("err-bm-csv-only"));
         }
         if !source.path.is_file() {
-            anyhow::bail!("Block model source does not exist: {}", source.path.display());
+            anyhow::bail!(tr!("err-bm-source-missing", path = source.path.display().to_string()));
         }
         userspace_log!("{}", tr!("cmd-block-model-imported-block-model-source-path", path = source.path.display().to_string()));
         self.open_block_model_source(source)
@@ -60,7 +60,7 @@ impl<'a> App<'a> {
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel| {
                 if cancel.is_cancelled() {
-                    anyhow::bail!("Cancelled");
+                    anyhow::bail!(crate::app::jobs::Cancelled);
                 }
                 let crate::model::input::InputFile { bytes, reservation, .. } = input;
                 // Ownership of the bytes moves into the CSV parser, whose
@@ -97,11 +97,11 @@ impl<'a> App<'a> {
                     // Each stage below is one pass over the model, so the bar
                     // steps at the boundaries between them; the weights are an
                     // estimate of their relative cost, not a measurement.
-                    let mapping = source.csv_columns.as_ref().context("Only CSV block-model sources are supported")?;
-                    let file = std::fs::File::open(&source.path).with_context(|| format!("Failed to read CSV block model {}", source.path.display()))?;
+                    let mapping = source.csv_columns.as_ref().with_context(|| tr!("err-bm-csv-only"))?;
+                    let file = std::fs::File::open(&source.path).with_context(|| tr!("err-bm-csv-read-failed", path = source.path.display().to_string()))?;
                     let file_bytes = file.metadata().map_or(0, |metadata| metadata.len()).max(1);
                     let parsed = crate::model::formats::csv_block_model::parse_stream(file, mapping, |read| progress.set_fraction(read as f32 / file_bytes as f32 * 0.5))
-                        .with_context(|| format!("Failed to parse CSV block model {}", source.path.display()))?;
+                        .with_context(|| tr!("err-bm-csv-parse-failed", name = source.path.display().to_string()))?;
                     let (model, blocks) = (parsed.model, std::sync::Arc::new(parsed.blocks));
                     progress.set_fraction(0.5);
                     let renderable_block_indices = std::sync::Arc::new(model.renderable_block_indices()?);
@@ -290,7 +290,7 @@ impl<'a> App<'a> {
         let requested_variable = variable.clone();
         let compute = move |cancel: &crate::app::jobs::CancelFlag| {
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             let prepared = OpenBlockModel::prepare_active_values_cache(&model_data, &renderable_block_indices, Some(&requested_variable));
             Ok((requested_variable, prepared))
@@ -315,7 +315,7 @@ impl<'a> App<'a> {
                     app.request_topology_redraw();
                 }
             }
-            Err(error) if error.to_string() != "Cancelled" => {
+            Err(error) if !crate::app::jobs::is_cancelled(&error) => {
                 userspace_warn!(
                     "{}",
                     tr!(
@@ -327,7 +327,7 @@ impl<'a> App<'a> {
             }
             Err(_) => {}
         };
-        self.spawn_job("Decoding block-model colour variable…", vec![crate::app::jobs::JobKey::BlockModel(id)], compute, apply);
+        self.spawn_job(tr!("err-bm-job-decoding-colour"), vec![crate::app::jobs::JobKey::BlockModel(id)], compute, apply);
     }
 
     pub(crate) fn set_block_model_color_transfer(&mut self, id: BlockModelId, transfer: ColorTransferFunction) {
@@ -455,17 +455,17 @@ impl<'a> App<'a> {
             .drill_holes
             .iter()
             .find(|dataset| dataset.id == drill_hole_id)
-            .context("The selected Drill Holes collection is no longer loaded")?;
+            .with_context(|| tr!("err-bm-drillholes-not-loaded"))?;
         if variables.is_empty() {
-            anyhow::bail!("Select at least one numeric drill-hole variable");
+            anyhow::bail!(tr!("err-bm-no-numeric-variable"));
         }
         let mut unique = std::collections::HashSet::new();
         for variable in &variables {
             if !unique.insert(variable) {
-                anyhow::bail!("Drill-hole variable '{variable}' was selected more than once");
+                anyhow::bail!(tr!("err-bm-variable-duplicate", variable = variable.to_string()));
             }
             if !matches!(dataset.dataset.field(variable).map(|field| &field.kind), Some(DrillFieldKind::Numeric { .. })) {
-                anyhow::bail!("Drill-hole variable '{variable}' is not numeric");
+                anyhow::bail!(tr!("err-bm-variable-not-numeric", variable = variable.to_string()));
             }
         }
         let dataset = std::sync::Arc::clone(&dataset.dataset);
@@ -477,10 +477,12 @@ impl<'a> App<'a> {
             for (index, variable) in variables.iter().enumerate() {
                 let samples = collect_kriging_samples(&dataset, holes.as_deref(), variable);
                 if samples.len() < min_samples as usize {
-                    anyhow::bail!(
-                        "Variable '{variable}' has only {} usable interval samples; at least {min_samples} are required",
-                        samples.len()
-                    );
+                    anyhow::bail!(tr!(
+                        "err-bm-variable-too-few-samples",
+                        variable = variable.to_string(),
+                        count = samples.len().to_string(),
+                        min_samples = min_samples.to_string()
+                    ));
                 }
                 let start = index as f32 / variable_count as f32;
                 let end = (index + 1) as f32 / variable_count as f32;
@@ -500,7 +502,7 @@ impl<'a> App<'a> {
                 )?;
                 let estimated_blocks = result.estimates.iter().filter(|value| value.is_finite()).count();
                 if estimated_blocks == 0 {
-                    anyhow::bail!("Variable '{variable}' has no block centres with at least {min_samples} samples inside the search radius");
+                    anyhow::bail!(tr!("err-bm-variable-no-estimates", variable = variable.to_string(), min_samples = min_samples.to_string()));
                 }
                 grid_result.get_or_insert((result.dims, result.upper, result.estimates.len()));
                 columns.push(BlockModelColumn {
@@ -510,7 +512,7 @@ impl<'a> App<'a> {
                     category_colors: std::collections::BTreeMap::new(),
                 });
             }
-            let (dims, grid_upper, count) = grid_result.context("No variables were selected for kriging")?;
+            let (dims, grid_upper, count) = grid_result.with_context(|| tr!("err-bm-kriging-no-variables"))?;
             let model = BlockModelData::from_regular_grid(lower, cell, dims, columns)?;
             let regular_bounds = RegularBlockBounds::new(lower, grid_upper, dims, None, count).map_err(anyhow::Error::msg)?;
             let blocks = std::sync::Arc::new(BlockBoundsSource::Regular(regular_bounds));
@@ -543,12 +545,12 @@ impl<'a> App<'a> {
                 userspace_log!("{}", tr!("cmd-block-model-created-block-model-name-ordinary", name = loaded.name.clone().to_string()));
                 app.add_as_one_step(|app| app.add_loaded_block_model(loaded));
             }
-            Err(error) if error.to_string() != "Cancelled" => {
+            Err(error) if !crate::app::jobs::is_cancelled(&error) => {
                 userspace_warn!("{}", tr!("cmd-block-model-could-not-create-block-model", error = format!("{error:#}")))
             }
             Err(_) => {}
         };
-        self.spawn_job_reporting_progress("Ordinary Kriging…", vec![crate::app::jobs::JobKey::DrillHole(drill_hole_id)], compute, apply);
+        self.spawn_job_reporting_progress(tr!("err-bm-job-kriging"), vec![crate::app::jobs::JobKey::DrillHole(drill_hole_id)], compute, apply);
         Ok(())
     }
 
@@ -588,7 +590,7 @@ impl<'a> App<'a> {
             .block_models
             .iter()
             .find(|model| model.id == block_model_id)
-            .context("The selected block model is no longer loaded")?;
+            .with_context(|| tr!("err-bm-model-not-loaded"))?;
         // BlockModelData is Arc-backed and the two large geometry arrays are Arcs,
         // so this snapshot is constant-time. Variable decoding, filtering,
         // boundary extraction, mesh construction and BVH building all stay
@@ -599,19 +601,19 @@ impl<'a> App<'a> {
         let model_name = model.name.clone();
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulationLog> {
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             let values = model_data.numeric_values(&variable)?;
             let default = model_data.variable(&variable).and_then(numeric_variable_default);
             let selected = ore_block_indices(&values, &renderable_block_indices, default, mode, min, max);
             if selected.is_empty() {
-                anyhow::bail!("No blocks match the ore filter");
+                anyhow::bail!(tr!("err-bm-ore-filter-empty"));
             }
             // Boundary extraction dominates; the mesh and BVH build that
             // follow it are single calls, so they close out the bar.
             let (vertices, faces) = boundary_mesh_from_blocks(&model_data, &blocks, &selected, cancel, &progress.phase(0.0, 0.8))?;
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             let generated = crate::app::commands::triangulation::session::build_generated_triangulation(
                 name,
@@ -711,7 +713,7 @@ fn prepare_initial_block_model_color(model: &BlockModelData, renderable: &Render
 #[cfg(target_arch = "wasm32")]
 fn loaded_block_model_from_bytes(bytes: Vec<u8>, name: String, source: BlockModelSource) -> Result<LoadedBlockModel> {
     let (model, blocks) = if let Some(mapping) = source.csv_columns.as_ref() {
-        let parsed = crate::model::formats::csv_block_model::parse(&bytes, mapping).with_context(|| format!("Failed to parse CSV block model {name}"))?;
+        let parsed = crate::model::formats::csv_block_model::parse(&bytes, mapping).with_context(|| tr!("err-bm-csv-parse-failed", name = name.to_string()))?;
         (parsed.model, std::sync::Arc::new(parsed.blocks))
     } else if source
         .path
@@ -720,12 +722,12 @@ fn loaded_block_model_from_bytes(bytes: Vec<u8>, name: String, source: BlockMode
         .is_some_and(|extension| extension.eq_ignore_ascii_case("csv"))
     {
         let mapping = crate::model::formats::csv_block_model::preview(&bytes)
-            .with_context(|| format!("Failed to inspect CSV block model {name}"))?
+            .with_context(|| tr!("err-bm-csv-inspect-failed", name = name.to_string()))?
             .mapping;
-        let parsed = crate::model::formats::csv_block_model::parse(&bytes, &mapping).with_context(|| format!("Failed to parse CSV block model {name}"))?;
+        let parsed = crate::model::formats::csv_block_model::parse(&bytes, &mapping).with_context(|| tr!("err-bm-csv-parse-failed", name = name.to_string()))?;
         (parsed.model, std::sync::Arc::new(parsed.blocks))
     } else {
-        anyhow::bail!("Only CSV block-model sources are supported");
+        anyhow::bail!(tr!("err-bm-csv-only"));
     };
     let renderable_block_indices = std::sync::Arc::new(model.renderable_block_indices()?);
     let uniform_grid = blocks.uniform_grid();
@@ -764,7 +766,7 @@ fn boundary_mesh_from_blocks(
     for (index, quad) in tiles.into_iter().enumerate() {
         if index.is_multiple_of(4096) {
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             progress.set_items(index as u64, tile_count);
         }
@@ -896,9 +898,9 @@ fn exterior_block_face_tiles(blocks: &BlockBoundsSource, selected: &[usize]) -> 
     let mut seen = HashSet::new();
     let mut selected_indices = Vec::with_capacity(selected.len());
     for &index in selected {
-        let block = blocks.get(index).with_context(|| format!("Ore block index {index} is out of range"))?;
+        let block = blocks.get(index).with_context(|| tr!("err-bm-ore-index-range", index = index.to_string()))?;
         if !block.lower.is_finite() || !block.upper.is_finite() || !block.lower.cmplt(block.upper).all() {
-            anyhow::bail!("Ore block {index} has invalid bounds");
+            anyhow::bail!(tr!("err-bm-ore-bad-bounds", index = index.to_string()));
         }
         if seen.insert(index) {
             selected_indices.push(index);
@@ -910,7 +912,7 @@ fn exterior_block_face_tiles(blocks: &BlockBoundsSource, selected: &[usize]) -> 
     // cover +X faces, and likewise for Y/Z.
     let mut plane_entries: [HashMap<u64, Vec<FaceCandidate>>; 6] = std::array::from_fn(|_| HashMap::new());
     for &index in &selected_indices {
-        let block = blocks.get(index).with_context(|| format!("Ore block index {index} is out of range"))?;
+        let block = blocks.get(index).with_context(|| tr!("err-bm-ore-index-range", index = index.to_string()))?;
         let planes = [block.upper.x, block.lower.x, block.upper.y, block.lower.y, block.upper.z, block.lower.z];
         for (face_index, plane) in planes.into_iter().enumerate() {
             let face = block_face_rect(block, face_index);
@@ -929,7 +931,7 @@ fn exterior_block_face_tiles(blocks: &BlockBoundsSource, selected: &[usize]) -> 
 
     let mut exposed_planes: [HashMap<u64, (f64, Vec<CoveredRect>)>; 6] = std::array::from_fn(|_| HashMap::new());
     for &index in &selected_indices {
-        let block = blocks.get(index).with_context(|| format!("Ore block index {index} is out of range"))?;
+        let block = blocks.get(index).with_context(|| tr!("err-bm-ore-index-range", index = index.to_string()))?;
         for (face_index, plane_index) in opposite_planes.iter().enumerate() {
             let face = block_face_rect(block, face_index);
             let mut covered = Vec::new();
@@ -1185,7 +1187,7 @@ fn add_block_face_tile(
         *dst = if let Some(index) = vertex_map.get(&key) {
             *index
         } else {
-            let index = u32::try_from(vertices.len()).map_err(|_| anyhow::anyhow!("Ore triangulation has too many vertices"))?;
+            let index = u32::try_from(vertices.len()).map_err(|_| anyhow::anyhow!(tr!("err-bm-ore-too-many-vertices")))?;
             vertices.push(mesh_data::Vertex::new(world.x, world.y, world.z));
             vertex_map.insert(key, index);
             index

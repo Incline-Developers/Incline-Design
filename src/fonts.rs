@@ -152,14 +152,20 @@ mod web {
     }
 
     async fn read(url: &str, request: Option<js_sys::Promise>) -> Result<Vec<u8>, String> {
-        let request = request.ok_or_else(|| format!("{url}: no window"))?;
-        let response = wasm_bindgen_futures::JsFuture::from(request).await.map_err(|error| format!("{url}: {error:?}"))?;
-        let response: web_sys::Response = response.dyn_into().map_err(|_| format!("{url}: not a response"))?;
+        let request = request.ok_or_else(|| crate::i18n::tr!("err-font-no-window", url = url.to_string()))?;
+        let response = wasm_bindgen_futures::JsFuture::from(request)
+            .await
+            .map_err(|error| crate::i18n::tr!("err-font-fetch", url = url.to_string(), error = format!("{error:?}")))?;
+        let response: web_sys::Response = response.dyn_into().map_err(|_| crate::i18n::tr!("err-font-not-response", url = url.to_string()))?;
         if !response.ok() {
-            return Err(format!("{url}: HTTP {}", response.status()));
+            return Err(crate::i18n::tr!("err-font-http", url = url.to_string(), status = response.status().to_string()));
         }
-        let buffer = response.array_buffer().map_err(|error| format!("{url}: {error:?}"))?;
-        let buffer = wasm_bindgen_futures::JsFuture::from(buffer).await.map_err(|error| format!("{url}: {error:?}"))?;
+        let buffer = response
+            .array_buffer()
+            .map_err(|error| crate::i18n::tr!("err-font-fetch", url = url.to_string(), error = format!("{error:?}")))?;
+        let buffer = wasm_bindgen_futures::JsFuture::from(buffer)
+            .await
+            .map_err(|error| crate::i18n::tr!("err-font-fetch", url = url.to_string(), error = format!("{error:?}")))?;
         Ok(js_sys::Uint8Array::new(&buffer).to_vec())
     }
 }

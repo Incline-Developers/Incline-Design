@@ -10,6 +10,7 @@ use super::{
     formats::omf::{self, DeferredAsset, ProjectSnapshot},
     progress::Phase,
 };
+use crate::i18n::tr;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AssetSummary {
@@ -157,14 +158,14 @@ impl OpenItem {
         let mut bundle = deferred.read()?;
         match &mut self {
             Self::Triangulation(item) => {
-                let data = bundle.triangulations.pop().context("backing contains no triangulation")?.loaded;
+                let data = bundle.triangulations.pop().with_context(|| tr!("err-store-backing-no-triangulation"))?.loaded;
                 item.mesh = data.mesh;
                 item.spatial = data.spatial;
                 item.edges = data.edges.into();
                 item.surface_face_order = data.surface_face_order;
             }
             Self::BlockModel(item) => {
-                let imported = bundle.block_models.pop().context("backing contains no block model")?;
+                let imported = bundle.block_models.pop().with_context(|| tr!("err-store-backing-no-block-model"))?;
                 let data = imported.loaded;
                 item.model.restore_payload(data.model);
                 item.blocks = data.blocks;
@@ -179,10 +180,10 @@ impl OpenItem {
                     super::block_model::OpenBlockModel::prepare_active_values_cache(&item.model, &item.renderable_block_indices, item.active_color_variable.as_deref());
             }
             Self::DrillHole(item) => {
-                item.dataset = bundle.drill_holes.pop().context("backing contains no drillholes")?.loaded.dataset;
+                item.dataset = bundle.drill_holes.pop().with_context(|| tr!("err-store-backing-no-drillholes"))?.loaded.dataset;
             }
             Self::PointCloud(item) => {
-                let data = bundle.point_clouds.pop().context("backing contains no point cloud")?.loaded;
+                let data = bundle.point_clouds.pop().with_context(|| tr!("err-store-backing-no-point-cloud"))?.loaded;
                 item.points = data.points;
                 item.colors = data.colors;
                 item.classifications = data.classifications;
@@ -190,7 +191,7 @@ impl OpenItem {
                 item.bounds = data.bounds;
             }
             Self::Raster(item) => {
-                let data = bundle.rasters.pop().context("backing contains no raster")?.loaded;
+                let data = bundle.rasters.pop().with_context(|| tr!("err-store-backing-no-raster"))?.loaded;
                 item.full_rgba = data.full_rgba;
                 item.rgba = data.rgba;
                 item.source_size = data.source_size;

@@ -160,6 +160,25 @@ impl CancelFlag {
     }
 }
 
+/// The error a computation returns when its [`CancelFlag`] stops it:
+/// `bail!(Cancelled)` or `ensure!(!cancel.is_cancelled(), Cancelled)`. Its text
+/// is translated, so callers recognise it with [`is_cancelled`], never by text.
+#[derive(Debug)]
+pub(crate) struct Cancelled;
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&crate::i18n::tr!("common-cancelled"))
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
+/// Whether `error` is, or was caused by, a [`Cancelled`] computation.
+pub(crate) fn is_cancelled(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| cause.is::<Cancelled>())
+}
+
 /// A heavy operation running on a background thread.
 pub(crate) struct BackgroundJob<'a> {
     pub(crate) ticket: crate::app::BackgroundTaskTicket,
@@ -254,8 +273,8 @@ pub(crate) fn run_compute_catching_panic<T>(compute: impl FnOnce() -> anyhow::Re
             .downcast_ref::<&str>()
             .map(|s| (*s).to_owned())
             .or_else(|| payload.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "unknown panic".to_owned());
-        Err(anyhow::anyhow!("background task panicked: {message}"))
+            .unwrap_or_else(|| tr!("err-file-unknown-panic"));
+        Err(anyhow::anyhow!(tr!("err-file-task-panicked", message = message)))
     })
 }
 

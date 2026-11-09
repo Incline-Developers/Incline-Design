@@ -1429,7 +1429,7 @@ impl crate::app::App<'_> {
 fn build_animation_cuts(work: Vec<AnimationWork>, cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<Vec<(usize, CutKey, Cut)>> {
     work.into_par_iter()
         .map(|work| {
-            anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+            anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
             let unmeasured = work.volume.is_none() || work.volume == Some(0.0);
             let cut = if unmeasured || work.cut == CutKey::Whole {
                 Cut::Solved(Some(Box::new(work.mesh)), None)
@@ -1589,7 +1589,7 @@ impl VolumeProfile {
             return Ok(far);
         }
         for probe in 0..CUT_REFINEMENTS {
-            anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+            anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
             if near_volume - far_volume <= tolerance {
                 return Ok((near + far) * 0.5);
             }
@@ -1637,7 +1637,7 @@ fn retained_volume_at_cut(mesh: &Triangulation, direction: glam::DVec2, cut: f64
     let mut signed = 0.0;
     for (face_index, indices) in mesh.face_vertex_indices_iter().enumerate() {
         if face_index.is_multiple_of(2048) {
-            anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+            anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
         }
         let triangle = indices.map(|index| mesh.vertices()[index]);
         let (polygon, count) = clip_triangle_at_cut(triangle, direction, cut);

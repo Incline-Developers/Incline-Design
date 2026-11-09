@@ -2169,7 +2169,7 @@ impl<'a> App<'a> {
             return;
         }
         let attributes = Window::default_attributes()
-            .with_title(format!("{} | Slice preview · Wheel zoom · Middle-drag pan · F fit", crate::APP_NAME))
+            .with_title(crate::i18n::tr!("err-file-section-preview-title", app = crate::APP_NAME.to_string()))
             .with_window_icon(window_icon())
             .with_min_inner_size(winit::dpi::PhysicalSize::new(320, 240))
             .with_inner_size(winit::dpi::PhysicalSize::new(800, 700));
@@ -2178,7 +2178,7 @@ impl<'a> App<'a> {
         let result = event_loop.create_window(attributes).map(Arc::new).map_err(anyhow::Error::from).and_then(|window| {
             self.graphics
                 .as_mut()
-                .ok_or_else(|| anyhow::anyhow!("renderer is not initialized"))?
+                .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-file-renderer-not-ready")))?
                 .open_slice_preview(window)
         });
         if let Err(error) = result {
@@ -2628,7 +2628,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             Err(e) => {
                 log::error!("{}", crate::i18n::tr!("app-failed-create-window-error", error = e.to_string()));
                 #[cfg(target_arch = "wasm32")]
-                crate::show_web_startup_error(&format!("failed to create the browser window: {e}"));
+                crate::show_web_startup_error(&crate::i18n::tr!("err-file-browser-window-failed", error = e.to_string()));
                 self.close_requested = true;
                 return;
             }
@@ -2856,7 +2856,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     Ok(Some(record)) => {
                         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| {
                             if cancel.is_cancelled() {
-                                anyhow::bail!("Cancelled");
+                                anyhow::bail!(crate::app::jobs::Cancelled);
                             }
                             progress.set_fraction(0.1);
                             let source_name = format!("{}.omf", record.name.trim_end_matches(".omf"));
@@ -2878,7 +2878,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                                 Err(error) => userspace_warn!("{}", crate::i18n::tr!("app-could-not-activate-browser-project", error = format!("{error:#}"))),
                             }
                         };
-                        self.spawn_job_reporting_progress("Switching project…", vec![crate::app::jobs::JobKey::Anonymous], compute, apply);
+                        self.spawn_job_reporting_progress(crate::i18n::tr!("cmd-file-switching-project"), vec![crate::app::jobs::JobKey::Anonymous], compute, apply);
                     }
                     Ok(None) => {
                         self.browser_project_loads_pending.remove(&project_id);

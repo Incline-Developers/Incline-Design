@@ -63,16 +63,20 @@ impl RegularBlockBounds {
         let len = dims
             .into_iter()
             .try_fold(1usize, |product, dim| product.checked_mul(dim))
-            .ok_or_else(|| "regular block-grid dimensions overflow usize".to_owned())?;
+            .ok_or_else(|| crate::i18n::tr!("err-bm-grid-dimensions-overflow"))?;
         if dims.contains(&0) || len != expected_len {
-            return Err(format!("regular block-grid dimensions imply {len} blocks, metadata reports {expected_len}"));
+            return Err(crate::i18n::tr!(
+                "err-bm-grid-count-mismatch",
+                len = len.to_string(),
+                expected_len = expected_len.to_string()
+            ));
         }
         if voxel_size.is_some_and(|sizes| sizes.contains(&0)) {
-            return Err("regular block-grid voxel dimensions must be non-zero".to_owned());
+            return Err(crate::i18n::tr!("err-bm-grid-voxel-zero"));
         }
         let cell = (upper - lower) / DVec3::from_array(dims.map(|dim| dim as f64));
         if !lower.is_finite() || !upper.is_finite() || !cell.is_finite() || cell.min_element() <= 0.0 {
-            return Err("regular block-grid bounds are invalid".to_owned());
+            return Err(crate::i18n::tr!("err-bm-grid-bounds-invalid"));
         }
         Ok(Self {
             lower,
@@ -1124,7 +1128,7 @@ pub(crate) fn compute_reserve_totals(
     };
     let mut totals = HashMap::new();
     for field in fields {
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+        anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
         let mut stats = ReserveFieldStats::default();
         // The same resolver the solid reserves use, so a field that fails
         // here fails there for the stated reason rather than two different
@@ -1165,7 +1169,7 @@ pub(crate) fn compute_reserve_totals(
         let (mut sum, mut weight_sum) = (0.0, 0.0);
         for index in 0..blocks {
             if index.is_multiple_of(4096) {
-                anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+                anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
             }
             let value = values.at(index);
             if !value.is_finite() {
@@ -1756,7 +1760,7 @@ impl BlockBoundsSource {
                 grid.cell *= scale;
                 anyhow::ensure!(
                     grid.lower.is_finite() && grid.cell.is_finite() && grid.cell.min_element() > 0.0,
-                    "Invalid scaled block grid"
+                    crate::i18n::tr!("err-bm-scaled-grid-invalid")
                 );
                 Self::Regular(grid)
             }
@@ -1765,7 +1769,7 @@ impl BlockBoundsSource {
                 let mut batch = Vec::with_capacity(SCALED_BATCH);
                 for index in 0..blocks.len() {
                     if index % 4096 == 0 {
-                        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+                        anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
                     }
                     let block = blocks.get(index).expect("index is in range");
                     let block = BlockBounds {
@@ -1774,7 +1778,7 @@ impl BlockBoundsSource {
                     };
                     anyhow::ensure!(
                         block.lower.is_finite() && block.upper.is_finite() && block.upper.cmpgt(block.lower).all(),
-                        "Invalid scaled block bounds"
+                        crate::i18n::tr!("err-bm-scaled-bounds-invalid")
                     );
                     batch.push(block);
                     if batch.len() == SCALED_BATCH {

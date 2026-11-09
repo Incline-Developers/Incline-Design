@@ -268,11 +268,11 @@ impl App<'_> {
             keys,
             move |cancel| {
                 for object in &mut objects {
-                    ensure!(!cancel.is_cancelled(), "Cancelled");
+                    ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
                     crate::model::survey::transform_object(&transform, object, cancel)?;
                 }
                 for item in &mut items {
-                    ensure!(!cancel.is_cancelled(), "Cancelled");
+                    ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
                     transform_item(item, &transform, &target_system, cancel)?;
                 }
                 Ok((objects, items))
@@ -352,7 +352,7 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
                 .enumerate()
                 .map(|(i, v)| {
                     if i % 4096 == 0 {
-                        ensure!(!cancel.is_cancelled(), "Cancelled");
+                        ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
                     }
                     let p = transform.point(DVec3::from_array(v.as_array()))?;
                     Ok(mesh_data::Vertex::new(p.x, p.y, p.z))
@@ -364,15 +364,15 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
                 .enumerate()
                 .map(|(i, face)| {
                     if i % 4096 == 0 {
-                        ensure!(!cancel.is_cancelled(), "Cancelled");
+                        ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
                     }
                     Ok(face.map(|index| index as u32))
                 })
                 .collect::<Result<Vec<_>>>()?;
             let mesh = mesh_data::Triangulation::from_vertices_and_faces(vertices, faces)?;
-            ensure!(!cancel.is_cancelled(), "Cancelled");
+            ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
             item.spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
-            ensure!(!cancel.is_cancelled(), "Cancelled");
+            ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
             item.surface_face_order = Arc::new(triangulation::spatial_surface_face_order(&mesh));
             item.mesh = Arc::new(mesh);
             // New ground: what was built from the old geometry is stale.
@@ -392,7 +392,7 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
             item.model.metadata.upper *= grid.scale;
             ensure!(
                 item.model.metadata.lower.is_finite() && item.model.metadata.upper.is_finite(),
-                "Invalid scaled model extent"
+                tr!("err-survey-invalid-model-extent")
             );
             if grid.scale != 1.0 {
                 item.blocks = Arc::new(item.blocks.scaled(grid.scale, cancel)?);
@@ -410,16 +410,16 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
             let count = if implicit.is_some() { 1 } else { item.renderable_block_indices.len() };
             for index in 0..count {
                 if index % 4096 == 0 {
-                    ensure!(!cancel.is_cancelled(), "Cancelled");
+                    ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
                 }
                 let bounds = implicit
                     .or_else(|| item.renderable_block_indices.get(index).and_then(|i| item.blocks.get(i)))
-                    .ok_or_else(|| anyhow!("Missing block bounds"))?;
+                    .ok_or_else(|| anyhow!("{}", tr!("err-survey-missing-block-bounds")))?;
                 for x in [bounds.lower.x, bounds.upper.x] {
                     for y in [bounds.lower.y, bounds.upper.y] {
                         for z in [bounds.lower.z, bounds.upper.z] {
                             let p = item.model.local_to_world(DVec3::new(x, y, z));
-                            ensure!(p.is_finite(), "Invalid transformed block coordinate");
+                            ensure!(p.is_finite(), tr!("err-survey-invalid-block-coordinate"));
                             min = min.min(p);
                             max = max.max(p);
                         }
@@ -435,13 +435,13 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
                 .enumerate()
                 .map(|(i, p)| {
                     if i % 4096 == 0 {
-                        ensure!(!cancel.is_cancelled(), "Cancelled");
+                        ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
                     }
                     transform.point(*p)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let bounds = point_cloud::finite_bounds(&points).ok_or_else(|| anyhow!("Empty point cloud"))?;
-            ensure!(!cancel.is_cancelled(), "Cancelled");
+            let bounds = point_cloud::finite_bounds(&points).ok_or_else(|| anyhow!("{}", tr!("err-survey-empty-point-cloud")))?;
+            ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
             item.prepared = Arc::new(point_cloud::prepare_for_render(
                 &points,
                 item.colors.as_deref().map(Vec::as_slice),
@@ -451,13 +451,13 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
             item.points = Arc::new(points);
             item.bounds = bounds;
             item.point_size *= transform.length_scale() as f32;
-            ensure!(item.point_size.is_finite(), "Invalid transformed point size");
+            ensure!(item.point_size.is_finite(), tr!("err-survey-invalid-point-size"));
         }
         OpenItem::DrillHole(item) => {
             let dataset = Arc::make_mut(&mut item.dataset);
             for (index, hole) in dataset.holes.iter_mut().enumerate() {
                 if index % 256 == 0 {
-                    ensure!(!cancel.is_cancelled(), "Cancelled");
+                    ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
                 }
                 hole.collar = transform.point(hole.collar)?;
                 for station in &mut hole.trace {
@@ -504,7 +504,7 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
             item.projection = target_system.to_owned();
         }
     }
-    ensure!(!cancel.is_cancelled(), "Cancelled");
+    ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
     Ok(())
 }
 

@@ -294,7 +294,7 @@ impl Clearances {
             let needed: f64 = blocks.iter().map(|(ground, haul, tolerance, _)| (left[ground] - tolerance).max(0.0) * haul).sum();
             if needed > available + 1e-6 * available.max(1.0) {
                 log::debug!("stop tail: clearance needs {needed:.3} truck hours, only {available:.3} remain before interval {end}");
-                return Err("blast clearance exceeds remaining fleet hours".into());
+                return Err(crate::i18n::tr!("err-sched-clearance-fleet-hours"));
             }
         }
         Ok(())
@@ -1130,7 +1130,7 @@ impl<'a> State<'a> {
 
     fn solve_priced(&self, interval: Interval, topology: &Topology, priced: bool) -> Result<Plan, String> {
         if self.cancelled() {
-            return Err(format!("interval {}: cancelled", interval.index));
+            return Err(crate::i18n::tr!("err-sched-interval-cancelled", interval = interval.index.to_string()));
         }
         let input = self.input;
         let duration = interval.duration_h();
@@ -1218,7 +1218,11 @@ impl<'a> State<'a> {
                 .map(|(_, col)| (*col, 1.0))
                 .collect();
             if terms.is_empty() {
-                return Err(format!("interval {}: block {} must be finished but no loader digs it", interval.index, block.0));
+                return Err(crate::i18n::tr!(
+                    "err-sched-block-undiggable",
+                    interval = interval.index.to_string(),
+                    block = block.0.to_string()
+                ));
             }
             problem.add_row(left..=left, terms);
         }
@@ -1454,7 +1458,7 @@ impl<'a> State<'a> {
         }
         let solution = problem
             .maximise_from(&mut self.warm.borrow_mut())
-            .map_err(|reason| format!("interval {}: {reason}", interval.index))?;
+            .map_err(|reason| crate::i18n::tr!("err-sched-interval-failed", interval = interval.index.to_string(), reason = reason.to_string()))?;
         let rows: Vec<(usize, usize, f64)> = columns.into_iter().map(|(index, segment, col)| (index, segment, solution[col.index()].max(0.0))).collect();
         let objective = problem.value(&solution);
         let steered: f64 = incentive.iter().map(|(col, per_hour)| per_hour * solution[col.index()].max(0.0)).sum();

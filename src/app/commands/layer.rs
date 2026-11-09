@@ -76,7 +76,7 @@ impl<'a> App<'a> {
             .layers()
             .iter()
             .position(|candidate| candidate.id == layer_id)
-            .context("Layer position disappeared")?;
+            .with_context(|| tr!("err-store-layer-position-missing"))?;
         let on_layer = positioned_objects_on_layer(&project.project.document, layer_id);
         let name = layer.name.clone();
         self.execute_edit(Command::DeleteLayerSnapshot {

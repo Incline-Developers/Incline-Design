@@ -31,7 +31,7 @@ impl<'a> App<'a> {
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 if cancel.is_cancelled() {
-                    anyhow::bail!("Cancelled");
+                    anyhow::bail!(crate::app::jobs::Cancelled);
                 }
                 let crate::model::input::InputFile { source, bytes, reservation } = input;
                 let source_name = source.name;
@@ -39,7 +39,7 @@ impl<'a> App<'a> {
                 // The bytes are already in memory here, so the read share of
                 // the bar covers parsing alone.
                 let mesh = formats::read_mesh_bytes(&source_name, &bytes, &progress.phase(0.0, LOAD_READ_SHARE))
-                    .map_err(|error| anyhow::anyhow!("Failed to read {source_name}: {error}"))?;
+                    .map_err(|error| anyhow::anyhow!(crate::i18n::tr!("err-surf-read-failed", name = source_name.to_string(), error = error.to_string())))?;
                 // Parsing owns the resulting mesh, so release the potentially
                 // large browser source before building its derived structures.
                 drop(bytes);
@@ -126,7 +126,7 @@ impl<'a> App<'a> {
             let compute = || {
                 crate::app::jobs::run_compute_catching_panic(|| -> Result<LoadedTriangulation> {
                     let mesh = formats::read_mesh_with_progress(&path, &progress.phase(0.0, LOAD_READ_SHARE))
-                        .map_err(|err| anyhow::anyhow!("Failed to read {}: {err}", path.display()))?;
+                        .map_err(|err| anyhow::anyhow!(crate::i18n::tr!("err-surf-read-failed", name = path.display().to_string(), error = err.to_string())))?;
                     userspace_log!(
                         "{}",
                         tr!(
@@ -499,7 +499,7 @@ pub(crate) fn build_generated_triangulation(
     build_edges: impl FnOnce(&mesh_data::Triangulation) -> Vec<[u32; 2]>,
 ) -> Result<crate::model::triangulation::GeneratedTriangulation> {
     if tri_faces.is_empty() {
-        anyhow::bail!("Triangulation produced no faces");
+        anyhow::bail!(crate::i18n::tr!("err-surf-no-faces"));
     }
     let mesh = mesh_data::Triangulation::from_vertices_and_faces(tri_vertices, tri_faces)?;
     let spatial = std::sync::Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));

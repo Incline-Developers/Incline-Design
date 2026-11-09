@@ -15,7 +15,7 @@ impl<'a> App<'a> {
     /// UI stays interactive; the result is applied on the next frame.
     pub(crate) fn include_solid_in_topology(&mut self, topology_id: TriangulationId, shape_id: TriangulationId, name: String, save_as_two: bool, hide_old: bool) -> Result<()> {
         if topology_id == shape_id {
-            anyhow::bail!("Topology and pit/stockpile solid must be different triangulations");
+            anyhow::bail!(crate::i18n::tr!("err-surf-include-same-surface"));
         }
 
         // Snapshot the (cheap-to-clone) inputs on the UI thread; the worker
@@ -24,12 +24,12 @@ impl<'a> App<'a> {
             .triangulations
             .iter()
             .find(|triangulation| triangulation.id == topology_id)
-            .ok_or_else(|| anyhow::anyhow!("Topology triangulation not found"))?;
+            .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-surf-include-topography-missing")))?;
         let shape = self
             .triangulations
             .iter()
             .find(|triangulation| triangulation.id == shape_id)
-            .ok_or_else(|| anyhow::anyhow!("Pit/stockpile solid triangulation not found"))?;
+            .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-surf-include-solid-missing")))?;
 
         let topology_mesh = topology.mesh.clone();
         let topology_spatial = topology.spatial.clone();
@@ -42,10 +42,10 @@ impl<'a> App<'a> {
             // after it close out the bar.
             let included = include_shape_mesh_in_topology_with_spatial(&topology_mesh, &topology_spatial, &shape_mesh, &progress.phase(0.0, 0.85))?;
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             if included.faces.is_empty() {
-                anyhow::bail!("Combined triangulation produced no faces");
+                anyhow::bail!(crate::i18n::tr!("err-surf-include-combined-no-faces"));
             }
             let IncludedShapeMesh {
                 mut vertices,
@@ -69,9 +69,15 @@ impl<'a> App<'a> {
                 }
 
                 let topology_edges = triangle_edge_list(&faces);
-                let topology = session::build_generated_triangulation(component_name(&name, "Topology"), vertices, faces, TriSurfaceType::Surface, |_| topology_edges)?;
+                let topology = session::build_generated_triangulation(component_name(&name, &tr!("tri-topology")), vertices, faces, TriSurfaceType::Surface, |_| topology_edges)?;
                 let shape_edges = triangle_edge_list(&shape_faces);
-                let shape = session::build_generated_triangulation(component_name(&name, "Shell"), shape_vertices, shape_faces, TriSurfaceType::Surface, |_| shape_edges)?;
+                let shape = session::build_generated_triangulation(
+                    component_name(&name, &tr!("opt-results-col-shell")),
+                    shape_vertices,
+                    shape_faces,
+                    TriSurfaceType::Surface,
+                    |_| shape_edges,
+                )?;
                 vec![topology, shape]
             } else {
                 let edges = triangle_edge_list(&faces);
@@ -179,10 +185,10 @@ pub(super) fn include_shape_mesh_in_topology_with_spatial(
     progress: &crate::model::progress::Phase,
 ) -> Result<IncludedShapeMesh> {
     if topology.face_count() == 0 {
-        anyhow::bail!("Topology contains no faces");
+        anyhow::bail!(crate::i18n::tr!("err-surf-include-topography-no-faces"));
     }
     if shape.face_count() == 0 {
-        anyhow::bail!("Pit/stockpile solid contains no faces");
+        anyhow::bail!(crate::i18n::tr!("err-surf-include-solid-no-faces"));
     }
 
     let topology_vertices = topology.vertices();
@@ -235,7 +241,7 @@ pub(super) fn include_shape_mesh_in_topology_with_spatial(
             xy_area_tolerance,
             source_cap.shape_cut_side,
         )
-        .map_err(|error| anyhow::anyhow!("Pit/stockpile clip failed after vertical rim extension: {error:#}"))?
+        .map_err(|error| anyhow::anyhow!(crate::i18n::tr!("err-surf-include-clip-failed", error = format!("{error:#}"))))?
     };
     if diag {
         log::debug!(target: "incline_design::include", "include diag: shape clip {:?}", stage_start.elapsed());
@@ -277,7 +283,7 @@ pub(super) fn include_shape_mesh_in_topology_with_spatial(
         );
     }
     if cut_rings.is_empty() {
-        anyhow::bail!("Pit/stockpile solid did not produce a topology intersection boundary");
+        anyhow::bail!(crate::i18n::tr!("err-surf-include-no-intersection-boundary"));
     }
 
     // Partition the plane by the cut rings (a CDT constrained on every ring
@@ -420,14 +426,14 @@ pub(super) fn build_ring_coverage(rings: &[Vec<mesh_data::Vertex>]) -> Result<Ri
     for ring in rings {
         for vertex in ring {
             if !vertex.x.is_finite() || !vertex.y.is_finite() {
-                anyhow::bail!("Cut ring contains non-finite coordinates");
+                anyhow::bail!(crate::i18n::tr!("err-surf-include-cut-ring-non-finite"));
             }
             min = min.min(glam::DVec2::new(vertex.x, vertex.y));
             max = max.max(glam::DVec2::new(vertex.x, vertex.y));
         }
     }
     if !min.x.is_finite() {
-        anyhow::bail!("Cut rings are empty");
+        anyhow::bail!(crate::i18n::tr!("err-surf-include-cut-rings-empty"));
     }
     let origin = min;
     let extent = max - min;
@@ -468,7 +474,13 @@ pub(super) fn build_ring_coverage(rings: &[Vec<mesh_data::Vertex>]) -> Result<Ri
             }
         }
     }
-    let cells = cuts::constrained_cells(points, edges, "Cut ring", "Cut ring coverage", origin)?;
+    let cells = cuts::constrained_cells(
+        points,
+        edges,
+        &crate::i18n::tr!("err-surf-include-cut-ring"),
+        &crate::i18n::tr!("err-surf-include-cut-ring-coverage"),
+        origin,
+    )?;
     let pips: Vec<RingPip> = rings.iter().map(|ring| RingPip::build(ring)).collect();
     let classified: Vec<([mesh_data::Vertex; 3], bool)> = cells
         .par_iter()
@@ -1015,7 +1027,7 @@ pub(super) fn closure_cap_info(
 ) -> Result<ClosureCapInfo> {
     let mut mask = vec![false; faces.len()];
     if faces.is_empty() || vertices.is_empty() {
-        anyhow::bail!("Pit/stockpile solid contains no cap faces");
+        anyhow::bail!(crate::i18n::tr!("err-surf-include-no-cap-faces"));
     }
 
     let mut z_min = f64::INFINITY;
@@ -1106,7 +1118,7 @@ pub(super) fn closure_cap_info(
         } else if height_score > 1e-9 {
             false
         } else if min_area <= 1e-10 && max_area <= 1e-10 {
-            anyhow::bail!("Pit/stockpile solid has no flat closure cap and does not overlap the topology");
+            anyhow::bail!(crate::i18n::tr!("err-surf-include-no-cap-no-overlap"));
         } else {
             min_area > max_area
         }
@@ -1320,7 +1332,7 @@ pub(super) fn rings_from_boundary_segments_bridged(segments: &[[mesh_data::Verte
     }
 
     if rings.is_empty() {
-        anyhow::bail!("Could not form a closed topology cut boundary from the clipped pit/stockpile");
+        anyhow::bail!(crate::i18n::tr!("err-surf-include-no-closed-boundary"));
     }
     Ok(rings)
 }
@@ -1846,10 +1858,10 @@ pub(super) fn clip_shape_to_topology(
     }
 
     if output.faces.is_empty() && !output.surface_retained {
-        anyhow::bail!("Pit/stockpile solid has no geometry on the retained side of the topology");
+        anyhow::bail!(crate::i18n::tr!("err-surf-include-no-retained-side"));
     }
     if output.topology_segments.is_empty() {
-        anyhow::bail!("Pit/stockpile solid did not intersect the topology surface");
+        anyhow::bail!(crate::i18n::tr!("err-surf-include-no-intersection"));
     }
 
     Ok(ClippedShapeMesh {
@@ -2139,7 +2151,7 @@ fn build_shape_cell_coverage(
         for &vertex_index in edge {
             let vertex = topology_vertices[vertex_index];
             if !vertex.x.is_finite() || !vertex.y.is_finite() {
-                anyhow::bail!("Topology boundary contains non-finite coordinates");
+                anyhow::bail!(crate::i18n::tr!("err-surf-include-boundary-non-finite"));
             }
             min = min.min(glam::DVec2::new(vertex.x, vertex.y));
             max = max.max(glam::DVec2::new(vertex.x, vertex.y));
@@ -2152,7 +2164,7 @@ fn build_shape_cell_coverage(
         }
     }
     if !min.x.is_finite() {
-        anyhow::bail!("Shape cell coverage has no constraint geometry");
+        anyhow::bail!(crate::i18n::tr!("err-surf-include-no-constraint-geometry"));
     }
     let origin = min;
     let extent = max - min;
@@ -2194,7 +2206,13 @@ fn build_shape_cell_coverage(
             }
         }
     }
-    let cells = cuts::constrained_cells(points, edges, "Boundary", "Shape cell coverage", origin)?;
+    let cells = cuts::constrained_cells(
+        points,
+        edges,
+        &crate::i18n::tr!("err-surf-include-boundary"),
+        &crate::i18n::tr!("err-surf-include-shape-coverage"),
+        origin,
+    )?;
     let pips: Vec<RingPip> = rings.iter().map(|ring| RingPip::build(ring)).collect();
     let classified: Vec<([mesh_data::Vertex; 3], bool, bool)> = cells
         .par_iter()

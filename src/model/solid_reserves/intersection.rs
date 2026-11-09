@@ -66,7 +66,10 @@ impl Block {
 
     pub(super) fn new(model: &BlockModelData, bounds: BlockBounds) -> anyhow::Result<Self> {
         let size = bounds.upper - bounds.lower;
-        anyhow::ensure!(bounds.lower.is_finite() && size.is_finite() && size.min_element() > 0.0, "Invalid block bounds");
+        anyhow::ensure!(
+            bounds.lower.is_finite() && size.is_finite() && size.min_element() > 0.0,
+            crate::i18n::tr!("err-solids-invalid-block-bounds")
+        );
         let center = model.local_to_world(bounds.lower + size * 0.5);
         let offsets = std::array::from_fn::<_, 8, _>(|i| {
             model.rotation()
@@ -78,7 +81,10 @@ impl Block {
                     ))
         });
         let scale = offsets.iter().map(|p| p.abs().max_element()).fold(0.0, f64::max);
-        anyhow::ensure!(center.is_finite() && scale.is_finite() && scale > 0.0, "Invalid block transform");
+        anyhow::ensure!(
+            center.is_finite() && scale.is_finite() && scale > 0.0,
+            crate::i18n::tr!("err-solids-invalid-block-transform")
+        );
         let points = offsets.map(|p| p / scale);
         let up = model.rotation() * DVec3::Z;
         let faces = [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]].map(|face| face.map(|i| points[i]));
@@ -190,7 +196,7 @@ impl Block {
                 correction = (next - sum) - value;
                 sum = next;
             });
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+        anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
         let fraction = sum / self.volume;
         anyhow::ensure!(
             fraction.is_finite() && (-1e-7..=1.0 + 1e-7).contains(&fraction),

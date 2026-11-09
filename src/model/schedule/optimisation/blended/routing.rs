@@ -154,7 +154,12 @@ fn group(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, window: 
                 .or_insert(option);
         }
         if alike.is_empty() {
-            return Err(format!("no destination left for dig group {group} in interval {interval} segment {segment}"));
+            return Err(crate::i18n::tr!(
+                "err-sched-no-destination-left",
+                group = group.to_string(),
+                interval = interval.to_string(),
+                segment = segment.to_string()
+            ));
         }
         choices.push((interval, segment, tonnes, alike.into_values().collect::<Vec<usize>>()));
     }

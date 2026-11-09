@@ -75,16 +75,16 @@ impl<'a> App<'a> {
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 if cancel.is_cancelled() {
-                    anyhow::bail!("Cancelled");
+                    anyhow::bail!(crate::app::jobs::Cancelled);
                 }
                 let data = crate::model::formats::point_cloud::read_point_cloud_bytes(&input.source.name, &input.bytes, &progress.phase(0.0, DECODE_SHARE))?;
                 if data.points.is_empty() {
-                    anyhow::bail!("Point cloud {} contains no points", input.source.name);
+                    anyhow::bail!(tr!("err-cloud-no-points", name = input.source.name.to_string()));
                 }
                 let (min, max) = data
                     .bounds
                     .or_else(|| finite_bounds(&data.points))
-                    .with_context(|| format!("Point cloud {} contains no finite points", input.source.name))?;
+                    .with_context(|| tr!("err-cloud-no-finite-points", name = input.source.name.to_string()))?;
                 let prepared = prepare_for_render(&data.points, data.colors.as_deref(), data.classifications.as_deref(), (min, max));
                 let colors = data.colors.map(std::sync::Arc::new);
                 let classifications = data.classifications.map(std::sync::Arc::new);
@@ -117,10 +117,10 @@ impl<'a> App<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn import_point_cloud_path(&mut self, path: &Path) -> Result<()> {
         if PointCloudFormat::from_path(path).is_none() {
-            anyhow::bail!("Unsupported point cloud file: {}", path.display());
+            anyhow::bail!(tr!("err-cloud-unsupported-file", name = path.display().to_string()));
         }
         if !path.is_file() {
-            anyhow::bail!("Point cloud file does not exist: {}", path.display());
+            anyhow::bail!(tr!("err-cloud-file-missing", name = path.display().to_string()));
         }
         self.open_point_cloud_path(path.to_path_buf());
         Ok(())
@@ -146,14 +146,14 @@ impl<'a> App<'a> {
         crate::app::jobs::spawn_pool_task(move || {
             let compute = || {
                 crate::app::jobs::run_compute_catching_panic(|| -> Result<LoadedPointCloud> {
-                    let data = read_point_cloud(&path, &progress.phase(0.0, DECODE_SHARE)).with_context(|| format!("Failed to read point cloud {}", path.display()))?;
+                    let data = read_point_cloud(&path, &progress.phase(0.0, DECODE_SHARE)).with_context(|| tr!("err-cloud-read-failed", name = path.display().to_string()))?;
                     if data.points.is_empty() {
-                        anyhow::bail!("Point cloud {} contains no points", path.display());
+                        anyhow::bail!(tr!("err-cloud-no-points", name = path.display().to_string()));
                     }
                     let (min, max) = data
                         .bounds
                         .or_else(|| finite_bounds(&data.points))
-                        .with_context(|| format!("Point cloud {} contains no finite points", path.display()))?;
+                        .with_context(|| tr!("err-cloud-no-finite-points", name = path.display().to_string()))?;
                     let prepared = prepare_for_render(&data.points, data.colors.as_deref(), data.classifications.as_deref(), (min, max));
                     let colors = data.colors.map(std::sync::Arc::new);
                     let classifications = data.classifications.map(std::sync::Arc::new);
@@ -279,7 +279,7 @@ impl<'a> App<'a> {
     /// so the tiles have to become a single cloud before they are useful.
     pub(crate) fn run_point_cloud_join(&mut self, cloud_ids: Vec<PointCloudId>, name: String, remove_sources: bool) -> anyhow::Result<()> {
         if cloud_ids.len() < 2 {
-            anyhow::bail!("Select at least two point clouds to join");
+            anyhow::bail!(tr!("err-cloud-join-select-two"));
         }
         let mut sources = Vec::with_capacity(cloud_ids.len());
         for id in &cloud_ids {
@@ -287,7 +287,7 @@ impl<'a> App<'a> {
                 .point_clouds
                 .iter()
                 .find(|cloud| cloud.id == *id)
-                .ok_or_else(|| anyhow::anyhow!("A selected point cloud is no longer loaded"))?;
+                .ok_or_else(|| anyhow::anyhow!(tr!("err-cloud-selected-unloaded")))?;
             sources.push(JoinSource {
                 points: cloud.points.clone(),
                 colors: cloud.colors.clone(),
@@ -356,7 +356,7 @@ impl<'a> App<'a> {
             .workspace
             .active_project()
             .map(|project| project.runtime_id)
-            .context("Open a project before classifying point clouds")?;
+            .with_context(|| tr!("err-cloud-classify-no-project"))?;
         let mut sources = Vec::with_capacity(cloud_ids.len());
         for id in &cloud_ids {
             let cloud = self
@@ -364,11 +364,11 @@ impl<'a> App<'a> {
                 .iter()
                 .find(|cloud| cloud.id == *id)
                 .filter(|cloud| cloud.state.loaded && cloud.state.deferred.is_none())
-                .ok_or_else(|| anyhow::anyhow!("A selected point cloud is no longer loaded"))?;
+                .ok_or_else(|| anyhow::anyhow!(tr!("err-cloud-selected-unloaded")))?;
             sources.push(cloud.clone());
         }
         if sources.is_empty() {
-            anyhow::bail!("Select at least one point cloud to classify");
+            anyhow::bail!(tr!("err-cloud-classify-select-one"));
         }
         let revisions: Vec<_> = sources.iter().map(|cloud| (ItemRef::PointCloud(cloud.id), cloud.state.revision())).collect();
         let keys = cloud_ids.iter().map(|id| crate::app::jobs::JobKey::PointCloud(*id)).collect();
@@ -382,9 +382,9 @@ impl<'a> App<'a> {
                 // Filtering is the bulk of the work; rebuilding the render
                 // chunks with the new codes is the rest.
                 let phase = progress.phase(start, start + span * 0.85);
-                let mut output = classify_ground(&cloud.points, &params, cancel, &phase).with_context(|| format!("Failed to classify {}", cloud.name))?;
+                let mut output = classify_ground(&cloud.points, &params, cancel, &phase).with_context(|| tr!("err-cloud-classify-failed", name = cloud.name.to_string()))?;
                 if cancel.is_cancelled() {
-                    anyhow::bail!("Cancelled");
+                    anyhow::bail!(crate::app::jobs::Cancelled);
                 }
                 cloud.prepared = std::sync::Arc::new(prepare_for_render(
                     &cloud.points,
@@ -467,7 +467,7 @@ const JOIN_COPY_SHARE: f32 = 0.35;
 fn join_point_clouds(sources: &[JoinSource], name: String, cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress) -> anyhow::Result<LoadedPointCloud> {
     let total: usize = sources.iter().map(|source| source.points.len()).sum();
     if total == 0 {
-        anyhow::bail!("The selected point clouds contain no points");
+        anyhow::bail!(tr!("err-cloud-join-no-points"));
     }
     // One cloud carrying colours makes the join coloured: the rest contribute
     // the uniform colour they were drawn with, so the tiles stay tellable
@@ -481,21 +481,21 @@ fn join_point_clouds(sources: &[JoinSource], name: String, cancel: &crate::app::
     if !classified && sources.iter().any(|source| source.classifications.is_some()) {
         userspace_warn!("{}", tr!("cmd-point-cloud-join-dropped-classifications"));
     }
-    let mut points = try_vec_with_capacity::<DVec3>(total, "joined point cloud")?;
+    let mut points = try_vec_with_capacity::<DVec3>(total, &tr!("err-cloud-label-joined"))?;
     let mut colors = if colored {
-        Some(try_vec_with_capacity::<u32>(total, "joined point cloud colours")?)
+        Some(try_vec_with_capacity::<u32>(total, &tr!("err-cloud-label-joined-colours"))?)
     } else {
         None
     };
     let mut classifications = if classified {
-        Some(try_vec_with_capacity::<u8>(total, "joined point cloud classifications")?)
+        Some(try_vec_with_capacity::<u8>(total, &tr!("err-cloud-label-joined-classes"))?)
     } else {
         None
     };
     let mut copied = 0usize;
     for source in sources {
         if cancel.is_cancelled() {
-            anyhow::bail!("Cancelled");
+            anyhow::bail!(crate::app::jobs::Cancelled);
         }
         points.extend_from_slice(&source.points);
         if let Some(colors) = colors.as_mut() {
@@ -526,7 +526,7 @@ fn join_point_clouds(sources: &[JoinSource], name: String, cancel: &crate::app::
         .reduce(|(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)))
         .filter(|(min, max)| min.is_finite() && max.is_finite())
         .or_else(|| finite_bounds(&points))
-        .ok_or_else(|| anyhow::anyhow!("The selected point clouds contain no finite points"))?;
+        .ok_or_else(|| anyhow::anyhow!(tr!("err-cloud-join-no-finite-points")))?;
     let prepared = prepare_for_render(&points, colors.as_deref(), classifications.as_deref(), bounds);
     progress.set_fraction(1.0);
     userspace_log!(

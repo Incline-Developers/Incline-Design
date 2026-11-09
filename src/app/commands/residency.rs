@@ -194,7 +194,7 @@ impl<'a> App<'a> {
                 let mut restored = Vec::new();
                 for item in items {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     restored.push(item.materialize()?);
                 }
@@ -267,7 +267,7 @@ impl<'a> App<'a> {
                 vec![key],
                 move |cancel, progress| {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     snapshot.evict(&progress.phase(0.0, 1.0))
                 },
@@ -319,7 +319,7 @@ impl<'a> App<'a> {
                 let mut restored = Vec::new();
                 for (id, stored) in layers {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     restored.push((id, stored.read(id)?));
                 }
@@ -386,7 +386,7 @@ impl<'a> App<'a> {
                 let mut stored = Vec::new();
                 for (id, payload) in payloads {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     stored.push((id, payload.store()?));
                 }
@@ -441,7 +441,7 @@ impl<'a> App<'a> {
                 let mut archived = Vec::new();
                 for request in requests {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     archived.push(request.write()?);
                 }
@@ -495,7 +495,7 @@ impl<'a> App<'a> {
                 let mut restored = Vec::new();
                 for (sequence, path, backing) in requests {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     restored.push(crate::model::history_storage::ArchivedCommand {
                         sequence,

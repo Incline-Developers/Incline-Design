@@ -52,7 +52,7 @@ fn refresh_preview(editor: &mut EditorState, document: &Document) -> bool {
             .drill_pattern_boundary_id
             .and_then(|id| document.get_object(id))
             .and_then(Object::closed_boundary)
-            .ok_or_else(|| "Pick a closed polyline or circle to define the blast shape".to_owned())
+            .ok_or_else(|| crate::i18n::tr!("err-drill-pattern-pick-boundary"))
             .and_then(|boundary| {
                 crate::model::drill_hole::generate_pattern_collars(
                     &boundary,

@@ -39,6 +39,7 @@ use rayon::prelude::*;
 
 use crate::{
     app::jobs::CancelFlag,
+    i18n::tr,
     model::{
         forest::Forest,
         point_cloud::{CLASS_GROUND, CLASS_UNCLASSIFIED},
@@ -243,14 +244,8 @@ struct Settled {
 }
 
 fn settle(points: &[DVec3], params: &GroundFilterParams, cancel: &CancelFlag, progress: &Phase) -> Result<Settled> {
-    ensure!(
-        params.cloth_resolution.is_finite() && params.cloth_resolution > 0.0,
-        "The cloth resolution must be greater than zero"
-    );
-    ensure!(
-        params.class_threshold.is_finite() && params.class_threshold > 0.0,
-        "The ground threshold must be greater than zero"
-    );
+    ensure!(params.cloth_resolution.is_finite() && params.cloth_resolution > 0.0, tr!("err-cloud-cloth-resolution"));
+    ensure!(params.class_threshold.is_finite() && params.class_threshold > 0.0, tr!("err-cloud-ground-threshold"));
     // Every point is relabelled; non-finite ones take no part and stay
     // unclassified.
     let mut codes = vec![CLASS_UNCLASSIFIED; points.len()];
@@ -258,7 +253,7 @@ fn settle(points: &[DVec3], params: &GroundFilterParams, cancel: &CancelFlag, pr
 
     let mut noise = 0;
     if params.remove_noise {
-        ensure!(params.noise_radius.is_finite() && params.noise_radius > 0.0, "The noise radius must be greater than zero");
+        ensure!(params.noise_radius.is_finite() && params.noise_radius > 0.0, tr!("err-cloud-noise-radius"));
         let isolated = isolated_points(points, &finite, params.noise_radius, params.noise_min_neighbours, cancel, &progress.phase(0.0, 0.2))?;
         codes.par_iter_mut().zip(isolated.par_iter()).for_each(|(code, isolated)| {
             if *isolated {
@@ -267,7 +262,7 @@ fn settle(points: &[DVec3], params: &GroundFilterParams, cancel: &CancelFlag, pr
         });
         noise = isolated.par_iter().filter(|isolated| **isolated).count();
     }
-    ensure!(!cancel.is_cancelled(), "Cancelled");
+    ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
 
     let cloth_points = |index: usize| finite[index] && codes[index] != CLASS_LOW_NOISE;
     let cloth = Cloth::settle(points, cloth_points, params, cancel, &progress.phase(0.2, 1.0))?;
@@ -279,7 +274,11 @@ fn point_forest() -> Result<&'static Forest> {
     static FOREST: LazyLock<Result<Forest, String>> = LazyLock::new(|| {
         let forest = Forest::parse(include_bytes!("../../res/models/point_forest.bin")).map_err(|error| error.to_string())?;
         if forest.feature_count() != FEATURE_COUNT {
-            return Err(format!("The classifier model takes {} features where {FEATURE_COUNT} are computed", forest.feature_count()));
+            return Err(tr!(
+                "err-cloud-classifier-features",
+                expected = forest.feature_count().to_string(),
+                computed = FEATURE_COUNT.to_string()
+            ));
         }
         Ok(forest)
     });
@@ -359,7 +358,7 @@ fn isolated_points(points: &[DVec3], eligible: &[bool], radius: f64, min_neighbo
     };
     let span = ((max - min) / radius).ceil();
     if span.max_element() >= MAX_VOXELS_PER_AXIS as f64 {
-        bail!("The noise radius of {radius} m is too small for a cloud this large; raise it");
+        bail!(tr!("err-cloud-noise-radius-small", radius = radius.to_string()));
     }
     let voxel = |point: DVec3| -> [u64; 3] {
         let cell = ((point - min) / radius).floor();
@@ -375,7 +374,7 @@ fn isolated_points(points: &[DVec3], eligible: &[bool], radius: f64, min_neighbo
     let mut sorted: Vec<u64> = keys.par_iter().filter_map(|key| *key).collect();
     sorted.par_sort_unstable();
     progress.set_fraction(0.4);
-    ensure!(!cancel.is_cancelled(), "Cancelled");
+    ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
 
     let mut occupied: Vec<(u64, u32)> = Vec::new();
     for key in sorted {
@@ -406,7 +405,7 @@ fn isolated_points(points: &[DVec3], eligible: &[bool], radius: f64, min_neighbo
         })
         .collect();
     progress.set_fraction(0.8);
-    ensure!(!cancel.is_cancelled(), "Cancelled");
+    ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
 
     let isolated = keys
         .par_iter()
@@ -454,7 +453,7 @@ struct Cloth {
 
 impl Cloth {
     fn settle(points: &[DVec3], include: impl Fn(usize) -> bool + Sync, params: &GroundFilterParams, cancel: &CancelFlag, progress: &Phase) -> Result<Self> {
-        ensure!(u32::try_from(points.len()).is_ok(), "The point cloud has too many points to classify in one pass");
+        ensure!(u32::try_from(points.len()).is_ok(), tr!("err-cloud-too-many-points"));
         let resolution = params.cloth_resolution;
         let Some((min, max)) = (0..points.len())
             .into_par_iter()
@@ -462,7 +461,7 @@ impl Cloth {
             .map(|index| (points[index].truncate(), points[index].truncate()))
             .reduce_with(|(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)))
         else {
-            bail!("The point cloud has no points left to find the ground in");
+            bail!(tr!("err-cloud-no-ground-points"));
         };
         let (cols, rows) = cloth_dimensions(max - min, resolution);
         ensure!(
@@ -474,7 +473,7 @@ impl Cloth {
         let floor = collision_heights(points, &include, origin, resolution, cols, rows);
         let floor = fill_empty_nodes(floor, cols, rows);
         progress.set_fraction(0.1);
-        ensure!(!cancel.is_cancelled(), "Cancelled");
+        ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
 
         let tolerance = params.class_threshold / 100.0;
         let mut heights = settle_membrane(&floor, cols, rows, resolution, params.terrain.curvature(), tolerance, cancel, &progress.phase(0.1, 0.95))?;
@@ -744,7 +743,7 @@ fn settle_membrane(floor: &[f64], cols: usize, rows: usize, resolution: f64, cur
 fn relax(heights: &[AtomicF64], floor: &[f64], cols: usize, rows: usize, lift: f64, tolerance: f64, cancel: &CancelFlag) -> Result<()> {
     for sweep in 0..MAX_SWEEPS {
         if sweep % 16 == 0 {
-            ensure!(!cancel.is_cancelled(), "Cancelled");
+            ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
         }
         let mut largest = 0.0f64;
         // Red and black particles only neighbour each other, so each half

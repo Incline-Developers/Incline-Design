@@ -217,7 +217,7 @@ impl BlockModelData {
             is_irregular: true,
             variables,
         };
-        let reservation = crate::app::memory::reserve(retained_bytes, "in-memory block model").map_err(invalid)?;
+        let reservation = crate::app::memory::reserve(retained_bytes, &crate::i18n::tr!("err-memory-what-block-model")).map_err(invalid)?;
         Ok(Self {
             content_version: NEXT_CONTENT_VERSION.fetch_add(1, Ordering::Relaxed),
             metadata,
@@ -280,7 +280,7 @@ impl BlockModelData {
         // The reservation cannot grow, so it is taken again for the new total;
         // the values exist already, so a refusal leaves the model untracked.
         self._reservation = crate::app::memory::MemoryReservation::untracked();
-        if let Ok(reservation) = crate::app::memory::reserve(self.estimated_bytes(), "block model") {
+        if let Ok(reservation) = crate::app::memory::reserve(self.estimated_bytes(), &crate::i18n::tr!("err-memory-what-block-model")) {
             self._reservation = reservation;
         }
         Ok(())

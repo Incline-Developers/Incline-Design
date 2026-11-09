@@ -132,7 +132,7 @@ fn ordered_dig_spans(sequence: &[GroundId], tonnes: &BTreeMap<GroundId, f64>, st
         at = end;
     }
     if !remaining.is_empty() {
-        return Err("published digging names a block outside its authored sequence".to_owned());
+        return Err(crate::i18n::tr!("err-sched-pub-dig-outside-sequence"));
     }
     Ok(spans)
 }
@@ -146,18 +146,18 @@ fn dig_times(input: &BlendInput, solution: &BlendSolution, replay: &ReplayReport
         if row.tonnes_t <= DUST_T {
             continue;
         }
-        let candidate = input.movements.get(row.candidate).ok_or("published movement names an unknown candidate")?;
+        let candidate = input.movements.get(row.candidate).ok_or_else(|| crate::i18n::tr!("err-sched-pub-unknown-candidate"))?;
         let SourceId::Ground(ground) = candidate.source else { continue };
-        let task = replay.row_tasks[index].ok_or("published digging has no authored bar")?;
+        let task = replay.row_tasks[index].ok_or_else(|| crate::i18n::tr!("err-sched-pub-dig-no-bar"))?;
         *groups.entry((candidate.loader, task, row.interval, row.segment)).or_default().entry(ground).or_default() += row.tonnes_t;
     }
     let tasks: BTreeMap<_, _> = input.tasks.iter().map(|task| (task.id, task)).collect();
     let mut result = BTreeMap::new();
     for ((loader, task, interval, segment), tonnes) in groups {
-        let TaskKind::Dig { sequence } = &tasks.get(&task).ok_or("published digging names an unknown bar")?.kind else {
-            return Err("published digging belongs to a non-dig bar".to_owned());
+        let TaskKind::Dig { sequence } = &tasks.get(&task).ok_or_else(|| crate::i18n::tr!("err-sched-pub-dig-unknown-bar"))?.kind else {
+            return Err(crate::i18n::tr!("err-sched-pub-dig-non-dig-bar"));
         };
-        let &(start_h, end_h) = times.get(&(interval, segment)).ok_or("published digging names an unknown cell")?;
+        let &(start_h, end_h) = times.get(&(interval, segment)).ok_or_else(|| crate::i18n::tr!("err-sched-pub-dig-unknown-cell"))?;
         for (ground, span) in ordered_dig_spans(sequence, &tonnes, start_h, end_h)? {
             result.insert((loader, task, ground, interval, segment), span);
         }
@@ -191,7 +191,7 @@ pub(crate) fn publish(
     let times = cell_times(input, solution);
     let grades = input.grades.count();
     if replay.row_tasks.len() != solution.movements.len() {
-        return Err("the replay did not attribute every published movement to a bar".to_owned());
+        return Err(crate::i18n::tr!("err-sched-pub-unattributed"));
     }
 
     let dig_times = dig_times(input, solution, replay, &times)?;
@@ -204,32 +204,36 @@ pub(crate) fn publish(
     let mut dug: BTreeMap<GroundId, (f64, f64)> = BTreeMap::new();
     for (index, row) in solution.movements.iter().enumerate() {
         if index % 4096 == 0 && cancel.is_cancelled() {
-            return Err("cancelled during publication".to_owned());
+            return Err(crate::i18n::tr!("err-sched-cancelled-publication"));
         }
         let Some(candidate) = input.movements.get(row.candidate) else {
-            return Err(format!("movement row names unknown candidate {}", row.candidate));
+            return Err(crate::i18n::tr!("err-sched-pub-row-unknown-candidate", candidate = row.candidate.to_string()));
         };
         let Some(&(start_h, end_h)) = times.get(&(row.interval, row.segment)) else {
-            return Err(format!("movement row names an unknown cell ({}, {})", row.interval, row.segment));
+            return Err(crate::i18n::tr!(
+                "err-sched-pub-row-unknown-cell",
+                interval = row.interval.to_string(),
+                segment = row.segment.to_string()
+            ));
         };
         if row.tonnes_t <= DUST_T || end_h - start_h < MINIMUM_SPAN_H {
             omitted_rows += 1;
             omitted_tonnes_t += row.tonnes_t.max(0.0);
             continue;
         }
-        let task = replay.row_tasks[index].ok_or_else(|| format!("movement row {index} was worked under no authored bar"))?;
+        let task = replay.row_tasks[index].ok_or_else(|| crate::i18n::tr!("err-sched-pub-row-no-bar", index = index.to_string()))?;
         let (start_h, end_h) = match candidate.source {
             SourceId::Ground(ground) => dig_times[&(candidate.loader, task, ground, row.interval, row.segment)],
             SourceId::Stockpile(_) => (start_h, end_h),
         };
-        let bar = *lookup.tasks.get(&task).ok_or("a movement names a bar capture did not record")?;
-        let agent = *lookup.loaders.get(&candidate.loader).ok_or("a movement names a loader capture did not record")?;
-        let source = lookup.source(candidate.source).ok_or("a movement names a source capture did not record")?;
+        let bar = *lookup.tasks.get(&task).ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-bar"))?;
+        let agent = *lookup.loaders.get(&candidate.loader).ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-loader"))?;
+        let source = lookup.source(candidate.source).ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-source"))?;
         let destination = *lookup
             .destinations
             .get(&candidate.destination)
-            .ok_or("a movement names a destination capture did not record")?;
-        let truck = *lookup.trucks.get(&candidate.truck).ok_or("a movement names a truck class capture did not record")?;
+            .ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-destination"))?;
+        let truck = *lookup.trucks.get(&candidate.truck).ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-truck"))?;
         let activity = match candidate.activity {
             Activity::Dig => ProjectActivity::Dig,
             Activity::Reclaim => ProjectActivity::Reclaim,
@@ -249,7 +253,7 @@ pub(crate) fn publish(
         };
         // Movement value at the authored boundaries, exactly as the replay
         // valued it.
-        let mut per_tonne = candidate.value_per_tonne().map_err(|_| "a movement value is not finite".to_owned())?;
+        let mut per_tonne = candidate.value_per_tonne().map_err(|_| crate::i18n::tr!("err-sched-pub-value-not-finite"))?;
         if let SourceId::Stockpile(pile) = candidate.source {
             let blend = replay
                 .pile_intervals
@@ -377,7 +381,7 @@ pub(crate) fn publish(
             remaining_t = 0.0;
         }
         if remaining_t < 0.0 {
-            return Err(format!("dig block {} was depleted past its measured tonnes", block.0));
+            return Err(crate::i18n::tr!("err-sched-pub-depleted", block = block.0.to_string()));
         }
         ground.push(GroundBalance {
             block: *block,

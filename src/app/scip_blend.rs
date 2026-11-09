@@ -231,7 +231,7 @@ pub(crate) fn improve(
         );
         out.timings.solver += started.elapsed();
         if cancel.is_cancelled() {
-            out.stop(SolveTermination::Cancelled, "cancelled during the search");
+            out.stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-search"));
             return out;
         }
         searched_bound = searched.bound;
@@ -335,7 +335,7 @@ pub(crate) fn improve(
                 completed = Some(values);
             }
             Err(_) if cancel.is_cancelled() => {
-                out.stop(SolveTermination::Cancelled, "cancelled while completing the first schedule into a seed");
+                out.stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-seed"));
                 return out;
             }
             Err(problem) => log::warn!("schedule run {}: first schedule not offered to SCIP: {problem}", out.identity.run_id),
@@ -354,7 +354,7 @@ pub(crate) fn improve(
     let built = formulate_scip_with_cancel(&out.input, Some(&cancel.signal()), Some(&activity.formulation_checks), options.diagnostic_logging);
     out.timings.formulation += started.elapsed();
     if cancel.is_cancelled() || built.is_err() {
-        out.stop(SolveTermination::Cancelled, "cancelled during formulation");
+        out.stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-formulation"));
         return out;
     }
     let built = built.expect("checked formulation result");
@@ -427,7 +427,7 @@ pub(crate) fn improve(
         Arc::clone(&activity.interrupt),
     );
     if cancel.is_cancelled() {
-        out.stop(SolveTermination::Cancelled, "cancelled before solve");
+        out.stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-before-solve"));
         return out;
     }
 
@@ -448,7 +448,7 @@ pub(crate) fn improve(
         )
     };
     if let Err(error) = solved {
-        out.stop(SolveTermination::BackendFailure, format!("SCIP stopped with {error:?}"));
+        out.stop(SolveTermination::BackendFailure, crate::i18n::tr!("err-sched-solver-stopped", error = format!("{error:?}")));
         return out;
     }
     let solved = model;
@@ -480,11 +480,14 @@ pub(crate) fn improve(
     out.event_callbacks = activity.interrupt.callbacks.load(Ordering::Acquire);
     out.interrupt_calls = activity.interrupt.calls.load(Ordering::Acquire);
     if activity.interrupt.failed.load(Ordering::Acquire) {
-        out.stop(SolveTermination::BackendFailure, "SCIPinterruptSolve rejected a solver-thread callback");
+        out.stop(SolveTermination::BackendFailure, crate::i18n::tr!("err-sched-interrupt-rejected"));
         return out;
     }
     if cancel.is_cancelled() {
-        out.stop(SolveTermination::Cancelled, format!("cancelled during solve; backend status {:?}", report.status));
+        out.stop(
+            SolveTermination::Cancelled,
+            crate::i18n::tr!("err-sched-cancelled-solve", status = format!("{:?}", report.status)),
+        );
         return out;
     }
 
@@ -493,7 +496,7 @@ pub(crate) fn improve(
     let extracted = extract_solution(&solved, &columns, || cancel.is_cancelled());
     out.timings.extraction += started.elapsed();
     if cancel.is_cancelled() || extracted.is_err() {
-        out.stop(SolveTermination::Cancelled, "cancelled during extraction");
+        out.stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-extraction"));
         return out;
     }
     let Some(mut solution) = extracted.expect("checked extraction result") else {
@@ -522,7 +525,7 @@ pub(crate) fn improve(
     let checked = replay_cancellable(&out.input, &solution, &cancel.signal());
     out.timings.replay += started.elapsed();
     if cancel.is_cancelled() || checked.is_none() {
-        out.stop(SolveTermination::Cancelled, "cancelled during replay");
+        out.stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-replay"));
         return out;
     }
     let checked = checked.expect("checked replay result");
@@ -540,7 +543,7 @@ pub(crate) fn improve(
     out.published_objective = Some(checked.replayed_objective);
     out.replay = Some(Arc::new(checked));
     if !valid {
-        out.stop(SolveTermination::ValidationFailure, "independent blended replay rejected the incumbent");
+        out.stop(SolveTermination::ValidationFailure, crate::i18n::tr!("err-sched-incumbent-rejected"));
         return out;
     }
     if let Some(bound) = out.primary_bound {
@@ -783,12 +786,12 @@ fn solve_day_by_day(
     let mut stitched = Stitched::new();
     for (position, &window) in windows.iter().enumerate() {
         if cancel.is_cancelled() {
-            return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during a day-by-day window".into());
+            return DayByDay::Stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-window"));
         }
-        let label = format!("window {}/{}", position + 1, windows.len());
+        let label = crate::i18n::tr!("err-sched-window-label", position = (position + 1).to_string(), total = windows.len().to_string());
         let limit = budget.map(|budget| budget.saturating_sub(started.elapsed()) / (windows.len() - position) as u32);
         if limit.is_some_and(|limit| limit.is_zero()) {
-            return DayByDay::Failed(format!("{label}: no time left"));
+            return DayByDay::Failed(crate::i18n::tr!("err-sched-window-no-time", label = label.clone()));
         }
         // Building the window's model and its start come out of its share.
         let deadline = limit.map(|limit| Instant::now() + limit);
@@ -796,9 +799,9 @@ fn solve_day_by_day(
         // A window's input is derived, not captured, so it is held to the
         // same checks before SCIP sees it.
         match validate_input(&input, Some(&full), options, cancel) {
-            Ok(()) if cancel.is_cancelled() => return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during a day-by-day window".into()),
+            Ok(()) if cancel.is_cancelled() => return DayByDay::Stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-window")),
             Ok(()) => {}
-            Err(problem) => return DayByDay::Failed(format!("{label}: invalid window input: {problem}")),
+            Err(problem) => return DayByDay::Failed(crate::i18n::tr!("err-sched-window-invalid-input", label = label.clone(), problem = problem.to_string())),
         }
 
         activity.set(2);
@@ -806,7 +809,7 @@ fn solve_day_by_day(
         let built = formulate_scip_with_cancel(&input, Some(&cancel.signal()), Some(&activity.formulation_checks), false);
         out.timings.formulation += phase.elapsed();
         let Ok(built) = built else {
-            return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during formulation".into());
+            return DayByDay::Stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-formulation"));
         };
         if built.sizes.variables > out.sizes.variables {
             out.sizes = built.sizes;
@@ -825,7 +828,7 @@ fn solve_day_by_day(
                 );
                 Some(values)
             }
-            Err(_) if cancel.is_cancelled() => return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during a day-by-day window".into()),
+            Err(_) if cancel.is_cancelled() => return DayByDay::Stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-window")),
             Err(problem) => {
                 log::warn!("schedule run {}: {label} has no dispatch start: {problem}", out.identity.run_id);
                 None
@@ -861,14 +864,14 @@ fn solve_day_by_day(
         let solve_time = phase.elapsed();
         out.timings.solver += solve_time;
         if let Err(error) = solved {
-            return DayByDay::Stop(SolveTermination::BackendFailure, format!("SCIP stopped with {error:?}"));
+            return DayByDay::Stop(SolveTermination::BackendFailure, crate::i18n::tr!("err-sched-solver-stopped", error = format!("{error:?}")));
         }
         let solved = model;
         if audit.failed.load(Ordering::Acquire) {
-            return DayByDay::Stop(SolveTermination::BackendFailure, "SCIPinterruptSolve rejected a solver-thread callback".into());
+            return DayByDay::Stop(SolveTermination::BackendFailure, crate::i18n::tr!("err-sched-interrupt-rejected"));
         }
         if cancel.is_cancelled() {
-            return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during a day-by-day window".into());
+            return DayByDay::Stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-window"));
         }
         let status = solved.status();
         let gap = adapter::gap(&solved);
@@ -890,8 +893,15 @@ fn solve_day_by_day(
         out.timings.extraction += phase.elapsed();
         drop(solved);
         let solution = match extracted {
-            Err(()) => return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during extraction".into()),
-            Ok(None) => return DayByDay::Failed(format!("{label}: no schedule within {limit:?} ({status:?})")),
+            Err(()) => return DayByDay::Stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-extraction")),
+            Ok(None) => {
+                return DayByDay::Failed(crate::i18n::tr!(
+                    "err-sched-window-no-schedule",
+                    label = label.clone(),
+                    limit = format!("{limit:?}"),
+                    status = format!("{status:?}")
+                ));
+            }
             Ok(Some(solution)) => solution,
         };
 
@@ -900,11 +910,11 @@ fn solve_day_by_day(
         let checked = replay_cancellable(&input, &solution, &cancel.signal());
         out.timings.replay += phase.elapsed();
         let Some(checked) = checked else {
-            return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during replay".into());
+            return DayByDay::Stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-replay"));
         };
         if !checked.is_valid() {
             let issue = checked.issues.iter().chain(&checked.grade_issues).next().cloned().unwrap_or_default();
-            return DayByDay::Failed(format!("{label}: replay rejected the window: {issue}"));
+            return DayByDay::Failed(crate::i18n::tr!("err-sched-window-replay-rejected", label = label.clone(), issue = issue.to_string()));
         }
         log::info!(
             "schedule run {}: day-by-day {label}, intervals {}..{} keeping {}: {} variables, {:?} objective {:.2} gap {:?} in {:.2?}",
@@ -925,7 +935,7 @@ fn solve_day_by_day(
     let mut solution = stitched.finish(&full);
     if !full.grade_targets.is_empty() {
         let Some(checked) = replay_cancellable(&full, &solution, &cancel.signal()) else {
-            return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during target scoring".into());
+            return DayByDay::Stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-scoring"));
         };
         solution.reported_objective -= checked.grade_target_penalty;
     }
@@ -933,14 +943,14 @@ fn solve_day_by_day(
     let checked = replay_cancellable(&full, &solution, &cancel.signal());
     out.timings.replay += phase.elapsed();
     let Some(checked) = checked else {
-        return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during replay".into());
+        return DayByDay::Stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-replay"));
     };
     if !checked.is_valid() {
         for issue in checked.issues.iter().chain(&checked.grade_issues).take(5) {
             log::warn!("schedule run {}: stitched day-by-day schedule: {issue}", out.identity.run_id);
         }
         let issue = checked.issues.iter().chain(&checked.grade_issues).next().cloned().unwrap_or_default();
-        return DayByDay::Failed(format!("the stitched schedule failed the whole-horizon replay: {issue}"));
+        return DayByDay::Failed(crate::i18n::tr!("err-sched-stitched-replay-failed", issue = issue.to_string()));
     }
     let summary = DayByDaySummary {
         method: StartMethod::DayByDay,
@@ -1003,7 +1013,9 @@ fn tighter(left: Option<f64>, right: Option<f64>) -> Option<f64> {
 /// SCIP's own for HiGHS, solves every LP with the dual simplex, so asking for
 /// the primal one changes nothing.
 fn configure(mut model: Model, time_limit: Option<Duration>, relative_gap: Option<f64>) -> Result<Model, String> {
-    model.set_char_param("lp/pricing", b'd').map_err(|error| format!("setting SCIP lp/pricing: {error:?}"))?;
+    model
+        .set_char_param("lp/pricing", b'd')
+        .map_err(|error| crate::i18n::tr!("err-sched-set-pricing", error = format!("{error:?}")))?;
     // A pile's contained-quantity balance has a zero side and terms of tens
     // of millions (grade times tonnes), so checked against an absolute 1e-6,
     // as SCIP does by default, double precision alone breaks it: a seed's
@@ -1011,14 +1023,16 @@ fn configure(mut model: Model, time_limit: Option<Duration>, relative_gap: Optio
     // against the row's largest term instead, it holds.
     model
         .set_bool_param("constraints/linear/checkrelmaxabs", true)
-        .map_err(|error| format!("setting SCIP's linear check: {error:?}"))?;
+        .map_err(|error| crate::i18n::tr!("err-sched-set-linear-check", error = format!("{error:?}")))?;
     if let Some(limit) = time_limit {
         model
             .set_real_param("limits/time", limit.as_secs_f64())
-            .map_err(|error| format!("setting SCIP time limit: {error:?}"))?;
+            .map_err(|error| crate::i18n::tr!("err-sched-set-time-limit", error = format!("{error:?}")))?;
     }
     if let Some(gap) = relative_gap {
-        model.set_real_param("limits/gap", gap).map_err(|error| format!("setting SCIP gap: {error:?}"))?;
+        model
+            .set_real_param("limits/gap", gap)
+            .map_err(|error| crate::i18n::tr!("err-sched-set-gap", error = format!("{error:?}")))?;
     }
     Ok(model)
 }
@@ -1050,14 +1064,14 @@ const SEED_BAND_RELATIVE: f64 = 1e-3;
 /// It is only ever a start: SCIP checks it against the model before storing
 /// it, and whatever SCIP returns is replayed again on its own.
 fn dispatch_start(input: &BlendInput, deadline: Option<Instant>, cancel: &CancelFlag) -> Result<(HashMap<String, f64>, f64), String> {
-    let greedy::Dispatched { mut solution, replay: checked } = greedy::dispatch_cancellable(input, &cancel.signal())?.ok_or("cancelled")?;
+    let greedy::Dispatched { mut solution, replay: checked } = greedy::dispatch_cancellable(input, &cancel.signal())?.ok_or_else(|| crate::i18n::tr!("common-cancelled"))?;
     // The rows are the dispatcher's own, so the objective they report is
     // what the replay values them at, the utilisation incentive included as
     // the model's objective includes it.
     solution.reported_objective = checked.ranked_objective();
     if !checked.is_valid() {
         let issue = checked.issues.iter().chain(&checked.grade_issues).next().cloned().unwrap_or_default();
-        return Err(format!("the replay rejected the dispatch schedule: {issue}"));
+        return Err(crate::i18n::tr!("err-sched-dispatch-rejected", issue = issue.to_string()));
     }
     Ok((complete_seed(input, &solution, deadline, cancel)?, checked.replayed_objective))
 }
@@ -1093,9 +1107,8 @@ fn complete_seed(input: &BlendInput, seed: &BlendSolution, deadline: Option<Inst
         // A stitched day-by-day seed may need its movements' band to meet
         // the model's rows, which exact pile state can rule out: try again
         // with the movements held alone, in what is left.
-        Err(problem) if !cancel.is_cancelled() && deadline.is_none_or(|deadline| Instant::now() < deadline) => {
-            complete_seed_with(input, seed, false, deadline, cancel).map_err(|again| format!("{problem}; with the movements alone, {again}"))
-        }
+        Err(problem) if !cancel.is_cancelled() && deadline.is_none_or(|deadline| Instant::now() < deadline) => complete_seed_with(input, seed, false, deadline, cancel)
+            .map_err(|again| crate::i18n::tr!("err-sched-seed-retry", problem = problem.to_string(), again = again.to_string())),
         done => done,
     }
 }
@@ -1104,11 +1117,11 @@ fn complete_seed(input: &BlendInput, seed: &BlendSolution, deadline: Option<Inst
 /// `pin_piles` is set, solving in what is left before `deadline` once the
 /// model is built.
 fn complete_seed_with(input: &BlendInput, seed: &BlendSolution, pin_piles: bool, deadline: Option<Instant>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
-    let mut built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).map_err(|_| "cancelled".to_owned())?;
+    let mut built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).map_err(|_| crate::i18n::tr!("common-cancelled"))?;
     let tonnes: BTreeMap<(usize, usize, usize), f64> = seed.movements.iter().map(|row| ((row.candidate, row.interval, row.segment), row.tonnes_t)).collect();
     let missing = tonnes.keys().filter(|key| !built.columns.movement.contains_key(key)).count();
     if missing > 0 {
-        return Err(format!("the seed names {missing} movement cells the whole-horizon model does not have"));
+        return Err(crate::i18n::tr!("err-sched-seed-missing-cells", missing = missing.to_string()));
     }
     let model = &mut built.model;
     // Problem-stage bound changes on the model's own original variables.
@@ -1140,7 +1153,7 @@ fn complete_seed_with(input: &BlendInput, seed: &BlendSolution, pin_piles: bool,
     }
     let limit = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
     if limit.is_some_and(|limit| limit.is_zero()) {
-        return Err("no time left to complete it".into());
+        return Err(crate::i18n::tr!("err-sched-seed-no-time"));
     }
     let mut model = configure(built.model, limit, None)?;
     let configured = |model: &mut Model| -> minlp::retcode::ScipResult {
@@ -1151,17 +1164,17 @@ fn complete_seed_with(input: &BlendInput, seed: &BlendSolution, pin_piles: bool,
         model.set_int_param("misc/usesymmetry", 0)?;
         model.set_int_param("limits/solutions", 1)
     };
-    configured(&mut model).map_err(|error| format!("configuring the seed's completion: {error:?}"))?;
+    configured(&mut model).map_err(|error| crate::i18n::tr!("err-sched-seed-configure", error = format!("{error:?}")))?;
     adapter::dump(&model, None);
     adapter::install_cancellation(&mut model, vec![cancel.signal()], Arc::new(adapter::InterruptAudit::default()));
     let solved = model.solve();
     if cancel.is_cancelled() {
-        return Err("cancelled".into());
+        return Err(crate::i18n::tr!("common-cancelled"));
     }
-    solved.map_err(|error| format!("SCIP stopped completing the seed with {error:?}"))?;
+    solved.map_err(|error| crate::i18n::tr!("err-sched-seed-stopped", error = format!("{error:?}")))?;
     let variables = model.orig_vars();
     let Some(values) = model.best_sol_values(&variables) else {
-        return Err(format!("SCIP found no completion ({:?})", model.status()));
+        return Err(crate::i18n::tr!("err-sched-seed-none", status = format!("{:?}", model.status())));
     };
     Ok(variables
         .iter()
@@ -1277,10 +1290,12 @@ fn offer_seed(mut model: Model, values: &HashMap<String, f64>) -> Result<(Model,
             solution.push((variable, value));
         }
     }
-    let stored = model.add_orig_sol(&solution).map_err(|error| format!("offering the seed: {error:?}"))?;
+    let stored = model
+        .add_orig_sol(&solution)
+        .map_err(|error| crate::i18n::tr!("err-sched-seed-offer", error = format!("{error:?}")))?;
     model
         .set_bool_param("misc/allowweakdualreds", false)
-        .map_err(|error| format!("configuring the seeded solve: {error:?}"))?;
+        .map_err(|error| crate::i18n::tr!("err-sched-seed-solve-configure", error = format!("{error:?}")))?;
     Ok((model, stored))
 }
 
