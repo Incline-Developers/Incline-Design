@@ -1962,7 +1962,10 @@ fn copy_point_set<W: Write + Seek + Send>(
 
 fn reader_limits() -> omf_crate::file::Limits {
     omf_crate::file::Limits {
-        json_bytes: Some(64 * 1024 * 1024),
+        // The index carries a saved schedule's rows: a year of hourly
+        // dispatch over a few stockpiles is around 80 MB of it, and a project
+        // must always open after it was saved.
+        json_bytes: Some(1024 * 1024 * 1024),
         image_bytes: Some(4 * 1024 * 1024 * 1024),
         image_dim: Some(65_536),
         validation: Some(1_000),
