@@ -1075,9 +1075,13 @@ impl crate::app::App<'_> {
         // plan, the other reads the blocks through the record API and
         // reconciles them against the bench measurements.
         match outcome {
-            StageOutcome::Settled { diagnostics, .. } if stage == SolidsStep::DigStrips && !diagnostics.iter().any(|entry| entry.blocking) => StageOutcome::Settled {
-                entities: crate::app::commands::dig_strips::count_dig_block_faces(&solids, &self.solid_view_cache),
-                diagnostics,
+            // Counted in the background: a survey pit's flitches take seconds
+            // to divide, and this is checked with no page open.
+            StageOutcome::Settled { diagnostics, .. } if stage == SolidsStep::DigStrips && !diagnostics.iter().any(|entry| entry.blocking) => match self.dig_block_count(&solids) {
+                Some(entities) => StageOutcome::Settled { entities, diagnostics },
+                None => StageOutcome::Working {
+                    message: Some(tr!("stage-counting-dig-blocks")),
+                },
             },
             StageOutcome::Settled { mut diagnostics, entities } if stage == SolidsStep::Reserving && !diagnostics.iter().any(|entry| entry.blocking) => {
                 let records = match self.planning_dig_blocks() {

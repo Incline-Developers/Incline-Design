@@ -365,8 +365,19 @@ pub(crate) struct ViewSolid {
     measured: Option<Arc<MeasuredReserves>>,
     /// The plan faces each flitch's ground is divided into, kept so a strip
     /// edit derives again only the flitch it touched, and so opening Dig
-    /// Strips again finds every flitch's blocks already worked out.
-    flitch_faces: std::sync::Mutex<FlitchFaces>,
+    /// Strips again finds every flitch's blocks already worked out. Shared
+    /// with the job that counts the blocks, which fills it.
+    flitch_faces: Arc<std::sync::Mutex<FlitchFaces>>,
+}
+
+/// A solid's held flitch faces, as one committed body divides them: what
+/// [`super::dig_strips::cached_dig_block_faces`] and its kin read and fill.
+/// Cheap to clone, and sendable to a job.
+#[derive(Clone)]
+pub(crate) struct FlitchFaceCache {
+    /// The committed body's attempt; `None` holds nothing.
+    attempt: Option<u64>,
+    memo: Arc<std::sync::Mutex<FlitchFaces>>,
 }
 
 /// Plan faces derived from one committed body's flitch ground, with an
@@ -396,6 +407,48 @@ impl FlitchFaces {
             };
         }
         self
+    }
+}
+
+impl FlitchFaceCache {
+    /// The faces the committed body's flitch at `flitch` is divided into by
+    /// the lines `key` stands for, derived by `derive` the first time: with
+    /// `strips`, the flitch's dig blocks; without, its bench's blasts.
+    pub(crate) fn faces(&self, flitch: f64, strips: bool, key: u64, derive: impl FnOnce() -> super::dig_strips::AnchoredFaces) -> Arc<super::dig_strips::AnchoredFaces> {
+        let Some(attempt) = self.attempt else {
+            return Arc::new(derive());
+        };
+        let slot = (flitch.to_bits(), strips);
+        if let Some((held, faces)) = self.memo.lock().expect("flitch faces").for_attempt(attempt).faces.get(&slot)
+            && *held == key
+        {
+            return faces.clone();
+        }
+        // Derived outside the lock, so flitches are divided side by side.
+        let faces = Arc::new(derive());
+        self.memo.lock().expect("flitch faces").for_attempt(attempt).faces.insert(slot, (key, faces.clone()));
+        faces
+    }
+
+    /// Dig Strips' flat mesh of the flitch at `flitch`, cut from what `key`
+    /// stands for, built by `build` the first time; held like [`Self::faces`].
+    fn flat_ground(&self, flitch: f64, key: u64, build: impl FnOnce() -> Option<OpenTriangulation>) -> Option<OpenTriangulation> {
+        let Some(attempt) = self.attempt else {
+            return build();
+        };
+        if let Some((held, mesh)) = self.memo.lock().expect("flitch faces").for_attempt(attempt).flat.get(&flitch.to_bits())
+            && *held == key
+        {
+            return mesh.clone();
+        }
+        let mesh = build();
+        self.memo
+            .lock()
+            .expect("flitch faces")
+            .for_attempt(attempt)
+            .flat
+            .insert(flitch.to_bits(), (key, mesh.clone()));
+        mesh
     }
 }
 
@@ -470,55 +523,22 @@ impl ViewSolid {
         self.body.product().map(|body| &body.flitch_footprints)
     }
 
-    /// The faces the committed body's flitch at `flitch` is divided into by
-    /// the lines `key` stands for, derived by `derive` the first time: with
-    /// `strips`, the flitch's dig blocks; without, its bench's blasts.
-    /// `None` until a body is committed.
-    pub(crate) fn flitch_faces(
-        &self,
-        flitch: f64,
-        strips: bool,
-        key: u64,
-        derive: impl FnOnce() -> super::dig_strips::AnchoredFaces,
-    ) -> Option<Arc<super::dig_strips::AnchoredFaces>> {
-        let attempt = self.body_attempt()?;
-        let slot = (flitch.to_bits(), strips);
-        if let Some((held, faces)) = self.flitch_faces.lock().expect("flitch faces").for_attempt(attempt).faces.get(&slot)
-            && *held == key
-        {
-            return Some(faces.clone());
+    /// The held faces of the committed body's flitches.
+    pub(crate) fn face_cache(&self) -> FlitchFaceCache {
+        FlitchFaceCache {
+            attempt: self.body_attempt(),
+            memo: self.flitch_faces.clone(),
         }
-        // Derived outside the lock, so flitches are divided side by side.
-        let faces = Arc::new(derive());
-        self.flitch_faces
-            .lock()
-            .expect("flitch faces")
-            .for_attempt(attempt)
-            .faces
-            .insert(slot, (key, faces.clone()));
-        Some(faces)
     }
 
-    /// Dig Strips' flat mesh of the flitch at `flitch`, cut from what `key`
-    /// stands for, built by `build` the first time; held like
-    /// [`Self::flitch_faces`].
-    fn flat_ground(&self, flitch: f64, key: u64, build: impl FnOnce() -> Option<OpenTriangulation>) -> Option<OpenTriangulation> {
-        let Some(attempt) = self.body_attempt() else {
-            return build();
-        };
-        if let Some((held, mesh)) = self.flitch_faces.lock().expect("flitch faces").for_attempt(attempt).flat.get(&flitch.to_bits())
-            && *held == key
-        {
-            return mesh.clone();
-        }
-        let mesh = build();
-        self.flitch_faces
-            .lock()
-            .expect("flitch faces")
-            .for_attempt(attempt)
-            .flat
-            .insert(flitch.to_bits(), (key, mesh.clone()));
-        mesh
+    /// The committed body, shared.
+    pub(crate) fn body_product(&self) -> Option<Arc<SolidBody>> {
+        self.body.product().cloned()
+    }
+
+    /// The committed blasts, shared.
+    pub(crate) fn blasting_product(&self) -> Option<Arc<SolidBlasting>> {
+        self.blasting.product().cloned()
     }
 
     /// Unique to the attempt that built the committed body.
@@ -1086,7 +1106,7 @@ impl crate::app::App<'_> {
                     partition: Stage::default(),
                     carved: None,
                     measured: None,
-                    flitch_faces: std::sync::Mutex::default(),
+                    flitch_faces: Arc::default(),
                     bench_reserves: Stage::default(),
                     reserves: Stage::default(),
                 },
@@ -1764,6 +1784,15 @@ impl crate::app::App<'_> {
         let dug_through = self.editor.sequence_editor.as_ref().filter(|_| sequencing).map_or(0, |draft| draft.preview);
         let benches_only = demand == GeometryDemand::Blasting;
         let dig_strips = demand == GeometryDemand::Body && self.editor.is_dig_strips_step();
+        // Dig Strips works on one flitch at a time: the one picked, or none.
+        let dig_target = self.editor.planning_cut_target().filter(|_| dig_strips);
+        let in_view = |solid: SolidId, band: BenchSelection| {
+            if dig_strips {
+                dig_target.is_some_and(|(picked, flitch)| picked == solid && (flitch.base - band.base).abs() < 1e-6 && (flitch.top - band.top).abs() < 1e-6)
+            } else {
+                selected(&view_selection, solid, Some(band))
+            }
+        };
         let runtime = self.workspace.active_project().map(|project| project.runtime_id);
         // Blocks marked from the Blocks step stand until the planner picks
         // something of their own in the view.
@@ -1895,7 +1924,7 @@ impl crate::app::App<'_> {
                 .iter()
                 .filter_map(|solid| Some((solid, self.solid_view_cache.get(&solid.id)?)))
                 .flat_map(|(solid, cache)| cache.display_parts(demand).unwrap_or_default().iter().map(move |part| (solid, cache, part)))
-                .filter(|(solid, _, part)| selected(&view_selection, solid.id, Some(part.band.selection)))
+                .filter(|(solid, _, part)| in_view(solid.id, part.band.selection))
                 .filter(|(solid, _, part)| !hidden.as_ref().is_some_and(|hidden| hidden.hides(solid.id, part.bench, part.band.selection, part.blast)))
                 .collect();
             flitches.into_par_iter().for_each(|(solid, cache, part)| {
@@ -1972,7 +2001,7 @@ impl crate::app::App<'_> {
                 })
                 .flatten();
             for (index, part) in parts.iter().enumerate() {
-                if !selected(&view_selection, solid.id, Some(part.band.selection)) {
+                if !in_view(solid.id, part.band.selection) {
                     continue;
                 }
                 if hidden.as_ref().is_some_and(|hidden| hidden.hides(solid.id, part.bench, part.band.selection, part.blast)) {
@@ -2880,15 +2909,16 @@ fn dig_strips_ground(solid: &Solid, cache: &ViewSolid, part: &SolidPart) -> Opti
     super::dig_strips::lines_key(&[cuts]).hash(&mut key);
     blast_faces.len().hash(&mut key);
     excluded.hash(&mut key);
+    let faces = cache.face_cache();
     let build = || {
-        let ground: Vec<Face> = super::dig_strips::cached_blast_faces(cache, flitch, footprint, cuts)
+        let ground: Vec<Face> = super::dig_strips::cached_blast_faces(&faces, flitch, footprint, cuts)
             .iter()
             .filter(|(_, point)| !excluded.iter().any(|&blast| arrangement::point_in_face(&blast_faces[blast].face, *point)))
             .map(|(face, _)| face.clone())
             .collect();
         flat_ground(&part.mesh, &ground, part.band.selection.top)
     };
-    Some(cache.flat_ground(flitch, key.finish(), build))
+    Some(faces.flat_ground(flitch, key.finish(), build))
 }
 
 /// Plan faces as one flat, outlined mesh at `z`, in `source`'s colours.

@@ -2155,6 +2155,7 @@ stage-failed-count =
 stage-duplicate-field = Two fields share this name
 stage-model-data-gaps = { $missing } blocks missing a value · { $weights } with no usable weight
 stage-waiting-models = Waiting on { $count } block models
+stage-counting-dig-blocks = Counting dig blocks…
 stage-waiting-solids = Waiting on { $count } solids
 stage-no-occupied-bands = The benching plan reaches no material in this solid
 stage-run-step = Run

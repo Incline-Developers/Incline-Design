@@ -526,6 +526,10 @@ pub(crate) struct App<'a> {
     /// published. Such a schedule follows the end when it moves later; one
     /// run a period at a time stops where it was taken to.
     pub(crate) schedule_reached_end: bool,
+    /// The Dig Strips step's count of every flitch's dig blocks, under the
+    /// key of the ground and lines it counted. See
+    /// [`crate::app::App::dig_block_count`].
+    pub(crate) dig_block_count: Option<(u64, usize)>,
     /// A run in flight on the bounded worker pool. Dropping it and cancelling
     /// its job publishes nothing.
     pub(crate) pending_schedule_run: Option<crate::app::schedule_run::PendingScheduleRun>,
@@ -762,6 +766,7 @@ impl<'a> Default for App<'a> {
             planning_entry_step: None,
             schedule_calculation: None,
             schedule_reached_end: false,
+            dig_block_count: None,
             pending_schedule_run: None,
             video_recording: None,
             schedule_run_diagnostics: None,
