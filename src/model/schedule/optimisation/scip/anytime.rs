@@ -805,9 +805,11 @@ fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, v
         }
         // One window may take at most half of what is left, or twice its
         // share when that is more, so a program that solves slowly costs
-        // that window, not every window after it.
+        // that window, not every window after it - and never more than is
+        // left: twice the last window's share is twice the time remaining,
+        // which ran a year's reroute minutes past the run's time limit.
         let left = ends.saturating_duration_since(Instant::now());
-        let window_ends = Instant::now() + left.mul_f64(2.0 / (total - done) as f64).max(left / 2);
+        let window_ends = Instant::now() + left.mul_f64(2.0 / (total - done) as f64).max(left / 2).min(left);
         let window = routing::window(input, windows_for(pass), index);
         let extra = pass >= reserve.passes;
         let reach = if extra {
