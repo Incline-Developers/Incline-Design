@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
-use glam::DVec3;
+use glam::{DMat3, DVec3};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::app::file_name;
@@ -19,7 +19,9 @@ use crate::{
             block_model_data::{BlockModelColumn, BlockModelData},
             mesh_data,
         },
+        grid_surface::NODE_TOLERANCE,
         kriging::{KrigingGrid, KrigingSample, OrdinaryKrigingOptions, ordinary_kriging},
+        prismoid_grid::{PrismoidGrid, PrismoidGridId},
     },
     ui::state::{OreFilterMode, TriSurfaceType},
     userspace_log, userspace_warn,
@@ -556,6 +558,53 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    /// Create a block model from a prismoid grid, one block per active
+    /// prismoid, named after the grid.
+    pub(crate) fn create_block_model_from_prismoid_grid(&mut self, grid_id: PrismoidGridId) -> Result<()> {
+        let item = self
+            .prismoid_grids
+            .iter()
+            .find(|item| item.id == grid_id && item.state.loaded)
+            .with_context(|| tr!("cmd-commands-select-one-loaded-prismoid-grid"))?;
+        let grid = std::sync::Arc::clone(&item.grid);
+        let grid_name = item.name.clone();
+        let name = tr!("cmd-prismoid-grid-block-model-name", grid = grid_name.clone());
+        let label = grid_name.clone();
+        let compute = move |cancel: &crate::app::jobs::CancelFlag, _: &crate::model::progress::Progress| -> Result<LoadedBlockModel> {
+            if cancel.is_cancelled() {
+                anyhow::bail!("Cancelled");
+            }
+            prismoid_block_model(&grid, &label, name)
+        };
+        let apply = move |app: &mut App, result: Result<LoadedBlockModel>| match result {
+            Ok(loaded) => {
+                let volume = loaded.model.shared_numeric_values("volume").map_or(0.0, |volumes| volumes.iter().sum());
+                userspace_log!(
+                    "{}",
+                    tr!(
+                        "cmd-prismoid-grid-created-block-model",
+                        name = loaded.name.clone(),
+                        grid = grid_name,
+                        blocks = loaded.model.metadata.n_blocks.to_string(),
+                        volume = format!("{volume:.2}")
+                    )
+                );
+                app.add_loaded_block_model(loaded);
+            }
+            Err(error) if error.to_string() != "Cancelled" => {
+                userspace_warn!("{}", tr!("cmd-block-model-could-not-create-block-model", error = format!("{error:#}")))
+            }
+            Err(_) => {}
+        };
+        self.spawn_job_reporting_progress(
+            tr!("cmd-prismoid-grid-creating-block-model"),
+            vec![crate::app::jobs::JobKey::PrismoidGrid(grid_id)],
+            compute,
+            apply,
+        );
+        Ok(())
+    }
+
     /// Make one block model the whole selection.
     ///
     /// The explorer's properties panel shows a block model's colours and slice
@@ -666,6 +715,77 @@ fn collect_kriging_samples(dataset: &DrillHoleDataset, holes: Option<&[usize]>, 
             })
         })
         .collect()
+}
+
+/// The smallest cell side a block model is made from a prismoid grid at.
+pub(super) const LEAST_PRISMOID_BLOCK_SIZE: f64 = 5.0;
+
+/// A prismoid grid's smallest cell side, when it is under
+/// [`LEAST_PRISMOID_BLOCK_SIZE`] by more than the node tolerance.
+pub(super) fn prismoid_cells_too_fine(grid: &PrismoidGrid) -> Option<f64> {
+    let size = grid.lattice.least_size();
+    (size < LEAST_PRISMOID_BLOCK_SIZE - NODE_TOLERANCE).then_some(size)
+}
+
+/// A block model of one box per active prismoid, from
+/// [`PrismoidGrid::blocks`] in the lattice's frame: each block's volume and
+/// vertical thickness, each cell value, and the grid's name as a category.
+fn prismoid_block_model(grid: &PrismoidGrid, grid_name: &str, name: String) -> Result<LoadedBlockModel> {
+    let lattice = &grid.lattice;
+    let rotation = DMat3::from_cols(lattice.u.extend(0.0), lattice.v.extend(0.0), DVec3::Z);
+    // The expression `block_volumes` measures each block with.
+    let stretch = rotation.determinant().abs();
+    let (cells, bounds): (Vec<usize>, Vec<BlockBounds>) = grid.blocks().into_iter().unzip();
+    let numeric = |name: &str, values: Vec<f64>| BlockModelColumn {
+        name: name.to_owned(),
+        values: std::sync::Arc::new(values),
+        categories: None,
+        category_colors: std::collections::BTreeMap::new(),
+    };
+    let mut columns = vec![
+        numeric("volume", bounds.iter().map(|block| (block.upper - block.lower).element_product() * stretch).collect()),
+        numeric("vertical_thickness", bounds.iter().map(|block| block.upper.z - block.lower.z).collect()),
+    ];
+    for values in &grid.cell_values {
+        columns.push(numeric(&values.name, cells.iter().map(|cell| values.values[*cell].unwrap_or(f64::NAN)).collect()));
+    }
+    columns.push(BlockModelColumn {
+        name: "prismoid_grid".to_owned(),
+        values: std::sync::Arc::new(vec![0.0; bounds.len()]),
+        categories: Some(std::collections::BTreeMap::from([(0, grid_name.to_owned())])),
+        category_colors: std::collections::BTreeMap::new(),
+    });
+    let (lower, upper) = bounds.iter().fold((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)), |(lower, upper), block| {
+        (lower.min(block.lower), upper.max(block.upper))
+    });
+    let retained_geometry_bytes = bounds.len().checked_mul(std::mem::size_of::<BlockBounds>()).context("block geometry size overflows")?;
+    let model = BlockModelData::from_columns(bounds.len(), lower, upper, columns, retained_geometry_bytes)?.with_transform(lattice.origin.extend(0.0), rotation)?;
+    let blocks = std::sync::Arc::new(BlockBoundsSource::Explicit(bounds));
+    let renderable_block_indices = std::sync::Arc::new(RenderableBlockIndices::All(blocks.len()));
+    let uniform_grid = blocks.uniform_grid();
+    let opaque_surface_blocks = uniform_grid.as_ref().map_or_else(
+        || crate::model::block_model::opaque_irregular_surface_block_count(&blocks, &renderable_block_indices),
+        |grid| crate::model::block_model::opaque_surface_block_count(&blocks, &renderable_block_indices, grid),
+    );
+    let world_bounds = compute_world_bounds(&model, &blocks, &renderable_block_indices);
+    let active_color_variable = Some("vertical_thickness".to_owned());
+    let active_values_cache = OpenBlockModel::prepare_active_values_cache(&model, &renderable_block_indices, active_color_variable.as_deref());
+    let generated_id = uuid::Uuid::new_v4();
+    Ok(LoadedBlockModel {
+        name,
+        source: BlockModelSource {
+            path: std::path::PathBuf::from(format!("generated/{generated_id}.blockmodel")),
+            csv_columns: None,
+        },
+        model,
+        blocks,
+        renderable_block_indices,
+        uniform_grid,
+        opaque_surface_blocks,
+        world_bounds,
+        active_color_variable,
+        active_values_cache,
+    })
 }
 
 fn ore_block_indices(values: &[f64], renderable_block_indices: &RenderableBlockIndices, default: Option<f64>, mode: OreFilterMode, min: f64, max: f64) -> Vec<usize> {

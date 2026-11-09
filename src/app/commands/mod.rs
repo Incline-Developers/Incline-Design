@@ -201,6 +201,7 @@ impl<'a> App<'a> {
                 | UiCommand::ExecuteCutTriangulationToSurface { .. }
                 | UiCommand::OpenBuildPrismoidGrid
                 | UiCommand::ExecuteBuildPrismoidGrid { .. }
+                | UiCommand::CreateBlockModelFromPrismoidGrid
                 | UiCommand::BuildCollarPoints { .. }
                 | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
@@ -1997,6 +1998,31 @@ impl<'a> App<'a> {
                     self.editor.tri_prismoid_open = false;
                 }
                 result
+            }
+            UiCommand::CreateBlockModelFromPrismoidGrid => {
+                let selected = self.selected_prismoid_grids();
+                let [grid_id] = selected[..] else {
+                    userspace_warn!("{}", tr!("cmd-commands-select-one-loaded-prismoid-grid"));
+                    return Ok(());
+                };
+                let too_fine = self
+                    .prismoid_grids
+                    .iter()
+                    .find(|item| item.id == grid_id)
+                    .and_then(|item| block_model::prismoid_cells_too_fine(&item.grid).map(|size| (item.name.clone(), size)));
+                if let Some((grid, size)) = too_fine {
+                    userspace_warn!(
+                        "{}",
+                        tr!(
+                            "cmd-prismoid-grid-cells-too-fine",
+                            grid = grid,
+                            size = prismoid_grid::cell_size(size),
+                            least = prismoid_grid::cell_size(block_model::LEAST_PRISMOID_BLOCK_SIZE)
+                        )
+                    );
+                    return Ok(());
+                }
+                self.create_block_model_from_prismoid_grid(grid_id)
             }
             UiCommand::OpenCutTopologyByPitShell => {
                 self.editor.tri_cut_pitshell_open = true;

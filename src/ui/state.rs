@@ -1367,6 +1367,9 @@ pub(crate) struct SelectionCounts {
     /// Selected design polylines that are not closed, which Clean Strings
     /// works on.
     pub(crate) open_strings: usize,
+    /// Selected prismoid grids that are loaded, which a block model is
+    /// created from.
+    pub(crate) prismoid_grids: usize,
 }
 
 /// A triangulation selector temporarily being filled from a viewport click.
@@ -6912,6 +6915,8 @@ pub(crate) enum UiCommand {
         step: std::num::NonZeroUsize,
         name: String,
     },
+    /// Create a block model from the one selected prismoid grid.
+    CreateBlockModelFromPrismoidGrid,
     /// Build a closed solid from a design surface and the topography it meets.
     ExecuteBuildSolidFromSurfaces {
         design_id: TriangulationId,
@@ -7664,6 +7669,7 @@ impl UiCommand {
             Self::ExecuteCutTriangulationBySurface { name, .. } => report(tr!("state-trim-triangulation-surface"), name.clone()),
             Self::ExecuteBuildSolidFromSurfaces { name, .. } => report(tr!("tri-build-solid-surfaces"), name.clone()),
             Self::ExecuteBuildPrismoidGrid { name, .. } => report(tr!("tri-build-prismoid-grid"), name.clone()),
+            Self::CreateBlockModelFromPrismoidGrid => report(tr!("common-create-block-model-from-prismoid-grid"), tr!("state-selected-prismoid-grid")),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),
             Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!("common-merge-shell-into-topology"), name.clone()),
             Self::Undo => report(tr!("common-undo"), tr!("state-previous-edit")),

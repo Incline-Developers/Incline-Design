@@ -58,6 +58,9 @@ struct MenuState {
     /// Whether exactly one loaded block model is selected, which is what ore
     /// thresholding runs on.
     can_create_ore_triangulation: bool,
+    /// Whether exactly one loaded prismoid grid is selected, which a block
+    /// model is created from.
+    can_create_block_model_from_grid: bool,
     can_undrape_rasters: bool,
     /// Whether any design object is selected, which is what Convert to Road
     /// turns into haul roads.
@@ -142,6 +145,9 @@ pub(crate) enum MacMenuAction {
     OpenCutTriangulationToSurface,
     /// The Modelling menu's row that opens the build prismoid grid dialog.
     OpenBuildPrismoidGrid,
+    /// The Modelling menu's row that creates a block model from the selected
+    /// prismoid grid.
+    CreateBlockModelFromPrismoidGrid,
     /// The Block Model menu's row that opens the pit optimization scenarios.
     OpenOptimizationScenarios,
     /// One row of File > Open Recent, by its index in the recent list the menu
@@ -240,6 +246,7 @@ impl MacMenuAction {
         Self::OpenCutTriangulationToSurface,
         Self::OpenBuildPrismoidGrid,
         Self::OpenOptimizationScenarios,
+        Self::CreateBlockModelFromPrismoidGrid,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -640,6 +647,14 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
+    add_action(
+        &modelling_menu,
+        &tr!("common-create-block-model-from-prismoid-grid"),
+        "",
+        MacMenuAction::CreateBlockModelFromPrismoidGrid,
+        &target,
+        mtm,
+    );
     let modelling_item = add_submenu(&root, &tr!("ws-menubar-modelling"), &modelling_menu, mtm);
     modelling_item.setTag(MODELLING_MENU_TAG);
 
@@ -815,6 +830,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_make_thickness_points: editor.selection_counts.triangulations == 1,
         can_clip_to_surface: editor.selection_counts.triangulations == 2,
         can_create_ore_triangulation: editor.selection_counts.block_models == 1,
+        can_create_block_model_from_grid: editor.selection_counts.prismoid_grids == 1,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         has_polyline_selection: editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_))),
         design_rows: DESIGN_ROWS.map(|row| row.enabled(editor)),
@@ -867,6 +883,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::OpenModellingClipToSurface, state.can_clip_to_surface);
     set_enabled(&root, MacMenuAction::OpenCutTriangulationToSurface, state.can_clip_to_surface);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
+    set_enabled(&root, MacMenuAction::CreateBlockModelFromPrismoidGrid, state.can_create_block_model_from_grid);
     for action in [MacMenuAction::OpenCutTriangulationByZ, MacMenuAction::OpenContourTriangulation] {
         set_enabled(&root, action, state.one_surface_selected);
     }

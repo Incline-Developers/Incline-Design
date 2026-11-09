@@ -46,6 +46,15 @@ pub(crate) struct DrawnPrismoidGrid {
 }
 
 impl App<'_> {
+    /// The loaded prismoid grids in the selection.
+    pub(crate) fn selected_prismoid_grids(&self) -> Vec<PrismoidGridId> {
+        self.prismoid_grids
+            .iter()
+            .filter(|item| item.state.loaded && self.editor.selected_handles.contains(&item.entity_id()))
+            .map(|item| item.id)
+            .collect()
+    }
+
     /// Remove a prismoid grid from the project as one undoable step.
     pub(crate) fn remove_prismoid_grid(&mut self, id: PrismoidGridId) {
         let entity = SceneEntityId::PrismoidGrid(id);
@@ -316,7 +325,7 @@ impl App<'_> {
 
 /// A cell size in metres to the centimetre: a size read off a surface's
 /// vertices carries their rounding.
-fn cell_size(size: f64) -> String {
+pub(super) fn cell_size(size: f64) -> String {
     ((size * 100.0).round() / 100.0).to_string()
 }
 

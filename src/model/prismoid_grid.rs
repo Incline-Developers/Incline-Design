@@ -10,6 +10,7 @@ use glam::{DVec2, DVec3};
 use crate::{
     app::jobs::CancelFlag,
     model::{
+        block_model::BlockBounds,
         drill_hole::DrillColorPreset,
         formats::mesh_data,
         grid_surface::{GridSurface, HEIGHT_TOLERANCE, NODE_TOLERANCE},
@@ -93,13 +94,6 @@ impl Lattice {
 
     /// The plan position of every corner, in corner order.
     pub(crate) fn corners(&self) -> Vec<DVec2> {
-        let edges = |sizes: &[f64]| {
-            let mut edges = vec![0.0];
-            for size in sizes {
-                edges.push(edges[edges.len() - 1] + size);
-            }
-            edges
-        };
         let (u_edges, v_edges) = (edges(&self.u_sizes), edges(&self.v_sizes));
         v_edges
             .iter()
@@ -112,6 +106,20 @@ impl Lattice {
         let uniform = |sizes: &[f64]| sizes.iter().all(|size| Some(size) == sizes.first());
         uniform(&self.u_sizes) && uniform(&self.v_sizes)
     }
+
+    /// The smallest cell side.
+    pub(crate) fn least_size(&self) -> f64 {
+        self.u_sizes.iter().chain(&self.v_sizes).copied().fold(f64::INFINITY, f64::min)
+    }
+}
+
+/// Distances from the lattice origin to each line between cells, from 0.
+fn edges(sizes: &[f64]) -> Vec<f64> {
+    let mut edges = vec![0.0];
+    for size in sizes {
+        edges.push(edges[edges.len() - 1] + size);
+    }
+    edges
 }
 
 /// One named value per cell, `None` where a cell has none.
@@ -424,6 +432,35 @@ impl PrismoidGrid {
             })
             .collect();
         Some(PrismoidMesh { vertices, faces, outline })
+    }
+
+    /// One box per active prismoid with its cell, in cell order, in the
+    /// lattice's frame: x along `u` and y along `v` from the origin, z the
+    /// elevation. Top and bottom are the roof's and floor's mean heights over
+    /// the two triangles [`Self::closed_mesh`] draws, so a box holds its
+    /// prismoid's volume. A cell whose box has no height is left out.
+    pub(crate) fn blocks(&self) -> Vec<(usize, BlockBounds)> {
+        let columns = self.lattice.columns();
+        let (u_edges, v_edges) = (edges(&self.lattice.u_sizes), edges(&self.lattice.v_sizes));
+        let mean = |heights: &[f64], [a, b, c, d]: [usize; 4]| (2.0 * heights[a] + heights[b] + 2.0 * heights[c] + heights[d]) / 6.0;
+        let mut blocks = Vec::new();
+        for (cell, _) in self.active.iter().enumerate().filter(|(_, active)| **active) {
+            let (column, row) = (cell % columns, cell / columns);
+            let a = row * (columns + 1) + column;
+            let d = a + columns + 1;
+            let corners = [a, a + 1, d + 1, d];
+            let (top, bottom) = (mean(&self.roof, corners), mean(&self.floor, corners));
+            if top > bottom {
+                blocks.push((
+                    cell,
+                    BlockBounds {
+                        lower: DVec3::new(u_edges[column], v_edges[row], bottom),
+                        upper: DVec3::new(u_edges[column + 1], v_edges[row + 1], top),
+                    },
+                ));
+            }
+        }
+        blocks
     }
 
     /// Thickness at every corner as a position from 0 to 1 across `range`,
