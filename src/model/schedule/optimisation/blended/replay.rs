@@ -355,17 +355,37 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     }
 
     // ---- objective, recomputed from the rows --------------------------------
+    // What the rows read of their candidates, worked out once per candidate:
+    // a long schedule's rows visit candidates all over memory, millions of
+    // times, and a small table of the values stays in cache.
+    let values: Vec<f64> = input.movements.iter().map(|candidate| candidate.value_per_tonne().unwrap_or(0.0)).collect();
+    let dug_from: Vec<Option<GroundId>> = input
+        .movements
+        .iter()
+        .map(|candidate| match candidate.source {
+            SourceId::Ground(ground) if candidate.activity == Activity::Dig => Some(ground),
+            _ => None,
+        })
+        .collect();
+    // Contained quantities are only ever read for a destination some grade
+    // target prices: most rows go elsewhere.
+    let targeted: Vec<bool> = input
+        .movements
+        .iter()
+        .map(|candidate| candidate.activity != Activity::Reclaim && input.grade_targets.iter().any(|target| target.destination == candidate.destination))
+        .collect();
     let mut replayed = 0.0;
     for row in &solution.movements {
         if checker.cancelled() {
             return None;
         }
-        let Some(candidate) = input.movements.get(row.candidate) else {
+        let Some(&value) = values.get(row.candidate) else {
             checker.report.issues.push(format!("movement row names unknown candidate {}", row.candidate));
             continue;
         };
-        replayed += row.tonnes_t * candidate.value_per_tonne().unwrap_or(0.0);
-        if !input.grade_targets.is_empty() && candidate.activity != Activity::Reclaim {
+        replayed += row.tonnes_t * value;
+        if targeted[row.candidate] {
+            let candidate = &input.movements[row.candidate];
             let fractions = checker.material_grades(row.candidate);
             let contained = checker.report.movement_contained.entry((row.candidate, row.interval)).or_insert_with(|| vec![0.0; grades]);
             for (g, q) in contained.iter_mut().enumerate() {
@@ -383,10 +403,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     // each source's checks read its own rows rather than every row.
     let mut dug_rows: HashMap<GroundId, Vec<&MovementRow>, foldhash::fast::FixedState> = HashMap::default();
     for row in &solution.movements {
-        let Some(candidate) = input.movements.get(row.candidate) else { continue };
-        if candidate.activity == Activity::Dig
-            && let SourceId::Ground(ground) = candidate.source
-        {
+        if let Some(&Some(ground)) = dug_from.get(row.candidate) {
             dug_rows.entry(ground).or_default().push(row);
         }
     }
