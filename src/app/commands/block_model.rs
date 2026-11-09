@@ -19,9 +19,9 @@ use crate::{
             block_model_data::{BlockModelColumn, BlockModelData},
             mesh_data,
         },
-        grid_surface::NODE_TOLERANCE,
         kriging::{KrigingGrid, KrigingSample, OrdinaryKrigingOptions, ordinary_kriging},
         prismoid_grid::{PrismoidGrid, PrismoidGridId},
+        project::ModelEnvelope,
     },
     ui::state::{OreFilterMode, TriSurfaceType},
     userspace_log, userspace_warn,
@@ -570,11 +570,12 @@ impl<'a> App<'a> {
         let grid_name = item.name.clone();
         let name = tr!("cmd-prismoid-grid-block-model-name", grid = grid_name.clone());
         let label = grid_name.clone();
+        let envelope = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
         let compute = move |cancel: &crate::app::jobs::CancelFlag, _: &crate::model::progress::Progress| -> Result<LoadedBlockModel> {
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }
-            prismoid_block_model(&grid, &label, name)
+            prismoid_block_model(&grid, &label, name, envelope.as_ref())
         };
         let apply = move |app: &mut App, result: Result<LoadedBlockModel>| match result {
             Ok(loaded) => {
@@ -721,21 +722,52 @@ fn collect_kriging_samples(dataset: &DrillHoleDataset, holes: Option<&[usize]>, 
 pub(super) const LEAST_PRISMOID_BLOCK_SIZE: f64 = 5.0;
 
 /// A prismoid grid's smallest cell side, when it is under
-/// [`LEAST_PRISMOID_BLOCK_SIZE`] by more than the node tolerance.
+/// [`LEAST_PRISMOID_BLOCK_SIZE`] to the centimetre the refusal prints it at.
 pub(super) fn prismoid_cells_too_fine(grid: &PrismoidGrid) -> Option<f64> {
     let size = grid.lattice.least_size();
-    (size < LEAST_PRISMOID_BLOCK_SIZE - NODE_TOLERANCE).then_some(size)
+    ((size * 100.0).round() < LEAST_PRISMOID_BLOCK_SIZE * 100.0).then_some(size)
 }
 
 /// A block model of one box per active prismoid, from
 /// [`PrismoidGrid::blocks`] in the lattice's frame: each block's volume and
 /// vertical thickness, each cell value, and the grid's name as a category.
-fn prismoid_block_model(grid: &PrismoidGrid, grid_name: &str, name: String) -> Result<LoadedBlockModel> {
+/// With an `envelope` the frame and extent are the envelope's, from its
+/// corner at the base RL, so every model of the project shares them.
+fn prismoid_block_model(grid: &PrismoidGrid, grid_name: &str, name: String, envelope: Option<&ModelEnvelope>) -> Result<LoadedBlockModel> {
     let lattice = &grid.lattice;
-    let rotation = DMat3::from_cols(lattice.u.extend(0.0), lattice.v.extend(0.0), DVec3::Z);
-    // The expression `block_volumes` measures each block with.
-    let stretch = rotation.determinant().abs();
     let (cells, bounds): (Vec<usize>, Vec<BlockBounds>) = grid.blocks().into_iter().unzip();
+    let (bounds, lower, upper, origin, rotation) = match envelope {
+        Some(envelope) => {
+            if (lattice.u, lattice.v) != (glam::DVec2::X, glam::DVec2::Y) {
+                anyhow::bail!("{}", tr!("cmd-prismoid-grid-block-model-off-envelope-axes", grid = grid_name.to_owned()));
+            }
+            if !grid.fits(envelope) {
+                anyhow::bail!(
+                    "{}",
+                    tr!("cmd-prismoid-grid-block-model-outside-envelope", grid = grid_name.to_owned(), envelope = envelope.summary())
+                );
+            }
+            let shift = lattice.origin.extend(0.0) - envelope.lower();
+            let bounds = bounds
+                .into_iter()
+                .map(|block| BlockBounds {
+                    lower: block.lower + shift,
+                    upper: block.upper + shift,
+                })
+                .collect();
+            (bounds, DVec3::ZERO, DVec3::from_array(envelope.size), envelope.lower(), DMat3::IDENTITY)
+        }
+        None => {
+            let (lower, upper) = bounds.iter().fold((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)), |(lower, upper), block| {
+                (lower.min(block.lower), upper.max(block.upper))
+            });
+            let rotation = DMat3::from_cols(lattice.u.extend(0.0), lattice.v.extend(0.0), DVec3::Z);
+            (bounds, lower, upper, lattice.origin.extend(0.0), rotation)
+        }
+    };
+    // The expression `block_volumes` measures each block with, on the boxes
+    // the model holds.
+    let stretch = rotation.determinant().abs();
     let numeric = |name: &str, values: Vec<f64>| BlockModelColumn {
         name: name.to_owned(),
         values: std::sync::Arc::new(values),
@@ -755,11 +787,8 @@ fn prismoid_block_model(grid: &PrismoidGrid, grid_name: &str, name: String) -> R
         categories: Some(std::collections::BTreeMap::from([(0, grid_name.to_owned())])),
         category_colors: std::collections::BTreeMap::new(),
     });
-    let (lower, upper) = bounds.iter().fold((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)), |(lower, upper), block| {
-        (lower.min(block.lower), upper.max(block.upper))
-    });
     let retained_geometry_bytes = bounds.len().checked_mul(std::mem::size_of::<BlockBounds>()).context("block geometry size overflows")?;
-    let model = BlockModelData::from_columns(bounds.len(), lower, upper, columns, retained_geometry_bytes)?.with_transform(lattice.origin.extend(0.0), rotation)?;
+    let model = BlockModelData::from_columns(bounds.len(), lower, upper, columns, retained_geometry_bytes)?.with_transform(origin, rotation)?;
     let blocks = std::sync::Arc::new(BlockBoundsSource::Explicit(bounds));
     let renderable_block_indices = std::sync::Arc::new(RenderableBlockIndices::All(blocks.len()));
     let uniform_grid = blocks.uniform_grid();

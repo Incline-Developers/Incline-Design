@@ -12,6 +12,14 @@ pub(crate) struct ChunkBoundsOutline {
 /// Width, in logical pixels, of the chunk-bounds debug outline.
 const CHUNK_BOUNDS_LINE_WIDTH: f32 = 1.5;
 
+/// The model envelope's outline: the grey of excluded ground's outline.
+const MODEL_ENVELOPE_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 0.9];
+
+/// The model envelope the view outlines: set, and in Geology.
+pub(super) fn shown_model_envelope(editor: &EditorState) -> Option<&crate::model::project::ModelEnvelope> {
+    editor.model_envelope.as_ref().filter(|_| editor.active_workspace == crate::ui::state::Workspace::Geology)
+}
+
 /// Cheap conservative whole-model reject before walking any cube chunks.
 /// Bounds are stored in world space while the render frustum uses the
 /// scene-origin-relative coordinates uploaded to the GPU.
@@ -632,6 +640,41 @@ impl<'a> Graphics<'a> {
         });
     }
 
+    /// Rebuild [`Self::model_envelope_outline`] when the envelope, the scene
+    /// origin or the scale factor moved since it was built.
+    fn rebuild_model_envelope_outline(&mut self, editor: &EditorState) {
+        let Some(envelope) = shown_model_envelope(editor) else {
+            self.model_envelope_outline = None;
+            return;
+        };
+        let scale_factor = self.window.scale_factor() as f32;
+        let key = {
+            use std::hash::{DefaultHasher, Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            (envelope.bits(), self.scene_origin.to_array().map(f64::to_bits), scale_factor.to_bits()).hash(&mut hasher);
+            hasher.finish()
+        };
+        if self.model_envelope_outline.as_ref().is_some_and(|(built, _)| *built == key) {
+            return;
+        }
+        let mut strokes = Vec::new();
+        let mut unused_fill_vertices = Vec::new();
+        let mut unused_fill_indices = Vec::new();
+        let mut context = crate::rendering::geometry::DrawContext::unstyled(&mut strokes, &mut unused_fill_vertices, &mut unused_fill_indices, self.scene_origin, scale_factor);
+        for (from, to) in envelope.edges() {
+            crate::rendering::geometry::draw_line(&mut context, from, to, CHUNK_BOUNDS_LINE_WIDTH, MODEL_ENVELOPE_COLOR);
+        }
+        let outline = ChunkBoundsOutline {
+            instance_buffer: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Model Envelope Outline Strokes"),
+                contents: bytemuck::cast_slice(&strokes),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+            instance_count: strokes.len() as u32,
+        };
+        self.model_envelope_outline = Some((key, outline));
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn render_scene_pass(
         &mut self,
@@ -650,6 +693,7 @@ impl<'a> Graphics<'a> {
         // screenshots render without editor overlays and must not drop it.
         if include_editor_overlays {
             self.rebuild_chunk_bounds_outline(editor, triangulations, point_clouds);
+            self.rebuild_model_envelope_outline(editor);
         }
         let bg_color = editor.renderer_background_color;
         let clear_color = [bg_color[0].clamp(0.0, 1.0) as f64, bg_color[1].clamp(0.0, 1.0) as f64, bg_color[2].clamp(0.0, 1.0) as f64];
@@ -1418,6 +1462,14 @@ impl<'a> Graphics<'a> {
         // Depth-tested so geometry in front of a box hides it, like any other
         // line in the scene.
         if let Some(outline) = &self.chunk_bounds_outline {
+            render_pass.set_pipeline(&self.pipes().stroke_render_pipeline);
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
+            render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, outline.instance_buffer.slice(..));
+            render_pass.draw(0..6, 0..outline.instance_count);
+        }
+
+        if let Some((_, outline)) = &self.model_envelope_outline {
             render_pass.set_pipeline(&self.pipes().stroke_render_pipeline);
             render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
             render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);

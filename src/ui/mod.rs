@@ -838,7 +838,12 @@ fn draw_ui(
             planning_layout.rect
         };
         dialogs::about::draw_about_dialog(root_ui, editor);
-        elements::properties::draw_preferences(root_ui, editor, project.has_active_project.then_some(&project.modelling), commands);
+        elements::properties::draw_preferences(
+            root_ui,
+            editor,
+            project.has_active_project.then_some((project.active_session, &project.modelling)),
+            commands,
+        );
         if editor.renaming_item.is_some() {
             dialogs::editing::draw_rename_dialog(root_ui, commands, editor);
         }
@@ -1311,7 +1316,12 @@ fn draw_ui(
     dialogs::editing::draw_smooth_strings_dialog(root_ui, editor, commands);
     dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
-    elements::properties::draw_preferences(root_ui, editor, project.has_active_project.then_some(&project.modelling), commands);
+    elements::properties::draw_preferences(
+        root_ui,
+        editor,
+        project.has_active_project.then_some((project.active_session, &project.modelling)),
+        commands,
+    );
     elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect);
     elements::properties::draw_prismoid_grid_legend(root_ui, editor, project, block_models, canvas_rect);
 

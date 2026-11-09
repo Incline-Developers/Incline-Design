@@ -15,7 +15,7 @@ use crate::{
         formats::mesh_data,
         grid_surface::{GridSurface, HEIGHT_TOLERANCE, NODE_TOLERANCE},
         progress::Phase,
-        project::ProjectItemState,
+        project::{ModelEnvelope, ProjectItemState},
     },
 };
 
@@ -45,6 +45,11 @@ pub(crate) enum BuildRefusal {
     Cancelled,
     /// The built grid failed [`PrismoidGrid::check`].
     Malformed(anyhow::Error),
+    /// The surfaces' nodes are no whole number of spacings from the model
+    /// envelope's corner.
+    OffEnvelopeLattice,
+    /// An active cell leaves the model envelope.
+    OutsideEnvelope,
 }
 
 /// A prismoid grid built between two surfaces, with the cells of the
@@ -189,8 +194,16 @@ impl PrismoidGrid {
     /// each `step` of the surfaces' cells along a side and read at its four
     /// corners only. A cell is active where both surfaces have triangles
     /// over every surface cell inside it, none of its corners lacks a height
-    /// or has the floor above the roof, and at least one has thickness.
-    pub(crate) fn between(roof: &GridSurface, floor: &GridSurface, step: NonZeroUsize, cancel: &CancelFlag, progress: &Phase) -> Result<PrismoidBuild, BuildRefusal> {
+    /// or has the floor above the roof, and at least one has thickness. With
+    /// an `envelope`, every active cell must lie inside it.
+    pub(crate) fn between(
+        roof: &GridSurface,
+        floor: &GridSurface,
+        step: NonZeroUsize,
+        envelope: Option<&ModelEnvelope>,
+        cancel: &CancelFlag,
+        progress: &Phase,
+    ) -> Result<PrismoidBuild, BuildRefusal> {
         let spacing = roof.spacing();
         if (spacing - floor.spacing()).abs() > spacing * NODE_TOLERANCE {
             return Err(BuildRefusal::NotOneLattice);
@@ -218,20 +231,26 @@ impl PrismoidGrid {
         let first = roof_origin + DVec2::new(low_column as f64, low_row as f64) * spacing;
         // Along each side, the first node kept and how many are kept: every
         // `step`-th node, from a whole multiple of the cell size measured
-        // from the coordinate origin, or from the first node of a lattice
-        // off the spacing's multiples.
+        // from the envelope's corner, else the coordinate origin. A lattice
+        // off the spacing's multiples starts at its first node; under an
+        // envelope it is refused.
         let step = step.get();
-        let kept_nodes = |at: f64, count: i64| {
-            let nodes = at / spacing;
+        let anchor = envelope.map_or(DVec2::ZERO, |envelope| envelope.lower().truncate());
+        let kept_nodes = |at: f64, anchor: f64, count: i64| {
+            let nodes = (at - anchor) / spacing;
             let whole = nodes.round();
-            let skip = if (nodes - whole).abs() > NODE_TOLERANCE {
+            let skip = if (nodes - whole).abs() <= NODE_TOLERANCE {
+                (step - (whole as i64).rem_euclid(step as i64) as usize) % step
+            } else if envelope.is_none() {
                 0
             } else {
-                (step - (whole as i64).rem_euclid(step as i64) as usize) % step
+                return None;
             };
-            (skip, (count as usize).saturating_sub(skip).div_ceil(step))
+            Some((skip, (count as usize).saturating_sub(skip).div_ceil(step)))
         };
-        let ((skip_column, columns), (skip_row, rows)) = (kept_nodes(first.x, columns), kept_nodes(first.y, rows));
+        let (Some((skip_column, columns)), Some((skip_row, rows))) = (kept_nodes(first.x, anchor.x, columns), kept_nodes(first.y, anchor.y, rows)) else {
+            return Err(BuildRefusal::OffEnvelopeLattice);
+        };
         if columns < 2 || rows < 2 {
             return Err(BuildRefusal::CellTooLarge);
         }
@@ -335,8 +354,27 @@ impl PrismoidGrid {
             cell_values: Vec::new(),
         };
         grid.check().map_err(BuildRefusal::Malformed)?;
+        if envelope.is_some_and(|envelope| !grid.fits(envelope)) {
+            return Err(BuildRefusal::OutsideEnvelope);
+        }
         progress.set_fraction(1.0);
         Ok(PrismoidBuild { grid, crossed, holes })
+    }
+
+    /// Whether the grid lies in `envelope`: its lattice on the envelope's
+    /// axes, and every active cell's corners inside it, roof and floor.
+    pub(crate) fn fits(&self, envelope: &ModelEnvelope) -> bool {
+        let lattice = &self.lattice;
+        if (lattice.u, lattice.v) != (DVec2::X, DVec2::Y) {
+            return false;
+        }
+        let (corners, columns) = (lattice.corners(), lattice.columns());
+        self.active.iter().enumerate().filter(|(_, active)| **active).all(|(cell, _)| {
+            let first = cell / columns * (columns + 1) + cell % columns;
+            [first, first + 1, first + columns + 1, first + columns + 2]
+                .into_iter()
+                .all(|corner| envelope.contains_xy(corners[corner]) && envelope.contains_z(self.roof[corner]) && envelope.contains_z(self.floor[corner]))
+        })
     }
 
     /// The vertical walls along every edge of an active cell whose neighbour

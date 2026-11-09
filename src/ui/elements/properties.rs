@@ -1,27 +1,30 @@
 //! Application preferences and selection appearance controls.
 
+use glam::DVec3;
+
 use crate::{
     i18n::tr,
     model::{
         Document, FillStyle, ObjectColor, ObjectId, SceneEntityId,
         block_model::{BlockModelId, OpenBlockModel},
         prismoid_grid::THICKNESS_RAMP,
-        project::ModellingSettings,
+        project::{LATTICE_UNIT, ModelEnvelope, ModellingSettings},
     },
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         UiCommand, UiProjectView,
+        elements::block_model::vector_fields,
         state::{EditorState, PreferencesDraft, PropertyTab, Workspace},
         widgets::{
             collapsible_section::CollapsibleSection,
             context_menu::{FIELD_WIDTH, context_menu_fields},
-            menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, committed, menu_field_label},
+            menu::{self, MenuButton, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, committed, menu_field_label},
             viewport::{BlockModelProperties, ViewportDockPanel, color_ramp_bar},
         },
     },
 };
 
-pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, modelling: Option<&ModellingSettings>, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, modelling: Option<(u32, &ModellingSettings)>, commands: &mut Vec<UiCommand>) {
     if !editor.show_preferences {
         return;
     }
@@ -679,9 +682,9 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
 
 /// The open project's settings for Build Surface. A number being dragged is
 /// held in the window's memory and sent once, when the drag ends.
-fn draw_modelling_settings(ui: &mut egui::Ui, modelling: Option<&ModellingSettings>, commands: &mut Vec<UiCommand>) {
+fn draw_modelling_settings(ui: &mut egui::Ui, modelling: Option<(u32, &ModellingSettings)>, commands: &mut Vec<UiCommand>) {
     menu::menu_section(ui, tr!("properties-modelling"));
-    let Some(stored) = modelling.copied() else {
+    let Some((session, &stored)) = modelling else {
         ui.label(egui::RichText::new(tr!("common-no-open-project")).weak());
         return;
     };
@@ -709,6 +712,73 @@ fn draw_modelling_settings(ui: &mut egui::Ui, modelling: Option<&ModellingSettin
     if responses.iter().any(committed) && settings != stored && settings.problem().is_none() {
         commands.push(UiCommand::SetModellingSettings(settings));
     }
+    draw_model_envelope(ui, session, stored, commands);
+}
+
+/// The model envelope rows: typed as two corners, sent only on Apply, the
+/// plan edges shown snapped outward before they are.
+fn draw_model_envelope(ui: &mut egui::Ui, session: u32, stored: ModellingSettings, commands: &mut Vec<UiCommand>) {
+    menu::menu_section(ui, tr!("properties-envelope"));
+    // Salted with the project's runtime id and its stored envelope, so no
+    // other project is offered this one's draft.
+    let scope = ui.scope_id().with("model_envelope_draft");
+    let draft_id = |envelope: Option<ModelEnvelope>| scope.with((session, envelope.map(|envelope| envelope.bits())));
+    let id = draft_id(stored.envelope);
+    let seeded = stored.envelope.map(|envelope| (envelope.lower(), envelope.upper()));
+    let Some((mut lower, mut upper)) = ui.data(|data| data.get_temp::<(DVec3, DVec3)>(id)).or(seeded) else {
+        menu::menu_note(ui, tr!("properties-envelope-none"));
+        if menu::menu_actions(ui, |ui| ui.add(MenuButton::new(tr!("properties-envelope-add"))).clicked()) {
+            ui.data_mut(|data| data.insert_temp(id, (DVec3::ZERO, DVec3::splat(100.0))));
+        }
+        return;
+    };
+    vector_fields(ui, &tr!("block-model-minimum"), &tr!("properties-envelope-minimum-help"), &mut lower, f64::MIN..=f64::MAX);
+    vector_fields(ui, &tr!("block-model-maximum"), &tr!("properties-envelope-maximum-help"), &mut upper, f64::MIN..=f64::MAX);
+    if Some((lower, upper)) == seeded {
+        ui.data_mut(|data| data.remove::<(DVec3, DVec3)>(id));
+    } else {
+        ui.data_mut(|data| data.insert_temp(id, (lower, upper)));
+    }
+    let typed = if !(lower.is_finite() && upper.is_finite() && upper.x > lower.x && upper.y > lower.y) {
+        menu::menu_note(ui, tr!("properties-envelope-plan-empty"));
+        None
+    } else if upper.z <= lower.z {
+        menu::menu_note(ui, tr!("properties-envelope-top-below"));
+        None
+    } else {
+        Some(ModelEnvelope::from_box(lower, upper))
+    };
+    if let Some(envelope) = typed
+        && (envelope.lower().truncate(), envelope.upper().truncate()) != (lower.truncate(), upper.truncate())
+    {
+        let (west_south, east_north) = (envelope.lower(), envelope.upper());
+        menu::menu_note(
+            ui,
+            tr!(
+                "properties-envelope-steer",
+                west = west_south.x.to_string(),
+                east = east_north.x.to_string(),
+                south = west_south.y.to_string(),
+                north = east_north.y.to_string(),
+                unit = LATTICE_UNIT.to_string()
+            ),
+        );
+    }
+    let can_apply = typed.is_some_and(|envelope| stored.envelope != Some(envelope));
+    let (apply, remove) = menu::menu_actions(ui, |ui| {
+        let apply = ui.add(MenuButton::new(tr!("common-apply")).primary().enabled(can_apply)).clicked();
+        let remove = stored.envelope.is_some() && ui.add(MenuButton::new(tr!("properties-envelope-remove"))).clicked();
+        (apply, remove)
+    });
+    if !(apply || remove) {
+        return;
+    }
+    ui.data_mut(|data| {
+        data.remove::<(DVec3, DVec3)>(id);
+        data.remove::<(DVec3, DVec3)>(draft_id(None));
+    });
+    let envelope = if apply { typed } else { None };
+    commands.push(UiCommand::SetModellingSettings(ModellingSettings { envelope, ..stored }));
 }
 
 /// A labelled value the panel only reports, laid out like the editable fields

@@ -64,6 +64,8 @@ struct EditorSceneState {
     /// either chunk-debug view on has to force one.
     debug_surface_chunks: bool,
     debug_point_cloud_chunks: bool,
+    /// The model envelope's outline is rebuilt by the scene pass too.
+    model_envelope: Option<[u64; 7]>,
 }
 
 impl EditorSceneState {
@@ -81,6 +83,7 @@ impl EditorSceneState {
             colors_points_by_classification: editor.colors_points_by_classification(),
             debug_surface_chunks: editor.debug_surface_chunks,
             debug_point_cloud_chunks: editor.debug_point_cloud_chunks,
+            model_envelope: passes::shown_model_envelope(editor).map(|envelope| envelope.bits()),
         }
     }
 }

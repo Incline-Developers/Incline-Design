@@ -23,7 +23,7 @@ use crate::{
         grid_surface::GridSurface,
         prismoid_grid::{BuildRefusal, DEFAULT_PRISMOID_GRID_COLOR, OpenPrismoidGrid, PrismoidBuild, PrismoidGrid, PrismoidGridId, THICKNESS_RAMP, ThicknessMap},
         progress::Progress,
-        project::{ProjectItemState, unique_item_name},
+        project::{ModelEnvelope, ProjectItemState, unique_item_name},
         raster::{OpenRasterTexture, RasterTextureId},
         rbf::NODE_BUDGET,
         spatial::TriangleBvh,
@@ -89,6 +89,7 @@ impl App<'_> {
         let (roof_name, roof_mesh, roof_spatial, roof_section) = read(roof_id)?;
         let (floor_name, floor_mesh, floor_spatial, floor_section) = read(floor_id)?;
         let section = SectionKind::derived_for(MemberKind::PrismoidGrid, [roof_section, floor_section]);
+        let envelope = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
         let (roof_label, floor_label, grid_name) = (roof_name.clone(), floor_name.clone(), name.clone());
         // An Err is a refusal; an Ok(Err) is a built grid failing its own
         // check, a fault in the build rather than in the surfaces.
@@ -97,7 +98,7 @@ impl App<'_> {
                 .map_err(|problem| anyhow::anyhow!("{}", tr!("cmd-prismoid-grid-not-a-grid", name = roof_name.clone(), reason = not_a_grid_reason(problem))))?;
             let floor = GridSurface::read(floor_mesh, floor_spatial)
                 .map_err(|problem| anyhow::anyhow!("{}", tr!("cmd-prismoid-grid-not-a-grid", name = floor_name.clone(), reason = not_a_grid_reason(problem))))?;
-            match PrismoidGrid::between(&roof, &floor, step, cancel, &progress.phase(0.0, 1.0)) {
+            match PrismoidGrid::between(&roof, &floor, step, envelope.as_ref(), cancel, &progress.phase(0.0, 1.0)) {
                 Ok(built) => Ok(Ok(built)),
                 Err(BuildRefusal::Malformed(error)) => Ok(Err(error.context(grid_name))),
                 Err(BuildRefusal::Cancelled) => anyhow::bail!("{}", tr!("common-cancelled")),
@@ -114,6 +115,16 @@ impl App<'_> {
                 ),
                 Err(BuildRefusal::RoofBelow) => anyhow::bail!("{}", tr!("cmd-prismoid-grid-roof-below", roof = roof_name, floor = floor_name)),
                 Err(BuildRefusal::NoThickness) => anyhow::bail!("{}", tr!("cmd-prismoid-grid-no-thickness", roof = roof_name, floor = floor_name)),
+                Err(BuildRefusal::OffEnvelopeLattice) => anyhow::bail!("{}", tr!("cmd-prismoid-grid-off-envelope-lattice", roof = roof_name, floor = floor_name)),
+                Err(BuildRefusal::OutsideEnvelope) => anyhow::bail!(
+                    "{}",
+                    tr!(
+                        "cmd-prismoid-grid-outside-envelope",
+                        roof = roof_name,
+                        floor = floor_name,
+                        envelope = envelope.as_ref().map_or_else(String::new, ModelEnvelope::summary)
+                    )
+                ),
             }
         };
         let apply = move |app: &mut App, result: Result<Result<PrismoidBuild>>| match result {
@@ -190,6 +201,7 @@ impl App<'_> {
     /// each frame; nothing is prepared or rebuilt unless a grid or the
     /// surfaces beside it moved.
     pub(crate) fn sync_prismoid_drawing(&mut self) {
+        self.editor.model_envelope = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
         if self.editor.active_workspace == Workspace::Geology {
             let grids = &self.prismoid_grids;
             self.prismoid_drawn.retain(|drawn| {

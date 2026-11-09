@@ -312,6 +312,8 @@ pub(crate) struct ModellingSettings {
     /// The most Fill Segment's new vertices are apart, in metres: the last
     /// spacing set.
     pub(crate) fill_spacing: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) envelope: Option<ModelEnvelope>,
 }
 
 impl ModellingSettings {
@@ -326,6 +328,7 @@ impl ModellingSettings {
             value.to_bits().hash(hasher);
         }
         self.cut_depth.map(f64::to_bits).hash(hasher);
+        self.envelope.map(|envelope| envelope.bits()).hash(hasher);
     }
 
     /// Why these settings cannot be built with, or `None` when they can.
@@ -342,7 +345,7 @@ impl ModellingSettings {
         if !(self.fill_spacing.is_finite() && self.fill_spacing > 0.0) {
             return Some(tr!("project-fill-spacing-positive"));
         }
-        None
+        self.envelope.as_ref().and_then(ModelEnvelope::problem)
     }
 
     /// The settings as a project stored them.
@@ -361,17 +364,21 @@ impl ModellingSettings {
 
     /// Every setting in one line, for the Build Surface dialog and the log.
     pub(crate) fn summary(&self) -> String {
-        tr!(
+        let summary = tr!(
             "project-method-steep-pairs-under",
             method = self.method_description(),
             distance = trimmed(self.steep_distance, 2),
             degrees = trimmed(self.steep_degrees, 1)
-        )
+        );
+        match &self.envelope {
+            Some(envelope) => format!("{summary} · {}", envelope.summary()),
+            None => summary,
+        }
     }
 }
 
 /// `value` to at most `decimals` places, without trailing zeros.
-fn trimmed(value: f64, decimals: usize) -> String {
+pub(crate) fn trimmed(value: f64, decimals: usize) -> String {
     let text = format!("{value:.decimals$}");
     if text.contains('.') {
         text.trim_end_matches('0').trim_end_matches('.').to_owned()
@@ -388,7 +395,147 @@ impl Default for ModellingSettings {
             steep_degrees: 80.0,
             cut_depth: None,
             fill_spacing: super::rbf::DEFAULT_SPACING,
+            envelope: None,
         }
+    }
+}
+
+/// What every grid spacing Build Surface offers divides: the least common
+/// multiple of [`GRID_SPACINGS`]. The model envelope's edges sit on whole
+/// multiples of it, so a node on a whole multiple of its spacing from the
+/// coordinate origin is one from the envelope's corner too.
+///
+/// [`GRID_SPACINGS`]: crate::app::commands::triangulation::reference_surface::GRID_SPACINGS
+pub(crate) const LATTICE_UNIT: f64 = 100.0;
+
+/// The project's mine space: a plan rectangle between two RLs that every
+/// surface grid, prismoid grid and derived block model is built inside.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ModelEnvelope {
+    /// The corner at the least easting and northing, at the base RL.
+    pub(crate) origin: [f64; 3],
+    /// Width along the rectangle's first side (east unrotated), length along
+    /// its second (north), height from base to top RL; metres.
+    pub(crate) size: [f64; 3],
+    /// Anticlockwise about Z from east, degrees. Zero until rotated
+    /// envelopes are built (`problem` refuses any other).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) rotation_degrees: f64,
+}
+
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
+}
+
+impl ModelEnvelope {
+    /// The north-aligned envelope holding the box from `lower` to `upper`:
+    /// its plan edges moved outward to whole multiples of [`LATTICE_UNIT`],
+    /// its base and top RL as given.
+    pub(crate) fn from_box(lower: glam::DVec3, upper: glam::DVec3) -> Self {
+        let west = (lower.x / LATTICE_UNIT).floor() * LATTICE_UNIT;
+        let south = (lower.y / LATTICE_UNIT).floor() * LATTICE_UNIT;
+        let east = (upper.x / LATTICE_UNIT).ceil() * LATTICE_UNIT;
+        let north = (upper.y / LATTICE_UNIT).ceil() * LATTICE_UNIT;
+        Self {
+            origin: [west, south, lower.z],
+            size: [east - west, north - south, upper.z - lower.z],
+            rotation_degrees: 0.0,
+        }
+    }
+
+    pub(crate) fn lower(&self) -> glam::DVec3 {
+        glam::DVec3::from_array(self.origin)
+    }
+
+    pub(crate) fn upper(&self) -> glam::DVec3 {
+        self.lower() + glam::DVec3::from_array(self.size)
+    }
+
+    /// The plan rectangle, anticlockwise from the corner.
+    pub(crate) fn ring(&self) -> [glam::DVec2; 4] {
+        let (lower, upper) = (self.lower().truncate(), self.upper().truncate());
+        [lower, glam::DVec2::new(upper.x, lower.y), upper, glam::DVec2::new(lower.x, upper.y)]
+    }
+
+    /// Whether `at` lies in the plan rectangle, within [`kernel::XY_TOL`].
+    ///
+    /// [`kernel::XY_TOL`]: super::kernel::XY_TOL
+    pub(crate) fn contains_xy(&self, at: glam::DVec2) -> bool {
+        let (lower, upper) = (self.lower().truncate(), self.upper().truncate());
+        let tolerance = glam::DVec2::splat(super::kernel::XY_TOL);
+        at.cmpge(lower - tolerance).all() && at.cmple(upper + tolerance).all()
+    }
+
+    /// Whether `z` lies from the base RL to the top RL, within
+    /// [`kernel::XY_TOL`] as the plan is: [`kernel::Z_TOL`]'s 5 cm would let
+    /// a derived block model's boxes leave its extent.
+    ///
+    /// [`kernel::XY_TOL`]: super::kernel::XY_TOL
+    /// [`kernel::Z_TOL`]: super::kernel::Z_TOL
+    pub(crate) fn contains_z(&self, z: f64) -> bool {
+        (self.lower().z - super::kernel::XY_TOL..=self.upper().z + super::kernel::XY_TOL).contains(&z)
+    }
+
+    /// The eight corners, indexed by bit: 1 east, 2 north, 4 the top RL.
+    pub(crate) fn corners(&self) -> [glam::DVec3; 8] {
+        let (lower, upper) = (self.lower(), self.upper());
+        std::array::from_fn(|index| {
+            glam::DVec3::new(
+                if index & 1 == 0 { lower.x } else { upper.x },
+                if index & 2 == 0 { lower.y } else { upper.y },
+                if index & 4 == 0 { lower.z } else { upper.z },
+            )
+        })
+    }
+
+    /// The twelve edges, each joining two corners one bit apart.
+    pub(crate) fn edges(&self) -> impl Iterator<Item = (glam::DVec3, glam::DVec3)> {
+        let corners = self.corners();
+        (0..8).flat_map(move |from| {
+            [1, 2, 4]
+                .into_iter()
+                .filter(move |bit| from & bit == 0)
+                .map(move |bit| (corners[from], corners[from | bit]))
+        })
+    }
+
+    /// Every number's bits, for fingerprints and keys.
+    pub(crate) fn bits(&self) -> [u64; 7] {
+        let [x, y, z] = self.origin;
+        let [width, length, height] = self.size;
+        [x, y, z, width, length, height, self.rotation_degrees].map(f64::to_bits)
+    }
+
+    fn problem(&self) -> Option<String> {
+        let [width, length, height] = self.size;
+        if !(width.is_finite() && width > 0.0 && length.is_finite() && length > 0.0) {
+            return Some(tr!("project-envelope-size-positive"));
+        }
+        if !(height.is_finite() && height > 0.0 && self.origin[2].is_finite()) {
+            return Some(tr!("project-envelope-top-above-base"));
+        }
+        let (lower, upper) = (self.lower(), self.upper());
+        if ![lower.x, lower.y, upper.x, upper.y].iter().all(|edge| (edge / LATTICE_UNIT).fract() == 0.0) {
+            return Some(tr!("project-envelope-on-lattice", unit = LATTICE_UNIT.to_string()));
+        }
+        if self.rotation_degrees != 0.0 {
+            return Some(tr!("project-envelope-rotation-later"));
+        }
+        None
+    }
+
+    /// The envelope in one line, for the settings summary and messages.
+    pub(crate) fn summary(&self) -> String {
+        let (lower, upper) = (self.lower(), self.upper());
+        tr!(
+            "project-envelope-summary",
+            west = trimmed(lower.x, 3),
+            east = trimmed(upper.x, 3),
+            south = trimmed(lower.y, 3),
+            north = trimmed(upper.y, 3),
+            base = trimmed(lower.z, 3),
+            top = trimmed(upper.z, 3)
+        )
     }
 }
 

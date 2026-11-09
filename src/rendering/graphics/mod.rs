@@ -533,6 +533,9 @@ pub(crate) struct Graphics<'a> {
     /// scene pass while the developer chunk-bounds view is on and drawn,
     /// depth-tested, by the editor overlay pass.
     pub(super) chunk_bounds_outline: Option<passes::ChunkBoundsOutline>,
+    /// The model envelope's twelve edges in Geology, with the key they were
+    /// built for, rebuilt only when it changes.
+    pub(super) model_envelope_outline: Option<(u64, passes::ChunkBoundsOutline)>,
     /// Live map render behind the engineering-drawing dialog's preview, and
     /// the framing/scene fingerprint it was rendered for.
     pub(super) plot_preview: Option<plot::PlotPreviewTarget>,

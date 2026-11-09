@@ -3254,6 +3254,9 @@ pub(crate) struct EditorState {
     pub(crate) tri_prismoid_step: std::num::NonZeroUsize,
     pub(crate) tri_prismoid_name_input: String,
     pub(crate) tri_prismoid_name_auto: bool,
+    /// The active project's model envelope, mirrored each frame for the
+    /// view's outline.
+    pub(crate) model_envelope: Option<crate::model::project::ModelEnvelope>,
     pub(crate) tri_cut_surface_unload_source: bool,
 
     // Clip to Surface: the seam's roof and floor selected at open, and its limits
@@ -5126,6 +5129,7 @@ impl EditorState {
             tri_prismoid_step: std::num::NonZeroUsize::MIN,
             tri_prismoid_name_input: String::new(),
             tri_prismoid_name_auto: true,
+            model_envelope: None,
             tri_cut_surface_unload_source: true,
             tri_cut_to_open: false,
             tri_cut_to_targets: Vec::new(),

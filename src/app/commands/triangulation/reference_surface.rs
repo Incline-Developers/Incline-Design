@@ -17,9 +17,10 @@ use crate::{
             BoxGrid, Crossing, MisshapenControls, PlanCells, SEARCH_MARGIN, SELF_SHAPE_LINES, canonical_order, cell_of, cells_across, control_crossings, control_points,
             control_points_spaced, elevation_along, grid_cell, nearer_end, segment_box, self_intersects, stop_if_cancelled, too_few_control_vertices, validate_controls,
         },
+        geometry::{clip_polyline_by_xy_edge, deduplicate_ring_by},
         kernel::{self, PolyContainment},
         progress::Progress,
-        project::ModellingSettings,
+        project::{ModelEnvelope, ModellingSettings, trimmed},
         rbf::{self, DEFAULT_SPACING, MERGE_DISTANCE, POINT_BUDGET, RbfSurface, SteepPair},
         rbf_spans::{LatticeBox, RowRuns, SpanLattice},
         string_clean::{self, LeftOut, NotLeftOut, OddOneOut, Problem, ProblemKind},
@@ -113,6 +114,8 @@ struct SurfaceMesh {
     steep: Vec<SteepPair>,
     /// The settings the surface was built with.
     settings: ModellingSettings,
+    /// Whether the points' outline was cut to the model envelope.
+    cut_to_envelope: bool,
 }
 
 /// How a build thinned its copy of the control strings to fit the
@@ -369,7 +372,7 @@ impl<'a> App<'a> {
                 keys: &keys,
                 layers: &control_layers,
             };
-            grid_surface_from_points(points, selected, ring, spacing, &settings, name, &stamp, cancel, progress)
+            grid_surface_from_points(points, selected, ring, spacing, &settings, settings.envelope.as_ref(), name, &stamp, cancel, progress)
         };
         let apply = move |app: &mut App, result: Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)>| match result {
             Ok((generated, left_out)) => {
@@ -704,7 +707,8 @@ fn control_strings(document: &crate::model::Document, ids: &[ObjectId]) -> Resul
 
 /// Worker half: the spline through the points and controls, gridded at
 /// `spacing`, cut to the extent or the points' outline, and reported with
-/// its run record.
+/// its run record. Refused when a height leaves the RLs of `heights_within`,
+/// `None` for a surface whose heights are not RLs.
 #[allow(clippy::too_many_arguments)]
 fn grid_surface_from_points(
     points: Vec<DVec3>,
@@ -712,12 +716,33 @@ fn grid_surface_from_points(
     extent: Option<Vec<DVec2>>,
     spacing: f64,
     settings: &ModellingSettings,
+    heights_within: Option<&ModelEnvelope>,
     name: String,
     stamp: &RunStamp,
     cancel: &CancelFlag,
     progress: &Progress,
 ) -> Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)> {
     let surface = surface_mesh(&points, controls, extent.as_deref(), spacing, settings, cancel, progress)?;
+    if let Some(envelope) = heights_within {
+        let (low, high) = surface
+            .vertices
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), vertex| (low.min(vertex.z), high.max(vertex.z)));
+        let (base, top) = (envelope.lower().z, envelope.upper().z);
+        if let Some(height) = [high, low].into_iter().find(|height| !envelope.contains_z(*height)) {
+            // At the precision of `contains_z`'s slack, so a refused height
+            // never prints as inside.
+            anyhow::bail!(
+                "{}",
+                tr!(
+                    "cmd-reference-surface-heights-outside-envelope",
+                    height = trimmed(height, 4),
+                    base = trimmed(base, 4),
+                    top = trimmed(top, 4)
+                )
+            );
+        }
+    }
     // What the build cleaned in its copy and the strings it left out come
     // first, each under its own heading, so the build line that follows
     // reads as what was built from them.
@@ -736,7 +761,7 @@ fn grid_surface_from_points(
         }
     }
     userspace_log!(
-        "{}\n{}",
+        "{}\n{}{}",
         tr!(
             "cmd-reference-surface-built-surface-name-inside-grid",
             name = name.to_string(),
@@ -776,7 +801,12 @@ fn grid_surface_from_points(
             spacing = surface.lattice.spacing().to_string(),
             author = stamp.author.to_string(),
             date = stamp.date.to_string()
-        )
+        ),
+        if surface.cut_to_envelope {
+            format!("\n{}", tr!("cmd-reference-surface-outline-cut"))
+        } else {
+            String::new()
+        }
     );
     // Each pick a control took over is named, for the geologist to explain,
     // in one message so the worker takes the console once.
@@ -936,6 +966,24 @@ fn surface_mesh(
         }
     }
 
+    // The model envelope bounds the grid: a drawn extent must lie in it,
+    // and without one every point and control the outline is made from.
+    if let Some(envelope) = &settings.envelope {
+        if let Some(ring) = extent {
+            if ring.iter().any(|vertex| !envelope.contains_xy(*vertex)) {
+                anyhow::bail!("{}", tr!("cmd-reference-surface-extent-outside-envelope", envelope = envelope.summary()));
+            }
+        } else {
+            let outside = points.iter().chain(controls.iter().flatten()).filter(|at| !envelope.contains_xy(at.truncate())).count();
+            if outside > 0 {
+                anyhow::bail!(
+                    "{}",
+                    tr!("cmd-reference-surface-points-outside-envelope", count = outside.to_string(), envelope = envelope.summary())
+                );
+            }
+        }
+    }
+
     let (picks, overridden, left_out) = picks_off_controls(points, controls, &cancelled)?;
     let budgeted = if !controls.is_empty() && picks.len() + entered.len() > POINT_BUDGET {
         Some(within_budget(controls, names, crossings, picks.len(), &cancelled)?)
@@ -971,6 +1019,14 @@ fn surface_mesh(
             whole.extend(entered.iter().copied());
             buffered_outline(&whole)?
         }
+    };
+    // Only the buffer can pass the envelope here; it is cut to it.
+    let envelope = settings
+        .envelope
+        .filter(|envelope| extent.is_none() && outline.iter().any(|vertex| !envelope.contains_xy(*vertex)));
+    let outline = match envelope {
+        Some(envelope) => cut_to_envelope(outline, &envelope),
+        None => outline,
     };
     let ring = extent.unwrap_or(&outline);
     let bands = drawn.unwrap_or_else(|| RingBands::new(ring));
@@ -1010,6 +1066,7 @@ fn surface_mesh(
         left_out,
         steep,
         settings: *settings,
+        cut_to_envelope: envelope.is_some(),
         left_out_strings: checked.left_out,
         cleaned: copy.changes,
     })
@@ -1610,6 +1667,26 @@ fn buffered_outline(points: &[DVec3]) -> Result<Vec<DVec2>> {
         ring.pop();
     }
     Ok(ring)
+}
+
+/// `outline` cut to the envelope's rectangle, a vertex within
+/// [`kernel::XY_TOL`] of a side moved onto it, so the cut runs along a
+/// line of every grid spacing's lattice.
+fn cut_to_envelope(outline: Vec<DVec2>, envelope: &ModelEnvelope) -> Vec<DVec2> {
+    let ring = envelope.ring();
+    let cut = (0..4).fold(outline, |cut, side| clip_polyline_by_xy_edge(&cut, ring[side], ring[(side + 1) % 4], true));
+    let (lower, upper) = (ring[0], ring[2]);
+    let onto = |value: f64, low: f64, high: f64| {
+        if (value - low).abs() <= kernel::XY_TOL {
+            low
+        } else if (value - high).abs() <= kernel::XY_TOL {
+            high
+        } else {
+            value
+        }
+    };
+    let cut = cut.into_iter().map(|at| DVec2::new(onto(at.x, lower.x, upper.x), onto(at.y, lower.y, upper.y))).collect();
+    deduplicate_ring_by(cut, |a: DVec2, b: DVec2| a.distance(b) <= kernel::XY_TOL)
 }
 
 /// The picks no control passes within [`MERGE_DISTANCE`] of in plan, with
