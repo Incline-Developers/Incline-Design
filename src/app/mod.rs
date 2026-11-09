@@ -522,6 +522,10 @@ pub(crate) struct App<'a> {
     /// can always say what was true when it was last run. Its indexes are
     /// built once, when it is published. See [`crate::app::schedule_run`].
     pub(crate) schedule_calculation: Option<std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>>,
+    /// Whether the held result reached the planning end when it was
+    /// published. Such a schedule follows the end when it moves later; one
+    /// run a period at a time stops where it was taken to.
+    pub(crate) schedule_reached_end: bool,
     /// A run in flight on the bounded worker pool. Dropping it and cancelling
     /// its job publishes nothing.
     pub(crate) pending_schedule_run: Option<crate::app::schedule_run::PendingScheduleRun>,
@@ -757,6 +761,7 @@ impl<'a> Default for App<'a> {
             planning_entry_pending: false,
             planning_entry_step: None,
             schedule_calculation: None,
+            schedule_reached_end: false,
             pending_schedule_run: None,
             video_recording: None,
             schedule_run_diagnostics: None,

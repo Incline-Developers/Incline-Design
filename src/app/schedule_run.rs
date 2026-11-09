@@ -93,7 +93,8 @@ pub(crate) enum ScheduleRunMode {
     Improve,
     /// A recalculation after an edit, nobody pressed anything: the horizon
     /// the held result covered, even a stale one, so a schedule run to day 3
-    /// stays a schedule to day 3. Quiet in the console.
+    /// stays a schedule to day 3 - unless it reached the planning end, when
+    /// it follows the end wherever it has moved. Quiet in the console.
     Auto,
 }
 
@@ -475,7 +476,18 @@ impl crate::app::App<'_> {
         let Some(calculation) = self.schedule_calculation.as_ref() else {
             return false;
         };
-        calculation.semantic == self.schedule_semantic_key() && calculation.requested_end_h <= self.planning_end_h() + 1e-9
+        let end_h = self.planning_end_h();
+        // A schedule that reached the planning end is out of date once the
+        // end moves later: the horizon it was asked to cover has grown.
+        let short_of_end = self.schedule_reached_end && calculation.requested_end_h < end_h - 1e-9;
+        calculation.semantic == self.schedule_semantic_key() && calculation.requested_end_h <= end_h + 1e-9 && !short_of_end
+    }
+
+    /// Hold `schedule` as the calculated result, noting whether it reaches
+    /// the planning end.
+    fn hold_schedule(&mut self, schedule: Arc<CalculatedSchedule>) {
+        self.schedule_reached_end = schedule.requested_end_h >= self.planning_end_h() - 1e-9;
+        self.schedule_calculation = Some(schedule);
     }
 
     /// Start a run, or say why one cannot start.
@@ -532,7 +544,10 @@ impl crate::app::App<'_> {
         let restore_only = mode == ScheduleRunMode::Auto && !self.editor.schedule_auto_recalculate;
         let requested_end_h = match mode {
             ScheduleRunMode::All => end_h,
-            ScheduleRunMode::Auto => held_end_h.or(saved.as_ref().map(|saved| saved.requested_end_h)).unwrap_or(end_h),
+            ScheduleRunMode::Auto => held_end_h
+                .filter(|_| !self.schedule_reached_end)
+                .or(saved.as_ref().map(|saved| saved.requested_end_h).filter(|_| self.schedule_calculation.is_none()))
+                .unwrap_or(end_h),
             ScheduleRunMode::Improve => held_end_h.filter(|_| self.schedule_calculation_is_current()).unwrap_or(end_h),
             ScheduleRunMode::Period => match self.schedule_calculation.as_ref().filter(|_| self.schedule_calculation_is_current()) {
                 Some(held) if held.requested_end_h >= end_h - 1e-9 => {
@@ -768,7 +783,7 @@ impl crate::app::App<'_> {
                         // so closing asks first. A recalculation gives the same
                         // answer again, and asks nothing.
                         app.keep_schedule_for_saving(&schedule, pending.improve);
-                        app.schedule_calculation = Some(schedule);
+                        app.hold_schedule(schedule);
                     }
                     Ok(RunOutcome::SavedOutOfDate) => {
                         app.schedule_auto_attempted = Some(app.auto_key());
@@ -1082,7 +1097,7 @@ impl crate::app::App<'_> {
             );
             self.schedule_run_diagnostics = None;
             self.keep_schedule_for_saving(&schedule, false);
-            self.schedule_calculation = Some(schedule);
+            self.hold_schedule(schedule);
             if let Some(pending) = self.pending_schedule_run.as_mut() {
                 pending.showing_early = true;
             }
