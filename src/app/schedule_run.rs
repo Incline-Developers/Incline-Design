@@ -487,7 +487,12 @@ impl crate::app::App<'_> {
     /// the planning end.
     fn hold_schedule(&mut self, schedule: Arc<CalculatedSchedule>) {
         self.schedule_reached_end = schedule.requested_end_h >= self.planning_end_h() - 1e-9;
-        self.schedule_calculation = Some(schedule);
+        // A long schedule is a great many small allocations: freeing a year
+        // of hourly dispatch held up the frame that showed its successor by
+        // some 50 ms, so the one it replaces goes on a worker.
+        if let Some(replaced) = self.schedule_calculation.replace(schedule) {
+            rayon::spawn(move || drop(replaced));
+        }
     }
 
     /// Start a run, or say why one cannot start.
