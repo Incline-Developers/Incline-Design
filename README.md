@@ -18,23 +18,23 @@ Incline is available for Windows, Linux, macOS, and WebAssembly.
 
 ### Mine Design
 
-Create and edit mine designs using points, lines, polylines, circles, text, and triangulations. Incline features a suite of design tools such as pit and stockpile shell generation, offsets, chamfers, Bézier curves, and surface draping, alongside tools for clipping triangulations, generating contours, and merging pit and stockpile shells into terrain.
+Create and edit mine designs using points, lines, polylines, circles, text, and triangulations. Incline features a suite of design tools such as pit and stockpile shell generation, offsets, chamfers, Bézier curves, and surface draping, alongside tools for clipping triangulations, generating contours, and merging pit and stockpile shells into terrain. Run pit optimisation scenarios on a block model and get nested pit shells by revenue factor as surfaces and solids.
 
 ### Drill & Blast
 
-Coming Soon!
+Lay out drill patterns inside blast boundaries, then move and rotate collars to suit the ground. Tie holes in with a palette of interhole delays, set initiation points, and charge holes from a library of explosive products and loading rules. Visualise the lines of equal firing time, burden relief, explosive weight per 8 ms window, powder factor, and a blast timeline.
 
 ### Geological Modeling
 
-Coming Soon!
+Import and inspect drill holes with their intervals, strata, seams and downhole geophysics. Estimate block models from drill-hole samples by ordinary kriging, threshold block models into ore triangulations, and build reference surfaces from points picked down the holes.
 
 ### Geospatial Data & Survey
 
-Coming Soon!
+Transform data between mine grids and registry coordinate systems, and turn point clouds into terrain by joining, classifying ground and vegetation, and triangulating them.
 
 ### Mine Planning
 
-Pit / stockpile / dump solids, haulage, equipment management, destination rules, cashflows, Gantt charts, reporting and animations.
+Build pit, stockpile and dump solids, split them into blast cuts and dig strips, and report reserves from the block model. Lay out haul road networks with truck classes and grade speeds for cycle times, set up loaders, trucks, drills and dozers with their delays and rosters, and route material with destination rules, stockpile modes, crusher grade targets and cashflows. Incline schedules it all with an hourly dispatch solver, and presents the result in a calendar, Gantt chart, destination charts, exportable reports, and 3D animations that can be recorded to video.
 
 ### Localisation
 
