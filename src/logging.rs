@@ -256,6 +256,10 @@ fn standalone_title(target: Option<&str>, severity: ConsoleSeverity) -> String {
         tr!("logging-renderer")
     } else if target.contains("job") || target.contains("load") {
         tr!("common-background")
+    } else if target.contains("schedule") || target.contains("scip") {
+        // A Run refused or a schedule that could not be calculated: it is
+        // the schedule that is being spoken about.
+        tr!("planning-page-schedule")
     } else if severity == ConsoleSeverity::Error {
         tr!("logging-system-error")
     } else {

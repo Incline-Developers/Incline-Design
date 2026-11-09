@@ -329,6 +329,54 @@ pub(crate) fn outline_menu(ui: &mut egui::Ui, outline: &crate::ui::state::BlastO
     chosen
 }
 
+/// The menu for several dig blocks at once: out of mining or back in,
+/// together. Ticked when every one is out on its own; a block that is out with
+/// the bench or blast around it is put back from there, so it is left alone
+/// here as it is in its own menu. One edit a solid.
+pub(crate) fn dig_blocks_menu(ui: &mut egui::Ui, outlines: &[&crate::ui::state::BlastOutline], document: &Document, commands: &mut Vec<UiCommand>) -> bool {
+    let mut blocks = Vec::new();
+    for outline in outlines {
+        let Some(solid) = document.solid(outline.solid) else { continue };
+        let target = crate::model::ExclusionTarget::Block {
+            flitch: outline.bench_base,
+            anchor: outline.anchor,
+        };
+        let face: Vec<Vec<glam::DVec2>> = outline.rings.iter().map(|ring| ring.iter().map(|point| point.truncate()).collect()).collect();
+        let own = solid.exclusions.face_excluded(target, &face);
+        if outline.excluded && !own {
+            continue;
+        }
+        blocks.push((solid, target, face, own));
+    }
+    let all_out = !blocks.is_empty() && blocks.iter().all(|(_, _, _, own)| *own);
+    if !ContextMenuAction::new(tr!("planning-exclude-from-mining"))
+        .checked(all_out)
+        .enabled(!blocks.is_empty())
+        .show(ui)
+        .clicked()
+    {
+        return false;
+    }
+    let mut edits: Vec<(crate::model::SolidId, crate::model::MiningExclusions)> = Vec::new();
+    for (solid, target, face, _) in &blocks {
+        let index = match edits.iter().position(|(id, _)| *id == solid.id) {
+            Some(index) => index,
+            None => {
+                edits.push((solid.id, solid.exclusions.clone()));
+                edits.len() - 1
+            }
+        };
+        edits[index].1 = edits[index].1.with_face(*target, face, !all_out);
+    }
+    for (solid, exclusions) in edits {
+        commands.push(UiCommand::UpdateSolid {
+            solid,
+            edit: crate::model::SolidEdit::Exclusions(exclusions),
+        });
+    }
+    true
+}
+
 /// The anchor the derivation stored for this outline. Recomputing it here
 /// would risk disagreeing with the stored one over a rounding step, so the
 /// outline carries the point it was matched on.

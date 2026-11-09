@@ -103,6 +103,29 @@ fn draw_ground_context_menu(ui: &mut egui::Ui, editor: &EditorState, document: &
         commands.push(UiCommand::CloseCanvasContextMenu);
         return;
     };
+    // A block among several selected stands for them all.
+    let several: Vec<&crate::ui::state::BlastOutline> = if kind == OutlineKind::DigBlock && editor.selected_dig_blocks.len() > 1 && editor.selected_dig_blocks.contains(&shape) {
+        editor
+            .dig_outlines
+            .iter()
+            .filter(|outline| {
+                editor
+                    .selected_dig_blocks
+                    .contains(&crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if !several.is_empty() {
+        let title = tr!("planning-dig-blocks-title", count = several.len());
+        ContextMenu::new("canvas_ground", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
+            if crate::ui::elements::blasting::dig_blocks_menu(ui, &several, document, commands) {
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
+        });
+        return;
+    }
     let title = match kind {
         OutlineKind::Blast => tr!("planning-dig-blast-group", name = outline.name.clone()),
         OutlineKind::DigBlock => tr!("planning-dig-block-title", name = outline.name.clone()),

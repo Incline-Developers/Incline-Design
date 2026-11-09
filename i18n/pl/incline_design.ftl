@@ -753,7 +753,6 @@ common-fly-mode = Tryb lotu
 common-generate-contour-lines = Generuj poziomice...
 common-hide-all = Ukryj wszystko
 common-hide-selection = Ukryj zaznaczenie
-common-hole-id = ID otworu
 common-ignore = Ignoruj
 common-import-csv-block-model = Importuj model blokowy CSV
 common-import-dxf = Importuj DXF

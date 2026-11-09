@@ -103,6 +103,11 @@ impl Triangulation {
         (0..self.faces.len()).filter_map(|index| self.triangle(index))
     }
 
+    /// Each face's vertex indices, as stored.
+    pub fn face_indices(&self) -> impl ExactSizeIterator<Item = [u32; 3]> + '_ {
+        self.faces.iter().map(|face| face.indices)
+    }
+
     pub fn face_vertex_indices_iter(&self) -> impl Iterator<Item = [usize; 3]> + '_ {
         self.faces.iter().copied().map(Face::indices_zero_based)
     }

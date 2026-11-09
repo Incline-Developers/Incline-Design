@@ -736,7 +736,6 @@ common-fly-mode = Нисэх горим
 common-generate-contour-lines = Изолиниа үүсгэх...
 common-hide-all = Бүгдийг нуух
 common-hide-selection = Сонголтыг нуух
-common-hole-id = Цооногийн ID
 common-ignore = Үл хэрэгсэх
 common-import-csv-block-model = CSV блокийн загвар импортлох
 common-import-dxf = DXF импортлох

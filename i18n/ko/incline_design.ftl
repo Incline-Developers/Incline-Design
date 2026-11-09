@@ -719,7 +719,6 @@ common-fly-mode = 비행 모드
 common-generate-contour-lines = 등고선 생성...
 common-hide-all = 모두 숨기기
 common-hide-selection = 선택 항목 숨기기
-common-hole-id = 시추공 ID
 common-ignore = 무시
 common-import-csv-block-model = CSV 블록 모델 가져오기
 common-import-dxf = DXF 가져오기

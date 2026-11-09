@@ -685,7 +685,6 @@ common-fly-mode = Mode terbang
 common-generate-contour-lines = Buat Garis Kontur...
 common-hide-all = Sembunyikan Semua
 common-hide-selection = Sembunyikan pilihan
-common-hole-id = ID Lubang
 common-ignore = Abaikan
 common-import-csv-block-model = Impor CSV model blok
 common-import-dxf = Impor DXF

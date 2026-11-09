@@ -766,7 +766,7 @@ fn draw_trucks(
     ui.painter().text(
         header.left_top() + egui::vec2(8.0, 28.0),
         egui::Align2::LEFT_TOP,
-        tr!("inspector-trucks"),
+        tr!("charts-trucks"),
         egui::FontId::proportional(12.0),
         ui.visuals().weak_text_color(),
     );
@@ -780,7 +780,7 @@ fn draw_trucks(
         tr!(
             "inspector-trucks-in-use",
             busy = format!("{:.1}", schedule.trucks_in_use(id, slider)),
-            fleet = format!("{fleet:.1}")
+            fleet = super::schedule_inspector::fleet_text(fleet)
         ),
         egui::FontId::proportional(13.0),
         ui.visuals().text_color(),
@@ -825,7 +825,7 @@ fn draw_trucks(
         ui.interact(plot, ui.scope_id().with("haul_truck_hover"), egui::Sense::hover()).on_hover_text(tr!(
             "inspector-trucks-in-use",
             busy = format!("{:.1}", schedule.trucks_in_use(id, hour)),
-            fleet = format!("{fleet:.1}")
+            fleet = super::schedule_inspector::fleet_text(fleet)
         ));
     }
 }

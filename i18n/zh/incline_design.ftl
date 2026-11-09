@@ -685,7 +685,6 @@ common-fly-mode = 飞行模式
 common-generate-contour-lines = 生成等高线...
 common-hide-all = 隐藏所有
 common-hide-selection = 隐藏选中项
-common-hole-id = 孔号
 common-ignore = 忽略
 common-import-csv-block-model = 导入 CSV 块体模型
 common-import-dxf = 导入 DXF

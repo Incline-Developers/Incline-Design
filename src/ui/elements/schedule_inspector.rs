@@ -688,7 +688,7 @@ fn trucks(ui: &mut egui::Ui, plan: &SchedulePlan, schedule: &CalculatedSchedule,
         let fleet = class.calendar.values_at(day).effective_units();
         let entry = Entry {
             name: class.name.clone(),
-            value: tr!("inspector-trucks-in-use", busy = format!("{busy:.1}"), fleet = format!("{fleet:.1}")),
+            value: tr!("inspector-trucks-in-use", busy = format!("{busy:.1}"), fleet = fleet_text(fleet)),
             meter: (fleet > 0.0).then(|| (busy / fleet).clamp(0.0, 1.0) as f32),
             ..Entry::default()
         };
@@ -764,4 +764,14 @@ fn draw_entry(ui: &mut egui::Ui, entry: &Entry) -> egui::Response {
         }
     }
     response
+}
+
+/// A truck fleet's size: whole trucks as they are, and a tenth only where
+/// availability leaves part of one.
+pub(crate) fn fleet_text(fleet: f64) -> String {
+    if (fleet - fleet.round()).abs() < 1e-9 {
+        format!("{fleet:.0}")
+    } else {
+        format!("{fleet:.1}")
+    }
 }

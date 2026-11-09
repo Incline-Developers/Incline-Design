@@ -93,7 +93,7 @@ impl crate::app::App<'_> {
         self.editor.blasting_bench_key = Some(key);
         self.editor.copy_cuts_dialog = None;
         self.editor.selected_blast = None;
-        self.editor.selected_dig_block = None;
+        self.editor.selected_dig_blocks.clear();
         self.editor.selected_handles.clear();
         self.scene_document_key = None;
         self.invalidate_geometry();

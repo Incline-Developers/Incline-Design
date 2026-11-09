@@ -726,7 +726,6 @@ common-fly-mode = Flugmodus
 common-generate-contour-lines = Höhenlinien erzeugen...
 common-hide-all = Alle ausblenden
 common-hide-selection = Auswahl ausblenden
-common-hole-id = Bohrloch-ID
 common-ignore = Ignorieren
 common-import-csv-block-model = CSV-Blockmodell importieren
 common-import-dxf = DXF importieren

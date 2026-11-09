@@ -712,7 +712,6 @@ common-fly-mode = Chế độ bay
 common-generate-contour-lines = Tạo đường đồng mức...
 common-hide-all = Ẩn tất cả
 common-hide-selection = Ẩn vùng chọn
-common-hole-id = Mã lỗ khoan
 common-ignore = Bỏ qua
 common-import-csv-block-model = Nhập mô hình khối CSV
 common-import-dxf = Nhập DXF

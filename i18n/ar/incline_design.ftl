@@ -685,7 +685,6 @@ common-fly-mode = وضع الطيران
 common-generate-contour-lines = توليد خطوط الكنتور...
 common-hide-all = إخفاء الجميع
 common-hide-selection = إخفاء الاختيار
-common-hole-id = معرّف الثقب
 common-ignore = تجاهل
 common-import-csv-block-model = استيراد CSV نموذج الكتل
 common-import-dxf = استيراد DXF

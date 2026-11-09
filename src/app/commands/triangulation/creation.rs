@@ -346,7 +346,7 @@ fn build_created_triangulation(
             surface_type = format!("{surface_type:?}")
         )
     );
-    session::build_generated_triangulation(name, all_verts, all_faces, surface_type, crate::model::triangulation::unique_edges)
+    session::build_generated_triangulation(name, all_verts, all_faces, surface_type, |_| Vec::new())
 }
 
 /// Snap breakline vertices that coincide within the given tolerances (XY

@@ -474,6 +474,9 @@ pub(crate) struct App<'a> {
     /// a restore that fails is not retried every frame.
     pub(crate) solid_view_cache: std::collections::HashMap<crate::model::SolidId, crate::app::commands::solids_view::ViewSolid>,
     pub(crate) solid_view_body: Vec<crate::model::triangulation::OpenTriangulation>,
+    /// The dig blocks the Reserves view draws, with their ground, for a drag
+    /// box to test against.
+    pub(crate) solid_view_shown_blocks: Vec<crate::app::commands::solids_view::ShownBlock>,
     pub(crate) solid_view_body_key: Option<u64>,
     /// What the Reserves page draws in the viewport: the open surfaces and
     /// the dig blocks together, assembled when either changes; see
@@ -519,6 +522,14 @@ pub(crate) struct App<'a> {
     /// can always say what was true when it was last run. Its indexes are
     /// built once, when it is published. See [`crate::app::schedule_run`].
     pub(crate) schedule_calculation: Option<std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>>,
+    /// Whether the held result reached the planning end when it was
+    /// published. Such a schedule follows the end when it moves later; one
+    /// run a period at a time stops where it was taken to.
+    pub(crate) schedule_reached_end: bool,
+    /// The Dig Strips step's count of every flitch's dig blocks, under the
+    /// key of the ground and lines it counted. See
+    /// [`crate::app::App::dig_block_count`].
+    pub(crate) dig_block_count: Option<(u64, usize)>,
     /// A run in flight on the bounded worker pool. Dropping it and cancelling
     /// its job publishes nothing.
     pub(crate) pending_schedule_run: Option<crate::app::schedule_run::PendingScheduleRun>,
@@ -738,6 +749,7 @@ impl<'a> Default for App<'a> {
             solid_preview: None,
             solid_view_cache: Default::default(),
             solid_view_body: Vec::new(),
+            solid_view_shown_blocks: Vec::new(),
             haul_block_surface: Vec::new(),
             solid_view_body_key: None,
             reserves_scene: Vec::new(),
@@ -753,6 +765,8 @@ impl<'a> Default for App<'a> {
             planning_entry_pending: false,
             planning_entry_step: None,
             schedule_calculation: None,
+            schedule_reached_end: false,
+            dig_block_count: None,
             pending_schedule_run: None,
             video_recording: None,
             schedule_run_diagnostics: None,

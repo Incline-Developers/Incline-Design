@@ -287,7 +287,7 @@ fn reconstruct_terrain_tin(
             suffix = max_edge_suffix.to_string()
         )
     );
-    session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)
+    session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, |_| Vec::new())
 }
 
 fn deduplicate_terrain_xy(sampled: Vec<DVec3>, cancel: &crate::app::jobs::CancelFlag) -> Result<Vec<TerrainVertex>> {

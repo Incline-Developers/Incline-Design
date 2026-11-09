@@ -714,7 +714,6 @@ common-fly-mode = フライモード
 common-generate-contour-lines = コンター線を生成...
 common-hide-all = すべて非表示
 common-hide-selection = 選択項目を非表示
-common-hole-id = 孔ID
 common-ignore = 無視
 common-import-csv-block-model = CSVブロックモデルをインポート
 common-import-dxf = DXFをインポート

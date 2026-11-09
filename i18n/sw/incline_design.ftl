@@ -717,7 +717,6 @@ common-fly-mode = Hali ya Kuruka
 common-generate-contour-lines = Zalisha Mistari ya Mwinuko...
 common-hide-all = Ficha Yote
 common-hide-selection = Ficha Uteuzi
-common-hole-id = Kitambulisho cha Shimo
 common-ignore = Puuza
 common-import-csv-block-model = Ingiza CSV Mfano wa Vitalu
 common-import-dxf = Ingiza DXF

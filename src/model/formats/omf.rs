@@ -39,7 +39,7 @@ use crate::{
         progress::Phase,
         project::{self, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
-        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, spatial_surface_face_order, unique_edges},
+        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, spatial_surface_face_order},
     },
     rendering::color::{linear_to_srgb_byte, rgb_bytes_to_linear_rgba},
 };
@@ -1210,7 +1210,19 @@ fn read_boundaries<R: omf_crate::file::ReadAt>(reader: &omf_crate::file::Reader<
         .collect())
 }
 
+/// A block model's arrays are written with dictionary encoding: categories,
+/// grid indices, densities and the like repeat across neighbouring blocks, and
+/// on a model of a hundred million blocks it took the file from 274 MB to 112
+/// MB and opened it faster. The setting is put back for what follows.
 fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenBlockModel) -> Result<omf_crate::Element> {
+    let previous = writer.dictionary_encoding();
+    writer.set_dictionary_encoding(true);
+    let element = write_block_model_arrays(writer, open);
+    writer.set_dictionary_encoding(previous);
+    element
+}
+
+fn write_block_model_arrays<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenBlockModel) -> Result<omf_crate::Element> {
     let model = &open.model;
     let lower = model.metadata.lower;
     let upper = model.metadata.upper;
@@ -2104,6 +2116,38 @@ struct Decoder<'a, R: omf_crate::file::ReadAt> {
 }
 
 impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
+    /// What a block model element holds, as a hash a later session reading the
+    /// same content derives again, without decoding any of it: the element's
+    /// geometry and attributes, each array named by the checksum and length of
+    /// its data rather than by its file name, which a save renumbers, and the
+    /// project origin the geometry is placed by. `None` when a checksum cannot
+    /// be read, so nothing is ever keyed on a guess.
+    fn block_model_fingerprint(&self, element: &omf_crate::Element) -> Option<u64> {
+        fn rename(value: &mut serde_json::Value, checksum: &dyn Fn(&str) -> Option<(u32, u64)>) -> Option<()> {
+            match value {
+                serde_json::Value::Object(map) => {
+                    if let Some(serde_json::Value::String(filename)) = map.get("filename") {
+                        let (crc, length) = checksum(filename)?;
+                        map.insert("filename".to_owned(), serde_json::json!([crc, length]));
+                    }
+                    map.values_mut().try_for_each(|value| rename(value, checksum))
+                }
+                serde_json::Value::Array(values) => values.iter_mut().try_for_each(|value| rename(value, checksum)),
+                _ => Some(()),
+            }
+        }
+        use std::hash::Hasher;
+        let mut described = serde_json::to_value((&element.geometry, &element.attributes)).ok()?;
+        rename(&mut described, &|filename| self.reader.member_checksum(filename).ok())?;
+        let mut hash = twox_hash::XxHash3_64::new();
+        hash.write(b"block model source");
+        hash.write(&serde_json::to_vec(&described).ok()?);
+        for coordinate in self.project_origin.to_array() {
+            hash.write_u64(coordinate.to_bits());
+        }
+        Some(hash.finish())
+    }
+
     fn finish(mut self) -> Result<ImportBundle> {
         if !self.generic_design.layers().is_empty() {
             self.generic_design.validate().with_context(|| tr!("err-omf-validate-line-designs"))?;
@@ -2441,7 +2485,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                             variables,
                             dims: geometry.grid.count().map(|n| n as usize),
                             ..Default::default()
-                        }),
+                        })
+                        .with_source_fingerprint(self.block_model_fingerprint(element)),
                         blocks: Arc::new(BlockBoundsSource::Explicit(Default::default())),
                         renderable_block_indices: Arc::new(RenderableBlockIndices::All(0)),
                         uniform_grid: None,
@@ -2963,7 +3008,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let geometry = element_geometry(element);
         let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, faces).with_context(|| tr!("err-omf-build-surface", name = element.name.to_string()))?);
         let spatial = Arc::new(crate::model::spatial::TriangleBvh::for_surface(&mesh));
-        let edges = unique_edges(&mesh);
+        let edges = Vec::new();
         let surface_face_order = Arc::new(spatial_surface_face_order(&mesh));
         let style = element.metadata.get(META_STYLE);
         let color = style_value(style, "color").unwrap_or_else(|| element_color(element, [0.65, 0.68, 0.72, 1.0]));
@@ -3134,9 +3179,16 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             omf_crate::Location::Primitives
         };
         let reader = self.reader;
-        let read_geometry = || -> Result<(BlockGeometry, Vec<usize>)> {
+        let rotation = DMat3::from_cols(
+            DVec3::from_array(geometry.orient.u),
+            DVec3::from_array(geometry.orient.v),
+            DVec3::from_array(geometry.orient.w),
+        );
+        let origin = self.project_origin + DVec3::from_array(geometry.orient.origin);
+        let read_geometry = || -> Result<(BlockGeometry, Vec<usize>, Option<GeometrySummary>)> {
             let mut blocks = BlockBatches::default();
             let mut parent_indices = Vec::new();
+            let mut summary = None;
             match &geometry.subblocks {
                 None => {
                     let total = count
@@ -3157,14 +3209,49 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 }
                 Some(omf_crate::Subblocks::Freeform { subblocks }) => {
                     ensure_items(subblocks.item_count(), &tr!("err-omf-items-free-subblocks"))?;
-                    for item in reader.array_freeform_subblocks(subblocks)? {
-                        let (parent, corners) = item?;
-                        blocks.push(subblock_bounds(parent, corners, &edges)?);
-                        let parent = block_parent_index(parent, count)?;
-                        if spreads_parents {
-                            parent_indices.push(parent);
+                    // Decoded and stored a row group per thread, a window of
+                    // groups at a time, then added in order: one thread
+                    // decoding a model of a hundred million blocks took over
+                    // twenty seconds. A group's corners become its bounds in
+                    // place, and what a thread hands back is already compact.
+                    let groups = reader.array_freeform_subblock_groups(subblocks)?;
+                    let order: Vec<usize> = (0..groups.len()).collect();
+                    let mut whole = GeometrySummary::default();
+                    for window in order.chunks(rayon::current_num_threads().max(1)) {
+                        let decoded: Vec<Result<DecodedGroup>> = window
+                            .par_iter()
+                            .map(|&group| {
+                                let (parents, mut corners) = groups.read(group)?;
+                                for (row, parent) in parents.iter().enumerate() {
+                                    for axis in 0..3 {
+                                        let (lower, size) = parent_span(&edges[axis], parent[axis])?;
+                                        corners[axis][row] = lower + size * corners[axis][row];
+                                        corners[axis + 3][row] = lower + size * corners[axis + 3][row];
+                                    }
+                                }
+                                let mut indices = Vec::with_capacity(if spreads_parents { parents.len() } else { 0 });
+                                for parent in parents {
+                                    let index = block_parent_index(parent, count)?;
+                                    if spreads_parents {
+                                        indices.push(index);
+                                    }
+                                }
+                                let summary = GeometrySummary::of(&corners, origin, rotation);
+                                Ok(DecodedGroup {
+                                    columns: corners.map(|values| BlockColumn::from_values(&values)),
+                                    parents: indices,
+                                    summary,
+                                })
+                            })
+                            .collect();
+                        for group in decoded {
+                            let group = group?;
+                            blocks.append(group.columns);
+                            parent_indices.extend(group.parents);
+                            whole = whole.join(group.summary);
                         }
                     }
+                    summary = Some(whole);
                 }
                 Some(omf_crate::Subblocks::Regular { count: sub_count, subblocks, .. }) => {
                     ensure_items(subblocks.item_count(), &tr!("err-omf-items-regular-subblocks"))?;
@@ -3184,14 +3271,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     }
                 }
             }
-            Ok((blocks.finish(), parent_indices))
+            Ok((blocks.finish(), parent_indices, summary))
         };
         // Each variable is its own array, so they decode side by side; a
         // block model's variables are usually far more numerous than its row groups.
         let read_columns = |parent_indices: &[usize]| -> Result<Vec<BlockModelColumn>> {
-            Ok(element
+            let read: Vec<(&omf_crate::Attribute, Option<&[usize]>)> = element
                 .attributes
-                .par_iter()
+                .iter()
                 .filter_map(|attribute| {
                     if location == omf_crate::Location::Subblocks && attribute.location == omf_crate::Location::Primitives {
                         Some((attribute, Some(parent_indices)))
@@ -3201,7 +3288,13 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                         None
                     }
                 })
-                .map(|(attribute, expansion)| read_block_column(reader, attribute, expansion))
+                .collect();
+            // The threads shared between the attributes, so what is decoded
+            // but not yet added stays near one row group per thread.
+            let window = rayon::current_num_threads() / read.len().max(1);
+            Ok(read
+                .into_par_iter()
+                .map(|(attribute, expansion)| read_block_column(reader, attribute, expansion, window))
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .flatten()
@@ -3209,34 +3302,38 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         };
         // The bounds are six more arrays, and decode beside the rest unless the
         // rest need the parents they hold.
-        let (blocks, columns) = if spreads_parents {
-            let (blocks, parent_indices) = read_geometry()?;
+        let (blocks, summary, columns) = if spreads_parents {
+            let (blocks, parent_indices, summary) = read_geometry()?;
             let columns = read_columns(&parent_indices)?;
-            (blocks, columns)
+            (blocks, summary, columns)
         } else {
             let (geometry, columns) = rayon::join(read_geometry, || read_columns(&[]));
-            (geometry?.0, columns?)
+            let (blocks, _, summary) = geometry?;
+            (blocks, summary, columns?)
         };
         if blocks.len() == 0 {
             self.bundle.warnings.push(tr!("err-omf-block-model-empty", name = element.name.to_string()));
             return Ok(());
         }
         let upper = DVec3::new(*edges[0].last().unwrap_or(&0.0), *edges[1].last().unwrap_or(&0.0), *edges[2].last().unwrap_or(&0.0));
-        let rotation = DMat3::from_cols(
-            DVec3::from_array(geometry.orient.u),
-            DVec3::from_array(geometry.orient.v),
-            DVec3::from_array(geometry.orient.w),
-        );
-        let origin = self.project_origin + DVec3::from_array(geometry.orient.origin);
-        let model = BlockModelData::from_columns(blocks.len(), DVec3::ZERO, upper, columns, blocks.heap_bytes())?.with_transform(origin, rotation)?;
+        let model = BlockModelData::from_columns(blocks.len(), DVec3::ZERO, upper, columns, blocks.heap_bytes())?
+            .with_transform(origin, rotation)?
+            .with_source_fingerprint(self.block_model_fingerprint(element));
         let blocks = Arc::new(BlockBoundsSource::Explicit(blocks));
         let renderable = Arc::new(RenderableBlockIndices::All(blocks.len()));
-        let uniform_grid = blocks.uniform_grid();
+        // What the decoding already found is not looked for again.
+        let uniform_grid = match (&*blocks, &summary) {
+            (BlockBoundsSource::Explicit(geometry), Some(summary)) => summary.least_lower.and_then(|origin| crate::model::block_model::detect_uniform_grid_from(geometry, origin)),
+            _ => blocks.uniform_grid(),
+        };
         let opaque_surface_blocks = uniform_grid.as_ref().map_or_else(
             || opaque_irregular_surface_block_count(&blocks, &renderable),
             |grid| opaque_surface_block_count(&blocks, &renderable, grid),
         );
-        let world_bounds = compute_world_bounds(&model, &blocks, &renderable);
+        let world_bounds = match &summary {
+            Some(summary) => summary.world,
+            None => compute_world_bounds(&model, &blocks, &renderable),
+        };
         let style = element.metadata.get(META_STYLE);
         let active_color_variable = style_value::<Option<String>>(style, "active_color_variable")
             .flatten()
@@ -3741,15 +3838,19 @@ fn affine_from_texcoords(vertices: &[DVec3], texcoords: &[[f64; 2]]) -> Option<[
     None
 }
 
+/// One attribute as a column. `window` is how many of its row groups decode
+/// side by side: the attributes share the threads, so a model of few
+/// attributes reads each one wider.
 fn read_block_column<R: omf_crate::file::ReadAt>(
     reader: &omf_crate::file::Reader<R>,
     attribute: &omf_crate::Attribute,
     expansion: Option<&[usize]>,
+    window: usize,
 ) -> Result<Option<BlockModelColumn>> {
     match &attribute.data {
         omf_crate::AttributeData::Number { values, .. } => {
             let values = match expansion {
-                None => read_number_column(reader, values)?,
+                None => read_number_column(reader, values, window)?,
                 Some(_) => {
                     let parents = read_numbers(reader, values)?.into_iter().map(|value| value.unwrap_or(f64::NAN)).collect::<Vec<_>>();
                     expand_block_values(parents, expansion)?
@@ -3805,11 +3906,8 @@ fn read_block_column<R: omf_crate::file::ReadAt>(
             let code_of = |value: Option<u32>| value.and_then(|index| codes.get(index as usize).copied()).map_or(f64::NAN, f64::from);
             let values = match expansion {
                 None => {
-                    let mut column = BlockColumnBuilder::default();
-                    for value in reader.array_indices(values)? {
-                        column.push(code_of(value?));
-                    }
-                    column.finish()
+                    let groups = reader.array_index_groups(values)?;
+                    read_column_groups(groups.len(), window, |group| Ok(groups.read(group)?.into_iter().map(code_of).collect()))?
                 }
                 Some(_) => {
                     let parents = collect_results(reader.array_indices(values)?)?.into_iter().map(code_of).collect::<Vec<_>>();
@@ -3912,16 +4010,32 @@ fn expand_block_values(values: Vec<f64>, expansion: Option<&[usize]>) -> Result<
 }
 
 /// A number array as a block column, encoded as it is read.
-fn read_number_column<R: omf_crate::file::ReadAt>(reader: &omf_crate::file::Reader<R>, array: &omf_crate::Array<omf_crate::array_type::Number>) -> Result<BlockColumn> {
+fn read_number_column<R: omf_crate::file::ReadAt>(
+    reader: &omf_crate::file::Reader<R>,
+    array: &omf_crate::Array<omf_crate::array_type::Number>,
+    window: usize,
+) -> Result<BlockColumn> {
     ensure_items(array.item_count(), &tr!("err-omf-items-number-values"))?;
+    let groups = reader.array_number_groups(array)?;
+    read_column_groups(groups.len(), window, |group| {
+        Ok(if groups.is_integer() {
+            groups.read_i64(group)?.into_iter().map(|value| value.map_or(f64::NAN, |value| value as f64)).collect()
+        } else {
+            groups.read_f64_or(group, f64::NAN)?
+        })
+    })
+}
+
+/// A column read a row group at a time: `window` groups decoded side by side,
+/// then added in order. Each value read one at a time through the array's
+/// iterator cost more than decoding the file did.
+fn read_column_groups(groups: usize, window: usize, read: impl Fn(usize) -> Result<Vec<f64>> + Sync) -> Result<BlockColumn> {
     let mut column = BlockColumnBuilder::default();
-    if let Ok(numbers) = reader.array_numbers(array)?.try_into_f64() {
-        for value in numbers {
-            column.push(value?.unwrap_or(f64::NAN));
-        }
-    } else {
-        for value in reader.array_numbers(array)?.try_into_i64()? {
-            column.push(value?.map_or(f64::NAN, |value| value as f64));
+    let order: Vec<usize> = (0..groups).collect();
+    for window in order.chunks(window.max(1)) {
+        let decoded: Vec<Result<BlockColumn>> = window.par_iter().map(|&group| Ok(BlockColumn::from_values(&read(group)?))).collect();
+        for values in decoded {
+            column.append(values?);
         }
     }
     Ok(column.finish())
@@ -3943,20 +4057,89 @@ impl BlockBatches {
         }
     }
 
+    /// Add blocks built into columns on their own, after any pushed before them.
+    fn append(&mut self, columns: [BlockColumn; 6]) {
+        self.geometry.extend(&self.batch);
+        self.batch.clear();
+        self.geometry.append(columns);
+    }
+
     fn finish(mut self) -> BlockGeometry {
         self.geometry.extend(&self.batch);
         self.geometry.finish()
     }
 }
 
+/// One row group of sub-blocks, decoded and stored on a thread of its own.
+struct DecodedGroup {
+    /// Lower x, y and z, then upper.
+    columns: [BlockColumn; 6],
+    /// Each block's parent, when a parent attribute is to be spread over them.
+    parents: Vec<usize>,
+    summary: GeometrySummary,
+}
+
+/// What a pass over every block would find, gathered while the blocks are
+/// decoded: their least lower corner, and their bounds in the world.
+#[derive(Clone, Copy, Default)]
+struct GeometrySummary {
+    least_lower: Option<DVec3>,
+    world: Option<(DVec3, DVec3)>,
+}
+
+impl GeometrySummary {
+    /// Blocks whose bounds are `columns` (lower x, y, z, then upper), in the
+    /// frame `origin` and `rotation` give.
+    fn of(columns: &[Vec<f64>; 6], origin: DVec3, rotation: DMat3) -> Self {
+        let [lx, ly, lz, ux, uy, uz] = columns;
+        if lx.is_empty() {
+            return Self::default();
+        }
+        let (mut least, mut world_least, mut world_greatest) = (DVec3::INFINITY, DVec3::INFINITY, DVec3::NEG_INFINITY);
+        for row in 0..lx.len() {
+            let block = BlockBounds {
+                lower: DVec3::new(lx[row], ly[row], lz[row]),
+                upper: DVec3::new(ux[row], uy[row], uz[row]),
+            };
+            let world = crate::model::block_model::block_world_bounds_in(origin, rotation, block);
+            least = least.min(block.lower);
+            world_least = world_least.min(world.lower);
+            world_greatest = world_greatest.max(world.upper);
+        }
+        Self {
+            least_lower: Some(least),
+            world: Some((world_least, world_greatest)),
+        }
+    }
+
+    fn join(self, other: Self) -> Self {
+        let pick = |a: Option<DVec3>, b: Option<DVec3>, join: fn(DVec3, DVec3) -> DVec3| match (a, b) {
+            (Some(a), Some(b)) => Some(join(a, b)),
+            (found, None) | (None, found) => found,
+        };
+        Self {
+            least_lower: pick(self.least_lower, other.least_lower, DVec3::min),
+            world: match (self.world, other.world) {
+                (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.max(b.1))),
+                (found, None) | (None, found) => found,
+            },
+        }
+    }
+}
+
+/// Where a parent block starts along one axis, and how long it is.
+fn parent_span(edges: &[f64], index: u32) -> Result<(f64, f64)> {
+    let index = index as usize;
+    let lower = *edges.get(index).with_context(|| tr!("err-omf-sub-block-parent-range"))?;
+    let upper = *edges.get(index + 1).with_context(|| tr!("err-omf-sub-block-parent-range"))?;
+    Ok((lower, upper - lower))
+}
+
 fn subblock_bounds(parent: [u32; 3], corners: [f64; 6], edges: &[Vec<f64>; 3]) -> Result<BlockBounds> {
     let mut lower = [0.0; 3];
     let mut upper = [0.0; 3];
     for axis in 0..3 {
-        let index = parent[axis] as usize;
-        let parent_lower = *edges[axis].get(index).with_context(|| tr!("err-omf-sub-block-parent-range"))?;
-        let parent_upper = *edges[axis].get(index + 1).with_context(|| tr!("err-omf-sub-block-parent-range"))?;
-        let size = parent_upper - parent_lower;
+        let (parent_lower, size) = parent_span(&edges[axis], parent[axis])?;
         lower[axis] = parent_lower + size * corners[axis];
         upper[axis] = parent_lower + size * corners[axis + 3];
     }

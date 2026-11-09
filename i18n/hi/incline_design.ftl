@@ -685,7 +685,6 @@ common-fly-mode = उड़ान मोड
 common-generate-contour-lines = समोच्च रेखाएँ उत्पन्न करें...
 common-hide-all = सभी को छिपाएँ
 common-hide-selection = चयन छिपाएँ
-common-hole-id = होल ID
 common-ignore = अनदेखा करें
 common-import-csv-block-model = आयात CSV ब्लॉक मॉडल
 common-import-dxf = आयात DXF

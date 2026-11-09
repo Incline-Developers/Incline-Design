@@ -534,7 +534,8 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SelectDigBlock(block) => {
-                self.editor.selected_dig_block = Some(block);
+                // From the Dig Strips list, taken as a click in the view is.
+                self.select_dig_blocks(vec![block]);
                 self.invalidate_overlay();
                 Ok(())
             }

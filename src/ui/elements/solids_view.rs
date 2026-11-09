@@ -182,7 +182,7 @@ pub(crate) fn draw_rows(ui: &mut egui::Ui, editor: &mut EditorState, document: &
                 apply_selection(&mut editor.solids_view_selection, &rows, extend);
             }
             editor.selected_blast = blast.filter(|_| !editor.solids_view_selection.is_empty());
-            editor.selected_dig_block = None;
+            editor.selected_dig_blocks.clear();
         } else {
             apply_selection(tree.selection_mut(editor), &rows, extend);
         }
@@ -966,11 +966,20 @@ fn read_across<T: PartialEq>(values: Vec<T>, describe: impl Fn(&T) -> String) ->
 /// rows, and the figures below grow with the Field List - so the split between
 /// them is a seam the user sets rather than a height computed here.
 pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState, project: &UiProjectView, document: &Document) {
-    let rows: Vec<_> = editor
+    let blocks = &editor.selected_dig_block_infos;
+    let mut rows: Vec<_> = editor
         .solids_view_selection
         .iter()
         .filter_map(|row| document.solid(row.solid).map(|solid| (solid, row.band)))
         .collect();
+    // Blocks picked in the view with nothing chosen in the tree speak for
+    // themselves: each names its solid and the flitch it was cut from.
+    if rows.is_empty() {
+        rows = blocks
+            .iter()
+            .filter_map(|block| document.solid(block.solid).map(|solid| (solid, Some(block.flitch))))
+            .collect();
+    }
     let title = tr!("planning-properties");
     if rows.is_empty() {
         PropertyTable::new("solids_view_properties", rect, &title).show(ui, |table| {
@@ -1014,7 +1023,29 @@ pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edit
                 None,
             );
         }
-        if let Some(block) = &editor.selected_dig_block_info {
+        if let [_, _, ..] = blocks.as_slice() {
+            // Several blocks: how many, and what they add up to.
+            table.readonly(&tr!("solids-dig-blocks"), &tr!("solids-dig-blocks-selected", count = blocks.len()), None, None);
+            table.readonly(
+                &tr!("solids-plan-area"),
+                &format!("{:.1}", blocks.iter().map(|block| block.plan_area).sum::<f64>()),
+                Some("m²"),
+                None,
+            );
+            table.readonly(&tr!("solids-bench"), &read_rl(blocks.iter().map(|block| block.bench.base).collect()), Some("RL"), None);
+            table.readonly(&tr!("solids-flitch"), &read_rl(blocks.iter().map(|block| block.flitch.base).collect()), Some("RL"), None);
+            table.readonly(
+                &tr!("solids-block-volume"),
+                &blocks
+                    .iter()
+                    .map(|block| block.volume)
+                    .sum::<Option<f64>>()
+                    .map_or_else(|| String::from("—"), reserve_number),
+                Some("m³"),
+                None,
+            );
+        }
+        if let [block] = blocks.as_slice() {
             // The block names its own parents. A scheduler reads the same
             // record, so the panel and the export agree by construction.
             table.readonly(&tr!("solids-dig-block"), &block.name, None, None);
@@ -1108,38 +1139,40 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
         for field in document.reserve_fields() {
             if field.aggregation == crate::model::ReserveAggregation::Category {
                 let groups = reserves.and_then(|reserves| reserves.categories.get(&field.id));
-                table.readonly(
+                let Some(groups) = groups else {
+                    table.readonly(&field.name, "—", None, editor.solid_view_reserve_issues.get(&field.id).map(String::as_str));
+                    continue;
+                };
+                // A field, its categories and each one's figures, closed
+                // until opened: listed flat, every category repeated every
+                // other field and buried the totals under them.
+                table.branch(
+                    ("category field", field.id),
                     &field.name,
-                    &groups.map_or_else(|| String::from("—"), |groups| tr!("planning-reserve-categories", count = groups.len())),
+                    &tr!("planning-reserve-categories", count = groups.len()),
                     None,
-                    groups.is_none().then(|| editor.solid_view_reserve_issues.get(&field.id)).flatten().map(String::as_str),
-                );
-                if let Some(groups) = groups {
-                    for (category, group) in groups {
-                        let label = format!("{} · {}", field.name, category);
-                        // Named in the label rather than as a unit: a unit
-                        // that long leaves the figure no room.
-                        table.readonly(
-                            &format!("{label} · {}", tr!("planning-reserve-blocks")),
-                            &reserve_number(group.equivalent_blocks),
-                            None,
-                            None,
-                        );
-                        for value_field in document
-                            .reserve_fields()
-                            .iter()
-                            .filter(|field| field.aggregation != crate::model::ReserveAggregation::Category)
-                        {
-                            let value = group.numeric.get(&value_field.id).and_then(|total| total.value(value_field.aggregation));
-                            table.readonly(
-                                &format!("{label} · {}", value_field.name),
-                                &value.map_or_else(|| String::from("—"), reserve_number),
+                    |table| {
+                        for (category, group) in groups {
+                            table.branch(
+                                ("category", field.id, category.as_str()),
+                                category,
+                                &reserve_number(group.equivalent_blocks),
                                 None,
-                                None,
+                                |table| {
+                                    table.readonly(&tr!("planning-reserve-blocks"), &reserve_number(group.equivalent_blocks), None, None);
+                                    for value_field in document
+                                        .reserve_fields()
+                                        .iter()
+                                        .filter(|field| field.aggregation != crate::model::ReserveAggregation::Category)
+                                    {
+                                        let value = group.numeric.get(&value_field.id).and_then(|total| total.value(value_field.aggregation));
+                                        table.readonly(&value_field.name, &value.map_or_else(|| String::from("—"), reserve_number), None, None);
+                                    }
+                                },
                             );
                         }
-                    }
-                }
+                    },
+                );
             } else {
                 let total = reserves.and_then(|reserves| reserves.all.numeric.get(&field.id));
                 let value = total.and_then(|total| total.value(field.aggregation));

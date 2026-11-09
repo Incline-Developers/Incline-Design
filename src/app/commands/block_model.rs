@@ -615,13 +615,7 @@ impl<'a> App<'a> {
             if cancel.is_cancelled() {
                 anyhow::bail!(crate::app::jobs::Cancelled);
             }
-            let generated = crate::app::commands::triangulation::session::build_generated_triangulation(
-                name,
-                vertices,
-                faces,
-                TriSurfaceType::SolidClosed,
-                crate::model::triangulation::unique_edges,
-            )?;
+            let generated = crate::app::commands::triangulation::session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::SolidClosed, |_| Vec::new())?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
                 message: crate::i18n::tr!("cmd-block-model-generated-ore-mesh-from-block", name = model_name.to_string()),

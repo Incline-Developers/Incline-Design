@@ -683,7 +683,6 @@ common-fly-mode = Modo de vuelo
 common-generate-contour-lines = Generar curvas de nivel...
 common-hide-all = Ocultar todo
 common-hide-selection = Ocultar selección
-common-hole-id = ID de sondaje
 common-ignore = Ignorar
 common-import-csv-block-model = Importar CSV de modelo de bloques
 common-import-dxf = Importar DXF

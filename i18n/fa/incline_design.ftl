@@ -685,7 +685,6 @@ common-fly-mode = حالت پرواز
 common-generate-contour-lines = تولید خطوط منحنی میزان...
 common-hide-all = پنهان کردن همه
 common-hide-selection = پنهان کردن انتخاب
-common-hole-id = شناسه گمانه
 common-ignore = نادیده گرفتن
 common-import-csv-block-model = واردات CSV مدل بلوکی
 common-import-dxf = واردات DXF

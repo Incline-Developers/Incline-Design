@@ -727,7 +727,6 @@ common-fly-mode = Uçuş Modu
 common-generate-contour-lines = Kontur Çizgileri Oluştur...
 common-hide-all = Tümünü Gizle
 common-hide-selection = Seçimi Gizle
-common-hole-id = Delik Kimliği
 common-ignore = Yok say
 common-import-csv-block-model = CSV Blok Model İçe Aktar
 common-import-dxf = DXF İçe Aktar

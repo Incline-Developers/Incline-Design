@@ -135,6 +135,11 @@ pub(crate) enum JobKey {
     },
     /// Animate's video export encoding the frames it is sent.
     VideoExport,
+    /// The Dig Strips step's count of every flitch's dig blocks, `key`
+    /// standing for the ground and lines counted.
+    DigBlockCount {
+        key: u64,
+    },
     /// A job not tied to any tracked source (always applied).
     #[allow(dead_code)]
     Anonymous,
@@ -301,6 +306,9 @@ impl<'a> App<'a> {
             JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
             // Its result is a finished video, wanted whatever moved.
             JobKey::VideoExport => true,
+            // Held under its key, which a reader checks against the ground
+            // and lines it is counting.
+            JobKey::DigBlockCount { .. } => true,
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects

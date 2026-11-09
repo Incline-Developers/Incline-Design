@@ -105,6 +105,29 @@ pub(crate) struct StageDiagnostic {
     pub(crate) blocking: bool,
 }
 
+impl StageDiagnostic {
+    /// The line it is listed as: its entity first, where it has one.
+    pub(crate) fn line(&self) -> String {
+        match &self.entity {
+            Some(entity) => format!("{entity}: {}", self.message),
+            None => self.message.clone(),
+        }
+    }
+}
+
+/// What a stage that failed says in one line: the problem itself when there
+/// is only one, which is what a Run refused for it then repeats, or else how
+/// many there are.
+pub(crate) fn failed_message(diagnostics: &[StageDiagnostic]) -> String {
+    let mut blocking = diagnostics.iter().filter(|entry| entry.blocking);
+    let first = blocking.next();
+    let count: usize = usize::from(first.is_some()) + blocking.count();
+    match first {
+        Some(only) if count == 1 => only.line(),
+        _ => tr!("stage-failed-count", count = count),
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StageStatus {
     pub(crate) state: StageState,
@@ -347,7 +370,7 @@ impl PlanningPipeline {
                 status.message = None;
                 if blocking > 0 {
                     status.state = StageState::Failed;
-                    status.message = Some(tr!("stage-failed-count", count = blocking));
+                    status.message = Some(failed_message(&status.diagnostics));
                     self.running = None;
                     // A failed stage stops everything after it.
                     for later in std::mem::take(&mut self.queue) {
@@ -390,13 +413,7 @@ impl PlanningPipeline {
             // A stage that completed with a blocking diagnostic did not
             // reconcile; its numbers are not schedulable inventory.
             if let Some(blocking) = status.diagnostics.iter().find(|entry| entry.blocking) {
-                return Err(StageNotReady::Failed {
-                    stage,
-                    message: blocking
-                        .entity
-                        .clone()
-                        .map_or_else(|| blocking.message.clone(), |entity| format!("{entity}: {}", blocking.message)),
-                });
+                return Err(StageNotReady::Failed { stage, message: blocking.line() });
             }
         }
         Ok(self.status(SolidsStep::LAST).run_generation)
@@ -1058,9 +1075,13 @@ impl crate::app::App<'_> {
         // plan, the other reads the blocks through the record API and
         // reconciles them against the bench measurements.
         match outcome {
-            StageOutcome::Settled { diagnostics, .. } if stage == SolidsStep::DigStrips && !diagnostics.iter().any(|entry| entry.blocking) => StageOutcome::Settled {
-                entities: crate::app::commands::dig_strips::count_dig_block_faces(&solids, &self.solid_view_cache),
-                diagnostics,
+            // Counted in the background: a survey pit's flitches take seconds
+            // to divide, and this is checked with no page open.
+            StageOutcome::Settled { diagnostics, .. } if stage == SolidsStep::DigStrips && !diagnostics.iter().any(|entry| entry.blocking) => match self.dig_block_count(&solids) {
+                Some(entities) => StageOutcome::Settled { entities, diagnostics },
+                None => StageOutcome::Working {
+                    message: Some(tr!("stage-counting-dig-blocks")),
+                },
             },
             StageOutcome::Settled { mut diagnostics, entities } if stage == SolidsStep::Reserving && !diagnostics.iter().any(|entry| entry.blocking) => {
                 let records = match self.planning_dig_blocks() {

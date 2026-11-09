@@ -84,12 +84,29 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                             block.name.clone()
                         };
                         let area = super::solids_view::format_area(block.area);
-                        let (response, _) = grid_columns_row(ui, &FRACTIONS, &[&name, &area], editor.selected_dig_block == Some(id));
+                        let (response, _) = grid_columns_row(ui, &FRACTIONS, &[&name, &area], editor.selected_dig_blocks.contains(&id));
                         if response.clicked() {
                             commands.push(UiCommand::SelectDigBlock(id));
                         }
-                        context_menu_popup(&response, &name, |ui| {
-                            if super::blasting::outline_menu(ui, block, super::blasting::OutlineKind::DigBlock, document, commands) {
+                        // A block among several selected stands for them all.
+                        let several = editor.selected_dig_blocks.len() > 1 && editor.selected_dig_blocks.contains(&id);
+                        let title = if several {
+                            tr!("planning-dig-blocks-title", count = editor.selected_dig_blocks.len())
+                        } else {
+                            name.clone()
+                        };
+                        context_menu_popup(&response, &title, |ui| {
+                            let chosen = if several {
+                                let outlines: Vec<&crate::ui::state::BlastOutline> = editor
+                                    .dig_outlines
+                                    .iter()
+                                    .filter(|outline| editor.selected_dig_blocks.contains(&BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor)))
+                                    .collect();
+                                super::blasting::dig_blocks_menu(ui, &outlines, document, commands)
+                            } else {
+                                super::blasting::outline_menu(ui, block, super::blasting::OutlineKind::DigBlock, document, commands)
+                            };
+                            if chosen {
                                 ui.close();
                             }
                         });

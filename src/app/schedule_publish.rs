@@ -478,7 +478,12 @@ pub(crate) fn publish(
         extraction_s: completion.timings.extraction.as_secs_f64(),
         replay_s: completion.timings.replay.as_secs_f64(),
         publication_s: started.elapsed().as_secs_f64(),
-        backend: format!("{} · {}", completion.backend_version, completion.wrapper_version),
+        // The hourly schedule's solver has no wrapper of its own to name.
+        backend: if completion.wrapper_version.is_empty() {
+            completion.backend_version.clone()
+        } else {
+            format!("{} · {}", completion.backend_version, completion.wrapper_version)
+        },
         model_identity: meta.model_identity,
         candidates: meta.candidates,
         ground_sources: meta.ground_sources,

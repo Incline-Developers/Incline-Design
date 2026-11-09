@@ -731,7 +731,6 @@ common-fly-mode = Режим польоту
 common-generate-contour-lines = Створити лінії горизонталей...
 common-hide-all = Приховати все
 common-hide-selection = Приховати вибір
-common-hole-id = ID свердловини
 common-ignore = Ігнорувати
 common-import-csv-block-model = Імпорт блочної моделі CSV
 common-import-dxf = Імпорт DXF

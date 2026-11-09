@@ -562,7 +562,16 @@ fn capture_drill_blast(
         identities.blasts.push(captured);
     }
     if !unclearable.is_empty() {
-        notes.push(tr!("drill-blast-unclearable", blasts = unclearable.join(", ")));
+        // A short horizon leaves every deeper bench unclearable: the first
+        // few name the trouble, and a count says how far it goes.
+        const NAMED: usize = 10;
+        let named = unclearable.iter().take(NAMED).cloned().collect::<Vec<_>>().join(", ");
+        let blasts = if unclearable.len() > NAMED {
+            tr!("drill-blast-unclearable-more", blasts = named, more = (unclearable.len() - NAMED).to_string())
+        } else {
+            named
+        };
+        notes.push(tr!("drill-blast-unclearable", blasts = blasts));
     }
 
     // Machines and their bars.

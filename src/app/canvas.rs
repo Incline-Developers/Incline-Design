@@ -371,7 +371,8 @@ impl<'a> App<'a> {
             && self.editor.active_tool == ActiveTool::None
             && !pending_selection_click.is_some_and(|pick| matches!(pick.entity, SceneEntityId::Object(_)))
         {
-            self.editor.selected_dig_block = self.dig_block_at_cursor();
+            let block = self.dig_block_at_cursor();
+            self.select_dig_blocks(block.into_iter().collect());
             self.invalidate_overlay();
             return;
         }
@@ -514,6 +515,13 @@ impl<'a> App<'a> {
         // Box selection: left-to-right (end.x > start.x) = cross select (any vertex
         // inside box); right-to-left (end.x < start.x) = window select (all vertices inside).
         let cross_select = end.0 > start.0;
+        // The Reserves view selects nothing but its dig blocks.
+        if self.editor.is_solids_view() && self.editor.active_tool == ActiveTool::None {
+            let blocks = self.reserves_blocks_in_screen_rect(start, end, cross_select);
+            self.select_dig_blocks(blocks);
+            self.invalidate_overlay();
+            return;
+        }
         // Drill & Blast gives connectors first refusal on the marquee. If no
         // tie-in is taken, it falls back to holes one at a time; Survey's
         // marquee takes point clouds, and production's the design geometry
@@ -564,6 +572,17 @@ impl<'a> App<'a> {
         } else {
             Vec::new()
         };
+        // So do Dig Strips' blocks, beside the strip lines over them.
+        if self.editor.is_dig_strips_step() && self.editor.active_tool == ActiveTool::None {
+            let dig = self.dig_blocks_in_screen_rect(start, end, cross_select);
+            let held = self.modifiers.shift_key() || self.modifiers.control_key();
+            if held || !dig.is_empty() {
+                self.select_dig_blocks(dig);
+            } else {
+                self.editor.selected_dig_blocks.clear();
+            }
+            self.invalidate_overlay();
+        }
         if self.modifiers.shift_key() {
             for id in blocks {
                 let selected = &mut self.editor.haul_selected_blocks;
@@ -645,6 +664,28 @@ impl<'a> App<'a> {
                 }
             })
             .map(|b| b.id)
+            .collect()
+    }
+
+    /// Dig Strips' blocks a marquee takes: wholly inside it, or for a
+    /// crossing box any corner inside it, by their outlines.
+    fn dig_blocks_in_screen_rect(&self, start: (f32, f32), end: (f32, f32), cross_select: bool) -> Vec<crate::ui::state::BlastShapeRef> {
+        let Some(graphics) = self.graphics.as_ref() else { return Vec::new() };
+        let view_proj = graphics.view_proj();
+        let (min, max) = ((start.0.min(end.0), start.1.min(end.1)), (start.0.max(end.0), start.1.max(end.1)));
+        let inside = |p: (f32, f32)| p.0 >= min.0 && p.0 <= max.0 && p.1 >= min.1 && p.1 <= max.1;
+        self.editor
+            .dig_outlines
+            .iter()
+            .filter(|outline| {
+                let mut corners = outline.rings.iter().flatten().map(|point| graphics.world_to_window_px(&view_proj, *point));
+                if cross_select {
+                    corners.any(|p| p.is_some_and(inside))
+                } else {
+                    corners.all(|p| p.is_some_and(inside))
+                }
+            })
+            .map(|outline| crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor))
             .collect()
     }
 
