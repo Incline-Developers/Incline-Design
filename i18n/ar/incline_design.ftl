@@ -4772,6 +4772,7 @@ err-surf-solid-same-surface = يحتاج المجسّم إلى سطحين مخت
 err-surf-solid-design-missing = سطح التصميم غير موجود
 err-surf-solid-topography-missing = سطح التضاريس غير موجود
 err-surf-solid-bench-bands = يجب أن تكون نطاقات المصاطب أرقامًا منتهية، بترتيب تصاعدي وغير متداخلة
+err-surf-solid-no-faces = المجسّم بين السطحين لا يحتوي على أوجه
 err-surf-read-failed = فشلت قراءة { $name }: { $error }
 err-surf-no-faces = التثليث لا يحتوي على أوجه
 err-surf-project-required = أنشئ مشروعًا أو افتحه قبل استيراد البيانات أو رسمها أو توليدها

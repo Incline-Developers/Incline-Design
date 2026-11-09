@@ -147,7 +147,7 @@ pub(crate) fn build_solid_mesh(
     }
     let mut notes = Vec::new();
     let (vertices, faces, volume) = build_solid_between_surfaces_uncached(design, topography, region, &progress.phase(0.0, 0.9), &mut notes)?;
-    anyhow::ensure!(!faces.is_empty(), "Triangulation produced no faces");
+    anyhow::ensure!(!faces.is_empty(), crate::i18n::tr!("err-surf-solid-no-faces"));
     let mesh = std::sync::Arc::new(mesh_data::Triangulation::from_vertices_and_faces(vertices, faces)?);
     progress.set_fraction(1.0);
     // Its picking tree only when something picks it: the solid is cut into

@@ -4764,6 +4764,7 @@ err-surf-solid-same-surface = 솔리드에는 서로 다른 두 표면이 필요
 err-surf-solid-design-missing = 설계 표면을 찾을 수 없습니다
 err-surf-solid-topography-missing = 지형 표면을 찾을 수 없습니다
 err-surf-solid-bench-bands = 벤치 구간은 유한한 수여야 하고 오름차순이며 겹치지 않아야 합니다
+err-surf-solid-no-faces = 두 표면 사이의 솔리드에 면이 없습니다
 err-surf-read-failed = { $name }을(를) 읽지 못했습니다: { $error }
 err-surf-no-faces = 삼각망에 면이 없습니다
 err-surf-project-required = 데이터를 가져오거나 그리거나 생성하기 전에 프로젝트를 만들거나 여세요

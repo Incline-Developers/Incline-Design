@@ -4759,6 +4759,7 @@ err-surf-solid-same-surface = ソリッドには2つの異なる曲面が必要�
 err-surf-solid-design-missing = 設計曲面が見つかりません
 err-surf-solid-topography-missing = 地形曲面が見つかりません
 err-surf-solid-bench-bands = ベンチ帯は、有限の数値で、昇順かつ重ならないようにしてください
+err-surf-solid-no-faces = 2つの曲面の間のソリッドに面がありません
 err-surf-read-failed = { $name } を読み込めませんでした: { $error }
 err-surf-no-faces = 三角網に面がありません
 err-surf-project-required = データをインポート、作図、生成する前に、プロジェクトを作成するか開いてください

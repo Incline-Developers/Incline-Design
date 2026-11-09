@@ -4730,6 +4730,7 @@ err-surf-solid-same-surface = 实体需要两个不同的表面
 err-surf-solid-design-missing = 未找到设计表面
 err-surf-solid-topography-missing = 未找到地形表面
 err-surf-solid-bench-bands = 台阶带必须是有限数，按升序排列且不重叠
+err-surf-solid-no-faces = 两个表面之间的实体没有面
 err-surf-read-failed = 无法读取 { $name }：{ $error }
 err-surf-no-faces = 三角网没有面
 err-surf-project-required = 导入、绘制或生成数据前，请先创建或打开项目

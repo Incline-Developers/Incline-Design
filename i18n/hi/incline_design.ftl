@@ -4730,6 +4730,7 @@ err-surf-solid-same-surface = ठोस के लिए दो अलग सत
 err-surf-solid-design-missing = डिज़ाइन सतह नहीं मिली
 err-surf-solid-topography-missing = टोपोग्राफ़ी सतह नहीं मिली
 err-surf-solid-bench-bands = बेंच बैंड परिमित संख्याएँ, बढ़ते क्रम में और ओवरलैप न करने वाले होने चाहिए
+err-surf-solid-no-faces = दोनों सतहों के बीच के ठोस में कोई फलक नहीं है
 err-surf-read-failed = { $name } पढ़ने में विफल: { $error }
 err-surf-no-faces = त्रिभुजन में कोई फलक नहीं है
 err-surf-project-required = डेटा आयात करने, बनाने या जनरेट करने से पहले प्रोजेक्ट बनाएँ या खोलें

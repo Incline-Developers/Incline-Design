@@ -4730,6 +4730,7 @@ err-surf-solid-same-surface = Solid memerlukan dua permukaan yang berbeda
 err-surf-solid-design-missing = Permukaan desain tidak ditemukan
 err-surf-solid-topography-missing = Permukaan topografi tidak ditemukan
 err-surf-solid-bench-bands = Pita jenjang harus berupa bilangan hingga, berurutan naik, dan tidak tumpang tindih
+err-surf-solid-no-faces = Solid di antara kedua permukaan tidak memiliki sisi
 err-surf-read-failed = Gagal membaca { $name }: { $error }
 err-surf-no-faces = Triangulasi tidak memiliki sisi
 err-surf-project-required = Buat atau buka proyek sebelum mengimpor, menggambar, atau membuat data

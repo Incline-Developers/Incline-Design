@@ -4728,6 +4728,7 @@ err-surf-solid-same-surface = Un sólido necesita dos superficies distintas
 err-surf-solid-design-missing = No se encontró la superficie de diseño
 err-surf-solid-topography-missing = No se encontró la superficie de topografía
 err-surf-solid-bench-bands = Las bandas de banco deben ser números finitos, en orden ascendente y sin superponerse
+err-surf-solid-no-faces = El sólido entre las dos superficies no tiene caras
 err-surf-read-failed = No se pudo leer { $name }: { $error }
 err-surf-no-faces = La triangulación no tiene caras
 err-surf-project-required = Cree o abra un proyecto antes de importar, dibujar o generar datos

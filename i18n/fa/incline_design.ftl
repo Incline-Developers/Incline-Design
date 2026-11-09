@@ -4730,6 +4730,7 @@ err-surf-solid-same-surface = یک حجم به دو سطح متفاوت نیاز
 err-surf-solid-design-missing = سطح طراحی پیدا نشد
 err-surf-solid-topography-missing = سطح توپوگرافی پیدا نشد
 err-surf-solid-bench-bands = باندهای پله باید اعداد متناهی، به ترتیب صعودی و بدون همپوشانی باشند
+err-surf-solid-no-faces = حجم بین دو سطح وجهی ندارد
 err-surf-read-failed = خواندن { $name } ناموفق بود: { $error }
 err-surf-no-faces = مثلث‌بندی وجهی ندارد
 err-surf-project-required = پیش از درون‌ریزی، ترسیم یا تولید داده، یک پروژه بسازید یا باز کنید

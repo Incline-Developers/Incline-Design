@@ -4758,6 +4758,7 @@ err-surf-solid-same-surface = Một khối đặc cần hai bề mặt khác nha
 err-surf-solid-design-missing = Không tìm thấy bề mặt thiết kế
 err-surf-solid-topography-missing = Không tìm thấy bề mặt địa hình
 err-surf-solid-bench-bands = Các dải tầng phải là số hữu hạn, theo thứ tự tăng dần và không chồng nhau
+err-surf-solid-no-faces = Khối đặc giữa hai bề mặt không có mặt nào
 err-surf-read-failed = Không thể đọc { $name }: { $error }
 err-surf-no-faces = Lưới tam giác không có mặt nào
 err-surf-project-required = Hãy tạo hoặc mở một dự án trước khi nhập, vẽ hoặc tạo dữ liệu

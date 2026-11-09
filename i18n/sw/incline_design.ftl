@@ -4762,6 +4762,7 @@ err-surf-solid-same-surface = Kigumu kinahitaji nyuso mbili tofauti
 err-surf-solid-design-missing = Uso wa muundo haukupatikana
 err-surf-solid-topography-missing = Uso wa topografia haukupatikana
 err-surf-solid-bench-bands = Bendi za ngazi lazima ziwe nambari zenye kikomo, kwa mpangilio wa kupanda na zisipishane
+err-surf-solid-no-faces = Kigumu kati ya nyuso hizo mbili hakina nyuso
 err-surf-read-failed = Imeshindwa kusoma { $name }: { $error }
 err-surf-no-faces = Mtandao wa pembetatu hauna nyuso
 err-surf-project-required = Unda au fungua mradi kabla ya kuingiza, kuchora au kutengeneza data

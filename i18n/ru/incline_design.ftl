@@ -4851,6 +4851,7 @@ err-surf-solid-same-surface = Для тела нужны две разные п�
 err-surf-solid-design-missing = Проектная поверхность не найдена
 err-surf-solid-topography-missing = Поверхность топографии не найдена
 err-surf-solid-bench-bands = Полосы уступов должны быть конечными числами, идти по возрастанию и не перекрываться
+err-surf-solid-no-faces = У тела между двумя поверхностями нет граней
 err-surf-read-failed = Не удалось прочитать { $name }: { $error }
 err-surf-no-faces = В триангуляции нет граней
 err-surf-project-required = Создайте или откройте проект перед импортом, рисованием или созданием данных

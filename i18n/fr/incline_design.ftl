@@ -4731,6 +4731,7 @@ err-surf-solid-same-surface = Un solide a besoin de deux surfaces différentes
 err-surf-solid-design-missing = Surface de tracé introuvable
 err-surf-solid-topography-missing = Surface de topographie introuvable
 err-surf-solid-bench-bands = Les bandes de gradins doivent être des nombres finis, en ordre croissant et sans chevauchement
+err-surf-solid-no-faces = Le solide entre les deux surfaces n’a aucune face
 err-surf-read-failed = Échec de la lecture de { $name } : { $error }
 err-surf-no-faces = La triangulation n’a aucune face
 err-surf-project-required = Créez ou ouvrez un projet avant d’importer, de dessiner ou de générer des données

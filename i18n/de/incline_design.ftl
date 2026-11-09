@@ -4771,6 +4771,7 @@ err-surf-solid-same-surface = Ein Körper braucht zwei verschiedene Oberflächen
 err-surf-solid-design-missing = Entwurfsoberfläche nicht gefunden
 err-surf-solid-topography-missing = Topografieoberfläche nicht gefunden
 err-surf-solid-bench-bands = Strossenbänder müssen endliche Zahlen in aufsteigender Reihenfolge sein und dürfen sich nicht überlappen
+err-surf-solid-no-faces = Der Körper zwischen den beiden Oberflächen hat keine Flächen
 err-surf-read-failed = { $name } konnte nicht gelesen werden: { $error }
 err-surf-no-faces = Die Triangulation hat keine Flächen
 err-surf-project-required = Erstellen oder öffnen Sie ein Projekt, bevor Sie Daten importieren, zeichnen oder erzeugen

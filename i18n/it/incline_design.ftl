@@ -4772,6 +4772,7 @@ err-surf-solid-same-surface = Un solido richiede due superfici diverse
 err-surf-solid-design-missing = Superficie di progetto non trovata
 err-surf-solid-topography-missing = Superficie topografica non trovata
 err-surf-solid-bench-bands = Le fasce dei gradoni devono essere numeri finiti, in ordine crescente e non sovrapposti
+err-surf-solid-no-faces = Il solido tra le due superfici non ha facce
 err-surf-read-failed = Impossibile leggere { $name }: { $error }
 err-surf-no-faces = La triangolazione non ha facce
 err-surf-project-required = Crea o apri un progetto prima di importare, disegnare o generare dati

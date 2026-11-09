@@ -4996,6 +4996,7 @@ err-surf-solid-same-surface = A solid needs two different surfaces
 err-surf-solid-design-missing = Design surface not found
 err-surf-solid-topography-missing = Topography surface not found
 err-surf-solid-bench-bands = Bench bands must be finite numbers, in ascending order and not overlapping
+err-surf-solid-no-faces = The solid between the two surfaces has no faces
 ## app/commands/triangulation/session.rs
 err-surf-read-failed = Failed to read { $name }: { $error }
 err-surf-no-faces = The triangulation has no faces

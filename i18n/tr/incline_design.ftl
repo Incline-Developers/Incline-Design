@@ -4772,6 +4772,7 @@ err-surf-solid-same-surface = Bir katı için iki farklı yüzey gerekir
 err-surf-solid-design-missing = Tasarım yüzeyi bulunamadı
 err-surf-solid-topography-missing = Topografya yüzeyi bulunamadı
 err-surf-solid-bench-bands = Basamak bantları sonlu sayılar, artan sırada ve örtüşmeyen olmalıdır
+err-surf-solid-no-faces = İki yüzey arasındaki katının yüzü yok
 err-surf-read-failed = { $name } okunamadı: { $error }
 err-surf-no-faces = Üçgenlemede yüz yok
 err-surf-project-required = Veri içe aktarmadan, çizmeden veya üretmeden önce bir proje oluşturun veya açın

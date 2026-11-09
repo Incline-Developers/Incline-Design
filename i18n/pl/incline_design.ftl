@@ -4858,6 +4858,7 @@ err-surf-solid-same-surface = Bryła wymaga dwóch różnych powierzchni
 err-surf-solid-design-missing = Nie znaleziono powierzchni projektowej
 err-surf-solid-topography-missing = Nie znaleziono powierzchni topografii
 err-surf-solid-bench-bands = Pasma pięter muszą być liczbami skończonymi, w kolejności rosnącej i nienakładającymi się
+err-surf-solid-no-faces = Bryła między dwiema powierzchniami nie ma ścian
 err-surf-read-failed = Nie udało się odczytać { $name }: { $error }
 err-surf-no-faces = Triangulacja nie ma ścian
 err-surf-project-required = Utwórz lub otwórz projekt przed importem, rysowaniem lub generowaniem danych

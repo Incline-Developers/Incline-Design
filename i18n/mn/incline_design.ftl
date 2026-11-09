@@ -4781,6 +4781,7 @@ err-surf-solid-same-surface = Хатуу биед хоёр өөр гадаргу
 err-surf-solid-design-missing = Зургийн гадаргуу олдсонгүй
 err-surf-solid-topography-missing = Топографийн гадаргуу олдсонгүй
 err-surf-solid-bench-bands = Уступын зурвас төгсгөлөг тоо, өсөх дараалалтай, давхцахгүй байх ёстой
+err-surf-solid-no-faces = Хоёр гадаргуугийн хоорондох хатуу биед тал алга
 err-surf-read-failed = { $name }-ийг уншиж чадсангүй: { $error }
 err-surf-no-faces = Гурвалжлалд тал алга
 err-surf-project-required = Өгөгдөл оруулах, зурах эсвэл үүсгэхээсээ өмнө төсөл үүсгэх эсвэл нээнэ үү
