@@ -327,11 +327,28 @@ impl crate::app::App<'_> {
             });
         }
         self.editor.dig_outlines = outlines;
-        // A flitch the tree no longer lists can't stay picked in it.
+        // A flitch the tree no longer lists can't stay picked in it. The pick
+        // moves to the nearest flitch of its solid the tree still lists - the
+        // step opens on a bench's top flitch, which on a pit's top benches is
+        // often wholly in blasts under the minimum size - rather than leaving
+        // nothing picked and every flitch drawn at once.
         if let [row] = self.editor.solids_view_selection.as_slice()
-            && row.band.is_some_and(|band| band.is_flitch && excluded_flitches.contains(&(row.solid, band.base.to_bits())))
+            && let Some(band) = row.band.filter(|band| band.is_flitch && excluded_flitches.contains(&(row.solid, band.base.to_bits())))
         {
-            self.editor.solids_view_selection.clear();
+            let nearest = flitches
+                .iter()
+                .filter(|item| item.solid.id == row.solid && item.footprint.is_some() && !excluded_flitches.contains(&(item.solid.id, item.flitch.to_bits())))
+                .min_by(|a, b| (a.flitch - band.base).abs().total_cmp(&(b.flitch - band.base).abs()).then(a.flitch.total_cmp(&b.flitch)))
+                .map(|item| crate::ui::state::SolidsViewRow {
+                    solid: item.solid.id,
+                    band: Some(BenchSelection {
+                        base: item.flitch,
+                        top: item.top,
+                        is_flitch: true,
+                    }),
+                });
+            self.editor.solids_tree_reveal |= nearest.is_some();
+            self.editor.solids_view_selection = nearest.into_iter().collect();
         }
         self.editor.dig_excluded_flitches = excluded_flitches;
         self.editor.dig_outlines_key = Some(key);
