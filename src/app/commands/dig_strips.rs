@@ -1,12 +1,19 @@
 //! Flitch-owned strip drawings and the dig blocks formed jointly with blasts.
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::{
+    hash::{DefaultHasher, Hash, Hasher},
+    sync::Arc,
+};
 
 use glam::{DVec2, DVec3};
 
+use super::solids_view::ViewSolid;
 use crate::{
     model::{Object, arrangement},
     ui::state::{BenchSelection, BlastOutline},
 };
+
+/// Plan faces, each with a point inside it.
+pub(crate) type AnchoredFaces = Vec<(arrangement::Face, DVec2)>;
 
 /// The plan faces one flitch's ground is divided into, north-west first.
 ///
@@ -19,7 +26,7 @@ use crate::{
 /// Shared by the derivation the panel reads and the geometry job that cuts the
 /// flitch solid apart, so the blocks drawn and the blocks measured are the same
 /// blocks.
-pub(crate) fn dig_block_faces(footprint: &[Vec<DVec2>], strips: &[Object], bench_cuts: &[Object]) -> Vec<(arrangement::Face, DVec2)> {
+pub(crate) fn dig_block_faces(footprint: &[Vec<DVec2>], strips: &[Object], bench_cuts: &[Object]) -> AnchoredFaces {
     let mut faces: Vec<_> = arrangement::subdivide(footprint, &dig_block_cuts(strips, bench_cuts))
         .into_iter()
         .filter_map(|face| arrangement::representative_point(&face).map(|anchor| (face, anchor)))
@@ -28,6 +35,39 @@ pub(crate) fn dig_block_faces(footprint: &[Vec<DVec2>], strips: &[Object], bench
     // neighbours are redrawn.
     faces.sort_by(|a, b| b.1.y.total_cmp(&a.1.y).then_with(|| a.1.x.total_cmp(&b.1.x)));
     faces
+}
+
+/// [`dig_block_faces`] for the committed body `cache` holds, worked out once
+/// for the lines given and kept with the body: opening Dig Strips again, or
+/// editing one flitch's strips, derives nothing for the other flitches.
+pub(crate) fn cached_dig_block_faces(cache: &ViewSolid, flitch: f64, footprint: &[Vec<DVec2>], strips: &[Object], bench_cuts: &[Object]) -> Arc<AnchoredFaces> {
+    let derive = || dig_block_faces(footprint, strips, bench_cuts);
+    cache
+        .flitch_faces(flitch, true, lines_key(&[strips, bench_cuts]), derive)
+        .unwrap_or_else(|| Arc::new(derive()))
+}
+
+/// A flitch's ground divided by its bench's cuts alone, so its part of each
+/// blast, with a point inside each; kept like [`cached_dig_block_faces`].
+pub(crate) fn cached_blast_faces(cache: &ViewSolid, flitch: f64, footprint: &[Vec<DVec2>], bench_cuts: &[Object]) -> Arc<AnchoredFaces> {
+    let derive = || {
+        arrangement::subdivide(footprint, &arrangement::cut_lines(bench_cuts))
+            .into_iter()
+            .filter_map(|face| arrangement::representative_point(&face).map(|anchor| (face, anchor)))
+            .collect()
+    };
+    cache.flitch_faces(flitch, false, lines_key(&[bench_cuts]), derive).unwrap_or_else(|| Arc::new(derive()))
+}
+
+/// Stands for the geometry of each list of lines, in order.
+pub(crate) fn lines_key(lines: &[&[Object]]) -> u64 {
+    let mut key = DefaultHasher::new();
+    for (index, cuts) in lines.iter().enumerate() {
+        index.hash(&mut key);
+        cuts.len().hash(&mut key);
+        cuts.iter().for_each(|cut| cut.geometry_hash().hash(&mut key));
+    }
+    key.finish()
 }
 
 /// The lines a flitch's ground is divided along: its own strips and its
@@ -78,15 +118,15 @@ pub(crate) fn dig_block_plans(faces: &[(arrangement::Face, DVec2)], cuts: &[Vec<
 /// The whole of the Dig Strips step's own work: the same faces the step draws
 /// and Reserving later cuts, counted without cutting anything, so a strip
 /// edit settles at once.
-pub(crate) fn count_dig_block_faces(solids: &[crate::model::Solid], caches: &std::collections::HashMap<crate::model::SolidId, super::solids_view::ViewSolid>) -> usize {
+pub(crate) fn count_dig_block_faces(solids: &[crate::model::Solid], caches: &std::collections::HashMap<crate::model::SolidId, ViewSolid>) -> usize {
     use rayon::prelude::*;
     // A survey's flitch ground runs to thousands of points a ring, and finding
-    // a point inside each face is most of the work: each flitch is counted
+    // a point inside each face is most of the work: each flitch is divided
     // once for its ground and lines, and the flitches side by side.
     let mut flitches = Vec::new();
     for solid in solids {
         let Some(cache) = caches.get(&solid.id) else { continue };
-        let (Some(footprints), Some(attempt)) = (cache.flitch_footprints(), cache.body_attempt()) else {
+        let Some(footprints) = cache.flitch_footprints() else {
             continue;
         };
         for bench in solid.benching.benches() {
@@ -96,21 +136,13 @@ pub(crate) fn count_dig_block_faces(solids: &[crate::model::Solid], caches: &std
                     continue;
                 };
                 let strips = solid.blasting.drawing(flitch.base, true).map_or(&[][..], |drawing| &drawing.cuts);
-                let mut key = DefaultHasher::new();
-                attempt.hash(&mut key);
-                flitch.base.to_bits().hash(&mut key);
-                for (lines, cuts) in [(0u8, strips), (1u8, bench_cuts)] {
-                    lines.hash(&mut key);
-                    cuts.len().hash(&mut key);
-                    cuts.iter().for_each(|cut| cut.geometry_hash().hash(&mut key));
-                }
-                flitches.push((cache, key.finish(), footprint, strips, bench_cuts));
+                flitches.push((cache, flitch.base, footprint, strips, bench_cuts));
             }
         }
     }
     flitches
         .into_par_iter()
-        .map(|(cache, key, footprint, strips, bench_cuts)| cache.dig_face_count(key, || dig_block_faces(footprint, strips, bench_cuts).len()))
+        .map(|(cache, flitch, footprint, strips, bench_cuts)| cached_dig_block_faces(cache, flitch, footprint, strips, bench_cuts).len())
         .sum()
 }
 
@@ -122,8 +154,10 @@ impl crate::app::App<'_> {
         // earlier step's benches.
         if !self.editor.is_dig_strips_step() {
             if !self.editor.dig_outlines.is_empty() {
-                self.editor.dig_outlines.clear();
-                self.editor.dig_outlines_key = None;
+                // Put aside rather than dropped: coming back to the step
+                // unchanged shows them again without deriving anything.
+                let outlines = std::mem::take(&mut self.editor.dig_outlines);
+                self.editor.dig_outlines_parked = self.editor.dig_outlines_key.take().map(|key| (key, outlines));
                 self.invalidate_overlay();
             }
             return;
@@ -148,11 +182,20 @@ impl crate::app::App<'_> {
         if self.editor.dig_outlines_key == Some(key) {
             return;
         }
+        if let Some((parked, outlines)) = self.editor.dig_outlines_parked.take()
+            && parked == key
+        {
+            self.editor.dig_outlines = outlines;
+            self.editor.dig_outlines_key = Some(key);
+            self.invalidate_overlay();
+            return;
+        }
         // Deriving a flitch's blocks finds a point inside each one, and a
         // survey's flitch ground runs to thousands of points a ring: the
         // flitches are derived side by side, then listed in order.
         struct Flitch<'a> {
             solid: &'a crate::model::Solid,
+            cache: &'a ViewSolid,
             bench: f64,
             flitch: f64,
             top: f64,
@@ -164,7 +207,7 @@ impl crate::app::App<'_> {
         for solid in document.solids() {
             // The flitch ground, which Benching committed: the strips drawn on
             // it are this step's own input, not the blocks cut out of them.
-            let Some(footprints) = self.solid_view_cache.get(&solid.id).and_then(super::solids_view::ViewSolid::flitch_footprints) else {
+            let Some((cache, footprints)) = self.solid_view_cache.get(&solid.id).and_then(|cache| Some((cache, cache.flitch_footprints()?))) else {
                 continue;
             };
             for bench in solid.benching.benches() {
@@ -180,6 +223,7 @@ impl crate::app::App<'_> {
                 for flitch in &bench.flitches {
                     flitches.push(Flitch {
                         solid,
+                        cache,
                         bench: bench.base,
                         flitch: flitch.base,
                         top: flitch.top(),
@@ -191,7 +235,7 @@ impl crate::app::App<'_> {
             }
         }
         let selection = &self.editor.solids_view_selection;
-        let derived: Vec<Option<Vec<(arrangement::Face, DVec2)>>> = {
+        let derived: Vec<Option<Arc<AnchoredFaces>>> = {
             use rayon::prelude::*;
             flitches
                 .par_iter()
@@ -201,10 +245,9 @@ impl crate::app::App<'_> {
                     let gone = item.solid.exclusions.bench_excluded(item.bench)
                         || (!item.excluded_blasts.is_empty()
                             && item.footprint.is_some_and(|footprint| {
-                                arrangement::subdivide(footprint, &arrangement::cut_lines(item.bench_cuts))
+                                cached_blast_faces(item.cache, item.flitch, footprint, item.bench_cuts)
                                     .iter()
-                                    .filter_map(|face| arrangement::representative_point(face))
-                                    .all(|anchor| item.excluded_blasts.iter().any(|rings| arrangement::point_in_face(rings, anchor)))
+                                    .all(|(_, anchor)| item.excluded_blasts.iter().any(|rings| arrangement::point_in_face(rings, *anchor)))
                             }));
                     if gone {
                         return None;
@@ -217,9 +260,9 @@ impl crate::app::App<'_> {
                     let faces = match item.footprint {
                         Some(footprint) if super::solids_view::selected(selection, item.solid.id, Some(band)) => {
                             let drawing = item.solid.blasting.drawing(item.flitch, true);
-                            dig_block_faces(footprint, drawing.map_or(&[][..], |drawing| &drawing.cuts), item.bench_cuts)
+                            cached_dig_block_faces(item.cache, item.flitch, footprint, drawing.map_or(&[][..], |drawing| &drawing.cuts), item.bench_cuts)
                         }
-                        _ => Vec::new(),
+                        _ => Arc::default(),
                     };
                     Some(faces)
                 })
@@ -249,7 +292,8 @@ impl crate::app::App<'_> {
                 })
                 .collect();
             let first = outlines.len();
-            for (index, (face, anchor)) in faces.into_iter().enumerate() {
+            for (index, (face, anchor)) in faces.iter().enumerate() {
+                let anchor = *anchor;
                 let blast = blasts.iter().find(|(_, _, rings)| arrangement::point_in_face(rings, anchor));
                 // Ground Blasting took out of mining is gone here, as
                 // its solids are; only a block excluded on its own
@@ -257,9 +301,9 @@ impl crate::app::App<'_> {
                 if solid.exclusions.bench_excluded(item.bench) || blast.is_some_and(|(_, excluded, _)| *excluded) {
                     continue;
                 }
-                let excluded = solid.exclusions.block_excluded(item.flitch, &face);
+                let excluded = solid.exclusions.block_excluded(item.flitch, face);
                 let blast = blast.map(|(name, _, _)| (*name).to_owned());
-                let area = arrangement::face_area(&face);
+                let area = arrangement::face_area(face);
                 outlines.push(BlastOutline {
                     solid: solid.id,
                     bench_base: item.flitch,
@@ -269,7 +313,7 @@ impl crate::app::App<'_> {
                     area,
                     blast,
                     excluded,
-                    rings: face.into_iter().map(|ring| ring.into_iter().map(|p| DVec3::new(p.x, p.y, item.top)).collect()).collect(),
+                    rings: face.iter().map(|ring| ring.iter().map(|p| DVec3::new(p.x, p.y, item.top)).collect()).collect(),
                 });
             }
             // Grouped by blast, numbered blasts in number order, as the

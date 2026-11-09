@@ -2398,6 +2398,9 @@ pub(crate) struct EditorState {
     pub(crate) blasting_outlines: Vec<BlastOutline>,
     pub(crate) dig_outlines: Vec<BlastOutline>,
     pub(crate) dig_outlines_key: Option<u64>,
+    /// The dig outlines and their key from the last visit to Dig Strips,
+    /// put back on the next one if nothing they depend on has changed.
+    pub(crate) dig_outlines_parked: Option<(u64, Vec<BlastOutline>)>,
     /// How far apart the cut lines in view on a Blasting or Dig Strips step
     /// typically run, in metres, so they fade together as the camera pulls
     /// back rather than merging into ink. Mirrored out of `App` with the
@@ -3703,6 +3706,7 @@ impl EditorState {
         self.selected_dig_blocks.clear();
         self.dig_outlines.clear();
         self.dig_outlines_key = None;
+        self.dig_outlines_parked = None;
         self.dig_excluded_flitches.clear();
         self.blasting_outlines.clear();
         self.blast_labels.clear();
@@ -4175,6 +4179,7 @@ impl EditorState {
             dig_outlines: Vec::new(),
             planning_cut_spacing_m: 0.0,
             dig_outlines_key: None,
+            dig_outlines_parked: None,
             dig_excluded_flitches: Default::default(),
             selected_dig_blocks: Vec::new(),
             solid_preview_pick: None,

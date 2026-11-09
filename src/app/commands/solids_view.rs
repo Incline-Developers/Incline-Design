@@ -363,10 +363,40 @@ pub(crate) struct ViewSolid {
     bench_reserves: Stage<ReserveProduct>,
     reserves: Stage<ReserveProduct>,
     measured: Option<Arc<MeasuredReserves>>,
-    /// How many dig block faces each flitch's ground is divided into, by the
-    /// key [`super::dig_strips::count_dig_block_faces`] gives it, so a strip
-    /// edit counts again only the flitch it touched.
-    dig_face_counts: std::sync::Mutex<HashMap<u64, usize>>,
+    /// The plan faces each flitch's ground is divided into, kept so a strip
+    /// edit derives again only the flitch it touched, and so opening Dig
+    /// Strips again finds every flitch's blocks already worked out.
+    flitch_faces: std::sync::Mutex<FlitchFaces>,
+}
+
+/// Plan faces derived from one committed body's flitch ground, with an
+/// anchor inside each.
+#[derive(Default)]
+struct FlitchFaces {
+    /// The body attempt the faces were divided from: see
+    /// [`ViewSolid::body_attempt`]. A new body clears the rest.
+    attempt: Option<u64>,
+    /// By flitch base bits and whether the flitch's own strips divide it as
+    /// well as its bench's cuts: the key of the lines it was divided by, and
+    /// the faces. One entry a flitch, so an edit replaces the old faces.
+    faces: HashMap<(u64, bool), (u64, Arc<super::dig_strips::AnchoredFaces>)>,
+    /// Dig Strips' flat plan of each flitch's ground still in mining, by
+    /// flitch base bits: the key of what it was cut from, and the mesh, or
+    /// `None` where nothing is left.
+    flat: HashMap<u64, (u64, Option<OpenTriangulation>)>,
+}
+
+impl FlitchFaces {
+    /// Starts over for a new body: everything held was cut from the last one.
+    fn for_attempt(&mut self, attempt: u64) -> &mut Self {
+        if self.attempt != Some(attempt) {
+            *self = Self {
+                attempt: Some(attempt),
+                ..Self::default()
+            };
+        }
+        self
+    }
 }
 
 impl ViewSolid {
@@ -440,21 +470,55 @@ impl ViewSolid {
         self.body.product().map(|body| &body.flitch_footprints)
     }
 
-    /// The number of dig block faces under `key`, counted by `count` the
-    /// first time. `key` has to say which body's ground was divided:
-    /// see [`Self::body_attempt`].
-    pub(crate) fn dig_face_count(&self, key: u64, count: impl FnOnce() -> usize) -> usize {
-        if let Some(count) = self.dig_face_counts.lock().expect("dig face counts").get(&key) {
-            return *count;
+    /// The faces the committed body's flitch at `flitch` is divided into by
+    /// the lines `key` stands for, derived by `derive` the first time: with
+    /// `strips`, the flitch's dig blocks; without, its bench's blasts.
+    /// `None` until a body is committed.
+    pub(crate) fn flitch_faces(
+        &self,
+        flitch: f64,
+        strips: bool,
+        key: u64,
+        derive: impl FnOnce() -> super::dig_strips::AnchoredFaces,
+    ) -> Option<Arc<super::dig_strips::AnchoredFaces>> {
+        let attempt = self.body_attempt()?;
+        let slot = (flitch.to_bits(), strips);
+        if let Some((held, faces)) = self.flitch_faces.lock().expect("flitch faces").for_attempt(attempt).faces.get(&slot)
+            && *held == key
+        {
+            return Some(faces.clone());
         }
-        let counted = count();
-        let mut counts = self.dig_face_counts.lock().expect("dig face counts");
-        // Edits made over a long session would otherwise pile up.
-        if counts.len() >= 4096 {
-            counts.clear();
+        // Derived outside the lock, so flitches are divided side by side.
+        let faces = Arc::new(derive());
+        self.flitch_faces
+            .lock()
+            .expect("flitch faces")
+            .for_attempt(attempt)
+            .faces
+            .insert(slot, (key, faces.clone()));
+        Some(faces)
+    }
+
+    /// Dig Strips' flat mesh of the flitch at `flitch`, cut from what `key`
+    /// stands for, built by `build` the first time; held like
+    /// [`Self::flitch_faces`].
+    fn flat_ground(&self, flitch: f64, key: u64, build: impl FnOnce() -> Option<OpenTriangulation>) -> Option<OpenTriangulation> {
+        let Some(attempt) = self.body_attempt() else {
+            return build();
+        };
+        if let Some((held, mesh)) = self.flitch_faces.lock().expect("flitch faces").for_attempt(attempt).flat.get(&flitch.to_bits())
+            && *held == key
+        {
+            return mesh.clone();
         }
-        counts.insert(key, counted);
-        counted
+        let mesh = build();
+        self.flitch_faces
+            .lock()
+            .expect("flitch faces")
+            .for_attempt(attempt)
+            .flat
+            .insert(flitch.to_bits(), (key, mesh.clone()));
+        mesh
     }
 
     /// Unique to the attempt that built the committed body.
@@ -1022,7 +1086,7 @@ impl crate::app::App<'_> {
                     partition: Stage::default(),
                     carved: None,
                     measured: None,
-                    dig_face_counts: std::sync::Mutex::default(),
+                    flitch_faces: std::sync::Mutex::default(),
                     bench_reserves: Stage::default(),
                     reserves: Stage::default(),
                 },
@@ -1823,6 +1887,21 @@ impl crate::app::App<'_> {
         let mut reserve_complete = true;
         let mut errors = Vec::new();
         let has_fields = self.workspace.active_document().is_some_and(|doc| !doc.reserve_fields().is_empty());
+        if dig_strips && !blast_sequencing {
+            // A survey's flitch ground runs to thousands of points a ring:
+            // what Dig Strips draws of each flitch is cut and laid flat side
+            // by side, for the loop below to find held.
+            let flitches: Vec<(&Solid, &ViewSolid, &SolidPart)> = solids
+                .iter()
+                .filter_map(|solid| Some((solid, self.solid_view_cache.get(&solid.id)?)))
+                .flat_map(|(solid, cache)| cache.display_parts(demand).unwrap_or_default().iter().map(move |part| (solid, cache, part)))
+                .filter(|(solid, _, part)| selected(&view_selection, solid.id, Some(part.band.selection)))
+                .filter(|(solid, _, part)| !hidden.as_ref().is_some_and(|hidden| hidden.hides(solid.id, part.bench, part.band.selection, part.blast)))
+                .collect();
+            flitches.into_par_iter().for_each(|(solid, cache, part)| {
+                dig_strips_ground(solid, cache, part);
+            });
+        }
         for solid in solids {
             let wanted = selected_solid(&view_selection, solid.id);
             let Some(cache) = self.solid_view_cache.get(&solid.id) else {
@@ -1908,7 +1987,7 @@ impl crate::app::App<'_> {
                 // flitch with excluded blasts in its bench is drawn as the
                 // ground it still has to dig, flat in plan as the step is
                 // viewed.
-                let ground = dig_strips.then(|| in_mining_ground(solid, cache, part)).flatten();
+                let ground = dig_strips.then(|| dig_strips_ground(solid, cache, part)).flatten();
                 // Selecting a blast narrows what is shown, not what is built.
                 if !benches_only
                     && let Some(blast) = selected_blast.filter(|blast| blast.solid == solid.id)
@@ -1931,11 +2010,9 @@ impl crate::app::App<'_> {
                     });
                 }
                 let counted = selected_blocks.is_empty() || is_selected_block;
-                let mut mesh = match &ground {
-                    Some(faces) => match flat_ground(&part.mesh, faces, part.band.selection.top) {
-                        Some(mesh) => mesh,
-                        None => continue,
-                    },
+                let mut mesh = match ground {
+                    Some(Some(mesh)) => mesh,
+                    Some(None) => continue,
                     None => part.mesh.clone(),
                 };
                 if blast_sequencing {
@@ -2770,32 +2847,48 @@ fn carve_level(level: &Level, earlier: &mut EarlierLevel, cancel: &crate::app::j
     Ok(carved)
 }
 
-/// The ground of a flitch part still in mining, where its bench has blasts
-/// out of mining - taken out by hand, under the minimum blast size, or with
-/// the whole bench. `None` when nothing of it is excluded, or the blasts are
-/// not worked out yet, and the part is drawn as it stands.
-fn in_mining_ground(solid: &Solid, cache: &ViewSolid, part: &SolidPart) -> Option<Vec<Face>> {
+/// What Dig Strips draws of a flitch part whose bench has blasts out of
+/// mining - taken out by hand, under the minimum blast size, or with the
+/// whole bench: its ground still in mining, flat in plan, or `Some(None)`
+/// where none is left. `None` when nothing of it is excluded, or the blasts
+/// are not worked out yet, and the part is drawn as it stands.
+///
+/// Held by the solid's view cache, so going back to the step lays nothing out
+/// again.
+fn dig_strips_ground(solid: &Solid, cache: &ViewSolid, part: &SolidPart) -> Option<Option<OpenTriangulation>> {
     let exclusions = &solid.exclusions;
     let bench = part.bench.base;
     if exclusions.bench_excluded(bench) {
-        return Some(Vec::new());
+        return Some(None);
     }
-    let excluded: Vec<&BlastFace> = cache
-        .blast_faces()?
+    let blast_faces = cache.blast_faces()?;
+    let excluded: Vec<usize> = blast_faces
         .iter()
-        .filter(|face| (face.bench.base - bench).abs() < 1e-6 && exclusions.blast_face_excluded(face.bench.base, &face.face))
+        .enumerate()
+        .filter(|(_, face)| (face.bench.base - bench).abs() < 1e-6 && exclusions.blast_face_excluded(face.bench.base, &face.face))
+        .map(|(index, _)| index)
         .collect();
     if excluded.is_empty() {
         return None;
     }
-    let footprint = cache.flitch_footprints()?.get(&part.band.selection.base.to_bits())?;
-    let cuts = solid.blasting.bench(bench).map(|entry| arrangement::cut_lines(&entry.cuts)).unwrap_or_default();
-    Some(
-        arrangement::subdivide(footprint, &cuts)
-            .into_iter()
-            .filter(|face| arrangement::representative_point(face).is_some_and(|point| !excluded.iter().any(|blast| arrangement::point_in_face(&blast.face, point))))
-            .collect(),
-    )
+    let flitch = part.band.selection.base;
+    let footprint = cache.flitch_footprints()?.get(&flitch.to_bits())?;
+    let cuts = solid.blasting.bench(bench).map(|entry| entry.cuts.as_slice()).unwrap_or_default();
+    // The blasts are the bench's cuts' own faces, so the cuts and which of
+    // those faces are out say everything the ground is cut from.
+    let mut key = DefaultHasher::new();
+    super::dig_strips::lines_key(&[cuts]).hash(&mut key);
+    blast_faces.len().hash(&mut key);
+    excluded.hash(&mut key);
+    let build = || {
+        let ground: Vec<Face> = super::dig_strips::cached_blast_faces(cache, flitch, footprint, cuts)
+            .iter()
+            .filter(|(_, point)| !excluded.iter().any(|&blast| arrangement::point_in_face(&blast_faces[blast].face, *point)))
+            .map(|(face, _)| face.clone())
+            .collect();
+        flat_ground(&part.mesh, &ground, part.band.selection.top)
+    };
+    Some(cache.flat_ground(flitch, key.finish(), build))
 }
 
 /// Plan faces as one flat, outlined mesh at `z`, in `source`'s colours.
