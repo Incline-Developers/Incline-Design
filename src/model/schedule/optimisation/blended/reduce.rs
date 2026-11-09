@@ -27,7 +27,7 @@ use super::{
     input::{BlendInput, ConditionalValue},
     replay::{BlendSolution, MovementRow},
 };
-use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, MaterialId, MovementCandidate, SourceId};
+use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, MaterialId, SourceId};
 
 pub(crate) struct Reduced {
     pub(crate) input: BlendInput,
@@ -46,7 +46,7 @@ impl Reduced {
 
         // Duplicates: the first of each set of identical candidates stands
         // for all of them.
-        let mut first: HashMap<&str, usize> = HashMap::with_capacity(names.len());
+        let mut first: HashMap<&str, usize, foldhash::fast::FixedState> = HashMap::with_capacity_and_hasher(names.len(), Default::default());
         let canonical: Vec<usize> = names.iter().enumerate().map(|(index, name)| *first.entry(name.as_str()).or_insert(index)).collect();
         drop(first);
 
@@ -75,18 +75,17 @@ impl Reduced {
         // The route each of those takes: its name with the material left out.
         let routed: Vec<usize> = by_block.values().flatten().copied().collect();
         let mut route_of: Vec<Option<String>> = vec![None; input.movements.len()];
+        // Its name with the material read as 0, which is the name of the same
+        // candidate with `material: MaterialId(0)`: no other field, nested
+        // ones included, is called `material`.
         let routes: Vec<(usize, String)> = routed
             .par_iter()
             .map(|&index| {
-                let candidate = &input.movements[index];
-                let route = format!(
-                    "{:?}",
-                    MovementCandidate {
-                        material: MaterialId(0),
-                        ..candidate.clone()
-                    }
-                );
-                (index, route)
+                let name = &names[index];
+                let field = "material: MaterialId(";
+                let start = name.find(field).expect("a candidate's name holds its material") + field.len();
+                let end = start + name[start..].find(')').expect("a material's name is closed");
+                (index, format!("{}0{}", &name[..start], &name[end..]))
             })
             .collect();
         for (index, route) in routes {
@@ -115,7 +114,7 @@ impl Reduced {
             let mut dropped = BTreeSet::new();
             for positions in groups.values().filter(|positions| positions.len() > 1) {
                 let representative = source.material[positions[0]].material;
-                let routes: HashMap<&str, usize> = by_block[&(block, representative)].iter().map(|&index| (route(index), index)).collect();
+                let routes: HashMap<&str, usize, foldhash::fast::FixedState> = by_block[&(block, representative)].iter().map(|&index| (route(index), index)).collect();
                 for &position in &positions[1..] {
                     for &index in &by_block[&(block, source.material[position].material)] {
                         stand_in[index] = routes[route(index)];
