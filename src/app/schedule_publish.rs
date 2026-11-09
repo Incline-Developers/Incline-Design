@@ -15,7 +15,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use rayon::slice::ParallelSliceMut;
+use rayon::{
+    iter::{IntoParallelRefIterator, ParallelIterator},
+    slice::ParallelSliceMut,
+};
 
 use crate::{
     app::{commands::schedule_capture::CaptureIdentities, jobs::CancelFlag, schedule_solve::ScheduleCompletion},
@@ -88,6 +91,16 @@ impl<'a> Lookup<'a> {
             SourceId::Stockpile(pile) => self.piles.get(&pile).map(|pile| WorkSource::Stockpile(*pile)),
         }
     }
+}
+
+/// What publication reads of one candidate, in project terms.
+struct Resolved<'a> {
+    agent: Option<LoaderAgentId>,
+    source: Option<WorkSource>,
+    destination: Option<ProjectDestinationId>,
+    truck: Option<trucking::TruckClassId>,
+    fractions: &'a [f64],
+    per_tonne: Option<f64>,
 }
 
 /// When each execution cell starts and how long it lasts, from the solved
@@ -205,6 +218,25 @@ pub(crate) fn publish(
     // (agent, bar, activity, source, interval, segment) -> (start, end, tonnes)
     let mut cells: BTreeMap<ExecutionCellKey, (f64, f64, f64)> = BTreeMap::new();
     let cycles: Vec<_> = input.movements.iter().map(|c| std::sync::Arc::new(c.cycle)).collect();
+    // What a row reads of its candidate, resolved once for each candidate
+    // rather than for each row: a year of hourly dispatch has millions of
+    // rows over a few hundred thousand candidates, and each is a search.
+    let resolved: Vec<Resolved<'_>> = input
+        .movements
+        .par_iter()
+        .map(|candidate| Resolved {
+            agent: lookup.loaders.get(&candidate.loader).copied(),
+            source: lookup.source(candidate.source),
+            destination: lookup.destinations.get(&candidate.destination).copied(),
+            truck: lookup.trucks.get(&candidate.truck).copied(),
+            fractions: input.grades.fractions(candidate.material).unwrap_or_default(),
+            per_tonne: candidate.value_per_tonne().ok(),
+        })
+        .collect();
+    let mut conditional_of: HashMap<usize, Vec<&_>> = HashMap::new();
+    for payment in &input.conditional_values {
+        conditional_of.entry(payment.candidate).or_default().push(payment);
+    }
     let mut deliveries: Vec<Delivery> = Vec::with_capacity(solution.movements.len());
     let mut dug: BTreeMap<GroundId, (f64, f64)> = BTreeMap::new();
     for (index, row) in solution.movements.iter().enumerate() {
@@ -232,13 +264,11 @@ pub(crate) fn publish(
             SourceId::Stockpile(_) => (start_h, end_h),
         };
         let bar = *lookup.tasks.get(&task).ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-bar"))?;
-        let agent = *lookup.loaders.get(&candidate.loader).ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-loader"))?;
-        let source = lookup.source(candidate.source).ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-source"))?;
-        let destination = *lookup
-            .destinations
-            .get(&candidate.destination)
-            .ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-destination"))?;
-        let truck = *lookup.trucks.get(&candidate.truck).ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-truck"))?;
+        let held = &resolved[row.candidate];
+        let agent = held.agent.ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-loader"))?;
+        let source = held.source.ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-source"))?;
+        let destination = held.destination.ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-destination"))?;
+        let truck = held.truck.ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-truck"))?;
         let activity = match candidate.activity {
             Activity::Dig => ProjectActivity::Dig,
             Activity::Reclaim => ProjectActivity::Reclaim,
@@ -246,7 +276,7 @@ pub(crate) fn publish(
         // Contained quantity: a dig carries its captured material; a reclaim
         // carries the blend the replay says this interval actually drew.
         let contained: Vec<f64> = match candidate.source {
-            SourceId::Ground(_) => (0..grades).map(|g| row.tonnes_t * input.grades.fraction(candidate.material, g).unwrap_or(0.0)).collect(),
+            SourceId::Ground(_) => (0..grades).map(|g| row.tonnes_t * held.fractions.get(g).copied().unwrap_or(0.0)).collect(),
             SourceId::Stockpile(pile) => {
                 let blend = replay
                     .pile_intervals
@@ -258,14 +288,14 @@ pub(crate) fn publish(
         };
         // Movement value at the authored boundaries, exactly as the replay
         // valued it.
-        let mut per_tonne = candidate.value_per_tonne().map_err(|_| crate::i18n::tr!("err-sched-pub-value-not-finite"))?;
+        let mut per_tonne = held.per_tonne.ok_or_else(|| crate::i18n::tr!("err-sched-pub-value-not-finite"))?;
         if let SourceId::Stockpile(pile) = candidate.source {
             let blend = replay
                 .pile_intervals
                 .get(&(pile, row.interval))
                 .map(|state| state.delivered_blend.as_slice())
                 .unwrap_or_default();
-            for payment in input.conditional_values.iter().filter(|payment| payment.candidate == row.candidate) {
+            for payment in conditional_of.get(&row.candidate).into_iter().flatten() {
                 if payment.holds(blend) {
                     per_tonne += payment.value_per_tonne;
                 }
