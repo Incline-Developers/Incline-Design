@@ -402,16 +402,20 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent], bar_height: f32) -> V
             height: 0.0,
         });
     }
-    rows.push(Row {
-        agent: None,
-        drill_blast: true,
-        blasting: true,
-        title: tr!("gantt-blasting-row"),
-        subtitle: tr!("gantt-blasting-row-note"),
-        lanes: Vec::new(),
-        top: 0.0,
-        height: 0.0,
-    });
+    // Blast windows and fired blasts mean nothing until drill & blast is
+    // sequenced: until then every dig block is available from the start.
+    if plan.drill_blast().enabled {
+        rows.push(Row {
+            agent: None,
+            drill_blast: true,
+            blasting: true,
+            title: tr!("gantt-blasting-row"),
+            subtitle: tr!("gantt-blasting-row-note"),
+            lanes: Vec::new(),
+            top: 0.0,
+            height: 0.0,
+        });
+    }
     // Filled with one sub-row holding everything the lane has; packed into
     // non-overlapping sub-rows once the lane is complete.
     for (index, bar) in plan.bars().iter().enumerate() {
@@ -825,8 +829,9 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     draw_time_slider(ui, ruler, body, editor, interval, over_canvas);
 
     if plan.agents().is_empty() {
-        // Under whatever rows there are - the Blasting row stands without a
-        // fleet - with the way to make one, rather than an empty grid.
+        // Under whatever rows there are - the Blasting row, when drill &
+        // blast is sequenced, stands without a fleet - with the way to make
+        // one, rather than an empty grid.
         let free = egui::Rect::from_min_max(egui::pos2(body.left(), (body.top() + rows_height - editor.gantt.row_scroll).max(body.top())), body.max);
         if free.height() > 80.0 {
             let center = free.center();
