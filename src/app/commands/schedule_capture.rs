@@ -1680,7 +1680,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                                     dense_destination: destination_ids[&destination],
                                     routing_rule: rule,
                                     routing_preference: preference,
-                                    subject: portion_name(&identities, source, held.portion),
+                                    subject: &|| portion_name(&identities, source, held.portion),
                                 },
                                 fleet,
                                 &truck_ids,
@@ -1788,7 +1788,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                                 dense_destination: dense,
                                 routing_rule: rule,
                                 routing_preference: preference,
-                                subject: pile_name.clone(),
+                                subject: &|| pile_name.clone(),
                             },
                             fleet,
                             &truck_ids,
@@ -2063,7 +2063,10 @@ struct ExpandArgs<'a> {
     dense_destination: DestinationId,
     routing_rule: crate::model::schedule::RuleId,
     routing_preference: u32,
-    subject: String,
+    /// What a diagnostic names the movement by: worked out only for one,
+    /// as a block's name takes a search and a translation, and there are
+    /// hundreds of thousands of movements.
+    subject: &'a dyn Fn() -> String,
 }
 
 /// One permitted (loader, source, destination) movement becomes one candidate
@@ -2096,7 +2099,7 @@ fn expand_candidate<'a>(
     };
     let classes = fleet.allowed_classes(context);
     if classes.is_empty() {
-        problems.push(CaptureDiagnostic::new(format!("{} · {}", args.loader_name, args.subject), tr!("schedule-capture-no-truck")).at(ScheduleStep::TruckingRules));
+        problems.push(CaptureDiagnostic::new(format!("{} · {}", args.loader_name, (args.subject)()), tr!("schedule-capture-no-truck")).at(ScheduleStep::TruckingRules));
         return;
     }
     let movement = MovementContext {
@@ -2136,7 +2139,7 @@ fn expand_candidate<'a>(
                 })
                 .collect(),
             Err(error) => {
-                problems.push(CaptureDiagnostic::new(args.subject.clone(), error.message()).at(ScheduleStep::Cashflow));
+                problems.push(CaptureDiagnostic::new((args.subject)(), error.message()).at(ScheduleStep::Cashflow));
                 return;
             }
         }
