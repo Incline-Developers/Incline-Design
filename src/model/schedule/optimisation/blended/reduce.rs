@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use rayon::prelude::*;
 
 use super::{
-    input::BlendInput,
+    input::{BlendInput, ConditionalValue},
     replay::{BlendSolution, MovementRow},
 };
 use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, MaterialId, MovementCandidate, SourceId};
@@ -172,6 +172,19 @@ impl Reduced {
         let mut reduced = input.clone();
         reduced.ground = ground;
         reduced.movements = movements;
+        // Conditional values name their candidate by position, so they follow
+        // it to its new one. A dropped duplicate's are its stand-in's own, and
+        // go with it; a merged material's candidates are digs, which carry
+        // none.
+        reduced.conditional_values = input
+            .conditional_values
+            .iter()
+            .filter(|value| stand_in[value.candidate] == value.candidate)
+            .map(|value| ConditionalValue {
+                candidate: renumbered[value.candidate],
+                ..value.clone()
+            })
+            .collect();
         Self { input: reduced, back }
     }
 
