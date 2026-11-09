@@ -35,7 +35,7 @@ use crate::{
             mesh_data::{Triangulation, Vertex},
         },
         point_cloud::{LoadedPointCloud, OpenPointCloud, prepare_for_render},
-        prismoid_grid::{CellValues, DEFAULT_PRISMOID_GRID_COLOR, Lattice, LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidGrid},
+        prismoid_grid::{CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, Lattice, LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidGrid},
         progress::Phase,
         project::{self, ModellingSettings, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
@@ -151,6 +151,9 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_SCHEDULE,
     META_HAULAGE,
 ];
+/// On a prismoid grid's cell values, not an element: what they are for,
+/// written only for a density.
+const META_ROLE: &str = "incline:role";
 const MAX_ARRAY_ITEMS: u64 = 200_000_000;
 
 /// Owned, cheaply-cloned state captured before OMF encoding moves to a worker.
@@ -1358,7 +1361,7 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
 /// Write a prismoid grid as standard OMF elements under one composite: the
 /// roof and the floor as grid surfaces on the one lattice, each carrying the
 /// active-cell mask, and the walls round the active cells as a surface. The
-/// cell values ride on the roof.
+/// cell values ride on the roof, each with its unit.
 fn write_prismoid_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenPrismoidGrid) -> Result<omf_crate::Element> {
     use omf_crate::{Attribute, Element, GridSurface, Location, Orient2, Surface};
 
@@ -1381,7 +1384,12 @@ fn write_prismoid_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
     let mut roof = part(writer, "roof", "prismoid_roof", &grid.roof)?;
     for cell_values in &grid.cell_values {
         let values = writer.array_numbers(cell_values.values.iter().map(|value| value.filter(|value| value.is_finite())))?;
-        roof.attributes.push(Attribute::from_numbers(cell_values.name.clone(), Location::Primitives, values));
+        let mut attribute = Attribute::from_numbers(cell_values.name.clone(), Location::Primitives, values);
+        attribute.units.clone_from(&cell_values.unit);
+        if cell_values.role == CellValueRole::Density {
+            attribute.metadata.insert(META_ROLE.to_owned(), "density".into());
+        }
+        roof.attributes.push(attribute);
     }
     let mut parts = vec![roof, part(writer, "floor", "prismoid_floor", &grid.floor)?];
     let (vertices, triangles) = grid.outline_walls();
@@ -3523,6 +3531,11 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 }
                 omf_crate::AttributeData::Number { values, .. } => cell_values.push(CellValues {
                     name: attribute.name.clone(),
+                    unit: attribute.units.clone(),
+                    role: match attribute.metadata.get(META_ROLE).and_then(Value::as_str) {
+                        Some("density") => CellValueRole::Density,
+                        _ => CellValueRole::Quality,
+                    },
                     values: read_numbers(self.reader, values)?,
                 }),
                 _ => {}

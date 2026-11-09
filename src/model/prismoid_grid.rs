@@ -13,9 +13,11 @@ use crate::{
         block_model::BlockBounds,
         drill_hole::DrillColorPreset,
         formats::mesh_data,
-        grid_surface::{GridSurface, HEIGHT_TOLERANCE, NODE_TOLERANCE},
+        grid_surface::{GridSurface, HEIGHT_TOLERANCE, NODE_TOLERANCE, surface_z_single},
         progress::Phase,
         project::{ModelEnvelope, ProjectItemState},
+        spatial::TriangleBvh,
+        triangulation::{quality_key, same_quality_name},
     },
 };
 
@@ -131,7 +133,18 @@ fn edges(sizes: &[f64]) -> Vec<f64> {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CellValues {
     pub(crate) name: String,
+    /// As the user typed it; empty when the values have none.
+    pub(crate) unit: String,
+    pub(crate) role: CellValueRole,
     pub(crate) values: Vec<Option<f64>>,
+}
+
+/// What a grid's values are for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CellValueRole {
+    Quality,
+    /// The density tonnes are measured with, in t/m³; one per grid.
+    Density,
 }
 
 /// Roof and floor elevations at every corner, row by row from the first
@@ -149,7 +162,8 @@ pub(crate) struct PrismoidGrid {
 impl PrismoidGrid {
     /// Whether the grid is well formed: unit, perpendicular, right-handed
     /// axes; at least one cell, each size finite and positive; finite heights
-    /// with the roof never below the floor; a mask and values for every cell.
+    /// with the roof never below the floor; a mask and values for every cell,
+    /// each set of values named, no name twice, at most one density.
     pub(crate) fn check(&self) -> Result<()> {
         let lattice = &self.lattice;
         if lattice.columns() == 0 || lattice.rows() == 0 {
@@ -186,6 +200,16 @@ impl PrismoidGrid {
         }
         if let Some(values) = self.cell_values.iter().find(|values| values.values.len() != cells) {
             bail!("has {} '{}' values for {cells} cells", values.values.len(), values.name);
+        }
+        if self.cell_values.iter().any(|values| values.name.trim().is_empty()) {
+            bail!("has values without a name");
+        }
+        let mut names = std::collections::HashSet::new();
+        if let Some(values) = self.cell_values.iter().find(|values| !names.insert(quality_key(&values.name))) {
+            bail!("has '{}' values twice", values.name);
+        }
+        if self.cell_values.iter().filter(|values| values.role == CellValueRole::Density).count() > 1 {
+            bail!("has more than one density");
         }
         Ok(())
     }
@@ -576,7 +600,7 @@ impl PrismoidGrid {
         let values: usize = self
             .cell_values
             .iter()
-            .map(|cell_values| cell_values.name.len() + cell_values.values.len() * size_of::<Option<f64>>())
+            .map(|cell_values| cell_values.name.len() + cell_values.unit.len() + cell_values.values.len() * size_of::<Option<f64>>())
             .sum();
         (self.roof.len() + self.floor.len()) * size_of::<f64>() + self.active.len() + values
     }
@@ -671,4 +695,247 @@ fn fill_missing(values: &mut [f64], columns: usize, rows: usize) {
             }
         }
     }
+}
+
+/// How a quality surface's values reach a grid's cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CellReading {
+    /// The mean of the surface's heights at a prismoid's four corners: the
+    /// grid's corners are nodes of the surface.
+    Corners,
+    /// Bilinear at the cell's centre, the surface being a grid on another lattice.
+    Centre,
+    /// Off the surface's triangles at the cell's centre: it is no grid.
+    Triangles,
+}
+
+/// A quality surface as the cells read it.
+pub(crate) enum QualitySurface {
+    Grid(GridSurface),
+    Triangles { mesh: Arc<mesh_data::Triangulation>, spatial: Arc<TriangleBvh> },
+}
+
+impl QualitySurface {
+    /// A grid where `GridSurface::read` takes the surface, else its triangles.
+    pub(crate) fn read(mesh: Arc<mesh_data::Triangulation>, spatial: Arc<TriangleBvh>) -> Self {
+        match GridSurface::read(Arc::clone(&mesh), Arc::clone(&spatial)) {
+            Ok(grid) => Self::Grid(grid),
+            Err(_) => Self::Triangles { mesh, spatial },
+        }
+    }
+}
+
+/// One quality surface read into a grid's cells.
+#[derive(Debug)]
+pub(crate) struct ReadCells {
+    pub(crate) reading: CellReading,
+    /// One per cell, in cell order; `None` for inactive cells too.
+    pub(crate) values: Vec<Option<f64>>,
+    /// Active cells given a value, and active cells left without one.
+    pub(crate) read: usize,
+    pub(crate) missing: usize,
+}
+
+/// Values read from one quality surface, with the surface's name for words.
+#[derive(Clone, Debug)]
+pub(crate) struct AddedValues {
+    pub(crate) surface: String,
+    pub(crate) values: CellValues,
+}
+
+/// Values about to join a grid as the refusals that need no cells see them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ValuesMark<'a> {
+    pub(crate) surface: &'a str,
+    pub(crate) name: &'a str,
+    pub(crate) unit: &'a str,
+    pub(crate) role: CellValueRole,
+}
+
+/// Why values cannot join a grid. Names are surface names unless said;
+/// quality names match as `same_quality_name` does.
+#[derive(Debug)]
+pub(crate) enum ValuesRefusal {
+    /// Two surfaces give one quality (by `CellValues::name`).
+    Twice { first: String, second: String, quality: String },
+    /// A name the grid keeps for its own values: a derived block model
+    /// column, the file's mask, or `density` for anything but the density.
+    Reserved { surface: String, quality: String },
+    /// The grid already holds a density (`held`: that quality's name) and another is added.
+    TwoDensities { held: String, surface: String },
+    /// A density in a unit naming kg.
+    DensityInKg { surface: String, unit: String },
+    /// No active cell got a value.
+    NoCover { surface: String },
+    /// The merged grid failed [`PrismoidGrid::check`].
+    Malformed(anyhow::Error),
+}
+
+/// Names the derived block model and the file keep for their own columns.
+const RESERVED_NAMES: [&str; 4] = ["volume", "vertical_thickness", "prismoid_grid", "active"];
+
+/// Whether `value` is a whole number, zero included, within `NODE_TOLERANCE`.
+fn is_whole_or_zero(value: f64) -> bool {
+    (value - value.round()).abs() <= NODE_TOLERANCE
+}
+
+/// As [`is_whole_or_zero`], one or more.
+fn is_whole(value: f64) -> bool {
+    value.round() >= 1.0 && is_whole_or_zero(value)
+}
+
+impl PrismoidGrid {
+    /// Reads `surface` into one value per cell, or `None` if cancelled.
+    pub(crate) fn read_cells(&self, surface: &QualitySurface, cancel: &CancelFlag) -> Option<ReadCells> {
+        match surface {
+            QualitySurface::Triangles { mesh, spatial } => self.read_cells_triangles(mesh, spatial, cancel),
+            QualitySurface::Grid(grid) if self.corners_are_nodes(grid) => self.read_cells_corners(grid, cancel),
+            QualitySurface::Grid(grid) => self.read_cells_centre(grid, cancel),
+        }
+    }
+
+    /// Whether the lattice is north-aligned and every corner can be a node of `grid`.
+    fn corners_are_nodes(&self, grid: &GridSurface) -> bool {
+        let lattice = &self.lattice;
+        if (lattice.u, lattice.v) != (DVec2::X, DVec2::Y) {
+            return false;
+        }
+        let spacing = grid.spacing();
+        let offset = (lattice.origin - grid.lattice().0) / spacing;
+        is_whole_or_zero(offset.x) && is_whole_or_zero(offset.y) && lattice.u_sizes.iter().chain(&lattice.v_sizes).all(|size| is_whole(size / spacing))
+    }
+
+    /// The plan position of every cell's centre, row by row.
+    fn cell_centres(&self) -> impl Iterator<Item = (usize, DVec2)> + '_ {
+        let lattice = &self.lattice;
+        let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));
+        let columns = lattice.columns();
+        (0..lattice.cell_count()).map(move |cell| {
+            let (column, row) = (cell % columns, cell / columns);
+            let along_u = u_edges[column] + lattice.u_sizes[column] / 2.0;
+            let along_v = v_edges[row] + lattice.v_sizes[row] / 2.0;
+            (cell, lattice.origin + lattice.u * along_u + lattice.v * along_v)
+        })
+    }
+
+    /// Reads each active cell with `value`, checking `cancel` once per row.
+    fn read_each(&self, reading: CellReading, cancel: &CancelFlag, mut value: impl FnMut(usize, DVec2) -> Option<f64>) -> Option<ReadCells> {
+        let columns = self.lattice.columns();
+        let mut values = vec![None; self.active.len()];
+        let (mut read, mut missing) = (0, 0);
+        for (cell, centre) in self.cell_centres() {
+            if cell % columns == 0 && cancel.is_cancelled() {
+                return None;
+            }
+            if !self.active[cell] {
+                continue;
+            }
+            values[cell] = value(cell, centre);
+            if values[cell].is_some() {
+                read += 1;
+            } else {
+                missing += 1;
+            }
+        }
+        Some(ReadCells { reading, values, read, missing })
+    }
+
+    fn read_cells_triangles(&self, mesh: &mesh_data::Triangulation, spatial: &TriangleBvh, cancel: &CancelFlag) -> Option<ReadCells> {
+        let mut stack = Vec::new();
+        self.read_each(CellReading::Triangles, cancel, |_, centre| surface_z_single(mesh, spatial, &mut stack, centre))
+    }
+
+    fn read_cells_centre(&self, grid: &GridSurface, cancel: &CancelFlag) -> Option<ReadCells> {
+        self.read_each(CellReading::Centre, cancel, |_, centre| grid.bilinear(centre))
+    }
+
+    fn read_cells_corners(&self, grid: &GridSurface, cancel: &CancelFlag) -> Option<ReadCells> {
+        let heights: Vec<Option<f64>> = self
+            .lattice
+            .corners()
+            .into_iter()
+            .map(|at| grid.node_at(at).and_then(|(column, row)| grid.height(column, row)))
+            .collect();
+        let columns = self.lattice.columns();
+        self.read_each(CellReading::Corners, cancel, |cell, _| {
+            let first = cell / columns * (columns + 1) + cell % columns;
+            let corners = [heights[first], heights[first + 1], heights[first + columns + 1], heights[first + columns + 2]];
+            corners.iter().try_fold(0.0, |sum, height| height.map(|height| sum + height)).map(|sum| sum / 4.0)
+        })
+    }
+
+    /// A copy of the grid with `added` merged in: a quality the grid already
+    /// holds is replaced in place, new ones follow in order.
+    pub(crate) fn with_values(&self, added: Vec<AddedValues>) -> Result<PrismoidGrid, ValuesRefusal> {
+        let held: Vec<_> = self.cell_values.iter().map(|values| (values.name.as_str(), values.role)).collect();
+        let marks: Vec<_> = added
+            .iter()
+            .map(|one| ValuesMark {
+                surface: &one.surface,
+                name: &one.values.name,
+                unit: &one.values.unit,
+                role: one.values.role,
+            })
+            .collect();
+        check_marks(&held, &marks)?;
+        if let Some(one) = added
+            .iter()
+            .find(|one| !self.active.iter().zip(&one.values.values).any(|(active, value)| *active && value.is_some()))
+        {
+            return Err(ValuesRefusal::NoCover { surface: one.surface.clone() });
+        }
+        let mut merged = self.clone();
+        for one in added {
+            match merged.cell_values.iter_mut().find(|held| same_quality_name(&held.name, &one.values.name)) {
+                Some(held) => *held = one.values,
+                None => merged.cell_values.push(one.values),
+            }
+        }
+        merged.check().map_err(ValuesRefusal::Malformed)?;
+        Ok(merged)
+    }
+}
+
+/// The refusal `added` meets against the grid's `held` names and roles
+/// before any cell is read, so a dialog can say it before the work starts.
+pub(crate) fn check_marks(held: &[(&str, CellValueRole)], added: &[ValuesMark<'_>]) -> Result<(), ValuesRefusal> {
+    for one in added {
+        let reserved = RESERVED_NAMES.iter().any(|name| same_quality_name(name, one.name));
+        if reserved || (same_quality_name(one.name, "density") && one.role != CellValueRole::Density) {
+            return Err(ValuesRefusal::Reserved {
+                surface: one.surface.to_owned(),
+                quality: one.name.to_owned(),
+            });
+        }
+    }
+    if let Some(one) = added.iter().find(|one| one.role == CellValueRole::Density && one.unit.to_ascii_lowercase().contains("kg")) {
+        return Err(ValuesRefusal::DensityInKg {
+            surface: one.surface.to_owned(),
+            unit: one.unit.to_owned(),
+        });
+    }
+    for (later, one) in added.iter().enumerate() {
+        if let Some(earlier) = added[..later].iter().find(|earlier| same_quality_name(earlier.name, one.name)) {
+            return Err(ValuesRefusal::Twice {
+                first: earlier.surface.to_owned(),
+                second: one.surface.to_owned(),
+                quality: one.name.to_owned(),
+            });
+        }
+    }
+    // A held density stays unless one of `added` replaces it.
+    let kept = held
+        .iter()
+        .filter(|(name, role)| *role == CellValueRole::Density && !added.iter().any(|one| same_quality_name(one.name, name)))
+        .map(|(name, _)| *name);
+    let mut densities = kept.chain(added.iter().filter(|one| one.role == CellValueRole::Density).map(|one| one.name));
+    if let (Some(first), Some(_)) = (densities.next(), densities.next())
+        && let Some(one) = added.iter().rev().find(|one| one.role == CellValueRole::Density)
+    {
+        return Err(ValuesRefusal::TwoDensities {
+            held: first.to_owned(),
+            surface: one.surface.to_owned(),
+        });
+    }
+    Ok(())
 }

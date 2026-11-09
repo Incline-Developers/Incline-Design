@@ -127,8 +127,18 @@ impl QualityMark {
 
     /// Whether two marks name one quality, whatever their units say.
     pub(crate) fn same_quality(&self, other: &Self) -> bool {
-        self.name.trim().to_lowercase() == other.name.trim().to_lowercase()
+        same_quality_name(&self.name, &other.name)
     }
+}
+
+/// A quality name as qualities are matched: trimmed and case-folded.
+pub(crate) fn quality_key(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// Whether two names are one quality.
+pub(crate) fn same_quality_name(name: &str, other: &str) -> bool {
+    quality_key(name) == quality_key(other)
 }
 
 /// A quality's unit as shown: words saying none was given when blank.

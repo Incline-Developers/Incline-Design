@@ -1,5 +1,6 @@
-//! Prismoid grid commands: building one from two surfaces, removing one
-//! from the explorer, and preparing what the view draws of each.
+//! Prismoid grid commands: building one from two surfaces, adding qualities
+//! to one, removing one from the explorer, and preparing what the view draws
+//! of each.
 
 use std::{
     collections::hash_map::DefaultHasher,
@@ -21,16 +22,19 @@ use crate::{
     },
     i18n::tr,
     model::{
-        ItemRef, MemberKind, SceneEntityId, SectionKind,
+        Command, ItemRef, MemberKind, OpenItem, SceneEntityId, SectionKind,
         formats::mesh_data::Triangulation,
         grid_surface::GridSurface,
-        prismoid_grid::{BuildRefusal, DEFAULT_PRISMOID_GRID_COLOR, OpenPrismoidGrid, PrismoidBuild, PrismoidGrid, PrismoidGridId, THICKNESS_RAMP, ThicknessMap},
-        progress::Progress,
+        prismoid_grid::{
+            AddedValues, BuildRefusal, CellReading, CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, OpenPrismoidGrid, PrismoidBuild, PrismoidGrid, PrismoidGridId,
+            QualitySurface, THICKNESS_RAMP, ThicknessMap, ValuesRefusal,
+        },
+        progress::{Phase, Progress},
         project::{ModelEnvelope, ProjectItemState, unique_item_name},
         raster::{OpenRasterTexture, RasterTextureId},
         rbf::NODE_BUDGET,
         spatial::TriangleBvh,
-        triangulation::{OpenTriangulation, TriangulationId, spatial_surface_face_order},
+        triangulation::{OpenTriangulation, QualityMark, TriangulationId, spatial_surface_face_order},
     },
     rendering::{color::linear_to_srgb_byte, scene::drill_hole_cache::evaluate_stops},
     ui::state::Workspace,
@@ -177,6 +181,97 @@ impl App<'_> {
             compute,
             apply,
         );
+        Ok(())
+    }
+
+    /// Read quality surfaces into a prismoid grid's cells, `density` as its
+    /// density, as one undoable step; surfaces saved unloaded are loaded
+    /// first.
+    pub(crate) fn add_prismoid_qualities(&mut self, grid_id: PrismoidGridId, surfaces: Vec<TriangulationId>, density: Option<TriangulationId>) -> Result<()> {
+        if !self.prismoid_grids.iter().any(|item| item.id == grid_id && item.state.loaded) {
+            anyhow::bail!("{}", tr!("cmd-commands-select-one-loaded-prismoid-grid-qualities"));
+        }
+        if !surfaces.iter().all(|id| self.triangulations.iter().any(|item| item.id == *id && item.quality.is_some())) {
+            anyhow::bail!("{}", tr!("cmd-thickness-points-surface-gone"));
+        }
+        let needed = surfaces.iter().map(|id| ItemRef::Triangulation(*id)).collect();
+        let restoring = self.restore_items_for(needed, {
+            let surfaces = surfaces.clone();
+            move |app| {
+                if let Err(refusal) = app.spawn_adding_prismoid_qualities(grid_id, &surfaces, density) {
+                    userspace_warn!("{refusal:#}");
+                }
+            }
+        });
+        if restoring {
+            Ok(())
+        } else {
+            self.spawn_adding_prismoid_qualities(grid_id, &surfaces, density)
+        }
+    }
+
+    fn spawn_adding_prismoid_qualities(&mut self, grid_id: PrismoidGridId, surfaces: &[TriangulationId], density: Option<TriangulationId>) -> Result<()> {
+        let gone = || anyhow::anyhow!("{}", tr!("cmd-commands-select-one-loaded-prismoid-grid-qualities"));
+        let runtime_id = self.workspace.active_project().map(|project| project.runtime_id).ok_or_else(gone)?;
+        let item = self.prismoid_grids.iter().find(|item| item.id == grid_id && item.state.loaded).ok_or_else(gone)?;
+        let (source, name) = (Arc::clone(&item.grid), item.name.clone());
+        let inputs = surfaces
+            .iter()
+            .map(|id| {
+                let item = self
+                    .triangulations
+                    .iter()
+                    .find(|item| item.id == *id && item.state.deferred.is_none())
+                    .ok_or_else(|| anyhow::anyhow!("{}", tr!("cmd-thickness-points-surface-gone")))?;
+                Ok(QualityInput {
+                    surface: item.name.clone(),
+                    mark: item.quality.clone().ok_or_else(|| anyhow::anyhow!("{}", tr!("cmd-thickness-points-surface-gone")))?,
+                    density: density == Some(*id),
+                    mesh: Arc::clone(&item.mesh),
+                    spatial: Arc::clone(&item.spatial),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut keys = vec![JobKey::PrismoidGrid(grid_id)];
+        keys.extend(surfaces.iter().map(|id| JobKey::Triangulation(*id)));
+        let grid = Arc::clone(&source);
+        let read_name = name.clone();
+        let compute = move |cancel: &CancelFlag, progress: &Progress| add_qualities(&grid, &read_name, inputs, cancel, &progress.phase(0.0, 1.0));
+        let apply = move |app: &mut App, result: Result<(PrismoidGrid, Vec<String>)>| {
+            let (merged, lines) = match result {
+                Ok(added) => added,
+                Err(refusal) => {
+                    userspace_warn!("{refusal:#}");
+                    return;
+                }
+            };
+            let current = app.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id);
+            let Some(item) = app.prismoid_grids.iter().find(|item| item.id == grid_id).filter(|_| current) else {
+                userspace_warn!("{}", tr!("cmd-prismoid-grid-qualities-discarded", grid = name));
+                return;
+            };
+            if !Arc::ptr_eq(&item.grid, &source) {
+                userspace_warn!("{}", tr!("cmd-prismoid-grid-changed-while-reading", grid = item.name.clone()));
+                return;
+            }
+            let grid_name = item.name.clone();
+            let mut replacement = item.clone();
+            replacement.summary = merged.summary();
+            replacement.grid = Arc::new(merged);
+            app.execute_edit_for(
+                runtime_id,
+                Command::ReplaceItem {
+                    item: ItemRef::PrismoidGrid(grid_id),
+                    other: Some(OpenItem::PrismoidGrid(Box::new(replacement))),
+                },
+            );
+            userspace_log!("{}", tr!("cmd-prismoid-grid-qualities-added", count = lines.len().to_string(), grid = grid_name));
+            for line in lines {
+                userspace_log!("{line}");
+            }
+            userspace_log!("{}", tr!("cmd-prismoid-grid-qualities-rederive"));
+        };
+        self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-adding-qualities"), keys, compute, apply);
         Ok(())
     }
 
@@ -336,6 +431,57 @@ impl App<'_> {
         let maps = self.prismoid_drawn.iter().filter_map(|drawn| drawn.thickness.as_ref());
         self.prismoid_rasters = self.raster_textures.iter().chain(maps).cloned().collect();
         self.prismoid_scene_key = Some(key);
+    }
+}
+
+/// One ticked quality surface, as the job reads it.
+struct QualityInput {
+    surface: String,
+    mark: QualityMark,
+    density: bool,
+    mesh: Arc<Triangulation>,
+    spatial: Arc<TriangleBvh>,
+}
+
+/// `grid` with each surface read into its cells under the surface's quality
+/// mark, the one marked `density` as its density, and a console line per
+/// surface. An Err is a refusal in words.
+fn add_qualities(grid: &PrismoidGrid, grid_name: &str, inputs: Vec<QualityInput>, cancel: &CancelFlag, progress: &Phase) -> Result<(PrismoidGrid, Vec<String>)> {
+    let (count, mut added, mut lines) = (inputs.len(), Vec::new(), Vec::new());
+    for (done, input) in inputs.into_iter().enumerate() {
+        let read = grid
+            .read_cells(&QualitySurface::read(input.mesh, input.spatial), cancel)
+            .ok_or_else(|| anyhow::anyhow!("{}", tr!("common-cancelled")))?;
+        let (quality, surface, cells, missing) = (input.mark.label(), input.surface.clone(), read.read.to_string(), read.missing.to_string());
+        lines.push(match read.reading {
+            CellReading::Corners => tr!("cmd-prismoid-grid-quality-corners", quality = quality, surface = surface, read = cells, missing = missing),
+            CellReading::Centre => tr!("cmd-prismoid-grid-quality-centre", quality = quality, surface = surface, read = cells, missing = missing),
+            CellReading::Triangles => tr!("cmd-prismoid-grid-quality-triangles", quality = quality, surface = surface, read = cells, missing = missing),
+        });
+        added.push(AddedValues {
+            surface: input.surface,
+            values: CellValues {
+                name: input.mark.name,
+                unit: input.mark.unit,
+                role: if input.density { CellValueRole::Density } else { CellValueRole::Quality },
+                values: read.values,
+            },
+        });
+        progress.set_fraction((done + 1) as f32 / count as f32);
+    }
+    let merged = grid.with_values(added).map_err(|refusal| anyhow::anyhow!("{}", values_refusal_words(refusal, grid_name)))?;
+    Ok((merged, lines))
+}
+
+/// A refusal to add values to the prismoid grid `grid_name`, in words.
+pub(crate) fn values_refusal_words(refusal: ValuesRefusal, grid_name: &str) -> String {
+    match refusal {
+        ValuesRefusal::Twice { first, second, quality } => tr!("cmd-prismoid-grid-quality-twice", first = first, second = second, quality = quality),
+        ValuesRefusal::Reserved { surface, quality } => tr!("cmd-prismoid-grid-quality-reserved", surface = surface, quality = quality),
+        ValuesRefusal::TwoDensities { held, surface } => tr!("cmd-prismoid-grid-two-densities", held = held, surface = surface),
+        ValuesRefusal::DensityInKg { surface, unit } => tr!("cmd-prismoid-grid-density-kg", surface = surface, unit = unit),
+        ValuesRefusal::NoCover { surface } => tr!("cmd-prismoid-grid-quality-no-cover", surface = surface, grid = grid_name.to_owned()),
+        ValuesRefusal::Malformed(fault) => format!("{fault:#}"),
     }
 }
 

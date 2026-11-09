@@ -667,6 +667,7 @@ impl EditorState {
             || (self.tri_cut_to_open && self.triangulation_pick_target.is_none())
             || self.insert_point_at_spacing_dialog.is_some()
             || self.smooth_strings_dialog.is_some()
+            || self.tri_prismoid_qualities_open
     }
 
     /// Lock or unlock one scene entity by name. Layer locks go through
@@ -3254,6 +3255,12 @@ pub(crate) struct EditorState {
     pub(crate) tri_prismoid_step: std::num::NonZeroUsize,
     pub(crate) tri_prismoid_name_input: String,
     pub(crate) tri_prismoid_name_auto: bool,
+    /// Add Qualities: the grid selected at open, the quality surfaces ticked
+    /// in the order ticked, and the one chosen as the density.
+    pub(crate) tri_prismoid_qualities_open: bool,
+    pub(crate) tri_prismoid_qualities_grid: Option<PrismoidGridId>,
+    pub(crate) tri_prismoid_qualities_ticked: Vec<TriangulationId>,
+    pub(crate) tri_prismoid_qualities_density: Option<TriangulationId>,
     /// The active project's model envelope, mirrored each frame for the
     /// view's outline.
     pub(crate) model_envelope: Option<crate::model::project::ModelEnvelope>,
@@ -5130,6 +5137,10 @@ impl EditorState {
             tri_prismoid_step: std::num::NonZeroUsize::MIN,
             tri_prismoid_name_input: String::new(),
             tri_prismoid_name_auto: true,
+            tri_prismoid_qualities_open: false,
+            tri_prismoid_qualities_grid: None,
+            tri_prismoid_qualities_ticked: Vec::new(),
+            tri_prismoid_qualities_density: None,
             model_envelope: None,
             tri_cut_surface_unload_source: true,
             tri_cut_to_open: false,
@@ -6927,6 +6938,15 @@ pub(crate) enum UiCommand {
     },
     /// Create a block model from the one selected prismoid grid.
     CreateBlockModelFromPrismoidGrid,
+    /// Open Add Qualities on the one selected prismoid grid.
+    OpenAddPrismoidQualities,
+    /// Read quality surfaces into a prismoid grid's cells, `density` as its
+    /// density.
+    ExecuteAddPrismoidQualities {
+        grid: PrismoidGridId,
+        surfaces: Vec<TriangulationId>,
+        density: Option<TriangulationId>,
+    },
     /// Build a closed solid from a design surface and the topography it meets.
     ExecuteBuildSolidFromSurfaces {
         design_id: TriangulationId,
@@ -7130,6 +7150,7 @@ impl UiCommand {
             | Self::OpenCutTriangulationBySurface
             | Self::OpenBuildSolidFromSurfaces
             | Self::OpenBuildPrismoidGrid
+            | Self::OpenAddPrismoidQualities
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
             | Self::OpenContourTriangulation
@@ -7681,6 +7702,7 @@ impl UiCommand {
             Self::ExecuteBuildSolidFromSurfaces { name, .. } => report(tr!("tri-build-solid-surfaces"), name.clone()),
             Self::ExecuteBuildPrismoidGrid { name, .. } => report(tr!("tri-build-prismoid-grid"), name.clone()),
             Self::CreateBlockModelFromPrismoidGrid => report(tr!("common-create-block-model-from-prismoid-grid"), tr!("state-selected-prismoid-grid")),
+            Self::ExecuteAddPrismoidQualities { .. } => report(tr!("state-add-prismoid-qualities"), tr!("state-selected-prismoid-grid")),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),
             Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!("common-merge-shell-into-topology"), name.clone()),
             Self::Undo => report(tr!("common-undo"), tr!("state-previous-edit")),
@@ -7964,6 +7986,8 @@ pub(crate) struct UiPrismoidGridEntry {
     pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     pub(crate) summary: PrismoidGridSummary,
+    /// The name of each set of cell values and what it is for.
+    pub(crate) values: Vec<(String, crate::model::prismoid_grid::CellValueRole)>,
     /// Whether the lattice has one column size and one row size, so its
     /// thickness can be drawn as colour.
     pub(crate) regular: bool,

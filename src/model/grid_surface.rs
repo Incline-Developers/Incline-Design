@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 
 use crate::model::{
     formats::mesh_data,
@@ -280,6 +280,34 @@ impl GridSurface {
         }
         None
     }
+}
+
+/// The height of `mesh` at `point` where it gives one: `None` off its
+/// triangles and where sheets stacked there differ by more than
+/// `HEIGHT_TOLERANCE`. Faces upright in plan give none.
+pub(crate) fn surface_z_single(mesh: &mesh_data::Triangulation, spatial: &TriangleBvh, stack: &mut Vec<usize>, point: DVec2) -> Option<f64> {
+    let mut range: Option<(f64, f64)> = None;
+    spatial.for_each_xy_bounds_candidate_index_with_stack(point, point, stack, |face| {
+        let Some(corners) = mesh.face_vertex_indices(face) else {
+            return;
+        };
+        let [a, b, c] = corners.map(|index| {
+            let vertex = mesh.vertices()[index];
+            DVec3::new(vertex.x, vertex.y, vertex.z)
+        });
+        let (along, across) = (b - a, c - a);
+        let normal = along.cross(across);
+        let inside = matches!(
+            kernel::point_in_polyline(point, [a, b, c].map(DVec3::truncate)),
+            PolyContainment::Inside | PolyContainment::OnBoundary
+        );
+        if !inside || normal.z.abs() <= f64::EPSILON * along.truncate().length() * across.truncate().length() {
+            return;
+        }
+        let z = a.z - (normal.x * (point.x - a.x) + normal.y * (point.y - a.y)) / normal.z;
+        range = Some(range.map_or((z, z), |(lowest, highest)| (lowest.min(z), highest.max(z))));
+    });
+    range.filter(|(lowest, highest)| highest - lowest <= HEIGHT_TOLERANCE).map(|(lowest, _)| lowest)
 }
 
 /// The leg length, and the corner where the legs meet, when the triangle is

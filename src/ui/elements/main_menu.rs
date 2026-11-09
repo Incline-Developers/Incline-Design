@@ -1226,6 +1226,15 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     commands.push(UiCommand::CreateBlockModelFromPrismoidGrid);
                     ui.close();
                 }
+                if ContextMenuAction::new(tr!("common-add-prismoid-qualities-ellipsis"))
+                    .enabled(editor.selection_counts.prismoid_grids == 1)
+                    .disabled_hover_text(tr!("ws-menubar-modelling-select-prismoid-grid"))
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::OpenAddPrismoidQualities);
+                    ui.close();
+                }
             });
             return;
         }

@@ -4,7 +4,11 @@ use std::num::NonZeroUsize;
 
 use crate::{
     i18n::tr,
-    model::{Document, Object, ObjectId, SceneEntityId, triangulation::TriangulationId},
+    model::{
+        Document, Object, ObjectId, SceneEntityId,
+        prismoid_grid::{CellValueRole, ValuesMark, check_marks},
+        triangulation::{TriangulationId, same_quality_name},
+    },
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         state::{
@@ -1180,6 +1184,157 @@ pub(crate) fn draw_build_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut Ed
 
     if !open {
         editor.tri_prismoid_open = false;
+    }
+}
+
+/// Add Qualities: the quality surfaces read into the prismoid grid selected
+/// at open, each ticked by hand, and the ticked one chosen as its density.
+pub(crate) fn draw_add_prismoid_qualities_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_prismoid_qualities_open {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("add_prismoid_qualities_dialog", tr!("tri-add-prismoid-qualities"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let grid = editor.tri_prismoid_qualities_grid.and_then(|id| project.prismoid_grids.iter().find(|entry| entry.id == id));
+            let marked: Vec<_> = project
+                .triangulations
+                .iter()
+                .filter_map(|entry| entry.quality.as_ref().map(|quality| (entry, quality)))
+                .collect();
+            editor.tri_prismoid_qualities_ticked.retain(|id| marked.iter().any(|(entry, _)| entry.id == *id));
+
+            tool_help_panel(ui, tr!("tri-add-prismoid-qualities-help"));
+            let grid_name = grid.map_or_else(String::new, |grid| grid.name.clone());
+            selected_source_field(
+                ui,
+                tr!("common-prismoid-grid"),
+                grid_name,
+                tr!("tri-prismoid-qualities-grid-help"),
+                picker_control_width(ui),
+            );
+
+            menu::menu_section(ui, tr!("tri-prismoid-qualities-surfaces"));
+            if marked.is_empty() {
+                menu::menu_note(ui, tr!("tri-prismoid-qualities-none"));
+            }
+            for (entry, quality) in &marked {
+                let was = editor.tri_prismoid_qualities_ticked.contains(&entry.id);
+                let mut ticked = was;
+                let row = tr!(
+                    "tri-prismoid-qualities-row",
+                    surface = entry.name.clone(),
+                    quality = quality.name.clone(),
+                    unit = quality.unit.clone()
+                );
+                MenuFieldBool::new(row.trim_end(), &mut ticked).show(ui);
+                if ticked && !was {
+                    editor.tri_prismoid_qualities_ticked.push(entry.id);
+                } else if was && !ticked {
+                    editor.tri_prismoid_qualities_ticked.retain(|id| *id != entry.id);
+                }
+                let notes: Vec<String> = [
+                    (editor.tri_prismoid_qualities_density == Some(entry.id)).then(|| tr!("tri-prismoid-qualities-density")),
+                    (!entry.is_loaded).then(|| tr!("tri-prismoid-qualities-loads")),
+                    grid.is_some_and(|grid| grid.values.iter().any(|(name, _)| same_quality_name(name, &quality.name)))
+                        .then(|| tr!("tri-prismoid-qualities-replaces")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                if !notes.is_empty() {
+                    menu::menu_note(ui, notes.join(", "));
+                }
+            }
+
+            let ticked: Vec<(TriangulationId, &str)> = editor
+                .tri_prismoid_qualities_ticked
+                .iter()
+                .filter_map(|id| marked.iter().find(|(entry, _)| entry.id == *id).map(|(_, quality)| (*id, quality.name.as_str())))
+                .collect();
+            if editor.tri_prismoid_qualities_density.is_some_and(|density| !ticked.iter().any(|(id, _)| *id == density)) {
+                editor.tri_prismoid_qualities_density = None;
+            }
+            let surface_name = |id: TriangulationId| marked.iter().find(|(entry, _)| entry.id == id).map_or("", |(entry, _)| entry.name.as_str());
+            let chosen = editor.tri_prismoid_qualities_density.map(surface_name);
+            ui.add_space(4.0);
+            ui.add_enabled_ui(!ticked.is_empty(), |ui| {
+                MenuFieldCombo::new(
+                    "add_prismoid_qualities_density",
+                    tr!("tri-prismoid-qualities-density-field"),
+                    &mut editor.tri_prismoid_qualities_density,
+                    chosen.map_or_else(|| tr!("common-none"), str::to_owned),
+                    std::iter::once((None, tr!("common-none").into())).chain(ticked.iter().map(|(id, _)| (Some(*id), surface_name(*id).to_owned().into()))),
+                )
+                .help_text(tr!("tri-prismoid-qualities-density-field-help"))
+                .width(picker_control_width(ui))
+                .show(ui);
+            });
+
+            // A density the grid holds stays unless a ticked surface of its
+            // quality replaces it.
+            let held = grid
+                .and_then(|grid| grid.values.iter().find(|(_, role)| *role == CellValueRole::Density))
+                .map(|(name, _)| name.as_str())
+                .filter(|name| !ticked.iter().any(|(_, quality)| same_quality_name(quality, name)));
+            let basis = match editor.tri_prismoid_qualities_density.map(surface_name).or(held) {
+                Some(density) => tr!("tri-prismoid-qualities-by-tonnes", density = density.to_owned()),
+                None => tr!("tri-prismoid-qualities-by-volume"),
+            };
+            menu::menu_note(ui, basis);
+
+            // The refusals the marks alone decide, said before the work starts.
+            let refusal = grid.and_then(|grid| {
+                let held: Vec<_> = grid.values.iter().map(|(name, role)| (name.as_str(), *role)).collect();
+                let marks: Vec<_> = ticked
+                    .iter()
+                    .filter_map(|(id, _)| marked.iter().find(|(entry, _)| entry.id == *id))
+                    .map(|(entry, quality)| ValuesMark {
+                        surface: &entry.name,
+                        name: &quality.name,
+                        unit: &quality.unit,
+                        role: if editor.tri_prismoid_qualities_density == Some(entry.id) {
+                            CellValueRole::Density
+                        } else {
+                            CellValueRole::Quality
+                        },
+                    })
+                    .collect();
+                check_marks(&held, &marks)
+                    .err()
+                    .map(|refusal| crate::app::commands::prismoid_grid::values_refusal_words(refusal, &grid.name))
+            });
+            if let Some(refusal) = &refusal {
+                menu::menu_note(ui, refusal.as_str());
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let can_run = grid.is_some() && !ticked.is_empty() && refusal.is_none();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("tri-add")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let Some(grid) = editor.tri_prismoid_qualities_grid
+                {
+                    commands.push(UiCommand::ExecuteAddPrismoidQualities {
+                        grid,
+                        surfaces: editor.tri_prismoid_qualities_ticked.clone(),
+                        density: editor.tri_prismoid_qualities_density,
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_prismoid_qualities_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_prismoid_qualities_open = false;
     }
 }
 

@@ -204,6 +204,8 @@ impl<'a> App<'a> {
                 | UiCommand::OpenBuildPrismoidGrid
                 | UiCommand::ExecuteBuildPrismoidGrid { .. }
                 | UiCommand::CreateBlockModelFromPrismoidGrid
+                | UiCommand::OpenAddPrismoidQualities
+                | UiCommand::ExecuteAddPrismoidQualities { .. }
                 | UiCommand::BuildCollarPoints { .. }
                 | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
@@ -2033,6 +2035,25 @@ impl<'a> App<'a> {
                     return Ok(());
                 }
                 self.create_block_model_from_prismoid_grid(grid_id)
+            }
+            UiCommand::OpenAddPrismoidQualities => {
+                let selected = self.selected_prismoid_grids();
+                let [grid_id] = selected[..] else {
+                    userspace_warn!("{}", tr!("cmd-commands-select-one-loaded-prismoid-grid-qualities"));
+                    return Ok(());
+                };
+                self.editor.tri_prismoid_qualities_open = true;
+                self.editor.tri_prismoid_qualities_grid = Some(grid_id);
+                self.editor.tri_prismoid_qualities_ticked.clear();
+                self.editor.tri_prismoid_qualities_density = None;
+                Ok(())
+            }
+            UiCommand::ExecuteAddPrismoidQualities { grid, surfaces, density } => {
+                let result = self.add_prismoid_qualities(grid, surfaces, density);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_qualities_open = false;
+                }
+                result
             }
             UiCommand::OpenCutTopologyByPitShell => {
                 self.editor.tri_cut_pitshell_open = true;
