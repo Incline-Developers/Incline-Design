@@ -728,6 +728,14 @@ impl<'a> App<'a> {
                     }
                     crate::model::formats::csv_drill_hole::settle_collars(&mut self.editor.import_drill_csv);
                 }
+                if kind == DataMenu::QualityPoints {
+                    let preview = self
+                        .editor
+                        .import_source_paths
+                        .first()
+                        .map(|path| crate::model::formats::csv_quality_points::preview_path(path));
+                    self.set_quality_preview(preview);
+                }
                 Ok(())
             }
             #[cfg(target_arch = "wasm32")]
@@ -756,6 +764,9 @@ impl<'a> App<'a> {
                             self.editor.import_csv_error = Some(error.to_string());
                         }
                     }
+                }
+                if kind == DataMenu::QualityPoints {
+                    self.set_quality_preview(accepted.first().map(|file| crate::model::formats::csv_quality_points::preview(&file.bytes)));
                 }
                 if kind == DataMenu::CsvDrillHole {
                     self.editor.import_drill_csv.clear();
@@ -1673,10 +1684,11 @@ impl<'a> App<'a> {
                 DataMenu::Pcd => AsyncFileDialog::new().add_filter("Point Cloud Data", &["pcd"]),
                 DataMenu::CsvBlockModel => AsyncFileDialog::new().add_filter("CSV block model", &["csv"]),
                 DataMenu::CsvDrillHole => AsyncFileDialog::new().add_filter("Drillhole CSV files", &["csv"]),
+                DataMenu::QualityPoints => AsyncFileDialog::new().add_filter(tr!("io-quality-points-csv"), &["csv"]),
                 DataMenu::Geotiff => AsyncFileDialog::new().add_filter("GeoTIFF", &["tif", "tiff"]),
                 _ => AsyncFileDialog::new(),
             };
-            let handles = if kind == DataMenu::CsvBlockModel {
+            let handles = if matches!(kind, DataMenu::CsvBlockModel | DataMenu::QualityPoints) {
                 vec![dialog.pick_file().await?]
             } else {
                 dialog.pick_files().await?
@@ -1716,10 +1728,11 @@ impl<'a> App<'a> {
                 DataMenu::Pcd => AsyncFileDialog::new().add_filter("Point Cloud Data", &["pcd"]),
                 DataMenu::CsvBlockModel => AsyncFileDialog::new().add_filter("CSV block model", &["csv"]),
                 DataMenu::CsvDrillHole => AsyncFileDialog::new().add_filter("Drillhole CSV files", &["csv"]),
+                DataMenu::QualityPoints => AsyncFileDialog::new().add_filter(tr!("io-quality-points-csv"), &["csv"]),
                 DataMenu::Geotiff => AsyncFileDialog::new().add_filter("GeoTIFF", &["tif", "tiff"]),
                 _ => AsyncFileDialog::new(),
             };
-            let paths: Vec<PathBuf> = if kind == DataMenu::CsvBlockModel {
+            let paths: Vec<PathBuf> = if matches!(kind, DataMenu::CsvBlockModel | DataMenu::QualityPoints) {
                 vec![dialog.pick_file().await?.into_path()]
             } else {
                 dialog.pick_files().await?.into_iter().map(FileHandleExt::into_path).collect()

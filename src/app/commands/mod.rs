@@ -15,6 +15,7 @@ pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. comm
 pub(crate) mod prismoid_grid;
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
+pub(crate) mod quality_points;
 pub(crate) mod raster; // Handles georeferenced image textures.
 pub(crate) mod rename; // Handles renaming layers and project items.
 pub(crate) mod reserves; // Handles the Solids workspace's Reserves setup (Field List, block model mappings).
@@ -178,6 +179,7 @@ impl<'a> App<'a> {
                 | UiCommand::ImportRasterPaths(_)
                 | UiCommand::ChooseImportSourceFiles(_)
                 | UiCommand::ImportCsvBlockModel { .. }
+                | UiCommand::ImportQualityPoints { .. }
                 | UiCommand::ImportDrillHole(_)
                 | UiCommand::ToggleCreateDrillPattern
                 | UiCommand::BeginDrillPatternShapePick
@@ -438,6 +440,7 @@ impl<'a> App<'a> {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.import_block_model_source(crate::model::block_model::BlockModelSource { path, csv_columns: Some(mapping) })
             }
+            UiCommand::ImportQualityPoints { path, mapping } => self.import_quality_points(path, mapping),
             UiCommand::ExportOmf(selection) => self.choose_export_omf(&selection),
             UiCommand::ExportProjectDxf(runtime_id) => {
                 self.choose_export_project_dxf(runtime_id);

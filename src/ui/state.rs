@@ -3874,6 +3874,7 @@ pub(crate) struct EditorState {
     pub(crate) import_source_menu: DataMenu,
     pub(crate) import_source_paths: Vec<PathBuf>,
     pub(crate) import_csv_preview: Option<CsvPreview>,
+    pub(crate) import_quality_preview: Option<crate::model::formats::csv_quality_points::QualityPreview>,
     pub(crate) import_csv_error: Option<String>,
     pub(crate) import_drill_csv: Vec<(CsvDrillFileMapping, CsvDrillPreview)>,
     pub(crate) export_dxf_layer: bool,
@@ -5433,6 +5434,7 @@ impl EditorState {
             import_source_menu: DataMenu::None,
             import_source_paths: Vec::new(),
             import_csv_preview: None,
+            import_quality_preview: None,
             import_csv_error: None,
             import_drill_csv: Vec::new(),
             export_dxf_layer: false,
@@ -6116,6 +6118,10 @@ pub(crate) enum UiCommand {
     ImportCsvBlockModel {
         path: PathBuf,
         mapping: CsvColumnMapping,
+    },
+    ImportQualityPoints {
+        path: PathBuf,
+        mapping: crate::model::formats::csv_quality_points::QualityMapping,
     },
     /// Boxed: the selection carries six sets, and every other variant is small.
     ExportOmf(Box<OmfExportSelection>),
@@ -7233,6 +7239,7 @@ impl UiCommand {
             Self::ClosePointCloud(id) => report(tr!("state-unload-point-cloud"), format!("{id:?}")),
             Self::RemovePointCloud(id) => report(tr!("state-remove-point-cloud"), format!("{id:?}")),
             Self::ImportCsvBlockModel { path, .. } => report(tr!("common-import-csv-block-model"), path.display().to_string()),
+            Self::ImportQualityPoints { path, .. } => report(tr!("state-import-quality-points"), path.display().to_string()),
             Self::ExportOmf(selection) => report(
                 tr!("state-export-omf"),
                 if *selection.as_ref() == OmfExportSelection::default() {
@@ -10581,6 +10588,8 @@ pub(crate) enum DataMenu {
     Pcd,
     CsvBlockModel,
     CsvDrillHole,
+    /// Composited quality values as design points: import only, Geology.
+    QualityPoints,
     /// The corrections worksheet: export only.
     CorrectionsWorksheet,
     Geotiff,
