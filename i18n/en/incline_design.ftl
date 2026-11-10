@@ -1,4 +1,4 @@
-# Incline — English message catalog (canonical source).
+# Incline: English message catalog (canonical source).
 #
 # Every `tr!(...)` call in the code is checked against THIS file at compile time:
 # an unknown id or a missing argument fails the build. Other languages
@@ -25,7 +25,7 @@ status-cpu = cpu
 status-memory = memory
 status-language = Language
 
-## Menu bar — File
+## Menu bar: File
 
 menu-file = File
 menu-file-save-project = Save Project
@@ -42,7 +42,7 @@ menu-file-export-viewport-image = Export Viewport Image...
 menu-file-about = About { $app }...
 menu-file-exit = Exit Application
 
-## Menu bar — View
+## Menu bar: View
 
 menu-view = View
 
@@ -1746,7 +1746,7 @@ schedule-run-still-showing = Still showing run { $run }: { $status }
 schedule-bar-reclaimed = Reclaimed: { $tonnes } t
 schedule-bar-reclaimed-of = Reclaimed: { $tonnes } t of the { $cap } t cap
 schedule-dispatch-reclaim = Reclaiming
-schedule-dispatch-heading = { $kind } — { $source }
+schedule-dispatch-heading = { $kind }: { $source }
 schedule-span-hours = { $from } → { $to } ({ $hours } h)
 schedule-tonnes-per-day = { $value } t/day
 schedule-dispatch-tonnes-rate = { $tonnes } t at { $rate } t/h
@@ -1927,7 +1927,7 @@ sequence-material-unmapped = no block model maps a value onto the chosen field
 
 ## Schedule → the floating sequence editor
 
-sequence-editor-title = Edit Sequence — ⁨{ $bar }⁩
+sequence-editor-title = Edit Sequence: ⁨{ $bar }⁩
 sequence-editor-no-run = ⁨{ $reason }⁩ Run Solids → Reserving to pick dig blocks for this bar.
 sequence-editor-order = Dig order
 sequence-editor-empty-order = No dig blocks yet
@@ -2484,7 +2484,7 @@ gantt-palette-delay = Delay
 gantt-palette-hint = Drag onto a machine's row to add a { $item } bar there.
 gantt-delay-type-title = Delay type
 gantt-delay-types-setup = Set up delay types…
-gantt-delay-heading = { $kind } — { $source }
+gantt-delay-heading = { $kind }: { $source }
 gantt-delay-calendar-note = The schedule gives this machine no work here.
 gantt-delay-bar-note = Holds the machine while it is the highest-priority bar open. Bars in higher lanes still work through it.
 gantt-delay-change-type = Delay Type
