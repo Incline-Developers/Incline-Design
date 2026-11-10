@@ -33,7 +33,7 @@ use crate::{
         plot::format_quantity,
         prismoid_grid::{
             AddedValues, BuildRefusal, CellReading, CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, OpenPrismoidGrid, PrismoidBuild, PrismoidColorBy, PrismoidGrid,
-            PrismoidGridId, PrismoidGridSummary, QualitySurface, ValuesRefusal, Weighting,
+            PrismoidGridId, PrismoidGridSummary, QualitySurface, SectionCrossing, ValuesRefusal, Weighting, ramp_position,
         },
         progress::{Phase, Progress},
         project::{ModelEnvelope, ProjectItemState, unique_item_name},
@@ -43,13 +43,17 @@ use crate::{
         spatial::TriangleBvh,
         triangulation::{OpenTriangulation, QualityMark, TriangulationId, spatial_surface_face_order},
     },
-    rendering::{camera::SectionSlab, color::linear_to_srgb_byte, scene::drill_hole_cache::evaluate_stops},
+    rendering::{
+        camera::SectionSlab,
+        color::linear_to_srgb_byte,
+        scene::{drill_hole_cache::evaluate_stops, section_surface_lines::SectionCellsOfGrid},
+    },
     ui::state::{CellSelection, EditorState, InspectorRow, InspectorRows, SelectionMode, Workspace},
     userspace_error, userspace_log, userspace_warn,
 };
 
 /// The dark line round a drawn grid's roof and floor.
-const PRISMOID_OUTLINE_COLOR: [f32; 4] = [0.05, 0.06, 0.08, 1.0];
+pub(crate) const PRISMOID_OUTLINE_COLOR: [f32; 4] = [0.05, 0.06, 0.08, 1.0];
 
 /// Counts cell selection changes over the session; each keys its outline.
 static NEXT_CELL_SELECTION_REVISION: AtomicU64 = AtomicU64::new(1);
@@ -651,6 +655,105 @@ impl App<'_> {
         let maps = self.prismoid_drawn.iter().filter_map(|drawn| drawn.map.as_ref());
         self.prismoid_rasters = self.raster_textures.iter().chain(maps).cloned().collect();
         self.prismoid_scene_key = Some(key);
+    }
+
+    /// Cut the drawn grids along a 2D section again, only when the plane, a
+    /// grid, its colours or the cell selection moved since the last cut: a
+    /// still section costs a hash a frame.
+    pub(crate) fn refresh_section_prismoid_cells(&mut self) {
+        let Some(graphics) = self.graphics.as_mut() else {
+            return;
+        };
+        let slab = graphics.section_slab();
+        let key = section_cells_key(&self.editor, slab, &self.prismoid_grids, &self.prismoid_drawn);
+        if key == self.section_cells_key {
+            return;
+        }
+        self.section_cells_key = key;
+        let mut cut = Vec::new();
+        if let (Some(_), Some(slab)) = (key, slab) {
+            for item in section_grids(&self.editor, &self.prismoid_grids, &self.prismoid_drawn) {
+                let crossings = item.grid.section_crossings(slab.point.truncate(), slab.normal.truncate());
+                if crossings.is_empty() {
+                    continue;
+                }
+                let held = self
+                    .editor
+                    .cell_selection
+                    .as_ref()
+                    .filter(|selection| selection.entity == item.entity_id() && Arc::ptr_eq(&selection.grid, &item.grid));
+                cut.push(SectionCellsOfGrid {
+                    colors: crossings.iter().map(|crossing| section_colors(item, crossing)).collect(),
+                    selected: crossings.iter().map(|crossing| held.is_some_and(|selection| selection.cells[crossing.cell])).collect(),
+                    crossings,
+                });
+            }
+        }
+        graphics.set_section_cells(cut);
+    }
+}
+
+/// The grids a section shows cells of: loaded, not hidden, and drawn from
+/// the grid they hold now.
+fn section_grids<'g>(editor: &'g EditorState, grids: &'g [OpenPrismoidGrid], drawn: &'g [DrawnPrismoidGrid]) -> impl Iterator<Item = &'g OpenPrismoidGrid> + Clone {
+    grids.iter().filter(move |item| {
+        item.state.loaded
+            && !editor.hidden_handles.contains(&item.entity_id())
+            && drawn
+                .iter()
+                .any(|drawn| drawn.surface.prismoid_grid == Some(item.id) && Arc::ptr_eq(&drawn.source, &item.grid))
+    })
+}
+
+/// What the section's prismoid cells are cut and coloured from: the plane,
+/// then each shown grid's id, grid, colour choice and flat colour, and the
+/// revision of a cell selection on it. The slab's width is not in it, as the
+/// cut is on the plane. `None` with no cells to draw: off Geology, no 2D
+/// section, or no grid drawn.
+fn section_cells_key(editor: &EditorState, slab: Option<SectionSlab>, grids: &[OpenPrismoidGrid], drawn: &[DrawnPrismoidGrid]) -> Option<u64> {
+    if editor.active_workspace != Workspace::Geology {
+        return None;
+    }
+    let slab = slab.filter(|slab| slab.outlines)?;
+    let shown = section_grids(editor, grids, drawn);
+    shown.clone().next()?;
+    let mut hasher = DefaultHasher::new();
+    crate::app::commands::slice::hash_section_plane(&slab, &mut hasher);
+    for item in shown {
+        item.id.hash(&mut hasher);
+        (Arc::as_ptr(&item.grid) as usize).hash(&mut hasher);
+        item.color_by.value.hash(&mut hasher);
+        std::mem::discriminant(&item.color_by.preset).hash(&mut hasher);
+        item.color.map(f32::to_bits).hash(&mut hasher);
+        let selection = editor.cell_selection.as_ref().filter(|selection| selection.entity == item.entity_id());
+        selection.map(|selection| selection.revision).hash(&mut hasher);
+    }
+    Some(hasher.finish())
+}
+
+/// One colour per point of a crossing, from the inputs the body's colours
+/// are made from: a value gives the cell one colour, thickness each point its
+/// own. The grid's own colour, opaque, where the body draws flat or the cell
+/// has no value.
+fn section_colors(item: &OpenPrismoidGrid, crossing: &SectionCrossing) -> Vec<[f32; 4]> {
+    let [red, green, blue, _] = item.color;
+    let flat = vec![[red, green, blue, 1.0]; crossing.points.len()];
+    let (index, range) = map_inputs(item);
+    let Some((min, max)) = range.filter(|_| item.grid.lattice.is_regular()) else {
+        return flat;
+    };
+    let preset = item.color_by.preset;
+    let stops = preset.stops();
+    let ramp = |value: f64| {
+        let [red, green, blue] = evaluate_stops(ramp_position(value, (min, max)), &stops, preset.smooth());
+        [red, green, blue, 1.0]
+    };
+    match index {
+        Some(index) => match item.grid.cell_values[index].values[crossing.cell].filter(|value| value.is_finite()) {
+            Some(value) => vec![ramp(value); crossing.points.len()],
+            None => flat,
+        },
+        None => crossing.points.iter().map(|point| ramp(point.roof - point.floor)).collect(),
     }
 }
 

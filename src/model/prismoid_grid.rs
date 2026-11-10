@@ -141,10 +141,12 @@ impl Lattice {
     /// between cells belongs to the cell beyond it, and the far edge to the
     /// last cell. `None` outside the lattice.
     pub(crate) fn cell_at(&self, at: DVec2) -> Option<(usize, usize)> {
-        let (u_edges, v_edges) = (edges(&self.u_sizes), edges(&self.v_sizes));
-        // The exact inverse of `corners`, also for axes `check` admits a
-        // hair off unit and perpendicular.
-        let DVec2 { x: s, y: t } = DMat2::from_cols(self.u, self.v).inverse() * (at - self.origin);
+        self.cell_at_in(at, &edges(&self.u_sizes), &edges(&self.v_sizes))
+    }
+
+    /// [`Self::cell_at`] from the lattice's edge distances.
+    fn cell_at_in(&self, at: DVec2, u_edges: &[f64], v_edges: &[f64]) -> Option<(usize, usize)> {
+        let DVec2 { x: s, y: t } = self.to_lattice(at);
         let find = |edges: &[f64], along: f64| {
             let total = edges[edges.len() - 1];
             // Written so NaN is outside.
@@ -153,7 +155,14 @@ impl Lattice {
             }
             Some((edges.partition_point(|edge| *edge <= along) - 1).min(edges.len() - 2))
         };
-        Some((find(&u_edges, s)?, find(&v_edges, t)?))
+        Some((find(u_edges, s)?, find(v_edges, t)?))
+    }
+
+    /// A plan point as distances along `u` and `v` from the origin: the exact
+    /// inverse of `corners`, also for axes `check` admits a hair off unit and
+    /// perpendicular.
+    fn to_lattice(&self, at: DVec2) -> DVec2 {
+        DMat2::from_cols(self.u, self.v).inverse() * (at - self.origin)
     }
 
     /// The plan position of the middle of a cell.
@@ -166,6 +175,12 @@ impl Lattice {
         let s = (u_edges[column] + u_edges[column + 1]) / 2.0;
         let t = (v_edges[row] + v_edges[row + 1]) / 2.0;
         self.origin + self.u * s + self.v * t
+    }
+
+    /// Where a plan point lies in a cell, from 0 to 1 along `u` and along `v`.
+    fn local_in(&self, column: usize, row: usize, at: DVec2, u_edges: &[f64], v_edges: &[f64]) -> DVec2 {
+        let DVec2 { x: s, y: t } = self.to_lattice(at);
+        DVec2::new((s - u_edges[column]) / self.u_sizes[column], (t - v_edges[row]) / self.v_sizes[row])
     }
 
     /// Whether every column has one size and every row one size.
@@ -652,6 +667,122 @@ impl PrismoidGrid {
         best.map(|(cell, _)| cell)
     }
 
+    /// Where the vertical plane through `point` with horizontal unit `normal`
+    /// crosses the active cells, in order along the plane: distances from
+    /// `point` towards `(-normal.y, normal.x)`, as a section frames them.
+    /// Heights lie on the triangles [`Self::closed_mesh`] draws, so a piece
+    /// across a cell's a-c diagonal gains a point on it.
+    pub(crate) fn section_crossings(&self, point: DVec2, normal: DVec2) -> Vec<SectionCrossing> {
+        const LEVEL: f64 = 1e-12;
+        let lattice = &self.lattice;
+        let columns = lattice.columns();
+        let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));
+        let along = DVec2::new(-normal.y, normal.x);
+        let inverse = DMat2::from_cols(lattice.u, lattice.v).inverse();
+        let (start, slope) = (inverse * (point - lattice.origin), inverse * along);
+        let axes = [(start.x, slope.x, &u_edges), (start.y, slope.y, &v_edges)];
+        let (mut enter, mut leave) = (f64::NEG_INFINITY, f64::INFINITY);
+        for (from, rate, edges) in axes {
+            let total = edges[edges.len() - 1];
+            if rate.abs() <= LEVEL {
+                if !(0.0..=total).contains(&from) {
+                    return Vec::new();
+                }
+            } else {
+                let (first, last) = (-from / rate, (total - from) / rate);
+                enter = enter.max(first.min(last));
+                leave = leave.min(first.max(last));
+            }
+        }
+        let crossed = enter.is_finite() && leave.is_finite() && enter < leave;
+        if !crossed {
+            return Vec::new();
+        }
+        let mut stops = vec![enter, leave];
+        for (from, rate, edges) in axes {
+            if rate.abs() > LEVEL {
+                stops.extend(edges.iter().map(|edge| (edge - from) / rate).filter(|stop| enter < *stop && *stop < leave));
+            }
+        }
+        stops.sort_by(f64::total_cmp);
+        let shortest = 1e-9 * lattice.least_size();
+        let mut crossings = Vec::new();
+        for pair in stops.windows(2) {
+            let (from, to) = (pair[0], pair[1]);
+            if to - from <= shortest {
+                continue;
+            }
+            // The middle of the piece, so a trace on a lattice line takes the
+            // cells beyond it, as `cell_at` does.
+            let Some((column, row)) = lattice.cell_at_in(point + along * ((from + to) / 2.0), &u_edges, &v_edges) else {
+                continue;
+            };
+            let cell = row * columns + column;
+            if !self.active[cell] {
+                continue;
+            }
+            let ends = [from, to].map(|stop| point + along * stop);
+            let [first, last] = ends.map(|plan| {
+                let local = lattice.local_in(column, row, plan, &u_edges, &v_edges);
+                local.x - local.y
+            });
+            let mut plans = vec![ends[0]];
+            if first * last < 0.0 {
+                plans.push(point + along * (from + (to - from) * first / (first - last)));
+            }
+            plans.push(ends[1]);
+            let points = plans
+                .into_iter()
+                .map(|plan| {
+                    let (roof, floor) = self.heights_at(cell, plan, &u_edges, &v_edges);
+                    SectionPoint { plan, roof, floor }
+                })
+                .collect();
+            crossings.push(SectionCrossing { cell, along: [from, to], points });
+        }
+        crossings
+    }
+
+    /// Roof and floor over a plan point in a cell, on the triangles
+    /// [`Self::closed_mesh`] draws: with corners a, b (along `u`), c and d
+    /// (along `v`), `[a, b, c]` where the point is at least as far across the
+    /// cell along `u` as along `v`, else `[a, c, d]`.
+    fn heights_at(&self, cell: usize, plan: DVec2, u_edges: &[f64], v_edges: &[f64]) -> (f64, f64) {
+        let lattice = &self.lattice;
+        let columns = lattice.columns();
+        let (column, row) = (cell % columns, cell / columns);
+        let local = lattice.local_in(column, row, plan, u_edges, v_edges).clamp(DVec2::ZERO, DVec2::ONE);
+        let (fs, ft) = (local.x, local.y);
+        let a = row * (columns + 1) + column;
+        let d = a + columns + 1;
+        let (b, c) = (a + 1, d + 1);
+        let height = |z: &[f64]| {
+            if fs >= ft {
+                z[a] + fs * (z[b] - z[a]) + ft * (z[c] - z[b])
+            } else {
+                z[a] + ft * (z[d] - z[a]) + fs * (z[c] - z[d])
+            }
+        };
+        (height(&self.roof), height(&self.floor))
+    }
+
+    /// The active cell a point on a section lies in, between the floor and
+    /// the roof as drawn; `None` above the roof, below the floor, off the
+    /// lattice or on an inactive cell.
+    #[allow(dead_code, reason = "picked from the section in a later commit")]
+    pub(crate) fn section_cell_at(&self, at: DVec3) -> Option<usize> {
+        let lattice = &self.lattice;
+        let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));
+        let plan = at.truncate();
+        let (column, row) = lattice.cell_at_in(plan, &u_edges, &v_edges)?;
+        let cell = row * lattice.columns() + column;
+        if !self.active[cell] {
+            return None;
+        }
+        let (roof, floor) = self.heights_at(cell, plan, &u_edges, &v_edges);
+        (floor <= at.z && at.z <= roof).then_some(cell)
+    }
+
     /// The boxes [`Self::blocks`] gives in the frame of a block model made
     /// from the grid: the lattice's, or with an `envelope` (the grid on its
     /// axes) the envelope's, from its corner at the base RL.
@@ -895,6 +1026,25 @@ pub(crate) struct PrismoidMesh {
     pub(crate) outline: Vec<[u32; 2]>,
 }
 
+/// Where a vertical plane crosses one active prismoid: the cell, the span of
+/// distances along the plane, and two points (three across the drawn
+/// diagonal) in order along it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SectionCrossing {
+    pub(crate) cell: usize,
+    pub(crate) along: [f64; 2],
+    pub(crate) points: Vec<SectionPoint>,
+}
+
+/// A point of a [`SectionCrossing`]: its plan position and the drawn roof
+/// and floor over it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SectionPoint {
+    pub(crate) plan: DVec2,
+    pub(crate) roof: f64,
+    pub(crate) floor: f64,
+}
+
 /// A grid's vertical thickness as positions on the grid's colour scale, row
 /// by row, with the map from world XY to their texture coordinates.
 pub(crate) struct ThicknessMap {
@@ -937,7 +1087,7 @@ fn texel_world_to_uv(lattice: &Lattice, (column_step, width): (usize, usize), (r
 
 /// `value` as a position from 0 to 1 across `(min, max)`, 0.5 where the
 /// range is flat.
-fn ramp_position(value: f64, (min, max): (f64, f64)) -> f32 {
+pub(crate) fn ramp_position(value: f64, (min, max): (f64, f64)) -> f32 {
     if (max - min).abs() <= HEIGHT_TOLERANCE {
         0.5
     } else {

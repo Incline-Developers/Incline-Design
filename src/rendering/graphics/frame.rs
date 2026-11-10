@@ -466,6 +466,29 @@ impl<'a> Graphics<'a> {
                 "Section Surface Line Buffer",
             );
         }
+        if self.section_cells.refresh(self.scene_origin, self.camera.forward()) && !self.section_cells.indices().is_empty() {
+            let (vertices, indices) = (self.section_cells.vertices(), self.section_cells.indices());
+            Self::ensure_stream_capacity(
+                &self.device,
+                &mut self.section_cell_vertex_gpu,
+                &mut self.section_cell_vertex_capacity,
+                vertices.len(),
+                size_of::<Vertex>(),
+                wgpu::BufferUsages::VERTEX,
+                "Section Cell Vertex Buffer",
+            );
+            Self::ensure_stream_capacity(
+                &self.device,
+                &mut self.section_cell_index_gpu,
+                &mut self.section_cell_index_capacity,
+                indices.len(),
+                size_of::<u32>(),
+                wgpu::BufferUsages::INDEX,
+                "Section Cell Index Buffer",
+            );
+            self.queue.write_buffer(&self.section_cell_vertex_gpu, 0, bytemuck::cast_slice(vertices));
+            self.queue.write_buffer(&self.section_cell_index_gpu, 0, bytemuck::cast_slice(indices));
+        }
 
         if self.overlay_dirty {
             let overlay_vp = self.view_proj();

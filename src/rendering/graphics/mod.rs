@@ -31,7 +31,7 @@ use crate::{
             bounds::{scene_bounds, visible_object_aabbs},
             build::{DocumentDrawBatch, DocumentObjectRanges, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
             document_style::{DocumentStyleGpu, DocumentStyleSlots},
-            section_surface_lines::{SectionSurfaceStrokes, SurfaceLines},
+            section_surface_lines::{SectionCells, SectionCellsOfGrid, SectionSurfaceStrokes, SurfaceLines},
         },
         snap::SNAP_THRESHOLD_PX,
         text::TextSystem,
@@ -505,6 +505,13 @@ pub(crate) struct Graphics<'a> {
     /// it alone.
     pub(super) section_surface: SectionSurfaceStrokes,
     pub(super) section_surface_capacity: usize,
+    /// The prismoids a 2D section crosses, as the App last cut them, filled
+    /// from their own buffers.
+    pub(super) section_cells: SectionCells,
+    pub(super) section_cell_vertex_gpu: wgpu::Buffer,
+    pub(super) section_cell_index_gpu: wgpu::Buffer,
+    pub(super) section_cell_vertex_capacity: usize,
+    pub(super) section_cell_index_capacity: usize,
     pub(super) pick_records: Vec<PickRecord>,
     pub(super) text_pick_records: Vec<TextPickRecord>,
     pub(super) document_draw_batches: Vec<DocumentDrawBatch>,
@@ -538,6 +545,10 @@ pub(crate) struct Graphics<'a> {
     pub(super) model_envelope_outline: Option<(u64, passes::ChunkBoundsOutline)>,
     /// The rim round the picked prismoids, keyed by the selection's revision.
     pub(super) cell_selection_outline: Option<(u64, passes::ChunkBoundsOutline)>,
+    /// The lines between the section's crossed prismoids, and round the
+    /// selected ones, keyed by the cells' revision.
+    pub(super) section_cell_lines: Option<(u64, passes::ChunkBoundsOutline)>,
+    pub(super) section_cell_rim: Option<(u64, passes::ChunkBoundsOutline)>,
     /// Live map render behind the engineering-drawing dialog's preview, and
     /// the framing/scene fingerprint it was rendered for.
     pub(super) plot_preview: Option<plot::PlotPreviewTarget>,
@@ -946,6 +957,13 @@ impl<'a> Graphics<'a> {
 
     pub(crate) fn set_section_surface_lines(&mut self, surfaces: Vec<SurfaceLines>) {
         self.section_surface.set(surfaces);
+    }
+
+    /// The prismoids the section crosses, filled by the next scene pass,
+    /// which the dropped cache key forces; the document is left alone.
+    pub(crate) fn set_section_cells(&mut self, grids: Vec<SectionCellsOfGrid>) {
+        self.section_cells.set(grids);
+        self.scene_cache_key = None;
     }
 
     pub(crate) fn recolor_section_surface_lines(&mut self, colors: impl Iterator<Item = [f32; 4]>) {

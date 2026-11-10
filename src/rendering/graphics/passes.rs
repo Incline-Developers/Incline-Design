@@ -660,10 +660,15 @@ impl<'a> Graphics<'a> {
     }
 
     /// Rebuild [`Self::cell_selection_outline`] when the selection, the
-    /// scene origin or the scale factor moved since it was built.
+    /// scene origin or the scale factor moved since it was built. None in a
+    /// 2D section, whose own rim stays on the plane.
     fn rebuild_cell_selection_outline(&mut self, editor: &EditorState) {
         let held = self.cell_selection_outline.take();
-        let selection = editor.cell_selection.as_ref().filter(|_| editor.active_workspace == crate::ui::state::Workspace::Geology);
+        let section_2d = self.camera_uniform.section_cuts();
+        let selection = editor
+            .cell_selection
+            .as_ref()
+            .filter(|_| editor.active_workspace == crate::ui::state::Workspace::Geology && !section_2d);
         self.cell_selection_outline = selection.map(|selection| {
             let segments = selection.outline.iter().map(|[from, to]| (*from, *to));
             self.keyed_outline(
@@ -675,6 +680,52 @@ impl<'a> Graphics<'a> {
                 "Cell Selection Outline Strokes",
             )
         });
+    }
+
+    /// Rebuild the lines between the section's crossed prismoids and round
+    /// the selected ones when the cells were cut again, or the scene origin
+    /// or the scale factor moved.
+    fn rebuild_section_cell_outlines(&mut self) {
+        let revision = self.section_cells.revision();
+        let held = self.section_cell_lines.take();
+        let walls = self.section_cells.walls();
+        self.section_cell_lines = (!walls.is_empty()).then(|| {
+            self.keyed_outline(
+                held,
+                revision,
+                walls.iter().copied(),
+                crate::rendering::scene::section_surface_lines::SECTION_CELL_LINE_WIDTH,
+                crate::app::commands::prismoid_grid::PRISMOID_OUTLINE_COLOR,
+                "Section Cell Line Strokes",
+            )
+        });
+        let held = self.section_cell_rim.take();
+        let rim = self.section_cells.rim();
+        self.section_cell_rim = (!rim.is_empty()).then(|| {
+            self.keyed_outline(
+                held,
+                revision,
+                rim.iter().copied(),
+                CELL_OUTLINE_WIDTH,
+                crate::ui::SELECTION_COLOR_F32,
+                "Section Cell Rim Strokes",
+            )
+        });
+    }
+
+    /// The section's crossed prismoids, filled through the document fill
+    /// pipeline from their own buffers.
+    fn draw_section_cell_fills<'pass>(&'pass self, render_pass: &mut wgpu::RenderPass<'pass>) {
+        let count = self.section_cells.indices().len() as u32;
+        if count == 0 {
+            return;
+        }
+        render_pass.set_pipeline(&self.pipes().render_pipeline);
+        render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
+        render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.section_cell_vertex_gpu.slice(..));
+        render_pass.set_index_buffer(self.section_cell_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..count, 0, 0..1);
     }
 
     /// `held` again when it was built for `key`, the scene origin and the
@@ -736,6 +787,7 @@ impl<'a> Graphics<'a> {
             self.rebuild_chunk_bounds_outline(editor, triangulations, point_clouds);
             self.rebuild_model_envelope_outline(editor);
             self.rebuild_cell_selection_outline(editor);
+            self.rebuild_section_cell_outlines();
         }
         let bg_color = editor.renderer_background_color;
         let clear_color = [bg_color[0].clamp(0.0, 1.0) as f64, bg_color[1].clamp(0.0, 1.0) as f64, bg_color[2].clamp(0.0, 1.0) as f64];
@@ -1037,6 +1089,7 @@ impl<'a> Graphics<'a> {
         }
 
         if section_cuts {
+            self.draw_section_cell_fills(&mut render_pass);
             self.draw_section_cuts(&mut render_pass, triangulations, editor, &frustum, &mut surface_stats);
         }
 
@@ -1511,7 +1564,8 @@ impl<'a> Graphics<'a> {
             render_pass.draw(0..6, 0..outline.instance_count);
         }
 
-        for (_, outline) in [&self.model_envelope_outline, &self.cell_selection_outline].into_iter().flatten() {
+        let keyed = [&self.model_envelope_outline, &self.cell_selection_outline, &self.section_cell_lines, &self.section_cell_rim];
+        for (_, outline) in keyed.into_iter().flatten() {
             render_pass.set_pipeline(&self.pipes().stroke_render_pipeline);
             render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
             render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);

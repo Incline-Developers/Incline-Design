@@ -363,16 +363,22 @@ pub(crate) fn section_surface_lines_key(editor: &EditorState, slab: Option<Secti
     }
     let slab = slab?;
     let mut hasher = DefaultHasher::new();
-    for value in slab.normal.to_array() {
-        value.to_bits().hash(&mut hasher);
-    }
-    // Where the plane lies, to the micrometre, not where on it the section is
-    // centred: a pan along the plane keeps the lines.
-    ((slab.point.dot(slab.normal) * 1.0e6).round() as i64).hash(&mut hasher);
+    hash_section_plane(&slab, &mut hasher);
     for triangulation in shown_surfaces(editor, triangulations) {
         triangulation.id.hash(&mut hasher);
         triangulation.state.revision().hash(&mut hasher);
         (std::sync::Arc::as_ptr(&triangulation.mesh) as usize).hash(&mut hasher);
     }
     Some(hasher.finish())
+}
+
+/// The section's plane into `hasher`: its normal, and where it lies to the
+/// micrometre, not where on it the section is centred, so a pan along the
+/// plane keeps what was cut.
+pub(crate) fn hash_section_plane(slab: &SectionSlab, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    for value in slab.normal.to_array() {
+        value.to_bits().hash(hasher);
+    }
+    ((slab.point.dot(slab.normal) * 1.0e6).round() as i64).hash(hasher);
 }

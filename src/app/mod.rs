@@ -401,6 +401,9 @@ pub(crate) struct App<'a> {
     section_surface_lines_key: Option<u64>,
     /// The colours those lines were last drawn in, one per shown surface.
     section_surface_colors: Vec<[f32; 4]>,
+    /// What the section's prismoid cells were last cut from, `None` while
+    /// none are drawn.
+    section_cells_key: Option<u64>,
     editor: EditorState,
     workspace: ProjectStore,
     /// Explorer/menu snapshot reused while its allocation-free source
@@ -699,6 +702,7 @@ impl<'a> Default for App<'a> {
             last_snap_poll_instant: None,
             section_surface_lines_key: None,
             section_surface_colors: Vec::new(),
+            section_cells_key: None,
             editor: EditorState::new(),
             workspace: ProjectStore::default(),
             ui_project_view_cache: RefCell::new(None),
@@ -1632,15 +1636,17 @@ impl<'a> App<'a> {
         self.scene_document_key = None;
         self.section_surface_lines_key = None;
         self.section_surface_colors.clear();
+        self.section_cells_key = None;
         // Item and object ids restart with the replacement project, so the
         // renderer's id-keyed caches would otherwise keep drawing this
         // project's geometry under the next one's items until something
         // that clears them (a view fit) happened to run.
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.clear_item_caches();
-            // Leaving the section above cut nothing, so the lines go with
-            // the key, or they stay drawn over the next project.
+            // Leaving the section above cut nothing, so the lines and cells
+            // go with their keys, or they stay drawn over the next project.
             graphics.set_section_surface_lines(Vec::new());
+            graphics.set_section_cells(Vec::new());
         }
         self.redraw_requested = true;
     }
@@ -2080,6 +2086,7 @@ impl<'a> App<'a> {
         self.graphics = None;
         // A new renderer starts with no surface lines: cut them again for it.
         self.section_surface_lines_key = None;
+        self.section_cells_key = None;
         #[cfg(target_os = "windows")]
         {
             self.trackpad = None;
