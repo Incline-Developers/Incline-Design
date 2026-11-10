@@ -10,14 +10,14 @@
 // The dropdowns below are all in the system menu bar on macOS (`mac.rs`), and
 // the mark gives way to the system's window buttons there, so nothing this
 // module still draws there needs any of this.
+// Only the recent project rows take a hint, and the browser has none.
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+use crate::ui::widgets::hint::Hint;
 #[cfg(not(target_os = "macos"))]
 use crate::ui::{
     state::{UiProjectEntry, ViewToggle},
     themed_icon,
-    widgets::{
-        context_menu::{ContextMenuAction, MenuBarMenu, context_menu_separator, context_submenu},
-        hint::Hint,
-    },
+    widgets::context_menu::{ContextMenuAction, MenuBarMenu, context_menu_separator, context_submenu},
 };
 use crate::{
     i18n::tr,

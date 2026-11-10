@@ -1,5 +1,8 @@
 //! Object editing and viewport tool dialogs.
 
+// Only the recent project rows take a hint, and the browser has none.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::ui::widgets::hint::Hint;
 use crate::{
     i18n::tr,
     model::{Axis, Document},
@@ -8,7 +11,6 @@ use crate::{
         themed_icon,
         widgets::{
             context_menu::{ContextMenu, ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
-            hint::Hint,
             menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
             viewport::ViewportDockPanel,
         },
