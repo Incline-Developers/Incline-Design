@@ -1811,6 +1811,10 @@ fn draw_global_dialogs(
         dialogs::triangulation::draw_prismoid_grid_surface_dialog(root_ui, editor, project, commands);
     }
 
+    if editor.tri_prismoid_difference_open {
+        dialogs::triangulation::draw_difference_prismoid_grids_dialog(root_ui, editor, project, commands);
+    }
+
     if editor.tri_prismoid_mask_open {
         dialogs::triangulation::draw_mask_prismoid_grid_dialog(root_ui, editor, document, project, commands);
     }

@@ -257,6 +257,29 @@ impl Lattice {
         DMat2::from_cols(self.u, self.v).inverse() * (at - self.origin)
     }
 
+    /// The (column, row) of this lattice's cell (0, 0) in `other`'s cells
+    /// when the two share one lattice: both regular, the same axes and cell
+    /// size to `NODE_TOLERANCE` (the size's as a fraction), their origins a
+    /// whole number of cells apart. Negative where this lattice starts before `other`; `None` for
+    /// two lattices, a 10 m grid against a 5 m one included.
+    pub(crate) fn offset_to(&self, other: &Lattice) -> Option<(i64, i64)> {
+        if !self.is_regular() || !other.is_regular() {
+            return None;
+        }
+        let same_axis = |mine: DVec2, theirs: DVec2| (mine - theirs).abs().max_element() <= NODE_TOLERANCE;
+        if !same_axis(self.u, other.u) || !same_axis(self.v, other.v) {
+            return None;
+        }
+        let mine = DVec2::new(*self.u_sizes.first()?, *self.v_sizes.first()?);
+        let theirs = DVec2::new(*other.u_sizes.first()?, *other.v_sizes.first()?);
+        if (mine - theirs).abs().cmpgt(mine * NODE_TOLERANCE).any() {
+            return None;
+        }
+        let offset = other.to_lattice(self.origin) / theirs;
+        let whole = offset.round();
+        ((offset - whole).abs().max_element() <= NODE_TOLERANCE).then_some((whole.x as i64, whole.y as i64))
+    }
+
     /// The plan position of the middle of a cell.
     pub(crate) fn cell_centre(&self, column: usize, row: usize) -> DVec2 {
         self.cell_centre_in(column, row, &edges(&self.u_sizes), &edges(&self.v_sizes))
@@ -1528,6 +1551,41 @@ pub(crate) struct AddedValues {
     pub(crate) values: CellValues,
 }
 
+/// What two prismoid grids are compared by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Quantity {
+    /// A cell's box height, the inspector's mean thickness.
+    VerticalThickness,
+    /// A value both grids hold, by name.
+    Value(String),
+}
+
+/// What a comparison of two grids found, this grid less the other.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DifferenceReport {
+    /// Cells given a difference.
+    pub(crate) compared: usize,
+    /// This grid's active cells given none: no active counterpart in the
+    /// other grid, or no value on one side.
+    pub(crate) left_out_a: usize,
+    /// The other grid's active cells with no active cell of this grid over them.
+    pub(crate) outside_a: usize,
+    pub(crate) low: f64,
+    pub(crate) high: f64,
+    pub(crate) mean: f64,
+    /// For vertical thickness, the compared cells' box volumes, this grid
+    /// less the other, in cubic metres.
+    pub(crate) volume: Option<f64>,
+}
+
+/// Why two grids cannot be compared.
+#[derive(Debug)]
+pub(crate) enum DifferenceRefusal {
+    /// The lattices differ in axes, cell size or alignment.
+    NotOneLattice,
+    Cancelled,
+}
+
 /// Values about to join a grid as the refusals that need no cells see them.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ValuesMark<'a> {
@@ -1655,6 +1713,104 @@ impl PrismoidGrid {
         })
     }
 
+    /// This grid less `other`, cell by cell, as values named `name` in
+    /// `unit`: for each active cell with an active counterpart on the shared
+    /// lattice, the box height less the box height, or the value less the
+    /// value where both are finite. Cells without a counterpart or a value
+    /// on either side get none and are counted. `Ok(None)` when no cell
+    /// compares; `Err` for two lattices or on cancel, checked once per row.
+    pub(crate) fn difference(
+        &self,
+        other: &PrismoidGrid,
+        quantity: &Quantity,
+        name: String,
+        unit: String,
+        cancel: &CancelFlag,
+    ) -> Result<Option<(CellValues, DifferenceReport)>, DifferenceRefusal> {
+        let (shift_column, shift_row) = self.lattice.offset_to(&other.lattice).ok_or(DifferenceRefusal::NotOneLattice)?;
+        let index_in = |grid: &PrismoidGrid| match quantity {
+            Quantity::VerticalThickness => None,
+            Quantity::Value(value) => grid.cell_values.iter().position(|values| same_quality_name(&values.name, value)),
+        };
+        let (mine, theirs) = (index_in(self), index_in(other));
+        let thickness = *quantity == Quantity::VerticalThickness;
+        // Each lattice's edge distances and stretch, taken once and only
+        // where boxes are measured.
+        let frame_of = |grid: &PrismoidGrid| thickness.then(|| (edges(&grid.lattice.u_sizes), edges(&grid.lattice.v_sizes), grid.stretch()));
+        let (my_frame, their_frame) = (frame_of(self), frame_of(other));
+        // An active cell's quantity and, for thickness, its box volume;
+        // `None` without a value. A named value takes no measure.
+        let read = |grid: &PrismoidGrid, frame: &Option<(Vec<f64>, Vec<f64>, f64)>, index: Option<usize>, cell: usize| -> Option<(f64, f64)> {
+            let (value, volume) = match (index, frame) {
+                (Some(index), _) => (grid.cell_values[index].values[cell]?, 0.0),
+                (None, Some((u_edges, v_edges, stretch))) => {
+                    let (bounds, measure) = grid.measure_in(cell, u_edges, v_edges, *stretch)?;
+                    (bounds.upper.z - bounds.lower.z, measure.volume())
+                }
+                (None, None) => return None,
+            };
+            value.is_finite().then_some((value, volume))
+        };
+        let (columns, rows) = (self.lattice.columns() as i64, self.lattice.rows() as i64);
+        let (other_columns, other_rows) = (other.lattice.columns() as i64, other.lattice.rows() as i64);
+        let counterpart = |column: i64, row: i64| {
+            let (column, row) = (column + shift_column, row + shift_row);
+            ((0..other_columns).contains(&column) && (0..other_rows).contains(&row)).then_some((row * other_columns + column) as usize)
+        };
+        let mut values = vec![None; self.active.len()];
+        let mut matched = vec![false; other.active.len()];
+        let mut report = DifferenceReport {
+            compared: 0,
+            left_out_a: 0,
+            outside_a: 0,
+            low: f64::INFINITY,
+            high: f64::NEG_INFINITY,
+            mean: 0.0,
+            volume: thickness.then_some(0.0),
+        };
+        for row in 0..rows {
+            if cancel.is_cancelled() {
+                return Err(DifferenceRefusal::Cancelled);
+            }
+            for column in 0..columns {
+                let cell = (row * columns + column) as usize;
+                if !self.active[cell] {
+                    continue;
+                }
+                let their = counterpart(column, row).filter(|their| other.active[*their]);
+                if let Some(their) = their {
+                    matched[their] = true;
+                }
+                match their.and_then(|their| read(self, &my_frame, mine, cell).zip(read(other, &their_frame, theirs, their))) {
+                    Some(((a, a_volume), (b, b_volume))) => {
+                        let difference = a - b;
+                        values[cell] = Some(difference);
+                        report.compared += 1;
+                        report.low = report.low.min(difference);
+                        report.high = report.high.max(difference);
+                        report.mean += difference;
+                        if let Some(volume) = &mut report.volume {
+                            *volume += a_volume - b_volume;
+                        }
+                    }
+                    None => report.left_out_a += 1,
+                }
+            }
+        }
+        report.outside_a = other.active.iter().zip(&matched).filter(|(active, matched)| **active && !**matched).count();
+        if report.compared == 0 {
+            return Ok(None);
+        }
+        report.mean /= report.compared as f64;
+        let values = CellValues {
+            name,
+            unit,
+            role: CellValueRole::Quality,
+            values,
+        };
+        Ok(Some((values, report)))
+    }
+
     /// A copy of the grid with `added` merged in: a quality the grid already
     /// holds is replaced in place, new ones follow in order.
     pub(crate) fn with_values(&self, added: Vec<AddedValues>) -> Result<PrismoidGrid, ValuesRefusal> {
@@ -1729,4 +1885,24 @@ pub(crate) fn check_marks(held: &[(&str, CellValueRole)], added: &[ValuesMark<'_
         });
     }
     Ok(())
+}
+
+/// The refusal a difference named `name` meets against the grid's `held`
+/// names and roles, `other` the grid compared with: what [`check_marks`]
+/// refuses a quality, and the name of the held density, which the
+/// difference would replace as a quality and so take the tonnes away.
+pub(crate) fn check_difference_name(held: &[(&str, CellValueRole)], other: &str, name: &str) -> Result<(), ValuesRefusal> {
+    if held.iter().any(|(held, role)| *role == CellValueRole::Density && same_quality_name(held, name)) {
+        return Err(ValuesRefusal::Reserved {
+            surface: other.to_owned(),
+            quality: name.to_owned(),
+        });
+    }
+    let mark = ValuesMark {
+        surface: other,
+        name,
+        unit: "",
+        role: CellValueRole::Quality,
+    };
+    check_marks(held, &[mark])
 }

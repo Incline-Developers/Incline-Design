@@ -210,6 +210,8 @@ impl<'a> App<'a> {
                 | UiCommand::ExecuteAddPrismoidQualities { .. }
                 | UiCommand::OpenPrismoidGridToSurface
                 | UiCommand::ExecutePrismoidGridToSurface { .. }
+                | UiCommand::OpenDifferencePrismoidGrids
+                | UiCommand::ExecuteDifferencePrismoidGrids { .. }
                 | UiCommand::TogglePrismoidMask
                 | UiCommand::OpenMaskPrismoidGridByPolyline
                 | UiCommand::ExecuteMaskPrismoidGridByPolyline { .. }
@@ -2104,6 +2106,31 @@ impl<'a> App<'a> {
                 let result = self.prismoid_grid_to_surface(grid, value, name);
                 if result.is_ok() {
                     self.editor.tri_prismoid_surface_open = false;
+                }
+                result
+            }
+            UiCommand::OpenDifferencePrismoidGrids => {
+                let selected = self.selected_prismoid_grids();
+                let (grid, other) = match selected[..] {
+                    [grid] => (Some(grid), None),
+                    [grid, other] => (Some(grid), Some(other)),
+                    _ => {
+                        userspace_warn!("{}", tr!("ws-menubar-modelling-select-prismoid-grids"));
+                        return Ok(());
+                    }
+                };
+                self.editor.tri_prismoid_difference_open = true;
+                self.editor.tri_prismoid_difference_grid = grid;
+                self.editor.tri_prismoid_difference_other = other;
+                self.editor.tri_prismoid_difference_value = None;
+                self.editor.tri_prismoid_difference_name_input.clear();
+                self.editor.tri_prismoid_difference_name_auto = true;
+                Ok(())
+            }
+            UiCommand::ExecuteDifferencePrismoidGrids { grid, other, value, name } => {
+                let result = self.difference_prismoid_grids(grid, other, value, name);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_difference_open = false;
                 }
                 result
             }

@@ -38,8 +38,9 @@ use crate::{
         grid_surface::GridSurface,
         plot::format_quantity,
         prismoid_grid::{
-            AddedValues, BuildRefusal, CellReading, CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, OpenPrismoidGrid, PrismoidBuild, PrismoidColorBy, PrismoidGrid,
-            PrismoidGridId, PrismoidGridSummary, QualitySurface, SectionCrossing, SectionPoint, Stratum, ValuesRefusal, Weighting, build_strata, ramp_position,
+            AddedValues, BuildRefusal, CellReading, CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, DifferenceRefusal, DifferenceReport, OpenPrismoidGrid, PrismoidBuild,
+            PrismoidColorBy, PrismoidGrid, PrismoidGridId, PrismoidGridSummary, QualitySurface, Quantity, SectionCrossing, SectionPoint, Stratum, ValuesRefusal, Weighting,
+            build_strata, check_difference_name, ramp_position,
         },
         progress::{Phase, Progress},
         project::{ModelEnvelope, ProjectItemState, unique_item_name},
@@ -47,7 +48,7 @@ use crate::{
         rbf::NODE_BUDGET,
         solid_reserves::NumericTotal,
         spatial::TriangleBvh,
-        triangulation::{GeneratedTriangulationLog, OpenTriangulation, QualityMark, TriangulationId, same_quality_name, spatial_surface_face_order, unique_edges},
+        triangulation::{GeneratedTriangulationLog, OpenTriangulation, QualityMark, TriangulationId, same_quality_name, spatial_surface_face_order, unique_edges, unit_label},
     },
     rendering::{
         camera::SectionSlab,
@@ -344,41 +345,116 @@ impl App<'_> {
         let read_name = name.clone();
         let compute = move |cancel: &CancelFlag, progress: &Progress| add_qualities(&grid, &read_name, inputs, cancel, &progress.phase(0.0, 1.0));
         let apply = move |app: &mut App, result: Result<(PrismoidGrid, Vec<String>)>| {
-            let (merged, lines) = match result {
-                Ok(added) => added,
-                Err(refusal) => {
-                    userspace_warn!("{refusal:#}");
-                    return;
-                }
-            };
-            let current = app.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id);
-            let Some(item) = app.prismoid_grids.iter().find(|item| item.id == grid_id).filter(|_| current) else {
-                userspace_warn!("{}", tr!("cmd-prismoid-grid-qualities-discarded", grid = name));
-                return;
-            };
-            if !Arc::ptr_eq(&item.grid, &source) {
-                userspace_warn!("{}", tr!("cmd-prismoid-grid-changed-while-reading", grid = item.name.clone()));
-                return;
-            }
-            let grid_name = item.name.clone();
-            let mut replacement = item.clone();
-            replacement.summary = merged.summary();
-            let totals = totals_lines(&replacement.summary);
-            replacement.grid = Arc::new(merged);
-            app.execute_edit_for(
-                runtime_id,
-                Command::ReplaceItem {
-                    item: ItemRef::PrismoidGrid(grid_id),
-                    other: Some(OpenItem::PrismoidGrid(Box::new(replacement))),
-                },
-            );
-            userspace_log!("{}", tr!("cmd-prismoid-grid-qualities-added", count = lines.len().to_string(), grid = grid_name));
-            for line in lines.into_iter().chain(totals) {
-                userspace_log!("{line}");
-            }
-            userspace_log!("{}", tr!("cmd-prismoid-grid-qualities-rederive"));
+            let result = result.map(|(merged, lines)| {
+                let added = tr!("cmd-prismoid-grid-qualities-added", count = lines.len().to_string(), grid = name.clone());
+                (merged, std::iter::once(added).chain(lines).collect())
+            });
+            app.replace_prismoid_values(runtime_id, grid_id, &name, &source, result);
         };
         self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-adding-qualities"), keys, compute, apply);
+        Ok(())
+    }
+
+    /// Put a grid's copy with values added in place as one undoable step and
+    /// log `lines`, its totals and the next step; a refusal is warned, and
+    /// nothing is replaced when the grid is gone or moved on from `source`.
+    fn replace_prismoid_values(&mut self, runtime_id: u32, grid_id: PrismoidGridId, name: &str, source: &Arc<PrismoidGrid>, result: Result<(PrismoidGrid, Vec<String>)>) {
+        let (merged, lines) = match result {
+            Ok(added) => added,
+            Err(refusal) => {
+                userspace_warn!("{refusal:#}");
+                return;
+            }
+        };
+        let current = self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id);
+        let Some(item) = self.prismoid_grids.iter().find(|item| item.id == grid_id).filter(|_| current) else {
+            userspace_warn!("{}", tr!("cmd-prismoid-grid-qualities-discarded", grid = name.to_owned()));
+            return;
+        };
+        if !Arc::ptr_eq(&item.grid, source) {
+            userspace_warn!("{}", tr!("cmd-prismoid-grid-changed-while-reading", grid = item.name.clone()));
+            return;
+        }
+        let mut replacement = item.clone();
+        replacement.summary = merged.summary();
+        let totals = totals_lines(&replacement.summary);
+        replacement.grid = Arc::new(merged);
+        self.execute_edit_for(
+            runtime_id,
+            Command::ReplaceItem {
+                item: ItemRef::PrismoidGrid(grid_id),
+                other: Some(OpenItem::PrismoidGrid(Box::new(replacement))),
+            },
+        );
+        for line in lines.into_iter().chain(totals) {
+            userspace_log!("{line}");
+        }
+        userspace_log!("{}", tr!("cmd-prismoid-grid-qualities-rederive"));
+    }
+
+    /// Compare two loaded prismoid grids cell by cell, this grid less the
+    /// other, by `quantity` (a value both hold, or vertical thickness with
+    /// `None`), and keep the difference on this grid as a value named `name`,
+    /// as one undoable step. The lattice test runs on the worker.
+    pub(crate) fn difference_prismoid_grids(&mut self, grid_id: PrismoidGridId, other_id: PrismoidGridId, quantity: Option<String>, name: String) -> Result<()> {
+        if grid_id == other_id {
+            anyhow::bail!("{}", tr!("cmd-prismoid-grid-difference-same"));
+        }
+        let gone = || anyhow::anyhow!("{}", tr!("ws-menubar-modelling-select-prismoid-grid"));
+        let runtime_id = self.workspace.active_project().map(|project| project.runtime_id).ok_or_else(gone)?;
+        let loaded = |id: PrismoidGridId| {
+            self.prismoid_grids
+                .iter()
+                .find(|item| item.id == id && item.state.loaded)
+                .map(|item| (Arc::clone(&item.grid), item.name.clone()))
+                .ok_or_else(gone)
+        };
+        let (source, grid_name) = loaded(grid_id)?;
+        let (other, other_name) = loaded(other_id)?;
+        let held = |grid: &PrismoidGrid, value: &str| {
+            grid.cell_values
+                .iter()
+                .find(|values| same_quality_name(&values.name, value))
+                .map(|values| values.unit.clone())
+        };
+        let (quantity, label, unit, other_unit) = match quantity {
+            None => (Quantity::VerticalThickness, tr!("thickness-points-column-vertical"), "m".to_owned(), None),
+            Some(value) => {
+                let (Some(unit), Some(other_unit)) = (held(&source, &value), held(&other, &value)) else {
+                    return Err(no_difference(&grid_name, &other_name, &value));
+                };
+                (Quantity::Value(value.clone()), value, unit, Some(other_unit))
+            }
+        };
+        // A name the grid keeps, or its density's, is refused before the
+        // work; any other held name is replaced, and the line says so.
+        let names: Vec<_> = source.cell_values.iter().map(|values| (values.name.as_str(), values.role)).collect();
+        check_difference_name(&names, &other_name, &name).map_err(|refusal| anyhow::anyhow!("{}", values_refusal_words(refusal, &grid_name)))?;
+        let replaces = names.iter().any(|(held, _)| same_quality_name(held, &name));
+        let keys = vec![JobKey::PrismoidGrid(grid_id), JobKey::PrismoidGrid(other_id)];
+        let (grid, name_a, name_b) = (Arc::clone(&source), grid_name.clone(), other_name.clone());
+        let other_read = Arc::clone(&other);
+        let compute = move |cancel: &CancelFlag, _: &Progress| -> Result<(PrismoidGrid, Vec<String>)> {
+            let compared = grid
+                .difference(&other, &quantity, name.clone(), unit.clone(), cancel)
+                .map_err(|refusal| difference_refusal_words(refusal, &grid, &other, &name_a, &name_b))?;
+            let (values, report) = compared.ok_or_else(|| no_difference(&name_a, &name_b, &label))?;
+            let lines = difference_lines(&name, &name_a, &name_b, &unit, other_unit.as_deref(), replaces, &report);
+            let merged = grid
+                .with_values(vec![AddedValues { surface: name_b.clone(), values }])
+                .map_err(|refusal| anyhow::anyhow!("{}", values_refusal_words(refusal, &name_a)))?;
+            Ok((merged, lines))
+        };
+        let apply = move |app: &mut App, result: Result<(PrismoidGrid, Vec<String>)>| {
+            if result.is_ok()
+                && let Some(changed) = other_grid_changed(&app.prismoid_grids, other_id, &other_read, &other_name)
+            {
+                userspace_warn!("{changed}");
+                return;
+            }
+            app.replace_prismoid_values(runtime_id, grid_id, &grid_name, &source, result);
+        };
+        self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-differencing"), keys, compute, apply);
         Ok(())
     }
 
@@ -1484,7 +1560,6 @@ fn add_qualities(grid: &PrismoidGrid, grid_name: &str, inputs: Vec<QualityInput>
     Ok((merged, lines))
 }
 
-/// A refusal to add values to the prismoid grid `grid_name`, in words.
 /// The mark a surface made from a grid's `values` carries, or from its
 /// vertical thickness with `None`.
 fn surface_mark(values: Option<&CellValues>) -> QualityMark {
@@ -1505,6 +1580,102 @@ fn no_value_surface(name: &str, quantity: &str) -> anyhow::Error {
     anyhow::anyhow!("{}", tr!("cmd-prismoid-grid-surface-empty", grid = name.to_owned(), quantity = quantity.to_owned()))
 }
 
+/// Why no prismoid of `grid` compares with one of `other` by `quantity`.
+fn no_difference(grid: &str, other: &str, quantity: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{}",
+        tr!(
+            "cmd-prismoid-grid-difference-none",
+            grid = grid.to_owned(),
+            other = other.to_owned(),
+            quantity = quantity.to_owned()
+        )
+    )
+}
+
+/// Why `grid` and `other` cannot be compared, in words naming both and
+/// their cell sizes.
+fn difference_refusal_words(refusal: DifferenceRefusal, grid: &PrismoidGrid, other: &PrismoidGrid, grid_name: &str, other_name: &str) -> anyhow::Error {
+    let words = match refusal {
+        DifferenceRefusal::Cancelled => tr!("common-cancelled"),
+        DifferenceRefusal::NotOneLattice => tr!(
+            "cmd-prismoid-grid-difference-lattices",
+            grid = grid_name.to_owned(),
+            size = cell_size(grid.lattice.least_size()),
+            other = other_name.to_owned(),
+            other_size = cell_size(other.lattice.least_size())
+        ),
+    };
+    anyhow::anyhow!("{words}")
+}
+
+/// Why a difference is dropped at its apply: the other grid, `name` when
+/// the job read it as `read`, is gone or no longer holds that grid.
+fn other_grid_changed(grids: &[OpenPrismoidGrid], other_id: PrismoidGridId, read: &Arc<PrismoidGrid>, name: &str) -> Option<String> {
+    let item = grids.iter().find(|item| item.id == other_id);
+    if item.is_some_and(|item| Arc::ptr_eq(&item.grid, read)) {
+        return None;
+    }
+    let name = item.map_or(name, |item| item.name.as_str());
+    Some(tr!("cmd-prismoid-grid-changed-while-reading", grid = name.to_owned()))
+}
+
+/// The console lines for a difference `name` kept on `grid`, `grid` less
+/// `other`: the other grid's unit when it differs from `unit`, the cells
+/// compared and left out on each side (as replaced when `replaces` a held
+/// value), the range and mean, and for vertical thickness the volume of
+/// the difference.
+fn difference_lines(name: &str, grid: &str, other: &str, unit: &str, other_unit: Option<&str>, replaces: bool, report: &DifferenceReport) -> Vec<String> {
+    let (name, grid, other) = (name.to_owned(), grid.to_owned(), other.to_owned());
+    let mut lines = Vec::new();
+    if let Some(other_unit) = other_unit.filter(|other_unit| *other_unit != unit) {
+        lines.push(tr!(
+            "cmd-prismoid-grid-difference-units",
+            name = name.clone(),
+            other = other.clone(),
+            other_unit = unit_label(other_unit),
+            grid = grid.clone(),
+            unit = unit_label(unit)
+        ));
+    }
+    let (compared, left_out, outside) = (report.compared.to_string(), report.left_out_a.to_string(), report.outside_a.to_string());
+    lines.push(if replaces {
+        tr!(
+            "cmd-prismoid-grid-difference-replaced",
+            name = name.clone(),
+            grid = grid.clone(),
+            other = other.clone(),
+            compared = compared,
+            left_out = left_out,
+            outside = outside
+        )
+    } else {
+        tr!(
+            "cmd-prismoid-grid-difference-added",
+            name = name.clone(),
+            grid = grid.clone(),
+            other = other.clone(),
+            compared = compared,
+            left_out = left_out,
+            outside = outside
+        )
+    });
+    let range = tr!(
+        "cmd-prismoid-grid-difference-range",
+        name = name,
+        low = format_quantity(report.low, 2),
+        high = format_quantity(report.high, 2),
+        mean = format_quantity(report.mean, 2),
+        unit = unit.to_owned()
+    );
+    lines.push(range.trim_end().to_owned());
+    if let Some(volume) = report.volume {
+        lines.push(tr!("cmd-prismoid-grid-difference-volume", volume = format_quantity(volume, 1)));
+    }
+    lines
+}
+
+/// A refusal to add values to the prismoid grid `grid_name`, in words.
 pub(crate) fn values_refusal_words(refusal: ValuesRefusal, grid_name: &str) -> String {
     match refusal {
         ValuesRefusal::Twice { first, second, quality } => tr!("cmd-prismoid-grid-quality-twice", first = first, second = second, quality = quality),

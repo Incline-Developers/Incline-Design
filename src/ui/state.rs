@@ -672,6 +672,7 @@ impl EditorState {
             || self.smooth_strings_dialog.is_some()
             || self.tri_prismoid_qualities_open
             || self.tri_prismoid_surface_open
+            || self.tri_prismoid_difference_open
             || self.tri_prismoid_mask_open
     }
 
@@ -3330,6 +3331,15 @@ pub(crate) struct EditorState {
     pub(crate) tri_prismoid_surface_value: Option<String>,
     pub(crate) tri_prismoid_surface_name_input: String,
     pub(crate) tri_prismoid_surface_name_auto: bool,
+    /// Difference between Prismoid Grids: this grid, the other grid, the
+    /// quantity compared (`None` for vertical thickness) and the name the
+    /// difference is kept under on this grid.
+    pub(crate) tri_prismoid_difference_open: bool,
+    pub(crate) tri_prismoid_difference_grid: Option<PrismoidGridId>,
+    pub(crate) tri_prismoid_difference_other: Option<PrismoidGridId>,
+    pub(crate) tri_prismoid_difference_value: Option<String>,
+    pub(crate) tri_prismoid_difference_name_input: String,
+    pub(crate) tri_prismoid_difference_name_auto: bool,
     /// Mask Prismoid Grid by Polyline: the grid and the closed polyline
     /// selected at open, and which side of it is kept.
     pub(crate) tri_prismoid_mask_open: bool,
@@ -4260,6 +4270,7 @@ impl EditorState {
             || self.tri_cut_poly_open
             || self.tri_prismoid_qualities_open
             || self.tri_prismoid_surface_open
+            || self.tri_prismoid_difference_open
             || self.tri_prismoid_mask_open
             || self.tri_cut_z_open
             || self.tri_cut_surface_open
@@ -4781,6 +4792,9 @@ impl EditorState {
         self.tri_prismoid_qualities_open = false;
         self.tri_prismoid_surface_open = false;
         self.tri_prismoid_surface_grid = None;
+        self.tri_prismoid_difference_open = false;
+        self.tri_prismoid_difference_grid = None;
+        self.tri_prismoid_difference_other = None;
         // Snapshotted object ids, and a hold on the selection while it is up:
         // neither can outlive the project they were taken from.
         self.reference_surface_dialog = None;
@@ -5239,6 +5253,12 @@ impl EditorState {
             tri_prismoid_surface_value: None,
             tri_prismoid_surface_name_input: String::new(),
             tri_prismoid_surface_name_auto: true,
+            tri_prismoid_difference_open: false,
+            tri_prismoid_difference_grid: None,
+            tri_prismoid_difference_other: None,
+            tri_prismoid_difference_value: None,
+            tri_prismoid_difference_name_input: String::new(),
+            tri_prismoid_difference_name_auto: true,
             tri_prismoid_mask_open: false,
             tri_prismoid_mask_grid: None,
             tri_prismoid_mask_object_id: None,
@@ -7069,6 +7089,17 @@ pub(crate) enum UiCommand {
         value: Option<String>,
         name: String,
     },
+    /// Open Difference between Prismoid Grids on the one or two selected
+    /// prismoid grids.
+    OpenDifferencePrismoidGrids,
+    /// Keep `grid` less `other`, cell by cell, as a value named `name` on
+    /// `grid`: one of their values, or vertical thickness with `None`.
+    ExecuteDifferencePrismoidGrids {
+        grid: PrismoidGridId,
+        other: PrismoidGridId,
+        value: Option<String>,
+        name: String,
+    },
     /// Mask the selected prismoids by hand, or unmask them when every one
     /// is masked by hand.
     TogglePrismoidMask,
@@ -7299,6 +7330,7 @@ impl UiCommand {
             | Self::OpenMaskPrismoidGridByPolyline
             | Self::OpenAddPrismoidQualities
             | Self::OpenPrismoidGridToSurface
+            | Self::OpenDifferencePrismoidGrids
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
             | Self::OpenContourTriangulation
@@ -7853,6 +7885,7 @@ impl UiCommand {
             Self::CreateBlockModelFromPrismoidGrid => report(tr!("common-create-block-model-from-prismoid-grid"), tr!("state-selected-prismoid-grid")),
             Self::ExecuteAddPrismoidQualities { .. } => report(tr!("state-add-prismoid-qualities"), tr!("state-selected-prismoid-grid")),
             Self::ExecutePrismoidGridToSurface { name, .. } => report(tr!("state-prismoid-grid-to-surface"), name.clone()),
+            Self::ExecuteDifferencePrismoidGrids { name, .. } => report(tr!("state-difference-prismoid-grids"), name.clone()),
             Self::TogglePrismoidMask => report(tr!("common-mask-prismoids"), tr!("state-selected-prismoid-grid")),
             Self::ExecuteMaskPrismoidGridByPolyline { .. } => report(tr!("state-mask-prismoid-grid"), tr!("state-selected-prismoid-grid")),
             Self::SetPrismoidGridColorValue { value, .. } => report(tr!("state-colour-prismoid-grid"), value.clone().unwrap_or_else(|| tr!("thickness-points-column-vertical"))),

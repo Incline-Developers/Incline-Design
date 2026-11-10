@@ -6,7 +6,7 @@ use crate::{
     i18n::tr,
     model::{
         Document, Object, ObjectId, SceneEntityId,
-        prismoid_grid::{CellValueRole, PrismoidGridId, ValuesMark, check_marks},
+        prismoid_grid::{CellValueRole, PrismoidGridId, ValuesMark, check_difference_name, check_marks},
         triangulation::{TriangulationId, same_quality_name},
     },
     rendering::color::{color32_to_rgba, rgba_to_color32},
@@ -1575,6 +1575,140 @@ pub(crate) fn draw_prismoid_grid_surface_dialog(ui: &mut egui::Ui, editor: &mut 
     if !open {
         editor.tri_prismoid_surface_open = false;
     }
+}
+
+/// Difference between Prismoid Grids: this grid and the other, pre-set from
+/// the selection and swappable over the loaded grids, the quantity compared
+/// (vertical thickness, or a value both hold) and the name the difference
+/// is kept under on this grid, derived from the quantity until typed.
+pub(crate) fn draw_difference_prismoid_grids_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_prismoid_difference_open {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("difference_prismoid_grids_dialog", tr!("tri-difference-prismoid-grids"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let width = picker_control_width(ui);
+            let grids: Vec<&UiPrismoidGridEntry> = project.prismoid_grids.iter().filter(|entry| entry.is_loaded).collect();
+            let this = loaded_prismoid_grid(project, editor.tri_prismoid_difference_grid);
+            let other = loaded_prismoid_grid(project, editor.tri_prismoid_difference_other);
+            // The values both grids hold, by this grid's names.
+            let shared: Vec<&str> = match (this, other) {
+                (Some(this), Some(other)) => this
+                    .values
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .filter(|name| other.values.iter().any(|(held, _)| same_quality_name(held, name)))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            if editor
+                .tri_prismoid_difference_value
+                .as_deref()
+                .is_some_and(|value| !shared.iter().any(|name| same_quality_name(name, value)))
+            {
+                editor.tri_prismoid_difference_value = None;
+            }
+
+            tool_help_panel(ui, tr!("tri-difference-prismoid-grids-help"));
+            let grid_name = |entry: Option<&UiPrismoidGridEntry>| entry.map_or_else(|| tr!("tri-select"), |entry| entry.name.clone());
+            MenuFieldCombo::new(
+                "difference_prismoid_grids_this",
+                tr!("tri-prismoid-this-grid"),
+                &mut editor.tri_prismoid_difference_grid,
+                grid_name(this),
+                grids.iter().map(|entry| (Some(entry.id), entry.name.clone().into())),
+            )
+            .width(width)
+            .show(ui);
+            MenuFieldCombo::new(
+                "difference_prismoid_grids_other",
+                tr!("tri-prismoid-other-grid"),
+                &mut editor.tri_prismoid_difference_other,
+                grid_name(other),
+                grids.iter().map(|entry| (Some(entry.id), entry.name.clone().into())),
+            )
+            .width(width)
+            .show(ui);
+
+            ui.add_space(4.0);
+
+            let thickness = tr!("thickness-points-column-vertical");
+            let chosen = editor.tri_prismoid_difference_value.clone().unwrap_or_else(|| thickness.clone());
+            MenuFieldCombo::new(
+                "difference_prismoid_grids_quantity",
+                tr!("tri-prismoid-quantity"),
+                &mut editor.tri_prismoid_difference_value,
+                chosen.clone(),
+                std::iter::once((None, thickness.into())).chain(shared.iter().map(|name| (Some((*name).to_owned()), (*name).into()))),
+            )
+            .width(width)
+            .show(ui);
+
+            if editor.tri_prismoid_difference_name_auto {
+                let derived = tr!("tri-prismoid-difference-default", quantity = chosen);
+                if editor.tri_prismoid_difference_name_input != derived {
+                    editor.tri_prismoid_difference_name_input = derived;
+                }
+            }
+            if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_prismoid_difference_name_input)
+                .width(width)
+                .show(ui)
+                .changed()
+            {
+                editor.tri_prismoid_difference_name_auto = false;
+            }
+
+            // The name's refusal, said before the work starts.
+            let refusal = difference_name_refusal(this, other, &editor.tri_prismoid_difference_name_input);
+            if let Some(refusal) = &refusal {
+                menu::menu_note(ui, refusal.as_str());
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let loaded = |id: Option<PrismoidGridId>| id.filter(|id| grids.iter().any(|entry| entry.id == *id));
+            let pair = match (loaded(editor.tri_prismoid_difference_grid), loaded(editor.tri_prismoid_difference_other)) {
+                (Some(grid), Some(other)) if grid != other => Some((grid, other)),
+                _ => None,
+            };
+            let can_run = pair.is_some() && refusal.is_none() && !editor.tri_prismoid_difference_name_input.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("common-ok")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let Some((grid, other)) = pair
+                {
+                    commands.push(UiCommand::ExecuteDifferencePrismoidGrids {
+                        grid,
+                        other,
+                        value: editor.tri_prismoid_difference_value.clone(),
+                        name: editor.tri_prismoid_difference_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_prismoid_difference_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_prismoid_difference_open = false;
+    }
+}
+
+/// Why a difference of `this` grid less `other` cannot be kept as `name`,
+/// in words: a name the grid keeps for its own values, or its density's.
+fn difference_name_refusal(this: Option<&UiPrismoidGridEntry>, other: Option<&UiPrismoidGridEntry>, name: &str) -> Option<String> {
+    let (this, other) = (this?, other?);
+    let held: Vec<_> = this.values.iter().map(|(name, role)| (name.as_str(), *role)).collect();
+    check_difference_name(&held, &other.name, name.trim())
+        .err()
+        .map(|refusal| crate::app::commands::prismoid_grid::values_refusal_words(refusal, &this.name))
 }
 
 /// Mask Prismoid Grid by Polyline: the grid and the closed polyline
