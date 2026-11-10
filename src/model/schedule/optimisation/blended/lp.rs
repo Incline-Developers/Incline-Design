@@ -305,9 +305,14 @@ impl LinearProgram {
         let shape = self.shape();
         let problem = self.to_solver();
         let keys = self.keys();
-        let options = solver::Options::default();
+        // From a basis the matrix goes unscaled: on programs this small,
+        // scaling costs more than the pivots it saves.
+        let unscaled = solver::Options {
+            simplex_scale_strategy: solver::SCALE_STRATEGY_OFF,
+            ..solver::Options::default()
+        };
         let found = match warm.take(shape) {
-            Some(basis) => Some(solver::solve_from(&problem, &options, Some(&basis), None)),
+            Some(basis) => Some(solver::solve_from(&problem, &unscaled, Some(&basis), None)),
             // A shape not held: the last program's basis, carried over by
             // what its columns and rows stand for. Most of an interval's
             // program is the one before it, so this is a few pivots where a
@@ -318,16 +323,16 @@ impl LinearProgram {
             None => keys.as_ref().and_then(|keys| warm.carried(keys, &problem)).map(|basis| {
                 let primal = solver::Options {
                     simplex_strategy: solver::SimplexStrategy::Primal,
-                    ..solver::Options::default()
+                    ..unscaled.clone()
                 };
                 solver::solve_from_alien(&problem, &primal, &basis)
             }),
         };
         // A basis that does not suit this program is no reason to fail it:
-        // solve afresh.
+        // solve afresh, presolved and scaled.
         let mut solution = match found {
             Some(found) if found.status == solver::Status::Optimal => found,
-            _ => solver::solve(&problem, &options),
+            _ => solver::solve(&problem, &solver::Options::default()),
         };
         if solution.status != solver::Status::Optimal {
             return Err(crate::i18n::tr!("err-sched-solver-ended", status = format!("{:?}", solution.status)));
