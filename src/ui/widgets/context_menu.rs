@@ -12,6 +12,8 @@
 
 use std::{fmt::Debug, hash::Hash};
 
+use super::hint::Hint;
+
 const MENU_WIDTH: f32 = 220.0;
 const HEADER_HEIGHT: f32 = 20.0;
 const ROW_HEIGHT: f32 = 20.0;
@@ -40,7 +42,7 @@ pub(crate) struct ContextMenu {
 impl ContextMenu {
     pub(crate) fn new(id_source: impl Hash + Debug, title: impl Into<egui::WidgetText>) -> Self {
         Self {
-            id: egui::Id::new(("context_menu", id_source)),
+            id: egui::Id::unique(("context_menu", id_source)),
             title: title.into(),
             position: egui::Pos2::ZERO,
             width: MENU_WIDTH,
@@ -57,16 +59,45 @@ impl ContextMenu {
         self
     }
 
-    pub(crate) fn show<R>(self, ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    /// Draw the menu, and report whether the user dismissed it this frame:
+    /// Escape, or a primary click outside it once it has been up a frame (the
+    /// click that opened it does not count), as egui's own popups close. A
+    /// click while one of its popups (a combo, a colour picker) is open is
+    /// left to that popup, and one while a submenu is open to the submenu,
+    /// which closes the menu when the click lands outside both.
+    pub(crate) fn show<R>(self, ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> (egui::InnerResponse<R>, bool) {
+        use egui::containers::menu::{MenuConfig, MenuState};
+
         let Self { id, title, position, width } = self;
-        egui::Area::new(id)
+        let child_popup_open = egui::Popup::is_any_open(ctx);
+        let submenu_open = MenuState::from_id(ctx, id, |state| state.open_item.is_some());
+        // A menu root like egui's popup menus, so submenus keep their open
+        // state. Rows close the menu themselves, so a click inside a submenu
+        // does not.
+        let config = MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        let response = egui::Area::new(id)
             .order(egui::Order::Foreground)
             .movable(false)
             .constrain(true)
             .fade_in(false)
             .pivot(egui::Align2::LEFT_TOP)
             .current_pos(position)
-            .show(ctx, |ui| menu_frame(ui.style()).show(ui, |ui| draw_body(ui, &title, width, add_contents)).inner)
+            .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
+            .show(ctx, |ui| menu_frame(ui.style()).show(ui, |ui| draw_body(ui, &title, width, add_contents)).inner);
+        MenuState::mark_shown(ctx, id);
+        // (frame first shown, frame last shown); a gap means it was reopened.
+        let frame = ctx.cumulative_frame_nr();
+        let (opened, _) = ctx.data_mut(|data| {
+            let shown = data.get_temp_mut_or(id, (frame, frame));
+            if shown.1 + 1 < frame {
+                *shown = (frame, frame);
+            }
+            shown.1 = frame;
+            *shown
+        });
+        let clicked_outside = opened < frame && !child_popup_open && !submenu_open && ctx.input(|input| input.pointer.primary_clicked()) && response.response.clicked_elsewhere();
+        let dismissed = clicked_outside || response.response.should_close() || ctx.input(|input| input.key_pressed(egui::Key::Escape));
+        (response, dismissed)
     }
 }
 
@@ -101,11 +132,23 @@ fn popup_with_close<R>(
     close: egui::PopupCloseBehavior,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<egui::InnerResponse<R>> {
-    egui::Popup::context_menu(response)
+    on_top(egui::Popup::context_menu(response))
         .close_behavior(close)
         .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
         .width(MENU_WIDTH)
         .show(|ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
+}
+
+/// Raise an open popup over everything else on its layer.
+///
+/// egui raises an area only the first time it is shown, and a popup keeps its
+/// id between openings. Opened again from a dialog that was clicked in the
+/// meantime - which raises the dialog - it would open underneath it.
+fn on_top(popup: egui::Popup<'_>) -> egui::Popup<'_> {
+    if popup.is_open() {
+        popup.ctx().move_to_top(egui::LayerId::new(egui::Order::Foreground, popup.get_id()));
+    }
+    popup
 }
 
 /// Paint the header and run `add_contents` inside the menu's content margins.
@@ -157,8 +200,8 @@ fn paint_header(ui: &mut egui::Ui, title: &str, width: f32) {
     );
 }
 
-/// Dense rows, small text, and the frame metrics egui builds nested submenu
-/// frames from (they are read from the style, not passed in like [`menu_frame`]).
+/// Dense rows, small text, and the frame metrics egui measures a submenu's
+/// offset with; the submenu's own frame comes from [`submenu_style`].
 fn apply_compact_style(ui: &mut egui::Ui) {
     let style = ui.style_mut();
     style.spacing.menu_margin = egui::Margin::ZERO;
@@ -179,6 +222,8 @@ pub(crate) struct ContextMenuAction {
     enabled: bool,
     submenu: bool,
     checked: Option<bool>,
+    strikethrough: bool,
+    swatch: Option<egui::Color32>,
 }
 
 impl ContextMenuAction {
@@ -189,7 +234,25 @@ impl ContextMenuAction {
             enabled: true,
             submenu: false,
             checked: None,
+            strikethrough: false,
+            swatch: None,
         }
+    }
+
+    /// A colour square at the head of the row, in the tick column, for a
+    /// choice between things known by their colour: a delay type, say.
+    pub(crate) fn swatch(mut self, color: egui::Color32) -> Self {
+        self.swatch = Some(color);
+        self
+    }
+
+    /// Strike a line through the label: for a row naming something that is no
+    /// longer there, such as a recent project whose file has gone. macOS shows
+    /// Open Recent in its native menu instead.
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) fn strikethrough(mut self, strikethrough: bool) -> Self {
+        self.strikethrough = strikethrough;
+        self
     }
 
     /// Mark this row as a switch rather than a command, drawing a tick at its
@@ -211,7 +274,6 @@ impl ContextMenuAction {
         self
     }
 
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(crate) fn submenu(mut self, submenu: bool) -> Self {
         self.submenu = submenu;
         self
@@ -224,6 +286,8 @@ impl ContextMenuAction {
             enabled,
             submenu,
             checked,
+            strikethrough,
+            swatch,
         } = self;
         ui.add_enabled_ui(enabled, |ui| {
             let font_id = egui::TextStyle::Button.resolve(ui.style());
@@ -235,13 +299,17 @@ impl ContextMenuAction {
                     .size()
                     .x
             });
-            let text_left = if checked.is_some() { CHECK_COLUMN } else { f32::from(ROW_HORIZONTAL_PADDING) };
+            let text_left = if checked.is_some() || swatch.is_some() {
+                CHECK_COLUMN
+            } else {
+                f32::from(ROW_HORIZONTAL_PADDING)
+            };
             let right_padding = if submenu { 14.0 } else { 4.0 };
             let shortcut_gap = if shortcut.is_some() { 16.0 } else { 0.0 };
             let natural_width = text_left + label_width + shortcut_gap + shortcut_width + right_padding;
             super::menu::record_intrinsic_content_width(ui, natural_width);
             let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), egui::Sense::click());
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label.text()));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label.text()));
             if ui.is_rect_visible(rect) {
                 let painter = ui.painter().with_clip_rect(rect);
                 let visuals = ui.style().interact(&response);
@@ -249,6 +317,10 @@ impl ContextMenuAction {
                     painter.rect_filled(rect, 1.0, visuals.bg_fill);
                 }
                 let text_color = visuals.fg_stroke.color;
+                if let Some(color) = swatch {
+                    let center = rect.left_center() + egui::vec2(CHECK_COLUMN / 2.0, 0.0);
+                    painter.rect_filled(egui::Rect::from_center_size(center, egui::vec2(9.0, 9.0)), CORNER_RADIUS, color);
+                }
                 if checked == Some(true) {
                     // A tick drawn rather than set as text: the row's glyphs
                     // come from the button style, and a checkmark character is
@@ -259,13 +331,16 @@ impl ContextMenuAction {
                         egui::Stroke::new(1.4, text_color),
                     ));
                 }
-                painter.text(
+                let label_rect = painter.text(
                     rect.left_center() + egui::vec2(text_left, 0.0),
                     egui::Align2::LEFT_CENTER,
                     label.text(),
                     egui::TextStyle::Button.resolve(ui.style()),
                     text_color,
                 );
+                if strikethrough {
+                    painter.hline(label_rect.x_range(), label_rect.center().y, egui::Stroke::new(1.0, text_color));
+                }
                 if let Some(shortcut) = shortcut {
                     painter.text(
                         rect.right_center() - egui::vec2(right_padding, 0.0),
@@ -284,11 +359,7 @@ impl ContextMenuAction {
                     ));
                 }
             }
-            if rect.width() + 0.5 < natural_width {
-                response.on_hover_text(full_label)
-            } else {
-                response
-            }
+            if rect.width() + 0.5 < natural_width { response.hint(full_label) } else { response }
         })
         .inner
     }
@@ -368,7 +439,7 @@ pub(crate) fn dropdown_menu<R>(
 
     let config = MenuConfig::new();
     let title = title.into();
-    egui::Popup::menu(response)
+    on_top(egui::Popup::menu(response))
         .close_behavior(config.close_behavior)
         .style(config.style.clone())
         .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
@@ -382,14 +453,30 @@ pub(crate) fn dropdown_menu<R>(
 ///
 /// The nested popup is egui's own [`egui::containers::menu::SubMenu`], so hover
 /// timing and keyboard navigation behave exactly as elsewhere.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) fn context_submenu<R>(ui: &mut egui::Ui, label: &str, enabled: bool, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
     let response = ContextMenuAction::new(label).enabled(enabled).submenu(true).show(ui);
     if !enabled {
         return None;
     }
     let title: egui::WidgetText = label.into();
-    egui::containers::menu::SubMenu::new().show(ui, &response, |ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
+    // egui frames the nested popup from its own style, not the row's, so the
+    // config carries this module's frame metrics along with the parent's
+    // close behaviour. egui measures the gap from the row, which sits a content
+    // margin inside the frame, so that margin brings the frames edge to edge.
+    let config = egui::containers::menu::MenuConfig::find(ui)
+        .style(submenu_style)
+        .submenu_gap(f32::from(CONTENT_HORIZONTAL_MARGIN));
+    egui::containers::menu::SubMenu::new()
+        .config(config)
+        .show(ui, &response, |ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
+}
+
+/// egui's menu style with [`menu_frame`]'s margin and corner radius, which
+/// egui's `Frame::popup` reads when it frames a submenu.
+fn submenu_style(style: &mut egui::Style) {
+    egui::containers::menu::menu_style(style);
+    style.spacing.menu_margin = egui::Margin::ZERO;
+    style.visuals.menu_corner_radius = egui::CornerRadius::same(CORNER_RADIUS);
 }
 
 /// The shared popup frame: flat fill, hairline border, no inner margin so the
@@ -400,4 +487,161 @@ fn menu_frame(style: &egui::Style) -> egui::Frame {
         .stroke(style.visuals.window_stroke())
         .corner_radius(egui::CornerRadius::same(CORNER_RADIUS))
         .shadow(style.visuals.popup_shadow)
+}
+
+/// How far each level of a checklist's hierarchy is indented.
+const CHECKLIST_INDENT: f32 = 12.0;
+/// Width of the disclosure column a nested checklist reserves, so rows with a
+/// triangle and rows without share one left edge.
+const CHECKLIST_DISCLOSURE: f32 = 12.0;
+
+/// A checklist row's state. `Mixed` is its own answer: a group some of whose
+/// members are selected is not the same as one that is not selected, and a
+/// two-state box would have to pick one of those and be wrong about the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tick {
+    On,
+    Off,
+    Mixed,
+}
+
+impl Tick {
+    pub(crate) fn of(all: bool, any: bool) -> Self {
+        match (all, any) {
+            (true, _) => Self::On,
+            (false, true) => Self::Mixed,
+            (false, false) => Self::Off,
+        }
+    }
+}
+
+/// What a checklist row was just asked to do.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ChecklistResponse {
+    /// The box was clicked, or the label was - a row is one target, because
+    /// hitting a 13-pixel box is not how a list of twenty benches gets ticked.
+    pub(crate) toggled: bool,
+    /// The disclosure triangle was clicked. Never both: expanding a group and
+    /// selecting it are different decisions.
+    pub(crate) expanded: bool,
+}
+
+/// One checkable row of a [`checklist_popup`], optionally nested under the row
+/// above it and optionally carrying a disclosure triangle.
+pub(crate) struct ChecklistRow<'a> {
+    label: &'a str,
+    tick: Tick,
+    depth: usize,
+    /// `Some(open)` draws a triangle; `None` leaves its column blank so a leaf
+    /// still lines up with its siblings.
+    disclosure: Option<bool>,
+}
+
+impl<'a> ChecklistRow<'a> {
+    pub(crate) fn new(label: &'a str, tick: Tick) -> Self {
+        Self {
+            label,
+            tick,
+            depth: 0,
+            disclosure: None,
+        }
+    }
+
+    pub(crate) fn depth(mut self, depth: usize) -> Self {
+        self.depth = depth;
+        self
+    }
+
+    pub(crate) fn disclosure(mut self, open: Option<bool>) -> Self {
+        self.disclosure = open;
+        self
+    }
+
+    pub(crate) fn show(self, ui: &mut egui::Ui) -> ChecklistResponse {
+        let Self { label, tick, depth, disclosure } = self;
+        let indent = CHECKLIST_INDENT * depth as f32;
+        let font_id = egui::TextStyle::Button.resolve(ui.style());
+        let label_width = ui.painter().layout_no_wrap(label.to_owned(), font_id.clone(), egui::Color32::PLACEHOLDER).size().x;
+        let natural = indent + CHECKLIST_DISCLOSURE + CHECK_COLUMN + label_width + f32::from(ROW_HORIZONTAL_PADDING) * 2.0;
+        super::menu::record_intrinsic_content_width(ui, natural);
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), egui::Sense::click());
+        let triangle_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + f32::from(ROW_HORIZONTAL_PADDING) + indent, rect.top()),
+            egui::vec2(CHECKLIST_DISCLOSURE, rect.height()),
+        );
+        let box_left = triangle_rect.right() + 2.0;
+        let mut out = ChecklistResponse::default();
+        if response.clicked() {
+            if disclosure.is_some() && ui.input(|input| input.pointer.interact_pos()).is_some_and(|pos| triangle_rect.contains(pos)) {
+                out.expanded = true;
+            } else {
+                out.toggled = true;
+            }
+        }
+        if ui.is_rect_visible(rect) {
+            let painter = ui.painter().with_clip_rect(rect);
+            let visuals = ui.style().interact(&response);
+            if response.hovered() {
+                painter.rect_filled(rect, 1.0, visuals.bg_fill);
+            }
+            let text_color = visuals.fg_stroke.color;
+            if let Some(open) = disclosure {
+                let center = triangle_rect.center();
+                let points = if open {
+                    vec![center + egui::vec2(-3.5, -2.0), center + egui::vec2(3.5, -2.0), center + egui::vec2(0.0, 3.0)]
+                } else {
+                    vec![center + egui::vec2(-2.0, -3.5), center + egui::vec2(3.0, 0.0), center + egui::vec2(-2.0, 3.5)]
+                };
+                painter.add(egui::Shape::convex_polygon(points, ui.visuals().weak_text_color(), egui::Stroke::NONE));
+            }
+            let box_rect = egui::Rect::from_center_size(egui::pos2(box_left + CHECK_COLUMN / 2.0 - 2.0, rect.center().y), egui::vec2(12.0, 12.0));
+            paint_check_box(&painter, ui.visuals(), box_rect, tick, response.hovered());
+            painter.text(egui::pos2(box_rect.right() + 5.0, rect.center().y), egui::Align2::LEFT_CENTER, label, font_id, text_color);
+        }
+        if rect.width() + 0.5 < natural {
+            response.hint(label.to_owned());
+        }
+        out
+    }
+}
+
+/// A check box as the house draws one: an outline while it is off, and the
+/// accent the primary buttons carry, with a white tick or dash, once it is
+/// on. Rounded as every control is.
+pub(crate) fn paint_check_box(painter: &egui::Painter, visuals: &egui::Visuals, rect: egui::Rect, tick: Tick, hovered: bool) {
+    let radius = super::toolbar::GROUP_CORNER_RADIUS;
+    if tick == Tick::Off {
+        let color = if hovered { visuals.text_color() } else { visuals.weak_text_color() };
+        painter.rect_stroke(rect, radius, egui::Stroke::new(1.0, color), egui::StrokeKind::Inside);
+        return;
+    }
+    let accent = super::menu::accent_fill(visuals);
+    painter.rect_filled(rect, radius, if hovered { super::shifted(accent, 16) } else { accent });
+    let center = rect.center();
+    let mark = egui::Stroke::new(1.6, egui::Color32::WHITE);
+    let points = match tick {
+        Tick::Mixed => vec![center + egui::vec2(-3.0, 0.0), center + egui::vec2(3.0, 0.0)],
+        _ => vec![center + egui::vec2(-3.0, 0.2), center + egui::vec2(-0.8, 2.4), center + egui::vec2(3.2, -2.4)],
+    };
+    painter.add(egui::Shape::line(points, mark));
+}
+
+/// A multiple-selection popup opened by a widget the caller drew.
+///
+/// Unlike a command menu this stays open while rows are ticked - the whole
+/// point is choosing several - and closes on a click outside it.
+pub(crate) fn checklist_popup<R>(response: &egui::Response, title: impl Into<egui::WidgetText>, width: f32, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    let title = title.into();
+    on_top(egui::Popup::menu(response))
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
+        .width(width)
+        .show(|ui| {
+            apply_compact_style(ui);
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| draw_body(ui, &title, width, add_contents))
+                .inner
+        })
+        .map(|inner| inner.inner)
 }

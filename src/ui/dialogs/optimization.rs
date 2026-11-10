@@ -25,7 +25,8 @@ use crate::{
         themed_icon, unthemed_icon,
         widgets::{
             collapsible_section::CollapsibleSection,
-            data_grid::{DataGrid, GridAction, GridButtons, GridColumn, GridRow, apply_flat, move_to_slot},
+            editable_grid::{DataGrid, GridAction, GridButtons, GridColumn, GridRow, apply_flat, move_to_slot},
+            hint::Hint,
             menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, menu_note},
             rosette_diagram::{HEIGHT as ROSETTE_HEIGHT, draw_rosette},
             toolbar::ToolbarButton,
@@ -56,7 +57,7 @@ pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorSt
         // The Escape that cancelled the pick is still in this frame's input; it
         // must not also close the editor it returns to.
         if std::mem::take(&mut editor.optimization.pick_was_active) {
-            menu::dialog_cancel_pressed(ui.ctx());
+            menu::dialog_cancelled(ui.ctx());
         }
         draw_scenario_editor(ui, &mut editor.optimization, block_models, project, commands);
     } else if editor.optimization.list_open {
@@ -90,10 +91,10 @@ fn draw_load_prompt(ui: &mut egui::Ui, state: &mut OptimizationState, commands: 
             ui.label(tr!("opt-load-question", names = names.clone(), count = prompt.items.len()));
             menu_note(ui, tr!("opt-load-note"));
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(tr!("opt-load")).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("opt-load")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     answer = Some(true);
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     answer = Some(false);
                 }
             });
@@ -160,7 +161,7 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
                                 let image = egui::Image::new(unthemed_icon!("status_broken.svg")).fit_to_exact_size(egui::Vec2::splat(ICON_SIDE - 8.0));
                                 let lines: Vec<String> = missing.iter().map(|issue| format!("• {issue}")).collect();
                                 ui.add_sized([ICON_SIDE, ICON_SIDE], image)
-                                    .on_hover_text(format!("{}\n{}", tr!("opt-missing-title"), lines.join("\n")));
+                                    .hint(format!("{}\n{}", tr!("opt-missing-title"), lines.join("\n")));
                             }
                             let delete = ToolbarButton::new(egui::Image::new(unthemed_icon!("delete_scenario.svg")), tr!("opt-delete"))
                                 .id_salt(("opt_delete", scenario.id))
@@ -190,7 +191,7 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
                 if ui.add(MenuButton::new(tr!("opt-add-scenario")).primary()).clicked() {
                     actions.push(UiCommand::AddOptimizationScenario);
                 }
-                if ui.add(MenuButton::new(tr!("common-close"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-close"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
                 // Import and export take the left of the same row.
@@ -245,7 +246,7 @@ fn body_height(ctx: &egui::Context) -> f32 {
 }
 
 fn name_field_ids(id: u64) -> (egui::Id, egui::Id) {
-    let field_id = egui::Id::new(("opt_scenario_name", id));
+    let field_id = egui::Id::unique(("opt_scenario_name", id));
     (field_id, field_id.with("typed"))
 }
 
@@ -299,7 +300,7 @@ fn status_icon(ui: &mut egui::Ui, status: ScenarioStatus) {
         ScenarioStatus::Stale => (unthemed_icon!("status_stale.svg"), tr!("opt-status-stale")),
     };
     let image = egui::Image::new(source).fit_to_exact_size(egui::Vec2::splat(ICON_SIDE - 8.0));
-    ui.add_sized([ICON_SIDE, ICON_SIDE], image).on_hover_text(tooltip);
+    ui.add_sized([ICON_SIDE, ICON_SIDE], image).hint(tooltip);
 }
 
 /// The green play button. While the scenario runs, a ring around it fills with
@@ -337,9 +338,10 @@ fn play_button(ui: &mut egui::Ui, status: ScenarioStatus) -> egui::Response {
             tr!("opt-status-running-percent", percent = ((progress * 100.0) as u32).to_string()),
             tr!("opt-cancel-run")
         ),
-        None => tr!("opt-run"),
+        // At rest it is a play button, which needs no caption.
+        None => return response,
     };
-    response.on_hover_text(tooltip)
+    response.hint(tooltip)
 }
 
 // ── Scenario editor ──
@@ -410,7 +412,7 @@ fn draw_scenario_editor(ui: &mut egui::Ui, state: &mut OptimizationState, block_
                 close_requested |= choice.close;
             });
             // Escape closes the editor - unless a window over it wants the key.
-            if !draft.confirm_close && !value_field::picker_open(ui.ctx()) && menu::dialog_cancel_pressed(ui.ctx()) {
+            if !draft.confirm_close && !value_field::picker_open(ui.ctx()) && menu::dialog_cancelled(ui.ctx()) {
                 close_requested = true;
             }
         });
@@ -565,7 +567,7 @@ fn draw_confirm_close(ctx: &egui::Context, state: &mut OptimizationState, comman
                 if ui.add(MenuButton::new(tr!("opt-discard")).danger()).clicked() {
                     choice = Some(CloseChoice::Discard);
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     choice = Some(CloseChoice::Keep);
                 }
             });
@@ -720,7 +722,7 @@ fn inline_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, v
     // model) stays shown, outlined red, rather than being cleared.
     if !value.is_empty() && !names.iter().any(|name| name == value) {
         mark_invalid(ui, &response);
-        response = response.on_hover_text(tr!("opt-missing-choice", name = value.clone()));
+        response = response.hint(tr!("opt-missing-choice", name = value.clone()));
     }
     response
 }
@@ -761,7 +763,7 @@ fn plain_rows(count: usize) -> Vec<GridRow> {
 /// once, so the card does not fold.
 fn option_group(ui: &mut egui::Ui, title: String, rows: impl FnOnce(&mut egui::Ui)) {
     ui.add_space(4.0);
-    CollapsibleSection::new(egui::Id::new(("optimization_group", title.as_str())), title)
+    CollapsibleSection::new(egui::Id::unique(("optimization_group", title.as_str())), title)
         .collapsible(false)
         .show(ui, rows);
 }
@@ -786,7 +788,7 @@ fn draw_inputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &
         // optimised is only known once it is loaded.
         if block_models.iter().any(|model| model.name == scenario.block_model && !model.state.loaded) {
             ui.add(egui::Label::new(egui::RichText::new(tr!("opt-block-model-unloaded")).color(ui.visuals().weak_text_color())).wrap())
-                .on_hover_text(tr!("opt-block-model-unloaded-hint"));
+                .hint(tr!("opt-block-model-unloaded-hint"));
         }
         let response = form_value(
             ui,
@@ -905,7 +907,7 @@ fn draw_constants(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, select
                 }
                 2 => {
                     let width = ui.available_width();
-                    let id = egui::Id::new(("opt_constant_value", row));
+                    let id = egui::Id::unique(("opt_constant_value", row));
                     match &mut constant.value {
                         ConstantValue::Number(number) => {
                             number.edit(ui, id, width, (f64::MIN, f64::MAX));
@@ -1383,7 +1385,7 @@ fn draw_constraints(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fiel
                             // A plain number: a bearing is not worth a constant.
                             let response = entry
                                 .bearing
-                                .edit_with_suffix(ui, egui::Id::new(("opt_rosette_bearing", row)), ui.available_width(), (0.0, 360.0), &unit_degrees());
+                                .edit_with_suffix(ui, egui::Id::unique(("opt_rosette_bearing", row)), ui.available_width(), (0.0, 360.0), &unit_degrees());
                             let same = bearings.iter().enumerate().any(|(other, value)| other != row && *value == bearings[row]);
                             if same {
                                 mark_invalid(ui, &response);
@@ -1498,11 +1500,11 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
             }
             // Plain numbers: a revenue factor range is not worth a constant.
             let from_changed = field_row(ui, tr!("opt-factor-from"), None, |ui, width| {
-                output.factor_from.edit(ui, egui::Id::new("opt_factor_from"), width, (0.0, f64::MAX))
+                output.factor_from.edit(ui, egui::Id::unique("opt_factor_from"), width, (0.0, f64::MAX))
             })
             .changed();
             let to_changed = field_row(ui, tr!("opt-factor-to"), None, |ui, width| {
-                output.factor_to.edit(ui, egui::Id::new("opt_factor_to"), width, (0.0, f64::MAX))
+                output.factor_to.edit(ui, egui::Id::unique("opt_factor_to"), width, (0.0, f64::MAX))
             })
             .changed();
             let (from, to) = (output.factor_from, output.factor_to);
@@ -1510,7 +1512,7 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
             // other is worked out from it between the two ends.
             let mut step = output.factor_step;
             if field_row(ui, tr!("opt-factor-step"), None, |ui, width| {
-                step.edit(ui, egui::Id::new("opt_factor_step"), width, (0.0001, f64::MAX))
+                step.edit(ui, egui::Id::unique("opt_factor_step"), width, (0.0001, f64::MAX))
             })
             .changed()
             {
@@ -1523,7 +1525,7 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
             }
             let mut count = output.shell_count;
             if field_row(ui, tr!("opt-shell-count"), None, |ui, width| {
-                edit_count(ui, egui::Id::new("opt_shell_count"), &mut count, width, (2, 1000))
+                edit_count(ui, egui::Id::unique("opt_shell_count"), &mut count, width, (2, 1000))
             })
             .changed()
             {
@@ -1565,7 +1567,7 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
             };
             let picked = output.shell_start.is_some();
             let response = field_row(ui, tr!("opt-start-point-label"), None, |ui, width| {
-                ui.add_enabled(can_pick, MenuButton::new(label).selected(picked).min_width(width)).on_hover_text(hint)
+                ui.add_enabled(can_pick, MenuButton::new(label).selected(picked).min_width(width)).hint(hint)
             });
             if !picked {
                 mark_invalid(ui, &response);
@@ -1628,7 +1630,7 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
                 let empty = output.shell_layer_name.trim().is_empty();
                 if empty || prefix_taken {
                     mark_invalid(ui, &response);
-                    response.on_hover_text(if empty { tr!("opt-shell-prefix-empty") } else { tr!("opt-shell-prefix-taken") });
+                    response.hint(if empty { tr!("opt-shell-prefix-empty") } else { tr!("opt-shell-prefix-taken") });
                 }
             });
         }
@@ -1676,7 +1678,7 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
         };
         if let Some(issue) = &shell_field_issue {
             mark_invalid(ui, &response);
-            response.on_hover_text(issue);
+            response.hint(issue);
         }
     });
 }

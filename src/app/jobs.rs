@@ -39,6 +39,16 @@ use crate::{
     model::{progress::Progress, triangulation::TriangulationId},
 };
 
+/// Whether a job announces itself to the user while it runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Announce {
+    /// Report in the bottom-right readout, turn the pointer to the busy
+    /// cursor, and keep the frame redrawing so a percentage advances.
+    StatusBar,
+    /// Say nothing anywhere.
+    Quietly,
+}
+
 /// Identifies the sources a job derives from, so stale in-flight jobs can be
 /// cancelled when their source changes or is removed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,6 +76,33 @@ pub(crate) enum JobKey {
     /// A pit optimization run of the scenario with this id.
     OptimizationRun(u64),
     DrillHole(crate::model::drill_hole::DrillHoleId),
+    /// The Solids Setup page's inspection mesh. Keyed by the solid, so
+    /// selecting another one - or changing this one's surfaces - cancels the
+    /// build already in flight for it.
+    SolidPreview(crate::model::SolidId),
+    /// One attempt at building one of a solid's artifacts.
+    ///
+    /// The token identifies the *attempt*, not the inputs. Keying on an input
+    /// fingerprint cannot tell a retry from the cancelled attempt it replaces,
+    /// because identical inputs hash identically - so a result the cancelled
+    /// attempt had already computed would satisfy the new request and publish.
+    SolidArtifact {
+        solid: crate::model::SolidId,
+        kind: crate::app::commands::solids_view::SolidArtifact,
+        token: u64,
+    },
+    /// One coalesced Schedule Animate geometry request.
+    ScheduleAnimation {
+        runtime: u32,
+        run: u64,
+        request: u64,
+    },
+    /// One explicit schedule calculation, owned by its project and serial.
+    ScheduleRun {
+        runtime: u32,
+        serial: u64,
+    },
+    ReserveStats(crate::model::block_model::BlockModelId, u64),
     /// Work on a dataset's linked geophysics files: an index pass, a check
     /// or a hole read. Stale once the dataset's link is taken up again
     /// under another generation, by a relink or a reopen.
@@ -96,6 +133,13 @@ pub(crate) enum JobKey {
     BrowserProjectSave {
         runtime_id: u32,
     },
+    /// Animate's video export encoding the frames it is sent.
+    VideoExport,
+    /// The Dig Strips step's count of every flitch's dig blocks, `key`
+    /// standing for the ground and lines counted.
+    DigBlockCount {
+        key: u64,
+    },
     /// A job not tied to any tracked source (always applied).
     #[allow(dead_code)]
     Anonymous,
@@ -109,12 +153,35 @@ pub(crate) struct CancelFlag(Arc<AtomicBool>);
 
 impl CancelFlag {
     pub(crate) fn cancel(&self) {
-        self.0.store(true, Ordering::Relaxed);
+        self.0.store(true, Ordering::Release);
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
+        self.0.load(Ordering::Acquire)
     }
+
+    pub(crate) fn signal(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.0)
+    }
+}
+
+/// The error a computation returns when its [`CancelFlag`] stops it:
+/// `bail!(Cancelled)` or `ensure!(!cancel.is_cancelled(), Cancelled)`. Its text
+/// is translated, so callers recognise it with [`is_cancelled`], never by text.
+#[derive(Debug)]
+pub(crate) struct Cancelled;
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&crate::i18n::tr!("common-cancelled"))
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
+/// Whether `error` is, or was caused by, a [`Cancelled`] computation.
+pub(crate) fn is_cancelled(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| cause.is::<Cancelled>())
 }
 
 /// A heavy operation running on a background thread.
@@ -211,8 +278,8 @@ pub(crate) fn run_compute_catching_panic<T>(compute: impl FnOnce() -> anyhow::Re
             .downcast_ref::<&str>()
             .map(|s| (*s).to_owned())
             .or_else(|| payload.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "unknown panic".to_owned());
-        Err(anyhow::anyhow!("background task panicked: {message}"))
+            .unwrap_or_else(|| tr!("err-file-unknown-panic"));
+        Err(anyhow::anyhow!(tr!("err-file-task-panicked", message = message)))
     })
 }
 
@@ -223,9 +290,25 @@ impl<'a> App<'a> {
             JobKey::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == id),
             JobKey::BlockModel(id) => self.block_models.iter().any(|item| item.id == id),
             JobKey::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == id),
+            // The page may have moved to another solid, or off the step, while
+            // the build ran; its result is only wanted for the solid still
+            // being previewed.
+            JobKey::ReserveStats(id, key) => self.block_models.iter().any(|model| model.id == id && model.reserve_totals_key == Some(key)),
+            JobKey::SolidArtifact { solid, kind, token } => self.solid_view_cache.get(&solid).is_some_and(|cache| cache.accepts(kind, token)),
+            JobKey::SolidPreview(solid) => self.solid_preview.as_ref().is_some_and(|preview| preview.solid() == solid),
+            JobKey::ScheduleAnimation { runtime, run, request } => self.schedule_animation.accepts(runtime, run, request),
+            JobKey::ScheduleRun { runtime, serial } => self
+                .pending_schedule_run
+                .as_ref()
+                .is_some_and(|pending| pending.runtime == runtime && pending.serial == serial),
             JobKey::Geophysics { dataset, generation } => self.well_logs.generation(dataset) == Some(generation),
             JobKey::DrillHoleLoad { runtime_id, .. } => self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id),
             JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
+            // Its result is a finished video, wanted whatever moved.
+            JobKey::VideoExport => true,
+            // Held under its key, which a reader checks against the ground
+            // and lines it is counting.
+            JobKey::DigBlockCount { .. } => true,
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects
@@ -264,7 +347,25 @@ impl<'a> App<'a> {
         C: FnOnce(&CancelFlag) -> anyhow::Result<T> + Send + 'static,
         A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
     {
-        self.spawn_job_reporting_progress(label, keys, move |cancel, _progress| compute(cancel), apply);
+        self.spawn_announced_job(Announce::StatusBar, label, keys, move |cancel, _progress| compute(cancel), apply);
+    }
+
+    /// As [`App::spawn_job`], but the task never reaches the status bar or the
+    /// busy pointer, and the frame is not held open while it runs.
+    ///
+    /// For work that reports itself where the user is already looking. The
+    /// status bar keeps redrawing for as long as it has something to show, so
+    /// a job that fires on every drag of a slider would otherwise keep the
+    /// whole scene redrawing between the drags as well as during them. `label`
+    /// is still carried, because a stale or lost result has to be able to name
+    /// itself in the activity console.
+    pub(crate) fn spawn_job_quietly<T, C, A>(&mut self, label: impl Into<String>, keys: Vec<JobKey>, compute: C, apply: A)
+    where
+        T: Send + 'static,
+        C: FnOnce(&CancelFlag) -> anyhow::Result<T> + Send + 'static,
+        A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
+    {
+        self.spawn_announced_job(Announce::Quietly, label, keys, move |cancel, _progress| compute(cancel), apply);
     }
 
     /// As [`App::spawn_job`], but the compute closure also gets a
@@ -288,8 +389,20 @@ impl<'a> App<'a> {
         C: FnOnce(&CancelFlag, &Progress) -> anyhow::Result<T> + Send + 'static,
         A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
     {
+        self.spawn_announced_job(Announce::StatusBar, label, keys, compute, apply)
+    }
+
+    fn spawn_announced_job<T, C, A>(&mut self, announce: Announce, label: impl Into<String>, keys: Vec<JobKey>, compute: C, apply: A) -> Progress
+    where
+        T: Send + 'static,
+        C: FnOnce(&CancelFlag, &Progress) -> anyhow::Result<T> + Send + 'static,
+        A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
+    {
         let label = label.into();
-        let (ticket, progress) = self.begin_reported_task(label.clone());
+        let (ticket, progress) = match announce {
+            Announce::StatusBar => self.begin_reported_task(label.clone()),
+            Announce::Quietly => self.begin_quiet_task(),
+        };
         let shared = progress.clone();
         let mut console_report = crate::logging::retain_current_report();
 
@@ -320,7 +433,7 @@ impl<'a> App<'a> {
             let mut poll_once = || match rx.try_recv() {
                 Ok(result) => {
                     if !app.job_dependencies_are_current(&poll_keys) {
-                        crate::userspace_warn!("{}", tr!("jobs-discarded-stale-result", poll_label = poll_label.clone().to_string()));
+                        crate::userspace_log!("{}", tr!("jobs-discarded-stale-result", poll_label = poll_label.clone().to_string()));
                     } else if let Some(apply) = apply.take() {
                         apply(app, result);
                     }
@@ -367,7 +480,12 @@ impl<'a> App<'a> {
     /// Whether any pending job lists `key` among its dependencies. Lets a
     /// caller refuse to start a second job for a source already in flight.
     pub(crate) fn job_pending(&self, key: &JobKey) -> bool {
-        self.pending_jobs.iter().any(|job| job.keys.contains(key))
+        self.any_job_pending(|job| job == key)
+    }
+
+    /// Whether any pending job lists a dependency `matches` accepts.
+    pub(crate) fn any_job_pending(&self, matches: impl Fn(&JobKey) -> bool) -> bool {
+        self.pending_jobs.iter().any(|job| job.keys.iter().any(&matches))
     }
 
     /// Drain finished background jobs, running their apply closures on the UI
@@ -380,8 +498,19 @@ impl<'a> App<'a> {
         }
 
         let mut residency_settled = false;
-        let mut still_pending = Vec::with_capacity(self.pending_jobs.len());
-        for mut job in std::mem::take(&mut self.pending_jobs) {
+        // Only the job being polled leaves the list. An apply closure has to
+        // see every other job still in flight: one that asks whether a
+        // restore is pending, or cancels a job, would otherwise find nothing -
+        // which is how one surface landing used to fail a solid whose own
+        // surfaces were still on their way. Follow-ups an apply spawns are
+        // appended, and polled from the next frame.
+        let tickets: Vec<_> = self.pending_jobs.iter().map(|job| job.ticket).collect();
+        for ticket in tickets {
+            // Gone already if an earlier apply cancelled it.
+            let Some(index) = self.pending_jobs.iter().position(|job| job.ticket == ticket) else {
+                continue;
+            };
+            let mut job = self.pending_jobs.remove(index);
             self.applied_job_needs_gpu = false;
             if (job.poll)(self) {
                 residency_settled |= job
@@ -393,18 +522,20 @@ impl<'a> App<'a> {
                 self.finish_background_task(job.ticket, needs_gpu);
                 self.redraw_requested = true;
             } else {
-                still_pending.push(job);
+                let index = index.min(self.pending_jobs.len());
+                self.pending_jobs.insert(index, job);
             }
         }
-        // An apply closure may itself spawn a follow-up job; keep those
-        // (currently in self.pending_jobs) after the ones still running.
-        still_pending.append(&mut self.pending_jobs);
-        self.pending_jobs = still_pending;
         // A rename/edit can invalidate a pending eviction. Reconcile the
         // remaining payloads after stale workers settle as well as on edits.
         if residency_settled {
             self.evict_unloaded_items();
             self.evict_unloaded_layers();
+        }
+        // Everything is done, so what the jobs built and threw away can go.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.pending_jobs.is_empty() {
+            crate::app::memory::release_free_memory();
         }
         // The status bar is driven from the ticket registry (see
         // `App::refresh_status_message`), which each job joined when it began.

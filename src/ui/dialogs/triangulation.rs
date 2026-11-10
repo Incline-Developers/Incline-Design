@@ -2,11 +2,17 @@
 
 use crate::{
     i18n::tr,
-    model::{Document, Object, ObjectId, SceneEntityId, triangulation::TriangulationId},
+    model::{Document, Object, ObjectId, triangulation::TriangulationId},
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
-        state::{ContourOutputLayer, EditorState, TriCreatePhase, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriangulationPickTarget, UiCommand, UiProjectView},
-        widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, selected_source_field},
+        state::{
+            ContourOutputLayer, EditorState, SelectionPickTool, SolidRegion, ToolSubject, TriCreatePhase, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType,
+            TriangulationPickTarget, UiCommand, UiProjectView,
+        },
+        widgets::{
+            hint::Hint,
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRange, MenuFieldText, MenuFieldU32},
+        },
     },
 };
 
@@ -81,6 +87,9 @@ fn tri_surface_type_label(surface_type: TriSurfaceType) -> String {
 
 const PICK_SELECTOR_WIDTH: f32 = 210.0;
 const PICK_BUTTON_WIDTH: f32 = 52.0;
+/// Width of the prompt shown while a viewport pick waits. Fixed, so the name
+/// under the cursor cannot resize it.
+pub(super) const PICK_PROMPT_WIDTH: f32 = 360.0;
 const PICKER_DIALOG_MIN_WIDTH: f32 = 430.0;
 const PICKER_DIALOG_MAX_WIDTH: f32 = 450.0;
 
@@ -153,11 +162,15 @@ fn viewport_pick_status(ui: &mut egui::Ui, editor: &EditorState, empty_text: &st
         .corner_radius(3.0)
         .inner_margin(egui::Margin::symmetric(8, 5))
         .show(ui, |ui| {
-            ui.set_min_width(250.0);
-            ui.label(egui::RichText::new(text).italics());
+            // The name under the cursor changes as it moves, so the row keeps
+            // its width and a long name is cut short rather than resizing
+            // the window.
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(egui::RichText::new(text).italics()).truncate());
         });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn triangulation_picker_field(
     ui: &mut egui::Ui,
     id_source: &'static str,
@@ -166,9 +179,10 @@ fn triangulation_picker_field(
     selected_text: impl Into<egui::WidgetText>,
     options: impl IntoIterator<Item = (Option<TriangulationId>, egui::WidgetText)>,
     help_text: impl Into<egui::WidgetText>,
+    project: &UiProjectView,
 ) -> bool {
     let width = picker_control_width(ui);
-    triangulation_picker_field_with_width(ui, id_source, label, value, selected_text, options, help_text, width)
+    triangulation_picker_field_with_width(ui, id_source, label, value, selected_text, options, help_text, project, width)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -180,8 +194,12 @@ fn triangulation_picker_field_with_width(
     selected_text: impl Into<egui::WidgetText>,
     options: impl IntoIterator<Item = (Option<TriangulationId>, egui::WidgetText)>,
     help_text: impl Into<egui::WidgetText>,
+    project: &UiProjectView,
     width: f32,
 ) -> bool {
+    // An unloaded surface has no mesh to work on, so it is not offered. Say
+    // so only when one is actually missing from the list.
+    let some_unloaded = project.triangulations.iter().any(|entry| !entry.is_loaded);
     let selected_text = selected_text.into();
     let pick_label = pick_button_label();
     let pick_width = pick_button_width(ui, &pick_label);
@@ -196,12 +214,14 @@ fn triangulation_picker_field_with_width(
                     for (option, text) in options {
                         ui.selectable_value(value, option, text);
                     }
-                })
-                .response
-                .on_hover_text(selected_text);
+                    if some_unloaded {
+                        ui.separator();
+                        ui.label(egui::RichText::new(tr!("triangulation-picker-loaded-only")).weak());
+                    }
+                });
             pick_clicked = ui
                 .add(MenuButton::new(pick_label).min_width(pick_width))
-                .on_hover_text(tr!("tri-choose-input-clicking-loaded-surface"))
+                .hint(tr!("tri-choose-input-clicking-loaded-surface"))
                 .clicked();
         })
         .response
@@ -209,13 +229,39 @@ fn triangulation_picker_field_with_width(
     pick_clicked
 }
 
-/// Name of a loaded surface, or a stand-in if it went away while the dialog
-/// was open - unloading or deleting it is a legitimate thing to do, and the
-/// run button is already disabled by then.
-fn surface_name(project: &UiProjectView, tri_id: Option<TriangulationId>) -> String {
-    tri_id
-        .and_then(|id| project.triangulations.iter().find(|entry| entry.is_loaded && entry.id == id))
-        .map_or_else(|| tr!("tri-no-surface-selected"), |entry| entry.name.clone())
+/// The surface a tool works on: the loaded ones in a list, beside a Pick
+/// button for clicking one in the viewport. A surface selected when the tool
+/// opened is already here. Returns the surface chosen from the list, and
+/// whether Pick was pressed; the caller sends the first to the app, which
+/// derives the tool's other fields from it.
+fn subject_surface_field(
+    ui: &mut egui::Ui,
+    id_source: &'static str,
+    current: Option<TriangulationId>,
+    help_text: impl Into<egui::WidgetText>,
+    project: &UiProjectView,
+    width: f32,
+) -> (Option<TriangulationId>, bool) {
+    // A surface unloaded or deleted from under the dialog reads as none
+    // chosen, which is a legitimate thing to have happened.
+    let loaded = || project.triangulations.iter().filter(|entry| entry.is_loaded);
+    let shown = current.filter(|id| loaded().any(|entry| entry.id == *id));
+    let label = shown
+        .and_then(|id| loaded().find(|entry| entry.id == id))
+        .map_or_else(|| tr!("tri-select"), |entry| entry.name.clone());
+    let mut value = shown;
+    let pick = triangulation_picker_field_with_width(
+        ui,
+        id_source,
+        tr!("tri-type-open-surface"),
+        &mut value,
+        label,
+        loaded().map(|entry| (Some(entry.id), entry.name.as_str().into())),
+        help_text,
+        project,
+        width,
+    );
+    (value.filter(|_| value != shown), pick)
 }
 
 pub(crate) fn draw_triangulation_pick_prompt(ui: &mut egui::Ui, editor: &mut EditorState) {
@@ -225,30 +271,33 @@ pub(crate) fn draw_triangulation_pick_prompt(ui: &mut egui::Ui, editor: &mut Edi
     let mut open = true;
     DragableMenu::new("triangulation_pick_from_view_dialog", tr!("tri-pick-from-view"))
         .open(&mut open)
-        .min_width(280.0)
+        .min_width(PICK_PROMPT_WIDTH)
+        .max_width(PICK_PROMPT_WIDTH)
         .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui.ctx(), |ui| {
             ui.label(target.prompt());
-            ui.label(egui::RichText::new(tr!("tri-only-loaded-pickable")).weak());
+            let empty_text = if target.picks_boundary() {
+                tr!("tri-move-cursor-over-closed-polyline")
+            } else {
+                ui.label(egui::RichText::new(tr!("tri-only-loaded-pickable")).weak());
+                tr!("tri-move-cursor-over-loaded-surface")
+            };
             ui.add_space(6.0);
-            viewport_pick_status(ui, editor, &tr!("tri-move-cursor-over-loaded-surface"));
+            viewport_pick_status(ui, editor, &empty_text);
             ui.add_space(6.0);
             if ui.add(MenuButton::new(tr!("tri-cancel-pick"))).clicked() {
-                editor.triangulation_pick_target = None;
-                editor.viewport_pick_hover_label = None;
-                editor.tri_hover_handles.clear();
+                editor.cancel_triangulation_pick();
             }
         });
     if !open {
-        editor.triangulation_pick_target = None;
-        editor.viewport_pick_hover_label = None;
-        editor.tri_hover_handles.clear();
+        editor.cancel_triangulation_pick();
     }
 }
 
 /// Movable main dialog for the Create Triangulation workflow.
 pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
-    if !editor.tri_create_open || editor.tri_create_phase != TriCreatePhase::MainDialog {
+    // Hidden while its Pick has the viewport.
+    if !editor.tri_create_open || editor.tri_create_phase != TriCreatePhase::MainDialog || editor.selection_pick.is_some() {
         return;
     }
 
@@ -257,28 +306,20 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
         .open(&mut open)
         .min_width(370.0)
         .show(ui.ctx(), |ui| {
-            tool_help_panel(ui, tr!("tri-create-help"));
+            tool_help_panel(ui, tr!("tri-create-objects-help"));
             ui.add_space(4.0);
 
-            // --- Selection summary ---
-            // The run works on the selection the dialog opened with, so the
-            // set is reported here rather than offered for editing: changing
-            // it means closing the dialog and selecting again.
+            // The objects the run works on: those selected when the dialog
+            // opened, changed with Pick.
             let has_selection = !editor.tri_selected_object_ids.is_empty();
-            let hover_selection = if has_selection {
-                let summary = tr!("tri-selection-selected", summary = selection_summary(&editor.tri_selected_object_ids, document));
-                ui.label(summary).hovered()
+            let summary = if has_selection {
+                tr!("tri-selection-selected", summary = selection_summary(&editor.tri_selected_object_ids, document))
             } else {
-                ui.colored_label(egui::Color32::GRAY, tr!("tri-selection-none"));
-                false
+                tr!("ui-selected-objects", count = 0)
             };
-
-            // Hovering the summary highlights the whole selection in the viewport.
-            editor.tri_hover_handles = if hover_selection {
-                editor.tri_selected_object_ids.iter().map(|&oid| SceneEntityId::Object(oid)).collect()
-            } else {
-                std::collections::HashSet::new()
-            };
+            if menu::picked_selection_field(ui, tr!("sequence-objects"), summary, tr!("pick-selection-edges-help"), picker_control_width(ui)) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::CreateTriangulation));
+            }
 
             ui.add_space(4.0);
             {
@@ -302,14 +343,13 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
 
             // --- Name + Triangulate ---
             MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_name_input)
-                .help_text(tr!("tri-create-output-name-help"))
                 .width(PICK_SELECTOR_WIDTH)
                 .hint_text(tr!("tri-create-output-name-hint"))
                 .show(ui);
             menu::menu_actions(ui, |ui| {
                 let ready = has_selection && !editor.tri_name_input.trim().is_empty();
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
-                let cancel = menu::dialog_cancel_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                let cancel = menu::dialog_cancelled(ui.ctx());
                 if ui.add(MenuButton::new(tr!("tri-create-run")).primary().enabled(ready)).clicked() || (confirm && ready) {
                     let object_ids: Vec<ObjectId> = editor.tri_selected_object_ids.clone();
                     let name = editor.tri_name_input.trim().to_owned();
@@ -349,7 +389,7 @@ pub(crate) fn draw_tri_create_failure_dialog(ui: &mut egui::Ui, editor: &mut Edi
                 ui.strong(tr!("tri-recommended-weld-retry"));
                 ui.colored_label(egui::Color32::GRAY, tr!("tri-vertices-within-5-cm-xy"));
                 menu::menu_actions(ui, |ui| {
-                    if ui.add(MenuButton::new(tr!("tri-weld-retry")).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                    if ui.add(MenuButton::new(tr!("tri-weld-retry")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                         commands.push(UiCommand::ExecuteCreateTriangulationWithWeld {
                             name: failure.name.clone(),
                             object_ids: failure.object_ids.clone(),
@@ -357,7 +397,7 @@ pub(crate) fn draw_tri_create_failure_dialog(ui: &mut egui::Ui, editor: &mut Edi
                         });
                         dismiss = true;
                     }
-                    if ui.add(MenuButton::new(tr!("survey-close"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    if ui.add(MenuButton::new(tr!("survey-close"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                         dismiss = true;
                     }
                 });
@@ -367,7 +407,7 @@ pub(crate) fn draw_tri_create_failure_dialog(ui: &mut egui::Ui, editor: &mut Edi
                 ui.strong(tr!("tri-solution-generate-upper-surface"));
                 ui.colored_label(egui::Color32::GRAY, tr!("tri-higher-edge-will-enforced-each"));
                 menu::menu_actions(ui, |ui| {
-                    if ui.add(MenuButton::new(tr!("tri-generate-upper-surface")).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                    if ui.add(MenuButton::new(tr!("tri-generate-upper-surface")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                         commands.push(UiCommand::ExecuteCreateTriangulationUpperSurface {
                             name: failure.name.clone(),
                             object_ids: failure.object_ids.clone(),
@@ -376,15 +416,15 @@ pub(crate) fn draw_tri_create_failure_dialog(ui: &mut egui::Ui, editor: &mut Edi
                         });
                         dismiss = true;
                     }
-                    if ui.add(MenuButton::new(tr!("survey-close"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    if ui.add(MenuButton::new(tr!("survey-close"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                         dismiss = true;
                     }
                 });
             } else {
                 ui.colored_label(egui::Color32::LIGHT_RED, &failure.message);
                 // Only one button, so Enter and Escape both dismiss.
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
-                let cancel = menu::dialog_cancel_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                let cancel = menu::dialog_cancelled(ui.ctx());
                 if ui.add(MenuButton::new(tr!("survey-close"))).clicked() || confirm || cancel {
                     dismiss = true;
                 }
@@ -419,27 +459,40 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
         .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui.ctx(), |ui| {
             let width = picker_control_width(ui);
-            selected_source_field(
-                ui,
-                tr!("tri-type-open-surface"),
-                surface_name(project, editor.tri_cut_poly_tri_id),
-                tr!("tri-selected-surface-which-will-clipped"),
-                width,
-            );
+            let (chosen, pick) = subject_surface_field(ui, "clip_surface", editor.tri_cut_poly_tri_id, tr!("tri-clip-surface-help"), project, width);
+            if let Some(id) = chosen {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::ClipSurface(id)));
+            }
+            if pick {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::ClipSurface);
+            }
 
             ui.add_space(4.0);
 
-            selected_source_field(
-                ui,
-                tr!("tri-boundary-polyline"),
-                if editor.tri_cut_poly_object_id.is_some() {
-                    editor.tri_cut_poly_object_name.clone()
-                } else {
-                    tr!("tri-no-boundary-selected")
-                },
-                tr!("tri-selected-closed-polyline-whose-xy"),
-                width,
-            );
+            // Polylines carry no names to list, so the boundary is picked by
+            // clicking it; one selected with the surface is already here.
+            let boundary = if editor.tri_cut_poly_object_id.is_some() {
+                editor.tri_cut_poly_object_name.clone()
+            } else {
+                tr!("tri-no-boundary-selected")
+            };
+            let pick_label = pick_button_label();
+            let pick_width = pick_button_width(ui, &pick_label);
+            MenuField::new(tr!("tri-boundary-polyline"))
+                .help_text(tr!("tri-boundary-polyline-help"))
+                .show(ui, |ui, row_height, _| {
+                    ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let name_width = width - ui.spacing().item_spacing.x - pick_width;
+                        ui.allocate_ui_with_layout(egui::vec2(name_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.set_min_width(name_width);
+                            ui.add(egui::Label::new(boundary.clone()).truncate());
+                        });
+                        if ui.add(MenuButton::new(pick_label).min_width(pick_width)).clicked() {
+                            editor.triangulation_pick_target = Some(TriangulationPickTarget::ClipBoundary);
+                        }
+                    })
+                    .response
+                });
 
             ui.add_space(4.0);
 
@@ -477,9 +530,7 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                 .width(width)
                 .hint_text(tr!("tri-e-g-mysurf-cut"))
                 .show(ui);
-            MenuFieldBool::new(tr!("tri-unload-source-surface"), &mut editor.tri_cut_poly_unload_source)
-                .help_text(tr!("tri-once-clip-succeeds-unload-source"))
-                .show(ui);
+            MenuFieldBool::new(tr!("tri-unload-source-surface"), &mut editor.tri_cut_poly_unload_source).show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -487,7 +538,7 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
             let can_run = editor.tri_cut_poly_tri_id.is_some() && editor.tri_cut_poly_object_id.is_some() && !editor.tri_cut_poly_name_input.trim().is_empty();
 
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("tri-clip")).primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let (Some(tri_id), Some(poly_id)) = (editor.tri_cut_poly_tri_id, editor.tri_cut_poly_object_id)
                 {
@@ -499,7 +550,7 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                         unload_source: editor.tri_cut_poly_unload_source,
                     });
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.tri_cut_poly_open = false;
                     editor.tool_highlight_id = None;
                 }
@@ -522,48 +573,33 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
         .max_width(PICKER_DIALOG_MAX_WIDTH)
         .show(ui.ctx(), |ui| {
             let width = picker_control_width(ui);
-            let selected_name = surface_name(project, editor.tri_cut_z_tri_id);
-            selected_source_field(ui, tr!("tri-type-open-surface"), selected_name, tr!("tri-slice-source-help"), width);
+            let (chosen, pick) = subject_surface_field(ui, "slice_surface", editor.tri_cut_z_tri_id, tr!("tri-slice-surface-help"), project, width);
+            if let Some(id) = chosen {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::SliceSurface(id)));
+            }
+            if pick {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::SliceSurface);
+            }
 
             ui.add_space(4.0);
 
-            MenuField::new(tr!("tri-axis-range", axis = crate::model::survey::axis_name(2).to_string()))
-                .help_text(tr!("tri-minimum-maximum-elevations-retained"))
-                .show(ui, |ui, row_height, _| {
-                    let width = picker_control_width(ui);
-                    let gap = ui.spacing().item_spacing.x;
-                    let field_width = (width - gap) * 0.5;
-                    ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add_sized(
-                            [field_width, row_height],
-                            egui::DragValue::new(&mut editor.tri_cut_z_min_input)
-                                .range(f64::MIN..=f64::MAX)
-                                .speed(0.1)
-                                .prefix(format!("{} ", tr!("tri-min")))
-                                .max_decimals(2),
-                        );
-                        ui.add_sized(
-                            [field_width, row_height],
-                            egui::DragValue::new(&mut editor.tri_cut_z_max_input)
-                                .range(f64::MIN..=f64::MAX)
-                                .speed(0.1)
-                                .prefix(format!("{} ", tr!("common-max")))
-                                .max_decimals(2),
-                        );
-                    })
-                    .response
-                });
+            let (z_low, z_high) = editor.tri_cut_z_limits;
+            MenuFieldRange::new(
+                tr!("tri-axis-range", axis = crate::model::survey::axis_name(2).to_string()),
+                &mut editor.tri_cut_z_min_input,
+                &mut editor.tri_cut_z_max_input,
+                z_low..=z_high,
+            )
+            .width(width)
+            .show(ui);
 
             ui.add_space(4.0);
 
             MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_cut_z_name_input)
-                .help_text(tr!("tri-slice-output-name-help"))
                 .width(width)
                 .hint_text(tr!("tri-e-g-mysurf-slice"))
                 .show(ui);
-            MenuFieldBool::new(tr!("tri-unload-source-surface"), &mut editor.tri_cut_z_unload_source)
-                .help_text(tr!("tri-once-slice-succeeds-unload-source"))
-                .show(ui);
+            MenuFieldBool::new(tr!("tri-unload-source-surface"), &mut editor.tri_cut_z_unload_source).show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -574,7 +610,7 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
             let can_run = editor.tri_cut_z_tri_id.is_some() && valid_z_range && !editor.tri_cut_z_name_input.trim().is_empty();
 
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("common-slice")).primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let Some(tri_id) = editor.tri_cut_z_tri_id
                 {
@@ -586,7 +622,7 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         unload_source: editor.tri_cut_z_unload_source,
                     });
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.tri_cut_z_open = false;
                 }
             });
@@ -630,6 +666,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 reference_label,
                 loaded.iter().filter(|(id, _)| Some(*id) != target_id).map(|(id, name)| (Some(*id), (*name).into())),
                 tr!("tri-reference-topology-help"),
+                project,
             ) {
                 editor.triangulation_pick_target = Some(TriangulationPickTarget::TrimTopology);
             }
@@ -649,11 +686,14 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 target_label,
                 loaded.iter().filter(|(id, _)| Some(*id) != reference_id).map(|(id, name)| (Some(*id), (*name).into())),
                 tr!("tri-target-surface-help"),
+                project,
             ) {
                 editor.triangulation_pick_target = Some(TriangulationPickTarget::TrimSurface);
             }
 
-            if editor.tri_cut_surface_target_id != old_target
+            // Also when the dialog opened with the surface already chosen
+            // from the selection, and so has no name yet.
+            if (editor.tri_cut_surface_target_id != old_target || editor.tri_cut_surface_name_input.is_empty())
                 && editor.tri_cut_surface_name_auto
                 && let Some(name) = editor
                     .tri_cut_surface_target_id
@@ -696,7 +736,6 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             );
 
             if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_cut_surface_name_input)
-                .help_text(tr!("tri-name-assigned-trimmed-output-surface"))
                 .width(picker_control_width(ui))
                 .hint_text(tr!("tri-e-g-design-trimmed"))
                 .show(ui)
@@ -704,9 +743,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             {
                 editor.tri_cut_surface_name_auto = false;
             }
-            MenuFieldBool::new(tr!("tri-unload-source-surface"), &mut editor.tri_cut_surface_unload_source)
-                .help_text(tr!("tri-once-trim-succeeds-unload-surface"))
-                .show(ui);
+            MenuFieldBool::new(tr!("tri-unload-source-surface"), &mut editor.tri_cut_surface_unload_source).show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -716,7 +753,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 && editor.tri_cut_surface_target_id != editor.tri_cut_surface_reference_id
                 && !editor.tri_cut_surface_name_input.trim().is_empty();
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("tri-trim")).primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let (Some(target_id), Some(reference_id)) = (editor.tri_cut_surface_target_id, editor.tri_cut_surface_reference_id)
                 {
@@ -728,7 +765,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                         unload_source: editor.tri_cut_surface_unload_source,
                     });
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.tri_cut_surface_open = false;
                 }
             });
@@ -736,6 +773,130 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
 
     if !open {
         editor.tri_cut_surface_open = false;
+    }
+}
+
+/// The Build Solid from Surfaces tool: pick a design surface and the
+/// topography it meets, and get the closed volume between them.
+///
+/// The same construction the Solids Setup page previews, so a solid inspected
+/// there and one built here are the same mesh.
+pub(crate) fn draw_build_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_solid_open || editor.triangulation_pick_target.is_some() {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("build_solid_from_surfaces_dialog", tr!("tri-build-solid-surfaces"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
+
+            let topography_id = editor.tri_solid_topography_id;
+            let design_label = editor
+                .tri_solid_design_id
+                .and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name))
+                .map(str::to_owned)
+                .unwrap_or_else(|| tr!("tri-select"));
+            let old_design = editor.tri_solid_design_id;
+            if triangulation_picker_field(
+                ui,
+                "build_solid_design",
+                tr!("tri-design-surface"),
+                &mut editor.tri_solid_design_id,
+                design_label,
+                loaded.iter().filter(|(id, _)| Some(*id) != topography_id).map(|(id, name)| (Some(*id), (*name).into())),
+                tr!("tri-pit-shell-dump-design"),
+                project,
+            ) {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::SolidDesign);
+            }
+
+            let design_id = editor.tri_solid_design_id;
+            let topography_label = editor
+                .tri_solid_topography_id
+                .and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name))
+                .map(str::to_owned)
+                .unwrap_or_else(|| tr!("tri-select"));
+            if triangulation_picker_field(
+                ui,
+                "build_solid_topography",
+                tr!("solids-topography"),
+                &mut editor.tri_solid_topography_id,
+                topography_label,
+                loaded.iter().filter(|(id, _)| Some(*id) != design_id).map(|(id, name)| (Some(*id), (*name).into())),
+                tr!("tri-ground-design-measured-against"),
+                project,
+            ) {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::SolidTopography);
+            }
+
+            if editor.tri_solid_design_id != old_design
+                && editor.tri_solid_name_auto
+                && let Some(name) = editor
+                    .tri_solid_design_id
+                    .and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name))
+            {
+                editor.tri_solid_name_input = crate::app::canvas::derived_triangulation_name(name, &tr!("tri-type-solid-closed"));
+            }
+
+            ui.add_space(4.0);
+
+            MenuField::new(tr!("tri-volume"))
+                .help_text(tr!("tri-which-two-volumes-surfaces"))
+                .show(ui, |ui, row_height, _| {
+                    let (response, clicked) = centered_choice_buttons(ui, row_height, SolidRegion::ALL.map(|region| (region.label(), editor.tri_solid_region == region)));
+                    if let Some(index) = clicked {
+                        editor.tri_solid_region = SolidRegion::ALL[index];
+                    }
+                    response
+                });
+
+            tool_help_panel(ui, tr!("tri-encloses-over-area-two", region = editor.tri_solid_region.description().to_string()));
+
+            if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_solid_name_input)
+                .width(picker_control_width(ui))
+                .hint_text(tr!("tri-north-pit-solid"))
+                .show(ui)
+                .changed()
+            {
+                editor.tri_solid_name_auto = false;
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let can_run = editor.tri_solid_design_id.is_some()
+                && editor.tri_solid_topography_id.is_some()
+                && editor.tri_solid_design_id != editor.tri_solid_topography_id
+                && !editor.tri_solid_name_input.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("tri-build")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let (Some(design_id), Some(topography_id)) = (editor.tri_solid_design_id, editor.tri_solid_topography_id)
+                {
+                    commands.push(UiCommand::ExecuteBuildSolidFromSurfaces {
+                        design_id,
+                        topography_id,
+                        region: editor.tri_solid_region,
+                        name: editor.tri_solid_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_solid_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_solid_open = false;
     }
 }
 
@@ -774,6 +935,7 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
                     .filter(|(id, _)| Some(*id) != editor.tri_cut_pitshell_pitshell_id)
                     .map(|(id, name)| (Some(*id), (*name).into())),
                 tr!("tri-existing-ground-topology-will-cut"),
+                project,
             ) {
                 editor.triangulation_pick_target = Some(TriangulationPickTarget::CutPitTopology);
             }
@@ -806,6 +968,7 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
                     .filter(|(id, _)| Some(*id) != editor.tri_cut_pitshell_topology_id)
                     .map(|(id, name)| (Some(*id), (*name).into())),
                 tr!("tri-pit-design-surface-only-areas"),
+                project,
             ) {
                 editor.triangulation_pick_target = Some(TriangulationPickTarget::CutPitShell);
             }
@@ -814,7 +977,6 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
             tool_help_panel(ui, tr!("tri-removes-topology-where-pit-shell"));
 
             if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_cut_pitshell_name_input)
-                .help_text(tr!("tri-name-assigned-topology-after-pit"))
                 .width(picker_control_width(ui))
                 .hint_text(tr!("tri-e-g-topo-cut"))
                 .show(ui)
@@ -822,9 +984,7 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
             {
                 editor.tri_cut_pitshell_name_auto = false;
             }
-            MenuFieldBool::new(tr!("tri-unload-source-topology"), &mut editor.tri_cut_pitshell_unload_source)
-                .help_text(tr!("tri-once-cut-succeeds-unload-original"))
-                .show(ui);
+            MenuFieldBool::new(tr!("tri-unload-source-topology"), &mut editor.tri_cut_pitshell_unload_source).show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -832,7 +992,7 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
             let can_run = editor.tri_cut_pitshell_topology_id.is_some() && editor.tri_cut_pitshell_pitshell_id.is_some() && !editor.tri_cut_pitshell_name_input.trim().is_empty();
 
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("common-cut")).primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let (Some(topology_id), Some(pit_shell_id)) = (editor.tri_cut_pitshell_topology_id, editor.tri_cut_pitshell_pitshell_id)
                 {
@@ -843,7 +1003,7 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
                         unload_source: editor.tri_cut_pitshell_unload_source,
                     });
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.tri_cut_pitshell_open = false;
                     editor.tool_highlight_id = None;
                 }
@@ -888,6 +1048,7 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 topology_label,
                 loaded.iter().map(|(id, name)| (Some(*id), (*name).into())),
                 tr!("tri-base-topology-will-receive-pit"),
+                project,
             ) {
                 editor.triangulation_pick_target = Some(TriangulationPickTarget::IncludeTopology);
             }
@@ -920,12 +1081,12 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 shape_label,
                 loaded.iter().filter(|(id, _)| Some(*id) != topology_id).map(|(id, name)| (Some(*id), (*name).into())),
                 tr!("tri-closed-pit-stockpile-solid-whose"),
+                project,
             ) {
                 editor.triangulation_pick_target = Some(TriangulationPickTarget::IncludeShape);
             }
 
             if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_include_solid_name_input)
-                .help_text(tr!("tri-name-assigned-merged-topology-pit"))
                 .width(picker_control_width(ui))
                 .hint_text(tr!("tri-e-g-topo-pit"))
                 .show(ui)
@@ -936,9 +1097,7 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
             MenuFieldBool::new(tr!("tri-save-two-entities"), &mut editor.tri_include_solid_save_as_two)
                 .help_text(tr!("tri-keep-clipped-topology-included-shape"))
                 .show(ui);
-            MenuFieldBool::new(tr!("tri-hide-unload-sources"), &mut editor.tri_include_solid_hide_old)
-                .help_text(tr!("tri-once-merge-succeeds-unload-source"))
-                .show(ui);
+            MenuFieldBool::new(tr!("tri-hide-unload-sources"), &mut editor.tri_include_solid_hide_old).show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -948,7 +1107,7 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 && editor.tri_include_solid_topology_id != editor.tri_include_solid_shape_id
                 && !editor.tri_include_solid_name_input.trim().is_empty();
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("tri-merge")).primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let (Some(topology_id), Some(shape_id)) = (editor.tri_include_solid_topology_id, editor.tri_include_solid_shape_id)
                 {
@@ -960,7 +1119,7 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                         hide_old: editor.tri_include_solid_hide_old,
                     });
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.tri_include_solid_open = false;
                 }
             });
@@ -984,13 +1143,13 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
         .max_width(PICKER_DIALOG_MAX_WIDTH + 62.0)
         .show(ui.ctx(), |ui| {
             let control_width = contour_control_width(ui);
-            selected_source_field(
-                ui,
-                tr!("tri-type-open-surface"),
-                surface_name(project, editor.tri_contour_tri_id),
-                tr!("tri-selected-surface-from-which-contour"),
-                control_width,
-            );
+            let (chosen, pick) = subject_surface_field(ui, "contour_surface", editor.tri_contour_tri_id, tr!("tri-contour-surface-help"), project, control_width);
+            if let Some(id) = chosen {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::ContourSurface(id)));
+            }
+            if pick {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::ContourSurface);
+            }
 
             ui.add_space(4.0);
 
@@ -1028,37 +1187,18 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
             editor.tri_contour_minor_color = color32_to_rgba(minor_color);
             editor.tri_contour_major_color = color32_to_rgba(major_color);
 
-            MenuField::new(tr!("tri-limit-z-range"))
-                .help_text(tr!("tri-when-enabled-generate-contours-only"))
-                .show(ui, |ui, row_height, _| {
-                    let width = control_width;
-                    ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add_sized([row_height, row_height], egui::Checkbox::new(&mut editor.tri_contour_use_z_range, ""));
-                        if editor.tri_contour_use_z_range {
-                            let gap = ui.spacing().item_spacing.x;
-                            let value_width = (width - row_height - gap * 2.0) * 0.5;
-                            ui.add_sized(
-                                [value_width, row_height],
-                                egui::DragValue::new(&mut editor.tri_contour_z_min_input)
-                                    .range(f64::MIN..=f64::MAX)
-                                    .speed(0.1)
-                                    .prefix(format!("{} ", tr!("tri-min")))
-                                    .max_decimals(2),
-                            );
-                            ui.add_sized(
-                                [value_width, row_height],
-                                egui::DragValue::new(&mut editor.tri_contour_z_max_input)
-                                    .range(f64::MIN..=f64::MAX)
-                                    .speed(0.1)
-                                    .prefix(format!("{} ", tr!("common-max")))
-                                    .max_decimals(2),
-                            );
-                        } else {
-                            ui.weak(tr!("tri-use-full-surface-elevation-range"));
-                        }
-                    })
-                    .response
-                });
+            MenuFieldBool::new(tr!("tri-limit-z-range"), &mut editor.tri_contour_use_z_range).show(ui);
+            if editor.tri_contour_use_z_range {
+                let (z_low, z_high) = editor.tri_contour_z_limits;
+                MenuFieldRange::new(
+                    tr!("tri-axis-range", axis = crate::model::survey::axis_name(2).to_string()),
+                    &mut editor.tri_contour_z_min_input,
+                    &mut editor.tri_contour_z_max_input,
+                    z_low..=z_high,
+                )
+                .width(control_width)
+                .show(ui);
+            }
 
             ui.add_space(4.0);
 
@@ -1079,13 +1219,11 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                 output_layer_label,
                 std::iter::once((None, tr!("tri-new-layer").into())).chain(active_layers.iter().map(|layer| (Some(layer.id), layer.name.clone().into()))),
             )
-            .help_text(tr!("tri-create-new-layer-contours-append"))
             .width(control_width)
             .show(ui);
 
             if editor.tri_contour_target_layer.is_none()
                 && MenuFieldText::new(tr!("tri-new-layer-name"), &mut editor.tri_contour_layer_name_input)
-                    .help_text(tr!("tri-name-assigned-newly-created-contour"))
                     .width(control_width)
                     .hint_text(tr!("tri-e-g-surface-contour"))
                     .show(ui)
@@ -1098,6 +1236,9 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
             if editor.tri_contour_target_layer.is_none() && new_layer_name_conflicts {
                 ui.colored_label(egui::Color32::LIGHT_RED, tr!("tri-layer-already-exists-select-above"));
             }
+            MenuFieldBool::new(tr!("tri-contour-labels"), &mut editor.tri_contour_labels)
+                .help_text(tr!("tri-contour-labels-help"))
+                .show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -1114,7 +1255,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                 && (editor.tri_contour_target_layer.is_some() || (!new_layer_name.is_empty() && !new_layer_name_conflicts));
 
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("tri-generate")).primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let Some(tri_id) = editor.tri_contour_tri_id
                 {
@@ -1129,10 +1270,11 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                         major_color: editor.tri_contour_major_color,
                         minor_color: editor.tri_contour_minor_color,
                         z_range,
+                        contour_labels: editor.tri_contour_labels,
                         output_layer,
                     });
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.tri_contour_open = false;
                 }
             });
@@ -1158,9 +1300,9 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
             tool_help_panel(ui, tr!("tri-reconstruct-help"));
             ui.add_space(4.0);
 
-            // The cloud is the one that was selected when the dialog opened.
-            // It can still be unloaded or deleted from under the dialog, which
-            // takes the run button with it.
+            // A cloud selected when the dialog opened is already here. It can
+            // still be unloaded or deleted from under the dialog, which takes
+            // the run button with it.
             let selected = editor.point_cloud_tin_cloud_id.and_then(|id| {
                 project
                     .point_clouds
@@ -1168,13 +1310,25 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
                     .find(|cloud| cloud.is_loaded && cloud.id == id)
                     .map(|cloud| (cloud.id, cloud.name.as_str(), cloud.point_count, cloud.is_classified))
             });
-            selected_source_field(
-                ui,
+            let shown = selected.map(|(id, ..)| id);
+            let mut cloud_id = shown;
+            MenuFieldCombo::new(
+                "point_cloud_tin_cloud",
                 tr!("common-point-cloud"),
-                selected.map(|(_, name, ..)| name.to_owned()).unwrap_or_else(|| tr!("tri-no-point-cloud-selected")),
-                tr!("tri-selected-point-cloud-whose-points"),
-                220.0,
-            );
+                &mut cloud_id,
+                selected.map(|(_, name, ..)| name.to_owned()).unwrap_or_else(|| tr!("tri-select")),
+                project
+                    .point_clouds
+                    .iter()
+                    .filter(|cloud| cloud.is_loaded)
+                    .map(|cloud| (Some(cloud.id), cloud.name.as_str().into())),
+            )
+            .help_text(tr!("tri-point-cloud-source-help"))
+            .width(220.0)
+            .show(ui);
+            if let Some(id) = cloud_id.filter(|_| cloud_id != shown) {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::TinPointCloud(id)));
+            }
 
             // Bare earth is the surveyor's first move on a delivery, so it is
             // offered right under the cloud it applies to and left on. A cloud
@@ -1227,7 +1381,6 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
                 budget_label,
                 [(true, tr!("tri-percentage-cloud").into()), (false, tr!("tri-vertex-count").into())],
             )
-            .help_text(tr!("tri-cap-surface-share-source-points"))
             .width(220.0)
             .show(ui);
 
@@ -1319,13 +1472,12 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
             ui.separator();
 
             MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.point_cloud_tin_name_input)
-                .help_text(tr!("tri-reconstruct-output-name-help"))
                 .width(220.0)
                 .hint_text(tr!("tri-type-open-surface"))
                 .show(ui);
             menu::menu_actions(ui, |ui| {
                 let can_run = selected.is_some() && !editor.point_cloud_tin_name_input.trim().is_empty();
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("tri-generate")).primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let Some((cloud_id, ..)) = selected
                 {
@@ -1343,7 +1495,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
                     });
                     editor.point_cloud_tin_open = false;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.point_cloud_tin_open = false;
                 }
             });

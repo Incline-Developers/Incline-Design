@@ -9,7 +9,12 @@ use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    formats::{block_model_data::BlockModelData, csv_block_model::CsvColumnMapping},
+    ReserveAggregation, ReserveField, ReserveFieldId,
+    formats::{
+        block_column::{BlockColumn, BlockColumnBuilder},
+        block_model_data::BlockModelData,
+        csv_block_model::CsvColumnMapping,
+    },
     project::ProjectItemState,
 };
 
@@ -20,7 +25,7 @@ use crate::model::{
 pub(crate) const MAX_GRADIENT_ENTRIES: usize = 32;
 pub(crate) const FIRST_CUSTOM_COLOR_STOP_ID: u64 = 1_000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct BlockModelId(pub(crate) u64);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -58,16 +63,20 @@ impl RegularBlockBounds {
         let len = dims
             .into_iter()
             .try_fold(1usize, |product, dim| product.checked_mul(dim))
-            .ok_or_else(|| "regular block-grid dimensions overflow usize".to_owned())?;
+            .ok_or_else(|| crate::i18n::tr!("err-bm-grid-dimensions-overflow"))?;
         if dims.contains(&0) || len != expected_len {
-            return Err(format!("regular block-grid dimensions imply {len} blocks, metadata reports {expected_len}"));
+            return Err(crate::i18n::tr!(
+                "err-bm-grid-count-mismatch",
+                len = len.to_string(),
+                expected_len = expected_len.to_string()
+            ));
         }
         if voxel_size.is_some_and(|sizes| sizes.contains(&0)) {
-            return Err("regular block-grid voxel dimensions must be non-zero".to_owned());
+            return Err(crate::i18n::tr!("err-bm-grid-voxel-zero"));
         }
         let cell = (upper - lower) / DVec3::from_array(dims.map(|dim| dim as f64));
         if !lower.is_finite() || !upper.is_finite() || !cell.is_finite() || cell.min_element() <= 0.0 {
-            return Err("regular block-grid bounds are invalid".to_owned());
+            return Err(crate::i18n::tr!("err-bm-grid-bounds-invalid"));
         }
         Ok(Self {
             lower,
@@ -141,9 +150,178 @@ impl RegularBlockBounds {
     }
 }
 
+/// Each block's own bounds, axis by axis. A coordinate has few distinct values
+/// in any stretch of a model's rows and block sizes fewer still, so this holds
+/// the exact 48 bytes of a [`BlockBounds`] in a small fraction of that.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BlockGeometry {
+    lower: [BlockColumn; 3],
+    upper: [BlockColumn; 3],
+}
+
+impl BlockGeometry {
+    pub(crate) fn len(&self) -> usize {
+        self.lower[0].len()
+    }
+
+    #[inline]
+    pub(crate) fn get(&self, index: usize) -> Option<BlockBounds> {
+        let [lx, ly, lz] = &self.lower;
+        let [ux, uy, uz] = &self.upper;
+        (index < self.len()).then(|| BlockBounds {
+            lower: DVec3::new(lx.get(index), ly.get(index), lz.get(index)),
+            upper: DVec3::new(ux.get(index), uy.get(index), uz.get(index)),
+        })
+    }
+
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.lower.iter().chain(&self.upper).map(BlockColumn::heap_bytes).sum()
+    }
+
+    /// The blocks `rows`, which must ascend, as geometry of their own.
+    pub(crate) fn select(&self, rows: &[usize]) -> Self {
+        use rayon::prelude::*;
+        let columns: Vec<BlockColumn> = self.columns().par_iter().map(|column| column.select(rows)).collect();
+        let Ok([lx, ly, lz, ux, uy, uz]) = <[BlockColumn; 6]>::try_from(columns) else {
+            unreachable!("six columns in, six out")
+        };
+        Self {
+            lower: [lx, ly, lz],
+            upper: [ux, uy, uz],
+        }
+    }
+
+    /// The six columns, lower x, y and z then upper, as [`Self::from_columns`] takes them.
+    pub(crate) fn columns(&self) -> [&BlockColumn; 6] {
+        [&self.lower[0], &self.lower[1], &self.lower[2], &self.upper[0], &self.upper[1], &self.upper[2]]
+    }
+
+    /// Geometry from its six columns, lower x, y and z then upper; `None`
+    /// unless they are all one length.
+    pub(crate) fn from_columns(columns: [BlockColumn; 6]) -> Option<Self> {
+        let length = columns[0].len();
+        if columns.iter().any(|column| column.len() != length) {
+            return None;
+        }
+        let [lx, ly, lz, ux, uy, uz] = columns;
+        Some(Self {
+            lower: [lx, ly, lz],
+            upper: [ux, uy, uz],
+        })
+    }
+
+    /// Every block, a run of rows at a time and the runs side by side: `map`
+    /// is given each run's first index and its bounds. A pass over a whole
+    /// model reads this way rather than a block at a time, which decoded six
+    /// values from six columns for every block.
+    pub(crate) fn par_map_runs<T: Send>(&self, map: impl Fn(usize, BlockRun) -> T + Sync + Send) -> Vec<T> {
+        use rayon::prelude::*;
+        let columns: [&BlockColumn; 6] = [&self.lower[0], &self.lower[1], &self.lower[2], &self.upper[0], &self.upper[1], &self.upper[2]];
+        debug_assert!(columns.iter().all(|column| column.run_count() == columns[0].run_count()));
+        (0..columns[0].run_count())
+            .into_par_iter()
+            .map_init(
+                || std::array::from_fn::<Vec<f64>, 6, _>(|_| Vec::new()),
+                |values, run| {
+                    for (column, values) in columns.iter().zip(values.iter_mut()) {
+                        column.decode_run(run, values);
+                    }
+                    map(run * crate::model::formats::block_column::SEGMENT_ROWS, BlockRun { columns: values })
+                },
+            )
+            .collect()
+    }
+}
+
+impl BlockGeometry {
+    /// [`Self::par_map_runs`] for a pass that reads only each block's lower
+    /// corner, which is half the decoding.
+    pub(crate) fn par_map_lower_runs<T: Send>(&self, map: impl Fn(usize, &mut dyn Iterator<Item = DVec3>) -> T + Sync + Send) -> Vec<T> {
+        use rayon::prelude::*;
+        let [x, y, z] = &self.lower;
+        (0..x.run_count())
+            .into_par_iter()
+            .map_init(
+                || [Vec::new(), Vec::new(), Vec::new()],
+                |[xs, ys, zs], run| {
+                    x.decode_run(run, xs);
+                    y.decode_run(run, ys);
+                    z.decode_run(run, zs);
+                    map(
+                        run * crate::model::formats::block_column::SEGMENT_ROWS,
+                        &mut xs.iter().zip(ys.iter()).zip(zs.iter()).map(|((x, y), z)| DVec3::new(*x, *y, *z)),
+                    )
+                },
+            )
+            .collect()
+    }
+}
+
+/// One run of blocks from [`BlockGeometry::par_map_runs`], read from the six
+/// columns it is kept in.
+pub(crate) struct BlockRun<'a> {
+    columns: &'a [Vec<f64>; 6],
+}
+
+impl BlockRun<'_> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = BlockBounds> + '_ {
+        let [lx, ly, lz, ux, uy, uz] = self.columns;
+        (0..lx.len()).map(move |row| BlockBounds {
+            lower: DVec3::new(lx[row], ly[row], lz[row]),
+            upper: DVec3::new(ux[row], uy[row], uz[row]),
+        })
+    }
+}
+
+/// Builds a [`BlockGeometry`] from bounds that arrive a batch at a time.
+#[derive(Default)]
+pub(crate) struct BlockGeometryBuilder {
+    lower: [BlockColumnBuilder; 3],
+    upper: [BlockColumnBuilder; 3],
+}
+
+impl BlockGeometryBuilder {
+    pub(crate) fn extend(&mut self, blocks: &[BlockBounds]) {
+        use rayon::prelude::*;
+        let lower = |axis: usize| move |block: &BlockBounds| block.lower[axis];
+        let upper = |axis: usize| move |block: &BlockBounds| block.upper[axis];
+        let (lowers, uppers) = (&mut self.lower, &mut self.upper);
+        rayon::join(
+            || {
+                lowers.par_iter_mut().enumerate().for_each(|(axis, builder)| {
+                    let values: Vec<f64> = blocks.iter().map(lower(axis)).collect();
+                    builder.extend_slice(&values);
+                });
+            },
+            || {
+                uppers.par_iter_mut().enumerate().for_each(|(axis, builder)| {
+                    let values: Vec<f64> = blocks.iter().map(upper(axis)).collect();
+                    builder.extend_slice(&values);
+                });
+            },
+        );
+    }
+
+    /// Add blocks whose lower and upper corners were built into columns on
+    /// their own; see [`BlockColumnBuilder::append`].
+    pub(crate) fn append(&mut self, columns: [BlockColumn; 6]) {
+        let [lx, ly, lz, ux, uy, uz] = columns;
+        for (builder, column) in self.lower.iter_mut().chain(&mut self.upper).zip([lx, ly, lz, ux, uy, uz]) {
+            builder.append(column);
+        }
+    }
+
+    pub(crate) fn finish(self) -> BlockGeometry {
+        BlockGeometry {
+            lower: self.lower.map(BlockColumnBuilder::finish),
+            upper: self.upper.map(BlockColumnBuilder::finish),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum BlockBoundsSource {
-    Explicit(Vec<BlockBounds>),
+    Explicit(BlockGeometry),
     #[allow(dead_code)]
     Regular(RegularBlockBounds),
 }
@@ -158,7 +336,7 @@ impl BlockBoundsSource {
 
     pub(crate) fn get(&self, index: usize) -> Option<BlockBounds> {
         match self {
-            Self::Explicit(blocks) => blocks.get(index).copied(),
+            Self::Explicit(blocks) => blocks.get(index),
             Self::Regular(grid) => grid.get(index),
         }
     }
@@ -174,6 +352,30 @@ impl BlockBoundsSource {
         match self {
             Self::Regular(grid) => grid.uniform_grid(),
             Self::Explicit(blocks) => detect_uniform_grid(blocks),
+        }
+    }
+
+    /// The blocks `rows`, which must ascend, as stored geometry.
+    pub(crate) fn select(&self, rows: &[usize]) -> BlockGeometry {
+        match self {
+            Self::Explicit(blocks) => blocks.select(rows),
+            Self::Regular(_) => {
+                let mut builder = BlockGeometryBuilder::default();
+                for chunk in rows.chunks(1 << 20) {
+                    let bounds: Vec<BlockBounds> = chunk.iter().filter_map(|&row| self.get(row)).collect();
+                    builder.extend(&bounds);
+                }
+                builder.finish()
+            }
+        }
+    }
+
+    /// The stored blocks, when `renderable` is every one of them, to be read a
+    /// run at a time with [`BlockGeometry::par_map_runs`].
+    fn every_block(&self, renderable: &RenderableBlockIndices) -> Option<&BlockGeometry> {
+        match self {
+            Self::Explicit(blocks) if renderable.is_all() && renderable.len() == blocks.len() => Some(blocks),
+            _ => None,
         }
     }
 }
@@ -353,17 +555,29 @@ pub(crate) fn opaque_surface_block_count(blocks: &BlockBoundsSource, renderable:
         return Some(grid_cells - interior);
     }
 
-    let mut occupied = vec![0u64; grid_cells.div_ceil(64)];
-    for block_index in renderable.iter() {
-        let block = blocks.get(block_index)?;
-        let index = grid.linear_index(grid.cell_coords(block.lower)?);
-        occupied[index / 64] |= 1 << (index % 64);
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    let occupied: Vec<AtomicU64> = (0..grid_cells.div_ceil(64)).map(|_| AtomicU64::new(0)).collect();
+    let off_grid = AtomicBool::new(false);
+    let mark = |lower: Option<DVec3>| match lower.and_then(|lower| grid.cell_coords(lower)) {
+        Some(coords) => {
+            let index = grid.linear_index(coords);
+            occupied[index / 64].fetch_or(1 << (index % 64), Ordering::Relaxed);
+        }
+        None => off_grid.store(true, Ordering::Relaxed),
+    };
+    let every_block = blocks.every_block(renderable);
+    match every_block {
+        Some(every_block) => {
+            every_block.par_map_lower_runs(|_, run| run.for_each(|lower| mark(Some(lower))));
+        }
+        None => renderable.par_for_each(|block_index| mark(blocks.get(block_index).map(|block| block.lower))),
+    }
+    if off_grid.load(Ordering::Relaxed) {
+        return None;
     }
     let strides = [1, grid.dims[0], grid.dims[0].checked_mul(grid.dims[1])?];
-    let mut surface_blocks = 0usize;
-    for block_index in renderable.iter() {
-        let block = blocks.get(block_index)?;
-        let coords = grid.cell_coords(block.lower)?;
+    let on_surface = |lower: DVec3| -> Option<usize> {
+        let coords = grid.cell_coords(lower)?;
         let index = grid.linear_index(coords);
         let fully_occluded = (0..3).all(|axis| {
             if coords[axis] == 0 || coords[axis] + 1 >= grid.dims[axis] {
@@ -371,10 +585,14 @@ pub(crate) fn opaque_surface_block_count(blocks: &BlockBoundsSource, renderable:
             }
             [index - strides[axis], index + strides[axis]]
                 .into_iter()
-                .all(|neighbour| occupied[neighbour / 64] & (1 << (neighbour % 64)) != 0)
+                .all(|neighbour| occupied[neighbour / 64].load(Ordering::Relaxed) & (1 << (neighbour % 64)) != 0)
         });
-        surface_blocks += usize::from(!fully_occluded);
-    }
+        Some(usize::from(!fully_occluded))
+    };
+    let surface_blocks = match every_block {
+        Some(every_block) => every_block.par_map_lower_runs(|_, run| run.filter_map(on_surface).sum::<usize>()).into_iter().sum(),
+        None => renderable.par_filter_map_reduce(|| 0usize, |block_index| on_surface(blocks.get(block_index)?.lower), |a, b| a + b),
+    };
     Some(surface_blocks)
 }
 
@@ -445,35 +663,50 @@ const MAX_UNIFORM_GRID_CELLS: usize = 1 << 29;
 /// Verify that `blocks` all lie on one uniform grid and describe it, or
 /// `None` when they don't (sub-blocked models, mixed cell sizes) or when the
 /// grid would be too large to be useful. One O(n) pass at load time.
-pub(crate) fn detect_uniform_grid(blocks: &[BlockBounds]) -> Option<UniformBlockGrid> {
-    let first = blocks.first()?;
+pub(crate) fn detect_uniform_grid(blocks: &BlockGeometry) -> Option<UniformBlockGrid> {
+    let first = blocks.get(0)?;
+    let origin = blocks
+        .par_map_lower_runs(|_, run| run.fold(first.lower, DVec3::min))
+        .into_iter()
+        .fold(first.lower, DVec3::min);
+    detect_uniform_grid_from(blocks, origin)
+}
+
+/// [`detect_uniform_grid`] for blocks whose least lower corner, `origin`, is
+/// already known.
+pub(crate) fn detect_uniform_grid_from(blocks: &BlockGeometry, origin: DVec3) -> Option<UniformBlockGrid> {
+    let first = blocks.get(0)?;
     let cell = first.upper - first.lower;
     if !cell.is_finite() || cell.min_element() <= 0.0 {
         return None;
-    }
-    let mut origin = first.lower;
-    for block in blocks {
-        origin = origin.min(block.lower);
     }
     if !origin.is_finite() {
         return None;
     }
     let cell_array = cell.to_array();
-    let mut dims = [0usize; 3];
-    for block in blocks {
-        let size = (block.upper - block.lower).to_array();
-        let t = ((block.lower - origin) / cell).to_array();
-        for axis in 0..3 {
-            if ((size[axis] - cell_array[axis]) / cell_array[axis]).abs() > UNIFORM_GRID_TOL {
-                return None;
-            }
-            let index = t[axis].round();
-            if (t[axis] - index).abs() > UNIFORM_GRID_TOL || index < 0.0 || index >= MAX_UNIFORM_GRID_CELLS as f64 {
-                return None;
-            }
-            dims[axis] = dims[axis].max(index as usize + 1);
-        }
-    }
+    let dims = blocks
+        .par_map_runs(|_, run| {
+            run.iter().try_fold([0usize; 3], |mut dims, block| {
+                let size = (block.upper - block.lower).to_array();
+                let t = ((block.lower - origin) / cell).to_array();
+                for axis in 0..3 {
+                    if ((size[axis] - cell_array[axis]) / cell_array[axis]).abs() > UNIFORM_GRID_TOL {
+                        return None;
+                    }
+                    let index = t[axis].round();
+                    if (t[axis] - index).abs() > UNIFORM_GRID_TOL || index < 0.0 || index >= MAX_UNIFORM_GRID_CELLS as f64 {
+                        return None;
+                    }
+                    dims[axis] = dims[axis].max(index as usize + 1);
+                }
+                Some(dims)
+            })
+        })
+        .into_iter()
+        .try_fold([0usize; 3], |a, b| {
+            let b = b?;
+            Some(std::array::from_fn(|axis| a[axis].max(b[axis])))
+        })?;
     let cells = dims[0].checked_mul(dims[1])?.checked_mul(dims[2])?;
     (cells <= MAX_UNIFORM_GRID_CELLS).then_some(UniformBlockGrid {
         origin,
@@ -901,6 +1134,217 @@ impl BlockModelSlice {
     }
 }
 
+/// Where one [`ReserveFieldMapping`] gets its per-block values from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) enum ReserveMappingSource {
+    /// Name of one of this model's own numeric variables.
+    Column(String),
+    /// Fixed value applied to every block, for a model that has no matching
+    /// column - e.g. `0` for a waste model with no grade data.
+    Constant(f64),
+    /// A numeric variable given per cubic metre, times each block's own
+    /// volume: tonnes from a density column, for a model that carries no
+    /// tonnage of its own. Summed and prorated like any other block value.
+    PerVolume(String),
+}
+
+impl ReserveMappingSource {
+    /// The model column this source reads, if it reads one.
+    pub(crate) fn column(&self) -> Option<&str> {
+        match self {
+            Self::Column(name) | Self::PerVolume(name) => Some(name),
+            Self::Constant(_) => None,
+        }
+    }
+}
+
+/// Whether a column's name says it is per cubic metre: a density.
+pub(crate) fn looks_like_density(column: &str) -> bool {
+    let name = column.to_lowercase();
+    ["dens", "sg", "t_m3", "t/m3", "kg_m3"].iter().any(|hint| name.contains(hint))
+}
+
+/// Each block's volume in cubic metres, which a volume-averaged field is
+/// weighted by. `None` when the geometry does not match the model.
+pub(crate) fn block_volumes<'a>(model: &BlockModelData, blocks: &'a BlockBoundsSource) -> Option<BlockValues<'a>> {
+    (blocks.len() == model.metadata.n_blocks).then(|| BlockValues::Volume {
+        blocks,
+        stretch: model.rotation().determinant().abs(),
+    })
+}
+
+/// `column` times each block's world volume, for a
+/// [`ReserveMappingSource::PerVolume`] mapping. `None` when the column is not
+/// resident or does not match the block geometry; the mapping's resolver has
+/// already said which.
+pub(crate) fn per_volume_values<'a>(model: &BlockModelData, blocks: &'a BlockBoundsSource, column: &str) -> Option<BlockValues<'a>> {
+    let values = model.shared_numeric_values(column)?;
+    (values.len() == blocks.len()).then(|| BlockValues::PerVolume {
+        values,
+        blocks,
+        stretch: model.rotation().determinant().abs(),
+    })
+}
+
+/// One number per block: read from a column, or worked out from one and the
+/// block's own size as it is asked for, rather than kept as another column.
+pub(crate) enum BlockValues<'a> {
+    Column(Arc<BlockColumn>),
+    Constant(f64),
+    /// The block's world volume, the same one the reserve scan measures a
+    /// block's overlaps against.
+    Volume {
+        blocks: &'a BlockBoundsSource,
+        stretch: f64,
+    },
+    /// `values` times the block's world volume.
+    PerVolume {
+        values: Arc<BlockColumn>,
+        blocks: &'a BlockBoundsSource,
+        stretch: f64,
+    },
+}
+
+impl BlockValues<'_> {
+    #[inline]
+    pub(crate) fn at(&self, index: usize) -> f64 {
+        match self {
+            Self::Column(values) => values.get(index),
+            Self::Constant(value) => *value,
+            Self::Volume { blocks, stretch } => blocks.get(index).map_or(f64::NAN, |bounds| (bounds.upper - bounds.lower).element_product() * stretch),
+            Self::PerVolume { values, blocks, stretch } => {
+                let value = values.get(index);
+                blocks
+                    .get(index)
+                    .map_or(f64::NAN, |bounds| value * (bounds.upper - bounds.lower).element_product() * stretch)
+            }
+        }
+    }
+}
+
+/// This block model's mapping of one project [`crate::model::ReserveField`]
+/// onto its own data.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ReserveFieldMapping {
+    pub(crate) field: ReserveFieldId,
+    pub(crate) source: ReserveMappingSource,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ReserveFieldStats {
+    pub(crate) total: Option<f64>,
+    pub(crate) min: Option<f64>,
+    pub(crate) max: Option<f64>,
+    /// Why this field has no total, when it has none. A field that resolved
+    /// cleanly carries `None` here, so a dash always has a stated reason.
+    pub(crate) issue: Option<crate::model::ReserveFieldIssue>,
+    /// Blocks whose mapped value was not a finite number.
+    pub(crate) missing_values: u64,
+    /// Blocks whose weight was absent, zero or negative.
+    pub(crate) unusable_weights: u64,
+}
+
+/// Statistics over all blocks, independent of rendering and reserve inclusion.
+///
+/// Min/max describe finite mapped values, even when average weights are
+/// missing. Every field in the list gets an entry: one that could not be
+/// resolved carries the reason rather than being dropped, so the page can say
+/// why a figure is absent instead of drawing an unexplained dash.
+pub(crate) fn compute_reserve_totals(
+    model: &BlockModelData,
+    blocks: &BlockBoundsSource,
+    fields: &[ReserveField],
+    mapping: &[ReserveFieldMapping],
+    cancel: &crate::app::jobs::CancelFlag,
+) -> anyhow::Result<HashMap<ReserveFieldId, ReserveFieldStats>> {
+    let geometry = blocks;
+    let blocks = model.metadata.n_blocks;
+    let resolve = |id| -> Option<BlockValues<'_>> {
+        match &mapping.iter().find(|entry| entry.field == id)?.source {
+            ReserveMappingSource::Column(name) => model.shared_numeric_values(name).map(BlockValues::Column),
+            ReserveMappingSource::PerVolume(name) => per_volume_values(model, geometry, name),
+            ReserveMappingSource::Constant(value) => Some(BlockValues::Constant(*value)),
+        }
+    };
+    let mut totals = HashMap::new();
+    for field in fields {
+        anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
+        let mut stats = ReserveFieldStats::default();
+        // The same resolver the solid reserves use, so a field that fails
+        // here fails there for the stated reason rather than two different
+        // ones - or, worse, for no stated reason at all.
+        if let Err(issue) = crate::model::solid_reserves::resolve_mapping(model, fields, mapping, field.id, blocks) {
+            stats.issue = Some(issue);
+            totals.insert(field.id, stats);
+            continue;
+        }
+        if field.aggregation == ReserveAggregation::Category {
+            totals.insert(field.id, stats);
+            continue;
+        }
+        let Some(values) = resolve(field.id) else {
+            stats.issue = Some(crate::model::ReserveFieldIssue::Unmapped);
+            totals.insert(field.id, stats);
+            continue;
+        };
+        let weights = match field.aggregation {
+            ReserveAggregation::WeightedAverage { weight_field } => {
+                let issue = match fields.iter().find(|entry| entry.id == weight_field) {
+                    None => Some(crate::model::ReserveFieldIssue::WeightFieldMissing),
+                    Some(entry) if entry.aggregation != ReserveAggregation::Sum => Some(crate::model::ReserveFieldIssue::WeightNotSummed(entry.name.clone())),
+                    Some(_) => crate::model::solid_reserves::resolve_mapping(model, fields, mapping, weight_field, blocks)
+                        .err()
+                        .map(|_| crate::model::ReserveFieldIssue::WeightUnresolved),
+                };
+                if let Some(issue) = issue {
+                    stats.issue = Some(issue);
+                    totals.insert(field.id, stats);
+                    continue;
+                }
+                resolve(weight_field)
+            }
+            ReserveAggregation::VolumeAverage => block_volumes(model, geometry),
+            _ => None,
+        };
+        let (mut sum, mut weight_sum) = (0.0, 0.0);
+        for index in 0..blocks {
+            if index.is_multiple_of(4096) {
+                anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
+            }
+            let value = values.at(index);
+            if !value.is_finite() {
+                stats.missing_values += 1;
+                continue;
+            }
+            stats.min = Some(stats.min.map_or(value, |min| min.min(value)));
+            stats.max = Some(stats.max.map_or(value, |max| max.max(value)));
+            if field.aggregation == ReserveAggregation::Sum {
+                sum += value;
+            } else if let Some(weights) = &weights {
+                let weight = weights.at(index);
+                if weight.is_finite() && weight > 0.0 {
+                    sum += value * weight;
+                    weight_sum += weight;
+                } else {
+                    stats.unusable_weights += 1;
+                }
+            }
+        }
+        if blocks > 0 && stats.missing_values as usize == blocks {
+            // Every value absent is not a measured zero.
+            stats.issue = Some(crate::model::ReserveFieldIssue::AllValuesMissing);
+        } else if field.aggregation == ReserveAggregation::Sum {
+            stats.total = sum.is_finite().then_some(sum);
+        } else if weight_sum > 0.0 && weight_sum.is_finite() && sum.is_finite() {
+            stats.total = Some(sum / weight_sum);
+        } else {
+            stats.issue = Some(crate::model::ReserveFieldIssue::WeightUnresolved);
+        }
+        totals.insert(field.id, stats);
+    }
+    Ok(totals)
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct OpenBlockModel {
     pub(crate) id: BlockModelId,
@@ -934,6 +1378,30 @@ pub(crate) struct OpenBlockModel {
     /// scene-bounds queries read this instead of re-walking every block's
     /// eight rotated corners.
     pub(crate) world_bounds: Option<(DVec3, DVec3)>,
+    /// This model's mapping of the project's Reserves field list onto its
+    /// own columns/constants; see [`ReserveFieldMapping`].
+    pub(crate) reserve_mapping: Vec<ReserveFieldMapping>,
+    /// Whether this model is opted into the project's Reserves. Defaults to
+    /// `false` - a newly loaded or imported model is excluded until checked
+    /// in, matching the checkbox in the Block Models step.
+    pub(crate) included_in_reserves: bool,
+    /// Computed reserve totals, keyed by field id. Session-only: derived from
+    /// `reserve_mapping` and recomputed whenever it or the field list changes.
+    pub(crate) reserve_totals: HashMap<ReserveFieldId, ReserveFieldStats>,
+    pub(crate) reserve_totals_key: Option<u64>,
+    pub(crate) reserve_totals_data_key: u64,
+    /// A restore was started to bring this model's mapped columns back. Kept
+    /// so a restore that ends without them can be turned into a stated
+    /// failure rather than an indefinite wait behind a matching key.
+    pub(crate) reserve_totals_awaiting_restore: bool,
+    /// Why the last scan produced nothing. Terminal: cleared only by an
+    /// explicit recompute, so a failure is reported once rather than retried
+    /// in a loop.
+    pub(crate) reserve_totals_error: Option<String>,
+    /// The input fingerprint that failure belongs to. While the inputs still
+    /// hash to this, no automatic attempt is made; changed inputs, or an
+    /// explicit Recompute, retire it.
+    pub(crate) reserve_totals_error_key: Option<u64>,
 }
 
 pub(crate) type ActiveValuesCache = RefCell<Option<ActiveValuesCacheEntry>>;
@@ -946,7 +1414,7 @@ pub(crate) type ActiveValuesCache = RefCell<Option<ActiveValuesCacheEntry>>;
 #[derive(Clone, Debug)]
 pub(crate) struct ActiveValuesCacheEntry {
     variable: String,
-    values: Option<Arc<Vec<f64>>>,
+    values: Option<Arc<BlockColumn>>,
     range: Option<(f64, f64)>,
     /// Per-code occurrence counts across the renderable blocks of the decoded
     /// column, plus the renderable total. Kept beside the values so the legend
@@ -989,7 +1457,7 @@ impl OpenBlockModel {
         let Some(name) = variable else {
             return RefCell::new(None);
         };
-        let values = model.shared_numeric_values(name).or_else(|| model.color_values(name).ok().map(Arc::new));
+        let values = model.shared_numeric_values(name);
         let range = model.variable(name).and_then(|variable| {
             categorical_variable_range(variable).or_else(|| {
                 values
@@ -1000,7 +1468,7 @@ impl OpenBlockModel {
         let category_code_counts = model
             .variable(name)
             .filter(|variable| categorical_variable(variable))
-            .and_then(|_| values.as_deref().map(|values| collect_category_counts(values.as_slice(), renderable_block_indices)));
+            .and_then(|_| values.as_deref().map(|values| collect_category_counts(values, renderable_block_indices)));
         RefCell::new(Some(ActiveValuesCacheEntry {
             variable: name.to_owned(),
             values,
@@ -1027,7 +1495,7 @@ impl OpenBlockModel {
     /// Approximate retained size, used by the undo history's memory budget.
     pub(crate) fn estimated_bytes(&self) -> usize {
         let blocks = match self.blocks.as_ref() {
-            BlockBoundsSource::Explicit(blocks) => blocks.len() * size_of::<BlockBounds>(),
+            BlockBoundsSource::Explicit(blocks) => blocks.heap_bytes(),
             // A regular grid is described by its extents, not per block.
             BlockBoundsSource::Regular(_) => size_of::<RegularBlockBounds>(),
         };
@@ -1072,7 +1540,7 @@ impl OpenBlockModel {
         if cache.as_ref().is_some_and(|entry| entry.variable == name) {
             return;
         }
-        let values = self.model.shared_numeric_values(name).or_else(|| self.model.color_values(name).ok().map(Arc::new));
+        let values = self.model.shared_numeric_values(name);
         let range = self.model.variable(name).and_then(|variable| {
             categorical_variable_range(variable).or_else(|| {
                 values
@@ -1084,7 +1552,7 @@ impl OpenBlockModel {
             .model
             .variable(name)
             .filter(|variable| categorical_variable(variable))
-            .and_then(|_| values.as_deref().map(|values| collect_category_counts(values.as_slice(), &self.renderable_block_indices)));
+            .and_then(|_| values.as_deref().map(|values| collect_category_counts(values, &self.renderable_block_indices)));
         *cache = Some(ActiveValuesCacheEntry {
             variable: name.to_owned(),
             values,
@@ -1096,7 +1564,7 @@ impl OpenBlockModel {
     /// Decoded values for the active colour variable, decoding at most once
     /// per variable switch. `None` when there is no active variable or it
     /// can't be decoded.
-    pub(crate) fn active_color_values(&self) -> Option<Arc<Vec<f64>>> {
+    pub(crate) fn active_color_values(&self) -> Option<Arc<BlockColumn>> {
         let name = self.active_color_variable.as_deref()?;
         self.ensure_active_values_cached(name);
         self.active_values_cache.borrow().as_ref()?.values.clone()
@@ -1264,29 +1732,50 @@ pub(crate) fn compute_world_bounds(model: &BlockModelData, blocks: &BlockBoundsS
         let bounds = block_world_bounds(model, local);
         return Some((bounds.lower, bounds.upper));
     }
-    let mut min = DVec3::splat(f64::INFINITY);
-    let mut max = DVec3::splat(f64::NEG_INFINITY);
-    let mut any = false;
-    for index in renderable_block_indices.iter() {
-        let Some(block) = blocks.get(index) else {
-            continue;
-        };
+    let join = |a: Option<(DVec3, DVec3)>, b: Option<(DVec3, DVec3)>| match (a, b) {
+        (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.max(b.1))),
+        (found, None) | (None, found) => found,
+    };
+    let world = |block: BlockBounds| {
         let bounds = block_world_bounds(model, block);
-        min = min.min(bounds.lower);
-        max = max.max(bounds.upper);
-        any = true;
+        Some((bounds.lower, bounds.upper))
+    };
+    match blocks.every_block(renderable_block_indices) {
+        Some(every_block) => every_block.par_map_runs(|_, run| run.iter().map(world).fold(None, join)).into_iter().fold(None, join),
+        None => renderable_block_indices.par_filter_map_reduce(|| None, |index| Some(world(blocks.get(index)?)), join),
     }
-    any.then_some((min, max))
 }
 
 fn block_world_bounds(model: &BlockModelData, block: BlockBounds) -> BlockBounds {
-    let mut min = DVec3::splat(f64::INFINITY);
-    let mut max = DVec3::splat(f64::NEG_INFINITY);
-    for world in block_world_corners(model, block) {
-        min = min.min(world);
-        max = max.max(world);
+    block_world_bounds_in(model.origin(), model.rotation(), block)
+}
+
+/// A block's world bounds in the frame `origin` and `rotation` give, as
+/// [`BlockModelData::local_to_world`] places its corners.
+///
+/// Each world coordinate is `origin + ((u * x + v * y) + w * z)` as
+/// `rotation * corner` rounds it, and rounding keeps a product or a sum in
+/// step with each of its terms, so the coordinate only ever rises, or only
+/// ever falls, as each corner coordinate does. Its least and greatest values
+/// over the eight corners are therefore at the corner that takes each face by
+/// the sign of its entry: two sums an axis rather than eight full products.
+pub(crate) fn block_world_bounds_in(origin: DVec3, rotation: glam::DMat3, block: BlockBounds) -> BlockBounds {
+    let columns = [rotation.x_axis, rotation.y_axis, rotation.z_axis];
+    let mut lower = [0.0; 3];
+    let mut upper = [0.0; 3];
+    for axis in 0..3 {
+        let world = |upper_face: [bool; 3]| {
+            let at = |local: usize| if upper_face[local] { block.upper[local] } else { block.lower[local] };
+            origin[axis] + (columns[0][axis] * at(0) + columns[1][axis] * at(1) + columns[2][axis] * at(2))
+        };
+        let rising: [bool; 3] = std::array::from_fn(|local| columns[local][axis] >= 0.0);
+        lower[axis] = world(rising.map(|rises| !rises));
+        upper[axis] = world(rising);
     }
-    BlockBounds { lower: min, upper: max }
+    BlockBounds {
+        lower: DVec3::from_array(lower),
+        upper: DVec3::from_array(upper),
+    }
 }
 
 /// A numeric variable's fixed "no value" sentinel, parsed from its source
@@ -1330,15 +1819,32 @@ fn categorical_variable(variable: &crate::model::formats::block_model_data::Bloc
     matches!(variable.physical_type.as_str(), "namedbyte" | "namedshort")
 }
 
-fn collect_category_counts(values: &[f64], renderable: &RenderableBlockIndices) -> Arc<CategoryCounts> {
-    let mut per_code: HashMap<u32, usize> = HashMap::new();
-    let mut total = 0usize;
-    for value in renderable.iter().filter_map(|index| values.get(index).copied()) {
-        if value.is_finite() && value.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(&value) {
-            *per_code.entry(value as u32).or_insert(0) += 1;
-            total += 1;
+fn collect_category_counts(values: &BlockColumn, renderable: &RenderableBlockIndices) -> Arc<CategoryCounts> {
+    let count = |values: &mut dyn Iterator<Item = f64>| {
+        let mut per_code: HashMap<u32, usize> = HashMap::new();
+        let mut total = 0usize;
+        for value in values {
+            if value.is_finite() && value.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(&value) {
+                *per_code.entry(value as u32).or_insert(0) += 1;
+                total += 1;
+            }
         }
-    }
+        (per_code, total)
+    };
+    // Every row, when every block is drawn: counted a run at a time.
+    let (per_code, total) = if renderable.is_all() && renderable.len() >= values.len() {
+        values
+            .par_map_runs(|_, run| count(&mut run.iter().copied()))
+            .into_iter()
+            .fold((HashMap::new(), 0), |(mut per_code, total), (run, counted)| {
+                for (code, count) in run {
+                    *per_code.entry(code).or_insert(0) += count;
+                }
+                (per_code, total + counted)
+            })
+    } else {
+        count(&mut renderable.iter().filter(|&index| index < values.len()).map(|index| values.get(index)))
+    };
     Arc::new(CategoryCounts { per_code, total })
 }
 
@@ -1387,22 +1893,29 @@ pub(crate) fn is_no_data_sentinel(value: f64) -> bool {
 /// first ramp stop instead of treating valid data as if no variable existed.
 /// Shared by the renderer's grade colouring and the UI's colour-scale legend
 /// so both agree on the range.
-pub(crate) fn render_value_range(values: &[f64], indices: &RenderableBlockIndices, default: Option<f64>) -> Option<(f64, f64)> {
-    let mut min = f64::INFINITY;
-    let mut max = f64::NEG_INFINITY;
-    for index in indices.iter() {
-        let Some(&value) = values.get(index) else {
-            continue;
-        };
-        if !value.is_finite() || default.is_some_and(|default| (value - default).abs() < 1e-8) {
-            continue;
-        }
-        if is_no_data_sentinel(value) {
-            continue;
-        }
-        min = min.min(value);
-        max = max.max(value);
-    }
+pub(crate) fn render_value_range(values: &BlockColumn, indices: &RenderableBlockIndices, default: Option<f64>) -> Option<(f64, f64)> {
+    let usable = |value: f64| value.is_finite() && !default.is_some_and(|default| (value - default).abs() < 1e-8) && !is_no_data_sentinel(value);
+    let join = |a: (f64, f64), b: (f64, f64)| (a.0.min(b.0), a.1.max(b.1));
+    let empty = (f64::INFINITY, f64::NEG_INFINITY);
+    // Every row, when every block is drawn: read a run at a time.
+    let (min, max) = if indices.is_all() && indices.len() >= values.len() {
+        values
+            .par_map_runs(|_, run| run.iter().filter(|value| usable(**value)).fold(empty, |range, value| join(range, (*value, *value))))
+            .into_iter()
+            .fold(empty, join)
+    } else {
+        indices.par_filter_map_reduce(
+            || empty,
+            |index| {
+                if index >= values.len() {
+                    return None;
+                }
+                let value = values.get(index);
+                usable(value).then_some((value, value))
+            },
+            join,
+        )
+    };
     (min.is_finite() && max.is_finite()).then_some((min, max))
 }
 
@@ -1429,6 +1942,7 @@ fn block_corners(block: BlockBounds) -> [DVec3; 8] {
 impl BlockBoundsSource {
     /// Scale local cell geometry while retaining implicit grids and file order.
     pub(crate) fn scaled(&self, scale: f64, cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<Self> {
+        const SCALED_BATCH: usize = 1 << 20;
         let out = match self {
             Self::Regular(grid) => {
                 let mut grid = grid.clone();
@@ -1436,27 +1950,34 @@ impl BlockBoundsSource {
                 grid.cell *= scale;
                 anyhow::ensure!(
                     grid.lower.is_finite() && grid.cell.is_finite() && grid.cell.min_element() > 0.0,
-                    "Invalid scaled block grid"
+                    crate::i18n::tr!("err-bm-scaled-grid-invalid")
                 );
                 Self::Regular(grid)
             }
             Self::Explicit(blocks) => {
-                let mut out = Vec::with_capacity(blocks.len());
-                for (index, block) in blocks.iter().enumerate() {
+                let mut out = BlockGeometryBuilder::default();
+                let mut batch = Vec::with_capacity(SCALED_BATCH);
+                for index in 0..blocks.len() {
                     if index % 4096 == 0 {
-                        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+                        anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
                     }
+                    let block = blocks.get(index).expect("index is in range");
                     let block = BlockBounds {
                         lower: block.lower * scale,
                         upper: block.upper * scale,
                     };
                     anyhow::ensure!(
                         block.lower.is_finite() && block.upper.is_finite() && block.upper.cmpgt(block.lower).all(),
-                        "Invalid scaled block bounds"
+                        crate::i18n::tr!("err-bm-scaled-bounds-invalid")
                     );
-                    out.push(block);
+                    batch.push(block);
+                    if batch.len() == SCALED_BATCH {
+                        out.extend(&batch);
+                        batch.clear();
+                    }
                 }
-                Self::Explicit(out)
+                out.extend(&batch);
+                Self::Explicit(out.finish())
             }
         };
         Ok(out)

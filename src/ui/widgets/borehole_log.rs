@@ -4,7 +4,10 @@
 
 use std::{fmt::Debug, hash::Hash};
 
-use super::viewport::{Outline, format_grade, outlined_galley, trim_decimal_zeros};
+use super::{
+    hint::Hint,
+    viewport::{Outline, format_grade, outlined_galley, trim_decimal_zeros},
+};
 use crate::{
     i18n::tr,
     ui::{
@@ -32,7 +35,7 @@ pub(crate) struct DrillHoleProperties<'a> {
 impl<'a> DrillHoleProperties<'a> {
     pub(crate) fn new(id_source: impl Hash + Debug, hole: &'a crate::model::drill_hole::DrillHole, fields: &'a [crate::model::drill_hole::DrillField]) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             hole,
             fields,
         }
@@ -276,7 +279,7 @@ struct LogLayout {
 impl<'a> BoreholeLog<'a> {
     pub(crate) fn new(id_source: impl Hash + Debug, hole: &'a crate::model::drill_hole::DrillHole, dataset: &'a crate::model::drill_hole::OpenDrillHoleDataset) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             hole,
             dataset,
             strat_field: None,
@@ -354,7 +357,7 @@ impl<'a> BoreholeLog<'a> {
         // The compass has its own drag zone, separate from the plot's.
         let spin = ui
             .interact(compass, self.id.with("compass"), egui::Sense::click_and_drag())
-            .on_hover_text(tr!("viewport-drag-spin-view-around-hole"));
+            .hint(tr!("viewport-drag-spin-view-around-hole"));
         if spin.dragged() {
             azimuth = spun(azimuth, spin.drag_delta().x);
         }
@@ -440,7 +443,7 @@ impl<'a> BoreholeLog<'a> {
                 let fit = ContextMenuAction::new(tr!("viewport-fit-hole-track"))
                     .checked(squeeze == LogSqueeze::Fit)
                     .show(ui)
-                    .on_hover_text(tr!("viewport-squeeze-sideways-just-enough-keep"));
+                    .hint(tr!("viewport-squeeze-sideways-just-enough-keep"));
                 if fit.clicked() {
                     squeeze = LogSqueeze::Fit;
                     ui.close();
@@ -449,7 +452,7 @@ impl<'a> BoreholeLog<'a> {
                     let label = if ratio == 1.0 {
                         tr!("viewport-1-1-true-shape")
                     } else {
-                        tr!("viewport-1-ratio", ratio = crate::model::plot::format_quantity(ratio, 0).to_string())
+                        tr!("viewport-1-ratio", ratio = crate::model::numbers::format_quantity(ratio, 0).to_string())
                     };
                     if ContextMenuAction::new(label).checked(squeeze == LogSqueeze::Fixed(ratio)).show(ui).clicked() {
                         squeeze = LogSqueeze::Fixed(ratio);
@@ -469,7 +472,7 @@ impl<'a> BoreholeLog<'a> {
             && let Some(pointer) = handle.hover_pos()
         {
             let depth = depth_at(plot, view, pointer.y);
-            handle.clone().on_hover_ui_at_pointer(|ui| log_traces::readout(ui, &traces, depth, &style));
+            handle.clone().hint_ui_at_pointer(|ui| log_traces::readout(ui, &traces, depth, &style));
         }
         if handle.hovered() && plot.height() > 0.0 {
             // Read and then spent, so a scroll aimed at the log zooms it.
@@ -613,9 +616,9 @@ impl<'a> BoreholeLog<'a> {
         buttons.set_clip_rect(room.intersect(ui.clip_rect()));
         let reset = buttons
             .add(menu::MenuButton::new(tr!("common-reset-view")).enabled(zoomed))
-            .on_hover_text(tr!("viewport-back-whole-log"))
+            .hint(tr!("viewport-back-whole-log"))
             // Disabled exactly when the log already shows the whole hole.
-            .on_disabled_hover_text(tr!("viewport-roll-wheel-over-log-zoom"))
+            .disabled_hint(tr!("viewport-roll-wheel-over-log-zoom"))
             .clicked();
 
         // Painted, not laid out, and dropped when the width is not there.
@@ -920,10 +923,10 @@ impl<'a> BoreholeLog<'a> {
 
         let ratio = elided(
             painter,
-            // Written as the plot sheet writes its 1:N, bar a fitted 1:2.5.
+            // Written as 1:N, bar a fitted 1:2.5.
             tr!(
                 "viewport-h-1-ratio",
-                ratio = trim_decimal_zeros(crate::model::plot::format_quantity(lean.ratio, 1)).to_string()
+                ratio = trim_decimal_zeros(crate::model::numbers::format_quantity(lean.ratio, 1)).to_string()
             ),
             font,
             ink,
@@ -1146,7 +1149,7 @@ fn fitted_squeeze(reach: f64, points_per_metre: f64, room: f64) -> Option<f64> {
         return None;
     }
     Some(if needed > 1.0 {
-        crate::model::plot::round_up_to_series(needed, &LOG_SQUEEZE_SERIES)
+        crate::model::numbers::round_up_to_series(needed, &LOG_SQUEEZE_SERIES)
     } else {
         1.0
     })
@@ -1417,7 +1420,7 @@ fn log_tick_step(span: f64, length: f32, min_gap: f32) -> f64 {
     if span <= 0.0 || length <= 0.0 {
         return 1.0;
     }
-    crate::model::plot::round_up_to_series(span * f64::from(min_gap) / f64::from(length), &[1.0, 2.0, 5.0, 10.0])
+    crate::model::numbers::round_up_to_series(span * f64::from(min_gap) / f64::from(length), &[1.0, 2.0, 5.0, 10.0])
 }
 
 /// A bearing turned by a drag across the page, wrapped back into 0..360.

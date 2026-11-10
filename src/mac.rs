@@ -1,24 +1,30 @@
-//! macOS system menu bar.
+//! macOS system menu bar, and the window buttons over Incline's title bar.
 //!
 //! Incline Design's other targets draw their menu inside the egui window. On macOS,
 //! AppKit owns the equivalent commands so they appear in the global menu bar
 //! and participate in standard Command-key handling.
+//!
+//! The title bar is Incline's own on every platform (`ui/elements/title_bar.rs`),
+//! but macOS keeps its red, yellow and green buttons: [`place_window_buttons`]
+//! moves them onto the bar's row.
 
 use std::{path::PathBuf, sync::Mutex};
 
 use objc2::{
-    MainThreadMarker, MainThreadOnly, define_class, msg_send,
+    AnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, Sel},
     sel,
 };
-use objc2_app_kit::{NSApplication, NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem};
-use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
+use objc2_app_kit::{NSApplication, NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem, NSStrikethroughStyleAttributeName, NSUnderlineStyle};
+use objc2_foundation::{NSAttributedString, NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSString, NSUserDefaults};
 
 use crate::{
     i18n::tr,
-    model::{Axis, SceneEntityId},
-    ui::state::{EditorState, UiProjectView, ViewToggle, Workspace},
+    ui::{
+        elements::main_menu::{MenuRow, workspace_menus},
+        state::{EditorState, UiProjectView, ViewToggle, Workspace},
+    },
 };
 
 static PENDING_ACTIONS: Mutex<Vec<MacMenuAction>> = Mutex::new(Vec::new());
@@ -30,45 +36,31 @@ static LAST_MENU_STATE: Mutex<Option<MenuState>> = Mutex::new(None);
 struct MenuState {
     can_save: bool,
     has_project: bool,
-    can_create_terrain_tin: bool,
-    can_join_point_clouds: bool,
-    can_classify_point_clouds: bool,
-    can_create_triangulation: bool,
-    /// Whether exactly one loaded surface is selected, which is what the
-    /// single-surface triangulation tools run on.
-    one_surface_selected: bool,
-    /// Clipping additionally needs the one closed polyline to clip against.
-    can_clip_by_polyline: bool,
-    /// Whether exactly one loaded drill-hole collection is selected, which is
-    /// what block-model estimation runs on.
-    can_create_block_model: bool,
-    /// Whether any hole is selected, which is what reference points are
-    /// placed on.
-    can_build_reference_points: bool,
-    /// Whether enough design points are selected to triangulate a surface
-    /// from, which is what Build Surface runs on.
-    can_build_reference_surface: bool,
-    /// Whether exactly one loaded block model is selected, which is what ore
-    /// thresholding runs on.
-    can_create_ore_triangulation: bool,
-    can_undrape_rasters: bool,
-    has_design_selection: bool,
-    has_polyline_selection: bool,
-    has_selection_intersections: bool,
+    /// Whether each workspace menu row can run, in [`MenuRow::all`] order.
+    menu_rows: Vec<bool>,
     /// Whether the active project is a file that can be shown in Finder.
     has_project_file: bool,
     /// The workspace decides which discipline menus are visible and active.
     active_workspace: Workspace,
     /// The View menu's switches, in the order [`VIEW_TOGGLES`] lists them.
     view_toggles: [bool; VIEW_TOGGLES.len()],
-    /// The File > Open Recent rows, as name and the project each opens.
-    recent: Vec<(String, PathBuf)>,
+    /// The File > Open Recent rows.
+    recent: Vec<RecentRow>,
+}
+
+/// One File > Open Recent row: its name, the project it opens, and whether
+/// that project's file was found at the last look.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RecentRow {
+    name: String,
+    path: PathBuf,
+    missing: bool,
 }
 
 /// Actions emitted by AppKit and consumed by the winit application loop.
 ///
-/// Every variant but [`MacMenuAction::OpenRecent`] is one fixed menu item;
-/// that one names a row of the File > Open Recent submenu, which is rebuilt
+/// The variants without an index are each one fixed menu item;
+/// [`MacMenuAction::OpenRecent`] names a row of the File > Open Recent submenu, which is rebuilt
 /// from the recent-project list rather than written out here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MacMenuAction {
@@ -79,54 +71,32 @@ pub(crate) enum MacMenuAction {
     OpenImport,
     OpenExport,
     ExportViewportImage,
-    OpenPlotDialog,
     RequestExit,
-    InsertPointsAtIntersections,
-    OpenInsertPointAtElevation,
-    OpenMoveToX,
-    OpenMoveToY,
-    OpenMoveToZ,
-    OpenCreateTriangulation,
-    OpenCutTriangulationByPolyline,
-    OpenCutTriangulationByZ,
-    OpenCutTriangulationBySurface,
-    OpenCutTopologyByPitShell,
-    OpenIncludeSolidInTopology,
-    OpenContourTriangulation,
-    OpenPointCloudTin,
-    OpenPointCloudJoin,
-    OpenPointCloudClassify,
-    OpenCreateBlockModel,
-    OpenCreateOreTriangulation,
-    OpenSurveyDefinitions,
-    OpenSurveyTransform,
     OpenPreferences,
     OpenAbout,
-    UndrapeAllRasters,
     ShowProjectInFileManager,
-    /// The Drillholes menu's row that opens the reference points dialog.
-    OpenReferencePoints,
-    /// The Drillholes menu's row that opens the build surface dialog.
-    OpenReferenceSurface,
-    /// The Block Model menu's row that opens the pit optimization scenarios.
-    OpenOptimizationScenarios,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
     /// One View menu switch, by its position in [`VIEW_TOGGLES`].
     ToggleView(usize),
+    /// One workspace menu row, by its position in [`MenuRow::all`].
+    MenuRow(usize),
 }
 
 /// The View menu's rows, in the order they are drawn. The egui menu bar draws
 /// the same two - see [`crate::ui::elements::main_menu`].
 pub(crate) const VIEW_TOGGLES: [ViewToggle; 2] = [ViewToggle::Console, ViewToggle::DarkMode];
 
-/// Tags name the discipline root items that come and go with the workspace, so
-/// [`set_workspace_menus`] finds them without matching on a translated title.
-const TRIANGULATION_MENU_TAG: isize = -1;
-const BLOCK_MODEL_MENU_TAG: isize = -3;
-const DRILL_HOLES_MENU_TAG: isize = -5;
-const COORDINATES_MENU_TAG: isize = -6;
+/// A workspace's root menus all carry the tag [`workspace_menu_tag`] gives
+/// it, so [`set_workspace_menus`] finds them without matching on a
+/// translated title. Every other root item is left at 0 or above.
+const WORKSPACE_MENU_TAG_BASE: isize = -1;
+
+fn workspace_menu_tag(workspace: Workspace) -> isize {
+    let index = Workspace::ALL.iter().position(|listed| *listed == workspace).unwrap_or_default();
+    WORKSPACE_MENU_TAG_BASE - index as isize
+}
 
 /// Tags at or above this carry a recent-project index rather than naming a
 /// fixed action, leaving room for the fixed list to grow.
@@ -134,6 +104,10 @@ const RECENT_TAG_BASE: isize = 1000;
 /// Tags at or above this, and below [`RECENT_SUBMENU_TAG`], carry a View menu
 /// switch by its index in [`VIEW_TOGGLES`].
 const VIEW_TAG_BASE: isize = 500;
+/// Tags at or above this, and below [`MENU_ROW_TAG_END`], carry a workspace
+/// menu row by its position in [`MenuRow::all`].
+const MENU_ROW_TAG_BASE: isize = 300;
+const MENU_ROW_TAG_END: isize = 400;
 /// Tag of the Open Recent item itself. It opens a submenu rather than
 /// performing anything, so [`MacMenuAction::from_tag`] rejects it: no fixed
 /// action sits this far up the range.
@@ -153,34 +127,10 @@ impl MacMenuAction {
         Self::OpenImport,
         Self::OpenExport,
         Self::ExportViewportImage,
-        Self::OpenPlotDialog,
         Self::RequestExit,
-        Self::InsertPointsAtIntersections,
-        Self::OpenInsertPointAtElevation,
-        Self::OpenMoveToX,
-        Self::OpenMoveToY,
-        Self::OpenMoveToZ,
-        Self::OpenCreateTriangulation,
-        Self::OpenCutTriangulationByPolyline,
-        Self::OpenCutTriangulationByZ,
-        Self::OpenCutTriangulationBySurface,
-        Self::OpenCutTopologyByPitShell,
-        Self::OpenIncludeSolidInTopology,
-        Self::OpenContourTriangulation,
-        Self::OpenPointCloudTin,
-        Self::OpenPointCloudJoin,
-        Self::OpenPointCloudClassify,
-        Self::OpenCreateBlockModel,
-        Self::OpenCreateOreTriangulation,
-        Self::OpenSurveyDefinitions,
-        Self::OpenSurveyTransform,
         Self::OpenPreferences,
         Self::OpenAbout,
-        Self::UndrapeAllRasters,
         Self::ShowProjectInFileManager,
-        Self::OpenReferencePoints,
-        Self::OpenReferenceSurface,
-        Self::OpenOptimizationScenarios,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -188,6 +138,7 @@ impl MacMenuAction {
         match self {
             Self::OpenRecent(index) => RECENT_TAG_BASE + index as isize,
             Self::ToggleView(index) => VIEW_TAG_BASE + index as isize,
+            Self::MenuRow(index) => MENU_ROW_TAG_BASE + index as isize,
             action => Self::FIXED.iter().position(|fixed| *fixed == action).map_or(0, |index| index as isize + 1),
         }
     }
@@ -199,6 +150,10 @@ impl MacMenuAction {
         if (VIEW_TAG_BASE..RECENT_SUBMENU_TAG).contains(&tag) {
             let index = usize::try_from(tag - VIEW_TAG_BASE).ok()?;
             return (index < VIEW_TOGGLES.len()).then_some(Self::ToggleView(index));
+        }
+        if (MENU_ROW_TAG_BASE..MENU_ROW_TAG_END).contains(&tag) {
+            let index = usize::try_from(tag - MENU_ROW_TAG_BASE).ok()?;
+            return (index < MenuRow::all().count()).then_some(Self::MenuRow(index));
         }
         Self::FIXED.get(usize::try_from(tag - 1).ok()?).copied()
     }
@@ -345,7 +300,6 @@ pub(crate) fn install_menu_bar() {
     add_action(&file_menu, &tr!("menu-file-import"), "", MacMenuAction::OpenImport, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-export"), "", MacMenuAction::OpenExport, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-export-viewport-image"), "", MacMenuAction::ExportViewportImage, &target, mtm);
-    add_action(&file_menu, &tr!("menu-file-export-engineering-drawing"), "", MacMenuAction::OpenPlotDialog, &target, mtm);
     add_separator(&file_menu, mtm);
     add_action(&file_menu, &tr!("preferences-title"), ",", MacMenuAction::OpenPreferences, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-about", app = crate::APP_NAME), "", MacMenuAction::OpenAbout, &target, mtm);
@@ -360,178 +314,34 @@ pub(crate) fn install_menu_bar() {
     }
     add_submenu(&root, &tr!("menu-view"), &view_menu, mtm);
 
-    let design_menu = menu(&tr!("ws-menubar-design"), mtm);
-    design_menu.setAutoenablesItems(false);
-    let insert_point_menu = menu(&tr!("ws-menubar-design-insert-point"), mtm);
-    insert_point_menu.setAutoenablesItems(false);
-    add_action(
-        &insert_point_menu,
-        &tr!("ws-menubar-design-insert-point-at-intersection"),
-        "",
-        MacMenuAction::InsertPointsAtIntersections,
-        &target,
-        mtm,
-    );
-    add_action(
-        &insert_point_menu,
-        &tr!("ws-menubar-design-insert-point-at-elevation"),
-        "",
-        MacMenuAction::OpenInsertPointAtElevation,
-        &target,
-        mtm,
-    );
-    add_submenu(&design_menu, &tr!("ws-menubar-design-insert-point"), &insert_point_menu, mtm);
-    add_separator(&design_menu, mtm);
-    let move_to_menu = menu(&tr!("ws-menubar-design-move-to"), mtm);
-    move_to_menu.setAutoenablesItems(false);
-    add_action(
-        &move_to_menu,
-        &format!("{} {}...", tr!("common-set"), Axis::X.label()),
-        "",
-        MacMenuAction::OpenMoveToX,
-        &target,
-        mtm,
-    );
-    add_action(
-        &move_to_menu,
-        &format!("{} {}...", tr!("common-set"), Axis::Y.label()),
-        "",
-        MacMenuAction::OpenMoveToY,
-        &target,
-        mtm,
-    );
-    add_action(
-        &move_to_menu,
-        &format!("{} {}...", tr!("common-set"), Axis::Z.label()),
-        "",
-        MacMenuAction::OpenMoveToZ,
-        &target,
-        mtm,
-    );
-    add_submenu(&design_menu, &tr!("ws-menubar-design-move-to"), &move_to_menu, mtm);
-    add_separator(&design_menu, mtm);
-    add_action(
-        &design_menu,
-        &tr!("ws-menubar-design-create-triangulation"),
-        "",
-        MacMenuAction::OpenCreateTriangulation,
-        &target,
-        mtm,
-    );
-    add_submenu(&root, &tr!("ws-menubar-design"), &design_menu, mtm);
-
-    let triangulation_menu = menu(&tr!("ws-menubar-triangulation"), mtm);
-    triangulation_menu.setAutoenablesItems(false);
-    add_action(
-        &triangulation_menu,
-        &tr!("common-clip-surface-polyline"),
-        "",
-        MacMenuAction::OpenCutTriangulationByPolyline,
-        &target,
-        mtm,
-    );
-    add_action(
-        &triangulation_menu,
-        &tr!("common-slice-triangulation-z-range"),
-        "",
-        MacMenuAction::OpenCutTriangulationByZ,
-        &target,
-        mtm,
-    );
-    add_action(
-        &triangulation_menu,
-        &tr!("common-trim-topology"),
-        "",
-        MacMenuAction::OpenCutTriangulationBySurface,
-        &target,
-        mtm,
-    );
-    add_separator(&triangulation_menu, mtm);
-    add_action(
-        &triangulation_menu,
-        &tr!("common-cut-topology-pit-shell"),
-        "",
-        MacMenuAction::OpenCutTopologyByPitShell,
-        &target,
-        mtm,
-    );
-    add_action(
-        &triangulation_menu,
-        &tr!("common-merge-shell-into-topology-ellipsis"),
-        "",
-        MacMenuAction::OpenIncludeSolidInTopology,
-        &target,
-        mtm,
-    );
-    add_separator(&triangulation_menu, mtm);
-    add_action(
-        &triangulation_menu,
-        &tr!("common-generate-contour-lines"),
-        "",
-        MacMenuAction::OpenContourTriangulation,
-        &target,
-        mtm,
-    );
-    let triangulation_item = add_submenu(&root, &tr!("ws-menubar-triangulation"), &triangulation_menu, mtm);
-    triangulation_item.setTag(TRIANGULATION_MENU_TAG);
-
-    let raster_menu = menu(&tr!("ws-menubar-raster"), mtm);
-    raster_menu.setAutoenablesItems(false);
-    add_action(&raster_menu, &tr!("common-undrape-all"), "", MacMenuAction::UndrapeAllRasters, &target, mtm);
-    add_submenu(&root, &tr!("ws-menubar-raster"), &raster_menu, mtm);
-
-    let block_model_menu = menu(&tr!("ws-menubar-block-model"), mtm);
-    block_model_menu.setAutoenablesItems(false);
-    add_action(
-        &block_model_menu,
-        &tr!("common-create-ore-triangulation-ellipsis"),
-        "",
-        MacMenuAction::OpenCreateOreTriangulation,
-        &target,
-        mtm,
-    );
-    // Production's half of the menu; `set_workspace_menus` shows each
-    // workspace only its own row.
-    add_action(&block_model_menu, &tr!("menu-pit-optimization"), "", MacMenuAction::OpenOptimizationScenarios, &target, mtm);
-    let block_model_item = add_submenu(&root, &tr!("ws-menubar-block-model"), &block_model_menu, mtm);
-    block_model_item.setTag(BLOCK_MODEL_MENU_TAG);
-
-    let drill_hole_menu = menu(&tr!("ws-menubar-drillholes"), mtm);
-    drill_hole_menu.setAutoenablesItems(false);
-    add_action(
-        &drill_hole_menu,
-        &tr!("common-create-block-model-ellipsis"),
-        "",
-        MacMenuAction::OpenCreateBlockModel,
-        &target,
-        mtm,
-    );
-    add_separator(&drill_hole_menu, mtm);
-    add_action(&drill_hole_menu, &tr!("common-reference-points"), "", MacMenuAction::OpenReferencePoints, &target, mtm);
-    add_action(
-        &drill_hole_menu,
-        &tr!("common-build-surface-ellipsis"),
-        "",
-        MacMenuAction::OpenReferenceSurface,
-        &target,
-        mtm,
-    );
-    let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
-    drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
-
-    let coordinates_menu = menu(&tr!("survey-coordinates-menu"), mtm);
-    coordinates_menu.setAutoenablesItems(false);
-    add_action(&coordinates_menu, &tr!("survey-definitions-action"), "", MacMenuAction::OpenSurveyDefinitions, &target, mtm);
-    add_action(&coordinates_menu, &tr!("survey-transform-action"), "", MacMenuAction::OpenSurveyTransform, &target, mtm);
-    let coordinates_item = add_submenu(&root, &tr!("survey-coordinates-menu"), &coordinates_menu, mtm);
-    coordinates_item.setTag(COORDINATES_MENU_TAG);
-
-    let point_cloud_menu = menu(&tr!("ws-menubar-point-cloud"), mtm);
-    point_cloud_menu.setAutoenablesItems(false);
-    add_action(&point_cloud_menu, &tr!("common-create-triangulation"), "", MacMenuAction::OpenPointCloudTin, &target, mtm);
-    add_action(&point_cloud_menu, &tr!("common-join"), "", MacMenuAction::OpenPointCloudJoin, &target, mtm);
-    add_action(&point_cloud_menu, &tr!("common-classify"), "", MacMenuAction::OpenPointCloudClassify, &target, mtm);
-    add_submenu(&root, &tr!("ws-menubar-point-cloud"), &point_cloud_menu, mtm);
+    // Every workspace's menus, from the table the egui bar draws;
+    // `set_workspace_menus` shows the active workspace its own.
+    debug_assert!(MenuRow::all().count() as isize <= MENU_ROW_TAG_END - MENU_ROW_TAG_BASE);
+    let mut row_index = 0;
+    for workspace in Workspace::ALL {
+        for workspace_menu in workspace_menus(workspace) {
+            let title = workspace_menu.title.label();
+            let root_menu = menu(&title, mtm);
+            root_menu.setAutoenablesItems(false);
+            for (index, group) in workspace_menu.groups.iter().enumerate() {
+                if index > 0 {
+                    add_separator(&root_menu, mtm);
+                }
+                let submenu = group.submenu.map(|title| menu(&title.label(), mtm));
+                if let Some(submenu) = &submenu {
+                    submenu.setAutoenablesItems(false);
+                }
+                for row in group.rows {
+                    add_action(submenu.as_deref().unwrap_or(&*root_menu), &row.label(), "", MacMenuAction::MenuRow(row_index), &target, mtm);
+                    row_index += 1;
+                }
+                if let (Some(title), Some(submenu)) = (group.submenu, &submenu) {
+                    add_submenu(&root_menu, &title.label(), submenu, mtm);
+                }
+            }
+            add_submenu(&root, &title, &root_menu, mtm).setTag(workspace_menu_tag(workspace));
+        }
+    }
 
     app.setMainMenu(Some(&root));
     NSMenu::setMenuBarVisible(true, mtm);
@@ -563,42 +373,12 @@ fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
 /// menu belongs elsewhere leaves a shorter bar rather than an empty dropdown,
 /// so Drill & Blast and Planning show none at all. The egui bar does the same -
 /// see `main_menu::draw_workspace_menus`.
-///
-/// Design, Raster and Point Cloud are looked up by title, so the titles below
-/// must stay in sync with the ones `install_menu_bar` gives the same root
-/// menus; the rest carry tags.
 fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
-    if let Some(item) = find_item(root, COORDINATES_MENU_TAG) {
-        item.setHidden(workspace != Workspace::Survey);
-    }
-    // Point Cloud sits with Survey, next to Coordinates, rather than with the
-    // Production design menus.
-    if let Some(item) = root.itemWithTitle(&NSString::from_str(&tr!("ws-menubar-point-cloud"))) {
-        item.setHidden(workspace != Workspace::Survey);
-    }
-    for title in [tr!("ws-menubar-design"), tr!("ws-menubar-raster")] {
-        if let Some(item) = root.itemWithTitle(&NSString::from_str(&title)) {
-            item.setHidden(workspace != Workspace::Production);
+    let shown = workspace_menu_tag(workspace);
+    for item in root.itemArray().iter() {
+        if item.tag() <= WORKSPACE_MENU_TAG_BASE {
+            item.setHidden(item.tag() != shown);
         }
-    }
-
-    if let Some(item) = find_item(root, TRIANGULATION_MENU_TAG) {
-        item.setHidden(workspace != Workspace::Production);
-    }
-
-    // Geology thresholds the block model; Production optimizes a pit over it.
-    if let Some(item) = find_item(root, BLOCK_MODEL_MENU_TAG) {
-        item.setHidden(!matches!(workspace, Workspace::Geology | Workspace::Production));
-    }
-    if let Some(item) = find_item(root, MacMenuAction::OpenCreateOreTriangulation.tag()) {
-        item.setHidden(workspace != Workspace::Geology);
-    }
-    if let Some(item) = find_item(root, MacMenuAction::OpenOptimizationScenarios.tag()) {
-        item.setHidden(workspace != Workspace::Production);
-    }
-
-    if let Some(item) = find_item(root, DRILL_HOLES_MENU_TAG) {
-        item.setHidden(workspace != Workspace::Geology);
     }
 }
 
@@ -614,7 +394,10 @@ fn set_checked(root: &NSMenu, action: MacMenuAction, checked: bool) {
 /// list holds changes with every project opened, and a row's tag is its index
 /// in it. Each new item retains its own target, exactly as the fixed ones
 /// installed at startup do.
-fn rebuild_recent_menu(root: &NSMenu, recent: &[(String, PathBuf)], mtm: MainThreadMarker) {
+///
+/// A project whose file was not found is disabled and struck through, as the
+/// egui menu shows it.
+fn rebuild_recent_menu(root: &NSMenu, recent: &[RecentRow], mtm: MainThreadMarker) {
     let Some(item) = find_item(root, RECENT_SUBMENU_TAG) else {
         return;
     };
@@ -623,12 +406,26 @@ fn rebuild_recent_menu(root: &NSMenu, recent: &[(String, PathBuf)], mtm: MainThr
     };
     submenu.removeAllItems();
     let target = MenuTarget::new(mtm);
-    for (index, (name, _)) in recent.iter().enumerate() {
-        add_action(&submenu, name, "", MacMenuAction::OpenRecent(index), &target, mtm);
+    for (index, row) in recent.iter().enumerate() {
+        let item = add_action(&submenu, &row.name, "", MacMenuAction::OpenRecent(index), &target, mtm);
+        if row.missing {
+            item.setEnabled(false);
+            item.setAttributedTitle(Some(&struck_through(&row.name)));
+            item.setToolTip(Some(&NSString::from_str(&tr!("menu-file-recent-project-missing", path = row.path.display().to_string()))));
+        }
     }
     // Greyed out with nothing to offer rather than hidden, so the File menu
     // keeps its shape.
     item.setEnabled(!recent.is_empty());
+}
+
+/// `text` with a single line struck through it.
+fn struck_through(text: &str) -> Retained<NSAttributedString> {
+    let style = NSNumber::new_isize(NSUnderlineStyle::Single.0);
+    // SAFETY: the strikethrough attribute takes an NSNumber holding an
+    // NSUnderlineStyle.
+    let attributes = NSDictionary::<objc2_foundation::NSAttributedStringKey, AnyObject>::from_slices(&[unsafe { NSStrikethroughStyleAttributeName }], &[&*style as &AnyObject]);
+    unsafe { NSAttributedString::initWithString_attributes(NSAttributedString::alloc(), &NSString::from_str(text), Some(&attributes)) }
 }
 
 /// The project behind one File > Open Recent row, as the menu last showed it.
@@ -637,7 +434,7 @@ fn rebuild_recent_menu(root: &NSMenu, recent: &[(String, PathBuf)], mtm: MainThr
 /// same list the row was built from rather than against the current one.
 pub(crate) fn recent_project_path(index: usize) -> Option<PathBuf> {
     let state = last_menu_state();
-    state.as_ref()?.recent.get(index).map(|(_, path)| path.clone())
+    state.as_ref()?.recent.get(index).map(|row| row.path.clone())
 }
 
 /// Keep native checkmarks and availability aligned with the current editor.
@@ -645,24 +442,18 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     let state = MenuState {
         can_save: project.projects.iter().any(crate::ui::state::UiProjectEntry::needs_save),
         has_project: project.projects.iter().any(|entry| entry.is_active),
-        can_create_terrain_tin: editor.selection_counts.point_clouds == 1,
-        can_join_point_clouds: editor.selection_counts.point_clouds >= 2,
-        can_classify_point_clouds: editor.selection_counts.point_clouds >= 1,
-        can_create_triangulation: editor.selection_counts.triangulation_sources > 0,
-        one_surface_selected: editor.selection_counts.triangulations == 1,
-        can_clip_by_polyline: editor.selection_counts.triangulations == 1 && editor.selection_counts.clip_boundaries == 1,
-        can_create_block_model: editor.selection_counts.drill_holes == 1,
-        can_build_reference_points: editor.selection_counts.reference_holes > 0,
-        can_build_reference_surface: editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS,
-        can_create_ore_triangulation: editor.selection_counts.block_models == 1,
-        can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
-        has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
-        has_polyline_selection: editor.selection_has_polylines,
-        has_selection_intersections: editor.selection_has_intersections,
+        menu_rows: MenuRow::all().map(|row| row.enabled(project)).collect(),
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
         view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
-        recent: project.recent_projects().map(|entry| (entry.name.clone(), entry.path.clone())).collect(),
+        recent: project
+            .recent_projects()
+            .map(|entry| RecentRow {
+                name: entry.name.clone(),
+                path: entry.path.clone(),
+                missing: entry.missing,
+            })
+            .collect(),
     };
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -684,30 +475,91 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::SaveProjectAs, state.has_project);
     // A never-saved project is nowhere to be shown.
     set_enabled(&root, MacMenuAction::ShowProjectInFileManager, state.has_project_file);
-    set_enabled(&root, MacMenuAction::UndrapeAllRasters, state.can_undrape_rasters);
-    set_enabled(&root, MacMenuAction::OpenPointCloudTin, state.can_create_terrain_tin);
-    set_enabled(&root, MacMenuAction::OpenPointCloudJoin, state.can_join_point_clouds);
-    set_enabled(&root, MacMenuAction::OpenPointCloudClassify, state.can_classify_point_clouds);
-    set_enabled(&root, MacMenuAction::OpenSurveyTransform, state.has_project);
-    // Select first, then act: these run on the scene selection they were
-    // opened with rather than on a pick list filled inside their dialog.
-    set_enabled(&root, MacMenuAction::OpenCreateTriangulation, state.can_create_triangulation);
-    set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
-    set_enabled(&root, MacMenuAction::OpenReferencePoints, state.can_build_reference_points);
-    set_enabled(&root, MacMenuAction::OpenReferenceSurface, state.can_build_reference_surface);
-    set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
-    for action in [MacMenuAction::OpenCutTriangulationByZ, MacMenuAction::OpenContourTriangulation] {
-        set_enabled(&root, action, state.one_surface_selected);
+    for (index, enabled) in state.menu_rows.iter().enumerate() {
+        set_enabled(&root, MacMenuAction::MenuRow(index), *enabled);
     }
-    set_enabled(&root, MacMenuAction::OpenCutTriangulationByPolyline, state.can_clip_by_polyline);
-    // The Design menu only acts on selected design objects.
-    for action in [MacMenuAction::OpenMoveToX, MacMenuAction::OpenMoveToY, MacMenuAction::OpenMoveToZ] {
-        set_enabled(&root, action, state.has_design_selection);
-    }
-    // Inserting at intersections additionally needs two polylines that cross.
-    set_enabled(&root, MacMenuAction::OpenInsertPointAtElevation, state.has_polyline_selection);
-    set_enabled(&root, MacMenuAction::InsertPointsAtIntersections, state.has_selection_intersections);
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);
     }
+}
+
+/// What a double-click on a title bar does, as set in System Settings >
+/// Desktop & Dock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TitleDoubleClick {
+    Zoom,
+    Minimize,
+    Nothing,
+}
+
+/// The double-click action the user has chosen for title bars.
+pub(crate) fn title_double_click() -> TitleDoubleClick {
+    let defaults = NSUserDefaults::standardUserDefaults();
+    match defaults
+        .stringForKey(&NSString::from_str("AppleActionOnDoubleClick"))
+        .map(|action| action.to_string())
+        .as_deref()
+    {
+        Some("Minimize") => TitleDoubleClick::Minimize,
+        Some("None") => TitleDoubleClick::Nothing,
+        // "Maximize" and "Fill" both zoom, as does an unset preference.
+        _ => TitleDoubleClick::Zoom,
+    }
+}
+
+/// Place the window's red, yellow and green buttons over Incline's own title
+/// bar: `left` points in from the window's left edge, centred `centre_y`
+/// points down from its top. Returns where they end, from the window's left.
+///
+/// AppKit lays its title bar out again whenever it sees fit - a resize, a
+/// change of key window, a new title - so this is called every frame, and
+/// only moves what has moved. In fullscreen the buttons belong to the menu
+/// bar that slides down, and are left alone.
+pub(crate) fn place_window_buttons(window: &winit::window::Window, centre_y: f64, left: f64) -> Option<f64> {
+    use objc2_app_kit::{NSView, NSWindowButton};
+    use objc2_foundation::{NSPoint, NSRect};
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+    // winit hands out its content view, alive as long as the window is.
+    let view: &NSView = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
+    let ns_window = view.window()?;
+    let close = ns_window.standardWindowButton(NSWindowButton::CloseButton)?;
+    let minimize = ns_window.standardWindowButton(NSWindowButton::MiniaturizeButton)?;
+    let zoom = ns_window.standardWindowButton(NSWindowButton::ZoomButton)?;
+    let spacing = minimize.frame().origin.x - close.frame().origin.x;
+    let end = left + 2.0 * spacing + zoom.frame().size.width;
+    if window.fullscreen().is_some() {
+        return Some(end);
+    }
+    // The buttons sit in the title bar view, inside a container pinned to
+    // the window's top; a bar taller than the system's grows the container to
+    // keep them in it.
+    let titlebar = unsafe { close.superview() }?;
+    let container = unsafe { titlebar.superview() }?;
+    let height = close.frame().size.height;
+    let needed = (centre_y + height / 2.0).ceil();
+    let frame = container.frame();
+    if frame.size.height < needed {
+        let window_height = ns_window.frame().size.height;
+        container.setFrame(NSRect::new(
+            NSPoint::new(frame.origin.x, window_height - needed),
+            objc2_foundation::NSSize::new(frame.size.width, needed),
+        ));
+    }
+    let titlebar_height = titlebar.frame().size.height;
+    let y = if titlebar.isFlipped() {
+        centre_y - height / 2.0
+    } else {
+        titlebar_height - centre_y - height / 2.0
+    };
+    for (index, button) in [&close, &minimize, &zoom].into_iter().enumerate() {
+        let origin = NSPoint::new(left + index as f64 * spacing, y.round());
+        if button.frame().origin != origin {
+            button.setFrameOrigin(origin);
+        }
+    }
+    Some(end)
 }

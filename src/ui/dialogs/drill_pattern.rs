@@ -52,7 +52,7 @@ fn refresh_preview(editor: &mut EditorState, document: &Document) -> bool {
             .drill_pattern_boundary_id
             .and_then(|id| document.get_object(id))
             .and_then(Object::closed_boundary)
-            .ok_or_else(|| "Pick a closed polyline or circle to define the blast shape".to_owned())
+            .ok_or_else(|| crate::i18n::tr!("err-drill-pattern-pick-boundary"))
             .and_then(|boundary| {
                 crate::model::drill_hole::generate_pattern_collars(
                     &boundary,
@@ -61,6 +61,7 @@ fn refresh_preview(editor: &mut EditorState, document: &Document) -> bool {
                     editor.drill_pattern_rotation_deg,
                     glam::DVec2::new(editor.drill_pattern_offset_x, editor.drill_pattern_offset_y),
                     editor.drill_pattern_layout,
+                    crate::model::drill_hole::MAX_PATTERN_HOLES,
                 )
             });
 
@@ -107,33 +108,30 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
             menu::menu_note(ui, tr!("drill-pattern-choose-closed-blast-boundary-then"));
             ui.add_space(6.0);
 
-            MenuField::new(tr!("drill-pattern-blast-shape"))
-                .help_text(tr!("drill-pattern-closed-design-polyline-whose-xy"))
-                .show(ui, |ui, row_height, column_width| {
-                    let button_width = PICK_BUTTON_WIDTH;
-                    let label_width = (column_width - ui.spacing().item_spacing.x - button_width).max(80.0);
-                    ui.allocate_ui_with_layout(egui::vec2(column_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        let mut display = boundary_label.clone();
-                        ui.add_sized([label_width, row_height], egui::TextEdit::singleline(&mut display).interactive(false))
-                            .on_hover_text(&boundary_label);
-                        let button_text = if editor.drill_pattern_awaiting_shape_pick {
-                            tr!("common-cancel")
+            MenuField::new(tr!("drill-pattern-blast-shape")).show(ui, |ui, row_height, column_width| {
+                let button_width = PICK_BUTTON_WIDTH;
+                let label_width = (column_width - ui.spacing().item_spacing.x - button_width).max(80.0);
+                ui.allocate_ui_with_layout(egui::vec2(column_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let mut display = boundary_label.clone();
+                    ui.add_sized([label_width, row_height], egui::TextEdit::singleline(&mut display).interactive(false));
+                    let button_text = if editor.drill_pattern_awaiting_shape_pick {
+                        tr!("common-cancel")
+                    } else {
+                        tr!("drill-pattern-pick")
+                    };
+                    if ui.add(MenuButton::new(button_text).min_width(button_width)).clicked() {
+                        if editor.drill_pattern_awaiting_shape_pick {
+                            editor.drill_pattern_awaiting_shape_pick = false;
+                            editor.viewport_pick_hover_label = None;
+                            editor.tool_highlight_id = editor.drill_pattern_boundary_id;
+                            geometry_dirty = true;
                         } else {
-                            tr!("drill-pattern-pick")
-                        };
-                        if ui.add(MenuButton::new(button_text).min_width(button_width)).clicked() {
-                            if editor.drill_pattern_awaiting_shape_pick {
-                                editor.drill_pattern_awaiting_shape_pick = false;
-                                editor.viewport_pick_hover_label = None;
-                                editor.tool_highlight_id = editor.drill_pattern_boundary_id;
-                                geometry_dirty = true;
-                            } else {
-                                commands.push(UiCommand::BeginDrillPatternShapePick);
-                            }
+                            commands.push(UiCommand::BeginDrillPatternShapePick);
                         }
-                    })
-                    .response
-                });
+                    }
+                })
+                .response
+            });
 
             if editor.drill_pattern_awaiting_shape_pick {
                 let status = editor
@@ -198,7 +196,6 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 .suffix(format!(" {}", tr!("common-m")))
                 .show(ui);
             MenuFieldText::new(tr!("drill-pattern-pattern-name"), &mut editor.drill_pattern_name)
-                .help_text(tr!("drill-pattern-name-help"))
                 .hint_text(tr!("drill-pattern-name-hint"))
                 .show(ui);
 
@@ -226,7 +223,7 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 && !editor.drill_pattern_name.trim().is_empty()
                 && !editor.drill_pattern_awaiting_shape_pick;
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("common-create")).primary().enabled(can_create)).clicked() || (confirm && can_create)) && can_create {
                     commands.push(UiCommand::CreateDrillPattern {
                         name: editor.drill_pattern_name.trim().to_owned(),
@@ -235,7 +232,7 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                         diameter: editor.drill_pattern_diameter_mm / 1_000.0,
                     });
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });

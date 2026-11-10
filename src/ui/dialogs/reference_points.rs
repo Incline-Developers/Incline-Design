@@ -1,5 +1,5 @@
 //! The reference points dialog: one working section, one side, one layer of
-//! derived points, on the holes the dialog was opened on.
+//! derived points, on the holes selected when it opened or picked since.
 
 use std::collections::BTreeSet;
 
@@ -7,16 +7,20 @@ use crate::{
     i18n::tr,
     model::drill_hole::{DrillField, DrillFieldKind, DrillValue, OpenDrillHoleDataset, ReferenceSide, ReferenceTarget},
     ui::{
-        state::{EditorState, UiCommand},
-        widgets::menu::{DragableMenu, MenuButton, MenuFieldCombo, selected_source_field},
+        state::{EditorState, SelectionPickTool, UiCommand},
+        widgets::menu::{DragableMenu, MenuButton, MenuFieldCombo, picked_selection_field},
     },
 };
 
 pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(draft) = editor.reference_points_dialog.as_mut() else {
         return;
     };
-    // The holes came in when the dialog opened, so the datasets they name are
+    // The holes come in from the selection, so the datasets they name are
     // gathered here rather than being chosen: one dataset or several, and one
     // that has since been unloaded drops out.
     let mut involved: Vec<&OpenDrillHoleDataset> = Vec::new();
@@ -29,6 +33,7 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
         }
     }
     let holes_label = match involved.as_slice() {
+        [] => tr!("reference-points-no-holes"),
         [dataset] => tr!(
             "reference-points-count-holes-from-dataset",
             count = draft.holes.len().to_string(),
@@ -57,13 +62,9 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
         .min_width(380.0)
         .max_width(460.0)
         .show(ui.ctx(), |ui| {
-            selected_source_field(
-                ui,
-                tr!("reference-points-holes"),
-                holes_label.clone(),
-                tr!("reference-points-holes-points-placed-selected-when"),
-                220.0,
-            );
+            if picked_selection_field(ui, tr!("reference-points-holes"), holes_label.clone(), tr!("reference-points-holes-help"), 220.0) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::ReferencePoints));
+            }
             ui.add_space(4.0);
 
             // The geologist names the categorical field that carries the

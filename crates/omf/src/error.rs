@@ -20,10 +20,7 @@ pub enum Limit {
 }
 
 fn format_corners<T: Display>(corners: &[T; 6]) -> String {
-    format!(
-        "[{}, {}, {}] to [{}, {}, {}]",
-        corners[0], corners[1], corners[2], corners[3], corners[4], corners[5],
-    )
+    format!("[{}, {}, {}] to [{}, {}, {}]", corners[0], corners[1], corners[2], corners[3], corners[4], corners[5],)
 }
 
 /// Ways that data, either in a file or being written to one, can be invalid.
@@ -48,28 +45,16 @@ pub enum InvalidData {
     #[error("sub-block {} has zero or negative size", format_corners(corners))]
     RegularSubblockZeroSize { corners: [u32; 6] },
     /// A regular sub-block extends outside the parent.
-    #[error(
-        "sub-block {} exceeds the maximum {maximum:?}",
-        format_corners(corners)
-    )]
-    RegularSubblockOutsideParent {
-        corners: [u32; 6],
-        maximum: [u32; 3],
-    },
+    #[error("sub-block {} exceeds the maximum {maximum:?}", format_corners(corners))]
+    RegularSubblockOutsideParent { corners: [u32; 6], maximum: [u32; 3] },
     /// A regular sub-block doesn't match the octree or full sub-block mode.
     #[error("sub-block {} is invalid for {mode:?} mode", format_corners(corners))]
-    RegularSubblockNotInMode {
-        corners: [u32; 6],
-        mode: SubblockMode,
-    },
+    RegularSubblockNotInMode { corners: [u32; 6], mode: SubblockMode },
     /// A free-form sub-block has zero or negative size.
     #[error("sub-block {} has zero or negative size", format_corners(corners))]
     FreeformSubblockZeroSize { corners: [f64; 6] },
     /// A free-form sub-block is outside the [0.0, 1.0] parent range.
-    #[error(
-        "sub-block {} is outside the valid range of 0.0 to 1.0",
-        format_corners(corners)
-    )]
+    #[error("sub-block {} is outside the valid range of 0.0 to 1.0", format_corners(corners))]
     FreeformSubblockOutsideParent { corners: [f64; 6] },
 }
 
@@ -87,9 +72,7 @@ pub enum Error {
     #[error("Error: the zip comment does not identify this as an OMF file: '{0}'")]
     NotOmf(String),
     /// When the file version is newer than the library.
-    #[error(
-        "Version error: the file uses OMF v{0}.{1} but this version library can only read 0.9 and 2.0"
-    )]
+    #[error("Version error: the file uses OMF v{0}.{1} but this version library can only read 0.9 and 2.0")]
     NewerVersion(u32, u32),
     /// The file version is pre-release and can't be loaded by release versions.
     #[error("Version error: the file uses pre-release OMF v{0}.{1}-{2} and can't be loaded")]
@@ -127,10 +110,7 @@ pub enum Error {
     /// When a Parquet schema doesn't match.
     #[cfg(feature = "parquet")]
     #[error("{}", mismatch_string(.0, .1))]
-    ParquetSchemaMismatch(
-        std::sync::Arc<parquet::schema::types::Type>,
-        std::sync::Arc<Vec<parquet::schema::types::Type>>,
-    ),
+    ParquetSchemaMismatch(std::sync::Arc<parquet::schema::types::Type>, std::sync::Arc<Vec<parquet::schema::types::Type>>),
     /// Forward errors from array operations.
     #[cfg(feature = "parquet")]
     #[error("{0}")]
@@ -139,10 +119,6 @@ pub enum Error {
     #[cfg(feature = "image")]
     #[error("Image processing error: {0}")]
     ImageError(Box<image::ImageError>),
-    /// Errors from OMF1 conversion.
-    #[cfg(feature = "omf1")]
-    #[error("OMF1 conversion failed: {0}")]
-    Omf1Error(#[from] crate::omf1::Omf1Error),
 }
 
 impl From<InvalidData> for Error {
@@ -155,9 +131,7 @@ impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
         match error.kind() {
             std::io::ErrorKind::OutOfMemory => Error::OutOfMemory,
-            std::io::ErrorKind::Other if error.get_ref().is_some_and(|r| r.is::<Error>()) => {
-                *error.into_inner().unwrap().downcast().unwrap()
-            }
+            std::io::ErrorKind::Other if error.get_ref().is_some_and(|r| r.is::<Error>()) => *error.into_inner().unwrap().downcast().unwrap(),
             _ => Error::IoError(error),
         }
     }
@@ -201,10 +175,7 @@ impl From<parquet::errors::ParquetError> for Error {
 }
 
 #[cfg(feature = "parquet")]
-fn mismatch_string(
-    found: &parquet::schema::types::Type,
-    expected: &[parquet::schema::types::Type],
-) -> String {
+fn mismatch_string(found: &parquet::schema::types::Type, expected: &[parquet::schema::types::Type]) -> String {
     use parquet::schema::{printer::print_schema, types::Type};
 
     fn schema_string(ty: &Type) -> String {
@@ -215,11 +186,7 @@ fn mismatch_string(
     let mut out = format!(
         "Parquet schema mismatch, found:\n{found}\n\n{expected_label}:\n",
         found = schema_string(found),
-        expected_label = if expected.len() == 1 {
-            "Expected"
-        } else {
-            "Expected one of"
-        }
+        expected_label = if expected.len() == 1 { "Expected" } else { "Expected one of" }
     );
     for ty in expected {
         out.push_str(&schema_string(ty));

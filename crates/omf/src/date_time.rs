@@ -31,44 +31,28 @@ pub fn date_time_to_i64(date_time: DateTime<Utc>) -> i64 {
 pub fn i64_to_date(value: i64) -> NaiveDate {
     Duration::try_days(value)
         .and_then(|d| NaiveDate::default().checked_add_signed(d))
-        .unwrap_or(if value < 0 {
-            NaiveDate::MIN
-        } else {
-            NaiveDate::MAX
-        })
+        .unwrap_or(if value < 0 { NaiveDate::MIN } else { NaiveDate::MAX })
 }
 
 /// Convert a number of microseconds since the epoch back to a date.
 pub fn i64_to_date_time(value: i64) -> DateTime<Utc> {
     DateTime::<Utc>::default()
         .checked_add_signed(Duration::microseconds(value))
-        .unwrap_or(if value < 0 {
-            DateTime::<Utc>::MIN_UTC
-        } else {
-            DateTime::<Utc>::MAX_UTC
-        })
+        .unwrap_or(if value < 0 { DateTime::<Utc>::MIN_UTC } else { DateTime::<Utc>::MAX_UTC })
 }
 
 /// Convert a number of milliseconds since the epoch back to a date.
 pub fn i64_milli_to_date_time(value: i64) -> DateTime<Utc> {
     Duration::try_milliseconds(value)
         .and_then(|d| DateTime::<Utc>::default().checked_add_signed(d))
-        .unwrap_or(if value < 0 {
-            DateTime::<Utc>::MIN_UTC
-        } else {
-            DateTime::<Utc>::MAX_UTC
-        })
+        .unwrap_or(if value < 0 { DateTime::<Utc>::MIN_UTC } else { DateTime::<Utc>::MAX_UTC })
 }
 
 /// Convert a number of nanoseconds since the epoch back to a date.
 pub fn i64_nano_to_date_time(value: i64) -> DateTime<Utc> {
     DateTime::<Utc>::default()
         .checked_add_signed(Duration::nanoseconds(value))
-        .unwrap_or(if value < 0 {
-            DateTime::<Utc>::MIN_UTC
-        } else {
-            DateTime::<Utc>::MAX_UTC
-        })
+        .unwrap_or(if value < 0 { DateTime::<Utc>::MIN_UTC } else { DateTime::<Utc>::MAX_UTC })
 }
 
 /// Returns the current date and time in UTC.

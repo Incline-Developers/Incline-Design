@@ -22,12 +22,6 @@ impl<T: Copy> PqArrayMatcher<T> {
         }
     }
 
-    /// Returns the schemas of this matcher.
-    #[cfg(test)]
-    pub fn schemas(&self) -> &[Type] {
-        &self.expected
-    }
-
     /// Checks a file schema against this matcher, returning the matched index on success.
     pub fn check(&self, schema: Arc<Type>) -> Result<T, Error> {
         let index = self
@@ -151,33 +145,27 @@ macro_rules! schema_logical_type {
         Some(parquet::basic::LogicalType::String)
     };
     (integer($bits:literal, $signed:literal)) => {
-        Some(parquet::basic::LogicalType::Integer(
-            parquet::basic::IntType {
-                bit_width: $bits,
-                is_signed: $signed,
-            },
-        ))
+        Some(parquet::basic::LogicalType::Integer(parquet::basic::IntType {
+            bit_width: $bits,
+            is_signed: $signed,
+        }))
     };
     (date) => {
         Some(parquet::basic::LogicalType::Date)
     };
-    (timestamp(millis, true)) => {
-        Some(parquet::basic::LogicalType::Timestamp(
-            parquet::basic::TimestampType {
-                is_adjusted_to_u_t_c: true,
-                unit: TimeUnit::MILLIS,
-            },
-        ))
+    (timestamp(millis,true)) => {
+        Some(parquet::basic::LogicalType::Timestamp(parquet::basic::TimestampType {
+            is_adjusted_to_u_t_c: true,
+            unit: TimeUnit::MILLIS,
+        }))
     };
-    (timestamp(micros, true)) => {
-        Some(parquet::basic::LogicalType::Timestamp(
-            parquet::basic::TimestampType {
-                is_adjusted_to_u_t_c: true,
-                unit: parquet::basic::TimeUnit::MICROS,
-            },
-        ))
+    (timestamp(micros,true)) => {
+        Some(parquet::basic::LogicalType::Timestamp(parquet::basic::TimestampType {
+            is_adjusted_to_u_t_c: true,
+            unit: parquet::basic::TimeUnit::MICROS,
+        }))
     };
-    (timestamp(nanos, true)) => {
+    (timestamp(nanos,true)) => {
         Some(Timestamp(TimestampType {
             is_adjusted_to_u_t_c: true,
             unit: TimeUnit::NANOS,
@@ -185,10 +173,13 @@ macro_rules! schema_logical_type {
     };
 }
 
-pub(crate) use {
-    schema, schema_field, schema_fields, schema_logical_type, schema_match, schema_physical_type,
-    schema_repetition,
-};
+pub(crate) use schema;
+pub(crate) use schema_field;
+pub(crate) use schema_fields;
+pub(crate) use schema_logical_type;
+pub(crate) use schema_match;
+pub(crate) use schema_physical_type;
+pub(crate) use schema_repetition;
 
 #[cfg(test)]
 mod tests {

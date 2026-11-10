@@ -1,4 +1,4 @@
-use std::{fmt::Debug, fmt::Display};
+use std::fmt::{Debug, Display};
 
 use crate::{Location, colormap::NumberRange, error::InvalidData};
 
@@ -86,11 +86,7 @@ impl Problem {
 impl Display for Problem {
     /// Formats a validation problem.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let severity = if self.reason.is_error() {
-            "Error"
-        } else {
-            "Warning"
-        };
+        let severity = if self.reason.is_error() { "Error" } else { "Warning" };
         write!(f, "{severity}: '{}", self.ty)?;
         if let Some(field) = self.field {
             write!(f, "::{field}'")?;
@@ -132,26 +128,11 @@ impl Problems {
 
     /// Ok if there are only warnings, Err if there are errors.
     pub(crate) fn into_result(self) -> Result<Self, Self> {
-        if self.0.iter().any(|p| p.is_error()) {
-            Err(self)
-        } else {
-            Ok(self)
-        }
+        if self.0.iter().any(|p| p.is_error()) { Err(self) } else { Ok(self) }
     }
 
-    pub(crate) fn push(
-        &mut self,
-        reason: Reason,
-        ty: &'static str,
-        field: Option<&'static str>,
-        name: Option<String>,
-    ) {
-        self.0.push(Problem {
-            reason,
-            ty,
-            field,
-            name,
-        })
+    pub(crate) fn push(&mut self, reason: Reason, ty: &'static str, field: Option<&'static str>, name: Option<String>) {
+        self.0.push(Problem { reason, ty, field, name })
     }
 }
 

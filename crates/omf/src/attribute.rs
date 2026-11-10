@@ -1,4 +1,3 @@
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -11,7 +10,7 @@ use crate::{
 };
 
 /// The various types of data that can be attached to an [`Attribute`](crate::Attribute).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum AttributeData {
     /// Number data with flexible type.
@@ -151,7 +150,7 @@ impl AttributeData {
 /// Each [`Element`](crate::Element) can have zero or more attributes,
 /// each attached to different parts of the element and each containing different types of data.
 /// On a set of points, one attribute might contain gold assay results and another rock-type classifications.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Attribute {
     /// Attribute name. Should be unique within the containing element.
     pub name: String,
@@ -198,19 +197,8 @@ impl Attribute {
     }
 
     /// Convenience function to create a number attribute.
-    pub fn from_numbers(
-        name: impl Into<String>,
-        location: Location,
-        values: Array<array_type::Number>,
-    ) -> Self {
-        Self::new(
-            name,
-            location,
-            AttributeData::Number {
-                values,
-                colormap: None,
-            },
-        )
+    pub fn from_numbers(name: impl Into<String>, location: Location, values: Array<array_type::Number>) -> Self {
+        Self::new(name, location, AttributeData::Number { values, colormap: None })
     }
 
     /// Convenience function to create a number attribute with a continuous colormap.
@@ -226,10 +214,7 @@ impl Attribute {
             location,
             AttributeData::Number {
                 values,
-                colormap: Some(NumberColormap::Continuous {
-                    range: range.into(),
-                    gradient,
-                }),
+                colormap: Some(NumberColormap::Continuous { range: range.into(), gradient }),
             },
         )
     }
@@ -247,29 +232,18 @@ impl Attribute {
             location,
             AttributeData::Number {
                 values,
-                colormap: Some(NumberColormap::Discrete {
-                    boundaries,
-                    gradient,
-                }),
+                colormap: Some(NumberColormap::Discrete { boundaries, gradient }),
             },
         )
     }
 
     /// Convenience function to create a vector attribute.
-    pub fn from_vectors(
-        name: impl Into<String>,
-        location: Location,
-        values: Array<array_type::Vector>,
-    ) -> Self {
+    pub fn from_vectors(name: impl Into<String>, location: Location, values: Array<array_type::Vector>) -> Self {
         Self::new(name, location, AttributeData::Vector { values })
     }
 
     /// Convenience function to create a string attribute.
-    pub fn from_strings(
-        name: impl Into<String>,
-        location: Location,
-        values: Array<array_type::Text>,
-    ) -> Self {
+    pub fn from_strings(name: impl Into<String>, location: Location, values: Array<array_type::Text>) -> Self {
         Self::new(name, location, AttributeData::Text { values })
     }
 
@@ -295,55 +269,23 @@ impl Attribute {
     }
 
     /// Convenience function to create a boolean attribute.
-    pub fn from_booleans(
-        name: impl Into<String>,
-        location: Location,
-        values: Array<array_type::Boolean>,
-    ) -> Self {
+    pub fn from_booleans(name: impl Into<String>, location: Location, values: Array<array_type::Boolean>) -> Self {
         Self::new(name, location, AttributeData::Boolean { values })
     }
 
     /// Convenience function to create a color attribute.
-    pub fn from_colors(
-        name: impl Into<String>,
-        location: Location,
-        values: Array<array_type::Color>,
-    ) -> Self {
+    pub fn from_colors(name: impl Into<String>, location: Location, values: Array<array_type::Color>) -> Self {
         Self::new(name, location, AttributeData::Color { values })
     }
 
     /// Convenience function to create a mapped texture attribute.
-    pub fn from_texture_map(
-        name: impl Into<String>,
-        image: Array<array_type::Image>,
-        location: Location,
-        texcoords: Array<array_type::Texcoord>,
-    ) -> Self {
-        Self::new(
-            name,
-            location,
-            AttributeData::MappedTexture { image, texcoords },
-        )
+    pub fn from_texture_map(name: impl Into<String>, image: Array<array_type::Image>, location: Location, texcoords: Array<array_type::Texcoord>) -> Self {
+        Self::new(name, location, AttributeData::MappedTexture { image, texcoords })
     }
 
     /// Convenience function to create a projected texture attribute.
-    pub fn from_texture_project(
-        name: impl Into<String>,
-        image: Array<array_type::Image>,
-        orient: Orient2,
-        width: f64,
-        height: f64,
-    ) -> Self {
-        Self::new(
-            name,
-            Location::Projected,
-            AttributeData::ProjectedTexture {
-                image,
-                orient,
-                width,
-                height,
-            },
-        )
+    pub fn from_texture_project(name: impl Into<String>, image: Array<array_type::Image>, orient: Orient2, width: f64, height: f64) -> Self {
+        Self::new(name, Location::Projected, AttributeData::ProjectedTexture { image, orient, width, height })
     }
 
     /// Returns the length of the attribute, or zero for a projected texture.
@@ -360,7 +302,7 @@ impl Attribute {
 ///
 /// See the documentation for each [`Geometry`](crate::Geometry) variant for a list of what
 /// locations are valid.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(i32)]
 pub enum Location {
     /// The attribute contains one value for each point, vertex, or block corner.
@@ -392,17 +334,13 @@ impl Validate for AttributeData {
     fn validate_inner(&mut self, val: &mut Validator) {
         match self {
             Self::Number { values, colormap } => {
-                val.enter("AttributeData::Number")
-                    .array(values, Constraint::Number, "values")
-                    .obj(colormap);
+                val.enter("AttributeData::Number").array(values, Constraint::Number, "values").obj(colormap);
             }
             Self::Vector { values } => {
-                val.enter("AttributeData::Vector")
-                    .array(values, Constraint::Vector, "values");
+                val.enter("AttributeData::Vector").array(values, Constraint::Vector, "values");
             }
             Self::Text { values } => {
-                val.enter("AttributeData::String")
-                    .array(values, Constraint::String, "values");
+                val.enter("AttributeData::String").array(values, Constraint::String, "values");
             }
             Self::Category {
                 names,
@@ -414,28 +352,17 @@ impl Validate for AttributeData {
                     .array(values, Constraint::Index(names.item_count()), "values")
                     .array(names, Constraint::Name, "names")
                     .array_opt(gradient.as_mut(), Constraint::Gradient, "colors")
-                    .array_size_opt(
-                        gradient.as_ref().map(|a| a.item_count()),
-                        names.item_count(),
-                        "colors",
-                    )
+                    .array_size_opt(gradient.as_ref().map(|a| a.item_count()), names.item_count(), "colors")
                     .objs(attributes.iter_mut())
                     .attrs_on_attribute(attributes, names.item_count());
             }
             Self::Boolean { values } => {
-                val.enter("AttributeData::Boolean")
-                    .array(values, Constraint::Boolean, "values");
+                val.enter("AttributeData::Boolean").array(values, Constraint::Boolean, "values");
             }
             Self::Color { values } => {
-                val.enter("AttributeData::Color")
-                    .array(values, Constraint::Color, "values");
+                val.enter("AttributeData::Color").array(values, Constraint::Color, "values");
             }
-            Self::ProjectedTexture {
-                orient,
-                width,
-                height,
-                image,
-            } => {
+            Self::ProjectedTexture { orient, width, height, image } => {
                 val.enter("AttributeData::ProjectedTexture")
                     .obj(orient)
                     .finite(*width, "width")
@@ -455,9 +382,8 @@ impl Validate for AttributeData {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Array, colormap::NumberRange};
-
     use super::*;
+    use crate::{Array, colormap::NumberRange};
 
     #[test]
     fn serialize_attribute() {
@@ -481,10 +407,7 @@ mod tests {
                 data: AttributeData::Number {
                     values: Array::new("2.parquet".to_owned(), 100),
                     colormap: Some(NumberColormap::Continuous {
-                        range: NumberRange::Float {
-                            min: 0.0,
-                            max: 100.0,
-                        },
+                        range: NumberRange::Float { min: 0.0, max: 100.0 },
                         gradient: Array::new("3.parquet".to_owned(), 128),
                     }),
                 },

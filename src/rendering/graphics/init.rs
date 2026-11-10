@@ -81,7 +81,7 @@ impl<'a> Graphics<'a> {
                 apply_limit_buckets: false,
             })
             .await
-            .map_err(|e| anyhow!("No compatible GPU adapter found: {e:?}"))?;
+            .map_err(|e| anyhow!(tr!("err-gfx-no-adapter", error = format!("{e:?}"))))?;
 
         let adapter_info = adapter.get_info();
         userspace_log!(
@@ -154,7 +154,7 @@ impl<'a> Graphics<'a> {
                 required_limits,
                 label: None,
                 experimental_features,
-                memory_hints: wgpu::MemoryHints::default(),
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
                 trace: wgpu::Trace::Off,
             })
             .await?;
@@ -191,14 +191,14 @@ impl<'a> Graphics<'a> {
                     .copied()
                     .find(|format| matches!(*format, wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm))
             })
-            .ok_or_else(|| anyhow!("Surface reports no supported 8-bit sRGB-compatible format"))?;
+            .ok_or_else(|| anyhow!(tr!("err-gfx-no-surface-format")))?;
         let present_mode = surface_caps
             .present_modes
             .iter()
             .copied()
             .find(|m| *m == wgpu::PresentMode::Fifo)
             .or_else(|| surface_caps.present_modes.first().copied())
-            .ok_or_else(|| anyhow!("Surface reports no supported present modes"))?;
+            .ok_or_else(|| anyhow!(tr!("err-gfx-no-present-modes")))?;
         // What "vsync off" means on this adapter. Mailbox renders freely and
         // presents the newest frame each refresh, so it drops the wait without
         // tearing; Immediate is the tearing fallback. Neither is guaranteed -
@@ -208,17 +208,19 @@ impl<'a> Graphics<'a> {
             .into_iter()
             .find(|mode| surface_caps.present_modes.contains(mode));
         userspace_log!("{}", tr!("init-surface-present-mode", mode = format!("{present_mode:?}")));
-        let alpha_mode = surface_caps
-            .alpha_modes
-            .first()
-            .copied()
-            .ok_or_else(|| anyhow!("Surface reports no supported alpha modes"))?;
+        // Blended by its alpha only where the window cuts its own corners.
+        let corners_alpha_mode = window_corners::WindowCorners::alpha_mode(&window, &surface_caps);
+        let alpha_mode = match corners_alpha_mode {
+            Some(mode) => mode,
+            None => surface_caps.alpha_modes.first().copied().ok_or_else(|| anyhow!(tr!("err-gfx-no-alpha-modes")))?,
+        };
         // Scene shaders output linear colour and therefore render through an
         // sRGB view. egui applies gamma itself and renders through the base
         // unorm view of the same surface texture.
         let scene_format = surface_format.add_srgb_suffix();
         let gui_format = surface_format.remove_srgb_suffix();
         let view_formats = vec![if surface_format.is_srgb() { gui_format } else { scene_format }];
+        let window_corners = corners_alpha_mode.map(|_| window_corners::WindowCorners::new(&device, gui_format));
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -573,6 +575,7 @@ impl<'a> Graphics<'a> {
             entries: &[style_bind_group_layout_entry],
             label: Some("edge_style_bind_group_layout"),
         });
+        let section_cut_bind_group_layout = crate::rendering::scene::gpu_cache::section_cut_bind_group_layout(&device);
         // A cloud's style, plus one per-chunk draw uniform selected by dynamic
         // offset as each chunk is drawn (see `PointChunkDrawUniform`).
         let point_cloud_style_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -604,8 +607,7 @@ impl<'a> Graphics<'a> {
         let drill_hole_gpu = DrillHoleGpuCache::new(&device);
         let document_style = DocumentStyleGpu::new(&device);
         // wgpu handles are not Send or Sync on wasm, where nothing crosses threads.
-        #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
-        let scene_pipelines = Arc::new(scene_pipelines::create_scene_pipelines(
+        let scene_pipelines = Shared::new(scene_pipelines::create_scene_pipelines(
             &device,
             &scene_pipelines::ScenePipelineLayouts {
                 camera: &camera_bind_group_layout,
@@ -615,6 +617,7 @@ impl<'a> Graphics<'a> {
                 surface_chunk: &surface_chunk_bind_group_layout,
                 raster_surface: &raster_surface_bind_group_layout,
                 edge_style: &edge_style_bind_group_layout,
+                section_cut: &section_cut_bind_group_layout,
                 point_cloud_style: &point_cloud_style_bind_group_layout,
                 block_model_transparency_composite: &block_model_transparency_composite_bind_group_layout,
                 block_model_volume_upscale: &block_model_volume_upscale_bind_group_layout,
@@ -767,6 +770,7 @@ impl<'a> Graphics<'a> {
         let stroke_gpu = Self::create_stream_buffer(&device, "Stroke Instance Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let overlay_stroke_gpu = Self::create_stream_buffer(&device, "Editor Overlay Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let dynamic_stroke_gpu = Self::create_stream_buffer(&device, "Dynamic Scene Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
+        let flow_stroke_gpu = Self::create_stream_buffer(&device, "Haul Flow Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let text_vertex_gpu = Self::create_stream_buffer(&device, "Document Text Vertex Buffer", size_of::<Vertex>(), wgpu::BufferUsages::VERTEX);
         let text_index_gpu = Self::create_stream_buffer(&device, "Document Text Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
 
@@ -795,12 +799,14 @@ impl<'a> Graphics<'a> {
             surface_chunk_bind_group_layout,
             raster_surface_bind_group_layout,
             edge_style_bind_group_layout,
+            section_cut_bind_group_layout,
             point_cloud_style_bind_group_layout,
             lyon_vertex_gpu,
             lyon_index_gpu,
             stroke_gpu,
             overlay_stroke_gpu,
             dynamic_stroke_gpu,
+            flow_stroke_gpu,
             text_vertex_gpu,
             text_index_gpu,
             camera_buffer,
@@ -815,6 +821,7 @@ impl<'a> Graphics<'a> {
             scene_cache,
             scene_cache_blit_layout,
             scene_cache_blit_pipeline,
+            window_corners,
             no_vsync_present_mode,
             scene_cache_key: None,
             depth_texture,
@@ -855,6 +862,11 @@ impl<'a> Graphics<'a> {
             overlay_stroke_capacity: 1,
             dynamic_strokes: Vec::new(),
             dynamic_stroke_capacity: 1,
+            flow_strokes: Vec::new(),
+            flow_stroke_capacity: 1,
+            flow_underlay: 0,
+            flow_clock: web_time::Instant::now(),
+            machines: None,
             text_vertex_buf: Vec::new(),
             text_index_buf: Vec::new(),
             text_vertex_capacity: 1,
@@ -874,6 +886,8 @@ impl<'a> Graphics<'a> {
             document_style,
             document_object_ranges: Vec::new(),
             cached_bounds_document_revision: u64::MAX,
+            cached_bounds_surface_key: None,
+            haul_roads_in_bounds: false,
             cached_scene_bounds: None,
             cached_object_aabbs: Vec::new(),
             overlay_dirty: true,
@@ -896,12 +910,15 @@ impl<'a> Graphics<'a> {
             surface_render_stats: Default::default(),
             point_render_stats: Default::default(),
             chunk_bounds_outline: None,
-            plot_preview: None,
-            plot_preview_key: None,
             pending_screenshot: None,
+            camera_lock: None,
+            video_target: None,
             slice_preview: None,
             embedded_slice_preview: None,
             embedded_preview_scene_key: None,
+            solid_preview: None,
+            solid_preview_key: None,
+            solid_preview_framing: None,
             detached_preview_scene_key: None,
             #[cfg(not(target_arch = "wasm32"))]
             cinematic: None,

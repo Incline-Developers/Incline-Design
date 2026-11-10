@@ -2,6 +2,7 @@
 
 use egui::{Color32, Popup, PopupCloseBehavior, Response, Sense, Stroke, StrokeKind, Ui, color_picker::Alpha, ecolor::Hsva};
 
+use super::hint::Hint;
 use crate::{i18n::tr, rendering::color::COLOR_TABLE};
 
 const PALETTE_WIDTH: f32 = 275.0;
@@ -71,7 +72,7 @@ pub(crate) fn edit_srgba_unmultiplied(ui: &mut Ui, color: &mut [u8; 4]) -> Respo
 
 fn edit_button<T: Copy + PartialEq + Send + Sync + 'static>(ui: &mut Ui, value: &mut T, alpha: Alpha, decode: impl Fn(T) -> Hsva, encode: impl Fn(Hsva) -> T) -> Response {
     let (rect, mut response) = ui.allocate_exact_size(ui.spacing().interact_size, Sense::click());
-    response.widget_info(|| egui::WidgetInfo::new(egui::WidgetType::ColorButton));
+    response.widget_info(|| egui::WidgetInfo::new(egui::Role::ColorWell));
     let state_id = response.id.with("cad_color_state");
     let popup_id = response.id.with("cad_color_popup");
     let was_open = Popup::is_id_open(ui.ctx(), popup_id);
@@ -149,7 +150,7 @@ fn edit_button<T: Copy + PartialEq + Send + Sync + 'static>(ui: &mut Ui, value: 
         }
         if alpha != Alpha::Opaque {
             let mut opacity = egui::vec2(state.hsva.a, 0.5);
-            let response = color_gradient(ui, egui::vec2(PALETTE_WIDTH, 14.0), &mut opacity, |a, _| Hsva { a, ..state.hsva }.into()).on_hover_text(tr!("color-opacity"));
+            let response = color_gradient(ui, egui::vec2(PALETTE_WIDTH, 14.0), &mut opacity, |a, _| Hsva { a, ..state.hsva }.into());
             if response.changed() {
                 state.hsva.a = opacity.x;
                 changed = true;
@@ -173,7 +174,7 @@ fn edit_button<T: Copy + PartialEq + Send + Sync + 'static>(ui: &mut Ui, value: 
         ui.painter().rect_stroke(rect, rounding, visuals.bg_stroke, StrokeKind::Inside);
     }
     ui.ctx().data_mut(|data| data.insert_temp(state_id, state));
-    response.on_hover_text(tr!("color-edit"))
+    response
 }
 
 /// The graphical RGB controls without egui's representation/copy toolbar.
@@ -183,14 +184,13 @@ fn rgb_picker(ui: &mut Ui, hsva: &mut Hsva) -> bool {
     egui::color_picker::show_color(ui, Color32::from(*hsva), egui::vec2(PALETTE_WIDTH, 14.0));
     let mut gamma = HsvaGamma::from(*hsva);
     let mut sv = egui::vec2(gamma.s, 1.0 - gamma.v);
-    let square =
-        color_gradient(ui, egui::Vec2::splat(PALETTE_WIDTH), &mut sv, |s, y| HsvaGamma { s, v: 1.0 - y, a: 1.0, ..gamma }.into()).on_hover_text(tr!("color-saturation-value"));
+    let square = color_gradient(ui, egui::Vec2::splat(PALETTE_WIDTH), &mut sv, |s, y| HsvaGamma { s, v: 1.0 - y, a: 1.0, ..gamma }.into());
     if square.changed() {
         gamma.s = sv.x;
         gamma.v = 1.0 - sv.y;
     }
     let mut hue = egui::vec2(gamma.h, 0.5);
-    let hue_response = color_gradient(ui, egui::vec2(PALETTE_WIDTH, 14.0), &mut hue, |h, _| HsvaGamma { h, s: 1.0, v: 1.0, a: 1.0 }.into()).on_hover_text(tr!("color-hue"));
+    let hue_response = color_gradient(ui, egui::vec2(PALETTE_WIDTH, 14.0), &mut hue, |h, _| HsvaGamma { h, s: 1.0, v: 1.0, a: 1.0 }.into());
     if hue_response.changed() {
         gamma.h = hue.x;
     }
@@ -306,6 +306,6 @@ fn swatch(ui: &mut Ui, index: u8, selected: Option<u8>, size: egui::Vec2) -> Res
         ui.painter().rect_stroke(rect, 0.0, Stroke::new(3.0, Color32::BLACK), StrokeKind::Inside);
         ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::WHITE), StrokeKind::Inside);
     }
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected == Some(index), index.to_string()));
-    response.on_hover_text(tr!("color-aci-value", index = index.to_string()))
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected == Some(index), index.to_string()));
+    response.hint(tr!("color-aci-value", index = index.to_string()))
 }

@@ -28,6 +28,7 @@ use crate::{
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup, context_menu_separator},
             explorer::{ExplorerEntry, explorer_note, row_height, stripe_bands},
+            hint::Hint,
             menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldF64, MenuFieldText, committed},
             tree_row_colors,
         },
@@ -85,10 +86,10 @@ impl SurveyState {
             _ => DraftKind::Registry,
         };
         self.registry_code = match definition.as_ref().map(|d| &d.kind) {
-            Some(SystemKind::Registry { code }) => Some(*code),
+            Some(SystemKind::Registry { code }) => *code,
             _ => None,
         };
-        self.registry_query = String::new();
+        self.registry_query = self.registry_code.map(registry_label).unwrap_or_default();
         (self.parent, self.transform) = match definition.as_ref().map(|d| &d.kind) {
             Some(SystemKind::Grid { parent, transform }) => (Some(parent.clone()), *transform),
             _ => (None, MineGridTransform::default()),
@@ -110,9 +111,7 @@ impl SurveyState {
         let name = self.name.trim().to_owned();
         anyhow::ensure!(!name.is_empty(), "{}", tr!("survey-name-required"));
         let kind = match self.kind {
-            DraftKind::Registry => SystemKind::Registry {
-                code: self.registry_code.ok_or_else(|| anyhow::anyhow!("{}", tr!("survey-pick-registry")))?,
-            },
+            DraftKind::Registry => SystemKind::Registry { code: self.registry_code },
             DraftKind::Grid => {
                 self.transform.validate()?;
                 SystemKind::Grid {
@@ -167,16 +166,15 @@ fn origin_fields(ui: &mut egui::Ui, origin: &mut glam::DVec3) -> bool {
 ///
 /// It is saved immediately rather than held as a pending draft, so the list
 /// always shows exactly what the config holds and a half-finished entry cannot
-/// be stranded by closing the dialog. A site's own grid is the default, because
-/// it is what a project already has before anyone says anything about it.
+/// be stranded by closing the dialog. It starts as a registry entry with no
+/// system chosen.
 fn add_definition(state: &SurveyState, commands: &mut Vec<UiCommand>) {
     commands.push(UiCommand::SaveSurveyDefinition {
         target: None,
         definition: SystemDefinition {
             name: crate::model::project::unique_item_name(tr!("survey-new-system-name"), state.definitions.iter().map(|d| d.name.as_str())),
-            // WGS84: a real system, so a new row is never unsaveable, and the
-            // one everybody recognises well enough to know to change it.
-            kind: SystemKind::Registry { code: 4326 },
+            // Blank until the user picks one: any default would be a guess.
+            kind: SystemKind::Registry { code: None },
             axis_names: None,
         },
     });
@@ -197,13 +195,13 @@ fn draw_definition_list(ui: &mut egui::Ui, state: &SurveyState, commands: &mut V
     for definition in &state.definitions {
         let name = definition.name.clone();
         let local = state.local_system.as_ref() == Some(&name);
-        let mut entry = ExplorerEntry::new(ui.id().with(("survey_system", &name)), name.clone()).selected(state.editing_name.as_ref() == Some(&name));
+        let mut entry = ExplorerEntry::new(ui.scope_id().with(("survey_system", &name)), name.clone()).selected(state.editing_name.as_ref() == Some(&name));
         // The mine coordinate system is where the project's numbers already
         // are, so it is worth seeing without reading any of the fields.
         if local {
             entry = entry.leading_icon(unthemed_icon!("local_system.svg"), ui.visuals().strong_text_color());
         }
-        let response = entry.show(ui).response.on_hover_text(definition.summary());
+        let response = entry.show(ui).response.hint(definition.summary());
         if response.clicked() {
             select = Some(Some(name.clone()));
         }
@@ -254,30 +252,68 @@ fn draw_definition_list(ui: &mut egui::Ui, state: &SurveyState, commands: &mut V
 /// The searchable registry picker.
 fn registry_fields(ui: &mut egui::Ui, state: &mut SurveyState) -> bool {
     let mut landed = false;
-    if let Some(code) = state.registry_code {
-        menu::menu_note(ui, crs::registry_name(code).map_or_else(|| format!("EPSG:{code}"), |name| format!("{name}\nEPSG:{code}")));
-    }
-    MenuFieldText::new(tr!("survey-registry-search"), &mut state.registry_query)
+    let selected = state.registry_code.map(registry_label);
+    let (response, accepted) = MenuFieldText::new(tr!("survey-registry-search"), &mut state.registry_query)
         .hint_text(tr!("survey-registry-hint"))
-        .show(ui);
-    let query = state.registry_query.trim();
-    if query.is_empty() {
-        return landed;
-    }
-    // A short list, because a picker that returns four hundred rows is a list
-    // nobody reads. Narrowing is done by typing another word.
-    let hits = crs::search_registry(query, 12);
-    if hits.is_empty() {
-        menu::menu_note(ui, tr!("survey-registry-none"));
-    }
-    for code in hits {
-        let label = crs::registry_name(code).map_or_else(|| format!("EPSG:{code}"), |name| format!("{name}  ·  EPSG:{code}"));
-        if ui.add(MenuButton::new(label).enabled(state.registry_code != Some(code))).clicked() {
-            state.registry_code = Some(code);
-            landed = true;
+        .show_with_completions(ui, "survey_registry_search", |query| {
+            let query = query.text.trim();
+            // Nothing to offer before typing, or for the system the field
+            // already names.
+            if query.is_empty() || selected.as_deref() == Some(query) {
+                return Vec::new();
+            }
+            // A short list, because a picker that returns four hundred rows is
+            // a list nobody reads. Narrowing is done by typing another word.
+            crs::search_registry(query, 12)
+                .into_iter()
+                .map(|code| {
+                    let suggestion = egui::Suggestion::new(registry_label(code));
+                    match crs::registry_name(code) {
+                        Some(name) => suggestion.content(name.to_owned()).description(format!("EPSG:{code}")),
+                        None => suggestion,
+                    }
+                })
+                .collect()
+        });
+    if let Some(code) = accepted.and_then(|accepted| registry_code_in(&accepted.insert)) {
+        state.registry_code = Some(code);
+        landed = true;
+    } else if response.lost_focus() && selected.as_deref() != Some(state.registry_query.trim()) {
+        // Leaving the field keeps only a system it names: a typed code is
+        // taken, anything else clears the field rather than standing in for
+        // a choice that was never made.
+        match registry_code_in(&state.registry_query) {
+            Some(code) => {
+                state.registry_code = Some(code);
+                state.registry_query = registry_label(code);
+                landed = true;
+            }
+            None => {
+                landed |= state.registry_code.take().is_some();
+                state.registry_query.clear();
+            }
         }
     }
     landed
+}
+
+/// How a registry system reads in the search field: its name and code.
+fn registry_label(code: u16) -> String {
+    match crs::registry_name(code) {
+        Some(name) => format!("{name} · EPSG:{code}"),
+        None => format!("EPSG:{code}"),
+    }
+}
+
+/// The registry code `text` ends in - `28356`, `EPSG:28356`, or a whole
+/// [`registry_label`] - if the registry has it.
+fn registry_code_in(text: &str) -> Option<u16> {
+    let text = text.trim();
+    let code = text
+        .rsplit_once(':')
+        .map_or(text, |(prefix, code)| if prefix.to_ascii_lowercase().ends_with("epsg") { code } else { "" });
+    let code = code.trim().parse().ok()?;
+    crs::registry_name(code).is_some().then_some(code)
 }
 
 /// The selected system's fields.
@@ -316,7 +352,7 @@ fn draw_definition_page(ui: &mut egui::Ui, state: &mut SurveyState, commands: &m
                 .filter(|definition| Some(&definition.name) != state.editing_name.as_ref())
                 .map(|definition| (Some(definition.name.clone()), definition.name.clone().into()))
                 .collect();
-            let parent_text = state.parent.clone().unwrap_or_else(|| tr!("survey-pick-parent"));
+            let parent_text = state.parent.clone().unwrap_or_else(|| tr!("survey-choose-system"));
             landed |= MenuFieldCombo::new("survey-parent", tr!("survey-parent"), &mut state.parent, parent_text, options)
                 .show(ui)
                 .changed();
@@ -336,7 +372,6 @@ fn draw_definition_page(ui: &mut egui::Ui, state: &mut SurveyState, commands: &m
                 &MenuFieldF64::new(tr!("survey-scale"), &mut state.transform.scale, 0.0..=f64::MAX)
                     .speed(0.000001)
                     .max_decimals(10)
-                    .help_text(tr!("survey-scale-help"))
                     .show(ui),
             );
         }
@@ -419,7 +454,7 @@ pub(crate) fn draw_definitions_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             if let Some(row) = select {
                 state.edit_definition(row);
             }
-            if menu::dialog_cancel_pressed(ui.ctx()) {
+            if menu::dialog_cancelled(ui.ctx()) {
                 state.definitions_open = false;
             }
         });
@@ -439,6 +474,7 @@ pub(crate) fn draw_transform_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
             SceneEntityId::PointCloud(_) => 3,
             SceneEntityId::DrillHole(_) => 4,
             SceneEntityId::Raster(_) => 5,
+            SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) => continue,
         }] += 1;
     }
     let state = &mut editor.survey;
@@ -494,7 +530,7 @@ pub(crate) fn draw_transform_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
             }
             menu::menu_actions(ui, |ui| {
                 let enabled = has_project && count > 0 && plan.is_ok();
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("survey-transform-button")).primary().enabled(enabled)).clicked() || submitted) && enabled {
                     commands.push(UiCommand::TransformSurveySelection);
                     // The run is the end of the dialog's job: progress, the
@@ -505,7 +541,7 @@ pub(crate) fn draw_transform_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
                 if ui.add(MenuButton::new(tr!("survey-swap"))).clicked() {
                     std::mem::swap(&mut state.source_system, &mut state.target_system);
                 }
-                if ui.add(MenuButton::new(tr!("survey-close"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("survey-close"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     state.transform_open = false;
                 }
             });

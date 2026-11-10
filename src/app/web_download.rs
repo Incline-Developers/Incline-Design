@@ -23,8 +23,8 @@ extern "C" {
 
 pub(crate) fn download(file_name: &str, bytes: &[u8], mime_type: &str) -> Result<(), String> {
     if file_name.trim().is_empty() {
-        return Err("download filename is empty".to_owned());
+        return Err(crate::i18n::tr!("err-file-download-name-empty"));
     }
     let bytes = js_sys::Uint8Array::from(bytes);
-    trigger_browser_download(&bytes, file_name, mime_type).map_err(|error| format!("could not start browser download: {error:?}"))
+    trigger_browser_download(&bytes, file_name, mime_type).map_err(|error| crate::i18n::tr!("err-file-download-start-failed", error = format!("{error:?}")))
 }

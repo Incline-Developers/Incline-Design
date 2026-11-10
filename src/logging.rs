@@ -1,13 +1,9 @@
 //! Structured program logging and the in-app activity console.
 
-// The Windows-GNU `thread_local!` expansion triggers this lint inside the
-// standard-library macro even though the initializer is already const.
-#![cfg_attr(all(target_os = "windows", target_env = "gnu"), allow(clippy::missing_const_for_thread_local))]
-
 #[cfg(not(target_arch = "wasm32"))]
 use std::backtrace::Backtrace;
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::VecDeque,
     fmt,
     sync::{Arc, Mutex, OnceLock},
@@ -32,6 +28,13 @@ static RUNTIME_LOG: OnceLock<Mutex<RuntimeLog>> = OnceLock::new();
 thread_local! {
     static ACTIVE_REPORT: Cell<Option<ConsoleEntryId>> = const { Cell::new(None) };
     static PANIC_HOOK_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
+    static DEFERRED_REPORT: RefCell<Option<DeferredReport>> = const { RefCell::new(None) };
+}
+
+/// An activity that has not reported anything yet, and so has no row.
+struct DeferredReport {
+    spec: CommandReportSpec,
+    id: Option<ConsoleEntryId>,
 }
 
 /// Stable identity for one console activity.
@@ -48,7 +51,7 @@ pub(crate) enum ConsoleSeverity {
 }
 
 impl ConsoleSeverity {
-    const fn rank(self) -> u8 {
+    pub(crate) const fn rank(self) -> u8 {
         match self {
             Self::Info => 0,
             Self::Success => 1,
@@ -57,7 +60,7 @@ impl ConsoleSeverity {
         }
     }
 
-    fn escalate(self, other: Self) -> Self {
+    pub(crate) fn escalate(self, other: Self) -> Self {
         if other.rank() > self.rank() { other } else { self }
     }
 }
@@ -79,6 +82,10 @@ pub(crate) struct ConsoleEntry {
     pub(crate) summary: String,
     pub(crate) details: Vec<String>,
     pub(crate) state: ConsoleEntryState,
+    /// The open project it was logged under, by runtime id; zero before any.
+    scope: u32,
+    /// The console frame it was last written in; see `RuntimeLog::frame`.
+    written: u64,
     #[cfg(not(target_arch = "wasm32"))]
     started_at: web_time::Instant,
     dispatch_complete: bool,
@@ -100,6 +107,15 @@ struct RuntimeLog {
     revision: u64,
     next_id: u64,
     snapshot: Option<(u64, Arc<[ConsoleEntry]>)>,
+    /// The active project's runtime id, which new entries are logged under
+    /// and the console shows; zero while none is open.
+    scope: u32,
+    /// Every project the console has shown, so one appearing for the first
+    /// time can take the activity that opened it.
+    seen_scopes: Vec<u32>,
+    /// How many frames the console has looked at its scope in; zero before
+    /// the first. Entries carry the count they were last written in.
+    frame: u64,
 }
 
 impl RuntimeLog {
@@ -110,7 +126,33 @@ impl RuntimeLog {
             revision: 0,
             next_id: 1,
             snapshot: None,
+            scope: 0,
+            seen_scopes: Vec::new(),
+            frame: 0,
         }
+    }
+
+    /// Show `scope`'s entries from now on. A project shown for the first time
+    /// takes the activities still in progress and what was written since the
+    /// last frame - an opening finishes just before its project appears -
+    /// which is how the activity that opened it moves with it. What was logged
+    /// before the first frame is the app's own, and stays.
+    fn set_scope(&mut self, scope: u32) {
+        let previous = self.frame;
+        self.frame += 1;
+        if scope == self.scope {
+            return;
+        }
+        if scope != 0 && !self.seen_scopes.contains(&scope) {
+            self.seen_scopes.push(scope);
+            for entry in &mut self.entries {
+                if entry.state == ConsoleEntryState::Pending || (previous > 0 && entry.written >= previous) {
+                    entry.scope = scope;
+                }
+            }
+        }
+        self.scope = scope;
+        self.changed();
     }
 
     fn next_id(&mut self) -> ConsoleEntryId {
@@ -119,7 +161,8 @@ impl RuntimeLog {
         id
     }
 
-    fn push(&mut self, entry: ConsoleEntry) {
+    fn push(&mut self, mut entry: ConsoleEntry) {
+        entry.written = self.frame;
         self.bytes += entry.byte_len();
         self.entries.push_back(entry);
         self.trim();
@@ -132,6 +175,7 @@ impl RuntimeLog {
         };
         let old_len = self.entries[index].byte_len();
         update(&mut self.entries[index]);
+        self.entries[index].written = self.frame;
         let new_len = self.entries[index].byte_len();
         self.bytes = self.bytes.saturating_sub(old_len).saturating_add(new_len);
         self.trim();
@@ -157,7 +201,9 @@ impl RuntimeLog {
         {
             return Arc::clone(snapshot);
         }
-        let snapshot: Arc<[ConsoleEntry]> = self.entries.iter().cloned().collect();
+        // Entries logged before any project was open belong to the app and
+        // stay; another project's do not.
+        let snapshot: Arc<[ConsoleEntry]> = self.entries.iter().filter(|entry| entry.scope == self.scope || entry.scope == 0).cloned().collect();
         self.snapshot = Some((self.revision, Arc::clone(&snapshot)));
         snapshot
     }
@@ -210,6 +256,10 @@ fn standalone_title(target: Option<&str>, severity: ConsoleSeverity) -> String {
         tr!("logging-renderer")
     } else if target.contains("job") || target.contains("load") {
         tr!("common-background")
+    } else if target.contains("schedule") || target.contains("scip") {
+        // A Run refused or a schedule that could not be calculated: it is
+        // the schedule that is being spoken about.
+        tr!("planning-page-schedule")
     } else if severity == ConsoleSeverity::Error {
         tr!("logging-system-error")
     } else {
@@ -217,46 +267,32 @@ fn standalone_title(target: Option<&str>, severity: ConsoleSeverity) -> String {
     }
 }
 
-fn adjacent_standalone_group_id(log: &RuntimeLog, title: &str) -> Option<ConsoleEntryId> {
-    log.entries
-        .back()
-        .filter(|entry| entry.title == title && entry.state == ConsoleEntryState::Complete)
-        .map(|entry| entry.id)
-}
-
 fn append_record(message: String, severity: ConsoleSeverity, target: Option<&str>) {
-    let active = ACTIVE_REPORT.get();
+    let active = ACTIVE_REPORT.get().or_else(|| open_deferred_report(None));
     with_runtime_log(|log| {
         if let Some(id) = active {
             log.update(id, |entry| {
                 entry.severity = entry.severity.escalate(severity);
-                entry.summary = concise(&message);
+                entry.summary = concise(message.lines().next().unwrap_or_default());
                 entry.details.push(message);
             });
         } else {
-            let timestamp = timestamp();
-            let title = standalone_title(target, severity);
-            let grouped_id = adjacent_standalone_group_id(log, &title);
-            if let Some(id) = grouped_id {
-                log.update(id, |entry| {
-                    entry.severity = entry.severity.escalate(severity);
-                    if entry.details.is_empty() {
-                        entry.details.push(entry.summary.clone());
-                    }
-                    entry.details.push(message);
-                    entry.summary = tr!("logging-count-messages", count = entry.details.len().to_string());
-                });
-                return;
-            }
             let id = log.next_id();
+            // A message of several lines is summed up by its first: the
+            // rest is detail, unfolded beneath it.
+            let summary = concise(message.lines().next().unwrap_or_default());
+            // Keep the whole message when the summary had to shorten or flatten it.
+            let details = if summary == message { Vec::new() } else { vec![message] };
             log.push(ConsoleEntry {
                 id,
-                timestamp,
+                timestamp: timestamp(),
                 severity,
-                title,
-                summary: concise(&message),
-                details: Vec::new(),
+                title: standalone_title(target, severity),
+                summary,
+                details,
                 state: ConsoleEntryState::Complete,
+                scope: log.scope,
+                written: 0,
                 #[cfg(not(target_arch = "wasm32"))]
                 started_at: web_time::Instant::now(),
                 dispatch_complete: true,
@@ -300,6 +336,12 @@ pub(crate) fn init() -> LoggingGuard {
     let _ = runtime_log();
 
     let logs_dir = crate::app::io::data_path("logs").ok();
+    // The appender prunes old files by reading the folder as it is built,
+    // before its first write creates it: on a first launch that printed
+    // "Error reading the log directory/files".
+    if let Some(logs_dir) = &logs_dir {
+        let _ = std::fs::create_dir_all(logs_dir);
+    }
     let (file_layer, file_writer_guard) = if let Some(logs_dir) = logs_dir {
         let appender = tracing_appender::rolling::RollingFileAppender::builder()
             .rotation(tracing_appender::rolling::Rotation::DAILY)
@@ -395,6 +437,8 @@ pub(crate) fn begin_command_report(spec: CommandReportSpec) -> ConsoleEntryId {
             summary: spec.summary,
             details: Vec::new(),
             state: ConsoleEntryState::Pending,
+            scope: log.scope,
+            written: 0,
             #[cfg(not(target_arch = "wasm32"))]
             started_at: web_time::Instant::now(),
             dispatch_complete: false,
@@ -405,6 +449,45 @@ pub(crate) fn begin_command_report(spec: CommandReportSpec) -> ConsoleEntryId {
     });
     trace_activity_started(id, &title, &summary);
     id
+}
+
+/// Run a user action that reports under `spec`, but only if it reports
+/// anything: its row opens with its first message, so an action that has
+/// nothing to say leaves no row behind.
+///
+/// For actions that are often silent steps, such as a viewport tool taking a
+/// click. Messages they log while no other activity is open join the row
+/// named for them instead of a generic standalone one. Background work they
+/// start is not held open by it: a silent step that spawns a job would
+/// otherwise always leave a row.
+pub(crate) fn with_deferred_report<T>(spec: CommandReportSpec, operation: impl FnOnce() -> T) -> T {
+    let active = ACTIVE_REPORT.get();
+    let outer = DEFERRED_REPORT.replace(Some(DeferredReport { spec, id: None }));
+    let result = operation();
+    let opened = DEFERRED_REPORT.replace(outer).and_then(|deferred| deferred.id);
+    if let Some(id) = opened {
+        ACTIVE_REPORT.set(active);
+        finish_command_report(id, None);
+    }
+    result
+}
+
+/// Open the innermost deferred activity's row, named by `spec` when given,
+/// and route logging into it. `None` when there is no deferred activity or
+/// its row is already open.
+fn open_deferred_report(spec: Option<CommandReportSpec>) -> Option<ConsoleEntryId> {
+    let spec = DEFERRED_REPORT.with_borrow(|deferred| {
+        let deferred = deferred.as_ref().filter(|deferred| deferred.id.is_none())?;
+        Some(spec.unwrap_or_else(|| deferred.spec.clone()))
+    })?;
+    let id = begin_command_report(spec);
+    DEFERRED_REPORT.with_borrow_mut(|deferred| {
+        if let Some(deferred) = deferred {
+            deferred.id = Some(id);
+        }
+    });
+    ACTIVE_REPORT.set(Some(id));
+    Some(id)
 }
 
 /// Run work with logging routed into the given command entry.
@@ -558,10 +641,12 @@ pub(crate) fn finish_command_report(id: ConsoleEntryId, error: Option<&anyhow::E
 
 /// Record a completed action that was triggered outside the [`UiCommand`]
 /// dispatcher, such as a canvas-tool commit. If a command report is already
-/// active, the result is attached to it instead of creating a duplicate row.
+/// active, the result is attached to it instead of creating a duplicate row;
+/// a deferred one ([`with_deferred_report`]) opens under `spec`.
 pub(crate) fn report_completed_action(spec: CommandReportSpec, detail: impl Into<String>) {
     let detail = detail.into();
-    if ACTIVE_REPORT.get().is_some() {
+    // A deferred activity takes the action's own, more specific name.
+    if ACTIVE_REPORT.get().is_some() || open_deferred_report(Some(spec.clone())).is_some() {
         log_to_distributor(format_args!("{detail}"), ConsoleSeverity::Info, module_path!());
         return;
     }
@@ -640,6 +725,11 @@ pub(crate) fn retain_current_report() -> Option<ConsoleReportHandle> {
         log.update(id, |entry| entry.pending_children = entry.pending_children.saturating_add(1));
     });
     Some(ConsoleReportHandle { id, cancelled: false })
+}
+
+/// Show the console for the project with this runtime id (zero for none).
+pub(crate) fn set_console_scope(scope: u32) {
+    with_runtime_log(|log| log.set_scope(scope));
 }
 
 /// Immutable revision-cached data for the UI.

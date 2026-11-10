@@ -3,7 +3,7 @@
 use crate::{
     app::{App, jobs::JobKey},
     i18n::tr,
-    model::{ItemRef, OpenItem, project::ProjectItemState},
+    model::{Command, ItemRef, OpenItem, project::ProjectItemState},
     userspace_error,
 };
 
@@ -17,6 +17,7 @@ fn preserve_state(current: &ProjectItemState, replacement: &mut ProjectItemState
     let mut state = current.clone();
     state.deferred = replacement.deferred.take();
     state.summary = replacement.summary.take();
+    state.restored_from = replacement.restored_from.take();
     *replacement = state;
 }
 
@@ -56,6 +57,19 @@ impl<'a> App<'a> {
             OpenItem::BlockModel(mut item) => {
                 if let Some(target) = self.block_models.iter_mut().find(|target| target.id == item.id) {
                     preserve_state(&target.state, &mut item.state);
+                    // Reserve statistics are written only on the UI thread, so
+                    // the live model is never older than this snapshot. A scan
+                    // landing between an eviction's snapshot and its apply
+                    // would otherwise be wiped by the swap - along with the
+                    // request key that says it satisfied these inputs, which
+                    // turns the next unload/reload of an unloaded model into a
+                    // scan that never sticks.
+                    item.reserve_totals = std::mem::take(&mut target.reserve_totals);
+                    item.reserve_totals_key = target.reserve_totals_key;
+                    item.reserve_totals_data_key = target.reserve_totals_data_key;
+                    item.reserve_totals_awaiting_restore = target.reserve_totals_awaiting_restore;
+                    item.reserve_totals_error = std::mem::take(&mut target.reserve_totals_error);
+                    item.reserve_totals_error_key = target.reserve_totals_error_key;
                     *target = *item;
                 }
             }
@@ -122,9 +136,17 @@ impl<'a> App<'a> {
             self.set_item_style(item, style);
         }
         if !loaded {
+            self.scanned_model_kept_until = None;
             self.evict_unloaded_items();
             self.evict_unloaded_layers();
         }
+    }
+
+    /// [`Self::set_item_loaded`]'s unload as a command, for a tool that unloads
+    /// its sources in the same undo step as the result it made from them.
+    pub(crate) fn unload_item_command(&mut self, item: ItemRef) -> Option<Command> {
+        self.cancel_jobs(|key| matches!(key, JobKey::Residency { item: pending, restoring: true, .. } if *pending == item));
+        self.item_style_command(item, |style| style.with_loaded(false))
     }
 
     /// The explorer's eye on a project item: hiding leaves it loaded, and
@@ -172,7 +194,7 @@ impl<'a> App<'a> {
                 let mut restored = Vec::new();
                 for item in items {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     restored.push(item.materialize()?);
                 }
@@ -191,8 +213,26 @@ impl<'a> App<'a> {
         true
     }
 
+    /// Whether a Setup run is under way. Its steps read the same items one
+    /// after another, so an unloaded item restored for one step stays resident
+    /// until the run ends, rather than being written out and read back
+    /// between steps. [`Self::release_pipeline_residency`] unloads it then.
+    fn pipeline_holds_residency(&self) -> bool {
+        self.planning_pipeline.as_ref().is_some_and(|pipeline| pipeline.is_running())
+            || self.schedule_pipeline.as_ref().is_some_and(|pipeline| pipeline.is_running())
+            || self.haulage_pipeline.as_ref().is_some_and(|pipeline| pipeline.is_running())
+    }
+
+    /// Unload what a Setup run kept resident, once the last one has finished.
+    pub(crate) fn release_pipeline_residency(&mut self) {
+        let held = self.pipeline_holds_residency();
+        if std::mem::replace(&mut self.residency_held_by_pipeline, held) && !held {
+            self.evict_unloaded_items();
+        }
+    }
+
     pub(crate) fn evict_unloaded_items(&mut self) {
-        if self.restore_pending() {
+        if self.restore_pending() || self.pipeline_holds_residency() {
             return;
         }
         let Some(runtime_id) = self.workspace.active_project().map(|project| project.runtime_id) else {
@@ -207,6 +247,7 @@ impl<'a> App<'a> {
             .chain(self.point_clouds.iter().map(|item| ItemRef::PointCloud(item.id)))
             .chain(self.raster_textures.iter().map(|item| ItemRef::Raster(item.id)))
             .filter(|item| self.project_item_state(*item).is_some_and(|state| !state.loaded && state.deferred.is_none()))
+            .filter(|item| !(matches!(item, ItemRef::BlockModel(_)) && self.scanned_model_kept_until.is_some()))
             .collect();
         for item in items {
             let Some(snapshot) = self.clone_project_item(item) else {
@@ -226,7 +267,7 @@ impl<'a> App<'a> {
                 vec![key],
                 move |cancel, progress| {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     snapshot.evict(&progress.phase(0.0, 1.0))
                 },
@@ -278,7 +319,7 @@ impl<'a> App<'a> {
                 let mut restored = Vec::new();
                 for (id, stored) in layers {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     restored.push((id, stored.read(id)?));
                 }
@@ -345,7 +386,7 @@ impl<'a> App<'a> {
                 let mut stored = Vec::new();
                 for (id, payload) in payloads {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     stored.push((id, payload.store()?));
                 }
@@ -400,7 +441,7 @@ impl<'a> App<'a> {
                 let mut archived = Vec::new();
                 for request in requests {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     archived.push(request.write()?);
                 }
@@ -454,7 +495,7 @@ impl<'a> App<'a> {
                 let mut restored = Vec::new();
                 for (sequence, path, backing) in requests {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     restored.push(crate::model::history_storage::ArchivedCommand {
                         sequence,

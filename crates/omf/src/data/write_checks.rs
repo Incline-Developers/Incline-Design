@@ -1,13 +1,12 @@
 use std::collections::HashSet;
 
+use super::NumberType;
 use crate::{
     SubblockMode,
     array::{Array, ArrayType, Constraint},
     error::InvalidData,
     validate::Reason,
 };
-
-use super::NumberType;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ArrayWriteCheck {
@@ -25,15 +24,10 @@ impl ArrayWriteCheck {
             (Self::MinimumScalar(min), Constraint::Size) => {
                 // Check that minimum scalar value is not zero or less.
                 if *min <= 0.0 {
-                    return Err(Reason::InvalidData(InvalidData::SizeZeroOrLess {
-                        value: *min,
-                    }));
+                    return Err(Reason::InvalidData(InvalidData::SizeZeroOrLess { value: *min }));
                 }
             }
-            (
-                Self::MaximumIndex(max_index),
-                Constraint::Segment(count) | Constraint::Triangle(count) | Constraint::Index(count),
-            ) => {
+            (Self::MaximumIndex(max_index), Constraint::Segment(count) | Constraint::Triangle(count) | Constraint::Index(count)) => {
                 // Check the maximum index against the vertex count.
                 if u64::from(*max_index) >= *count {
                     return Err(Reason::InvalidData(InvalidData::IndexOutOfRange {
@@ -42,11 +36,7 @@ impl ArrayWriteCheck {
                     }));
                 }
             }
-            (
-                Self::Subblocks(maximum_parents),
-                Constraint::RegularSubblock { block_count, .. }
-                | Constraint::FreeformSubblock { block_count, .. },
-            ) => {
+            (Self::Subblocks(maximum_parents), Constraint::RegularSubblock { block_count, .. } | Constraint::FreeformSubblock { block_count, .. }) => {
                 // Check parent block indices against the block count.
                 for (i, parent) in maximum_parents.iter().enumerate() {
                     if parent[i] >= block_count[i] {
@@ -57,41 +47,29 @@ impl ArrayWriteCheck {
                     }
                 }
             }
-            (
-                Self::RegularSubblocksMaximum(maximums),
-                Constraint::RegularSubblock { subblock_count, .. },
-            ) => {
+            (Self::RegularSubblocksMaximum(maximums), Constraint::RegularSubblock { subblock_count, .. }) => {
                 // Check regular sub-block indices against the sub-block count.
                 for (i, corners) in maximums.iter().enumerate() {
                     if corners[i + 3] > subblock_count[i] {
-                        return Err(Reason::InvalidData(
-                            InvalidData::RegularSubblockOutsideParent {
-                                corners: *corners,
-                                maximum: *subblock_count,
-                            },
-                        ));
+                        return Err(Reason::InvalidData(InvalidData::RegularSubblockOutsideParent {
+                            corners: *corners,
+                            maximum: *subblock_count,
+                        }));
                     }
                 }
             }
             (
                 Self::RegularSubblockCorners(all_corners),
                 Constraint::RegularSubblock {
-                    subblock_count,
-                    mode: Some(mode),
-                    ..
+                    subblock_count, mode: Some(mode), ..
                 },
             ) => {
                 // Check regular sub-block indices against the sub-block count.
                 let valid_sizes = valid_subblock_sizes(*mode, *subblock_count);
                 for corners in all_corners {
                     let size = std::array::from_fn(|i| corners[i + 3] - corners[i]);
-                    if !valid_sizes.contains(&size)
-                        || (*mode == SubblockMode::Octree && !subblock_is_octree_compat(corners))
-                    {
-                        return Err(Reason::InvalidData(InvalidData::RegularSubblockNotInMode {
-                            corners: *corners,
-                            mode: *mode,
-                        }));
+                    if !valid_sizes.contains(&size) || (*mode == SubblockMode::Octree && !subblock_is_octree_compat(corners)) {
+                        return Err(Reason::InvalidData(InvalidData::RegularSubblockNotInMode { corners: *corners, mode: *mode }));
                     }
                 }
             }
@@ -109,10 +87,7 @@ pub(crate) fn subblock_is_octree_compat(corners: &[u32; 6]) -> bool {
     (0..3).all(|i| corners[i].is_multiple_of(corners[i + 3] - corners[i]))
 }
 
-pub(crate) fn valid_subblock_sizes(
-    mode: SubblockMode,
-    subblock_count: [u32; 3],
-) -> HashSet<[u32; 3]> {
+pub(crate) fn valid_subblock_sizes(mode: SubblockMode, subblock_count: [u32; 3]) -> HashSet<[u32; 3]> {
     let mut valid_sizes = HashSet::new();
     match mode {
         SubblockMode::Octree => {
@@ -160,10 +135,7 @@ impl MaximumIndex {
     }
 
     pub fn get(self) -> Vec<ArrayWriteCheck> {
-        self.0
-            .map(ArrayWriteCheck::MaximumIndex)
-            .into_iter()
-            .collect()
+        self.0.map(ArrayWriteCheck::MaximumIndex).into_iter().collect()
     }
 }
 
@@ -191,10 +163,7 @@ pub(crate) struct IncreasingBoundary<T> {
 
 impl<T: NumberType> IncreasingBoundary<T> {
     pub fn new() -> Self {
-        Self {
-            previous: None,
-            ok: true,
-        }
+        Self { previous: None, ok: true }
     }
 
     pub fn visit(&mut self, value: T) -> T {
@@ -222,9 +191,7 @@ pub(crate) struct ParentIndices {
 
 impl ParentIndices {
     pub fn new() -> Self {
-        Self {
-            maximums: [[0; 3]; 3],
-        }
+        Self { maximums: [[0; 3]; 3] }
     }
 
     pub fn visit<T: Copy + Into<u32>>(&mut self, value: [T; 3]) {
@@ -308,9 +275,7 @@ impl RegularCorners {
             ArrayWriteCheck::RegularSubblockCorners(self.corners),
         ];
         if let Some(corners) = self.invalid_size {
-            out.push(ArrayWriteCheck::Invalid(
-                InvalidData::RegularSubblockZeroSize { corners },
-            ));
+            out.push(ArrayWriteCheck::Invalid(InvalidData::RegularSubblockZeroSize { corners }));
         }
         out
     }

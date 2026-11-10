@@ -1,0 +1,705 @@
+//! The Schedule workspace's Setup: the loader fleet.
+//!
+//! Two editable lists and a name. *Loader Classes* are machine types with a
+//! dig rate; *Loader Agents* are the machines on site, each of one class and
+//! taking its rate from that class - so a rate typed once applies to every
+//! machine of that type, and the Gantt gains a row the moment an agent is
+//! added.
+//!
+//! Nothing here computes: the lists are configuration, and editing them can
+//! neither run the Solids pipeline nor move its completion markers.
+
+use crate::{
+    i18n::tr,
+    model::{Document, ReserveField, schedule::SchedulePlan},
+    ui::{
+        EditorState,
+        fonts::bold,
+        state::{ScheduleAgentDraft, ScheduleClassDraft, ScheduleEdit, ScheduleNameDraft, ScheduleStep, UiCommand},
+        widgets::{
+            context_menu::{ContextMenuAction, context_menu_popup},
+            data_grid::{
+                DataGrid, GridDrag, GridRow, PropertyTable, grid_add_action_row, grid_empty_state, grid_group_row, grid_group_row_draggable, grid_row, property_table_height,
+            },
+            explorer::ExplorerEntry,
+            hint::Hint,
+        },
+    },
+};
+
+/// Preserve the stored rate, including small or fractional rates.
+fn rate_text(rate: f64) -> String {
+    rate.to_string()
+}
+
+fn rate_with_unit(rate: f64) -> String {
+    format!("{} {}", rate_text(rate), tr!("schedule-tph"))
+}
+
+/// Parse a typed dig rate, or say what is wrong with it.
+///
+/// Separate from the domain's own check so the field can explain an entry
+/// that is not a number at all, which never reaches the domain.
+fn parse_rate(text: &str) -> Result<f64, String> {
+    let Ok(value) = text.trim().parse::<f64>() else {
+        return Err(tr!("schedule-rate-not-a-number"));
+    };
+    if !value.is_finite() || value <= 0.0 {
+        return Err(crate::model::schedule::ScheduleError::InvalidRate.message());
+    }
+    Ok(value)
+}
+
+/// A loader's spot time: any number of seconds, none included.
+fn parse_spot_time(text: &str) -> Result<f64, String> {
+    text.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+        .ok_or_else(|| tr!("schedule-spot-time-invalid"))
+}
+
+/// Why this name cannot be committed, for the inline badge beside it. The
+/// command layer checks the same rules; this is so the user is told before
+/// pressing anything rather than after.
+pub(crate) fn name_problem(name: &str, taken: impl Iterator<Item = String>) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Some(crate::model::schedule::ScheduleError::EmptyName.message());
+    }
+    taken
+        .into_iter()
+        .any(|other| other.trim().eq_ignore_ascii_case(trimmed))
+        .then(|| crate::model::schedule::ScheduleError::DuplicateName(trimmed.to_owned()).message())
+}
+
+/// The Schedule Setup step tree.
+///
+/// A flat list of four steps with the same badges, the same connecting line
+/// and the same context menu as the Solids page's, because it is the same kind
+/// of thing: an explicitly executed pipeline, not a category tree. The Site
+/// Data grouping the fleet lists used to sit under is gone with it - a step
+/// that can be marked Complete, Stale or Failed belongs in the chain that
+/// marks it.
+///
+/// Dig sequences are deliberately absent. An ordered run of ground belongs to
+/// the Gantt bar that works it, and is authored there; a second list of them
+/// here would be a second place the same thing could be edited.
+pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    let open = editor.setup_group == crate::ui::state::SetupGroup::Schedule;
+    let mut step = open.then_some(editor.schedule_setup_step);
+    let mut markers = Vec::with_capacity(ScheduleStep::ALL.len());
+    for entry in ScheduleStep::ALL {
+        let status = &editor.schedule_stages[entry.index()];
+        let empty = super::planning_setup::schedule_stage_empty(editor, entry);
+        ui.horizontal(|ui| {
+            ui.add_space(ui.spacing().indent);
+            let entry_response = ExplorerEntry::new(egui::Id::unique(entry.tree_id()), bold(&entry.label()))
+                .leading_icon(super::planning_setup::StepBadge::of_schedule_step(editor, entry).icon(), egui::Color32::WHITE)
+                .header_aligned_icon()
+                .selected(step == Some(entry))
+                .show(ui);
+            if let Some(rect) = entry_response.icon_rect {
+                markers.push((rect, if empty { crate::app::planning_pipeline::StageState::NotRun } else { status.state }));
+            }
+            // The badge's reason, where the badge is.
+            let response = entry_response.response.hint_ui(|ui| {
+                if empty {
+                    ui.label(bold(&tr!("stage-state-empty")));
+                    ui.label(tr!("stage-empty-hint"));
+                } else {
+                    super::planning_setup::stage_tooltip_parts(ui, status.state, status.blocked_by.map(ScheduleStep::label), status.message.as_deref(), &status.diagnostics);
+                }
+            });
+            if response.clicked() {
+                step = Some(entry);
+            }
+            super::planning_setup::draw_stage_menu(
+                &response,
+                entry.label(),
+                editor.schedule_run_active,
+                [UiCommand::RunScheduleStage(entry), UiCommand::RunAllScheduleStages, UiCommand::CancelScheduleRun],
+                commands,
+            );
+        });
+    }
+    super::planning_setup::paint_step_links(ui, &markers);
+    // Set rather than opened: `open_schedule_step` sends Road Access on to
+    // what repairs it, and a click in the list means this step.
+    if let Some(step) = step.filter(|step| !open || *step != editor.schedule_setup_step) {
+        editor.setup_group = crate::ui::state::SetupGroup::Schedule;
+        editor.schedule_setup_step = step;
+    }
+}
+
+/// The Scheduling Readiness step: what the last completed run checked, and
+/// what the Gantt would be told if it asked to calculate right now.
+///
+/// Reports; it never runs anything. A held result stays on screen after an
+/// edit retires it, labelled as belonging to the run that produced it - a
+/// result that vanished on the first edit would leave the page with nothing to
+/// say about what was checked.
+pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, document: &Document) {
+    use crate::app::planning_pipeline::StageState;
+
+    let status = &editor.schedule_stages[ScheduleStep::Readiness.index()];
+    let summary = status.last_success.as_ref();
+    let field = plan
+        .tonnage_field()
+        .map(|id| {
+            document
+                .reserve_fields()
+                .iter()
+                .find(|field| field.id == id)
+                .map_or_else(|| tr!("sequence-tonnage-field-missing"), |field| field_option_label(document, field))
+        })
+        .unwrap_or_else(|| tr!("schedule-tonnage-field-none"));
+    let calculation = if editor.schedule_calculation_blocked.is_some() {
+        tr!("schedule-readiness-not-ready")
+    } else {
+        tr!("schedule-readiness-ready")
+    };
+    // Every step passed, so what is left to do is on the Gantt.
+    let checks_passed = status.state == StageState::Complete;
+    let blocks = summary.map_or_else(|| String::from("—"), |summary| summary.entities.to_string());
+
+    let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 4).min(rect.height())));
+    PropertyTable::new("schedule_readiness", table_rect, &ScheduleStep::Readiness.label()).show(ui, |rows| {
+        rows.header(&tr!("planning-property"), &tr!("planning-value"));
+        rows.readonly(&tr!("schedule-readiness-calculation"), &calculation, None, None);
+        rows.readonly(&tr!("schedule-readiness-tonnage-field"), &field, None, None);
+        rows.readonly(&tr!("schedule-readiness-blocks"), &blocks, None, None);
+    });
+
+    // Everything the step had to say, in full, and then why the Gantt would
+    // not calculate.
+    let mut open_gantt = false;
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left() + 8.0, table_rect.bottom() + 8.0), egui::pos2(rect.right() - 8.0, rect.bottom()));
+    if !body.is_positive() {
+        return;
+    }
+    ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(body));
+        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+            // A failure with one problem says that problem, listed below.
+            if let Some(message) = status.message.as_ref().filter(|message| !status.diagnostics.iter().any(|entry| entry.line() == **message)) {
+                ui.add(egui::Label::new(egui::RichText::new(message).color(ui.visuals().error_fg_color)).wrap());
+            }
+            for entry in &status.diagnostics {
+                let text = entry.line();
+                let color = if entry.blocking { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
+                ui.add(egui::Label::new(egui::RichText::new(text).color(color)).wrap());
+            }
+            if let Some(reason) = &editor.schedule_calculation_blocked {
+                ui.add_space(8.0);
+                ui.add(egui::Label::new(bold(reason)).wrap());
+                if checks_passed {
+                    ui.add_space(6.0);
+                    open_gantt = ui.add(crate::ui::widgets::menu::MenuButton::new(tr!("schedule-readiness-open-gantt"))).clicked();
+                }
+            }
+        });
+    });
+    if open_gantt {
+        editor.planning_view = crate::ui::state::PlanningView::Gantt;
+    }
+}
+
+/// The Solids step's settings: how many dig blocks the run made, and whether
+/// those no block model reaches count as 0 t. What the step found is listed
+/// beneath.
+pub(crate) fn draw_solids_tonnage(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let status = &editor.schedule_stages[ScheduleStep::Solids.index()];
+    let blocks = status.last_seen.map_or_else(|| String::from("—"), |count| count.to_string());
+    let counted = plan.unmeasured_as_zero() && status.last_success.is_some();
+    let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 2 + usize::from(counted)).min(rect.height())));
+    PropertyTable::new("schedule_solids", table_rect, &tr!("schedule-solids-tonnage")).show(ui, |rows| {
+        rows.readonly(&tr!("schedule-readiness-blocks"), &blocks, None, None);
+        let mut zero = plan.unmeasured_as_zero();
+        if rows.checkbox(&tr!("schedule-unmeasured-as-zero"), &mut zero).changed() {
+            commands.push(UiCommand::schedule(session, ScheduleEdit::SetUnmeasuredAsZero(zero)));
+        }
+        if counted {
+            rows.readonly(&tr!("schedule-blocks-zero"), &editor.schedule_zero_blocks.to_string(), None, None);
+        }
+    });
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left() + 8.0, table_rect.bottom() + 8.0), egui::pos2(rect.right() - 8.0, rect.bottom()));
+    if !body.is_positive() {
+        return;
+    }
+    ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(body));
+        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+            // A failure with one problem says that problem, listed below.
+            if let Some(message) = status.message.as_ref().filter(|message| !status.diagnostics.iter().any(|entry| entry.line() == **message)) {
+                ui.add(egui::Label::new(egui::RichText::new(message).color(ui.visuals().weak_text_color())).wrap());
+            }
+            for entry in &status.diagnostics {
+                let text = entry.line();
+                let color = if entry.blocking { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
+                ui.add(egui::Label::new(egui::RichText::new(text).color(color)).wrap());
+            }
+            // A count says how many; the ground says which. Reserves shows
+            // the whole site with these blocks marked and the view on them.
+            if !editor.schedule_unmeasured_blocks.is_empty() {
+                ui.add_space(6.0);
+                if ui.add(crate::ui::widgets::menu::MenuButton::new(tr!("schedule-blocks-show-unmeasured"))).clicked() {
+                    editor.solids_view_marked = editor.schedule_unmeasured_blocks.clone();
+                    editor.solids_view_frame_marked = true;
+                    editor.solids_view_selection.clear();
+                    editor.selected_dig_blocks.clear();
+                    editor.selected_blast = None;
+                    commands.push(UiCommand::SetPlanningView(crate::ui::state::PlanningView::Reserves));
+                }
+            }
+        });
+    });
+}
+
+/// One field as the tonnage combo lists it: its name and how it aggregates,
+/// because only a summed field can be read as tonnes and the choice should
+/// not look like it can.
+fn field_option_label(document: &Document, field: &ReserveField) -> String {
+    format!("{} · {}", field.name, super::planning_setup::aggregation_label(document, &field.aggregation))
+}
+
+/// The schedule's own settings: what it is called, how far it runs, which
+/// reserve field is read as tonnes and which grades it carries, with the
+/// settings few projects need to change set apart beneath.
+///
+/// The tonnage field is chosen, never guessed: the combo offers "Not chosen"
+/// and every field in the project's Field List with its aggregation beside it.
+/// It stays here, ahead of every other step, because the grades it weights -
+/// and the Stockpiles step's opening lots - are read against it.
+pub(crate) fn draw_configuration(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    editor: &mut EditorState,
+    plan: &SchedulePlan,
+    document: &Document,
+    session: u32,
+    commands: &mut Vec<UiCommand>,
+) {
+    // General, then Advanced, each as tall as its rows and the two scrolling
+    // as one, parted by a single rule.
+    crate::ui::widgets::data_grid::table_stack(ui, rect, "schedule_configuration", |ui| {
+        use crate::ui::widgets::data_grid::stack_slot;
+        draw_general_table(ui, stack_slot(ui), editor, plan, document, session, commands);
+        super::schedule_optimisation::draw_advanced(ui, stack_slot(ui), editor, plan, session, commands);
+    });
+}
+
+fn draw_general_table(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, session: u32, commands: &mut Vec<UiCommand>) {
+    if editor.schedule_name_draft.as_ref().is_none_or(|draft| draft.source != plan.name) {
+        editor.schedule_name_draft = Some(ScheduleNameDraft {
+            source: plan.name.clone(),
+            text: plan.name.clone(),
+        });
+    }
+    let mut edits = Vec::new();
+    let no_fields = document.reserve_fields().is_empty();
+    // The horizon is the Periods step's, as the dates it runs between.
+    PropertyTable::new("schedule_configuration", rect, &tr!("schedule-general")).show(ui, |rows| {
+        rows.header(&tr!("planning-property"), &tr!("planning-value"));
+        let draft = editor.schedule_name_draft.as_mut().expect("just ensured");
+        let response = rows.field(&tr!("planning-schedule-name"), &mut draft.text, None);
+        if response.lost_focus() && draft.text.trim() != plan.name {
+            edits.push(UiCommand::schedule(session, ScheduleEdit::SetName(draft.text.trim().to_owned())));
+        }
+        let mut tonnage = plan.tonnage_field();
+        let selected_text = tonnage
+            .and_then(|id| document.reserve_fields().iter().find(|field| field.id == id))
+            .map(|field| field_option_label(document, field))
+            .or_else(|| tonnage.map(|_| tr!("sequence-tonnage-field-missing")))
+            .unwrap_or_else(|| tr!("schedule-tonnage-field-none"));
+        let response = rows.combo(
+            "schedule_tonnage_field",
+            &tr!("schedule-tonnage-field"),
+            &mut tonnage,
+            &selected_text,
+            std::iter::once((None, tr!("schedule-tonnage-field-none"))).chain(
+                document
+                    .reserve_fields()
+                    .iter()
+                    // Tonnes add up. One already chosen stays listed so the box
+                    // can show what the plan holds.
+                    .filter(|field| field.aggregation == crate::model::ReserveAggregation::Sum || Some(field.id) == plan.tonnage_field())
+                    .map(|field| (Some(field.id), field_option_label(document, field))),
+            ),
+        );
+        if response.changed() && tonnage != plan.tonnage_field() {
+            edits.push(UiCommand::schedule(session, ScheduleEdit::SetTonnageField(tonnage)));
+        }
+        super::schedule_optimisation::grades_row(rows, plan, document, session, &mut edits);
+        if no_fields {
+            rows.readonly("", &tr!("schedule-tonnage-field-no-fields"), None, None);
+        }
+    });
+    commands.extend(edits);
+}
+
+/// The Loader Classes list. Selecting one drives the property table beside it.
+pub(crate) fn draw_class_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let mut selected = editor.schedule_selected_class;
+    let new_class = tr!("schedule-new-class");
+    let mut add = false;
+    let added = DataGrid::new("schedule_class_list", rect, &tr!("schedule-loader-classes"))
+        .column_header(&tr!("planning-name"))
+        .add_button(&new_class, &mut add)
+        .show(ui, |ui| {
+            if plan.classes().is_empty() {
+                return grid_empty_state(ui, &tr!("schedule-no-class-list"), Some(&new_class));
+            }
+            // Grouped as the machines are, so a class sits with the
+            // machines it makes.
+            for kind in plan.machine_groups() {
+                let classes: Vec<_> = plan.ordered_classes().into_iter().filter(|class| class.kind == kind).collect();
+                if classes.is_empty() {
+                    continue;
+                }
+                if !grid_group_row(ui, ("schedule_class_group", kind), &kind.group_label(), &classes.len().to_string(), 0) {
+                    continue;
+                }
+                for class in classes {
+                    let rate = if class.kind.is_drill_blast() {
+                        format!("{} {}", rate_text(class.default_dig_rate_tph), class.kind.rate_unit())
+                    } else {
+                        rate_with_unit(class.default_dig_rate_tph)
+                    };
+                    let label = format!("{} · {}", class.name, rate);
+                    let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(class.id)));
+                    if response.clicked() {
+                        selected = Some(class.id);
+                    }
+                    // Offered but greyed while machines use it, with the
+                    // reason: deleting would leave them without a class.
+                    let users: Vec<String> = plan.agents_of(class.id).map(|agent| agent.name.clone()).collect();
+                    context_menu_popup(&response, &class.name, |ui| {
+                        let delete = ContextMenuAction::new(tr!("schedule-delete-class")).enabled(users.is_empty()).show(ui);
+                        if delete.clicked() {
+                            commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteClass(class.id)));
+                            ui.close();
+                        }
+                        delete.disabled_hint(tr!("schedule-error-class-in-use", agents = users.join(", ")));
+                    });
+                }
+            }
+            grid_add_action_row(ui, &new_class)
+        });
+    let open_dialog = add || added;
+    // The page opens on a class rather than on an empty pane.
+    if selected.is_none_or(|id| plan.class(id).is_none()) {
+        selected = plan.ordered_classes().first().map(|class| class.id);
+    }
+    if editor.schedule_selected_class != selected {
+        // A different class is being edited; its cells replace whatever was
+        // half-typed into the previous one.
+        editor.schedule_class_draft = None;
+    }
+    editor.schedule_selected_class = selected;
+    if open_dialog && !editor.new_loader_class_open {
+        // Seeded as the dialog opens, not while it is on screen: a name
+        // refilled every frame could never be cleared and retyped.
+        editor.new_loader_class_name = suggested_class_name(plan);
+        editor.new_loader_class_rate.clear();
+        editor.new_loader_class_open = true;
+    }
+}
+
+/// The selected class's editable cells: its name, and the rate every machine
+/// of this type digs at.
+pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let Some(class) = editor.schedule_selected_class.and_then(|id| plan.class(id)) else {
+        PropertyTable::new("schedule_class_properties", rect, &tr!("schedule-loader-classes")).show(ui, |rows| {
+            rows.header(&tr!("planning-property"), &tr!("planning-value"));
+            rows.readonly(&tr!("planning-name"), &tr!("schedule-select-class"), None, None);
+        });
+        return;
+    };
+    let source = (class.name.clone(), class.default_dig_rate_tph, class.default_reclaim_rate_tph, class.spot_time_s);
+    if editor.schedule_class_draft.as_ref().is_none_or(|draft| draft.id != class.id || draft.source != source) {
+        editor.schedule_class_draft = Some(ScheduleClassDraft {
+            id: class.id,
+            name: source.0.clone(),
+            rate: source.1.to_string(),
+            reclaim_rate: source.2.to_string(),
+            spot_time: class.spot_time_s.to_string(),
+            source,
+        });
+    }
+    let draft = editor.schedule_class_draft.as_mut().expect("just ensured");
+    let name_error = name_problem(&draft.name, plan.classes().iter().filter(|other| other.id != class.id).map(|other| other.name.clone()));
+    let rate_error = parse_rate(&draft.rate).err();
+    let reclaim_error = parse_rate(&draft.reclaim_rate).err();
+    let spot_error = parse_spot_time(&draft.spot_time).err();
+    let users = plan.agents_of(class.id).count();
+    let mut edits = Vec::new();
+    PropertyTable::new("schedule_class_properties", rect, &class.name).show(ui, |rows| {
+        rows.header(&tr!("planning-property"), &tr!("planning-value"));
+        let name = rows.field(&tr!("planning-name"), &mut draft.name, name_error.as_deref());
+        if name.lost_focus()
+            && name_problem(&draft.name, plan.classes().iter().filter(|other| other.id != class.id).map(|other| other.name.clone())).is_none()
+            && draft.name.trim() != class.name
+        {
+            edits.push(UiCommand::schedule(
+                session,
+                ScheduleEdit::RenameClass {
+                    class: class.id,
+                    name: draft.name.trim().to_owned(),
+                },
+            ));
+        }
+        let mut kind = class.kind;
+        let kind_label = kind.label();
+        if rows
+            .combo(
+                ("schedule_class_kind", class.id),
+                &tr!("machine-kind"),
+                &mut kind,
+                &kind_label,
+                crate::model::schedule::MachineKind::ALL.map(|kind| (kind, kind.label())),
+            )
+            .changed()
+        {
+            edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassKind { class: class.id, kind }));
+        }
+        if !class.kind.is_drill_blast() {
+            let mut loader_type = class.loader_type;
+            let type_label = loader_type.label();
+            if rows
+                .combo(
+                    ("schedule_class_loader_type", class.id),
+                    &tr!("loader-type"),
+                    &mut loader_type,
+                    &type_label,
+                    crate::model::schedule::LoaderType::ALL.map(|loader_type| (loader_type, loader_type.label())),
+                )
+                .hint(tr!("loader-type-help"))
+                .changed()
+            {
+                edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassLoaderType { class: class.id, loader_type }));
+            }
+        }
+        let rate_label = if class.kind.is_drill_blast() {
+            tr!("machine-work-rate", unit = class.kind.rate_unit())
+        } else {
+            tr!("schedule-dig-rate")
+        };
+        let rate = rows.field(&rate_label, &mut draft.rate, rate_error.as_deref());
+        if rate.lost_focus()
+            && let Ok(value) = parse_rate(&draft.rate)
+            && value != class.default_dig_rate_tph
+        {
+            edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassRate { class: class.id, rate_tph: value }));
+        }
+        // Its own row and its own commit: loading a stockpile back into a truck
+        // is a different job from digging a face, and nothing here knows the
+        // ratio between them.
+        // Dozers, drills and MPUs neither reclaim nor load trucks.
+        let loader = !class.kind.is_drill_blast();
+        if loader {
+            let reclaim = rows.field(&tr!("schedule-class-reclaim-rate"), &mut draft.reclaim_rate, reclaim_error.as_deref());
+            if reclaim.lost_focus()
+                && let Ok(value) = parse_rate(&draft.reclaim_rate)
+                && value != class.default_reclaim_rate_tph
+            {
+                edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassReclaimRate { class: class.id, rate_tph: value }));
+            }
+        }
+        if loader
+            && rows.field(&tr!("haul-spot-time"), &mut draft.spot_time, spot_error.as_deref()).lost_focus()
+            && let Ok(seconds) = parse_spot_time(&draft.spot_time)
+            && seconds != class.spot_time_s
+        {
+            edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassSpotTime { class: class.id, seconds }));
+        }
+        // Named here rather than only on deletion: a class in use cannot be
+        // deleted, and knowing that before trying is the point.
+        rows.readonly(&tr!("schedule-loader-agents"), &users.to_string(), None, None);
+    });
+    commands.append(&mut edits);
+}
+
+/// The Loader Agents list: the machines themselves, each showing its class.
+pub(crate) fn draw_agent_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let mut selected = editor.schedule_selected_agent;
+    let has_classes = !plan.classes().is_empty();
+    let mut confirm_delete = None;
+    let new_agent = tr!("schedule-new-agent");
+    let mut add = false;
+    let (title, name) = (tr!("schedule-loader-agents"), tr!("planning-name"));
+    let mut grid = DataGrid::new("schedule_agent_list", rect, &title).column_header(&name);
+    // A machine needs a class to belong to, so there is nothing to add until
+    // one exists; the empty list says where to go instead.
+    if has_classes {
+        grid = grid.add_button(&new_agent, &mut add);
+    }
+    let added = grid.show(ui, |ui| {
+        if !has_classes {
+            return grid_empty_state(ui, &tr!("schedule-no-classes"), None);
+        } else if plan.agents().is_empty() {
+            return grid_empty_state(ui, &tr!("schedule-no-agents"), Some(&new_agent));
+        }
+        // Grouped by kind, and put in order by dragging: a machine within
+        // its group, a group by its heading. The Gantt and the Calendar list
+        // the fleet in the same order.
+        const GROUPS: u8 = 0;
+        let mut drag = GridDrag::new(ui, "schedule_agent_list_drag");
+        let ordered = plan.ordered_agents();
+        for (run, kind) in (1u8..).zip(plan.machine_groups()) {
+            let agents: Vec<_> = ordered.iter().filter(|agent| plan.agent_kind(agent.id) == Some(kind)).collect();
+            if agents.is_empty() {
+                continue;
+            }
+            let (open, heading) = grid_group_row_draggable(ui, ("schedule_agent_group", kind), &kind.group_label(), &agents.len().to_string());
+            let mut span = heading.rect;
+            if open {
+                for agent in agents {
+                    let class = plan
+                        .class(agent.class_id)
+                        .map(|class| class.name.clone())
+                        .unwrap_or_else(|| tr!("schedule-error-unknown-class"));
+                    let label = format!("{} · {}", agent.name, class);
+                    let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(agent.id)).draggable());
+                    span = span.union(response.rect);
+                    drag.row(MachineDrag::Machine(agent.id), run, response.rect, &response);
+                    if response.clicked() {
+                        selected = Some(agent.id);
+                    }
+                    context_menu_popup(&response, &agent.name, |ui| {
+                        if ContextMenuAction::new(tr!("schedule-delete-agent")).show(ui).clicked() {
+                            // Work it holds would be stranded, so that is
+                            // asked first; a machine with none just goes.
+                            if crate::ui::dialogs::schedule::agent_delete_impact(plan, agent.id) == (0, 0) {
+                                commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteAgent(agent.id)));
+                            } else {
+                                confirm_delete = Some(agent.id);
+                            }
+                            ui.close();
+                        }
+                    });
+                }
+            }
+            drag.row(MachineDrag::Group(kind), GROUPS, span, &heading);
+        }
+        match drag.finish(ui) {
+            Some((MachineDrag::Group(kind), before)) => {
+                let before = match before {
+                    Some(MachineDrag::Group(before)) => Some(before),
+                    _ => None,
+                };
+                commands.push(UiCommand::schedule(session, ScheduleEdit::MoveMachineGroup { kind, before }));
+            }
+            Some((MachineDrag::Machine(agent), before)) => {
+                let before = match before {
+                    Some(MachineDrag::Machine(before)) => Some(before),
+                    _ => None,
+                };
+                commands.push(UiCommand::schedule(session, ScheduleEdit::MoveMachine { agent, before }));
+            }
+            None => {}
+        }
+        grid_add_action_row(ui, &new_agent)
+    });
+    let open_dialog = has_classes && (add || added);
+    if confirm_delete.is_some() {
+        editor.pending_delete_agent = confirm_delete;
+    }
+    // The page opens on a machine rather than on an empty pane.
+    if selected.is_none_or(|id| plan.agent(id).is_none()) {
+        selected = plan.ordered_agents().first().map(|agent| agent.id);
+    }
+    if editor.schedule_selected_agent != selected {
+        editor.schedule_agent_draft = None;
+    }
+    editor.schedule_selected_agent = selected;
+    if open_dialog && !editor.new_loader_agent_open {
+        editor.new_loader_agent_name = suggested_agent_name(plan);
+        editor.new_loader_agent_class = plan.classes().first().map(|class| class.id);
+        editor.new_loader_agent_open = true;
+    }
+}
+
+/// What a drag on the Machines list holds.
+#[derive(Clone, Copy, PartialEq)]
+enum MachineDrag {
+    Group(crate::model::schedule::MachineKind),
+    Machine(crate::model::schedule::LoaderAgentId),
+}
+
+/// The selected agent's cells: its name, its class, and the rate that class
+/// gives it. The rate is shown but not editable - stage 1 has no per-machine
+/// override, and offering one here would imply the class rate was a default
+/// this row had departed from.
+pub(crate) fn draw_agent_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let Some(agent) = editor.schedule_selected_agent.and_then(|id| plan.agent(id)) else {
+        PropertyTable::new("schedule_agent_properties", rect, &tr!("schedule-loader-agents")).show(ui, |rows| {
+            rows.header(&tr!("planning-property"), &tr!("planning-value"));
+            rows.readonly(&tr!("planning-name"), &tr!("schedule-select-agent"), None, None);
+        });
+        return;
+    };
+    if editor.schedule_agent_draft.as_ref().is_none_or(|draft| draft.id != agent.id || draft.source != agent.name) {
+        editor.schedule_agent_draft = Some(ScheduleAgentDraft {
+            id: agent.id,
+            source: agent.name.clone(),
+            name: agent.name.clone(),
+        });
+    }
+    let draft = editor.schedule_agent_draft.as_mut().expect("just ensured");
+    let name_error = name_problem(&draft.name, plan.agents().iter().filter(|other| other.id != agent.id).map(|other| other.name.clone()));
+    let selected_text = plan
+        .class(agent.class_id)
+        .map(|class| class.name.clone())
+        .unwrap_or_else(|| tr!("schedule-error-unknown-class"));
+    let rate = plan.effective_rate_tph(agent.id).map(rate_text).unwrap_or_else(|| tr!("schedule-error-unknown-class"));
+    let mut class_choice = agent.class_id;
+    let mut edits = Vec::new();
+    PropertyTable::new("schedule_agent_properties", rect, &agent.name).show(ui, |rows| {
+        rows.header(&tr!("planning-property"), &tr!("planning-value"));
+        let name = rows.field(&tr!("planning-name"), &mut draft.name, name_error.as_deref());
+        if name.lost_focus()
+            && name_problem(&draft.name, plan.agents().iter().filter(|other| other.id != agent.id).map(|other| other.name.clone())).is_none()
+            && draft.name.trim() != agent.name
+        {
+            edits.push(UiCommand::schedule(
+                session,
+                ScheduleEdit::RenameAgent {
+                    agent: agent.id,
+                    name: draft.name.trim().to_owned(),
+                },
+            ));
+        }
+        let response = rows.combo(
+            "schedule_agent_class",
+            &tr!("schedule-class"),
+            &mut class_choice,
+            &selected_text,
+            plan.classes().iter().map(|class| (class.id, class.name.clone())),
+        );
+        if response.changed() && class_choice != agent.class_id {
+            edits.push(UiCommand::schedule(
+                session,
+                ScheduleEdit::SetAgentClass {
+                    agent: agent.id,
+                    class: class_choice,
+                },
+            ));
+        }
+        let unit = match plan.agent_kind(agent.id) {
+            Some(kind) if kind.is_drill_blast() => kind.rate_unit().to_owned(),
+            _ => tr!("schedule-tph"),
+        };
+        rows.readonly(&tr!("schedule-effective-rate"), &rate, Some(&unit), None);
+    });
+    commands.append(&mut edits);
+}
+
+/// A name for a new class or agent that nothing in the fleet already has.
+pub(crate) fn suggested_class_name(plan: &SchedulePlan) -> String {
+    crate::model::schedule::suggested_name(&tr!("schedule-loader-class-default"), plan.classes().iter().map(|class| class.name.clone()))
+}
+
+pub(crate) fn suggested_agent_name(plan: &SchedulePlan) -> String {
+    crate::model::schedule::suggested_name(&tr!("schedule-loader-agent-default"), plan.agents().iter().map(|agent| agent.name.clone()))
+}

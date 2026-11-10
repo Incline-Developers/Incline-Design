@@ -40,7 +40,7 @@ pub(crate) fn draw_new_product_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 // A product with no delay is not one, and the palette shows the
                 // name under every card, so neither field is optional.
                 let can_add = editor.new_delay_product_delay_ms > 0 && !editor.new_delay_product_name.trim().is_empty();
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("common-add-product")).primary().enabled(can_add)).clicked()) && can_add {
                     commands.push(UiCommand::AddDelayProduct {
                         delay_ms: editor.new_delay_product_delay_ms,
@@ -49,7 +49,7 @@ pub(crate) fn draw_new_product_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                     });
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });
@@ -78,7 +78,7 @@ pub(crate) fn draw_initiation_dialog(ui: &mut egui::Ui, editor: &mut EditorState
             .show(ui);
         menu::menu_actions(ui, |ui| {
             let confirm_label = if existing { tr!("products-update") } else { tr!("products-add-initiation") };
-            if menu::dialog_confirm_pressed(ui.ctx()) || ui.add(MenuButton::new(confirm_label).primary()).clicked() {
+            if menu::dialog_confirmed(ui.ctx()) || ui.add(MenuButton::new(confirm_label).primary()).clicked() {
                 commands.push(UiCommand::SetInitiation {
                     target,
                     delay_ms: Some(dialog.delay_ms),
@@ -89,7 +89,7 @@ pub(crate) fn draw_initiation_dialog(ui: &mut egui::Ui, editor: &mut EditorState
                 commands.push(UiCommand::SetInitiation { target, delay_ms: None });
                 close = true;
             }
-            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                 close = true;
             }
         });

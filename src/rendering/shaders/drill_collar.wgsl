@@ -91,6 +91,10 @@ fn vs_main(instance: CollarInstance, @builtin(vertex_index) vertex_index: u32) -
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    // A 2D section draws the hole as a ribbon whose capped top marks the collar.
+    if camera.section_normal.w > 1.5 {
+        discard;
+    }
     if outside_section_slab(input.section_offset) {
         discard;
     }

@@ -7,17 +7,15 @@ use std::{
 
 use flate2::write::GzEncoder;
 
+use super::{ReadAt, Reader, zip_container::Builder};
 use crate::{
-    Array, ArrayType, FORMAT_VERSION_MAJOR, FORMAT_VERSION_MINOR, FORMAT_VERSION_PRERELEASE,
-    Project,
+    Array, ArrayType, FORMAT_VERSION_MAJOR, FORMAT_VERSION_MINOR, FORMAT_VERSION_PRERELEASE, Project,
     array::DataType,
     array_type,
     error::Error,
     file::zip_container::FileType,
     validate::{Problems, Validate, Validator},
 };
-
-use super::{ReadAt, Reader, zip_container::Builder};
 
 /// Buffer size used between JSON serialization and compression.
 const JSON_BUFFER_SIZE: usize = 64 * 1024;
@@ -87,6 +85,7 @@ impl From<Compression> for flate2::Compression {
 pub struct Writer<W: Write + Seek> {
     pub(crate) builder: Builder<W>,
     compression: Compression,
+    dictionary_encoding: bool,
 }
 
 impl Writer<File> {
@@ -94,13 +93,7 @@ impl Writer<File> {
     ///
     /// The file will be created if it doesn't exist, and truncated and replaced if it does.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
-        Self::new(
-            OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .create(true)
-                .open(path)?,
-        )
+        Self::new(OpenOptions::new().write(true).truncate(true).create(true).open(path)?)
     }
 }
 
@@ -110,6 +103,7 @@ impl<W: Write + Seek> Writer<W> {
         Ok(Self {
             builder: Builder::new(write)?,
             compression: Default::default(),
+            dictionary_encoding: false,
         })
     }
 
@@ -126,14 +120,26 @@ impl<W: Write + Seek> Writer<W> {
         self.compression = compression;
     }
 
+    /// Whether Parquet arrays are written with dictionary encoding.
+    pub fn dictionary_encoding(&self) -> bool {
+        self.dictionary_encoding
+    }
+
+    /// Write the Parquet arrays that follow with dictionary encoding, or not.
+    ///
+    /// Each column chunk then stores its distinct values once and refers to
+    /// them, which shrinks arrays with repeated values and reads faster; a chunk
+    /// with too many distinct values falls back to plain values. It is a
+    /// standard Parquet encoding. Off by default, as building the dictionary
+    /// costs time when writing arrays that rarely repeat a value.
+    pub fn set_dictionary_encoding(&mut self, enabled: bool) {
+        self.dictionary_encoding = enabled;
+    }
+
     /// Write an array from already-encoded bytes.
     ///
     /// Returns the new [`Array`](crate::Array) on success or an error if file IO fails.
-    pub fn array_bytes<A: ArrayType>(
-        &mut self,
-        length: u64,
-        bytes: &[u8],
-    ) -> Result<Array<A>, Error> {
+    pub fn array_bytes<A: ArrayType>(&mut self, length: u64, bytes: &[u8]) -> Result<Array<A>, Error> {
         let file_type = check_header::<A>(bytes, true)?;
         let mut f = self.builder.open(file_type)?;
         let name = f.name().to_owned();
@@ -146,11 +152,7 @@ impl<W: Write + Seek> Writer<W> {
     /// The bytes must already be encoded in Parquet, PNG, or JPEG depending on the array type.
     /// Returns the new [`Array`](crate::Array) on success or an error if file IO fails on either
     /// side.
-    pub fn array_bytes_from<A: ArrayType>(
-        &mut self,
-        length: u64,
-        mut read: impl Read,
-    ) -> Result<Array<A>, Error> {
+    pub fn array_bytes_from<A: ArrayType>(&mut self, length: u64, mut read: impl Read) -> Result<Array<A>, Error> {
         let mut header = [0_u8; 8];
         read.read_exact(&mut header)?;
         // Only the start is in hand; the trailing Parquet magic can't be checked here.
@@ -173,11 +175,7 @@ impl<W: Write + Seek> Writer<W> {
     ///
     /// `array` must come from a project returned by `reader`. Returns the new array, which
     /// holds the same items.
-    pub fn array_copy<A: ArrayType, R: ReadAt>(
-        &mut self,
-        reader: &Reader<R>,
-        array: &Array<A>,
-    ) -> Result<Array<A>, Error> {
+    pub fn array_copy<A: ArrayType, R: ReadAt>(&mut self, reader: &Reader<R>, array: &Array<A>) -> Result<Array<A>, Error> {
         self.array_bytes_from(array.item_count(), reader.array_bytes_reader(array)?)
     }
 
@@ -201,21 +199,12 @@ impl<W: Write + Seek> Writer<W> {
         let warnings = val.finish().into_result()?;
         // Buffer between the serializer and the compressor. Serde writes the JSON in very
         // small pieces and a compressor call per piece is far slower than one per block.
-        let mut gz = BufWriter::with_capacity(
-            JSON_BUFFER_SIZE,
-            GzEncoder::new(self.builder.open(FileType::Index)?, self.compression.into()),
-        );
+        let mut gz = BufWriter::with_capacity(JSON_BUFFER_SIZE, GzEncoder::new(self.builder.open(FileType::Index)?, self.compression.into()));
         serde_json::to_writer(&mut gz, &project).map_err(Error::SerializationFailed)?;
-        gz.into_inner()
-            .map_err(std::io::IntoInnerError::into_error)?
-            .finish()?;
+        gz.into_inner().map_err(std::io::IntoInnerError::into_error)?.finish()?;
         // In the future we could base the format version on the data, writing backward
         // compatible files if new features weren't used.
-        let write = self.builder.finish(
-            FORMAT_VERSION_MAJOR,
-            FORMAT_VERSION_MINOR,
-            FORMAT_VERSION_PRERELEASE,
-        )?;
+        let write = self.builder.finish(FORMAT_VERSION_MAJOR, FORMAT_VERSION_MINOR, FORMAT_VERSION_PRERELEASE)?;
         Ok((write, warnings))
     }
 }

@@ -1,6 +1,6 @@
 use std::{fmt::Debug, hash::Hash, path::PathBuf};
 
-use super::shifted;
+use super::{hint::Hint, shifted};
 use crate::i18n::tr;
 
 /// Height of a floating menu's drag bar, and of a docked panel's heading.
@@ -251,7 +251,7 @@ pub(crate) fn draw_menu_heading(ui: &mut egui::Ui, title: &egui::WidgetText, rec
     if let Some(help_text) = help_text {
         let left = (rect.left() + TITLE_BAR_HORIZONTAL_PADDING + title_width + 6.0).min(rect.right() - TITLE_BAR_HORIZONTAL_PADDING - HELP_MARKER_SIZE);
         let marker = egui::Rect::from_min_size(egui::pos2(left, rect.center().y - HELP_MARKER_SIZE / 2.0), egui::Vec2::splat(HELP_MARKER_SIZE));
-        let response = ui.interact(marker, ui.id().with("menu_heading_help"), egui::Sense::hover());
+        let response = ui.interact(marker, ui.scope_id().with("menu_heading_help"), egui::Sense::hover());
         paint_help_marker(ui, marker, response, help_text);
     }
 }
@@ -294,7 +294,7 @@ pub(crate) fn accent_fill(visuals: &egui::Visuals) -> egui::Color32 {
 }
 
 /// The fill a destructive action takes, in place of [`accent_fill`].
-fn danger_fill(visuals: &egui::Visuals) -> egui::Color32 {
+pub(crate) fn danger_fill(visuals: &egui::Visuals) -> egui::Color32 {
     if visuals.dark_mode {
         egui::Color32::from_rgb(0xC4, 0x4B, 0x4B)
     } else {
@@ -317,6 +317,8 @@ pub(crate) struct DragableMenu<'open> {
     inner_margin: egui::Margin,
     default_pos: Option<egui::Pos2>,
     current_pos: Option<egui::Pos2>,
+    movable: bool,
+    order: egui::Order,
 }
 
 impl<'open> DragableMenu<'open> {
@@ -326,7 +328,7 @@ impl<'open> DragableMenu<'open> {
     pub(crate) fn new(id_source: impl Hash + Debug, title: impl Into<egui::WidgetText>) -> Self {
         let title = title.into().fallback_text_style(egui::TextStyle::Button);
         Self {
-            id: egui::Id::new(("dragable_menu", id_source)),
+            id: egui::Id::unique(("dragable_menu", id_source)),
             title,
             title_bar: true,
             open: None,
@@ -336,6 +338,8 @@ impl<'open> DragableMenu<'open> {
             inner_margin: egui::Margin::symmetric(8, 6),
             default_pos: None,
             current_pos: None,
+            movable: true,
+            order: egui::Order::Foreground,
         }
     }
 
@@ -380,6 +384,25 @@ impl<'open> DragableMenu<'open> {
         self
     }
 
+    /// Nail the menu to `pos` and take its drag away.
+    ///
+    /// For the one dialog that is not a tool window: it fills the application
+    /// window, so there is nowhere to move it to and no edge to resize from,
+    /// and a title bar that still answered the pointer would only let it be
+    /// dragged half off the screen.
+    pub(crate) fn pinned(mut self, pos: egui::Pos2) -> Self {
+        self.current_pos = Some(pos);
+        self.movable = false;
+        self
+    }
+
+    /// Raise the menu to another layer. Tool windows share the foreground;
+    /// an alert goes above them so another dialog can never hide it.
+    pub(crate) fn order(mut self, order: egui::Order) -> Self {
+        self.order = order;
+        self
+    }
+
     pub(crate) fn show<R>(self, ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
         let Self {
             id,
@@ -392,13 +415,15 @@ impl<'open> DragableMenu<'open> {
             inner_margin,
             default_pos,
             current_pos,
+            movable,
+            order,
         } = self;
 
         if open.as_deref().is_some_and(|open| !open) {
             return None;
         }
 
-        let mut area = egui::Area::new(id).order(egui::Order::Foreground).movable(true).constrain(true).fade_in(false);
+        let mut area = egui::Area::new(id).order(order).movable(movable).constrain(true).fade_in(false);
         area = if let Some(current_pos) = current_pos {
             area.pivot(egui::Align2::LEFT_TOP).current_pos(current_pos)
         } else if let Some(default_pos) = default_pos {
@@ -450,13 +475,20 @@ impl<'open> DragableMenu<'open> {
                         rect
                     });
 
+                    // What the title bar and the gap under it actually took,
+                    // measured rather than assumed. `fixed_size` is the size of
+                    // the whole card: a body sized from a nominal title height
+                    // misses the spacing under it, and a card asked for the
+                    // height of the screen then stands that much taller than
+                    // the screen with its foot - and its buttons - underneath.
+                    let consumed = ui.cursor().top() - ui.max_rect().top();
                     let inner = egui::Frame::NONE
                         .inner_margin(inner_margin)
                         .show(ui, |ui| {
                             if let Some(fixed_size) = fixed_size {
-                                let body_height = fixed_size.y - if title_bar { TITLE_BAR_HEIGHT } else { 0.0 } - inner_margin.sum().y;
-                                ui.set_min_size(egui::vec2(fixed_size.x - inner_margin.sum().x, body_height.max(0.0)));
-                                ui.set_max_size(egui::vec2(fixed_size.x - inner_margin.sum().x, body_height.max(0.0)));
+                                let body = egui::vec2(fixed_size.x - inner_margin.sum().x, (fixed_size.y - consumed - inner_margin.sum().y).max(0.0));
+                                ui.set_min_size(body);
+                                ui.set_max_size(body);
                             }
                             add_contents(ui)
                         })
@@ -507,25 +539,31 @@ fn draw_menu_title_bar(ui: &mut egui::Ui, title: egui::WidgetText, rect: egui::R
 /// The close cross in the right-hand slot of a title bar `rect`, for cards
 /// that paint their own bar. Returns whether it was clicked.
 pub(crate) fn title_bar_close_button(ui: &mut egui::Ui, rect: egui::Rect, surface: egui::Color32) -> bool {
-    let dark_mode = ui.visuals().dark_mode;
     let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - TITLE_BAR_HEIGHT / 2.0, rect.center().y), egui::Vec2::splat(CLOSE_BUTTON_SIZE));
-    let response = ui
-        .interact(close_rect, ui.id().with("close"), egui::Sense::click())
-        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    close_cross(ui, close_rect, ui.scope_id().with("close"), surface).clicked()
+}
+
+/// The small cross that dismisses whatever it sits on, drawn and interacted
+/// with in one call, over a card of colour `surface`.
+///
+/// One mark in one place: a floating menu's own close button and a list row's
+/// remove control are the same gesture at two sizes, and drawing them twice is
+/// how they end up looking like two different controls.
+pub(crate) fn close_cross(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, surface: egui::Color32) -> egui::Response {
+    let response = ui.interact(rect, id, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let visuals = ui.visuals();
+    let dark_mode = visuals.dark_mode;
+    let color = if response.hovered() { visuals.text_color() } else { visuals.weak_text_color() };
     if response.hovered() {
-        ui.painter()
-            .rect_filled(close_rect, CONTROL_CORNER_RADIUS, shifted(surface, if dark_mode { 26 } else { -26 }));
+        ui.painter().rect_filled(rect, CONTROL_CORNER_RADIUS, shifted(surface, if dark_mode { 26 } else { -26 }));
     }
-    let color = if response.hovered() {
-        ui.visuals().text_color()
-    } else {
-        ui.visuals().weak_text_color()
-    };
+    // Three tenths in from each side, so the cross keeps its proportions at
+    // the row-sized version as well as the title-bar one.
+    let icon_rect = rect.shrink(rect.width() * 0.3);
     let stroke = egui::Stroke::new(1.3, color);
-    let icon_rect = close_rect.shrink(6.0);
     ui.painter().line_segment([icon_rect.left_top(), icon_rect.right_bottom()], stroke);
     ui.painter().line_segment([icon_rect.right_top(), icon_rect.left_bottom()], stroke);
-    response.clicked()
+    response
 }
 
 /// How much weight a [`MenuButton`] carries in its row.
@@ -616,7 +654,7 @@ impl egui::Widget for MenuButton {
         // A disabled button senses hover only, so it can never report a click.
         let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
         let (rect, response) = ui.allocate_exact_size(egui::vec2(width, BUTTON_HEIGHT), sense);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, galley.text()));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, galley.text()));
         let response = if enabled { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response };
 
         if ui.is_rect_visible(rect) {
@@ -661,7 +699,7 @@ impl egui::Widget for MenuButton {
             ui.painter().with_clip_rect(rect).galley(text_pos, galley, text_color);
         }
 
-        if width + 0.5 < natural_width { response.on_hover_text(full_text) } else { response }
+        if width + 0.5 < natural_width { response.hint(full_text) } else { response }
     }
 }
 
@@ -700,9 +738,70 @@ pub(crate) fn committed(response: &egui::Response) -> bool {
 /// Small, weak, and followed by a hairline across the menu, so a long dialog
 /// reads as a few short lists rather than one run of fields.
 pub(crate) fn menu_section(ui: &mut egui::Ui, heading: impl Into<String>) {
+    section_heading(ui, heading.into(), egui::FontId::proportional(11.0));
+}
+
+/// A [`menu_section`] heading with an arrow that folds the section away: a
+/// click hides or shows what follows, remembered between sessions. Returns
+/// whether the section is open, so the caller draws its body only then.
+pub(crate) fn menu_section_folding(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, heading: impl Into<String>) -> bool {
+    const ARROW: f32 = 8.0;
+    const ARROW_GAP: f32 = 5.0;
+    let id = egui::Id::unique(id);
+    let mut open = ui.data_mut(|data| data.get_persisted::<bool>(id)).unwrap_or(false);
+    ui.add_space(4.0);
+    let galley = ui.painter().layout_no_wrap(heading.into(), egui::FontId::proportional(11.0), egui::Color32::PLACEHOLDER);
+    record_intrinsic_content_width(ui, ARROW + ARROW_GAP + galley.size().x);
+    let row = ui.ctx().fonts_mut(|fonts| fonts.row_height(&egui::FontId::proportional(11.0))).max(14.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), row), egui::Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if response.clicked() {
+        open = !open;
+        ui.data_mut(|data| data.insert_persisted(id, open));
+    }
+    let color = if response.hovered() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let center = egui::pos2(rect.left() + ARROW / 2.0, rect.center().y);
+    let half = ARROW / 2.0;
+    let points = if open {
+        vec![
+            center + egui::vec2(-half, -half / 2.0),
+            center + egui::vec2(half, -half / 2.0),
+            center + egui::vec2(0.0, half / 2.0 + 1.0),
+        ]
+    } else {
+        vec![
+            center + egui::vec2(-half / 2.0, -half),
+            center + egui::vec2(half / 2.0 + 1.0, 0.0),
+            center + egui::vec2(-half / 2.0, half),
+        ]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
+    let text_left = rect.left() + ARROW + ARROW_GAP;
+    let text_end = text_left + galley.size().x;
+    ui.painter().galley(egui::pos2(text_left, rect.center().y - galley.size().y / 2.0), galley, color);
+    ui.painter().line_segment(
+        [egui::pos2(text_end + 8.0, rect.center().y), rect.right_center()],
+        egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+    );
+    ui.add_space(2.0);
+    open
+}
+
+/// A [`menu_section`] heading at body size, for the Planning pages and their
+/// dialogs, which set their text at body size throughout.
+pub(crate) fn panel_section(ui: &mut egui::Ui, heading: impl Into<String>) {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    section_heading(ui, heading.into(), font);
+}
+
+fn section_heading(ui: &mut egui::Ui, heading: String, font: egui::FontId) {
     ui.add_space(4.0);
     let color = ui.visuals().weak_text_color();
-    let galley = ui.painter().layout_no_wrap(heading.into(), egui::FontId::proportional(11.0), color);
+    let galley = ui.painter().layout_no_wrap(heading, font, color);
     record_intrinsic_content_width(ui, galley.size().x);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), galley.size().y.max(14.0)), egui::Sense::hover());
     let text_end = rect.left() + galley.size().x;
@@ -753,7 +852,7 @@ const MENU_FIELD_MAX_WIDTH: f32 = 260.0;
 /// value, a vector triple) pass theirs through [`label_needs`] so they line up
 /// with the fields around them.
 pub(crate) fn field_column(ui: &egui::Ui, label_needs: f32) -> f32 {
-    let id = ui.id().with("menu_field_column");
+    let id = ui.scope_id().with("menu_field_column");
     let pass = ui.ctx().cumulative_pass_nr();
     let widest_label = ui.ctx().memory_mut(|memory| {
         let (last_pass, running, settled) = memory.data.get_temp::<(u64, f32, f32)>(id).unwrap_or((u64::MAX, 0.0, 0.0));
@@ -827,16 +926,49 @@ pub(crate) fn selected_source_field(ui: &mut egui::Ui, label: impl Into<egui::Wi
     let value = value.into();
     MenuField::new(label).help_text(help_text).show(ui, |ui, row_height, _| {
         ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.add(egui::Label::new(value.clone()).truncate()).on_hover_text(value);
+            ui.add(egui::Label::new(value.clone()).truncate()).hint(value);
         })
         .response
     });
 }
 
+/// A row stating the set of items a tool works on, beside a Pick button for
+/// selecting them in the viewport.
+///
+/// Design objects and holes have no names to list, so the set is stated as a
+/// count and changed by picking. Returns whether Pick was pressed; the caller
+/// answers with `UiCommand::BeginSelectionPick`.
+pub(crate) fn picked_selection_field(
+    ui: &mut egui::Ui,
+    label: impl Into<egui::WidgetText>,
+    value: impl Into<egui::WidgetText>,
+    help_text: impl Into<egui::WidgetText>,
+    width: f32,
+) -> bool {
+    const PICK_BUTTON_WIDTH: f32 = 52.0;
+    let value = value.into();
+    let pick_label = tr!("drill-pattern-pick");
+    let pick_width = natural_button_width(ui, &pick_label, PICK_BUTTON_WIDTH);
+    let mut picked = false;
+    MenuField::new(label).help_text(help_text).show(ui, |ui, row_height, _| {
+        let value_width = width - ui.spacing().item_spacing.x - pick_width;
+        ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.allocate_ui_with_layout(egui::vec2(value_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                // The count keeps its width whatever it reads, so the button
+                // does not move as the set changes.
+                ui.set_min_width(value_width);
+                ui.add(egui::Label::new(value.clone()).truncate()).hint(value);
+            });
+            picked = ui.add(MenuButton::new(pick_label).min_width(pick_width)).clicked();
+        })
+        .response
+    });
+    picked
+}
+
 /// A labelled file-picker row showing the selected file count/name and a choose button.
 pub(crate) struct MenuFieldFilePicker<'paths> {
     label: egui::WidgetText,
-    help_text: Option<egui::WidgetText>,
     paths: &'paths [PathBuf],
     empty_text: egui::WidgetText,
     button_text: egui::WidgetText,
@@ -847,7 +979,6 @@ impl<'paths> MenuFieldFilePicker<'paths> {
     pub(crate) fn new(label: impl Into<egui::WidgetText>, paths: &'paths [PathBuf]) -> Self {
         Self {
             label: label.into(),
-            help_text: None,
             paths,
             empty_text: tr!("common-no-file-chosen").into(),
             button_text: tr!("common-choose").into(),
@@ -857,11 +988,6 @@ impl<'paths> MenuFieldFilePicker<'paths> {
 
     pub(crate) fn empty_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
         self.empty_text = text.into();
-        self
-    }
-
-    pub(crate) fn help_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
-        self.help_text = Some(text.into());
         self
     }
 
@@ -878,14 +1004,13 @@ impl<'paths> MenuFieldFilePicker<'paths> {
     pub(crate) fn show(self, ui: &mut egui::Ui) -> egui::Response {
         let Self {
             label,
-            help_text,
             paths,
             empty_text,
             button_text,
             width,
         } = self;
         let text = selected_file_label(paths, empty_text);
-        menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
+        menu_field_row(ui, label, None, |ui, row_height, column_width| {
             let width = width.unwrap_or(column_width);
             let inner = ui.horizontal(|ui| {
                 let clicked = ui.add(MenuButton::new(button_text).min_width(row_height * 3.8)).clicked();
@@ -957,7 +1082,7 @@ pub(crate) fn menu_field_label(ui: &mut egui::Ui, label: egui::WidgetText, help_
         ui.painter().galley(rect.min, galley, ui.visuals().text_color());
     }
     if elided {
-        response.on_hover_text(full_text);
+        response.hint(full_text);
     }
 
     if let Some(help_text) = help_text {
@@ -980,7 +1105,7 @@ fn paint_help_marker(ui: &egui::Ui, rect: egui::Rect, response: egui::Response, 
             color,
         );
     }
-    response.on_hover_text(help_text);
+    response.hint(help_text);
 }
 
 macro_rules! menu_field_float {
@@ -1108,38 +1233,61 @@ impl<'value> MenuFieldBool<'value> {
     }
 }
 
-/// The switch a [`MenuFieldBool`] shows, for rows that lay out their own label.
+/// The switch a [`MenuFieldBool`] shows, for rows that lay out their own label,
+/// or with its label beside it where a lone setting sits in a toolbar or a
+/// title strip.
+///
+/// A checkbox reads as "include this item"; a switch reads as "this mode is
+/// on", which is what an Auto run is.
 pub(crate) struct SlidingToggle<'value> {
     value: &'value mut bool,
+    label: Option<egui::WidgetText>,
 }
 
 impl<'value> SlidingToggle<'value> {
     pub(crate) fn new(value: &'value mut bool) -> Self {
-        Self { value }
+        Self { value, label: None }
+    }
+
+    /// Text after the switch, clickable with it.
+    pub(crate) fn label(mut self, label: impl Into<egui::WidgetText>) -> Self {
+        self.label = Some(label.into());
+        self
     }
 }
 
 impl egui::Widget for SlidingToggle<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        const LABEL_GAP: f32 = 6.0;
+        let galley = self
+            .label
+            .map(|label| label.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body));
+        let label_width = galley.as_ref().map_or(0.0, |galley| LABEL_GAP + galley.size().x);
         // The track is a fixed size, but the row's full height stays clickable
         // so the switch is no harder to hit than the fields above it.
         let height = ui.spacing().interact_size.y.max(TOGGLE_HEIGHT);
-        let (rect, mut response) = ui.allocate_exact_size(egui::vec2(TOGGLE_WIDTH, height), egui::Sense::click());
+        let (rect, mut response) = ui.allocate_exact_size(egui::vec2(TOGGLE_WIDTH + label_width, height), egui::Sense::click());
 
         if response.clicked() {
             *self.value = !*self.value;
             response.mark_changed();
         }
 
-        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *self.value, ""));
+        let text = galley.as_ref().map_or("", |galley| galley.text());
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *self.value, text));
 
         if ui.is_rect_visible(rect) {
+            let rect = egui::Rect::from_min_size(rect.min, egui::vec2(TOGGLE_WIDTH, height));
+            if let Some(galley) = galley {
+                let text_pos = egui::pos2(rect.right() + LABEL_GAP, rect.center().y - galley.size().y / 2.0);
+                ui.painter().galley(text_pos, galley, ui.style().interact(&response).text_color());
+            }
             let visuals = ui.style().interact_selectable(&response, *self.value);
             // Keyed by the bool's own address rather than `response.id`: that id is
             // assigned by allocation order within the enclosing panel, so switching
             // properties tabs lines a toggle up with whatever occupied that same slot
             // in the previous tab and replays a slide from its stale cached value.
-            let value_id = egui::Id::new(self.value as *const bool as usize);
+            let value_id = egui::Id::unique(self.value as *const bool as usize);
             let animation = ui.ctx().animate_bool_responsive(value_id, *self.value);
             let track_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(TOGGLE_WIDTH, TOGGLE_HEIGHT));
             let radius = track_rect.height() / 2.0;
@@ -1221,6 +1369,55 @@ impl<'value> MenuFieldU32<'value> {
     }
 }
 
+/// A labelled low-high pair inside known limits: a two-handled rail between
+/// the two numbers, which can also be dragged or typed into.
+pub(crate) struct MenuFieldRange<'value> {
+    label: egui::WidgetText,
+    low: &'value mut f64,
+    high: &'value mut f64,
+    limits: std::ops::RangeInclusive<f64>,
+    width: Option<f32>,
+}
+
+impl<'value> MenuFieldRange<'value> {
+    /// `low` and `high` are pulled inside `limits`, and `low` below `high`.
+    pub(crate) fn new(label: impl Into<egui::WidgetText>, low: &'value mut f64, high: &'value mut f64, limits: std::ops::RangeInclusive<f64>) -> Self {
+        Self {
+            label: label.into(),
+            low,
+            high,
+            limits,
+            width: None,
+        }
+    }
+
+    pub(crate) fn width(mut self, width: f32) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    pub(crate) fn show(self, ui: &mut egui::Ui) -> egui::Response {
+        let Self { label, low, high, limits, width } = self;
+        menu_field_row(ui, label, None, |ui, row_height, column_width| {
+            let width = width.unwrap_or(column_width);
+            ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                // Each number gets a little under a third of the row and the
+                // rail the rest, so the row fills the column like its neighbours.
+                let gap = ui.spacing().item_spacing.x;
+                let number_width = ((width - 2.0 * gap) * RANGE_NUMBER_SHARE).floor();
+                let spacing = ui.spacing_mut();
+                spacing.interact_size.x = number_width;
+                spacing.slider_width = (width - 2.0 * (number_width + gap)).max(0.0);
+                ui.add(egui::RangeSlider::new(low, high, limits).smart_aim(false).max_decimals(2))
+            })
+            .inner
+        })
+    }
+}
+
+/// The share of a [`MenuFieldRange`] row each of its two numbers takes.
+const RANGE_NUMBER_SHARE: f32 = 0.3;
+
 /// A consistently aligned single-line text field for draggable and docked menus.
 pub(crate) struct MenuFieldText<'value> {
     label: egui::WidgetText,
@@ -1265,7 +1462,47 @@ impl<'value> MenuFieldText<'value> {
             hint,
         } = self;
         menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
-            ui.add_sized([width.unwrap_or(column_width), row_height], egui::TextEdit::singleline(value).hint_text(hint))
+            let response = ui.add_sized([width.unwrap_or(column_width), row_height], egui::TextEdit::singleline(value).hint_text(hint));
+            // These fields mostly arrive pre-filled with a suggested name.
+            // Selecting it on focus lets typing replace the suggestion rather
+            // than append to it ("Shell_trimmedShell_trimmed").
+            if response.gained_focus()
+                && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), response.id)
+            {
+                let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(value.chars().count()));
+                state.cursor.set_char_range(Some(all));
+                state.store(ui.ctx(), response.id);
+            }
+            response
+        })
+    }
+
+    /// [`Self::show`] with a completion popup under the field: `suggest` is
+    /// asked about the whole text as it changes. Returns the field's response
+    /// and the suggestion the user accepted - with Enter, Tab, or a click -
+    /// which replaces the text with its `insert`.
+    pub(crate) fn show_with_completions(
+        self,
+        ui: &mut egui::Ui,
+        id_salt: impl egui::AsIdSalt,
+        suggest: impl FnOnce(&egui::CompletionQuery<'_>) -> Vec<egui::Suggestion>,
+    ) -> (egui::Response, Option<egui::Suggestion>) {
+        let Self {
+            label,
+            help_text,
+            value,
+            width,
+            hint,
+        } = self;
+        let id = ui.scope_id().with(id_salt);
+        menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
+            let width = width.unwrap_or(column_width);
+            let text_edit = egui::TextEdit::singleline(value)
+                .hint_text(hint)
+                .desired_width(width)
+                .min_size(egui::vec2(width, row_height));
+            let output = egui::CompletionPopup::new(id).word_boundary(|_| false).show(ui, text_edit, suggest);
+            (output.text_edit.response.response, output.accepted)
         })
     }
 }
@@ -1295,27 +1532,17 @@ impl<'value> MenuFieldColor32<'value> {
 /// A consistently aligned premultiplied RGBA colour field.
 pub(crate) struct MenuFieldRgba<'value> {
     label: egui::WidgetText,
-    help_text: Option<egui::WidgetText>,
     value: &'value mut [f32; 4],
 }
 
 impl<'value> MenuFieldRgba<'value> {
     pub(crate) fn new(label: impl Into<egui::WidgetText>, value: &'value mut [f32; 4]) -> Self {
-        Self {
-            label: label.into(),
-            help_text: None,
-            value,
-        }
-    }
-
-    pub(crate) fn help_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
-        self.help_text = Some(text.into());
-        self
+        Self { label: label.into(), value }
     }
 
     pub(crate) fn show(self, ui: &mut egui::Ui) -> egui::Response {
-        let Self { label, help_text, value } = self;
-        menu_field_row(ui, label, help_text, |ui, _, _| super::color::edit_rgba_premultiplied(ui, value))
+        let Self { label, value } = self;
+        menu_field_row(ui, label, None, |ui, _, _| super::color::edit_rgba_premultiplied(ui, value))
     }
 }
 
@@ -1339,7 +1566,7 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
         options: impl IntoIterator<Item = (T, egui::WidgetText)>,
     ) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             label: label.into(),
             help_text: None,
             value,
@@ -1391,7 +1618,7 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
                 .response;
             // Only a value the box cuts short is worth repeating on hover.
             if selected_needs > width + 0.5 {
-                response = response.on_hover_text(selected_tooltip);
+                response = response.hint(selected_tooltip);
             }
             if selection_changed {
                 response.mark_changed();
@@ -1403,15 +1630,68 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
 
 /// Standard dialog keyboard shortcuts.
 ///
-/// Enter confirms the dialog's primary action and Escape cancels it. Both keys
-/// are *consumed* from egui's input, so only the first dialog that asks for
-/// them in a frame reacts, and the viewport tools never see the same press
-/// (`App::handle_key_code` skips them while a modal dialog is open).
-pub(crate) fn dialog_confirm_pressed(ctx: &egui::Context) -> bool {
-    ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+/// Enter confirms the dialog's primary action and Escape cancels it, when the
+/// key is *released*, and only if the press came while a dialog was already
+/// up. A key that opens a dialog (Enter finishing a tool that then warns)
+/// therefore cannot close it too, on its press or its release. Both events
+/// are consumed from egui's input, so only the first dialog that asks for them
+/// in a frame reacts, and the viewport tools never see the same press
+/// (`App::handle_key_code` skips them while a modal dialog is open). A held
+/// key's auto-repeat never counts as a press, so holding Enter cannot run
+/// through a chain of dialogs either.
+pub(crate) fn dialog_confirmed(ctx: &egui::Context) -> bool {
+    dialog_key_released(ctx, egui::Key::Enter)
 }
 
-/// Escape half of [`dialog_confirm_pressed`].
-pub(crate) fn dialog_cancel_pressed(ctx: &egui::Context) -> bool {
-    ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+/// Escape half of [`dialog_confirmed`].
+pub(crate) fn dialog_cancelled(ctx: &egui::Context) -> bool {
+    dialog_key_released(ctx, egui::Key::Escape)
+}
+
+/// Whether dialogs have asked for a key in successive frames, and whether its
+/// press came while they had.
+#[derive(Clone, Copy, Debug, Default)]
+struct DialogKey {
+    asked_frame: Option<u64>,
+    /// Whether a dialog asked in the frame before `asked_frame`.
+    up_before: bool,
+    armed: bool,
+}
+
+fn dialog_key_released(ctx: &egui::Context, key: egui::Key) -> bool {
+    let id = egui::Id::unique(("dialog_key", key));
+    let frame = ctx.cumulative_frame_nr();
+    let mut state = ctx.data_mut(|data| data.get_temp::<DialogKey>(id)).unwrap_or_default();
+    if state.asked_frame != Some(frame) {
+        state.up_before = state.asked_frame.is_some_and(|asked| asked + 1 == frame);
+        state.asked_frame = Some(frame);
+        // A frame with no dialog asking breaks the hold: a press it never saw
+        // must not be finished by its release.
+        if !state.up_before {
+            state.armed = false;
+        }
+    }
+    let (pressed, released) = ctx.input_mut(|input| {
+        // Auto-repeat continues a press rather than making one: a key held
+        // since before the dialog opened must not arm it. Consumed all the same.
+        let pressed = input
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::Key { key: pressed, pressed: true, repeat: false, modifiers, .. } if *pressed == key && modifiers.matches_logically(egui::Modifiers::NONE)));
+        input.consume_key(egui::Modifiers::NONE, key);
+        let before = input.events.len();
+        input
+            .events
+            .retain(|event| !matches!(event, egui::Event::Key { key: released, pressed: false, .. } if *released == key));
+        (pressed, input.events.len() != before)
+    });
+    if pressed {
+        state.armed = state.up_before;
+    }
+    let fired = released && state.armed;
+    if released {
+        state.armed = false;
+    }
+    ctx.data_mut(|data| data.insert_temp(id, state));
+    fired
 }

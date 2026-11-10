@@ -84,7 +84,7 @@ struct SurfaceMesh {
 
 /// What a surface build takes from a selection: the points to triangulate,
 /// the layers they came from, the open strings the surface is made to pass
-/// through, and the one closed string clipping the result.
+/// through, and the closed strings, of which one may clip the result.
 pub(crate) struct SurfaceInput {
     pub(crate) points: Vec<ObjectId>,
     /// Distinct layers the points sit on, in document order. One layer is the
@@ -93,15 +93,30 @@ pub(crate) struct SurfaceInput {
     /// Open strings, in document order. Each is a breakline the finished
     /// surface runs along, at the string's own elevations.
     pub(crate) controls: Vec<ObjectId>,
-    pub(crate) extent: Option<ObjectId>,
+    /// Closed strings, in document order. One is the extent; more than one
+    /// leaves no saying which, and is a problem.
+    pub(crate) extents: Vec<ObjectId>,
 }
 
-/// Read a surface build's inputs out of `selected`, or say why there are none.
+impl SurfaceInput {
+    /// Why a surface cannot be built from this, if it cannot.
+    pub(crate) fn problem(&self) -> Option<String> {
+        if self.points.len() < MINIMUM_POINTS {
+            Some(too_few_points(self.points.len()))
+        } else if self.extents.len() > 1 {
+            Some(tr!("cmd-reference-surface-select-exactly-one-closed-string"))
+        } else {
+            None
+        }
+    }
+}
+
+/// Read a surface build's inputs out of `selected`.
 ///
 /// Walked over `document.objects()` rather than `selected` itself, so the
 /// points and the layer list come back in document order rather than
 /// whatever order the selection's `HashSet` happens to iterate in.
-pub(crate) fn surface_input(document: &Document, selected: &HashSet<SceneEntityId>) -> Result<SurfaceInput> {
+pub(crate) fn surface_input(document: &Document, selected: &HashSet<SceneEntityId>) -> SurfaceInput {
     let mut points = Vec::new();
     let mut layers = Vec::new();
     let mut controls = Vec::new();
@@ -128,15 +143,12 @@ pub(crate) fn surface_input(document: &Document, selected: &HashSet<SceneEntityI
             _ => {}
         }
     }
-    if points.len() < MINIMUM_POINTS {
-        anyhow::bail!("{}", too_few_points(points.len()));
+    SurfaceInput {
+        points,
+        layers,
+        controls,
+        extents,
     }
-    let extent = match extents.len() {
-        0 => None,
-        1 => Some(extents[0]),
-        _ => anyhow::bail!("{}", tr!("cmd-reference-surface-select-exactly-one-closed-string")),
-    };
-    Ok(SurfaceInput { points, layers, controls, extent })
 }
 
 impl<'a> App<'a> {
@@ -211,7 +223,7 @@ impl<'a> App<'a> {
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag| -> Result<crate::model::triangulation::GeneratedTriangulation> {
             if cancel.is_cancelled() {
-                anyhow::bail!("{}", tr!("common-cancelled"));
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             delaunay_surface_from_points(points, controls, ring, name, &|| cancel.is_cancelled())
         };
@@ -272,7 +284,7 @@ fn control_ends_where_it_starts(index: usize) -> String {
 /// Stop the build once the job it runs in has been cancelled.
 fn stop_if_cancelled(cancelled: &dyn Fn() -> bool) -> Result<()> {
     if cancelled() {
-        anyhow::bail!("{}", tr!("common-cancelled"));
+        anyhow::bail!(crate::app::jobs::Cancelled);
     }
     Ok(())
 }
@@ -446,7 +458,7 @@ fn delaunay_surface_from_points(
         }
         userspace_warn!("{}", report);
     }
-    session::build_generated_triangulation(name, surface.vertices, surface.faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)
+    session::build_generated_triangulation(name, surface.vertices, surface.faces, TriSurfaceType::Surface, |_| Vec::new())
 }
 
 /// Triangulate the points in plan and, given an extent, cut the result back

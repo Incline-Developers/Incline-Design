@@ -1,4 +1,3 @@
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -34,8 +33,7 @@ use crate::{
 ///
 ///   To have attribute values on undivided parent blocks in this mode there must be a sub-block
 ///   that covers the whole parent block.
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[schemars(inline)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BlockModel {
     /// Orientation of the block model.
     pub orient: Orient3,
@@ -48,11 +46,7 @@ pub struct BlockModel {
 
 impl BlockModel {
     pub fn new(orient: Orient3, grid: Grid3) -> Self {
-        Self {
-            orient,
-            grid,
-            subblocks: None,
-        }
+        Self { orient, grid, subblocks: None }
     }
 
     pub fn with_subblocks(orient: Orient3, grid: Grid3, subblocks: Subblocks) -> Self {
@@ -63,13 +57,7 @@ impl BlockModel {
         }
     }
 
-    pub fn with_regular_subblocks(
-        orient: Orient3,
-        grid: Grid3,
-        subblock_count: [u32; 3],
-        subblocks: Array<array_type::RegularSubblock>,
-        mode: Option<SubblockMode>,
-    ) -> Self {
+    pub fn with_regular_subblocks(orient: Orient3, grid: Grid3, subblock_count: [u32; 3], subblocks: Array<array_type::RegularSubblock>, mode: Option<SubblockMode>) -> Self {
         Self {
             orient,
             grid,
@@ -81,11 +69,7 @@ impl BlockModel {
         }
     }
 
-    pub fn with_freeform_subblocks(
-        orient: Orient3,
-        grid: Grid3,
-        subblocks: Array<array_type::FreeformSubblock>,
-    ) -> Self {
+    pub fn with_freeform_subblocks(orient: Orient3, grid: Grid3, subblocks: Array<array_type::FreeformSubblock>) -> Self {
         Self {
             orient,
             grid,
@@ -109,7 +93,7 @@ impl BlockModel {
 }
 
 /// Stores sub-blocks of a block model.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Subblocks {
     /// Divide each parent block into a regular grid of `count` cells. Sub-blocks each covers
@@ -129,8 +113,6 @@ pub enum Subblocks {
     /// Sub-blocks must stay within their parent, must have a non-zero size in all directions, and
     /// should not overlap. Further restrictions can be applied by the `mode` field, see
     /// [`SubblockMode`](crate::SubblockMode) for details.
-    ///
-    /// ![Example of regular sub-blocks](../images/subblocks_regular.svg "Regular sub-bloks")
     Regular {
         /// The sub-block grid size.
         ///
@@ -192,11 +174,7 @@ impl Subblocks {
 
     fn validate(&mut self, block_count: [u32; 3], val: &mut Validator) {
         match self {
-            Subblocks::Regular {
-                count,
-                subblocks,
-                mode,
-            } => {
+            Subblocks::Regular { count, subblocks, mode } => {
                 val.enter("Subblocks::Regular")
                     .above_zero_seq(*count, "count")
                     .subblock_mode_and_count(*mode, *count)
@@ -211,18 +189,14 @@ impl Subblocks {
                     );
             }
             Subblocks::Freeform { subblocks } => {
-                val.enter("Subblocks::Freeform").array(
-                    subblocks,
-                    Constraint::FreeformSubblock { block_count },
-                    "subblocks",
-                );
+                val.enter("Subblocks::Freeform").array(subblocks, Constraint::FreeformSubblock { block_count }, "subblocks");
             }
         }
     }
 }
 
 /// A optional mode for regular sub-blocks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SubblockMode {
     /// Sub-blocks form a octree-like inside the parent block.
     ///
@@ -245,10 +219,7 @@ pub enum SubblockMode {
 
 impl Validate for BlockModel {
     fn validate_inner(&mut self, val: &mut Validator) {
-        let mut v = val
-            .enter("BlockModel")
-            .obj(&mut self.orient)
-            .obj(&mut self.grid);
+        let mut v = val.enter("BlockModel").obj(&mut self.orient).obj(&mut self.grid);
         if let Some(subblocks) = &mut self.subblocks {
             subblocks.validate(self.grid.count(), &mut v);
         }

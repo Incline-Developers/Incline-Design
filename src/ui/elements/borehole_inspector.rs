@@ -18,6 +18,7 @@ use crate::{
         widgets::{
             borehole_log::DrillHoleProperties,
             collapsible_section::CollapsibleSection,
+            hint::Hint,
             menu::{self, MenuButton, MenuFieldCombo},
         },
     },
@@ -63,7 +64,7 @@ pub(crate) fn draw_borehole_inspector(
         .default_size(DEFAULT_WIDTH.min(widest))
         .min_size(MIN_WIDTH)
         .max_size(widest)
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             // Report exactly the rect we were offered rather than whatever
@@ -116,12 +117,12 @@ fn draw_body(
         BoreholeInspectorTab::Data => {
             // Columns come from the dataset, so every hole shows the same.
             let properties = DrillHoleProperties::new(("borehole_inspector", dataset.id, hole_index), hole, &dataset.dataset.fields);
-            CollapsibleSection::new("borehole_inspector_summary", tr!("borehole-inspector-summary"))
+            CollapsibleSection::new(egui::Id::unique("borehole_inspector_summary"), tr!("borehole-inspector-summary"))
                 .default_open(true)
                 .show(ui, |ui| ui.push_id((dataset.id, hole_index), |ui| properties.show_summary(ui)));
             if !hole.intervals.is_empty() {
                 ui.add_space(4.0);
-                CollapsibleSection::new("borehole_inspector_intervals", tr!("viewport-interval-data"))
+                CollapsibleSection::new(egui::Id::unique("borehole_inspector_intervals"), tr!("viewport-interval-data"))
                     .default_open(true)
                     .show(ui, |ui| {
                         // The table scrolls to fit what the panel has left,
@@ -132,7 +133,7 @@ fn draw_body(
             }
         }
         BoreholeInspectorTab::Log => {
-            CollapsibleSection::new("borehole_inspector_log_display", tr!("borehole-inspector-display"))
+            CollapsibleSection::new(egui::Id::unique("borehole_inspector_log_display"), tr!("borehole-inspector-display"))
                 .default_open(true)
                 .show(ui, |ui| draw_log_field_pickers(ui, editor, dataset, commands));
             ui.add_space(4.0);
@@ -191,11 +192,7 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState) {
             ui.spacing_mut().item_spacing.x = 4.0;
             // Rightmost, where a panel's close belongs; the lock sits inboard.
             // The same switch Geology's viewport bar button throws.
-            if ui
-                .add(egui::Button::image(themed_icon!(ui, "close_project.svg")).frame(false))
-                .on_hover_text(tr!("borehole-inspector-close-inspector"))
-                .clicked()
-            {
+            if ui.add(egui::Button::image(themed_icon!(ui, "close_project.svg")).frame(false)).clicked() {
                 editor.show_borehole_inspector = false;
             }
             let locked = editor.borehole_inspector_locked;
@@ -206,7 +203,7 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState) {
             } else {
                 (unthemed_icon!("entry_unlocked.svg"), tr!("borehole-inspector-hold-hole-while-you-work"))
             };
-            if ui.add(egui::Button::image(icon).frame(locked)).on_hover_text(hint).clicked() {
+            if ui.add(egui::Button::image(icon).frame(locked)).hint(hint).clicked() {
                 editor.borehole_inspector_locked = !locked;
             }
         });

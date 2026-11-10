@@ -639,10 +639,15 @@ impl XyPoint for crate::model::formats::mesh_data::Vertex {
 /// Signed area of a polyline (XY plane only). Positive = CCW, negative = CW.
 pub(crate) fn signed_area_xy<P: XyPoint>(verts: &[P]) -> f64 {
     let n = verts.len();
+    let Some(origin) = verts.first().map(|vert| vert.xy()) else {
+        return 0.0;
+    };
+    // About the first point: products of mine coordinates run to trillions,
+    // and their rounding alone outweighs the area of a millimetre sliver.
     let mut area = 0.0_f64;
     for i in 0..n {
-        let a = verts[i].xy();
-        let b = verts[(i + 1) % n].xy();
+        let a = verts[i].xy() - origin;
+        let b = verts[(i + 1) % n].xy() - origin;
         area += a.x * b.y - b.x * a.y;
     }
     area * 0.5

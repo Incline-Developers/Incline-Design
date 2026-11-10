@@ -2,16 +2,15 @@ cargo-features = ["profile-rustflags"]
 
 [workspace]
 resolver = "3"
-members = [".", "crates/mineflow", "crates/omf"]
+members = [".", "crates/mineflow", "crates/minlp", "crates/omf", "crates/solver"]
 default-members = ["."]
-exclude = ["vendor/egui-winit"]
 
 [package]
 name = "incline-design"
-version = "0.3.4"
+version = "0.4.0"
 edition = "2024"
 description = "Free Open Source Mine Design"
-repository = "https://github.com/Incline-Developers/Incline"
+repository = "https://github.com/Incline-Developers/Incline-Design"
 license = "MIT"
 keywords = ["mining", "cad", "design"]
 categories = ["graphics", "science"]
@@ -29,28 +28,35 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 chrono = "0.4.45"
 cosmic-text = "0.19.0"
 dxf = "0.6.2"
-earcut = "0.4.11"
-egui = "0.36.2"
-egui-wgpu = "0.36.2"
-egui_extras = { version = "0.36.2", default-features = false, features = ["svg"] }
+earcut = "0.4.12"
+egui = "0.37.0"
+egui-wgpu = "0.37.0"
+egui_extras = { version = "0.37.0", default-features = false, features = ["svg"] }
 foldhash = "0.2.0"
 fontmesh = "0.7.0"
-glam = { version = "0.34.1", features = ["serde"] }
+gif = "0.14.2"
+glam = { version = "0.34.3", features = ["serde"] }
 i18n-embed = { version = "0.16.0", features = ["fluent-system"] }
 i18n-embed-fl = "0.10.1"
 laz = { version = "0.13.0", features = ["parallel"] }
-log = "0.4.34"
+log = "0.4.35"
 lyon = "1.0.19"
 mineflow = { path = "crates/mineflow" }
+minlp = { path = "crates/minlp" }
+solver = { path = "crates/solver" }
 omf = { path = "crates/omf", default-features = false, features = ["image", "parquet", "zlib-rs"] }
 png = "0.18.1"
 # `crs-definitions` feature omitted: only `from_proj_string` is used, and enabling it
 # would pull in a second copy of the EPSG tables pinned to crs-definitions 0.5.
-proj4rs = { version = "0.2.1", default-features = false }
+proj4rs = { version = "0.3.0", default-features = false }
 crs-definitions = "0.6.0"
 csv = "1.4.0"
+# Animate's video export's AV1 encoder, pure Rust, on the shared rayon pool.
+# Its `asm` feature (about 2.7x faster on x86-64) is left off: it needs nasm
+# on every build machine.
+rav1e = { version = "0.8.1", default-features = false, features = ["threading"] }
 rayon = "1.12.0"
-rfd = { version = "0.17.2", features = ["file-handle-inner"] }
+rfd = { version = "0.18.0", features = ["file-handle-inner"] }
 robust = "1.2.0"
 rust-embed = { version = "8.13.0", default-features = false, features = ["debug-embed"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -61,21 +67,26 @@ thousands = "0.2.0"
 tiff = { version = "0.11.3", features = ["deflate", "fax", "jpeg", "lzw"], default-features = false }
 twox-hash = "2.1.5"
 unic-langid = { version = "0.9.6", features = ["macros"] }
-uuid = { version = "1.28.0", features = ["js", "serde", "v4"] }
+uuid = { version = "1.29.2", features = ["js", "serde", "v4"] }
 web-time = "1.1.0"
 wgpu = "30.0.1"
-winit = "0.30.13"
+# winit's defaults less `wayland-csd-adwaita`: the window draws its own title bar, so
+# the Adwaita frame winit would build (hidden) only spawned dbus-send at startup
+# and warned about button layouts it can't read.
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "7.0.0"
-egui-winit = "0.36.2"
+egui_system_font_provider = "0.37.0"
+# Its defaults less `winit/default`, which would bring back the Adwaita frame (see `winit`).
+egui-winit = { version = "0.37.0", default-features = false, features = ["clipboard", "links", "wayland", "x11"] }
 i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
-memmap2 = "0.9.11"
+memmap2 = "0.9.12"
 pollster = "1.0.1"
 sys-locale = "0.3.2"
-sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+sysinfo = { version = "0.40.1", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
-toml = "1.1.8"
+toml = "1.2.1"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-log = "0.2.0"
@@ -84,16 +95,23 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.7"
 console_log = "1.1.0"
-egui-winit = { version = "0.36.2", default-features = false, features = ["links"] }
+egui-winit = { version = "0.37.0", default-features = false, features = ["links"] }
 getrandom = { version = "0.4.3", features = ["wasm_js"] }
-js-sys = "0.3.106"
-wasm-bindgen = "0.2.128"
-wasm-bindgen-futures = "0.4.78"
+js-sys = "0.3.107"
+wasm-bindgen = "0.2.130"
+wasm-bindgen-futures = "0.4.80"
 wasm-bindgen-rayon = { version = "1.3.0", features = ["no-bundler"] }
-web-sys = { version = "0.3.105", features = [
+web-sys = { version = "0.3.107", features = [
+    "AudioContext",
+    "AudioDestinationNode",
+    "AudioNode",
+    "AudioParam",
+    "AudioScheduledSourceNode",
+    "BaseAudioContext",
     "BeforeUnloadEvent",
     "Blob",
     "BlobPropertyBag",
+    "CanvasRenderingContext2d",
     "Clipboard",
     "Document",
     "Element",
@@ -101,6 +119,7 @@ web-sys = { version = "0.3.105", features = [
     "EventTarget",
     "File",
     "FileList",
+    "GainNode",
     "HtmlCanvasElement",
     "HtmlElement",
     "HtmlInputElement",
@@ -112,23 +131,58 @@ web-sys = { version = "0.3.105", features = [
     "IdbTransaction",
     "IdbTransactionMode",
     "IdbVersionChangeEvent",
+    "ImageData",
     "MediaQueryList",
     "Navigator",
     "Node",
+    "OscillatorNode",
+    "OscillatorType",
+    "Response",
     "Storage",
+    "TextMetrics",
     "Url",
     "Window",
 ] }
 
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+libc = "0.2.191"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSCell", "NSImage", "NSMenu", "NSMenuItem"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSObject", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSApplication",
+    "NSAttributedString",
+    "NSButton",
+    "NSCell",
+    "NSControl",
+    "NSGraphics",
+    "NSImage",
+    "NSMenu",
+    "NSMenuItem",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+    "objc2-core-foundation",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "NSAttributedString",
+    "NSData",
+    "NSDictionary",
+    "NSGeometry",
+    "NSObject",
+    "NSString",
+    "NSUserDefaults",
+    "NSValue",
+    "objc2-core-foundation",
+] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62.2", features = [
     "Win32_Graphics_DirectManipulation",
+    "Win32_Graphics_Gdi",
     "Win32_System_Com",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Input_Pointer",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
@@ -178,7 +232,3 @@ window-size = { width = 660, height = 400 }
 app-position = { x = 180, y = 200 }
 application-folder-position = { x = 480, y = 200 }
 
-# looks like they excluded my patch from the 26.2 release, I think it'll be coming in 27.0? whenever that happens.
-[patch.crates-io]
-# egui-winit 0.36.2 unconditionally compiles native file drops on wasm.
-egui-winit = { path = "vendor/egui-winit" }

@@ -9,6 +9,7 @@ struct StrokeInstance {
     @location(2) end: vec3<f32>,
     @location(3) style: u32,
     @location(4) color: vec4<f32>,
+    @location(5) fade_size: f32,
 };
 
 struct VertexOutput {
@@ -47,6 +48,26 @@ fn clip_ndc(clip: vec4<f32>) -> vec2<f32> {
     return clip.xy / max(abs(clip.w), 1e-6);
 }
 
+// A fading stroke may take up at most this share of the pixels across the
+// ground it outlines; past that, neighbouring outlines merge into ink.
+const FADE_SPAN_PER_WIDTH: f32 = 6.0;
+// The faintest a fading stroke gets, so dense ground stays outlined.
+const FADE_MIN_ALPHA: f32 = 0.2;
+
+// How many pixels across a square of `size` metres on plan at `at` appears,
+// from the area it projects to, so a tilted view counts its foreshortening.
+fn plan_span_px(at: vec3<f32>, size: f32) -> f32 {
+    let centre_clip = camera.view_proj * vec4<f32>(at, 1.0);
+    if centre_clip.w <= 0.0 {
+        return 1e6;
+    }
+    let pixel_to_ndc = vec2<f32>(2.0 / camera.viewport.x, 2.0 / camera.viewport.y);
+    let centre = clip_ndc(centre_clip);
+    let x = (clip_ndc(camera.view_proj * vec4<f32>(at + vec3<f32>(size, 0.0, 0.0), 1.0)) - centre) / pixel_to_ndc;
+    let y = (clip_ndc(camera.view_proj * vec4<f32>(at + vec3<f32>(0.0, size, 0.0), 1.0)) - centre) / pixel_to_ndc;
+    return sqrt(abs(x.x * y.y - x.y * y.x));
+}
+
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32, stroke: StrokeInstance) -> VertexOutput {
     var out: VertexOutput;
@@ -58,20 +79,31 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, stroke: StrokeInstance) -> 
     out.color = document_styled_color(stroke.color, flags);
     out.disc_radius = -1.0;
 
+    // Thin a fading stroke down to a pixel as its ground shrinks on screen,
+    // then fade it. Lines measure at their middle so both ends agree.
+    var half_width = stroke.half_width;
+    // Selected and hovered strokes keep their weight.
+    if stroke.fade_size > 0.0 && (flags & (STYLE_SELECTED | STYLE_HOVER)) == 0u {
+        let middle = select((stroke.start + stroke.end) * 0.5, stroke.start, (stroke.style & (STROKE_ROUND | STROKE_SCREEN_AXIS)) != 0u);
+        let width = plan_span_px(middle, stroke.fade_size) / FADE_SPAN_PER_WIDTH;
+        half_width = clamp(width * 0.5, min(0.5, half_width), half_width);
+        out.color.a *= clamp(width, FADE_MIN_ALPHA, 1.0);
+    }
+
     let corner = QUAD[vertex_index];
     let pixel_to_ndc = vec2<f32>(2.0 / camera.viewport.x, 2.0 / camera.viewport.y);
     var anchor = stroke.start;
     var offset_px: vec2<f32>;
     if (stroke.style & STROKE_ROUND) != 0u {
         // One pixel of margin keeps every sample the disc covers inside the quad.
-        let square = vec2<f32>(corner.x * 2.0 - 1.0, corner.y) * (stroke.half_width + 1.0);
+        let square = vec2<f32>(corner.x * 2.0 - 1.0, corner.y) * (half_width + 1.0);
         offset_px = square;
         out.disc_px = square;
-        out.disc_radius = stroke.half_width;
+        out.disc_radius = half_width;
     } else if (stroke.style & STROKE_SCREEN_AXIS) != 0u {
         let axis = stroke.end.xy;
         let direction = axis / max(length(axis), 1e-6);
-        offset_px = axis * (corner.x * 2.0 - 1.0) + vec2<f32>(-direction.y, direction.x) * corner.y * stroke.half_width;
+        offset_px = axis * (corner.x * 2.0 - 1.0) + vec2<f32>(-direction.y, direction.x) * corner.y * half_width;
     } else {
         let at_end = corner.x > 0.5;
         anchor = select(stroke.start, stroke.end, at_end);
@@ -81,7 +113,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, stroke: StrokeInstance) -> 
         // non-square viewport.
         let delta = (clip_ndc(end_clip) - clip_ndc(start_clip)) / pixel_to_ndc;
         let direction = select(vec2<f32>(1.0, 0.0), delta / length(delta), length(delta) > 1e-6);
-        offset_px = vec2<f32>(-direction.y, direction.x) * corner.y * stroke.half_width;
+        offset_px = vec2<f32>(-direction.y, direction.x) * corner.y * half_width;
     }
 
     out.section_offset = section_plane_offset(anchor);

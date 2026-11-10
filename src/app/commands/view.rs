@@ -1,7 +1,7 @@
 use crate::{
     app::App,
     i18n::tr,
-    ui::state::{ActiveTool, DelayProduct},
+    ui::state::{ActiveTool, DelayProduct, RECENT_FUNCTION_LIMIT, note_recent},
     userspace_log, userspace_warn,
 };
 
@@ -34,13 +34,24 @@ impl<'a> App<'a> {
             centre
         } else {
             self.refresh_snap_index();
+            let drawn = crate::app::events::drawn_surfaces(
+                &self.editor,
+                self.showing_solid_preview(),
+                &self.triangulations,
+                &self.solid_view_body,
+                &self.reserves_scene,
+                &self.schedule_animation,
+                self.solid_preview.as_ref(),
+            );
+            let overlay = if self.editor.is_haulage_page() { &self.haul_block_surface[..] } else { drawn.1 };
             let Some(graphics) = self.graphics.as_mut() else {
                 return;
             };
             // No snap caught: one rule for every object, the closest point on
             // it to the cursor.
             let Some(centre) = graphics.pick_rotation_centre(
-                &self.triangulations,
+                drawn.0,
+                overlay,
                 &self.drill_holes,
                 &self.editor.hidden_handles,
                 &self.editor.frozen_handles,
@@ -83,6 +94,15 @@ impl<'a> App<'a> {
         // render; document geometry does not need rebuilding.
         self.redraw_requested = true;
         userspace_log!("{}", tr!("cmd-view-set-topology-wireframes-enabled", enabled = enabled.to_string()));
+        Ok(())
+    }
+
+    pub(crate) fn set_topology_contours(&mut self, enabled: bool) -> anyhow::Result<()> {
+        // A per-session view toggle like the wireframes, picked up by the
+        // topology GPU cache's style check on the next render.
+        self.editor.topology_contours_enabled = enabled;
+        self.redraw_requested = true;
+        userspace_log!("{}", tr!("cmd-view-set-topology-contours-enabled", enabled = enabled.to_string()));
         Ok(())
     }
 
@@ -168,6 +188,7 @@ impl<'a> App<'a> {
             crate::app::io::finite_clamped(preferences.fly_mouse_look_sensitivity, 0.0001, 0.02, crate::app::io::default_fly_mouse_look_sensitivity());
         preferences.fly_near_clip_limit = crate::app::io::finite_clamped(preferences.fly_near_clip_limit, 0.01, 100.0, crate::app::io::default_fly_near_clip_limit());
         preferences.fly_max_clip_span = crate::app::io::finite_clamped(preferences.fly_max_clip_span, 100.0, 1_000_000.0, crate::app::io::default_fly_max_clip_span());
+        preferences.recent_functions_shown = preferences.recent_functions_shown.clamp(1, RECENT_FUNCTION_LIMIT as u32);
 
         // Apply to the editor before attempting to save. A save failure must
         // not leave the editor holding a stale style: a widget whose draft no
@@ -177,11 +198,8 @@ impl<'a> App<'a> {
         self.editor.well_log_style = preferences.well_log_style;
         self.editor.dark_mode = preferences.dark_mode;
         self.editor.show_console = preferences.show_console;
-        self.editor.panel_chrome = preferences.panel_chrome;
         self.editor.ui_size_percent = preferences.ui_size_percent;
-        self.editor.show_world_axis_gizmo = preferences.show_world_axis_gizmo;
-        self.editor.show_scale_bar = preferences.show_scale_bar;
-        self.editor.renderer_background_color = preferences.renderer_background_color;
+        self.editor.renderer_background_color = crate::ui::scene_background_color(preferences.dark_mode);
         self.editor.snap_poll_rate = preferences.snap_poll_rate;
         self.editor.vsync_enabled = preferences.vsync_enabled;
         self.editor.frame_rate_cap = preferences.frame_rate_cap;
@@ -199,13 +217,13 @@ impl<'a> App<'a> {
         self.editor.plan_zoom_sensitivity = preferences.plan_zoom_sensitivity;
         self.editor.plan_invert_vertical_look = preferences.plan_invert_vertical_look;
         self.editor.plan_invert_horizontal_look = preferences.plan_invert_horizontal_look;
-        self.editor.plan_zoom_towards_cursor = preferences.plan_zoom_towards_cursor;
         self.editor.fly_field_of_view_degrees = preferences.fly_field_of_view_degrees;
         self.editor.fly_mouse_look_sensitivity = preferences.fly_mouse_look_sensitivity;
         self.editor.fly_invert_vertical_look = preferences.fly_invert_vertical_look;
         self.editor.fly_invert_horizontal_look = preferences.fly_invert_horizontal_look;
         self.editor.fly_near_clip_limit = preferences.fly_near_clip_limit;
         self.editor.fly_max_clip_span = preferences.fly_max_clip_span;
+        self.editor.recent_functions_shown = preferences.recent_functions_shown;
         // Language applies live. Nothing holds a translated string between
         // frames, so installing the bundle and asking for the redraw at the end
         // of this function is the whole switch - no restart, no font reload.
@@ -237,13 +255,30 @@ impl<'a> App<'a> {
         // the draft and the editor disagreeing.
         crate::app::io::save_config(&config_from(
             &preferences,
-            self.editor.workspace_order,
             self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
+            self.editor.recent_functions.clone(),
         ))?;
 
+        Ok(())
+    }
+
+    /// Remember a menu function as just used and save the list with the rest
+    /// of the config; no project is touched, so nothing turns dirty.
+    pub(crate) fn note_recent_function(&mut self, row: crate::ui::elements::main_menu::MenuRow) -> anyhow::Result<()> {
+        if !note_recent(&mut self.editor.recent_functions, row) {
+            return Ok(());
+        }
+        crate::app::io::save_config(&config_from(
+            &self.editor.current_preferences(),
+            self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
+            self.editor.blast_library.clone(),
+            self.editor.survey.definitions.clone(),
+            self.editor.survey.local_system.clone(),
+            self.editor.recent_functions.clone(),
+        ))?;
         Ok(())
     }
 
@@ -274,7 +309,6 @@ impl<'a> App<'a> {
                 self.editor.plan_zoom_sensitivity,
                 self.editor.plan_invert_vertical_look,
                 self.editor.plan_invert_horizontal_look,
-                self.editor.plan_zoom_towards_cursor,
                 self.editor.fly_field_of_view_degrees,
                 self.editor.fly_mouse_look_sensitivity,
                 self.editor.fly_invert_vertical_look,
@@ -285,12 +319,142 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The surfaces framing must measure: whatever the viewport is actually
+    /// drawing, as [`crate::app::events::drawn_surfaces`] says for every page.
+    ///
+    /// Animate draws the solids for the instant on screen, Reserves its dig
+    /// blocks and the Blasting steps their bench bodies, with the project's
+    /// own surfaces hidden; measuring those framed nothing there, and the
+    /// camera stayed put or swung to the world origin.
+    fn framed_triangulations(&self) -> &[crate::model::triangulation::OpenTriangulation] {
+        crate::app::events::drawn_surfaces(
+            &self.editor,
+            self.showing_solid_preview(),
+            &self.triangulations,
+            &self.solid_view_body,
+            &self.reserves_scene,
+            &self.schedule_animation,
+            self.solid_preview.as_ref(),
+        )
+        .0
+    }
+
+    /// Work out what clicks, snaps and the orbit pivot skip this frame:
+    /// [`EditorState::pick_frozen`] and [`EditorState::orbit_frozen`]. Rebuilt only when the page, the
+    /// locks or the project's items change.
+    pub(crate) fn sync_page_locks(&mut self) {
+        use std::hash::{Hash, Hasher};
+
+        use crate::model::SceneEntityId;
+        let page = self.editor.page_locks_items();
+        // Summed per entry: the sets do not iterate in a stable order.
+        let unordered = |set: &std::collections::HashSet<SceneEntityId>| {
+            set.iter().fold(set.len() as u64, |sum, entity| {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                entity.hash(&mut hasher);
+                sum.wrapping_add(hasher.finish())
+            })
+        };
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        page.hash(&mut hasher);
+        self.editor.is_schedule_animation().hash(&mut hasher);
+        unordered(&self.editor.frozen_handles).hash(&mut hasher);
+        unordered(&self.editor.page_unlocked).hash(&mut hasher);
+        if page {
+            self.workspace
+                .active_project()
+                .map(|project| (project.runtime_id, project.project.document.revision()))
+                .hash(&mut hasher);
+            (self.triangulations.len(), self.block_models.len(), self.drill_holes.len(), self.point_clouds.len()).hash(&mut hasher);
+        }
+        let key = hasher.finish();
+        if self.page_lock_key == Some(key) {
+            return;
+        }
+        self.page_lock_key = Some(key);
+        if !page {
+            self.editor.pick_frozen = self.editor.frozen_handles.clone();
+            self.editor.orbit_frozen = self.editor.frozen_handles.clone();
+            return;
+        }
+        let unlocked = &self.editor.page_unlocked;
+        // Design lines stay pickable on the Road Network: Convert Selection
+        // turns them into roads, and they have no padlock of their own.
+        let objects = self
+            .workspace
+            .active_project()
+            .filter(|_| self.editor.is_schedule_animation())
+            .map(|project| {
+                project
+                    .project
+                    .document
+                    .objects()
+                    .iter()
+                    .map(|object| SceneEntityId::Object(object.id()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let every = self
+            .triangulations
+            .iter()
+            .map(|item| SceneEntityId::Triangulation(item.id))
+            .chain(self.block_models.iter().map(|item| SceneEntityId::BlockModel(item.id)))
+            .chain(self.drill_holes.iter().map(|item| SceneEntityId::DrillHole(item.id)))
+            .chain(self.point_clouds.iter().map(|item| SceneEntityId::PointCloud(item.id)))
+            .chain(objects)
+            .chain(self.editor.frozen_handles.iter().copied());
+        self.editor.pick_frozen = every.filter(|entity| !unlocked.contains(entity)).collect();
+        self.editor.orbit_frozen = self.editor.frozen_handles.iter().copied().filter(|entity| !unlocked.contains(entity)).collect();
+    }
+
+    /// Open Animate on the whole site: once per project, and again whenever
+    /// a page that frames what it draws - Reserves, Blasting, Dig Strips, the
+    /// Road Network or another workspace - has had the camera since. Moving
+    /// between Animate and the pages with no 3D view keeps the user's view.
+    pub(crate) fn sync_animation_frame(&mut self) {
+        let elsewhere = self.editor.active_workspace != crate::ui::state::Workspace::Planning || self.editor.is_solids_view() || self.editor.is_viewport_step();
+        if elsewhere {
+            self.editor.animation_framed_key = None;
+            return;
+        }
+        if !self.editor.is_schedule_animation() {
+            return;
+        }
+        let Some(runtime) = self.workspace.active_project().map(|project| project.runtime_id) else {
+            return;
+        };
+        if self.editor.animation_framed_key == Some(runtime) {
+            return;
+        }
+        // Wait for the scene, and for any swing of the view to land: a frame
+        // taken before either would be undone.
+        if self.schedule_animation.scene().is_empty() || self.graphics.as_ref().is_some_and(|graphics| graphics.view_transition_running()) {
+            return;
+        }
+        self.editor.animation_framed_key = Some(runtime);
+        let triangulations = self.framed_triangulations().to_vec();
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.zoom_to_extents(
+                &self.scene_document,
+                &triangulations,
+                &self.block_models,
+                &self.drill_holes,
+                &self.point_clouds,
+                &self.editor.hidden_handles,
+            );
+            self.redraw_requested = true;
+        }
+    }
+
     /// Reset the camera to a plan view that fits all visible content.
     pub(crate) fn reset_view(&mut self) {
+        // Cloned before borrowing graphics mutably: the surfaces may come
+        // from the project or from the schedule animation.
+        let triangulations = self.framed_triangulations().to_vec();
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.fit_to_extents(
                 &self.scene_document,
-                &self.triangulations,
+                &triangulations,
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,
@@ -303,10 +467,20 @@ impl<'a> App<'a> {
 
     /// Fit all visible content while preserving the current orbit angle.
     pub(crate) fn zoom_to_extents(&mut self) {
+        // The Layout is about its roads and blocks, which the scene's own
+        // extents do not count.
+        if self.editor.is_haulage_page()
+            && let Some((min, max)) = self.haul_layout_bounds()
+        {
+            self.frame_haul(min, max);
+            userspace_log!("{}", tr!("cmd-view-zoom-extents-preserving-angle"));
+            return;
+        }
+        let triangulations = self.framed_triangulations().to_vec();
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.zoom_to_extents(
                 &self.scene_document,
-                &self.triangulations,
+                &triangulations,
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,
@@ -325,27 +499,21 @@ impl<'a> App<'a> {
 /// whole: a save that left a field out of the literal would drop whatever the
 /// last one had put there. The products are passed in rather than read off the
 /// draft because they are not a preference the settings tabs edit - the
-/// palette owns them. The workspace order is passed separately for the same
-/// reason, so saving preferences or products preserves the tab arrangement.
-/// Mine-grid definitions are also carried through every config write.
+/// palette owns them. Mine-grid definitions are also carried through every config write.
 pub(crate) fn config_from(
     preferences: &crate::ui::state::PreferencesDraft,
-    workspace_order: [crate::ui::state::Workspace; 5],
     delay_products: Vec<crate::app::io::StoredDelayProduct>,
     blast_library: crate::model::blast::BlastLibrary,
     coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
     mine_coordinate_system: Option<String>,
+    recent_functions: Vec<String>,
 ) -> crate::app::io::Config {
     crate::app::io::Config {
         language: preferences.language,
         well_log_style: preferences.well_log_style,
         dark_mode: preferences.dark_mode,
         show_console: preferences.show_console,
-        panel_chrome: preferences.panel_chrome,
         ui_size_percent: preferences.ui_size_percent,
-        show_world_axis_gizmo: preferences.show_world_axis_gizmo,
-        show_scale_bar: preferences.show_scale_bar,
-        renderer_background_color: preferences.renderer_background_color,
         snap_poll_rate: preferences.snap_poll_rate,
         vsync_enabled: preferences.vsync_enabled,
         frame_rate_cap: preferences.frame_rate_cap,
@@ -360,7 +528,6 @@ pub(crate) fn config_from(
         plan_zoom_sensitivity: preferences.plan_zoom_sensitivity,
         plan_invert_vertical_look: preferences.plan_invert_vertical_look,
         plan_invert_horizontal_look: preferences.plan_invert_horizontal_look,
-        plan_zoom_towards_cursor: preferences.plan_zoom_towards_cursor,
         fly_field_of_view_degrees: preferences.fly_field_of_view_degrees,
         fly_mouse_look_sensitivity: preferences.fly_mouse_look_sensitivity,
         fly_invert_vertical_look: preferences.fly_invert_vertical_look,
@@ -371,6 +538,7 @@ pub(crate) fn config_from(
         blast_library,
         coordinate_systems,
         mine_coordinate_system,
-        workspace_order: workspace_order.to_vec(),
+        recent_functions_shown: preferences.recent_functions_shown,
+        recent_functions,
     }
 }

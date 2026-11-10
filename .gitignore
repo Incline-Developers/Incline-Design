@@ -9,6 +9,7 @@ tmp/
 .agents/
 .codex/
 .qwen/
+.zcode/
 
 # Profiling
 flamegraph.svg

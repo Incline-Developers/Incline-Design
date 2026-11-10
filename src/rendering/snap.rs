@@ -218,6 +218,52 @@ pub(crate) fn snap_cursor(
     nearest.hit
 }
 
+/// [`snap_cursor`] over strings drawn outside the document - the Haulage
+/// Layout's dig blocks and roads - nearer than `nearer_than`, a hit already
+/// found, if one is given: their points in point mode, their edges in line
+/// mode, nothing otherwise. Each string says whether it closes on itself.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn snap_to_rings<'a>(
+    rings: impl Iterator<Item = (&'a [DVec3], bool)>,
+    mode: &CursorMode,
+    view_proj: &DMat4,
+    screen: Size,
+    cursor_px: (f32, f32),
+    threshold_px: f32,
+    slab: Option<SectionSlab>,
+    nearer_than: Option<DVec3>,
+) -> Option<DVec3> {
+    let view = SnapView {
+        view_proj: *view_proj,
+        screen,
+        cursor: DVec2::new(cursor_px.0 as f64, cursor_px.1 as f64),
+        slab,
+    };
+    let threshold = threshold_px as f64;
+    let mut nearest = Nearest {
+        hit: None,
+        distance_sq: threshold * threshold,
+    };
+    if let Some(screen_point) = nearer_than.and_then(|world| view.project(world)) {
+        nearest.distance_sq = nearest.distance_sq.min(screen_point.distance_squared(view.cursor));
+    }
+    for (ring, closed) in rings {
+        match mode {
+            CursorMode::SnapToPoint => ring.iter().for_each(|p| nearest.consider_point(&view, *p)),
+            CursorMode::SnapToLine => {
+                for pair in ring.windows(2) {
+                    nearest.consider_segment(&view, pair[0], pair[1]);
+                }
+                if closed && let (Some(first), Some(last)) = (ring.first(), ring.last()) {
+                    nearest.consider_segment(&view, *last, *first);
+                }
+            }
+            CursorMode::SnapToSurface | CursorMode::Select => return nearer_than,
+        }
+    }
+    nearest.hit.map(|hit| hit.world).or(nearer_than)
+}
+
 /// World-space ray through a screen pixel, from the near plane forward.
 fn screen_ray(view_proj: &DMat4, screen: Size, cursor: DVec2) -> Option<(DVec3, DVec3)> {
     let ndc_x = cursor.x / screen.0 as f64 * 2.0 - 1.0;

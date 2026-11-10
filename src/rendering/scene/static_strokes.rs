@@ -107,8 +107,13 @@ fn fingerprint(object_revision: u64, rgba: [f32; 4], layer: LayerId) -> u64 {
 }
 
 /// Whether the cache may own this object's stroke geometry. Hidden objects
-/// draw nothing, and translucent ones need the blended document stage.
+/// draw nothing, and translucent ones need the blended document stage. A
+/// planning step's cut lines fade by their spacing, which moves with their
+/// neighbours, so they stay on the stream that rebuilds with them.
 fn eligible(object: &Object, editor: &EditorState, rgba: [f32; 4]) -> bool {
+    if editor.is_planning_cut_step() {
+        return false;
+    }
     let Object::Polyline { closed, fill, .. } = object else {
         return false;
     };

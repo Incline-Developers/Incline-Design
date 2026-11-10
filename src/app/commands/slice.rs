@@ -158,11 +158,13 @@ impl<'a> App<'a> {
         if !self.slice_cursor_tracks_section() {
             return;
         }
-        let snapped = if self.editor.active_tool.snaps_cursor() && self.editor.snapping_active() {
-            self.cursor_snap_point(web_time::Instant::now())
-        } else {
-            None
-        };
+        let snapped = self.poly_close_target().or_else(|| {
+            if self.editor.active_tool.snaps_cursor() && self.editor.snapping_active() {
+                self.cursor_snap_point(web_time::Instant::now())
+            } else {
+                None
+            }
+        });
         let Some(world) = snapped.or_else(|| self.graphics.as_ref().and_then(|graphics| graphics.cursor_world(self.editor.z_level))) else {
             return;
         };

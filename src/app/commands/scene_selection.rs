@@ -1,12 +1,11 @@
-//! What the selection-driven tools take from the current scene selection.
+//! What the tools take from the current scene selection.
 //!
-//! Create Triangulation, the surface tools, the point-cloud tools and the
-//! estimation tools run on whatever is selected when they are opened, rather
-//! than on a pick list filled inside their own dialog: select first, then act.
-//! That splits into three jobs handled here - counting the selection every
-//! frame so the menu entries can enable themselves, gathering the ids once
-//! when a dialog opens so it works on a set that cannot shift under it, and
-//! turning an explorer row's click into the selection it names.
+//! Every tool opens on whatever is selected of the kind it works on, and its
+//! dialog chooses or picks from there (see `tool_subject.rs`). That splits
+//! into three jobs handled here - counting the selection every frame for the
+//! pick prompt to report, gathering the ids when a tool reads the selection
+//! so it works on a set that cannot shift under it, and turning an explorer
+//! row's click into the selection it names.
 
 use std::collections::HashSet;
 
@@ -74,6 +73,16 @@ impl App<'_> {
             .collect()
     }
 
+    /// The surface a topology tool (Trim, Cut Topology with Pit Shell,
+    /// Include Solid) opens on: the active one, in the slot for the surface
+    /// being worked on. A surface selected before opening one of these is the
+    /// shape or the surface to trim far more often than it is the ground, so
+    /// the topology is left for the user to choose rather than guessed.
+    pub(crate) fn topology_tool_surface(&self) -> Option<TriangulationId> {
+        self.active_triangulation
+            .filter(|id| self.triangulations.iter().any(|triangulation| triangulation.id == *id && triangulation.state.loaded))
+    }
+
     /// Selected point clouds that are loaded, in project order.
     pub(crate) fn selected_point_clouds(&self) -> Vec<PointCloudId> {
         self.point_clouds
@@ -137,11 +146,12 @@ impl App<'_> {
             match handle {
                 SceneEntityId::Object(object_id) => {
                     if let Some(object) = self.scene_document.get_object(*object_id) {
+                        counts.objects += 1;
+                        if matches!(object, Object::Polyline { .. }) {
+                            counts.polylines += 1;
+                        }
                         if is_triangulation_polyline(object) {
                             counts.triangulation_sources += 1;
-                        }
-                        if object.encloses_area() {
-                            counts.clip_boundaries += 1;
                         }
                         if matches!(object, Object::Point { .. }) {
                             counts.surface_points += 1;

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use glam::{DMat4, DQuat, DVec2, DVec3, dcamera};
+use glam::{DMat3, DMat4, DQuat, DVec2, DVec3, dcamera};
 use winit::{
     dpi::PhysicalPosition,
     event::{MouseButton, MouseScrollDelta},
@@ -57,7 +57,7 @@ impl Camera {
         let forward = self.angle_forward();
         let right = self.angle_right();
         self.up = forward.cross(right).normalize();
-        self.target = self.position + forward * target_distance.max(MIN_ORTHO_ZOOM);
+        self.target = self.position + forward * target_distance.max(MIN_ZOOM);
     }
 
     pub(crate) fn sync_angles_from_forward(&mut self) {
@@ -87,14 +87,14 @@ impl Camera {
         self.up = DVec3::Y;
         self.target = center;
         // Camera height == zoom so `update_camera` re-derives the same zoom.
-        self.position = center + DVec3::Z * zoom.max(MIN_ORTHO_ZOOM);
+        self.position = center + DVec3::Z * zoom.max(MIN_ZOOM);
     }
 
     /// Place the camera at `position` looking along `forward` with the given
     /// `up`, keeping the focal point `target_distance` ahead.
     pub(crate) fn look_to(&mut self, position: DVec3, forward: DVec3, up: DVec3, target_distance: f64) {
         self.position = position;
-        self.target = position + forward * target_distance.max(MIN_ORTHO_ZOOM);
+        self.target = position + forward * target_distance.max(MIN_ZOOM);
         self.up = up;
         self.sync_angles_from_forward();
     }
@@ -112,11 +112,18 @@ impl Camera {
     pub(crate) fn frame_keep_orientation(&mut self, center: DVec3, zoom: f64) {
         let forward = self.forward();
         self.target = center;
-        self.position = center - forward * zoom.max(MIN_ORTHO_ZOOM);
+        self.position = center - forward * zoom.max(MIN_ZOOM);
     }
 }
 
-const MIN_ORTHO_ZOOM: f64 = 1.0e-4;
+/// The closest the view zooms: a view 20 cm tall (the zoom is its half
+/// height). Vertices are f32 on the GPU, relative to a chunk origin that can
+/// lie kilometres away, so they round to a tenth of a millimetre or so; this
+/// keeps that well under a pixel.
+const MIN_ZOOM: f64 = 0.1;
+/// The farthest the view zooms out: about the size of a continent, past any
+/// mine or projected coordinate system.
+const MAX_ZOOM: f64 = 1.0e7;
 pub(crate) const PERSPECTIVE_FOV_Y: f64 = 40.0_f64.to_radians();
 const MIN_PERSPECTIVE_NEAR: f64 = 0.25;
 const MAX_PERSPECTIVE_DEPTH_SPAN: f64 = 150_000.0;
@@ -161,6 +168,19 @@ impl Projection {
         self.aspect = width.max(1) as f64 / height.max(1) as f64;
     }
 
+    /// This projection reshaped for a `width` x `height` target, framing the
+    /// largest centred part of what it framed that has the target's shape:
+    /// the same height where the target is no wider, the same width where it
+    /// is wider. The video export frames its picture this way.
+    pub(crate) fn cropped_to(&self, width: u32, height: u32) -> Self {
+        let mut cropped = self.clone();
+        cropped.resize(width, height);
+        let shrink = (self.aspect / cropped.aspect).min(1.0);
+        cropped.zoom *= shrink;
+        cropped.perspective_fov_y = 2.0 * ((self.perspective_fov_y * 0.5).tan() * shrink).atan();
+        cropped
+    }
+
     pub(crate) fn set_symmetric_depth_extent(&mut self, half_depth: f64) {
         let half_depth = half_depth.max(1.0);
         self.znear = -half_depth;
@@ -177,9 +197,18 @@ impl Projection {
             return;
         }
 
-        let requested_far = (max_depth + padding).max(self.min_perspective_near * 2.0);
-        self.znear = padded_perspective_near(min_depth, padding, requested_far, self.min_perspective_near);
+        let near_limit = self.near_limit();
+        let requested_far = (max_depth + padding).max(near_limit * 2.0);
+        self.znear = padded_perspective_near(min_depth, padding, requested_far, near_limit);
         self.zfar = requested_far.min(self.znear + self.max_perspective_depth_span);
+    }
+
+    /// The nearest the perspective near plane may come: the user's limit,
+    /// unless the view is zoomed in closer than that, when the plane follows
+    /// the zoom so what the view looks at is not clipped away. Depth is a
+    /// reversed-Z float, so a near plane that close costs no precision.
+    fn near_limit(&self) -> f64 {
+        self.min_perspective_near.min(self.zoom * 0.1)
     }
 
     pub(crate) fn expand_view_depth_range(&mut self, min_depth: f64, max_depth: f64, padding: f64) {
@@ -189,9 +218,10 @@ impl Projection {
             return;
         }
 
-        let requested_far = (max_depth + padding).max(self.min_perspective_near * 2.0);
-        if max_depth + padding > self.min_perspective_near {
-            let near = padded_perspective_near(min_depth, padding, requested_far.max(self.zfar), self.min_perspective_near);
+        let near_limit = self.near_limit();
+        let requested_far = (max_depth + padding).max(near_limit * 2.0);
+        if max_depth + padding > near_limit {
+            let near = padded_perspective_near(min_depth, padding, requested_far.max(self.zfar), near_limit);
             self.znear = self.znear.min(near);
         }
         self.zfar = self.zfar.max(requested_far).min(self.znear + self.max_perspective_depth_span);
@@ -223,6 +253,10 @@ impl Projection {
         self.perspective
     }
 
+    pub(crate) fn aspect(&self) -> f64 {
+        self.aspect
+    }
+
     pub(crate) fn perspective_fov_y(&self) -> f64 {
         self.perspective_fov_y
     }
@@ -232,15 +266,16 @@ impl Projection {
         self.min_perspective_near = near_clip_limit;
         self.max_perspective_depth_span = max_clip_span;
         if self.perspective {
-            self.znear = self.znear.max(self.min_perspective_near);
+            self.znear = self.znear.max(self.near_limit());
             self.zfar = self.zfar.max(self.znear * (1.0 + f64::EPSILON)).min(self.znear + self.max_perspective_depth_span);
         }
     }
 
     pub(crate) fn set_perspective(&mut self, perspective: bool) {
         if perspective && !self.perspective {
-            let far = self.znear.abs().max(self.zfar.abs()).max(self.min_perspective_near * 2.0);
-            self.znear = (far * 1.0e-4).max(self.min_perspective_near).min(far * (1.0 - f64::EPSILON));
+            let near_limit = self.near_limit();
+            let far = self.znear.abs().max(self.zfar.abs()).max(near_limit * 2.0);
+            self.znear = (far * 1.0e-4).max(near_limit).min(far * (1.0 - f64::EPSILON));
             self.zfar = far.min(self.znear + self.max_perspective_depth_span);
         } else if !perspective && self.perspective {
             let half_depth = self.zfar.max(1.0);
@@ -264,12 +299,26 @@ pub(crate) struct CameraUniform {
     /// reports pixels in the *target's* space, not the viewport sub-rect's
     /// own space, so a shader reconstructing a screen-relative position (the
     /// XY grid) needs to subtract this first. Zero for every render target
-    /// that's filled from its own origin (plots, slice previews, the offscreen
+    /// that's filled from its own origin (slice previews, the offscreen
     /// volume raycast target) - only the main window's toolbar-bounded canvas
-    /// has a nonzero offset. zw: unused padding.
+    /// has a nonzero offset. z: the projection's y scale (its matrix's
+    /// `[1][1]`), from which a shader sizes a pixel at a given view depth,
+    /// kept by [`Self::update_view_proj`]. w: unused padding.
     viewport_origin: [f32; 4],
     section_plane: [f32; 4],
     section_normal: [f32; 4],
+}
+
+/// The matrix [`CameraUniform::update_view_proj`] uploads, over points rebased
+/// by `scene_origin`.
+///
+/// An overlay drawn on top of a render has to project through the same matrix
+/// the GPU drew with, not one rebuilt from the live camera: the two differ
+/// wherever a pass uploads its own settings, as the solid preview does by
+/// rendering without vertical exaggeration.
+pub(crate) fn scene_view_proj(camera: &Camera, projection: &Projection, scene_origin: DVec3, vertical_exaggeration: f64) -> DMat4 {
+    let rebased_view = dcamera::rh::view::look_to_mat4(camera.position - scene_origin, camera.forward(), camera.up);
+    projection.calc_matrix() * rebased_view * DMat4::from_scale(DVec3::new(1.0, 1.0, vertical_exaggeration))
 }
 
 impl CameraUniform {
@@ -292,7 +341,7 @@ impl CameraUniform {
             Some(slab) => {
                 let point = slab.point - scene_origin;
                 self.section_plane = [point.x as f32, point.y as f32, point.z as f32, slab.half_width as f32];
-                self.section_normal = [slab.normal.x as f32, slab.normal.y as f32, slab.normal.z as f32, 1.0];
+                self.section_normal = [slab.normal.x as f32, slab.normal.y as f32, slab.normal.z as f32, if slab.outlines { 2.0 } else { 1.0 }];
             }
             None => {
                 self.section_plane = [0.0; 4];
@@ -301,12 +350,16 @@ impl CameraUniform {
         }
     }
 
+    /// Whether this camera sees a 2D section, where surfaces draw as their cut through the plane.
+    pub(crate) fn section_cuts(&self) -> bool {
+        self.section_normal[3] > 1.5
+    }
+
     pub(crate) fn update_view_proj(&mut self, camera: &Camera, projection: &Projection, scene_origin: DVec3, vertical_exaggeration: f64) {
-        let rebased_view = dcamera::rh::view::look_to_mat4(camera.position - scene_origin, camera.forward(), camera.up);
-        let exaggeration = DMat4::from_scale(DVec3::new(1.0, 1.0, vertical_exaggeration));
-        let view_proj = projection.calc_matrix() * rebased_view * exaggeration;
+        let view_proj = scene_view_proj(camera, projection, scene_origin, vertical_exaggeration);
         self.view_proj = view_proj.as_mat4().to_cols_array_2d();
         self.inv_view_proj = view_proj.inverse().as_mat4().to_cols_array_2d();
+        self.viewport_origin[2] = projection.calc_matrix().y_axis.y as f32;
         let forward = camera.forward();
         self.cam_forward = [forward.x as f32, forward.y as f32, forward.z as f32, vertical_exaggeration as f32];
         self.cam_position = [
@@ -326,7 +379,7 @@ impl CameraUniform {
     /// except the main window's canvas) should leave this at its default of
     /// zero rather than calling it.
     pub(crate) fn set_viewport_origin(&mut self, x: u32, y: u32) {
-        self.viewport_origin = [x as f32, y as f32, 0.0, 0.0];
+        self.viewport_origin = [x as f32, y as f32, self.viewport_origin[2], 0.0];
     }
 
     /// Interaction-quality knobs packed into the otherwise-unused `viewport.zw`
@@ -363,7 +416,6 @@ pub(crate) struct CameraController {
     rotate_sensitivity: f64,
     invert_vertical_look: bool,
     invert_horizontal_look: bool,
-    zoom_towards_cursor: bool,
     pub(crate) mouse_loc: (f32, f32),
     orbit_anchor: Option<DVec3>,
     /// The button is up but motion from before the release is still queued; the anchor holds until `update_camera` spends it.
@@ -389,7 +441,6 @@ impl CameraController {
             rotate_sensitivity,
             invert_vertical_look: false,
             invert_horizontal_look: false,
-            zoom_towards_cursor: true,
             mouse_loc: (0., 0.),
             orbit_anchor: None,
             orbit_releasing: false,
@@ -397,19 +448,11 @@ impl CameraController {
         }
     }
 
-    pub(crate) fn configure_preferences(
-        &mut self,
-        orbit_sensitivity: f64,
-        zoom_sensitivity: f64,
-        invert_vertical_look: bool,
-        invert_horizontal_look: bool,
-        zoom_towards_cursor: bool,
-    ) {
+    pub(crate) fn configure_preferences(&mut self, orbit_sensitivity: f64, zoom_sensitivity: f64, invert_vertical_look: bool, invert_horizontal_look: bool) {
         self.rotate_sensitivity = orbit_sensitivity;
         self.zoom_sensitivity = zoom_sensitivity;
         self.invert_vertical_look = invert_vertical_look;
         self.invert_horizontal_look = invert_horizontal_look;
-        self.zoom_towards_cursor = zoom_towards_cursor;
     }
 
     pub(crate) fn begin_orbit(&mut self, anchor: DVec3) {
@@ -449,14 +492,13 @@ impl CameraController {
     /// (`Graphics::set_slice_standard_view`), over this same duration, so
     /// clicking the gizmo reads as one gesture in either view.
     pub(crate) fn begin_view_transition(&mut self, camera: &Camera, forward: DVec3, up_hint: DVec3, target_distance: f64) {
-        let end_forward = forward.normalize_or(camera.forward());
-        let end_up = orthonormal_up(end_forward, up_hint);
+        let start_forward = camera.forward();
+        let end_forward = forward.normalize_or(start_forward);
         self.view_transition = Some(ViewTransition {
-            start_forward: camera.forward(),
-            end_forward,
-            end_up,
+            start: view_rotation(start_forward, orthonormal_up(start_forward, camera.up())),
+            end: view_rotation(end_forward, orthonormal_up(end_forward, up_hint)),
             target: camera.target(),
-            distance: target_distance.max(MIN_ORTHO_ZOOM),
+            distance: target_distance.max(MIN_ZOOM),
             elapsed: Duration::ZERO,
             duration: VIEW_TRANSITION_DURATION,
         });
@@ -475,8 +517,12 @@ impl CameraController {
         let duration = transition.duration.as_secs_f64().max(f64::EPSILON);
         let linear_t = (transition.elapsed.as_secs_f64() / duration).clamp(0.0, 1.0);
         let t = ease_out_cubic(linear_t);
-        let forward = slerp_unit_with_axis_hint(transition.start_forward, transition.end_forward, transition.end_up, t);
-        let up = orthonormal_up(forward, transition.end_up);
+        // The whole orientation turns as one, so the heading on screen eases
+        // round with the tilt rather than jumping to the end view's on the
+        // first frame.
+        let rotation = transition.start.slerp(transition.end, t);
+        let forward = rotation * DVec3::NEG_Z;
+        let up = rotation * DVec3::Y;
 
         camera.target = transition.target;
         camera.position = transition.target - forward * transition.distance;
@@ -573,13 +619,11 @@ impl CameraController {
         } else {
             self.zoom_sensitivity * self.scroll
         };
-        let zoom_factor = to_target_distance_modifier * zoom_scale;
+        // Stop at the zoom limits rather than pass them: the view's scale
+        // follows this distance, and crossing the target would flip it.
+        let zoom_factor = (to_target_distance_modifier * zoom_scale).clamp(to_target_distance_modifier - MAX_ZOOM, (to_target_distance_modifier - MIN_ZOOM).max(0.0));
         let aspect = screen_size.0 as f64 / screen_size.1.max(1.0) as f64;
-        let zoom_lateral = if self.zoom_towards_cursor {
-            (right * mouse_loc_rel.x * aspect + up * mouse_loc_rel.y) * zoom_factor
-        } else {
-            DVec3::ZERO
-        };
+        let zoom_lateral = (right * mouse_loc_rel.x * aspect + up * mouse_loc_rel.y) * zoom_factor;
         camera.position += scrollward * zoom_factor + zoom_lateral;
         camera.target += zoom_lateral;
         self.scroll = 0.0;
@@ -629,15 +673,15 @@ impl CameraController {
     fn reconcile_zoom(camera: &Camera, projection: &mut Projection) {
         // Scale orthographic bounds by camera-to-target distance for zoom effect
         let dist = (camera.target - camera.position).dot(camera.forward()).abs();
-        projection.zoom = dist.max(MIN_ORTHO_ZOOM);
+        projection.zoom = dist.clamp(MIN_ZOOM, MAX_ZOOM);
     }
 }
 
 #[derive(Debug)]
 struct ViewTransition {
-    start_forward: DVec3,
-    end_forward: DVec3,
-    end_up: DVec3,
+    /// The camera's orientation at either end; see [`view_rotation`].
+    start: DQuat,
+    end: DQuat,
     target: DVec3,
     distance: f64,
     elapsed: Duration,
@@ -646,6 +690,12 @@ struct ViewTransition {
 
 pub(super) fn ease_out_cubic(t: f64) -> f64 {
     1.0 - (1.0 - t).powi(3)
+}
+
+/// The rotation taking the camera's own axes - looking down -Z with +Y up -
+/// to `forward` and `up`, which must be orthonormal.
+fn view_rotation(forward: DVec3, up: DVec3) -> DQuat {
+    DQuat::from_mat3(&DMat3::from_cols(forward.cross(up), up, -forward)).normalize()
 }
 
 fn orthonormal_up(forward: DVec3, up_hint: DVec3) -> DVec3 {
@@ -661,41 +711,6 @@ fn orthonormal_up(forward: DVec3, up_hint: DVec3) -> DVec3 {
     right.cross(forward).normalize_or(up_hint)
 }
 
-fn slerp_unit(from: DVec3, to: DVec3, t: f64) -> DVec3 {
-    let from = from.normalize_or_zero();
-    let to = to.normalize_or(from);
-    let dot = from.dot(to).clamp(-1.0, 1.0);
-
-    if dot > 0.9995 {
-        return from.lerp(to, t).normalize_or(to);
-    }
-
-    if dot < -0.9995 {
-        let axis = from.cross(if from.z.abs() < 0.9 { DVec3::Z } else { DVec3::Y }).normalize_or(DVec3::X);
-        return DQuat::from_axis_angle(axis, std::f64::consts::PI * t).mul_vec3(from).normalize_or(to);
-    }
-
-    let theta = dot.acos();
-    let sin_theta = theta.sin();
-    let a = ((1.0 - t) * theta).sin() / sin_theta;
-    let b = (t * theta).sin() / sin_theta;
-    (from * a + to * b).normalize_or(to)
-}
-
-fn slerp_unit_with_axis_hint(from: DVec3, to: DVec3, axis_hint: DVec3, t: f64) -> DVec3 {
-    let from = from.normalize_or_zero();
-    let to = to.normalize_or(from);
-    let dot = from.dot(to).clamp(-1.0, 1.0);
-
-    if dot >= -0.9995 {
-        return slerp_unit(from, to, t);
-    }
-
-    let hinted_axis = axis_hint.reject_from(from);
-    let fallback_axis = from.cross(if from.z.abs() < 0.9 { DVec3::Z } else { DVec3::Y }).normalize_or(DVec3::X);
-    let axis = hinted_axis.normalize_or(fallback_axis);
-    DQuat::from_axis_angle(axis, std::f64::consts::PI * t).mul_vec3(from).normalize_or(to)
-}
 #[derive(Debug)]
 pub(crate) struct FlyCameraController {
     forward: bool,
@@ -894,6 +909,9 @@ pub(crate) struct SectionSlab {
     pub(crate) point: DVec3,
     pub(crate) normal: DVec3,
     pub(crate) half_width: f64,
+    /// A 2D section: surfaces draw only where they cross the plane, while
+    /// lines, points and block models keep the slab.
+    pub(crate) outlines: bool,
 }
 
 impl SectionSlab {
@@ -904,6 +922,23 @@ impl SectionSlab {
 
     pub(crate) fn contains(&self, world: DVec3) -> bool {
         self.signed_distance(world).abs() <= self.half_width
+    }
+
+    /// The stretch `(enter, leave)` of the ray `origin + direction * t`,
+    /// `t >= 0`, along which the section draws filled geometry: between the
+    /// walls, or from the plane on in a 2D section, matching the block
+    /// raycast's `clip_march_to_section_slab`. `None` if the ray misses it.
+    pub(crate) fn ray_span(&self, origin: DVec3, direction: DVec3) -> Option<(f64, f64)> {
+        let from = self.signed_distance(origin);
+        let slope = direction.dot(self.normal);
+        if slope.abs() <= f64::EPSILON {
+            return (from.abs() <= self.half_width).then_some((0.0, f64::INFINITY));
+        }
+        let wall_a = (self.half_width - from) / slope;
+        let wall_b = (-self.half_width - from) / slope;
+        let enter = if self.outlines { -from / slope } else { wall_a.min(wall_b) };
+        let (enter, leave) = (enter.max(0.0), wall_a.max(wall_b));
+        (enter < leave).then_some((enter, leave))
     }
 
     /// Fraction range `(enter, leave)` along segment `a`-`b`, each in `0.0..=1.0`,

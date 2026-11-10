@@ -1,4 +1,3 @@
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -13,7 +12,7 @@ pub(crate) fn zero_origin(v: &Vector3) -> bool {
 }
 
 /// Selects the type of geometry in an [`Element`](crate::Element) from several options.
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type")]
 pub enum Geometry {
     PointSet(PointSet),
@@ -39,10 +38,7 @@ impl<'de> Deserialize<'de> for Geometry {
                 formatter.write_str("a geometry object with a \"type\" field")
             }
 
-            fn visit_map<A: serde::de::MapAccess<'de>>(
-                self,
-                mut map: A,
-            ) -> Result<Geometry, A::Error> {
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Geometry, A::Error> {
                 use serde::de::{Error, value::MapAccessDeserializer};
 
                 let Some(first) = map.next_key::<std::borrow::Cow<'de, str>>()? else {
@@ -87,14 +83,7 @@ impl<'de> Deserialize<'de> for Geometry {
             }
         }
 
-        const VARIANTS: &[&str] = &[
-            "PointSet",
-            "LineSet",
-            "Surface",
-            "GridSurface",
-            "BlockModel",
-            "Composite",
-        ];
+        const VARIANTS: &[&str] = &["PointSet", "LineSet", "Surface", "GridSurface", "BlockModel", "Composite"];
         deserializer.deserialize_map(GeometryVisitor)
     }
 }
@@ -108,9 +97,7 @@ impl Geometry {
             Self::Surface(_) => &[Location::Vertices, Location::Primitives],
             Self::GridSurface(_) => &[Location::Vertices, Location::Primitives],
             Self::Composite(_) => &[Location::Elements],
-            Self::BlockModel(b) if b.has_subblocks() => {
-                &[Location::Subblocks, Location::Primitives]
-            }
+            Self::BlockModel(b) if b.has_subblocks() => &[Location::Subblocks, Location::Primitives],
             Self::BlockModel(_) => &[Location::Primitives],
         }
     }
@@ -185,8 +172,7 @@ impl From<Composite> for Geometry {
 /// ### Attribute Locations
 ///
 /// - [`Vertices`](crate::Location::Vertices) puts attribute values on the points.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[schemars(inline)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PointSet {
     /// Origin of the points relative to the project coordinate reference system.
     #[serde(default, skip_serializing_if = "zero_origin")]
@@ -222,8 +208,7 @@ impl PointSet {
 /// - [`Vertices`](crate::Location::Vertices) puts attribute values on the vertices.
 ///
 /// - [`Primitives`](crate::Location::Primitives) puts attribute values on the line segments.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[schemars(inline)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LineSet {
     /// Origin of the lines relative to the project coordinate reference system.
     #[serde(default, skip_serializing_if = "zero_origin")]
@@ -242,16 +227,8 @@ impl LineSet {
         Self::with_origin(vertices, segments, Default::default())
     }
 
-    pub fn with_origin(
-        vertices: Array<array_type::Vertex>,
-        segments: Array<array_type::Segment>,
-        origin: Vector3,
-    ) -> Self {
-        Self {
-            origin,
-            vertices,
-            segments,
-        }
+    pub fn with_origin(vertices: Array<array_type::Vertex>, segments: Array<array_type::Segment>, origin: Vector3) -> Self {
+        Self { origin, vertices, segments }
     }
 
     pub fn location_len(&self, location: Location) -> Option<u64> {
@@ -270,8 +247,7 @@ impl LineSet {
 /// - [`Vertices`](crate::Location::Vertices) puts attribute values on the vertices.
 ///
 /// - [`Primitives`](crate::Location::Primitives) puts attribute values on the triangles.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[schemars(inline)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Surface {
     /// Origin of the surface relative to the project coordinate reference system.
     #[serde(default, skip_serializing_if = "zero_origin")]
@@ -287,23 +263,12 @@ pub struct Surface {
 }
 
 impl Surface {
-    pub fn new(
-        vertices: Array<array_type::Vertex>,
-        triangles: Array<array_type::Triangle>,
-    ) -> Self {
+    pub fn new(vertices: Array<array_type::Vertex>, triangles: Array<array_type::Triangle>) -> Self {
         Self::with_origin(vertices, triangles, Default::default())
     }
 
-    pub fn with_origin(
-        vertices: Array<array_type::Vertex>,
-        triangles: Array<array_type::Triangle>,
-        origin: Vector3,
-    ) -> Self {
-        Self {
-            origin,
-            vertices,
-            triangles,
-        }
+    pub fn with_origin(vertices: Array<array_type::Vertex>, triangles: Array<array_type::Triangle>, origin: Vector3) -> Self {
+        Self { origin, vertices, triangles }
     }
 
     pub fn location_len(&self, location: Location) -> Option<u64> {
@@ -322,8 +287,7 @@ impl Surface {
 /// - [`Vertices`](crate::Location::Vertices) puts attribute values on the grid vertices.
 ///
 /// - [`Primitives`](crate::Location::Primitives) puts attribute values on the grid cells.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[schemars(inline)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GridSurface {
     /// Position and orientation of the surface.
     pub orient: Orient2,
@@ -336,11 +300,7 @@ pub struct GridSurface {
 
 impl GridSurface {
     pub fn new(orient: Orient2, grid: Grid2, heights: Option<Array<array_type::Scalar>>) -> Self {
-        Self {
-            orient,
-            grid,
-            heights,
-        }
+        Self { orient, grid, heights }
     }
 
     pub fn location_len(&self, location: Location) -> Option<u64> {
@@ -357,8 +317,7 @@ impl GridSurface {
 /// ### Attribute Locations
 ///
 /// - [`Elements`](crate::Location::Elements) puts attribute values on elements.
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[schemars(inline)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Composite {
     #[serde(default)]
     pub elements: Vec<Element>,
@@ -404,11 +363,7 @@ impl Validate for LineSet {
         val.enter("LineSet")
             .finite_seq(self.origin, "origin")
             .array(&mut self.vertices, Constraint::Vertex, "vertices")
-            .array(
-                &mut self.segments,
-                Constraint::Segment(self.vertices.item_count()),
-                "segments",
-            );
+            .array(&mut self.segments, Constraint::Segment(self.vertices.item_count()), "segments");
     }
 }
 
@@ -417,11 +372,7 @@ impl Validate for Surface {
         val.enter("Surface")
             .finite_seq(self.origin, "origin")
             .array(&mut self.vertices, Constraint::Vertex, "vertices")
-            .array(
-                &mut self.triangles,
-                Constraint::Triangle(self.vertices.item_count()),
-                "triangles",
-            );
+            .array(&mut self.triangles, Constraint::Triangle(self.vertices.item_count()), "triangles");
     }
 }
 
@@ -432,21 +383,15 @@ impl Validate for GridSurface {
             .obj(&mut self.orient)
             .obj(&mut self.grid)
             .array_opt(self.heights.as_mut(), Constraint::Scalar, "heights")
-            .array_size_opt(
-                self.heights.as_ref().map(|h| h.item_count()),
-                self.grid.flat_corner_count(),
-                "heights",
-            );
+            .array_size_opt(self.heights.as_ref().map(|h| h.item_count()), self.grid.flat_corner_count(), "heights");
         self.orient.validate_ortho(&mut val);
     }
 }
 
 impl Validate for Composite {
     fn validate_inner(&mut self, val: &mut Validator) {
-        val.enter("Composite").objs(&mut self.elements).unique(
-            self.elements.iter().map(|e| &e.name),
-            "elements[..]::name",
-            false,
-        );
+        val.enter("Composite")
+            .objs(&mut self.elements)
+            .unique(self.elements.iter().map(|e| &e.name), "elements[..]::name", false);
     }
 }

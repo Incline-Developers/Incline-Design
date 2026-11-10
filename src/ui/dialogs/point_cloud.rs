@@ -2,11 +2,17 @@
 
 use crate::{
     i18n::tr,
-    model::ground_filter::{ClothTerrain, estimate_classify_memory_bytes, recommended_cloth_resolution},
+    model::{
+        ground_filter::{ClothTerrain, estimate_classify_memory_bytes, recommended_cloth_resolution},
+        point_cloud::PointCloudId,
+    },
     ui::{
         dialogs::triangulation::format_bytes,
-        state::{EditorState, UiCommand, UiProjectView},
-        widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
+        state::{EditorState, ToolSubject, UiCommand, UiPointCloudEntry, UiProjectView},
+        widgets::{
+            context_menu::{ChecklistRow, Tick},
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
+        },
     },
 };
 
@@ -42,10 +48,9 @@ pub(crate) fn draw_point_cloud_join_dialog(ui: &mut egui::Ui, editor: &mut Edito
             let selected: Vec<_> = loaded.iter().filter(|cloud| editor.point_cloud_join_sources.contains(&cloud.id)).collect();
             let total: usize = selected.iter().map(|cloud| cloud.point_count).sum();
 
-            // The clouds come from the selection the dialog opened with, so
-            // this states the set rather than offering one to tick through.
+            // The clouds selected when the dialog opened start ticked.
             MenuField::new(tr!("point-cloud-point-clouds"))
-                .help_text(tr!("point-cloud-selected-clouds-copied-into-joined"))
+                .help_text(tr!("point-cloud-join-sources-help"))
                 .show(ui, |ui, _row_height, _field_width| {
                     ui.label(tr!("point-cloud-selected-count", count = selected.len().to_string(), points = total.to_string()));
                 });
@@ -54,8 +59,8 @@ pub(crate) fn draw_point_cloud_join_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 .max_height(JOIN_LIST_MAX_HEIGHT)
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
-                    for cloud in &selected {
-                        ui.weak(tr!("point-cloud-name-count-points", name = cloud.name.to_string(), count = cloud.point_count.to_string()));
+                    if let Some(id) = cloud_checklist(ui, &loaded, &editor.point_cloud_join_sources) {
+                        toggle(&mut editor.point_cloud_join_sources, id);
                     }
                 });
 
@@ -63,7 +68,6 @@ pub(crate) fn draw_point_cloud_join_dialog(ui: &mut egui::Ui, editor: &mut Edito
             ui.separator();
 
             MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.point_cloud_join_name_input)
-                .help_text(tr!("point-cloud-name-assigned-joined-point-cloud"))
                 .width(220.0)
                 .hint_text(tr!("common-joined-cloud"))
                 .show(ui);
@@ -73,7 +77,7 @@ pub(crate) fn draw_point_cloud_join_dialog(ui: &mut egui::Ui, editor: &mut Edito
 
             menu::menu_actions(ui, |ui| {
                 let can_run = selected.len() >= 2 && !editor.point_cloud_join_name_input.trim().is_empty();
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("point-cloud-join")).primary().enabled(can_run)).clicked() || (confirm && can_run) {
                     commands.push(UiCommand::ExecutePointCloudJoin {
                         cloud_ids: selected.iter().map(|cloud| cloud.id).collect(),
@@ -82,13 +86,38 @@ pub(crate) fn draw_point_cloud_join_dialog(ui: &mut egui::Ui, editor: &mut Edito
                     });
                     editor.point_cloud_join_open = false;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.point_cloud_join_open = false;
                 }
             });
         });
     if !open {
         editor.point_cloud_join_open = false;
+    }
+}
+
+/// The loaded clouds as a list to tick. Returns the cloud whose row was
+/// clicked.
+fn cloud_checklist(ui: &mut egui::Ui, loaded: &[&UiPointCloudEntry], ticked: &[PointCloudId]) -> Option<PointCloudId> {
+    if loaded.is_empty() {
+        ui.weak(tr!("point-cloud-none-loaded"));
+    }
+    let mut clicked = None;
+    for cloud in loaded {
+        let label = tr!("point-cloud-name-count-points", name = cloud.name.to_string(), count = cloud.point_count.to_string());
+        if ChecklistRow::new(&label, Tick::of(ticked.contains(&cloud.id), false)).show(ui).toggled {
+            clicked = Some(cloud.id);
+        }
+    }
+    clicked
+}
+
+fn toggle(sources: &mut Vec<PointCloudId>, id: PointCloudId) {
+    match sources.iter().position(|source| *source == id) {
+        Some(index) => {
+            sources.remove(index);
+        }
+        None => sources.push(id),
     }
 }
 
@@ -125,7 +154,7 @@ pub(crate) fn draw_point_cloud_classify_dialog(ui: &mut egui::Ui, editor: &mut E
             let selected: Vec<_> = loaded.iter().filter(|cloud| editor.point_cloud_classify_sources.contains(&cloud.id)).collect();
             let total: usize = selected.iter().map(|cloud| cloud.point_count).sum();
             MenuField::new(tr!("point-cloud-point-clouds"))
-                .help_text(tr!("point-cloud-selected-clouds-each-classified-its"))
+                .help_text(tr!("point-cloud-classify-sources-help"))
                 .show(ui, |ui, _row_height, _field_width| {
                     ui.label(tr!("point-cloud-selected-count", count = selected.len().to_string(), points = total.to_string()));
                 });
@@ -134,8 +163,12 @@ pub(crate) fn draw_point_cloud_classify_dialog(ui: &mut egui::Ui, editor: &mut E
                 .max_height(JOIN_LIST_MAX_HEIGHT)
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
-                    for cloud in &selected {
-                        ui.weak(tr!("point-cloud-name-count-points", name = cloud.name.to_string(), count = cloud.point_count.to_string()));
+                    // The app derives the recommended resolution and the
+                    // memory estimate from the set, so a change goes to it.
+                    if let Some(id) = cloud_checklist(ui, &loaded, &editor.point_cloud_classify_sources) {
+                        let mut sources = editor.point_cloud_classify_sources.clone();
+                        toggle(&mut sources, id);
+                        commands.push(UiCommand::SetToolSubject(ToolSubject::ClassifyPointClouds(sources)));
                     }
                 });
 
@@ -238,7 +271,7 @@ pub(crate) fn draw_point_cloud_classify_dialog(ui: &mut egui::Ui, editor: &mut E
 
             menu::menu_actions(ui, |ui| {
                 let can_run = !selected.is_empty();
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("point-cloud-classify")).primary().enabled(can_run)).clicked() || (confirm && can_run) {
                     commands.push(UiCommand::ExecutePointCloudClassify {
                         cloud_ids: selected.iter().map(|cloud| cloud.id).collect(),
@@ -246,7 +279,7 @@ pub(crate) fn draw_point_cloud_classify_dialog(ui: &mut egui::Ui, editor: &mut E
                     });
                     editor.point_cloud_classify_open = false;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.point_cloud_classify_open = false;
                 }
             });

@@ -81,6 +81,7 @@ impl TextCache {
                 let mut line_str = String::new();
                 let mut attrs_list = AttrsList::new(&Attrs::new());
                 for section in line {
+                    crate::fonts::request_cjk_fonts_for(section.content);
                     let start = line_str.len();
                     line_str.push_str(section.content);
                     let end = line_str.len();
@@ -133,14 +134,15 @@ impl GlyphMeshCache {
             .or_insert_with(|| {
                 let generated = database
                     .with_face_data(key.font_id, |data, face_index| {
-                        let font = FontRef::from_index(data, face_index).map_err(|error| format!("failed to parse font face {face_index}: {error:?}"))?;
+                        let font = FontRef::from_index(data, face_index)
+                            .map_err(|error| crate::i18n::tr!("err-gfx-font-parse", face = face_index.to_string(), error = format!("{error:?}")))?;
                         match glyph_to_mesh_2d(&font, GlyphId::new(u32::from(key.glyph_id)), GLYPH_CURVE_SUBDIVISIONS) {
                             Ok(mesh) => Ok(Some(mesh)),
                             Err(FontMeshError::NoOutline) => Ok(None),
                             Err(error) => Err(error.to_string()),
                         }
                     })
-                    .unwrap_or_else(|| Err("font face is no longer available".to_owned()));
+                    .unwrap_or_else(|| Err(crate::i18n::tr!("err-gfx-font-missing")));
 
                 match generated {
                     Ok(mesh) => mesh,

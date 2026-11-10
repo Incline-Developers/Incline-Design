@@ -10,6 +10,7 @@
 
 use thousands::Separable;
 
+use super::hint::Hint;
 use crate::{
     i18n::tr,
     ui::{EditorState, widgets::shifted},
@@ -162,8 +163,11 @@ fn draw_ring(ui: &mut egui::Ui, status: &str, task: &str, fill: RingFill, end_in
         return;
     }
     // The label is elided to whatever the counts leave it, so a long one - a
-    // full export path, say - is only readable on hover.
-    response.on_hover_text(task);
+    // full export path, say - is only readable on hover. One shown whole
+    // has nothing more to say there.
+    if !task.is_empty() && task_galley.as_ref().is_none_or(|galley| galley.elided) {
+        response.hint(task);
+    }
 
     let center = egui::pos2(rect.right() - end_inset - diameter / 2.0, rect.center().y);
     paint_ring(ui, &painter, center, diameter, fill);
@@ -231,6 +235,33 @@ fn paint_ring_in(ui: &egui::Ui, painter: &egui::Painter, center: egui::Pos2, dia
         }
     };
     paint_arc(painter, center, radius - width / 2.0, start, sweep, egui::Stroke::new(width, filled));
+}
+
+/// A ring of `diameter` on its own, where the layout puts it: filled to
+/// `fraction` of the way round, or turning while there is none to show.
+pub(crate) fn ring(ui: &mut egui::Ui, diameter: f32, fraction: Option<f32>) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(diameter, diameter), egui::Sense::hover());
+    let visuals = ui.visuals();
+    let track = shifted(visuals.panel_fill, if visuals.dark_mode { TRACK_SHIFT_DARK } else { TRACK_SHIFT_LIGHT });
+    let width = (diameter * RING_STROKE_FRACTION).clamp(*RING_STROKE_RANGE.start(), *RING_STROKE_RANGE.end());
+    let radius = (diameter - width) / 2.0;
+    let painter = ui.painter();
+    painter.circle_stroke(rect.center(), radius, egui::Stroke::new(width, track));
+    let (start, sweep) = match fraction {
+        Some(fraction) => (0.0, fraction.clamp(0.0, 1.0) * std::f32::consts::TAU),
+        None => {
+            ui.ctx().request_repaint();
+            let turns = (ui.input(|i| i.time) / SPIN_PERIOD).rem_euclid(1.0) as f32;
+            (turns * std::f32::consts::TAU, SPIN_FRACTION * std::f32::consts::TAU)
+        }
+    };
+    paint_arc(painter, rect.center(), radius, start, sweep, egui::Stroke::new(width, ring_fill(visuals)));
+    response
+}
+
+/// The green a ring fills with, for a figure drawn beside one to match.
+pub(crate) fn ring_fill(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode { FILL_DARK } else { FILL_LIGHT }
 }
 
 /// Stroke `sweep` radians of arc, clockwise from `start` radians past twelve

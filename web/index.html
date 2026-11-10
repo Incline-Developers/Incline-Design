@@ -6,6 +6,9 @@
     <title>Incline Design Web</title>
     <link data-trunk rel="icon" type="image/svg+xml" href="../res/logo.svg" />
     <link data-trunk rel="copy-file" href="_headers" />
+    <!-- CJK faces, fetched the first time the app shows CJK text (src/fonts.rs). -->
+    <link data-trunk rel="copy-file" href="../res/fonts/noto-sans/NotoSansSC-VF.ttf" data-target-path="fonts" />
+    <link data-trunk rel="copy-file" href="../res/fonts/noto-sans/NotoSansKR-VF.ttf" data-target-path="fonts" />
 
     <style>
         html, body {
@@ -98,7 +101,7 @@
         }
 
         #startup-errors {
-            color: #ffc1c5;
+            color: #b42318;
             overflow-wrap: anywhere;
             white-space: pre-wrap;
         }
@@ -158,6 +161,9 @@
             };
             window.inclineDesignStartupError = (message) => {
                 console.error(message);
+                // The first failure is the cause; what follows from it goes
+                // to the console only.
+                if (errors.childElementCount) return;
                 panel.hidden = false;
                 panel.classList.add("startup-failed");
                 status.textContent = "Incline Design could not start";
@@ -172,9 +178,6 @@
             };
 
             const missing = [];
-            if (!("gpu" in navigator)) {
-                missing.push("WebGPU");
-            }
             if (!window.crossOriginIsolated) {
                 missing.push("cross-origin isolation (COOP/COEP headers)");
             }
@@ -188,8 +191,12 @@
             if (!WebAssembly.validate(sharedMemoryModule)) {
                 missing.push("WebAssembly shared-memory support");
             }
-            if (missing.length) {
-                window.inclineDesignStartupError(`This browser is missing ${missing.join(", ")}. Use a current browser over HTTPS or localhost and configure the required isolation headers.`);
+            if (!window.isSecureContext) {
+                window.inclineDesignStartupError("Incline Design has to be opened over HTTPS.");
+            } else if (!("gpu" in navigator)) {
+                window.inclineDesignStartupError("Incline Design needs WebGPU, which this browser does not have. Try a current version of Chrome or Edge, or the desktop app from inclinedesign.net.");
+            } else if (missing.length) {
+                window.inclineDesignStartupError(`This browser is missing ${missing.join(", ")}. Use a current browser and configure the required isolation headers.`);
             }
 
             addEventListener("error", event => {
@@ -204,8 +211,8 @@
             });
         })();
     </script>
-    <!-- Binaryen 123 does not auto-enable the threads/bulk-memory validators;
-         rustc LTO still performs the release optimizations for this module. -->
-    <link data-trunk rel="rust" href="../Cargo.toml" data-wasm-opt="0" data-initializer="web-initializer.js">
+    <!-- wasm-opt does not infer the shared-memory features the threaded build
+         uses (atomics, bulk memory), so enable them explicitly. -->
+    <link data-trunk rel="rust" href="../Cargo.toml" data-wasm-opt="s" data-wasm-opt-params="--enable-threads --enable-bulk-memory --enable-mutable-globals --enable-nontrapping-float-to-int --enable-sign-ext" data-initializer="web-initializer.js">
 </body>
 </html>

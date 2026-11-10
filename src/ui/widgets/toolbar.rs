@@ -3,6 +3,7 @@ use std::hash::Hash;
 use egui::{Color32, Response, Sense, Stroke, Ui, Vec2};
 use strum::IntoEnumIterator;
 
+use super::hint::Hint;
 use crate::{i18n::tr, ui::state::ToolHatch};
 
 /// A consistently styled icon button for application toolbars.
@@ -45,7 +46,7 @@ impl ToolbarButton {
     /// Give the clickable response a stable identity when its parent may be
     /// rebuilt in a different order during an egui sizing pass.
     pub(crate) fn id_salt(mut self, id_salt: impl Hash + std::fmt::Debug) -> Self {
-        self.id_salt = Some(egui::Id::new(id_salt));
+        self.id_salt = Some(egui::Id::unique(id_salt));
         self
     }
 }
@@ -66,7 +67,8 @@ impl egui::Widget for ToolbarButton {
 
         let icon_rect = egui::Align2::CENTER_CENTER.align_size_within_rect(self.icon_size, rect);
         self.icon.fit_to_exact_size(self.icon_size).paint_at(ui, icon_rect);
-        response.on_hover_text(self.tooltip)
+        // A button whose icon says it all is given no tooltip.
+        if self.tooltip.is_empty() { response } else { response.hint(self.tooltip) }
     }
 }
 
@@ -116,7 +118,7 @@ impl<'a> HatchPicker<'a> {
                 }
             })
             .response
-            .on_hover_text(format!("{}: {}", tr!("toolbar-fill-type"), hatch_label(*self.selected_hatch)));
+            .hint(format!("{}: {}", tr!("toolbar-fill-type"), hatch_label(*self.selected_hatch)));
 
         let swatch_rect = egui::Rect::from_center_size(response.rect.center(), self.button_size);
 
@@ -271,19 +273,31 @@ impl<'a> ColorSquarePicker<'a> {
                 widget.expansion = -SWATCH_INSET;
             }
 
-            ui.allocate_ui_with_layout(egui::vec2(self.size.x, self.size.y + 1.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-                ui.add_space(2.0);
+            // Added straight into the row, so it is centred on it the way the
+            // hatch picker's combo beside it is.
+            let response = super::color::edit_srgba(ui, self.color, egui::color_picker::Alpha::Opaque);
 
-                let response = super::color::edit_srgba(ui, self.color, egui::color_picker::Alpha::Opaque);
+            let painter = ui.painter();
+            painter.rect_filled(response.rect, SWATCH_CORNER_RADIUS, *self.color);
+            painter.rect_stroke(response.rect, SWATCH_CORNER_RADIUS, Stroke::new(1., Color32::BLACK), egui::StrokeKind::Inside);
 
-                let painter = ui.painter();
-                painter.rect_filled(response.rect, SWATCH_CORNER_RADIUS, *self.color);
-                painter.rect_stroke(response.rect, SWATCH_CORNER_RADIUS, Stroke::new(1., Color32::BLACK), egui::StrokeKind::Inside);
-
-                response
-            })
-            .inner
+            response
         })
         .inner
     }
+}
+
+/// A hairline between two runs of buttons, `gap` clear either side.
+///
+/// A hairline rather than a gap: a toolbar's buttons meet each other, so a
+/// space alone would read as a missing button. Held clear of the strip's top
+/// and bottom by the same `gap`, so it marks a seam between two runs rather
+/// than looking like an edge of the bar itself.
+pub(crate) fn divider(ui: &mut Ui, side: f32, gap: f32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0 + 2.0 * gap, side), Sense::hover());
+    let visuals = ui.visuals();
+    let color = super::shifted(visuals.panel_fill, if visuals.dark_mode { 26 } else { -46 });
+    let painter = ui.painter();
+    let x = painter.round_to_pixel_center(rect.center().x);
+    painter.vline(x, (rect.top() + gap)..=(rect.bottom() - gap), Stroke::new(1.0, color));
 }

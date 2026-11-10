@@ -10,7 +10,10 @@ use crate::{
     ui::{
         EditorState,
         state::{BlastLibraryItem, UiCommand},
-        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldF64, MenuFieldText},
+        widgets::{
+            hint::Hint,
+            menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldF64, MenuFieldText},
+        },
     },
 };
 
@@ -74,7 +77,7 @@ pub(crate) fn draw_charge_product_dialog(ui: &mut egui::Ui, editor: &mut EditorS
         }
         let can_save = !name.is_empty() && !clash;
         menu::menu_actions(ui, |ui| {
-            if (menu::dialog_confirm_pressed(ui.ctx()) || ui.add(MenuButton::new(tr!("confirmations-save")).primary().enabled(can_save)).clicked()) && can_save {
+            if (menu::dialog_confirmed(ui.ctx()) || ui.add(MenuButton::new(tr!("confirmations-save")).primary().enabled(can_save)).clicked()) && can_save {
                 let mut product = product.clone();
                 product.name = name.to_owned();
                 commands.push(UiCommand::SaveChargeProduct {
@@ -83,7 +86,7 @@ pub(crate) fn draw_charge_product_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                 });
                 close = true;
             }
-            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                 close = true;
             }
         });
@@ -188,10 +191,7 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             }
             if let Some(pattern) = from_pattern
                 && (pattern.0 - preview.0).abs() + (pattern.1 - preview.1).abs() > 1.0e-9
-                && ui
-                    .add(MenuButton::new(tr!("charging-preview-use-pattern-hole")))
-                    .on_hover_text(tr!("charging-preview-active-pattern-median-hole"))
-                    .clicked()
+                && ui.add(MenuButton::new(tr!("charging-preview-use-pattern-hole"))).clicked()
             {
                 *preview = pattern;
             }
@@ -237,7 +237,7 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                         reload,
                     });
                 };
-                if (menu::dialog_confirm_pressed(ui.ctx()) || ui.add(MenuButton::new(tr!("confirmations-save")).primary().enabled(can_save)).clicked()) && can_save {
+                if (menu::dialog_confirmed(ui.ctx()) || ui.add(MenuButton::new(tr!("confirmations-save")).primary().enabled(can_save)).clicked()) && can_save {
                     save(false);
                     close = true;
                 }
@@ -251,7 +251,7 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                     save(true);
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });
@@ -262,9 +262,8 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
 }
 
 /// A small frameless button for a table row's actions.
-fn row_action(ui: &mut egui::Ui, glyph: &str, enabled: bool, tooltip: String) -> bool {
+fn row_action(ui: &mut egui::Ui, glyph: &str, enabled: bool) -> bool {
     ui.add_enabled(enabled, egui::Button::new(glyph).frame(false).min_size(egui::vec2(DECK_ACTION_SIZE, DECK_ACTION_SIZE)))
-        .on_hover_text(tooltip)
         .clicked()
 }
 
@@ -322,7 +321,7 @@ fn draw_deck_table(ui: &mut egui::Ui, rule: &mut ChargeRule, products: &[ChargeP
             let fill = deck.length == DeckLength::Fill;
             if ui
                 .selectable_label(fill, tr!("common-fill"))
-                .on_hover_text(tr!("charging-deck-takes-whatever-length-fixed-decks"))
+                .hint(tr!("charging-deck-takes-whatever-length-fixed-decks"))
                 .clicked()
             {
                 if fill {
@@ -333,13 +332,13 @@ fn draw_deck_table(ui: &mut egui::Ui, rule: &mut ChargeRule, products: &[ChargeP
             }
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                if row_action(ui, "↑", index > 0, tr!("object-edit-move-up")) {
+                if row_action(ui, "↑", index > 0) {
                     swap = Some((index - 1, index));
                 }
-                if row_action(ui, "↓", index + 1 < count, tr!("object-edit-move-down")) {
+                if row_action(ui, "↓", index + 1 < count) {
                     swap = Some((index, index + 1));
                 }
-                if row_action(ui, "×", true, tr!("charging-remove-deck")) {
+                if row_action(ui, "×", true) {
                     remove = Some(index);
                 }
             });
@@ -384,7 +383,7 @@ fn draw_priming(ui: &mut egui::Ui, rule: &mut ChargeRule) {
     let weak = ui.visuals().weak_text_color();
     egui::Grid::new("rule_priming").num_columns(3).spacing([16.0, 2.0]).show(ui, |ui| {
         let heading = |ui: &mut egui::Ui, text: String, help: String| {
-            ui.label(egui::RichText::new(text).small().color(weak)).on_hover_text(help);
+            ui.label(egui::RichText::new(text).small().color(weak)).hint(help);
         };
         heading(ui, tr!("charging-downhole-delay"), tr!("charging-hole-detonator-hole-fires-long-after"));
         heading(ui, tr!("charging-primer-height"), tr!("charging-how-far-above-base-each-explosive"));
@@ -505,11 +504,11 @@ pub(crate) fn draw_delete_blast_item_dialog(ui: &mut egui::Ui, editor: &mut Edit
                 menu::menu_note(ui, note);
             }
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     commands.push(UiCommand::DeleteBlastLibraryItem(item.clone()));
                     editor.pending_delete_blast_item = None;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.pending_delete_blast_item = None;
                 }
             });

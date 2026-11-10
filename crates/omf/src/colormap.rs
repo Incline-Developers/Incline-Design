@@ -1,7 +1,6 @@
 use std::fmt::Display;
 
 use chrono::{DateTime, NaiveDate, Utc};
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -15,25 +14,13 @@ use crate::{
 ///
 /// Values outside this range will use the color at the ends of the gradient.
 /// The variant used should match the type of the number array.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum NumberRange {
-    Float {
-        min: f64,
-        max: f64,
-    },
-    Integer {
-        min: i64,
-        max: i64,
-    },
-    Date {
-        min: NaiveDate,
-        max: NaiveDate,
-    },
-    DateTime {
-        min: DateTime<Utc>,
-        max: DateTime<Utc>,
-    },
+    Float { min: f64, max: f64 },
+    Integer { min: i64, max: i64 },
+    Date { min: NaiveDate, max: NaiveDate },
+    DateTime { min: DateTime<Utc>, max: DateTime<Utc> },
 }
 
 impl Display for NumberRange {
@@ -61,10 +48,7 @@ impl From<(i64, i64)> for NumberRange {
 
 impl From<(i32, i32)> for NumberRange {
     fn from((min, max): (i32, i32)) -> Self {
-        Self::Integer {
-            min: min.into(),
-            max: max.into(),
-        }
+        Self::Integer { min: min.into(), max: max.into() }
     }
 }
 
@@ -81,7 +65,7 @@ impl From<(DateTime<Utc>, DateTime<Utc>)> for NumberRange {
 }
 
 /// Describes a mapping of floating-point value to colors.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum NumberColormap {
     /// A continuous colormap linearly samples a color gradient within a defined range.
@@ -92,8 +76,6 @@ pub enum NumberColormap {
     ///
     /// Values below the minimum use the first color in the gradient array. Values above
     /// the maximum use the last.
-    ///
-    /// ![Diagram of a continuous colormap](../images/colormap_continuous.svg "Continuous colormap")
     Continuous {
         /// Value range.
         range: NumberRange,
@@ -120,22 +102,13 @@ impl Validate for NumberColormap {
     fn validate_inner(&mut self, val: &mut Validator) {
         match self {
             NumberColormap::Continuous { range, gradient } => {
-                val.enter("NumberColormap::Continuous")
-                    .min_max(*range)
-                    .array(gradient, Constraint::Gradient, "gradient");
+                val.enter("NumberColormap::Continuous").min_max(*range).array(gradient, Constraint::Gradient, "gradient");
             }
-            NumberColormap::Discrete {
-                boundaries,
-                gradient,
-            } => {
+            NumberColormap::Discrete { boundaries, gradient } => {
                 val.enter("NumberColormap::Discrete")
                     .array(boundaries, Constraint::Boundary, "boundaries")
                     .array(gradient, Constraint::Gradient, "gradient")
-                    .array_size(
-                        gradient.item_count(),
-                        boundaries.item_count() + 1,
-                        "gradient",
-                    );
+                    .array_size(gradient.item_count(), boundaries.item_count() + 1, "gradient");
             }
         }
     }

@@ -16,13 +16,14 @@
 
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
+use super::hint::Hint;
 use crate::{
     i18n::tr,
     model::optimization::{Constant, ConstantValue, ConstantsRow, FieldValue, ValueKind, ValueType},
     ui::{
         themed_icon,
         widgets::{
-            data_grid::group_colour,
+            editable_grid::group_colour,
             menu::{self, DragableMenu, MenuButton},
             toolbar::ToolbarButton,
         },
@@ -35,15 +36,15 @@ const PICKER_WIDTH: f32 = 520.0;
 const PICKER_LIST_HEIGHT: f32 = 260.0;
 
 fn constants_key() -> egui::Id {
-    egui::Id::new("opt_value_field_constants")
+    egui::Id::unique("opt_value_field_constants")
 }
 
 fn request_key() -> egui::Id {
-    egui::Id::new("opt_value_field_picker_request")
+    egui::Id::unique("opt_value_field_picker_request")
 }
 
 fn choice_key() -> egui::Id {
-    egui::Id::new("opt_value_field_picker_choice")
+    egui::Id::unique("opt_value_field_picker_choice")
 }
 
 #[derive(Clone)]
@@ -176,7 +177,7 @@ fn edit_number(ui: &mut egui::Ui, id: egui::Id, shown: String, width: f32, range
         ui.data_mut(|data| data.remove::<String>(buffer_id));
         format!("{shown}{suffix}")
     };
-    let response = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(width).horizontal_align(egui::Align::RIGHT));
+    let response = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(width).align(egui::Align2::RIGHT_TOP));
     // A box at rest holds its suffix, which is not something typed in.
     let typing = response.has_focus() || response.changed();
     let filtered = filter_number(&text, range.0 < 0.0);
@@ -210,7 +211,7 @@ pub(crate) struct ValueField<'a, T: FieldEditor> {
 impl<'a, T: FieldEditor> ValueField<'a, T> {
     pub(crate) fn new(id_salt: impl Hash + Debug, value: &'a mut FieldValue<T>) -> Self {
         Self {
-            id: egui::Id::new(("opt_value_field", id_salt)),
+            id: egui::Id::unique(("opt_value_field", id_salt)),
             value,
             range: (f64::MIN, f64::MAX),
             suffix: String::new(),
@@ -309,7 +310,7 @@ impl<'a, T: FieldEditor> ValueField<'a, T> {
 /// A locked field with a usable constant has no problem to report; it says what
 /// the constant's value is on hover instead.
 fn return_value_hint(response: &egui::Response, value: &ConstantValue) -> Option<String> {
-    let _ = response.clone().on_disabled_hover_text(value.display());
+    let _ = response.clone().disabled_hint(value.display());
     None
 }
 
@@ -321,7 +322,7 @@ fn finish_locked(response: egui::Response, problem: Option<String>) -> egui::Res
                 .ctx
                 .layer_painter(response.layer_id)
                 .rect_stroke(response.rect, 2.0, egui::Stroke::new(1.5, egui::Color32::RED), egui::StrokeKind::Outside);
-            response.on_disabled_hover_text(message)
+            response.disabled_hint(message)
         }
         None => response,
     }
@@ -348,12 +349,12 @@ pub(crate) fn draw_constant_picker(ctx: &egui::Context) {
         .filter_map(ConstantsRow::constant)
         .filter(|constant| constant.value.value_type() == request.value_type)
         .collect();
-    let collapsed_id = egui::Id::new("opt_constant_picker_collapsed");
+    let collapsed_id = egui::Id::unique("opt_constant_picker_collapsed");
     // Every group starts open; the ones folded here are remembered by their
     // place in the list until the picker closes.
     let mut collapsed: Vec<usize> = ctx.data(|data| data.get_temp(collapsed_id)).unwrap_or_default();
 
-    let sheet = egui::Area::new(egui::Id::new("opt_constant_picker_sheet"))
+    let sheet = egui::Area::new(egui::Id::unique("opt_constant_picker_sheet"))
         .order(egui::Order::Foreground)
         .fixed_pos(ctx.content_rect().min)
         .interactable(true)
@@ -364,7 +365,7 @@ pub(crate) fn draw_constant_picker(ctx: &egui::Context) {
         });
     ctx.move_to_top(sheet.response.layer_id);
 
-    let selected_id = egui::Id::new("opt_constant_picker_selected");
+    let selected_id = egui::Id::unique("opt_constant_picker_selected");
     let mut selected: Option<String> = ctx.data(|data| data.get_temp(selected_id));
     let mut open = true;
     let mut cancel = false;
@@ -440,7 +441,7 @@ pub(crate) fn draw_constant_picker(ctx: &egui::Context) {
                 if ui.add(MenuButton::new(tr!("opt-select")).primary().enabled(ready)).clicked() {
                     choose = selected.clone();
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     cancel = true;
                 }
             });
@@ -474,8 +475,8 @@ pub(crate) fn close_constant_picker(ctx: &egui::Context) {
 fn close_picker(ctx: &egui::Context) {
     ctx.data_mut(|data| {
         data.remove::<PickerRequest>(request_key());
-        data.remove::<String>(egui::Id::new("opt_constant_picker_selected"));
-        data.remove::<Vec<usize>>(egui::Id::new("opt_constant_picker_collapsed"));
+        data.remove::<String>(egui::Id::unique("opt_constant_picker_selected"));
+        data.remove::<Vec<usize>>(egui::Id::unique("opt_constant_picker_collapsed"));
     });
     ctx.request_repaint();
 }

@@ -134,7 +134,7 @@ pub(crate) fn slopes(grid: &Grid, spec: &SlopeSpec, block_of_cell: &[u32]) -> Re
                     if block == NO_BLOCK {
                         return (step(*fallback), false);
                     }
-                    let angle = values[block as usize];
+                    let angle = values.get(block as usize);
                     if angle.is_finite() && angle > 0.0 && angle < 90.0 && step(angle) > 0 {
                         (step(angle), false)
                     } else {
@@ -210,7 +210,7 @@ pub(crate) fn solve(plan: &ShellPlan, grid: &Grid, values: &BlockValues, slopes:
     let mut gaps: Vec<(usize, usize)> = if count >= 2 { vec![(0, count)] } else { Vec::new() };
     while !gaps.is_empty() {
         if cancel.is_cancelled() {
-            bail!("Cancelled");
+            bail!(crate::app::jobs::Cancelled);
         }
         // Each gap is known by its outer shell, which no other gap shares.
         let mut gap_of_outer = vec![u32::MAX; count + 1];
@@ -293,7 +293,7 @@ fn solve_encoded(precedence: &Precedence, encoded: &[i64], cancel: &CancelFlag) 
     let mut solver = Solver::new(precedence, encoded).map_err(|error| anyhow!("{error}"))?;
     match solver.solve_with_cancel(|| cancel.is_cancelled()) {
         Ok(_) => {}
-        Err(mineflow::Error::Cancelled) => bail!("Cancelled"),
+        Err(mineflow::Error::Cancelled) => bail!(crate::app::jobs::Cancelled),
         Err(error) => bail!("{error}"),
     }
     Ok(solver.pit().map_err(|error| anyhow!("{error}"))?.into_vec())
@@ -351,7 +351,7 @@ fn sweep(domain: &Domain, lattice: &Lattice, whole: Option<&Precedence>, values:
     let mut top = upper[2];
     while top > lower[2] {
         if cancel.is_cancelled() {
-            bail!("Cancelled");
+            bail!(crate::app::jobs::Cancelled);
         }
         let bottom = top.saturating_sub(SWEEP_LEVELS).max(lower[2]);
         let found: Vec<Result<(usize, Vec<u32>)>> = tiles

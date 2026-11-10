@@ -140,7 +140,7 @@ fn fs_main(in: VertexOutput) -> TransparencyOutput {
     // Derivatives before anything that can end the invocation.
     let box_pixels = 1.0 / max(sqrt(dpdx(in.box_position) * dpdx(in.box_position) + dpdy(in.box_position) * dpdy(in.box_position)), vec3<f32>(1.0e-9));
     let wire = block_wire_coverage(in.box_position, in.box_lower, in.box_upper, box_pixels, block_style.wire_params.x, in.faces);
-    if outside_section_slab(in.section_offset) {
+    if outside_section_slab(in.section_offset) || in_front_of_section_2d(in.section_offset) {
         discard;
     }
     if (in.grade < -1.5) {

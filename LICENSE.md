@@ -1,5 +1,3 @@
-Incline Design
-
 # MIT License
 
 Copyright (c) 2026 Leo Timmins, Lucas Timmins, and Incline Design contributors

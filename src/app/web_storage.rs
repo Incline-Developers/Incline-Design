@@ -243,7 +243,9 @@ pub(crate) fn install_paste_listener(proxy: winit::event_loop::EventLoopProxy<cr
 }
 
 fn js_error(error: JsValue) -> String {
-    error.as_string().unwrap_or_else(|| format!("browser storage error: {error:?}"))
+    error
+        .as_string()
+        .unwrap_or_else(|| crate::i18n::tr!("err-file-storage-error", error = format!("{error:?}")))
 }
 
 pub(crate) async fn put_project(record: &BrowserProjectRecord) -> Result<(), String> {
@@ -274,8 +276,8 @@ pub(crate) async fn save_session(id: Option<ProjectId>) -> Result<(), String> {
 
 async fn json_from_promise<T: serde::de::DeserializeOwned>(promise: js_sys::Promise) -> Result<T, String> {
     let value = JsFuture::from(promise).await.map_err(js_error)?;
-    let json = value.as_string().ok_or_else(|| "IndexedDB returned non-text project data".to_owned())?;
-    serde_json::from_str(&json).map_err(|error| format!("invalid browser project record: {error}"))
+    let json = value.as_string().ok_or_else(|| crate::i18n::tr!("err-file-storage-non-text"))?;
+    serde_json::from_str(&json).map_err(|error| crate::i18n::tr!("err-file-storage-invalid-record", error = error.to_string()))
 }
 
 pub(crate) async fn load_session_projects() -> Result<BrowserSessionProjects, String> {
@@ -290,8 +292,8 @@ pub(crate) async fn load_project(project_id: ProjectId) -> Result<Option<Browser
     let meta = js_sys::Reflect::get(&value, &JsValue::from_str("metaJson"))
         .map_err(js_error)?
         .as_string()
-        .ok_or_else(|| "IndexedDB returned a project without its details".to_owned())?;
-    let meta: BrowserProjectMeta = serde_json::from_str(&meta).map_err(|error| format!("invalid browser project record: {error}"))?;
+        .ok_or_else(|| crate::i18n::tr!("err-file-storage-no-details"))?;
+    let meta: BrowserProjectMeta = serde_json::from_str(&meta).map_err(|error| crate::i18n::tr!("err-file-storage-invalid-record", error = error.to_string()))?;
     let bytes = js_sys::Reflect::get(&value, &JsValue::from_str("bytes")).map_err(js_error)?;
     // `new Uint8Array(x)` takes both shapes: the typed array written since,
     // and the plain array of numbers older records still hold.

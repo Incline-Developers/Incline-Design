@@ -26,6 +26,17 @@ pub(crate) fn for_each_record<E: From<csv::Error>>(bytes: &[u8], limit: Option<u
     Ok(())
 }
 
+/// The first record of `bytes` and how many bytes it takes up, its terminator
+/// and any blank lines before it included. `None` when there is no record.
+pub(crate) fn first_record(bytes: &[u8]) -> Result<Option<(StringRecord, usize)>, csv::Error> {
+    let mut reader = ReaderBuilder::new().has_headers(false).flexible(true).from_reader(bytes);
+    let mut record = StringRecord::new();
+    if !reader.read_record(&mut record)? {
+        return Ok(None);
+    }
+    Ok(Some((record, (reader.position().byte() as usize).min(bytes.len()))))
+}
+
 pub(crate) fn owned_fields(record: &StringRecord) -> Vec<String> {
     record.iter().map(str::to_owned).collect()
 }

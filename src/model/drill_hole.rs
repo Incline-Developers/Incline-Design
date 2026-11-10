@@ -292,7 +292,8 @@ impl DrillPatternLayout {
 /// Fill an XY polygon with a drill grid rotated counter-clockwise from global
 /// X. `spacing` runs within a row and `burden` separates rows; staggered rows
 /// move half a spacing. Collars sit half a cell inside the rotated polygon
-/// bounds and take their Z from the boundary's polygon plane.
+/// bounds and take their Z from the boundary's polygon plane. A pattern of
+/// more than `max_holes` holes is refused.
 pub(crate) fn generate_pattern_collars(
     boundary: &[DVec3],
     burden: f64,
@@ -300,6 +301,7 @@ pub(crate) fn generate_pattern_collars(
     rotation_degrees: f64,
     offset: DVec2,
     layout: DrillPatternLayout,
+    max_holes: usize,
 ) -> Result<Vec<DVec3>, String> {
     if boundary.len() < 3 || boundary.iter().any(|point| !point.is_finite()) {
         return Err(tr!("drill-hole-choose-valid-closed-polyline"));
@@ -334,8 +336,8 @@ pub(crate) fn generate_pattern_collars(
     let columns = ((width / spacing).ceil() as usize).max(1);
     let rows = ((height / burden).ceil() as usize).max(1);
     let cells = columns.saturating_mul(rows);
-    if cells > MAX_PATTERN_HOLES.saturating_mul(20) {
-        return Err(crate::i18n::tr!("drill-hole-spacing-would-scan-too-many", maximum = MAX_PATTERN_HOLES.to_string()));
+    if cells > max_holes.saturating_mul(20) {
+        return Err(crate::i18n::tr!("drill-hole-spacing-would-scan-too-many", maximum = max_holes.to_string()));
     }
 
     // Newell's method gives a stable normal for either winding and polygons
@@ -360,7 +362,7 @@ pub(crate) fn generate_pattern_collars(
         }
     };
 
-    let mut collars = Vec::with_capacity(cells.min(MAX_PATTERN_HOLES));
+    let mut collars = Vec::with_capacity(cells.min(max_holes));
     let base_x = if width < spacing { (min_x + max_x) * 0.5 } else { min_x + spacing * 0.5 };
     let base_y = if height < burden { (min_y + max_y) * 0.5 } else { min_y + burden * 0.5 };
     // Reduce arbitrary offsets to one lattice period and start at the first
@@ -462,8 +464,8 @@ pub(crate) fn generate_pattern_collars(
                 let world_x = centroid.x + x * cos_rotation - y * sin_rotation;
                 let world_y = centroid.y + x * sin_rotation + y * cos_rotation;
                 collars.push(DVec3::new(world_x, world_y, elevation(world_x, world_y)));
-                if collars.len() > MAX_PATTERN_HOLES {
-                    return Err(crate::i18n::tr!("drill-hole-pattern-too-many-holes", maximum = MAX_PATTERN_HOLES.to_string()));
+                if collars.len() > max_holes {
+                    return Err(crate::i18n::tr!("drill-hole-pattern-too-many-holes", maximum = max_holes.to_string()));
                 }
             }
         }

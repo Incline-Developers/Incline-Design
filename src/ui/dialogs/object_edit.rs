@@ -41,7 +41,7 @@ const MIN_CELL_WIDTH: f32 = 40.0;
 /// A single stable id keeps the caret alive across frames and lets a freshly
 /// opened cell request focus before the widget that will carry it exists.
 fn active_cell_id() -> egui::Id {
-    egui::Id::new("object_edit_active_cell")
+    egui::Id::unique("object_edit_active_cell")
 }
 
 /// Which sheet of the dialog is showing.
@@ -156,7 +156,7 @@ pub(crate) fn draw_object_edit_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     // Escape with a cell open belongs to the cell - `TextEdit` consumes it and
     // the buffer is abandoned. With no cell open it closes the dialog, which
     // is why `EditorState::dialog_owns_cancel_key` names this dialog.
-    if editor.object_edit_dialog.as_ref().is_some_and(|dialog| dialog.editing_cell.is_none()) && menu::dialog_cancel_pressed(ui.ctx()) {
+    if editor.object_edit_dialog.as_ref().is_some_and(|dialog| dialog.editing_cell.is_none()) && menu::dialog_cancelled(ui.ctx()) {
         editor.object_edit_dialog = None;
         return;
     }
@@ -334,11 +334,7 @@ fn draw_properties_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
     // Touching the swatch pins a fixed colour on the object; the toggle
     // above returns to the layer's.
     let mut by_layer = matches!(dialog.object.color(), ObjectColor::ByLayer);
-    if MenuFieldBool::new(tr!("object-edit-colour-layer"), &mut by_layer)
-        .help_text(tr!("object-edit-follow-owning-layer-s-colour"))
-        .show(ui)
-        .changed()
-    {
+    if MenuFieldBool::new(tr!("object-edit-colour-layer"), &mut by_layer).show(ui).changed() {
         set_object_color(&mut dialog.object, if by_layer { ObjectColor::ByLayer } else { ObjectColor::Fixed(layer_rgba) });
     }
     if !by_layer {
@@ -359,10 +355,7 @@ fn draw_properties_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
     let mut rescan = false;
     match &mut dialog.object {
         Object::Polyline { closed, fill, line_weight, .. } => {
-            rescan |= MenuFieldBool::new(tr!("common-closed"), closed)
-                .help_text(tr!("object-edit-join-last-vertex-back-first"))
-                .show(ui)
-                .changed();
+            rescan |= MenuFieldBool::new(tr!("common-closed"), closed).show(ui).changed();
             let current_fill = *fill;
             MenuFieldCombo::new(
                 "object_edit_fill",
@@ -522,7 +515,7 @@ fn value_cell_width(row_width: f32, columns: usize) -> f32 {
 fn draw_vertex_row(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog, row: usize, columns: &[VertexColumn]) {
     let row_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), ROW_HEIGHT));
     // Sensed before the cells are added, so a click on a cell goes to the cell, not the row.
-    let row_response = ui.interact(row_rect, ui.id().with(("object_edit_row", row)), egui::Sense::click());
+    let row_response = ui.interact(row_rect, ui.scope_id().with(("object_edit_row", row)), egui::Sense::click());
     if dialog.selected_row == Some(row) {
         ui.painter().rect_filled(row_rect, GROUP_CORNER_RADIUS, ui.visuals().selection.bg_fill.gamma_multiply(0.35));
     }

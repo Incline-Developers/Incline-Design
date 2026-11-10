@@ -34,15 +34,8 @@ impl<R: ReadAt> SubFile<R> {
     /// This new file will its start and zero position at the current position of `inner` and
     /// extend up to `len` bytes.
     pub fn new(inner: Arc<R>, start: u64, len: u64) -> std::io::Result<Self> {
-        start
-            .checked_add(len)
-            .expect("start + len should not overflow");
-        Ok(Self {
-            start,
-            inner,
-            position: 0,
-            len,
-        })
+        start.checked_add(len).expect("start + len should not overflow");
+        Ok(Self { start, inner, position: 0, len })
     }
 
     /// Returns the total length of the sub-file, ignoring the current position.
@@ -72,9 +65,7 @@ impl<R: ReadAt> Read for SubFile<R> {
             return Ok(0);
         }
         let limit = usize::try_from((buf.len() as u64).min(self.remaining())).expect("valid limit");
-        let n = self
-            .inner
-            .read_at(&mut buf[..limit], self.start + self.position)?;
+        let n = self.inner.read_at(&mut buf[..limit], self.start + self.position)?;
         self.position += n as u64;
         Ok(n)
     }
@@ -87,8 +78,7 @@ impl<R: ReadAt> Seek for SubFile<R> {
             SeekFrom::End(delta) => (self.len as i64).saturating_add(delta),
             SeekFrom::Current(delta) => (self.position as i64).saturating_add(delta),
         };
-        self.position =
-            u64::try_from(new_position).map_err(|_| std::io::ErrorKind::InvalidInput)?;
+        self.position = u64::try_from(new_position).map_err(|_| std::io::ErrorKind::InvalidInput)?;
         Ok(self.position)
     }
 
@@ -128,15 +118,13 @@ impl<R: ReadAt> parquet::file::reader::ChunkReader for SubFile<R> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
 
     #[test]
     fn subfile() {
-        let path = Path::new("./target/tmp/subfile.txt");
-        std::fs::write(path, b"0123456789").unwrap();
-        let base = Arc::new(std::fs::File::open(path).unwrap());
+        let path = std::env::temp_dir().join("omf-subfile.txt");
+        std::fs::write(&path, b"0123456789").unwrap();
+        let base = Arc::new(std::fs::File::open(&path).unwrap());
         let mut t = SubFile::new(base.clone(), 2, 6).unwrap();
         let mut buf = [0; 5];
         t.read_exact(&mut buf).unwrap();

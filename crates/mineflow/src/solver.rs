@@ -4,7 +4,7 @@ use std::time::Duration;
 use web_time::Instant;
 
 use crate::{
-    BlockValueSource, Precedence, ValueScale,
+    Precedence, ValueScale,
     error::{Error, Result, invalid},
     pseudoflow::Forest,
 };
@@ -90,13 +90,6 @@ impl Solver {
             largest: None,
         })
     }
-    pub fn from_source<S: BlockValueSource>(precedence: &Precedence, source: S) -> Result<Self> {
-        if source.num_blocks() != precedence.num_blocks()? {
-            return Err(invalid("value source has a different block count"));
-        }
-        let values: Vec<_> = (0..source.num_blocks()).map(|i| source.value(i)).collect();
-        Self::new(precedence, &values)
-    }
     pub fn num_blocks(&self) -> i64 {
         self.values.len() as i64
     }
@@ -107,13 +100,6 @@ impl Solver {
         self.values.copy_from_slice(values);
         self.invalidate();
         Ok(())
-    }
-    pub fn update_values_from_source<S: BlockValueSource>(&mut self, source: S) -> Result<()> {
-        if source.num_blocks() != self.num_blocks() {
-            return Err(invalid("value source has a different block count"));
-        }
-        let values: Vec<_> = (0..source.num_blocks()).map(|i| source.value(i)).collect();
-        self.update_values(&values)
     }
     fn invalidate(&mut self) {
         self.forest = None;

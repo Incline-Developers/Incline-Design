@@ -6,6 +6,7 @@
 use crate::model::{Axis, ObjectId};
 
 pub(crate) mod about;
+pub(crate) mod alerts;
 pub(crate) mod charging;
 pub(crate) mod confirmations;
 pub(crate) mod drill_hole;
@@ -16,13 +17,18 @@ pub(crate) mod import_export;
 pub(crate) mod object_edit;
 pub(crate) mod optimization;
 pub(crate) mod optimization_results;
-pub(crate) mod plot;
 pub(crate) mod point_cloud;
 pub(crate) mod products;
 pub(crate) mod reference_points;
 pub(crate) mod reference_surface;
+pub(crate) mod reserve_fields;
+pub(crate) mod schedule;
+pub(crate) mod selection_pick;
+pub(crate) mod sequence_editor;
+pub(crate) mod solids;
 pub(crate) mod survey;
 pub(crate) mod triangulation;
+pub(crate) mod video_export;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MoveToAxisDialog {

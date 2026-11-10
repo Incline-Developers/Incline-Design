@@ -8,10 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::i18n::LanguageChoice;
 
-pub(crate) fn default_renderer_background_color() -> [f32; 4] {
-    crate::rendering::color::hex_to_linear_rgba(0x232c36)
-}
-
 /// The OS locale on a config with no `language` key - so, in practice, on the
 /// first launch. See [`LanguageChoice::default`].
 pub(crate) fn default_language() -> LanguageChoice {
@@ -48,28 +44,17 @@ pub(crate) const fn default_downscale_raster_previews() -> bool {
     false
 }
 
-pub(crate) const fn default_show_world_axis_gizmo() -> bool {
-    true
-}
-
-pub(crate) const fn default_show_scale_bar() -> bool {
-    true
-}
-
 pub(crate) const fn default_ui_size_percent() -> f64 {
     100.0
-}
-
-pub(crate) const fn default_panel_chrome() -> bool {
-    true
 }
 
 pub(crate) const fn default_dark_mode() -> bool {
     true
 }
 
+/// Closed: warnings and errors raise their own dialog (`ui::dialogs::alerts`).
 pub(crate) const fn default_show_console() -> bool {
-    true
+    false
 }
 
 pub(crate) const fn default_plan_orbit_sensitivity() -> f64 {
@@ -78,10 +63,6 @@ pub(crate) const fn default_plan_orbit_sensitivity() -> f64 {
 
 pub(crate) const fn default_plan_zoom_sensitivity() -> f64 {
     0.005
-}
-
-pub(crate) const fn default_plan_zoom_towards_cursor() -> bool {
-    true
 }
 
 pub(crate) const fn default_fly_field_of_view_degrees() -> f64 {
@@ -98,6 +79,10 @@ pub(crate) const fn default_fly_near_clip_limit() -> f64 {
 
 pub(crate) const fn default_fly_max_clip_span() -> f64 {
     150_000.0
+}
+
+pub(crate) const fn default_recent_functions_shown() -> u32 {
+    10
 }
 
 /// One stored blasting product, as the config file holds it.
@@ -158,16 +143,9 @@ pub(crate) struct Config {
     /// Show the console pannel
     #[serde(default = "default_show_console")]
     pub(crate) show_console: bool,
-    /// Round the panels off and part them with a gap. Off, they sit flush and
-    /// square with a separator line between them.
-    #[serde(default = "default_panel_chrome")]
-    pub(crate) panel_chrome: bool,
     /// User multiplier on native OS/browser UI scaling.
     #[serde(default = "default_ui_size_percent")]
     pub(crate) ui_size_percent: f64,
-    /// Linear RGBA clear colour used behind the rendered scene.
-    #[serde(default = "default_renderer_background_color")]
-    pub(crate) renderer_background_color: [f32; 4],
     #[serde(default = "default_snap_poll_rate")]
     pub(crate) snap_poll_rate: u32,
     #[serde(default = "default_vsync_enabled")]
@@ -187,11 +165,6 @@ pub(crate) struct Config {
     /// Bound large GeoTIFF previews to reduce CPU/GPU memory use.
     #[serde(default = "default_downscale_raster_previews")]
     pub(crate) downscale_raster_previews: bool,
-    #[serde(default = "default_show_world_axis_gizmo")]
-    pub(crate) show_world_axis_gizmo: bool,
-    /// Show the cartographic distance scale in the viewport.
-    #[serde(default = "default_show_scale_bar")]
-    pub(crate) show_scale_bar: bool,
     #[serde(default, alias = "debug_chunk_coloring")]
     pub(crate) debug_surface_chunks: bool,
     #[serde(default)]
@@ -206,8 +179,6 @@ pub(crate) struct Config {
     pub(crate) plan_invert_vertical_look: bool,
     #[serde(default)]
     pub(crate) plan_invert_horizontal_look: bool,
-    #[serde(default = "default_plan_zoom_towards_cursor")]
-    pub(crate) plan_zoom_towards_cursor: bool,
     #[serde(default = "default_fly_field_of_view_degrees")]
     pub(crate) fly_field_of_view_degrees: f64,
     #[serde(default = "default_fly_mouse_look_sensitivity")]
@@ -229,17 +200,21 @@ pub(crate) struct Config {
     /// same reason.
     #[serde(default)]
     pub(crate) blast_library: crate::model::blast::BlastLibrary,
-    /// Lenient: a tab that no longer exists (the old Optimization workspace)
-    /// is dropped rather than failing the whole file.
-    #[serde(default)]
-    #[serde(deserialize_with = "lenient_list")]
-    pub(crate) workspace_order: Vec<crate::ui::state::Workspace>,
     #[serde(default)]
     #[serde(deserialize_with = "lenient_list")]
     pub(crate) coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
     /// Which saved system the project's numbers are in.
     #[serde(default)]
     pub(crate) mine_coordinate_system: Option<String>,
+    #[serde(default = "default_recent_functions_shown")]
+    pub(crate) recent_functions_shown: u32,
+    /// Every workspace's recent functions, newest last. A habit, not a
+    /// project's data, so it is kept here and survives every project switch.
+    /// The alias is the name it had while only the Design menu was listed.
+    #[serde(default)]
+    #[serde(alias = "recent_design_functions")]
+    #[serde(deserialize_with = "lenient_list")]
+    pub(crate) recent_functions: Vec<String>,
 }
 
 /// Deserialize a list, dropping entries this build cannot read instead of
@@ -280,9 +255,7 @@ impl Default for Config {
             well_log_style: crate::ui::widgets::log_traces::WellLogStyle::default(),
             dark_mode: default_dark_mode(),
             show_console: default_show_console(),
-            panel_chrome: default_panel_chrome(),
             ui_size_percent: default_ui_size_percent(),
-            renderer_background_color: default_renderer_background_color(),
             snap_poll_rate: default_snap_poll_rate(),
             vsync_enabled: default_vsync_enabled(),
             frame_rate_cap: default_frame_rate_cap(),
@@ -290,8 +263,6 @@ impl Default for Config {
             block_model_interaction_resolution_divisor: default_block_model_interaction_resolution_divisor(),
             show_block_model_boundary_highlights: default_show_block_model_boundary_highlights(),
             downscale_raster_previews: default_downscale_raster_previews(),
-            show_world_axis_gizmo: default_show_world_axis_gizmo(),
-            show_scale_bar: default_show_scale_bar(),
             debug_surface_chunks: false,
             debug_clip_planes: false,
             debug_point_cloud_chunks: false,
@@ -299,7 +270,6 @@ impl Default for Config {
             plan_zoom_sensitivity: default_plan_zoom_sensitivity(),
             plan_invert_vertical_look: false,
             plan_invert_horizontal_look: false,
-            plan_zoom_towards_cursor: default_plan_zoom_towards_cursor(),
             fly_field_of_view_degrees: default_fly_field_of_view_degrees(),
             fly_mouse_look_sensitivity: default_fly_mouse_look_sensitivity(),
             fly_invert_vertical_look: false,
@@ -308,9 +278,10 @@ impl Default for Config {
             fly_max_clip_span: default_fly_max_clip_span(),
             delay_products: default_delay_products(),
             blast_library: Default::default(),
-            workspace_order: crate::ui::state::Workspace::ALL.to_vec(),
             coordinate_systems: Vec::new(),
             mine_coordinate_system: None,
+            recent_functions_shown: default_recent_functions_shown(),
+            recent_functions: Vec::new(),
         }
     }
 }

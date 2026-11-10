@@ -12,40 +12,18 @@ fn write_read(writer: PqArrayWriter) -> PqArrayReader<Bytes> {
 }
 
 fn read_column<P: PqArrayType>(reader: &PqArrayReader<Bytes>, name: &str) -> Vec<P> {
-    reader
-        .iter_column::<P>(name)
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap()
+    reader.iter_column::<P>(name).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
 }
 
-fn read_nullable_column<P: PqArrayType>(
-    reader: &PqArrayReader<Bytes>,
-    name: &str,
-) -> Vec<Option<P>> {
-    reader
-        .iter_nullable_column::<P>(name)
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap()
+fn read_nullable_column<P: PqArrayType>(reader: &PqArrayReader<Bytes>, name: &str) -> Vec<Option<P>> {
+    reader.iter_nullable_column::<P>(name).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
 }
 
-fn read_multi_column<P: PqArrayType, const N: usize>(
-    reader: &PqArrayReader<Bytes>,
-    names: [&str; N],
-) -> Vec<[P; N]> {
-    reader
-        .iter_multi_column::<P, N>(names)
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap()
+fn read_multi_column<P: PqArrayType, const N: usize>(reader: &PqArrayReader<Bytes>, names: [&str; N]) -> Vec<[P; N]> {
+    reader.iter_multi_column::<P, N>(names).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
 }
 
-fn read_nullable_group_column<P: PqArrayType, const N: usize>(
-    reader: &PqArrayReader<Bytes>,
-    group_name: &str,
-    field_names: [&str; N],
-) -> Vec<Option<[P; N]>> {
+fn read_nullable_group_column<P: PqArrayType, const N: usize>(reader: &PqArrayReader<Bytes>, group_name: &str, field_names: [&str; N]) -> Vec<Option<[P; N]>> {
     reader
         .iter_nullable_group_column::<P, N>(group_name, field_names)
         .unwrap()
@@ -149,12 +127,7 @@ fn parquet_array_nullable_f64() {
 
 #[test]
 fn parquet_array_multi() {
-    let values = [
-        [0.0, 0.1, 0.2],
-        [1.0, 1.1, 1.2],
-        [2.0, 2.1, 2.2],
-        [3.0, 3.1, 3.2],
-    ];
+    let values = [[0.0, 0.1, 0.2], [1.0, 1.1, 1.2], [2.0, 2.1, 2.2], [3.0, 3.1, 3.2]];
     let mut writer = PqArrayWriter::new(Default::default());
     writer.add_multiple(&["x", "y", "z"], values).unwrap();
     let reader = write_read(writer);
@@ -166,25 +139,14 @@ fn parquet_array_multi() {
             required double z;
         }
     );
-    assert_eq!(
-        read_multi_column::<f64, 3>(&reader, ["x", "y", "z"]),
-        values
-    );
+    assert_eq!(read_multi_column::<f64, 3>(&reader, ["x", "y", "z"]), values);
 }
 
 #[test]
 fn parquet_array_nullable_group() {
-    let values = [
-        Some([0.0_f32, 0.1]),
-        None,
-        Some([10.0, 0.2]),
-        Some([20.0, 0.3]),
-        Some([30.0, 0.4]),
-    ];
+    let values = [Some([0.0_f32, 0.1]), None, Some([10.0, 0.2]), Some([20.0, 0.3]), Some([30.0, 0.4])];
     let mut writer = PqArrayWriter::new(Default::default());
-    writer
-        .add_nullable_group("vectors", &["x", "y"], values)
-        .unwrap();
+    writer.add_nullable_group("vectors", &["x", "y"], values).unwrap();
     let reader = write_read(writer);
     assert_eq!(
         reader.schema().as_ref(),
@@ -195,10 +157,7 @@ fn parquet_array_nullable_group() {
             }
         }
     );
-    assert_eq!(
-        read_nullable_group_column::<f32, 2>(&reader, "vectors", ["x", "y"]),
-        values
-    );
+    assert_eq!(read_nullable_group_column::<f32, 2>(&reader, "vectors", ["x", "y"]), values);
 }
 
 #[test]
@@ -229,20 +188,12 @@ fn parquet_array_separate_columns_uneven() {
     writer.add("b", values1).unwrap();
     let mut buf = Vec::new();
     let e = writer.write(&mut buf).unwrap_err();
-    assert_eq!(
-        e.to_string(),
-        "Parquet error: uneven iterator lengths after 4 items"
-    );
+    assert_eq!(e.to_string(), "Parquet error: uneven iterator lengths after 4 items");
 }
 
 #[test]
 fn parquet_array_string() {
-    let values = [
-        "foo".to_owned(),
-        "bar".to_owned(),
-        "".to_owned(),
-        "♫".to_owned(),
-    ];
+    let values = ["foo".to_owned(), "bar".to_owned(), "".to_owned(), "♫".to_owned()];
     let mut writer = PqArrayWriter::new(Default::default());
     writer.add("s", values.clone()).unwrap();
     let reader = write_read(writer);
@@ -257,12 +208,7 @@ fn parquet_array_string() {
 
 #[test]
 fn parquet_array_binary() {
-    let values = [
-        vec![0, 1, 2, 3],
-        b"foo".to_vec(),
-        b"".to_vec(),
-        vec![254, 255],
-    ];
+    let values = [vec![0, 1, 2, 3], b"foo".to_vec(), b"".to_vec(), vec![254, 255]];
     let mut writer = PqArrayWriter::new(Default::default());
     writer.add("b", values.clone()).unwrap();
     let reader = write_read(writer);
@@ -277,12 +223,7 @@ fn parquet_array_binary() {
 
 #[test]
 fn parquet_nullable_array_string() {
-    let values = [
-        Some("foo".to_owned()),
-        Some("bar".to_owned()),
-        None,
-        Some("".to_owned()),
-    ];
+    let values = [Some("foo".to_owned()), Some("bar".to_owned()), None, Some("".to_owned())];
     let mut writer = PqArrayWriter::new(Default::default());
     writer.add_nullable("a", values.clone()).unwrap();
     let reader = write_read(writer);
@@ -321,9 +262,7 @@ fn parquet_array_large() {
 fn parquet_array_date() {
     let values = ["1970-01-01", "-1000-08-20", "2023-09-14", "+10000-12-31"];
     let mut writer = PqArrayWriter::new(Default::default());
-    writer
-        .add("d", values.iter().map(|s| NaiveDate::from_str(s).unwrap()))
-        .unwrap();
+    writer.add("d", values.iter().map(|s| NaiveDate::from_str(s).unwrap())).unwrap();
     let reader = write_read(writer);
     assert_eq!(
         reader.schema().as_ref(),
@@ -331,14 +270,7 @@ fn parquet_array_date() {
             required int32 d (date);
         }
     );
-    assert_eq!(
-        reader
-            .iter_column::<NaiveDate>("d")
-            .unwrap()
-            .map(|d| d.unwrap().to_string())
-            .collect::<Vec<_>>(),
-        values
-    );
+    assert_eq!(reader.iter_column::<NaiveDate>("d").unwrap().map(|d| d.unwrap().to_string()).collect::<Vec<_>>(), values);
 }
 
 #[test]
@@ -350,12 +282,7 @@ fn parquet_array_date_time() {
         "+10000-12-31 23:59:59 UTC",
     ];
     let mut writer = PqArrayWriter::new(Default::default());
-    writer
-        .add(
-            "t",
-            values.iter().map(|s| DateTime::<Utc>::from_str(s).unwrap()),
-        )
-        .unwrap();
+    writer.add("t", values.iter().map(|s| DateTime::<Utc>::from_str(s).unwrap())).unwrap();
     let reader = write_read(writer);
     assert_eq!(
         reader.schema().as_ref(),
@@ -364,11 +291,7 @@ fn parquet_array_date_time() {
         }
     );
     assert_eq!(
-        reader
-            .iter_column::<DateTime::<Utc>>("t")
-            .unwrap()
-            .map(|d| d.unwrap().to_string())
-            .collect::<Vec<_>>(),
+        reader.iter_column::<DateTime::<Utc>>("t").unwrap().map(|d| d.unwrap().to_string()).collect::<Vec<_>>(),
         values
     );
 }

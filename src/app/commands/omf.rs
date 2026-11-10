@@ -2,8 +2,6 @@
 
 use std::path::PathBuf;
 
-#[cfg(not(target_arch = "wasm32"))]
-use anyhow::Context;
 use anyhow::Result;
 
 use crate::{
@@ -255,6 +253,12 @@ impl<'a> App<'a> {
         // Merged once, for every section, before anything is installed:
         // every item below looks its own membership up in this same map.
         let folder_map = project::merge_folders(&mut design.folders, &folders, project::FolderMergeMode::Reuse);
+        for imported in &designs {
+            design.document.merge_reserve_fields_from(&imported.document);
+            design.document.merge_solids_from(&imported.document);
+            design.document.merge_schedule_from(&imported.document);
+            design.document.merge_haulage_from(&imported.document);
+        }
         for imported in designs {
             project::merge_document_preserve_ids(&mut design.document, &imported.document, &folder_map);
         }
@@ -280,8 +284,6 @@ impl<'a> App<'a> {
             }
         };
         self.set_active_project(opened);
-        // A grid at Z=0 sits far from real data and swings under it while orbiting.
-        self.editor.show_xy_grid = false;
         if let Some(project) = self.workspace.active_project_mut() {
             project.lossy_save_warnings = lossy_save_warnings;
             project.lossy_save_confirmed = false;
@@ -321,16 +323,15 @@ impl<'a> App<'a> {
                 let mut decoded = Vec::with_capacity(paths.len());
                 for (index, path) in paths.into_iter().enumerate() {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
-                    let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
                     let name = path
                         .file_name()
                         .and_then(|name| name.to_str())
                         .map(ToOwned::to_owned)
                         .unwrap_or_else(|| format!("{}.omf", tr!("common-untitled")));
                     let phase = progress.phase(index as f32 / total, (index + 1) as f32 / total);
-                    decoded.push((name.clone(), omf::from_bytes(&name, bytes, &phase)?));
+                    decoded.push((name.clone(), omf::from_path(&name, &path, &phase)?));
                 }
                 Ok(decoded)
             },
@@ -352,7 +353,7 @@ impl<'a> App<'a> {
                 let mut decoded = Vec::with_capacity(files.len());
                 for (index, file) in files.into_iter().enumerate() {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     let phase = progress.phase(index as f32 / total, (index + 1) as f32 / total);
                     let name = file.source.name;
@@ -374,17 +375,11 @@ impl<'a> App<'a> {
             return;
         }
         let should_fit = !self.scene_has_renderables();
+        // Everything every file brings - its collections, layers and items -
+        // goes in as one undo step at the end.
+        let before = self.project_members();
         let mut imported_items = 0usize;
         for (source_name, bundle) in bundles {
-            let target_is_empty = self
-                .workspace
-                .active_project()
-                .is_some_and(|project| project.project.document.layers().is_empty() && project.project.document.objects().is_empty())
-                && self.triangulations.is_empty()
-                && self.block_models.is_empty()
-                && self.drill_holes.is_empty()
-                && self.point_clouds.is_empty()
-                && self.raster_textures.is_empty();
             let count = bundle.item_count();
             if count == 0 {
                 userspace_warn!("{}", tr!("cmd-omf-project-source-name-contains-no", source_name = source_name.clone().to_string()));
@@ -416,11 +411,16 @@ impl<'a> App<'a> {
                 optimization: _,
             } = bundle;
 
-            if let Some(project) = self.workspace.active_project_mut() {
+            // A merge brings content, never the project's settings: the file's
+            // coordinate system and units are reported, not adopted.
+            if let Some(project) = self.workspace.active_project() {
                 let target_crs = project.project.metadata.coordinate_reference_system.trim();
                 let source_crs = coordinate_reference_system.trim();
-                if target_is_empty && target_crs.is_empty() {
-                    project.project.metadata.coordinate_reference_system = coordinate_reference_system.clone();
+                if target_crs.is_empty() && !source_crs.is_empty() {
+                    userspace_log!(
+                        "{}",
+                        tr!("cmd-omf-crs-not-set", source_name = source_name.clone().to_string(), source_crs = source_crs.to_string())
+                    );
                 } else if !target_crs.is_empty()
                     && !source_crs.is_empty()
                     && crate::model::crs::CoordinateSystem::parse_stored(target_crs) != crate::model::crs::CoordinateSystem::parse_stored(source_crs)
@@ -437,8 +437,15 @@ impl<'a> App<'a> {
                 }
                 let target_units = project.project.metadata.units.trim();
                 let source_units = units.trim();
-                if target_is_empty && target_units.is_empty() {
-                    project.project.metadata.units = units.clone();
+                if target_units.is_empty() && !source_units.is_empty() {
+                    userspace_log!(
+                        "{}",
+                        tr!(
+                            "cmd-omf-units-not-set",
+                            source_name = source_name.clone().to_string(),
+                            source_units = source_units.to_string()
+                        )
+                    );
                 } else if !target_units.is_empty() && !source_units.is_empty() && !target_units.eq_ignore_ascii_case(source_units) {
                     userspace_warn!(
                         "{}",
@@ -494,6 +501,7 @@ impl<'a> App<'a> {
             );
         }
 
+        self.record_additions(&before, Vec::new());
         if imported_items > 0 {
             self.invalidate_geometry();
             if should_fit {
@@ -573,15 +581,21 @@ impl<'a> App<'a> {
                     .with_section(imported.section)
                     .with_folder(folder),
                 name,
+                geometry: imported.geometry,
                 mesh,
                 spatial,
-                edges,
+                edges: edges.into(),
                 surface_face_order,
                 color: imported.color,
                 line_color: imported.line_color,
                 line_weight: imported.line_weight,
                 raster_texture,
                 raster_opacity: imported.raster_opacity,
+                flitch_style: None,
+                cull_back_faces: false,
+                always_show_edges: false,
+                depth_shade: None,
+                pattern_from: None,
             });
             if let Some(open) = self.triangulations.last_mut() {
                 open.state.payload_source = PayloadSource::for_triangulation(imported.payload_source, open);
@@ -619,6 +633,12 @@ impl<'a> App<'a> {
                 }
                 open.color_transfers.extend(imported.color_transfers);
                 open.hide_empty_color_values = imported.hide_empty_color_values;
+                // The mapping names the file's reserve fields, which only a
+                // whole-project open brings along.
+                if !fresh {
+                    open.reserve_mapping = imported.reserve_mapping;
+                    open.included_in_reserves = imported.reserve_included;
+                }
             }
         }
 
@@ -675,12 +695,12 @@ impl<'a> App<'a> {
                 vec![crate::app::jobs::JobKey::Anonymous],
                 move |cancel, progress| {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     omf::to_bytes(snapshot, omf::Compression::Archive, &progress.phase(0.0, 1.0))
                 },
                 move |_app, result| match result {
-                    Ok(bytes) => Self::trigger_browser_download(default_name, bytes, "application/octet-stream", "project"),
+                    Ok(bytes) => Self::trigger_browser_download(default_name, bytes, "application/octet-stream", crate::i18n::tr!("err-file-desc-project")),
                     Err(error) => userspace_warn!("{}", tr!("cmd-omf-export-failed", error = format!("{error:#}"))),
                 },
             );
@@ -721,7 +741,7 @@ impl<'a> App<'a> {
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 if cancel.is_cancelled() {
-                    anyhow::bail!("Cancelled");
+                    anyhow::bail!(crate::app::jobs::Cancelled);
                 }
                 omf::write_path(snapshot, &path, &progress.phase(0.0, 1.0))
             },

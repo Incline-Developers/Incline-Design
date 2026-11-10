@@ -6,23 +6,25 @@
 //! and `Ignore` columns are discarded.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt,
-    io::{self, Write},
-    mem::size_of,
+    io::{self, Read, Write},
     sync::Arc,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use std::{fs::File, io::Read, path::Path};
+use std::{fs::File, path::Path};
 
+use csv::StringRecord;
 use glam::DVec3;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    block_model::{BlockBounds, BlockBoundsSource, RenderableBlockIndices, color_variable_default, is_no_data_sentinel},
+    block_model::{BlockBounds, BlockBoundsSource, BlockGeometryBuilder, RenderableBlockIndices, color_variable_default, is_no_data_sentinel},
     formats::{
+        block_column::BlockColumnBuilder,
         block_model_data::{BlockModelColumn, BlockModelData},
-        csv_records::{for_each_record, owned_fields},
+        csv_records::{first_record, for_each_record, owned_fields},
     },
 };
 
@@ -62,9 +64,50 @@ impl CsvColumnRole {
     }
 }
 
+/// A block dimension the CSV doesn't carry a column for, entered by hand
+/// instead (e.g. every block is a fixed 30m x 30m x 30m). Wraps `f64` with a
+/// bit-pattern `Eq`/`Ord`/`Hash` so `CsvColumnMapping` keeps deriving them -
+/// it's part of `BlockModelSource`, used as a job-dedup key.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub(crate) struct FixedDimension(pub(crate) f64);
+
+impl PartialEq for FixedDimension {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for FixedDimension {}
+
+impl PartialOrd for FixedDimension {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FixedDimension {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.to_bits().cmp(&other.0.to_bits())
+    }
+}
+
+impl std::hash::Hash for FixedDimension {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct CsvColumnMapping {
     pub(crate) roles: Vec<CsvColumnRole>,
+    /// Fixed block sizes for the `Dx`/`Dy`/`Dz` axes, used when no column is
+    /// mapped to that role - for models whose CSV only carries centroids.
+    #[serde(default)]
+    pub(crate) fixed_dx: Option<FixedDimension>,
+    #[serde(default)]
+    pub(crate) fixed_dy: Option<FixedDimension>,
+    #[serde(default)]
+    pub(crate) fixed_dz: Option<FixedDimension>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -173,7 +216,12 @@ pub(crate) fn auto_mapping(headers: &[String]) -> CsvColumnMapping {
             }
         })
         .collect();
-    CsvColumnMapping { roles }
+    CsvColumnMapping {
+        roles,
+        fixed_dx: None,
+        fixed_dy: None,
+        fixed_dz: None,
+    }
 }
 
 pub(crate) fn validate_mapping(mapping: &CsvColumnMapping, column_count: usize) -> Result<(), CsvBlockModelError> {
@@ -183,18 +231,30 @@ pub(crate) fn validate_mapping(mapping: &CsvColumnMapping, column_count: usize) 
             mapping.roles.len()
         )));
     }
-    for required in [
-        CsvColumnRole::X,
-        CsvColumnRole::Y,
-        CsvColumnRole::Z,
-        CsvColumnRole::Dx,
-        CsvColumnRole::Dy,
-        CsvColumnRole::Dz,
-    ] {
+    for required in [CsvColumnRole::X, CsvColumnRole::Y, CsvColumnRole::Z] {
         let count = mapping.roles.iter().filter(|role| **role == required).count();
         if count != 1 {
             return Err(CsvBlockModelError::Invalid(format!(
                 "Select exactly one '{}' column (currently selected {count})",
+                required.label()
+            )));
+        }
+    }
+    for (required, fixed) in [
+        (CsvColumnRole::Dx, mapping.fixed_dx),
+        (CsvColumnRole::Dy, mapping.fixed_dy),
+        (CsvColumnRole::Dz, mapping.fixed_dz),
+    ] {
+        let count = mapping.roles.iter().filter(|role| **role == required).count();
+        if count > 1 {
+            return Err(CsvBlockModelError::Invalid(format!(
+                "Select at most one '{}' column (currently selected {count})",
+                required.label()
+            )));
+        }
+        if count == 0 && !fixed.is_some_and(|fixed| fixed.0.is_finite() && fixed.0 > 0.0) {
+            return Err(CsvBlockModelError::Invalid(format!(
+                "Select a '{}' column, or set a fixed size greater than zero",
                 required.label()
             )));
         }
@@ -206,40 +266,248 @@ pub(crate) fn validate_mapping(mapping: &CsvColumnMapping, column_count: usize) 
     Ok(())
 }
 
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn parse(bytes: &[u8], mapping: &CsvColumnMapping) -> Result<ParsedCsvBlockModel, CsvBlockModelError> {
-    let mut headers: Option<Vec<String>> = None;
-    let mut role_indices = BTreeMap::new();
-    let mut resource_indices = Vec::new();
+    parse_stream(bytes, mapping, |_| {})
+}
+
+/// How much text one thread parses at a time.
+const CHUNK_BYTES: usize = 16 * 1024 * 1024;
+
+/// Which columns of the file mean what, settled from its header.
+struct CsvLayout<'a> {
+    mapping: &'a CsvColumnMapping,
+    headers: Vec<String>,
+    role_indices: BTreeMap<CsvColumnRole, usize>,
+    resource_indices: Vec<usize>,
+    resource_roles: Vec<CsvColumnRole>,
+}
+
+impl CsvLayout<'_> {
+    fn has_ids(&self) -> bool {
+        self.resource_roles.contains(&CsvColumnRole::Id)
+    }
+}
+
+/// What one chunk of text held, up to its first bad row.
+#[derive(Default)]
+struct ParsedChunk {
+    blocks: Vec<BlockBounds>,
+    columns: Vec<Vec<f64>>,
+    /// Per column, the labels this chunk's codes in `columns` count from.
+    labels: Vec<Vec<String>>,
+    /// The line each row started on, kept only to name a duplicate ID.
+    lines: Vec<usize>,
+    error: Option<CsvBlockModelError>,
+}
+
+/// Read a CSV model a window of text at a time, parsing each window's chunks
+/// side by side and encoding its rows before the next window is read, so what
+/// is held at once is the finished part of the model and one window.
+pub(crate) fn parse_stream(mut input: impl Read, mapping: &CsvColumnMapping, mut report_read: impl FnMut(u64)) -> Result<ParsedCsvBlockModel, CsvBlockModelError> {
+    let mut window_bytes = CHUNK_BYTES * rayon::current_num_threads().max(1);
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut read_so_far = 0u64;
+    let mut at_end = false;
+    let mut next_line = 1usize;
+    let mut layout: Option<CsvLayout<'_>> = None;
     let mut resource_names = Vec::new();
-    let mut resource_roles = Vec::new();
-    let mut resource_values: Vec<Vec<f64>> = Vec::new();
-    let mut resource_categories: Vec<BTreeMap<String, u32>> = Vec::new();
+    let mut geometry = BlockGeometryBuilder::default();
+    let mut builders: Vec<BlockColumnBuilder> = Vec::new();
+    let mut categories: Vec<HashMap<String, u32>> = Vec::new();
     let mut seen_ids = HashSet::new();
-    let mut blocks = Vec::new();
+    let mut block_count = 0usize;
     let mut overall_lower = DVec3::splat(f64::INFINITY);
     let mut overall_upper = DVec3::splat(f64::NEG_INFINITY);
 
-    for_each_record(bytes, None, |record_number, record| {
-        if headers.is_none() {
-            validate_mapping(mapping, record.len())?;
-            let record = owned_fields(record);
-            let names = unique_resource_names(&record, mapping);
-            for (index, role) in mapping.roles.iter().copied().enumerate() {
-                if matches!(role, CsvColumnRole::Value | CsvColumnRole::Category | CsvColumnRole::Id) {
-                    resource_indices.push(index);
-                    resource_roles.push(role);
-                } else if role != CsvColumnRole::Ignore {
-                    role_indices.insert(role, index);
+    while !at_end {
+        let held = buffer.len();
+        buffer.resize(window_bytes.max(held + CHUNK_BYTES), 0);
+        let mut filled = held;
+        while filled < buffer.len() {
+            let read = input.read(&mut buffer[filled..])?;
+            if read == 0 {
+                at_end = true;
+                break;
+            }
+            filled += read;
+        }
+        buffer.truncate(filled);
+        read_so_far += (filled - held) as u64;
+        report_read(read_so_far);
+
+        let mut ends = record_ends(&buffer, CHUNK_BYTES);
+        if at_end && ends.last() != Some(&buffer.len()) && !buffer.is_empty() {
+            ends.push(buffer.len());
+        }
+        let Some(&usable) = ends.last() else {
+            // One record longer than the window, or no line ends at all: the
+            // next pass reads more before looking again.
+            window_bytes = window_bytes.saturating_mul(2);
+            continue;
+        };
+
+        let mut start = 0;
+        if layout.is_none() {
+            let Some((record, used)) = first_record(&buffer[..usable])? else {
+                buffer.clear();
+                continue;
+            };
+            let found = CsvLayout::from_header(&record, mapping)?;
+            resource_names = unique_resource_names(&found.headers, mapping);
+            builders = (0..found.resource_indices.len()).map(|_| BlockColumnBuilder::default()).collect();
+            categories = (0..found.resource_indices.len()).map(|_| HashMap::new()).collect();
+            layout = Some(found);
+            next_line += count_newlines(&buffer[..used]);
+            start = used;
+        }
+        let layout_ref = layout.as_ref().expect("the header is settled above");
+
+        let mut lines = Vec::new();
+        let mut line = next_line;
+        let mut chunks = Vec::new();
+        let mut from = start;
+        for &end in &ends {
+            if end > from {
+                chunks.push(&buffer[from..end]);
+                lines.push(line);
+                line += count_newlines(&buffer[from..end]);
+                from = end;
+            }
+        }
+        next_line = line;
+        let parsed: Vec<ParsedChunk> = chunks.par_iter().zip(&lines).map(|(text, &first_line)| parse_chunk(text, first_line, layout_ref)).collect();
+
+        for mut chunk in parsed {
+            merge_categories(layout_ref, &mut chunk, &mut categories)?;
+            if layout_ref.has_ids() {
+                check_ids(layout_ref, &chunk, &mut seen_ids)?;
+            }
+            for block in &chunk.blocks {
+                overall_lower = overall_lower.min(block.lower);
+                overall_upper = overall_upper.max(block.upper);
+            }
+            block_count += chunk.blocks.len();
+            geometry.extend(&chunk.blocks);
+            builders.par_iter_mut().zip(&chunk.columns).for_each(|(builder, values)| builder.extend_slice(values));
+            if let Some(error) = chunk.error {
+                return Err(error);
+            }
+        }
+        buffer.drain(..usable);
+    }
+
+    let layout = layout.ok_or_else(|| CsvBlockModelError::Invalid("CSV file is empty".to_owned()))?;
+    if block_count == 0 {
+        return Err(CsvBlockModelError::Invalid("CSV file has no block rows".to_owned()));
+    }
+    let geometry = geometry.finish();
+    let retained_geometry_bytes = geometry.heap_bytes();
+    let columns = resource_names
+        .into_iter()
+        .zip(builders)
+        .zip(layout.resource_roles.iter().copied())
+        .zip(categories)
+        .map(|(((name, values), role), categories)| BlockModelColumn {
+            name,
+            values: Arc::new(values.finish()),
+            categories: (role == CsvColumnRole::Category).then(|| categories.into_iter().map(|(label, code)| (code, label)).collect()),
+            category_colors: BTreeMap::new(),
+        })
+        .collect();
+    let model = BlockModelData::from_columns(block_count, overall_lower, overall_upper, columns, retained_geometry_bytes)
+        .map_err(|error| CsvBlockModelError::Invalid(error.to_string()))?;
+    Ok(ParsedCsvBlockModel {
+        model,
+        blocks: BlockBoundsSource::Explicit(geometry),
+    })
+}
+
+fn count_newlines(text: &[u8]) -> usize {
+    text.iter().filter(|&&byte| byte == b'\n').count()
+}
+
+/// Where the records of `text` can be cut into pieces of at least `chunk`
+/// bytes: after line ends outside quotes, the last of them included. A file
+/// with no quotes at all needs no walking over.
+fn record_ends(text: &[u8], chunk: usize) -> Vec<usize> {
+    let mut ends = Vec::new();
+    let mut last_cut = 0;
+    if text.contains(&b'"') {
+        let (mut quoted, mut last_end) = (false, 0);
+        for (index, &byte) in text.iter().enumerate() {
+            if byte == b'"' {
+                quoted = !quoted;
+            } else if byte == b'\n' && !quoted {
+                last_end = index + 1;
+                if last_end - last_cut >= chunk {
+                    ends.push(last_end);
+                    last_cut = last_end;
                 }
             }
-            resource_values = (0..resource_indices.len()).map(|_| Vec::new()).collect();
-            resource_categories = (0..resource_indices.len()).map(|_| BTreeMap::new()).collect();
-            resource_names = names;
-            headers = Some(record);
-            return Ok(());
         }
+        if last_end > last_cut {
+            ends.push(last_end);
+        }
+        return ends;
+    }
+    while let Some(found) = text.get(last_cut + chunk..).and_then(|rest| rest.iter().position(|&byte| byte == b'\n')) {
+        last_cut += chunk + found + 1;
+        ends.push(last_cut);
+    }
+    if let Some(last) = text.iter().rposition(|&byte| byte == b'\n')
+        && last + 1 > last_cut
+    {
+        ends.push(last + 1);
+    }
+    ends
+}
 
-        let headers = headers.as_ref().expect("header is processed first");
+impl<'a> CsvLayout<'a> {
+    fn from_header(record: &StringRecord, mapping: &'a CsvColumnMapping) -> Result<Self, CsvBlockModelError> {
+        validate_mapping(mapping, record.len())?;
+        let headers = owned_fields(record);
+        let (mut role_indices, mut resource_indices, mut resource_roles) = (BTreeMap::new(), Vec::new(), Vec::new());
+        for (index, role) in mapping.roles.iter().copied().enumerate() {
+            if matches!(role, CsvColumnRole::Value | CsvColumnRole::Category | CsvColumnRole::Id) {
+                resource_indices.push(index);
+                resource_roles.push(role);
+            } else if role != CsvColumnRole::Ignore {
+                role_indices.insert(role, index);
+            }
+        }
+        Ok(Self {
+            mapping,
+            headers,
+            role_indices,
+            resource_indices,
+            resource_roles,
+        })
+    }
+}
+
+fn parse_chunk(text: &[u8], first_line: usize, layout: &CsvLayout<'_>) -> ParsedChunk {
+    let CsvLayout {
+        mapping,
+        headers,
+        role_indices,
+        resource_indices,
+        resource_roles,
+    } = layout;
+    let columns = resource_indices.len();
+    // Sized for this chunk's rows from its first line's length, so the columns
+    // are not grown, and overshot, by doubling.
+    let row_guess = text.iter().position(|&byte| byte == b'\n').map_or(1, |length| text.len() / (length + 1).max(1) + 1);
+    let mut chunk = ParsedChunk {
+        blocks: Vec::with_capacity(row_guess),
+        columns: (0..columns).map(|_| Vec::with_capacity(row_guess)).collect(),
+        labels: vec![Vec::new(); columns],
+        ..ParsedChunk::default()
+    };
+    let mut local: Vec<HashMap<String, u32>> = vec![HashMap::new(); columns];
+    let has_ids = layout.has_ids();
+    let result = for_each_record(text, None, |line, record| {
+        let record_number = first_line + line - 1;
         if record.iter().all(|field| field.trim().is_empty()) {
             return Ok(());
         }
@@ -254,8 +522,21 @@ pub(crate) fn parse(bytes: &[u8], mapping: &CsvColumnMapping) -> Result<ParsedCs
             let index = role_indices[&role];
             parse_required_number(record.get(index).unwrap_or(""), record_number, &headers[index])
         };
+        let dimension = |role, fixed: Option<FixedDimension>| -> Result<f64, CsvBlockModelError> {
+            if role_indices.contains_key(&role) {
+                value(role)
+            } else {
+                // Validated by `validate_mapping`: a role with no mapped column
+                // always has a fixed size set.
+                Ok(fixed.expect("validate_mapping requires a fixed size when the column is unmapped").0)
+            }
+        };
         let center = DVec3::new(value(CsvColumnRole::X)?, value(CsvColumnRole::Y)?, value(CsvColumnRole::Z)?);
-        let size = DVec3::new(value(CsvColumnRole::Dx)?, value(CsvColumnRole::Dy)?, value(CsvColumnRole::Dz)?);
+        let size = DVec3::new(
+            dimension(CsvColumnRole::Dx, mapping.fixed_dx)?,
+            dimension(CsvColumnRole::Dy, mapping.fixed_dy)?,
+            dimension(CsvColumnRole::Dz, mapping.fixed_dz)?,
+        );
         if !center.is_finite() {
             return Err(CsvBlockModelError::Invalid(format!("CSV row {record_number} contains a non-finite block position")));
         }
@@ -264,86 +545,111 @@ pub(crate) fn parse(bytes: &[u8], mapping: &CsvColumnMapping) -> Result<ParsedCs
                 "CSV row {record_number} block sizes must all be finite and greater than zero"
             )));
         }
-        let half = size * 0.5;
-        let block = BlockBounds {
-            lower: center - half,
-            upper: center + half,
-        };
-        overall_lower = overall_lower.min(block.lower);
-        overall_upper = overall_upper.max(block.upper);
-        blocks.push(block);
-
-        for (resource, (values, &index)) in resource_values.iter_mut().zip(&resource_indices).enumerate() {
+        // Each field is checked before any of the row is kept, so a bad row
+        // leaves the columns the same length as the blocks.
+        let row_start = chunk.columns.first().map_or(0, Vec::len);
+        for (resource, &index) in resource_indices.iter().enumerate() {
             let field = record.get(index).unwrap_or("").trim();
             let role = resource_roles[resource];
-            if role == CsvColumnRole::Category {
+            let number = if role == CsvColumnRole::Category {
                 if field.is_empty() {
-                    values.push(f64::NAN);
-                } else if let Some(&code) = resource_categories[resource].get(field) {
-                    values.push(code as f64);
+                    f64::NAN
+                } else if let Some(&code) = local[resource].get(field) {
+                    f64::from(code)
                 } else {
-                    let code = u32::try_from(resource_categories[resource].len())
-                        .map_err(|_| CsvBlockModelError::Invalid(format!("CSV column '{}' has more categories than Incline Design can represent", headers[index])))?;
-                    resource_categories[resource].insert(field.to_owned(), code);
-                    values.push(code as f64);
+                    let code = chunk.labels[resource].len() as u32;
+                    local[resource].insert(field.to_owned(), code);
+                    chunk.labels[resource].push(field.to_owned());
+                    f64::from(code)
                 }
-                continue;
-            }
-            let parsed = if field.is_empty() && role == CsvColumnRole::Value {
-                f64::NAN
             } else {
-                field.parse::<f64>().map_err(|_| {
-                    let expectation = if role == CsvColumnRole::Id { "a numeric ID" } else { "a number or blank" };
-                    CsvBlockModelError::Invalid(format!("CSV row {record_number}, column '{}': expected {expectation}, found '{field}'", headers[index]))
-                })?
-            };
-            if role == CsvColumnRole::Id {
-                if !parsed.is_finite() {
+                let parsed = if field.is_empty() && role == CsvColumnRole::Value {
+                    f64::NAN
+                } else {
+                    match field.parse::<f64>() {
+                        Ok(parsed) => parsed,
+                        Err(_) => {
+                            chunk.columns[..resource].iter_mut().for_each(|column| column.truncate(row_start));
+                            let expectation = if role == CsvColumnRole::Id { "a numeric ID" } else { "a number or blank" };
+                            return Err(CsvBlockModelError::Invalid(format!(
+                                "CSV row {record_number}, column '{}': expected {expectation}, found '{field}'",
+                                headers[index]
+                            )));
+                        }
+                    }
+                };
+                if role == CsvColumnRole::Id && !parsed.is_finite() {
+                    chunk.columns[..resource].iter_mut().for_each(|column| column.truncate(row_start));
                     return Err(CsvBlockModelError::Invalid(format!(
                         "CSV row {record_number}, column '{}': ID must be finite",
                         headers[index]
                     )));
                 }
-                let key = if parsed == 0.0 { 0 } else { parsed.to_bits() };
-                if !seen_ids.insert(key) {
-                    return Err(CsvBlockModelError::Invalid(format!(
-                        "CSV row {record_number}, column '{}': duplicate ID '{field}'",
-                        headers[index]
-                    )));
-                }
-            }
-            values.push(parsed);
+                parsed
+            };
+            chunk.columns[resource].push(number);
+        }
+        let half = size * 0.5;
+        chunk.blocks.push(BlockBounds {
+            lower: center - half,
+            upper: center + half,
+        });
+        if has_ids {
+            chunk.lines.push(record_number);
         }
         Ok(())
-    })?;
+    });
+    chunk.error = result.err();
+    chunk
+}
 
-    let headers = headers.ok_or_else(|| CsvBlockModelError::Invalid("CSV file is empty".to_owned()))?;
-    validate_mapping(mapping, headers.len())?;
-    if blocks.is_empty() {
-        return Err(CsvBlockModelError::Invalid("CSV file has no block rows".to_owned()));
+/// Give a chunk's categories their codes for the whole file, numbered in the
+/// order the file first mentions them, whichever thread parsed what.
+fn merge_categories(layout: &CsvLayout<'_>, chunk: &mut ParsedChunk, categories: &mut [HashMap<String, u32>]) -> Result<(), CsvBlockModelError> {
+    for resource in 0..layout.resource_indices.len() {
+        if layout.resource_roles[resource] != CsvColumnRole::Category {
+            continue;
+        }
+        let known = &mut categories[resource];
+        let codes = chunk.labels[resource]
+            .iter()
+            .map(|label| {
+                if let Some(&code) = known.get(label) {
+                    return Ok(code);
+                }
+                let code = u32::try_from(known.len()).map_err(|_| {
+                    CsvBlockModelError::Invalid(format!(
+                        "CSV column '{}' has more categories than Incline Design can represent",
+                        layout.headers[layout.resource_indices[resource]]
+                    ))
+                })?;
+                known.insert(label.clone(), code);
+                Ok(code)
+            })
+            .collect::<Result<Vec<u32>, CsvBlockModelError>>()?;
+        for value in &mut chunk.columns[resource] {
+            if !value.is_nan() {
+                *value = f64::from(codes[*value as usize]);
+            }
+        }
     }
-    let retained_geometry_bytes = blocks
-        .len()
-        .checked_mul(size_of::<BlockBounds>())
-        .ok_or_else(|| CsvBlockModelError::Invalid("CSV block geometry size overflows".to_owned()))?;
-    let columns = resource_names
-        .into_iter()
-        .zip(resource_values)
-        .zip(resource_roles)
-        .zip(resource_categories)
-        .map(|(((name, values), role), categories)| BlockModelColumn {
-            name,
-            values: Arc::new(values),
-            categories: (role == CsvColumnRole::Category).then(|| categories.into_iter().map(|(label, code)| (code, label)).collect()),
-            category_colors: BTreeMap::new(),
-        })
-        .collect();
-    let model = BlockModelData::from_columns(blocks.len(), overall_lower, overall_upper, columns, retained_geometry_bytes)
-        .map_err(|error| CsvBlockModelError::Invalid(error.to_string()))?;
-    Ok(ParsedCsvBlockModel {
-        model,
-        blocks: BlockBoundsSource::Explicit(blocks),
-    })
+    Ok(())
+}
+
+fn check_ids(layout: &CsvLayout<'_>, chunk: &ParsedChunk, seen: &mut HashSet<u64>) -> Result<(), CsvBlockModelError> {
+    let Some(resource) = layout.resource_roles.iter().position(|role| *role == CsvColumnRole::Id) else {
+        return Ok(());
+    };
+    for (&id, &line) in chunk.columns[resource].iter().zip(&chunk.lines) {
+        let key = if id == 0.0 { 0 } else { id.to_bits() };
+        if !seen.insert(key) {
+            return Err(CsvBlockModelError::Invalid(format!(
+                "CSV row {line}, column '{}': duplicate ID '{id}'",
+                layout.headers[layout.resource_indices[resource]]
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn write<W: Write>(model: &BlockModelData, blocks: &BlockBoundsSource, renderable: &RenderableBlockIndices, output: W) -> Result<(), CsvBlockModelError> {

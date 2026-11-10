@@ -95,6 +95,12 @@ impl OrientedBox {
         }
     }
 
+    /// Whether the plane through `point` with unit `normal` passes through the box.
+    pub(crate) fn straddles_plane(&self, point: Vec3, normal: Vec3) -> bool {
+        let reach: f32 = (0..3).map(|axis| self.axes[axis].dot(normal).abs() * self.half_extents[axis]).sum();
+        (self.center - point).dot(normal).abs() <= reach
+    }
+
     /// Corner `index` (0..8): bit `i` picks the positive end of axis `i`, so
     /// corners differing in exactly one bit share an edge.
     pub(crate) fn corner(&self, index: usize) -> Vec3 {

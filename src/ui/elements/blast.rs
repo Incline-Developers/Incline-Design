@@ -17,7 +17,12 @@ use crate::{
     ui::{
         EditorState,
         state::Workspace,
-        widgets::{menu, toolbar::GROUP_CORNER_RADIUS, viewport::ViewportDockPanel},
+        widgets::{
+            menu,
+            toolbar::GROUP_CORNER_RADIUS,
+            transport::{Transport, transport_button},
+            viewport::ViewportDockPanel,
+        },
     },
 };
 
@@ -494,7 +499,7 @@ fn draw_hole_card(ui: &egui::Ui, editor: &EditorState, analysis: Option<&BlastAn
         pos.y = (collar.y - 18.0 - card_size.y).max(canvas_rect.top() + TILE_MARGIN);
     }
 
-    egui::Area::new(egui::Id::new("blast_hole_card"))
+    egui::Area::new(egui::Id::unique("blast_hole_card"))
         .order(egui::Order::Tooltip)
         .interactable(false)
         .fixed_pos(pos)
@@ -628,59 +633,6 @@ pub(crate) fn paint_column(painter: &egui::Painter, rect: egui::Rect, decks: &[C
     painter.rect_stroke(rect, GROUP_CORNER_RADIUS, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 }
 
-#[derive(Clone, Copy)]
-enum Transport {
-    Play,
-    Pause,
-    Rewind,
-}
-
-/// A small square transport button with its glyph painted rather than set
-/// in type, so it does not depend on the UI font carrying media symbols.
-fn transport_button(ui: &mut egui::Ui, kind: Transport, tooltip: String) -> egui::Response {
-    let side = ui.spacing().interact_size.y;
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
-    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    // Play and pause are the bar's one action, so they take the accent like a
-    // primary button; rewind sits beside them as a secondary one.
-    let (fill, color) = if matches!(kind, Transport::Play | Transport::Pause) {
-        let accent = menu::accent_fill(ui.visuals());
-        let fill = if response.is_pointer_button_down_on() {
-            crate::ui::widgets::shifted(accent, -16)
-        } else if response.hovered() {
-            crate::ui::widgets::shifted(accent, 16)
-        } else {
-            accent
-        };
-        (fill, egui::Color32::WHITE)
-    } else {
-        let visuals = ui.style().interact(&response);
-        (visuals.bg_fill, visuals.fg_stroke.color)
-    };
-    ui.painter().rect_filled(rect, GROUP_CORNER_RADIUS, fill);
-    let c = rect.center();
-    let r = side * 0.24;
-    match kind {
-        Transport::Play => {
-            let points = vec![egui::pos2(c.x - r * 0.8, c.y - r), egui::pos2(c.x + r, c.y), egui::pos2(c.x - r * 0.8, c.y + r)];
-            ui.painter().add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
-        }
-        Transport::Pause => {
-            for dx in [-r * 0.55, r * 0.55] {
-                ui.painter()
-                    .rect_filled(egui::Rect::from_center_size(egui::pos2(c.x + dx, c.y), egui::vec2(r * 0.55, r * 2.0)), 1.0, color);
-            }
-        }
-        Transport::Rewind => {
-            ui.painter()
-                .rect_filled(egui::Rect::from_center_size(egui::pos2(c.x - r * 0.9, c.y), egui::vec2(r * 0.35, r * 2.0)), 0.5, color);
-            let points = vec![egui::pos2(c.x + r, c.y - r), egui::pos2(c.x - r * 0.55, c.y), egui::pos2(c.x + r, c.y + r)];
-            ui.painter().add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
-        }
-    }
-    response.on_hover_text(tooltip)
-}
-
 /// The blast played through: transport and the site's charge limit, a strip
 /// of the surface signal over the detonations it sets off that scrubs the
 /// playhead, and what is going off in the 8 ms at it against the busiest.
@@ -721,16 +673,16 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 if review.playing {
-                    if transport_button(ui, Transport::Pause, tr!("blast-pause")).clicked() {
+                    if transport_button(ui, Transport::Pause, None).clicked() {
                         review.playing = false;
                     }
-                } else if transport_button(ui, Transport::Play, tr!("blast-play")).clicked() {
+                } else if transport_button(ui, Transport::Play, None).clicked() {
                     if review.playhead_ms >= end {
                         review.playhead_ms = 0.0;
                     }
                     review.playing = true;
                 }
-                if transport_button(ui, Transport::Rewind, tr!("blast-back-start")).clicked() {
+                if transport_button(ui, Transport::Rewind, None).clicked() {
                     review.playhead_ms = 0.0;
                 }
                 ui.add_space(4.0);
@@ -841,7 +793,7 @@ fn timeline_keys(ctx: &egui::Context, review: &mut crate::ui::state::BlastReview
     if ctx.egui_wants_keyboard_input() {
         return;
     }
-    let hold_id = egui::Id::new("blast_timeline_scrub_hold");
+    let hold_id = egui::Id::unique("blast_timeline_scrub_hold");
     // Consumed, so a transport button left with focus is not clicked by the
     // same Space press.
     let (space, step_back, step_forward, back_down, forward_down, dt) = ctx.input_mut(|input| {

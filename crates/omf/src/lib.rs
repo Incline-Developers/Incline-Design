@@ -1,21 +1,10 @@
 //! Reader and writer for Open Mining Format version 2,
 //! a standard for mining data interchange backed by the
-//! [Global Mining Guidelines Group](https://gmggroup.org).
+//! [Global Mining Guidelines Group](https://gmggroup.org), and Incline's native project format.
 //!
-//! > **Warning:**
-//! > This is a beta release of OMF 2. The storage format and libraries might be changed in
-//! > backward-incompatible ways and are not subject to any SLA or deprecation policy.
-//! > Further, this code is unfinished and may not be secure.
-//! > Don't use it to open files you don't trust, and don't use it in production yet.
-//!
-//! # What is OMF
-//!
-//! OMF is an open-source serialization format and library to support data interchange
-//! across the entire mining community.
-//! Its goal is to standardize file formats and promote collaboration.
-//!
-//! This repository provides a file format specification and a Rust library for reading and writing files,
-//! plus wrappers to use that library from C and Python.
+//! Forked from [gmggroup/omf-rust](https://github.com/gmggroup/omf-rust) and changed for Incline.
+//! Upstream's OMF 1 converter, JSON Schema generation and C and Python wrappers are not included;
+//! the app rejects OMF 1 files.
 //!
 //! # Getting Started
 //!
@@ -73,14 +62,9 @@ pub mod error;
 pub mod file;
 mod geometry;
 mod grid;
-#[cfg(feature = "omf1")]
-pub mod omf1;
 #[cfg(feature = "parquet")]
 mod pqarray;
 mod project;
-mod schema;
-#[cfg(test)]
-mod schema_doc;
 pub mod validate;
 mod version;
 
@@ -92,10 +76,8 @@ pub use element::Element;
 pub use geometry::{Composite, Geometry, GridSurface, LineSet, PointSet, Surface};
 pub use grid::{Grid2, Grid3, Orient2, Orient3};
 pub use project::Project;
-pub use schema::json_schema;
 pub use version::{
-    CRATE_NAME, CRATE_VERSION, FORMAT_EXTENSION, FORMAT_NAME, FORMAT_VERSION_MAJOR,
-    FORMAT_VERSION_MINOR, FORMAT_VERSION_PRERELEASE, crate_full_name, format_full_name,
+    CRATE_NAME, CRATE_VERSION, FORMAT_EXTENSION, FORMAT_NAME, FORMAT_VERSION_MAJOR, FORMAT_VERSION_MINOR, FORMAT_VERSION_PRERELEASE, crate_full_name, format_full_name,
     format_version,
 };
 

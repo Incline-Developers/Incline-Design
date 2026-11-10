@@ -1,9 +1,9 @@
-//! Offscreen colour targets copied back to the CPU as RGBA8, shared by the
-//! viewport image export and the plot map render.
-
-use std::sync::Arc;
+//! Offscreen colour targets copied back to the CPU as RGBA8, for the viewport
+//! image and video exports.
 
 use anyhow::{Result, anyhow};
+
+use super::Shared;
 
 /// A `width` x `height` colour target in `format` that can be rendered into and
 /// copied out of.
@@ -29,7 +29,7 @@ pub(super) fn offscreen_target(device: &wgpu::Device, label: &str, format: wgpu:
 /// A texture copied into a mappable buffer, awaiting readback.
 pub(super) struct RgbaReadback {
     /// Shared so a browser map callback can unmap the buffer it was handed.
-    pub(super) buffer: Arc<wgpu::Buffer>,
+    pub(super) buffer: Shared<wgpu::Buffer>,
     padded_bytes_per_row: u32,
     pub(super) width: u32,
     pub(super) height: u32,
@@ -39,19 +39,25 @@ pub(super) struct RgbaReadback {
 impl RgbaReadback {
     /// Record a copy of all of `texture` into a new mappable buffer.
     pub(super) fn record(device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, label: &str) -> Self {
-        let (width, height) = (texture.width(), texture.height());
+        Self::record_region(device, encoder, texture, (0, 0), (texture.width(), texture.height()), label)
+    }
+
+    /// Record a copy of the `size` region of `texture` at `origin` into a
+    /// new mappable buffer.
+    pub(super) fn record_region(device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, origin: (u32, u32), size: (u32, u32), label: &str) -> Self {
+        let (width, height) = size;
         let padded_bytes_per_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        // On wasm `wgpu::Buffer` is not Send+Sync; the Arc never crosses threads
-        // there, but the native readback path requires Arc over Rc.
-        #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
-        let buffer = Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+        let buffer = Shared::new(device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: u64::from(padded_bytes_per_row) * u64::from(height),
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
         encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
+            wgpu::TexelCopyTextureInfo {
+                origin: wgpu::Origin3d { x: origin.0, y: origin.1, z: 0 },
+                ..texture.as_image_copy()
+            },
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
                 layout: wgpu::TexelCopyBufferLayout {
@@ -82,10 +88,12 @@ impl RgbaReadback {
         self.buffer.map_async(wgpu::MapMode::Read, .., move |result| {
             let _ = tx.send(result);
         });
-        device.poll(wgpu::PollType::wait_indefinitely()).map_err(|error| anyhow!("GPU poll failed: {error}"))?;
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| anyhow!(crate::i18n::tr!("err-gfx-poll-failed", error = error.to_string())))?;
         rx.recv()
-            .map_err(|_| anyhow!("Readback callback dropped"))?
-            .map_err(|error| anyhow!("Buffer map failed: {error}"))
+            .map_err(|_| anyhow!(crate::i18n::tr!("err-gfx-readback-dropped")))?
+            .map_err(|error| anyhow!(crate::i18n::tr!("err-gfx-buffer-map", error = error.to_string())))
     }
 
     /// The mapped pixels with wgpu's row padding stripped and the surface
@@ -94,7 +102,7 @@ impl RgbaReadback {
         let swap_bgra = match self.format.remove_srgb_suffix() {
             wgpu::TextureFormat::Bgra8Unorm => true,
             wgpu::TextureFormat::Rgba8Unorm => false,
-            other => return Err(anyhow!("Unsupported surface format for image export: {other:?}")),
+            other => return Err(anyhow!(crate::i18n::tr!("err-gfx-image-format", format = format!("{other:?}")))),
         };
         let padded = self.buffer.get_mapped_range(..)?;
         let row_bytes = self.width as usize * 4;

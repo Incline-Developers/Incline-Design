@@ -40,11 +40,11 @@ use crate::{
 const MENU_ROW_INSET: f32 = 6.0;
 /// Clear space kept between the centre cluster and the two beside it.
 const CENTRE_CLEARANCE: f32 = 16.0;
+/// Space between the project actions and Planning's run controls.
+const PLANNING_GAP: f32 = 8.0;
 /// Clear space either side of the hairline parting the view controls every
 /// workspace carries from the ones the open workspace adds - see [`divider`].
 const DIVIDER_GAP: f32 = 7.0;
-/// How far that hairline is held clear of the strip's top and bottom.
-const DIVIDER_INSET: f32 = 7.0;
 /// Gap between one drawing setting in the centre run and the next. Wider than
 /// the gap between buttons: these are labelled fields rather than a run of
 /// icons, and they read as separate settings.
@@ -68,11 +68,17 @@ const SHIFT_MODIFIER: &str = "Shift+";
 ///
 /// Its visible surface uses [`TOOL_CELL_SIZE`], the same thickness as the left
 /// and bottom toolbars; the panel claims its chrome margins around that.
-pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> egui::Rect {
-    let claimed = TOOL_CELL_SIZE + 2.0 * crate::ui::chrome::margin(ui.ctx());
+pub(crate) fn draw_viewport_bar(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    project: &UiProjectView,
+    document: &crate::model::Document,
+    commands: &mut Vec<UiCommand>,
+) -> egui::Rect {
+    let claimed = TOOL_CELL_SIZE + 2.0 * crate::ui::chrome::margin();
     egui::Panel::top("viewport_bar")
         .resizable(false)
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .exact_size(claimed)
         // Buttons meet the region edges so its later chrome pass can mask their
         // outer corners; explicit cluster gaps provide all the spacing needed.
@@ -87,7 +93,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                 // an explicit scope prevents an earlier conditional panel from
                 // shifting the ids of these persistent controls on that rerun.
                 let contents_id = ui.make_persistent_id("viewport_bar_contents");
-                ui.scope_builder(egui::UiBuilder::new().id(contents_id).max_rect(strip), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().scope_id(contents_id).max_rect(strip), |ui| {
                     let side = strip.height();
                     // Deliberately *not* raising `interact_size.y` to match: the
                     // combo box and the number field in the centre take their
@@ -97,10 +103,37 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
 
                     let left = super::cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_project_actions(ui, editor, project, commands, side);
-                        main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
+                        if editor.active_workspace == Workspace::Planning {
+                            // Every Planning page is run from here, in place
+                            // of the discipline menus the other workspaces
+                            // carry: Setup the open step's group, Reserves the
+                            // Solids steps it shows, and the schedule's pages
+                            // the schedule. The pages' own tabs are in a row
+                            // of their own under the bar - see
+                            // `elements::planning_tabs`.
+                            ui.add_space(PLANNING_GAP);
+                            if editor.is_planning_view(crate::ui::state::PlanningView::Setup) {
+                                super::planning_setup::draw_setup_run_controls(ui, editor, commands);
+                            } else if editor.is_solids_view() {
+                                super::planning_setup::draw_solids_run_controls(ui, editor, commands);
+                            } else {
+                                super::schedule_gantt::draw_calculation_controls(ui, editor, &project.schedule, "viewport_bar", commands);
+                            }
+                        } else {
+                            main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
+                        }
                     });
                     let right = super::cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        draw_view_tools(ui, editor, project, commands, side);
+                        if !editor.is_planning_setup() {
+                            draw_view_tools(ui, editor, project, commands, side);
+                        } else if editor.shows_solid_preview() {
+                            draw_solid_preview_camera_tools(ui, editor, side);
+                        }
+                        // The timeline's zoom, at the end the camera tools
+                        // take elsewhere.
+                        if editor.is_schedule_gantt() || editor.is_schedule_charts() {
+                            super::schedule_gantt::draw_timeline_zoom(ui, editor, &project.schedule, side);
+                        }
                     });
 
                     // egui centres a block it is told the size of, and the run
@@ -112,7 +145,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                     // Keyed by workspace: the runs are different widths, and
                     // a stale one would place the incoming run off centre for
                     // a frame after every tab switch.
-                    let width_id = ui.make_persistent_id(("viewport_bar_centre_width", editor.active_workspace.label()));
+                    let width_id = ui.make_persistent_id(("viewport_bar_centre_width", editor.active_workspace.label(), editor.planning_view));
                     let width: f32 = ui.data(|data| data.get_temp(width_id)).unwrap_or(CENTRE_WIDTH_GUESS);
                     if let Some(band) = centre_band(strip, left, right) {
                         let left_edge = (strip.center().x - width / 2.0).clamp(band.left(), (band.right() - width).max(band.left()));
@@ -121,7 +154,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         // instead of squeezing what is in it.
                         let run = egui::Rect::from_min_max(egui::pos2(left_edge, band.top()), band.max);
                         let drawn = super::cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            draw_centre_settings(ui, editor, project);
+                            draw_centre_settings(ui, editor, project, document, commands);
                         });
                         ui.data_mut(|data| data.insert_temp(width_id, drawn.width()));
                     }
@@ -189,6 +222,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     if import.clicked() {
         editor.show_import = true;
         editor.show_export = false;
+        editor.import_as_haul_roads = false;
     }
     let export = ui.add_enabled(
         has_project,
@@ -226,7 +260,29 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
 
 /// The centre run: every workspace gets the working elevation, alongside any
 /// settings belonging specifically to that workspace.
-fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, document: &crate::model::Document, commands: &mut Vec<UiCommand>) {
+    // The Gantt and the Charts share one timeline: where it is looking. The
+    // Calendar's report goes here, with why the grid refused an edit beside
+    // it when it has.
+    if editor.is_schedule_gantt() || editor.is_schedule_charts() {
+        super::schedule_gantt::draw_timeline_range(ui, editor);
+        return;
+    }
+    if editor.is_schedule_calendar() {
+        super::schedule_calendar::draw_report_menu(ui, editor, &project.schedule, document, commands);
+        if let Some(error) = editor.schedule_calendar.error.clone() {
+            ui.add_space(CENTRE_ITEM_GAP);
+            ui.add(egui::Label::new(egui::RichText::new(error).color(ui.visuals().error_fg_color)));
+        }
+        return;
+    }
+    if editor.is_planning_setup() {
+        return;
+    }
+    if editor.is_planning_cut_step() {
+        draw_cut_step_settings(ui, editor);
+        return;
+    }
     match editor.active_workspace {
         Workspace::Production => draw_drawing_settings(ui, editor, project),
         Workspace::DrillAndBlast => {
@@ -323,6 +379,32 @@ fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
         editor.end_tie_chain();
         editor.initiation_dialog = None;
     }
+}
+
+/// The cut steps name what is being cut, with a switch for the blast and
+/// block labels over the viewport. Cuts are drawn at the bench's own crest and
+/// over the solid, so a working elevation or a line colour would only be a way
+/// to draw one wrong.
+fn draw_cut_step_settings(ui: &mut egui::Ui, editor: &mut EditorState) {
+    ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
+    match &editor.planning_cut_name {
+        Some(name) => {
+            ui.label(if editor.is_dig_strips_step() { tr!("viewport-flitch") } else { tr!("viewport-bench") });
+            ui.label(name);
+        }
+        // The tools grey out without one bench to draw on - see
+        // `EditorState::planning_cut_target` - so say so where it would be named.
+        None => {
+            let hint = if editor.is_dig_strips_step() {
+                tr!("planning-dig-one-flitch")
+            } else {
+                tr!("planning-blasts-one-bench")
+            };
+            ui.label(egui::RichText::new(hint).color(ui.visuals().weak_text_color()));
+        }
+    }
+    centre_part(ui);
+    ui.add(crate::ui::widgets::menu::SlidingToggle::new(editor.cut_labels_mut()).label(tr!("viewport-labels")));
 }
 
 /// What the drawing tools will use next: layer, elevation, line colour, fill.
@@ -427,18 +509,8 @@ fn draw_geology_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, side: f3
 }
 
 /// Part the run every workspace carries from the run this one adds.
-///
-/// A hairline rather than a gap: the bar's buttons meet each other, so a space
-/// alone would read as a missing button. Held clear of the strip's top and
-/// bottom so it marks a seam between two runs rather than looking like an edge
-/// of the bar itself.
 fn divider(ui: &mut egui::Ui, side: f32) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0 + 2.0 * DIVIDER_GAP, side), egui::Sense::hover());
-    let visuals = ui.visuals();
-    let color = crate::ui::widgets::shifted(visuals.panel_fill, if visuals.dark_mode { 26 } else { -46 });
-    let painter = ui.painter();
-    let x = painter.round_to_pixel_center(rect.center().x);
-    painter.vline(x, (rect.top() + DIVIDER_INSET)..=(rect.bottom() - DIVIDER_INSET), egui::Stroke::new(1.0, color));
+    crate::ui::widgets::toolbar::divider(ui, side, DIVIDER_GAP);
 }
 
 /// What every workspace asks of the camera: how far the scene is stretched
@@ -499,8 +571,35 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     }
 }
 
+/// The camera's two ways back to the whole view, on the Setup steps that show
+/// the solid preview rather than the viewport, driving the preview's camera.
+/// They hold the place they take on every other page, against the bar's end.
+fn draw_solid_preview_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
+    use crate::ui::widgets::preview_navigation;
+
+    let zoom = ui.add(
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), tr!("common-zoom-extents"))
+            .id_salt("solid_preview_zoom_to_extents")
+            .button_side(side),
+    );
+    if zoom.clicked() {
+        preview_navigation::zoom_to_extents(&mut editor.solid_preview_view);
+        ui.ctx().request_repaint();
+    }
+
+    let reset = ui.add(
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), tr!("common-reset-view"))
+            .id_salt("solid_preview_reset_view")
+            .button_side(side),
+    );
+    if reset.clicked() {
+        preview_navigation::reset_view(&mut editor.solid_preview_view);
+        ui.ctx().request_repaint();
+    }
+}
+
 /// The switches saying how the scene's geometry is drawn: the vertices of its
-/// lines, the wireframes on its meshes, the grid it is drawn over, and the
+/// lines, the wireframes and contours on its meshes, the grid it is drawn over, and the
 /// presentation shading laid over the lot. None of them is a tool, and none of
 /// them is saved.
 ///
@@ -555,6 +654,24 @@ fn draw_display_switches(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
         } else {
             crate::ui::state::GridOptionsDialog::open_plan(editor.xy_grid_style)
         });
+    }
+
+    // Right of the wireframes: the other way of reading a mesh's shape.
+    let contours = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("toggle_contours.svg")),
+            if editor.topology_contours_enabled {
+                tr!("viewport-bar-hide-contours")
+            } else {
+                tr!("viewport-bar-show-contours")
+            },
+        )
+        .id_salt("contours")
+        .button_side(side)
+        .selected(editor.topology_contours_enabled),
+    );
+    if contours.clicked() {
+        commands.push(UiCommand::SetTopologyContours(!editor.topology_contours_enabled));
     }
 
     let wireframes = ui.add(

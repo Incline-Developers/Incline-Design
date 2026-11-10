@@ -1,0 +1,3987 @@
+//! Shared, background-built geometry for every solid listed in View.
+//!
+//! The artifacts built here are *presentation independent*. Which step is
+//! open, which blast is selected and where the camera is pointing change what
+//! is drawn out of them, never what is built: a solid is cut into its benches,
+//! its flitches and its dig blocks once, and every consumer reads that one
+//! result. Selecting a blast used to rebuild the whole body, which is exactly
+//! what the pipeline is meant to make impossible.
+use std::{
+    collections::{HashMap, HashSet},
+    hash::{DefaultHasher, Hash, Hasher},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
+use glam::DVec2;
+use rayon::prelude::*;
+
+use super::solids::{CutBand, bench_bands, build_bench_body, plan_bands, preview_triangulation};
+
+pub(crate) mod disk_cache;
+use crate::{
+    model::{
+        DigBlockId, Object, Solid, SolidId,
+        arrangement::{self, Face},
+        formats::mesh_data::Triangulation,
+        solid_reserves::{ReserveBand, ReserveOutcome, ReservePartition, ReservePiece, ReserveSource},
+        triangulation::{GroundSourceStamp, OpenTriangulation, TriangulationId},
+    },
+    ui::state::{BenchSelection, BlastShapeRef, SolidPreviewSummary, SolidsViewRow},
+};
+
+/// One built piece of a solid: the mesh, where it sits in the benching plan,
+/// what it is worth, and which planning entity it is.
+///
+/// A record rather than an index into four parallel arrays, so a piece cannot
+/// be measured against another piece's band or another piece's identity.
+#[derive(Clone)]
+pub(crate) struct SolidPart {
+    pub(crate) mesh: OpenTriangulation,
+    pub(crate) band: CutBand,
+    /// The bench this part lies in - a whole bench part names itself.
+    pub(crate) bench: BenchSelection,
+    /// Which blast of that bench holds it. A bench with no cuts drawn on it
+    /// is one blast, so this is set for every part of a built solid.
+    pub(crate) blast: Option<BlastShapeRef>,
+    /// Which dig block this part is, for the flitch-level parts.
+    pub(crate) block: Option<DigPiece>,
+    /// `None` when the piece did not come out closed and so cannot be measured.
+    pub(crate) volume: Option<f64>,
+}
+
+/// One blast face of one bench, derived once and read by every consumer.
+#[derive(Clone)]
+pub(crate) struct BlastFace {
+    pub(crate) bench: BenchSelection,
+    pub(crate) face: Face,
+    pub(crate) anchor: [f64; 2],
+    pub(crate) area: f64,
+}
+
+impl BlastFace {
+    pub(super) fn shape_ref(&self, solid: SolidId) -> BlastShapeRef {
+        BlastShapeRef::new(solid, self.bench.base, self.anchor)
+    }
+}
+
+/// What the Solids and Benching stages commit: the closed body, cut into
+/// benches and flitches, with the ground each covers.
+///
+/// Deliberately free of anything a cut line decides. Drawing a blast cut has
+/// to re-partition the solid, and must never rebuild it - which is exactly
+/// what one artifact keyed on both would have done.
+pub(crate) struct SolidBody {
+    /// Whole-bench parts, never cut laterally. What Blasting draws on.
+    pub(crate) bench_parts: Vec<SolidPart>,
+    /// One part per flitch as Benching leaves it, before any cut divides it,
+    /// so it carries no blast and no block. The mesh is shared, so the Dig
+    /// Strips stage clips from it without rebuilding the body it came out of.
+    pub(crate) flitch_parts: Vec<SolidPart>,
+    /// Bench ground, by the bit pattern of the bench base RL.
+    pub(crate) bench_footprints: HashMap<u64, Vec<Vec<DVec2>>>,
+    /// Flitch ground, by the bit pattern of the flitch base RL.
+    pub(crate) flitch_footprints: HashMap<u64, Vec<Vec<DVec2>>>,
+    /// The flitch bands that actually hold material.
+    pub(crate) occupied_bands: Vec<CutBand>,
+}
+
+/// What the Blasting stage commits: each bench's ground divided into blasts.
+pub(crate) struct SolidBlasting {
+    pub(crate) blast_faces: Vec<BlastFace>,
+}
+
+/// What the Reserving stage commits: the terminal blocks.
+#[derive(Clone)]
+pub(crate) struct SolidPartition {
+    /// Flitch-level parts, cut into dig blocks. What View draws.
+    pub(crate) parts: Vec<SolidPart>,
+    /// Bench-high parts, one per blast, so the blast sequence editor outlines
+    /// blasts rather than the dig blocks inside them.
+    pub(crate) blast_parts: Vec<SolidPart>,
+    /// How these parts were cut, so the next partition can reuse them.
+    carving: Carving,
+}
+
+/// What a partition was cut from, so the next one can keep every piece whose
+/// outline it leaves unchanged.
+#[derive(Clone)]
+struct Carving {
+    /// Pieces are only reusable over the body they were cut from.
+    body: Arc<SolidBody>,
+    /// By the bit pattern of the flitch base RL.
+    flitches: HashMap<u64, CarvedLevel>,
+    /// By the bit pattern of the bench base RL.
+    benches: HashMap<u64, CarvedLevel>,
+    /// Each flitch's dig block outlines, by the bit pattern of its base RL.
+    /// Drawing them again is most of what an edit elsewhere would otherwise
+    /// cost a survey's flitches.
+    outlines: HashMap<u64, Arc<FlitchOutlines>>,
+}
+
+/// One flitch's or bench's pieces: each one's outline, and the index of its
+/// part - in `parts` for a flitch and `blast_parts` for a bench - or `None`
+/// where the outline holds no material, so it is not cut again to find that
+/// out. Each outline is the one its dig block holds, not a copy of it.
+type CarvedLevel = Vec<(Arc<Face>, Option<usize>)>;
+
+/// One flitch's dig block outlines, and the lines they were drawn from: the
+/// same lines over the same ground draw the same outlines.
+struct FlitchOutlines {
+    strips: Vec<Object>,
+    bench_cuts: Vec<Object>,
+    faces: Vec<(Arc<Face>, DVec2)>,
+    plans: Vec<Face>,
+}
+
+/// One solid's artifacts, one per stage that owns one.
+///
+/// Four separate keys, products and errors rather than one of each. A bench
+/// height changes the slabs and reuses the envelope; a blast cut changes the
+/// blast faces and reuses the slabs; a strip changes the dig blocks and reuses
+/// the blasts. And a fault in any of them fails only the stage that owns it.
+/// One artifact's request state: what was asked for, and which attempt.
+///
+/// The attempt token is the point. A content fingerprint alone cannot tell a
+/// retry from the cancelled attempt it replaces: identical inputs produce an
+/// identical fingerprint, so a result already computed by the cancelled
+/// attempt would satisfy the new one's validity check and publish silently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Request {
+    /// Content fingerprint of the inputs this attempt was made for.
+    pub(crate) key: u64,
+    /// Unique to this attempt, even for identical inputs.
+    pub(crate) token: u64,
+}
+
+impl Request {
+    fn new(key: u64) -> Self {
+        Self {
+            key,
+            token: NEXT_REQUEST_TOKEN.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+}
+
+/// One stage's slot: the attempt in flight, the product it committed, and why
+/// it failed if it did.
+///
+/// Request and product are deliberately separate. A key that records only what
+/// was *asked for* says a cancelled artifact is in hand, and the next sync
+/// declines to ask again - a retry that waits for ever.
+pub(crate) struct Stage<T> {
+    request: Option<Request>,
+    product: Option<T>,
+    error: Option<String>,
+    /// Waiting on deferred inputs to be restored, rather than on a worker.
+    /// Not a failure: a run over unloaded surfaces has to be able to finish.
+    awaiting_inputs: bool,
+}
+
+impl<T> Default for Stage<T> {
+    fn default() -> Self {
+        Self {
+            request: None,
+            product: None,
+            error: None,
+            awaiting_inputs: false,
+        }
+    }
+}
+
+impl<T> Stage<T> {
+    /// Whether `token` names the attempt currently in flight. The one gate a
+    /// finished result has to pass before it may publish.
+    pub(crate) fn accepts(&self, token: u64) -> bool {
+        self.request.is_some_and(|request| request.token == token)
+    }
+
+    /// Whether an attempt for these inputs is in hand - running or finished.
+    fn is_current(&self, key: u64) -> bool {
+        self.request.is_some_and(|request| request.key == key)
+    }
+
+    /// Start an attempt, discarding whatever the last one left behind.
+    fn begin(&mut self, key: u64) -> u64 {
+        let request = Request::new(key);
+        self.request = Some(request);
+        self.product = None;
+        self.error = None;
+        self.awaiting_inputs = false;
+        request.token
+    }
+
+    fn settle(&mut self, product: T) {
+        self.product = Some(product);
+        self.error = None;
+        self.awaiting_inputs = false;
+    }
+
+    fn fail(&mut self, error: String) {
+        self.product = None;
+        self.error = Some(error);
+        self.awaiting_inputs = false;
+    }
+
+    /// Mark this attempt as waiting on deferred inputs rather than a worker.
+    fn await_inputs(&mut self) {
+        self.awaiting_inputs = true;
+    }
+
+    /// Retire an attempt that produced nothing, so the next sync asks again.
+    fn retire_if_unfinished(&mut self) {
+        if self.product.is_none() && self.error.is_none() {
+            self.request = None;
+        }
+    }
+
+    /// Retire a settled failure, so an explicit rerun tries once more. An
+    /// unchanged-input retry is otherwise refused by design: a stage that
+    /// failed must not re-fail on every refresh.
+    fn retire_failure(&mut self) {
+        if self.error.is_some() {
+            self.request = None;
+            self.error = None;
+        }
+    }
+
+    fn product(&self) -> Option<&T> {
+        self.product.as_ref()
+    }
+
+    fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    fn is_awaiting_inputs(&self) -> bool {
+        self.awaiting_inputs
+    }
+
+    /// Whether an attempt has been made and has yet to produce anything.
+    fn is_working(&self) -> bool {
+        self.request.is_some() && self.product.is_none() && self.error.is_none()
+    }
+}
+
+/// What to do about a request whose inputs are not resident.
+#[derive(Debug, PartialEq, Eq)]
+enum RestoreDecision {
+    /// Ask for them; this request has not asked yet.
+    Request,
+    /// A load is in flight - wait for it.
+    Wait,
+    /// This request already asked and nothing is in flight, so the load is not
+    /// coming. A stated failure, not an indefinite wait.
+    Failed,
+}
+
+fn restore_decision(attempted: bool, pending: bool) -> RestoreDecision {
+    match (attempted, pending) {
+        (false, _) => RestoreDecision::Request,
+        (true, true) => RestoreDecision::Wait,
+        (true, false) => RestoreDecision::Failed,
+    }
+}
+
+/// What one completed reserve measurement produced.
+pub(crate) struct ReserveProduct {
+    /// Totals per entry of the partition it measured.
+    totals: Arc<Vec<crate::model::solid_reserves::ReserveTotals>>,
+    resolution: Option<crate::model::solid_reserves::ReserveResolution>,
+    availability: ReserveAvailability,
+    /// What each piece is made of, when the scan was asked to retain it - the
+    /// dig-block scan is, and the bench scan beside it is not. Shared rather
+    /// than cloned: the records that carry it to a scheduler are rebuilt
+    /// whenever the snapshot is, and a capture is the size of the model's
+    /// intersections with the partition.
+    material: Option<Arc<crate::model::solid_reserves::MaterialCapture>>,
+}
+
+/// The last dig-block measurement, so the next one can keep the pieces a new
+/// partition leaves as they are.
+struct MeasuredReserves {
+    /// What it was measured with, the partition aside.
+    config: u64,
+    /// The mesh each slot measured.
+    meshes: Vec<Arc<Triangulation>>,
+    totals: Arc<Vec<crate::model::solid_reserves::ReserveTotals>>,
+    resolution: crate::model::solid_reserves::ReserveResolution,
+    material: Option<Arc<crate::model::solid_reserves::MaterialCapture>>,
+}
+
+/// Why a completed reserve measurement holds the totals it does.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReserveAvailability {
+    Measured,
+    /// A dump or stockpile with no model: geometry and capacity only.
+    CapacityOnly,
+    /// The project defines no reserve fields, so there is nothing to measure.
+    NoSchema,
+}
+
+/// The colour the Reserves view marks blocks out in: the ones the Blocks step
+/// could not measure.
+const MARKED_COLOR: [f32; 4] = [0.92, 0.36, 0.22, 1.0];
+
+pub(crate) struct ViewSolid {
+    /// The Solids stage: what the closed body is built from. The cache entry's
+    /// own identity, so it is not inside a [`Stage`] like the rest.
+    pub(crate) key: u64,
+    pub(super) runtime: u32,
+    solid: Solid,
+    sources: [Option<Arc<Triangulation>>; 2],
+    /// Which source geometry every artifact in this entry was built from.
+    /// Settled with the envelope - captured when its job started, from the
+    /// inputs that job read - and read by the dig-block records, so a block
+    /// can say which ground produced it. See [`GroundSourceStamp`].
+    stamp: GroundSourceStamp,
+    /// The envelope's key in the disk cache, which every later stage's is
+    /// made from: settled with the envelope, `None` where nothing is kept.
+    disk_key: Option<u64>,
+    /// Reserve measurements looked for in the disk cache and not found there,
+    /// by their disk key, so the next attempt measures instead of looking again.
+    reserves_not_on_disk: HashSet<u64>,
+    /// The part of this solid's block model its reserves read, by its key,
+    /// held only while Setup is open; see [`ReserveSource`].
+    reserve_source: Option<KeptPart>,
+    /// Parts looked for in the disk cache and not found there, by their key.
+    sources_not_on_disk: HashSet<u64>,
+    envelope: Stage<Arc<OpenTriangulation>>,
+    /// The Benching stage: the envelope plus the plan that divides it.
+    body: Stage<Arc<SolidBody>>,
+    /// The Blasting stage: the benches plus the cuts across them.
+    blasting: Stage<Arc<SolidBlasting>>,
+    /// The Reserving stage: the blasts plus each flitch's own strips, cut.
+    partition: Stage<SolidPartition>,
+    /// The last partition, kept from when a blast cut retired it until the
+    /// next one is built, so that one can reuse its pieces.
+    carved: Option<SolidPartition>,
+    /// Reserves over whole benches, from the Benching stage. Independent of
+    /// the dig-block figures, so the two can be reconciled against each other.
+    bench_reserves: Stage<ReserveProduct>,
+    reserves: Stage<ReserveProduct>,
+    measured: Option<Arc<MeasuredReserves>>,
+    /// The plan faces each flitch's ground is divided into, kept so a strip
+    /// edit derives again only the flitch it touched, and so opening Dig
+    /// Strips again finds every flitch's blocks already worked out. Shared
+    /// with the job that counts the blocks, which fills it.
+    flitch_faces: Arc<std::sync::Mutex<FlitchFaces>>,
+}
+
+/// A solid's held flitch faces, as one committed body divides them: what
+/// [`super::dig_strips::cached_dig_block_faces`] and its kin read and fill.
+/// Cheap to clone, and sendable to a job.
+#[derive(Clone)]
+pub(crate) struct FlitchFaceCache {
+    /// The committed body's attempt; `None` holds nothing.
+    attempt: Option<u64>,
+    memo: Arc<std::sync::Mutex<FlitchFaces>>,
+}
+
+/// Plan faces derived from one committed body's flitch ground, with an
+/// anchor inside each.
+#[derive(Default)]
+struct FlitchFaces {
+    /// The body attempt the faces were divided from: see
+    /// [`ViewSolid::body_attempt`]. A new body clears the rest.
+    attempt: Option<u64>,
+    /// By flitch base bits and whether the flitch's own strips divide it as
+    /// well as its bench's cuts: the key of the lines it was divided by, and
+    /// the faces. One entry a flitch, so an edit replaces the old faces.
+    faces: HashMap<(u64, bool), (u64, Arc<super::dig_strips::AnchoredFaces>)>,
+    /// Dig Strips' flat plan of each flitch's ground still in mining, by
+    /// flitch base bits: the key of what it was cut from, and the mesh, or
+    /// `None` where nothing is left.
+    flat: HashMap<u64, (u64, Option<OpenTriangulation>)>,
+}
+
+impl FlitchFaces {
+    /// Starts over for a new body: everything held was cut from the last one.
+    fn for_attempt(&mut self, attempt: u64) -> &mut Self {
+        if self.attempt != Some(attempt) {
+            *self = Self {
+                attempt: Some(attempt),
+                ..Self::default()
+            };
+        }
+        self
+    }
+}
+
+impl FlitchFaceCache {
+    /// The faces the committed body's flitch at `flitch` is divided into by
+    /// the lines `key` stands for, derived by `derive` the first time: with
+    /// `strips`, the flitch's dig blocks; without, its bench's blasts.
+    pub(crate) fn faces(&self, flitch: f64, strips: bool, key: u64, derive: impl FnOnce() -> super::dig_strips::AnchoredFaces) -> Arc<super::dig_strips::AnchoredFaces> {
+        let Some(attempt) = self.attempt else {
+            return Arc::new(derive());
+        };
+        let slot = (flitch.to_bits(), strips);
+        if let Some((held, faces)) = self.memo.lock().expect("flitch faces").for_attempt(attempt).faces.get(&slot)
+            && *held == key
+        {
+            return faces.clone();
+        }
+        // Derived outside the lock, so flitches are divided side by side.
+        let faces = Arc::new(derive());
+        self.memo.lock().expect("flitch faces").for_attempt(attempt).faces.insert(slot, (key, faces.clone()));
+        faces
+    }
+
+    /// Dig Strips' flat mesh of the flitch at `flitch`, cut from what `key`
+    /// stands for, built by `build` the first time; held like [`Self::faces`].
+    fn flat_ground(&self, flitch: f64, key: u64, build: impl FnOnce() -> Option<OpenTriangulation>) -> Option<OpenTriangulation> {
+        let Some(attempt) = self.attempt else {
+            return build();
+        };
+        if let Some((held, mesh)) = self.memo.lock().expect("flitch faces").for_attempt(attempt).flat.get(&flitch.to_bits())
+            && *held == key
+        {
+            return mesh.clone();
+        }
+        let mesh = build();
+        self.memo
+            .lock()
+            .expect("flitch faces")
+            .for_attempt(attempt)
+            .flat
+            .insert(flitch.to_bits(), (key, mesh.clone()));
+        mesh
+    }
+}
+
+impl ViewSolid {
+    /// The source mesh this solid's envelope was built from, but only while it
+    /// still stands for the content the caller is asking about.
+    ///
+    /// Keeping an unloaded surface's last mesh is what lets a solid survive an
+    /// eviction. Keeping it across an *edit* would build the pit from the old
+    /// geometry while the fingerprint claimed the new - so the key has to
+    /// match, and the key carries the content versions.
+    fn retained_source(&self, key: u64, index: usize) -> Option<Arc<Triangulation>> {
+        (self.key == key).then(|| self.sources[index].clone()).flatten()
+    }
+
+    /// Whether every artifact up to and including `demand`'s own is committed.
+    ///
+    /// Per stage, because the artifacts after one are cleared the moment it
+    /// rebuilds: asking for all four is how a page that only needs the benches
+    /// came to go blank until Dig Strips had run as well.
+    pub(crate) fn built_through(&self, demand: crate::app::planning_pipeline::GeometryDemand) -> bool {
+        use crate::app::planning_pipeline::GeometryDemand;
+        [
+            (GeometryDemand::Envelope, self.envelope.product().is_some()),
+            (GeometryDemand::Body, self.body.product().is_some()),
+            (GeometryDemand::Blasting, self.blasting.product().is_some()),
+            (GeometryDemand::Partition, self.partition.product().is_some()),
+        ]
+        .into_iter()
+        .take_while(|(stage, _)| *stage <= demand)
+        .all(|(_, built)| built)
+    }
+
+    /// Whether an attempt at any artifact up to `demand`'s own is in flight.
+    pub(crate) fn working_through(&self, demand: crate::app::planning_pipeline::GeometryDemand) -> bool {
+        use crate::app::planning_pipeline::GeometryDemand;
+        [
+            (GeometryDemand::Envelope, self.envelope.is_working()),
+            (GeometryDemand::Body, self.body.is_working()),
+            (GeometryDemand::Blasting, self.blasting.is_working()),
+            (GeometryDemand::Partition, self.partition.is_working()),
+        ]
+        .into_iter()
+        .take_while(|(stage, _)| *stage <= demand)
+        .any(|(_, working)| working)
+    }
+
+    /// The parts one stage draws out of the artifact it owns.
+    ///
+    /// Benching draws its flitches, Blasting the whole benches it divides, and
+    /// Dig Strips the blocks it cuts. A stage never reaches forward for a
+    /// later stage's subdivision - which is also why it does not go blank when
+    /// that subdivision is retired.
+    pub(crate) fn display_parts(&self, demand: crate::app::planning_pipeline::GeometryDemand) -> Option<&[SolidPart]> {
+        use crate::app::planning_pipeline::GeometryDemand;
+        match demand {
+            // Blasting draws its benches flitch by flitch, so they keep the
+            // colours and patterns Benching gave them.
+            GeometryDemand::Envelope | GeometryDemand::Body | GeometryDemand::Blasting => self.body.product().map(|body| body.flitch_parts.as_slice()),
+            GeometryDemand::Partition => self.partition.product().map(|partition| partition.parts.as_slice()),
+        }
+    }
+
+    /// The flitch bands that hold material - a Benching product, readable
+    /// without any of the cutting stages having run.
+    pub(crate) fn occupied_bands(&self) -> Option<&[CutBand]> {
+        self.body.product().map(|body| body.occupied_bands.as_slice())
+    }
+
+    /// Each flitch's ground in plan, likewise a Benching product.
+    pub(crate) fn flitch_footprints(&self) -> Option<&HashMap<u64, Vec<Vec<DVec2>>>> {
+        self.body.product().map(|body| &body.flitch_footprints)
+    }
+
+    /// The held faces of the committed body's flitches.
+    pub(crate) fn face_cache(&self) -> FlitchFaceCache {
+        FlitchFaceCache {
+            attempt: self.body_attempt(),
+            memo: self.flitch_faces.clone(),
+        }
+    }
+
+    /// The committed body, shared.
+    pub(crate) fn body_product(&self) -> Option<Arc<SolidBody>> {
+        self.body.product().cloned()
+    }
+
+    /// The committed blasts, shared.
+    pub(crate) fn blasting_product(&self) -> Option<Arc<SolidBlasting>> {
+        self.blasting.product().cloned()
+    }
+
+    /// Unique to the attempt that built the committed body.
+    pub(crate) fn body_attempt(&self) -> Option<u64> {
+        self.body.product().and(self.body.request).map(|request| request.token)
+    }
+
+    /// One bench-high part per blast, committed with the dig blocks.
+    pub(crate) fn blast_parts(&self) -> Option<&[SolidPart]> {
+        self.partition.product().map(|partition| partition.blast_parts.as_slice())
+    }
+
+    /// The dig blocks, once every artifact behind them is committed too.
+    ///
+    /// The terminal product, and the one thing that does need all four: a
+    /// block is only a finished block if the body and the blast partition it
+    /// was cut out of are the ones still in hand.
+    pub(crate) fn finished_partition(&self) -> Option<&[SolidPart]> {
+        self.body.product()?;
+        self.blasting.product()?;
+        self.partition.product().map(|partition| partition.parts.as_slice())
+    }
+
+    /// The committed body, whatever the stages after it are doing.
+    pub(crate) fn body(&self) -> Option<&SolidBody> {
+        self.body.product().map(Arc::as_ref)
+    }
+
+    pub(crate) fn envelope_is_built(&self) -> bool {
+        self.envelope.product().is_some()
+    }
+
+    /// The built solid, once the Solids stage has made it.
+    pub(crate) fn envelope(&self) -> Option<&OpenTriangulation> {
+        self.envelope.product().map(Arc::as_ref)
+    }
+
+    pub(crate) fn blast_faces(&self) -> Option<&[BlastFace]> {
+        self.blasting.product().map(|blasting| blasting.blast_faces.as_slice())
+    }
+
+    /// Whether a part is ground the planner took out of mining: its bench,
+    /// the blast it lies in, or the dig block itself. Read off the parts
+    /// rather than cut out of them, so the dig blocks still add back up to
+    /// the benches they came from.
+    pub(crate) fn excludes(&self, solid: &Solid, part: &SolidPart) -> bool {
+        let exclusions = &solid.exclusions;
+        if exclusions.is_empty() {
+            return false;
+        }
+        exclusions.bench_excluded(part.bench.base)
+            || part
+                .blast
+                .and_then(|blast| self.blast_faces()?.iter().find(|face| face.shape_ref(solid.id) == blast))
+                .is_some_and(|face| exclusions.blast_face_excluded(face.bench.base, &face.face))
+            || part.block.as_ref().is_some_and(|block| exclusions.block_excluded(part.band.selection.base, &block.face))
+    }
+
+    /// The first thing that went wrong, in stage order: a dig error on a solid
+    /// whose envelope failed says nothing useful.
+    pub(crate) fn error(&self) -> Option<&str> {
+        self.error_through(crate::app::planning_pipeline::GeometryDemand::Partition)
+    }
+
+    /// The first fault at or before `stage`'s own artifact, so a stage is only
+    /// ever failed by its own half of the work or by one it depends on.
+    pub(crate) fn error_through(&self, stage: crate::app::planning_pipeline::GeometryDemand) -> Option<&str> {
+        use crate::app::planning_pipeline::GeometryDemand;
+        [
+            (GeometryDemand::Envelope, self.envelope.error()),
+            (GeometryDemand::Body, self.body.error()),
+            (GeometryDemand::Blasting, self.blasting.error()),
+            (GeometryDemand::Partition, self.partition.error()),
+        ]
+        .into_iter()
+        .take_while(|(demand, _)| *demand <= stage)
+        .find_map(|(_, error)| error)
+    }
+
+    /// Whether any artifact up to `stage` is still waiting on deferred inputs
+    /// coming back. Waiting, not failed: a run over unloaded surfaces has to
+    /// be able to finish on its own.
+    pub(crate) fn awaiting_inputs_through(&self, stage: crate::app::planning_pipeline::GeometryDemand) -> bool {
+        use crate::app::planning_pipeline::GeometryDemand;
+        [
+            (GeometryDemand::Envelope, self.envelope.is_awaiting_inputs()),
+            (GeometryDemand::Body, self.body.is_awaiting_inputs()),
+            (GeometryDemand::Blasting, self.blasting.is_awaiting_inputs()),
+            (GeometryDemand::Partition, self.partition.is_awaiting_inputs()),
+        ]
+        .into_iter()
+        .take_while(|(demand, _)| *demand <= stage)
+        .any(|(_, waiting)| waiting)
+    }
+
+    /// Everything about this solid's artifacts that changes what is drawn:
+    /// which attempts are in hand, and what each produced.
+    pub(crate) fn fingerprint(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        for (request, settled, error) in [
+            (self.envelope.request, self.envelope.product().is_some(), self.envelope.error()),
+            (self.body.request, self.body.product().is_some(), self.body.error()),
+            (self.blasting.request, self.blasting.product().is_some(), self.blasting.error()),
+            (self.partition.request, self.partition.product().is_some(), self.partition.error()),
+            (self.bench_reserves.request, self.bench_reserves.product().is_some(), self.bench_reserves.error()),
+            (self.reserves.request, self.reserves.product().is_some(), self.reserves.error()),
+        ] {
+            request.map(|request| (request.key, request.token)).hash(&mut hasher);
+            settled.hash(&mut hasher);
+            error.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// Does this solid's request for `kind` accept a result bearing `token`?
+    pub(crate) fn accepts(&self, kind: SolidArtifact, token: u64) -> bool {
+        match kind {
+            SolidArtifact::Envelope => self.envelope.accepts(token),
+            SolidArtifact::Body => self.body.accepts(token),
+            SolidArtifact::Blasting => self.blasting.accepts(token),
+            SolidArtifact::Partition => self.partition.accepts(token),
+            SolidArtifact::BenchReserves => self.bench_reserves.accepts(token),
+            SolidArtifact::DigReserves => self.reserves.accepts(token),
+        }
+    }
+}
+
+/// Which of a solid's artifacts a job belongs to.
+///
+/// Part of the job key, so cancellation can name one artifact of one solid
+/// and validity can name one attempt at it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum SolidArtifact {
+    Envelope,
+    Body,
+    Blasting,
+    Partition,
+    BenchReserves,
+    DigReserves,
+}
+
+/// A dig block cut out of a flitch: which block it is, what it is called, and
+/// how much ground it covers.
+#[derive(Clone)]
+pub(crate) struct DigPiece {
+    /// Stable across reruns that leave this ground alone.
+    pub(crate) id: DigBlockId,
+    pub(crate) key: BlastShapeRef,
+    pub(crate) name: String,
+    pub(crate) area: f64,
+    /// The ground it covers, kept so the next run can recognise it - and so a
+    /// persisted schedule reference can be matched against it. Shared rather
+    /// than owned: the snapshot that carries it to a scheduler is rebuilt
+    /// every frame, and a footprint is not worth copying that often.
+    pub(crate) face: Arc<Face>,
+    /// Identities this block's ground used to be held under, where a split or
+    /// a merge changed it. Recorded rather than left implicit so a scheduler
+    /// can trace where material went instead of seeing a deletion and an
+    /// unrelated creation.
+    pub(crate) replaces: Vec<DigBlockId>,
+}
+
+/// One dig block's identity as the project remembers it between runs.
+///
+/// Held apart from the geometry caches on purpose. A body rebuild throws its
+/// cache away, and a forced rerun throws all of them away; neither is a reason
+/// for ground that did not move to be renamed underneath a schedule.
+#[derive(Clone)]
+pub(crate) struct DigBlockIdentity {
+    pub(crate) id: DigBlockId,
+    /// Base RL of the flitch the block was cut from.
+    pub(crate) band: f64,
+    pub(crate) anchor: [f64; 2],
+    /// The ground it covered, so a split can be told from a merge.
+    pub(crate) face: Arc<Face>,
+}
+
+/// `amount` of the way from `color` towards `towards`, alpha untouched.
+fn blended(color: [f32; 4], towards: [f32; 4], amount: f32) -> [f32; 4] {
+    let mut blend = color;
+    for (channel, target) in blend.iter_mut().zip(towards).take(3) {
+        *channel += (target - *channel) * amount;
+    }
+    blend
+}
+
+/// A face's ground: its outer ring less its holes.
+/// What the body depends on: the solid's definition, its surfaces and its
+/// benching plan. Deliberately free of the cut lines - those divide the body
+/// rather than shaping it - and of the open step, the selected blast, the
+/// camera and the selection, none of which may change what is built at all.
+fn envelope_key(runtime: u32, solid: &Solid, versions: &[Option<u64>; 2]) -> u64 {
+    let mut key = DefaultHasher::new();
+    runtime.hash(&mut key);
+    solid.id.hash(&mut key);
+    (solid.kind as u8).hash(&mut key);
+    solid.surface.hash(&mut key);
+    solid.topography.hash(&mut key);
+    // Content versions, not mesh pointers: unloading and restoring a surface
+    // changes every pointer without changing a vertex, and rebuilding a pit
+    // because of that would be work no edit asked for.
+    versions.hash(&mut key);
+    key.finish()
+}
+
+/// What the bench and flitch slabs depend on: the envelope, and the plan that
+/// divides it. Changing a bench height re-slabs; it does not rebuild the
+/// envelope, which is by far the most expensive thing here.
+fn body_key(envelope: u64, solid: &Solid) -> u64 {
+    let mut key = DefaultHasher::new();
+    envelope.hash(&mut key);
+    solid.benching.top.to_bits().hash(&mut key);
+    for interval in &solid.benching.intervals {
+        interval.base.to_bits().hash(&mut key);
+        interval.bench.to_bits().hash(&mut key);
+        interval.flitch.to_bits().hash(&mut key);
+    }
+    key.finish()
+}
+
+/// What the blast partition depends on: the benches, and the lines drawn
+/// across them. Strip cuts belong to the stage after this one.
+fn blasting_key(body: u64, solid: &Solid) -> u64 {
+    let mut key = DefaultHasher::new();
+    body.hash(&mut key);
+    for bench in &solid.blasting.benches {
+        bench.base.to_bits().hash(&mut key);
+        for cut in &bench.cuts {
+            cut.geometry_hash().hash(&mut key);
+        }
+    }
+    key.finish()
+}
+
+/// What the dig blocks depend on: the blast partition above them, and each
+/// flitch's own strips. Not the open step, not the selected blast, not the
+/// camera.
+fn partition_key(blasting: u64, solid: &Solid) -> u64 {
+    let mut key = DefaultHasher::new();
+    blasting.hash(&mut key);
+    for bench in &solid.blasting.dig_strips {
+        bench.base.to_bits().hash(&mut key);
+        for cut in &bench.cuts {
+            cut.geometry_hash().hash(&mut key);
+        }
+    }
+    key.finish()
+}
+
+pub(super) fn mesh_volume(mesh: &Triangulation) -> f64 {
+    let origin = mesh.bounds().min;
+    mesh.face_vertex_indices_iter()
+        .map(|face| {
+            let [a, b, c] = face.map(|i| {
+                let v = mesh.vertices()[i];
+                glam::DVec3::new(v.x - origin.x, v.y - origin.y, v.z - origin.z)
+            });
+            a.dot(b.cross(c)) / 6.0
+        })
+        .sum::<f64>()
+        .abs()
+}
+
+/// Whether any row of the selection names this solid at all. An empty
+/// selection means everything, the same as [`selected`].
+fn selected_solid(selection: &[SolidsViewRow], solid: SolidId) -> bool {
+    selection.is_empty() || selection.iter().any(|row| row.solid == solid)
+}
+
+pub(super) fn selected(selection: &[SolidsViewRow], solid: SolidId, band: Option<BenchSelection>) -> bool {
+    selection.is_empty()
+        || selection.iter().any(|row| {
+            row.solid == solid
+                && row
+                    .band
+                    .is_none_or(|wanted| band.is_some_and(|band| band.base >= wanted.base - 1e-6 && band.top <= wanted.top + 1e-6))
+        })
+}
+
+/// One job key naming one attempt at one artifact of one solid.
+fn artifact_job(solid: SolidId, kind: SolidArtifact, token: u64) -> crate::app::jobs::JobKey {
+    crate::app::jobs::JobKey::SolidArtifact { solid, kind, token }
+}
+
+/// Ids for the generated meshes, counted down from the top so nothing in the
+/// project can ever take one.
+static NEXT_VIEW_ID: AtomicU64 = AtomicU64::new(u64::MAX - (1 << 32));
+static NEXT_DIG_BLOCK_ID: AtomicU64 = AtomicU64::new(1);
+/// Unique per attempt at building any artifact, so a result can name the
+/// attempt it belongs to rather than only the inputs it was computed from.
+static NEXT_REQUEST_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+fn next_view_id() -> TriangulationId {
+    TriangulationId(NEXT_VIEW_ID.fetch_sub(1, Ordering::Relaxed))
+}
+
+/// How far down the geometry the open page draws.
+///
+/// The rule the whole pipeline rests on, applied to display as well as to
+/// running: a step shows the artifact it owns and never one from a stage after
+/// it. Blasting draws whole benches, Dig Strips and View the finished blocks,
+/// and everything before them the flitches Benching committed.
+///
+/// The sequence editor is not one of the Solids Setup steps, so it falls to
+/// the finished partition - the dig blocks a completed run committed, which
+/// are exactly what a dig order is made of. It asks for no more than that:
+/// this chooses which artifact to *display*, never which to build.
+/// Which pages are showing the artifacts a completed run committed.
+///
+/// Display only, and the distinction the whole pipeline rests on: a page in
+/// this list *reads* what a run left behind and asks the pipeline for
+/// nothing. Opening one is not a calculation. That is what lets the sequence
+/// editor open onto a finished run, or onto a stated reason there is not one,
+/// without starting any geometry work. It is also why adding a page here
+/// cannot cause a job: the build gate in
+/// [`crate::app::App::sync_solids_view`] is the pipeline's own demand, and
+/// only a running stage sets that.
+pub(crate) fn displaying_solid_artifacts(editor: &crate::ui::state::EditorState) -> bool {
+    editor.is_solids_view() || editor.is_planning_cut_step() || editor.sequence_editor_active() || editor.blast_sequence_active() || editor.is_schedule_animation()
+}
+
+fn display_demand(editor: &crate::ui::state::EditorState) -> crate::app::planning_pipeline::GeometryDemand {
+    use crate::{
+        app::planning_pipeline::GeometryDemand,
+        ui::state::{SetupGroup, SolidsStep},
+    };
+    let setup = editor.is_setup_group(SetupGroup::Solids);
+    if !setup {
+        return GeometryDemand::Partition;
+    }
+    match editor.planning_solids_step {
+        SolidsStep::Blasting => GeometryDemand::Blasting,
+        // The strips are drawn over the flitches; the blocks cut from an
+        // earlier set of strips are Reserving's, and would be out of date.
+        SolidsStep::Reserving => GeometryDemand::Partition,
+        SolidsStep::FieldList | SolidsStep::BlockModels | SolidsStep::Solids | SolidsStep::Benching | SolidsStep::DigStrips => GeometryDemand::Body,
+    }
+}
+
+/// What the frame should do with one completed pick result.
+///
+/// Every outcome but the last two is a refusal, and the refusals are the
+/// point: a click is resolved frames after it is made, against caches and a
+/// camera the user has never seen, so the only click that may act is one
+/// whose request still names the project, pane, editor instance and run it
+/// was made against. Anything else is dropped, never reinterpreted against
+/// whatever is current now.
+#[derive(Debug)]
+pub(crate) enum PickRouting {
+    /// Nobody's any more: the click outlived its context.
+    Drop,
+    /// The editor it was made in is still open, but the run it was picked
+    /// against has been replaced. Still dropped - but worth saying out loud,
+    /// because the click looked perfectly good on screen.
+    Superseded,
+    /// A sequence-editor click that passed every gate. `generation` is the
+    /// run the *click* was made against - confirmed still current, and
+    /// carried through rather than re-read, so the pick is answered as the
+    /// click it was.
+    SequenceEditor {
+        block: Option<crate::model::DigBlockId>,
+        generation: u64,
+    },
+    BlastSequence,
+}
+
+/// Decide one completed pick result against the state it must still match.
+///
+/// The whole of the pick's consumption boundary as one decision, kept pure so
+/// every refusal can be checked without a running application. `session` is
+/// the project open now; `generation_now` is the run the project holds now
+/// (`None` when there is no finished run), fetched only for a sequence-editor
+/// click; `hit` is the block the click's ray reached, if any.
+pub(crate) fn route_pick_result(
+    editor: &crate::ui::state::EditorState,
+    session: u32,
+    generation_now: Option<u64>,
+    result: &crate::ui::state::SolidPreviewPickResult,
+    hit: Option<crate::model::DigBlockId>,
+) -> PickRouting {
+    use crate::ui::state::SolidPreviewPickOwner;
+    match result.request.owner {
+        SolidPreviewPickOwner::BlastSequence { edition } => {
+            let Some(draft) = editor
+                .blast_bar_dialog
+                .as_ref()
+                .filter(|draft| editor.blast_sequence_active() && draft.session == session && result.request.session == session && draft.edition == edition)
+            else {
+                return PickRouting::Drop;
+            };
+            if draft.generation.is_some() && draft.generation == generation_now && result.request.generation == generation_now {
+                PickRouting::BlastSequence
+            } else {
+                PickRouting::Superseded
+            }
+        }
+        SolidPreviewPickOwner::SequenceEditor { .. } => {
+            // The draft instance the click belongs to, or nothing: not the bar
+            // alone (a closed and reopened editor is a different session), and
+            // not while a discard question stands over the draft.
+            if editor.sequence_pick_target(session, &result.request).is_none() {
+                return PickRouting::Drop;
+            }
+            // The run the clicked image depicted must still be the run the
+            // project holds: a rerun between the click and here puts different
+            // ground under the same id, and the pick is refused rather than
+            // stamped with the new run's generation.
+            match (result.request.generation, generation_now) {
+                (Some(generation), Some(now)) if generation == now => PickRouting::SequenceEditor { block: hit, generation },
+                (Some(_), _) => PickRouting::Superseded,
+                (None, _) => PickRouting::Drop,
+            }
+        }
+    }
+}
+
+impl crate::app::App<'_> {
+    /// `displaying` says whether a page that shows these artifacts is open.
+    /// When it is not, the artifacts are still built and measured - only the
+    /// display list, the pick and the selection pruning are skipped.
+    pub(crate) fn sync_solids_view(&mut self, displaying: bool) {
+        let Some(project) = self.workspace.active_project() else {
+            return;
+        };
+        let runtime = project.runtime_id;
+        if self.editor.blast_sequence_active() {
+            self.editor.blast_sequence_generation = self.planning_snapshot().ok().map(|snapshot| snapshot.generation);
+            if let Some(draft) = self.editor.blast_bar_dialog.as_mut()
+                && draft.generation.is_none()
+            {
+                draft.generation = self.editor.blast_sequence_generation;
+            }
+        }
+        // Ids alone, every frame; the solids themselves - every cut drawing
+        // with them - are copied only when a stage needs them built.
+        let ids: Vec<SolidId> = self
+            .workspace
+            .active_document()
+            .map(|doc| doc.solids().iter().map(|solid| solid.id).collect())
+            .unwrap_or_default();
+        self.solid_view_cache.retain(|id, cache| cache.runtime == runtime && ids.contains(id));
+        // A solid's part of its block model is held for edits made on Setup,
+        // and given back the moment another page is open.
+        if !self.editor.is_planning_view(crate::ui::state::PlanningView::Setup) {
+            for cache in self.solid_view_cache.values_mut() {
+                cache.reserve_source = None;
+            }
+        }
+        self.editor.solid_view_bands.retain(|id, _| ids.contains(id));
+        self.dig_block_identities.retain(|id, _| ids.contains(id));
+        // Only a running stage may start authoritative work. Display reads
+        // what the last run committed and nothing else, so opening View on a
+        // project that has never been run finishes no calculation.
+        let demand = self.planning_pipeline.as_ref().and_then(crate::app::planning_pipeline::PlanningPipeline::demand);
+        if let Some(demand) = demand {
+            let solids = self.workspace.active_document().map(|doc| doc.solids().to_vec()).unwrap_or_default();
+            use crate::app::planning_pipeline::GeometryDemand;
+            for solid in &solids {
+                // Each stage asks only for its own artifact, and only once the
+                // one it reads is committed. Nothing here reaches forward.
+                self.sync_solid_envelope(runtime, solid);
+                if demand >= GeometryDemand::Body {
+                    self.sync_solid_body(runtime, solid);
+                }
+                if demand >= GeometryDemand::Blasting {
+                    self.sync_solid_blasting(runtime, solid);
+                }
+                if demand >= GeometryDemand::Partition {
+                    self.sync_solid_partition(runtime, solid);
+                }
+            }
+            // Bench reserves are the Benching stage's own output, and the
+            // reference the dig blocks are later reconciled against.
+            if demand >= GeometryDemand::Body {
+                self.sync_solid_reserves(&solids, ReserveScope::Bench);
+            }
+            if demand >= GeometryDemand::Partition {
+                self.sync_solid_reserves(&solids, ReserveScope::Dig);
+            }
+        }
+        if !displaying {
+            return;
+        }
+        self.prune_solids_view_selection();
+        self.resolve_solid_preview_pick();
+        self.rebuild_solid_view_body(display_demand(&self.editor));
+    }
+
+    /// The stamp entry for one named source surface, as this job's inputs
+    /// stand right now.
+    fn source_stamp(&self, id: Option<TriangulationId>) -> Option<(TriangulationId, crate::model::triangulation::GeometryVersion)> {
+        id.and_then(|id| self.triangulations.iter().find(|item| item.id == id).map(|item| (item.id, item.geometry)))
+    }
+
+    /// A solid's design surface: the loaded mesh, else the one its envelope
+    /// was built from while that still stands for the same content - so a
+    /// surface hidden and unloaded still says where the solid is.
+    pub(crate) fn solid_design_surface(&self, runtime: u32, solid: &Solid) -> Option<Arc<Triangulation>> {
+        let id = solid.surface?;
+        if let Some(item) = self.triangulations.iter().find(|item| item.id == id && item.mesh.face_count() > 0) {
+            return Some(item.mesh.clone());
+        }
+        let versions = [solid.surface, solid.topography].map(|id| self.surface_content_version(id));
+        let key = envelope_key(runtime, solid, &versions);
+        self.solid_view_cache.get(&solid.id).and_then(|cache| cache.retained_source(key, 0))
+    }
+
+    /// Solids: build the closed body between the solid's two surfaces.
+    ///
+    /// The single most expensive thing in the pipeline, and the one keyed
+    /// least often: only the solid's own definition and its source meshes
+    /// reach it. A benching, blasting or strip edit never gets this far.
+    fn sync_solid_envelope(&mut self, runtime: u32, solid: &Solid) {
+        let ids = [solid.surface, solid.topography];
+        let versions = ids.map(|id| self.surface_content_version(id));
+        let key = envelope_key(runtime, solid, &versions);
+        let sources: [Option<Arc<Triangulation>>; 2] = std::array::from_fn(|index| {
+            ids[index]
+                .and_then(|id| {
+                    self.triangulations
+                        .iter()
+                        .find(|item| item.id == id && item.mesh.face_count() > 0)
+                        .map(|item| item.mesh.clone())
+                })
+                .or_else(|| self.solid_view_cache.get(&solid.id).and_then(|cache| cache.retained_source(key, index)))
+        });
+        let attempted = self
+            .solid_view_cache
+            .get(&solid.id)
+            .is_some_and(|cache| cache.key == key && cache.envelope.is_awaiting_inputs());
+        if self.solid_view_cache.get(&solid.id).is_some_and(|cache| cache.key == key) {
+            // The solid itself has not moved, but its name, colour or model
+            // may have; keep the snapshot the later stages read.
+            if let Some(cache) = self.solid_view_cache.get_mut(&solid.id) {
+                cache.solid = solid.clone();
+                cache.sources = sources.clone();
+            }
+            // An attempt that is waiting on a restore has to be re-decided
+            // every pass: the restore does not change the key - it is the same
+            // content coming back - so nothing else would ever wake it.
+            let cache = self.solid_view_cache.get(&solid.id).expect("checked above");
+            if cache.envelope.is_current(key) && !cache.envelope.is_awaiting_inputs() {
+                return;
+            }
+        } else {
+            self.cancel_solid_jobs(solid.id, None);
+            self.editor.solid_view_bands.remove(&solid.id);
+            // New inputs: a failure of theirs is news even if it reads the same.
+            self.solid_failures_warned.retain(|(warned, _)| *warned != solid.id);
+            self.solid_view_cache.insert(
+                solid.id,
+                ViewSolid {
+                    key,
+                    runtime,
+                    solid: solid.clone(),
+                    sources: sources.clone(),
+                    stamp: GroundSourceStamp::default(),
+                    disk_key: None,
+                    reserves_not_on_disk: HashSet::new(),
+                    reserve_source: None,
+                    sources_not_on_disk: HashSet::new(),
+                    envelope: Stage::default(),
+                    body: Stage::default(),
+                    blasting: Stage::default(),
+                    partition: Stage::default(),
+                    carved: None,
+                    measured: None,
+                    flitch_faces: Arc::default(),
+                    bench_reserves: Stage::default(),
+                    reserves: Stage::default(),
+                },
+            );
+        }
+        let [Some(design), Some(topo)] = sources else {
+            // Unconfigured is a fault; still loading is not. Failing a run
+            // because a surface has yet to come back would make a project with
+            // deferred inputs impossible to run without visiting Setup first.
+            let missing: Vec<_> = ids
+                .into_iter()
+                .flatten()
+                .filter(|id| self.triangulations.iter().any(|item| item.id == *id && item.mesh.face_count() == 0))
+                .map(crate::model::ItemRef::Triangulation)
+                .collect();
+            let unconfigured = ids.iter().any(Option::is_none);
+            // A solid that names no surface at all is misconfigured, not
+            // loading: there is nothing to wait for.
+            let pending = !unconfigured && self.restore_solid_inputs(missing, attempted);
+            let Some(cache) = self.solid_view_cache.get_mut(&solid.id) else { return };
+            cache.envelope.begin(key);
+            if pending {
+                cache.envelope.await_inputs();
+            } else {
+                cache.envelope.fail(crate::i18n::tr!("planning-solid-needs-surfaces"));
+            }
+            return;
+        };
+        // One solid's volume is built once at a time. The Setup page's
+        // preview may be building it already, and two builds of a large pair
+        // at once hold twice the memory; its result is kept for these
+        // surfaces, so the build started once it lands takes it rather than
+        // repeating it. Waiting, so the run neither fails nor forgets to ask
+        // again.
+        if self.job_pending(&crate::app::jobs::JobKey::SolidPreview(solid.id)) {
+            let cache = self.solid_view_cache.get_mut(&solid.id).expect("just inserted");
+            cache.envelope.begin(key);
+            cache.envelope.await_inputs();
+            return;
+        }
+        let id = solid.id;
+        // Captured here, from the inputs this job is about to read - never
+        // re-derived at land time from whatever the document then holds. The
+        // stamp settles only with a result the cache accepted, so an obsolete
+        // job can never stamp another run's geometry.
+        let stamp = GroundSourceStamp {
+            surface: self.source_stamp(solid.surface),
+            topography: self.source_stamp(solid.topography),
+        };
+        let token = self.solid_view_cache.get_mut(&id).expect("just inserted").envelope.begin(key);
+        let snapshot = solid.clone();
+        self.spawn_job_reporting_progress(
+            crate::i18n::tr!("planning-building-view"),
+            vec![artifact_job(id, SolidArtifact::Envelope, token)],
+            move |cancel, progress| {
+                let (envelope, built_from) = build_solid_envelope(&snapshot, &design, &topo, cancel, progress)?;
+                Ok((envelope, disk_cache::chain_key(&snapshot, built_from)))
+            },
+            move |app, result| {
+                let Some(cache) = app.accepting_solid(runtime, id, SolidArtifact::Envelope, token) else {
+                    return;
+                };
+                cache.stamp = stamp;
+                let name = cache.solid.name.clone();
+                match result {
+                    Ok((envelope, disk_key)) => {
+                        cache.disk_key = disk_key;
+                        cache.envelope.settle(Arc::new(envelope));
+                    }
+                    Err(error) => {
+                        let message = format!("{error:#}");
+                        cache.envelope.fail(message.clone());
+                        app.warn_solid_failed(id, &name, &message);
+                    }
+                }
+                app.solid_view_body_key = None;
+            },
+        );
+    }
+
+    /// Whether a run's Benching stage is cutting `solid` into its slabs.
+    pub(crate) fn solid_body_job_pending(&self, solid: crate::model::SolidId) -> bool {
+        self.any_job_pending(|job| matches!(job, crate::app::jobs::JobKey::SolidArtifact { solid: job_solid, kind: SolidArtifact::Body, .. } if *job_solid == solid))
+    }
+
+    /// Whether a run's Solids stage is building `solid`'s volume.
+    pub(crate) fn solid_envelope_job_pending(&self, solid: crate::model::SolidId) -> bool {
+        self.any_job_pending(|job| matches!(job, crate::app::jobs::JobKey::SolidArtifact { solid: job_solid, kind: SolidArtifact::Envelope, .. } if *job_solid == solid))
+    }
+
+    /// Ask for this request's deferred inputs, at most once.
+    ///
+    /// Re-deciding a waiting attempt every pass is what lets a restore that
+    /// lands wake the work behind it - but it also means an unconditional
+    /// request here would spawn a fresh residency job on every pass for ever
+    /// once one failed. `attempted` says this request has already asked, so a
+    /// pass that finds nothing in flight has its answer: the load is not
+    /// coming, and the stage fails rather than waiting on it.
+    fn restore_solid_inputs(&mut self, needed: Vec<crate::model::ItemRef>, attempted: bool) -> bool {
+        let pending = needed.iter().any(|item| self.item_load_pending(*item));
+        match restore_decision(attempted, pending) {
+            RestoreDecision::Wait => true,
+            RestoreDecision::Failed => false,
+            RestoreDecision::Request => {
+                let missing = needed.into_iter().filter(|item| !self.item_load_pending(*item)).collect();
+                // The restore that lands has to wake the build waiting on it:
+                // a run keeps the artifacts in sync each frame, but coming
+                // back through here immediately is what turns a completed
+                // load into started work rather than another frame of waiting.
+                let started = self.restore_items_for(missing, |app| app.sync_solid_preview());
+                pending || started
+            }
+        }
+    }
+
+    /// Benching: cut a committed envelope into its benches and flitches.
+    fn sync_solid_body(&mut self, runtime: u32, solid: &Solid) {
+        let Some(cache) = self.solid_view_cache.get(&solid.id) else { return };
+        let Some(envelope) = cache.envelope.product().cloned() else { return };
+        let key = body_key(cache.key, solid);
+        if cache.body.is_current(key) {
+            return;
+        }
+        // The Setup page's preview may be cutting this solid into the same
+        // flitches; its slabs are taken once it lands, rather than a second
+        // set cut beside them. Not begun, so the run waits and asks again.
+        if self.job_pending(&crate::app::jobs::JobKey::SolidPreview(solid.id)) {
+            return;
+        }
+        let id = solid.id;
+        self.cancel_solid_jobs(id, Some(SolidArtifact::Body));
+        let cache = self.solid_view_cache.get_mut(&id).expect("checked above");
+        let token = cache.body.begin(key);
+        // Re-slabbing invalidates everything cut out of the old slabs.
+        cache.blasting = Stage::default();
+        cache.partition = Stage::default();
+        cache.carved = None;
+        cache.measured = None;
+        cache.bench_reserves = Stage::default();
+        cache.reserves = Stage::default();
+        let disk_key = cache.disk_key.map(|key| body_key(key, solid));
+        let snapshot = solid.clone();
+        self.spawn_job_reporting_progress(
+            crate::i18n::tr!("planning-building-slabs"),
+            vec![artifact_job(id, SolidArtifact::Body, token)],
+            move |cancel, progress| {
+                if let Some(body) = disk_key.and_then(|key| disk_cache::load(disk_cache::Kind::Body, key, |input| disk_cache::read_body(input, &snapshot))) {
+                    return Ok(body);
+                }
+                let body = build_solid_body(&snapshot, &envelope, cancel, progress)?;
+                if let Some(key) = disk_key {
+                    disk_cache::store(disk_cache::Kind::Body, key, |out| disk_cache::write_body(out, &body));
+                }
+                Ok(body)
+            },
+            move |app, result| {
+                let Some(cache) = app.accepting_solid(runtime, id, SolidArtifact::Body, token) else {
+                    return;
+                };
+                let name = cache.solid.name.clone();
+                match result {
+                    Ok(body) => cache.body.settle(Arc::new(body)),
+                    Err(error) => {
+                        let message = format!("{error:#}");
+                        cache.body.fail(message.clone());
+                        app.warn_solid_failed(id, &name, &message);
+                    }
+                }
+                app.solid_view_body_key = None;
+            },
+        );
+    }
+
+    /// Blasting: divide each committed bench's ground by the cuts across it.
+    fn sync_solid_blasting(&mut self, runtime: u32, solid: &Solid) {
+        let Some(cache) = self.solid_view_cache.get(&solid.id) else { return };
+        let Some(body) = cache.body.product().cloned() else { return };
+        let Some(body_request) = cache.body.request else { return };
+        let key = blasting_key(body_request.key, solid);
+        if cache.blasting.is_current(key) {
+            return;
+        }
+        let id = solid.id;
+        self.cancel_solid_jobs(id, Some(SolidArtifact::Blasting));
+        let cache = self.solid_view_cache.get_mut(&id).expect("checked above");
+        let token = cache.blasting.begin(key);
+        if let Some(partition) = std::mem::take(&mut cache.partition).product {
+            cache.carved = Some(partition);
+        }
+        let disk_key = cache.disk_key.map(|key| blasting_key(body_key(key, solid), solid));
+        let snapshot = solid.clone();
+        self.spawn_job_reporting_progress(
+            crate::i18n::tr!("planning-building-view"),
+            vec![artifact_job(id, SolidArtifact::Blasting, token)],
+            move |cancel, _| {
+                if let Some(blasting) = disk_key.and_then(|key| disk_cache::load(disk_cache::Kind::Blasting, key, disk_cache::read_blasting)) {
+                    return Ok(blasting);
+                }
+                let blasting = build_solid_blasting(&snapshot, &body, cancel)?;
+                if let Some(key) = disk_key {
+                    disk_cache::store(disk_cache::Kind::Blasting, key, |out| disk_cache::write_blasting(out, &blasting));
+                }
+                Ok(blasting)
+            },
+            move |app, result| {
+                let Some(cache) = app.accepting_solid(runtime, id, SolidArtifact::Blasting, token) else {
+                    return;
+                };
+                let name = cache.solid.name.clone();
+                match result {
+                    Ok(blasting) => cache.blasting.settle(Arc::new(blasting)),
+                    Err(error) => {
+                        let message = format!("{error:#}");
+                        cache.blasting.fail(message.clone());
+                        app.warn_solid_failed(id, &name, &message);
+                    }
+                }
+                app.solid_view_body_key = None;
+            },
+        );
+    }
+
+    /// Dig Strips: cut each flitch into the blocks its strips and the blast
+    /// boundaries above it divide it into.
+    fn sync_solid_partition(&mut self, runtime: u32, solid: &Solid) {
+        let Some(cache) = self.solid_view_cache.get(&solid.id) else { return };
+        let Some(body) = cache.body.product().cloned() else { return };
+        let Some(blasting) = cache.blasting.product().cloned() else { return };
+        let Some(blasting_request) = cache.blasting.request else { return };
+        let key = partition_key(blasting_request.key, solid);
+        if cache.partition.is_current(key) {
+            return;
+        }
+        let id = solid.id;
+        self.cancel_solid_jobs(id, Some(SolidArtifact::Partition));
+        let cache = self.solid_view_cache.get_mut(&id).expect("checked above");
+        let previous = cache.partition.product.take().or(cache.carved.take());
+        let token = cache.partition.begin(key);
+        cache.reserves = Stage::default();
+        let disk_key = cache.disk_key.map(|key| partition_key(blasting_key(body_key(key, solid), solid), solid));
+        let snapshot = solid.clone();
+        self.spawn_job_reporting_progress(
+            crate::i18n::tr!("planning-building-view"),
+            vec![artifact_job(id, SolidArtifact::Partition, token)],
+            move |cancel, progress| {
+                if let Some(partition) = disk_key.and_then(|key| disk_cache::load(disk_cache::Kind::Partition, key, |input| disk_cache::read_partition(input, &snapshot, &body))) {
+                    return Ok(partition);
+                }
+                let partition = build_solid_partition(&snapshot, &body, &blasting, previous, cancel, progress)?;
+                // Written after the partition is handed back: a survey's runs
+                // to a gigabyte, and the edit that cut it should not wait on
+                // the disk. The copy shares every mesh.
+                if let Some(key) = disk_key {
+                    let kept = partition.clone();
+                    crate::app::jobs::spawn_io_task(move || disk_cache::store(disk_cache::Kind::Partition, key, |out| disk_cache::write_partition(out, &kept)));
+                }
+                Ok(partition)
+            },
+            move |app, result| {
+                if app.accepting_solid(runtime, id, SolidArtifact::Partition, token).is_none() {
+                    return;
+                }
+                match result {
+                    Ok(mut partition) => {
+                        adopt_dig_block_ids(&mut partition, app.dig_block_identities.get(&id).map_or(&[][..], Vec::as_slice));
+                        app.solid_view_cache.get_mut(&id).expect("checked above").partition.settle(partition);
+                        app.record_dig_block_identities(id);
+                    }
+                    Err(error) => {
+                        let message = format!("{error:#}");
+                        let cache = app.solid_view_cache.get_mut(&id).expect("checked above");
+                        cache.partition.fail(message.clone());
+                        let name = cache.solid.name.clone();
+                        app.warn_solid_failed(id, &name, &message);
+                    }
+                }
+                app.solid_view_body_key = None;
+            },
+        );
+    }
+
+    /// Say in a dialog that part of a solid could not be built: nothing after
+    /// it can run until that is put right. Once per failure, since the Setup
+    /// preview and the Solids step build the same surfaces side by side.
+    pub(crate) fn warn_solid_failed(&mut self, solid: SolidId, name: &str, message: &str) {
+        if message != crate::app::jobs::Cancelled.to_string() && self.solid_failures_warned.insert((solid, message.to_owned())) {
+            crate::userspace_warn!("{}", crate::i18n::tr!("solid-build-failed", solid = name.to_owned(), reason = message.to_owned()));
+        }
+    }
+
+    /// The cache entry for a result that is still wanted, or `None` when the
+    /// project moved on or the attempt was superseded.
+    fn accepting_solid(&mut self, runtime: u32, solid: SolidId, kind: SolidArtifact, token: u64) -> Option<&mut ViewSolid> {
+        if self.workspace.active_project().is_none_or(|project| project.runtime_id != runtime) {
+            return None;
+        }
+        self.solid_view_cache.get_mut(&solid).filter(|cache| cache.accepts(kind, token))
+    }
+
+    /// Every job belonging to one solid, or to one artifact of it and the
+    /// artifacts cut out of that one.
+    fn cancel_solid_jobs(&mut self, solid: SolidId, from: Option<SolidArtifact>) {
+        let cancelled = match from {
+            None => vec![
+                SolidArtifact::Envelope,
+                SolidArtifact::Body,
+                SolidArtifact::Blasting,
+                SolidArtifact::Partition,
+                SolidArtifact::BenchReserves,
+                SolidArtifact::DigReserves,
+            ],
+            Some(SolidArtifact::Body) => vec![
+                SolidArtifact::Body,
+                SolidArtifact::Blasting,
+                SolidArtifact::Partition,
+                SolidArtifact::BenchReserves,
+                SolidArtifact::DigReserves,
+            ],
+            Some(SolidArtifact::Blasting) => vec![SolidArtifact::Blasting, SolidArtifact::Partition, SolidArtifact::DigReserves],
+            Some(SolidArtifact::Partition) => vec![SolidArtifact::Partition, SolidArtifact::DigReserves],
+            Some(kind) => vec![kind],
+        };
+        self.cancel_jobs(|job| matches!(job, crate::app::jobs::JobKey::SolidArtifact { solid: job_solid, kind, .. } if *job_solid == solid && cancelled.contains(kind)));
+    }
+
+    /// Retire every attempt that produced nothing, so a retry asks again.
+    ///
+    /// A cancelled attempt leaves a request behind with no product; without
+    /// this the next sync sees a request for the current inputs and declines
+    /// to ask, which is a retry that waits for ever.
+    pub(crate) fn discard_incomplete_solid_requests(&mut self) {
+        self.solid_view_cache.retain(|_, cache| {
+            cache.body.retire_if_unfinished();
+            cache.blasting.retire_if_unfinished();
+            cache.partition.retire_if_unfinished();
+            cache.bench_reserves.retire_if_unfinished();
+            cache.reserves.retire_if_unfinished();
+            cache.envelope.retire_if_unfinished();
+            // An envelope that never arrived cannot be retired in place - its
+            // key is what the whole entry is identified by - so the entry
+            // goes, and the next run asks for it from scratch.
+            cache.envelope.product().is_some() || cache.envelope.error().is_some()
+        });
+    }
+
+    /// Retire settled failures so an explicit rerun tries them once more.
+    ///
+    /// Kept apart from the refresh path on purpose: a failed stage must not
+    /// re-fail on every frame, and only Run or a changed input retires it.
+    pub(crate) fn retry_failed_solid_requests(&mut self) {
+        for cache in self.solid_view_cache.values_mut() {
+            cache.envelope.retire_failure();
+            cache.body.retire_failure();
+            cache.blasting.retire_failure();
+            cache.partition.retire_failure();
+            cache.bench_reserves.retire_failure();
+            cache.reserves.retire_failure();
+        }
+        for model in &mut self.block_models {
+            model.reserve_totals_error = None;
+            model.reserve_totals_error_key = None;
+        }
+    }
+
+    /// Remember the identities a completed partition established, so the next
+    /// run can hand the same ground the same ids.
+    fn record_dig_block_identities(&mut self, solid: SolidId) {
+        let Some(partition) = self.solid_view_cache.get(&solid).and_then(|cache| cache.partition.product()) else {
+            return;
+        };
+        let ledger: Vec<DigBlockIdentity> = partition
+            .parts
+            .iter()
+            .filter_map(|part| {
+                part.block.as_ref().map(|block| DigBlockIdentity {
+                    id: block.id,
+                    band: part.band.selection.base,
+                    anchor: block.key.anchor(),
+                    face: block.face.clone(),
+                })
+            })
+            .collect();
+        self.dig_block_identities.insert(solid, ledger);
+    }
+
+    /// Drop selection rows whose band no longer exists in the built geometry.
+    fn prune_solids_view_selection(&mut self) {
+        let solids = self.workspace.active_document().map_or(&[][..], |document| document.solids());
+        self.editor.solids_view_selection.retain(|row| {
+            let Some(solid) = solids.iter().find(|solid| solid.id == row.solid) else {
+                return false;
+            };
+            let Some(band) = row.band else {
+                return true;
+            };
+            let Some(body) = self.solid_view_cache.get(&row.solid).and_then(ViewSolid::body) else {
+                return true;
+            };
+            if band.is_flitch {
+                body.occupied_bands.iter().any(|part| part.selection == band)
+            } else {
+                solid.benching.benches().iter().any(|bench| bench.base == band.base && bench.top() == band.top) && body.bench_parts.iter().any(|part| part.band.selection == band)
+            }
+        });
+    }
+
+    /// Apply a completed pick from the preview renderer to the sequence
+    /// editor it was made in.
+    ///
+    /// The decision itself is [`route_pick_result`]: the result's request
+    /// must still name the project, pane, editor instance and run it was made
+    /// against, and this shell only supplies those answers from live state
+    /// (which mesh the ray reached, which run the project holds now) and
+    /// carries out what it decides.
+    fn resolve_solid_preview_pick(&mut self) {
+        let Some(result) = self.editor.solid_preview_pick_result.take() else {
+            return;
+        };
+        self.redraw_requested = true;
+        self.solid_view_body_key = None;
+        let Some(session) = self.workspace.active_project().map(|project| project.runtime_id) else {
+            return;
+        };
+        let block = match result.outcome {
+            crate::ui::state::SolidPick::Miss => None,
+            crate::ui::state::SolidPick::Hit(id) => self.dig_block_key_of(id).map(|(id, _)| id),
+        };
+        // Every pane that picks here edits a sequence, which is answered
+        // against the run it was made on.
+        let generation_now = self.planning_snapshot().ok().map(|snapshot| snapshot.generation);
+        match route_pick_result(&self.editor, session, generation_now, &result, block) {
+            PickRouting::Drop => {}
+            PickRouting::Superseded => {
+                crate::userspace_warn!("{}", crate::i18n::tr!("sequence-pick-superseded"));
+            }
+            PickRouting::SequenceEditor { block, generation } => {
+                let stroke = matches!(result.request.owner, crate::ui::state::SolidPreviewPickOwner::SequenceEditor { stroke: true, .. });
+                self.pick_into_sequence_draft(block, generation, stroke);
+            }
+            PickRouting::BlastSequence => {
+                // Through the part's own blast, not the block key: a block is
+                // keyed by its flitch base, which is the bench base only for a
+                // bench's lowest flitch.
+                let blast = match result.outcome {
+                    crate::ui::state::SolidPick::Hit(id) => self.blast_of_preview_mesh(id),
+                    crate::ui::state::SolidPick::Miss => None,
+                };
+                if let Some(shape) = blast {
+                    let reference = crate::model::schedule::BlastRef {
+                        solid: shape.solid,
+                        bench: shape.bench_base(),
+                        anchor: shape.anchor(),
+                    };
+                    // Inserted at the slider, which then steps over it: the
+                    // blast is fired, leaves the pane, and the next pick lands
+                    // after it - as a dig block picked in the dig sequence
+                    // editor does.
+                    if let Some(blast) = self.editor.schedule_blasts.iter().find(|blast| blast.holds(&reference)).map(|blast| blast.reference)
+                        && let Some(draft) = self.editor.blast_bar_dialog.as_mut()
+                        && !draft.members.iter().any(|member| member.same(&blast))
+                    {
+                        let at = draft.preview.min(draft.members.len());
+                        draft.members.insert(at, blast);
+                        draft.preview = at + 1;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The dig block a preview mesh belongs to, as `(id, key)` - or `None` for
+    /// a mesh that is not a block at all.
+    fn dig_block_key_of(&self, id: crate::model::triangulation::TriangulationId) -> Option<(crate::model::DigBlockId, BlastShapeRef)> {
+        self.solid_view_cache
+            .values()
+            .filter_map(|cache| {
+                let partition = cache.partition.product().map_or(&[][..], |partition| partition.parts.as_slice());
+                let benches = cache.body.product().map_or(&[][..], |body| body.bench_parts.as_slice());
+                partition
+                    .iter()
+                    .chain(benches)
+                    .find(|part| part.mesh.id == id)
+                    .and_then(|part| part.block.as_ref())
+                    .map(|block| (block.id, block.key))
+            })
+            .next()
+    }
+
+    /// Assemble what the Reserves page draws: every open surface, on the
+    /// project's own visibility, with the dig blocks among them. Cloning the
+    /// list clones every mesh handle in it, so it is redone when one of those
+    /// changes rather than once a frame, and dropped off the page.
+    /// Name every mesh of the solids' cached cuts for the renderer to keep,
+    /// following the cache rather than the page: a rerun's old meshes drop out
+    /// here, whichever page it finished on.
+    pub(crate) fn refresh_solid_view_retained(&mut self) {
+        let key: u64 = self
+            .solid_view_cache
+            .iter()
+            .map(|(id, cache)| {
+                let mut entry = DefaultHasher::new();
+                (id, cache.key, cache.fingerprint()).hash(&mut entry);
+                entry.finish()
+            })
+            .fold(self.solid_view_cache.len() as u64, u64::wrapping_add);
+        if self.solid_view_retained_key == Some(key) {
+            return;
+        }
+        self.solid_view_retained_key = Some(key);
+        self.solid_view_retained = self
+            .solid_view_cache
+            .values()
+            .flat_map(|cache| {
+                let body = cache.display_parts(crate::app::planning_pipeline::GeometryDemand::Body).unwrap_or_default();
+                let blocks = cache.display_parts(crate::app::planning_pipeline::GeometryDemand::Partition).unwrap_or_default();
+                let blasts = cache.blast_parts().unwrap_or_default();
+                body.iter().chain(blocks).chain(blasts).map(|part| part.mesh.id)
+            })
+            .collect();
+    }
+
+    pub(crate) fn refresh_reserves_scene(&mut self) {
+        if !self.editor.is_solids_view() {
+            if self.reserves_scene_key.take().is_some() {
+                self.reserves_scene = Vec::new();
+            }
+            return;
+        }
+        let mut hasher = DefaultHasher::new();
+        for mesh in self.triangulations.iter().chain(&self.solid_view_body) {
+            mesh.id.hash(&mut hasher);
+            // Every edit and every style change advances the item's revision,
+            // which is what the drawn copy has to follow.
+            mesh.state.revision().hash(&mut hasher);
+            (Arc::as_ptr(&mesh.mesh) as usize).hash(&mut hasher);
+        }
+        self.workspace.composite_key().hash(&mut hasher);
+        // The display list is restyled in place of being rebuilt with new
+        // meshes - a selected block keeps its mesh - so its own key stands in
+        // for its colours.
+        self.solid_view_body_key.hash(&mut hasher);
+        let key = hasher.finish();
+        if self.reserves_scene_key == Some(key) {
+            return;
+        }
+        self.reserves_scene = self.triangulations.iter().chain(&self.solid_view_body).cloned().collect();
+        self.reserves_scene_key = Some(key);
+    }
+
+    /// A Reserves click: select the dig block under the cursor, or clear the
+    /// selection over empty ground, the way clicking empty space anywhere in
+    /// the viewport does. Only the blocks are picked, as nothing else on the
+    /// page can be selected.
+    pub(crate) fn select_reserves_block_at_cursor(&mut self) {
+        let hit = self
+            .graphics
+            .as_ref()
+            .and_then(|graphics| graphics.surface_under_cursor(&self.solid_view_body, &self.editor.hidden_handles));
+        let block = hit.and_then(|id| self.dig_block_key_of(id)).map(|(_, key)| key);
+        // Any click ends a marking: picking one of the blocks selects it among
+        // the rest, and clicking off them brings the rest back.
+        if !self.editor.solids_view_marked.is_empty() {
+            self.editor.solids_view_marked.clear();
+            self.solid_view_body_key = None;
+        }
+        self.select_dig_blocks(block.into_iter().collect());
+        self.redraw_requested = true;
+    }
+
+    /// Take `blocks` into the dig block selection, in Reserves or on Dig
+    /// Strips, as the modifiers held say and as the rest of the viewport takes
+    /// a pick: shift toggles each block, ctrl adds them, and otherwise they
+    /// replace what was selected - nothing at all clearing it.
+    pub(crate) fn select_dig_blocks(&mut self, blocks: Vec<BlastShapeRef>) {
+        let selected = &mut self.editor.selected_dig_blocks;
+        let before = selected.clone();
+        if self.modifiers.shift_key() {
+            for block in blocks {
+                match selected.iter().position(|held| *held == block) {
+                    Some(index) => {
+                        selected.remove(index);
+                    }
+                    None => selected.push(block),
+                }
+            }
+        } else if self.modifiers.control_key() {
+            for block in blocks {
+                if !selected.contains(&block) {
+                    selected.push(block);
+                }
+            }
+        } else {
+            *selected = blocks;
+        }
+        if *selected != before {
+            self.solid_view_body_key = None;
+        }
+    }
+
+    /// The Reserves view's dig blocks a drag box takes: wholly inside it, or
+    /// for a box dragged left to right any corner inside it, judged by each
+    /// block's outline at the top and foot of its flitch - of those that can
+    /// be seen. Looking down on a pit, every flitch's block under the one in
+    /// sight falls inside the same box; a block is taken only where it is
+    /// what the view shows at the point inside its ground.
+    pub(crate) fn reserves_blocks_in_screen_rect(&self, start: (f32, f32), end: (f32, f32), cross_select: bool) -> Vec<BlastShapeRef> {
+        let Some(graphics) = self.graphics.as_ref() else { return Vec::new() };
+        let view_proj = graphics.view_proj();
+        let (min, max) = ((start.0.min(end.0), start.1.min(end.1)), (start.0.max(end.0), start.1.max(end.1)));
+        let inside = |p: (f32, f32)| p.0 >= min.0 && p.0 <= max.0 && p.1 >= min.1 && p.1 <= max.1;
+        self.solid_view_shown_blocks
+            .iter()
+            .filter(|block| {
+                let mut corners = block
+                    .face
+                    .iter()
+                    .flatten()
+                    .flat_map(|point| [block.base, block.top].map(|z| glam::DVec3::new(point.x, point.y, z)))
+                    .map(|world| graphics.world_to_window_px(&view_proj, world));
+                if cross_select {
+                    corners.any(|p| p.is_some_and(inside))
+                } else {
+                    corners.all(|p| p.is_some_and(inside))
+                }
+            })
+            .filter(|block| {
+                let anchor = block.key.anchor();
+                graphics
+                    .world_to_window_px(&view_proj, glam::DVec3::new(anchor[0], anchor[1], block.top))
+                    .and_then(|px| graphics.surface_at_window_px(px, &self.solid_view_body, &self.editor.hidden_handles))
+                    == Some(block.mesh)
+            })
+            .map(|block| block.key)
+            .collect()
+    }
+
+    /// The blast a preview mesh lies in, whatever flitch it was cut from.
+    fn blast_of_preview_mesh(&self, id: crate::model::triangulation::TriangulationId) -> Option<BlastShapeRef> {
+        self.solid_view_cache.values().find_map(|cache| {
+            let blasts = cache.blast_parts().unwrap_or_default();
+            let partition = cache.partition.product().map_or(&[][..], |partition| partition.parts.as_slice());
+            blasts.iter().chain(partition).find(|part| part.mesh.id == id).and_then(|part| part.blast)
+        })
+    }
+
+    /// Rebuild the display list from the artifacts. Pure presentation: which
+    /// step is open, what is selected and how things are coloured all live
+    /// here, and none of them reach the geometry.
+    fn rebuild_solid_view_body(&mut self, demand: crate::app::planning_pipeline::GeometryDemand) {
+        use crate::app::planning_pipeline::GeometryDemand;
+        // While the sequence editor owns the preview it shows the whole run:
+        // narrowing the image to the Reserves view's tree selection would
+        // hide ground a dig order is entitled to be built from, and that
+        // selection is not even on screen to be seen or changed.
+        let sequencing = self.editor.sequence_editor_active();
+        let blast_sequencing = self.editor.blast_sequence_active();
+        let blast_draft = self.editor.blast_bar_dialog.as_ref().filter(|_| blast_sequencing).cloned();
+        let editing = sequencing || blast_sequencing;
+        let selected_blocks: Vec<BlastShapeRef> = if editing { Vec::new() } else { self.editor.selected_dig_blocks.clone() };
+        let selected_blast = (!editing).then_some(self.editor.selected_blast).flatten();
+        let view_selection: Vec<SolidsViewRow> = self.editor.solids_view_selection.clone();
+        // What the sequence editors' own tree has hidden from their preview.
+        let hidden = editing.then(|| self.editor.sequence_hidden.clone());
+        // Which draft position each block sits at, and how far the order
+        // preview has been walked. Taken from the mirror rather than resolved
+        // again here: the mirror is this frame's, and resolving one reference
+        // in two places is how two answers to one question start to differ.
+        let order: HashMap<DigBlockId, usize> = self
+            .editor
+            .sequence_members
+            .iter()
+            .enumerate()
+            .filter_map(|(position, member)| member.block.filter(|_| sequencing).map(|block| (block, position)))
+            .collect();
+        let dug_through = self.editor.sequence_editor.as_ref().filter(|_| sequencing).map_or(0, |draft| draft.preview);
+        let benches_only = demand == GeometryDemand::Blasting;
+        let dig_strips = demand == GeometryDemand::Body && self.editor.is_dig_strips_step();
+        // Dig Strips works on one flitch at a time: the one picked, or none.
+        let dig_target = self.editor.planning_cut_target().filter(|_| dig_strips);
+        let in_view = |solid: SolidId, band: BenchSelection| {
+            if dig_strips {
+                dig_target.is_some_and(|(picked, flitch)| picked == solid && (flitch.base - band.base).abs() < 1e-6 && (flitch.top - band.top).abs() < 1e-6)
+            } else {
+                selected(&view_selection, solid, Some(band))
+            }
+        };
+        let runtime = self.workspace.active_project().map(|project| project.runtime_id);
+        // Blocks marked from the Blocks step stand until the planner picks
+        // something of their own in the view.
+        if !self.editor.solids_view_selection.is_empty() || !self.editor.selected_dig_blocks.is_empty() {
+            self.editor.solids_view_marked.clear();
+            self.editor.solids_view_frame_marked = false;
+        }
+        let marked: std::collections::HashSet<DigBlockId> = if editing {
+            Default::default()
+        } else {
+            self.editor.solids_view_marked.iter().copied().collect()
+        };
+        let mut marked_bounds: Option<(glam::DVec3, glam::DVec3)> = None;
+
+        let mut hasher = DefaultHasher::new();
+        runtime.hash(&mut hasher);
+        selected_blocks.hash(&mut hasher);
+        selected_blast.hash(&mut hasher);
+        benches_only.hash(&mut hasher);
+        dig_strips.hash(&mut hasher);
+        demand.hash(&mut hasher);
+        sequencing.hash(&mut hasher);
+        blast_sequencing.hash(&mut hasher);
+        if let Some(draft) = &blast_draft {
+            draft.preview.hash(&mut hasher);
+            for member in &draft.members {
+                member.hash_content(&mut hasher);
+            }
+        }
+        dug_through.hash(&mut hasher);
+        self.editor.solids_view_marked.hash(&mut hasher);
+        self.editor.solids_view_frame_marked.hash(&mut hasher);
+        // Sorted before hashing: a hash map's iteration order is not stable,
+        // and an unstable key would rebuild the display list every frame.
+        let mut order_key: Vec<(DigBlockId, usize)> = order.iter().map(|(block, position)| (*block, *position)).collect();
+        order_key.sort_unstable();
+        order_key.hash(&mut hasher);
+        // The stage fingerprints cover everything about the solids this draws -
+        // colours, benching styles, cuts, exclusions - and are cached against
+        // the document revision, where serialising every solid was not.
+        self.planning_fingerprints().hash(&mut hasher);
+        let solid_ids: Vec<SolidId> = self
+            .workspace
+            .active_document()
+            .map(|doc| doc.solids().iter().map(|solid| solid.id).collect())
+            .unwrap_or_default();
+        solid_ids.hash(&mut hasher);
+        if let Some(hidden) = &hidden {
+            // Summed per entry: the sets do not iterate in a stable order, and
+            // a sum does not care what order it was added up in.
+            let unordered = |hash: &dyn Fn(&mut DefaultHasher)| {
+                let mut entry = DefaultHasher::new();
+                hash(&mut entry);
+                entry.finish()
+            };
+            let solids = hidden.solids.iter().fold(0u64, |sum, solid| sum.wrapping_add(unordered(&|h| solid.hash(h))));
+            let blasts = hidden.blasts.iter().fold(0u64, |sum, blast| sum.wrapping_add(unordered(&|h| blast.hash(h))));
+            let flitches = hidden.flitches.iter().fold(0u64, |sum, flitch| sum.wrapping_add(unordered(&|h| flitch.hash(h))));
+            (solids, blasts, flitches).hash(&mut hasher);
+            for row in &hidden.rows {
+                row.solid.hash(&mut hasher);
+                row.band.map(|band| (band.base.to_bits(), band.top.to_bits(), band.is_flitch)).hash(&mut hasher);
+            }
+        }
+        for row in &view_selection {
+            row.solid.hash(&mut hasher);
+            row.band.map(|band| (band.base.to_bits(), band.top.to_bits(), band.is_flitch)).hash(&mut hasher);
+        }
+        for id in &solid_ids {
+            if let Some(cache) = self.solid_view_cache.get(id) {
+                cache.key.hash(&mut hasher);
+                cache.built_through(demand).hash(&mut hasher);
+                cache.fingerprint().hash(&mut hasher);
+            }
+        }
+        let key = hasher.finish();
+        if self.solid_view_body_key == Some(key) {
+            return;
+        }
+        let solids = self.workspace.active_document().map(|doc| doc.solids().to_vec()).unwrap_or_default();
+        let solids = solids.as_slice();
+        self.solid_view_body_key = Some(key);
+        self.solid_view_body.clear();
+        self.solid_view_shown_blocks.clear();
+        self.editor.solid_view_reserves = None;
+        self.editor.solid_view_reserve_status = None;
+        self.editor.solid_view_reserve_issues.clear();
+        self.editor.solid_view_coverage = None;
+        self.editor.selected_dig_block_infos.clear();
+
+        // Ramp across what is actually on screen rather than the whole pit,
+        // so one bench is not a single flat shade of its solid's colour.
+        let depth_shade = blast_sequencing
+            .then(|| {
+                let mut range: Option<[f64; 2]> = None;
+                for solid in solids {
+                    let Some(parts) = self
+                        .solid_view_cache
+                        .get(&solid.id)
+                        .filter(|_| selected_solid(&view_selection, solid.id))
+                        .and_then(|cache| if blast_sequencing { cache.blast_parts() } else { cache.display_parts(demand) })
+                    else {
+                        continue;
+                    };
+                    for part in parts {
+                        if !selected(&view_selection, solid.id, Some(part.band.selection)) {
+                            continue;
+                        }
+                        let bounds = part.mesh.mesh.bounds();
+                        range = Some(range.map_or([bounds.min.z, bounds.max.z], |[low, high]| [low.min(bounds.min.z), high.max(bounds.max.z)]));
+                    }
+                }
+                range
+            })
+            .flatten();
+
+        let mut volume = Some(0.0);
+        let mut covered = 0.0;
+        let mut pending = false;
+        let mut not_run = false;
+        let mut reserve_complete = true;
+        let mut errors = Vec::new();
+        let has_fields = self.workspace.active_document().is_some_and(|doc| !doc.reserve_fields().is_empty());
+        if dig_strips && !blast_sequencing {
+            // A survey's flitch ground runs to thousands of points a ring:
+            // what Dig Strips draws of each flitch is cut and laid flat side
+            // by side, for the loop below to find held.
+            let flitches: Vec<(&Solid, &ViewSolid, &SolidPart)> = solids
+                .iter()
+                .filter_map(|solid| Some((solid, self.solid_view_cache.get(&solid.id)?)))
+                .flat_map(|(solid, cache)| cache.display_parts(demand).unwrap_or_default().iter().map(move |part| (solid, cache, part)))
+                .filter(|(solid, _, part)| in_view(solid.id, part.band.selection))
+                .filter(|(solid, _, part)| !hidden.as_ref().is_some_and(|hidden| hidden.hides(solid.id, part.bench, part.band.selection, part.blast)))
+                .collect();
+            flitches.into_par_iter().for_each(|(solid, cache, part)| {
+                dig_strips_ground(solid, cache, part);
+            });
+        }
+        for solid in solids {
+            let wanted = selected_solid(&view_selection, solid.id);
+            let Some(cache) = self.solid_view_cache.get(&solid.id) else {
+                // Nothing has been built for this solid. Opening a page is not
+                // a calculation, so this says so rather than starting one.
+                not_run |= wanted;
+                continue;
+            };
+            // The occupied bands are a Benching product, and the trees that
+            // list them belong to the steps after it. Reading them from the
+            // body rather than from a finished partition is what lets Blasting
+            // open on the benches its own prerequisite committed.
+            match cache.occupied_bands() {
+                Some(bands) => {
+                    self.editor.solid_view_bands.insert(solid.id, bands.iter().map(|band| band.selection).collect());
+                }
+                None if cache.error_through(GeometryDemand::Body).is_some() => {
+                    self.editor.solid_view_bands.insert(solid.id, Vec::new());
+                }
+                None => {}
+            }
+            // The blast sequence editor draws whole blasts, so their outlines
+            // are the blasts' own rather than the dig blocks inside them.
+            let parts = if blast_sequencing { cache.blast_parts() } else { cache.display_parts(demand) };
+            let Some(parts) = parts else {
+                if wanted {
+                    match cache.error_through(demand) {
+                        Some(error) => errors.push(error.to_owned()),
+                        // No artifact and no fault: either the work is in
+                        // flight, or this step has not been run for these
+                        // inputs. Missing geometry must not read as a valid
+                        // empty result either way.
+                        None if cache.working_through(demand) => pending = true,
+                        None => not_run = true,
+                    }
+                }
+                continue;
+            };
+            if !wanted {
+                continue;
+            }
+            if has_fields && demand == GeometryDemand::Partition {
+                let settled = cache.reserves.product().is_some();
+                if !settled {
+                    reserve_complete = false;
+                    self.editor.solid_view_reserve_status = Some(cache.reserves.error().map(str::to_owned).unwrap_or_else(|| crate::i18n::tr!("planning-computing-reserves")));
+                }
+                if let Some(resolution) = cache.reserves.product().and_then(|product| product.resolution.as_ref()) {
+                    for (field, issue) in &resolution.issues {
+                        self.editor.solid_view_reserve_issues.entry(*field).or_insert_with(|| issue.describe());
+                    }
+                }
+                if solid.kind.requires_block_model() && cache.reserves.product().is_some_and(|product| product.availability == ReserveAvailability::CapacityOnly) {
+                    self.editor.solid_view_reserve_status = Some(crate::i18n::tr!("planning-reserve-capacity-only"));
+                }
+            }
+            // Only measured ground adds to the totals. A dump with no model
+            // carries no fields at all, and merged in it would leave the
+            // selection with none - every tonnage and grade a dash - while
+            // its volume still counts against the model's coverage.
+            let reserves = (demand == GeometryDemand::Partition && !blast_sequencing)
+                .then(|| {
+                    cache
+                        .reserves
+                        .product()
+                        .filter(|product| product.availability == ReserveAvailability::Measured)
+                        .map(|product| &product.totals)
+                })
+                .flatten();
+            for (index, part) in parts.iter().enumerate() {
+                if !in_view(solid.id, part.band.selection) {
+                    continue;
+                }
+                if hidden.as_ref().is_some_and(|hidden| hidden.hides(solid.id, part.bench, part.band.selection, part.blast)) {
+                    continue;
+                }
+                // Ground out of mining is gone from every step after
+                // Blasting, which still draws it so it can be put back.
+                if (demand == GeometryDemand::Partition || blast_sequencing) && cache.excludes(solid, part) {
+                    continue;
+                }
+                // Dig Strips comes before the flitches are cut apart, so a
+                // flitch with excluded blasts in its bench is drawn as the
+                // ground it still has to dig, flat in plan as the step is
+                // viewed.
+                let ground = dig_strips.then(|| dig_strips_ground(solid, cache, part)).flatten();
+                // Selecting a blast narrows what is shown, not what is built.
+                if !benches_only
+                    && let Some(blast) = selected_blast.filter(|blast| blast.solid == solid.id)
+                    && part.blast != Some(blast)
+                {
+                    continue;
+                }
+                let is_selected_block = part.block.as_ref().is_some_and(|piece| selected_blocks.contains(&piece.key));
+                if is_selected_block && let Some(piece) = &part.block {
+                    self.editor.selected_dig_block_infos.push(crate::ui::state::DigBlockInfo {
+                        id: piece.id,
+                        solid: solid.id,
+                        name: piece.name.clone(),
+                        plan_area: piece.area,
+                        bench: part.bench,
+                        flitch: part.band.selection,
+                        blast: part.blast,
+                        volume: part.volume,
+                        replaces: piece.replaces.clone(),
+                    });
+                }
+                let counted = selected_blocks.is_empty() || is_selected_block;
+                let mut mesh = match ground {
+                    Some(Some(mesh)) => mesh,
+                    Some(None) => continue,
+                    None => part.mesh.clone(),
+                };
+                if blast_sequencing {
+                    // Whole blasts, bench high: a flitch's hatching would
+                    // stripe across them and say nothing about the blast.
+                    // Height carries the benches apart instead, as it does on
+                    // the Blasting step, and the outline is a heavy, near black
+                    // line so each blast reads apart from its neighbours.
+                    mesh.flitch_style = None;
+                    mesh.color = solid.color;
+                    mesh.depth_shade = depth_shade;
+                    mesh.line_color = blended(solid.color, [0.0, 0.0, 0.0, 1.0], 0.92);
+                    mesh.line_weight = Some(4.5);
+                } else {
+                    mesh.flitch_style = solid
+                        .benching
+                        .intervals
+                        .get(part.band.interval)
+                        .map(|interval| interval.style(part.band.position, solid.color));
+                    mesh.color = mesh.flitch_style.map_or(solid.color, |style| style.color);
+                }
+                if is_selected_block {
+                    // Both blocks either side of a seam draw it, so an edge
+                    // colour alone is a coin toss over which one is on top.
+                    // Tinting the faces is what actually shows the pick.
+                    mesh.line_color = crate::ui::SELECTION_COLOR_F32;
+                    mesh.color = blended(mesh.color, crate::ui::SELECTION_COLOR_F32, 0.55);
+                    mesh.flitch_style = None;
+                }
+                // While blocks are marked they are all the view shows: the
+                // ground around them would hide most of them, and the
+                // Contents then read for them alone.
+                let is_marked = part.block.as_ref().is_some_and(|piece| marked.contains(&piece.id));
+                if !marked.is_empty() && !is_marked {
+                    continue;
+                }
+                if is_marked {
+                    mesh.flitch_style = None;
+                    mesh.line_color = MARKED_COLOR;
+                    mesh.color = blended(mesh.color, MARKED_COLOR, 0.75);
+                    let bounds = part.mesh.mesh.bounds();
+                    let (min, max) = (
+                        glam::DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z),
+                        glam::DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z),
+                    );
+                    marked_bounds = Some(marked_bounds.map_or((min, max), |(low, high)| (low.min(min), high.max(max))));
+                }
+                // The sequence editor's own three states, which stand in for
+                // the single selected block above while it owns the preview:
+                // in this bar's order and already dug at the slider's
+                // position, in the order and still to come, or not in this
+                // bar at all. All three stay drawn and stay pickable - a
+                // dimmed block is ground that can still be added.
+                if let Some(position) = part.block.as_ref().and_then(|piece| order.get(&piece.id).copied()) {
+                    if sequencing && position < dug_through {
+                        continue;
+                    }
+                    mesh.flitch_style = None;
+                    mesh.line_color = crate::ui::SELECTION_COLOR_F32;
+                    mesh.color = blended(mesh.color, crate::ui::SELECTION_COLOR_F32, 0.55);
+                }
+                // The blast sequence editor's own states, as the dig
+                // sequence editor's: fired at the slider's position and off
+                // the pane, uncovering the bench below; in the order and still
+                // to come; or not in this bar at all.
+                if let Some(draft) = &blast_draft
+                    && let Some(blast) = part.blast
+                {
+                    let reference = crate::model::schedule::BlastRef {
+                        solid: solid.id,
+                        bench: blast.bench_base(),
+                        anchor: blast.anchor(),
+                    };
+                    let position = self
+                        .editor
+                        .schedule_blasts
+                        .iter()
+                        .find(|entry| entry.holds(&reference))
+                        .and_then(|entry| draft.members.iter().position(|member| entry.holds(member)));
+                    if let Some(position) = position {
+                        if position < draft.preview {
+                            continue;
+                        }
+                        // A dark outline still, or two neighbouring blasts in
+                        // the order would merge into one purple patch.
+                        mesh.flitch_style = None;
+                        mesh.line_color = blended(crate::ui::SELECTION_COLOR_F32, [0.0, 0.0, 0.0, 1.0], 0.85);
+                        mesh.color = blended(mesh.color, crate::ui::SELECTION_COLOR_F32, 0.55);
+                    }
+                }
+                if counted {
+                    // Reserves are measured over the flitch-level partition,
+                    // so a bench figure is its own parts added back up rather
+                    // than a second measurement of the same ground.
+                    if let Some(values) = reserves.and_then(|values| values.get(index)) {
+                        covered += values.all.covered_volume;
+                        match self.editor.solid_view_reserves.as_mut() {
+                            Some(total) => total.merge(values),
+                            None => self.editor.solid_view_reserves = Some(values.clone()),
+                        }
+                    }
+                    volume = volume.zip(part.volume).map(|(total, item)| total + item);
+                }
+                if let Some(piece) = &part.block {
+                    self.solid_view_shown_blocks.push(ShownBlock {
+                        mesh: mesh.id,
+                        key: piece.key,
+                        face: piece.face.clone(),
+                        base: part.band.selection.base,
+                        top: part.band.selection.top,
+                    });
+                }
+                self.solid_view_body.push(mesh);
+            }
+        }
+        if !reserve_complete || pending || !errors.is_empty() {
+            self.editor.solid_view_reserves = None;
+        }
+        if self.editor.solids_view_frame_marked
+            && let Some((low, high)) = marked_bounds
+        {
+            self.editor.solids_view_frame_marked = false;
+            self.frame_haul(low, high);
+        }
+        // Coverage says how much of the shown ground the block model actually
+        // reaches, so a partly covered solid cannot read as fully measured.
+        self.editor.solid_view_coverage = volume.filter(|volume| *volume > 0.0).map(|volume| covered / volume);
+        self.editor.solid_preview_summary = if not_run && self.solid_view_body.is_empty() {
+            SolidPreviewSummary::NotRun
+        } else if pending {
+            SolidPreviewSummary::Building {
+                showing_previous: !self.solid_view_body.is_empty(),
+            }
+        } else if !errors.is_empty() {
+            SolidPreviewSummary::Failed(errors.join("\n"))
+        } else if self.solid_view_body.is_empty() {
+            SolidPreviewSummary::Empty
+        } else {
+            SolidPreviewSummary::Ready {
+                volume,
+                faces: self.solid_view_body.iter().map(|mesh| mesh.mesh.face_count()).sum(),
+                waiting_on_unloaded: false,
+            }
+        };
+    }
+}
+
+/// Carry dig block identities across a rebuild, and record what changed.
+///
+/// A new block inherits the identity of any remembered block whose ground it
+/// still is: either the old anchor falls inside the new face (the old block
+/// was merged into this one) or the new anchor falls inside the old face (the
+/// old block was split, and this is one of the pieces). The first unclaimed
+/// candidate is inherited so one predecessor cannot name two successors; the
+/// rest are recorded as replaced.
+fn adopt_dig_block_ids(partition: &mut SolidPartition, previous: &[DigBlockIdentity]) {
+    let mut taken: Vec<DigBlockId> = Vec::new();
+    for part in &mut partition.parts {
+        let base = part.band.selection.base;
+        let Some(block) = part.block.as_mut() else { continue };
+        let anchor = DVec2::from(block.key.anchor());
+        let (inherited, replaces) = match_identity(base, &block.face, anchor, previous, &taken);
+        if let Some(id) = inherited {
+            taken.push(id);
+            block.id = id;
+        }
+        block.replaces = replaces;
+    }
+}
+
+/// Which remembered identity one new block should take, and which others its
+/// ground came out of.
+///
+/// Split out from the walk above so the rule can be exercised on plain data:
+/// the meshes around it are expensive to build and say nothing about it.
+fn match_identity(band: f64, face: &[Vec<DVec2>], anchor: DVec2, previous: &[DigBlockIdentity], taken: &[DigBlockId]) -> (Option<DigBlockId>, Vec<DigBlockId>) {
+    let mut candidates: Vec<DigBlockId> = previous
+        .iter()
+        .filter(|entry| (entry.band - band).abs() < 1e-6)
+        .filter(|entry| arrangement::point_in_face(face, DVec2::from(entry.anchor)) || arrangement::point_in_face(&entry.face, anchor))
+        .map(|entry| entry.id)
+        .collect();
+    candidates.sort_unstable();
+    match candidates.iter().position(|id| !taken.contains(id)) {
+        Some(position) => {
+            let inherited = candidates.remove(position);
+            (Some(inherited), candidates)
+        }
+        // Every candidate already named a successor, so this is new ground
+        // that came out of them: keep the fresh id and record the lineage.
+        None => (None, candidates),
+    }
+}
+
+/// The Solids stage: the closed body between a solid's two surfaces.
+fn build_solid_envelope(
+    solid: &Solid,
+    design: &Arc<Triangulation>,
+    topo: &Arc<Triangulation>,
+    cancel: &crate::app::jobs::CancelFlag,
+    progress: &crate::model::progress::Progress,
+) -> anyhow::Result<(OpenTriangulation, super::triangulation::solid_between::BuiltFrom)> {
+    // The same mesh as the Setup page's preview of this solid, when it has
+    // built one, rather than a copy of it.
+    let built = super::triangulation::solid_between::build_solid_mesh(design, topo, crate::ui::state::SolidRegion::of_solid(solid.kind), &solid.name, &progress.phase(0.0, 1.0))?;
+    anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
+    let envelope = preview_triangulation(
+        solid.name.clone(),
+        built.mesh,
+        built.spatial,
+        built.edges,
+        built.surface_face_order,
+        solid.color,
+        [0.0, 0.0, 0.0, 1.0],
+    );
+    Ok((envelope, built.built_from))
+}
+
+/// The Benching stage: cut a committed envelope into benches and flitches.
+///
+/// Reads the envelope, never the surfaces it came from, so editing a bench
+/// height costs one re-slab rather than a whole rebuild.
+fn build_solid_body(solid: &Solid, source: &OpenTriangulation, cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress) -> anyhow::Result<SolidBody> {
+    progress.set_fraction(0.0);
+    let (bench_body, bench_bands_out) = build_bench_body(source, bench_bands(&solid.benching), true, cancel)?;
+    progress.set_fraction(0.4);
+    let (flitch_body, flitch_bands) = build_bench_body(source, plan_bands(&solid.benching), true, cancel)?;
+    progress.set_fraction(0.8);
+    let bench_footprints = plan_footprints(&bench_body, &bench_bands_out, cancel)?;
+    let flitch_footprints = plan_footprints(&flitch_body, &flitch_bands, cancel)?;
+    let occupied_bands = flitch_bands.clone();
+
+    let benches = solid.benching.benches();
+    let bench_of = |band: BenchSelection| -> BenchSelection {
+        benches.iter().find(|bench| band.base >= bench.base - 1e-6 && band.top <= bench.top() + 1e-6).map_or(
+            BenchSelection {
+                base: band.base,
+                top: band.top,
+                is_flitch: false,
+            },
+            |bench| BenchSelection {
+                base: bench.base,
+                top: bench.top(),
+                is_flitch: false,
+            },
+        )
+    };
+
+    // Each piece checked closed side by side; said in order after.
+    let bench_checks: Vec<Closure> = bench_body.par_iter().map(closure).collect();
+    let flitch_checks: Vec<Closure> = flitch_body.par_iter().map(closure).collect();
+    let mut bench_parts = Vec::with_capacity(bench_body.len());
+    for ((mut mesh, band), check) in bench_body.into_iter().zip(bench_bands_out).zip(bench_checks) {
+        mesh.id = next_view_id();
+        let volume = closed_volume(check, &solid.name, &band);
+        bench_parts.push(SolidPart {
+            bench: band.selection,
+            band,
+            blast: None,
+            block: None,
+            volume,
+            mesh,
+        });
+    }
+    let mut flitch_parts = Vec::with_capacity(flitch_body.len());
+    for ((mesh, band), check) in flitch_body.into_iter().zip(flitch_bands).zip(flitch_checks) {
+        let volume = closed_volume(check, &solid.name, &band);
+        flitch_parts.push(SolidPart {
+            bench: bench_of(band.selection),
+            band,
+            blast: None,
+            block: None,
+            volume,
+            mesh,
+        });
+    }
+    progress.set_fraction(1.0);
+
+    Ok(SolidBody {
+        bench_parts,
+        flitch_parts,
+        bench_footprints,
+        flitch_footprints,
+        occupied_bands,
+    })
+}
+
+/// The Blasting stage: each bench's ground cut by the lines drawn across it.
+///
+/// A bench with no cuts is one blast covering the whole of it, which is what
+/// makes "no cuts drawn" a valid finished result rather than pending work.
+fn build_solid_blasting(solid: &Solid, body: &SolidBody, cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<SolidBlasting> {
+    // Each bench on its own, side by side: a survey's bench ground runs to
+    // hundreds of thousands of points, and finding a point inside a ring of
+    // them is most of the work.
+    let benches = body
+        .bench_parts
+        .par_iter()
+        .map(|part| -> anyhow::Result<Vec<BlastFace>> {
+            anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
+            let Some(outline) = body.bench_footprints.get(&part.band.selection.base.to_bits()) else {
+                return Ok(Vec::new());
+            };
+            let cuts = solid
+                .blasting
+                .bench(part.band.selection.base)
+                .map(|bench| arrangement::cut_lines(&bench.cuts))
+                .unwrap_or_default();
+            Ok(arrangement::subdivide(outline, &cuts)
+                .into_iter()
+                .filter_map(|face| {
+                    let anchor = arrangement::representative_point(&face)?;
+                    Some(BlastFace {
+                        bench: part.band.selection,
+                        area: arrangement::face_area(&face),
+                        face,
+                        anchor: anchor.to_array(),
+                    })
+                })
+                .collect())
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(SolidBlasting {
+        blast_faces: benches.into_iter().flatten().collect(),
+    })
+}
+
+/// The Reserving stage: each flitch cut by its own strips and by the blast
+/// boundaries of the bench above it.
+///
+/// Reuses the committed flitch meshes and the committed blast faces; nothing
+/// here rebuilds the envelope or re-derives a blast. `previous` is the last
+/// partition of this solid, whose pieces [`carve_level`] reuses where it can.
+fn build_solid_partition(
+    solid: &Solid,
+    body: &Arc<SolidBody>,
+    blasting: &SolidBlasting,
+    previous: Option<SolidPartition>,
+    cancel: &crate::app::jobs::CancelFlag,
+    progress: &crate::model::progress::Progress,
+) -> anyhow::Result<SolidPartition> {
+    let blast_for = |bench: BenchSelection, point: DVec2| -> Option<BlastShapeRef> {
+        blasting
+            .blast_faces
+            .iter()
+            .find(|blast| blast.bench == bench && arrangement::point_in_face(&blast.face, point))
+            .map(|blast| blast.shape_ref(solid.id))
+    };
+
+    // Only a partition of this same body can lend its pieces.
+    let (mut old_parts, mut old_blasts, earlier) = match previous.filter(|previous| Arc::ptr_eq(&previous.carving.body, body)) {
+        Some(previous) => (
+            previous.parts.into_iter().map(Some).collect(),
+            previous.blast_parts.into_iter().map(Some).collect(),
+            Some(previous.carving),
+        ),
+        None => (Vec::new(), Vec::new(), None),
+    };
+    let mut carving = Carving {
+        body: body.clone(),
+        flitches: HashMap::new(),
+        benches: HashMap::new(),
+        outlines: HashMap::new(),
+    };
+
+    // Each flitch's earlier pieces are taken out first, so the flitches can
+    // be cut side by side; their pieces are then numbered in flitch order, as
+    // one after another would have numbered them.
+    let mut flitch_earlier: Vec<EarlierLevel> = body
+        .flitch_parts
+        .iter()
+        .map(|flitch| {
+            earlier_level(
+                earlier.as_ref().and_then(|earlier| earlier.flitches.get(&flitch.band.selection.base.to_bits())),
+                &mut old_parts,
+            )
+        })
+        .collect();
+    let total = body.flitch_parts.len() as u64;
+    let done = AtomicU64::new(0);
+    let earlier_outlines = earlier.as_ref().map(|earlier| &earlier.outlines);
+    let flitches: Vec<_> = body.flitch_parts.iter().zip(flitch_earlier.iter_mut()).collect();
+    let cut = side_by_side(
+        flitches,
+        |(flitch, _)| flitch.mesh.mesh.face_count(),
+        |(flitch, earlier)| -> anyhow::Result<(Arc<FlitchOutlines>, Vec<Option<Carved>>)> {
+            anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
+            let band = flitch.band;
+            let key = band.selection.base.to_bits();
+            let strips = solid.blasting.drawing(band.selection.base, true).map_or(&[][..], |drawing| &drawing.cuts);
+            let bench_cuts = solid.blasting.bench(flitch.bench.base).map_or(&[][..], |entry| &entry.cuts);
+            let footprint = body.flitch_footprints.get(&key).map_or(&[][..], Vec::as_slice);
+            let drawn = earlier_outlines
+                .and_then(|outlines| outlines.get(&key))
+                .filter(|drawn| drawn.strips == strips && drawn.bench_cuts == bench_cuts)
+                .cloned();
+            let outlines = match drawn {
+                Some(drawn) => drawn,
+                None => {
+                    let faces = super::dig_strips::dig_block_faces(footprint, strips, bench_cuts);
+                    let plans = super::dig_strips::dig_block_plans(&faces, &super::dig_strips::dig_block_cuts(strips, bench_cuts));
+                    Arc::new(FlitchOutlines {
+                        strips: strips.to_vec(),
+                        bench_cuts: bench_cuts.to_vec(),
+                        faces: faces.into_iter().map(|(face, anchor)| (Arc::new(face), anchor)).collect(),
+                        plans,
+                    })
+                }
+            };
+            anyhow::ensure!(
+                !outlines.faces.is_empty(),
+                crate::i18n::tr!("err-solids-flitch-no-footprint", rl = band.selection.base.to_string())
+            );
+            let level = Level {
+                source: &flitch.mesh,
+                volume: flitch.volume,
+                footprint,
+                faces: &outlines.faces,
+                plans: Some(&outlines.plans),
+                outline: Outline::Rim,
+            };
+            let carved = carve_level(&level, earlier, cancel)?;
+            progress.set_items(done.fetch_add(1, Ordering::Relaxed) + 1, total);
+            Ok((outlines, carved))
+        },
+    )?;
+    drop(flitch_earlier);
+
+    let mut parts = Vec::new();
+    for (flitch, (outlines, carved)) in body.flitch_parts.iter().zip(cut) {
+        let band = flitch.band;
+        let bench = flitch.bench;
+        let key = band.selection.base.to_bits();
+        let mut pieces = Vec::new();
+        for (number, ((face, anchor), carved)) in outlines.faces.iter().zip(carved).enumerate() {
+            let (face, anchor) = (face.clone(), *anchor);
+            let Some(carved) = carved else {
+                pieces.push((face, None));
+                continue;
+            };
+            pieces.push((face.clone(), Some(parts.len())));
+            parts.push(SolidPart {
+                bench,
+                blast: blast_for(bench, anchor),
+                block: Some(DigPiece {
+                    id: DigBlockId(NEXT_DIG_BLOCK_ID.fetch_add(1, Ordering::Relaxed)),
+                    key: BlastShapeRef::new(solid.id, band.selection.base, anchor.to_array()),
+                    name: (number + 1).to_string(),
+                    area: arrangement::face_area(&face),
+                    face,
+                    replaces: Vec::new(),
+                }),
+                band,
+                volume: flitch.volume.and(carved.volume),
+                mesh: carved.mesh,
+            });
+        }
+        carving.flitches.insert(key, pieces);
+        carving.outlines.insert(key, outlines);
+    }
+    progress.set_items(body.flitch_parts.len() as u64, body.flitch_parts.len() as u64);
+    let blast_parts = build_blast_parts(solid, body, blasting, earlier.as_ref(), &mut old_blasts, &mut carving, cancel)?;
+
+    Ok(SolidPartition { parts, blast_parts, carving })
+}
+
+/// How sharply a blast's surface must turn for the turn to be outlined.
+pub(crate) const BLAST_CREASE_ANGLE: f64 = 30.0_f64.to_radians();
+
+/// Each bench cut into its blasts, whole benches high, so a blast draws as
+/// one piece with its own outline. Cut the way the dig blocks are, from the
+/// committed bench meshes and blast faces.
+fn build_blast_parts(
+    solid: &Solid,
+    body: &SolidBody,
+    blasting: &SolidBlasting,
+    earlier: Option<&Carving>,
+    old_parts: &mut [Option<SolidPart>],
+    carving: &mut Carving,
+    cancel: &crate::app::jobs::CancelFlag,
+) -> anyhow::Result<Vec<SolidPart>> {
+    let blasts_of = |bench: &SolidPart| -> Vec<&BlastFace> { blasting.blast_faces.iter().filter(|blast| blast.bench == bench.band.selection).collect() };
+    let mut bench_earlier: Vec<EarlierLevel> = body
+        .bench_parts
+        .iter()
+        .map(|bench| earlier_level(earlier.and_then(|earlier| earlier.benches.get(&bench.band.selection.base.to_bits())), old_parts))
+        .collect();
+    let benches: Vec<_> = body.bench_parts.iter().zip(bench_earlier.iter_mut()).collect();
+    let cut = side_by_side(
+        benches,
+        |(bench, _)| bench.mesh.mesh.face_count(),
+        |(bench, earlier)| -> anyhow::Result<Option<CutLevel>> {
+            anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
+            let blasts = blasts_of(bench);
+            if blasts.is_empty() {
+                return Ok(None);
+            }
+            let key = bench.band.selection.base.to_bits();
+            let faces: Vec<(Arc<Face>, DVec2)> = blasts.iter().map(|blast| (Arc::new(blast.face.clone()), DVec2::from(blast.anchor))).collect();
+            let level = Level {
+                source: &bench.mesh,
+                volume: bench.volume,
+                footprint: body.bench_footprints.get(&key).map_or(&[][..], Vec::as_slice),
+                faces: &faces,
+                plans: None,
+                outline: Outline::Crease,
+            };
+            let carved = carve_level(&level, earlier, cancel)?;
+            Ok(Some((faces, carved)))
+        },
+    )?;
+    drop(bench_earlier);
+
+    let mut parts = Vec::new();
+    for (bench, cut) in body.bench_parts.iter().zip(cut) {
+        let Some((faces, carved)) = cut else { continue };
+        let key = bench.band.selection.base.to_bits();
+        let mut pieces = Vec::new();
+        for ((blast, (face, _)), carved) in blasts_of(bench).into_iter().zip(faces).zip(carved) {
+            let Some(carved) = carved else {
+                pieces.push((face, None));
+                continue;
+            };
+            pieces.push((face, Some(parts.len())));
+            parts.push(SolidPart {
+                mesh: carved.mesh,
+                band: bench.band,
+                bench: bench.bench,
+                blast: Some(blast.shape_ref(solid.id)),
+                block: None,
+                volume: bench.volume.and(carved.volume),
+            });
+        }
+        carving.benches.insert(key, pieces);
+    }
+    Ok(parts)
+}
+
+/// How many source faces [`side_by_side`] cuts at once. Each costs several
+/// hundred bytes while it is being cut, and a survey's flitches run to tens of
+/// millions of faces between them: all at once, they took more memory than
+/// the slabs they were cut from.
+const FACES_IN_FLIGHT: usize = 2_000_000;
+
+/// `cut` over every item, in their order, as many at once as fit within
+/// [`FACES_IN_FLIGHT`] by `faces` - always at least one. An item starts as
+/// soon as one in flight finishes, so no thread waits for a batch, and one too
+/// large to share runs alone with the whole pool for its own parallel work.
+/// The first error stops further items from starting.
+fn side_by_side<T: Send, R: Send>(items: Vec<T>, faces: impl Fn(&T) -> usize + Sync, cut: impl Fn(T) -> anyhow::Result<R> + Sync) -> anyhow::Result<Vec<R>> {
+    struct Queue<T> {
+        waiting: std::collections::VecDeque<(usize, T)>,
+        in_flight: usize,
+        failed: bool,
+    }
+    let results: Vec<std::sync::Mutex<Option<anyhow::Result<R>>>> = (0..items.len()).map(|_| std::sync::Mutex::new(None)).collect();
+    let queue = std::sync::Mutex::new(Queue {
+        waiting: items.into_iter().enumerate().collect(),
+        in_flight: 0,
+        failed: false,
+    });
+    // Starts every waiting item that fits; each one, as it finishes, starts
+    // whatever its share now lets in.
+    fn start<'scope, T: Send + 'scope, R: Send + 'scope>(
+        scope: &rayon::Scope<'scope>,
+        queue: &'scope std::sync::Mutex<Queue<T>>,
+        results: &'scope [std::sync::Mutex<Option<anyhow::Result<R>>>],
+        faces: &'scope (impl Fn(&T) -> usize + Sync),
+        cut: &'scope (impl Fn(T) -> anyhow::Result<R> + Sync),
+    ) {
+        let mut state = queue.lock().expect("queue lock");
+        while !state.failed
+            && let Some((_, next)) = state.waiting.front()
+            && (state.in_flight == 0 || state.in_flight + faces(next) <= FACES_IN_FLIGHT)
+        {
+            let (index, item) = state.waiting.pop_front().expect("checked above");
+            let weight = faces(&item);
+            state.in_flight += weight;
+            scope.spawn(move |scope| {
+                let result = cut(item);
+                let failed = result.is_err();
+                *results[index].lock().expect("result lock") = Some(result);
+                {
+                    let mut state = queue.lock().expect("queue lock");
+                    state.in_flight -= weight;
+                    state.failed |= failed;
+                }
+                start(scope, queue, results, faces, cut);
+            });
+        }
+    }
+    rayon::scope(|scope| start(scope, &queue, &results, &faces, &cut));
+    let mut out = Vec::with_capacity(results.len());
+    let mut first_error = None;
+    for result in results {
+        match result.into_inner().expect("result lock") {
+            Some(Ok(value)) => out.push(value),
+            Some(Err(error)) => {
+                first_error.get_or_insert(error);
+            }
+            None => {}
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(out),
+    }
+}
+
+/// Which outline a newly cut piece draws.
+#[derive(Clone, Copy)]
+enum Outline {
+    /// The rim of the walls it was cut along: a dig block.
+    Rim,
+    /// Where its surface turns a corner: a blast.
+    Crease,
+}
+
+/// One flitch or bench to cut into `faces`.
+struct Level<'a> {
+    source: &'a OpenTriangulation,
+    /// The source's volume, `None` when it is open.
+    volume: Option<f64>,
+    footprint: &'a [Vec<DVec2>],
+    faces: &'a [(Arc<Face>, DVec2)],
+    /// What each face is cut out with, when not its own outline: see
+    /// [`super::dig_strips::dig_block_plans`].
+    plans: Option<&'a [Face]>,
+    outline: Outline,
+}
+
+/// One level as it was cut: its plan faces, each with a point inside, and what
+/// each face carved.
+type CutLevel = (Vec<(Arc<Face>, DVec2)>, Vec<Option<Carved>>);
+
+/// How the last partition cut one level: each outline, with what it found
+/// there while no face of the new one has taken it.
+type EarlierLevel<'a> = Vec<(&'a Arc<Face>, Option<Kept>)>;
+
+/// What the last partition found under one outline.
+enum Kept {
+    Piece(Box<SolidPart>),
+    /// No material, so cutting it again would only find nothing again.
+    Empty,
+}
+
+/// Take `level`'s pieces out of the last partition's `parts`.
+fn earlier_level<'a>(level: Option<&'a CarvedLevel>, parts: &mut [Option<SolidPart>]) -> EarlierLevel<'a> {
+    level.map_or_else(Vec::new, |level| {
+        level
+            .iter()
+            .map(|(face, part)| {
+                let kept = match part {
+                    Some(part) => parts.get_mut(*part).and_then(Option::take).map(|part| Kept::Piece(Box::new(part))),
+                    None => Some(Kept::Empty),
+                };
+                (face, kept)
+            })
+            .collect()
+    })
+}
+
+/// One face's piece, ready to become a part.
+struct Carved {
+    mesh: OpenTriangulation,
+    /// `None` when it was kept from a part that could not be measured.
+    volume: Option<f64>,
+}
+
+/// A piece's geometry before it is dressed as a mesh.
+struct Built {
+    slab: super::triangulation::solid_between::Slab,
+    volume: f64,
+    boundary_wall: Vec<bool>,
+    /// Which source vertex each vertex was, for a piece split off whole.
+    source_vertex: Option<Vec<u32>>,
+}
+
+/// Cut one level into its faces, in order; `None` where a face holds no
+/// material. A face the last partition had too keeps its piece. The rest
+/// come from the separate ground they lie on: split off whole where the face
+/// is all of that ground, and cut from that ground alone otherwise.
+///
+/// Never cut from an earlier cut piece, however much smaller: it carries the
+/// walls of the outline it was cut to, which the new one need not share.
+fn carve_level(level: &Level, earlier: &mut EarlierLevel, cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<Vec<Option<Carved>>> {
+    use super::triangulation::solid_between::{clip_piece_to_plans, split_solid_by_plan};
+
+    let source = level.source;
+    let faces = level.faces;
+
+    // Unchanged outlines, first: a whole bench outlined again is a pass over
+    // all of a survey's bench.
+    let mut carved: Vec<Option<Carved>> = (0..faces.len()).map(|_| None).collect();
+    let mut pending: Vec<usize> = Vec::new();
+    for (index, (face, _)) in faces.iter().enumerate() {
+        let kept = earlier
+            .iter_mut()
+            .find(|(earlier, _)| Arc::ptr_eq(earlier, face) || **earlier == *face)
+            .and_then(|(_, kept)| kept.take());
+        match kept {
+            Some(Kept::Piece(part)) => {
+                carved[index] = Some(Carved {
+                    mesh: part.mesh,
+                    volume: part.volume,
+                })
+            }
+            Some(Kept::Empty) => {}
+            None => pending.push(index),
+        }
+    }
+    if pending.is_empty() {
+        return Ok(carved);
+    }
+
+    if let [_] = faces {
+        let mesh = match level.outline {
+            Outline::Rim => {
+                let mut mesh = source.clone();
+                mesh.id = next_view_id();
+                mesh.cull_back_faces = true;
+                mesh
+            }
+            // The bench itself, outlined where it turns a corner rather than
+            // copied to be: a bench of one blast is all of the blast, and a
+            // copy of a bench cut from a survey topography runs to gigabytes.
+            // The outline is found by position, so its ends are the bench's
+            // own points.
+            Outline::Crease => {
+                let slab = (
+                    source.mesh.vertices().to_vec(),
+                    source.mesh.face_vertex_indices_iter().map(|f| f.map(|i| i as u32)).collect(),
+                );
+                let edges = super::triangulation::solid_between::crease_outline(&slab, BLAST_CREASE_ANGLE);
+                drop(slab);
+                let mut mesh = source.clone();
+                mesh.edges = Arc::new(edges);
+                mesh.cull_back_faces = true;
+                mesh.always_show_edges = true;
+                mesh.line_weight = Some(1.5);
+                mesh.id = next_view_id();
+                mesh
+            }
+        };
+        return Ok(vec![Some(Carved { mesh, volume: level.volume })]);
+    }
+
+    let mut built: Vec<Option<Built>> = (0..faces.len()).map(|_| None).collect();
+
+    // The rest, from the ground they lie on.
+    {
+        let ground = arrangement::subdivide(level.footprint, &[]);
+        let plans: Vec<&[Vec<DVec2>]> = ground.iter().map(Vec::as_slice).collect();
+        let mut split: Vec<Option<_>> = match ground.len() {
+            0 | 1 => Vec::new(),
+            _ => split_solid_by_plan(&source.mesh, &plans).map_or_else(Vec::new, |split| split.into_iter().map(Some).collect()),
+        };
+        let ground_of = |point: DVec2| ground.iter().position(|face| arrangement::point_in_face(face, point));
+        // Faces cut from the same ground are cut together, in one pass over
+        // its faces.
+        let mut groups: std::collections::BTreeMap<Option<usize>, Vec<usize>> = std::collections::BTreeMap::new();
+        for index in pending {
+            let (_, anchor) = &faces[index];
+            let lot = if split.is_empty() { None } else { ground_of(*anchor) };
+            if let Some(lot) = lot
+                && faces.iter().filter(|(_, anchor)| ground_of(*anchor) == Some(lot)).count() == 1
+                && let Some(piece) = split[lot].take()
+            {
+                built[index] = Some(Built {
+                    slab: piece.slab,
+                    volume: piece.volume,
+                    boundary_wall: Vec::new(),
+                    source_vertex: Some(piece.source_vertex),
+                });
+                continue;
+            }
+            groups.entry(lot).or_default().push(index);
+        }
+        for (lot, members) in groups {
+            anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
+            let slab = match lot {
+                None => (
+                    source.mesh.vertices().to_vec(),
+                    source.mesh.face_vertex_indices_iter().map(|f| f.map(|i| i as u32)).collect(),
+                ),
+                Some(lot) => {
+                    let Some(piece) = split[lot].as_ref() else { continue };
+                    piece.slab.clone()
+                }
+            };
+            let plans: Vec<&[Vec<DVec2>]> = members
+                .iter()
+                .map(|&index| level.plans.map_or(faces[index].0.as_slice(), |plans| plans[index].as_slice()))
+                .collect();
+            for (index, clipped) in members.into_iter().zip(clip_piece_to_plans(slab, &plans, cancel)?) {
+                built[index] = Some(Built {
+                    slab: clipped.slab,
+                    volume: clipped.volume,
+                    boundary_wall: clipped.boundary_wall,
+                    source_vertex: None,
+                });
+            }
+        }
+    }
+
+    // Each piece is dressed on its own, so they are dressed together.
+    let built: Vec<(usize, Built)> = built
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, built)| Some((index, built?)))
+        .filter(|(_, built)| !built.slab.1.is_empty())
+        .collect();
+    let dressed = built
+        .into_par_iter()
+        .map(|(index, built)| -> anyhow::Result<(usize, Carved)> {
+            let edges = match (level.outline, &built.source_vertex) {
+                (Outline::Rim, Some(source_vertex)) => split_edges(&source.edges, source_vertex),
+                (Outline::Rim, None) => super::triangulation::solid_between::boundary_wall_outline(&built.slab, &built.boundary_wall),
+                (Outline::Crease, _) => super::triangulation::solid_between::crease_outline(&built.slab, BLAST_CREASE_ANGLE),
+            };
+            let mut mesh = piece_preview(source, built.slab, edges)?;
+            if built.source_vertex.is_some() {
+                // Split off whole, its edges are the source's every triangle
+                // side: shown only as the whole flitch shows them, not as the
+                // always-on rim a cut piece draws.
+                mesh.always_show_edges = source.always_show_edges;
+                mesh.line_weight = source.line_weight;
+            }
+            Ok((index, Carved { mesh, volume: Some(built.volume) }))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    for (index, piece) in dressed {
+        carved[index] = Some(piece);
+    }
+    Ok(carved)
+}
+
+/// What Dig Strips draws of a flitch part whose bench has blasts out of
+/// mining - taken out by hand, under the minimum blast size, or with the
+/// whole bench: its ground still in mining, flat in plan, or `Some(None)`
+/// where none is left. `None` when nothing of it is excluded, or the blasts
+/// are not worked out yet, and the part is drawn as it stands.
+///
+/// Held by the solid's view cache, so going back to the step lays nothing out
+/// again.
+fn dig_strips_ground(solid: &Solid, cache: &ViewSolid, part: &SolidPart) -> Option<Option<OpenTriangulation>> {
+    let exclusions = &solid.exclusions;
+    let bench = part.bench.base;
+    if exclusions.bench_excluded(bench) {
+        return Some(None);
+    }
+    let blast_faces = cache.blast_faces()?;
+    let excluded: Vec<usize> = blast_faces
+        .iter()
+        .enumerate()
+        .filter(|(_, face)| (face.bench.base - bench).abs() < 1e-6 && exclusions.blast_face_excluded(face.bench.base, &face.face))
+        .map(|(index, _)| index)
+        .collect();
+    if excluded.is_empty() {
+        return None;
+    }
+    let flitch = part.band.selection.base;
+    let footprint = cache.flitch_footprints()?.get(&flitch.to_bits())?;
+    let cuts = solid.blasting.bench(bench).map(|entry| entry.cuts.as_slice()).unwrap_or_default();
+    // The blasts are the bench's cuts' own faces, so the cuts and which of
+    // those faces are out say everything the ground is cut from.
+    let mut key = DefaultHasher::new();
+    super::dig_strips::lines_key(&[cuts]).hash(&mut key);
+    blast_faces.len().hash(&mut key);
+    excluded.hash(&mut key);
+    let faces = cache.face_cache();
+    let build = || {
+        let ground: Vec<Face> = super::dig_strips::cached_blast_faces(&faces, flitch, footprint, cuts)
+            .iter()
+            .filter(|(_, point)| !excluded.iter().any(|&blast| arrangement::point_in_face(&blast_faces[blast].face, *point)))
+            .map(|(face, _)| face.clone())
+            .collect();
+        flat_ground(&part.mesh, &ground, part.band.selection.top)
+    };
+    Some(faces.flat_ground(flitch, key.finish(), build))
+}
+
+/// Plan faces as one flat, outlined mesh at `z`, in `source`'s colours.
+fn flat_ground(source: &OpenTriangulation, faces: &[Face], z: f64) -> Option<OpenTriangulation> {
+    let origin = faces.iter().flatten().flatten().next().copied()?;
+    let mut vertices = Vec::new();
+    let mut triangles: Vec<[u32; 3]> = Vec::new();
+    let mut edges = Vec::new();
+    for face in faces {
+        let base = vertices.len();
+        let mut points: Vec<DVec2> = Vec::new();
+        let mut holes = Vec::new();
+        for ring in face.iter().filter(|ring| ring.len() >= 3) {
+            if !points.is_empty() {
+                holes.push(points.len());
+            }
+            let start = base + points.len();
+            edges.extend((0..ring.len()).map(|i| [(start + i) as u32, (start + (i + 1) % ring.len()) as u32]));
+            points.extend(ring.iter().copied());
+        }
+        let mut indices: Vec<usize> = Vec::new();
+        earcut::Earcut::new().earcut(points.iter().map(|point| [point.x - origin.x, point.y - origin.y]), &holes, &mut indices);
+        for &[a, b, c] in indices.as_chunks::<3>().0 {
+            // Facing up, so a view culling back faces still shows it.
+            let up = (points[b] - points[a]).perp_dot(points[c] - points[a]) >= 0.0;
+            let [a, b, c] = [a, b, c].map(|index| (base + index) as u32);
+            triangles.push(if up { [a, b, c] } else { [a, c, b] });
+        }
+        vertices.extend(points.iter().map(|point| crate::model::formats::mesh_data::Vertex { x: point.x, y: point.y, z }));
+    }
+    let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, triangles).ok()?);
+    let spatial = Arc::new(crate::model::spatial::TriangleBvh::deferred(mesh.clone()));
+    let order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
+    let mut flat = preview_triangulation(source.name.clone(), mesh, spatial, edges, order, source.color, source.line_color);
+    flat.always_show_edges = source.always_show_edges;
+    flat.line_weight = source.line_weight;
+    flat.id = next_view_id();
+    Some(flat)
+}
+
+/// One piece of a bench or flitch, drawn as its own outlined body in the
+/// source's colours.
+fn piece_preview(source: &OpenTriangulation, slab: super::triangulation::solid_between::Slab, mut edges: Vec<[u32; 2]>) -> anyhow::Result<OpenTriangulation> {
+    let (vertices, faces) = merge_coincident_vertices(slab, &mut edges);
+    edges.shrink_to_fit();
+    let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, faces)?);
+    let spatial = Arc::new(crate::model::spatial::TriangleBvh::deferred(mesh.clone()));
+    let order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
+    let mut piece = preview_triangulation(source.name.clone(), mesh, spatial, edges, order, source.color, source.line_color);
+    piece.cull_back_faces = true;
+    piece.always_show_edges = true;
+    piece.line_weight = Some(1.5);
+    piece.id = next_view_id();
+    Ok(piece)
+}
+
+/// One vertex per position. Cutting leaves a piece with about five times the
+/// vertices it has places, and a solid has thousands of pieces to hold in
+/// memory and on the GPU. Only bit-identical positions merge, and faces keep
+/// their order, so the geometry and everything measured from it are unchanged.
+/// A vertex nothing refers to is dropped.
+fn merge_coincident_vertices((vertices, mut faces): super::triangulation::solid_between::Slab, edges: &mut [[u32; 2]]) -> super::triangulation::solid_between::Slab {
+    let mut used = vec![false; vertices.len()];
+    for &index in faces.iter().flatten().chain(edges.iter().flatten()) {
+        used[index as usize] = true;
+    }
+    let mut merged = Vec::with_capacity(vertices.len() / 2);
+    let mut seen: HashMap<[u64; 3], u32> = HashMap::with_capacity(vertices.len() / 2);
+    let remap: Vec<u32> = vertices
+        .iter()
+        .zip(&used)
+        .map(|(vertex, used)| {
+            if !used {
+                return u32::MAX;
+            }
+            *seen.entry([vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()]).or_insert_with(|| {
+                merged.push(*vertex);
+                (merged.len() - 1) as u32
+            })
+        })
+        .collect();
+    for index in faces.iter_mut().flatten().chain(edges.iter_mut().flatten()) {
+        *index = remap[*index as usize];
+    }
+    (merged, faces)
+}
+
+/// The source's outline edges that lie wholly on a split piece, renumbered
+/// to the piece's own vertices.
+fn split_edges(edges: &[[u32; 2]], source_vertex: &[u32]) -> Vec<[u32; 2]> {
+    let local: HashMap<u32, u32> = source_vertex.iter().enumerate().map(|(index, &source)| (source, index as u32)).collect();
+    edges.iter().filter_map(|edge| Some([*local.get(&edge[0])?, *local.get(&edge[1])?])).collect()
+}
+
+/// Whether a piece closes: its volume if it does, and if not, how many edges
+/// are open, how long they are and where the longest is.
+type Closure = Result<f64, (usize, f64, crate::model::formats::mesh_data::Vertex)>;
+
+fn closure(mesh: &OpenTriangulation) -> Closure {
+    let faces: Vec<_> = mesh.mesh.face_vertex_indices_iter().map(|face| face.map(|i| i as u32)).collect();
+    match super::triangulation::solid_between::open_edge_report(mesh.mesh.vertices(), &faces) {
+        None => Ok(mesh_volume(&mesh.mesh)),
+        Some(open) => Err(open),
+    }
+}
+
+/// A measured volume, or `None` when the piece did not come out closed - said
+/// in the activity console with where, since the reserve diagnostic that
+/// follows can only say that some piece of the solid is open.
+fn closed_volume(closure: Closure, solid: &str, band: &CutBand) -> Option<f64> {
+    match closure {
+        Ok(volume) => Some(volume),
+        Err((count, length, at)) => {
+            crate::userspace_log!(
+                "{}",
+                crate::i18n::tr!(
+                    "planning-reserve-open-piece",
+                    solid = solid.to_string(),
+                    base = format!("{:.2}", band.selection.base),
+                    top = format!("{:.2}", band.selection.top),
+                    count = count.to_string(),
+                    length = format!("{length:.3}"),
+                    x = format!("{:.2}", at.x),
+                    y = format!("{:.2}", at.y),
+                    z = format!("{:.2}", at.z)
+                )
+            );
+            None
+        }
+    }
+}
+
+fn plan_footprints(body: &[OpenTriangulation], bands: &[CutBand], cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<HashMap<u64, Vec<Vec<DVec2>>>> {
+    // Each band's on its own, so the bands are traced side by side.
+    let traced = body
+        .par_iter()
+        .zip(bands)
+        .map(|(mesh, band)| -> anyhow::Result<(u64, Vec<Vec<DVec2>>)> {
+            anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
+            let rings = super::triangulation::solid_between::plan_footprint_rings(&mesh.mesh, band.selection.top)
+                .into_iter()
+                .map(|ring| ring.into_iter().map(|point| DVec2::new(point.x, point.y)).collect())
+                .collect();
+            Ok((band.selection.base.to_bits(), rings))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(traced.into_iter().collect())
+}
+
+impl crate::app::App<'_> {
+    /// Measure reserves over one scope's partition of every solid.
+    ///
+    /// Run twice over a completed solid: once at Benching over whole benches,
+    /// and once at Reserving over the blocks those benches are cut into. The
+    /// bench figures are an *independent* measurement, not the blocks added
+    /// up, which is the only thing a subdivision can honestly be reconciled
+    /// against - summing the children and comparing them to themselves would
+    /// prove nothing.
+    fn sync_solid_reserves(&mut self, solids: &[Solid], scope: ReserveScope) {
+        let fields = self.workspace.active_document().map(|doc| doc.reserve_fields().to_vec()).unwrap_or_default();
+        for solid in solids {
+            let Some(cache) = self.solid_view_cache.get(&solid.id) else { continue };
+            let Some(parts) = scope.parts(cache) else { continue };
+            let model = solid.block_model.and_then(|id| self.block_models.iter().find(|model| model.id == id));
+            // The inclusion checkbox is enforced here, not merely displayed:
+            // an excluded model contributes nothing to project reserves.
+            let included = model.is_some_and(|model| model.included_in_reserves);
+            let resident = model.is_some_and(|model| model.blocks.len() == model.model.metadata.n_blocks);
+            let mut config = DefaultHasher::new();
+            solid.block_model.hash(&mut config);
+            included.hash(&mut config);
+            serde_json::to_vec(&fields).unwrap_or_default().hash(&mut config);
+            if let Some(model) = model {
+                serde_json::to_vec(&model.reserve_mapping).unwrap_or_default().hash(&mut config);
+                self.model_content_version(model).hash(&mut config);
+            }
+            let measured_with = config.finish();
+            let mut config = DefaultHasher::new();
+            scope.hash_into(&mut config);
+            scope.source_key(cache).hash(&mut config);
+            measured_with.hash(&mut config);
+            let key = config.finish();
+            let slots = parts.len();
+            // As for the envelope: an attempt waiting on a restore keeps the
+            // same key when that restore succeeds - it is the same content
+            // coming back - so it has to be re-decided rather than skipped.
+            let stage = scope.slot_ref(cache);
+            let attempted = stage.is_current(key) && stage.is_awaiting_inputs();
+            if stage.is_current(key) && !stage.is_awaiting_inputs() {
+                continue;
+            }
+            let id = solid.id;
+            // An empty schema is a completed result of its own. Totals
+            // measured against a schema that no longer exists must not stay
+            // readable - the record API would export their field ids as
+            // current.
+            if fields.is_empty() {
+                let stage = scope.slot(self.solid_view_cache.get_mut(&id).unwrap());
+                stage.begin(key);
+                stage.settle(ReserveProduct {
+                    totals: Arc::new(vec![Default::default(); slots]),
+                    resolution: None,
+                    availability: ReserveAvailability::NoSchema,
+                    material: None,
+                });
+                continue;
+            }
+            // A dump or stockpile with no model is a legitimate geometry-only
+            // result: it has a capacity, and no measured content. Turning that
+            // into a zero tonnage, or inferring tonnes from cubic metres,
+            // would be an invented number.
+            let capacity_only = solid.block_model.is_none() && !solid.kind.requires_block_model();
+            let error = if capacity_only {
+                None
+            } else if model.is_none() {
+                Some(crate::i18n::tr!("planning-reserve-needs-model"))
+            } else if !included {
+                Some(crate::model::ReserveFieldIssue::ModelExcluded.describe())
+            } else if parts.iter().any(|part| part.volume.is_none()) {
+                Some(crate::i18n::tr!("planning-reserve-open-solid"))
+            } else {
+                None
+            };
+            // Kept between sessions where everything the measurement reads is
+            // named by something that outlasts this one: the pieces by their
+            // stage's disk key, the model by its source's fingerprint. The
+            // pieces must be the ones the solid's plan now gives, which the
+            // stage's own key confirms.
+            let disk_key = (|| {
+                let model = model.filter(|_| included && error.is_none())?;
+                let chained = cache.disk_key?;
+                let (memory, disk) = match scope {
+                    ReserveScope::Bench => (body_key(cache.key, solid), body_key(chained, solid)),
+                    ReserveScope::Dig => (
+                        partition_key(blasting_key(body_key(cache.key, solid), solid), solid),
+                        partition_key(blasting_key(body_key(chained, solid), solid), solid),
+                    ),
+                };
+                (scope.source_key(cache) == Some(memory)).then_some(())?;
+                disk_cache::reserves_key(disk, scope.disk_kind(), &fields, &model.reserve_mapping, model.model.source_fingerprint()?)
+            })();
+            let look_on_disk = disk_key.filter(|key| !cache.reserves_not_on_disk.contains(key));
+            // The solid's part of its model: named like the measurement, by
+            // things that outlast a session, and cut to the body this plan
+            // has now, which bounds every piece the body is ever cut into.
+            let part = (|| {
+                let model = model.filter(|_| included && error.is_none())?;
+                let body = cache.body.product().filter(|_| cache.body.is_current(body_key(cache.key, solid)))?;
+                let columns = ReserveSource::columns(&model.reserve_mapping);
+                let key = disk_cache::reserve_source_key(body_key(cache.disk_key?, solid), &columns, model.model.source_fingerprint()?)?;
+                let reach = ReserveSource::reach_of(body.bench_parts.iter().map(|part| &*part.mesh.mesh))?;
+                Some((key, reach))
+            })();
+            let part_in_memory = part.and_then(|(key, _)| cache.reserve_source.as_ref().filter(|(held, _)| *held == key).map(|(_, source)| source.clone()));
+            // Only the pieces this measurement has not already got figures for.
+            let measured = cache
+                .measured
+                .clone()
+                .filter(|measured| scope == ReserveScope::Dig && measured.config == measured_with && error.is_none());
+            let earlier_resolution = measured.as_ref().map(|measured| measured.resolution.clone()).unwrap_or_default();
+            let earlier_fields = measured.as_ref().and_then(|measured| measured.material.as_ref()).map(|material| material.fields.clone());
+            let kept_slots: Vec<(usize, usize)> = measured.as_ref().map_or_else(Vec::new, |measured| {
+                let earlier: HashMap<*const Triangulation, usize> = measured.meshes.iter().enumerate().map(|(slot, mesh)| (Arc::as_ptr(mesh), slot)).collect();
+                parts
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(slot, part)| Some((slot, *earlier.get(&Arc::as_ptr(&part.mesh.mesh))?)))
+                    .collect()
+            });
+            let kept = measured.filter(|_| !kept_slots.is_empty()).map(|measured| crate::model::solid_reserves::KeptMeasures {
+                slots: kept_slots,
+                totals: measured.totals.clone(),
+                material: measured.material.clone(),
+            });
+            let unchanged: HashSet<usize> = kept.iter().flat_map(|kept| kept.slots.iter().map(|&(slot, _)| slot)).collect();
+            let everything_kept = unchanged.len() == parts.len();
+            let inputs = model.filter(|_| resident && included && error.is_none() && !everything_kept).map(|model| {
+                (
+                    model.model.clone(),
+                    model.blocks.clone(),
+                    model.reserve_mapping.clone(),
+                    reserve_partition(parts, &unchanged),
+                )
+            });
+            // Not loaded, and its part kept: measured over the part instead.
+            let from_part = model.filter(|_| !resident && included && error.is_none() && !everything_kept).and_then(|model| {
+                let (key, _) = part?;
+                let held = part_in_memory.clone();
+                (held.is_some() || !cache.sources_not_on_disk.contains(&key)).then(|| (key, held, model.reserve_mapping.clone(), reserve_partition(parts, &unchanged)))
+            });
+            let meshes: Vec<Arc<Triangulation>> = parts.iter().map(|part| part.mesh.mesh.clone()).collect();
+            let runtime = cache.runtime;
+            self.cancel_solid_jobs(id, Some(scope.artifact()));
+            let token = scope.slot(self.solid_view_cache.get_mut(&id).unwrap()).begin(key);
+            if capacity_only {
+                scope.slot(self.solid_view_cache.get_mut(&id).unwrap()).settle(ReserveProduct {
+                    totals: Arc::new(vec![Default::default(); slots]),
+                    resolution: None,
+                    availability: ReserveAvailability::CapacityOnly,
+                    material: None,
+                });
+                continue;
+            }
+            if let Some(error) = error {
+                scope.slot(self.solid_view_cache.get_mut(&id).unwrap()).fail(error);
+                continue;
+            }
+            // Nothing to scan, so nothing the model has to be loaded for.
+            if everything_kept && let Some(kept) = &kept {
+                let mut outcome = ReserveOutcome {
+                    totals: vec![Default::default(); slots],
+                    resolution: earlier_resolution,
+                    material: earlier_fields.map(|fields| crate::model::solid_reserves::MaterialCapture {
+                        fields,
+                        labels: Vec::new(),
+                        portions: vec![Arc::default(); slots],
+                    }),
+                };
+                outcome.keep(kept);
+                let cache = self.solid_view_cache.get_mut(&id).unwrap();
+                settle_reserves(cache, scope, outcome, measured_with, meshes);
+                self.solid_view_body_key = None;
+                continue;
+            }
+            // A measurement kept from an earlier session needs neither the
+            // scan nor the model loaded for it.
+            if let Some(disk_key) = look_on_disk {
+                self.spawn_job_reporting_progress(
+                    crate::i18n::tr!("planning-computing-reserves"),
+                    vec![artifact_job(id, scope.artifact(), token)],
+                    move |_, _| Ok(disk_cache::load(scope.disk_kind(), disk_key, |input| disk_cache::read_reserves(input, slots))),
+                    move |app, result: anyhow::Result<Option<ReserveOutcome>>| {
+                        if app.accepting_solid(runtime, id, scope.artifact(), token).is_none() {
+                            return;
+                        }
+                        let cache = app.solid_view_cache.get_mut(&id).expect("checked above");
+                        match result {
+                            Ok(Some(outcome)) => settle_reserves(cache, scope, outcome, measured_with, meshes),
+                            // Not kept, so measured after all, on the next pass.
+                            _ => {
+                                cache.reserves_not_on_disk.insert(disk_key);
+                                scope.slot(cache).retire_if_unfinished();
+                            }
+                        }
+                        app.solid_view_body_key = None;
+                    },
+                );
+                continue;
+            }
+            if inputs.is_none()
+                && let Some((source_key, held, mapping, partition)) = from_part
+            {
+                let fields = fields.clone();
+                let capture_material = scope == ReserveScope::Dig;
+                self.spawn_job_reporting_progress(
+                    crate::i18n::tr!("planning-computing-reserves"),
+                    vec![artifact_job(id, scope.artifact(), token)],
+                    move |cancel, progress| -> anyhow::Result<Option<(ReserveOutcome, Arc<ReserveSource>)>> {
+                        let source = match held {
+                            Some(source) => source,
+                            None => match disk_cache::load(disk_cache::Kind::ReserveSource, source_key, disk_cache::read_reserve_source) {
+                                Some(source) => Arc::new(source),
+                                None => return Ok(None),
+                            },
+                        };
+                        let mut outcome = crate::model::solid_reserves::compute(&source.model, &source.blocks, &mapping, &fields, &partition, capture_material, cancel, progress)?;
+                        if let Some(kept) = &kept {
+                            outcome.keep(kept);
+                        }
+                        if let Some(key) = disk_key {
+                            disk_cache::store(scope.disk_kind(), key, |out| {
+                                disk_cache::write_reserves(out, &outcome.totals, &outcome.resolution, outcome.material.as_ref())
+                            });
+                        }
+                        Ok(Some((outcome, source)))
+                    },
+                    move |app, result| {
+                        if app.accepting_solid(runtime, id, scope.artifact(), token).is_none() {
+                            return;
+                        }
+                        let setup = app.editor.is_planning_view(crate::ui::state::PlanningView::Setup);
+                        let cache = app.solid_view_cache.get_mut(&id).expect("checked above");
+                        match result {
+                            Ok(Some((outcome, source))) => {
+                                settle_reserves(cache, scope, outcome, measured_with, meshes);
+                                if setup {
+                                    cache.reserve_source = Some((source_key, source));
+                                }
+                            }
+                            // Not kept after all: the next pass loads the model.
+                            Ok(None) => {
+                                cache.sources_not_on_disk.insert(source_key);
+                                scope.slot(cache).retire_if_unfinished();
+                            }
+                            Err(error) => scope.slot(cache).fail(format!("{error:#}")),
+                        }
+                        app.solid_view_body_key = None;
+                    },
+                );
+                continue;
+            }
+            let Some((model, blocks, mapping, partition)) = inputs else {
+                // Not resident: a restore is a wait, not a failure.
+                let item = crate::model::ItemRef::BlockModel(solid.block_model.expect("a model was resolved"));
+                let pending = self.restore_solid_inputs(vec![item], attempted);
+                let stage = scope.slot(self.solid_view_cache.get_mut(&id).unwrap());
+                if pending {
+                    stage.await_inputs();
+                } else {
+                    stage.fail(crate::i18n::tr!("planning-reserve-unavailable"));
+                }
+                continue;
+            };
+            let fields = fields.clone();
+            let capture_material = scope == ReserveScope::Dig;
+            let cut_part = part.filter(|_| part_in_memory.is_none());
+            self.scanned_model_kept_until = Some(web_time::Instant::now() + SCANNED_MODEL_KEPT);
+            self.spawn_job_reporting_progress(
+                crate::i18n::tr!("planning-computing-reserves"),
+                vec![artifact_job(id, scope.artifact(), token)],
+                // Routing needs to know what each dig block is made of, which
+                // its totals cannot say; whole benches are reported, never
+                // routed, so theirs is not retained.
+                move |cancel, progress| {
+                    // The solid's part of the model, cut beside the scan when
+                    // it is not kept yet, so the next edit need not load the
+                    // whole model again.
+                    let cut_part = || {
+                        let (key, reach) = cut_part?;
+                        if disk_cache::exists(disk_cache::Kind::ReserveSource, key) {
+                            return None;
+                        }
+                        let source = Arc::new(ReserveSource::extract(&model, &blocks, &mapping, reach)?);
+                        let kept = source.clone();
+                        crate::app::jobs::spawn_io_task(move || disk_cache::store(disk_cache::Kind::ReserveSource, key, |out| disk_cache::write_reserve_source(out, &kept)));
+                        Some((key, source))
+                    };
+                    let (outcome, part) = rayon::join(
+                        || crate::model::solid_reserves::compute(&model, &blocks, &mapping, &fields, &partition, capture_material, cancel, progress),
+                        cut_part,
+                    );
+                    let mut outcome = outcome?;
+                    if let Some(kept) = &kept {
+                        outcome.keep(kept);
+                    }
+                    // A column that was not in memory says nothing about the
+                    // model, only about this session, so such a measurement
+                    // is not kept for another.
+                    let resident = !outcome
+                        .resolution
+                        .issues
+                        .iter()
+                        .any(|(_, issue)| matches!(issue, crate::model::ReserveFieldIssue::ColumnNotResident(_)));
+                    if let Some(key) = disk_key.filter(|_| resident) {
+                        disk_cache::store(scope.disk_kind(), key, |out| {
+                            disk_cache::write_reserves(out, &outcome.totals, &outcome.resolution, outcome.material.as_ref())
+                        });
+                    }
+                    Ok((outcome, part))
+                },
+                move |app, result: anyhow::Result<(ReserveOutcome, Option<KeptPart>)>| {
+                    if app.accepting_solid(runtime, id, scope.artifact(), token).is_none() {
+                        return;
+                    }
+                    let setup = app.editor.is_planning_view(crate::ui::state::PlanningView::Setup);
+                    let cache = app.solid_view_cache.get_mut(&id).expect("checked above");
+                    match result {
+                        Ok((outcome, part)) => {
+                            settle_reserves(cache, scope, outcome, measured_with, meshes);
+                            if let Some((key, source)) = part {
+                                // Kept on disk now, so it is worth looking for there again.
+                                cache.sources_not_on_disk.remove(&key);
+                                if setup {
+                                    cache.reserve_source = Some((key, source));
+                                }
+                            }
+                        }
+                        Err(error) => scope.slot(cache).fail(format!("{error:#}")),
+                    }
+                    app.solid_view_body_key = None;
+                },
+            );
+        }
+    }
+}
+
+/// A dig block the Reserves view draws: which block, and the ground it
+/// covers between the foot and top of its flitch.
+pub(crate) struct ShownBlock {
+    /// The mesh drawn for it.
+    mesh: crate::model::triangulation::TriangulationId,
+    key: BlastShapeRef,
+    face: Arc<Face>,
+    base: f64,
+    top: f64,
+}
+
+/// A solid's part of its block model, by the key it is kept under.
+type KeptPart = (u64, Arc<ReserveSource>);
+
+/// How long a hidden block model stays loaded after a reserve scan used it.
+const SCANNED_MODEL_KEPT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Commit a measurement, and keep the dig blocks' for the next one to build on.
+fn settle_reserves(cache: &mut ViewSolid, scope: ReserveScope, outcome: ReserveOutcome, measured_with: u64, meshes: Vec<Arc<Triangulation>>) {
+    let totals = Arc::new(outcome.totals);
+    let material = outcome.material.map(Arc::new);
+    if scope == ReserveScope::Dig {
+        cache.measured = Some(Arc::new(MeasuredReserves {
+            config: measured_with,
+            meshes,
+            totals: totals.clone(),
+            resolution: outcome.resolution.clone(),
+            material: material.clone(),
+        }));
+    }
+    scope.slot(cache).settle(ReserveProduct {
+        totals,
+        resolution: Some(outcome.resolution),
+        availability: ReserveAvailability::Measured,
+        material,
+    });
+}
+
+/// Which partition of a solid a reserve measurement covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ReserveScope {
+    /// Whole benches, measured at the Benching stage.
+    Bench,
+    /// Dig blocks, measured at the Reserving stage.
+    Dig,
+}
+
+impl ReserveScope {
+    fn hash_into(self, hasher: &mut DefaultHasher) {
+        (self as u8).hash(hasher);
+    }
+
+    fn disk_kind(self) -> disk_cache::Kind {
+        match self {
+            Self::Bench => disk_cache::Kind::BenchReserves,
+            Self::Dig => disk_cache::Kind::DigReserves,
+        }
+    }
+
+    fn artifact(self) -> SolidArtifact {
+        match self {
+            Self::Bench => SolidArtifact::BenchReserves,
+            Self::Dig => SolidArtifact::DigReserves,
+        }
+    }
+
+    fn parts(self, cache: &ViewSolid) -> Option<&[SolidPart]> {
+        match self {
+            Self::Bench => cache.body().map(|body| body.bench_parts.as_slice()),
+            Self::Dig => cache.partition.product().map(|partition| partition.parts.as_slice()),
+        }
+    }
+
+    /// The fingerprint of the geometry this scope measures, so a re-slab or a
+    /// re-partition is an input change to the measurement over it.
+    fn source_key(self, cache: &ViewSolid) -> Option<u64> {
+        match self {
+            Self::Bench => cache.body.request.map(|request| request.key),
+            Self::Dig => cache.partition.request.map(|request| request.key),
+        }
+    }
+
+    fn slot(self, cache: &mut ViewSolid) -> &mut Stage<ReserveProduct> {
+        match self {
+            Self::Bench => &mut cache.bench_reserves,
+            Self::Dig => &mut cache.reserves,
+        }
+    }
+
+    pub(crate) fn slot_ref(self, cache: &ViewSolid) -> &Stage<ReserveProduct> {
+        match self {
+            Self::Bench => &cache.bench_reserves,
+            Self::Dig => &cache.reserves,
+        }
+    }
+}
+
+impl crate::app::App<'_> {
+    /// One authoritative version of everything a reserve scan reads from a
+    /// block model: the grid it measures over, the columns it can read, and
+    /// the mapping that says which of them to read.
+    ///
+    /// A source identity survives both eviction and first materialization of
+    /// deferred OMF metadata. Item epochs also include automatic colour-ramp
+    /// updates, which are not changes to reserve inputs.
+    pub(crate) fn model_content_version(&self, model: &crate::model::block_model::OpenBlockModel) -> u64 {
+        let mut version = DefaultHasher::new();
+        model.model.content_version().hash(&mut version);
+        serde_json::to_vec(&model.reserve_mapping).unwrap_or_default().hash(&mut version);
+        version.finish()
+    }
+
+    /// The same, for one of a solid's source surfaces. `None` when the solid
+    /// does not name one; `Some` whether or not it is currently resident.
+    pub(crate) fn surface_content_version(&self, id: Option<crate::model::triangulation::TriangulationId>) -> Option<u64> {
+        let id = id?;
+        // The geometry token, not the item epoch: the epoch also moves for a
+        // colour, visibility or other display edit, and none of those is a
+        // change to the ground a solid is built from.
+        let geometry = self.triangulations.iter().find(|item| item.id == id).map(|item| item.geometry);
+        let mut version = DefaultHasher::new();
+        id.hash(&mut version);
+        // A named surface that is not in the project at all is distinct from
+        // one that is present but unloaded.
+        geometry.hash(&mut version);
+        Some(version.finish())
+    }
+}
+
+impl ViewSolid {
+    /// Where this solid's reserve measurement stands for one scope. Reading
+    /// the committed artifacts, never starting work.
+    pub(crate) fn reserve_state(&self, scope: ReserveScope) -> crate::app::planning_pipeline::ReserveState {
+        use crate::app::planning_pipeline::ReserveState;
+        let stage = scope.slot_ref(self);
+        if let Some(error) = stage.error() {
+            return ReserveState::Failed(error.to_owned());
+        }
+        match stage.product() {
+            Some(product) => match product.availability {
+                ReserveAvailability::Measured | ReserveAvailability::NoSchema => ReserveState::Complete,
+                ReserveAvailability::CapacityOnly => ReserveState::CapacityOnly,
+            },
+            None => ReserveState::Waiting,
+        }
+    }
+}
+
+/// One bench's independently measured reserves, as the reconciliation reads
+/// them. `None` where the bench was not measured at all.
+pub(crate) struct BenchReserveReference {
+    pub(crate) bench: BenchSelection,
+    pub(crate) volume: Option<f64>,
+    pub(crate) totals: Option<crate::model::solid_reserves::ReserveTotals>,
+    /// Whether the Benching stage actually measured this solid. A capacity-only
+    /// or schema-free solid owes no reference; a measured one does.
+    pub(crate) measured: bool,
+}
+
+impl crate::app::App<'_> {
+    /// The Benching stage's own measurement of each bench of one solid.
+    pub(crate) fn bench_reserve_references(&self, solid: SolidId) -> Vec<BenchReserveReference> {
+        let Some(cache) = self.solid_view_cache.get(&solid) else { return Vec::new() };
+        let Some(body) = cache.body() else { return Vec::new() };
+        let product = cache.bench_reserves.product();
+        let measured = product.is_some_and(|product| product.availability == ReserveAvailability::Measured);
+        body.bench_parts
+            .iter()
+            .enumerate()
+            .map(|(slot, part)| BenchReserveReference {
+                bench: part.band.selection,
+                volume: part.volume,
+                totals: product.and_then(|product| product.totals.get(slot)).cloned(),
+                measured,
+            })
+            .collect()
+    }
+}
+
+/// One finished dig block, as a scheduler consumes it.
+///
+/// The terminal output of a completed run: identity, parentage, geometry and
+/// measured content in one record, readable without opening any page. Parents
+/// are named directly rather than left to be re-inferred from anchor points.
+pub(crate) struct DigBlockRecord {
+    pub(crate) id: DigBlockId,
+    pub(crate) solid: SolidId,
+    pub(crate) solid_name: String,
+    /// RL range of the bench this block belongs to.
+    pub(crate) bench: BenchSelection,
+    /// RL range of the flitch it was cut from.
+    pub(crate) flitch: BenchSelection,
+    pub(crate) blast: Option<BlastShapeRef>,
+    /// The plan area of that blast, which a minimum blast size is read
+    /// against.
+    pub(crate) blast_area: Option<f64>,
+    /// The block's number within its flitch, as the panels show it.
+    pub(crate) name: String,
+    pub(crate) plan_area: f64,
+    /// Which source geometry this block was cut from, captured when the
+    /// Solids artifact job started. This - not the id above, which is
+    /// allocated per session - is what a persisted schedule reference
+    /// resolves against; see [`crate::model::schedule::DigBlockRef`].
+    pub(crate) source: GroundSourceStamp,
+    /// The block's footprint in plan, and a point inside it. Together with
+    /// the solid and the flitch these narrow a reference down to one block;
+    /// see [`crate::model::schedule::DigBlockRef`].
+    pub(crate) ground: Arc<Face>,
+    #[allow(dead_code, reason = "stored by the stage 2B 3D picker through App::dig_block_reference, the field's only reader")]
+    pub(crate) anchor: [f64; 2],
+    /// `None` when the block did not come out closed, so it has no volume
+    /// rather than a volume of zero.
+    pub(crate) volume: Option<f64>,
+    /// Out of mining. Still a record, so the blocks reconcile against their
+    /// bench; the snapshot a schedule reads leaves it out.
+    pub(crate) excluded: bool,
+    /// What is known about the material in this block. Deliberately not an
+    /// `Option`: "no block model by design" and "the reserve run has not
+    /// finished" are different answers, and a scheduler must not read either
+    /// as an absent tonnage.
+    pub(crate) material: MaterialState,
+    /// What the block is *made of*: the contributing block-model rows' own
+    /// mapped values, grouped, as the scan retained them. `None` for a block
+    /// nothing was measured against - a capacity-only solid, or a project with
+    /// no reserve schema - which is not the same as a block made of nothing.
+    pub(crate) portions: Option<BlockPortions>,
+}
+
+/// One dig block's share of its solid's material capture.
+///
+/// Holds the whole solid's capture and the block's slot in it rather than a
+/// copy of that slot: a snapshot is rebuilt whenever the report cache is, and a
+/// capture is the size of the model's intersections with the partition.
+#[derive(Clone)]
+pub(crate) struct BlockPortions {
+    pub(crate) capture: Arc<crate::model::solid_reserves::MaterialCapture>,
+    pub(crate) slot: usize,
+}
+
+impl BlockPortions {
+    pub(crate) fn portions(&self) -> &[crate::model::solid_reserves::MaterialPortion] {
+        self.capture.portions.get(self.slot).map_or(&[][..], |portions| portions.as_slice())
+    }
+}
+
+/// What a completed run can say about one block's contents.
+pub(crate) enum MaterialState {
+    Measured(crate::model::solid_reserves::ReserveTotals),
+    /// A dump or stockpile with no block model: geometry and capacity only.
+    CapacityOnly,
+    /// The project defines no reserve fields, so there is nothing to measure.
+    NoSchema,
+    /// A measurement was expected and is not there.
+    Unavailable,
+}
+
+/// Why a completed scheduling snapshot could not be produced.
+pub(crate) enum PlanningNotReady {
+    NoProject,
+    /// No run has produced this stage yet, or a run was cancelled.
+    NotRun {
+        stage: String,
+    },
+    /// A run produced it, and an edit since has retired it.
+    Stale {
+        stage: String,
+    },
+    Running {
+        stage: String,
+    },
+    /// One solid's geometry has not been built for the current inputs.
+    Incomplete {
+        solid: String,
+    },
+    Failed {
+        solid: String,
+        message: String,
+    },
+}
+
+impl PlanningNotReady {
+    pub(crate) fn describe(&self) -> String {
+        match self {
+            Self::NoProject => crate::i18n::tr!("planning-snapshot-no-project"),
+            Self::NotRun { stage } => crate::i18n::tr!("planning-snapshot-not-run", stage = stage.clone()),
+            Self::Stale { stage } => crate::i18n::tr!("planning-snapshot-stale", stage = stage.clone()),
+            Self::Running { stage } => crate::i18n::tr!("planning-snapshot-running", stage = stage.clone()),
+            Self::Incomplete { solid } => crate::i18n::tr!("planning-snapshot-incomplete", solid = solid.clone()),
+            Self::Failed { solid, message } => crate::i18n::tr!("planning-snapshot-failed", solid = solid.clone(), message = message.clone()),
+        }
+    }
+}
+
+impl crate::app::App<'_> {
+    /// Every dig block of every solid whose geometry has been built.
+    ///
+    /// Reads committed artifacts only: it starts no work and depends on no
+    /// page being open, which is what lets a scheduler consume a completed
+    /// run through the model rather than through the UI.
+    pub(crate) fn planning_dig_blocks(&self) -> Result<Vec<DigBlockRecord>, PlanningNotReady> {
+        let solids = self.workspace.active_document().map(|document| document.solids().to_vec()).unwrap_or_default();
+        let mut records = Vec::new();
+        for solid in &solids {
+            let Some(cache) = self.solid_view_cache.get(&solid.id) else {
+                return Err(PlanningNotReady::Incomplete { solid: solid.name.clone() });
+            };
+            if let Some(error) = cache.error() {
+                return Err(PlanningNotReady::Failed {
+                    solid: solid.name.clone(),
+                    message: error.to_owned(),
+                });
+            }
+            let Some(blocks) = cache.finished_partition() else {
+                return Err(PlanningNotReady::Incomplete { solid: solid.name.clone() });
+            };
+            let totals = cache.reserves.product().map(|product| &product.totals);
+            for (slot, part) in blocks.iter().enumerate() {
+                let Some(block) = &part.block else { continue };
+                records.push(DigBlockRecord {
+                    id: block.id,
+                    solid: solid.id,
+                    solid_name: solid.name.clone(),
+                    source: cache.stamp,
+                    bench: part.bench,
+                    flitch: part.band.selection,
+                    blast: part.blast,
+                    blast_area: part
+                        .blast
+                        .and_then(|blast| cache.blast_faces()?.iter().find(|face| face.shape_ref(solid.id) == blast))
+                        .map(|face| face.area),
+                    name: block.name.clone(),
+                    plan_area: block.area,
+                    ground: block.face.clone(),
+                    anchor: block.key.anchor(),
+                    volume: part.volume,
+                    excluded: cache.excludes(solid, part),
+                    portions: cache
+                        .reserves
+                        .product()
+                        .and_then(|product| product.material.clone())
+                        .map(|capture| BlockPortions { capture, slot }),
+                    material: match cache.reserves.product().map(|product| product.availability) {
+                        Some(ReserveAvailability::CapacityOnly) => MaterialState::CapacityOnly,
+                        Some(ReserveAvailability::NoSchema) => MaterialState::NoSchema,
+                        Some(ReserveAvailability::Measured) => match totals.and_then(|totals| totals.get(slot)) {
+                            Some(totals) => MaterialState::Measured(totals.clone()),
+                            None => MaterialState::Unavailable,
+                        },
+                        None => MaterialState::Unavailable,
+                    },
+                });
+            }
+        }
+        Ok(records)
+    }
+
+    /// Every blast of every pit whose blasting has been built, named as the
+    /// Blasts step names them. A dump or stockpile is cut into blasts too, for
+    /// its blocks, but placed material is never drilled.
+    pub(crate) fn planning_blasts(&self) -> Vec<BlastRecord> {
+        let Some(document) = self.workspace.active_document() else {
+            return Vec::new();
+        };
+        let mut records = Vec::new();
+        for solid in document.solids().iter().filter(|solid| solid.kind.is_blasted()) {
+            let Some(faces) = self.solid_view_cache.get(&solid.id).and_then(ViewSolid::blast_faces) else {
+                continue;
+            };
+            for face in faces.iter().filter(|face| !solid.exclusions.blast_face_excluded(face.bench.base, &face.face)) {
+                let stored = solid.blasting.bench(face.bench.base);
+                let name = stored
+                    .and_then(|entry| entry.blasts.iter().find(|blast| arrangement::point_in_face(&face.face, DVec2::from(blast.anchor))))
+                    .map_or_else(String::new, |blast| blast.name.clone());
+                records.push(BlastRecord {
+                    solid: solid.id,
+                    solid_name: solid.name.clone(),
+                    bench: face.bench,
+                    face: Arc::new(face.face.clone()),
+                    anchor: face.anchor,
+                    area: face.area,
+                    name,
+                });
+            }
+        }
+        records
+    }
+
+    /// List the run's blasts for the Schedule pages, by solid and bench,
+    /// highest bench first.
+    pub(crate) fn refresh_schedule_blasts(&mut self) {
+        let names: HashMap<SolidId, String> = self
+            .workspace
+            .active_document()
+            .map(|document| document.solids().iter().map(|solid| (solid.id, solid.name.clone())).collect())
+            .unwrap_or_default();
+        let mut entries: Vec<crate::ui::state::BlastListEntry> = self
+            .planning_blasts()
+            .into_iter()
+            .map(|record| crate::ui::state::BlastListEntry {
+                reference: record.reference(),
+                name: record.name.clone(),
+                solid_name: names.get(&record.solid).cloned().unwrap_or_default(),
+                bench_base: record.bench.base,
+                bench_top: record.bench.top,
+                area: record.area,
+                face: record.face,
+            })
+            .collect();
+        entries.sort_by(|a, b| {
+            a.solid_name
+                .cmp(&b.solid_name)
+                .then(b.bench_base.total_cmp(&a.bench_base))
+                .then(natural_key(&a.name).cmp(&natural_key(&b.name)))
+        });
+        self.editor.schedule_blasts = entries;
+    }
+
+    /// The completed, validated scheduling snapshot, or why there is not one.
+    ///
+    /// The public contract, and deliberately not the collector above. That one
+    /// gathers whatever the artifacts hold, because Reserving reconciles
+    /// against it *before* it can be Complete - gating it on completion would
+    /// deadlock the stage that produces it. This one gates: a caller gets one
+    /// coherent generation of a run that finished, or an explicit reason.
+    ///
+    /// Shared rather than rebuilt: it is asked for every frame (the run
+    /// controls' block count, the schedule's fingerprints) and on every bar
+    /// edit, and a large pit's blocks carry megabytes of ground and reserves.
+    /// Everything it reads is covered by the key - the stage fingerprints, the
+    /// run that completed, and each solid's committed artifacts.
+    pub(crate) fn planning_snapshot(&self) -> Result<Arc<PlanningSnapshot>, PlanningNotReady> {
+        use crate::app::planning_pipeline::StageNotReady;
+
+        let Some(project) = self.workspace.active_project() else {
+            return Err(PlanningNotReady::NoProject);
+        };
+        let Some(pipeline) = self.planning_pipeline.as_ref().filter(|pipeline| pipeline.runtime == project.runtime_id) else {
+            return Err(PlanningNotReady::NoProject);
+        };
+        // Taken here, not read from the frame-synchronised cache. A caller can
+        // edit configuration and ask before the next frame runs; answering
+        // from last frame's fingerprints would hand out an old artifact
+        // wearing current metadata.
+        let fingerprints = self.planning_fingerprints();
+        let generation = pipeline.readiness(&fingerprints).map_err(|reason| match reason {
+            StageNotReady::NotRun(stage) => PlanningNotReady::NotRun { stage: stage.label() },
+            StageNotReady::Stale(stage) => PlanningNotReady::Stale { stage: stage.label() },
+            StageNotReady::Running(stage) => PlanningNotReady::Running { stage: stage.label() },
+            StageNotReady::Failed { stage, message } => PlanningNotReady::Failed { solid: stage.label(), message },
+        })?;
+        let key = {
+            let mut hasher = DefaultHasher::new();
+            (project.runtime_id, generation, fingerprints).hash(&mut hasher);
+            if let Some(document) = self.workspace.active_document() {
+                for solid in document.solids() {
+                    solid.id.hash(&mut hasher);
+                    self.solid_view_cache.get(&solid.id).map(|cache| (cache.key, cache.fingerprint())).hash(&mut hasher);
+                }
+            }
+            hasher.finish()
+        };
+        if let Some((cached, snapshot)) = self.planning_snapshot_cache.borrow().as_ref()
+            && *cached == key
+        {
+            return Ok(Arc::clone(snapshot));
+        }
+        // Excluded ground is not dug, so nothing that reads the run - the
+        // schedule, haulage, the sequence editors - is handed it as ground.
+        // Nor is a dump or stockpile with no block model: it is room to fill,
+        // with no material in it to dig.
+        let (blocks, excluded): (Vec<_>, Vec<_>) = self
+            .planning_dig_blocks()?
+            .into_iter()
+            .filter(|block| !matches!(block.material, MaterialState::CapacityOnly))
+            .partition(|block| !block.excluded);
+        // Unavailable material is not a schedulable quantity. No-schema is a
+        // deliberate answer and passes.
+        if let Some(block) = blocks.iter().find(|block| matches!(block.material, MaterialState::Unavailable)) {
+            return Err(PlanningNotReady::Failed {
+                solid: block.solid_name.clone(),
+                message: crate::i18n::tr!("planning-snapshot-unmeasured", block = block.name.clone()),
+            });
+        }
+        let snapshot = Arc::new(PlanningSnapshot {
+            runtime: project.runtime_id,
+            generation,
+            blocks,
+            excluded,
+            blasts: self.planning_blasts(),
+        });
+        *self.planning_snapshot_cache.borrow_mut() = Some((key, Arc::clone(&snapshot)));
+        Ok(snapshot)
+    }
+}
+
+/// One coherent generation of a completed run, as a scheduler consumes it.
+pub(crate) struct PlanningSnapshot {
+    /// The project run this belongs to, so a consumer can tell that a snapshot
+    /// it is holding has outlived the project that produced it.
+    #[allow(dead_code, reason = "part of the published contract; read by consumers, not by the app")]
+    pub(crate) runtime: u32,
+    /// The run that produced it, for provenance.
+    pub(crate) generation: u64,
+    pub(crate) blocks: Vec<DigBlockRecord>,
+    /// The blocks taken out of mining, kept apart so a dig order that still
+    /// names one can be told it is excluded rather than missing.
+    pub(crate) excluded: Vec<DigBlockRecord>,
+    /// Every blast of every solid, for drill and blast.
+    pub(crate) blasts: Vec<BlastRecord>,
+}
+
+/// A name's number first when it is one, so 2 sorts before 10.
+fn natural_key(name: &str) -> (u64, String) {
+    (name.trim().parse::<u64>().unwrap_or(u64::MAX), name.to_owned())
+}
+
+/// One blast as a scheduler consumes it: the bench it divides, its ground
+/// in plan, the point its name is held against and the name.
+#[derive(Clone, Debug)]
+pub(crate) struct BlastRecord {
+    pub(crate) solid: SolidId,
+    pub(crate) solid_name: String,
+    pub(crate) bench: BenchSelection,
+    pub(crate) face: Arc<Face>,
+    pub(crate) anchor: [f64; 2],
+    pub(crate) area: f64,
+    pub(crate) name: String,
+}
+
+impl BlastRecord {
+    /// Whether a stored reference names this blast: the same solid and
+    /// bench, and its point inside this ground.
+    pub(crate) fn holds(&self, blast: &crate::model::schedule::BlastRef) -> bool {
+        blast.solid == self.solid && (blast.bench - self.bench.base).abs() < 1e-6 && arrangement::point_in_face(&self.face, DVec2::from(blast.anchor))
+    }
+
+    /// The reference a bar or setting stores for this blast.
+    pub(crate) fn reference(&self) -> crate::model::schedule::BlastRef {
+        crate::model::schedule::BlastRef {
+            solid: self.solid,
+            bench: self.bench.base,
+            anchor: self.anchor,
+        }
+    }
+}
+
+/// Group the flitch-level parts into the ordered bands the reserve scan needs.
+///
+/// This is the fix for the calculator's input contract: dig blocks in one
+/// flitch share that flitch's elevations exactly, so they can never be
+/// flattened into one ordered, non-overlapping list. They are pieces of one
+/// band instead, and the band carries the ordering.
+fn reserve_partition(parts: &[SolidPart], leave_out: &HashSet<usize>) -> ReservePartition {
+    let mut bands: Vec<ReserveBand> = Vec::new();
+    for (slot, part) in parts.iter().enumerate() {
+        if leave_out.contains(&slot) {
+            continue;
+        }
+        let piece = ReservePiece {
+            mesh: part.mesh.mesh.clone(),
+            // Its own tree, gone with the scan: the part rarely needs one again.
+            spatial: Arc::new(crate::model::spatial::TriangleBvh::deferred(part.mesh.mesh.clone())),
+            slot,
+        };
+        let band = part.band.selection;
+        match bands.iter_mut().find(|entry| entry.base == band.base && entry.top == band.top) {
+            Some(entry) => entry.pieces.push(piece),
+            None => bands.push(ReserveBand {
+                base: band.base,
+                top: band.top,
+                pieces: vec![piece],
+            }),
+        }
+    }
+    bands.sort_by(|a, b| a.base.total_cmp(&b.base));
+    ReservePartition { bands, slots: parts.len() }
+}

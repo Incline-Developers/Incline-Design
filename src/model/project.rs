@@ -37,6 +37,9 @@ pub(crate) struct ProjectItemState {
     pub(crate) deferred: Option<crate::model::formats::omf::DeferredAsset>,
     /// Where an unchanged payload's encoded arrays can be copied from on save.
     pub(crate) payload_source: Option<crate::model::formats::omf::PayloadSource>,
+    /// The backing a resident payload was last read from, while it is still that
+    /// payload, so unloading it again need not write it out again.
+    pub(crate) restored_from: Option<(crate::model::formats::omf::DeferredAsset, crate::model::formats::omf::PayloadIdentity)>,
     pub(crate) summary: Option<crate::model::asset_residency::AssetSummary>,
     /// Explorer folder this item sits in, or `None` for its section root.
     ///
@@ -77,6 +80,7 @@ impl ProjectItemState {
             hidden: false,
             deferred: None,
             payload_source: None,
+            restored_from: None,
             summary: None,
             folder: None,
             section: SectionKind::natural_for(kind),
@@ -133,6 +137,13 @@ impl ProjectItemState {
         self.revision = self.revision.wrapping_add(1);
         self.epoch = self.revision;
         previous
+    }
+
+    /// Record that the item was paged in or out. The revision advances, so
+    /// anything keyed on it reloads, but the epoch does not: the item is
+    /// holding the same content it was holding before, in a different place.
+    pub(crate) fn touch_residency(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub(crate) fn epoch(&self) -> u64 {
@@ -293,8 +304,10 @@ pub(crate) struct ProjectFile {
 pub(crate) struct OpenProject {
     #[cfg(target_arch = "wasm32")]
     pub(crate) id: ProjectId,
-    /// Stable identity for this open instance. Namespace zero is reserved for
-    /// persistent IDs and a runtime namespace prevents stale session handles.
+    /// Stable identity for this open instance, unique for the life of the
+    /// process: it is the session token a queued command carries so that an
+    /// edit drawn against one project is refused by its replacement.
+    /// Namespace zero is reserved for persistent IDs.
     pub(crate) runtime_id: u32,
     pub(crate) path: Option<PathBuf>,
     #[cfg(target_arch = "wasm32")]
@@ -497,24 +510,33 @@ impl OpenProject {
     }
 }
 
-#[derive(Clone, Debug)]
+/// Runtime namespaces are handed out by the process, not by a store.
+///
+/// Closing a project replaces the whole [`ProjectStore`], so a counter living
+/// in the store would restart at 1 with every open and the second project of
+/// a session would inherit the first one's identity. Anything that addresses
+/// a project across a frame boundary - a queued UI command, and later an
+/// asynchronous pick or calculation - would then be accepted by its
+/// replacement. Namespace zero stays reserved for persistent ids.
+static NEXT_RUNTIME_NAMESPACE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+/// The next runtime namespace, saturating rather than wrapping back onto a
+/// namespace some open project already has.
+fn next_runtime_namespace() -> u32 {
+    NEXT_RUNTIME_NAMESPACE
+        .try_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |current| {
+            Some(current.saturating_add(1))
+        })
+        .unwrap_or(u32::MAX)
+}
+
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ProjectStore {
     /// The single native project, represented as a one-element collection
     /// while older document helpers are progressively simplified.
     pub(crate) projects: Vec<OpenProject>,
     /// `Some(0)` while a project is open, otherwise `None`.
     pub(crate) active_index: Option<usize>,
-    next_runtime_namespace: u32,
-}
-
-impl Default for ProjectStore {
-    fn default() -> Self {
-        Self {
-            projects: Vec::new(),
-            active_index: None,
-            next_runtime_namespace: 1,
-        }
-    }
 }
 
 impl ProjectStore {
@@ -560,8 +582,7 @@ impl ProjectStore {
     }
 
     fn prepare_project(&mut self, project: &mut OpenProject) {
-        let namespace = self.next_runtime_namespace;
-        self.next_runtime_namespace = self.next_runtime_namespace.saturating_add(1);
+        let namespace = next_runtime_namespace();
         project.runtime_id = namespace;
         project.project.document.apply_runtime_namespace(namespace);
         // `open_project` hashes disk-local ObjectIds to establish the saved
@@ -632,6 +653,12 @@ impl ProjectStore {
                     }),
                 );
             }
+            // Not geometry, but this composite is what UI code reads project
+            // data through (see `App::render`'s `document` parameter) - the
+            // Reserves Field List needs to survive the rebuild too.
+            scene.clone_reserve_fields_from(document);
+            scene.clone_solids_from(document);
+            scene.append_haulage_from(document);
         }
         scene.rebuild_object_index();
         scene
@@ -666,13 +693,17 @@ impl ProjectFile {
 
 pub(crate) fn validate(project: &mut ProjectFile) -> Result<()> {
     if project.format_version != PROJECT_FORMAT_VERSION {
-        bail!("Unsupported legacy design format version {} (expected {})", project.format_version, PROJECT_FORMAT_VERSION);
+        bail!(tr!(
+            "err-store-project-format-version",
+            found = project.format_version.to_string(),
+            expected = PROJECT_FORMAT_VERSION.to_string()
+        ));
     }
     // Enforce model invariants before runtime namespacing: duplicate or
     // out-of-range ids would otherwise silently alias distinct records once
     // ids are masked into the 32-bit local namespace.
-    project.document.validate().context("invalid project document")?;
-    project.folders.validate().context("invalid project folders")?;
+    project.document.validate().with_context(|| tr!("err-store-project-document-invalid"))?;
+    project.folders.validate().with_context(|| tr!("err-store-project-folders-invalid"))?;
     // Serialized counters are advisory only; derive them from the actual ids.
     project.document.recompute_id_counters();
     project.folders.recompute_next_id();
@@ -797,6 +828,18 @@ pub(crate) fn merge_document_preserve_ids(target: &mut Document, imported: &Docu
         };
         carry_layer_placement(target, target_layer, layer, folders);
         layer_map.insert(layer.id, target_layer);
+    }
+
+    // Older planning files reference a design layer by id. Keep that
+    // ownership when importing into a document whose default layer collided.
+    for solid in &mut target.solids {
+        if let Some(source) = imported.solid(solid.id) {
+            for bench in &mut solid.blasting.benches {
+                if let Some(old) = source.blasting.bench(bench.base).and_then(|entry| entry.cut_layer) {
+                    bench.cut_layer = layer_map.get(&old).copied().or(Some(old));
+                }
+            }
+        }
     }
 
     copy_objects(target, imported, &layer_map, true)

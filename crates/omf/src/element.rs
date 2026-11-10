@@ -1,4 +1,3 @@
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -11,7 +10,7 @@ use crate::{
 ///
 /// Each shape has a name plus other optional metadata, a "geometry" that describes
 /// a point-set, surface, etc., and a list of attributes that that exist on that geometry.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Element {
     /// The element name. Names should be non-empty and unique.
     pub name: String,
@@ -63,11 +62,7 @@ impl Validate for Element {
             .name(&self.name)
             .obj(&mut self.geometry)
             .objs(&mut self.attributes)
-            .unique(
-                self.attributes.iter().map(|a| &a.name),
-                "attributes[..]::name",
-                false,
-            )
+            .unique(self.attributes.iter().map(|a| &a.name), "attributes[..]::name", false)
             .attrs_on_geometry(&self.attributes, &self.geometry);
     }
 }

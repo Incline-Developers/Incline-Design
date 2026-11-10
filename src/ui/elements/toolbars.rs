@@ -16,13 +16,16 @@ use crate::{
         EditorState, UiProjectView,
         state::{ActiveTool, CursorMode, UiCommand, Workspace},
         themed_icon, unthemed_icon,
-        widgets::toolbar::{TOOL_CELL_SIZE, ToolbarButton},
+        widgets::{
+            hint::Hint,
+            toolbar::{TOOL_CELL_SIZE, ToolbarButton},
+        },
     },
 };
 
 /// Height claimed by the bottom toolbar, including its chrome margins.
-pub(crate) fn bottom_toolbar_height(ctx: &egui::Context) -> f32 {
-    TOOL_CELL_SIZE + 2.0 * crate::ui::chrome::margin(ctx)
+pub(crate) fn bottom_toolbar_height() -> f32 {
+    TOOL_CELL_SIZE + 2.0 * crate::ui::chrome::margin()
 }
 
 /// Id of the drawing toolbar's column panel.
@@ -39,6 +42,12 @@ enum LeftToolAction {
     Tool(ActiveTool),
     /// Open or close the Drill & Blast pattern builder.
     DrillPattern,
+    /// Start a haul road, or finish the one being drawn.
+    HaulDraw,
+    /// Send this command; the button holds no state of its own.
+    Command(Box<UiCommand>),
+    /// Open or close Animate's Record Video dialog.
+    RecordVideo,
 }
 
 /// One button in the drawing toolbar's run.
@@ -64,7 +73,13 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
         let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses();
         LeftTool {
             icon: egui::Image::new(icon),
-            hint: (blocked_by_section && editing_enabled && layer_ok).then(|| tr!("toolbars-tool-not-available-section-view", tool = tooltip.as_str().to_string())),
+            hint: if !editing_enabled {
+                None
+            } else if !layer_ok {
+                Some(tr!("toolbars-tool-needs-layer", tool = tooltip.as_str().to_string()))
+            } else {
+                blocked_by_section.then(|| tr!("toolbars-tool-not-available-section-view", tool = tooltip.as_str().to_string()))
+            },
             tooltip,
             action: LeftToolAction::Tool(tool),
             enabled: editing_enabled && layer_ok && !blocked_by_section,
@@ -94,6 +109,77 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
         tool(themed_icon!(ui, "split_at_points.svg"), tr!("toolbars-split-polyline-points"), ActiveTool::SplitAtPoints),
         tool(unthemed_icon!("explode_polyline.svg"), tr!("toolbars-explode-polyline-lines"), ActiveTool::ExplodePolyline),
         tool(unthemed_icon!("delete_element.svg"), tr!("toolbars-delete-points"), ActiveTool::DeletePoints),
+    ]
+}
+
+/// The Blasting step's tools, in the order they are drawn: the two that draw
+/// a cut, then the ones that adjust one already drawn.
+///
+/// A subset of production's run rather than a run of its own - these are the
+/// same tools drawing the same polylines, and what makes one of them a cut is
+/// only the layer it lands on. What is left out is left out because it has no
+/// meaning against a bench outline: points, text, circles, draping, and the
+/// bench generators the Benching step already ran.
+///
+/// They need a bench to draw on. Selecting a whole solid, or several benches,
+/// is a way of looking at the outlines rather than editing them - see
+/// [`EditorState::planning_cut_target`] - so it leaves the run standing but greyed.
+fn blasting_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool) -> Vec<LeftTool> {
+    let enabled = editing_enabled && editor.planning_cut_target().is_some();
+    let tool = |icon: egui::ImageSource<'static>, tooltip: String, tool: ActiveTool| LeftTool {
+        icon: egui::Image::new(icon),
+        tooltip,
+        action: LeftToolAction::Tool(tool),
+        enabled,
+        hint: None,
+    };
+    vec![
+        tool(themed_icon!(ui, "create_line.svg"), tr!("common-create-line"), ActiveTool::MakeLine),
+        tool(themed_icon!(ui, "create_polyline.svg"), tr!("common-create-polyline"), ActiveTool::MakePoly),
+        tool(themed_icon!(ui, "move_element.svg"), tr!("common-move-design"), ActiveTool::Move),
+        tool(themed_icon!(ui, "offset_element.svg"), tr!("common-offset"), ActiveTool::OffsetElement),
+        tool(themed_icon!(ui, "relimit_line.svg"), tr!("common-relimit-line"), ActiveTool::RelimitLine),
+        tool(themed_icon!(ui, "split_at_points.svg"), tr!("toolbars-split-polyline-points"), ActiveTool::SplitAtPoints),
+        tool(unthemed_icon!("explode_polyline.svg"), tr!("toolbars-explode-polyline-lines"), ActiveTool::ExplodePolyline),
+        tool(unthemed_icon!("delete_element.svg"), tr!("toolbars-delete-points"), ActiveTool::DeletePoints),
+    ]
+}
+
+/// The Road Network tools: draw a road, turn design strings into roads,
+/// and bring roads in from or out to DXF.
+fn haulage_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, project_active: bool) -> Vec<LeftTool> {
+    let objects = editor.selected_handles.iter().any(|h| matches!(h, crate::model::SceneEntityId::Object(_)));
+    let tool = |icon: egui::ImageSource<'static>, tooltip: String, action: LeftToolAction, enabled: bool| LeftTool {
+        icon: egui::Image::new(icon),
+        tooltip,
+        action,
+        enabled: project_active && enabled,
+        hint: None,
+    };
+    let draw = if editor.haul_draw { tr!("haul-finish") } else { tr!("haul-draw") };
+    vec![
+        tool(themed_icon!(ui, "draw_haul_road.svg"), draw, LeftToolAction::HaulDraw, true),
+        LeftTool {
+            hint: (project_active && !objects).then(|| tr!("haul-convert-help")),
+            ..tool(
+                themed_icon!(ui, "convert_to_road.svg"),
+                tr!("haul-convert"),
+                LeftToolAction::Command(Box::new(UiCommand::ConvertHaulSelection)),
+                objects,
+            )
+        },
+        tool(
+            themed_icon!(ui, "import_data.svg"),
+            tr!("haul-import"),
+            LeftToolAction::Command(Box::new(UiCommand::OpenHaulImport)),
+            true,
+        ),
+        tool(
+            themed_icon!(ui, "export_data.svg"),
+            tr!("haul-export"),
+            LeftToolAction::Command(Box::new(UiCommand::ExportHaulRoads)),
+            !project.haulage.roads.is_empty(),
+        ),
     ]
 }
 
@@ -161,6 +247,22 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
     ]
 }
 
+/// Animate's run: recording the schedule as a video.
+fn animate_tools(ui: &egui::Ui, editor: &EditorState) -> Vec<LeftTool> {
+    let recording = editor.video_export_progress.is_some();
+    vec![LeftTool {
+        icon: egui::Image::new(themed_icon!(ui, "record_video.svg")),
+        tooltip: tr!("video-export-tool"),
+        action: LeftToolAction::RecordVideo,
+        enabled: editor.schedule_animation_enabled && !recording,
+        hint: Some(if recording {
+            tr!("video-export-tool-recording")
+        } else {
+            tr!("video-export-tool-needs-schedule")
+        }),
+    }]
+}
+
 /// Draw one cell of the drawing toolbar's run.
 ///
 /// A tool greys out on its own rather than the run being wrapped in a single
@@ -171,13 +273,16 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::NewLayer => editor.new_layer_dialog_open,
         LeftToolAction::Tool(active) => editor.active_tool == active,
         LeftToolAction::DrillPattern => editor.drill_pattern_open,
+        LeftToolAction::HaulDraw => editor.haul_draw,
+        LeftToolAction::Command(_) => false,
+        LeftToolAction::RecordVideo => editor.video_export_dialog.is_some(),
     };
     let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip.as_str())
         .id_salt(("left_tool", tool.tooltip.as_str()))
         .selected(selected);
     let mut response = ui.add_enabled_ui(tool.enabled, |ui| ui.add(button)).inner;
     if let Some(hint) = tool.hint.as_deref() {
-        response = response.on_disabled_hover_text(hint);
+        response = response.disabled_hint(hint);
     }
     if !response.clicked() {
         return;
@@ -192,6 +297,14 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         }
         LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(active)),
         LeftToolAction::DrillPattern => commands.push(UiCommand::ToggleCreateDrillPattern),
+        LeftToolAction::HaulDraw => commands.push(if editor.haul_draw { UiCommand::FinishHaulRoad } else { UiCommand::StartHaulRoad }),
+        LeftToolAction::Command(ref command) => commands.push(command.as_ref().clone()),
+        LeftToolAction::RecordVideo => {
+            editor.video_export_dialog = match editor.video_export_dialog {
+                Some(_) => None,
+                None => Some(crate::ui::dialogs::video_export::VideoExportDialog::new(editor)),
+            };
+        }
     }
 }
 
@@ -217,6 +330,12 @@ pub(crate) fn draw_left_toolbar(
     commands: &mut Vec<UiCommand>,
 ) -> egui::Rect {
     let tools = match editor.active_workspace {
+        // Planning's Blasting step draws design geometry and its Haulage
+        // Layout draws roads, so their runs are asked for before the
+        // workspace is: everywhere else in Planning the column stands empty.
+        _ if editor.is_planning_cut_step() => blasting_tools(ui, editor, editing_enabled),
+        _ if editor.is_haulage_page() => haulage_tools(ui, project, editor, project_active),
+        _ if editor.is_schedule_animation() => animate_tools(ui, editor),
         workspace if workspace.has_production_tools() => left_tools(ui, editor, editing_enabled, project_active),
         Workspace::DrillAndBlast => blast_tools(ui, project, editor, editing_enabled, project_active),
         _ => Vec::new(),
@@ -224,7 +343,7 @@ pub(crate) fn draw_left_toolbar(
     // The run wraps into further columns rather than off the bottom of a short
     // window, and a panel claims its width before anything is drawn in it - so
     // the packing is arithmetic, every cell being one square.
-    let margins = 2.0 * crate::ui::chrome::margin(ui.ctx());
+    let margins = 2.0 * crate::ui::chrome::margin();
     // A column is filled before the next is started - ten tools in room for
     // six wrap 6-4, not 5-5 - so the toolbar only reaches as far across the
     // window as it has to. An empty run still claims the one column it would
@@ -236,7 +355,7 @@ pub(crate) fn draw_left_toolbar(
 
     egui::Panel::left(LEFT_TOOLBAR_PANEL_ID)
         .resizable(false)
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .exact_size(width)
         // No padding on the region: the square cell fills run edge to edge,
         // and the region chrome masks whichever ones reach its corners.
@@ -272,11 +391,11 @@ pub(crate) fn draw_left_toolbar(
 /// Returns the toolbar's rect and the screen x of the cursor-mode run's
 /// middle, which the console's grip lines up with.
 pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> (egui::Rect, f32) {
-    let claimed = bottom_toolbar_height(ui.ctx());
+    let claimed = bottom_toolbar_height();
     let mut cursor_modes_centre = ui.ctx().content_rect().center().x;
     let rect = egui::Panel::bottom("bottom_tools_strip")
         .resizable(false)
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .exact_size(claimed)
         // The cells meet the region on every side; the chrome painted after
         // them is what rounds whichever fill reaches an outer corner.
@@ -295,7 +414,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
             crate::ui::elements::bar_strip(ui, "bottom_toolbar_strip", ui.available_height(), |ui, strip| {
                 let side = strip.height();
                 let contents_id = ui.make_persistent_id("bottom_toolbar_buttons");
-                ui.scope_builder(egui::UiBuilder::new().id(contents_id).max_rect(strip), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().scope_id(contents_id).max_rect(strip), |ui| {
                     // Three clusters placed against the same strip, the way the
                     // viewport bar lays its own out - see [`super::cluster`] - so the
                     // centred run is not pushed along by what is beside it.
