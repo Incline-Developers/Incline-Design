@@ -35,7 +35,7 @@ use crate::{
             mesh_data::{Triangulation, Vertex},
         },
         point_cloud::{LoadedPointCloud, OpenPointCloud, prepare_for_render},
-        prismoid_grid::{CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, Lattice, LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidColorBy, PrismoidGrid},
+        prismoid_grid::{CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, Lattice, LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidColorBy, PrismoidGrid, Stratum},
         progress::Phase,
         project::{self, ModellingSettings, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
@@ -76,6 +76,9 @@ const META_FOLDER: &str = "incline:folder";
 const META_SECTION: &str = "incline:section";
 /// A surface's or a design layer's [`QualityMark`], written only when set.
 const META_QUALITY: &str = "incline:quality";
+/// A prismoid grid's place in the strata it was built in, written only when
+/// it has one.
+const META_STRATUM: &str = "incline:stratum";
 const META_SOURCE: &str = "incline:source";
 const META_STYLE: &str = "incline:style";
 const META_ID: &str = "incline:id";
@@ -136,6 +139,7 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_FOLDER,
     META_SECTION,
     META_QUALITY,
+    META_STRATUM,
     META_SOURCE,
     META_STYLE,
     META_ID,
@@ -1416,6 +1420,9 @@ fn write_prismoid_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
         style["color_by"] = serde_json::to_value(&open.color_by)?;
     }
     put(&mut element, META_STYLE, style);
+    if let Some(stratum) = &open.stratum {
+        put(&mut element, META_STRATUM, serde_json::to_value(stratum)?);
+    }
     Ok(element)
 }
 
@@ -3556,12 +3563,17 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         };
         grid.check().with_context(|| format!("Prismoid grid '{name}'"))?;
         let style = element.metadata.get(META_STYLE);
+        let stratum = element.metadata.get(META_STRATUM).map(|record| Stratum::deserialize(record).ok().filter(Stratum::is_whole));
+        if let Some(None) = stratum {
+            self.bundle.warnings.push(tr!("omf-prismoid-stratum-dropped", name = name.to_string()));
+        }
         Ok(LoadedPrismoidGrid {
             name: name.to_owned(),
             color: style_value(style, "color").unwrap_or_else(|| element_color(element, DEFAULT_PRISMOID_GRID_COLOR)),
             summary: grid.summary(),
             grid: Arc::new(grid),
             color_by: style_value(style, "color_by").unwrap_or_default(),
+            stratum: stratum.flatten(),
         })
     }
 

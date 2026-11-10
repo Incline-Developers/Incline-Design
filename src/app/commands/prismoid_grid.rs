@@ -26,14 +26,14 @@ use crate::{
     },
     i18n::tr,
     model::{
-        Command, ItemRef, ItemStyle, MemberKind, OpenItem, ReserveAggregation, SceneEntityId, SectionKind,
+        Command, FolderId, ItemRef, ItemStyle, MemberKind, OpenItem, ReserveAggregation, SceneEntityId, SectionKind,
         drill_hole::DrillColorPreset,
         formats::mesh_data::Triangulation,
         grid_surface::GridSurface,
         plot::format_quantity,
         prismoid_grid::{
             AddedValues, BuildRefusal, CellReading, CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, OpenPrismoidGrid, PrismoidBuild, PrismoidColorBy, PrismoidGrid,
-            PrismoidGridId, PrismoidGridSummary, QualitySurface, SectionCrossing, SectionPoint, ValuesRefusal, Weighting, ramp_position,
+            PrismoidGridId, PrismoidGridSummary, QualitySurface, SectionCrossing, SectionPoint, Stratum, ValuesRefusal, Weighting, build_strata, ramp_position,
         },
         progress::{Phase, Progress},
         project::{ModelEnvelope, ProjectItemState, unique_item_name},
@@ -65,6 +65,9 @@ static NEXT_CELL_SELECTION_REVISION: AtomicU64 = AtomicU64::new(1);
 /// Counts down from the top, clear of the project's rasters: the raster
 /// cache uploads an id's pixels once, so every map built takes a new one.
 static NEXT_PRISMOID_MAP_ID: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// A surface's name, mesh, index and section, taken to build from.
+type PrismoidSource = (String, Arc<Triangulation>, Arc<TriangleBvh>, SectionKind);
 
 /// A prismoid grid as the view draws it, for as long as `source` stands.
 pub(crate) struct DrawnPrismoidGrid {
@@ -105,59 +108,20 @@ impl App<'_> {
         if roof_id == floor_id {
             anyhow::bail!("{}", tr!("cmd-prismoid-grid-same-surface"));
         }
-        let read = |id: TriangulationId| -> Result<(
-            String,
-            Arc<crate::model::formats::mesh_data::Triangulation>,
-            Arc<crate::model::spatial::TriangleBvh>,
-            SectionKind,
-        )> {
-            let item = self
-                .triangulations
-                .iter()
-                .find(|item| item.id == id && item.state.loaded)
-                .ok_or_else(|| anyhow::anyhow!("{}", tr!("cmd-thickness-points-surface-gone")))?;
-            refuse_quality(&item.name, item.quality.as_ref())?;
-            Ok((item.name.clone(), Arc::clone(&item.mesh), Arc::clone(&item.spatial), item.state.section))
-        };
-        let (roof_name, roof_mesh, roof_spatial, roof_section) = read(roof_id)?;
-        let (floor_name, floor_mesh, floor_spatial, floor_section) = read(floor_id)?;
+        let (roof_name, roof_mesh, roof_spatial, roof_section) = self.prismoid_source(roof_id)?;
+        let (floor_name, floor_mesh, floor_spatial, floor_section) = self.prismoid_source(floor_id)?;
         let section = SectionKind::derived_for(MemberKind::PrismoidGrid, [roof_section, floor_section]);
         let envelope = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
         let (roof_label, floor_label, grid_name) = (roof_name.clone(), floor_name.clone(), name.clone());
         // An Err is a refusal; an Ok(Err) is a built grid failing its own
         // check, a fault in the build rather than in the surfaces.
         let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<Result<PrismoidBuild>> {
-            let roof = GridSurface::read(roof_mesh, roof_spatial)
-                .map_err(|problem| anyhow::anyhow!("{}", tr!("cmd-prismoid-grid-not-a-grid", name = roof_name.clone(), reason = not_a_grid_reason(problem))))?;
-            let floor = GridSurface::read(floor_mesh, floor_spatial)
-                .map_err(|problem| anyhow::anyhow!("{}", tr!("cmd-prismoid-grid-not-a-grid", name = floor_name.clone(), reason = not_a_grid_reason(problem))))?;
+            let roof = read_grid_surface(&roof_name, roof_mesh, roof_spatial)?;
+            let floor = read_grid_surface(&floor_name, floor_mesh, floor_spatial)?;
             match PrismoidGrid::between(&roof, &floor, step, envelope.as_ref(), cancel, &progress.phase(0.0, 1.0)) {
                 Ok(built) => Ok(Ok(built)),
                 Err(BuildRefusal::Malformed(error)) => Ok(Err(error.context(grid_name))),
-                Err(BuildRefusal::Cancelled) => anyhow::bail!("{}", tr!("common-cancelled")),
-                Err(BuildRefusal::NotOneLattice) => anyhow::bail!("{}", tr!("cmd-prismoid-grid-not-one-lattice", roof = roof_name, floor = floor_name)),
-                Err(BuildRefusal::NoOverlap) => anyhow::bail!("{}", tr!("cmd-prismoid-grid-no-overlap", roof = roof_name, floor = floor_name)),
-                Err(BuildRefusal::CellTooLarge) => anyhow::bail!(
-                    "{}",
-                    tr!(
-                        "cmd-prismoid-grid-cell-too-large",
-                        roof = roof_name,
-                        floor = floor_name,
-                        size = cell_size(roof.spacing() * step.get() as f64)
-                    )
-                ),
-                Err(BuildRefusal::RoofBelow) => anyhow::bail!("{}", tr!("cmd-prismoid-grid-roof-below", roof = roof_name, floor = floor_name)),
-                Err(BuildRefusal::NoThickness) => anyhow::bail!("{}", tr!("cmd-prismoid-grid-no-thickness", roof = roof_name, floor = floor_name)),
-                Err(BuildRefusal::OffEnvelopeLattice) => anyhow::bail!("{}", tr!("cmd-prismoid-grid-off-envelope-lattice", roof = roof_name, floor = floor_name)),
-                Err(BuildRefusal::OutsideEnvelope) => anyhow::bail!(
-                    "{}",
-                    tr!(
-                        "cmd-prismoid-grid-outside-envelope",
-                        roof = roof_name,
-                        floor = floor_name,
-                        envelope = envelope.as_ref().map_or_else(String::new, ModelEnvelope::summary)
-                    )
-                ),
+                Err(refusal) => Err(refusal_words(refusal, &roof_name, &floor_name, roof.spacing() * step.get() as f64, envelope.as_ref())),
             }
         };
         let apply = move |app: &mut App, result: Result<Result<PrismoidBuild>>| match result {
@@ -165,42 +129,8 @@ impl App<'_> {
             Ok(Err(fault)) => userspace_error!("{fault:#}"),
             Ok(Ok(PrismoidBuild { grid, crossed, holes })) => {
                 let id = app.insert_prismoid_grid(name, grid, section);
-                let Some(item) = app.prismoid_grids.iter().find(|item| item.id == id) else {
-                    return;
-                };
-                let summary = &item.summary;
-                let totals = totals_lines(summary);
-                let (min, max) = summary.vertical_thickness.unwrap_or_default();
-                let size = cell_size(item.grid.lattice.u_sizes.first().copied().unwrap_or_default());
-                userspace_log!(
-                    "{}",
-                    tr!(
-                        "cmd-prismoid-grid-built",
-                        name = item.name.clone(),
-                        columns = summary.columns.to_string(),
-                        rows = summary.rows.to_string(),
-                        size = size,
-                        active = summary.active_cells.to_string(),
-                        min = format!("{min:.2}"),
-                        max = format!("{max:.2}")
-                    )
-                );
-                for line in totals {
-                    userspace_log!("{line}");
-                }
-                if crossed > 0 {
-                    userspace_warn!(
-                        "{}",
-                        tr!(
-                            "cmd-prismoid-grid-crossed",
-                            count = (crossed as i64),
-                            roof = roof_label.clone(),
-                            floor = floor_label.clone()
-                        )
-                    );
-                }
-                if holes > 0 {
-                    userspace_log!("{}", tr!("cmd-prismoid-grid-holes", count = (holes as i64), roof = roof_label, floor = floor_label));
+                if let Some(item) = app.prismoid_grids.iter().find(|item| item.id == id) {
+                    log_built_prismoid_grid(item, crossed, holes, &roof_label, &floor_label);
                 }
             }
         };
@@ -211,6 +141,147 @@ impl App<'_> {
             apply,
         );
         Ok(())
+    }
+
+    /// Build a prismoid grid for every interval between neighbouring
+    /// `horizons`, each a surface and its name, listed top first, into a new
+    /// folder named after the strata. An interval with no thickness anywhere
+    /// is skipped; any other refused interval refuses the strata.
+    pub(crate) fn build_strata(&mut self, horizons: Vec<(TriangulationId, String)>, intervals: Vec<String>, step: NonZeroUsize, name: String) -> Result<()> {
+        let names: Vec<String> = horizons.iter().map(|(_, horizon)| horizon.clone()).collect();
+        let stated = Stratum {
+            strata: name,
+            index: 0,
+            horizons: names,
+            intervals,
+        };
+        let named_once = stated.horizons.iter().enumerate().all(|(index, horizon)| !stated.horizons[..index].contains(horizon));
+        if !stated.is_whole() || !named_once {
+            anyhow::bail!("{}", tr!("tri-strata-list-help"));
+        }
+        if horizons
+            .iter()
+            .enumerate()
+            .any(|(index, (id, _))| horizons[..index].iter().any(|(earlier, _)| earlier == id))
+        {
+            anyhow::bail!("{}", tr!("cmd-prismoid-grid-strata-same-surface"));
+        }
+        let sources = horizons.iter().map(|(id, _)| self.prismoid_source(*id)).collect::<Result<Vec<_>>>()?;
+        let section = SectionKind::derived_for(MemberKind::PrismoidGrid, sources.iter().map(|source| source.3));
+        let envelope = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
+        let surfaces: Vec<String> = sources.iter().map(|source| source.0.clone()).collect();
+        let (labels, words) = (surfaces.clone(), stated.clone());
+        let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<Result<Vec<Option<PrismoidBuild>>>> {
+            let grids = sources
+                .into_iter()
+                .map(|(name, mesh, spatial, _)| read_grid_surface(&name, mesh, spatial))
+                .collect::<Result<Vec<_>>>()?;
+            let size = grids[0].spacing() * step.get() as f64;
+            match build_strata(&grids, step, envelope.as_ref(), cancel, &progress.phase(0.0, 1.0)) {
+                Ok(built) => Ok(Ok(built)),
+                Err((index, BuildRefusal::Malformed(error))) => Ok(Err(error.context(words.intervals[index].clone()))),
+                Err((_, BuildRefusal::Cancelled)) => anyhow::bail!("{}", tr!("common-cancelled")),
+                Err((index, refusal)) => {
+                    let reason = refusal_words(refusal, &surfaces[index], &surfaces[index + 1], size, envelope.as_ref());
+                    anyhow::bail!(
+                        "{}",
+                        tr!(
+                            "cmd-prismoid-grid-strata-refused",
+                            name = words.strata.clone(),
+                            interval = words.intervals[index].clone(),
+                            reason = format!("{reason:#}")
+                        )
+                    )
+                }
+            }
+        };
+        let apply = move |app: &mut App, result: Result<Result<Vec<Option<PrismoidBuild>>>>| {
+            let built = match result {
+                Ok(Ok(built)) => built,
+                Ok(Err(fault)) => {
+                    userspace_error!("{fault:#}");
+                    return;
+                }
+                Err(refusal) => {
+                    userspace_warn!("{refusal:#}");
+                    return;
+                }
+            };
+            let count = built.len();
+            for (index, _) in built.iter().enumerate().filter(|(_, build)| build.is_none()) {
+                userspace_log!(
+                    "{}",
+                    tr!(
+                        "cmd-prismoid-grid-strata-skipped",
+                        interval = stated.intervals[index].clone(),
+                        roof = labels[index].clone(),
+                        floor = labels[index + 1].clone()
+                    )
+                );
+            }
+            if built.iter().all(Option::is_none) {
+                userspace_warn!("{}", tr!("cmd-prismoid-grid-strata-none-built", name = stated.strata.clone()));
+                return;
+            }
+            // A strata is never rebuilt in place, so each build has a folder
+            // of its own.
+            let Some(project) = app.workspace.active_project_mut() else {
+                return;
+            };
+            let folders = &mut project.project.folders;
+            let strata = unique_item_name(stated.strata.clone(), folders.names(section).into_iter());
+            let folder = folders.add(section, strata.clone());
+            let stratum = Stratum { strata, ..stated };
+            app.editor.selected_handles.clear();
+            let mut made = 0;
+            for (index, build) in built.into_iter().enumerate() {
+                let Some(PrismoidBuild { grid, crossed, holes }) = build else {
+                    continue;
+                };
+                let record = Stratum { index, ..stratum.clone() };
+                let id = app.insert_prismoid_grid_in(stratum.intervals[index].clone(), grid, section, folder, Some(record));
+                app.editor.selected_handles.insert(SceneEntityId::PrismoidGrid(id));
+                made += 1;
+                if let Some(item) = app.prismoid_grids.iter().find(|item| item.id == id) {
+                    log_built_prismoid_grid(item, crossed, holes, &labels[index], &labels[index + 1]);
+                }
+                if crossed > 0 && index > 0 && index + 1 < count {
+                    userspace_warn!(
+                        "{}",
+                        tr!(
+                            "cmd-prismoid-grid-strata-overlap",
+                            floor = labels[index + 1].clone(),
+                            roof = labels[index].clone(),
+                            interval = stratum.intervals[index].clone()
+                        )
+                    );
+                }
+            }
+            userspace_log!(
+                "{}",
+                tr!(
+                    "cmd-prismoid-grid-strata-built",
+                    name = stratum.strata.clone(),
+                    built = made.to_string(),
+                    count = count.to_string()
+                )
+            );
+        };
+        let keys = horizons.iter().map(|(id, _)| JobKey::Triangulation(*id)).collect();
+        self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-strata-building"), keys, compute, apply);
+        Ok(())
+    }
+
+    /// A loaded surface's name, mesh, index and section, to build a prismoid
+    /// grid from; a quality surface is refused.
+    fn prismoid_source(&self, id: TriangulationId) -> Result<PrismoidSource> {
+        let item = self
+            .triangulations
+            .iter()
+            .find(|item| item.id == id && item.state.loaded)
+            .ok_or_else(|| anyhow::anyhow!("{}", tr!("cmd-thickness-points-surface-gone")))?;
+        refuse_quality(&item.name, item.quality.as_ref())?;
+        Ok((item.name.clone(), Arc::clone(&item.mesh), Arc::clone(&item.spatial), item.state.section))
     }
 
     /// Read quality surfaces into a prismoid grid's cells, `density` as its
@@ -308,21 +379,29 @@ impl App<'_> {
     /// Add a built prismoid grid to the project, dirty, at its section's
     /// root, and select it.
     pub(crate) fn insert_prismoid_grid(&mut self, name: String, grid: PrismoidGrid, section: SectionKind) -> PrismoidGridId {
+        let id = self.insert_prismoid_grid_in(name, grid, section, None, None);
+        self.editor.selected_handles.clear();
+        self.editor.selected_handles.insert(SceneEntityId::PrismoidGrid(id));
+        id
+    }
+
+    /// Add a built prismoid grid to the project, dirty, in `folder` of its
+    /// section, leaving the selection to the caller.
+    pub(crate) fn insert_prismoid_grid_in(&mut self, name: String, grid: PrismoidGrid, section: SectionKind, folder: Option<FolderId>, stratum: Option<Stratum>) -> PrismoidGridId {
         let id = PrismoidGridId(self.next_prismoid_grid_id);
         self.next_prismoid_grid_id += 1;
         let name = unique_item_name(name, self.prismoid_grids.iter().map(|item| item.name.as_str()));
         self.prismoid_grids.push(OpenPrismoidGrid {
             id,
-            state: ProjectItemState::dirty(MemberKind::PrismoidGrid, None).with_section(section),
+            state: ProjectItemState::dirty(MemberKind::PrismoidGrid, None).with_section(section).with_folder(folder),
             name,
             color: DEFAULT_PRISMOID_GRID_COLOR,
             summary: grid.summary(),
             grid: Arc::new(grid),
             color_by: PrismoidColorBy::default(),
+            stratum,
         });
         self.touch_active_project_content();
-        self.editor.selected_handles.clear();
-        self.editor.selected_handles.insert(SceneEntityId::PrismoidGrid(id));
         self.invalidate_geometry();
         id
     }
@@ -1125,6 +1204,70 @@ pub(crate) fn values_refusal_words(refusal: ValuesRefusal, grid_name: &str) -> S
 /// vertices carries their rounding.
 pub(super) fn cell_size(size: f64) -> String {
     ((size * 100.0).round() / 100.0).to_string()
+}
+
+/// A surface read as a grid, refused in words naming it.
+fn read_grid_surface(name: &str, mesh: Arc<Triangulation>, spatial: Arc<TriangleBvh>) -> Result<GridSurface> {
+    GridSurface::read(mesh, spatial).map_err(|problem| anyhow::anyhow!("{}", tr!("cmd-prismoid-grid-not-a-grid", name = name.to_string(), reason = not_a_grid_reason(problem))))
+}
+
+/// Why `roof` and `floor` make no prismoid grid at cells of `size` metres,
+/// in words naming both.
+fn refusal_words(refusal: BuildRefusal, roof: &str, floor: &str, size: f64, envelope: Option<&ModelEnvelope>) -> anyhow::Error {
+    let (roof, floor) = (roof.to_string(), floor.to_string());
+    let words = match refusal {
+        BuildRefusal::Malformed(error) => return error,
+        BuildRefusal::Cancelled => tr!("common-cancelled"),
+        BuildRefusal::NotOneLattice => tr!("cmd-prismoid-grid-not-one-lattice", roof = roof, floor = floor),
+        BuildRefusal::NoOverlap => tr!("cmd-prismoid-grid-no-overlap", roof = roof, floor = floor),
+        BuildRefusal::CellTooLarge => tr!("cmd-prismoid-grid-cell-too-large", roof = roof, floor = floor, size = cell_size(size)),
+        BuildRefusal::RoofBelow => tr!("cmd-prismoid-grid-roof-below", roof = roof, floor = floor),
+        BuildRefusal::NoThickness => tr!("cmd-prismoid-grid-no-thickness", roof = roof, floor = floor),
+        BuildRefusal::OffEnvelopeLattice => tr!("cmd-prismoid-grid-off-envelope-lattice", roof = roof, floor = floor),
+        BuildRefusal::OutsideEnvelope => tr!(
+            "cmd-prismoid-grid-outside-envelope",
+            roof = roof,
+            floor = floor,
+            envelope = envelope.map_or_else(String::new, ModelEnvelope::summary)
+        ),
+    };
+    anyhow::anyhow!("{words}")
+}
+
+/// The console lines for a built grid: its size and thickness, its totals,
+/// then any cells crossed or missing between `roof` and `floor`.
+fn log_built_prismoid_grid(item: &OpenPrismoidGrid, crossed: usize, holes: usize, roof: &str, floor: &str) {
+    let summary = &item.summary;
+    let (min, max) = summary.vertical_thickness.unwrap_or_default();
+    let size = cell_size(item.grid.lattice.u_sizes.first().copied().unwrap_or_default());
+    userspace_log!(
+        "{}",
+        tr!(
+            "cmd-prismoid-grid-built",
+            name = item.name.clone(),
+            columns = summary.columns.to_string(),
+            rows = summary.rows.to_string(),
+            size = size,
+            active = summary.active_cells.to_string(),
+            min = format!("{min:.2}"),
+            max = format!("{max:.2}")
+        )
+    );
+    for line in totals_lines(summary) {
+        userspace_log!("{line}");
+    }
+    if crossed > 0 {
+        userspace_warn!(
+            "{}",
+            tr!("cmd-prismoid-grid-crossed", count = (crossed as i64), roof = roof.to_string(), floor = floor.to_string())
+        );
+    }
+    if holes > 0 {
+        userspace_log!(
+            "{}",
+            tr!("cmd-prismoid-grid-holes", count = (holes as i64), roof = roof.to_string(), floor = floor.to_string())
+        );
+    }
 }
 
 /// A grid's volume and tonnes, then each quality's mean, as its explorer row

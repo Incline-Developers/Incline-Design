@@ -31,7 +31,10 @@ use crate::{
         raster::RasterTextureId,
         triangulation::TriangulationId,
     },
-    ui::elements::main_menu::RecentRow,
+    ui::{
+        elements::main_menu::RecentRow,
+        widgets::editable_grid::{GridAction, apply_flat},
+    },
 };
 
 type OptionalScreenPointPx = Option<(f32, f32)>;
@@ -3294,6 +3297,15 @@ pub(crate) struct EditorState {
     pub(crate) tri_prismoid_step: std::num::NonZeroUsize,
     pub(crate) tri_prismoid_name_input: String,
     pub(crate) tri_prismoid_name_auto: bool,
+    /// Build Strata: the horizons top first, and the interval below each
+    /// by position, so a moved horizon leaves the names of intervals behind.
+    pub(crate) tri_strata_open: bool,
+    pub(crate) tri_strata_rows: Vec<StrataRowDraft>,
+    pub(crate) tri_strata_intervals: Vec<IntervalDraft>,
+    pub(crate) tri_strata_selected: Option<usize>,
+    pub(crate) tri_strata_step: std::num::NonZeroUsize,
+    pub(crate) tri_strata_name_input: String,
+    pub(crate) tri_strata_name_auto: bool,
     /// Add Qualities: the grid selected at open, the quality surfaces ticked
     /// in the order ticked, and the one chosen as the density.
     pub(crate) tri_prismoid_qualities_open: bool,
@@ -4225,6 +4237,7 @@ impl EditorState {
             || self.tri_cut_surface_open
             || self.tri_solid_open
             || self.tri_prismoid_open
+            || self.tri_strata_open
             || self.tri_cut_pitshell_open
             || self.tri_include_solid_open
             || self.tri_contour_open
@@ -5177,6 +5190,13 @@ impl EditorState {
             tri_prismoid_step: std::num::NonZeroUsize::MIN,
             tri_prismoid_name_input: String::new(),
             tri_prismoid_name_auto: true,
+            tri_strata_open: false,
+            tri_strata_rows: Vec::new(),
+            tri_strata_intervals: Vec::new(),
+            tri_strata_selected: None,
+            tri_strata_step: std::num::NonZeroUsize::MIN,
+            tri_strata_name_input: String::new(),
+            tri_strata_name_auto: true,
             tri_prismoid_qualities_open: false,
             tri_prismoid_qualities_grid: None,
             tri_prismoid_qualities_ticked: Vec::new(),
@@ -6976,6 +6996,16 @@ pub(crate) enum UiCommand {
         step: std::num::NonZeroUsize,
         name: String,
     },
+    /// Open the Build Strata tool.
+    OpenBuildStrata,
+    /// Build a prismoid grid for every interval between neighbouring
+    /// horizons, each a surface and its name, listed top first.
+    ExecuteBuildStrata {
+        horizons: Vec<(TriangulationId, String)>,
+        intervals: Vec<String>,
+        step: std::num::NonZeroUsize,
+        name: String,
+    },
     /// Create a block model from the one selected prismoid grid.
     CreateBlockModelFromPrismoidGrid,
     /// Open Add Qualities on the one selected prismoid grid.
@@ -7200,6 +7230,7 @@ impl UiCommand {
             | Self::OpenCutTriangulationBySurface
             | Self::OpenBuildSolidFromSurfaces
             | Self::OpenBuildPrismoidGrid
+            | Self::OpenBuildStrata
             | Self::OpenAddPrismoidQualities
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
@@ -7751,6 +7782,7 @@ impl UiCommand {
             Self::ExecuteCutTriangulationBySurface { name, .. } => report(tr!("state-trim-triangulation-surface"), name.clone()),
             Self::ExecuteBuildSolidFromSurfaces { name, .. } => report(tr!("tri-build-solid-surfaces"), name.clone()),
             Self::ExecuteBuildPrismoidGrid { name, .. } => report(tr!("tri-build-prismoid-grid"), name.clone()),
+            Self::ExecuteBuildStrata { name, .. } => report(tr!("tri-build-strata"), name.clone()),
             Self::CreateBlockModelFromPrismoidGrid => report(tr!("common-create-block-model-from-prismoid-grid"), tr!("state-selected-prismoid-grid")),
             Self::ExecuteAddPrismoidQualities { .. } => report(tr!("state-add-prismoid-qualities"), tr!("state-selected-prismoid-grid")),
             Self::SetPrismoidGridColorValue { value, .. } => report(tr!("state-colour-prismoid-grid"), value.clone().unwrap_or_else(|| tr!("thickness-points-column-vertical"))),
@@ -8049,6 +8081,61 @@ pub(crate) struct UiPrismoidGridEntry {
     /// Folder the grid sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
+}
+
+/// One horizon of Build Strata's list.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct StrataRowDraft {
+    pub(crate) surface: Option<TriangulationId>,
+    pub(crate) horizon: String,
+    /// Typed over, so it no longer follows the surface's name.
+    pub(crate) horizon_typed: bool,
+}
+
+/// The interval below one horizon of Build Strata's list.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct IntervalDraft {
+    pub(crate) name: String,
+    /// Typed over, so it no longer follows the horizons either side.
+    pub(crate) typed: bool,
+}
+
+/// Bring Build Strata's drafts up to date: one interval for each pair of
+/// neighbouring rows, and each name not typed over following its surface
+/// or, for an interval, the horizons either side.
+pub(crate) fn refresh_strata_drafts(rows: &mut [StrataRowDraft], intervals: &mut Vec<IntervalDraft>, surface_name: impl Fn(TriangulationId) -> Option<String>) {
+    for row in rows.iter_mut().filter(|row| !row.horizon_typed) {
+        row.horizon = row.surface.and_then(&surface_name).unwrap_or_default();
+    }
+    intervals.resize_with(rows.len().saturating_sub(1), IntervalDraft::default);
+    for (interval, pair) in intervals.iter_mut().zip(rows.windows(2)).filter(|(interval, _)| !interval.typed) {
+        let (upper, lower) = (pair[0].horizon.trim(), pair[1].horizon.trim());
+        interval.name = if upper.is_empty() || lower.is_empty() {
+            String::new()
+        } else {
+            tr!("tri-strata-interval-default", upper = upper.to_string(), lower = lower.to_string())
+        };
+    }
+}
+
+/// Apply the list's actions to Build Strata's rows, keeping each interval
+/// on its pair of horizons: a new row splits a pair, whose upper part keeps
+/// the interval, and a deleted row joins two pairs under the upper one's.
+/// A move leaves the intervals where they are.
+pub(crate) fn apply_strata_actions(rows: &mut Vec<StrataRowDraft>, intervals: &mut Vec<IntervalDraft>, selected: &mut Option<usize>, actions: Vec<GridAction>) {
+    for action in actions {
+        let count = rows.len();
+        let added = matches!(action, GridAction::Add);
+        let deleted = if let GridAction::Delete(row) = action { Some(row) } else { None };
+        apply_flat(rows, selected, &mut vec![action], StrataRowDraft::default);
+        if added && count > 0 {
+            let at = selected.unwrap_or(count);
+            intervals.insert(at.min(intervals.len()), IntervalDraft::default());
+        }
+        if let Some(row) = deleted.filter(|row| *row < count && !intervals.is_empty()) {
+            intervals.remove(row.min(intervals.len() - 1));
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

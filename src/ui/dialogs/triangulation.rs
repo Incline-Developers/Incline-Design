@@ -13,10 +13,11 @@ use crate::{
     ui::{
         state::{
             ContourOutputLayer, EditorState, SolidRegion, TriCreatePhase, TriCutSource, TriLowerCut, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriUpperCut,
-            TriangulationPickTarget, UiCommand, UiProjectView,
+            TriangulationPickTarget, UiCommand, UiProjectView, apply_strata_actions, refresh_strata_drafts,
         },
-        widgets::menu::{
-            self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRange, MenuFieldText, MenuFieldU32, selected_source_field,
+        widgets::{
+            editable_grid::{DataGrid, GridButtons, GridColumn, GridRow, cell_choice, cell_text},
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRange, MenuFieldText, MenuFieldU32, selected_source_field},
         },
     },
 };
@@ -94,6 +95,8 @@ const PICK_SELECTOR_WIDTH: f32 = 210.0;
 const PICK_BUTTON_WIDTH: f32 = 52.0;
 const PICKER_DIALOG_MIN_WIDTH: f32 = 430.0;
 const PICKER_DIALOG_MAX_WIDTH: f32 = 450.0;
+/// Room for Build Strata's three columns.
+const STRATA_DIALOG_WIDTH: f32 = 560.0;
 
 /// The cell sizes Build Prismoid Grid offers, as multiples of the surfaces'
 /// spacing.
@@ -1131,21 +1134,7 @@ pub(crate) fn draw_build_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut Ed
 
             ui.add_space(4.0);
 
-            let step_label = |step: NonZeroUsize| match step.get() {
-                1 => tr!("tri-prismoid-cell-size-surfaces"),
-                times => tr!("tri-prismoid-cell-size-times", times = times.to_string()),
-            };
-            let selected = step_label(editor.tri_prismoid_step);
-            MenuFieldCombo::new(
-                "build_prismoid_cell_size",
-                tr!("tri-prismoid-cell-size"),
-                &mut editor.tri_prismoid_step,
-                selected,
-                PRISMOID_CELL_STEPS.into_iter().filter_map(NonZeroUsize::new).map(|step| (step, step_label(step).into())),
-            )
-            .help_text(tr!("tri-prismoid-cell-size-help"))
-            .width(picker_control_width(ui))
-            .show(ui);
+            cell_size_field(ui, "build_prismoid_cell_size", &mut editor.tri_prismoid_step);
 
             if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_prismoid_name_input)
                 .help_text(tr!("tri-name-assigned-prismoid-grid"))
@@ -1184,6 +1173,159 @@ pub(crate) fn draw_build_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut Ed
 
     if !open {
         editor.tri_prismoid_open = false;
+    }
+}
+
+/// The cell size of a prismoid, as a whole multiple of the surfaces'
+/// spacing.
+fn cell_size_field(ui: &mut egui::Ui, id: &str, step: &mut NonZeroUsize) {
+    let step_label = |step: NonZeroUsize| match step.get() {
+        1 => tr!("tri-prismoid-cell-size-surfaces"),
+        times => tr!("tri-prismoid-cell-size-times", times = times.to_string()),
+    };
+    let selected = step_label(*step);
+    MenuFieldCombo::new(
+        id,
+        tr!("tri-prismoid-cell-size"),
+        step,
+        selected,
+        PRISMOID_CELL_STEPS.into_iter().filter_map(NonZeroUsize::new).map(|step| (step, step_label(step).into())),
+    )
+    .help_text(tr!("tri-prismoid-cell-size-help"))
+    .width(picker_control_width(ui))
+    .show(ui);
+}
+
+/// The Build Strata tool: horizons listed top down, each a surface, its name
+/// and the name of the interval below it, built into a prismoid grid for
+/// every interval.
+pub(crate) fn draw_build_strata_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_strata_open {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("build_strata_dialog", tr!("tri-build-strata"))
+        .open(&mut open)
+        .min_width(STRATA_DIALOG_WIDTH)
+        .max_width(STRATA_DIALOG_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
+            let loaded_name = |id: TriangulationId| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name);
+            let surface_name = |id: TriangulationId| loaded_name(id).map(str::to_owned);
+
+            tool_help_panel(ui, tr!("tri-build-strata-help"));
+
+            refresh_strata_drafts(&mut editor.tri_strata_rows, &mut editor.tri_strata_intervals, surface_name);
+            let (rows, intervals) = (&mut editor.tri_strata_rows, &mut editor.tri_strata_intervals);
+            let chosen: Vec<Option<TriangulationId>> = rows.iter().map(|row| row.surface).collect();
+            let grid_rows = vec![GridRow::Item; rows.len()];
+            let columns = vec![
+                GridColumn::new(tr!("tri-strata-surface"), 35.0),
+                GridColumn::new(tr!("tri-strata-horizon"), 30.0),
+                GridColumn::new(tr!("tri-strata-interval-below"), 35.0),
+            ];
+            let actions = DataGrid::new("build_strata_horizons", columns).buttons(GridButtons::default().reorder()).show(
+                ui,
+                &mut editor.tri_strata_selected,
+                &grid_rows,
+                |ui, row, column| match column {
+                    0 => {
+                        // Each surface is offered once across the list.
+                        let choices: Vec<_> = std::iter::once(None)
+                            .chain(loaded.iter().map(|(id, _)| Some(*id)).filter(|id| *id == chosen[row] || !chosen.contains(id)))
+                            .collect();
+                        let label = |id: Option<TriangulationId>| id.and_then(loaded_name).map_or_else(|| tr!("tri-select"), str::to_owned);
+                        cell_choice(ui, ("build_strata_surface", row), &mut rows[row].surface, &choices, label);
+                    }
+                    1 => {
+                        let before = rows[row].horizon.clone();
+                        cell_text(ui, &mut rows[row].horizon, true);
+                        if rows[row].horizon != before {
+                            rows[row].horizon_typed = true;
+                        }
+                    }
+                    _ => match intervals.get_mut(row) {
+                        Some(interval) => {
+                            let before = interval.name.clone();
+                            cell_text(ui, &mut interval.name, true);
+                            if interval.name != before {
+                                interval.typed = true;
+                            }
+                        }
+                        None => {
+                            ui.label(tr!("inventory-portion-missing"));
+                        }
+                    },
+                },
+            );
+            apply_strata_actions(rows, intervals, &mut editor.tri_strata_selected, actions);
+            refresh_strata_drafts(rows, intervals, surface_name);
+            menu::menu_note(ui, tr!("tri-strata-list-help"));
+
+            ui.add_space(4.0);
+
+            cell_size_field(ui, "build_strata_cell_size", &mut editor.tri_strata_step);
+
+            if editor.tri_strata_name_auto {
+                editor.tri_strata_name_input = editor
+                    .tri_strata_rows
+                    .first()
+                    .and_then(|row| row.surface)
+                    .and_then(loaded_name)
+                    .map(|top| crate::app::canvas::derived_triangulation_name(top, &tr!("common-strata")))
+                    .unwrap_or_default();
+            }
+            if MenuFieldText::new(tr!("tri-strata-name"), &mut editor.tri_strata_name_input)
+                .help_text(tr!("tri-strata-name-help"))
+                .width(picker_control_width(ui))
+                .hint_text(tr!("tri-strata-name-hint"))
+                .show(ui)
+                .changed()
+            {
+                editor.tri_strata_name_auto = false;
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let rows = &editor.tri_strata_rows;
+            let surfaces_once = rows
+                .iter()
+                .enumerate()
+                .all(|(index, row)| row.surface.and_then(loaded_name).is_some() && !rows[..index].iter().any(|earlier| earlier.surface == row.surface));
+            let horizons_once = rows
+                .iter()
+                .enumerate()
+                .all(|(index, row)| !row.horizon.trim().is_empty() && !rows[..index].iter().any(|earlier| earlier.horizon.trim() == row.horizon.trim()));
+            let can_run = rows.len() >= 2
+                && surfaces_once
+                && horizons_once
+                && editor.tri_strata_intervals.iter().all(|interval| !interval.name.trim().is_empty())
+                && !editor.tri_strata_name_input.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if ui.add(MenuButton::new(tr!("tri-build")).primary().enabled(can_run)).clicked() || (confirm && can_run) {
+                    commands.push(UiCommand::ExecuteBuildStrata {
+                        horizons: rows.iter().filter_map(|row| Some((row.surface?, row.horizon.trim().to_owned()))).collect(),
+                        intervals: editor.tri_strata_intervals.iter().map(|interval| interval.name.trim().to_owned()).collect(),
+                        step: editor.tri_strata_step,
+                        name: editor.tri_strata_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_strata_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_strata_open = false;
     }
 }
 

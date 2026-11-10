@@ -1217,6 +1217,10 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     commands.push(UiCommand::OpenBuildPrismoidGrid);
                     ui.close();
                 }
+                if ContextMenuAction::new(tr!("common-build-strata-ellipsis")).show(ui).clicked() {
+                    commands.push(UiCommand::OpenBuildStrata);
+                    ui.close();
+                }
                 if ContextMenuAction::new(tr!("common-create-block-model-from-prismoid-grid"))
                     .enabled(editor.selection_counts.prismoid_grids == 1)
                     .disabled_hover_text(tr!("ws-menubar-modelling-select-prismoid-grid"))

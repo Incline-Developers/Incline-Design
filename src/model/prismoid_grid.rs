@@ -2,7 +2,13 @@
 //! on one plan lattice, with a mask of the active cells and any number of
 //! values per cell.
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{
+    num::NonZeroUsize,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use anyhow::{Result, bail};
 use glam::{DMat2, DMat3, DVec2, DVec3};
@@ -15,7 +21,7 @@ use crate::{
         drill_hole::DrillColorPreset,
         formats::mesh_data,
         grid_surface::{GridSurface, HEIGHT_TOLERANCE, NODE_TOLERANCE, surface_z_single},
-        progress::Phase,
+        progress::{Phase, Progress},
         project::{ModelEnvelope, ProjectItemState},
         solid_reserves::NumericTotal,
         spatial::TriangleBvh,
@@ -57,6 +63,69 @@ impl PrismoidColorBy {
         let value = self.value.as_deref()?;
         names.position(|name| same_quality_name(name, value))
     }
+}
+
+/// Where a prismoid grid sits in the strata it was built in: the stack as
+/// the user stated it, top first.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Stratum {
+    pub(crate) strata: String,
+    /// This grid's interval, from 0 at the top.
+    pub(crate) index: usize,
+    pub(crate) horizons: Vec<String>,
+    pub(crate) intervals: Vec<String>,
+}
+
+impl Stratum {
+    /// One more horizon than intervals, this grid among them, and every
+    /// name given.
+    pub(crate) fn is_whole(&self) -> bool {
+        let blank = |name: &String| name.trim().is_empty();
+        self.horizons.len() == self.intervals.len() + 1
+            && self.index < self.intervals.len()
+            && !blank(&self.strata)
+            && !self.horizons.iter().any(blank)
+            && !self.intervals.iter().any(blank)
+    }
+}
+
+/// Build the interval between each pair of neighbouring `horizons`, listed
+/// top first, by the one rule a single grid is built by. An interval with no
+/// thickness anywhere is `None`; any other refusal refuses the whole stack,
+/// given with the interval's position.
+pub(crate) fn build_strata(
+    horizons: &[GridSurface],
+    step: NonZeroUsize,
+    envelope: Option<&ModelEnvelope>,
+    cancel: &CancelFlag,
+    progress: &Phase,
+) -> Result<Vec<Option<PrismoidBuild>>, (usize, BuildRefusal)> {
+    use rayon::prelude::*;
+    let pairs: Vec<&[GridSurface]> = horizons.windows(2).collect();
+    // The intervals build side by side, so the bar counts finished ones; a
+    // lone interval reports its own steps.
+    let finished = AtomicU64::new(0);
+    let built: Vec<_> = pairs
+        .par_iter()
+        .map(|pair| {
+            if cancel.is_cancelled() {
+                return Err(BuildRefusal::Cancelled);
+            }
+            let own = if pairs.len() == 1 { progress.clone() } else { Progress::new().phase(0.0, 1.0) };
+            let built = PrismoidGrid::between(&pair[0], &pair[1], step, envelope, cancel, &own);
+            progress.set_items(finished.fetch_add(1, Ordering::Relaxed) + 1, pairs.len() as u64);
+            built
+        })
+        .collect();
+    built
+        .into_iter()
+        .enumerate()
+        .map(|(index, built)| match built {
+            Ok(built) => Ok(Some(built)),
+            Err(BuildRefusal::NoThickness) => Ok(None),
+            Err(refusal) => Err((index, refusal)),
+        })
+        .collect()
 }
 
 /// Why two grid surfaces make no prismoid grid.
@@ -1220,6 +1289,8 @@ pub(crate) struct OpenPrismoidGrid {
     /// Computed once: `grid` is an immutable `Arc`, so it cannot go stale.
     pub(crate) summary: PrismoidGridSummary,
     pub(crate) color_by: PrismoidColorBy,
+    /// `None` for a grid built on its own.
+    pub(crate) stratum: Option<Stratum>,
 }
 
 impl OpenPrismoidGrid {
@@ -1235,6 +1306,7 @@ pub(crate) struct LoadedPrismoidGrid {
     pub(crate) grid: Arc<PrismoidGrid>,
     pub(crate) summary: PrismoidGridSummary,
     pub(crate) color_by: PrismoidColorBy,
+    pub(crate) stratum: Option<Stratum>,
 }
 
 /// How a node's roof and floor stand, from their heights (NaN where

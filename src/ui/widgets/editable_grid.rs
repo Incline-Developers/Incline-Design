@@ -22,6 +22,7 @@ use crate::{
         widgets::{
             menu::{self, DragableMenu, MenuButton},
             toolbar::ToolbarButton,
+            value_field::mark_invalid,
         },
     },
 };
@@ -533,4 +534,22 @@ pub(crate) fn apply_flat<T>(rows: &mut Vec<T>, selected: &mut Option<usize>, act
         }
     }
     *actions = remaining;
+}
+
+/// A drop-down over a fixed list of choices that fills the grid cell it is drawn in.
+pub(crate) fn cell_choice<T: Copy + PartialEq>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut T, all: &[T], label: impl Fn(T) -> String) {
+    let width = ui.available_width().max(40.0);
+    egui::ComboBox::from_id_salt(id).selected_text(label(*value)).width(width).truncate().show_ui(ui, |ui| {
+        for option in all {
+            ui.selectable_value(value, *option, label(*option));
+        }
+    });
+}
+
+/// A text box that fills its grid cell, outlined in red when `required` and empty.
+pub(crate) fn cell_text(ui: &mut egui::Ui, value: &mut String, required: bool) {
+    let response = ui.add(egui::TextEdit::singleline(value).desired_width(ui.available_width()));
+    if required && value.trim().is_empty() {
+        mark_invalid(ui, &response);
+    }
 }

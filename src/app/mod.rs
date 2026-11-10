@@ -879,6 +879,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenIncludeSolidInTopology => Some(UiCommand::OpenIncludeSolidInTopology),
             MacMenuAction::OpenBuildSolidFromSurfaces => Some(UiCommand::OpenBuildSolidFromSurfaces),
             MacMenuAction::OpenBuildPrismoidGrid => Some(UiCommand::OpenBuildPrismoidGrid),
+            MacMenuAction::OpenBuildStrata => Some(UiCommand::OpenBuildStrata),
             MacMenuAction::CreateBlockModelFromPrismoidGrid => Some(UiCommand::CreateBlockModelFromPrismoidGrid),
             MacMenuAction::OpenAddPrismoidQualities => Some(UiCommand::OpenAddPrismoidQualities),
             MacMenuAction::OpenContourTriangulation => Some(UiCommand::OpenContourTriangulation),

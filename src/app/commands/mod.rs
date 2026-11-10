@@ -203,6 +203,8 @@ impl<'a> App<'a> {
                 | UiCommand::ExecuteCutTriangulationToSurface { .. }
                 | UiCommand::OpenBuildPrismoidGrid
                 | UiCommand::ExecuteBuildPrismoidGrid { .. }
+                | UiCommand::OpenBuildStrata
+                | UiCommand::ExecuteBuildStrata { .. }
                 | UiCommand::CreateBlockModelFromPrismoidGrid
                 | UiCommand::OpenAddPrismoidQualities
                 | UiCommand::ExecuteAddPrismoidQualities { .. }
@@ -2008,6 +2010,23 @@ impl<'a> App<'a> {
                 let result = self.build_prismoid_grid(roof_id, floor_id, step, name);
                 if result.is_ok() {
                     self.editor.tri_prismoid_open = false;
+                }
+                result
+            }
+            UiCommand::OpenBuildStrata => {
+                self.editor.tri_strata_open = true;
+                self.editor.tri_strata_rows.clear();
+                self.editor.tri_strata_intervals.clear();
+                self.editor.tri_strata_selected = None;
+                self.editor.tri_strata_step = std::num::NonZeroUsize::MIN;
+                self.editor.tri_strata_name_input.clear();
+                self.editor.tri_strata_name_auto = true;
+                Ok(())
+            }
+            UiCommand::ExecuteBuildStrata { horizons, intervals, step, name } => {
+                let result = self.build_strata(horizons, intervals, step, name);
+                if result.is_ok() {
+                    self.editor.tri_strata_open = false;
                 }
                 result
             }

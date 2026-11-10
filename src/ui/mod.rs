@@ -1799,6 +1799,10 @@ fn draw_global_dialogs(
         dialogs::triangulation::draw_build_prismoid_grid_dialog(root_ui, editor, project, commands);
     }
 
+    if editor.tri_strata_open {
+        dialogs::triangulation::draw_build_strata_dialog(root_ui, editor, project, commands);
+    }
+
     if editor.tri_prismoid_qualities_open {
         dialogs::triangulation::draw_add_prismoid_qualities_dialog(root_ui, editor, project, commands);
     }

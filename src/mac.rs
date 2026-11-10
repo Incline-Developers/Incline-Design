@@ -148,6 +148,8 @@ pub(crate) enum MacMenuAction {
     OpenCutTriangulationToSurface,
     /// The Modelling menu's row that opens the build prismoid grid dialog.
     OpenBuildPrismoidGrid,
+    /// The Modelling menu's row that opens the build strata dialog.
+    OpenBuildStrata,
     /// The Modelling menu's row that creates a block model from the selected
     /// prismoid grid.
     CreateBlockModelFromPrismoidGrid,
@@ -254,6 +256,7 @@ impl MacMenuAction {
         Self::OpenOptimizationScenarios,
         Self::CreateBlockModelFromPrismoidGrid,
         Self::OpenAddPrismoidQualities,
+        Self::OpenBuildStrata,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -654,6 +657,7 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
+    add_action(&modelling_menu, &tr!("common-build-strata-ellipsis"), "", MacMenuAction::OpenBuildStrata, &target, mtm);
     add_action(
         &modelling_menu,
         &tr!("common-create-block-model-from-prismoid-grid"),
