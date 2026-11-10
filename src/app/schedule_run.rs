@@ -1214,7 +1214,11 @@ impl crate::app::App<'_> {
             || self.editor.schedule_run_improve != improve
             || self.editor.schedule_run_repair != repair
         {
-            self.editor.schedule_result = result;
+            // The one it replaces may be held here alone by now, and freeing
+            // a long schedule is too slow for a frame: see `hold_schedule`.
+            if let Some(replaced) = std::mem::replace(&mut self.editor.schedule_result, result) {
+                rayon::spawn(move || drop(replaced));
+            }
             self.editor.schedule_run_status = status;
             self.editor.schedule_run_details = details;
             self.editor.schedule_run_stale = stale;
