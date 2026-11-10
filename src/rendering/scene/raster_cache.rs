@@ -52,6 +52,7 @@ impl RasterGpuCache {
                 [0.0; 6],
                 scene_origin,
                 "Fallback Raster",
+                false,
             ));
         }
 
@@ -81,7 +82,17 @@ impl RasterGpuCache {
             }
             self.rasters.insert(
                 raster.id,
-                upload_raster(device, queue, layout, &raster.rgba, raster.preview_size, raster.world_to_uv, scene_origin, &raster.name),
+                upload_raster(
+                    device,
+                    queue,
+                    layout,
+                    &raster.rgba,
+                    raster.preview_size,
+                    raster.world_to_uv,
+                    scene_origin,
+                    &raster.name,
+                    raster.nearest,
+                ),
             );
         }
     }
@@ -134,7 +145,9 @@ fn upload_raster(
     world_to_uv: [f64; 6],
     scene_origin: DVec3,
     name: &str,
+    nearest: bool,
 ) -> CachedRasterGpu {
+    let filter = if nearest { wgpu::FilterMode::Nearest } else { wgpu::FilterMode::Linear };
     let texture = device.create_texture_with_data(
         queue,
         &wgpu::TextureDescriptor {
@@ -159,8 +172,8 @@ fn upload_raster(
         label: Some("Raster Surface Sampler"),
         address_mode_u: wgpu::AddressMode::ClampToEdge,
         address_mode_v: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
+        mag_filter: filter,
+        min_filter: filter,
         ..Default::default()
     });
     let map = map_uniform(world_to_uv, scene_origin);

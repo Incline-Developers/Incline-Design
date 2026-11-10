@@ -1333,7 +1333,7 @@ fn draw_ui(
         commands,
     );
     elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect);
-    elements::properties::draw_prismoid_grid_legend(root_ui, editor, project, block_models, canvas_rect);
+    elements::properties::draw_prismoid_grid_legend(root_ui, editor, project, block_models, commands, canvas_rect);
 
     // --- Canvas right-click context menu ---
     if editor.canvas_context_menu_open

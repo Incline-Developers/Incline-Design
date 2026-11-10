@@ -158,6 +158,7 @@ impl<'a> App<'a> {
             world_to_uv: loaded.world_to_uv,
             projection: loaded.projection,
             driver_name: loaded.driver_name,
+            nearest: false,
         });
         self.touch_active_project_content();
         self.redraw_requested = true;

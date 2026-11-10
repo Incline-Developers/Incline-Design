@@ -2553,6 +2553,8 @@ fn prismoid_grid_entry(grid: &crate::model::prismoid_grid::OpenPrismoidGrid) -> 
         summary: grid.summary.clone(),
         values: grid.grid.cell_values.iter().map(|values| (values.name.clone(), values.role)).collect(),
         regular: grid.grid.lattice.is_regular(),
+        color: grid.color,
+        color_by: grid.color_by.clone(),
         folder: grid.state.folder,
         section: grid.state.section,
     }

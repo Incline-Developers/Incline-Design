@@ -2011,6 +2011,14 @@ impl<'a> App<'a> {
                 }
                 result
             }
+            UiCommand::SetPrismoidGridColorValue { id, value } => {
+                self.set_prismoid_grid_color_by(id, |color_by| color_by.value = value);
+                Ok(())
+            }
+            UiCommand::SetPrismoidGridColorPreset { id, preset } => {
+                self.set_prismoid_grid_color_by(id, |color_by| color_by.preset = preset);
+                Ok(())
+            }
             UiCommand::CreateBlockModelFromPrismoidGrid => {
                 let selected = self.selected_prismoid_grids();
                 let [grid_id] = selected[..] else {

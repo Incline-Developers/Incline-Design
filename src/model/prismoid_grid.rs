@@ -6,6 +6,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use anyhow::{Result, bail};
 use glam::{DMat2, DMat3, DVec2, DVec3};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     app::jobs::CancelFlag,
@@ -28,8 +29,35 @@ pub(crate) struct PrismoidGridId(pub(crate) u64);
 /// The grey a built prismoid grid starts in.
 pub(crate) const DEFAULT_PRISMOID_GRID_COLOR: [f32; 4] = [0.72, 0.72, 0.75, 1.0];
 
-/// The ramp vertical thickness is drawn on, thin blue to thick red.
+/// The ramp a grid is drawn on until another is chosen, low blue to high red.
 pub(crate) const THICKNESS_RAMP: DrillColorPreset = DrillColorPreset::Rainbow;
+
+/// What a prismoid grid is coloured by: one of its values by name, or its
+/// vertical thickness with `None`, on one of Leo's colour scales.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct PrismoidColorBy {
+    pub(crate) value: Option<String>,
+    pub(crate) preset: DrillColorPreset,
+}
+
+impl Default for PrismoidColorBy {
+    fn default() -> Self {
+        Self {
+            value: None,
+            preset: THICKNESS_RAMP,
+        }
+    }
+}
+
+impl PrismoidColorBy {
+    /// The position of the first of `names` that is the chosen value, by the
+    /// rule qualities are matched by; `None` for thickness or a name not held.
+    pub(crate) fn index<'a>(&self, mut names: impl Iterator<Item = &'a str>) -> Option<usize> {
+        let value = self.value.as_deref()?;
+        names.position(|name| same_quality_name(name, value))
+    }
+}
 
 /// Why two grid surfaces make no prismoid grid.
 #[derive(Debug)]
@@ -682,41 +710,84 @@ impl PrismoidGrid {
     /// 0.5 where the range is flat. `None` unless the lattice is regular: the
     /// map to the texture is affine, and a tensor lattice's corners are not
     /// evenly spaced.
-    pub(crate) fn thickness_map(&self, (min, max): (f64, f64), max_side: u32) -> Option<ThicknessMap> {
+    pub(crate) fn thickness_map(&self, range: (f64, f64), max_side: u32) -> Option<ThicknessMap> {
         let lattice = &self.lattice;
         if !lattice.is_regular() {
             return None;
         }
         // A side too long for a texture keeps every `step`-th corner, its
         // last texel clamped to the last corner.
-        let fit = |side: usize| {
-            let step = (side - 1).div_ceil(max_side as usize - 1);
-            (step, (side - 1).div_ceil(step) + 1)
-        };
+        let (along_u, along_v) = (texel_fit(lattice.columns(), max_side, 1), texel_fit(lattice.rows(), max_side, 1));
+        let ((column_step, width), (row_step, height)) = (along_u, along_v);
         let (columns, rows) = (lattice.columns() + 1, lattice.rows() + 1);
-        let ((column_step, width), (row_step, height)) = (fit(columns), fit(rows));
-        let position = |corner: usize| {
-            if (max - min).abs() <= HEIGHT_TOLERANCE {
-                0.5
-            } else {
-                ((self.roof[corner] - self.floor[corner] - min) / (max - min)).clamp(0.0, 1.0) as f32
-            }
-        };
         let positions = (0..height)
             .flat_map(|row| (0..width).map(move |column| (column, row)))
-            .map(|(column, row)| position((row * row_step).min(rows - 1) * columns + (column * column_step).min(columns - 1)))
+            .map(|(column, row)| {
+                let corner = (row * row_step).min(rows - 1) * columns + (column * column_step).min(columns - 1);
+                ramp_position(self.roof[corner] - self.floor[corner], range)
+            })
             .collect();
         // Texel centres on the corners kept.
-        let along = |axis: DVec2, size: f64, step: usize, count: usize| {
-            let (spacing, count) = (size * step as f64, count as f64);
-            [axis.x / (spacing * count), axis.y / (spacing * count), (0.5 - lattice.origin.dot(axis) / spacing) / count]
-        };
-        let [a, b, c] = along(lattice.u, lattice.u_sizes[0], column_step, width);
-        let [d, e, f] = along(lattice.v, lattice.v_sizes[0], row_step, height);
         Some(ThicknessMap {
             size: [width as u32, height as u32],
             positions,
-            world_to_uv: [a, b, c, d, e, f],
+            world_to_uv: texel_world_to_uv(lattice, along_u, along_v, 0.5),
+        })
+    }
+
+    /// One cell value as positions from 0 to 1 across `range` (0.5 where the
+    /// range is flat), a texel per cell inside a ring of one. `None` unless
+    /// the lattice is regular, or when `index` names no set of values.
+    pub(crate) fn cell_value_map(&self, index: usize, range: (f64, f64), max_side: u32) -> Option<CellValueMap> {
+        let lattice = &self.lattice;
+        if !lattice.is_regular() {
+            return None;
+        }
+        let values = &self.cell_values.get(index)?.values;
+        let columns = lattice.columns();
+        // A side too long for a texture keeps every `step`-th cell.
+        let (along_u, along_v) = (texel_fit(columns, max_side, 2), texel_fit(lattice.rows(), max_side, 2));
+        let ((column_step, width), (row_step, height)) = (along_u, along_v);
+        let position = |cell: usize| Some(ramp_position(values[cell].filter(|value| value.is_finite())?, range));
+        // Outer `None`: the texel is not an active cell.
+        let held: Vec<Option<Option<f32>>> = (0..width * height)
+            .map(|texel| {
+                let (i, j) = (texel % width, texel / width);
+                if i == 0 || j == 0 || i == width - 1 || j == height - 1 {
+                    return None;
+                }
+                let cell = (j - 1) * row_step * columns + (i - 1) * column_step;
+                self.active[cell].then(|| position(cell))
+            })
+            .collect();
+        // A wall stands on a cell edge, a texel boundary, so its fragments
+        // fall either side by rounding; the neighbour holding the same
+        // colour makes a straight wall read as its cell.
+        const AROUND: [(isize, isize); 8] = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)];
+        let positions = (0..width * height)
+            .map(|texel| {
+                if let Some(own) = held[texel] {
+                    return own;
+                }
+                let (i, j) = (texel % width, texel / width);
+                AROUND
+                    .iter()
+                    .find_map(|(di, dj)| {
+                        let (x, y) = (i.checked_add_signed(*di)?, j.checked_add_signed(*dj)?);
+                        if x >= width || y >= height {
+                            return None;
+                        }
+                        held[y * width + x]
+                    })
+                    .flatten()
+            })
+            .collect();
+        // Texel i lies over kept column i - 1, so a cell's centre lands on
+        // its texel's centre.
+        Some(CellValueMap {
+            size: [width as u32, height as u32],
+            positions,
+            world_to_uv: texel_world_to_uv(lattice, along_u, along_v, 1.0),
         })
     }
 
@@ -743,6 +814,16 @@ impl PrismoidGrid {
             .filter(|values| values.role == CellValueRole::Quality)
             .map(|values| (values, NumericTotal::default()))
             .collect();
+        let mut spreads: Vec<ValueSpread> = self
+            .cell_values
+            .iter()
+            .map(|values| ValueSpread {
+                name: values.name.clone(),
+                unit: values.unit.clone(),
+                range: None,
+                missing: 0,
+            })
+            .collect();
         let mut volume = 0.0;
         for cell in cells {
             active_cells += 1;
@@ -755,6 +836,9 @@ impl PrismoidGrid {
             ] {
                 let height = self.roof[corner] - self.floor[corner];
                 thickness = Some(thickness.map_or((height, height), |(min, max)| (min.min(height), max.max(height))));
+            }
+            for (values, spread) in self.cell_values.iter().zip(&mut spreads) {
+                spread.take(values.values[cell]);
             }
             // A box with no height holds nothing, as `blocks` leaves it out.
             let Some((_, measure)) = self.measure_in(cell, &u_edges, &v_edges, stretch) else {
@@ -789,6 +873,7 @@ impl PrismoidGrid {
                     total,
                 })
                 .collect(),
+            spreads,
         }
     }
 
@@ -810,12 +895,54 @@ pub(crate) struct PrismoidMesh {
     pub(crate) outline: Vec<[u32; 2]>,
 }
 
-/// A grid's vertical thickness as positions on [`THICKNESS_RAMP`], row by
-/// row, with the map from world XY to their texture coordinates.
+/// A grid's vertical thickness as positions on the grid's colour scale, row
+/// by row, with the map from world XY to their texture coordinates.
 pub(crate) struct ThicknessMap {
     pub(crate) size: [u32; 2],
     pub(crate) positions: Vec<f32>,
     pub(crate) world_to_uv: [f64; 6],
+}
+
+/// One value as positions on a colour scale, a texel per cell inside a ring
+/// of one texel, row by row, `None` where a cell has no value, with the map
+/// from world XY to texture coordinates.
+pub(crate) struct CellValueMap {
+    pub(crate) size: [u32; 2],
+    pub(crate) positions: Vec<Option<f32>>,
+    pub(crate) world_to_uv: [f64; 6],
+}
+
+/// Every `step`-th of a side's `cells` kept so that they, and `extra`
+/// texels more, fit `max_side`: the step and the texels on that side.
+fn texel_fit(cells: usize, max_side: u32, extra: usize) -> (usize, usize) {
+    let step = cells.div_ceil((max_side as usize).saturating_sub(extra).max(1));
+    (step, cells.div_ceil(step) + extra)
+}
+
+/// The map from world XY to texture coordinates for the steps and texel
+/// counts `texel_fit` gave, the lattice origin `offset` texels in.
+fn texel_world_to_uv(lattice: &Lattice, (column_step, width): (usize, usize), (row_step, height): (usize, usize), offset: f64) -> [f64; 6] {
+    let along = |axis: DVec2, size: f64, step: usize, count: usize| {
+        let (spacing, count) = (size * step as f64, count as f64);
+        [
+            axis.x / (spacing * count),
+            axis.y / (spacing * count),
+            (offset - lattice.origin.dot(axis) / spacing) / count,
+        ]
+    };
+    let [a, b, c] = along(lattice.u, lattice.u_sizes[0], column_step, width);
+    let [d, e, f] = along(lattice.v, lattice.v_sizes[0], row_step, height);
+    [a, b, c, d, e, f]
+}
+
+/// `value` as a position from 0 to 1 across `(min, max)`, 0.5 where the
+/// range is flat.
+fn ramp_position(value: f64, (min, max): (f64, f64)) -> f32 {
+    if (max - min).abs() <= HEIGHT_TOLERANCE {
+        0.5
+    } else {
+        ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
+    }
 }
 
 fn mesh_vertex(position: DVec3) -> mesh_data::Vertex {
@@ -893,6 +1020,25 @@ pub(crate) struct QualityTotal {
     pub(crate) total: NumericTotal,
 }
 
+/// One set of cell values' smallest and largest over the cells summed, and
+/// how many of those cells have none.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ValueSpread {
+    pub(crate) name: String,
+    pub(crate) unit: String,
+    pub(crate) range: Option<(f64, f64)>,
+    pub(crate) missing: usize,
+}
+
+impl ValueSpread {
+    fn take(&mut self, value: Option<f64>) {
+        match value.filter(|value| value.is_finite()) {
+            Some(value) => self.range = Some(self.range.map_or((value, value), |(min, max)| (min.min(value), max.max(value)))),
+            None => self.missing += 1,
+        }
+    }
+}
+
 /// What a prismoid grid's row reports about it.
 #[derive(Clone, Debug)]
 pub(crate) struct PrismoidGridSummary {
@@ -910,6 +1056,8 @@ pub(crate) struct PrismoidGridSummary {
     pub(crate) weighting: Weighting,
     /// Each quality's mean, density aside, in the grid's order.
     pub(crate) qualities: Vec<QualityTotal>,
+    /// Every set of values, density included, in the grid's order.
+    pub(crate) spreads: Vec<ValueSpread>,
 }
 
 /// A prismoid grid open in the project.
@@ -922,6 +1070,7 @@ pub(crate) struct OpenPrismoidGrid {
     pub(crate) grid: Arc<PrismoidGrid>,
     /// Computed once: `grid` is an immutable `Arc`, so it cannot go stale.
     pub(crate) summary: PrismoidGridSummary,
+    pub(crate) color_by: PrismoidColorBy,
 }
 
 impl OpenPrismoidGrid {
@@ -936,6 +1085,7 @@ pub(crate) struct LoadedPrismoidGrid {
     pub(crate) color: [f32; 4],
     pub(crate) grid: Arc<PrismoidGrid>,
     pub(crate) summary: PrismoidGridSummary,
+    pub(crate) color_by: PrismoidColorBy,
 }
 
 /// How a node's roof and floor stand, from their heights (NaN where

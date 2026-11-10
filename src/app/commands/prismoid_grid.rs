@@ -26,13 +26,14 @@ use crate::{
     },
     i18n::tr,
     model::{
-        Command, ItemRef, MemberKind, OpenItem, ReserveAggregation, SceneEntityId, SectionKind,
+        Command, ItemRef, ItemStyle, MemberKind, OpenItem, ReserveAggregation, SceneEntityId, SectionKind,
+        drill_hole::DrillColorPreset,
         formats::mesh_data::Triangulation,
         grid_surface::GridSurface,
         plot::format_quantity,
         prismoid_grid::{
-            AddedValues, BuildRefusal, CellReading, CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, OpenPrismoidGrid, PrismoidBuild, PrismoidGrid, PrismoidGridId,
-            PrismoidGridSummary, QualitySurface, THICKNESS_RAMP, ThicknessMap, ValuesRefusal, Weighting,
+            AddedValues, BuildRefusal, CellReading, CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, OpenPrismoidGrid, PrismoidBuild, PrismoidColorBy, PrismoidGrid,
+            PrismoidGridId, PrismoidGridSummary, QualitySurface, ValuesRefusal, Weighting,
         },
         progress::{Phase, Progress},
         project::{ModelEnvelope, ProjectItemState, unique_item_name},
@@ -53,12 +54,19 @@ const PRISMOID_OUTLINE_COLOR: [f32; 4] = [0.05, 0.06, 0.08, 1.0];
 /// Counts cell selection changes over the session; each keys its outline.
 static NEXT_CELL_SELECTION_REVISION: AtomicU64 = AtomicU64::new(1);
 
+/// Counts down from the top, clear of the project's rasters: the raster
+/// cache uploads an id's pixels once, so every map built takes a new one.
+static NEXT_PRISMOID_MAP_ID: AtomicU64 = AtomicU64::new(u64::MAX);
+
 /// A prismoid grid as the view draws it, for as long as `source` stands.
 pub(crate) struct DrawnPrismoidGrid {
     source: Arc<PrismoidGrid>,
     surface: OpenTriangulation,
-    /// `None` on a tensor lattice, which draws in the grid's flat colour.
-    thickness: Option<OpenRasterTexture>,
+    /// `None` on a tensor lattice or when the chosen value has no range,
+    /// which draw in the grid's flat colour.
+    map: Option<OpenRasterTexture>,
+    /// What `map` was made from.
+    color_by: PrismoidColorBy,
 }
 
 impl App<'_> {
@@ -302,12 +310,24 @@ impl App<'_> {
             color: DEFAULT_PRISMOID_GRID_COLOR,
             summary: grid.summary(),
             grid: Arc::new(grid),
+            color_by: PrismoidColorBy::default(),
         });
         self.touch_active_project_content();
         self.editor.selected_handles.clear();
         self.editor.selected_handles.insert(SceneEntityId::PrismoidGrid(id));
         self.invalidate_geometry();
         id
+    }
+
+    /// Change what a grid is coloured by, as one undoable style step; an
+    /// unchanged choice records nothing.
+    pub(crate) fn set_prismoid_grid_color_by(&mut self, id: PrismoidGridId, change: impl FnOnce(&mut PrismoidColorBy)) {
+        let item = ItemRef::PrismoidGrid(id);
+        let Some(ItemStyle::PrismoidGrid { loaded, hidden, mut color_by }) = self.item_style(item) else {
+            return;
+        };
+        change(&mut color_by);
+        self.set_item_style(item, ItemStyle::PrismoidGrid { loaded, hidden, color_by });
     }
 
     /// Keep the view's meshes in step with the open grids, in Geology. Runs
@@ -344,6 +364,19 @@ impl App<'_> {
                 .collect();
             for id in wanted {
                 self.spawn_prismoid_drawing(id);
+            }
+            let grids = &self.prismoid_grids;
+            let recolour: Vec<_> = self
+                .prismoid_drawn
+                .iter()
+                .filter_map(|drawn| {
+                    let id = drawn.surface.prismoid_grid?;
+                    grids.iter().any(|item| item.id == id && item.color_by != drawn.color_by).then_some(id)
+                })
+                .filter(|id| !self.job_pending(&JobKey::PrismoidGrid(*id)))
+                .collect();
+            for id in recolour {
+                self.spawn_prismoid_map(id);
             }
         }
         self.refresh_prismoid_scene();
@@ -473,7 +506,8 @@ impl App<'_> {
         let Some(item) = self.prismoid_grids.iter().find(|item| item.id == id) else {
             return;
         };
-        let (grid, name, color, range) = (Arc::clone(&item.grid), item.name.clone(), item.color, item.summary.vertical_thickness);
+        let (grid, name, color, color_by) = (Arc::clone(&item.grid), item.name.clone(), item.color, item.color_by.clone());
+        let (index, range) = map_inputs(item);
         let corners = grid.lattice.corner_count();
         if corners > NODE_BUDGET {
             self.prismoid_refused.insert(id);
@@ -507,16 +541,19 @@ impl App<'_> {
             let order = Arc::new(spatial_surface_face_order(&mesh));
             phase.set_fraction(0.8);
             proceed()?;
-            let thickness = range
-                .and_then(|range| grid.thickness_map(range, MAX_RASTER_PREVIEW_DIMENSION))
-                .map(|map| thickness_raster(id, &name, map));
+            let map = prismoid_map(&grid, &name, index, range, color_by.preset);
             let mut surface = preview_triangulation(name, Arc::new(mesh), spatial, closed.outline, order, color, PRISMOID_OUTLINE_COLOR);
             surface.id = next_view_id();
-            surface.raster_texture = thickness.as_ref().map(|raster| raster.id);
+            surface.raster_texture = map.as_ref().map(|raster| raster.id);
             surface.always_show_edges = true;
             surface.prismoid_grid = Some(id);
             phase.finish();
-            Ok(DrawnPrismoidGrid { source: grid, surface, thickness })
+            Ok(DrawnPrismoidGrid {
+                source: grid,
+                surface,
+                map,
+                color_by,
+            })
         };
         let apply = move |app: &mut App, result: Result<DrawnPrismoidGrid>| match result {
             Ok(drawn) => {
@@ -537,6 +574,44 @@ impl App<'_> {
         self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-preparing"), vec![JobKey::PrismoidGrid(id)], compute, apply);
     }
 
+    /// Rebuild only a drawn grid's colours, for a new choice of what it is
+    /// coloured by. A result that no longer matches the grid is dropped; the
+    /// next frame asks again.
+    fn spawn_prismoid_map(&mut self, id: PrismoidGridId) {
+        let Some(item) = self.prismoid_grids.iter().find(|item| item.id == id) else {
+            return;
+        };
+        let (grid, name, color_by) = (Arc::clone(&item.grid), item.name.clone(), item.color_by.clone());
+        let (index, range) = map_inputs(item);
+        let compute = move |_: &CancelFlag| -> Result<(Arc<PrismoidGrid>, PrismoidColorBy, Option<OpenRasterTexture>)> {
+            let map = prismoid_map(&grid, &name, index, range, color_by.preset);
+            Ok((grid, color_by, map))
+        };
+        let apply = move |app: &mut App, result: Result<(Arc<PrismoidGrid>, PrismoidColorBy, Option<OpenRasterTexture>)>| {
+            let Ok((grid, color_by, map)) = result else {
+                return;
+            };
+            let current = app
+                .prismoid_grids
+                .iter()
+                .any(|item| item.id == id && Arc::ptr_eq(&item.grid, &grid) && item.color_by == color_by);
+            let Some(drawn) = app
+                .prismoid_drawn
+                .iter_mut()
+                .find(|drawn| drawn.surface.prismoid_grid == Some(id) && Arc::ptr_eq(&drawn.source, &grid))
+                .filter(|_| current)
+            else {
+                return;
+            };
+            drawn.surface.raster_texture = map.as_ref().map(|raster| raster.id);
+            drawn.map = map;
+            drawn.color_by = color_by;
+            app.refresh_prismoid_scene();
+            app.invalidate_topology_bounds_and_redraw();
+        };
+        self.spawn_job_quietly(tr!("cmd-prismoid-grid-preparing"), vec![JobKey::PrismoidGrid(id)], compute, apply);
+    }
+
     /// What the merged surface list is made of, so it is put together when
     /// one of those things moves rather than once a frame.
     fn prismoid_scene_key(&self) -> u64 {
@@ -553,6 +628,7 @@ impl App<'_> {
         for drawn in &self.prismoid_drawn {
             drawn.surface.prismoid_grid.hash(&mut hasher);
             (Arc::as_ptr(&drawn.surface.mesh) as usize).hash(&mut hasher);
+            drawn.map.as_ref().map(|map| map.id).hash(&mut hasher);
         }
         hasher.finish()
     }
@@ -572,7 +648,7 @@ impl App<'_> {
             return;
         }
         self.prismoid_scene = self.triangulations.iter().chain(self.prismoid_drawn.iter().map(|drawn| &drawn.surface)).cloned().collect();
-        let maps = self.prismoid_drawn.iter().filter_map(|drawn| drawn.thickness.as_ref());
+        let maps = self.prismoid_drawn.iter().filter_map(|drawn| drawn.map.as_ref());
         self.prismoid_rasters = self.raster_textures.iter().chain(maps).cloned().collect();
         self.prismoid_scene_key = Some(key);
     }
@@ -913,31 +989,70 @@ pub(crate) fn totals_lines(summary: &PrismoidGridSummary) -> Vec<String> {
     lines
 }
 
-/// A thickness map in the ramp's colours, as a raster the drape can draw. Its
-/// id counts down from the top, clear of the project's.
-fn thickness_raster(id: PrismoidGridId, name: &str, map: ThicknessMap) -> OpenRasterTexture {
-    let stops = THICKNESS_RAMP.stops();
-    let rgba = map
-        .positions
-        .iter()
-        .flat_map(|position| {
-            let [red, green, blue] = evaluate_stops(*position, &stops, THICKNESS_RAMP.smooth()).map(linear_to_srgb_byte);
-            [red, green, blue, u8::MAX]
+/// Which of a grid's values its colours follow, `None` for thickness, and
+/// that one's range. A chosen value the grid no longer holds draws thickness.
+fn map_inputs(item: &OpenPrismoidGrid) -> (Option<usize>, Option<(f64, f64)>) {
+    let index = item.color_by.index(item.grid.cell_values.iter().map(|values| values.name.as_str()));
+    let range = match index {
+        Some(index) => item.summary.spreads.get(index).and_then(|spread| spread.range),
+        None => item.summary.vertical_thickness,
+    };
+    (index, range)
+}
+
+/// A grid's colours as a raster: thickness smooth across each cell, a value
+/// one block per cell. `None` with no range, so the body draws flat.
+fn prismoid_map(grid: &PrismoidGrid, name: &str, index: Option<usize>, range: Option<(f64, f64)>, preset: DrillColorPreset) -> Option<OpenRasterTexture> {
+    let range = range?;
+    match index {
+        None => grid
+            .thickness_map(range, MAX_RASTER_PREVIEW_DIMENSION)
+            .map(|map| ramp_raster(name, map.positions.into_iter().map(Some), map.size, map.world_to_uv, preset, false)),
+        Some(index) => grid
+            .cell_value_map(index, range, MAX_RASTER_PREVIEW_DIMENSION)
+            .map(|map| ramp_raster(name, map.positions.into_iter(), map.size, map.world_to_uv, preset, true)),
+    }
+}
+
+/// Positions on a scale as a raster the drape can draw, under a new id. A
+/// cell without a value is clear, so the body's own colour shows there.
+fn ramp_raster(name: &str, positions: impl Iterator<Item = Option<f32>>, size: [u32; 2], world_to_uv: [f64; 6], preset: DrillColorPreset, nearest: bool) -> OpenRasterTexture {
+    let stops = preset.stops();
+    let rgba = positions
+        .flat_map(|position| match position {
+            Some(position) => {
+                let [red, green, blue] = evaluate_stops(position, &stops, preset.smooth()).map(linear_to_srgb_byte);
+                [red, green, blue, u8::MAX]
+            }
+            None => [0; 4],
         })
         .collect();
     let rgba = Arc::new(rgba);
     OpenRasterTexture {
-        id: RasterTextureId(u64::MAX - id.0),
+        id: RasterTextureId(NEXT_PRISMOID_MAP_ID.fetch_sub(1, Ordering::Relaxed)),
         state: ProjectItemState::dirty(MemberKind::Raster, None).with_loaded(true),
         name: name.to_owned(),
-        source_size: map.size,
-        preview_size: map.size,
+        source_size: size,
+        preview_size: size,
         full_rgba: Arc::clone(&rgba),
         rgba,
-        world_to_uv: map.world_to_uv,
+        world_to_uv,
         projection: String::new(),
         driver_name: String::new(),
+        nearest,
     }
+}
+
+/// A scale's stops for the key's bar, which blends between neighbours: a
+/// stepped scale gives each band two stops of its colour, so the bar steps
+/// where the body does.
+pub(crate) fn ramp_bar_stops(preset: DrillColorPreset) -> Vec<(f32, [f32; 3])> {
+    let stops = preset.stops();
+    if preset.smooth() {
+        return stops.iter().map(|stop| (stop.t, stop.color)).collect();
+    }
+    let ends = stops.iter().skip(1).map(|stop| stop.t).chain([1.0]);
+    stops.iter().zip(ends).flat_map(|(stop, end)| [(stop.t, stop.color), (end, stop.color)]).collect()
 }
 
 /// `merged` unless it is empty. A free function on the two fields, because

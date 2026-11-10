@@ -27,7 +27,7 @@ use crate::{
         },
         optimization::OptimizationScenario,
         point_cloud::PointCloudId,
-        prismoid_grid::{PrismoidGridId, PrismoidGridSummary},
+        prismoid_grid::{PrismoidColorBy, PrismoidGridId, PrismoidGridSummary},
         raster::RasterTextureId,
         triangulation::TriangulationId,
     },
@@ -6987,6 +6987,16 @@ pub(crate) enum UiCommand {
         surfaces: Vec<TriangulationId>,
         density: Option<TriangulationId>,
     },
+    /// Colour a prismoid grid by one of its values, or by its vertical
+    /// thickness with `None`.
+    SetPrismoidGridColorValue {
+        id: PrismoidGridId,
+        value: Option<String>,
+    },
+    SetPrismoidGridColorPreset {
+        id: PrismoidGridId,
+        preset: DrillColorPreset,
+    },
     /// Build a closed solid from a design surface and the topography it meets.
     ExecuteBuildSolidFromSurfaces {
         design_id: TriangulationId,
@@ -7743,6 +7753,8 @@ impl UiCommand {
             Self::ExecuteBuildPrismoidGrid { name, .. } => report(tr!("tri-build-prismoid-grid"), name.clone()),
             Self::CreateBlockModelFromPrismoidGrid => report(tr!("common-create-block-model-from-prismoid-grid"), tr!("state-selected-prismoid-grid")),
             Self::ExecuteAddPrismoidQualities { .. } => report(tr!("state-add-prismoid-qualities"), tr!("state-selected-prismoid-grid")),
+            Self::SetPrismoidGridColorValue { value, .. } => report(tr!("state-colour-prismoid-grid"), value.clone().unwrap_or_else(|| tr!("thickness-points-column-vertical"))),
+            Self::SetPrismoidGridColorPreset { preset, .. } => report(tr!("state-set-prismoid-grid-colour-preset"), preset.label()),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),
             Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!("common-merge-shell-into-topology"), name.clone()),
             Self::Undo => report(tr!("common-undo"), tr!("state-previous-edit")),
@@ -8031,6 +8043,9 @@ pub(crate) struct UiPrismoidGridEntry {
     /// Whether the lattice has one column size and one row size, so its
     /// thickness can be drawn as colour.
     pub(crate) regular: bool,
+    /// The body's flat colour, which shows through cells without a value.
+    pub(crate) color: [f32; 4],
+    pub(crate) color_by: PrismoidColorBy,
     /// Folder the grid sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,

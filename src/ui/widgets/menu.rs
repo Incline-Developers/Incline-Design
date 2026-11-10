@@ -1611,6 +1611,25 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
     }
 }
 
+/// The width a [`MenuFieldCombo`] needs to show `text` whole, measured as it
+/// measures its options.
+fn combo_width_for(ui: &egui::Ui, text: &str) -> f32 {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let chrome = ui.spacing().icon_width + ui.spacing().icon_spacing + BUTTON_HORIZONTAL_PADDING * 2.0;
+    ui.painter().layout_no_wrap(text.to_owned(), font_id, egui::Color32::PLACEHOLDER).size().x + chrome
+}
+
+/// `text` cut short with an ellipsis until a combo `width` wide shows it
+/// whole, so a long option cannot widen the combo past `width`.
+pub(crate) fn elide_for_combo(ui: &egui::Ui, text: &str, width: f32) -> String {
+    let mut kept: Vec<char> = text.chars().collect();
+    let mut shown = text.to_owned();
+    while combo_width_for(ui, &shown) > width && kept.pop().is_some() {
+        shown = format!("{}…", kept.iter().collect::<String>().trim_end());
+    }
+    shown
+}
+
 /// Standard dialog keyboard shortcuts.
 ///
 /// Enter confirms the dialog's primary action and Escape cancels it, when the

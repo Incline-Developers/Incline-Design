@@ -2609,6 +2609,7 @@ pub(crate) enum ItemStyle {
     PrismoidGrid {
         loaded: bool,
         hidden: bool,
+        color_by: prismoid_grid::PrismoidColorBy,
     },
 }
 
@@ -2665,6 +2666,7 @@ impl ItemStyle {
         Self::PrismoidGrid {
             loaded: item.state.loaded,
             hidden: item.state.hidden,
+            color_by: item.color_by.clone(),
         }
     }
 
@@ -2778,6 +2780,7 @@ impl ItemStyle {
                             })
                             .fold(0usize, usize::saturating_add)
                 }
+                Self::PrismoidGrid { color_by, .. } => color_by.value.as_ref().map_or(0, String::len),
                 _ => 0,
             }
     }
@@ -3168,9 +3171,10 @@ impl EditTarget<'_> {
                     changed = true;
                 }
             }
-            (ItemRef::PrismoidGrid(id), ItemStyle::PrismoidGrid { loaded, .. }) => {
+            (ItemRef::PrismoidGrid(id), ItemStyle::PrismoidGrid { loaded, color_by, .. }) => {
                 if let Some(entry) = self.prismoid_grids.iter_mut().find(|entry| entry.id == id) {
                     entry.state.loaded = *loaded;
+                    entry.color_by = color_by.clone();
                     changed = true;
                 }
             }

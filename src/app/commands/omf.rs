@@ -721,7 +721,13 @@ impl<'a> App<'a> {
                 self.prismoid_grids.iter().map(|item| item.id.0),
             );
             let folder = project::merged_folder(folder_map, imported.folder);
-            let LoadedPrismoidGrid { name, color, grid, summary } = imported.loaded;
+            let LoadedPrismoidGrid {
+                name,
+                color,
+                grid,
+                summary,
+                color_by,
+            } = imported.loaded;
             let name = project::unique_item_name(name, self.prismoid_grids.iter().map(|item| item.name.as_str()));
             self.prismoid_grids.push(OpenPrismoidGrid {
                 id: PrismoidGridId(id),
@@ -733,6 +739,7 @@ impl<'a> App<'a> {
                 color,
                 grid,
                 summary,
+                color_by,
             });
         }
     }

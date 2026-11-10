@@ -3,11 +3,13 @@
 use glam::DVec3;
 
 use crate::{
+    app::commands::prismoid_grid::ramp_bar_stops,
     i18n::tr,
     model::{
         Document, FillStyle, ObjectColor, ObjectId, SceneEntityId,
         block_model::{BlockModelId, OpenBlockModel},
-        prismoid_grid::THICKNESS_RAMP,
+        drill_hole::DrillColorPreset,
+        prismoid_grid::{PrismoidColorBy, PrismoidGridId, ValueSpread},
         project::{LATTICE_UNIT, ModelEnvelope, ModellingSettings},
     },
     rendering::color::{color32_to_rgba, rgba_to_color32},
@@ -19,6 +21,7 @@ use crate::{
             collapsible_section::CollapsibleSection,
             context_menu::{FIELD_WIDTH, context_menu_fields},
             menu::{self, MenuButton, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, committed, menu_field_label},
+            toolbar::GROUP_CORNER_RADIUS,
             viewport::{BlockModelProperties, ViewportDockPanel, color_ramp_bar},
         },
     },
@@ -218,9 +221,103 @@ pub(crate) fn draw_selection_appearance(
 const PRISMOID_LEGEND_WIDTH: f32 = 240.0;
 const PRISMOID_LEGEND_BAR_HEIGHT: f32 = 14.0;
 
-/// The key to one selected prismoid grid's colours: the ramp, with the
-/// grid's own vertical thickness range at its ends.
-pub(crate) fn draw_prismoid_grid_legend(ui: &egui::Ui, editor: &EditorState, project: &UiProjectView, models: &[OpenBlockModel], canvas: egui::Rect) {
+/// What a prismoid grid's key says.
+#[derive(Debug, PartialEq)]
+struct PrismoidKeyText {
+    title: String,
+    bar: PrismoidKeyBar,
+    /// How many cells have no value, beside the body's own colour.
+    no_value: Option<String>,
+}
+
+#[derive(Debug, PartialEq)]
+enum PrismoidKeyBar {
+    /// The range's two ends.
+    Ends(String, String),
+    /// In the bar's place when no cell has a value.
+    Empty(String),
+}
+
+/// The key's words for the value a grid is coloured by, or for its vertical
+/// thickness with `None`.
+fn prismoid_key_text(spread: Option<&ValueSpread>, thickness: (f64, f64)) -> PrismoidKeyText {
+    let ends = |(min, max): (f64, f64)| PrismoidKeyBar::Ends(format!("{min:.2}"), format!("{max:.2}"));
+    let Some(spread) = spread else {
+        return PrismoidKeyText {
+            title: tr!("thickness-points-column-vertical"),
+            bar: ends(thickness),
+            no_value: None,
+        };
+    };
+    let title = if spread.unit.is_empty() {
+        spread.name.clone()
+    } else {
+        tr!("viewport-prismoid-value-unit", value = spread.name.clone(), unit = spread.unit.clone())
+    };
+    let (bar, no_value) = match spread.range {
+        Some(range) => (
+            ends(range),
+            (spread.missing > 0).then(|| tr!("viewport-prismoid-no-value-cells", count = spread.missing.to_string())),
+        ),
+        None => (PrismoidKeyBar::Empty(tr!("explorer-prismoid-grid-quality-no-values", quality = spread.name.clone())), None),
+    };
+    PrismoidKeyText { title, bar, no_value }
+}
+
+/// The Colour-by combo's value and options: vertical thickness, the grid's
+/// values, and a chosen name the grid does not hold, so the combo says what
+/// the item keeps while thickness is drawn.
+fn prismoid_color_choices(color_by: &PrismoidColorBy, spreads: &[ValueSpread], index: Option<usize>) -> (Option<String>, Vec<(Option<String>, String)>) {
+    let mut options: Vec<_> = std::iter::once((None, tr!("thickness-points-column-vertical")))
+        .chain(spreads.iter().map(|spread| (Some(spread.name.clone()), spread.name.clone())))
+        .collect();
+    let value = match index {
+        Some(index) => Some(spreads[index].name.clone()),
+        None => color_by.value.clone(),
+    };
+    if let (None, Some(name)) = (index, &value) {
+        options.push((value.clone(), tr!("viewport-prismoid-value-not-held", value = name.clone())));
+    }
+    (value, options)
+}
+
+/// The key's Colour-by and Colour-scale rows, both as wide as the label
+/// column leaves, so a long value name neither hides a label nor widens
+/// its row.
+fn draw_prismoid_color_fields(ui: &mut egui::Ui, id: PrismoidGridId, color_by: &PrismoidColorBy, spreads: &[ValueSpread], index: Option<usize>, commands: &mut Vec<UiCommand>) {
+    let label = tr!("viewport-prismoid-colour-by");
+    let width = menu::field_column_for(ui, &label, false);
+    let (mut value, options) = prismoid_color_choices(color_by, spreads, index);
+    if fitted_combo(ui, ("prismoid_color_value", id), label, &mut value, options, width) {
+        commands.push(UiCommand::SetPrismoidGridColorValue { id, value });
+    }
+    let mut preset = color_by.preset;
+    let presets = DrillColorPreset::ALL.map(|preset| (preset, preset.label())).into();
+    if fitted_combo(ui, ("prismoid_color_preset", id), tr!("drill-hole-colour-scale"), &mut preset, presets, width) {
+        commands.push(UiCommand::SetPrismoidGridColorPreset { id, preset });
+    }
+}
+
+/// A combo `width` wide with its texts cut to fit, the chosen one named in
+/// full on hover when cut; true when the choice changed.
+fn fitted_combo<T: PartialEq>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, label: String, value: &mut T, options: Vec<(T, String)>, width: f32) -> bool {
+    let full = options.iter().find(|(option, _)| option == value).map_or_else(String::new, |(_, text)| text.clone());
+    let selected = menu::elide_for_combo(ui, &full, width);
+    let options: Vec<_> = options.into_iter().map(|(option, text)| (option, menu::elide_for_combo(ui, &text, width).into())).collect();
+    let response = MenuFieldCombo::new(id, label, value, selected.clone(), options).width(width).show(ui);
+    if selected == full { response } else { response.on_hover_text(full) }.changed()
+}
+
+/// The key to one selected prismoid grid's colours, with what they follow
+/// and their scale: the ramp, with the grid's own range at its ends.
+pub(crate) fn draw_prismoid_grid_legend(
+    ui: &egui::Ui,
+    editor: &EditorState,
+    project: &UiProjectView,
+    models: &[OpenBlockModel],
+    commands: &mut Vec<UiCommand>,
+    canvas: egui::Rect,
+) {
     if editor.active_workspace != Workspace::Geology {
         return;
     }
@@ -231,7 +328,7 @@ pub(crate) fn draw_prismoid_grid_legend(ui: &egui::Ui, editor: &EditorState, pro
     let (Some(grid), None) = (shown.next(), shown.next()) else {
         return;
     };
-    let Some((min, max)) = grid.summary.vertical_thickness.filter(|_| grid.regular) else {
+    let Some(thickness) = grid.summary.vertical_thickness.filter(|_| grid.regular) else {
         return;
     };
     // Along the bottom edge clear of the tool panels' corner, as the
@@ -247,35 +344,49 @@ pub(crate) fn draw_prismoid_grid_legend(ui: &egui::Ui, editor: &EditorState, pro
     }
     let card_up = models.iter().any(|model| Some(model.id) == editor.viewport_block_model_id && model.state.loaded);
     let bottom = card.filter(|_| card_up).map_or(canvas.bottom(), |card| card.top());
-    let stops: Vec<_> = THICKNESS_RAMP
-        .stops()
-        .iter()
-        .map(|stop| {
-            let [red, green, blue] = stop.color;
-            (stop.t, rgba_to_color32([red, green, blue, 1.0]))
-        })
+    let spreads = &grid.summary.spreads;
+    let index = grid.color_by.index(spreads.iter().map(|spread| spread.name.as_str()));
+    let text = prismoid_key_text(index.map(|index| &spreads[index]), thickness);
+    let stops: Vec<_> = ramp_bar_stops(grid.color_by.preset)
+        .into_iter()
+        .map(|(t, [red, green, blue])| (t, rgba_to_color32([red, green, blue, 1.0])))
         .collect();
-    ViewportDockPanel::new("prismoid_grid_legend", tr!("thickness-points-column-vertical"), canvas)
+    ViewportDockPanel::new("prismoid_grid_legend", text.title, canvas)
         .anchor(egui::Align2::LEFT_BOTTOM, egui::pos2(left, bottom - BLOCK_MODEL_CARD_GAP))
         .order(egui::Order::Middle)
         .min_width(PRISMOID_LEGEND_WIDTH + 20.0)
         .max_width(PRISMOID_LEGEND_WIDTH + 20.0)
         .show(ui.ctx(), |ui| {
             ui.set_width(PRISMOID_LEGEND_WIDTH);
+            draw_prismoid_color_fields(ui, grid.id, &grid.color_by, spreads, index, commands);
             let weak = ui.visuals().weak_text_color();
             let font = egui::TextStyle::Small.resolve(ui.style());
-            let low = ui.painter().layout_no_wrap(format!("{min:.2}"), font.clone(), weak);
-            let high = ui.painter().layout_no_wrap(format!("{max:.2}"), font, weak);
             let (row, _) = ui.allocate_exact_size(egui::vec2(PRISMOID_LEGEND_WIDTH, PRISMOID_LEGEND_BAR_HEIGHT + 8.0), egui::Sense::hover());
-            let gap = 6.0;
-            let bar = egui::Rect::from_x_y_ranges(
-                row.left() + low.size().x + gap..=row.right() - high.size().x - gap,
-                row.center().y - PRISMOID_LEGEND_BAR_HEIGHT / 2.0..=row.center().y + PRISMOID_LEGEND_BAR_HEIGHT / 2.0,
-            );
-            color_ramp_bar(ui.painter(), bar, &stops);
-            let (low_at, high_at) = (row.center().y - low.size().y / 2.0, row.right() - high.size().x);
-            ui.painter().galley(egui::pos2(row.left(), low_at), low, weak);
-            ui.painter().galley(egui::pos2(high_at, low_at), high, weak);
+            match text.bar {
+                PrismoidKeyBar::Ends(low, high) => {
+                    let low = ui.painter().layout_no_wrap(low, font.clone(), weak);
+                    let high = ui.painter().layout_no_wrap(high, font, weak);
+                    let gap = 6.0;
+                    let bar = egui::Rect::from_x_y_ranges(
+                        row.left() + low.size().x + gap..=row.right() - high.size().x - gap,
+                        row.center().y - PRISMOID_LEGEND_BAR_HEIGHT / 2.0..=row.center().y + PRISMOID_LEGEND_BAR_HEIGHT / 2.0,
+                    );
+                    color_ramp_bar(ui.painter(), bar, &stops);
+                    let (low_at, high_at) = (row.center().y - low.size().y / 2.0, row.right() - high.size().x);
+                    ui.painter().galley(egui::pos2(row.left(), low_at), low, weak);
+                    ui.painter().galley(egui::pos2(high_at, low_at), high, weak);
+                }
+                PrismoidKeyBar::Empty(line) => {
+                    ui.painter().text(row.center(), egui::Align2::CENTER_CENTER, line, font, weak);
+                }
+            }
+            if let Some(line) = text.no_value {
+                ui.horizontal(|ui| {
+                    let (swatch, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                    ui.painter().rect_filled(swatch, GROUP_CORNER_RADIUS, rgba_to_color32(grid.color));
+                    ui.label(egui::RichText::new(line).small().color(weak));
+                });
+            }
         });
 }
 

@@ -35,7 +35,7 @@ use crate::{
             mesh_data::{Triangulation, Vertex},
         },
         point_cloud::{LoadedPointCloud, OpenPointCloud, prepare_for_render},
-        prismoid_grid::{CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, Lattice, LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidGrid},
+        prismoid_grid::{CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, Lattice, LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidColorBy, PrismoidGrid},
         progress::Phase,
         project::{self, ModellingSettings, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
@@ -1410,7 +1410,12 @@ fn write_prismoid_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
         open.state.source_format.as_deref(),
         "prismoid_grid",
     );
-    put(&mut element, META_STYLE, json!({ "loaded": open.state.is_visible(), "color": open.color }));
+    let mut style = json!({ "loaded": open.state.is_visible(), "color": open.color });
+    // Only a choice: a grid left on its thickness writes as before.
+    if open.color_by != PrismoidColorBy::default() {
+        style["color_by"] = serde_json::to_value(&open.color_by)?;
+    }
+    put(&mut element, META_STYLE, style);
     Ok(element)
 }
 
@@ -3556,6 +3561,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             color: style_value(style, "color").unwrap_or_else(|| element_color(element, DEFAULT_PRISMOID_GRID_COLOR)),
             summary: grid.summary(),
             grid: Arc::new(grid),
+            color_by: style_value(style, "color_by").unwrap_or_default(),
         })
     }
 
