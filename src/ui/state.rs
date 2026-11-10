@@ -30,7 +30,7 @@ use crate::{
         raster::RasterTextureId,
         triangulation::TriangulationId,
     },
-    ui::elements::main_menu::DesignRow,
+    ui::elements::main_menu::{MenuRow, workspace_menus},
 };
 
 type OptionalScreenPointPx = Option<(f32, f32)>;
@@ -416,13 +416,15 @@ impl EditorState {
         }
     }
 
-    /// Whether a tool that runs on the selection is open on a snapshot of it.
+    /// Whether a tool that took its input from the selection is open.
     ///
-    /// These tools take their inputs when they open and cannot be re-pointed
-    /// from inside, so the viewport and the explorer tree both stop taking
-    /// selection while one is up: a click that appeared to add or drop an
-    /// input would not reach the run. Changing the inputs means closing the
-    /// tool, selecting, and reopening.
+    /// These tools read the selection once, as they open, so the viewport and
+    /// the explorer tree both stop taking selection while one is up: a click
+    /// that appeared to add or drop an input would not reach the run. What
+    /// the tool works on is changed in its dialog instead (a list, or a field
+    /// pick in the viewport, which is not a selection). Create Triangulation
+    /// and the reference tools work on design objects, which have no names
+    /// to list, so those still mean closing, selecting and reopening.
     pub(crate) fn selection_locked_by_tool(&self) -> bool {
         self.tri_create_open
             || self.tri_cut_poly_open
@@ -1108,9 +1110,6 @@ pub(crate) enum ContourOutputLayer {
 pub(crate) struct SelectionCounts {
     /// Selected design objects able to contribute an edge to a triangulation.
     pub(crate) triangulation_sources: usize,
-    /// Selected design objects that enclose an area, and so can serve as a
-    /// clipping boundary.
-    pub(crate) clip_boundaries: usize,
     /// Selected design points, which a surface can be triangulated from.
     pub(crate) surface_points: usize,
     /// Selected triangulations that are loaded, and so have a mesh to work on.
@@ -1127,7 +1126,8 @@ pub(crate) struct SelectionCounts {
     pub(crate) block_models: usize,
 }
 
-/// A triangulation selector temporarily being filled from a viewport click.
+/// A triangulation tool's input temporarily being filled from a viewport
+/// click: a surface, or the clip tool's boundary polyline.
 /// Keeping one shared mode prevents overlapping dialogs from competing for a
 /// click and lets Escape cancel the pick without closing the owning tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1142,6 +1142,30 @@ pub(crate) enum TriangulationPickTarget {
     SolidDesign,
     /// The topography half of the Build Solid tool.
     SolidTopography,
+    /// The closed polyline the clip tool cuts its surface along.
+    ClipBoundary,
+    /// The surface the clip tool cuts.
+    ClipSurface,
+    /// The surface Slice by Z cuts.
+    SliceSurface,
+    /// The surface contour lines are generated from.
+    ContourSurface,
+}
+
+/// What a tool works on, chosen in its dialog. The app derives what follows
+/// from it (the output's name, the elevation range, the variables on offer),
+/// exactly as it does for a subject taken from the selection at open.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ToolSubject {
+    ClipSurface(TriangulationId),
+    SliceSurface(TriangulationId),
+    ContourSurface(TriangulationId),
+    OreBlockModel(BlockModelId),
+    /// The whole collection: a subset of its holes comes only from holes
+    /// picked in the viewport before the dialog opened.
+    BlockModelDrillholes(crate::model::drill_hole::DrillHoleId),
+    TinPointCloud(PointCloudId),
+    ClassifyPointClouds(Vec<PointCloudId>),
 }
 
 impl TriangulationPickTarget {
@@ -1152,8 +1176,14 @@ impl TriangulationPickTarget {
             Self::IncludeShape => tr!("state-click-pit-stockpile-solid-viewport"),
             Self::SolidDesign => tr!("state-click-design-surface-viewport"),
             Self::SolidTopography => tr!("state-click-topography-viewport"),
-            Self::TrimSurface => tr!("state-click-surface-viewport"),
+            Self::TrimSurface | Self::ClipSurface | Self::SliceSurface | Self::ContourSurface => tr!("state-click-surface-viewport"),
+            Self::ClipBoundary => tr!("state-click-closed-polyline-viewport"),
         }
+    }
+
+    /// Whether the click picks a closed polyline rather than a surface.
+    pub(crate) fn picks_boundary(self) -> bool {
+        self == Self::ClipBoundary
     }
 }
 
@@ -3278,8 +3308,10 @@ pub(crate) struct EditorState {
     /// Haulage step last found it.
     pub(crate) schedule_haul_connections: Option<crate::app::commands::haulage::HaulConnections>,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
-    /// Production's recent functions by [`DesignRow::key`], newest last.
-    pub(crate) recent_design_functions: Vec<String>,
+    /// Every workspace's recent functions by [`MenuRow::key`], newest last.
+    /// One list: a row belongs to one workspace, so each workspace's list is
+    /// the rows of its own in here.
+    pub(crate) recent_functions: Vec<String>,
     pub(crate) recent_functions_shown: u32,
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
@@ -4606,7 +4638,7 @@ impl EditorState {
             schedule_report_grouping: Default::default(),
             schedule_calendar: ScheduleCalendarView::default(),
             schedule_haul_connections: None,
-            recent_design_functions: Vec::new(),
+            recent_functions: Vec::new(),
             recent_functions_shown: crate::app::io::default_recent_functions_shown(),
             survey: Default::default(),
             delay_products: builtin_delay_products(),
@@ -5662,8 +5694,10 @@ pub(crate) enum UiCommand {
     CancelTextEdit,
     SetTriangulationColor(TriangulationId, [f32; 4]),
     CloseCanvasContextMenu,
-    /// Remember a menu function as just used, by its row key.
-    NoteRecentFunction(&'static str),
+    /// Remember a menu function as just used.
+    NoteRecentFunction(MenuRow),
+    /// Point an open tool at the item chosen in its dialog.
+    SetToolSubject(ToolSubject),
     LoadTriangulation(TriangulationId),
     LoadBlockModel(BlockModelId),
     CloseBlockModel(BlockModelId),
@@ -6087,6 +6121,7 @@ impl UiCommand {
             | Self::CancelTextEdit
             | Self::CloseCanvasContextMenu
             | Self::NoteRecentFunction(_)
+            | Self::SetToolSubject(_)
             | Self::OpenOptimizationScenarios
             | Self::AddOptimizationScenario
             | Self::EditOptimizationScenario(_)
@@ -6888,43 +6923,58 @@ pub(crate) struct UiProjectView {
 /// is the better tool for finding one.
 pub(crate) const RECENT_PROJECT_LIMIT: usize = 10;
 
-/// How many functions a recent list keeps, whatever it is set to show, so
-/// showing fewer and then more again loses nothing.
+/// How many functions a workspace's recent list keeps, whatever it is set to
+/// show, so showing fewer and then more again loses nothing.
 pub(crate) const RECENT_FUNCTION_LIMIT: usize = 20;
 
-/// Remember `key` as the newest use in `list` (kept newest last, as the
-/// recent projects are): a repeat moves to the end, the oldest past
-/// [`RECENT_FUNCTION_LIMIT`] drop off. Returns whether the list changed.
-pub(crate) fn note_recent(list: &mut Vec<String>, key: &str) -> bool {
+/// Remember `row` as the newest use in `list` (kept newest last, as the
+/// recent projects are): a repeat moves to the end, and the oldest of the
+/// row's workspace past [`RECENT_FUNCTION_LIMIT`] drop off, the other
+/// workspaces' rows staying as they are. Returns whether the list changed.
+pub(crate) fn note_recent(list: &mut Vec<String>, row: MenuRow) -> bool {
+    let key = row.key();
     if list.last().is_some_and(|last| last == key) {
         return false;
     }
     list.retain(|kept| kept != key);
     list.push(key.to_owned());
-    let excess = list.len().saturating_sub(RECENT_FUNCTION_LIMIT);
-    list.drain(..excess);
+    let workspace = row.workspace();
+    let shares_list = |kept: &String| MenuRow::from_key(kept).is_some_and(|kept| kept.workspace() == workspace);
+    let mut excess = list.iter().filter(|kept| shares_list(kept)).count().saturating_sub(RECENT_FUNCTION_LIMIT);
+    list.retain(|kept| {
+        let dropped = excess > 0 && shares_list(kept);
+        excess -= usize::from(dropped);
+        !dropped
+    });
     true
 }
 
 impl EditorState {
-    /// Only Production keeps a recent functions list.
+    /// Put down a triangulation tool's viewport pick without taking
+    /// anything, leaving the tool's dialog as it was.
+    pub(crate) fn cancel_triangulation_pick(&mut self) {
+        if self.triangulation_pick_target.take().is_some_and(TriangulationPickTarget::picks_boundary) {
+            // The hover highlight gives way to the boundary already chosen.
+            self.tool_highlight_id = self.tri_cut_poly_object_id;
+        }
+        self.viewport_pick_hover_label = None;
+        self.tri_hover_handles.clear();
+    }
+}
+
+impl EditorState {
+    /// A workspace with menus keeps a recent functions list of their rows.
     pub(crate) fn keeps_recent_functions(&self) -> bool {
-        self.active_workspace == Workspace::Production
+        !workspace_menus(self.active_workspace).is_empty()
     }
 
     /// The active workspace's recent functions, newest first and as many as
-    /// the preference shows; `None` where the workspace keeps no list.
-    pub(crate) fn recent_design_rows(&self) -> Option<Vec<DesignRow>> {
-        self.keeps_recent_functions().then(|| {
-            let rows = self.recent_design_functions.iter().rev().filter_map(|key| DesignRow::from_key(key));
-            rows.take(self.recent_functions_shown as usize).collect()
-        })
-    }
-
-    /// The active workspace's recent function keys; `None` where it keeps no
-    /// list.
-    pub(crate) fn recent_functions_mut(&mut self) -> Option<&mut Vec<String>> {
-        self.keeps_recent_functions().then_some(&mut self.recent_design_functions)
+    /// the preference shows.
+    pub(crate) fn recent_function_rows(&self) -> Vec<MenuRow> {
+        let rows = self.recent_functions.iter().rev().filter_map(|key| MenuRow::from_key(key));
+        rows.filter(|row| row.workspace() == Some(self.active_workspace))
+            .take(self.recent_functions_shown as usize)
+            .collect()
     }
 }
 

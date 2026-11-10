@@ -88,6 +88,8 @@ winit event → App::window_event (app/mod.rs) → app/events.rs (input, redraw)
 
 `ui/elements/main_menu.rs` (menu bar), egui context menus (`ui/elements/explorer.rs` for tree entries, `ui/dialogs/editing.rs::draw_right_click_context` for the canvas), and `src/mac.rs` (native `NSMenu`: its own `MacMenuAction` enum, a mapping back to `UiCommand` in `app/mod.rs`, and an enable/check sync pass). Adding or removing an item means editing the egui site *and* `mac.rs`.
 
+The workspace menus (Design, Triangulation, Drillholes, ...) are the exception: they are one table, `main_menu.rs::workspace_menus`, of `MenuRow`s that each carry their label, command, enabled rule and saved key. The egui bar, the macOS menus and each workspace's recent functions list (a right click on empty space; `EditorState::recent_function_rows`) all read it, so a new workspace function is a `MenuRow` variant and a place in the table, nothing more.
+
 ### State ownership
 
 - **`App`** (`app/mod.rs`) — durable: `ProjectStore` workspace, open entities, undo `History`. Many fields `#[cfg(target_arch = "wasm32")]`-gated.
@@ -98,7 +100,7 @@ Animate and the Road Network lock every item by default (`EditorState::page_lock
 
 Selection is uniform via `SceneEntityId` (`Object` / `Triangulation` / `BlockModel` / `DrillHole` / `PointCloud`); `rendering/query.rs` and `rendering/pick.rs` return one, so viewport features match on the variant rather than consulting per-kind lists.
 
-Tools that consume one kind of thing are **select first, then act**: `app/commands/scene_selection.rs` counts the selection per kind into `EditorState::selection_counts` each frame, the menu entry enables itself from that count (in `ui/elements/main_menu.rs` *and* `mac.rs`), and the open command snapshots the ids so the dialog reports its input instead of offering a picker. While one is open the viewport stops taking selection (`EditorState::selection_locked_by_tool`). Dialogs taking two surfaces still pick theirs inside the dialog: both inputs are the same kind, so a selection cannot say which is which.
+Tools that work on a named item (a surface, a point cloud, a block model, a drillhole collection) are **always in the menu, and choose that item in their dialog**: a list of the loaded ones, plus a viewport Pick for surfaces (`TriangulationPickTarget`). The selection only prefills it, when it holds exactly one of the right kind. `app/commands/tool_subject.rs` opens each tool and derives what follows from the item (output name, elevation range, variables); the dialog sends a choice back as `UiCommand::SetToolSubject(ToolSubject)`, which runs the same code. Clip by Polyline's boundary is a viewport click (`TriangulationPickTarget::ClipBoundary`; polylines have no names to list), and dialogs taking two surfaces pick both inside the dialog. Tools that work on design objects (Set X/Y/Z, Create Triangulation, the reference tools) still take them from the selection: `app/commands/scene_selection.rs` counts it per kind into `EditorState::selection_counts` each frame and the menu entry enables itself from that count (`MenuRow::enabled` in `ui/elements/main_menu.rs`). While any of these is open the viewport stops taking selection (`EditorState::selection_locked_by_tool`).
 
 ### Invalidation and caching
 

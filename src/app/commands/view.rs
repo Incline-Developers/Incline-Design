@@ -259,7 +259,7 @@ impl<'a> App<'a> {
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
-            self.editor.recent_design_functions.clone(),
+            self.editor.recent_functions.clone(),
         ))?;
 
         Ok(())
@@ -267,8 +267,8 @@ impl<'a> App<'a> {
 
     /// Remember a menu function as just used and save the list with the rest
     /// of the config; no project is touched, so nothing turns dirty.
-    pub(crate) fn note_recent_function(&mut self, key: &'static str) -> anyhow::Result<()> {
-        if !self.editor.recent_functions_mut().is_some_and(|list| note_recent(list, key)) {
+    pub(crate) fn note_recent_function(&mut self, row: crate::ui::elements::main_menu::MenuRow) -> anyhow::Result<()> {
+        if !note_recent(&mut self.editor.recent_functions, row) {
             return Ok(());
         }
         crate::app::io::save_config(&config_from(
@@ -277,7 +277,7 @@ impl<'a> App<'a> {
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
-            self.editor.recent_design_functions.clone(),
+            self.editor.recent_functions.clone(),
         ))?;
         Ok(())
     }
@@ -506,7 +506,7 @@ pub(crate) fn config_from(
     blast_library: crate::model::blast::BlastLibrary,
     coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
     mine_coordinate_system: Option<String>,
-    recent_design_functions: Vec<String>,
+    recent_functions: Vec<String>,
 ) -> crate::app::io::Config {
     crate::app::io::Config {
         language: preferences.language,
@@ -539,6 +539,6 @@ pub(crate) fn config_from(
         coordinate_systems,
         mine_coordinate_system,
         recent_functions_shown: preferences.recent_functions_shown,
-        recent_design_functions,
+        recent_functions,
     }
 }

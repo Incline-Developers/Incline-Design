@@ -217,7 +217,7 @@ pub(crate) fn draw_right_click_context(
         }
 
         if editor.keeps_recent_functions() {
-            context_submenu(ui, &tr!("edit-recent-functions"), true, |ui| draw_recent_function_rows(ui, editor, commands));
+            context_submenu(ui, &tr!("edit-recent-functions"), true, |ui| draw_recent_function_rows(ui, editor, project, commands));
         }
         if ContextMenuAction::new(tr!("survey-close")).show(ui).clicked() {
             commands.push(UiCommand::CloseCanvasContextMenu);
@@ -230,28 +230,28 @@ pub(crate) fn draw_right_click_context(
 
 /// The recent functions list a right click on empty space opens: the canvas
 /// menu's frame, place and closers, with the list as its only rows.
-pub(crate) fn draw_recent_functions_context(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>, px: f32, py: f32) {
+pub(crate) fn draw_recent_functions_context(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, px: f32, py: f32) {
     let ppp = ui.ctx().pixels_per_point();
     let pos = egui::pos2(px / ppp + 4.0, py / ppp + 4.0);
     let (_, dismissed) = ContextMenu::new("canvas_recent_functions", tr!("edit-recent-functions"))
         .position(pos)
         .width(220.0)
-        .show(ui.ctx(), |ui| draw_recent_function_rows(ui, editor, commands));
+        .show(ui.ctx(), |ui| draw_recent_function_rows(ui, editor, project, commands));
     if dismissed {
         commands.push(UiCommand::CloseCanvasContextMenu);
     }
 }
 
 /// One line per recent function, greyed exactly when its menu bar entry is.
-fn draw_recent_function_rows(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
-    let rows = editor.recent_design_rows().unwrap_or_default();
+fn draw_recent_function_rows(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    let rows = editor.recent_function_rows();
     if rows.is_empty() {
         ContextMenuAction::new(tr!("edit-no-recent-functions")).enabled(false).show(ui);
     }
     for row in rows {
-        if ContextMenuAction::new(row.path()).enabled(row.enabled(editor)).show(ui).clicked() {
+        if ContextMenuAction::new(row.path()).enabled(row.enabled(editor, project)).show(ui).clicked() {
             commands.push(row.command());
-            commands.push(UiCommand::NoteRecentFunction(row.key()));
+            commands.push(UiCommand::NoteRecentFunction(row));
             commands.push(UiCommand::CloseCanvasContextMenu);
         }
     }

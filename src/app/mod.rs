@@ -861,31 +861,13 @@ impl<'a> App<'a> {
                 None
             }
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
-            MacMenuAction::DesignRow(index) => match crate::ui::elements::main_menu::DESIGN_ROWS.get(index) {
+            MacMenuAction::MenuRow(index) => match crate::ui::elements::main_menu::MenuRow::all().nth(index) {
                 Some(row) => {
-                    self.handle_ui_commands(vec![row.command(), UiCommand::NoteRecentFunction(row.key())]);
+                    self.handle_ui_commands(vec![row.command(), UiCommand::NoteRecentFunction(row)]);
                     return;
                 }
                 None => None,
             },
-            MacMenuAction::OpenCutTriangulationByPolyline => Some(UiCommand::OpenCutTriangulationByPolyline),
-            MacMenuAction::OpenCutTriangulationByZ => Some(UiCommand::OpenCutTriangulationByZ),
-            MacMenuAction::OpenCutTriangulationBySurface => Some(UiCommand::OpenCutTriangulationBySurface),
-            MacMenuAction::OpenCutTopologyByPitShell => Some(UiCommand::OpenCutTopologyByPitShell),
-            MacMenuAction::OpenIncludeSolidInTopology => Some(UiCommand::OpenIncludeSolidInTopology),
-            MacMenuAction::OpenBuildSolidFromSurfaces => Some(UiCommand::OpenBuildSolidFromSurfaces),
-            MacMenuAction::OpenContourTriangulation => Some(UiCommand::OpenContourTriangulation),
-            MacMenuAction::OpenPointCloudTin => Some(UiCommand::OpenPointCloudTin),
-            MacMenuAction::OpenPointCloudJoin => Some(UiCommand::OpenPointCloudJoin),
-            MacMenuAction::OpenPointCloudClassify => Some(UiCommand::OpenPointCloudClassify),
-            MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
-            MacMenuAction::OpenReferencePoints => Some(UiCommand::OpenReferencePoints),
-            MacMenuAction::OpenReferenceSurface => Some(UiCommand::OpenReferenceSurface),
-            MacMenuAction::OpenOptimizationScenarios => Some(UiCommand::OpenOptimizationScenarios),
-            MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
-            MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
-            MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
-            MacMenuAction::UndrapeAllRasters => Some(UiCommand::UndrapeAllRasters),
             MacMenuAction::ToggleView(index) => crate::mac::VIEW_TOGGLES.get(index).copied().map(UiCommand::ToggleViewOption),
         };
 
@@ -980,14 +962,10 @@ impl<'a> App<'a> {
         self.editor.recent_functions_shown = config.recent_functions_shown.clamp(1, crate::ui::state::RECENT_FUNCTION_LIMIT as u32);
         // A key no row carries any more (a function since removed) is dropped.
         let mut recent = Vec::new();
-        for key in config
-            .recent_design_functions
-            .iter()
-            .filter(|key| crate::ui::elements::main_menu::DesignRow::from_key(key).is_some())
-        {
-            crate::ui::state::note_recent(&mut recent, key);
+        for row in config.recent_functions.iter().filter_map(|key| crate::ui::elements::main_menu::MenuRow::from_key(key)) {
+            crate::ui::state::note_recent(&mut recent, row);
         }
-        self.editor.recent_design_functions = recent;
+        self.editor.recent_functions = recent;
         self.configure_graphics_camera_preferences();
     }
 

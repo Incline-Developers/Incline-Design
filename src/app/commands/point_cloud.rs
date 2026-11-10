@@ -255,23 +255,6 @@ impl<'a> App<'a> {
         self.delete_item_commands(crate::model::ItemRef::PointCloud(id))
     }
 
-    /// Open the Join dialog, ticking every loaded cloud the first time and
-    /// keeping a still-valid previous pick afterwards.
-    pub(crate) fn open_point_cloud_join(&mut self) {
-        // The clouds to join are chosen in the explorer or the viewport before
-        // the dialog opens, so it reports the set rather than offering one.
-        let sources = self.selected_point_clouds();
-        if sources.len() < 2 {
-            userspace_warn!("{}", tr!("cmd-point-cloud-select-two-more-loaded-point"));
-            return;
-        }
-        self.editor.point_cloud_join_open = true;
-        self.editor.point_cloud_join_sources = sources;
-        if self.editor.point_cloud_join_name_input.trim().is_empty() {
-            self.editor.point_cloud_join_name_input = tr!("common-joined-cloud");
-        }
-    }
-
     /// Concatenate several loaded clouds into one new cloud.
     ///
     /// Survey deliveries arrive tiled across many files, and every downstream
@@ -318,32 +301,6 @@ impl<'a> App<'a> {
         };
         self.spawn_job_reporting_progress(tr!("cmd-point-cloud-joining-name", name = name.to_string()), keys, compute, apply);
         Ok(())
-    }
-
-    /// Open the Classify dialog on the selected clouds.
-    pub(crate) fn open_point_cloud_classify(&mut self) {
-        let sources = self.selected_point_clouds();
-        if sources.is_empty() {
-            userspace_warn!("{}", tr!("cmd-point-cloud-select-one-more-loaded-point"));
-            return;
-        }
-        // The sparsest cloud sets the recommendation: a cloth fine enough for
-        // the densest would leave the sparsest's particles with nothing under
-        // them.
-        self.editor.point_cloud_classify_spacing = self
-            .point_clouds
-            .iter()
-            .filter(|cloud| sources.contains(&cloud.id))
-            .filter_map(|cloud| crate::model::ground_filter::plan_spacing(&cloud.points))
-            .reduce(f64::max);
-        self.editor.point_cloud_classify_extents = self
-            .point_clouds
-            .iter()
-            .filter(|cloud| sources.contains(&cloud.id))
-            .map(|cloud| (cloud.id, (cloud.bounds.1 - cloud.bounds.0).truncate()))
-            .collect();
-        self.editor.point_cloud_classify_open = true;
-        self.editor.point_cloud_classify_sources = sources;
     }
 
     /// Classify ground and noise in each cloud and rewrite its codes in place.

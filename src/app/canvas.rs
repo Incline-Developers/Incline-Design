@@ -2,7 +2,7 @@ use crate::{
     app::{App, PICK_THRESHOLD_PX},
     i18n::tr,
     model::{Command, Object, SceneEntityId},
-    ui::state::{ActiveTool, DrapePhase, SelectionMode, TriangulationPickTarget, Workspace},
+    ui::state::{ActiveTool, DrapePhase, SelectionMode, ToolSubject, TriangulationPickTarget, Workspace},
 };
 
 impl<'a> App<'a> {
@@ -10,15 +10,35 @@ impl<'a> App<'a> {
         self.pending_selection_click = None;
 
         // A tool open on a snapshot of the selection freezes it - see
-        // `EditorState::selection_locked_by_tool`. The field pickers below run
-        // first: the two-surface tools still name their own inputs, and their
-        // pick is not a selection change.
-        if self.editor.selection_locked_by_tool() {
+        // `EditorState::selection_locked_by_tool`. A field pick still goes
+        // through: a tool naming one of its own inputs is not a selection
+        // change.
+        if self.editor.triangulation_pick_target.is_none() && self.editor.selection_locked_by_tool() {
             return;
         }
 
         if self.editor.optimization.start_pick.is_some() {
             self.pick_shell_start_at_cursor();
+            return;
+        }
+
+        // The clip tool's boundary: only a closed polyline is taken, and a
+        // click on anything else leaves the pick waiting.
+        if self.editor.triangulation_pick_target.is_some_and(TriangulationPickTarget::picks_boundary) {
+            let picked = self
+                .graphics
+                .as_ref()
+                .and_then(|graphics| graphics.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.pick_frozen, self.editor.xray_enabled));
+            if let Some((SceneEntityId::Object(id), _)) = picked
+                && let Some(object) = self.scene_document.get_object(id)
+                && object.encloses_area()
+            {
+                let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.to_string());
+                self.editor.tri_cut_poly_object_id = Some(id);
+                self.editor.tri_cut_poly_object_name = layer.map_or_else(|| tr!("common-polyline"), |layer| tr!("common-polyline-layer", layer = layer));
+                self.editor.cancel_triangulation_pick();
+                self.invalidate_geometry();
+            }
             return;
         }
 
@@ -135,7 +155,8 @@ impl<'a> App<'a> {
     /// viewport pickers. Work is invoked at the existing bounded hover-poll
     /// rate, and geometry is invalidated only when the candidate changes.
     pub(crate) fn update_viewport_field_pick_hover(&mut self) {
-        if self.editor.triangulation_pick_target.is_some() {
+        let boundary_picker = self.editor.triangulation_pick_target.is_some_and(TriangulationPickTarget::picks_boundary);
+        if self.editor.triangulation_pick_target.is_some() && !boundary_picker {
             let hovered = self
                 .graphics
                 .as_ref()
@@ -162,7 +183,7 @@ impl<'a> App<'a> {
             return;
         }
 
-        if !self.editor.drill_pattern_awaiting_shape_pick {
+        if !self.editor.drill_pattern_awaiting_shape_pick && !boundary_picker {
             return;
         }
 
@@ -260,6 +281,11 @@ impl<'a> App<'a> {
                     &tr!("common-shell"),
                 );
             }
+            // Not a surface: taken in `begin_select_or_drag`.
+            TriangulationPickTarget::ClipBoundary => {}
+            TriangulationPickTarget::ClipSurface => self.set_tool_subject(ToolSubject::ClipSurface(id)),
+            TriangulationPickTarget::SliceSurface => self.set_tool_subject(ToolSubject::SliceSurface(id)),
+            TriangulationPickTarget::ContourSurface => self.set_tool_subject(ToolSubject::ContourSurface(id)),
             TriangulationPickTarget::IncludeShape => {
                 self.editor.tri_include_solid_shape_id = Some(id);
                 if self.editor.tri_include_solid_topology_id == Some(id) {

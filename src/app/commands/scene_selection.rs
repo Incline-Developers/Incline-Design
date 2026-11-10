@@ -150,9 +150,6 @@ impl App<'_> {
                         if is_triangulation_polyline(object) {
                             counts.triangulation_sources += 1;
                         }
-                        if object.encloses_area() {
-                            counts.clip_boundaries += 1;
-                        }
                         if matches!(object, Object::Point { .. }) {
                             counts.surface_points += 1;
                         }

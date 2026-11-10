@@ -1630,9 +1630,7 @@ impl<'a> App<'a> {
                 } else if self.editor.optimization.start_pick.is_some() {
                     self.cancel_shell_start_pick();
                 } else if self.editor.triangulation_pick_target.is_some() {
-                    self.editor.triangulation_pick_target = None;
-                    self.editor.viewport_pick_hover_label = None;
-                    self.editor.tri_hover_handles.clear();
+                    self.editor.cancel_triangulation_pick();
                     self.invalidate_geometry();
                 } else if self.editor.drill_pattern_awaiting_shape_pick {
                     self.editor.drill_pattern_awaiting_shape_pick = false;
@@ -1802,9 +1800,7 @@ impl<'a> App<'a> {
             return; // let the text editor handle it
         }
         if self.editor.triangulation_pick_target.is_some() {
-            self.editor.triangulation_pick_target = None;
-            self.editor.viewport_pick_hover_label = None;
-            self.editor.tri_hover_handles.clear();
+            self.editor.cancel_triangulation_pick();
             self.invalidate_geometry();
         } else if self.editor.drill_pattern_awaiting_shape_pick {
             self.editor.drill_pattern_awaiting_shape_pick = false;
