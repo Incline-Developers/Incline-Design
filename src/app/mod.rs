@@ -884,6 +884,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenAddPrismoidQualities => Some(UiCommand::OpenAddPrismoidQualities),
             MacMenuAction::OpenPrismoidGridToSurface => Some(UiCommand::OpenPrismoidGridToSurface),
             MacMenuAction::OpenDifferencePrismoidGrids => Some(UiCommand::OpenDifferencePrismoidGrids),
+            MacMenuAction::OpenHoleMisfit => Some(UiCommand::OpenHoleMisfit),
             MacMenuAction::OpenMaskPrismoidGridByPolyline => Some(UiCommand::OpenMaskPrismoidGridByPolyline),
             MacMenuAction::TogglePrismoidMask => Some(UiCommand::TogglePrismoidMask),
             MacMenuAction::OpenContourTriangulation => Some(UiCommand::OpenContourTriangulation),

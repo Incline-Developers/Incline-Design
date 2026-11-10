@@ -1705,6 +1705,8 @@ fn draw_global_dialogs(
     dialogs::reference_surface::draw_reference_surface_dialog(root_ui, editor, project, commands);
     dialogs::thickness_points::draw_thickness_points_dialog(root_ui, editor, drill_holes, commands);
     dialogs::thickness_points::draw_thickness_table(root_ui, editor);
+    dialogs::thickness_points::draw_hole_misfit_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::thickness_points::draw_hole_misfit_table(root_ui, editor);
     dialogs::thickness_points::draw_seam_surface_dialog(root_ui, editor, commands);
     dialogs::thickness_points::draw_seam_table(root_ui, editor);
     geometry_dirty |= dialogs::drill_pattern::draw_drill_pattern_dialog(root_ui, editor, document, commands);

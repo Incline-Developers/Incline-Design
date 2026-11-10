@@ -1,7 +1,8 @@
 //! Thickness points and thickness surfaces, the App side: the surface a run
 //! measures against, the seam, holes and measured pairs it reads, and the
 //! point layer, table, saved values and report it leaves; then the seam's
-//! other surface from the latest run.
+//! other surface from the latest run. Beside them, the misfit of a prismoid
+//! grid at the same picks.
 //!
 //! The reference surface is read off its own grid, so a surface from a
 //! saved project works as well as one built this session. The seam a
@@ -23,13 +24,16 @@ use crate::{
     },
     i18n::tr,
     model::{
-        Command, LayerId, SceneEntityId,
+        Command, LayerId, Object, ObjectId, SceneEntityId,
         drill_hole::{DrillHoleId, DrillHoleRef, OpenDrillHoleDataset, ReferenceSide, ReferenceTarget},
         grid_surface::{GridSurface, NotAGrid},
-        thickness_points::{self, ColumnClash, Intercept, InterceptSource, LeftOut, LeftOutReason, PairsError, ThicknessRun},
+        prismoid_grid::{PrismoidGrid, PrismoidGridId},
+        thickness_points::{self, ColumnClash, Intercept, InterceptSource, LeftOut, LeftOutReason, MisfitQuality, MisfitRow, PairsError, ThicknessRun},
         triangulation::{GeneratedTriangulation, TriangulationId},
     },
-    ui::state::{GridCheck, PairsFile, SeamChoice, SeamSurfaceDraft, SeamTable, ThicknessPointsDraft, ThicknessTable, TriSurfaceType},
+    ui::state::{
+        GridCheck, HoleMisfitDraft, HoleMisfitTable, HoleMisfitUnit, PairsFile, SeamChoice, SeamSurfaceDraft, SeamTable, ThicknessPointsDraft, ThicknessTable, TriSurfaceType,
+    },
     userspace_log, userspace_warn,
 };
 
@@ -118,6 +122,13 @@ struct DatasetIntercepts {
     id: DrillHoleId,
     intercepts: Vec<Intercept>,
     left_out: Vec<LeftOut>,
+}
+
+/// One hole's roof and floor of a seam, as `hole_intercept` finds them.
+pub(crate) struct HoleIntercept {
+    pub(crate) hole: DrillHoleRef,
+    pub(crate) dhid: String,
+    pub(crate) found: Option<std::result::Result<Intercept, LeftOut>>,
 }
 
 impl<'a> App<'a> {
@@ -266,42 +277,13 @@ impl<'a> App<'a> {
             document_revision: project.project.document.revision(),
         };
         let read = self.surface_read(surface).map_err(anyhow::Error::msg)?;
-        let holes: Vec<DrillHoleRef> = if holes.is_empty() {
-            self.drill_holes
-                .iter()
-                .filter(|dataset| dataset.state.loaded)
-                .flat_map(|dataset| (0..dataset.dataset.holes.len()).map(|hole| DrillHoleRef { dataset: dataset.id, hole }))
-                .collect()
-        } else {
-            holes
-        };
         // Gathered here: one pass over each hole's intervals, and the worker
         // never sees the datasets.
-        let mut involved: Vec<&OpenDrillHoleDataset> = Vec::new();
-        for reference in &holes {
-            if !involved.iter().any(|dataset| dataset.id == reference.dataset)
-                && let Some(dataset) = self.drill_holes.iter().find(|dataset| dataset.id == reference.dataset && dataset.state.loaded)
-            {
-                involved.push(dataset);
-            }
-        }
-        let (codes_by_dataset, _) = super::drill_hole::reference_codes(&involved, &seam.field, &seam.target);
+        let (gathered, missing) = self.hole_intercepts(holes, &seam.field, &seam.target);
         let mut groups: Vec<DatasetIntercepts> = Vec::new();
-        let mut without = 0usize;
-        for reference in &holes {
-            let hole = involved
-                .iter()
-                .find(|dataset| dataset.id == reference.dataset)
-                .and_then(|dataset| dataset.dataset.holes.get(reference.hole));
-            let Some(hole) = hole else {
-                without += 1;
-                continue;
-            };
-            let codes = codes_by_dataset
-                .iter()
-                .find(|(id, _)| *id == reference.dataset)
-                .map_or(&[][..], |(_, codes)| codes.as_slice());
-            let Some(found) = thickness_points::hole_intercept(hole, &seam.field, codes) else {
+        let mut without = missing;
+        for HoleIntercept { hole: reference, found, .. } in gathered {
+            let Some(found) = found else {
                 without += 1;
                 continue;
             };
@@ -372,6 +354,236 @@ impl<'a> App<'a> {
         };
         self.spawn_job(tr!("cmd-thickness-points-making"), vec![project_key], compute, apply);
         Ok(())
+    }
+
+    /// Each of `holes` (none: every loaded hole) with the seam's roof and
+    /// floor on its trace, in order, and how many are no longer loaded.
+    pub(crate) fn hole_intercepts(&self, holes: Vec<DrillHoleRef>, field: &str, target: &ReferenceTarget) -> (Vec<HoleIntercept>, usize) {
+        let holes: Vec<DrillHoleRef> = if holes.is_empty() {
+            self.drill_holes
+                .iter()
+                .filter(|dataset| dataset.state.loaded)
+                .flat_map(|dataset| (0..dataset.dataset.holes.len()).map(|hole| DrillHoleRef { dataset: dataset.id, hole }))
+                .collect()
+        } else {
+            holes
+        };
+        let mut involved: Vec<&OpenDrillHoleDataset> = Vec::new();
+        for reference in &holes {
+            if !involved.iter().any(|dataset| dataset.id == reference.dataset)
+                && let Some(dataset) = self.drill_holes.iter().find(|dataset| dataset.id == reference.dataset && dataset.state.loaded)
+            {
+                involved.push(dataset);
+            }
+        }
+        let (codes_by_dataset, _) = super::drill_hole::reference_codes(&involved, field, target);
+        let mut gathered = Vec::new();
+        let mut missing = 0;
+        for reference in holes {
+            let Some(hole) = crate::ui::dialogs::reference_points::hole_of(&involved, reference) else {
+                missing += 1;
+                continue;
+            };
+            let codes = codes_by_dataset
+                .iter()
+                .find(|(id, _)| *id == reference.dataset)
+                .map_or(&[][..], |(_, codes)| codes.as_slice());
+            gathered.push(HoleIntercept {
+                hole: reference,
+                dhid: hole.dhid.clone(),
+                found: thickness_points::hole_intercept(hole, field, codes),
+            });
+        }
+        (gathered, missing)
+    }
+
+    /// Open Misfit at Holes on the one prismoid grid selected, with any
+    /// holes and quality points selected beside it.
+    pub(crate) fn open_hole_misfit(&mut self) {
+        let selected = self.selected_prismoid_grids();
+        let item = match selected[..] {
+            [grid] => self.prismoid_grids.iter().find(|item| item.id == grid),
+            _ => None,
+        };
+        let Some(item) = item else {
+            userspace_warn!("{}", tr!("ws-menubar-modelling-select-prismoid-grid"));
+            return;
+        };
+        let (grid, grid_label, category) = (item.id, item.name.clone(), item.category().to_owned());
+        let mut holes = Vec::new();
+        self.for_each_reference_hole(|hole| holes.push(hole));
+        holes.sort_unstable_by_key(|hole| (hole.dataset.0, hole.hole));
+        let (quality_points, layers) = self.selected_quality_points();
+        let qualities_label = if layers.is_empty() {
+            tr!("hole-misfit-qualities-none")
+        } else {
+            let layer = |(_, name, count): &(LayerId, String, usize)| tr!("hole-misfit-qualities-layer", layer = name.clone(), count = count.to_string());
+            layers.iter().map(layer).collect::<Vec<_>>().join(", ")
+        };
+        let seam = self.misfit_seam(&category, &holes);
+        self.editor.hole_misfit_dialog = Some(HoleMisfitDraft {
+            grid,
+            grid_label,
+            holes,
+            quality_points,
+            qualities_label,
+            seam,
+            codes: None,
+        });
+    }
+
+    /// The selected points on quality-marked layers, and each such layer
+    /// with its name and how many of them it holds, in document order.
+    fn selected_quality_points(&self) -> (Vec<ObjectId>, Vec<(LayerId, String, usize)>) {
+        let document = &self.scene_document;
+        let mut points = Vec::new();
+        let mut layers: Vec<(LayerId, String, usize)> = Vec::new();
+        for object in document.objects() {
+            let Object::Point { id, layer, .. } = object else {
+                continue;
+            };
+            if !self.editor.selected_handles.contains(&SceneEntityId::Object(*id)) {
+                continue;
+            }
+            let Some(marked) = document.layer(*layer).filter(|marked| marked.quality.is_some()) else {
+                continue;
+            };
+            points.push(*id);
+            match layers.iter_mut().find(|(seen, ..)| seen == layer) {
+                Some((_, _, count)) => *count += 1,
+                None => layers.push((*layer, marked.name.clone(), 1)),
+            }
+        }
+        (points, layers)
+    }
+
+    /// The seam a grid named `category` models, set only where that name is
+    /// exactly a working section or a code the holes log in one field alone;
+    /// else none.
+    fn misfit_seam(&self, category: &str, holes: &[DrillHoleRef]) -> SeamChoice {
+        use crate::ui::dialogs::reference_points::{categorical_fields, hole_of, logged_codes, logged_sections, seam_preset};
+        let involved: Vec<&OpenDrillHoleDataset> = self
+            .drill_holes
+            .iter()
+            .filter(|dataset| dataset.state.loaded && (holes.is_empty() || holes.iter().any(|hole| hole.dataset == dataset.id)))
+            .collect();
+        let mut found = categorical_fields(&involved).into_iter().filter_map(|field| {
+            let codes = if holes.is_empty() {
+                logged_codes(involved.iter().flat_map(|dataset| dataset.dataset.holes.iter()), &field.key)
+            } else {
+                logged_codes(holes.iter().filter_map(|reference| hole_of(&involved, *reference)), &field.key)
+            };
+            let target = seam_preset(category, &logged_sections(&involved, &field.key, &codes), &codes)?;
+            Some((field.key.clone(), target))
+        });
+        // The name in two fields does not say which is the seam's.
+        match (found.next(), found.next()) {
+            (Some((field, target)), None) => SeamChoice {
+                field: Some(field),
+                value: Some(target),
+                side: ReferenceSide::default(),
+            },
+            _ => SeamChoice::default(),
+        }
+    }
+
+    /// List `grid` less the seam's picks at `holes` and less the values of
+    /// `quality_points`, and show the table. Without a seam no hole is read.
+    pub(crate) fn misfit_at_holes(&mut self, grid: PrismoidGridId, holes: Vec<DrillHoleRef>, quality_points: &[ObjectId], seam: Option<&(String, ReferenceTarget)>) -> Result<()> {
+        let (source, grid_name) = self
+            .prismoid_grids
+            .iter()
+            .find(|item| item.id == grid && item.state.loaded)
+            .map(|item| (Arc::clone(&item.grid), item.name.clone()))
+            .with_context(|| tr!("cmd-hole-misfit-grid-gone"))?;
+        let (gathered, gone_holes) = seam.map_or_else(|| (Vec::new(), 0), |(field, target)| self.hole_intercepts(holes, field, target));
+        let hole_count = gathered.len();
+        let holes = gathered.into_iter().map(|hole| (hole.dhid, hole.found)).collect();
+        let (qualities, gone_points) = self.misfit_qualities(quality_points);
+        let rows = thickness_points::misfit_at_holes(&source, holes, &qualities, &CancelFlag::default())?;
+        let totals = thickness_points::misfit_totals(&rows, qualities.len());
+        let units = misfit_units(&source, &grid_name, &qualities);
+        let seam = crate::ui::state::misfit_seam_label(seam.map(|(_, target)| target));
+        let compared = rows.iter().filter(|row| row.result.is_ok()).count();
+        userspace_log!(
+            "{}",
+            tr!(
+                "cmd-hole-misfit-made",
+                grid = grid_name.clone(),
+                seam = seam.clone(),
+                holes = hole_count.to_string(),
+                compared = compared.to_string(),
+                not = (rows.len() - compared).to_string()
+            )
+        );
+        for total in totals.iter().filter(|total| total.compared > 0) {
+            let (Some(mean), Some((largest, row))) = (total.mean, total.largest) else {
+                continue;
+            };
+            let unit = &units[total.measure.slot()];
+            userspace_log!(
+                "{}",
+                tr!(
+                    "cmd-hole-misfit-measure",
+                    measure = unit.total_name.clone(),
+                    count = total.compared.to_string(),
+                    mean = with_unit(mean, &unit.unit),
+                    largest = with_unit(largest, &unit.unit),
+                    source = rows[row].source.clone()
+                )
+            );
+        }
+        if compared == 0 {
+            userspace_log!("{}", tr!("cmd-hole-misfit-none", grid = grid_name.clone()));
+        }
+        let not_read = (gone_holes + gone_points > 0).then(|| tr!("cmd-hole-misfit-not-read", holes = gone_holes.to_string(), points = gone_points.to_string()));
+        if let Some(not_read) = &not_read {
+            userspace_log!("{}", not_read);
+        }
+        let fingerprint = misfit_fingerprint(&rows, &units);
+        self.editor.hole_misfit_table = Some(Arc::new(HoleMisfitTable {
+            grid: grid_name,
+            seam,
+            rows,
+            totals,
+            units,
+            not_read,
+            fingerprint,
+        }));
+        Ok(())
+    }
+
+    /// The quality points named, one entry per layer in document order, and
+    /// how many are gone or on a layer that lost its mark.
+    fn misfit_qualities(&self, ids: &[ObjectId]) -> (Vec<MisfitQuality>, usize) {
+        let wanted: std::collections::HashSet<ObjectId> = ids.iter().copied().collect();
+        let document = &self.scene_document;
+        let mut read = 0;
+        let mut qualities: Vec<(LayerId, MisfitQuality)> = Vec::new();
+        for object in document.objects() {
+            let Object::Point { id, layer, pos, .. } = object else {
+                continue;
+            };
+            if !wanted.contains(id) {
+                continue;
+            }
+            let Some((name, mark)) = document.layer(*layer).and_then(|marked| Some((marked.name.clone(), marked.quality.clone()?))) else {
+                continue;
+            };
+            read += 1;
+            match qualities.iter_mut().find(|(seen, _)| seen == layer) {
+                Some((_, quality)) => quality.points.push(*pos),
+                None => qualities.push((
+                    *layer,
+                    MisfitQuality {
+                        layer: name,
+                        mark,
+                        points: vec![*pos],
+                    },
+                )),
+            }
+        }
+        (qualities.into_iter().map(|(_, quality)| quality).collect(), wanted.len().saturating_sub(read))
     }
 
     /// Report a run, lay its points down as a new layer at their roofs with
@@ -684,6 +896,66 @@ fn run_record(revision: u64, name: String, chosen: &ReferenceSeam, points: &[thi
         side: chosen.side,
         samples,
     }
+}
+
+/// Each misfit measure's names and unit, by slot: metres for the holes,
+/// the grid's unit for a quality it holds, else the points'.
+fn misfit_units(grid: &PrismoidGrid, grid_name: &str, qualities: &[MisfitQuality]) -> Vec<HoleMisfitUnit> {
+    let metres = |name: String| HoleMisfitUnit {
+        total_name: name.clone(),
+        name,
+        unit: tr!("common-m"),
+        note: None,
+    };
+    let mut units = vec![
+        metres(tr!("hole-misfit-measure-roof")),
+        metres(tr!("hole-misfit-measure-floor")),
+        metres(tr!("thickness-points-column-vertical")),
+        metres(tr!("thickness-points-column-true")),
+    ];
+    units.extend(qualities.iter().map(|quality| {
+        // A blank unit on the grid says nothing: the points' own stands.
+        let held = thickness_points::held_quality(grid, &quality.mark.name)
+            .map(|index| grid.cell_values[index].unit.trim().to_owned())
+            .filter(|held| !held.is_empty());
+        let points_unit = quality.mark.unit.trim().to_owned();
+        let note = held.as_ref().filter(|held| !points_unit.is_empty() && **held != points_unit).map(|held| {
+            tr!(
+                "hole-misfit-unit-differs",
+                unit = points_unit.clone(),
+                grid = grid_name.to_owned(),
+                grid_unit = held.clone()
+            )
+        });
+        HoleMisfitUnit {
+            name: quality.mark.name.clone(),
+            total_name: quality.layer.clone(),
+            unit: held.unwrap_or(points_unit),
+            note,
+        }
+    }));
+    units
+}
+
+/// A figure to three places with its unit, or alone where it has none.
+fn with_unit(value: f64, unit: &str) -> String {
+    let number = thickness_points::three_places(value);
+    if unit.is_empty() { number } else { format!("{number} {unit}") }
+}
+
+/// A number that moves when a run's rows or units show something else.
+fn misfit_fingerprint(rows: &[MisfitRow], units: &[HoleMisfitUnit]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let bits = |value: Option<f64>| value.map(f64::to_bits);
+    for row in rows {
+        let at = row.at.map(|at| (at.x.to_bits(), at.y.to_bits()));
+        (&row.source, row.measure.slot(), at, bits(row.picked), bits(row.model), row.result.map(f64::to_bits)).hash(&mut hasher);
+    }
+    for unit in units {
+        (&unit.name, &unit.unit, &unit.note).hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// The hole a point or left-out item came from, by name.

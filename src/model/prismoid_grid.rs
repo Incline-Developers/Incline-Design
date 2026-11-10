@@ -966,6 +966,41 @@ impl PrismoidGrid {
         (height(&self.roof), height(&self.floor))
     }
 
+    /// The roof's slope (dz/dx, dz/dy) on the triangle [`Self::heights_at`]
+    /// takes for a plan point in a cell.
+    fn roof_slope_in(&self, cell: usize, plan: DVec2, u_edges: &[f64], v_edges: &[f64]) -> DVec2 {
+        let lattice = &self.lattice;
+        let columns = lattice.columns();
+        let (column, row) = (cell % columns, cell / columns);
+        let local = lattice.local_in(column, row, plan, u_edges, v_edges).clamp(DVec2::ZERO, DVec2::ONE);
+        let [a, b, c, d] = self.cell_corners(cell).map(|corner| self.roof[corner]);
+        let (along_u, along_v) = if local.x >= local.y { (b - a, c - b) } else { (c - d, d - a) };
+        lattice.u * (along_u / lattice.u_sizes[column]) + lattice.v * (along_v / lattice.v_sizes[row])
+    }
+
+    /// The roof, floor and roof slope over a plan point, on the triangles
+    /// [`Self::closed_mesh`] draws; why not, off the lattice or on a cell
+    /// that is not active.
+    pub(crate) fn reading_at(&self, plan: DVec2) -> std::result::Result<PlanReading, PlanMiss> {
+        let lattice = &self.lattice;
+        let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));
+        let (column, row) = lattice.cell_at_in(plan, &u_edges, &v_edges).ok_or(PlanMiss::Outside)?;
+        let cell = row * lattice.columns() + column;
+        if self.masked[cell] {
+            return Err(PlanMiss::Masked);
+        }
+        if !self.active[cell] {
+            return Err(PlanMiss::Inactive);
+        }
+        let (roof, floor) = self.heights_at(cell, plan, &u_edges, &v_edges);
+        Ok(PlanReading {
+            cell,
+            roof,
+            floor,
+            roof_slope: self.roof_slope_in(cell, plan, &u_edges, &v_edges),
+        })
+    }
+
     /// The active cell a point on a section lies in, between the floor and
     /// the roof as drawn; `None` above the roof, below the floor, off the
     /// lattice or on an inactive cell.
@@ -1266,6 +1301,28 @@ pub(crate) struct SectionPoint {
     pub(crate) plan: DVec2,
     pub(crate) roof: f64,
     pub(crate) floor: f64,
+}
+
+/// The grid over one plan point: the cell, the drawn roof and floor, and the
+/// roof's slope there (dz/dx, dz/dy).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlanReading {
+    pub(crate) cell: usize,
+    pub(crate) roof: f64,
+    pub(crate) floor: f64,
+    pub(crate) roof_slope: DVec2,
+}
+
+/// Why a plan point has no reading.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlanMiss {
+    /// Off the lattice.
+    Outside,
+    /// In a cell masked by hand.
+    Masked,
+    /// In a cell the grid leaves out: a horizon does not cover it, the
+    /// horizons cross in it, or it has no thickness. Which is not kept.
+    Inactive,
 }
 
 /// A grid's vertical thickness as positions on the grid's colour scale, row

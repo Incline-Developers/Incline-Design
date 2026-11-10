@@ -663,6 +663,7 @@ impl EditorState {
             || self.reference_points_dialog.is_some()
             || self.reference_surface_dialog.is_some()
             || self.thickness_points_dialog.is_some()
+            || self.hole_misfit_dialog.is_some()
             || self.seam_surface_dialog.is_some()
             || self.thin_strings_dialog.is_some()
             // Its limits are picked from the view, so the lock lifts while a
@@ -3466,6 +3467,10 @@ pub(crate) struct EditorState {
     pub(crate) last_seam: Option<SeamChoice>,
     /// The thickness table shown, until closed.
     pub(crate) thickness_table: Option<std::sync::Arc<ThicknessTable>>,
+    /// Misfit at Holes' snapshot of its inputs while it is open.
+    pub(crate) hole_misfit_dialog: Option<HoleMisfitDraft>,
+    /// The misfit table shown, until closed.
+    pub(crate) hole_misfit_table: Option<std::sync::Arc<HoleMisfitTable>>,
     /// The thickness surfaces dialog's surface while it is open.
     pub(crate) seam_surface_dialog: Option<SeamSurfaceDraft>,
     /// The thickness grid table shown, until closed.
@@ -4271,6 +4276,7 @@ impl EditorState {
             || self.tri_prismoid_qualities_open
             || self.tri_prismoid_surface_open
             || self.tri_prismoid_difference_open
+            || self.hole_misfit_dialog.is_some()
             || self.tri_prismoid_mask_open
             || self.tri_cut_z_open
             || self.tri_cut_surface_open
@@ -4800,6 +4806,8 @@ impl EditorState {
         self.reference_surface_dialog = None;
         self.thickness_points_dialog = None;
         self.thickness_table = None;
+        self.hole_misfit_dialog = None;
+        self.hole_misfit_table = None;
         self.seam_surface_dialog = None;
         self.tri_cut_to_open = false;
         self.tri_cut_to_targets.clear();
@@ -5335,6 +5343,8 @@ impl EditorState {
             thickness_points_dialog: None,
             last_seam: None,
             thickness_table: None,
+            hole_misfit_dialog: None,
+            hole_misfit_table: None,
             seam_surface_dialog: None,
             seam_table: None,
             seam_rename_dialog: None,
@@ -7100,6 +7110,18 @@ pub(crate) enum UiCommand {
         value: Option<String>,
         name: String,
     },
+    /// Open Misfit at Holes on the one selected prismoid grid, with any
+    /// holes and quality points selected beside it.
+    OpenHoleMisfit,
+    /// List `grid` less the picks of the seam at `holes` (none: every
+    /// loaded hole), and less the values of `quality_points`. Without a
+    /// seam (its field and target), the quality points alone.
+    ExecuteHoleMisfit {
+        grid: PrismoidGridId,
+        holes: Vec<DrillHoleRef>,
+        quality_points: Vec<ObjectId>,
+        seam: Option<(String, crate::model::drill_hole::ReferenceTarget)>,
+    },
     /// Mask the selected prismoids by hand, or unmask them when every one
     /// is masked by hand.
     TogglePrismoidMask,
@@ -7331,6 +7353,7 @@ impl UiCommand {
             | Self::OpenAddPrismoidQualities
             | Self::OpenPrismoidGridToSurface
             | Self::OpenDifferencePrismoidGrids
+            | Self::OpenHoleMisfit
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
             | Self::OpenContourTriangulation
@@ -7886,6 +7909,7 @@ impl UiCommand {
             Self::ExecuteAddPrismoidQualities { .. } => report(tr!("state-add-prismoid-qualities"), tr!("state-selected-prismoid-grid")),
             Self::ExecutePrismoidGridToSurface { name, .. } => report(tr!("state-prismoid-grid-to-surface"), name.clone()),
             Self::ExecuteDifferencePrismoidGrids { name, .. } => report(tr!("state-difference-prismoid-grids"), name.clone()),
+            Self::ExecuteHoleMisfit { seam, .. } => report(tr!("state-hole-misfit"), misfit_seam_label(seam.as_ref().map(|(_, target)| target))),
             Self::TogglePrismoidMask => report(tr!("common-mask-prismoids"), tr!("state-selected-prismoid-grid")),
             Self::ExecuteMaskPrismoidGridByPolyline { .. } => report(tr!("state-mask-prismoid-grid"), tr!("state-selected-prismoid-grid")),
             Self::SetPrismoidGridColorValue { value, .. } => report(tr!("state-colour-prismoid-grid"), value.clone().unwrap_or_else(|| tr!("thickness-points-column-vertical"))),
@@ -10954,6 +10978,56 @@ pub(crate) struct ThicknessTable {
     pub(crate) name: String,
     pub(crate) surface: String,
     pub(crate) points: Vec<crate::model::thickness_points::ThicknessPoint>,
+}
+
+/// What Misfit at Holes was opened on: the grid, the holes and quality
+/// points selected with it, and the seam the user says the grid models.
+#[derive(Clone, Debug)]
+pub(crate) struct HoleMisfitDraft {
+    pub(crate) grid: PrismoidGridId,
+    pub(crate) grid_label: String,
+    /// None means every loaded hole.
+    pub(crate) holes: Vec<DrillHoleRef>,
+    pub(crate) quality_points: Vec<ObjectId>,
+    pub(crate) qualities_label: String,
+    /// The side is unused.
+    pub(crate) seam: SeamChoice,
+    /// As [`ThicknessPointsDraft::codes`].
+    pub(crate) codes: Option<(String, Vec<String>)>,
+}
+
+/// One misfit run as its table shows it.
+#[derive(Debug)]
+pub(crate) struct HoleMisfitTable {
+    pub(crate) grid: String,
+    pub(crate) seam: String,
+    pub(crate) rows: Vec<crate::model::thickness_points::MisfitRow>,
+    pub(crate) totals: Vec<crate::model::thickness_points::MisfitTotals>,
+    /// By measure slot.
+    pub(crate) units: Vec<HoleMisfitUnit>,
+    /// The holes and quality points asked for and gone, in words.
+    pub(crate) not_read: Option<String>,
+    /// Moves with what the rows show, so their widths are measured again.
+    pub(crate) fingerprint: u64,
+}
+
+/// The seam a misfit run names: the seam's label, or that it took the
+/// quality points alone.
+pub(crate) fn misfit_seam_label(target: Option<&crate::model::drill_hole::ReferenceTarget>) -> String {
+    target.map_or_else(|| tr!("hole-misfit-qualities-only"), crate::model::drill_hole::ReferenceTarget::label)
+}
+
+/// How a misfit measure is named and in what unit.
+#[derive(Clone, Debug)]
+pub(crate) struct HoleMisfitUnit {
+    /// In the Measure column: "Roof RL", or the quality's name.
+    pub(crate) name: String,
+    /// In the totals: the same, or the quality layer's name.
+    pub(crate) total_name: String,
+    pub(crate) unit: String,
+    /// Said beside each compared row: a points unit that differs from the
+    /// grid's.
+    pub(crate) note: Option<String>,
 }
 
 /// What the rename seam dialog holds while open: the seam, where it was

@@ -212,6 +212,8 @@ impl<'a> App<'a> {
                 | UiCommand::ExecutePrismoidGridToSurface { .. }
                 | UiCommand::OpenDifferencePrismoidGrids
                 | UiCommand::ExecuteDifferencePrismoidGrids { .. }
+                | UiCommand::OpenHoleMisfit
+                | UiCommand::ExecuteHoleMisfit { .. }
                 | UiCommand::TogglePrismoidMask
                 | UiCommand::OpenMaskPrismoidGridByPolyline
                 | UiCommand::ExecuteMaskPrismoidGridByPolyline { .. }
@@ -2131,6 +2133,22 @@ impl<'a> App<'a> {
                 let result = self.difference_prismoid_grids(grid, other, value, name);
                 if result.is_ok() {
                     self.editor.tri_prismoid_difference_open = false;
+                }
+                result
+            }
+            UiCommand::OpenHoleMisfit => {
+                self.open_hole_misfit();
+                Ok(())
+            }
+            UiCommand::ExecuteHoleMisfit {
+                grid,
+                holes,
+                quality_points,
+                seam,
+            } => {
+                let result = self.misfit_at_holes(grid, holes, &quality_points, seam.as_ref());
+                if result.is_ok() {
+                    self.editor.hole_misfit_dialog = None;
                 }
                 result
             }
