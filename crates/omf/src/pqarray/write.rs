@@ -20,6 +20,10 @@ pub struct PqWriteOptions {
     pub row_group_size: usize,
     pub compression_level: u32,
     pub statistics: bool,
+    /// Store each column chunk's distinct values once and refer to them, where
+    /// that is smaller; Parquet falls back to plain values for the rest of a
+    /// chunk once its distinct values outgrow a dictionary page.
+    pub dictionary: bool,
 }
 
 impl Default for PqWriteOptions {
@@ -31,6 +35,7 @@ impl Default for PqWriteOptions {
             compression_level: 6,
             // Statistics just waste time because we don't read them.
             statistics: false,
+            dictionary: false,
         }
     }
 }
@@ -44,8 +49,8 @@ impl PqWriteOptions {
             ))
             .set_statistics_enabled(if self.statistics { DEFAULT_STATISTICS_ENABLED } else { EnabledStatistics::None })
             .set_max_row_group_row_count(Some(self.row_group_size))
-            // We don't need any fancy encodings, and not using them is faster.
-            .set_dictionary_enabled(false)
+            .set_dictionary_enabled(self.dictionary)
+            // Plain values otherwise, and as the fallback from a dictionary.
             .set_encoding(Encoding::PLAIN)
             .build()
     }

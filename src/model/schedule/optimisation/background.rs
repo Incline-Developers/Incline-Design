@@ -38,22 +38,6 @@ pub(crate) fn spawn<T: Send + 'static>(name: &str, work: impl FnOnce() -> T + Se
 }
 
 impl<T: Send + 'static> Background<T> {
-    /// Work that has already finished with `value`.
-    pub(crate) fn done(value: T) -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            Self {
-                handle: std::thread::spawn(move || value),
-            }
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            Self {
-                slot: std::sync::Arc::new(std::sync::Mutex::new(Some(value))),
-            }
-        }
-    }
-
     pub(crate) fn is_finished(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {

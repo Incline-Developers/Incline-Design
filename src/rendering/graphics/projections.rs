@@ -630,11 +630,12 @@ impl<'a> Graphics<'a> {
             .filter(|outline| !outline.name.is_empty())
             .filter_map(|outline| {
                 let world = DVec3::new(outline.anchor[0], outline.anchor[1], outline.plane);
-                let selected = (if editor.is_dig_strips_step() {
-                    editor.selected_dig_block
+                let shape = crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor);
+                let selected = if editor.is_dig_strips_step() {
+                    editor.selected_dig_blocks.contains(&shape)
                 } else {
-                    editor.selected_blast
-                }) == Some(crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
+                    editor.selected_blast == Some(shape)
+                };
                 self.world_to_window_px(&self.view_proj(), world).map(|point| (outline.name.clone(), point, selected))
             })
             .collect();

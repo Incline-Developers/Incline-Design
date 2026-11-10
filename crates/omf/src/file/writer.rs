@@ -85,6 +85,7 @@ impl From<Compression> for flate2::Compression {
 pub struct Writer<W: Write + Seek> {
     pub(crate) builder: Builder<W>,
     compression: Compression,
+    dictionary_encoding: bool,
 }
 
 impl Writer<File> {
@@ -102,6 +103,7 @@ impl<W: Write + Seek> Writer<W> {
         Ok(Self {
             builder: Builder::new(write)?,
             compression: Default::default(),
+            dictionary_encoding: false,
         })
     }
 
@@ -116,6 +118,22 @@ impl<W: Write + Seek> Writer<W> {
     /// The default is `Compression::default()`.
     pub fn set_compression(&mut self, compression: Compression) {
         self.compression = compression;
+    }
+
+    /// Whether Parquet arrays are written with dictionary encoding.
+    pub fn dictionary_encoding(&self) -> bool {
+        self.dictionary_encoding
+    }
+
+    /// Write the Parquet arrays that follow with dictionary encoding, or not.
+    ///
+    /// Each column chunk then stores its distinct values once and refers to
+    /// them, which shrinks arrays with repeated values and reads faster; a chunk
+    /// with too many distinct values falls back to plain values. It is a
+    /// standard Parquet encoding. Off by default, as building the dictionary
+    /// costs time when writing arrays that rarely repeat a value.
+    pub fn set_dictionary_encoding(&mut self, enabled: bool) {
+        self.dictionary_encoding = enabled;
     }
 
     /// Write an array from already-encoded bytes.

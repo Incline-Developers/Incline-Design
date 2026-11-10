@@ -56,12 +56,18 @@ pub(crate) struct MipOptions {
     pub presolve: bool,
     pub presolve_reduction_limit: i64,
     pub restart_presolve_reduction_limit: i64,
+    /// Not HiGHS's: a cap on the root's separation rounds, sub-MIPs aside.
+    pub max_root_separation_rounds: Option<i64>,
 }
+
+/// HiGHS's default `mip_feasibility_tolerance`: how far a row or bound may
+/// be broken, and a value lie off a whole number, in a feasible solution.
+pub const MIP_FEASIBILITY_TOLERANCE: f64 = 1e-6;
 
 impl Default for MipOptions {
     fn default() -> Self {
         Self {
-            mip_feasibility_tolerance: 1e-6,
+            mip_feasibility_tolerance: MIP_FEASIBILITY_TOLERANCE,
             small_matrix_value: 1e-9,
             random_seed: 0,
             objective_bound: INF,
@@ -92,6 +98,7 @@ impl Default for MipOptions {
             presolve: true,
             presolve_reduction_limit: -1,
             restart_presolve_reduction_limit: -1,
+            max_root_separation_rounds: None,
         }
     }
 }
@@ -551,7 +558,7 @@ impl MipData {
             if model.is_col_integer(i) && fractionality(solution[i]) > self.feastol {
                 return false;
             }
-            obj += model.col_cost[i] * solution[i];
+            obj += CDouble::new(model.col_cost[i]) * solution[i];
         }
         for i in 0..model.num_row {
             let mut rowactivity = 0.0;
@@ -637,7 +644,7 @@ impl MipData {
         let mut obj = CDouble::new(lp.offset);
         for i in 0..lp.num_col {
             let value = col_value[i];
-            obj += lp.col_cost[i] * value;
+            obj += CDouble::new(lp.col_cost[i]) * value;
             if lp.integrality[i] == VarType::Integer {
                 integrality_violation = super::cmax(fractionality(value), integrality_violation);
             }
@@ -743,13 +750,16 @@ impl MipData {
                     orig.a_value.clone(),
                     lp_options,
                 );
+                repair.set_interrupt(self.interrupt.clone());
                 repair.run();
                 self.total_repair_lp_iterations += repair.iterations() as i64;
                 let primal_feasible = repair.primal_feasible();
                 if primal_feasible {
                     self.total_repair_lp_feasible += 1;
                     col_value = repair.col_value().unwrap().to_vec();
-                    row_value = repair.row_value().unwrap().to_vec();
+                    // Row activities in quad precision from the repaired
+                    // columns (HiGHS #3181).
+                    row_value = super::calculate_row_values_quad(&self.orig_model, &col_value);
                     allow_try_again = false;
                     continue;
                 }
@@ -987,7 +997,7 @@ impl MipData {
             }
             let mut cdouble_obj = CDouble::new(0.0);
             for i_col in 0..num_col {
-                cdouble_obj += self.model.col_cost[i_col] * solution[i_col];
+                cdouble_obj += CDouble::new(self.model.col_cost[i_col]) * solution[i_col];
             }
             let sol = solution.clone();
             self.add_incumbent(&sol, cdouble_obj.value(), *source, true, false);

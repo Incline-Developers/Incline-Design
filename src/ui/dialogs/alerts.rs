@@ -11,19 +11,18 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::{
     i18n::tr,
-    logging::{ConsoleEntry, ConsoleEntryId, ConsoleEntryState, ConsoleSeverity, ConsoleSnapshot},
+    logging::{ConsoleEntryId, ConsoleEntryState, ConsoleSeverity, ConsoleSnapshot},
     ui::{
         elements::console::{console_entry_text, severity_icon},
         state::EditorState,
-        widgets::{
-            collapsible_section::CollapsibleSection,
-            menu::{self, DragableMenu, MenuButton},
-        },
+        widgets::menu::{self, DragableMenu, MenuButton},
     },
 };
 
 const ICON_SIDE: f32 = 32.0;
-const DETAILS_MAX_HEIGHT: f32 = 180.0;
+/// The most of the window an alert's messages may take before they scroll,
+/// so a long run of them never pushes its buttons off screen.
+const MESSAGES_MAX_SHARE: f32 = 0.6;
 /// One width for every alert, so the dialog does not jump as they change.
 const WIDTH: f32 = 440.0;
 
@@ -86,7 +85,6 @@ pub(crate) fn draw_alert_dialog(ui: &mut egui::Ui, editor: &mut EditorState, sna
 
     let mut open = true;
     let mut close = false;
-    let mut close_all = false;
     DragableMenu::new("alert_dialog", entry.title.clone())
         .open(&mut open)
         .order(egui::Order::Tooltip)
@@ -109,14 +107,30 @@ pub(crate) fn draw_alert_dialog(ui: &mut egui::Ui, editor: &mut EditorState, sna
                     };
                     let size = egui::TextStyle::Body.resolve(ui.style()).size;
                     let color = ui.visuals().text_color();
-                    let mut message = egui::text::LayoutJob::default();
-                    message.append(
-                        &label,
-                        0.0,
-                        egui::TextFormat::simple(egui::FontId::new(size, egui::FontFamily::Name("noto_sans_bold".into())), color),
-                    );
-                    message.append(&format!(" {}", entry.summary), 0.0, egui::TextFormat::simple(egui::FontId::proportional(size), color));
-                    ui.add(egui::Label::new(message).wrap());
+                    // Every message whole: the summary is the console's one
+                    // line, shortened to fit a row, and the details are what
+                    // was actually said. One that warned twenty times says all
+                    // twenty, one under the other.
+                    let messages: Vec<&str> = if entry.details.is_empty() {
+                        vec![entry.summary.as_str()]
+                    } else {
+                        entry.details.iter().map(String::as_str).collect()
+                    };
+                    let max_height = ui.ctx().content_rect().height() * MESSAGES_MAX_SHARE;
+                    egui::ScrollArea::vertical().max_height(max_height).auto_shrink([false, true]).show(ui, |ui| {
+                        for (index, text) in messages.into_iter().enumerate() {
+                            let mut message = egui::text::LayoutJob::default();
+                            if index == 0 {
+                                message.append(
+                                    &format!("{label} "),
+                                    0.0,
+                                    egui::TextFormat::simple(egui::FontId::new(size, egui::FontFamily::Name("noto_sans_bold".into())), color),
+                                );
+                            }
+                            message.append(text, 0.0, egui::TextFormat::simple(egui::FontId::proportional(size), color));
+                            ui.add(egui::Label::new(message).wrap().selectable(true));
+                        }
+                    });
                     let meta = if waiting > 0 {
                         tr!("alerts-time-more-waiting", time = entry.timestamp.clone(), count = waiting)
                     } else {
@@ -125,16 +139,6 @@ pub(crate) fn draw_alert_dialog(ui: &mut egui::Ui, editor: &mut EditorState, sna
                     ui.label(egui::RichText::new(meta).small().weak());
                 });
             });
-            if has_more_than_summary(entry) {
-                ui.add_space(4.0);
-                CollapsibleSection::new(egui::Id::unique(("alert_details", entry.id)), tr!("alerts-details")).show(ui, |ui| {
-                    egui::ScrollArea::vertical().max_height(DETAILS_MAX_HEIGHT).show(ui, |ui| {
-                        for detail in &entry.details {
-                            ui.add(egui::Label::new(egui::RichText::new(detail).monospace().weak()).selectable(true).wrap());
-                        }
-                    });
-                });
-            }
             menu::menu_actions(ui, |ui| {
                 if ui.add(MenuButton::new(tr!("common-close")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
@@ -143,24 +147,10 @@ pub(crate) fn draw_alert_dialog(ui: &mut egui::Ui, editor: &mut EditorState, sna
                     ui.ctx().copy_text(console_entry_text(entry));
                     editor.toasts.push(tr!("alerts-copied"));
                 }
-                if waiting > 0 && ui.add(MenuButton::new(tr!("alerts-close-all"))).clicked() {
-                    close_all = true;
-                }
             });
         });
 
-    if close_all {
-        editor.alerts.queue.clear();
-    } else if close || !open {
+    if close || !open {
         editor.alerts.queue.pop_front();
-    }
-}
-
-/// Whether the details say anything the summary line does not.
-fn has_more_than_summary(entry: &ConsoleEntry) -> bool {
-    match entry.details.as_slice() {
-        [] => false,
-        [only] => only.split_whitespace().ne(entry.summary.split_whitespace()),
-        _ => true,
     }
 }

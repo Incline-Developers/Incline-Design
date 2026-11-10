@@ -32,6 +32,7 @@ impl crate::app::App<'_> {
         match edit {
             ScheduleEdit::DeleteClass(id) => plan.class(*id).map(|class| class.name.clone()),
             ScheduleEdit::DeleteAgent(id) => plan.agent(*id).map(|agent| agent.name.clone()),
+            ScheduleEdit::DeleteCalendarView(id) => plan.calendar_views().view(*id).map(|view| view.name.clone()),
             ScheduleEdit::CopyBar(id) => plan.bar(*id).map(|bar| bar.name().to_owned()),
             ScheduleEdit::DeleteBars(ids) => Some(ids.iter().filter_map(|id| plan.bar(*id)).map(|bar| bar.name().to_owned()).collect::<Vec<_>>().join(", ")),
             ScheduleEdit::DuplicateOpeningLot { destination, lot: id } | ScheduleEdit::DeleteOpeningLot { destination, lot: id } => {
@@ -80,6 +81,37 @@ impl crate::app::App<'_> {
             ScheduleEdit::RenameAgent { agent, name } => self.rename_loader_agent(agent, name),
             ScheduleEdit::SetAgentClass { agent, class } => self.set_loader_agent_class(agent, class),
             ScheduleEdit::DeleteAgent(agent) => self.delete_loader_agent(agent),
+            ScheduleEdit::AddCalendarView(view) => {
+                let mut added = None;
+                self.edit_schedule(|plan| {
+                    added = Some(plan.calendar_views_mut().add(view));
+                    Ok(())
+                });
+                // Saving the Calendar's own view as a view of its own is
+                // what makes the changes made to it that view's.
+                if added.is_some() {
+                    self.editor.schedule_calendar.view = added;
+                    self.editor.schedule_calendar.unsaved_view = None;
+                }
+            }
+            ScheduleEdit::SetCalendarView(view) => self.edit_schedule(|plan| {
+                plan.calendar_views_mut().replace(view);
+                Ok(())
+            }),
+            ScheduleEdit::DeleteCalendarView(id) => {
+                self.edit_schedule(|plan| {
+                    plan.calendar_views_mut().remove(id);
+                    Ok(())
+                });
+                if self.editor.schedule_calendar.view == Some(id) {
+                    self.editor.schedule_calendar.view = None;
+                }
+            }
+            ScheduleEdit::MoveMachineGroup { kind, before } => self.edit_schedule(|plan| {
+                plan.move_machine_group(kind, before);
+                Ok(())
+            }),
+            ScheduleEdit::MoveMachine { agent, before } => self.edit_schedule(|plan| plan.move_machine(agent, before)),
             ScheduleEdit::SetCalendarCells { edits } => self.set_calendar_cells(edits),
             ScheduleEdit::SetTonnageField(field) => self.set_tonnage_field(field),
             ScheduleEdit::SetUnmeasuredAsZero(zero) => self.edit_schedule(|plan| {
@@ -135,7 +167,12 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetRuleDestinations { rule, destinations } => self.edit_routing(|routing| routing.set_rule_destinations(rule, destinations)),
             ScheduleEdit::SetRuleLoaders { rule, loaders } => self.edit_routing(|routing| routing.set_rule_loaders(rule, loaders)),
             ScheduleEdit::SetRuleSources { rule, sources } => self.edit_routing(|routing| routing.set_rule_sources(rule, sources)),
-            ScheduleEdit::SetRuleConditions { rule, conditions } => self.edit_routing(|routing| routing.set_rule_conditions(rule, conditions)),
+            ScheduleEdit::SetRuleConditions { rule, conditions, sources } => self.edit_routing(|routing| {
+                if let Some(sources) = sources {
+                    routing.set_rule_sources(rule, sources)?;
+                }
+                routing.set_rule_conditions(rule, conditions)
+            }),
             ScheduleEdit::MoveRule { rule, later } => self.edit_routing(|routing| routing.move_rule(rule, later)),
             ScheduleEdit::AddTruckClass { name } => self.add_truck_class(name),
             ScheduleEdit::DuplicateTruckClass(class) => self.duplicate_truck_class(class),
@@ -170,7 +207,12 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetCashflowRuleLoaders { rule, loaders } => self.edit_cashflow(|cashflow| cashflow.set_rule_loaders(rule, loaders)),
             ScheduleEdit::SetCashflowRuleSources { rule, sources } => self.edit_cashflow(|cashflow| cashflow.set_rule_sources(rule, sources)),
             ScheduleEdit::SetCashflowRuleDestinations { rule, destinations } => self.edit_cashflow(|cashflow| cashflow.set_rule_destinations(rule, destinations)),
-            ScheduleEdit::SetCashflowRuleConditions { rule, conditions } => self.edit_cashflow(|cashflow| cashflow.set_rule_conditions(rule, conditions)),
+            ScheduleEdit::SetCashflowRuleConditions { rule, conditions, sources } => self.edit_cashflow(|cashflow| {
+                if let Some(sources) = sources {
+                    cashflow.set_rule_sources(rule, sources)?;
+                }
+                cashflow.set_rule_conditions(rule, conditions)
+            }),
             ScheduleEdit::SetCashflowRuleValue { rule, value_per_tonne } => self.edit_cashflow(|cashflow| cashflow.set_rule_value(rule, value_per_tonne)),
             ScheduleEdit::SetClassReclaimRate { class, rate_tph } => self.edit_schedule(|plan| plan.set_class_reclaim_rate(class, rate_tph)),
             ScheduleEdit::SetClassKind { class, kind } => self.edit_schedule(|plan| plan.set_class_kind(class, kind)),
@@ -221,8 +263,7 @@ impl crate::app::App<'_> {
                 maximum_t,
                 insert_lane,
             } => self.add_reclaim_bar(name, agent, priority, window, sources, maximum_t, insert_lane),
-            ScheduleEdit::SetReclaimSources { bar, sources } => self.set_reclaim_sources(bar, sources),
-            ScheduleEdit::SetReclaimMaximum { bar, maximum_t } => self.edit_schedule(|plan| plan.set_reclaim_maximum(bar, maximum_t)),
+            ScheduleEdit::SetReclaim { bar, sources, maximum_t } => self.set_reclaim(bar, sources, maximum_t),
             ScheduleEdit::SetExperimentHorizon { end_day, interval_h } => self.edit_schedule(|plan| {
                 // One edit, both fields: a horizon and the resolution it is
                 // split at are typed together and are one undo step.
@@ -823,13 +864,29 @@ impl crate::app::App<'_> {
     /// A selection identical to the one the bar already holds is not an edit
     /// and is dropped before the undo history sees it, so reopening the popup
     /// and closing it again leaves nothing behind.
-    fn set_reclaim_sources(&mut self, bar: BarId, sources: Vec<crate::model::schedule::DestinationId>) {
-        if !self.reclaim_sources_are_stockpiles(&sources) {
+    /// A reclaim bar's sources and cap, as the one undo step its dialog's
+    /// Apply is.
+    fn set_reclaim(&mut self, bar: BarId, sources: Vec<crate::model::schedule::DestinationId>, maximum_t: Option<f64>) {
+        // Sources left as they were are not authored again, so a cap can
+        // still be changed on a bar holding an entry that needs repair.
+        let held = self.workspace.active_document().is_some_and(|document| {
+            document
+                .schedule()
+                .bars()
+                .iter()
+                .any(|other| other.id == bar && matches!(&other.work, crate::model::schedule::BarWork::Reclaim(work) if work.sources == sources))
+        });
+        if !held && !self.reclaim_sources_are_stockpiles(&sources) {
             return;
         }
-        // `edit_schedule` already drops an edit that changed nothing, so a
-        // selection equal to the one held never reaches the undo history.
-        self.edit_schedule(|plan| plan.set_reclaim_sources(bar, sources).map(|_| ()));
+        // `edit_schedule` already drops an edit that changed nothing, so an
+        // Apply with nothing changed never reaches the undo history.
+        self.edit_schedule(|plan| {
+            if !held {
+                plan.set_reclaim_sources(bar, sources)?;
+            }
+            plan.set_reclaim_maximum(bar, maximum_t)
+        });
     }
 
     /// Whether every *newly authored* source is a stockpile today.

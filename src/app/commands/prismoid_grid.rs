@@ -36,7 +36,7 @@ use crate::{
         drill_hole::DrillColorPreset,
         formats::mesh_data::{self, Triangulation},
         grid_surface::GridSurface,
-        plot::format_quantity,
+        numbers::format_quantity,
         prismoid_grid::{
             AddedValues, BuildRefusal, CellReading, CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, DifferenceRefusal, DifferenceReport, OpenPrismoidGrid, PrismoidBuild,
             PrismoidColorBy, PrismoidGrid, PrismoidGridId, PrismoidGridSummary, QualitySurface, Quantity, SectionCrossing, SectionPoint, Stratum, ValuesRefusal, Weighting,

@@ -8,9 +8,9 @@
 use crate::{
     i18n::tr,
     model::{
+        numbers::format_quantity,
         optimization::format_factor,
         optimization_run::report::{Basis, Bucket, OptimizationReport, WASTE, strip_ratio},
-        plot::format_quantity,
     },
     ui::{
         state::{OptimizationState, ResultsSource, ShellFilter, UiCommand},
@@ -19,6 +19,7 @@ use crate::{
             bar_line_chart::{BarLineChart, BarSeries, LineSeries},
             context_menu::context_menu_separator,
             data_table::DataTable,
+            hint::Hint,
             menu::{self, DragableMenu, MenuButton, menu_note},
             toolbar::ToolbarButton,
         },
@@ -172,7 +173,7 @@ fn draw_controls(
             (Basis::Cumulative, tr!("opt-results-cumulative"), tr!("opt-results-cumulative-hint")),
             (Basis::Incremental, tr!("opt-results-incremental"), tr!("opt-results-incremental-hint")),
         ] {
-            if ui.add(MenuButton::new(label).selected(*basis == option)).on_hover_text(hint).clicked() {
+            if ui.add(MenuButton::new(label).selected(*basis == option)).hint(hint).clicked() {
                 *basis = option;
             }
         }

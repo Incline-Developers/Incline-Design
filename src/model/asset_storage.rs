@@ -7,6 +7,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use anyhow::Result;
 
+use crate::i18n::tr;
+
 #[derive(Clone, Debug)]
 pub(crate) struct Backing(Arc<BackingFile>);
 
@@ -27,24 +29,43 @@ struct BackingFile {
 }
 
 impl Backing {
+    /// A new backing file for `write` to fill, without its contents ever being
+    /// in memory whole.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn write_with(write: impl FnOnce(&mut std::fs::File) -> Result<()>) -> Result<Self> {
+        use std::io::Write;
+        let mut file = tempfile::Builder::new()
+            .prefix("asset-")
+            .tempfile_in(native::directory()?)
+            .with_context(|| tr!("err-store-backing-create"))?;
+        write(file.as_file_mut())?;
+        file.flush().with_context(|| tr!("err-store-backing-flush"))?;
+        Ok(Self(Arc::new(BackingFile { path: file.into_temp_path() })))
+    }
+
+    /// A private copy of the file at `path`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn copy_of(path: &std::path::Path) -> Result<Self> {
+        Self::write_with(|file| {
+            std::io::copy(
+                &mut std::fs::File::open(path).with_context(|| tr!("err-store-read-path", path = path.display().to_string()))?,
+                file,
+            )
+            .with_context(|| tr!("err-store-read-path", path = path.display().to_string()))?;
+            Ok(())
+        })
+    }
+
     pub(crate) fn write(bytes: &[u8]) -> Result<Self> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use std::io::Write;
-            // /tmp is commonly a RAM-backed filesystem. Put evicted data in
-            // the application cache so unloading does not merely move it into
-            // tmpfs and keep the same system-memory pressure.
-            let directory = dirs::cache_dir().context("locate asset cache directory")?.join("Incline_Design").join("unloaded-assets");
-            std::fs::create_dir_all(&directory).context("create asset cache directory")?;
-            let mut file = tempfile::Builder::new().prefix("asset-").tempfile_in(directory).context("create asset backing file")?;
-            file.write_all(bytes).context("write asset backing file")?;
-            file.flush().context("flush asset backing file")?;
-            Ok(Self(Arc::new(BackingFile { path: file.into_temp_path() })))
+            Self::write_with(|file| file.write_all(bytes).with_context(|| tr!("err-store-backing-write")))
         }
         #[cfg(target_arch = "wasm32")]
         {
             let key = uuid::Uuid::new_v4().to_string();
-            browser::write(&key, bytes).map_err(|error| anyhow::anyhow!("store unloaded asset: {error:?}"))?;
+            browser::write(&key, bytes).map_err(|error| anyhow::anyhow!(tr!("err-store-browser-store", error = format!("{error:?}"))))?;
             Ok(Self(Arc::new(BackingFile { key, len: bytes.len() })))
         }
     }
@@ -55,7 +76,7 @@ impl Backing {
     pub(crate) fn open(&self) -> Result<BackingData> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            std::fs::File::open(&self.0.path).context("open unloaded asset")
+            std::fs::File::open(&self.0.path).with_context(|| tr!("err-store-asset-open"))
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -71,11 +92,117 @@ impl Backing {
     pub(crate) fn read(&self) -> Result<Vec<u8>> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            std::fs::read(&self.0.path).context("read unloaded asset")
+            std::fs::read(&self.0.path).with_context(|| tr!("err-store-asset-read"))
         }
         #[cfg(target_arch = "wasm32")]
         {
-            browser::read(&self.0.key, self.0.len).map_err(|error| anyhow::anyhow!("read unloaded asset: {error:?}"))
+            browser::read(&self.0.key, self.0.len).map_err(|error| anyhow::anyhow!(tr!("err-store-browser-read", error = format!("{error:?}"))))
+        }
+    }
+}
+
+/// Claim this run's backing folder and clear out the ones runs that died left
+/// behind. Call once at startup, off the UI thread: the first unload waits
+/// for it, and clearing a crashed run's copies can take a moment.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn initialize_native() {
+    if let Err(error) = native::directory() {
+        log::warn!("asset backing unavailable: {error:#}");
+    }
+}
+
+/// Backing files live in a folder per run, under the application cache rather
+/// than /tmp, which is commonly RAM-backed: unloading into tmpfs would keep the
+/// same memory pressure. Each copy deletes itself when its last handle drops,
+/// but a run that crashes, is killed or exits with work in flight never drops
+/// them. So each run holds a lock on a file in its folder for as long as it
+/// lives (the OS releases it however the process ends), and the next run to
+/// start deletes every folder whose lock it can take.
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
+    use std::{
+        fs::{self, File, OpenOptions},
+        path::{Path, PathBuf},
+        sync::OnceLock,
+    };
+
+    use anyhow::{Context, Result, anyhow};
+
+    struct Session {
+        directory: PathBuf,
+        /// Locked for the life of the process; never read.
+        _lock: File,
+    }
+
+    static SESSION: OnceLock<Result<Session, String>> = OnceLock::new();
+
+    /// This run's folder, claimed on first use.
+    pub(super) fn directory() -> Result<&'static Path> {
+        match SESSION.get_or_init(|| claim().map_err(|error| format!("{error:#}"))) {
+            Ok(session) => Ok(&session.directory),
+            Err(error) => Err(anyhow!("{error}")),
+        }
+    }
+
+    fn claim() -> Result<Session> {
+        let root = dirs::cache_dir()
+            .with_context(|| crate::i18n::tr!("err-store-cache-locate"))?
+            .join("Incline_Design")
+            .join("unloaded-assets");
+        fs::create_dir_all(&root).with_context(|| crate::i18n::tr!("err-store-cache-create"))?;
+        // Held while claiming and sweeping, so no run sweeps a folder another
+        // has made but not yet locked. Locking is best effort throughout: on a
+        // filesystem without it nothing is ever swept, which is the old
+        // behaviour.
+        let guard = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(root.join(".lock"))
+            .with_context(|| crate::i18n::tr!("err-store-cache-lock-open"))?;
+        let _ = guard.lock();
+        let directory = tempfile::Builder::new()
+            .prefix("session-")
+            .tempdir_in(&root)
+            .with_context(|| crate::i18n::tr!("err-store-session-create"))?
+            .keep();
+        let lock = File::create(directory.join("lock")).with_context(|| crate::i18n::tr!("err-store-session-lock"))?;
+        let _ = lock.try_lock();
+        sweep(&root, &directory);
+        Ok(Session { directory, _lock: lock })
+    }
+
+    /// Delete everything in `root` but this run's folder, the guard and the
+    /// folders of runs still alive. Loose files are copies from before
+    /// backing folders were per run.
+    fn sweep(root: &Path, own: &Path) {
+        let Ok(entries) = fs::read_dir(root) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path == own || entry.file_name() == ".lock" {
+                continue;
+            }
+            let removed = if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                if alive(&path) {
+                    continue;
+                }
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            };
+            if let Err(error) = removed {
+                log::warn!("could not remove stale asset backing {}: {error}", path.display());
+            }
+        }
+    }
+
+    /// Whether a running process still holds the folder's lock. A folder with
+    /// no lock file is a dead run's (the lock is made before anything else
+    /// goes in); one whose lock cannot be checked is left alone.
+    fn alive(directory: &Path) -> bool {
+        match File::open(directory.join("lock")) {
+            Ok(file) => !matches!(file.try_lock(), Ok(())),
+            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
         }
     }
 }

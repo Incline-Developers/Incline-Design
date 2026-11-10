@@ -1,0 +1,9 @@
+# Hover hints go through `ui/widgets/hint.rs`, whose card replaces egui's tooltip.
+disallowed-methods = [
+    { path = "egui::Response::on_hover_text", reason = "use `widgets::hint::Hint::hint`" },
+    { path = "egui::Response::on_hover_text_at_pointer", reason = "use `widgets::hint::Hint::hint_at_pointer`" },
+    { path = "egui::Response::on_disabled_hover_text", reason = "use `widgets::hint::Hint::disabled_hint`" },
+    { path = "egui::Response::on_hover_ui", reason = "use `widgets::hint::Hint::hint_ui`" },
+    { path = "egui::Response::on_hover_ui_at_pointer", reason = "use `widgets::hint::Hint::hint_ui_at_pointer`" },
+    { path = "egui::Response::on_disabled_hover_ui", reason = "use `widgets::hint::Hint` and say why the widget is disabled" },
+]

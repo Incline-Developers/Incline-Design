@@ -1,8 +1,12 @@
-//! macOS system menu bar.
+//! macOS system menu bar, and the window buttons over Incline's title bar.
 //!
 //! Incline Design's other targets draw their menu inside the egui window. On macOS,
 //! AppKit owns the equivalent commands so they appear in the global menu bar
 //! and participate in standard Command-key handling.
+//!
+//! The title bar is Incline's own on every platform (`ui/elements/title_bar.rs`),
+//! but macOS keeps its red, yellow and green buttons: [`place_window_buttons`]
+//! moves them onto the bar's row.
 
 use std::{path::PathBuf, sync::Mutex};
 
@@ -13,12 +17,12 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{NSApplication, NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem, NSStrikethroughStyleAttributeName, NSUnderlineStyle};
-use objc2_foundation::{NSAttributedString, NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSAttributedString, NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSString, NSUserDefaults};
 
 use crate::{
     i18n::tr,
     ui::{
-        elements::main_menu::{DESIGN_ROWS, GEOLOGY_DESIGN_ROWS, design_groups, geology_design_groups},
+        elements::main_menu::{MenuRow, workspace_menus},
         state::{EditorState, UiProjectView, ViewToggle, Workspace},
     },
 };
@@ -32,65 +36,10 @@ static LAST_MENU_STATE: Mutex<Option<MenuState>> = Mutex::new(None);
 struct MenuState {
     can_save: bool,
     has_project: bool,
-    can_create_terrain_tin: bool,
-    can_join_point_clouds: bool,
-    can_classify_point_clouds: bool,
-    /// Whether exactly one loaded surface is selected, which is what the
-    /// single-surface triangulation tools run on.
-    one_surface_selected: bool,
-    /// Clipping additionally needs the one closed polyline to clip against.
-    can_clip_by_polyline: bool,
-    /// Whether exactly one loaded drill-hole collection is selected, which is
-    /// what block-model estimation runs on.
-    can_create_block_model: bool,
-    /// Whether any hole is selected, which is what reference points are
-    /// placed on.
-    can_build_reference_points: bool,
-    /// Whether enough design points are selected to triangulate a surface
-    /// from, which is what Build Surface runs on.
-    can_build_reference_surface: bool,
-    /// Whether exactly one loaded surface is selected, which is what
-    /// thickness points are measured against.
-    can_make_thickness_points: bool,
-    /// Whether two loaded surfaces are selected, the seam's roof and floor
-    /// that Clip to Surface clips.
-    can_clip_to_surface: bool,
-    /// Whether exactly one loaded block model is selected, which is what ore
-    /// thresholding runs on.
-    can_create_ore_triangulation: bool,
-    /// Whether exactly one loaded prismoid grid is selected, which a block
-    /// model is created from.
-    can_create_block_model_from_grid: bool,
-    /// Whether exactly one loaded prismoid grid is selected, which qualities
-    /// are added to.
-    can_add_prismoid_qualities: bool,
-    /// Whether exactly one loaded prismoid grid is selected, which Prismoid
-    /// Grid to Surface makes a surface from.
-    can_prismoid_grid_to_surface: bool,
-    /// Whether one or two loaded prismoid grids are selected, which
-    /// Difference between Prismoid Grids compares.
-    can_difference_prismoid_grids: bool,
-    /// Whether one loaded prismoid grid is selected, which Misfit at Holes
-    /// measures.
-    can_hole_misfit: bool,
-    /// Whether one loaded prismoid grid and one closed polyline are
-    /// selected, which Mask Prismoid Grid by Polyline takes.
-    can_mask_prismoid_grid_by_polyline: bool,
-    /// Whether any prismoid is selected, which Mask Prismoids acts on.
-    can_mask_prismoids: bool,
-    /// Whether every selected prismoid is masked by hand, which ticks it.
-    prismoids_masked: bool,
-    can_undrape_rasters: bool,
-    /// Whether any design object is selected, which is what Convert to Road
-    /// turns into haul roads.
-    has_polyline_selection: bool,
-    /// Whether each Design row can run, in [`DESIGN_ROWS`] order.
-    design_rows: [bool; DESIGN_ROWS.len()],
-    /// Whether each Geology Design row can run, in
-    /// [`GEOLOGY_DESIGN_ROWS`] order.
-    geology_rows: Vec<bool>,
-    /// Each Geology Design switch row's tick, in the same order.
-    geology_checks: Vec<Option<bool>>,
+    /// Whether each workspace menu row can run, in [`MenuRow::all`] order.
+    menu_rows: Vec<bool>,
+    /// Each switch row's tick, in the same order; `None` for the others.
+    menu_checks: Vec<Option<bool>>,
     /// Whether the active project is a file that can be shown in Finder.
     has_project_file: bool,
     /// The workspace decides which discipline menus are visible and active.
@@ -112,8 +61,8 @@ struct RecentRow {
 
 /// Actions emitted by AppKit and consumed by the winit application loop.
 ///
-/// Every variant but [`MacMenuAction::OpenRecent`] is one fixed menu item;
-/// that one names a row of the File > Open Recent submenu, which is rebuilt
+/// The variants without an index are each one fixed menu item;
+/// [`MacMenuAction::OpenRecent`] names a row of the File > Open Recent submenu, which is rebuilt
 /// from the recent-project list rather than written out here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MacMenuAction {
@@ -123,99 +72,33 @@ pub(crate) enum MacMenuAction {
     OpenProject,
     OpenImport,
     OpenExport,
-    DrawHaulRoad,
-    ConvertHaulSelection,
-    ImportHaulRoads,
-    ExportHaulRoads,
-    EditHaulProperties,
     ExportViewportImage,
-    OpenPlotDialog,
     RequestExit,
-    OpenCutTriangulationByPolyline,
-    OpenCutTriangulationByZ,
-    OpenCutTriangulationBySurface,
-    OpenCutTopologyByPitShell,
-    OpenIncludeSolidInTopology,
-    OpenBuildSolidFromSurfaces,
-    OpenContourTriangulation,
-    OpenPointCloudTin,
-    OpenPointCloudJoin,
-    OpenPointCloudClassify,
-    OpenCreateBlockModel,
-    OpenCreateOreTriangulation,
-    OpenSurveyDefinitions,
-    OpenSurveyTransform,
     OpenPreferences,
     OpenAbout,
-    UndrapeAllRasters,
     ShowProjectInFileManager,
-    /// The Drillholes menu's row that opens the reference points dialog.
-    OpenReferencePoints,
-    /// The Drillholes menu's row that opens the build surface dialog.
-    OpenReferenceSurface,
-    /// The Modelling menu's row that opens the thickness points dialog.
-    OpenThicknessPoints,
-    /// The Modelling menu's row that opens the thickness surfaces dialog.
-    OpenSeamSurface,
-    /// The Modelling menu's row that opens the clip to surface dialog.
-    OpenModellingClipToSurface,
-    /// The Triangulation menu's row that opens the same dialog, beside the
-    /// other cuts.
-    OpenCutTriangulationToSurface,
-    /// The Modelling menu's row that opens the build prismoid grid dialog.
-    OpenBuildPrismoidGrid,
-    /// The Modelling menu's row that opens the build strata dialog.
-    OpenBuildStrata,
-    /// The Modelling menu's row that creates a block model from the selected
-    /// prismoid grid.
-    CreateBlockModelFromPrismoidGrid,
-    /// The Modelling menu's row that opens Add Qualities on the selected
-    /// prismoid grid.
-    OpenAddPrismoidQualities,
-    /// The Modelling menu's row that opens Mask Prismoid Grid by Polyline on
-    /// the selected grid and closed polyline.
-    OpenMaskPrismoidGridByPolyline,
-    /// The Modelling menu's row that masks or unmasks the selected
-    /// prismoids.
-    TogglePrismoidMask,
-    /// The Modelling menu's row that opens Prismoid Grid to Surface on the
-    /// selected prismoid grid.
-    OpenPrismoidGridToSurface,
-    /// The Modelling menu's row that opens Difference between Prismoid Grids
-    /// on the selected prismoid grids.
-    OpenDifferencePrismoidGrids,
-    /// The Modelling menu's row that opens Misfit at Holes on the selected
-    /// prismoid grid.
-    OpenHoleMisfit,
-    /// The Block Model menu's row that opens the pit optimization scenarios.
-    OpenOptimizationScenarios,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
     /// One View menu switch, by its position in [`VIEW_TOGGLES`].
     ToggleView(usize),
-    /// One row of Geology Design's lower half, by its position in
-    /// [`GEOLOGY_DESIGN_ROWS`].
-    GeologyRow(usize),
-    /// One Design menu row, by its index in [`DESIGN_ROWS`].
-    DesignRow(usize),
+    /// One workspace menu row, by its position in [`MenuRow::all`].
+    MenuRow(usize),
 }
 
 /// The View menu's rows, in the order they are drawn. The egui menu bar draws
 /// the same two - see [`crate::ui::elements::main_menu`].
 pub(crate) const VIEW_TOGGLES: [ViewToggle; 2] = [ViewToggle::Console, ViewToggle::DarkMode];
 
-/// Tags name the discipline root items that come and go with the workspace, so
-/// [`set_workspace_menus`] finds them without matching on a translated title.
-const TRIANGULATION_MENU_TAG: isize = -1;
-const BLOCK_MODEL_MENU_TAG: isize = -3;
-const DRILL_HOLES_MENU_TAG: isize = -5;
-const COORDINATES_MENU_TAG: isize = -6;
-const MODELLING_MENU_TAG: isize = -7;
-const DESIGN_MENU_TAG: isize = -8;
-/// Geology Design's own rows that carry no action of their own - its
-/// headings, separator and submenus - shown in Geology alone.
-const GEOLOGY_ROW_TAG: isize = -9;
+/// A workspace's root menus all carry the tag [`workspace_menu_tag`] gives
+/// it, so [`set_workspace_menus`] finds them without matching on a
+/// translated title. Every other root item is left at 0 or above.
+const WORKSPACE_MENU_TAG_BASE: isize = -1;
+
+fn workspace_menu_tag(workspace: Workspace) -> isize {
+    let index = Workspace::ALL.iter().position(|listed| *listed == workspace).unwrap_or_default();
+    WORKSPACE_MENU_TAG_BASE - index as isize
+}
 
 /// Tags at or above this carry a recent-project index rather than naming a
 /// fixed action, leaving room for the fixed list to grow.
@@ -223,16 +106,10 @@ const RECENT_TAG_BASE: isize = 1000;
 /// Tags at or above this, and below [`RECENT_SUBMENU_TAG`], carry a View menu
 /// switch by its index in [`VIEW_TOGGLES`].
 const VIEW_TAG_BASE: isize = 500;
-/// Tags at or above this, and below [`DESIGN_ROW_TAG_END`], carry a Design
-/// row by its index in [`DESIGN_ROWS`].
-const DESIGN_ROW_TAG_BASE: isize = 300;
-const DESIGN_ROW_TAG_END: isize = 400;
-const _: () = assert!(DESIGN_ROWS.len() as isize <= DESIGN_ROW_TAG_END - DESIGN_ROW_TAG_BASE);
-/// Tags at or above this, and below [`VIEW_TAG_BASE`], carry a Geology
-/// Design row by its index in [`GEOLOGY_DESIGN_ROWS`].
-const GEOLOGY_ROW_TAG_BASE: isize = 400;
-const _: () = assert!(GEOLOGY_DESIGN_ROWS.len() as isize <= VIEW_TAG_BASE - GEOLOGY_ROW_TAG_BASE);
-const _: () = assert!(DESIGN_ROW_TAG_END <= GEOLOGY_ROW_TAG_BASE);
+/// Tags at or above this, and below [`MENU_ROW_TAG_END`], carry a workspace
+/// menu row by its position in [`MenuRow::all`].
+const MENU_ROW_TAG_BASE: isize = 300;
+const MENU_ROW_TAG_END: isize = 400;
 /// Tag of the Open Recent item itself. It opens a submenu rather than
 /// performing anything, so [`MacMenuAction::from_tag`] rejects it: no fixed
 /// action sits this far up the range.
@@ -251,48 +128,11 @@ impl MacMenuAction {
         Self::OpenProject,
         Self::OpenImport,
         Self::OpenExport,
-        Self::DrawHaulRoad,
-        Self::ConvertHaulSelection,
-        Self::ImportHaulRoads,
-        Self::ExportHaulRoads,
-        Self::EditHaulProperties,
         Self::ExportViewportImage,
-        Self::OpenPlotDialog,
         Self::RequestExit,
-        Self::OpenCutTriangulationByPolyline,
-        Self::OpenCutTriangulationByZ,
-        Self::OpenCutTriangulationBySurface,
-        Self::OpenCutTopologyByPitShell,
-        Self::OpenIncludeSolidInTopology,
-        Self::OpenBuildSolidFromSurfaces,
-        Self::OpenContourTriangulation,
-        Self::OpenPointCloudTin,
-        Self::OpenPointCloudJoin,
-        Self::OpenPointCloudClassify,
-        Self::OpenCreateBlockModel,
-        Self::OpenCreateOreTriangulation,
-        Self::OpenSurveyDefinitions,
-        Self::OpenSurveyTransform,
         Self::OpenPreferences,
         Self::OpenAbout,
-        Self::UndrapeAllRasters,
         Self::ShowProjectInFileManager,
-        Self::OpenReferencePoints,
-        Self::OpenReferenceSurface,
-        Self::OpenThicknessPoints,
-        Self::OpenSeamSurface,
-        Self::OpenModellingClipToSurface,
-        Self::OpenCutTriangulationToSurface,
-        Self::OpenBuildPrismoidGrid,
-        Self::OpenOptimizationScenarios,
-        Self::CreateBlockModelFromPrismoidGrid,
-        Self::OpenAddPrismoidQualities,
-        Self::OpenBuildStrata,
-        Self::TogglePrismoidMask,
-        Self::OpenMaskPrismoidGridByPolyline,
-        Self::OpenPrismoidGridToSurface,
-        Self::OpenDifferencePrismoidGrids,
-        Self::OpenHoleMisfit,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -300,8 +140,7 @@ impl MacMenuAction {
         match self {
             Self::OpenRecent(index) => RECENT_TAG_BASE + index as isize,
             Self::ToggleView(index) => VIEW_TAG_BASE + index as isize,
-            Self::DesignRow(index) => DESIGN_ROW_TAG_BASE + index as isize,
-            Self::GeologyRow(index) => GEOLOGY_ROW_TAG_BASE + index as isize,
+            Self::MenuRow(index) => MENU_ROW_TAG_BASE + index as isize,
             action => Self::FIXED.iter().position(|fixed| *fixed == action).map_or(0, |index| index as isize + 1),
         }
     }
@@ -314,13 +153,9 @@ impl MacMenuAction {
             let index = usize::try_from(tag - VIEW_TAG_BASE).ok()?;
             return (index < VIEW_TOGGLES.len()).then_some(Self::ToggleView(index));
         }
-        if (DESIGN_ROW_TAG_BASE..DESIGN_ROW_TAG_END).contains(&tag) {
-            let index = usize::try_from(tag - DESIGN_ROW_TAG_BASE).ok()?;
-            return (index < DESIGN_ROWS.len()).then_some(Self::DesignRow(index));
-        }
-        if (GEOLOGY_ROW_TAG_BASE..VIEW_TAG_BASE).contains(&tag) {
-            let index = usize::try_from(tag - GEOLOGY_ROW_TAG_BASE).ok()?;
-            return (index < GEOLOGY_DESIGN_ROWS.len()).then_some(Self::GeologyRow(index));
+        if (MENU_ROW_TAG_BASE..MENU_ROW_TAG_END).contains(&tag) {
+            let index = usize::try_from(tag - MENU_ROW_TAG_BASE).ok()?;
+            return (index < MenuRow::all().count()).then_some(Self::MenuRow(index));
         }
         Self::FIXED.get(usize::try_from(tag - 1).ok()?).copied()
     }
@@ -402,15 +237,6 @@ fn add_disabled_submenu(root: &NSMenu, title: &str, mtm: MainThreadMarker) {
     item.setEnabled(false);
 }
 
-/// A disabled row naming the group below it, shown in Geology alone like
-/// the rest of Geology Design's own rows.
-fn add_heading(menu: &NSMenu, title: &str, mtm: MainThreadMarker) {
-    let item = menu_item(title, None, "", mtm);
-    item.setEnabled(false);
-    item.setTag(GEOLOGY_ROW_TAG);
-    menu.addItem(&item);
-}
-
 fn add_action(menu: &NSMenu, title: &str, key: &str, action: MacMenuAction, target: &MenuTarget, mtm: MainThreadMarker) -> Retained<NSMenuItem> {
     let item = menu_item(title, Some(sel!(performInclineDesignMenuAction:)), key, mtm);
     item.setTag(action.tag());
@@ -476,7 +302,6 @@ pub(crate) fn install_menu_bar() {
     add_action(&file_menu, &tr!("menu-file-import"), "", MacMenuAction::OpenImport, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-export"), "", MacMenuAction::OpenExport, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-export-viewport-image"), "", MacMenuAction::ExportViewportImage, &target, mtm);
-    add_action(&file_menu, &tr!("menu-file-export-engineering-drawing"), "", MacMenuAction::OpenPlotDialog, &target, mtm);
     add_separator(&file_menu, mtm);
     add_action(&file_menu, &tr!("preferences-title"), ",", MacMenuAction::OpenPreferences, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-about", app = crate::APP_NAME), "", MacMenuAction::OpenAbout, &target, mtm);
@@ -491,267 +316,34 @@ pub(crate) fn install_menu_bar() {
     }
     add_submenu(&root, &tr!("menu-view"), &view_menu, mtm);
 
-    let haul_menu = menu(&tr!("haul-roads"), mtm);
-    haul_menu.setAutoenablesItems(false);
-    for (label, action) in [
-        (tr!("haul-draw"), MacMenuAction::DrawHaulRoad),
-        (tr!("haul-convert"), MacMenuAction::ConvertHaulSelection),
-        (tr!("haul-import"), MacMenuAction::ImportHaulRoads),
-        (tr!("haul-export"), MacMenuAction::ExportHaulRoads),
-        (tr!("haul-open-layout"), MacMenuAction::EditHaulProperties),
-    ] {
-        add_action(&haul_menu, &label, "", action, &target, mtm);
-    }
-    add_submenu(&root, &tr!("haul-roads"), &haul_menu, mtm);
-    let design_menu = menu(&tr!("ws-menubar-design"), mtm);
-    design_menu.setAutoenablesItems(false);
-    add_heading(&design_menu, &tr!("ws-menubar-production-design"), mtm);
-    for (title, run, separated) in design_groups() {
-        if separated {
-            add_separator(&design_menu, mtm);
-        }
-        let submenu = title.as_ref().map(|title| menu(title, mtm));
-        if let Some(submenu) = &submenu {
-            submenu.setAutoenablesItems(false);
-        }
-        for index in run {
-            let action = MacMenuAction::DesignRow(index);
-            add_action(submenu.as_deref().unwrap_or(&*design_menu), &DESIGN_ROWS[index].label(), "", action, &target, mtm);
-        }
-        if let (Some(title), Some(submenu)) = (&title, &submenu) {
-            add_submenu(&design_menu, title, submenu, mtm);
+    // Every workspace's menus, from the table the egui bar draws;
+    // `set_workspace_menus` shows the active workspace its own.
+    debug_assert!(MenuRow::all().count() as isize <= MENU_ROW_TAG_END - MENU_ROW_TAG_BASE);
+    let mut row_index = 0;
+    for workspace in Workspace::ALL {
+        for workspace_menu in workspace_menus(workspace) {
+            let title = workspace_menu.title.label();
+            let root_menu = menu(&title, mtm);
+            root_menu.setAutoenablesItems(false);
+            for (index, group) in workspace_menu.groups.iter().enumerate() {
+                if index > 0 {
+                    add_separator(&root_menu, mtm);
+                }
+                let submenu = group.submenu.map(|title| menu(&title.label(), mtm));
+                if let Some(submenu) = &submenu {
+                    submenu.setAutoenablesItems(false);
+                }
+                for row in group.rows {
+                    add_action(submenu.as_deref().unwrap_or(&*root_menu), &row.label(), "", MacMenuAction::MenuRow(row_index), &target, mtm);
+                    row_index += 1;
+                }
+                if let (Some(title), Some(submenu)) = (group.submenu, &submenu) {
+                    add_submenu(&root_menu, &title.label(), submenu, mtm);
+                }
+            }
+            add_submenu(&root, &title, &root_menu, mtm).setTag(workspace_menu_tag(workspace));
         }
     }
-    // Geology Design below the line, the same rows the egui menu draws; see
-    // `main_menu::draw_geology_design_entries`.
-    let separator = NSMenuItem::separatorItem(mtm);
-    separator.setTag(GEOLOGY_ROW_TAG);
-    design_menu.addItem(&separator);
-    add_heading(&design_menu, &tr!("ws-menubar-geology-design"), mtm);
-    let groups = geology_design_groups();
-    for (title, run) in &groups {
-        let submenu = menu(title, mtm);
-        submenu.setAutoenablesItems(false);
-        for (index, row) in GEOLOGY_DESIGN_ROWS.iter().enumerate().take(run.end).skip(run.start) {
-            add_action(&submenu, &row.label(), "", MacMenuAction::GeologyRow(index), &target, mtm);
-        }
-        add_submenu(&design_menu, title, &submenu, mtm).setTag(GEOLOGY_ROW_TAG);
-    }
-    for (index, row) in GEOLOGY_DESIGN_ROWS.iter().enumerate().skip(groups[groups.len() - 1].1.end) {
-        add_action(&design_menu, &row.label(), "", MacMenuAction::GeologyRow(index), &target, mtm);
-    }
-    add_submenu(&root, &tr!("ws-menubar-design"), &design_menu, mtm).setTag(DESIGN_MENU_TAG);
-
-    let triangulation_menu = menu(&tr!("ws-menubar-triangulation"), mtm);
-    triangulation_menu.setAutoenablesItems(false);
-    add_action(
-        &triangulation_menu,
-        &tr!("common-clip-surface-polyline"),
-        "",
-        MacMenuAction::OpenCutTriangulationByPolyline,
-        &target,
-        mtm,
-    );
-    add_action(
-        &triangulation_menu,
-        &tr!("common-slice-triangulation-z-range"),
-        "",
-        MacMenuAction::OpenCutTriangulationByZ,
-        &target,
-        mtm,
-    );
-    add_action(
-        &triangulation_menu,
-        &tr!("common-trim-topology"),
-        "",
-        MacMenuAction::OpenCutTriangulationBySurface,
-        &target,
-        mtm,
-    );
-    add_action(
-        &triangulation_menu,
-        &tr!("common-clip-to-surface-ellipsis"),
-        "",
-        MacMenuAction::OpenCutTriangulationToSurface,
-        &target,
-        mtm,
-    );
-    add_separator(&triangulation_menu, mtm);
-    add_action(
-        &triangulation_menu,
-        &tr!("common-cut-topology-pit-shell"),
-        "",
-        MacMenuAction::OpenCutTopologyByPitShell,
-        &target,
-        mtm,
-    );
-    add_action(
-        &triangulation_menu,
-        &tr!("common-merge-shell-into-topology-ellipsis"),
-        "",
-        MacMenuAction::OpenIncludeSolidInTopology,
-        &target,
-        mtm,
-    );
-    add_action(
-        &triangulation_menu,
-        &tr!("menu-build-solid-surfaces"),
-        "",
-        MacMenuAction::OpenBuildSolidFromSurfaces,
-        &target,
-        mtm,
-    );
-    add_separator(&triangulation_menu, mtm);
-    add_action(
-        &triangulation_menu,
-        &tr!("common-generate-contour-lines"),
-        "",
-        MacMenuAction::OpenContourTriangulation,
-        &target,
-        mtm,
-    );
-    let triangulation_item = add_submenu(&root, &tr!("ws-menubar-triangulation"), &triangulation_menu, mtm);
-    triangulation_item.setTag(TRIANGULATION_MENU_TAG);
-
-    let raster_menu = menu(&tr!("ws-menubar-raster"), mtm);
-    raster_menu.setAutoenablesItems(false);
-    add_action(&raster_menu, &tr!("common-undrape-all"), "", MacMenuAction::UndrapeAllRasters, &target, mtm);
-    add_submenu(&root, &tr!("ws-menubar-raster"), &raster_menu, mtm);
-
-    let block_model_menu = menu(&tr!("ws-menubar-block-model"), mtm);
-    block_model_menu.setAutoenablesItems(false);
-    add_action(
-        &block_model_menu,
-        &tr!("common-create-ore-triangulation-ellipsis"),
-        "",
-        MacMenuAction::OpenCreateOreTriangulation,
-        &target,
-        mtm,
-    );
-    // Production's half of the menu; `set_workspace_menus` shows each
-    // workspace only its own row.
-    add_action(&block_model_menu, &tr!("menu-pit-optimization"), "", MacMenuAction::OpenOptimizationScenarios, &target, mtm);
-    let block_model_item = add_submenu(&root, &tr!("ws-menubar-block-model"), &block_model_menu, mtm);
-    block_model_item.setTag(BLOCK_MODEL_MENU_TAG);
-
-    let drill_hole_menu = menu(&tr!("ws-menubar-drillholes"), mtm);
-    drill_hole_menu.setAutoenablesItems(false);
-    add_action(
-        &drill_hole_menu,
-        &tr!("common-create-block-model-ellipsis"),
-        "",
-        MacMenuAction::OpenCreateBlockModel,
-        &target,
-        mtm,
-    );
-    let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
-    drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
-
-    let modelling_menu = menu(&tr!("ws-menubar-modelling"), mtm);
-    modelling_menu.setAutoenablesItems(false);
-    add_action(&modelling_menu, &tr!("common-reference-points"), "", MacMenuAction::OpenReferencePoints, &target, mtm);
-    add_action(
-        &modelling_menu,
-        &tr!("common-build-surface-ellipsis"),
-        "",
-        MacMenuAction::OpenReferenceSurface,
-        &target,
-        mtm,
-    );
-    add_separator(&modelling_menu, mtm);
-    add_action(
-        &modelling_menu,
-        &tr!("common-thickness-points-ellipsis"),
-        "",
-        MacMenuAction::OpenThicknessPoints,
-        &target,
-        mtm,
-    );
-    add_action(
-        &modelling_menu,
-        &tr!("common-thickness-surfaces-ellipsis"),
-        "",
-        MacMenuAction::OpenSeamSurface,
-        &target,
-        mtm,
-    );
-    add_separator(&modelling_menu, mtm);
-    add_action(
-        &modelling_menu,
-        &tr!("common-clip-to-surface-ellipsis"),
-        "",
-        MacMenuAction::OpenModellingClipToSurface,
-        &target,
-        mtm,
-    );
-    add_separator(&modelling_menu, mtm);
-    add_action(
-        &modelling_menu,
-        &tr!("common-build-prismoid-grid-ellipsis"),
-        "",
-        MacMenuAction::OpenBuildPrismoidGrid,
-        &target,
-        mtm,
-    );
-    add_action(&modelling_menu, &tr!("common-build-strata-ellipsis"), "", MacMenuAction::OpenBuildStrata, &target, mtm);
-    add_action(
-        &modelling_menu,
-        &tr!("common-create-block-model-from-prismoid-grid"),
-        "",
-        MacMenuAction::CreateBlockModelFromPrismoidGrid,
-        &target,
-        mtm,
-    );
-    add_action(
-        &modelling_menu,
-        &tr!("common-add-prismoid-qualities-ellipsis"),
-        "",
-        MacMenuAction::OpenAddPrismoidQualities,
-        &target,
-        mtm,
-    );
-    add_action(
-        &modelling_menu,
-        &tr!("common-prismoid-grid-to-surface-ellipsis"),
-        "",
-        MacMenuAction::OpenPrismoidGridToSurface,
-        &target,
-        mtm,
-    );
-    add_action(
-        &modelling_menu,
-        &tr!("common-difference-prismoid-grids-ellipsis"),
-        "",
-        MacMenuAction::OpenDifferencePrismoidGrids,
-        &target,
-        mtm,
-    );
-    add_action(&modelling_menu, &tr!("common-misfit-at-holes-ellipsis"), "", MacMenuAction::OpenHoleMisfit, &target, mtm);
-    add_action(
-        &modelling_menu,
-        &tr!("common-mask-prismoid-grid-polyline"),
-        "",
-        MacMenuAction::OpenMaskPrismoidGridByPolyline,
-        &target,
-        mtm,
-    );
-    add_action(&modelling_menu, &tr!("common-mask-prismoids"), "", MacMenuAction::TogglePrismoidMask, &target, mtm);
-    let modelling_item = add_submenu(&root, &tr!("ws-menubar-modelling"), &modelling_menu, mtm);
-    modelling_item.setTag(MODELLING_MENU_TAG);
-
-    let coordinates_menu = menu(&tr!("survey-coordinates-menu"), mtm);
-    coordinates_menu.setAutoenablesItems(false);
-    add_action(&coordinates_menu, &tr!("survey-definitions-action"), "", MacMenuAction::OpenSurveyDefinitions, &target, mtm);
-    add_action(&coordinates_menu, &tr!("survey-transform-action"), "", MacMenuAction::OpenSurveyTransform, &target, mtm);
-    let coordinates_item = add_submenu(&root, &tr!("survey-coordinates-menu"), &coordinates_menu, mtm);
-    coordinates_item.setTag(COORDINATES_MENU_TAG);
-
-    let point_cloud_menu = menu(&tr!("ws-menubar-point-cloud"), mtm);
-    point_cloud_menu.setAutoenablesItems(false);
-    add_action(&point_cloud_menu, &tr!("common-create-triangulation"), "", MacMenuAction::OpenPointCloudTin, &target, mtm);
-    add_action(&point_cloud_menu, &tr!("common-join"), "", MacMenuAction::OpenPointCloudJoin, &target, mtm);
-    add_action(&point_cloud_menu, &tr!("common-classify"), "", MacMenuAction::OpenPointCloudClassify, &target, mtm);
-    add_submenu(&root, &tr!("ws-menubar-point-cloud"), &point_cloud_menu, mtm);
 
     app.setMainMenu(Some(&root));
     NSMenu::setMenuBarVisible(true, mtm);
@@ -783,60 +375,12 @@ fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
 /// menu belongs elsewhere leaves a shorter bar rather than an empty dropdown,
 /// so Drill & Blast and Planning show none at all. The egui bar does the same -
 /// see `main_menu::draw_workspace_menus`.
-///
-/// Raster and Point Cloud are looked up by title, so the titles below
-/// must stay in sync with the ones `install_menu_bar` gives the same root
-/// menus; the rest carry tags.
 fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
-    if let Some(item) = find_item(root, COORDINATES_MENU_TAG) {
-        item.setHidden(workspace != Workspace::Survey);
-    }
-    // Point Cloud sits with Survey, next to Coordinates, rather than with the
-    // Production design menus.
-    if let Some(item) = root.itemWithTitle(&NSString::from_str(&tr!("ws-menubar-point-cloud"))) {
-        item.setHidden(workspace != Workspace::Survey);
-    }
-    if let Some(item) = root.itemWithTitle(&NSString::from_str(&tr!("ws-menubar-raster"))) {
-        item.setHidden(workspace != Workspace::Production);
-    }
-    // Geology shows Design retitled, with its own rows under the line.
-    if let Some(item) = find_item(root, DESIGN_MENU_TAG) {
-        item.setHidden(!workspace.has_drawing_tools());
-        let geology = workspace == Workspace::Geology;
-        let title = NSString::from_str(&if geology { tr!("ws-menubar-geology-design") } else { tr!("ws-menubar-design") });
-        item.setTitle(&title);
-        if let Some(submenu) = item.submenu() {
-            submenu.setTitle(&title);
-            for row in submenu.itemArray().iter() {
-                let tag = row.tag();
-                if tag == GEOLOGY_ROW_TAG || (GEOLOGY_ROW_TAG_BASE..VIEW_TAG_BASE).contains(&tag) {
-                    row.setHidden(!geology);
-                }
-            }
+    let shown = workspace_menu_tag(workspace);
+    for item in root.itemArray().iter() {
+        if item.tag() <= WORKSPACE_MENU_TAG_BASE {
+            item.setHidden(item.tag() != shown);
         }
-    }
-
-    if let Some(item) = find_item(root, TRIANGULATION_MENU_TAG) {
-        item.setHidden(workspace != Workspace::Production);
-    }
-
-    // Geology thresholds the block model; Production optimizes a pit over it.
-    if let Some(item) = find_item(root, BLOCK_MODEL_MENU_TAG) {
-        item.setHidden(!matches!(workspace, Workspace::Geology | Workspace::Production));
-    }
-    if let Some(item) = find_item(root, MacMenuAction::OpenCreateOreTriangulation.tag()) {
-        item.setHidden(workspace != Workspace::Geology);
-    }
-    if let Some(item) = find_item(root, MacMenuAction::OpenOptimizationScenarios.tag()) {
-        item.setHidden(workspace != Workspace::Production);
-    }
-
-    if let Some(item) = find_item(root, DRILL_HOLES_MENU_TAG) {
-        item.setHidden(workspace != Workspace::Geology);
-    }
-
-    if let Some(item) = find_item(root, MODELLING_MENU_TAG) {
-        item.setHidden(workspace != Workspace::Geology);
     }
 }
 
@@ -900,30 +444,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     let state = MenuState {
         can_save: project.projects.iter().any(crate::ui::state::UiProjectEntry::needs_save),
         has_project: project.projects.iter().any(|entry| entry.is_active),
-        can_create_terrain_tin: editor.selection_counts.point_clouds == 1,
-        can_join_point_clouds: editor.selection_counts.point_clouds >= 2,
-        can_classify_point_clouds: editor.selection_counts.point_clouds >= 1,
-        one_surface_selected: editor.selection_counts.triangulations == 1,
-        can_clip_by_polyline: editor.selection_counts.triangulations == 1 && editor.selection_counts.clip_boundaries == 1,
-        can_create_block_model: editor.selection_counts.drill_holes == 1,
-        can_build_reference_points: editor.selection_counts.reference_holes > 0,
-        can_build_reference_surface: editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS,
-        can_make_thickness_points: editor.selection_counts.triangulations == 1,
-        can_clip_to_surface: editor.selection_counts.triangulations == 2,
-        can_create_ore_triangulation: editor.selection_counts.block_models == 1,
-        can_create_block_model_from_grid: editor.selection_counts.prismoid_grids == 1,
-        can_add_prismoid_qualities: editor.selection_counts.prismoid_grids == 1,
-        can_prismoid_grid_to_surface: editor.selection_counts.prismoid_grids == 1,
-        can_difference_prismoid_grids: matches!(editor.selection_counts.prismoid_grids, 1 | 2),
-        can_hole_misfit: editor.selection_counts.prismoid_grids == 1,
-        can_mask_prismoid_grid_by_polyline: editor.selection_counts.prismoid_grids == 1 && editor.selection_counts.clip_boundaries == 1,
-        can_mask_prismoids: editor.selection_counts.prismoid_cells > 0,
-        prismoids_masked: editor.selection_counts.prismoid_cells > 0 && editor.selection_counts.masked_prismoid_cells == editor.selection_counts.prismoid_cells,
-        can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
-        has_polyline_selection: editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_))),
-        design_rows: DESIGN_ROWS.map(|row| row.enabled(editor)),
-        geology_rows: GEOLOGY_DESIGN_ROWS.iter().map(|row| row.enabled(editor)).collect(),
-        geology_checks: GEOLOGY_DESIGN_ROWS.iter().map(|row| row.checked(editor)).collect(),
+        menu_rows: MenuRow::all().map(|row| row.enabled(project) && row.ready(editor)).collect(),
+        menu_checks: MenuRow::all().map(|row| row.checked(editor)).collect(),
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
         view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
@@ -956,55 +478,96 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::SaveProjectAs, state.has_project);
     // A never-saved project is nowhere to be shown.
     set_enabled(&root, MacMenuAction::ShowProjectInFileManager, state.has_project_file);
-    set_enabled(&root, MacMenuAction::UndrapeAllRasters, state.can_undrape_rasters);
-    set_enabled(&root, MacMenuAction::OpenPointCloudTin, state.can_create_terrain_tin);
-    set_enabled(&root, MacMenuAction::OpenPointCloudJoin, state.can_join_point_clouds);
-    set_enabled(&root, MacMenuAction::OpenPointCloudClassify, state.can_classify_point_clouds);
-    set_enabled(&root, MacMenuAction::OpenSurveyTransform, state.has_project);
-    // Select first, then act: these run on the scene selection they were
-    // opened with rather than on a pick list filled inside their dialog.
-    set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
-    set_enabled(&root, MacMenuAction::OpenReferencePoints, state.can_build_reference_points);
-    set_enabled(&root, MacMenuAction::OpenReferenceSurface, state.can_build_reference_surface);
-    set_enabled(&root, MacMenuAction::OpenThicknessPoints, state.can_make_thickness_points);
-    set_enabled(&root, MacMenuAction::OpenSeamSurface, state.can_make_thickness_points);
-    set_enabled(&root, MacMenuAction::OpenModellingClipToSurface, state.can_clip_to_surface);
-    set_enabled(&root, MacMenuAction::OpenCutTriangulationToSurface, state.can_clip_to_surface);
-    set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
-    set_enabled(&root, MacMenuAction::CreateBlockModelFromPrismoidGrid, state.can_create_block_model_from_grid);
-    set_enabled(&root, MacMenuAction::OpenAddPrismoidQualities, state.can_add_prismoid_qualities);
-    set_enabled(&root, MacMenuAction::OpenPrismoidGridToSurface, state.can_prismoid_grid_to_surface);
-    set_enabled(&root, MacMenuAction::OpenDifferencePrismoidGrids, state.can_difference_prismoid_grids);
-    set_enabled(&root, MacMenuAction::OpenHoleMisfit, state.can_hole_misfit);
-    set_enabled(&root, MacMenuAction::OpenMaskPrismoidGridByPolyline, state.can_mask_prismoid_grid_by_polyline);
-    set_enabled(&root, MacMenuAction::TogglePrismoidMask, state.can_mask_prismoids);
-    set_checked(&root, MacMenuAction::TogglePrismoidMask, state.prismoids_masked);
-    for action in [MacMenuAction::OpenCutTriangulationByZ, MacMenuAction::OpenContourTriangulation] {
-        set_enabled(&root, action, state.one_surface_selected);
+    for (index, enabled) in state.menu_rows.iter().enumerate() {
+        set_enabled(&root, MacMenuAction::MenuRow(index), *enabled);
     }
-    set_enabled(&root, MacMenuAction::OpenCutTriangulationByPolyline, state.can_clip_by_polyline);
-    // The Design menu only acts on selected design objects.
-    for (index, enabled) in state.design_rows.iter().enumerate() {
-        set_enabled(&root, MacMenuAction::DesignRow(index), *enabled);
-    }
-    for (index, enabled) in state.geology_rows.iter().enumerate() {
-        set_enabled(&root, MacMenuAction::GeologyRow(index), *enabled);
-    }
-    for (index, checked) in state.geology_checks.iter().enumerate() {
+    for (index, checked) in state.menu_checks.iter().enumerate() {
         if let Some(checked) = checked {
-            set_checked(&root, MacMenuAction::GeologyRow(index), *checked);
+            set_checked(&root, MacMenuAction::MenuRow(index), *checked);
         }
     }
-    for action in [
-        MacMenuAction::DrawHaulRoad,
-        MacMenuAction::ImportHaulRoads,
-        MacMenuAction::ExportHaulRoads,
-        MacMenuAction::EditHaulProperties,
-    ] {
-        set_enabled(&root, action, project.has_active_project);
-    }
-    set_enabled(&root, MacMenuAction::ConvertHaulSelection, state.has_polyline_selection);
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);
     }
+}
+
+/// What a double-click on a title bar does, as set in System Settings >
+/// Desktop & Dock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TitleDoubleClick {
+    Zoom,
+    Minimize,
+    Nothing,
+}
+
+/// The double-click action the user has chosen for title bars.
+pub(crate) fn title_double_click() -> TitleDoubleClick {
+    let defaults = NSUserDefaults::standardUserDefaults();
+    match defaults
+        .stringForKey(&NSString::from_str("AppleActionOnDoubleClick"))
+        .map(|action| action.to_string())
+        .as_deref()
+    {
+        Some("Minimize") => TitleDoubleClick::Minimize,
+        Some("None") => TitleDoubleClick::Nothing,
+        // "Maximize" and "Fill" both zoom, as does an unset preference.
+        _ => TitleDoubleClick::Zoom,
+    }
+}
+
+/// Place the window's red, yellow and green buttons over Incline's own title
+/// bar: `left` points in from the window's left edge, centred `centre_y`
+/// points down from its top. Returns where they end, from the window's left.
+///
+/// AppKit lays its title bar out again whenever it sees fit - a resize, a
+/// change of key window, a new title - so this is called every frame, and
+/// only moves what has moved. In fullscreen the buttons belong to the menu
+/// bar that slides down, and are left alone.
+pub(crate) fn place_window_buttons(window: &winit::window::Window, centre_y: f64, left: f64) -> Option<f64> {
+    use objc2_app_kit::{NSView, NSWindowButton};
+    use objc2_foundation::{NSPoint, NSRect};
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+    // winit hands out its content view, alive as long as the window is.
+    let view: &NSView = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
+    let ns_window = view.window()?;
+    let close = ns_window.standardWindowButton(NSWindowButton::CloseButton)?;
+    let minimize = ns_window.standardWindowButton(NSWindowButton::MiniaturizeButton)?;
+    let zoom = ns_window.standardWindowButton(NSWindowButton::ZoomButton)?;
+    let spacing = minimize.frame().origin.x - close.frame().origin.x;
+    let end = left + 2.0 * spacing + zoom.frame().size.width;
+    if window.fullscreen().is_some() {
+        return Some(end);
+    }
+    // The buttons sit in the title bar view, inside a container pinned to
+    // the window's top; a bar taller than the system's grows the container to
+    // keep them in it.
+    let titlebar = unsafe { close.superview() }?;
+    let container = unsafe { titlebar.superview() }?;
+    let height = close.frame().size.height;
+    let needed = (centre_y + height / 2.0).ceil();
+    let frame = container.frame();
+    if frame.size.height < needed {
+        let window_height = ns_window.frame().size.height;
+        container.setFrame(NSRect::new(
+            NSPoint::new(frame.origin.x, window_height - needed),
+            objc2_foundation::NSSize::new(frame.size.width, needed),
+        ));
+    }
+    let titlebar_height = titlebar.frame().size.height;
+    let y = if titlebar.isFlipped() {
+        centre_y - height / 2.0
+    } else {
+        titlebar_height - centre_y - height / 2.0
+    };
+    for (index, button) in [&close, &minimize, &zoom].into_iter().enumerate() {
+        let origin = NSPoint::new(left + index as f64 * spacing, y.round());
+        if button.frame().origin != origin {
+            button.setFrameOrigin(origin);
+        }
+    }
+    Some(end)
 }

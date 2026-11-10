@@ -32,7 +32,7 @@ use crate::{
         triangulation::TriangulationId,
     },
     ui::{
-        elements::main_menu::RecentRow,
+        elements::main_menu::{MenuRow, workspace_menus},
         widgets::editable_grid::{GridAction, apply_flat},
     },
 };
@@ -376,11 +376,37 @@ impl EditorState {
         }
     }
 
-    pub(crate) fn planning_subpage(&self) -> PlanningSubpage {
-        match self.planning_page {
-            PlanningPage::Solids => self.solids_subpage,
-            PlanningPage::Haulage => self.haulage_subpage,
-            PlanningPage::Schedule => self.schedule_subpage,
+    /// Whether the Planning workspace is showing `view`.
+    pub(crate) fn is_planning_view(&self, view: PlanningView) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_view == view
+    }
+
+    /// Whether Setup is open on one of `group`'s steps.
+    pub(crate) fn is_setup_group(&self, group: SetupGroup) -> bool {
+        self.is_planning_view(PlanningView::Setup) && self.setup_group == group
+    }
+
+    /// Open Setup on a Solids step.
+    pub(crate) fn open_solids_step(&mut self, step: SolidsStep) {
+        self.planning_view = PlanningView::Setup;
+        self.setup_group = SetupGroup::Solids;
+        self.planning_solids_step = step;
+    }
+
+    /// Open Setup on a Haulage step.
+    pub(crate) fn open_haulage_step(&mut self, step: HaulageStep) {
+        self.planning_view = PlanningView::Setup;
+        self.setup_group = SetupGroup::Haulage;
+        self.haulage_setup_step = step;
+    }
+
+    /// Whether the schedule's own pages are what the Planning workspace is
+    /// on: a Schedule Setup step, or any view of the calculated schedule.
+    pub(crate) fn is_schedule_context(&self) -> bool {
+        match self.planning_view {
+            PlanningView::Setup => self.setup_group == SetupGroup::Schedule,
+            PlanningView::Reserves => false,
+            PlanningView::Calendar | PlanningView::Gantt | PlanningView::Charts | PlanningView::Animate => true,
         }
     }
 
@@ -391,10 +417,7 @@ impl EditorState {
     /// snap and orbit against the real scene. So it reverses both of the
     /// predicates below rather than adding a layout branch of its own.
     pub(crate) fn is_blasting_step(&self) -> bool {
-        self.active_workspace == Workspace::Planning
-            && self.planning_page == PlanningPage::Solids
-            && self.solids_subpage == PlanningSubpage::Setup
-            && self.planning_solids_step == SolidsStep::Blasting
+        self.is_setup_group(SetupGroup::Solids) && self.planning_solids_step == SolidsStep::Blasting
     }
 
     /// Whether the open cut step labels its blasts or dig blocks.
@@ -411,11 +434,15 @@ impl EditorState {
         }
     }
 
+    /// Whether the open Setup step draws the offscreen solid preview in place
+    /// of the viewport: the Solids and Benching steps. The viewport bar's
+    /// camera buttons drive that preview there.
+    pub(crate) fn shows_solid_preview(&self) -> bool {
+        self.is_setup_group(SetupGroup::Solids) && matches!(self.planning_solids_step, SolidsStep::Solids | SolidsStep::Benching)
+    }
+
     pub(crate) fn is_dig_strips_step(&self) -> bool {
-        self.active_workspace == Workspace::Planning
-            && self.planning_page == PlanningPage::Solids
-            && self.solids_subpage == PlanningSubpage::Setup
-            && self.planning_solids_step == SolidsStep::DigStrips
+        self.is_setup_group(SetupGroup::Solids) && self.planning_solids_step == SolidsStep::DigStrips
     }
     pub(crate) fn is_planning_cut_step(&self) -> bool {
         self.is_blasting_step() || self.is_dig_strips_step()
@@ -431,34 +458,41 @@ impl EditorState {
         }
     }
 
-    pub(crate) fn is_planning_viewport(&self) -> bool {
-        self.active_workspace == Workspace::Planning
-            && (!matches!(
-                self.planning_subpage(),
-                PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Calendar | PlanningSubpage::Gantt | PlanningSubpage::Charts
-            ) || self.is_planning_cut_step())
+    /// Whether a Setup step that frames the 3D viewport, rather than owning
+    /// the window, is open: the two cut steps, and the Road Network.
+    pub(crate) fn is_viewport_step(&self) -> bool {
+        self.is_planning_cut_step() || self.is_haulage_page()
+    }
+
+    /// Whether this page locks the project's items until they are unlocked
+    /// on it. Animate and the Road Network show the site to be watched or
+    /// drawn over, where a click selecting the terrain under it would only
+    /// paint its wireframe across the view. The lock is the page's own - see
+    /// [`Self::page_unlocked`] - and leaves the production views alone.
+    pub(crate) fn page_locks_items(&self) -> bool {
+        self.is_schedule_animation() || self.is_haulage_page()
+    }
+
+    /// Whether `entity` shows as locked in the trees: on a page that locks
+    /// items, its own lock; anywhere else, the item's.
+    pub(crate) fn shows_locked(&self, entity: SceneEntityId) -> bool {
+        self.pick_frozen.contains(&entity)
     }
 
     /// Whether a Planning page that owns the whole window - rather than
-    /// framing the 3D viewport - is on screen. Both the Solids setup and the
-    /// view of what it produced are laid out that way.
+    /// framing the 3D viewport - is on screen. Every Setup step but the
+    /// viewport ones is laid out that way, and so is every view but Reserves
+    /// and Animate.
     pub(crate) fn is_planning_setup(&self) -> bool {
-        self.active_workspace == Workspace::Planning
-            && matches!(
-                self.planning_subpage(),
-                PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Calendar | PlanningSubpage::Gantt | PlanningSubpage::Charts
-            )
-            && !self.is_planning_cut_step()
+        self.active_workspace == Workspace::Planning && !matches!(self.planning_view, PlanningView::Reserves | PlanningView::Animate) && !self.is_viewport_step()
     }
 
-    /// Whether the Schedule page is showing its Gantt subpage.
     pub(crate) fn is_schedule_gantt(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Gantt
+        self.is_planning_view(PlanningView::Gantt)
     }
 
-    /// Whether the Schedule page is showing its Charts subpage.
     pub(crate) fn is_schedule_charts(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Charts
+        self.is_planning_view(PlanningView::Charts)
     }
 
     /// Whether a Schedule page that lays out its own whole pane - the
@@ -468,20 +502,23 @@ impl EditorState {
     }
 
     pub(crate) fn is_schedule_calendar(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Calendar
+        self.is_planning_view(PlanningView::Calendar)
     }
 
     /// Whether the Schedule Setup page is showing the Destinations step, the
     /// one page whose choices are drawn from the Solids run's own bands.
-    pub(crate) fn is_schedule_destinations(&self) -> bool {
-        self.active_workspace == Workspace::Planning
-            && self.planning_page == PlanningPage::Schedule
-            && self.schedule_subpage == PlanningSubpage::Setup
-            && self.schedule_setup_step == ScheduleStep::Destinations
+    /// Whether the page on screen offers the ground and category values rules
+    /// and opening chunks choose from.
+    pub(crate) fn shows_routing_choices(&self) -> bool {
+        self.is_setup_group(SetupGroup::Schedule)
+            && matches!(
+                self.schedule_setup_step,
+                ScheduleStep::Stockpiles | ScheduleStep::Destinations | ScheduleStep::TruckingRules | ScheduleStep::Cashflow
+            )
     }
 
     pub(crate) fn is_schedule_animation(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Animate
+        self.is_planning_view(PlanningView::Animate)
     }
 
     /// Whether the floating sequence editor is on screen.
@@ -577,21 +614,13 @@ impl EditorState {
         }
         match request.owner {
             SolidPreviewPickOwner::SequenceEditor { bar, edition, .. } => (draft.bar == bar && draft.edition == edition && !draft.confirming_close).then_some(draft),
-            SolidPreviewPickOwner::SolidsView | SolidPreviewPickOwner::BlastSequence { .. } => None,
+            SolidPreviewPickOwner::BlastSequence { .. } => None,
         }
     }
 
-    /// Whether a completed Solids View pick may still move that page's
-    /// selection. The same refusal as [`Self::sequence_pick_target`], for the
-    /// pane that selects rather than edits: the pick belongs to the View page,
-    /// and only while it is the page on screen.
-    pub(crate) fn solids_view_pick_target(&self, session: u32, request: &SolidPreviewPickRequest) -> bool {
-        request.owner == SolidPreviewPickOwner::SolidsView && request.session == session && self.is_solids_view()
-    }
-
-    /// Whether the Solids page is showing its View subpage.
+    /// Whether the Reserves view, of what the Solids steps generated, is showing.
     pub(crate) fn is_solids_view(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Solids && self.solids_subpage == PlanningSubpage::View
+        self.is_planning_view(PlanningView::Reserves)
     }
 
     /// Set (or clear) the status-bar message. Whenever the displayed task
@@ -643,15 +672,22 @@ impl EditorState {
         self.section_surface_lines && self.active_workspace == Workspace::Geology
     }
 
-    /// Whether a tool that runs on the selection is open on a snapshot of it.
+    /// Whether a tool that took its input from the selection is open.
     ///
-    /// These tools take their inputs when they open and cannot be re-pointed
-    /// from inside, so the viewport and the explorer tree both stop taking
-    /// selection while one is up: a click that appeared to add or drop an
-    /// input would not reach the run. Changing the inputs means closing the
-    /// tool, selecting, and reopening.
+    /// These tools read the selection once, as they open, so the viewport and
+    /// the explorer tree both stop taking selection while one is up: a click
+    /// that appeared to add or drop an input would not reach the run. What
+    /// the tool works on is changed in its dialog instead: a list, a field
+    /// pick in the viewport (which is not a selection), or, for the tools
+    /// working on design objects and holes, its Pick button, which hands the
+    /// selection back for as long as [`SelectionPick`] is up.
     pub(crate) fn selection_locked_by_tool(&self) -> bool {
+        if self.selection_pick.is_some() {
+            return false;
+        }
         self.tri_create_open
+            || self.move_to_axis_dialog.is_some()
+            || self.insert_point_at_elevation_dialog.is_some()
             || self.tri_cut_poly_open
             || self.tri_cut_z_open
             || self.tri_contour_open
@@ -691,6 +727,17 @@ impl EditorState {
         } else {
             self.explicitly_frozen.remove(&handle);
             self.frozen_handles.remove(&handle);
+        }
+    }
+
+    /// Lock or unlock one entity on the page that locks items by default,
+    /// leaving its lock in the production views alone.
+    pub(crate) fn set_page_locked(&mut self, handle: SceneEntityId, locked: bool) {
+        if locked {
+            self.page_unlocked.remove(&handle);
+            self.selected_handles.remove(&handle);
+        } else {
+            self.page_unlocked.insert(handle);
         }
     }
 
@@ -759,7 +806,7 @@ pub(crate) enum TriSurfaceType {
     SolidClosed,
 }
 
-/// The Solids Setup subpage's steps, in the order the step tree lists them:
+/// The Solids Setup's steps, in the order the step tree lists them:
 /// the project-wide Field List, each block model's mapping onto it, then the
 /// solids those reserves are computed over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -837,6 +884,7 @@ pub(crate) struct BlastingRestore {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DigBlockInfo {
     pub(crate) id: crate::model::DigBlockId,
+    pub(crate) solid: crate::model::SolidId,
     pub(crate) name: String,
     pub(crate) plan_area: f64,
     /// The bench and flitch it belongs to, named rather than re-derived.
@@ -911,13 +959,11 @@ pub(crate) enum SolidPick {
 
 /// Which pane a click on the shared solid preview belongs to.
 ///
-/// The Solids View page and the sequence editor draw through the same offscreen
-/// image, so the click alone cannot say who made it - and a click one pane
-/// made must never be answered into the other.
+/// The blast and dig sequence editors draw through the same offscreen image,
+/// so the click alone cannot say who made it - and a click one pane made must
+/// never be answered into the other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SolidPreviewPickOwner {
-    /// The Solids View page's inspector pane, selecting a dig block.
-    SolidsView,
     BlastSequence {
         edition: u64,
     },
@@ -948,7 +994,7 @@ pub(crate) struct SolidPreviewPickRequest {
     pub(crate) session: u32,
     pub(crate) owner: SolidPreviewPickOwner,
     /// The run generation the clicked image depicted. `None` where the pane
-    /// picks displayed geometry without a scheduling gate (the Solids View
+    /// picks displayed geometry without a scheduling gate (the Reserves view
     /// page may pick out benches before any dig-block run exists).
     pub(crate) generation: Option<u64>,
     /// The revision of the displayed image the click was made on. The renderer
@@ -974,7 +1020,7 @@ pub(crate) struct SolidPreviewPickResult {
     pub(crate) outcome: SolidPick,
 }
 
-/// A row of the Solids View tree: a solid, one of its benches, or one flitch
+/// A row of the Reserves view tree: a solid, one of its benches, or one flitch
 /// inside a bench. The kind heading a group is not itself selectable - it
 /// stands for every solid under it, which selecting those says better.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1033,7 +1079,7 @@ pub(crate) struct HaulFlowSegment {
     pub(crate) tph: f64,
 }
 
-/// One dig block as the Haulage layout shows it: its outline, and how it
+/// One dig block as the Road Network shows it: its outline, and how it
 /// meets the road network.
 #[derive(Clone, Debug)]
 pub(crate) struct HaulBlock {
@@ -1073,6 +1119,23 @@ impl HaulBlock {
             flitch_base: self.flitch.base,
             face: self.face.clone(),
             probe: self.anchor,
+        }
+    }
+}
+
+/// What the Copy To dialog of a cut step has ticked: benches or flitches, by
+/// solid and the bit pattern of their base RL.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CopyCutsDialog {
+    pub(crate) targets: std::collections::HashSet<(crate::model::SolidId, u64)>,
+}
+
+impl CopyCutsDialog {
+    pub(crate) fn set(&mut self, solid: crate::model::SolidId, base: f64, on: bool) {
+        if on {
+            self.targets.insert((solid, base.to_bits()));
+        } else {
+            self.targets.remove(&(solid, base.to_bits()));
         }
     }
 }
@@ -1144,12 +1207,12 @@ pub(crate) struct SolidPreviewView {
 }
 
 impl Default for SolidPreviewView {
+    /// Looking straight down with north up, the whole mesh framed: where the
+    /// main viewport starts too.
     fn default() -> Self {
-        // A raised three-quarter view: a pit reads as a pit at a glance,
-        // which a plan or elevation view of the same mesh does not.
         Self {
-            yaw: -std::f64::consts::FRAC_PI_4,
-            pitch: std::f64::consts::FRAC_PI_6,
+            yaw: Self::NORTH_UP_LOOKING_DOWN,
+            pitch: Self::MAX_PITCH,
             zoom_multiplier: 1.0,
             pan: [0.0; 2],
         }
@@ -1160,15 +1223,10 @@ impl SolidPreviewView {
     /// Widest elevation either side of the horizon. Stopping short of
     /// straight down keeps the camera's up vector well defined.
     const MAX_PITCH: f64 = std::f64::consts::FRAC_PI_2 * 0.98;
+    /// The yaw that puts north at the top of the image looking down; looking
+    /// up, the opposite yaw does.
+    const NORTH_UP_LOOKING_DOWN: f64 = std::f64::consts::FRAC_PI_2;
 
-    /// Looking straight down with north up, the whole mesh framed.
-    pub(crate) fn plan() -> Self {
-        Self {
-            yaw: std::f64::consts::FRAC_PI_2,
-            pitch: Self::MAX_PITCH,
-            ..Self::default()
-        }
-    }
     /// Room left round the mesh at a zoom of one: the image's half-height is
     /// this many framing radii.
     pub(crate) const FRAMING_MARGIN: f64 = 1.15;
@@ -1256,8 +1314,8 @@ impl SolidPreviewView {
     /// camera so both cameras answer a gizmo click the same way.
     pub(crate) fn face(&mut self, view: StandardView) {
         let (yaw, pitch) = match view {
-            StandardView::Up => (self.yaw, Self::MAX_PITCH),
-            StandardView::Down => (self.yaw, -Self::MAX_PITCH),
+            StandardView::Up => (Self::NORTH_UP_LOOKING_DOWN, Self::MAX_PITCH),
+            StandardView::Down => (-Self::NORTH_UP_LOOKING_DOWN, -Self::MAX_PITCH),
             StandardView::North => (-std::f64::consts::FRAC_PI_2, 0.0),
             StandardView::South => (std::f64::consts::FRAC_PI_2, 0.0),
             StandardView::West => (0.0, 0.0),
@@ -1386,19 +1444,17 @@ pub(crate) enum ContourOutputLayer {
 
 /// What the current scene selection offers the tools that run on it.
 ///
-/// Create Triangulation, the terrain tools, the point-cloud tools and the
-/// estimation tools act on whatever was selected when they were opened, so
-/// their menu entries have to know every frame whether the selection can feed
-/// them. Counting here rather
-/// than at each menu keeps the document out of the menu code and the scan off
-/// the frame: `App::refresh_selection_counts` fills this in once.
+/// Counting here rather than where it is shown keeps the document out of the
+/// UI code and the scan off the frame: `App::refresh_selection_counts` fills
+/// this in once.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SelectionCounts {
+    /// Selected design objects of any kind.
+    pub(crate) objects: usize,
+    /// Selected polylines; circles are not among them.
+    pub(crate) polylines: usize,
     /// Selected design objects able to contribute an edge to a triangulation.
     pub(crate) triangulation_sources: usize,
-    /// Selected design objects that enclose an area, and so can serve as a
-    /// clipping boundary.
-    pub(crate) clip_boundaries: usize,
     /// Selected design points and open-string vertices, which a surface can
     /// be built from.
     pub(crate) surface_points: usize,
@@ -1424,9 +1480,38 @@ pub(crate) struct SelectionCounts {
     pub(crate) prismoid_cells: usize,
     /// Of those, the ones masked by hand.
     pub(crate) masked_prismoid_cells: usize,
+    /// Selected design objects that enclose an area, which Mask Prismoid
+    /// Grid by Polyline masks along.
+    pub(crate) clip_boundaries: usize,
 }
 
-/// A triangulation selector temporarily being filled from a viewport click.
+/// The tools that work on a set of design objects or holes, which have no
+/// names to list: their dialogs state the set and change it with Pick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SelectionPickTool {
+    SetAxis,
+    InsertAtElevation,
+    /// Has no dialog: opens straight into the pick when the selection holds
+    /// too little to run on, and runs on Done.
+    InsertAtIntersection,
+    CreateTriangulation,
+    ReferencePoints,
+    ReferenceSurface,
+}
+
+/// A tool's Pick in progress. Its dialog is hidden and the viewport selects
+/// again, a click adding or dropping one item and a box adding what it
+/// takes; Done hands the selection to the tool, and cancelling puts back the
+/// selection the pick started from.
+#[derive(Clone, Debug)]
+pub(crate) struct SelectionPick {
+    pub(crate) tool: SelectionPickTool,
+    pub(crate) handles_before: HashSet<SceneEntityId>,
+    pub(crate) holes_before: HashSet<DrillHoleRef>,
+}
+
+/// A triangulation tool's input temporarily being filled from a viewport
+/// click: a surface, or the clip tool's boundary polyline.
 /// Keeping one shared mode prevents overlapping dialogs from competing for a
 /// click and lets Escape cancel the pick without closing the owning tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1443,10 +1528,34 @@ pub(crate) enum TriangulationPickTarget {
     SolidDesign,
     /// The topography half of the Build Solid tool.
     SolidTopography,
+    /// The closed polyline the clip tool cuts its surface along.
+    ClipBoundary,
+    /// The surface the clip tool cuts.
+    ClipSurface,
+    /// The surface Slice by Z cuts.
+    SliceSurface,
+    /// The surface contour lines are generated from.
+    ContourSurface,
     /// The roof half of the Build Prismoid Grid tool.
     PrismoidRoof,
     /// The floor half of the Build Prismoid Grid tool.
     PrismoidFloor,
+}
+
+/// What a tool works on, chosen in its dialog. The app derives what follows
+/// from it (the output's name, the elevation range, the variables on offer),
+/// exactly as it does for a subject taken from the selection at open.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ToolSubject {
+    ClipSurface(TriangulationId),
+    SliceSurface(TriangulationId),
+    ContourSurface(TriangulationId),
+    OreBlockModel(BlockModelId),
+    /// The whole collection: a subset of its holes comes only from holes
+    /// picked in the viewport before the dialog opened.
+    BlockModelDrillholes(crate::model::drill_hole::DrillHoleId),
+    TinPointCloud(PointCloudId),
+    ClassifyPointClouds(Vec<PointCloudId>),
 }
 
 impl TriangulationPickTarget {
@@ -1457,8 +1566,21 @@ impl TriangulationPickTarget {
             Self::IncludeShape => tr!("state-click-pit-stockpile-solid-viewport"),
             Self::SolidDesign => tr!("state-click-design-surface-viewport"),
             Self::SolidTopography => tr!("state-click-topography-viewport"),
-            Self::TrimSurface | Self::ClipToUpper | Self::ClipToLower | Self::PrismoidRoof | Self::PrismoidFloor => tr!("state-click-surface-viewport"),
+            Self::TrimSurface
+            | Self::ClipSurface
+            | Self::SliceSurface
+            | Self::ContourSurface
+            | Self::ClipToUpper
+            | Self::ClipToLower
+            | Self::PrismoidRoof
+            | Self::PrismoidFloor => tr!("state-click-surface-viewport"),
+            Self::ClipBoundary => tr!("state-click-closed-polyline-viewport"),
         }
+    }
+
+    /// Whether the click picks a closed polyline rather than a surface.
+    pub(crate) fn picks_boundary(self) -> bool {
+        self == Self::ClipBoundary
     }
 }
 
@@ -2513,6 +2635,20 @@ pub(crate) struct EditorState {
     /// Entities the user froze by name: Display > Freeze Selection, or the
     /// explorer's per-row padlock.
     pub(crate) explicitly_frozen: HashSet<SceneEntityId>,
+    /// Entities unlocked on the pages that lock every item by default -
+    /// Animate and the Road Network ([`Self::page_locks_items`]). Their
+    /// padlocks set this, not [`Self::frozen_handles`], so locking or
+    /// unlocking there leaves the production views as they were.
+    pub(crate) page_unlocked: HashSet<SceneEntityId>,
+    /// Derived each frame: what a click or a marquee may not select and the
+    /// cursor may not snap to. Off the locking pages, [`Self::frozen_handles`]; on them, every item but those
+    /// unlocked there.
+    pub(crate) pick_frozen: HashSet<SceneEntityId>,
+    /// Derived each frame: what the camera may not orbit about. A page's own
+    /// lock leaves that alone, so the view still turns about the ground on
+    /// the locking pages; an item locked by name stays out unless it is
+    /// unlocked there.
+    pub(crate) orbit_frozen: HashSet<SceneEntityId>,
     /// Design layers locked against selection and editing.
     pub(crate) locked_layers: HashSet<LayerId>,
     /// Rasters locked against draping and deletion. Rasters are not scene
@@ -2521,9 +2657,12 @@ pub(crate) struct EditorState {
     pub(crate) locked_rasters: HashSet<RasterTextureId>,
     /// Entities dimmed toward the background colour.
     pub(crate) translucent_handles: HashSet<SceneEntityId>,
-    /// Show wireframes on all topology meshes. Selected topology meshes always
-    /// show a highlighted wireframe independently of this preference.
+    /// Show wireframes on all topology meshes, in the selection colour on
+    /// selected ones; selection itself is shown by hatching either way.
     pub(crate) topology_wireframes_enabled: bool,
+    /// Draw contour bands on all topology meshes, at an interval that
+    /// follows zoom, in the wireframe's colour.
+    pub(crate) topology_contours_enabled: bool,
     /// Show every vertex of all visible design objects. These are kept in a
     /// persistent GPU instance cache rather than a decimated UI overlay.
     pub(crate) show_points: bool,
@@ -2539,6 +2678,9 @@ pub(crate) struct EditorState {
     /// A per-session view switch like the others on the viewport bar: not
     /// saved, and off at every launch.
     pub(crate) show_borehole_inspector: bool,
+    /// Show the Inspector down the right of the Gantt and Charts pages, rather
+    /// than the strip it collapses to. Per-session: open at every launch.
+    pub(crate) show_schedule_inspector: bool,
     /// Which tab of the Borehole Inspector panel is showing. Transient: not
     /// persisted, always starts back on [`BoreholeInspectorTab::Data`].
     pub(crate) borehole_inspector_tab: BoreholeInspectorTab,
@@ -2559,7 +2701,7 @@ pub(crate) struct EditorState {
     pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
     pub(crate) ui_size_percent: f64,
     /// Show the construction grid on the world XY plane at Z=0. Never written
-    /// to the config, and off until the user turns it on.
+    /// to the config, and on at launch.
     pub(crate) show_xy_grid: bool,
     /// Linear RGBA clear colour used behind the rendered scene: the panel
     /// surface of the current theme, so the viewport reads as one more region.
@@ -2594,6 +2736,8 @@ pub(crate) struct EditorState {
     /// `App` every `memory_usage::SAMPLE_PERIOD`. `None` until the first
     /// reading, or where the platform cannot say.
     pub(crate) memory_usage: Option<crate::app::memory_usage::MemoryUsage>,
+    /// The window the UI is drawn in. See [`WindowFrame`].
+    pub(crate) window_frame: WindowFrame,
     /// Each processor core's load, `0.0..=1.0`, refreshed by `App` every
     /// `memory_usage::CPU_SAMPLE_PERIOD`. Empty until the first reading, and
     /// always on the web, where a browser does not say.
@@ -2740,11 +2884,13 @@ pub(crate) struct EditorState {
     /// Where the machines drawn as models are labelled; set with the icons.
     pub(crate) animation_machine_labels: Vec<crate::rendering::machines::MachineLabel>,
     pub(crate) haul_route: Option<crate::model::haulage::routing::RouteCheck>,
-    /// Browser-only viewport prompt shown before creating a named project.
+    /// The never-saved browser project whose first Save is asking for its
+    /// name: a browser has no file dialog to name it in. See
+    /// `dialogs::editing::draw_name_browser_project_dialog`.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) new_project_dialog_open: bool,
+    pub(crate) naming_browser_project: Option<u32>,
     #[cfg(target_arch = "wasm32")]
-    pub(crate) new_project_name: String,
+    pub(crate) browser_project_name: String,
     pub(crate) new_layer_dialog_open: bool,
     pub(crate) new_layer_name: String,
     /// Active explorer rename: (target, name_buffer).
@@ -2838,17 +2984,13 @@ pub(crate) struct EditorState {
     pub(crate) design_line_weight_input: Option<(Vec<ObjectId>, f32)>,
     pub(crate) move_to_layer_dialog: Option<MoveToLayerDialog>,
     pub(crate) move_to_axis_dialog: Option<crate::ui::dialogs::MoveToAxisDialog>,
-    /// Whether the selected polylines cross anywhere, refreshed by
-    /// `App::refresh_intersection_availability` before each frame's UI. Gates
-    /// Design > Insert Point > At intersection.
-    pub(crate) selection_has_intersections: bool,
-    /// Whether Insert Point has a selected polyline to act on; circles are excluded.
-    pub(crate) selection_has_polylines: bool,
     /// How much of the scene selection each selection-driven tool can act on,
     /// refreshed by `App::refresh_selection_counts` before each frame's UI.
-    /// The menus decide their own availability from this, and never see the
-    /// document the counts are derived from.
+    /// The pick prompt reports from this, and never sees the document the
+    /// counts are derived from.
     pub(crate) selection_counts: SelectionCounts,
+    /// A tool's Pick is up: the viewport selects for that tool until Done.
+    pub(crate) selection_pick: Option<SelectionPick>,
     pub(crate) insert_point_at_elevation_dialog: Option<crate::ui::dialogs::InsertPointAtElevationDialog>,
     pub(crate) thin_strings_dialog: Option<crate::ui::dialogs::ThinStringsDialog>,
     /// The tolerance Thin Strings opens with: the last one applied.
@@ -2900,6 +3042,9 @@ pub(crate) struct EditorState {
     pub(crate) blasting_outlines: Vec<BlastOutline>,
     pub(crate) dig_outlines: Vec<BlastOutline>,
     pub(crate) dig_outlines_key: Option<u64>,
+    /// The dig outlines and their key from the last visit to Dig Strips,
+    /// put back on the next one if nothing they depend on has changed.
+    pub(crate) dig_outlines_parked: Option<(u64, Vec<BlastOutline>)>,
     /// How far apart the cut lines in view on a Blasting or Dig Strips step
     /// typically run, in metres, so they fade together as the camera pulls
     /// back rather than merging into ink. Mirrored out of `App` with the
@@ -2908,7 +3053,10 @@ pub(crate) struct EditorState {
     /// Flitches whose ground Blasting took wholly out of mining, by solid and
     /// base RL bits: Dig Strips leaves them out, as nothing on them is dug.
     pub(crate) dig_excluded_flitches: std::collections::HashSet<(crate::model::SolidId, u64)>,
-    pub(crate) selected_dig_block: Option<BlastShapeRef>,
+    /// The dig blocks picked: one at a time on Dig Strips, any number in the
+    /// Reserves view, where ctrl adds a block, shift toggles one and a drag
+    /// box takes every block it holds.
+    pub(crate) selected_dig_blocks: Vec<BlastShapeRef>,
     /// A click on the solid preview, waiting for the renderer to say what it
     /// landed on - addressed, so it can only ever be answered as the click it
     /// was (see [`SolidPreviewPickRequest`]).
@@ -2930,15 +3078,17 @@ pub(crate) struct EditorState {
     /// image it was made on, and a click on a superseded image can be told
     /// apart from one on the image being drawn now.
     pub(crate) solid_preview_image_revision: u64,
-    /// The selected dig block as the figures panel reports it: identity,
-    /// parents and what it is worth. Mirrored out of the committed artifacts.
-    pub(crate) selected_dig_block_info: Option<DigBlockInfo>,
+    /// The selected dig blocks as the figures panel reports them: identity,
+    /// parents and what each is worth. Mirrored out of the committed artifacts.
+    pub(crate) selected_dig_block_infos: Vec<DigBlockInfo>,
     /// The prismoids picked on a drawn grid, in Geology.
     pub(crate) cell_selection: Option<CellSelection>,
     /// Lines copied in a planning cut step, and whether they came from Dig
     /// Strips (flitch strips) or Blasting (bench blast lines): each pastes
     /// only into the step it was copied from.
     pub(crate) cut_clipboard: (bool, Vec<crate::model::Object>),
+    /// The open Copy To dialog of a cut step.
+    pub(crate) copy_cuts_dialog: Option<CopyCutsDialog>,
     pub(crate) selected_blast: Option<BlastShapeRef>,
     pub(crate) scroll_to_blast: bool,
     pub(crate) blast_labels: Vec<(String, (f32, f32), bool)>,
@@ -2946,9 +3096,13 @@ pub(crate) struct EditorState {
     /// The bench selection the view was last framed on, so picking a bench
     /// zooms to it once rather than fighting the user's pan every frame.
     pub(crate) blasting_framed_key: Option<u64>,
-    /// The project the Haulage Layout was last framed on, so it fits the
+    /// The project the Road Network was last framed on, so it fits the
     /// network once when opened rather than fighting the user's pan.
     pub(crate) haulage_framed_key: Option<u32>,
+    /// The project Animate last framed the whole site for. Cleared when
+    /// another page that frames what it draws takes the camera, so Animate
+    /// opens on the site again rather than on a bench or a road.
+    pub(crate) animation_framed_key: Option<u32>,
     /// What the Blasting step took over on entry and puts back on leaving, so
     /// popping in to check a bench costs the user neither the view nor the
     /// drawing settings they had set up.
@@ -2968,8 +3122,6 @@ pub(crate) struct EditorState {
     pub(crate) planning_stages: [PlanningStageView; SolidsStep::ALL.len()],
     /// Whether a run is queued or in flight, so the controls can offer Cancel.
     pub(crate) planning_run_active: bool,
-    /// What a scheduler asking for a snapshot right now would be told.
-    pub(crate) planning_snapshot_status: String,
     pub(crate) solid_view_reserves: Option<crate::model::solid_reserves::ReserveTotals>,
     pub(crate) solid_view_reserve_status: Option<String>,
     /// Why each absent reserve field is absent, so every dash in the figures
@@ -3509,12 +3661,6 @@ pub(crate) struct EditorState {
     pub(crate) ore_max_input: f64,
     pub(crate) ore_name_input: String,
 
-    // Plot sheets
-    pub(crate) plot_dialog: Option<crate::ui::dialogs::plot::PlotDialog>,
-    /// Live map render shown inside the export dialog's sheet preview, kept up
-    /// to date by the renderer while the dialog is open.
-    pub(crate) plot_preview_texture: Option<egui::TextureId>,
-
     // Batter Berm tool
     pub(crate) batter_berm_dialog_open: bool,
     pub(crate) batter_berm_target_id: Option<ObjectId>,
@@ -3581,16 +3727,14 @@ pub(crate) struct EditorState {
     pub(crate) active_property_tab: PropertyTab,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
-    pub(crate) planning_page: PlanningPage,
-    pub(crate) schedule_subpage: PlanningSubpage,
-    pub(crate) haulage_subpage: PlanningSubpage,
+    /// The Planning tab showing.
+    pub(crate) planning_view: PlanningView,
+    /// Which group's step Setup has open. Each group remembers its own step.
+    pub(crate) setup_group: SetupGroup,
     pub(crate) haulage_setup_step: HaulageStep,
-    /// Which Solids subpage is showing: its setup, or the view of what that
-    /// setup produced.
-    pub(crate) solids_subpage: PlanningSubpage,
-    /// Rows picked out in the Solids View tree.
+    /// Rows picked out in the Reserves view tree.
     pub(crate) solids_view_selection: Vec<SolidsViewRow>,
-    /// Selected row in the Solids Setup subpage's Block Models step.
+    /// Selected row in the Solids Setup's Block Models step.
     pub(crate) planning_selected_block_model: Option<BlockModelId>,
     /// Whether the New Field dialog (Solids Setup's Field List step) is open,
     /// and its draft contents.
@@ -3598,11 +3742,11 @@ pub(crate) struct EditorState {
     pub(crate) new_reserve_field_name: String,
     pub(crate) new_reserve_field_kind: ReserveFieldKind,
     pub(crate) new_reserve_field_weight_field: Option<crate::model::ReserveFieldId>,
-    /// Selected step in the Solids Setup subpage's step tree. Held here
+    /// Selected step in the Solids Setup's step tree. Held here
     /// rather than in egui's temporary data because `App` reads it too: the
     /// solid preview is only built while the Solids step is on screen.
     pub(crate) planning_solids_step: SolidsStep,
-    /// Selected row in the Solids Setup subpage's Solids step.
+    /// Selected row in the Solids Setup's Solids step.
     pub(crate) planning_selected_solid: Option<crate::model::SolidId>,
     /// Whether the New Solid dialog (Solids Setup's Solids step) is open, and
     /// its draft contents.
@@ -3622,6 +3766,9 @@ pub(crate) struct EditorState {
     pub(crate) schedule_stages: [ScheduleStageView; ScheduleStep::ALL.len()],
     /// The Haulage Setup pipeline's steps, mirrored like the Schedule ones.
     pub(crate) haulage_stages: [HaulageStageView; HaulageStep::ALL.len()],
+    /// Whether the project has no reserve fields yet, mirrored with the
+    /// Schedule stages: its first step then waits rather than fails.
+    pub(crate) schedule_no_fields: bool,
     pub(crate) haulage_run_active: bool,
     /// Rerun the Haulage steps on their own once edits settle. Mirrored
     /// from the project's [`crate::model::schedule::AutoRun`] each frame.
@@ -3633,9 +3780,17 @@ pub(crate) struct EditorState {
     /// while a current Schedule Setup run stands, and otherwise the one unmet
     /// prerequisite, named. Inspection never consults it - only calculation is
     /// gated.
-    pub(crate) schedule_calculation_status: String,
+    pub(crate) schedule_calculation_blocked: Option<String>,
     /// How many dig blocks Schedule Setup's Solids step last counted as 0 t.
     pub(crate) schedule_zero_blocks: usize,
+    /// The dig blocks that step last found with no tonnage, so its page can
+    /// show where they are.
+    pub(crate) schedule_unmeasured_blocks: Vec<crate::model::DigBlockId>,
+    /// Dig blocks the Reserves view marks out - the ones the Blocks step
+    /// could not measure - until a selection there replaces them.
+    pub(crate) solids_view_marked: Vec<crate::model::DigBlockId>,
+    /// Frame the marked blocks once they are drawn.
+    pub(crate) solids_view_frame_marked: bool,
     /// What the current Solids run still mines, while a tree that picks
     /// ground to dig is on screen; `None` elsewhere, and before a run.
     pub(crate) mined_ground: Option<std::sync::Arc<MinedGround>>,
@@ -3682,7 +3837,7 @@ pub(crate) struct EditorState {
     /// itself rather than by its row: the list is rebuilt from the run every
     /// time it opens, and a row index would fold a different bench each time
     /// the ground changed.
-    pub(crate) schedule_source_collapsed: Vec<(u64, u64, u64)>,
+    pub(crate) schedule_source_expanded: Vec<(u64, u64, u64)>,
     /// The source scopes a rule can name, as the last completed Solids run
     /// describes them: every pit, its benches, and their flitches. Mirrored
     /// out of the run rather than read from the document, because which bands
@@ -3798,7 +3953,7 @@ pub(crate) struct EditorState {
     /// exact selected step on the Schedule or Solids setup page.
     pub(crate) schedule_run_repair: Option<ScheduleRepairTarget>,
     /// Schedule Animate is session-only: selection and visibility here never
-    /// move the Solids View page or alter saved project item visibility.
+    /// move the Reserves view or alter saved project item visibility.
     pub(crate) schedule_animation_selection: Vec<SolidsViewRow>,
     pub(crate) schedule_animation_hidden: SolidsVisibility,
     /// The schedule's time slider, in hours from the origin: one instant
@@ -3868,6 +4023,10 @@ pub(crate) struct EditorState {
     /// A machine waiting on the delete confirmation, asked only when
     /// deleting it would strand Gantt work.
     pub(crate) pending_delete_agent: Option<crate::model::schedule::LoaderAgentId>,
+    /// The reserve field whose Delete is being confirmed.
+    pub(crate) pending_delete_field: Option<crate::model::ReserveFieldId>,
+    /// The solid whose Delete is being confirmed.
+    pub(crate) pending_delete_solid: Option<crate::model::SolidId>,
     /// The periods selected on the Periods step (Day 1 is 0), and the one a
     /// Shift-click extends from. A colour picked on any selected row marks
     /// them all.
@@ -3880,8 +4039,9 @@ pub(crate) struct EditorState {
     pub(crate) new_destination_kind: crate::model::schedule::DestinationKind,
     /// Where the Gantt is looking: see [`GanttView`].
     pub(crate) gantt: GanttView,
-    /// Whether the Inspector is open beside the Gantt and the Charts.
-    pub(crate) gantt_inspector_open: bool,
+    /// The bar height a drag on a row's edge in the Gantt's name column is
+    /// showing, until it is let go and written to the plan.
+    pub(crate) gantt_bar_height_drag: Option<f32>,
     /// Downward scroll of the Charts page's rows, in points.
     pub(crate) schedule_charts_scroll: f32,
     /// How the Calendar's report export groups its rows.
@@ -3891,11 +4051,10 @@ pub(crate) struct EditorState {
     /// Haulage step last found it.
     pub(crate) schedule_haul_connections: Option<crate::app::commands::haulage::HaulConnections>,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
-    pub(crate) workspace_order: [Workspace; 5],
-    /// Production's recent functions by [`DesignRow::key`], newest last.
-    pub(crate) recent_design_functions: Vec<String>,
-    /// Geology's, by [`GeologyRow::key`](crate::ui::elements::main_menu::GeologyRow::key).
-    pub(crate) recent_geology_functions: Vec<String>,
+    /// Every workspace's recent functions by [`MenuRow::key`], newest last.
+    /// One list: a row belongs to one workspace, so each workspace's list is
+    /// the rows of its own in here.
+    pub(crate) recent_functions: Vec<String>,
     pub(crate) recent_functions_shown: u32,
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
@@ -3920,7 +4079,7 @@ pub(crate) struct EditorState {
     /// World point under the pointer that the screen-space snap corridor ends
     /// at. The preview paints the whole corridor, not only the holes it found.
     pub(crate) tie_path_end_world: Option<DVec3>,
-    /// What the active dataset's tie-in adds up to, for the products panel.
+    /// What the active dataset's tie-in adds up to, for the product sections.
     pub(crate) blast_round: BlastRoundSummary,
     /// The dataset and revision [`Self::blast_round`] was worked out from, so
     /// a pattern is only walked again when its content has moved on.
@@ -4103,46 +4262,43 @@ impl EditorState {
     }
 
     /// Whether the viewport shows the haul network: its roads, node pins and
-    /// route check belong to the Haulage pages and Animate, which draws what
+    /// route check belong to the Haulage steps and Animate, which draws what
     /// travels on them, and nowhere else.
     pub(crate) fn shows_haul_network(&self) -> bool {
-        let planning = self.active_workspace == Workspace::Planning;
-        (planning && self.planning_page == PlanningPage::Haulage) || self.is_schedule_animation()
+        self.is_setup_group(SetupGroup::Haulage) || self.is_schedule_animation()
     }
 
-    /// Whether the Haulage Layout - the road network over the viewport - is
-    /// showing.
+    /// Whether the Road Network step - the road network over the viewport,
+    /// where roads are drawn and joined - is showing.
     pub(crate) fn is_haulage_page(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Haulage && self.haulage_subpage == PlanningSubpage::Layout
+        self.is_setup_group(SetupGroup::Haulage) && self.haulage_setup_step == HaulageStep::Network
     }
 
     /// Open the Calendar on `address`: its group unfolded, the cell selected
     /// and scrolled into view.
     pub(crate) fn open_calendar_cell(&mut self, address: CalendarCellAddress) {
-        self.planning_page = PlanningPage::Schedule;
-        self.schedule_subpage = PlanningSubpage::Calendar;
+        self.planning_view = PlanningView::Calendar;
         self.schedule_calendar.collapsed.remove(&address.owner);
         self.schedule_calendar.selection = Some(CalendarSelection { anchor: address, focus: address });
         self.schedule_calendar.draft = None;
         self.schedule_calendar.reveal = Some(address);
     }
 
-    /// Open the page that repairs a Schedule Setup step. What the Haulage step
-    /// reports is a truck class's, and is repaired on the Haulage page.
+    /// Open the step that repairs a Schedule Setup step. What the Road
+    /// Access step reports is a truck class's, and is repaired in Haulage's
+    /// Truck Classes.
     pub(crate) fn open_schedule_step(&mut self, step: ScheduleStep) {
         if step == ScheduleStep::Haulage {
-            self.planning_page = PlanningPage::Haulage;
-            self.haulage_subpage = PlanningSubpage::Setup;
-            self.haulage_setup_step = HaulageStep::TruckClasses;
+            self.open_haulage_step(HaulageStep::TruckClasses);
         } else {
-            self.planning_page = PlanningPage::Schedule;
-            self.schedule_subpage = PlanningSubpage::Setup;
+            self.planning_view = PlanningView::Setup;
+            self.setup_group = SetupGroup::Schedule;
             self.schedule_setup_step = step;
         }
     }
 
     /// Put down whatever road edit is in progress. A road is drawn over the
-    /// Haulage Layout's viewport, so leaving it must not leave the next click
+    /// Road Network's viewport, so leaving it must not leave the next click
     /// in another workspace placing road points.
     pub(crate) fn cancel_haul_edit(&mut self) {
         self.haul_draw = false;
@@ -4229,6 +4385,8 @@ impl EditorState {
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
     fn dialog_owns_both_keys(&self) -> bool {
         self.alerts.is_showing()
+            || self.selection_pick.is_some()
+            || self.copy_cuts_dialog.is_some()
             || self.grid_dialog.is_some()
             || self.exit_confirm_open
             || self.replace_project_confirm_open
@@ -4251,7 +4409,6 @@ impl EditorState {
             || self.seam_surface_dialog.is_some()
             || self.tri_cut_to_open
             || self.drill_pattern_open
-            || self.plot_dialog.is_some()
             || self.move_to_layer_dialog.is_some()
             || self.move_to_axis_dialog.is_some()
             || self.insert_point_at_elevation_dialog.is_some()
@@ -4295,7 +4452,7 @@ impl EditorState {
             || {
                 #[cfg(target_arch = "wasm32")]
                 {
-                    self.new_project_dialog_open
+                    self.naming_browser_project.is_some()
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -4539,9 +4696,10 @@ impl EditorState {
     /// project that was just left.
     pub(crate) fn clear_project_transients(&mut self) {
         self.selected_blast = None;
-        self.selected_dig_block = None;
+        self.selected_dig_blocks.clear();
         self.dig_outlines.clear();
         self.dig_outlines_key = None;
+        self.dig_outlines_parked = None;
         self.dig_excluded_flitches.clear();
         self.blasting_outlines.clear();
         self.blast_labels.clear();
@@ -4560,6 +4718,9 @@ impl EditorState {
         self.hidden_handles.clear();
         self.frozen_handles.clear();
         self.explicitly_frozen.clear();
+        self.page_unlocked.clear();
+        self.pick_frozen.clear();
+        self.orbit_frozen.clear();
         self.locked_layers.clear();
         self.locked_rasters.clear();
         self.translucent_handles.clear();
@@ -4572,7 +4733,7 @@ impl EditorState {
         self.active_tool = ActiveTool::None;
         #[cfg(target_arch = "wasm32")]
         {
-            self.new_project_dialog_open = false;
+            self.naming_browser_project = None;
         }
         self.new_layer_dialog_open = false;
         self.renaming_item = None;
@@ -4658,7 +4819,7 @@ impl EditorState {
         self.schedule_selected_rule = None;
         self.schedule_rule_draft = None;
         self.schedule_condition_draft = None;
-        self.schedule_source_collapsed.clear();
+        self.schedule_source_expanded.clear();
         self.schedule_routing_sources = Default::default();
         self.schedule_category_values = Default::default();
         self.new_destination_open = false;
@@ -4688,6 +4849,8 @@ impl EditorState {
         self.new_loader_agent_open = false;
         self.new_loader_agent_class = None;
         self.pending_delete_agent = None;
+        self.pending_delete_field = None;
+        self.pending_delete_solid = None;
         self.schedule_selected_periods.clear();
         self.schedule_period_anchor = None;
         self.new_loader_agent_name.clear();
@@ -4789,6 +4952,7 @@ impl EditorState {
         self.tri_create_diagnostic_segments_screen_px.clear();
         self.clear_string_rings();
         self.triangulation_pick_target = None;
+        self.selection_pick = None;
         self.viewport_pick_hover_label = None;
         self.tri_cut_poly_open = false;
         self.tri_cut_poly_object_id = None;
@@ -4872,22 +5036,27 @@ impl EditorState {
             alerts: Default::default(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
+            page_unlocked: HashSet::new(),
+            pick_frozen: HashSet::new(),
+            orbit_frozen: HashSet::new(),
             locked_layers: HashSet::new(),
             locked_rasters: HashSet::new(),
             translucent_handles: HashSet::new(),
             topology_wireframes_enabled: false,
+            topology_contours_enabled: false,
             show_points: false,
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
             show_borehole_inspector: false,
+            show_schedule_inspector: true,
             borehole_inspector_tab: BoreholeInspectorTab::default(),
             borehole_log_strat_field: None,
             borehole_log_curves: None,
             strat_checks: Vec::new(),
             well_log_style: Default::default(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
-            show_xy_grid: false,
+            show_xy_grid: true,
             renderer_background_color: crate::ui::scene_background_color(crate::app::io::default_dark_mode()),
             show_preferences: false,
             preferences_draft: None,
@@ -4901,6 +5070,7 @@ impl EditorState {
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
             measured_fps: None,
             memory_usage: None,
+            window_frame: WindowFrame::default(),
             cpu_usage: Vec::new(),
             frame_rate_window: (0, 0.0),
             debug_surface_chunks: false,
@@ -4978,9 +5148,9 @@ impl EditorState {
             animation_machine_labels: Vec::new(),
             haul_route: None,
             #[cfg(target_arch = "wasm32")]
-            new_project_dialog_open: false,
+            naming_browser_project: None,
             #[cfg(target_arch = "wasm32")]
-            new_project_name: String::new(),
+            browser_project_name: String::new(),
             new_layer_dialog_open: false,
             new_layer_name: tr!("ws-menubar-design"),
             renaming_item: None,
@@ -5022,9 +5192,8 @@ impl EditorState {
             design_line_weight_input: None,
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
-            selection_has_intersections: false,
-            selection_has_polylines: false,
             selection_counts: SelectionCounts::default(),
+            selection_pick: None,
             insert_point_at_elevation_dialog: None,
             thin_strings_dialog: None,
             thin_tolerance: crate::app::commands::drawing::thin::DEFAULT_THIN_TOLERANCE,
@@ -5051,29 +5220,31 @@ impl EditorState {
             dig_outlines: Vec::new(),
             planning_cut_spacing_m: 0.0,
             dig_outlines_key: None,
+            dig_outlines_parked: None,
             dig_excluded_flitches: Default::default(),
-            selected_dig_block: None,
+            selected_dig_blocks: Vec::new(),
             solid_preview_pick: None,
             solid_preview_pick_result: None,
             solid_preview_pivot_request: None,
             solid_preview_pivot: None,
             solid_preview_image_revision: 0,
-            selected_dig_block_info: None,
+            selected_dig_block_infos: Vec::new(),
             cell_selection: None,
             cut_clipboard: (false, Vec::new()),
+            copy_cuts_dialog: None,
             selected_blast: None,
             scroll_to_blast: false,
             blast_labels: Vec::new(),
             blasting_outlines_key: None,
             haulage_framed_key: None,
             blasting_framed_key: None,
+            animation_framed_key: None,
             blasting_restore: None,
             blasting_bench_key: None,
             planning_cut_name: None,
             solids_tree_reveal: false,
             planning_stages: Default::default(),
             planning_run_active: false,
-            planning_snapshot_status: String::new(),
             solid_view_reserves: None,
             solid_view_reserve_issues: Default::default(),
             solid_view_coverage: None,
@@ -5373,8 +5544,6 @@ impl EditorState {
             ore_min_input: 0.0,
             ore_max_input: 1.0,
             ore_name_input: String::new(),
-            plot_dialog: None,
-            plot_preview_texture: None,
             batter_berm_dialog_open: false,
             batter_berm_target_id: None,
             batter_berm_width: 8.0,
@@ -5409,11 +5578,9 @@ impl EditorState {
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Interface,
             active_workspace: Workspace::Production,
-            planning_page: PlanningPage::Solids,
-            schedule_subpage: PlanningSubpage::Setup,
-            haulage_subpage: PlanningSubpage::Setup,
+            planning_view: PlanningView::Setup,
+            setup_group: SetupGroup::Solids,
             haulage_setup_step: HaulageStep::Network,
-            solids_subpage: PlanningSubpage::Setup,
             solids_view_selection: Vec::new(),
             planning_selected_block_model: None,
             new_reserve_field_open: false,
@@ -5434,9 +5601,13 @@ impl EditorState {
             schedule_run_active: false,
             haulage_stages: Default::default(),
             haulage_run_active: false,
+            schedule_no_fields: false,
             haulage_auto_run: true,
-            schedule_calculation_status: String::new(),
+            schedule_calculation_blocked: None,
             schedule_zero_blocks: 0,
+            schedule_unmeasured_blocks: Vec::new(),
+            solids_view_marked: Vec::new(),
+            solids_view_frame_marked: false,
             mined_ground: None,
             mined_ground_key: None,
             schedule_experiment_draft: None,
@@ -5456,7 +5627,7 @@ impl EditorState {
             schedule_selected_rule: None,
             schedule_rule_draft: None,
             schedule_condition_draft: None,
-            schedule_source_collapsed: Vec::new(),
+            schedule_source_expanded: Vec::new(),
             schedule_routing_sources: Default::default(),
             schedule_category_values: Default::default(),
             schedule_agent_draft: None,
@@ -5528,20 +5699,20 @@ impl EditorState {
             new_loader_agent_name: String::new(),
             new_loader_agent_class: None,
             pending_delete_agent: None,
+            pending_delete_field: None,
+            pending_delete_solid: None,
             schedule_selected_periods: std::collections::BTreeSet::new(),
             schedule_period_anchor: None,
             new_destination_open: false,
             new_destination_name: String::new(),
             new_destination_kind: crate::model::schedule::DestinationKind::Stockpile,
             gantt: GanttView::default(),
-            gantt_inspector_open: true,
+            gantt_bar_height_drag: None,
             schedule_charts_scroll: 0.0,
             schedule_report_grouping: Default::default(),
             schedule_calendar: ScheduleCalendarView::default(),
             schedule_haul_connections: None,
-            workspace_order: Workspace::ALL,
-            recent_design_functions: Vec::new(),
-            recent_geology_functions: Vec::new(),
+            recent_functions: Vec::new(),
             recent_functions_shown: crate::app::io::default_recent_functions_shown(),
             survey: Default::default(),
             delay_products: builtin_delay_products(),
@@ -5825,7 +5996,7 @@ pub(crate) enum ActiveTool {
     /// Lay a product along the visible screen-space corridor between collars.
     TieHoles,
     /// Drill & Blast's initiation tool: a click puts the point a round starts
-    /// at on the hole under the cursor, at the delay the products panel holds.
+    /// at on the hole under the cursor, at the delay the product sections hold.
     SetInitiationPoint,
     /// Load holes with the active charge rule: click one, or drag a box over
     /// several. Shift unloads instead.
@@ -6171,8 +6342,63 @@ pub(crate) struct HaulBlockRef {
     pub(crate) probe: [f64; 2],
 }
 
+/// The window around the UI, as the title bar drawn across its top needs it.
+///
+/// Incline draws its own title bar (`elements::title_bar`). `App` mirrors the
+/// window's state in before each frame; the fields marked as the UI's are
+/// written by the bar for `App` to hand on to the platform after it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WindowFrame {
+    pub(crate) maximized: bool,
+    pub(crate) fullscreen: bool,
+    pub(crate) focused: bool,
+    /// Whether the UI draws the window's border: where nothing else frames
+    /// the window, and it does not fill the screen.
+    pub(crate) border: bool,
+    /// The window's corner radius in points, where the window cuts its own
+    /// corners (`rendering/graphics/window_corners.rs`) and the border must
+    /// follow them. Zero for square corners, or where the system rounds them.
+    pub(crate) corner_radius: u8,
+    /// Where the system's own window buttons end, from the window's left
+    /// edge, in points: macOS keeps its red, yellow and green buttons over
+    /// the bar, and the bar's contents start after them. Zero elsewhere.
+    pub(crate) leading_inset: f32,
+    /// Whether the pointer is over, or pressing, the maximise button. On
+    /// Windows the button is hit-tested by the system, for Snap Layouts, so
+    /// egui never sees the pointer there and these say what it would have.
+    #[cfg_attr(any(target_os = "macos", target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) maximize_hovered: bool,
+    #[cfg_attr(any(target_os = "macos", target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) maximize_pressed: bool,
+    /// The UI's: where it drew the maximise button this frame.
+    pub(crate) maximize_button: Option<egui::Rect>,
+    /// The UI's: the height the workspace tabs' names are centred at, which
+    /// the system's window buttons on macOS are centred at too.
+    pub(crate) buttons_centre_y: f32,
+}
+
+/// Something the title bar asks of the window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum WindowAction {
+    /// Move the window with the pointer, the primary button being held.
+    Drag,
+    /// Resize the window from one of its edges or corners, likewise.
+    /// macOS resizes its own window, and has its own buttons.
+    #[cfg_attr(any(target_os = "macos", target_arch = "wasm32"), allow(dead_code))]
+    Resize(winit::window::ResizeDirection),
+    #[cfg_attr(any(target_os = "macos", target_arch = "wasm32"), allow(dead_code))]
+    Minimize,
+    #[cfg_attr(any(target_os = "macos", target_arch = "wasm32"), allow(dead_code))]
+    ToggleMaximize,
+    /// Whatever a double-click on a title bar does on this platform.
+    TitleDoubleClick,
+    /// The system's window menu, at this point in the window.
+    ShowMenu(egui::Pos2),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UiCommand {
+    Window(WindowAction),
     Haulage {
         project: u32,
         edit: HaulEdit,
@@ -6211,15 +6437,29 @@ pub(crate) enum UiCommand {
     /// the discipline it was made in, and the tabs are not a way of carrying
     /// one across.
     ClearSelection,
+    /// Add the ground of these Solids Navigation rows to the open dig order or
+    /// blast order, narrowed to one blast when there is one.
+    AddToSequence {
+        rows: Vec<SolidsViewRow>,
+        blast: Option<BlastShapeRef>,
+    },
+    /// Copy the cut lines selected on a cut step to these benches or flitches.
+    CopyCutsTo(Vec<(crate::model::SolidId, BenchSelection)>),
     SetFlyModeEnabled(bool),
     SetSliceModeEnabled(bool),
     #[cfg(not(target_arch = "wasm32"))]
     SetSlicePreviewDetached(bool),
     NewProject,
+    /// Save a never-saved browser project under `name`, from the dialog its
+    /// first Save opened.
     #[cfg(target_arch = "wasm32")]
-    CreateBrowserProject {
+    SaveBrowserProjectAs {
+        runtime_id: u32,
         name: String,
     },
+    /// Close that dialog without saving, and drop what was waiting on the save.
+    #[cfg(target_arch = "wasm32")]
+    CancelBrowserProjectSave,
     OpenProject,
     #[cfg(not(target_arch = "wasm32"))]
     ActivateTrackedProject(PathBuf),
@@ -6332,6 +6572,7 @@ pub(crate) enum UiCommand {
         name: String,
         aggregation: crate::model::ReserveAggregation,
     },
+    RequestDeleteReserveField(crate::model::ReserveFieldId),
     DeleteReserveField(crate::model::ReserveFieldId),
     /// Add a field named after a block model column, mapped onto that column
     /// in every block model that has one by that name.
@@ -6505,6 +6746,7 @@ pub(crate) enum UiCommand {
     /// Save Surface Lines as Strings: the drawn lines to a new layer.
     SaveSectionSurfaceLines,
     SetTopologyWireframes(bool),
+    SetTopologyContours(bool),
     SetShowPoints(bool),
     /// Presentation shading over the scene pass. Native only.
     #[cfg(not(target_arch = "wasm32"))]
@@ -6512,8 +6754,7 @@ pub(crate) enum UiCommand {
     SetStandardView(StandardView),
     OpenPreferences,
     ApplyPreferences(PreferencesDraft),
-    SetPlanningPage(PlanningPage),
-    SetPlanningSubpage(PlanningSubpage),
+    SetPlanningView(PlanningView),
     FocusScheduleAnimationSolid(crate::model::SolidId),
     OpenSurveyDefinitions,
     OpenSurveyTransform,
@@ -6535,10 +6776,6 @@ pub(crate) enum UiCommand {
     /// two. The tools that run on a selection are reached this way as well as
     /// from the viewport.
     SelectExplorerRow(ExplorerRow),
-    ReorderWorkspace {
-        workspace: Workspace,
-        before: Option<Workspace>,
-    },
     /// Switch the UI language from the status bar's picker. Applied live and
     /// saved into the config, exactly as any other preference is.
     SetLanguage(crate::i18n::LanguageChoice),
@@ -6622,8 +6859,18 @@ pub(crate) enum UiCommand {
     CancelTextEdit,
     SetTriangulationColor(TriangulationId, [f32; 4]),
     CloseCanvasContextMenu,
-    /// Remember a menu function as just used, by its row key.
-    NoteRecentFunction(&'static str),
+    /// Remember a menu function as just used.
+    NoteRecentFunction(MenuRow),
+    /// Point an open tool at the item chosen in its dialog.
+    SetToolSubject(ToolSubject),
+    /// Hide a tool's dialog and select its input in the viewport.
+    BeginSelectionPick(SelectionPickTool),
+    /// Hand the picked selection to the tool.
+    FinishSelectionPick,
+    /// Put the pick down and the selection back as it was.
+    CancelSelectionPick,
+    /// Empty the selection being picked.
+    ClearSelectionPick,
     LoadTriangulation(TriangulationId),
     LoadBlockModel(BlockModelId),
     CloseBlockModel(BlockModelId),
@@ -7204,14 +7451,6 @@ pub(crate) enum UiCommand {
         output_layer: ContourOutputLayer,
     },
 
-    // ── Plot sheets ──
-    /// Open the "Export Engineering Drawing" dialog.
-    OpenPlotDialog,
-    /// Set the plot scale to the smallest conventional one that fits the data.
-    FitPlotScaleToData,
-    /// Render and write the configured plot sheet.
-    ExportPlotSheet,
-
     /// Open the "Edit Object" dialog on one design object, seeding its working
     /// copy from the document.
     OpenObjectEditDialog(ObjectId),
@@ -7264,7 +7503,8 @@ impl UiCommand {
             Some(CommandReportSpec::new(title, summary))
         }
         match self {
-            Self::SetActiveTool(_)
+            Self::Window(_)
+            | Self::SetActiveTool(_)
             | Self::RemoveLastStrokeVertex
             | Self::OpenNextVertexPanel
             | Self::ArmDragVertex
@@ -7279,6 +7519,8 @@ impl UiCommand {
             | Self::ToggleCreateDrillPattern
             | Self::BeginDrillPatternShapePick
             | Self::ClearSelection
+            | Self::AddToSequence { .. }
+            | Self::CopyCutsTo(_)
             | Self::CloseStartupDialog
             | Self::CancelCloseProject
             | Self::CancelExit
@@ -7289,8 +7531,7 @@ impl UiCommand {
             | Self::CancelRelimit
             | Self::OpenPreferences
             | Self::ApplyPreferences(_)
-            | Self::SetPlanningPage(_)
-            | Self::SetPlanningSubpage(_)
+            | Self::SetPlanningView(_)
             | Self::FocusScheduleAnimationSolid(_)
             | Self::SetWellLogStyle(_)
             | Self::OpenSurveyDefinitions
@@ -7300,7 +7541,6 @@ impl UiCommand {
             | Self::SetSurveyLocalSystem(_)
             | Self::SelectExplorerRow(_)
             | Self::TransformSurveySelection
-            | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
             | Self::ToggleSectionSurfaceLines
             | Self::SaveSectionSurfaceLines
@@ -7316,6 +7556,11 @@ impl UiCommand {
             | Self::CancelTextEdit
             | Self::CloseCanvasContextMenu
             | Self::NoteRecentFunction(_)
+            | Self::SetToolSubject(_)
+            | Self::BeginSelectionPick(_)
+            | Self::FinishSelectionPick
+            | Self::CancelSelectionPick
+            | Self::ClearSelectionPick
             | Self::OpenOptimizationScenarios
             | Self::AddOptimizationScenario
             | Self::EditOptimizationScenario(_)
@@ -7362,8 +7607,6 @@ impl UiCommand {
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
             | Self::OpenContourTriangulation
-            | Self::OpenPlotDialog
-            | Self::FitPlotScaleToData
             | Self::SetBlockModelColorTransfer { .. }
             | Self::ResetBlockModelColorTransfer { .. }
             | Self::SetDrillHoleColorStops { .. }
@@ -7438,7 +7681,10 @@ impl UiCommand {
             Self::SetSlicePreviewDetached(detached) => report(tr!("state-slice-preview"), if *detached { tr!("state-detached") } else { tr!("state-docked") }),
             Self::NewProject => report(tr!("state-create-project"), tr!("state-untitled-project")),
             #[cfg(target_arch = "wasm32")]
-            Self::CreateBrowserProject { name } => report(tr!("state-create-project"), name.clone()),
+            #[cfg(target_arch = "wasm32")]
+            Self::SaveBrowserProjectAs { name, .. } => report(tr!("state-save-project"), name.clone()),
+            #[cfg(target_arch = "wasm32")]
+            Self::CancelBrowserProjectSave => None,
             Self::OpenProject => report(tr!("state-open-project"), tr!("state-choose-one-more-files")),
             #[cfg(not(target_arch = "wasm32"))]
             Self::ActivateTrackedProject(path) => report(tr!("state-activate-project"), path.display().to_string()),
@@ -7457,17 +7703,17 @@ impl UiCommand {
             Self::ImportTriangulationPaths(paths) => report(tr!("state-import-triangulation"), tr!("state-count-file-s", count = paths.len().to_string())),
             Self::ImportPointCloudPaths(paths) => report(tr!("state-import-point-cloud"), tr!("state-count-file-s", count = paths.len().to_string())),
             Self::ImportRasterPaths(paths) => report(tr!("state-import-raster"), tr!("state-count-file-s", count = paths.len().to_string())),
-            Self::LoadRaster(id) => report(tr!("state-load-raster"), format!("{id:?}")),
-            Self::UnloadRaster(id) => report(tr!("state-unload-raster"), format!("{id:?}")),
-            Self::ToggleRasterLocked(id) => report(tr!("state-set-raster-lock"), format!("{id:?}")),
-            Self::RemoveRaster(id) => report(tr!("state-remove-raster"), format!("{id:?}")),
-            Self::DrapeRaster(id) => report(tr!("state-drape-raster"), format!("{id:?}")),
-            Self::UndrapeRaster(id) => report(tr!("state-undrape-raster"), format!("{id:?}")),
+            Self::LoadRaster(_) => report(tr!("state-load-raster"), String::new()),
+            Self::UnloadRaster(_) => report(tr!("state-unload-raster"), String::new()),
+            Self::ToggleRasterLocked(_) => report(tr!("state-set-raster-lock"), String::new()),
+            Self::RemoveRaster(_) => report(tr!("state-remove-raster"), String::new()),
+            Self::DrapeRaster(_) => report(tr!("state-drape-raster"), String::new()),
+            Self::UndrapeRaster(_) => report(tr!("state-undrape-raster"), String::new()),
             Self::UndrapeAllRasters => report(tr!("state-undrape-rasters"), tr!("state-removed-from-every-triangulation")),
             Self::ClearActiveTriangulationRaster => report(tr!("state-clear-raster"), tr!("state-removed-from-active-triangulation")),
-            Self::LoadPointCloud(id) => report(tr!("state-load-point-cloud"), format!("{id:?}")),
-            Self::ClosePointCloud(id) => report(tr!("state-unload-point-cloud"), format!("{id:?}")),
-            Self::RemovePointCloud(id) => report(tr!("state-remove-point-cloud"), format!("{id:?}")),
+            Self::LoadPointCloud(_) => report(tr!("state-load-point-cloud"), String::new()),
+            Self::ClosePointCloud(_) => report(tr!("state-unload-point-cloud"), String::new()),
+            Self::RemovePointCloud(_) => report(tr!("state-remove-point-cloud"), String::new()),
             Self::ImportCsvBlockModel { path, .. } => report(tr!("common-import-csv-block-model"), path.display().to_string()),
             Self::ImportQualityPoints { path, .. } => report(tr!("state-import-quality-points"), path.display().to_string()),
             Self::ExportOmf(selection) => report(
@@ -7480,12 +7726,12 @@ impl UiCommand {
             ),
             Self::ExportProjectDxf(id) => report(tr!("state-export-project-dxf"), tr!("state-project-id", id = id.to_string())),
             Self::ExportViewportImage => report(tr!("state-export-viewport-image"), tr!("state-choose-destination")),
-            Self::ExportLayerDxf(id) => report(tr!("state-export-layer-dxf"), format!("{id:?}")),
-            Self::ExportTriangulationAs(id, format) => report(tr!("state-export-triangulation"), format!("{id:?} · {format:?}")),
-            Self::ExportBlockModelCsv(id) => report(tr!("state-export-block-model-csv"), format!("{id:?}")),
+            Self::ExportLayerDxf(_) => report(tr!("state-export-layer-dxf"), String::new()),
+            Self::ExportTriangulationAs(_, format) => report(tr!("state-export-triangulation"), format!("{format:?}")),
+            Self::ExportBlockModelCsv(_) => report(tr!("state-export-block-model-csv"), String::new()),
             Self::ExportScheduleReport(export) => report(tr!("report-export-title"), export.0.clone()),
-            Self::ExportDrillHoleCsv(id) => report(tr!("state-export-drillhole-csv"), format!("{id:?}")),
-            Self::ExportCorrectionsWorksheet(id) => report(tr!("state-export-corrections-worksheet"), format!("{id:?}")),
+            Self::ExportDrillHoleCsv(_) => report(tr!("state-export-drillhole-csv"), String::new()),
+            Self::ExportCorrectionsWorksheet(_) => report(tr!("state-export-corrections-worksheet"), String::new()),
             #[cfg(not(target_arch = "wasm32"))]
             Self::RequestExit => report(tr!("state-exit-incline-design"), tr!("state-checking-unsaved-work")),
             Self::SaveAndExit => report(tr!("common-save-exit"), tr!("state-saving-current-project")),
@@ -7493,18 +7739,21 @@ impl UiCommand {
             Self::CreateLayer { name } => report(tr!("common-create-layer"), name.clone()),
             Self::AddReserveField { name, .. } => report(tr!("reserve-add-field"), name.clone()),
             Self::AddReserveFieldFromColumn { column, .. } => report(tr!("reserve-add-field"), column.clone()),
-            Self::DeleteReserveField(id) => report(tr!("planning-delete-field"), format!("{id:?}")),
+            Self::RequestDeleteReserveField(_) => report(tr!("planning-delete-field"), String::new()),
+            Self::DeleteReserveField(_) => report(tr!("planning-delete-field"), String::new()),
             Self::AddSolid { name, .. } => report(tr!("solids-add-solid"), name.clone()),
             // The fleet editors report additions and deletions, which are
             // structural (a deletion's name is filled in App-side, by
             // `schedule_report_subject`, which can still read it), but not renames or rate edits: those are cell edits
             // and a console line per keystroke-commit would bury the log.
             Self::Schedule { edit, .. } => match edit {
-                ScheduleEdit::AddClass { name, rate_tph, kind } => report(tr!("schedule-new-class"), format!("{name} · {rate_tph} {}", if kind.is_drill_blast() { kind.rate_unit() } else { "tph" })),
+                ScheduleEdit::AddClass { name, rate_tph, kind } => report(tr!("schedule-new-class"), format!("{name} · {rate_tph} {}", kind.rate_unit())),
                 ScheduleEdit::DeleteClass(_) => report(tr!("schedule-delete-class"), String::new()),
                 ScheduleEdit::AddAgent { name, .. } => report(tr!("schedule-new-agent"), name.clone()),
                 ScheduleEdit::DeleteAgent(_) => report(tr!("schedule-delete-agent"), String::new()),
-                ScheduleEdit::SetCalendarCells { edits } => report(tr!("schedule-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
+                ScheduleEdit::AddCalendarView(view) => report(tr!("calendar-view-save"), view.name.clone()),
+                ScheduleEdit::DeleteCalendarView(_) => report(tr!("calendar-view-delete"), String::new()),
+                ScheduleEdit::SetCalendarCells { edits } => report(tr!("schedule-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len())),
                 ScheduleEdit::AddBar { name, .. } => report(tr!("schedule-new-bar"), name.clone()),
                 ScheduleEdit::AddReclaimBar { name, .. } => report(tr!("reclaim-add-bar"), name.clone()),
                 ScheduleEdit::AddOpeningLot { name, tonnes_t, .. } => report(tr!("inventory-new-lot"), format!("{name} · {tonnes_t} t")),
@@ -7522,16 +7771,16 @@ impl UiCommand {
                 ScheduleEdit::AddRule { name, .. } => report(tr!("destination-new-rule"), name.clone()),
                 ScheduleEdit::DuplicateRule(_) => report(tr!("destination-duplicate-rule"), String::new()),
                 ScheduleEdit::DeleteRule(_) => report(tr!("destination-delete-rule"), String::new()),
-                ScheduleEdit::SetCrusherCells { edits } => report(tr!("destination-crusher-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
+                ScheduleEdit::SetCrusherCells { edits } => report(tr!("destination-crusher-edit"), tr!("schedule-calendar-cells-updated", count = edits.len())),
                 ScheduleEdit::SetStockpileOperating { .. } => report(tr!("pile-operating-edit"), String::new()),
-                ScheduleEdit::SetPileModeCells { edits } => report(tr!("pile-mode-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
+                ScheduleEdit::SetPileModeCells { edits } => report(tr!("pile-mode-edit"), tr!("schedule-calendar-cells-updated", count = edits.len())),
                 ScheduleEdit::AddTruckClass { name } => report(tr!("truck-new-class"), name.clone()),
                 ScheduleEdit::DuplicateTruckClass(_) => report(tr!("truck-duplicate-class"), String::new()),
                 ScheduleEdit::DeleteTruckClass(_) => report(tr!("truck-delete-class"), String::new()),
                 ScheduleEdit::AddTruckingRule { name, .. } => report(tr!("truck-new-rule"), name.clone()),
                 ScheduleEdit::DuplicateTruckingRule(_) => report(tr!("truck-duplicate-rule"), String::new()),
                 ScheduleEdit::DeleteTruckingRule(_) => report(tr!("truck-delete-rule"), String::new()),
-                ScheduleEdit::SetTruckCells { edits } => report(tr!("schedule-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
+                ScheduleEdit::SetTruckCells { edits } => report(tr!("schedule-truck-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len())),
                 ScheduleEdit::AddCashflowRule { name } => report(tr!("cashflow-new-rule"), name.clone()),
                 ScheduleEdit::DuplicateCashflowRule(_) => report(tr!("cashflow-duplicate-rule"), String::new()),
                 ScheduleEdit::DeleteCashflowRule(_) => report(tr!("cashflow-delete-rule"), String::new()),
@@ -7566,6 +7815,9 @@ impl UiCommand {
                 | ScheduleEdit::SetClassRate { .. }
                 | ScheduleEdit::RenameAgent { .. }
                 | ScheduleEdit::SetAgentClass { .. }
+                | ScheduleEdit::MoveMachineGroup { .. }
+                | ScheduleEdit::MoveMachine { .. }
+                | ScheduleEdit::SetCalendarView(_)
                 | ScheduleEdit::RenameBar { .. }
                 | ScheduleEdit::SetTonnageField(_)
                 | ScheduleEdit::SetUnmeasuredAsZero(_)
@@ -7629,8 +7881,7 @@ impl UiCommand {
                 | ScheduleEdit::MoveOpeningLot { .. }
                 | ScheduleEdit::SetOpeningPortionTonnes { .. }
                 | ScheduleEdit::SetOpeningPortionValue { .. }
-                | ScheduleEdit::SetReclaimSources { .. }
-                | ScheduleEdit::SetReclaimMaximum { .. }
+                | ScheduleEdit::SetReclaim { .. }
                 // Experimental optimiser settings: the Optimisation section
                 // and the stockpile's own page show the result where it was
                 // typed.
@@ -7643,48 +7894,19 @@ impl UiCommand {
                 | ScheduleEdit::SetStockpileChunkSize { .. }
                 | ScheduleEdit::SetOpeningBlend { .. } => None,
             },
-            Self::DeleteSolid(id) => report(tr!("planning-delete-solid"), format!("{id:?}")),
+            Self::DeleteSolid(_) => report(tr!("planning-delete-solid"), String::new()),
             Self::SelectBlast(_) | Self::SelectDigBlock(_) => None,
-            Self::ResetBlastName(blast) => report(tr!("planning-reset-blast-name"), format!("{:?} RL {:.2}", blast.solid, blast.bench_base())),
+            Self::ResetBlastName(blast) => report(tr!("planning-reset-blast-name"), format!("RL {:.2}", blast.bench_base())),
             Self::SaveSolidPreviewToProject => report(tr!("planning-save-solid-project"), tr!("state-solids-preview")),
             Self::CreateFolder(section) => report(
                 tr!("state-create-collection"),
                 tr!("state-new-collection-under-section", section = ExplorerSection::from_kind(*section).label().to_string()),
             ),
-            Self::DeleteFolder { section, folder } => report(
-                tr!("explorer-remove-collection"),
-                tr!(
-                    "state-folder-section",
-                    folder = format!("{folder:?}"),
-                    section = ExplorerSection::from_kind(*section).label().to_string()
-                ),
-            ),
-            Self::DeleteFolderAndContents { section, folder } => report(
-                tr!("common-delete-collection"),
-                tr!(
-                    "state-folder-section",
-                    folder = format!("{folder:?}"),
-                    section = ExplorerSection::from_kind(*section).label().to_string()
-                ),
-            ),
-            Self::MoveToFolder { member, section, folder } => report(
-                tr!("common-move-collection"),
-                match folder {
-                    Some(folder) => tr!(
-                        "state-member-into-folder-section",
-                        member = format!("{member:?}"),
-                        folder = format!("{folder:?}"),
-                        section = ExplorerSection::from_kind(*section).label().to_string()
-                    ),
-                    None => tr!(
-                        "state-member-root-section",
-                        member = format!("{member:?}"),
-                        section = ExplorerSection::from_kind(*section).label().to_string()
-                    ),
-                },
-            ),
+            Self::DeleteFolder { section, .. } => report(tr!("explorer-remove-collection"), ExplorerSection::from_kind(*section).label().to_string()),
+            Self::DeleteFolderAndContents { section, .. } => report(tr!("common-delete-collection"), ExplorerSection::from_kind(*section).label().to_string()),
+            Self::MoveToFolder { section, .. } => report(tr!("common-move-collection"), ExplorerSection::from_kind(*section).label().to_string()),
             Self::AddDelayProduct { delay_ms, name, .. } => report(tr!("common-add-product"), format!("{delay_ms} ms · {name}")),
-            Self::DeleteDelayProduct(id) => report(tr!("common-delete-product"), format!("{id:?}")),
+            Self::DeleteDelayProduct(_) => report(tr!("common-delete-product"), String::new()),
             Self::SaveChargeProduct { product, .. } => report(tr!("state-save-charge-product"), product.name.clone()),
             Self::SaveChargeRule { rule, .. } => report(tr!("state-save-charge-rule"), rule.name.clone()),
             Self::DeleteBlastLibraryItem(item) => report(tr!("state-delete-charge-library-entry"), item.name().to_owned()),
@@ -7694,6 +7916,7 @@ impl UiCommand {
             Self::ResetView => report(tr!("common-reset-view"), tr!("state-fit-extents")),
             Self::ToggleRotationCentre => report(tr!("state-centre-rotation"), tr!("state-fix-release-centre-both-views")),
             Self::SetTopologyWireframes(enabled) => report(tr!("state-set-topology-wireframes"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
+            Self::SetTopologyContours(enabled) => report(tr!("state-set-topology-contours"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::SetGridShown(shown) => report(tr!("state-set-grid"), if *shown { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::SetShowPoints(enabled) => report(tr!("state-set-point-visibility"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             #[cfg(not(target_arch = "wasm32"))]
@@ -7710,30 +7933,21 @@ impl UiCommand {
             #[cfg(not(target_arch = "wasm32"))]
             Self::DiscardProjectChanges(id) => report(tr!("state-discard-project-changes"), tr!("state-project-id", id = id.to_string())),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::DiscardLayerChanges(id) => report(tr!("common-discard-layer-changes"), format!("{id:?}")),
-            Self::DeleteLayer(id) => report(tr!("common-delete-layer"), format!("{id:?}")),
-            Self::DuplicateLayer(id) => report(tr!("state-duplicate-layer"), format!("{id:?}")),
-            Self::RenameItem { target, new_name } => report(
-                tr!("state-rename-kind", kind = target.kind_label().to_string()),
-                tr!("state-target-new-name", target = format!("{target:?}"), new_name = new_name.to_string()),
-            ),
+            Self::DiscardLayerChanges(_) => report(tr!("common-discard-layer-changes"), String::new()),
+            Self::DeleteLayer(_) => report(tr!("common-delete-layer"), String::new()),
+            Self::DuplicateLayer(_) => report(tr!("state-duplicate-layer"), String::new()),
+            Self::RenameItem { target, new_name } => report(tr!("state-rename-kind", kind = target.kind_label().to_string()), new_name.to_string()),
             Self::ApplyChamfer => report(tr!("common-chamfer"), tr!("state-apply-selection")),
             Self::ApplyBezier => report(tr!("common-create-bezier-curve"), tr!("state-apply-selection")),
             Self::ApplyMoveDelta(delta) => report(tr!("common-move-selection"), format!("{delta}")),
             Self::ApplyCollarRotation => report(tr!("common-rotate-collar"), tr!("state-apply-selection")),
-            Self::LoadLayer(id) => report(tr!("state-load-layer"), format!("{id:?}")),
-            Self::UnloadLayer(id) => report(tr!("state-unload-layer"), format!("{id:?}")),
-            Self::SetLayerVisible(id, visible) => report(
-                tr!("state-set-visibility"),
-                format!("{id:?}: {}", if *visible { tr!("state-shown") } else { tr!("state-hidden") }),
-            ),
+            Self::LoadLayer(_) => report(tr!("state-load-layer"), String::new()),
+            Self::UnloadLayer(_) => report(tr!("state-unload-layer"), String::new()),
+            Self::SetLayerVisible(_, visible) => report(tr!("state-set-visibility"), if *visible { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::RequestDeleteRows(rows) => report(tr!("explorer-delete-selected", count = rows.len().to_string()), String::new()),
-            Self::SetItemVisible(item, visible) => report(
-                tr!("state-set-visibility"),
-                format!("{item:?}: {}", if *visible { tr!("state-shown") } else { tr!("state-hidden") }),
-            ),
-            Self::ToggleLayerLocked(id) => report(tr!("state-set-layer-lock"), format!("{id:?}")),
-            Self::ToggleEntityLocked(handle) => report(tr!("state-set-entity-lock"), format!("{handle:?}")),
+            Self::SetItemVisible(_, visible) => report(tr!("state-set-visibility"), if *visible { tr!("state-shown") } else { tr!("state-hidden") }),
+            Self::ToggleLayerLocked(_) => report(tr!("state-set-layer-lock"), String::new()),
+            Self::ToggleEntityLocked(_) => report(tr!("state-set-entity-lock"), String::new()),
             Self::SetSectionVisible(section, visible) => report(
                 if *visible { tr!("common-reveal-all") } else { tr!("common-hide-all") },
                 tr!("state-section-name", section = section.label().to_string()),
@@ -7742,8 +7956,8 @@ impl UiCommand {
                 if *locked { tr!("common-lock-all") } else { tr!("common-unlock-all") },
                 tr!("state-section-name", section = section.label().to_string()),
             ),
-            Self::SelectAllObjectsInLayer(id) => report(tr!("state-select-layer-objects"), format!("{id:?}")),
-            Self::CloseTriangulation(id) => report(tr!("state-unload-triangulation"), format!("{id:?}")),
+            Self::SelectAllObjectsInLayer(_) => report(tr!("state-select-layer-objects"), String::new()),
+            Self::CloseTriangulation(_) => report(tr!("state-unload-triangulation"), String::new()),
             Self::BatchSetObjectColor(ids, _) => report(tr!("state-set-object-colour"), tr!("common-count-object-s", count = ids.len().to_string())),
             Self::BatchSetPolylineClosed(ids, closed) => report(
                 tr!("state-set-polyline-closed"),
@@ -7754,9 +7968,9 @@ impl UiCommand {
                 tr!("state-set-line-weight"),
                 tr!("state-count-object-s-weight", count = ids.len().to_string(), weight = weight.to_string()),
             ),
-            Self::MoveObjectsToLayer { object_ids, target_layer, copy } => report(
+            Self::MoveObjectsToLayer { object_ids, copy, .. } => report(
                 if *copy { tr!("state-copy-objects-layer") } else { tr!("state-move-objects-layer") },
-                tr!("state-count-object-s-layer", count = object_ids.len().to_string(), layer = format!("{target_layer:?}")),
+                tr!("state-count-objects", count = object_ids.len().to_string()),
             ),
             Self::BatchSetAxisValue(ids, axis, value) => report(
                 tr!("state-move-axis-value"),
@@ -7767,12 +7981,12 @@ impl UiCommand {
                     value = value.to_string()
                 ),
             ),
-            Self::CommitTextEdit(id, _, _, _, _) => report(tr!("common-edit-text"), format!("{id:?}")),
-            Self::SetTriangulationColor(id, _) => report(tr!("state-set-triangulation-colour"), format!("{id:?}")),
-            Self::LoadTriangulation(id) => report(tr!("state-load-triangulation"), format!("{id:?}")),
-            Self::LoadBlockModel(id) => report(tr!("state-load-block-model"), format!("{id:?}")),
-            Self::CloseBlockModel(id) => report(tr!("state-unload-block-model"), format!("{id:?}")),
-            Self::RemoveBlockModel(id) => report(tr!("state-remove-block-model"), format!("{id:?}")),
+            Self::CommitTextEdit(_, _, _, _, _) => report(tr!("common-edit-text"), String::new()),
+            Self::SetTriangulationColor(_, _) => report(tr!("state-set-triangulation-colour"), String::new()),
+            Self::LoadTriangulation(_) => report(tr!("state-load-triangulation"), String::new()),
+            Self::LoadBlockModel(_) => report(tr!("state-load-block-model"), String::new()),
+            Self::CloseBlockModel(_) => report(tr!("state-unload-block-model"), String::new()),
+            Self::RemoveBlockModel(_) => report(tr!("state-remove-block-model"), String::new()),
             Self::LoadPrismoidGrid(id) => report(tr!("state-load-prismoid-grid"), format!("{id:?}")),
             Self::ClosePrismoidGrid(id) => report(tr!("state-unload-prismoid-grid"), format!("{id:?}")),
             Self::RemovePrismoidGrid(id) => report(tr!("state-remove-prismoid-grid"), format!("{id:?}")),
@@ -7782,9 +7996,9 @@ impl UiCommand {
                 tr!("common-create-drill-pattern"),
                 tr!("state-name-count-holes", name = name.to_string(), count = collars.len().to_string()),
             ),
-            Self::LoadDrillHole(id) => report(tr!("state-load-drillholes"), format!("{id:?}")),
-            Self::CloseDrillHole(id) => report(tr!("state-unload-drillholes"), format!("{id:?}")),
-            Self::RemoveDrillHole(id) => report(tr!("state-remove-drillholes"), format!("{id:?}")),
+            Self::LoadDrillHole(_) => report(tr!("state-load-drillholes"), String::new()),
+            Self::CloseDrillHole(_) => report(tr!("state-unload-drillholes"), String::new()),
+            Self::RemoveDrillHole(_) => report(tr!("state-remove-drillholes"), String::new()),
             Self::SetDrillHoleColorField { field, .. } => report(tr!("state-colour-drillholes"), field.clone().unwrap_or_else(|| tr!("common-uniform-white"))),
             Self::SetDrillHoleColorByWorkingSection { field, .. } => report(tr!("state-colour-drillholes-working-section"), field.clone()),
             Self::SetDrillHoleColorPreset { preset, .. } => report(tr!("state-set-drillhole-colour-preset"), preset.label()),
@@ -7855,14 +8069,13 @@ impl UiCommand {
             Self::DeleteOptimizationScenario(id) => report(tr!("opt-delete-scenario"), id.to_string()),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!("common-create-block-model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!("common-create-ore-triangulation"), name.clone()),
-            Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
-            Self::RemoveTriangulation(id) => report(tr!("state-remove-triangulation"), format!("{id:?}")),
+            Self::RemoveTriangulation(_) => report(tr!("state-remove-triangulation"), String::new()),
             Self::HideSelection => report(tr!("common-hide-selection"), tr!("state-selected-scene-elements")),
             Self::UnhideAll => report(tr!("common-unhide-all"), tr!("state-hidden-objects")),
             Self::ShowAllHidden => report(tr!("toolbars-show-all-hidden"), tr!("state-individually-hidden-designs")),
             Self::ZoomToExtents => report(tr!("common-zoom-extents"), tr!("state-preserve-view-angle")),
             Self::BeginOffsetPick { object_ids, .. } => report(tr!("common-offset"), tr!("common-count-object-s", count = object_ids.len().to_string())),
-            Self::RelimitLineResize { source_id, .. } => report(tr!("common-relimit-line"), format!("{source_id:?}")),
+            Self::RelimitLineResize { .. } => report(tr!("common-relimit-line"), String::new()),
             Self::CommitBatterBerm => report(tr!("common-create-batter-berm"), tr!("state-apply-generated-rings")),
             Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
             Self::ReverseSelectedStrings => report(tr!("toolbars-reverse-strings"), tr!("state-selected-polylines")),
@@ -7895,7 +8108,7 @@ impl UiCommand {
                 tr!("tri-create-title"),
                 tr!("state-name-count-object-s", name = name.to_string(), count = object_ids.len().to_string()),
             ),
-            Self::ExecutePointCloudTin { cloud_id, .. } => report(tr!("state-create-point-cloud-tin"), format!("{cloud_id:?}")),
+            Self::ExecutePointCloudTin { .. } => report(tr!("state-create-point-cloud-tin"), String::new()),
             Self::ExecutePointCloudJoin { cloud_ids, name, .. } => report(
                 tr!("common-join-point-clouds"),
                 tr!("state-name-count-cloud-s", name = name.to_string(), count = cloud_ids.len().to_string()),
@@ -8311,6 +8524,7 @@ pub(crate) struct UiProjectView {
     pub(crate) has_active_project: bool,
     pub(crate) needs_startup_dialog: bool,
     /// Full filesystem path of the currently active project, if any.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) active_path: Option<PathBuf>,
     /// The active project's modelling settings; the defaults without one.
     pub(crate) modelling: crate::model::project::ModellingSettings,
@@ -8344,50 +8558,58 @@ pub(crate) struct UiProjectView {
 /// is the better tool for finding one.
 pub(crate) const RECENT_PROJECT_LIMIT: usize = 10;
 
-/// How many functions a recent list keeps, whatever it is set to show, so
-/// showing fewer and then more again loses nothing.
+/// How many functions a workspace's recent list keeps, whatever it is set to
+/// show, so showing fewer and then more again loses nothing.
 pub(crate) const RECENT_FUNCTION_LIMIT: usize = 20;
 
-/// Remember `key` as the newest use in `list` (kept newest last, as the
-/// recent projects are): a repeat moves to the end, the oldest past
-/// [`RECENT_FUNCTION_LIMIT`] drop off. Returns whether the list changed.
-pub(crate) fn note_recent(list: &mut Vec<String>, key: &str) -> bool {
+/// Remember `row` as the newest use in `list` (kept newest last, as the
+/// recent projects are): a repeat moves to the end, and the oldest of the
+/// row's workspace past [`RECENT_FUNCTION_LIMIT`] drop off, the other
+/// workspaces' rows staying as they are. Returns whether the list changed.
+pub(crate) fn note_recent(list: &mut Vec<String>, row: MenuRow) -> bool {
+    let key = row.key();
     if list.last().is_some_and(|last| last == key) {
         return false;
     }
     list.retain(|kept| kept != key);
     list.push(key.to_owned());
-    let excess = list.len().saturating_sub(RECENT_FUNCTION_LIMIT);
-    list.drain(..excess);
+    let workspace = row.workspace();
+    let shares_list = |kept: &String| MenuRow::from_key(kept).is_some_and(|kept| kept.workspace() == workspace);
+    let mut excess = list.iter().filter(|kept| shares_list(kept)).count().saturating_sub(RECENT_FUNCTION_LIMIT);
+    list.retain(|kept| {
+        let dropped = excess > 0 && shares_list(kept);
+        excess -= usize::from(dropped);
+        !dropped
+    });
     true
 }
 
 impl EditorState {
-    /// Production and Geology keep a recent functions list each.
+    /// Put down a triangulation tool's viewport pick without taking
+    /// anything, leaving the tool's dialog as it was.
+    pub(crate) fn cancel_triangulation_pick(&mut self) {
+        if self.triangulation_pick_target.take().is_some_and(TriangulationPickTarget::picks_boundary) {
+            // The hover highlight gives way to the boundary already chosen.
+            self.tool_highlight_id = self.tri_cut_poly_object_id;
+        }
+        self.viewport_pick_hover_label = None;
+        self.tri_hover_handles.clear();
+    }
+}
+
+impl EditorState {
+    /// A workspace with menus keeps a recent functions list of their rows.
     pub(crate) fn keeps_recent_functions(&self) -> bool {
-        matches!(self.active_workspace, Workspace::Production | Workspace::Geology)
+        !workspace_menus(self.active_workspace).is_empty()
     }
 
     /// The active workspace's recent functions, newest first and as many as
-    /// the preference shows; `None` where the workspace keeps no list.
-    pub(crate) fn recent_rows(&self) -> Option<Vec<RecentRow>> {
-        let keys = match self.active_workspace {
-            Workspace::Production => &self.recent_design_functions,
-            Workspace::Geology => &self.recent_geology_functions,
-            _ => return None,
-        };
-        let rows = keys.iter().rev().filter_map(|key| RecentRow::from_key(self.active_workspace, key));
-        Some(rows.take(self.recent_functions_shown as usize).collect())
-    }
-
-    /// The active workspace's recent function keys; `None` where it keeps no
-    /// list.
-    pub(crate) fn recent_functions_mut(&mut self) -> Option<&mut Vec<String>> {
-        match self.active_workspace {
-            Workspace::Production => Some(&mut self.recent_design_functions),
-            Workspace::Geology => Some(&mut self.recent_geology_functions),
-            _ => None,
-        }
+    /// the preference shows.
+    pub(crate) fn recent_function_rows(&self) -> Vec<MenuRow> {
+        let rows = self.recent_functions.iter().rev().filter_map(|key| MenuRow::from_key(key));
+        rows.filter(|row| row.workspace() == Some(self.active_workspace))
+            .take(self.recent_functions_shown as usize)
+            .collect()
     }
 }
 
@@ -8400,6 +8622,12 @@ impl UiProjectView {
     /// are ways of leaving it.
     pub(crate) fn recent_projects(&self) -> impl Iterator<Item = &UiTrackedProjectEntry> {
         self.tracked_projects.iter().filter(|entry| !entry.is_active).take(RECENT_PROJECT_LIMIT)
+    }
+
+    /// The project the window is titled after: the active one, or the first
+    /// open if none is.
+    pub(crate) fn titled_project(&self) -> Option<&UiProjectEntry> {
+        self.projects.iter().find(|entry| entry.is_active).or_else(|| self.projects.first())
     }
 }
 
@@ -8696,13 +8924,13 @@ pub(crate) enum Workspace {
     Production,
     DrillAndBlast,
     Geology,
-    Planning,
     Survey,
+    Planning,
 }
 
 impl Workspace {
     /// Every workspace, in the default tab order.
-    pub(crate) const ALL: [Self; 5] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning, Self::Survey];
+    pub(crate) const ALL: [Self; 5] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Survey, Self::Planning];
 
     pub(crate) fn label(self) -> String {
         match self {
@@ -8747,15 +8975,17 @@ impl Workspace {
     }
 }
 
-/// Fixed pages within the Planning workspace, remembered for this session.
+/// The groups of Setup's one step list, in the order they run: each is a
+/// pipeline of its own, and each one after the first reads what the one
+/// before it produced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum PlanningPage {
+pub(crate) enum SetupGroup {
     Solids,
     Haulage,
     Schedule,
 }
 
-impl PlanningPage {
+impl SetupGroup {
     pub(crate) const ALL: [Self; 3] = [Self::Solids, Self::Haulage, Self::Schedule];
 
     pub(crate) fn label(self) -> String {
@@ -8763,20 +8993,6 @@ impl PlanningPage {
             Self::Solids => tr!("planning-page-solids"),
             Self::Haulage => tr!("planning-page-haulage"),
             Self::Schedule => tr!("planning-page-schedule"),
-        }
-    }
-
-    pub(crate) fn subpages(self) -> &'static [PlanningSubpage] {
-        match self {
-            Self::Solids => &[PlanningSubpage::Setup, PlanningSubpage::View],
-            Self::Haulage => &[PlanningSubpage::Setup, PlanningSubpage::Layout],
-            Self::Schedule => &[
-                PlanningSubpage::Setup,
-                PlanningSubpage::Calendar,
-                PlanningSubpage::Gantt,
-                PlanningSubpage::Charts,
-                PlanningSubpage::Animate,
-            ],
         }
     }
 }
@@ -8875,29 +9091,30 @@ impl PlaybackSpan {
     }
 }
 
-/// Steps within a Planning page. Schedule remembers its selected step.
+/// The Planning workspace's tabs: Setup, where every input is, then the
+/// views of what it produces. One row, so a tab always opens the same page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum PlanningSubpage {
+pub(crate) enum PlanningView {
+    /// Every step of the Solids, Haulage and Schedule pipelines, in one list.
     Setup,
-    /// Solids: everything the setup has generated, to look through rather than
-    /// to configure.
-    View,
-    Layout,
+    /// Everything the Solids steps have generated, to look through rather
+    /// than to configure.
+    Reserves,
     Calendar,
-    /// Schedule: one timeline row per loader agent, along elapsed project
-    /// time. Stage 1 draws the rows and the ruler; the bars follow.
+    /// One timeline row per loader agent, along elapsed project time.
     Gantt,
-    /// Schedule: a chart per destination along the Gantt's own timeline.
+    /// A chart per destination along the Gantt's own timeline.
     Charts,
     Animate,
 }
 
-impl PlanningSubpage {
+impl PlanningView {
+    pub(crate) const ALL: [Self; 6] = [Self::Setup, Self::Reserves, Self::Calendar, Self::Gantt, Self::Charts, Self::Animate];
+
     pub(crate) fn label(self) -> String {
         match self {
             Self::Setup => tr!("planning-page-setup"),
-            Self::View => tr!("planning-subpage-view"),
-            Self::Layout => tr!("planning-subpage-layout"),
+            Self::Reserves => tr!("planning-view-reserves"),
             Self::Calendar => tr!("planning-subpage-calendar"),
             Self::Gantt => tr!("planning-subpage-gantt"),
             Self::Charts => tr!("planning-subpage-charts"),
@@ -8906,7 +9123,7 @@ impl PlanningSubpage {
     }
 }
 
-/// The Schedule Setup subpage's steps, in the order the step tree lists them.
+/// The Schedule Setup's steps, in the order the step tree lists them.
 ///
 /// Configuration is the schedule's own name and the field read as tonnes; the
 /// two fleet steps are the machines the Gantt draws its rows from; Scheduling
@@ -9047,14 +9264,14 @@ impl ScheduleStep {
             Self::LoaderAgents => tr!("schedule-loader-agents"),
             Self::Delays => tr!("delay-step"),
             Self::DrillBlast => tr!("drill-blast-step"),
-            Self::Haulage => tr!("planning-page-haulage"),
+            Self::Haulage => tr!("schedule-step-road-access"),
             Self::Stockpiles => tr!("planning-stockpiles"),
             Self::Dumps => tr!("planning-dumps"),
             Self::Crushers => tr!("destination-crushers"),
             Self::Destinations => tr!("destination-destinations"),
             Self::TruckingRules => tr!("truck-rules"),
             Self::Cashflow => tr!("cashflow"),
-            Self::Solids => tr!("planning-page-solids"),
+            Self::Solids => tr!("schedule-step-block-tonnes"),
             Self::Readiness => tr!("schedule-readiness-step"),
         }
     }
@@ -9100,6 +9317,8 @@ pub(crate) struct SetupStageView<S> {
     pub(crate) message: Option<String>,
     pub(crate) diagnostics: Vec<crate::app::planning_pipeline::StageDiagnostic>,
     pub(crate) last_success: Option<crate::app::planning_pipeline::StageSummary>,
+    /// How many entities its latest settled run saw, failed or not.
+    pub(crate) last_seen: Option<usize>,
     /// The earlier step that has to run first, when this one cannot.
     pub(crate) blocked_by: Option<S>,
 }
@@ -9111,6 +9330,7 @@ impl<S> Default for SetupStageView<S> {
             message: None,
             diagnostics: Vec::new(),
             last_success: None,
+            last_seen: None,
             blocked_by: None,
         }
     }
@@ -9317,6 +9537,21 @@ pub(crate) enum ScheduleEdit {
         class: crate::model::schedule::LoaderClassId,
     },
     DeleteAgent(crate::model::schedule::LoaderAgentId),
+    /// Save a Calendar view under its name, and show it.
+    AddCalendarView(crate::model::schedule::calendar_views::CalendarView),
+    /// Replace a saved Calendar view.
+    SetCalendarView(crate::model::schedule::calendar_views::CalendarView),
+    DeleteCalendarView(crate::model::schedule::calendar_views::CalendarViewId),
+    /// Move a group of machines to just before another group, or to the end.
+    MoveMachineGroup {
+        kind: crate::model::schedule::MachineKind,
+        before: Option<crate::model::schedule::MachineKind>,
+    },
+    /// Move a machine to just before another of its group, or to its end.
+    MoveMachine {
+        agent: crate::model::schedule::LoaderAgentId,
+        before: Option<crate::model::schedule::LoaderAgentId>,
+    },
     /// Apply one atomic calendar edit or rectangular paste/clear batch.
     SetCalendarCells {
         edits: Vec<crate::model::schedule::CalendarCellEdit>,
@@ -9498,10 +9733,12 @@ pub(crate) enum ScheduleEdit {
         rule: crate::model::schedule::RuleId,
         sources: crate::model::schedule::MovementSourceSelection,
     },
-    /// Replace one rule's whole condition list, validated as a set.
+    /// Replace one rule's whole condition list, validated as a set. `sources`
+    /// goes with it when a category narrows what the rule can read, one undo.
     SetRuleConditions {
         rule: crate::model::schedule::RuleId,
         conditions: Vec<crate::model::schedule::FieldCondition>,
+        sources: Option<crate::model::schedule::MovementSourceSelection>,
     },
     /// Move a rule one place along the priority order. `later` is down.
     MoveRule {
@@ -9612,6 +9849,7 @@ pub(crate) enum ScheduleEdit {
     SetCashflowRuleConditions {
         rule: crate::model::schedule::CashflowRuleId,
         conditions: Vec<crate::model::schedule::FieldCondition>,
+        sources: Option<crate::model::schedule::MovementSourceSelection>,
     },
     /// Signed, and never clamped: a cost is a negative value.
     SetCashflowRuleValue {
@@ -9693,17 +9931,13 @@ pub(crate) enum ScheduleEdit {
         /// Open a lane of its own at `priority` first, as a drop on a lane edge asks.
         insert_lane: bool,
     },
-    /// Replace the set of stockpiles a reclaim bar may draw on, as one edit.
-    /// Never empty, and never a silent repair of an entry that no longer
-    /// resolves.
-    SetReclaimSources {
+    /// Replace the set of stockpiles a reclaim bar may draw on and the most
+    /// it may take over the whole calculation (`None` for no cap of its own),
+    /// as one edit. The set is never empty, and never a silent repair of an
+    /// entry that no longer resolves.
+    SetReclaim {
         bar: crate::model::schedule::BarId,
         sources: Vec<crate::model::schedule::DestinationId>,
-    },
-    /// The most one reclaim bar may take over the whole calculation, or `None`
-    /// for no cap of its own.
-    SetReclaimMaximum {
-        bar: crate::model::schedule::BarId,
         maximum_t: Option<f64>,
     },
     /// Set what a machine class does: load, doze, drill or charge.
@@ -10046,8 +10280,8 @@ impl BarWindowDialog {
     pub(crate) fn of(bar: crate::model::schedule::BarId, window: crate::model::schedule::WorkWindow) -> Self {
         Self {
             bar,
-            start: format!("{:.2}", window.start_h),
-            end: window.end_h.map(|end| format!("{end:.2}")).unwrap_or_default(),
+            start: crate::ui::elements::schedule_delays::instant_text(window.start_h),
+            end: window.end_h.map(crate::ui::elements::schedule_delays::instant_text).unwrap_or_default(),
         }
     }
 
@@ -10055,10 +10289,10 @@ impl BarWindowDialog {
     /// one. An empty end is open-ended and is not an error; anything else that
     /// does not parse is.
     pub(crate) fn window(&self) -> Option<crate::model::schedule::WorkWindow> {
-        let start_h = self.start.trim().parse::<f64>().ok()?;
+        let start_h = crate::ui::elements::schedule_delays::read_time(&self.start)?;
         let end_h = match self.end.trim() {
             "" => None,
-            text => Some(text.parse::<f64>().ok()?),
+            text => Some(crate::ui::elements::schedule_delays::read_time(text)?),
         };
         let window = crate::model::schedule::WorkWindow { start_h, end_h };
         window.is_valid().then_some(window)
@@ -10246,7 +10480,7 @@ impl SequenceDraft {
             // Nothing dug: the editor opens on the whole authored order, and
             // the slider walks forward through it from there.
             preview: 0,
-            view: SolidPreviewView::plan(),
+            view: SolidPreviewView::default(),
             confirming_close: false,
         }
     }
@@ -10308,6 +10542,9 @@ pub(crate) struct ScheduleNameDraft {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CalendarRow {
     Input(crate::model::schedule::CalendarField),
+    /// What the crushers' grade bands cost that day, which the schedule's value
+    /// on Improve and the report is net of and the movement value is not.
+    GradePenalty,
     /// Tonnes a loader dug out of the ground in the period.
     DigTonnes,
     /// Tonnes a loader reclaimed from stockpiles in the period. Kept apart
@@ -10364,6 +10601,7 @@ impl CalendarRow {
         matches!(
             self,
             Self::DigTonnes
+                | Self::BlastWork
                 | Self::ReclaimTonnes
                 | Self::ScheduledUtilisation
                 | Self::TruckHours
@@ -10374,6 +10612,7 @@ impl CalendarRow {
                 | Self::Cumulative
                 | Self::GradeActual(_)
                 | Self::Value
+                | Self::GradePenalty
         )
     }
 
@@ -10462,6 +10701,13 @@ pub(crate) struct ScheduleCalendarView {
     /// A cell to scroll into view on the next frame, once its row is laid
     /// out.
     pub(crate) reveal: Option<CalendarCellAddress>,
+    /// The saved view the grid shows, or the Calendar's own (everything).
+    pub(crate) view: Option<crate::model::schedule::calendar_views::CalendarViewId>,
+    /// Changes made to the Calendar's own view, not yet saved as a view of
+    /// their own. Saved views are edited in place.
+    pub(crate) unsaved_view: Option<crate::model::schedule::calendar_views::CalendarView>,
+    /// Whether the Rows panel is open rather than folded to its strip.
+    pub(crate) show_rows: bool,
 }
 
 impl Default for ScheduleCalendarView {
@@ -10478,6 +10724,9 @@ impl Default for ScheduleCalendarView {
             mode_menu: None,
             error: None,
             reveal: None,
+            view: None,
+            unsaved_view: None,
+            show_rows: true,
         }
     }
 }
@@ -10500,6 +10749,9 @@ pub(crate) struct GanttView {
     pub(crate) span_seconds: f64,
     /// Downward row scroll, in points.
     pub(crate) row_scroll: f32,
+    /// Whether the planner has zoomed or panned since the project opened.
+    /// Until then the timeline keeps itself framed on the whole schedule.
+    pub(crate) moved: bool,
 }
 
 impl Default for GanttView {
@@ -10508,6 +10760,7 @@ impl Default for GanttView {
             start_seconds: 0.0,
             span_seconds: Self::DEFAULT_SPAN_SECONDS,
             row_scroll: 0.0,
+            moved: false,
         }
     }
 }
@@ -10515,7 +10768,7 @@ impl Default for GanttView {
 impl GanttView {
     pub(crate) const HOUR: f64 = 3600.0;
     pub(crate) const DAY: f64 = 24.0 * Self::HOUR;
-    /// The span a Gantt opens at, and returns to on Reset View.
+    /// The span shown while there is no work to frame.
     pub(crate) const DEFAULT_SPAN_SECONDS: f64 = 7.0 * Self::DAY;
     /// Closest it zooms in, and furthest out. An hour is the finest window a
     /// tonnes-per-hour schedule says anything useful over; a year is past the
@@ -10558,8 +10811,18 @@ impl GanttView {
             start_seconds: 0.0,
             span_seconds: span,
             row_scroll: self.row_scroll,
+            moved: self.moved,
         };
         self.clamp();
+    }
+
+    /// Frame the whole schedule until the planner moves the view, so it
+    /// opens on everything rather than the first week, and a run that
+    /// reaches further is still all in view.
+    pub(crate) fn follow_extent(&mut self, extent_seconds: Option<f64>) {
+        if !self.moved {
+            self.reset_to(extent_seconds);
+        }
     }
 
     /// Hold the window inside its limits: a span between an hour and a year,
@@ -10608,6 +10871,7 @@ impl GanttView {
         let anchor = anchor.clamp(0.0, 1.0);
         let pinned = self.start_seconds + anchor * self.span_seconds;
         let span = (self.span_seconds / factor).clamp(Self::MIN_SPAN_SECONDS, Self::MAX_SPAN_SECONDS);
+        self.moved = true;
         self.span_seconds = span;
         self.start_seconds = pinned - anchor * span;
         self.clamp();
@@ -10619,6 +10883,7 @@ impl GanttView {
             return;
         }
         self.start_seconds += delta;
+        self.moved = true;
         self.clamp();
     }
 
@@ -10678,7 +10943,7 @@ impl DelayProduct {
     }
 }
 
-/// What the active dataset's tie-in adds up to, as the products panel reads
+/// What the active dataset's tie-in adds up to, as the product sections read
 /// it back.
 ///
 /// Derived from the dataset rather than stored: it is recomputed by
@@ -10871,7 +11136,6 @@ pub(crate) fn builtin_delay_products() -> Vec<DelayProduct> {
 /// A section of the Preferences window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PropertyTab {
-    Reserves,
     Interface,
     Camera,
     Performance,
@@ -10903,9 +11167,10 @@ pub(crate) enum DataMenu {
 /// open strings the surface passes through, the one closed string clipping
 /// them, and the text it reports each as.
 ///
-/// Snapshotted when the command opens and never re-derived: the viewport and
-/// the tree stop taking selection while it is up, so what the dialog reports
-/// is what the build runs on. `None` extent means the whole triangulation.
+/// Read from the selection when the command opens and again when its Pick
+/// is done: the viewport and the tree stop taking selection otherwise, so
+/// what the dialog reports is what the build runs on. `None` extent means
+/// the whole triangulation.
 #[derive(Clone, Debug)]
 pub(crate) struct ReferenceSurfaceDraft {
     /// The output name, offered from the points' seam or layer at open time.
@@ -10913,11 +11178,12 @@ pub(crate) struct ReferenceSurfaceDraft {
     pub(crate) points: Vec<ObjectId>,
     pub(crate) controls: Vec<ObjectId>,
     pub(crate) extent: Option<ObjectId>,
-    /// Rendered at open time rather than each frame, the same as the other
-    /// select-first tools' input labels.
+    /// Rendered when the selection is read rather than each frame.
     pub(crate) points_label: String,
     pub(crate) controls_label: String,
     pub(crate) extent_label: String,
+    /// Why this selection cannot be built from, if it cannot.
+    pub(crate) problem: Option<String>,
     pub(crate) plan_extent: Option<crate::app::commands::triangulation::reference_surface::PlanExtent>,
     /// The quality the points are marked with, when they agree on one.
     pub(crate) quality: Option<crate::model::triangulation::QualityMark>,
@@ -11317,9 +11583,9 @@ impl EditorState {
 /// opened on, the categorical field standing in for the working section, its
 /// value, and the side. Transient, like every dialog draft.
 ///
-/// The holes are snapshotted when the command opens and never re-derived:
-/// the viewport and the tree stop taking selection while it is up, so what
-/// the dialog reports is what the build runs on.
+/// The holes are read from the selection when the command opens and again
+/// when its Pick is done: the viewport and the tree stop taking selection
+/// otherwise, so what the dialog reports is what the build runs on.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ReferencePointsDraft {
     pub(crate) holes: Vec<DrillHoleRef>,

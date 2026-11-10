@@ -246,8 +246,180 @@ fn bbox_valid(min: DVec3, max: DVec3) -> bool {
     min.is_finite() && max.is_finite() && min.x <= max.x && min.y <= max.y && min.z <= max.z
 }
 
+/// The triangle index of one mesh, built with it or on first need.
+///
+/// A dense surface cuts into thousands of pieces, each with its own index, and
+/// the trees of a solid came to a quarter of its memory and half the time of a
+/// cut, while a piece is rarely asked anything. A piece defers its tree: a ray
+/// walks its triangles, and only a query that needs the tree builds it.
 #[derive(Clone, Debug)]
 pub(crate) struct TriangleBvh {
+    tree: std::sync::Arc<std::sync::OnceLock<TriangleTree>>,
+    /// What to build the tree from. `None` for one built up front.
+    deferred: Option<std::sync::Arc<mesh_data::Triangulation>>,
+    /// Whether a query has already asked for a background build.
+    building: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Surfaces with at least this many faces have no tree until something asks.
+/// The tree costs about 60 bytes a triangle, and a survey's topography can go
+/// through a whole planning session with only the solids built from it picked.
+const DEFER_SURFACE_TREE_FACES: usize = 1_000_000;
+
+impl TriangleBvh {
+    pub(crate) fn build(mesh: &mesh_data::Triangulation) -> Self {
+        Self {
+            tree: std::sync::Arc::new(std::sync::OnceLock::from(TriangleTree::build(mesh))),
+            deferred: None,
+            building: std::sync::Arc::default(),
+        }
+    }
+
+    pub(crate) fn deferred(mesh: std::sync::Arc<mesh_data::Triangulation>) -> Self {
+        Self {
+            tree: std::sync::Arc::default(),
+            deferred: Some(mesh),
+            building: std::sync::Arc::default(),
+        }
+    }
+
+    /// The tree for a surface in the project: up front when it is quick and
+    /// small, otherwise when first asked for.
+    pub(crate) fn for_surface(mesh: &std::sync::Arc<mesh_data::Triangulation>) -> Self {
+        if mesh.face_count() >= DEFER_SURFACE_TREE_FACES {
+            Self::deferred(mesh.clone())
+        } else {
+            Self::build(mesh)
+        }
+    }
+
+    /// Whether the tree can answer now. If not, one is started in the
+    /// background, so a viewport hovering over a big surface asks and carries on.
+    fn built_or_start_building(&self) -> bool {
+        if self.tree.get().is_some() {
+            return true;
+        }
+        if !self.building.swap(true, std::sync::atomic::Ordering::Relaxed)
+            && let Some(mesh) = self.deferred.clone()
+        {
+            let tree = self.tree.clone();
+            crate::app::jobs::spawn_pool_task(move || {
+                let built = TriangleTree::build(&mesh);
+                let _ = tree.set(built);
+            });
+        }
+        false
+    }
+
+    /// Built outside the cell, which must not stay locked across the build: a
+    /// rayon worker waiting on the build's own tasks can pick up another query
+    /// of this tree, and would then wait on itself for ever.
+    fn tree(&self) -> &TriangleTree {
+        if let Some(tree) = self.tree.get() {
+            return tree;
+        }
+        let built = TriangleTree::build(self.deferred.as_deref().expect("a tree not built up front keeps its mesh"));
+        self.tree.get_or_init(|| built)
+    }
+
+    /// Build it now, ahead of work that would otherwise have every thread
+    /// asking for it at once and each building its own.
+    pub(crate) fn ensure_built(&self) {
+        self.tree();
+    }
+
+    pub(crate) fn ray_hit(&self, mesh: &mesh_data::Triangulation, origin: DVec3, direction: DVec3) -> Option<DVec3> {
+        self.ray_hit_details(mesh, origin, direction).map(|hit| hit.point)
+    }
+
+    pub(crate) fn ray_hit_details(&self, mesh: &mesh_data::Triangulation, origin: DVec3, direction: DVec3) -> Option<TriangleHit> {
+        self.ray_hit_details_where(mesh, origin, direction, |_| true)
+    }
+
+    /// Nearest hit whose point `accept` keeps, skipping the ones it rejects.
+    /// A section wants the first surface *it draws*: the slab discards the
+    /// fragments outside it, so the hits outside it are not there to be hit.
+    /// Rejected hits never narrow the search, so the traversal still prunes
+    /// on the nearest accepted distance and stays a nearest-hit walk.
+    pub(crate) fn ray_hit_details_where(&self, mesh: &mesh_data::Triangulation, origin: DVec3, direction: DVec3, accept: impl Fn(DVec3) -> bool) -> Option<TriangleHit> {
+        match self.tree.get() {
+            Some(tree) => tree.ray_hit_details_where(mesh, origin, direction, accept),
+            None => {
+                // Answered by walking the faces meanwhile, as this is one click
+                // on a piece, or the first of many on a large surface.
+                if mesh.face_count() >= DEFER_SURFACE_TREE_FACES {
+                    self.built_or_start_building();
+                }
+                ray_hit_without_tree(mesh, origin, direction, accept)
+            }
+        }
+    }
+
+    /// Visit triangles whose projected BVH bounds overlap a cursor-sized
+    /// screen region. This keeps vertex/edge snapping proportional to nearby
+    /// geometry rather than the entire mesh, without materialising the
+    /// candidate set (dense meshes put thousands of triangles in a 15 px
+    /// radius).
+    pub(crate) fn for_each_screen_candidate(
+        &self,
+        mesh: &mesh_data::Triangulation,
+        view_projection: &DMat4,
+        screen: (f32, f32),
+        cursor: (f32, f32),
+        threshold: f32,
+        visit: impl FnMut([DVec3; 3]),
+    ) {
+        // Snapping is asked for every frame on the UI thread, and goes without
+        // on a large surface for the moment its tree takes to arrive.
+        if mesh.face_count() >= DEFER_SURFACE_TREE_FACES && !self.built_or_start_building() {
+            return;
+        }
+        self.tree().for_each_screen_candidate(mesh, view_projection, screen, cursor, threshold, visit);
+    }
+
+    /// Visit triangle indices whose XY bounds overlap the supplied rectangle.
+    ///
+    /// Allocation-free: the caller's `stack` is reused across the thousands of
+    /// queries a clip runs. It uses per-triangle XY bounds cached when the BVH
+    /// is built, so leaf filtering does not have to refetch vertices.
+    pub(crate) fn for_each_xy_bounds_candidate_index_with_stack(&self, min: DVec2, max: DVec2, stack: &mut Vec<usize>, visit: impl FnMut(usize)) {
+        self.tree().for_each_xy_bounds_candidate_index_with_stack(min, max, stack, visit);
+    }
+
+    /// Visit triangle indices whose XY bounds a vertical plane may cross: the
+    /// plane through `point` with horizontal unit `normal`.
+    pub(crate) fn for_each_vertical_plane_candidate_index(&self, point: DVec3, normal: DVec3, visit: impl FnMut(usize)) {
+        self.tree().for_each_vertical_plane_candidate_index(point, normal, visit);
+    }
+}
+
+/// The nearest accepted hit, from every triangle of a mesh whose box the ray
+/// enters. Far cheaper than building a tree to answer the one click.
+fn ray_hit_without_tree(mesh: &mesh_data::Triangulation, origin: DVec3, direction: DVec3, accept: impl Fn(DVec3) -> bool) -> Option<TriangleHit> {
+    // Padded so rounding cannot drop a hit on a flat piece's own plane.
+    const PAD: f64 = 1e-3;
+    let bounds = mesh.bounds();
+    let min = DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z) - DVec3::splat(PAD);
+    let max = DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z) + DVec3::splat(PAD);
+    if !ray_box(origin, direction, min, max, f64::INFINITY) {
+        return None;
+    }
+    let mut nearest = f64::INFINITY;
+    for index in 0..mesh.face_count() {
+        if let Some(distance) = ray_triangle(origin, direction, mesh_triangle(mesh, index))
+            && distance < nearest
+            && accept(origin + direction * distance)
+        {
+            nearest = distance;
+        }
+    }
+    nearest.is_finite().then_some(TriangleHit {
+        point: origin + direction * nearest,
+    })
+}
+
+#[derive(Clone, Debug)]
+struct TriangleTree {
     /// World-space reference point subtracted before f32 conversion of node bounds.
     origin: DVec3,
     xy_bounds: Vec<TriangleXyBounds>,
@@ -280,7 +452,7 @@ struct Node {
 
 /// Compact 28-byte BVH node for triangulation meshes.
 ///
-/// Bounds are stored as local f32 relative to `TriangleBvh::origin`.
+/// Bounds are stored as local f32 relative to `TriangleTree::origin`.
 /// Nodes are laid out in depth-first order so the left child is always
 /// at `index + 1`, saving one field over the naive 4-pointer layout.
 ///
@@ -331,8 +503,8 @@ impl TriangleBox {
     }
 }
 
-impl TriangleBvh {
-    pub(crate) fn build(mesh: &mesh_data::Triangulation) -> Self {
+impl TriangleTree {
+    fn build(mesh: &mesh_data::Triangulation) -> Self {
         let b = mesh.bounds();
         let origin = DVec3::new((b.min.x + b.max.x) * 0.5, (b.min.y + b.max.y) * 0.5, (b.min.z + b.max.z) * 0.5);
         // Temporary f32 vertex cache for centroid/bounds computation during build.
@@ -365,20 +537,7 @@ impl TriangleBvh {
         Self { origin, xy_bounds, order, nodes }
     }
 
-    pub(crate) fn ray_hit(&self, mesh: &mesh_data::Triangulation, origin: DVec3, direction: DVec3) -> Option<DVec3> {
-        self.ray_hit_details(mesh, origin, direction).map(|hit| hit.point)
-    }
-
-    pub(crate) fn ray_hit_details(&self, mesh: &mesh_data::Triangulation, origin: DVec3, direction: DVec3) -> Option<TriangleHit> {
-        self.ray_hit_details_where(mesh, origin, direction, |_| true)
-    }
-
-    /// Nearest hit whose point `accept` keeps, skipping the ones it rejects.
-    /// A section wants the first surface *it draws*: the slab discards the
-    /// fragments outside it, so the hits outside it are not there to be hit.
-    /// Rejected hits never narrow the search, so the traversal still prunes
-    /// on the nearest accepted distance and stays a nearest-hit walk.
-    pub(crate) fn ray_hit_details_where(&self, mesh: &mesh_data::Triangulation, origin: DVec3, direction: DVec3, accept: impl Fn(DVec3) -> bool) -> Option<TriangleHit> {
+    fn ray_hit_details_where(&self, mesh: &mesh_data::Triangulation, origin: DVec3, direction: DVec3, accept: impl Fn(DVec3) -> bool) -> Option<TriangleHit> {
         if self.nodes.is_empty() {
             return None;
         }
@@ -392,7 +551,7 @@ impl TriangleBvh {
             if node.count > 0 {
                 let start = node.right_child_or_start as usize;
                 for &triangle_index in &self.order[start..start + node.count as usize] {
-                    if let Some(distance) = ray_triangle(origin, direction, self.triangle(mesh, triangle_index as usize))
+                    if let Some(distance) = ray_triangle(origin, direction, mesh_triangle(mesh, triangle_index as usize))
                         && distance < nearest
                         && accept(origin + direction * distance)
                     {
@@ -414,7 +573,7 @@ impl TriangleBvh {
     /// geometry rather than the entire mesh, without materialising the
     /// candidate set (dense meshes put thousands of triangles in a 15 px
     /// radius).
-    pub(crate) fn for_each_screen_candidate(
+    fn for_each_screen_candidate(
         &self,
         mesh: &mesh_data::Triangulation,
         view_projection: &DMat4,
@@ -437,7 +596,7 @@ impl TriangleBvh {
             if node.count > 0 {
                 let start = node.right_child_or_start as usize;
                 for &i in &self.order[start..start + node.count as usize] {
-                    visit(self.triangle(mesh, i as usize));
+                    visit(mesh_triangle(mesh, i as usize));
                 }
             } else {
                 stack.push(node.right_child_or_start as usize);
@@ -451,7 +610,7 @@ impl TriangleBvh {
     /// Allocation-free: the caller's `stack` is reused across the thousands of
     /// queries a clip runs. It uses per-triangle XY bounds cached when the BVH
     /// is built, so leaf filtering does not have to refetch vertices.
-    pub(crate) fn for_each_xy_bounds_candidate_index_with_stack(&self, min: DVec2, max: DVec2, stack: &mut Vec<usize>, mut visit: impl FnMut(usize)) {
+    fn for_each_xy_bounds_candidate_index_with_stack(&self, min: DVec2, max: DVec2, stack: &mut Vec<usize>, mut visit: impl FnMut(usize)) {
         if self.nodes.is_empty() {
             return;
         }
@@ -494,7 +653,7 @@ impl TriangleBvh {
     /// plane through `point` with horizontal unit `normal`. Pruned node by
     /// node like the rectangle query above, so a section through a big mesh
     /// reads only the strip of it the plane passes.
-    pub(crate) fn for_each_vertical_plane_candidate_index(&self, point: DVec3, normal: DVec3, mut visit: impl FnMut(usize)) {
+    fn for_each_vertical_plane_candidate_index(&self, point: DVec3, normal: DVec3, mut visit: impl FnMut(usize)) {
         if self.nodes.is_empty() {
             return;
         }
@@ -529,22 +688,6 @@ impl TriangleBvh {
         }
     }
 
-    fn triangle(&self, mesh: &mesh_data::Triangulation, index: usize) -> [DVec3; 3] {
-        mesh.face_vertex_indices(index)
-            .unwrap_or_else(|| {
-                // The BVH `order` array is built from this mesh, so every
-                // index must resolve; substituting a degenerate triangle keeps
-                // ray tests safe but must not pass silently.
-                debug_assert!(false, "BVH face index {index} out of range");
-                log::error!("{}", crate::i18n::tr!("spatial-bvh-face-index-out-of-range", index = index.to_string()));
-                [0, 0, 0]
-            })
-            .map(|v| {
-                let p = mesh.vertices()[v];
-                DVec3::new(p.x, p.y, p.z)
-            })
-    }
-
     fn node_min(&self, node: &TriNode) -> DVec3 {
         self.origin + DVec3::new(node.min[0] as f64, node.min[1] as f64, node.min[2] as f64)
     }
@@ -552,6 +695,22 @@ impl TriangleBvh {
     fn node_max(&self, node: &TriNode) -> DVec3 {
         self.origin + DVec3::new(node.max[0] as f64, node.max[1] as f64, node.max[2] as f64)
     }
+}
+
+fn mesh_triangle(mesh: &mesh_data::Triangulation, index: usize) -> [DVec3; 3] {
+    mesh.face_vertex_indices(index)
+        .unwrap_or_else(|| {
+            // The BVH `order` array is built from this mesh, so every
+            // index must resolve; substituting a degenerate triangle keeps
+            // ray tests safe but must not pass silently.
+            debug_assert!(false, "BVH face index {index} out of range");
+            log::error!("{}", crate::i18n::tr!("spatial-bvh-face-index-out-of-range", index = index.to_string()));
+            [0, 0, 0]
+        })
+        .map(|v| {
+            let p = mesh.vertices()[v];
+            DVec3::new(p.x, p.y, p.z)
+        })
 }
 
 /// Minimum subtree size to spawn a rayon parallel task. Below this threshold

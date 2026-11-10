@@ -20,6 +20,7 @@ pub(crate) mod haulage;
 pub(crate) mod improve_progress;
 pub(crate) mod main_menu;
 pub(crate) mod planning_setup;
+pub(crate) mod planning_tabs;
 pub(crate) mod prismoid_inspector;
 pub(crate) mod products;
 pub(crate) mod properties;
@@ -41,6 +42,7 @@ pub(crate) mod schedule_setup;
 pub(crate) mod schedule_trucking;
 pub(crate) mod solids_view;
 pub(crate) mod status_bar;
+pub(crate) mod title_bar;
 pub(crate) mod toolbars;
 pub(crate) mod viewport_bar;
 

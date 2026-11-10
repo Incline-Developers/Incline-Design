@@ -37,6 +37,9 @@ pub(crate) struct ProjectItemState {
     pub(crate) deferred: Option<crate::model::formats::omf::DeferredAsset>,
     /// Where an unchanged payload's encoded arrays can be copied from on save.
     pub(crate) payload_source: Option<crate::model::formats::omf::PayloadSource>,
+    /// The backing a resident payload was last read from, while it is still that
+    /// payload, so unloading it again need not write it out again.
+    pub(crate) restored_from: Option<(crate::model::formats::omf::DeferredAsset, crate::model::formats::omf::PayloadIdentity)>,
     pub(crate) summary: Option<crate::model::asset_residency::AssetSummary>,
     /// Explorer folder this item sits in, or `None` for its section root.
     ///
@@ -77,6 +80,7 @@ impl ProjectItemState {
             hidden: false,
             deferred: None,
             payload_source: None,
+            restored_from: None,
             summary: None,
             folder: None,
             section: SectionKind::natural_for(kind),
@@ -952,13 +956,17 @@ impl ProjectFile {
 
 pub(crate) fn validate(project: &mut ProjectFile) -> Result<()> {
     if project.format_version != PROJECT_FORMAT_VERSION {
-        bail!("Unsupported legacy design format version {} (expected {})", project.format_version, PROJECT_FORMAT_VERSION);
+        bail!(tr!(
+            "err-store-project-format-version",
+            found = project.format_version.to_string(),
+            expected = PROJECT_FORMAT_VERSION.to_string()
+        ));
     }
     // Enforce model invariants before runtime namespacing: duplicate or
     // out-of-range ids would otherwise silently alias distinct records once
     // ids are masked into the 32-bit local namespace.
-    project.document.validate().context("invalid project document")?;
-    project.folders.validate().context("invalid project folders")?;
+    project.document.validate().with_context(|| tr!("err-store-project-document-invalid"))?;
+    project.folders.validate().with_context(|| tr!("err-store-project-folders-invalid"))?;
     // Serialized counters are advisory only; derive them from the actual ids.
     project.document.recompute_id_counters();
     project.folders.recompute_next_id();

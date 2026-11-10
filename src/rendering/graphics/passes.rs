@@ -566,7 +566,7 @@ impl<'a> Graphics<'a> {
     /// content that changes every frame belongs in
     /// [`Self::render_editor_overlay_pass`] instead, which runs over the cache.
     ///
-    /// `include_editor_overlays` marks the interactive viewport: the plot,
+    /// `include_editor_overlays` marks the interactive viewport: the
     /// slice-preview and screenshot paths share this pass but not the grid,
     /// the drill-pattern preview, the chunk statistics or volume residency
     /// streaming, all of which belong to the viewport the user is driving.
@@ -873,7 +873,7 @@ impl<'a> Graphics<'a> {
         // writes off, so every object covers it regardless of which side of
         // the plane it sits on - a surface below Z=0 reads as ground under
         // the grid rather than being cut through by it. It is an editor-only
-        // aid: plot and slice-preview passes omit it.
+        // aid: slice-preview passes omit it.
         if include_editor_overlays && editor.show_xy_grid && self.slice_view.is_none() {
             render_pass.set_pipeline(&self.pipes().grid_render_pipeline);
             render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
@@ -1639,8 +1639,8 @@ impl<'a> Graphics<'a> {
         // `camera.viewport.xy * render_scale` - that uniform tracks the visible
         // scene viewport (see `apply_canvas_rect`), not the swapchain, so this
         // must too. Take it from this pass's own `viewport` rather than
-        // `self.viewport_rect`: secondary cameras (slice previews, plot
-        // exports) render a full-surface viewport into their own swapped-in
+        // `self.viewport_rect`: secondary cameras (slice previews, video
+        // frames) render a full-surface viewport into their own swapped-in
         // targets, sized to the swapped-in `config`, while `viewport_rect`
         // still describes the main window's canvas. The clamp is what keeps
         // every scissor below inside the target.

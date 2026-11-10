@@ -23,7 +23,7 @@ use super::{
     shells::{OUTSIDE, Shells},
     values::{BlockValues, block_base, route_costs},
 };
-use crate::app::jobs::CancelFlag;
+use crate::{app::jobs::CancelFlag, i18n::tr};
 
 /// Name of the report file in the scenario's reports folder.
 pub(crate) const FILE_NAME: &str = "optimization_results.csv";
@@ -229,7 +229,7 @@ pub(crate) fn build(
         .with_min_len(1 << 14)
         .try_fold(empty, |mut buckets, cell| {
             if cell % (1 << 16) == 0 && cancel.is_cancelled() {
-                bail!("Cancelled");
+                bail!(crate::app::jobs::Cancelled);
             }
             let label = shells.label[cell];
             let block = block_of_cell[cell];
@@ -245,7 +245,7 @@ pub(crate) fn build(
             bucket.tonnes += base.tonnes;
             bucket.mining += base.mining;
             for (sums, element) in bucket.elements.iter_mut().zip(&economics.elements) {
-                let grade = finite_or_zero(element.values[block]);
+                let grade = finite_or_zero(element.values.get(block));
                 sums.grade_tonnes += base.tonnes * grade;
                 sums.contained += base.tonnes * grade * element.factor;
             }
@@ -411,14 +411,19 @@ pub(crate) fn write_csv(report: &OptimizationReport) -> Result<Vec<u8>> {
             }
         }
     }
-    writer.into_inner().context("Could not finish the report")
+    writer.into_inner().with_context(|| tr!("err-opt-report-finish"))
 }
 
 /// Read a report written by [`write_csv`] back, from its incremental rows.
 pub(crate) fn read_csv(reader: impl Read) -> Result<OptimizationReport> {
     let mut reader = csv::Reader::from_reader(reader);
     let header: Vec<String> = reader.headers()?.iter().map(str::to_owned).collect();
-    let column = |name: &str| header.iter().position(|column| column == name).with_context(|| format!("The file has no '{name}' column"));
+    let column = |name: &str| {
+        header
+            .iter()
+            .position(|column| column == name)
+            .with_context(|| tr!("err-opt-report-missing-column", name = name.to_string()))
+    };
     let lead: Vec<usize> = LEAD.iter().map(|name| column(name)).collect::<Result<_>>()?;
     let costs: Vec<usize> = COSTS.iter().map(|name| column(name)).collect::<Result<_>>()?;
     let strip = column(STRIP_RATIO)?;
@@ -426,7 +431,7 @@ pub(crate) fn read_csv(reader: impl Read) -> Result<OptimizationReport> {
     // Elements sit between the strip ratio and the costs, five columns each.
     let element_columns = &header[strip + 1..costs[0]];
     if !element_columns.len().is_multiple_of(5) {
-        bail!("The element columns of the file are not in fives");
+        bail!(tr!("err-opt-report-element-columns"));
     }
     let unit_of = |header: &str, prefix: &str| -> Option<String> {
         let rest = header.strip_prefix(prefix)?;
@@ -437,9 +442,9 @@ pub(crate) fn read_csv(reader: impl Read) -> Result<OptimizationReport> {
     };
     let mut elements = Vec::new();
     for group in element_columns.chunks(5) {
-        let name = group[3].strip_suffix(" revenue").context("An element column group does not end in revenue and cost")?;
-        let grade_unit = unit_of(&group[0], &format!("{name} grade")).context("An element grade column is not named as expected")?;
-        let sales_unit = unit_of(&group[1], &format!("{name} contained")).context("An element contained column is not named as expected")?;
+        let name = group[3].strip_suffix(" revenue").with_context(|| tr!("err-opt-report-element-group"))?;
+        let grade_unit = unit_of(&group[0], &format!("{name} grade")).with_context(|| tr!("err-opt-report-grade-column"))?;
+        let sales_unit = unit_of(&group[1], &format!("{name} contained")).with_context(|| tr!("err-opt-report-contained-column"))?;
         elements.push(ElementInfo {
             name: name.to_owned(),
             grade_unit,
@@ -451,7 +456,7 @@ pub(crate) fn read_csv(reader: impl Read) -> Result<OptimizationReport> {
         if text.trim().is_empty() {
             Ok(0.0)
         } else {
-            text.trim().parse::<f64>().with_context(|| format!("'{text}' is not a number"))
+            text.trim().parse::<f64>().with_context(|| tr!("err-opt-report-not-a-number", text = text.to_string()))
         }
     };
     let mut scenario = String::new();
@@ -465,7 +470,7 @@ pub(crate) fn read_csv(reader: impl Read) -> Result<OptimizationReport> {
             continue;
         }
         scenario = field(lead[0]).to_owned();
-        let number: usize = field(lead[2]).trim().parse().context("A shell number is not a whole number")?;
+        let number: usize = field(lead[2]).trim().parse().with_context(|| tr!("err-opt-report-shell-number"))?;
         let shell = match shells.iter().position(|shell| shell.number == number) {
             Some(index) => index,
             None => {
@@ -506,7 +511,7 @@ pub(crate) fn read_csv(reader: impl Read) -> Result<OptimizationReport> {
         rows.push((shell, destination, bucket));
     }
     if shells.is_empty() {
-        bail!("The file has no incremental rows");
+        bail!(tr!("err-opt-report-no-incremental"));
     }
     // Waste first, as a run makes it.
     if let Some(waste) = destinations.iter().position(|name| name == WASTE)

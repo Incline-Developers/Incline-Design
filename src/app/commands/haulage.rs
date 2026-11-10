@@ -126,7 +126,7 @@ impl crate::app::App<'_> {
         self.editor.animation_routes = routes;
     }
     pub(crate) fn refresh_haulage_view(&mut self) {
-        if self.editor.planning_page != crate::ui::state::PlanningPage::Haulage {
+        if !self.editor.is_setup_group(crate::ui::state::SetupGroup::Haulage) {
             return;
         }
         self.editor.haul_view_revision = self.editor.haul_view_revision.wrapping_add(1);
@@ -255,15 +255,7 @@ impl crate::app::App<'_> {
                         _ => None,
                     })
                     .collect();
-                let mut names: Vec<String> = after.roads.iter().map(|r| r.name.clone()).collect();
-                let strings: Vec<_> = strings
-                    .into_iter()
-                    .map(|points| {
-                        let name = crate::model::schedule::suggested_name(&tr!("haul-road"), names.iter().cloned());
-                        names.push(name.clone());
-                        (name, points)
-                    })
-                    .collect();
+                let strings = name_road_strings(after, strings);
                 after.convert(&strings)?;
             }
             HaulEdit::MoveNode(id, pos) => after.move_node(id, pos)?,
@@ -318,8 +310,7 @@ impl crate::app::App<'_> {
     }
     pub(crate) fn start_haul_road(&mut self) {
         self.editor.active_workspace = crate::ui::state::Workspace::Planning;
-        self.editor.planning_page = crate::ui::state::PlanningPage::Haulage;
-        self.editor.haulage_subpage = crate::ui::state::PlanningSubpage::Layout;
+        self.editor.open_haulage_step(crate::ui::state::HaulageStep::Network);
         self.refresh_haulage_view();
         self.editor.haul_draw = true;
         self.editor.haul_points.clear();
@@ -410,10 +401,14 @@ impl crate::app::App<'_> {
         self.invalidate_overlay();
     }
     pub(crate) fn place_haul_point(&mut self) {
-        if let Some(point) = self.haul_cursor_point(self.editor.z_level, true)
-            && self.editor.haul_points.last().is_none_or(|last| last.distance(point) > 1e-6)
-        {
-            self.editor.haul_points.push(point);
+        match self.haul_cursor_point(self.editor.z_level, true) {
+            Some(point) => {
+                if self.editor.haul_points.last().is_none_or(|last| last.distance(point) > 1e-6) {
+                    self.editor.haul_points.push(point);
+                }
+            }
+            None if self.editor.snapping_active() => crate::userspace_log!("{}", tr!("haul-point-no-snap")),
+            None => {}
         }
         self.invalidate_overlay();
     }
@@ -504,7 +499,7 @@ impl crate::app::App<'_> {
         }
         self.invalidate_overlay();
     }
-    /// Delete key on the Haulage page. Roads go at once; a destination's node
+    /// Delete key on the Road Network. Roads go at once; a destination's node
     /// asks first, because it carries a role. Returns whether it acted.
     pub(crate) fn delete_selected_haulage(&mut self) -> bool {
         let Some(project) = self.workspace.active_project() else { return false };
@@ -527,7 +522,7 @@ impl crate::app::App<'_> {
         }
         true
     }
-    /// What the Haulage Layout shows: its roads and the dig blocks not hidden
+    /// What the Road Network shows: its roads and the dig blocks not hidden
     /// in Solids Navigation.
     pub(crate) fn haul_layout_bounds(&self) -> Option<(DVec3, DVec3)> {
         let network = self.workspace.active_document()?.haulage();
@@ -659,13 +654,11 @@ impl crate::app::App<'_> {
             },
         ]));
         self.editor.schedule_selected_destination = Some(destination);
-        self.editor.planning_page = crate::ui::state::PlanningPage::Schedule;
-        self.editor.schedule_subpage = crate::ui::state::PlanningSubpage::Setup;
-        self.editor.schedule_setup_step = match kind {
+        self.editor.open_schedule_step(match kind {
             DestinationKind::Stockpile => crate::ui::state::ScheduleStep::Stockpiles,
             DestinationKind::Dump => crate::ui::state::ScheduleStep::Dumps,
             DestinationKind::Crusher => crate::ui::state::ScheduleStep::Crushers,
-        };
+        });
         Ok(())
     }
 }
@@ -882,4 +875,27 @@ pub(crate) fn haul_destinations(document: &crate::model::Document) -> Vec<Destin
 /// judged against.
 pub(crate) fn max_grade(trucks: &crate::model::schedule::TruckFleetConfig) -> f64 {
     trucks.classes.iter().map(|c| c.maximum_grade).reduce(f64::min).unwrap_or(0.1)
+}
+
+/// Give strings becoming roads the next free road names.
+pub(crate) fn name_road_strings(network: &crate::model::haulage::network::HaulNetwork, strings: Vec<Vec<DVec3>>) -> Vec<(String, Vec<DVec3>)> {
+    let mut names: Vec<String> = network.roads.iter().map(|road| road.name.clone()).collect();
+    strings
+        .into_iter()
+        .map(|points| {
+            let name = crate::model::schedule::suggested_name(&tr!("haul-road"), names.iter().cloned());
+            names.push(name.clone());
+            (name, points)
+        })
+        .collect()
+}
+
+/// Whether `network` already has a road along exactly `points`, either way.
+pub(crate) fn road_already_there(network: &crate::model::haulage::network::HaulNetwork, points: &[DVec3]) -> bool {
+    let tolerance = network.settings.join_tolerance_m;
+    let same = |a: &DVec3, b: &DVec3| a.distance(*b) <= tolerance;
+    network.roads.iter().any(|road| {
+        let held = network.points(road);
+        held.len() == points.len() && (held.iter().zip(points).all(|(a, b)| same(a, b)) || held.iter().rev().zip(points).all(|(a, b)| same(a, b)))
+    })
 }

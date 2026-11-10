@@ -108,6 +108,8 @@ pub(crate) struct RenderInput<'frame> {
     /// The Solids Setup page's inspection meshes: the solid as one, or one
     /// closed mesh per flitch once it has a benching plan.
     pub(crate) solid_preview: &'frame [OpenTriangulation],
+    /// Surfaces to keep on the GPU though not drawn; see `TriangulationGpuCache::sync`.
+    pub(crate) retained_surfaces: &'frame std::collections::HashSet<crate::model::triangulation::TriangulationId>,
     pub(crate) project: &'frame UiProjectView,
 }
 
@@ -123,6 +125,7 @@ impl<'a> Graphics<'a> {
             point_clouds,
             rasters,
             solid_preview,
+            retained_surfaces,
             project,
         } = input;
         // Acquire before any queue writes: a hidden/unavailable surface can fail
@@ -160,6 +163,10 @@ impl<'a> Graphics<'a> {
                 self.scene_cache_key = None;
                 self.solid_preview_key = None;
             }
+        } else {
+            // The preview places the origin by its own rule while it shows;
+            // following the view as well could leave the two trading it.
+            self.keep_scene_origin_near_view();
         }
         let mut scene_content_changed = self.geometry_dirty;
         self.haul_roads_in_bounds = editor.shows_haul_network();
@@ -198,14 +205,14 @@ impl<'a> Graphics<'a> {
         }
         editor.debug_clip_plane_distances = Some(self.projection.clip_planes());
         // Uploaded every frame; outside a section this is `None`, which is what switches the shader clip off.
-        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor, self.section_slab());
+        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor);
         let grid_uniform = GridUniform::new(
             self.scene_origin,
             editor.renderer_background_color,
             &self.camera,
             &self.projection,
             self.vertical_exaggeration,
-            self.fly_mode_enabled,
+            f64::from(self.screen_size().1),
             &editor.xy_grid_style,
             self.window.scale_factor(),
         );
@@ -247,6 +254,10 @@ impl<'a> Graphics<'a> {
         let gpu_work_was_pending = self.point_cloud_gpu.has_pending_uploads() || self.block_model_gpu.has_pending_builds();
         self.raster_gpu
             .sync(&self.device, &self.queue, self.scene_origin, rasters, &self.raster_surface_bind_group_layout);
+        // A section builds a cut texture for every mesh in the cache, so while
+        // one is up only what is drawn stays.
+        let no_surfaces = std::collections::HashSet::new();
+        let retained = if self.section_slab().is_some() { &no_surfaces } else { retained_surfaces };
         self.triangulation_gpu.sync(
             &self.device,
             &self.queue,
@@ -254,6 +265,7 @@ impl<'a> Graphics<'a> {
             scale_factor,
             triangulations,
             solid_preview,
+            retained,
             rasters,
             editor,
             &self.surface_style_bind_group_layout,
@@ -626,9 +638,6 @@ impl<'a> Graphics<'a> {
             editor,
         );
 
-        // Keep the engineering-drawing dialog's map preview current.
-        self.refresh_plot_preview(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters);
-
         self.update_tool_projections(editor, document, drill_holes);
 
         let orbit_marker_screen = self.orbit_marker_screen_pos();
@@ -683,6 +692,10 @@ impl<'a> Graphics<'a> {
             self.window.request_redraw();
         }
 
+        // Last, over the UI too: see `window_corners`.
+        if let Some(corners) = &self.window_corners {
+            corners.draw(&self.queue, &mut encoder, &gui_view, [self.size.width, self.size.height]);
+        }
         self.queue.submit(std::iter::once(encoder.finish()));
         if sample_volume_feedback
             && self

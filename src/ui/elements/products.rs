@@ -1,17 +1,17 @@
-//! The Drill & Blast workspace's products island below the data explorer.
+//! The Drill & Blast workspace's products, as sections at the foot of the
+//! data explorer's tree.
 //!
-//! It is built out of the explorer's own parts - the banded rows, the coloured
-//! section heading carrying the only symbol in the panel, the lit row for the
-//! one that is armed - so the two islands read as one interface rather
-//! than as a tree beside a board of cards. A product fits a row: the delay, in
-//! the colour a tie-in laid with it is drawn in, and the name after it.
-//! Interhole delays are the only product so far - see
-//! [`crate::ui::state::DelayProduct`] - so the palette is one section, and a
-//! new kind would be another beside it.
+//! They are built out of the explorer's own parts - the banded rows, the
+//! coloured section heading carrying the only symbol in the section, the lit
+//! row for the one that is armed - so they read as more of the tree rather
+//! than as a board of cards. A product fits a row: the delay, in the colour a
+//! tie-in laid with it is drawn in, and the name after it. Interhole delays
+//! are the only product so far - see [`crate::ui::state::DelayProduct`] - so
+//! the palette is one section, and a new kind would be another beside it.
 //!
-//! Nothing in the panel is a button: a product is chosen by clicking its row,
-//! and the palette itself is edited from the section heading's right-click
-//! menu, so the list holds products and only products.
+//! Nothing in the sections is a button: a product is chosen by clicking its
+//! row, and the palette itself is edited from the section heading's
+//! right-click menu, so the list holds products and only products.
 //!
 //! The charge library sits below the delays in the same form: loading rules,
 //! one of which the Charge Holes tool stands on the way the Tie Holes tool
@@ -26,14 +26,11 @@ use crate::{
         unthemed_icon,
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
-            explorer::{ExplorerEntry, ExplorerHeader, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
+            explorer::{ExplorerEntry, ExplorerHeader, explorer_note},
+            hint::Hint,
         },
     },
 };
-
-/// Id of the products panel. Shared with [`crate::ui::chrome`], which reads
-/// the panel's resize interaction to light up its grip.
-pub(crate) const PANEL_ID: &str = "products_panel";
 
 /// Heading tint for the palette: the red the heading's own tie-in icon is
 /// drawn in, so the section reads as one mark rather than as a symbol beside
@@ -56,91 +53,54 @@ const RULE_BAR_FALLBACK_DEPTH: f64 = 12.0;
 /// Space between a product's delay and the name after it.
 const LABEL_GAP: f32 = 6.0;
 
-/// Draw the products panel and return what it claimed.
-pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
-    // The explorer's row colours, because these are the explorer's rows: the
-    // two islands share one palette rather than each mixing its own.
-    let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
-    let (min_height, max_height) = crate::ui::chrome::panel_size_limits(ui.available_height());
-    egui::Panel::bottom(PANEL_ID)
-        .resizable(true)
-        .default_size(max_height)
-        .min_size(min_height)
-        .max_size(max_height)
-        .show_separator_line(false)
-        .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
-        .show(ui, |ui| {
-            // Prevent content from forcing the panel wider than the user has dragged it.
-            ui.set_max_width(ui.available_width());
-            // Scroll overflowing products within the island's chosen height
-            // so the data explorer keeps its share of the column.
-            egui::ScrollArea::vertical()
-                .id_salt("products_panel_scroll")
-                .auto_shrink([false; 2])
-                .min_scrolled_height(0.0)
-                .max_height(ui.available_height())
-                .show(ui, |ui| {
-                    // A name longer than the column ends in an ellipsis rather
-                    // than widening the panel.
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                    // Rows carry their own height and butt up against each
-                    // other, so the banding tiles the list without gaps.
-                    ui.spacing_mut().item_spacing.y = 0.0;
+/// Drill & Blast's products: the delay palette, the charge rules and the
+/// charge products, as sections at the foot of the explorer tree, among its
+/// rows and on its stripes.
+pub(crate) fn draw_product_sections(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    let (toggle, header, _) = ExplorerHeader::new(egui::Id::unique("delay_palette_collapse"), tr!("products-delay-palette"))
+        .icon(unthemed_icon!("tie_holes.svg"))
+        .color(HEADER_DELAY_PALETTE)
+        .show(ui, |ui| draw_delay_palette(ui, editor));
+    // Adding to the palette is editing the palette rather than one product in
+    // it, so it hangs off the section heading - the way the explorer's own
+    // section menus do - instead of taking a permanent row at the foot of
+    // the list.
+    context_menu_popup(&toggle.union(header.inner), tr!("products-delay-palette"), |ui| {
+        if ContextMenuAction::new(tr!("common-new-product")).show(ui).clicked() {
+            editor.begin_new_delay_product();
+            ui.close();
+        }
+    });
 
-                    // Reserved before any row is laid out and filled once the
-                    // list's height is known: see `paint_fixed_stripes`.
-                    let (stripes_slot, stripes_top) = reserve_fixed_stripes(ui);
-                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::unique("delay_palette_collapse"), tr!("products-delay-palette"))
-                        .icon(unthemed_icon!("tie_holes.svg"))
-                        .color(HEADER_DELAY_PALETTE)
-                        .show(ui, |ui| draw_delay_palette(ui, editor));
-                    // Adding to the palette is editing the palette rather than
-                    // one product in it, so it hangs off the section heading -
-                    // the way the explorer's own section menus do - instead of
-                    // taking a permanent row at the foot of the list.
-                    context_menu_popup(&toggle.union(header.inner), tr!("products-delay-palette"), |ui| {
-                        if ContextMenuAction::new(tr!("common-new-product")).show(ui).clicked() {
-                            editor.begin_new_delay_product();
-                            ui.close();
-                        }
-                    });
+    let (toggle, header, _) = ExplorerHeader::new(egui::Id::unique("charge_rules_collapse"), tr!("products-charge-rules"))
+        .icon(unthemed_icon!("charge_holes.svg"))
+        .color(HEADER_CHARGE)
+        .show(ui, |ui| draw_charge_rules(ui, editor, commands));
+    context_menu_popup(&toggle.union(header.inner), tr!("products-charge-rules"), |ui| {
+        if ContextMenuAction::new(tr!("products-new-rule")).show(ui).clicked() {
+            editor.charge_rule_dialog = Some(ChargeRuleDialog::new(None, new_rule(&editor.blast_library)));
+            ui.close();
+        }
+    });
 
-                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::unique("charge_rules_collapse"), tr!("products-charge-rules"))
-                        .icon(unthemed_icon!("charge_holes.svg"))
-                        .color(HEADER_CHARGE)
-                        .show(ui, |ui| draw_charge_rules(ui, editor, commands));
-                    context_menu_popup(&toggle.union(header.inner), tr!("products-charge-rules"), |ui| {
-                        if ContextMenuAction::new(tr!("products-new-rule")).show(ui).clicked() {
-                            editor.charge_rule_dialog = Some(ChargeRuleDialog::new(None, new_rule(&editor.blast_library)));
-                            ui.close();
-                        }
-                    });
-
-                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::unique("charge_products_collapse"), tr!("products-charge-products"))
-                        .icon(unthemed_icon!("charge_products.svg"))
-                        .color(HEADER_CHARGE)
-                        .default_open(false)
-                        .show(ui, |ui| draw_charge_products(ui, editor));
-                    context_menu_popup(&toggle.union(header.inner), tr!("products-charge-products"), |ui| {
-                        if ContextMenuAction::new(tr!("common-new-product")).show(ui).clicked() {
-                            editor.charge_product_dialog = Some(ChargeProductDialog {
-                                original: None,
-                                product: ChargeProduct {
-                                    name: String::new(),
-                                    kind: crate::model::blast::DeckKind::Explosive,
-                                    density: 1.0,
-                                    color: [0xD0, 0x7A, 0x4A],
-                                },
-                            });
-                            ui.close();
-                        }
-                    });
-
-                    paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
-                });
-        })
-        .response
-        .rect
+    let (toggle, header, _) = ExplorerHeader::new(egui::Id::unique("charge_products_collapse"), tr!("products-charge-products"))
+        .icon(unthemed_icon!("charge_products.svg"))
+        .color(HEADER_CHARGE)
+        .show(ui, |ui| draw_charge_products(ui, editor));
+    context_menu_popup(&toggle.union(header.inner), tr!("products-charge-products"), |ui| {
+        if ContextMenuAction::new(tr!("common-new-product")).show(ui).clicked() {
+            editor.charge_product_dialog = Some(ChargeProductDialog {
+                original: None,
+                product: ChargeProduct {
+                    name: String::new(),
+                    kind: crate::model::blast::DeckKind::Explosive,
+                    density: 1.0,
+                    color: [0xD0, 0x7A, 0x4A],
+                },
+            });
+            ui.close();
+        }
+    });
 }
 
 /// The palette itself: one row per stored product.
@@ -299,9 +259,9 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
         }
         let mut response = shown.response;
         if let Some(problem) = &problem {
-            response = response.on_hover_text(problem);
+            response = response.hint(problem);
         } else {
-            response = response.on_hover_text(rule_description(rule));
+            response = response.hint(rule_description(rule));
         }
         if response.clicked() {
             choose = Some(rule.name.clone());

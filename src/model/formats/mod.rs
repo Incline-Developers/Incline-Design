@@ -4,6 +4,7 @@
 //! OBJ materials/texture coordinates, and PLY properties other than positions
 //! and vertex indices are intentionally ignored.
 
+pub(crate) mod block_column;
 pub(crate) mod block_model_data;
 pub(crate) mod csv_block_model;
 pub(crate) mod csv_drill_hole;

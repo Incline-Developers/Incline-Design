@@ -7,8 +7,8 @@ use crate::{
     },
     ui::{
         EditorState, UiCommand,
-        state::OreFilterMode,
-        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, menu_field_label, selected_source_field},
+        state::{OreFilterMode, ToolSubject},
+        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, menu_field_label},
     },
 };
 
@@ -26,25 +26,36 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
             menu::menu_note(ui, tr!("block-model-kriging-help"));
             ui.add_space(4.0);
 
-            // The collection is the one that was selected when the dialog
-            // opened. It can still be unloaded or removed from under the
-            // dialog, which takes the run button with it.
+            // A collection selected when the dialog opened is already here.
+            // It can still be unloaded or removed from under the dialog,
+            // which takes the run button with it.
             let selected_dataset = editor
                 .kriging_drill_hole_id
                 .and_then(|id| drill_holes.iter().find(|dataset| dataset.state.loaded && dataset.id == id));
-            selected_source_field(
-                ui,
+            let shown = selected_dataset.map(|dataset| dataset.id);
+            let mut dataset_id = shown;
+            MenuFieldCombo::new(
+                "create_block_model_drillholes",
                 tr!("ws-menubar-drillholes"),
+                &mut dataset_id,
                 selected_dataset.map_or_else(
-                    || tr!("block-model-no-drill-holes-selected"),
+                    || tr!("tri-select"),
                     |dataset| match &editor.kriging_holes {
                         Some(holes) => tr!("block-model-source-some-holes", name = dataset.name.clone(), count = holes.len().to_string()),
                         None => dataset.name.clone(),
                     },
                 ),
-                tr!("block-model-source-drill-holes-help"),
-                220.0,
-            );
+                drill_holes
+                    .iter()
+                    .filter(|dataset| dataset.state.loaded)
+                    .map(|dataset| (Some(dataset.id), dataset.name.as_str().into())),
+            )
+            .help_text(tr!("block-model-source-drillholes-help"))
+            .width(220.0)
+            .show(ui);
+            if let Some(id) = dataset_id.filter(|_| dataset_id != shown) {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::BlockModelDrillholes(id)));
+            }
 
             let numeric_fields: Vec<_> = selected_dataset
                 .map(|dataset| dataset.dataset.fields.iter().filter(|field| matches!(field.kind, DrillFieldKind::Numeric { .. })).collect())
@@ -254,18 +265,29 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
         .open(&mut open)
         .min_width(340.0)
         .show(ui.ctx(), |ui| {
-            // The model is the one that was selected when the dialog opened,
-            // and can still be unloaded or removed from under it.
+            // A model selected when the dialog opened is already here, and
+            // can still be unloaded or removed from under it.
             let selected_model = editor
                 .ore_block_model_id
                 .and_then(|id| block_models.iter().find(|model| model.state.loaded && model.id == id));
-            selected_source_field(
-                ui,
+            let shown = selected_model.map(|model| model.id);
+            let mut model_id = shown;
+            MenuFieldCombo::new(
+                "ore_triangulation_block_model",
                 tr!("common-block-model"),
-                selected_model.map_or_else(|| tr!("block-model-no-block-model-selected"), |model| model.name.clone()),
-                tr!("block-model-selected-block-model-whose-blocks"),
-                190.0,
-            );
+                &mut model_id,
+                selected_model.map_or_else(|| tr!("tri-select"), |model| model.name.clone()),
+                block_models
+                    .iter()
+                    .filter(|model| model.state.loaded)
+                    .map(|model| (Some(model.id), model.name.as_str().into())),
+            )
+            .help_text(tr!("block-model-source-model-help"))
+            .width(190.0)
+            .show(ui);
+            if let Some(id) = model_id.filter(|_| model_id != shown) {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::OreBlockModel(id)));
+            }
 
             let variables: Vec<String> = selected_model
                 .map(|model| model.model.numeric_variables().into_iter().filter(|var| !var.special).map(|var| var.name.clone()).collect())

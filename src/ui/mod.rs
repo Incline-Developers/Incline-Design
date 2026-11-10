@@ -64,6 +64,10 @@ pub(crate) struct Gui {
     last_cursor_event: Option<WindowEvent>,
     #[cfg(target_arch = "wasm32")]
     pending_pastes: Vec<String>,
+    /// The system has taken the held button to move or resize the window,
+    /// and its release will go there rather than here. See
+    /// [`Gui::release_pointer`].
+    release_pointer: bool,
 }
 
 /// The layout rect covering `screen_size` physical pixels, expressed in the
@@ -109,6 +113,7 @@ impl Gui {
             last_cursor_event: None,
             #[cfg(target_arch = "wasm32")]
             pending_pastes: Vec::new(),
+            release_pointer: false,
         }
     }
 
@@ -152,6 +157,16 @@ impl Gui {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn reload_fonts(&self) {
         setup_custom_fonts(&self.ctx);
+    }
+
+    /// Let go of the primary button at the next frame, unless it has been
+    /// let go of by then.
+    ///
+    /// Once the window is being moved or resized the system holds the
+    /// pointer, and on most platforms the release never reaches the window:
+    /// egui would go on thinking the title bar was being dragged.
+    pub(crate) fn release_pointer(&mut self) {
+        self.release_pointer = true;
     }
 
     /// Queue text received from the browser's paste event for the next egui frame.
@@ -222,6 +237,30 @@ impl Gui {
         {
             raw_input.screen_rect = Some(surface_rect);
         }
+        if std::mem::take(&mut self.release_pointer) {
+            let released = raw_input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::PointerButton {
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        ..
+                    }
+                )
+            });
+            let (down, pos) = self.ctx.input(|input| (input.pointer.primary_down(), input.pointer.latest_pos()));
+            if down
+                && !released
+                && let Some(pos) = pos
+            {
+                raw_input.events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: self.ctx.input(|input| input.modifiers),
+                });
+            }
+        }
         #[cfg(target_arch = "wasm32")]
         {
             // egui-winit's WASM build has only an in-process clipboard. Drop
@@ -235,6 +274,7 @@ impl Gui {
         // egui may run the UI closure more than once while resolving layout.
         // Keep console rows identical across those passes, even if a warning is
         // logged while the frame is being built.
+        crate::logging::set_console_scope(if project.has_active_project { project.active_session } else { 0 });
         let console_snapshot = crate::logging::console_snapshot();
         let frame_context = UiFrameContext {
             orbit_marker,
@@ -385,12 +425,13 @@ impl VideoOverlay {
         };
         raw_input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(pixels_per_point);
         let output = self.ctx.run_ui(raw_input, |ui| {
+            let mut space = LabelSpace::new(rect, machine_icon_rects(ui, editor));
             if labels.destinations {
-                draw_haul_pin_labels(ui, editor, project, document, rect);
+                draw_haul_pin_labels(ui, editor, project, document, rect, &mut space);
             }
             draw_machine_icons(ui, editor, rect);
             if labels.machines {
-                draw_machine_labels(ui, editor, &project.schedule, rect);
+                draw_machine_labels(ui, editor, &project.schedule, rect, &mut space);
             }
         });
         for (id, deltas) in &output.textures_delta.set {
@@ -780,6 +821,11 @@ fn draw_ui(
     // the end: see `chrome::paint_window_background`.
     let window_background = root_ui.painter().add(egui::Shape::Noop);
 
+    // The window's edges, over everything: Incline draws its own frame. See
+    // `elements::title_bar`.
+    elements::title_bar::draw_resize_edges(root_ui.ctx(), &editor.window_frame, commands);
+    elements::title_bar::draw_window_border(root_ui.ctx(), &editor.window_frame);
+
     // --- Panel layout: compute rects for all fixed panels ---
     let project_active = project.has_active_project;
     let editing_enabled = project.has_active_project && !editor.fly_mode_enabled;
@@ -787,7 +833,7 @@ fn draw_ui(
     // On macOS the File and Project dropdowns are in the system menu bar
     // (`mac.rs`) instead, but the bar itself is still drawn: the mark and the
     // workspace tabs have nowhere else to go.
-    let main_menu_rect = crate::ui::elements::main_menu::draw_main_menu(root_ui, editor, project, commands);
+    let (main_menu_rect, workspace_tabs) = crate::ui::elements::main_menu::draw_main_menu(root_ui, editor, project, commands);
 
     // --- Draw all toolbar panels ---
     // The status bar spans the window, so it is claimed first.
@@ -802,7 +848,19 @@ fn draw_ui(
 
     // The bar spans the window, so it is claimed before the explorer: the
     // column, the tools and the scene all start below it.
-    let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands);
+    let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, document, commands);
+    // The open workspace tab stands on the bar's top edge.
+    let workspace_tabs = workspace_tabs.map(|tabs| tabs.standing_on(chrome::region_rect(viewport_bar_rect).top()));
+    // Planning's page tabs, across the window under the bar and over every
+    // page, so they are claimed before anything below them too.
+    let planning_tabs = (editor.active_workspace == state::Workspace::Planning).then(|| elements::planning_tabs::draw_planning_tabs(root_ui, editor, commands));
+    if planning_tabs.is_none() {
+        // `Panel::show` creates one direct child of `root_ui`. Keep the root
+        // auto-id sequence identical in the workspaces without this row, or
+        // every panel drawn after it receives a different unique id.
+        root_ui.skip_ahead_auto_ids(1);
+    }
+    let planning_tabs_bottom = planning_tabs.as_ref().map_or(f32::NEG_INFINITY, |tabs| tabs.rect.bottom());
 
     if editor.is_planning_setup() {
         let explorer = if editor.is_schedule_pane() {
@@ -817,25 +875,18 @@ fn draw_ui(
             elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
         });
         let console = console_rect.unwrap_or(egui::Rect::NOTHING);
-        let planning_page = editor.planning_page;
-        let mut planning_layout = elements::planning_setup::PlanningLayout::default();
-        let details = if editor.is_solids_view() {
-            // The View page arranges a column of its own beside its inspector,
-            // so it hands back the same layout the Setup steps do.
-            planning_layout = elements::solids_view::draw_details(root_ui, editor, project, document, commands);
-            planning_layout.rect
-        } else if editor.is_schedule_gantt() {
-            // The Gantt owns the whole pane rather than arranging islands in
-            // it, so - like the Solids View - it hands its own rect back to be
-            // rounded off as one region.
+        let setup_group = editor.setup_group;
+        let planning_layout = if editor.is_schedule_gantt() {
+            // The schedule pages arrange islands as the Setup steps do: a
+            // toolbar across the top and the page under it, with the Gantt's
+            // Inspector beside it.
             elements::schedule_gantt::draw_details(root_ui, editor, project, document, commands)
         } else if editor.is_schedule_charts() {
             elements::schedule_charts::draw_details(root_ui, editor, project, document, commands)
         } else if editor.is_schedule_calendar() {
             elements::schedule_calendar::draw_details(root_ui, editor, project, document, commands)
         } else {
-            planning_layout = elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page);
-            planning_layout.rect
+            elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, setup_group)
         };
         dialogs::about::draw_about_dialog(root_ui, editor);
         elements::properties::draw_preferences(
@@ -848,33 +899,24 @@ fn draw_ui(
             dialogs::editing::draw_rename_dialog(root_ui, commands, editor);
         }
         #[cfg(target_arch = "wasm32")]
-        if editor.new_project_dialog_open {
-            dialogs::editing::draw_create_project_dialog(root_ui, commands, editor, details);
-        }
-        #[cfg(target_arch = "wasm32")]
-        let naming_browser_project = editor.new_project_dialog_open;
+        let naming_browser_project = editor.naming_browser_project.is_some();
         #[cfg(not(target_arch = "wasm32"))]
         let naming_browser_project = false;
         if project.needs_startup_dialog && !naming_browser_project {
-            dialogs::editing::draw_select_project_dialog(root_ui, project, commands);
+            dialogs::editing::draw_select_project_dialog(root_ui, project, main_menu_rect.bottom(), commands);
         }
         *canvas_rect_out = egui::Rect::ZERO;
         geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, frame_context.console_snapshot, commands);
         let ctx = root_ui.ctx();
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
-        let details_region = if editor.is_solids_view() || editor.is_schedule_pane() {
-            details
-        } else {
-            egui::Rect::NOTHING
-        };
-        chrome::paint_regions(
-            ctx,
-            [viewport_bar_rect, console, details_region]
-                .into_iter()
-                .chain(explorer.regions)
-                .chain(planning_layout.regions),
-        );
+        chrome::paint_regions(ctx, [viewport_bar_rect, console].into_iter().chain(explorer.regions).chain(planning_layout.regions));
         chrome::paint_grips(ctx, planning_layout.grips);
+        if let Some(tabs) = &planning_tabs {
+            tabs.paint(ctx);
+        }
+        if let Some(tabs) = &workspace_tabs {
+            tabs.paint(ctx);
+        }
         chrome::paint_grips(
             ctx,
             explorer
@@ -914,7 +956,8 @@ fn draw_ui(
         egui::Rect::NOTHING
     };
 
-    // The planning cut steps' panels, down the right edge. Claimed after the
+    // The planning cut steps', Road Network's and Reserves' panels, down the
+    // right edge. Claimed after the
     // two strips below it, so it stops at the bottom toolbar's top and they
     // carry on underneath it, and after the viewport bar, so it starts
     // directly under it.
@@ -927,8 +970,11 @@ fn draw_ui(
             elements::blasting::draw_panel(root_ui, editor, document, commands)
         };
         Some((island.regions, vec![island.grip]))
-    } else if editor.is_planning_viewport() && editor.planning_page == state::PlanningPage::Haulage {
+    } else if editor.is_haulage_page() {
         let column = elements::haulage::draw_panel(root_ui, editor, document, project, commands);
+        Some((column.regions, column.grips))
+    } else if editor.is_solids_view() {
+        let column = elements::solids_view::draw_panel(root_ui, editor, project, document);
         Some((column.regions, column.grips))
     } else {
         None
@@ -979,7 +1025,10 @@ fn draw_ui(
     // What is left of the root ui is the canvas, so its edges are already
     // inside the window-edge gap the chrome claimed.
     let scene_claimed = egui::Rect::from_min_max(
-        egui::pos2(root_ui.available_rect_before_wrap().left(), main_menu_rect.bottom().max(viewport_bar_rect.bottom())),
+        egui::pos2(
+            root_ui.available_rect_before_wrap().left(),
+            main_menu_rect.bottom().max(viewport_bar_rect.bottom()).max(planning_tabs_bottom),
+        ),
         egui::pos2(root_ui.available_rect_before_wrap().right(), canvas_bottom),
     );
     let scene_rect = chrome::region_rect(scene_claimed);
@@ -1309,11 +1358,11 @@ fn draw_ui(
 
     // --- Startup & global dialogs ---
     #[cfg(target_arch = "wasm32")]
-    let naming_browser_project = editor.new_project_dialog_open;
+    let naming_browser_project = editor.naming_browser_project.is_some();
     #[cfg(not(target_arch = "wasm32"))]
     let naming_browser_project = false;
     if project.needs_startup_dialog && !naming_browser_project {
-        dialogs::editing::draw_select_project_dialog(root_ui, project, commands);
+        dialogs::editing::draw_select_project_dialog(root_ui, project, main_menu_rect.bottom(), commands);
     }
     dialogs::files::draw_vertical_exaggeration_dialog(root_ui, editor, canvas_rect);
     dialogs::video_export::draw_video_export_dialog(root_ui, editor, canvas_rect, commands);
@@ -1332,7 +1381,11 @@ fn draw_ui(
         project.has_active_project.then_some((project.active_session, &project.modelling)),
         commands,
     );
-    elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect);
+    // Laid out before the block-model card, which decides whether it keeps
+    // its place along the bottom edge; drawn below, with the other overlays.
+    let world_per_point = frame_context.world_per_physical_pixel.map(|scale| scale * f64::from(root_ui.ctx().pixels_per_point()));
+    let scale_bar = widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).layout(root_ui.ctx(), world_per_point, editor.renderer_background_color);
+    let scale_bar_shown = elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect, scale_bar.as_ref().map(|bar| bar.rect()));
     elements::properties::draw_prismoid_grid_legend(root_ui, editor, project, block_models, commands, canvas_rect);
 
     // --- Canvas right-click context menu ---
@@ -1340,7 +1393,7 @@ fn draw_ui(
         && let Some((px, py)) = editor.canvas_context_menu_px
     {
         if editor.canvas_context_menu_recent {
-            dialogs::editing::draw_recent_functions_context(root_ui, editor, commands, px, py);
+            dialogs::editing::draw_recent_functions_context(root_ui, editor, project, commands, px, py);
         } else {
             dialogs::editing::draw_right_click_context(root_ui, editor, project, commands, &mut geometry_dirty, document, px, py);
         }
@@ -1349,12 +1402,6 @@ fn draw_ui(
     // --- Tool-specific dialogs ---
 
     geometry_dirty |= draw_circle_radius_input(root_ui, editor, commands, canvas_rect);
-
-    // Browser project creation
-    #[cfg(target_arch = "wasm32")]
-    if editor.new_project_dialog_open {
-        crate::ui::dialogs::editing::draw_create_project_dialog(root_ui, commands, editor, canvas_rect);
-    }
 
     dialogs::products::draw_new_product_dialog(root_ui, editor, commands);
     dialogs::products::draw_initiation_dialog(root_ui, editor, commands);
@@ -1512,10 +1559,11 @@ fn draw_ui(
             painter.galley(rect.min + egui::vec2(6.0, 4.0), galley, root_ui.visuals().text_color());
         }
     }
-    draw_haul_pin_labels(root_ui, editor, project, document, canvas_rect);
+    let mut space = LabelSpace::new(canvas_rect, machine_icon_rects(root_ui, editor));
+    draw_haul_pin_labels(root_ui, editor, project, document, canvas_rect, &mut space);
     // Under the flows' read-out, which is what the pointer is asking for.
     draw_machine_icons(root_ui, editor, canvas_rect);
-    draw_machine_labels(root_ui, editor, &project.schedule, canvas_rect);
+    draw_machine_labels(root_ui, editor, &project.schedule, canvas_rect, &mut space);
     draw_haul_flows(root_ui, editor, canvas_rect);
     if editor.is_schedule_animation()
         && let Some(frame) = editor.video_export_frame
@@ -1566,8 +1614,9 @@ fn draw_ui(
     // cursor egui reports for the frame is whoever asked last.
     elements::cursors::draw_tool_cursor(root_ui.ctx(), editor, canvas_rect, frame_context.camera_active);
 
-    let world_per_point = frame_context.world_per_physical_pixel.map(|scale| scale * f64::from(root_ui.ctx().pixels_per_point()));
-    widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).show(root_ui.ctx(), world_per_point, editor.renderer_background_color);
+    if scale_bar_shown && let Some(scale_bar) = scale_bar {
+        scale_bar.show(root_ui.ctx());
+    }
 
     geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, frame_context.console_snapshot, commands);
 
@@ -1613,6 +1662,15 @@ fn draw_ui(
             .chain(planning_grips)
             .chain(prismoid_grip),
     );
+    // Over the regions' chrome: the open workspace tab reaches down through
+    // the gap to the viewport bar under it, and Planning's tabs sit in the
+    // gap between two regions, whose seam bands would square their tiles off.
+    if let Some(tabs) = &planning_tabs {
+        tabs.paint(&ctx);
+    }
+    if let Some(tabs) = &workspace_tabs {
+        tabs.paint(&ctx);
+    }
 
     geometry_dirty
 }
@@ -1691,6 +1749,8 @@ fn draw_global_dialogs(
 ) -> bool {
     let mut geometry_dirty = false;
     dialogs::alerts::draw_alert_dialog(root_ui, editor, console_snapshot);
+    #[cfg(target_arch = "wasm32")]
+    dialogs::editing::draw_name_browser_project_dialog(root_ui, commands, editor);
     // An Improve run goes on whichever page is open, and so does its card.
     elements::improve_progress::draw_improve_card(root_ui, editor, commands);
     dialogs::survey::draw_definitions_dialog(root_ui, editor, commands);
@@ -1848,6 +1908,7 @@ fn draw_global_dialogs(
     if editor.triangulation_pick_target.is_some() {
         dialogs::triangulation::draw_triangulation_pick_prompt(root_ui, editor);
     }
+    dialogs::selection_pick::draw_selection_pick_prompt(root_ui, editor, commands);
     if editor.block_model_create_open {
         elements::block_model::draw_create_block_model_dialog(root_ui, editor, drill_holes, commands);
     }
@@ -1855,10 +1916,6 @@ fn draw_global_dialogs(
     widgets::toast::draw_toasts(root_ui.ctx(), &mut editor.toasts);
     if editor.ore_triangulation_open {
         elements::block_model::draw_ore_triangulation_dialog(root_ui, editor, block_models, commands);
-    }
-
-    if editor.plot_dialog.is_some() {
-        dialogs::plot::draw_plot_dialog(root_ui, editor, project, commands);
     }
 
     // import export menus
@@ -2128,12 +2185,51 @@ fn draw_video_frame_marker(ui: &egui::Ui, (width, height): (u32, u32), canvas_re
     );
 }
 
+/// Where Animate's labels go. Each takes the first of the places offered
+/// for it that is on the canvas and clear of the machine icons and of every
+/// label already placed, so labels move aside for one another rather than
+/// stacking; one with nowhere clear near its point is left out.
+struct LabelSpace {
+    canvas: egui::Rect,
+    taken: Vec<egui::Rect>,
+}
+
+impl LabelSpace {
+    fn new(canvas: egui::Rect, obstacles: Vec<egui::Rect>) -> Self {
+        Self { canvas, taken: obstacles }
+    }
+
+    fn place(&mut self, places: impl IntoIterator<Item = egui::Rect>) -> Option<egui::Rect> {
+        let rect = places
+            .into_iter()
+            .find(|rect| self.canvas.contains_rect(*rect) && !self.taken.iter().any(|taken| taken.intersects(*rect)))?;
+        self.taken.push(rect);
+        Some(rect)
+    }
+}
+
+/// Places for a label of `size` beside an obstacle `around`, nearest first:
+/// below it, above it, to its right and left, then a label's height further
+/// down and up.
+fn label_places(around: egui::Rect, size: egui::Vec2) -> [egui::Rect; 6] {
+    const GAP: f32 = 2.0;
+    let centred = |top: f32| egui::Rect::from_min_size(egui::pos2(around.center().x - size.x / 2.0, top), size);
+    let beside = |left: f32| egui::Rect::from_min_size(egui::pos2(left, around.center().y - size.y / 2.0), size);
+    [
+        centred(around.bottom() + GAP),
+        centred(around.top() - GAP - size.y),
+        beside(around.right() + GAP),
+        beside(around.left() - GAP - size.x),
+        centred(around.bottom() + 2.0 * GAP + size.y),
+        centred(around.top() - 2.0 * GAP - 2.0 * size.y),
+    ]
+}
+
 /// Destination points: the name, and what trucks do there, on a pill that
-/// stays legible over pale ground. Zoomed out, a label that would land on one
-/// already drawn gives way rather than stacking illegibly.
-fn draw_haul_pin_labels(ui: &egui::Ui, editor: &EditorState, project: &UiProjectView, document: &Document, canvas_rect: egui::Rect) {
+/// stays legible over pale ground, tied to its point by a leader. A label is
+/// moved round its point to keep clear of the others.
+fn draw_haul_pin_labels(ui: &egui::Ui, editor: &EditorState, project: &UiProjectView, document: &Document, canvas_rect: egui::Rect, space: &mut LabelSpace) {
     let scale = ui.ctx().pixels_per_point();
-    let mut placed: Vec<egui::Rect> = Vec::new();
     for ((x, y), role) in &editor.haul_pins {
         use crate::model::{haulage::NodeRole, schedule::DestinationKind};
         let (name, kind) = match role.destination() {
@@ -2156,12 +2252,25 @@ fn draw_haul_pin_labels(ui: &egui::Ui, editor: &EditorState, project: &UiProject
         job.append(&what, 6.0, egui::TextFormat::simple(egui::FontId::proportional(11.0), visuals.weak_text_color()));
         let galley = painter.layout_job(job);
         let anchor = egui::pos2(x / scale, y / scale);
-        let rect = egui::Rect::from_min_size(anchor + egui::vec2(10.0, -galley.size().y - 14.0), galley.size() + egui::vec2(12.0, 6.0));
-        if placed.iter().any(|other| other.intersects(rect)) {
-            continue;
-        }
-        placed.push(rect);
-        painter.line_segment([anchor, rect.left_bottom()], egui::Stroke::new(1.0, visuals.weak_text_color()));
+        let size = galley.size() + egui::vec2(12.0, 6.0);
+        // Up and to the right, as it always was where there is room; then
+        // round the point, and further up.
+        let (rise, reach) = (14.0, 10.0);
+        let places = [
+            egui::vec2(reach, -size.y - rise),
+            egui::vec2(-size.x - reach, -size.y - rise),
+            egui::vec2(reach, rise),
+            egui::vec2(-size.x - reach, rise),
+            egui::vec2(reach, -2.0 * size.y - rise - 4.0),
+            egui::vec2(-size.x - reach, -2.0 * size.y - rise - 4.0),
+        ]
+        .map(|offset| egui::Rect::from_min_size(anchor + offset, size));
+        let Some(rect) = space.place(places) else { continue };
+        let corner = [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()]
+            .into_iter()
+            .min_by(|a, b| a.distance_sq(anchor).total_cmp(&b.distance_sq(anchor)))
+            .unwrap_or(rect.left_bottom());
+        painter.line_segment([anchor, corner], egui::Stroke::new(1.0, visuals.weak_text_color()));
         painter.rect(
             rect,
             widgets::toolbar::GROUP_CORNER_RADIUS,
@@ -2195,26 +2304,55 @@ fn machine_icon_groups(editor: &EditorState, scale: f32) -> Vec<(egui::Pos2, Vec
     groups
 }
 
-fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
+/// One job's machine icons as drawn: the job's anchor, its machines, and
+/// each icon with where it goes.
+type IconGroup<'a> = (egui::Pos2, Vec<&'a crate::rendering::machines::MachineIcon>, Vec<(egui::TextureHandle, egui::Rect)>);
+
+/// Each icon group's icons, side by side and centred on the job they stand
+/// on.
+fn machine_icon_layout<'a>(ui: &egui::Ui, editor: &'a EditorState) -> Vec<IconGroup<'a>> {
     const GAP: f32 = 1.0;
+    machine_icon_groups(editor, ui.ctx().pixels_per_point())
+        .into_iter()
+        .map(|(at, members)| {
+            let badges: Vec<_> = members
+                .iter()
+                .filter_map(|icon| {
+                    let texture = machine_icon_texture(ui.ctx(), icon.model, icon.working)?;
+                    let size = texture.size_vec2();
+                    Some((texture, MACHINE_ICON_HEIGHT * size.x / size.y.max(1.0)))
+                })
+                .collect();
+            let width = badges.iter().map(|badge| badge.1 + GAP).sum::<f32>() - GAP;
+            let mut left = at.x - width / 2.0;
+            let placed = badges
+                .into_iter()
+                .map(|(texture, icon_width)| {
+                    let rect = egui::Rect::from_min_size(egui::pos2(left, at.y - MACHINE_ICON_HEIGHT / 2.0), egui::vec2(icon_width, MACHINE_ICON_HEIGHT));
+                    left += icon_width + GAP;
+                    (texture, rect)
+                })
+                .collect();
+            (at, members, placed)
+        })
+        .collect()
+}
+
+/// Where the machine icons stand, for labels to keep clear of.
+fn machine_icon_rects(ui: &egui::Ui, editor: &EditorState) -> Vec<egui::Rect> {
+    machine_icon_layout(ui, editor)
+        .into_iter()
+        .flat_map(|(.., icons)| icons.into_iter().map(|(_, rect)| rect))
+        .collect()
+}
+
+fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
     if editor.animation_machine_icons.is_empty() {
         return;
     }
     let painter = ui.painter().with_clip_rect(canvas_rect);
-    for (at, members) in machine_icon_groups(editor, ui.ctx().pixels_per_point()) {
-        let badges: Vec<_> = members
-            .iter()
-            .filter_map(|icon| {
-                let texture = machine_icon_texture(ui.ctx(), icon.model, icon.working)?;
-                let size = texture.size_vec2();
-                Some((texture, MACHINE_ICON_HEIGHT * size.x / size.y.max(1.0)))
-            })
-            .collect();
-        let width = badges.iter().map(|badge| badge.1 + GAP).sum::<f32>() - GAP;
-        let mut left = at.x - width / 2.0;
-        for (texture, icon_width) in badges {
-            let rect = egui::Rect::from_min_size(egui::pos2(left, at.y - MACHINE_ICON_HEIGHT / 2.0), egui::vec2(icon_width, MACHINE_ICON_HEIGHT));
-            left += icon_width + GAP;
+    for (.., icons) in machine_icon_layout(ui, editor) {
+        for (texture, rect) in icons {
             if canvas_rect.intersects(rect) {
                 painter.image(texture.id(), rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
             }
@@ -2224,35 +2362,43 @@ fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Re
 
 /// Each machine's name: under the model of one drawn close up, and under
 /// the icons of the rest - one line naming every machine on a job, in the
-/// order its icons run. Like the destination labels, one that would land on
-/// a label already drawn gives way.
-fn draw_machine_labels(ui: &egui::Ui, editor: &EditorState, plan: &crate::model::schedule::SchedulePlan, canvas_rect: egui::Rect) {
+/// order its icons run. A label that would land on another is moved round
+/// its machine, above or beside it, and is left out only when nothing near
+/// is clear.
+fn draw_machine_labels(ui: &egui::Ui, editor: &EditorState, plan: &crate::model::schedule::SchedulePlan, canvas_rect: egui::Rect, space: &mut LabelSpace) {
     let scale = ui.ctx().pixels_per_point();
     let name = |agent| plan.agent(agent).map(|agent| agent.name.as_str()).unwrap_or_default();
-    let mut lines: Vec<(egui::Pos2, String)> = editor
+    // What each label is placed round: a close-up model's point, or a job's
+    // row of icons.
+    let mut lines: Vec<(egui::Rect, String)> = editor
         .animation_machine_labels
         .iter()
-        .map(|label| (egui::pos2(label.at.0 / scale, label.at.1 / scale + 10.0), name(label.agent).to_owned()))
+        .map(|label| {
+            let at = egui::pos2(label.at.0 / scale, label.at.1 / scale);
+            (egui::Rect::from_center_size(at, egui::vec2(0.0, 16.0)), name(label.agent).to_owned())
+        })
         .collect();
     // Those at work last among the icons, as drawn, so they win a clash -
     // reversed here because the first label placed is the one kept.
-    for (at, members) in machine_icon_groups(editor, scale).into_iter().rev() {
+    for (at, members, icons) in machine_icon_layout(ui, editor).into_iter().rev() {
         let names: Vec<&str> = members.iter().map(|icon| name(icon.agent)).filter(|name| !name.is_empty()).collect();
-        lines.push((egui::pos2(at.x, at.y + MACHINE_ICON_HEIGHT / 2.0 + 2.0), names.join(" · ")));
+        let around = icons
+            .iter()
+            .map(|(_, rect)| *rect)
+            .reduce(egui::Rect::union)
+            .unwrap_or_else(|| egui::Rect::from_center_size(at, egui::Vec2::ZERO));
+        lines.push((around, names.join(" · ")));
     }
     let painter = ui.painter().with_clip_rect(canvas_rect);
     let visuals = ui.visuals();
-    let mut placed: Vec<egui::Rect> = Vec::new();
-    for (top_centre, text) in lines {
+    for (around, text) in lines {
         if text.is_empty() {
             continue;
         }
         let galley = painter.layout_no_wrap(text, egui::FontId::proportional(11.0), visuals.strong_text_color());
-        let rect = egui::Rect::from_min_size(top_centre - egui::vec2(galley.size().x / 2.0 + 5.0, 0.0), galley.size() + egui::vec2(10.0, 4.0));
-        if !canvas_rect.intersects(rect) || placed.iter().any(|other| other.intersects(rect)) {
+        let Some(rect) = space.place(label_places(around, galley.size() + egui::vec2(10.0, 4.0))) else {
             continue;
-        }
-        placed.push(rect);
+        };
         painter.rect_filled(rect, widgets::toolbar::GROUP_CORNER_RADIUS, visuals.window_fill().gamma_multiply(0.85));
         painter.galley(rect.min + egui::vec2(5.0, 2.0), galley, visuals.strong_text_color());
     }

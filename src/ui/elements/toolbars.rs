@@ -15,10 +15,13 @@ use crate::{
     model::{Axis, SceneEntityId},
     ui::{
         EditorState, UiProjectView,
-        elements::main_menu::RecentRow,
+        elements::main_menu::MenuRow,
         state::{ActiveTool, CursorMode, UiCommand, Workspace},
         themed_icon, unthemed_icon,
-        widgets::toolbar::{TOOL_CELL_SIZE, ToolbarButton},
+        widgets::{
+            hint::Hint,
+            toolbar::{TOOL_CELL_SIZE, ToolbarButton},
+        },
     },
 };
 
@@ -72,7 +75,13 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
         let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses(editor.active_workspace);
         LeftTool {
             icon: egui::Image::new(icon),
-            hint: (blocked_by_section && editing_enabled && layer_ok).then(|| tr!("toolbars-tool-not-available-section-view", tool = tooltip.as_str().to_string())),
+            hint: if !editing_enabled {
+                None
+            } else if !layer_ok {
+                Some(tr!("toolbars-tool-needs-layer", tool = tooltip.as_str().to_string()))
+            } else {
+                blocked_by_section.then(|| tr!("toolbars-tool-not-available-section-view", tool = tooltip.as_str().to_string()))
+            },
             tooltip,
             action: LeftToolAction::Tool(tool),
             enabled: editing_enabled && layer_ok && !blocked_by_section,
@@ -141,19 +150,20 @@ fn drawing_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, pro
             themed_icon!(ui, "insert_crossings.svg"),
             tr!("toolbars-insert-points-crossings"),
             LeftToolAction::Command(Box::new(UiCommand::InsertPointsAtIntersections)),
-            editor.selection_has_intersections,
+            // Opens straight into the pick when the selection has nothing to cross.
+            true,
         ),
         cell(
             themed_icon!(ui, "reverse_string.svg"),
             tr!("toolbars-reverse-strings"),
             LeftToolAction::Command(Box::new(UiCommand::ReverseSelectedStrings)),
-            editor.selection_has_polylines,
+            editor.selection_counts.polylines > 0,
         ),
         cell(
             themed_icon!(ui, "thin_string.svg"),
             tr!("toolbars-thin-strings"),
             LeftToolAction::Command(Box::new(UiCommand::OpenThinStringsDialog)),
-            editor.selection_has_polylines,
+            editor.selection_counts.polylines > 0,
         ),
     ]);
     tools
@@ -192,7 +202,7 @@ fn blasting_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool) ->
     ]
 }
 
-/// The Haulage Layout tools: draw a road, turn design strings into roads,
+/// The Road Network tools: draw a road, turn design strings into roads,
 /// and bring roads in from or out to DXF.
 fn haulage_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, project_active: bool) -> Vec<LeftTool> {
     let objects = editor.selected_handles.iter().any(|h| matches!(h, crate::model::SceneEntityId::Object(_)));
@@ -329,7 +339,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         .selected(selected);
     let mut response = ui.add_enabled_ui(tool.enabled, |ui| ui.add(button)).inner;
     if let Some(hint) = tool.hint.as_deref() {
-        response = response.on_disabled_hover_text(hint);
+        response = response.disabled_hint(hint);
     }
     if !response.clicked() {
         return;
@@ -361,8 +371,8 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
 /// A cell running a Design row's function, the last command pushed, is a use
 /// of that row.
 fn note_row_use(workspace: Workspace, commands: &mut Vec<UiCommand>) {
-    if let Some(row) = commands.last().and_then(|command| RecentRow::running(workspace, command)) {
-        commands.push(UiCommand::NoteRecentFunction(row.key()));
+    if let Some(row) = commands.last().and_then(|command| MenuRow::running(workspace, command)) {
+        commands.push(UiCommand::NoteRecentFunction(row));
     }
 }
 

@@ -16,6 +16,12 @@ struct ConsoleUiState {
     expanded: HashSet<ConsoleEntryId>,
     pending_toggle: Option<(ConsoleEntryId, u64)>,
     presentation_revision: u64,
+    /// Whether the planner has scrolled up off the newest line. Until they
+    /// do, and once they scroll back down, the console follows new lines.
+    scrolled_up: bool,
+    /// The scrolled view's height last frame, to put the newest line at its
+    /// foot before this frame's rows are laid out.
+    view_height: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,7 +93,14 @@ pub(crate) fn draw_console(ui: &mut egui::Ui, min_height: f32, max_height: f32, 
                     );
                 } else {
                     let visual_rows_id = ui.make_persistent_id("console_visual_rows");
-                    egui::ScrollArea::vertical()
+                    // Followed by setting the offset ourselves rather than by
+                    // `stick_to_bottom` alone: egui lets go of the bottom for
+                    // good after any frame it was not asked to hold it, such as
+                    // the one an entry opens in, and the console then sat on old
+                    // lines while new ones arrived below.
+                    let stride = row_height + ui.spacing().item_spacing.y;
+                    let bottom = (rows.len() as f32 * stride - ui.spacing().item_spacing.y - state.view_height).max(0.0);
+                    let mut area = egui::ScrollArea::vertical()
                         .id_salt("console_scroll_area")
                         .auto_shrink([false; 2])
                         // A `ScrollArea` claims 64pt of height by default even
@@ -95,26 +108,35 @@ pub(crate) fn draw_console(ui: &mut egui::Ui, min_height: f32, max_height: f32, 
                         // pushes the panel past the window edge as the user
                         // drags it shorter. Let it take what the panel has.
                         .min_scrolled_height(0.0)
-                        .stick_to_bottom(!expanded_this_frame)
-                        .show_rows(ui, row_height, rows.len(), |ui, visible| {
-                            for row in &rows[visible] {
-                                let (rect, row_id) = allocate_visual_row(ui, visual_rows_id, row_height);
-                                match *row {
-                                    PresentationRow::Header { entry_index } => {
-                                        draw_header_row(ui, rect, row_id, entry_index, &entries[entry_index], entries, &mut state);
-                                    }
-                                    PresentationRow::Detail {
-                                        entry_index,
-                                        detail_index,
-                                        byte_range,
-                                    } => {
-                                        let entry = &entries[entry_index];
-                                        let detail = &entry.details[detail_index];
-                                        draw_detail_row(ui, rect, row_id, entry_index, &detail[byte_range.0..byte_range.1], entry, entries, detail_indent, &font_id);
-                                    }
+                        .stick_to_bottom(!expanded_this_frame);
+                    let follow = !state.scrolled_up && !expanded_this_frame && state.view_height > 0.0;
+                    if follow {
+                        area = area.vertical_scroll_offset(bottom);
+                    }
+                    let output = area.show_rows(ui, row_height, rows.len(), |ui, visible| {
+                        for row in &rows[visible] {
+                            let (rect, row_id) = allocate_visual_row(ui, visual_rows_id, row_height);
+                            match *row {
+                                PresentationRow::Header { entry_index } => {
+                                    draw_header_row(ui, rect, row_id, entry_index, &entries[entry_index], entries, &mut state);
+                                }
+                                PresentationRow::Detail {
+                                    entry_index,
+                                    detail_index,
+                                    byte_range,
+                                } => {
+                                    let entry = &entries[entry_index];
+                                    let detail = &entry.details[detail_index];
+                                    draw_detail_row(ui, rect, row_id, entry_index, &detail[byte_range.0..byte_range.1], entry, entries, detail_indent, &font_id);
                                 }
                             }
-                        });
+                        }
+                    });
+                    let max_offset = (output.content_size.y - output.inner_rect.height()).max(0.0);
+                    state.view_height = output.inner_rect.height();
+                    if !expanded_this_frame {
+                        state.scrolled_up = output.state.clamped_offset().y < max_offset - 2.0;
+                    }
                 }
 
                 ui.ctx().data_mut(|data| data.insert_temp(state_id, state));

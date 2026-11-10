@@ -136,6 +136,20 @@ impl crate::app::App<'_> {
     /// Remove a field from the Field List, and every block model's mapping
     /// of it - a mapping entry naming a field that no longer exists would
     /// otherwise linger, unreachable, until the next OMF round-trip pruned it.
+    /// Delete a field from its row: refused, saying by what, while something
+    /// reads it, and otherwise asked first, since it cannot be undone.
+    pub(crate) fn request_delete_reserve_field(&mut self, id: ReserveFieldId) {
+        let Some(document) = self.workspace.active_document() else {
+            return;
+        };
+        let users = reserve_field_users(document, id);
+        if users.is_empty() {
+            self.editor.pending_delete_field = Some(id);
+        } else {
+            crate::userspace_warn!("{}", crate::i18n::tr!("reserve-field-in-use", users = users.join(", ")));
+        }
+    }
+
     pub(crate) fn delete_reserve_field(&mut self, id: ReserveFieldId) {
         let Some(document) = self.workspace.active_document_mut() else {
             return;
@@ -206,8 +220,8 @@ impl crate::app::App<'_> {
     /// asks for the selected one and the work itself lives in
     /// [`Self::request_reserve_stats`].
     pub(crate) fn sync_reserve_setup_stats(&mut self) {
-        use crate::ui::state::{PlanningPage, SolidsStep};
-        if !self.editor.is_planning_setup() || self.editor.planning_page != PlanningPage::Solids || self.editor.planning_solids_step != SolidsStep::BlockModels {
+        use crate::ui::state::{SetupGroup, SolidsStep};
+        if !self.editor.is_setup_group(SetupGroup::Solids) || self.editor.planning_solids_step != SolidsStep::BlockModels {
             return;
         }
         let Some(id) = self.editor.planning_selected_block_model else {
@@ -380,4 +394,15 @@ fn column_aggregation(column: &str, fields: &[crate::model::ReserveField]) -> Re
         Some(weight) => ReserveAggregation::WeightedAverage { weight_field: weight.id },
         None => ReserveAggregation::VolumeAverage,
     }
+}
+
+/// What reads a reserve field, by name. Deleting it would leave these reading
+/// a field that is gone, so they have to let go of it first.
+fn reserve_field_users(document: &crate::model::Document, id: ReserveFieldId) -> Vec<String> {
+    let weighted = document
+        .reserve_fields()
+        .iter()
+        .filter(|field| matches!(field.aggregation, crate::model::ReserveAggregation::WeightedAverage { weight_field } if weight_field == id))
+        .map(|field| field.name.clone());
+    weighted.chain(document.schedule().field_users(id)).collect()
 }

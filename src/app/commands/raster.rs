@@ -38,14 +38,14 @@ impl<'a> App<'a> {
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel| {
                 if cancel.is_cancelled() {
-                    anyhow::bail!("Cancelled");
+                    anyhow::bail!(crate::app::jobs::Cancelled);
                 }
                 decode_raster_bytes(&input.source.name, &input.bytes, preview_limit)
             },
             move |app, result| match result {
                 Ok(mut loaded) => {
                     loaded.path = display_path;
-                    app.add_loaded_raster(loaded);
+                    app.add_as_one_step(|app| app.add_loaded_raster(loaded));
                 }
                 Err(error) => userspace_log!("{}", tr!("cmd-raster-failed-load-raster-name-error", name = name.to_string(), error = format!("{error:#}"))),
             },
@@ -55,10 +55,10 @@ impl<'a> App<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn import_raster_path(&mut self, path: &Path) -> Result<()> {
         if !is_supported_raster_path(path) {
-            anyhow::bail!("Unsupported raster file: {}", path.display());
+            anyhow::bail!(crate::i18n::tr!("err-raster-unsupported-file", path = path.display().to_string()));
         }
         if !path.is_file() {
-            anyhow::bail!("Raster file does not exist: {}", path.display());
+            anyhow::bail!(crate::i18n::tr!("err-raster-file-missing", path = path.display().to_string()));
         }
         self.open_raster_path(path.to_path_buf());
         Ok(())
@@ -106,7 +106,7 @@ impl<'a> App<'a> {
             let complete = || match result {
                 Ok(Ok(loaded)) => {
                     self.finish_background_task(ticket, false);
-                    self.add_loaded_raster(loaded);
+                    self.add_as_one_step(|app| app.add_loaded_raster(loaded));
                 }
                 Ok(Err(error)) => {
                     crate::userspace_warn!(
@@ -165,12 +165,12 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn clear_active_triangulation_raster(&mut self) -> Result<()> {
-        let triangulation_id = self.active_triangulation.context("Select a triangulation first")?;
+        let triangulation_id = self.active_triangulation.with_context(|| crate::i18n::tr!("err-raster-select-triangulation"))?;
         let triangulation = self
             .triangulations
             .iter_mut()
             .find(|triangulation| triangulation.id == triangulation_id)
-            .context("The active triangulation is no longer loaded")?;
+            .with_context(|| crate::i18n::tr!("err-raster-triangulation-unloaded"))?;
         if triangulation.raster_texture.is_some() {
             self.set_triangulation_drapes(&[triangulation_id], None);
         }
@@ -232,7 +232,11 @@ impl<'a> App<'a> {
     /// world-XY extent overlaps the raster footprint. Until draped, a loaded
     /// raster only shows as a flat plan-view image.
     pub(crate) fn drape_raster_over_surfaces(&mut self, id: RasterTextureId) -> Result<()> {
-        let raster = self.raster_textures.iter().find(|raster| raster.id == id).context("Load the texture before draping it")?;
+        let raster = self
+            .raster_textures
+            .iter()
+            .find(|raster| raster.id == id)
+            .with_context(|| crate::i18n::tr!("err-raster-load-texture-first"))?;
         let raster_id = raster.id;
         let raster_name = raster.name.clone();
         let world_to_uv = raster.world_to_uv;

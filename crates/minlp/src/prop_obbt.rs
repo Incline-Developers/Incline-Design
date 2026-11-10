@@ -430,6 +430,7 @@ fn get_filter_coef(scip: &Scip, propdata: &PropData, var: VarId, boundtype: Boun
 /// `createGenVBound`: creates a genvbound if the dual LP solution provides
 /// such information; returns whether a non-trivial genvbound was found.
 ///
+/// ```text
 /// Consider the problem
 ///
 ///    min { +/- x_i : obj * x <= z, lb <= Ax <= ub, l <= x <= u },
@@ -460,6 +461,7 @@ fn get_filter_coef(scip: &Scip, propdata: &PropData, var: VarId, boundtype: Boun
 /// that holds for all primal feasible points with objective value at least
 /// cutoff_bound. Therefore, the latter inequality can be added as a
 /// generalized variable bound.
+/// ```
 fn create_gen_vbound(scip: &mut Scip, propdata: &PropData, bound: &Bound) -> ScipResult<bool> {
     let mut found = false;
 

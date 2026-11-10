@@ -15,6 +15,7 @@ use crate::{
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::{DataGrid, PropertyRows, PropertyTable, grid_cell_combo, grid_columns_row, grid_empty_state, grid_group_row_response, property_table_height},
+            hint::Hint,
         },
     },
 };
@@ -77,7 +78,7 @@ fn group_heading(
     commands: &mut Vec<UiCommand>,
 ) -> bool {
     let (open, response) = grid_group_row_response(ui, id, label, &group_detail(plan, blasts), depth);
-    let response = response.on_hover_text(tr!("drill-blast-group-hint"));
+    let response = response.hint(tr!("drill-blast-group-hint"));
     let members: Vec<BlastRef> = blasts.iter().map(|entry| entry.reference).collect();
     context_menu_popup(&response, path, |ui| stage_menu(ui, members.clone(), session, commands));
     open

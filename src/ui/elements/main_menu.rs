@@ -1,5 +1,6 @@
 //! Top application menu bar: the mark, the application-wide menus (File,
-//! Project) and the workspace tabs.
+//! Project) and the workspace tabs. It is the window's title bar as well, and
+//! [`title_bar`] adds the project's name and the window's buttons to it.
 //!
 //! Everything that acts on the scene rather than on the application has moved
 //! down to the viewport bar - see [`crate::ui::elements::viewport_bar`] - so
@@ -7,45 +8,59 @@
 //! Blender's topbar does.
 
 // The dropdowns below are all in the system menu bar on macOS (`mac.rs`), and
-// nothing this module still draws there needs any of this.
+// the mark gives way to the system's window buttons there, so nothing this
+// module still draws there needs any of this.
+// Only the recent project rows take a hint, and the browser has none.
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+use crate::ui::widgets::hint::Hint;
 #[cfg(not(target_os = "macos"))]
 use crate::ui::{
     state::{UiProjectEntry, ViewToggle},
-    widgets::context_menu::{ContextMenuAction, MenuBarMenu, context_menu_heading, context_menu_separator, context_submenu},
+    themed_icon,
+    widgets::context_menu::{ContextMenuAction, MenuBarMenu, context_menu_separator, context_submenu},
 };
 use crate::{
     i18n::tr,
-    model::{Axis, SceneEntityId},
+    model::Axis,
     ui::{
         EditorState, UiCommand, UiProjectView,
+        elements::title_bar,
         state::{ActiveTool, Workspace, string_rework_live},
-        themed_icon,
-        widgets::toolbar::GROUP_CORNER_RADIUS,
+        widgets::page_tabs::{PageTab, PageTabsPaint},
     },
 };
 
 /// Extra space above the bar's contents, on top of the panel frame's own
 /// margin, so the menus and tabs are not pinned to the window's top edge.
 const TOP_PADDING: i8 = 3;
-/// Side of the application mark at the left of the bar.
+/// Side of the application mark at the left of the bar. Not on macOS, where
+/// the system's window buttons stand at the head of the bar instead.
+#[cfg(not(target_os = "macos"))]
 const LOGO_SIZE: f32 = 18.0;
 /// Space either side of the mark, so it reads as a mark rather than as the
 /// first menu.
+#[cfg(not(target_os = "macos"))]
 const LOGO_MARGIN: f32 = 6.0;
-/// Height of the rule parting the menus from the workspace tabs.
+/// Space between the run of menus and tabs and the window's buttons, at
+/// either end of the bar.
+const WINDOW_BUTTONS_GAP: f32 = 8.0;
+/// Space between the last menu and the workspace tabs, on top of the bar's
+/// item spacing, so the two runs read as two rather than one.
 #[cfg(not(target_os = "macos"))]
-const SEPARATOR_HEIGHT: f32 = 16.0;
-/// Space either side of that rule.
-#[cfg(not(target_os = "macos"))]
-const SEPARATOR_MARGIN: f32 = 8.0;
+const MENUS_TABS_GAP: f32 = 2.0;
+/// How far below the row's centre the bar's contents sit - the mark, the
+/// menus and the workspace tabs' names. Centred on the
+/// row they ride high, the bar's top padding being only the window's edge.
+/// See [`lowered`].
+const LABEL_DROP: f32 = 2.0;
 /// Space either side of a workspace tab's label.
 const TAB_PADDING: f32 = 10.0;
 /// Vertical space a workspace tab claims in the bar.
 const TAB_HEIGHT: f32 = 20.0;
-/// Height of a workspace tab's fill, sat against the top of that space. Shorter
-/// than [`TAB_HEIGHT`] so the group box behind Planning keeps air below it
-/// instead of bleeding into the region under the bar.
-const TAB_FILL_HEIGHT: f32 = 17.0;
+/// Height of a workspace tab's cell, sat against the top of that space, which
+/// its label is centred in. The open tab's surface runs on below it, down to
+/// the viewport bar it stands on.
+const TAB_CELL_HEIGHT: f32 = 17.0;
 /// Space either side of a dropdown's label in the viewport bar.
 ///
 /// `egui`'s `menu_style` packs bar labels to 2 points, which is right for a
@@ -82,61 +97,93 @@ pub(crate) fn show_in_file_manager_label() -> String {
 /// instead, but the bar itself stays: the mark and the workspace tabs are not
 /// things an `NSMenu` can carry.
 ///
-/// Returns the panel's bounding rect.
-pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> egui::Rect {
+/// Returns the panel's bounding rect, and the workspace tabs to paint once the
+/// regions under the bar are done: the open one stands on the viewport bar.
+pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> (egui::Rect, Option<PageTabsPaint>) {
     // Not a region: the bar spans the window and carries the gap's own colour,
     // so it reads as the backdrop the workspace is laid on rather than as a
     // panel of its own. See `chrome::window_bar_frame`.
-    let bar_fill = crate::ui::chrome::window_bar_fill(ui);
     let frame = crate::ui::chrome::window_bar_frame(ui);
+    let mut tabs = None;
     let frame = frame.inner_margin(egui::Margin {
         top: frame.inner_margin.top + TOP_PADDING,
         ..frame.inner_margin
     });
-    egui::Panel::top("main_menu")
+    let rect = egui::Panel::top("main_menu")
         .show_separator_line(false)
         .frame(frame)
         .show(ui, |ui| {
-            // Too narrow a window scrolls the row rather than clipping the
-            // workspace tabs off the end of it. See `elements::bar_strip`.
-            // The row is as tall as `MenuBar` makes it, which is this unless
-            // something on it is taller; the strip grows with the contents.
-            crate::ui::elements::bar_strip(ui, "main_menu_strip", ui.spacing().interact_size.y, |ui, strip| {
-                let mut used = 0.0;
-                ui.scope_builder(egui::UiBuilder::new().max_rect(strip), |ui| {
-                    egui::MenuBar::new().ui(ui, |ui| {
-                        draw_logo(ui);
+            // The bar is the window's title bar too: see `elements::title_bar`.
+            let inner = ui.max_rect();
+            let bar = inner + frame.inner_margin;
+            let row = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), ui.spacing().interact_size.y));
+            title_bar::interact_background(ui, bar, commands);
+            let controls_left = title_bar::draw_window_controls(ui, bar, row, &mut editor.window_frame, commands);
+            let strip_rect = inner.with_max_x(inner.right().min(controls_left - WINDOW_BUTTONS_GAP));
+            // Room for the system's window buttons, where they are over the
+            // bar, measured from the strip's own left so a scrolled strip
+            // keeps the same space.
+            let leading_space = (editor.window_frame.leading_inset > 0.0).then(|| (editor.window_frame.leading_inset + WINDOW_BUTTONS_GAP - strip_rect.left()).max(0.0));
+            let mut tabs_right = strip_rect.right();
+            ui.scope_builder(egui::UiBuilder::new().max_rect(strip_rect), |ui| {
+                // Too narrow a window scrolls the row rather than clipping the
+                // workspace tabs off the end of it. See `elements::bar_strip`.
+                // The row is as tall as `MenuBar` makes it, which is this unless
+                // something on it is taller; the strip grows with the contents.
+                crate::ui::elements::bar_strip(ui, "main_menu_strip", ui.spacing().interact_size.y, |ui, strip| {
+                    let mut used = 0.0;
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(strip), |ui| {
+                        egui::MenuBar::new().ui(ui, |ui| {
+                            if let Some(space) = leading_space {
+                                ui.add_space(space);
+                            }
 
-                        #[cfg(not(target_os = "macos"))]
-                        {
-                            draw_file_menu(ui, editor, project, commands);
-                            draw_view_menu(ui, editor, commands);
-                        }
-                        // The parameter is only read by the menus above.
-                        #[cfg(target_os = "macos")]
-                        let _ = project;
+                            #[cfg(not(target_os = "macos"))]
+                            lowered(ui, |ui| {
+                                draw_logo(ui);
+                                draw_file_menu(ui, editor, project, commands);
+                                draw_view_menu(ui, editor, commands);
+                                ui.add_space(MENUS_TABS_GAP);
+                            });
 
-                        #[cfg(not(target_os = "macos"))]
-                        draw_separator(ui);
+                            tabs = Some(draw_workspace_tabs(ui, editor, commands));
 
-                        draw_workspace_tabs(ui, editor, commands, bar_fill);
-
-                        // `MenuBar` sizes itself to the whole width it is given,
-                        // so its rect says nothing about how much of the row was
-                        // used; where the next item would go does.
-                        used = ui.cursor().left() - strip.left();
+                            // `MenuBar` sizes itself to the whole width it is given,
+                            // so its rect says nothing about how much of the row was
+                            // used; where the next item would go does.
+                            used = ui.cursor().left() - strip.left();
+                        });
                     });
+                    tabs_right = (strip.left() + used).min(strip_rect.right());
+                    used
                 });
-                used
             });
+            let title_span = egui::Rangef::new(tabs_right, controls_left);
+            title_bar::draw_title(ui, bar, title_span, row.center().y + LABEL_DROP, project);
         })
         .response
-        .rect
+        .rect;
+    (rect, tabs)
+}
+
+/// Lay `add_contents` out along the bar [`LABEL_DROP`] lower than the row
+/// centres it, taking the same room in the row as if it had not moved.
+///
+/// Moving the row itself down would move the bar's height with it, so its
+/// contents are lowered within it instead.
+#[cfg(not(target_os = "macos"))]
+fn lowered(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
+    let drop = egui::vec2(0.0, LABEL_DROP);
+    let row = ui.available_rect_before_wrap();
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row.translate(drop)).layout(*ui.layout()));
+    add_contents(&mut child);
+    ui.advance_cursor_after_rect(child.min_rect().translate(-drop));
 }
 
 /// Paint the application mark at the head of the bar.
 ///
 /// Flat and one-coloured: beside the menu labels it is a glyph, not artwork.
+#[cfg(not(target_os = "macos"))]
 fn draw_logo(ui: &mut egui::Ui) {
     ui.add_space(LOGO_MARGIN);
     let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(LOGO_SIZE), egui::Sense::hover());
@@ -144,110 +191,32 @@ fn draw_logo(ui: &mut egui::Ui) {
     ui.add_space(LOGO_MARGIN);
 }
 
-/// Part the menus from the workspace tabs with a short vertical rule.
-#[cfg(not(target_os = "macos"))]
-fn draw_separator(ui: &mut egui::Ui) {
-    ui.add_space(SEPARATOR_MARGIN);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, SEPARATOR_HEIGHT), egui::Sense::hover());
-    let color = ui.visuals().widgets.noninteractive.bg_stroke.color;
-    ui.painter().line_segment([rect.center_top(), rect.center_bottom()], egui::Stroke::new(1.0, color));
-    ui.add_space(SEPARATOR_MARGIN);
-}
-
-/// A drag previews the order locally; only releasing commits it to settings.
-#[derive(Clone)]
-struct WorkspaceTabDrag {
-    workspace: Workspace,
-    order: [Workspace; 5],
-    grab_offset: f32,
-}
-
-/// Draw the run of workspace tabs, sliding neighbours out of the dragged tab's way.
-fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, bar_fill: egui::Color32) {
-    let drag_id = ui.scope_id().with("workspace-tab-drag");
-    let mut drag = ui.ctx().data_mut(|data| data.get_temp::<WorkspaceTabDrag>(drag_id));
+/// Draw the run of workspace tabs, always in [`Workspace::ALL`]'s order.
+///
+/// The open workspace stands up out of the bar onto the viewport bar under it,
+/// a browser's open tab (`widgets::page_tabs`), sliding to the next one picked.
+/// The other tabs are labels on the bar itself. They are laid out and take
+/// their clicks here, and are painted once the regions are, since the open one
+/// reaches down to them.
+fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> PageTabsPaint {
+    let spacing = ui.spacing().item_spacing.x;
     let font = egui::TextStyle::Button.resolve(ui.style());
     let widths = Workspace::ALL.map(|workspace| ui.painter().layout_no_wrap(workspace.label(), font.clone(), egui::Color32::PLACEHOLDER).size().x + TAB_PADDING * 2.0);
-    let tab_width = |workspace| widths[Workspace::ALL.iter().position(|item| *item == workspace).unwrap()];
-    let spacing = ui.spacing().item_spacing.x;
     let total_width = widths.iter().sum::<f32>() + spacing * (Workspace::ALL.len() - 1) as f32;
     let (strip, _) = ui.allocate_exact_size(egui::vec2(total_width, TAB_HEIGHT), egui::Sense::hover());
-    let pointer = ui.input(|input| input.pointer.interact_pos());
-    let cancelled = ui.input(|input| input.key_pressed(egui::Key::Escape));
-    if cancelled {
-        drag = None;
-    }
-    if let Some(drag) = &mut drag
-        && let Some(pointer) = pointer
-    {
-        let center = pointer.x - drag.grab_offset + tab_width(drag.workspace) / 2.0;
-        let mut index = drag.order.iter().position(|item| *item == drag.workspace).unwrap();
-        let mut x = strip.left();
-        let centers = drag.order.map(|workspace| {
-            let center = x + tab_width(workspace) / 2.0;
-            x += tab_width(workspace) + spacing;
-            center
-        });
-        while index > 0 && center < centers[index - 1] {
-            drag.order.swap(index, index - 1);
-            index -= 1;
-        }
-        while index + 1 < drag.order.len() && center > centers[index + 1] {
-            drag.order.swap(index, index + 1);
-            index += 1;
-        }
-    }
-    let order = drag.as_ref().map_or(editor.workspace_order, |drag| drag.order);
+    // The line the tabs' names are centred on, which the system's window
+    // buttons on macOS are centred on too. See `PageTabsPaint::label_offset`.
+    editor.window_frame.buttons_centre_y = strip.top() + TAB_CELL_HEIGHT / 2.0 + LABEL_DROP;
     let mut x = strip.left();
-    let mut tabs = Vec::new();
-    for workspace in order {
+    let mut painted = Vec::with_capacity(Workspace::ALL.len());
+    for (workspace, width) in Workspace::ALL.into_iter().zip(widths) {
         let id = ui.scope_id().with(("workspace-tab", workspace));
-        let animated_x = ui.ctx().animate_value_with_time(id.with("position"), x, 0.12);
-        let left = if let Some(drag) = &drag
-            && drag.workspace == workspace
-            && let Some(pointer) = pointer
-        {
-            (pointer.x - drag.grab_offset).clamp(strip.left(), strip.right() - tab_width(workspace))
-        } else {
-            animated_x
-        };
-        let rect = egui::Rect::from_min_size(egui::pos2(left, strip.top()), egui::vec2(tab_width(workspace), TAB_FILL_HEIGHT));
-        tabs.push((workspace, id, rect));
-        x += tab_width(workspace) + spacing;
+        let rect = egui::Rect::from_min_size(egui::pos2(x, strip.top()), egui::vec2(width, TAB_CELL_HEIGHT));
+        painted.push(draw_workspace_tab(ui, editor, commands, workspace, id, rect));
+        x += width + spacing;
     }
-    // Paint the held tab last so it travels above its sliding neighbours.
-    tabs.sort_by_key(|(workspace, _, _)| drag.as_ref().is_some_and(|drag| drag.workspace == *workspace));
-    for (workspace, id, rect) in tabs {
-        let response = draw_workspace_tab(ui, editor, commands, workspace, bar_fill, id, rect);
-        if response.drag_started() && !cancelled {
-            let press = ui.input(|input| input.pointer.press_origin()).unwrap_or(rect.center());
-            drag = Some(WorkspaceTabDrag {
-                workspace,
-                order,
-                grab_offset: press.x - rect.left(),
-            });
-        }
-    }
-    if ui.input(|input| input.pointer.any_released()) {
-        if let Some(drag) = drag.take()
-            && drag.order != editor.workspace_order
-        {
-            let index = drag.order.iter().position(|item| *item == drag.workspace).unwrap();
-            commands.push(UiCommand::ReorderWorkspace {
-                workspace: drag.workspace,
-                before: drag.order.get(index + 1).copied(),
-            });
-        }
-    } else if !ui.input(|input| input.pointer.primary_down()) {
-        drag = None;
-    }
-    ui.ctx().data_mut(|data| {
-        if let Some(drag) = drag {
-            data.insert_temp(drag_id, drag);
-        } else {
-            data.remove::<WorkspaceTabDrag>(drag_id);
-        }
-    });
+    let selected = Workspace::ALL.iter().position(|workspace| *workspace == editor.active_workspace);
+    PageTabsPaint::new(ui, ui.scope_id().with("workspace-tab-tile"), painted, selected).label_offset(LABEL_DROP)
 }
 
 /// Open `workspace`, putting down anything the tools it does not carry had
@@ -286,6 +255,9 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     editor.end_tie_chain();
     editor.initiation_dialog = None;
     editor.cancel_haul_edit();
+    // The finish menu belongs to the stroke, which stays behind on its page.
+    editor.poly_finish_dialog = false;
+    editor.poly_finish_dialog_px = None;
     // Survey consumes the same entity selection as the design workspaces.
     // Keep it when entering/leaving Survey so users can select data first.
     // Drill & Blast's individual-hole selection still has different semantics.
@@ -317,81 +289,29 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     }
 }
 
-/// One workspace tab: a text cell filled from [`tab_fill`].
+/// One workspace tab, taking its click, and the tab to paint.
 ///
 /// A tab for a workspace that has nothing behind it yet is drawn as bare text
 /// on the bar rather than left off it, so the shape of the application is
 /// visible before all of it is built.
-fn draw_workspace_tab(
-    ui: &mut egui::Ui,
-    editor: &mut EditorState,
-    commands: &mut Vec<UiCommand>,
-    workspace: Workspace,
-    bar_fill: egui::Color32,
-    id: egui::Id,
-    rect: egui::Rect,
-) -> egui::Response {
+fn draw_workspace_tab(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, workspace: Workspace, id: egui::Id, rect: egui::Rect) -> PageTab {
     let enabled = workspace.implemented();
     let selected = editor.active_workspace == workspace;
-    let state = if !enabled {
-        TabState::Disabled
-    } else if selected {
-        TabState::Active
-    } else {
-        TabState::Inactive
-    };
-
     let font = egui::TextStyle::Button.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(workspace.label(), font, egui::Color32::PLACEHOLDER);
-    // Not `add_enabled_ui`, which fades everything painted inside it toward the
-    // background: the weak text colour below is the whole of what a disabled tab
-    // says about itself, and a fade would wash it out further. The colours below
-    // say what state a tab is in; the sense is what stops it being clicked.
-    let sense = if enabled { egui::Sense::click_and_drag() } else { egui::Sense::hover() };
+    // The weak text colour is the whole of what a disabled tab says about
+    // itself; the sense is what stops it being clicked.
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
     let response = ui.interact(rect, id, sense);
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, workspace.label()));
-
-    let visuals = ui.visuals();
-    ui.painter().rect_filled(rect, GROUP_CORNER_RADIUS, tab_fill(visuals, bar_fill, state, response.hovered()));
-    let text = match state {
-        TabState::Active => visuals.strong_text_color(),
-        TabState::Inactive => visuals.text_color(),
-        TabState::Disabled => visuals.weak_text_color(),
-    };
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, text);
-
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, enabled, selected, workspace.label()));
     if response.clicked() {
         select_workspace(editor, commands, workspace);
     }
-    response
-}
-
-/// What a workspace tab is showing about itself.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TabState {
-    Active,
-    Inactive,
-    Disabled,
-}
-
-/// Fill for a workspace tab, stepped off `bar_fill` the way Blender steps its
-/// workspace tabs.
-///
-/// The open workspace's tab takes the panel surface itself - it reads as the
-/// workspace below coming up through the bar, which is exactly what Blender's
-/// active tab does. Every other tab takes the bar's own colour, so no cell
-/// outline shows around it and only its label is left on the backdrop; what
-/// separates an available workspace from one with nothing behind it yet is the
-/// text colour alone. An available tab still lights up under the pointer, and
-/// that step is signed by theme so "lighter" means away from the background in
-/// both.
-fn tab_fill(visuals: &egui::Visuals, bar_fill: egui::Color32, state: TabState, hovered: bool) -> egui::Color32 {
-    let away = if visuals.dark_mode { 1 } else { -1 };
-    let hover = i16::from(hovered && state != TabState::Disabled) * 6;
-    match state {
-        TabState::Active => crate::ui::widgets::shifted(visuals.panel_fill, away * hover),
-        TabState::Inactive => crate::ui::widgets::shifted(bar_fill, away * hover),
-        TabState::Disabled => bar_fill,
+    PageTab {
+        rect,
+        galley,
+        hovered: response.hovered(),
+        enabled,
     }
 }
 
@@ -454,10 +374,6 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
             commands.push(UiCommand::ExportViewportImage);
             ui.close();
         }
-        if ContextMenuAction::new(tr!("menu-file-export-engineering-drawing")).show(ui).clicked() {
-            commands.push(UiCommand::OpenPlotDialog);
-            ui.close();
-        }
         context_menu_separator(ui);
         if ContextMenuAction::new(tr!("preferences-title")).show(ui).clicked() {
             commands.push(UiCommand::OpenPreferences);
@@ -514,9 +430,9 @@ fn draw_open_recent(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut V
             // the full path tells them apart.
             #[cfg(not(target_arch = "wasm32"))]
             let row = if missing {
-                row.on_disabled_hover_text(tr!("menu-file-recent-project-missing", path = entry.path.display().to_string()))
+                row.disabled_hint(tr!("menu-file-recent-project-missing", path = entry.path.display().to_string()))
             } else {
-                row.on_hover_text(entry.path.display().to_string())
+                row.hint(entry.path.display().to_string())
             };
             if row.clicked() {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -529,139 +445,44 @@ fn draw_open_recent(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut V
     });
 }
 
-/// One entry of the Production Design menu. The egui menu, the macOS menu and
-/// the recent functions list all read [`DESIGN_ROWS`], so they cannot drift.
+/// One function of a workspace's menus. The egui menus, the macOS menus and
+/// the recent functions lists all read [`workspace_menus`], so they cannot
+/// drift.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DesignRow {
+pub(crate) enum MenuRow {
     InsertAtIntersection,
     InsertAtElevation,
     CleanStrings,
     SetAxis(Axis),
     CreateTriangulation,
-}
-
-/// The Design menu's entries in menu order; [`design_groups`] cuts it up.
-pub(crate) const DESIGN_ROWS: [DesignRow; 7] = [
-    DesignRow::InsertAtIntersection,
-    DesignRow::InsertAtElevation,
-    DesignRow::CleanStrings,
-    DesignRow::SetAxis(Axis::X),
-    DesignRow::SetAxis(Axis::Y),
-    DesignRow::SetAxis(Axis::Z),
-    DesignRow::CreateTriangulation,
-];
-
-/// The Design menu's runs of [`DESIGN_ROWS`]: a submenu title, or `None` for
-/// rows standing on the menu itself, and whether a separator goes above it.
-pub(crate) fn design_groups() -> [(Option<String>, std::ops::Range<usize>, bool); 4] {
-    [
-        (Some(tr!("ws-menubar-design-insert-point")), 0..2, false),
-        (None, 2..3, false),
-        (Some(tr!("ws-menubar-design-move-to")), 3..6, true),
-        (None, 6..7, true),
-    ]
-}
-
-impl DesignRow {
-    pub(crate) fn label(self) -> String {
-        match self {
-            Self::InsertAtIntersection => tr!("ws-menubar-design-insert-point-at-intersection"),
-            Self::InsertAtElevation => tr!("ws-menubar-design-insert-point-at-elevation"),
-            Self::CleanStrings => tr!("cmd-string-clean-clean-strings"),
-            Self::SetAxis(axis) => tr!("common-set") + &format!(" {}...", axis.label()),
-            Self::CreateTriangulation => tr!("ws-menubar-design-create-triangulation"),
-        }
-    }
-
-    pub(crate) fn command(self) -> UiCommand {
-        match self {
-            Self::InsertAtIntersection => UiCommand::InsertPointsAtIntersections,
-            Self::InsertAtElevation => UiCommand::OpenInsertPointAtElevationDialog,
-            Self::CleanStrings => UiCommand::CleanStrings,
-            Self::SetAxis(axis) => UiCommand::OpenMoveToAxisDialog(axis),
-            Self::CreateTriangulation => UiCommand::OpenCreateTriangulation,
-        }
-    }
-
-    pub(crate) fn enabled(self, editor: &EditorState) -> bool {
-        // Every entry here acts on the current design selection.
-        match self {
-            // Needs two or more crossing polylines to insert anything.
-            Self::InsertAtIntersection => editor.selection_has_intersections,
-            Self::InsertAtElevation => editor.selection_has_polylines,
-            Self::CleanStrings => editor.selection_counts.open_strings > 0,
-            Self::SetAxis(_) => editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
-            // Only objects that can contribute an edge count towards it.
-            Self::CreateTriangulation => editor.selection_counts.triangulation_sources > 0,
-        }
-    }
-
-    /// The row's name in a saved recent list, made from its menu words'
-    /// translation ids (plus the axis for Set X/Y/Z) rather than their text,
-    /// so a language switch relabels the list without losing it. Not itself
-    /// a translation id.
-    pub(crate) fn key(self) -> &'static str {
-        match self {
-            Self::InsertAtIntersection => "ws-menubar-design-insert-point-at-intersection",
-            Self::InsertAtElevation => "ws-menubar-design-insert-point-at-elevation",
-            Self::CleanStrings => "cmd-string-clean-clean-strings",
-            Self::SetAxis(Axis::X) => "ws-menubar-design-move-to-x",
-            Self::SetAxis(Axis::Y) => "ws-menubar-design-move-to-y",
-            Self::SetAxis(Axis::Z) => "ws-menubar-design-move-to-z",
-            Self::CreateTriangulation => "ws-menubar-design-create-triangulation",
-        }
-    }
-
-    /// `None` for a key no row carries any more.
-    pub(crate) fn from_key(key: &str) -> Option<Self> {
-        DESIGN_ROWS.into_iter().find(|row| row.key() == key)
-    }
-
-    /// The way to the row through the menu bar, as the recent list shows it:
-    /// "Design / Insert Point / At intersection".
-    pub(crate) fn path(self) -> String {
-        let index = DESIGN_ROWS.iter().position(|row| *row == self).unwrap_or_default();
-        let submenu = design_groups().into_iter().find(|(_, run, _)| run.contains(&index)).and_then(|(title, _, _)| title);
-        let mut parts = vec![tr!("ws-menubar-design")];
-        parts.extend(submenu);
-        parts.push(self.label());
-        parts.join(" / ")
-    }
-}
-
-/// The Design menu's entries, shared by production's Design and the top
-/// of Geology Design.
-#[cfg(not(target_os = "macos"))]
-fn draw_design_menu_entries(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
-    let draw_row = |ui: &mut egui::Ui, row: DesignRow, commands: &mut Vec<UiCommand>| {
-        if ContextMenuAction::new(row.label()).enabled(row.enabled(editor)).show(ui).clicked() {
-            commands.push(row.command());
-            commands.push(UiCommand::NoteRecentFunction(row.key()));
-            ui.close();
-        }
-    };
-    for (title, run, separated) in design_groups() {
-        if separated {
-            context_menu_separator(ui);
-        }
-        let rows = &DESIGN_ROWS[run];
-        match title {
-            Some(title) => {
-                let enabled = rows.iter().any(|entry| entry.enabled(editor));
-                context_submenu(ui, &title, enabled, |ui| rows.iter().for_each(|row| draw_row(ui, *row, commands)));
-            }
-            None => rows.iter().for_each(|row| draw_row(ui, *row, commands)),
-        }
-    }
-}
-
-/// One row of Geology Design's lower half: a tool it arms, or a command it
-/// pushes. Leo's Design functions sit here too, so the half is a superset.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GeologyRow {
+    ClipSurfaceByPolyline,
+    SliceSurfaceByZ,
+    TrimTopology,
+    ClipToSurface,
+    CutTopologyByPitShell,
+    MergeShellIntoTopology,
+    BuildSolidFromSurfaces,
+    GenerateContours,
+    PitOptimization,
+    UndrapeAllRasters,
+    CreateOreTriangulation,
+    CreateBlockModel,
+    ReferencePoints,
+    ReferenceSurface,
+    SurveyDefinitions,
+    SurveyTransform,
+    PointCloudTin,
+    PointCloudJoin,
+    PointCloudClassify,
+    // Geology Design: a tool it arms, a command it pushes, or one of the
+    // Design menu's functions as Geology offers it (a row belongs to one
+    // workspace, so these are Geology's own rows).
     Tool(ActiveTool),
-    /// One of the Design menu's rows, run and enabled as that menu runs it.
-    Design(DesignRow),
+    GeologyInsertAtCrossings,
+    GeologyInsertAtElevation,
+    GeologyCleanStrings,
+    GeologySetAxis(Axis),
+    GeologyCreateTriangulation,
     InsertAtSpacing,
     Reverse,
     DrapeAlongTriangles,
@@ -676,73 +497,314 @@ pub(crate) enum GeologyRow {
     NudgeRl,
     SurfaceLines,
     SaveSurfaceLines,
+    // Modelling.
+    ThicknessPoints,
+    ThicknessSurfaces,
+    ModellingClipToSurface,
+    BuildPrismoidGrid,
+    BuildStrata,
+    BlockModelFromPrismoidGrid,
+    PrismoidQualities,
+    PrismoidGridToSurface,
+    DifferencePrismoidGrids,
+    MisfitAtHoles,
+    MaskPrismoidGridByPolyline,
+    MaskPrismoids,
 }
 
-/// Geology Design's lower half in menu order; [`geology_design_groups`] cuts
-/// it into submenus and the macOS menu tags rows by index into it.
-pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 44] = [
-    GeologyRow::Tool(ActiveTool::MakePoint),
-    GeologyRow::Tool(ActiveTool::MakeLine),
-    GeologyRow::Tool(ActiveTool::MakePoly),
-    GeologyRow::Tool(ActiveTool::MakeCircle),
-    GeologyRow::Tool(ActiveTool::MakeText),
-    GeologyRow::RemoveLastVertex,
-    GeologyRow::NextVertex,
-    GeologyRow::CopyAlongString,
-    GeologyRow::CarryOnString,
-    GeologyRow::RedrawRun,
-    GeologyRow::Tool(ActiveTool::Move),
-    GeologyRow::Design(DesignRow::SetAxis(Axis::X)),
-    GeologyRow::Design(DesignRow::SetAxis(Axis::Y)),
-    GeologyRow::Design(DesignRow::SetAxis(Axis::Z)),
-    GeologyRow::Tool(ActiveTool::OffsetElement),
-    GeologyRow::Tool(ActiveTool::RelimitLine),
-    GeologyRow::Tool(ActiveTool::Bezier),
-    GeologyRow::Tool(ActiveTool::Chamfer),
-    GeologyRow::Reverse,
-    GeologyRow::Design(DesignRow::CleanStrings),
-    GeologyRow::Tool(ActiveTool::FuseIntoPolyline),
-    GeologyRow::Tool(ActiveTool::SplitAtPoints),
-    GeologyRow::Tool(ActiveTool::SplitAtCrossings),
-    GeologyRow::Tool(ActiveTool::RemoveBetweenCrossings),
-    GeologyRow::Tool(ActiveTool::ExplodePolyline),
-    GeologyRow::Tool(ActiveTool::ExplodePolylineToPoints),
-    GeologyRow::Tool(ActiveTool::EditVertex),
-    GeologyRow::Tool(ActiveTool::InsertPoint),
-    GeologyRow::Tool(ActiveTool::FillSegment),
-    GeologyRow::InsertAtSpacing,
-    GeologyRow::DragVertex,
-    GeologyRow::NudgeRl,
-    GeologyRow::Tool(ActiveTool::DeletePoints),
-    GeologyRow::Design(DesignRow::InsertAtIntersection),
-    GeologyRow::Design(DesignRow::InsertAtElevation),
-    GeologyRow::Thin,
-    GeologyRow::Smooth,
-    GeologyRow::Tool(ActiveTool::DrapeToTopology),
-    GeologyRow::DrapeAlongTriangles,
-    GeologyRow::Design(DesignRow::CreateTriangulation),
-    GeologyRow::Tool(ActiveTool::MeasureBatterAngle),
-    GeologyRow::Tool(ActiveTool::MeasureDistance),
-    GeologyRow::SurfaceLines,
-    GeologyRow::SaveSurfaceLines,
-];
-
-/// Geology Design's submenus: title and run of [`GEOLOGY_DESIGN_ROWS`]. The
-/// rows after the last run stand on the menu itself.
-pub(crate) fn geology_design_groups() -> [(String, std::ops::Range<usize>); 5] {
-    [
-        (tr!("ws-menubar-geology-draw"), 0..10),
-        (tr!("ws-menubar-geology-edit"), 10..20),
-        (tr!("ws-menubar-geology-join-split"), 20..26),
-        (tr!("ws-menubar-geology-vertices"), 26..37),
-        (tr!("ws-menubar-geology-surface"), 37..40),
-    ]
+/// The name of a workspace menu, or of a submenu inside one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MenuTitle {
+    Design,
+    InsertPoint,
+    MoveTo,
+    Triangulation,
+    BlockModel,
+    Raster,
+    Drillholes,
+    Coordinates,
+    PointCloud,
+    GeologyDesign,
+    GeologyDraw,
+    GeologyEdit,
+    GeologyJoinSplit,
+    GeologyVertices,
+    GeologySurface,
+    Modelling,
 }
 
-impl GeologyRow {
-    /// The row's words, its toolbar cell's or Design entry's where it has one.
+impl MenuTitle {
     pub(crate) fn label(self) -> String {
         match self {
+            Self::Design => tr!("ws-menubar-design"),
+            Self::InsertPoint => tr!("ws-menubar-design-insert-point"),
+            Self::MoveTo => tr!("ws-menubar-design-move-to"),
+            Self::Triangulation => tr!("ws-menubar-triangulation"),
+            Self::BlockModel => tr!("ws-menubar-block-model"),
+            Self::Raster => tr!("ws-menubar-raster"),
+            Self::Drillholes => tr!("ws-menubar-drillholes"),
+            Self::Coordinates => tr!("survey-coordinates-menu"),
+            Self::PointCloud => tr!("ws-menubar-point-cloud"),
+            Self::GeologyDesign => tr!("ws-menubar-geology-design"),
+            Self::GeologyDraw => tr!("ws-menubar-geology-draw"),
+            Self::GeologyEdit => tr!("ws-menubar-geology-edit"),
+            Self::GeologyJoinSplit => tr!("ws-menubar-geology-join-split"),
+            Self::GeologyVertices => tr!("ws-menubar-geology-vertices"),
+            Self::GeologySurface => tr!("ws-menubar-geology-surface"),
+            Self::Modelling => tr!("ws-menubar-modelling"),
+        }
+    }
+}
+
+/// A run of a menu's rows, parted from the next by a separator: inside a
+/// submenu, or standing on the menu itself.
+pub(crate) struct MenuGroup {
+    pub(crate) submenu: Option<MenuTitle>,
+    pub(crate) rows: &'static [MenuRow],
+}
+
+/// One menu of a workspace's run.
+pub(crate) struct WorkspaceMenu {
+    pub(crate) title: MenuTitle,
+    pub(crate) groups: &'static [MenuGroup],
+}
+
+const fn rows(rows: &'static [MenuRow]) -> MenuGroup {
+    MenuGroup { submenu: None, rows }
+}
+
+const fn submenu(title: MenuTitle, rows: &'static [MenuRow]) -> MenuGroup {
+    MenuGroup { submenu: Some(title), rows }
+}
+
+const PRODUCTION_MENUS: &[WorkspaceMenu] = &[
+    WorkspaceMenu {
+        title: MenuTitle::Design,
+        groups: &[
+            submenu(MenuTitle::InsertPoint, &[MenuRow::InsertAtIntersection, MenuRow::InsertAtElevation]),
+            rows(&[MenuRow::CleanStrings]),
+            submenu(MenuTitle::MoveTo, &[MenuRow::SetAxis(Axis::X), MenuRow::SetAxis(Axis::Y), MenuRow::SetAxis(Axis::Z)]),
+            rows(&[MenuRow::CreateTriangulation]),
+        ],
+    },
+    WorkspaceMenu {
+        title: MenuTitle::Triangulation,
+        groups: &[
+            rows(&[MenuRow::ClipSurfaceByPolyline, MenuRow::SliceSurfaceByZ, MenuRow::TrimTopology, MenuRow::ClipToSurface]),
+            rows(&[MenuRow::CutTopologyByPitShell, MenuRow::MergeShellIntoTopology, MenuRow::BuildSolidFromSurfaces]),
+            rows(&[MenuRow::GenerateContours]),
+        ],
+    },
+    // Pit optimization works over a block model, but it opens on its
+    // scenarios rather than on a selection: each scenario names its own.
+    WorkspaceMenu {
+        title: MenuTitle::BlockModel,
+        groups: &[rows(&[MenuRow::PitOptimization])],
+    },
+    WorkspaceMenu {
+        title: MenuTitle::Raster,
+        groups: &[rows(&[MenuRow::UndrapeAllRasters])],
+    },
+];
+
+const GEOLOGY_MENUS: &[WorkspaceMenu] = &[
+    // Leo's Design functions and every drawing tool, grouped by what each
+    // does to a string.
+    WorkspaceMenu {
+        title: MenuTitle::GeologyDesign,
+        groups: &[
+            submenu(
+                MenuTitle::GeologyDraw,
+                &[
+                    MenuRow::Tool(ActiveTool::MakePoint),
+                    MenuRow::Tool(ActiveTool::MakeLine),
+                    MenuRow::Tool(ActiveTool::MakePoly),
+                    MenuRow::Tool(ActiveTool::MakeCircle),
+                    MenuRow::Tool(ActiveTool::MakeText),
+                    MenuRow::RemoveLastVertex,
+                    MenuRow::NextVertex,
+                    MenuRow::CopyAlongString,
+                    MenuRow::CarryOnString,
+                    MenuRow::RedrawRun,
+                ],
+            ),
+            submenu(
+                MenuTitle::GeologyEdit,
+                &[
+                    MenuRow::Tool(ActiveTool::Move),
+                    MenuRow::GeologySetAxis(Axis::X),
+                    MenuRow::GeologySetAxis(Axis::Y),
+                    MenuRow::GeologySetAxis(Axis::Z),
+                    MenuRow::Tool(ActiveTool::OffsetElement),
+                    MenuRow::Tool(ActiveTool::RelimitLine),
+                    MenuRow::Tool(ActiveTool::Bezier),
+                    MenuRow::Tool(ActiveTool::Chamfer),
+                    MenuRow::Reverse,
+                    MenuRow::GeologyCleanStrings,
+                ],
+            ),
+            submenu(
+                MenuTitle::GeologyJoinSplit,
+                &[
+                    MenuRow::Tool(ActiveTool::FuseIntoPolyline),
+                    MenuRow::Tool(ActiveTool::SplitAtPoints),
+                    MenuRow::Tool(ActiveTool::SplitAtCrossings),
+                    MenuRow::Tool(ActiveTool::RemoveBetweenCrossings),
+                    MenuRow::Tool(ActiveTool::ExplodePolyline),
+                    MenuRow::Tool(ActiveTool::ExplodePolylineToPoints),
+                ],
+            ),
+            submenu(
+                MenuTitle::GeologyVertices,
+                &[
+                    MenuRow::Tool(ActiveTool::EditVertex),
+                    MenuRow::Tool(ActiveTool::InsertPoint),
+                    MenuRow::Tool(ActiveTool::FillSegment),
+                    MenuRow::InsertAtSpacing,
+                    MenuRow::DragVertex,
+                    MenuRow::NudgeRl,
+                    MenuRow::Tool(ActiveTool::DeletePoints),
+                    MenuRow::GeologyInsertAtCrossings,
+                    MenuRow::GeologyInsertAtElevation,
+                    MenuRow::Thin,
+                    MenuRow::Smooth,
+                ],
+            ),
+            submenu(
+                MenuTitle::GeologySurface,
+                &[
+                    MenuRow::Tool(ActiveTool::DrapeToTopology),
+                    MenuRow::DrapeAlongTriangles,
+                    MenuRow::GeologyCreateTriangulation,
+                ],
+            ),
+            rows(&[
+                MenuRow::Tool(ActiveTool::MeasureBatterAngle),
+                MenuRow::Tool(ActiveTool::MeasureDistance),
+                MenuRow::SurfaceLines,
+                MenuRow::SaveSurfaceLines,
+            ]),
+        ],
+    },
+    // Thresholding runs on the block model, and estimation on the
+    // drill holes, so each entry lives under its input's own menu.
+    WorkspaceMenu {
+        title: MenuTitle::BlockModel,
+        groups: &[rows(&[MenuRow::CreateOreTriangulation])],
+    },
+    WorkspaceMenu {
+        title: MenuTitle::Drillholes,
+        groups: &[rows(&[MenuRow::CreateBlockModel])],
+    },
+    // The seam's surfaces, from the holes' reference points to its true
+    // thickness.
+    WorkspaceMenu {
+        title: MenuTitle::Modelling,
+        groups: &[
+            rows(&[MenuRow::ReferencePoints, MenuRow::ReferenceSurface]),
+            rows(&[MenuRow::ThicknessPoints, MenuRow::ThicknessSurfaces]),
+            rows(&[MenuRow::ModellingClipToSurface]),
+            rows(&[
+                MenuRow::BuildPrismoidGrid,
+                MenuRow::BuildStrata,
+                MenuRow::BlockModelFromPrismoidGrid,
+                MenuRow::PrismoidQualities,
+                MenuRow::PrismoidGridToSurface,
+                MenuRow::DifferencePrismoidGrids,
+                // Select first, then act: the grid, with any holes and
+                // quality points selected beside it.
+                MenuRow::MisfitAtHoles,
+                MenuRow::MaskPrismoidGridByPolyline,
+                // One row masks the selected prismoids and, ticked when all
+                // are masked by hand, unmasks them.
+                MenuRow::MaskPrismoids,
+            ]),
+        ],
+    },
+];
+
+const SURVEY_MENUS: &[WorkspaceMenu] = &[
+    WorkspaceMenu {
+        title: MenuTitle::Coordinates,
+        groups: &[rows(&[MenuRow::SurveyDefinitions, MenuRow::SurveyTransform])],
+    },
+    WorkspaceMenu {
+        title: MenuTitle::PointCloud,
+        groups: &[rows(&[MenuRow::PointCloudTin, MenuRow::PointCloudJoin, MenuRow::PointCloudClassify])],
+    },
+];
+
+/// The menus a workspace has, in bar order. Each row belongs to one workspace
+/// only. Drill & Blast and Planning carry no discipline menus of their own
+/// yet, and the run is what the workspace has rather than a fixed set of
+/// titles: a menu that opens on nothing is left off it.
+pub(crate) const fn workspace_menus(workspace: Workspace) -> &'static [WorkspaceMenu] {
+    match workspace {
+        Workspace::Production => PRODUCTION_MENUS,
+        Workspace::Geology => GEOLOGY_MENUS,
+        Workspace::Survey => SURVEY_MENUS,
+        Workspace::DrillAndBlast | Workspace::Planning => &[],
+    }
+}
+
+/// Where a row sits: its workspace, its menu and its group there.
+struct MenuPlace {
+    workspace: Workspace,
+    menu: &'static WorkspaceMenu,
+    group: &'static MenuGroup,
+}
+
+impl MenuRow {
+    /// Every row of every workspace, in workspace then menu order.
+    pub(crate) fn all() -> impl Iterator<Item = Self> {
+        Self::places().map(|(row, _)| row)
+    }
+
+    fn places() -> impl Iterator<Item = (Self, MenuPlace)> {
+        Workspace::ALL.into_iter().flat_map(|workspace| {
+            workspace_menus(workspace).iter().flat_map(move |menu| {
+                menu.groups
+                    .iter()
+                    .flat_map(move |group| group.rows.iter().map(move |row| (*row, MenuPlace { workspace, menu, group })))
+            })
+        })
+    }
+
+    fn place(self) -> Option<MenuPlace> {
+        Self::places().find(|(row, _)| *row == self).map(|(_, place)| place)
+    }
+
+    /// The workspace whose menus carry the row.
+    pub(crate) fn workspace(self) -> Option<Workspace> {
+        self.place().map(|place| place.workspace)
+    }
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::InsertAtIntersection => tr!("ws-menubar-design-insert-point-at-intersection"),
+            Self::InsertAtElevation => tr!("ws-menubar-design-insert-point-at-elevation"),
+            Self::CleanStrings | Self::GeologyCleanStrings => tr!("cmd-string-clean-clean-strings"),
+            Self::SetAxis(axis) | Self::GeologySetAxis(axis) => tr!("common-set") + &format!(" {}...", axis.label()),
+            Self::CreateTriangulation | Self::GeologyCreateTriangulation => tr!("ws-menubar-design-create-triangulation"),
+            Self::ClipSurfaceByPolyline => tr!("common-clip-surface-polyline"),
+            Self::SliceSurfaceByZ => tr!("common-slice-triangulation-z-range"),
+            Self::TrimTopology => tr!("common-trim-topology"),
+            Self::ClipToSurface | Self::ModellingClipToSurface => tr!("common-clip-to-surface-ellipsis"),
+            Self::CutTopologyByPitShell => tr!("common-cut-topology-pit-shell"),
+            Self::MergeShellIntoTopology => tr!("common-merge-shell-into-topology-ellipsis"),
+            Self::BuildSolidFromSurfaces => tr!("menu-build-solid-surfaces"),
+            Self::GenerateContours => tr!("common-generate-contour-lines"),
+            Self::PitOptimization => tr!("menu-pit-optimization"),
+            Self::UndrapeAllRasters => tr!("common-undrape-all"),
+            Self::CreateOreTriangulation => tr!("common-create-ore-triangulation-ellipsis"),
+            Self::CreateBlockModel => tr!("common-create-block-model-ellipsis"),
+            Self::ReferencePoints => tr!("common-reference-points"),
+            Self::ReferenceSurface => tr!("common-build-surface-ellipsis"),
+            Self::SurveyDefinitions => tr!("survey-definitions-action"),
+            Self::SurveyTransform => tr!("survey-transform-action"),
+            Self::PointCloudTin => tr!("common-create-triangulation"),
+            Self::PointCloudJoin => tr!("common-join"),
+            Self::PointCloudClassify => tr!("common-classify"),
             Self::Tool(tool) => match tool {
                 ActiveTool::MakePoint => tr!("common-create-point"),
                 ActiveTool::MakeLine => tr!("common-create-line"),
@@ -768,9 +830,8 @@ impl GeologyRow {
                 ActiveTool::MeasureDistance => tr!("toolbars-measure-distance"),
                 _ => tr!("toolbars-strike-dip"),
             },
-            Self::Design(DesignRow::InsertAtIntersection) => tr!("toolbars-insert-points-crossings"),
-            Self::Design(DesignRow::InsertAtElevation) => tr!("ws-menubar-geology-insert-at-elevation"),
-            Self::Design(row) => row.label(),
+            Self::GeologyInsertAtCrossings => tr!("toolbars-insert-points-crossings"),
+            Self::GeologyInsertAtElevation => tr!("ws-menubar-geology-insert-at-elevation"),
             Self::InsertAtSpacing => tr!("ws-menubar-geology-insert-at-spacing"),
             Self::Reverse => tr!("toolbars-reverse-strings"),
             Self::DrapeAlongTriangles => tr!("ws-menubar-geology-drape-along-triangles"),
@@ -785,13 +846,51 @@ impl GeologyRow {
             Self::NudgeRl => tr!("ws-menubar-geology-nudge-rl"),
             Self::SurfaceLines => tr!("ws-menubar-geology-surface-lines"),
             Self::SaveSurfaceLines => tr!("ws-menubar-geology-save-surface-lines"),
+            Self::ThicknessPoints => tr!("common-thickness-points-ellipsis"),
+            Self::ThicknessSurfaces => tr!("common-thickness-surfaces-ellipsis"),
+            Self::BuildPrismoidGrid => tr!("common-build-prismoid-grid-ellipsis"),
+            Self::BuildStrata => tr!("common-build-strata-ellipsis"),
+            Self::BlockModelFromPrismoidGrid => tr!("common-create-block-model-from-prismoid-grid"),
+            Self::PrismoidQualities => tr!("common-add-prismoid-qualities-ellipsis"),
+            Self::PrismoidGridToSurface => tr!("common-prismoid-grid-to-surface-ellipsis"),
+            Self::DifferencePrismoidGrids => tr!("common-difference-prismoid-grids-ellipsis"),
+            Self::MisfitAtHoles => tr!("common-misfit-at-holes-ellipsis"),
+            Self::MaskPrismoidGridByPolyline => tr!("common-mask-prismoid-grid-polyline"),
+            Self::MaskPrismoids => tr!("common-mask-prismoids"),
         }
     }
 
     pub(crate) fn command(self) -> UiCommand {
         match self {
+            Self::InsertAtIntersection => UiCommand::InsertPointsAtIntersections,
+            Self::InsertAtElevation => UiCommand::OpenInsertPointAtElevationDialog,
+            Self::SetAxis(axis) => UiCommand::OpenMoveToAxisDialog(axis),
+            Self::CreateTriangulation => UiCommand::OpenCreateTriangulation,
+            Self::ClipSurfaceByPolyline => UiCommand::OpenCutTriangulationByPolyline,
+            Self::SliceSurfaceByZ => UiCommand::OpenCutTriangulationByZ,
+            Self::TrimTopology => UiCommand::OpenCutTriangulationBySurface,
+            Self::CutTopologyByPitShell => UiCommand::OpenCutTopologyByPitShell,
+            Self::MergeShellIntoTopology => UiCommand::OpenIncludeSolidInTopology,
+            Self::BuildSolidFromSurfaces => UiCommand::OpenBuildSolidFromSurfaces,
+            Self::GenerateContours => UiCommand::OpenContourTriangulation,
+            Self::PitOptimization => UiCommand::OpenOptimizationScenarios,
+            Self::UndrapeAllRasters => UiCommand::UndrapeAllRasters,
+            Self::CreateOreTriangulation => UiCommand::OpenCreateOreTriangulation,
+            Self::CreateBlockModel => UiCommand::OpenCreateBlockModel,
+            Self::ReferencePoints => UiCommand::OpenReferencePoints,
+            Self::ReferenceSurface => UiCommand::OpenReferenceSurface,
+            Self::SurveyDefinitions => UiCommand::OpenSurveyDefinitions,
+            Self::SurveyTransform => UiCommand::OpenSurveyTransform,
+            Self::PointCloudTin => UiCommand::OpenPointCloudTin,
+            Self::PointCloudJoin => UiCommand::OpenPointCloudJoin,
+            Self::PointCloudClassify => UiCommand::OpenPointCloudClassify,
+            Self::CleanStrings | Self::GeologyCleanStrings => UiCommand::CleanStrings,
+            Self::ClipToSurface | Self::ModellingClipToSurface => UiCommand::OpenCutTriangulationToSurface,
             Self::Tool(tool) => UiCommand::SetActiveTool(tool),
-            Self::Design(row) => row.command(),
+            Self::GeologyInsertAtCrossings => UiCommand::InsertPointsAtIntersections,
+            Self::GeologyInsertAtElevation => UiCommand::OpenInsertPointAtElevationDialog,
+            Self::GeologySetAxis(axis) => UiCommand::OpenMoveToAxisDialog(axis),
+            Self::GeologyCreateTriangulation => UiCommand::OpenCreateTriangulation,
             Self::InsertAtSpacing => UiCommand::OpenInsertPointAtSpacingDialog,
             Self::Reverse => UiCommand::ReverseSelectedStrings,
             Self::DrapeAlongTriangles => UiCommand::ArmDrapeAlongTriangles,
@@ -806,21 +905,94 @@ impl GeologyRow {
             Self::NudgeRl => UiCommand::OpenNudgePanel,
             Self::SurfaceLines => UiCommand::ToggleSectionSurfaceLines,
             Self::SaveSurfaceLines => UiCommand::SaveSectionSurfaceLines,
+            Self::ThicknessPoints => UiCommand::OpenThicknessPoints,
+            Self::ThicknessSurfaces => UiCommand::OpenSeamSurface,
+            Self::BuildPrismoidGrid => UiCommand::OpenBuildPrismoidGrid,
+            Self::BuildStrata => UiCommand::OpenBuildStrata,
+            Self::BlockModelFromPrismoidGrid => UiCommand::CreateBlockModelFromPrismoidGrid,
+            Self::PrismoidQualities => UiCommand::OpenAddPrismoidQualities,
+            Self::PrismoidGridToSurface => UiCommand::OpenPrismoidGridToSurface,
+            Self::DifferencePrismoidGrids => UiCommand::OpenDifferencePrismoidGrids,
+            Self::MisfitAtHoles => UiCommand::OpenHoleMisfit,
+            Self::MaskPrismoidGridByPolyline => UiCommand::OpenMaskPrismoidGridByPolyline,
+            Self::MaskPrismoids => UiCommand::TogglePrismoidMask,
         }
     }
 
-    /// Whether the row can run now: Leo's rows on the selection his Design
-    /// entries ask for, a tool as its toolbar cell is (layer, fly, section).
-    pub(crate) fn enabled(self, editor: &EditorState) -> bool {
+    /// Whether the row can run. No row waits on the selection: a tool opens
+    /// on whatever is selected of the kind it works on, and what it works on
+    /// is chosen or changed in its dialog.
+    pub(crate) fn enabled(self, project: &UiProjectView) -> bool {
         match self {
+            // These work on a set of design objects or holes, which their
+            // dialog states and changes with Pick. Insert at Intersection has
+            // no dialog, and opens straight into the pick when the selection
+            // has nothing to cross.
+            Self::InsertAtIntersection | Self::InsertAtElevation | Self::SetAxis(_) | Self::CreateTriangulation | Self::ReferencePoints | Self::ReferenceSurface => true,
+            // The tools taking two surfaces pick both in their dialog.
+            Self::TrimTopology | Self::CutTopologyByPitShell | Self::MergeShellIntoTopology | Self::BuildSolidFromSurfaces | Self::PitOptimization | Self::SurveyDefinitions => {
+                true
+            }
+            Self::UndrapeAllRasters => project.raster_textures.iter().any(|raster| raster.is_draped),
+            // These work on one named item, which their dialog lists: the
+            // selection only saves choosing it there.
+            Self::ClipSurfaceByPolyline | Self::SliceSurfaceByZ | Self::GenerateContours | Self::PointCloudTin | Self::PointCloudJoin | Self::PointCloudClassify => true,
+            Self::CreateOreTriangulation | Self::CreateBlockModel | Self::SurveyTransform => project.has_active_project,
+            // Geology's own rows, and the two Clip to Surface rows, wait on
+            // the editor instead; see [`MenuRow::ready`].
+            Self::CleanStrings
+            | Self::ClipToSurface
+            | Self::Tool(_)
+            | Self::GeologyInsertAtCrossings
+            | Self::GeologyInsertAtElevation
+            | Self::GeologyCleanStrings
+            | Self::GeologySetAxis(_)
+            | Self::GeologyCreateTriangulation
+            | Self::InsertAtSpacing
+            | Self::Reverse
+            | Self::DrapeAlongTriangles
+            | Self::Thin
+            | Self::Smooth
+            | Self::RemoveLastVertex
+            | Self::NextVertex
+            | Self::CopyAlongString
+            | Self::CarryOnString
+            | Self::RedrawRun
+            | Self::DragVertex
+            | Self::NudgeRl
+            | Self::SurfaceLines
+            | Self::SaveSurfaceLines
+            | Self::ThicknessPoints
+            | Self::ThicknessSurfaces
+            | Self::ModellingClipToSurface
+            | Self::BuildPrismoidGrid
+            | Self::BuildStrata
+            | Self::BlockModelFromPrismoidGrid
+            | Self::PrismoidQualities
+            | Self::PrismoidGridToSurface
+            | Self::DifferencePrismoidGrids
+            | Self::MisfitAtHoles
+            | Self::MaskPrismoidGridByPolyline
+            | Self::MaskPrismoids => true,
+        }
+    }
+
+    /// Whether the row can run as the editor stands, beside
+    /// [`MenuRow::enabled`]: select first, then act, for the rows that still
+    /// open on the selection, and a tool as its toolbar cell is (layer, fly,
+    /// section). The Design menu's functions Geology offers run as that menu
+    /// runs them.
+    pub(crate) fn ready(self, editor: &EditorState) -> bool {
+        match self {
+            Self::CleanStrings | Self::GeologyCleanStrings => editor.selection_counts.open_strings > 0,
+            Self::ClipToSurface | Self::ModellingClipToSurface => editor.selection_counts.triangulations == 2,
+            Self::ThicknessPoints | Self::ThicknessSurfaces => editor.selection_counts.triangulations == 1,
             Self::Tool(tool) => {
                 !editor.fly_mode_enabled
                     && (!tool.requires_active_layer() || editor.active_layer.is_some())
                     && !(editor.slice_mode_enabled && tool.section_refuses(editor.active_workspace))
             }
-            Self::Design(row) => row.enabled(editor),
-            Self::InsertAtSpacing | Self::Reverse | Self::Thin | Self::Smooth => editor.selection_has_polylines,
-            Self::DrapeAlongTriangles => true,
+            Self::InsertAtSpacing | Self::Reverse | Self::Thin | Self::Smooth => editor.selection_counts.polylines > 0,
             // Carrying on, the string's end is not the stroke's to give back.
             Self::RemoveLastVertex => {
                 !editor.pending_stroke.is_empty() && !editor.poly_finish_dialog && !(editor.pending_stroke.len() == 1 && string_rework_live(editor).is_some())
@@ -830,22 +1002,91 @@ impl GeologyRow {
             Self::CarryOnString | Self::RedrawRun => editor.pending_stroke.is_empty() && !editor.poly_finish_dialog,
             // Move works on a section in Geology and needs no layer.
             Self::DragVertex | Self::NudgeRl => !editor.fly_mode_enabled,
-            Self::SurfaceLines => true,
             // Saved only while drawn: the switch on and a section up.
             Self::SaveSurfaceLines => editor.slice_mode_enabled && editor.section_surface_lines_on(),
+            Self::BlockModelFromPrismoidGrid | Self::PrismoidQualities | Self::PrismoidGridToSurface | Self::MisfitAtHoles => editor.selection_counts.prismoid_grids == 1,
+            Self::DifferencePrismoidGrids => matches!(editor.selection_counts.prismoid_grids, 1 | 2),
+            Self::MaskPrismoidGridByPolyline => editor.selection_counts.prismoid_grids == 1 && editor.selection_counts.clip_boundaries == 1,
+            Self::MaskPrismoids => editor.selection_counts.prismoid_cells > 0,
+            _ => true,
+        }
+    }
+
+    /// Why a row [`MenuRow::ready`] holds back is greyed, for the rows that
+    /// wait on a selection the menu can name. The macOS menus show no hint.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    pub(crate) fn needs(self) -> Option<String> {
+        match self {
+            Self::ThicknessPoints | Self::ThicknessSurfaces => Some(tr!("ws-menubar-modelling-select-surface")),
+            Self::ClipToSurface | Self::ModellingClipToSurface => Some(tr!("ws-menubar-modelling-select-surfaces")),
+            Self::BlockModelFromPrismoidGrid | Self::PrismoidQualities | Self::PrismoidGridToSurface | Self::MisfitAtHoles => {
+                Some(tr!("ws-menubar-modelling-select-prismoid-grid"))
+            }
+            Self::DifferencePrismoidGrids => Some(tr!("ws-menubar-modelling-select-prismoid-grids")),
+            Self::MaskPrismoidGridByPolyline => Some(tr!("ws-menubar-modelling-select-prismoid-grid-polyline")),
+            Self::MaskPrismoids => Some(tr!("ws-menubar-modelling-select-prismoids")),
+            _ => None,
         }
     }
 
     /// A switch row's tick; `None` for a row that is not a switch.
     pub(crate) fn checked(self, editor: &EditorState) -> Option<bool> {
-        (self == Self::SurfaceLines).then_some(editor.section_surface_lines)
+        match self {
+            Self::SurfaceLines => Some(editor.section_surface_lines),
+            Self::MaskPrismoids => {
+                let cells = editor.selection_counts.prismoid_cells;
+                Some(cells > 0 && editor.selection_counts.masked_prismoid_cells == cells)
+            }
+            _ => None,
+        }
     }
 
-    /// The row's name in a saved recent list, from its words' translation id
-    /// as [`DesignRow::key`]; a Design menu row keeps its own key, so a use
-    /// from either half of Geology Design is the one line.
+    /// The row of `workspace` that pushes `command`, so a toolbar cell
+    /// running the same function as a menu row counts as a use of it.
+    pub(crate) fn running(workspace: Workspace, command: &UiCommand) -> Option<Self> {
+        Self::all().find(|row| row.workspace() == Some(workspace) && row.command() == *command)
+    }
+
+    /// Whether the row, just run, was used: a tool row's command toggles, so
+    /// a click that put its tool down, or that the tool refused, is not.
+    pub(crate) fn was_used(self, editor: &EditorState) -> bool {
+        match self {
+            Self::Tool(tool) => editor.active_tool == tool,
+            _ => true,
+        }
+    }
+
+    /// The row's name in a saved recent list: fixed words rather than the
+    /// label's text, so a language switch relabels the list without losing
+    /// it. Not itself a translation id.
     pub(crate) fn key(self) -> &'static str {
         match self {
+            Self::InsertAtIntersection => "ws-menubar-design-insert-point-at-intersection",
+            Self::InsertAtElevation => "ws-menubar-design-insert-point-at-elevation",
+            Self::SetAxis(Axis::X) => "ws-menubar-design-move-to-x",
+            Self::SetAxis(Axis::Y) => "ws-menubar-design-move-to-y",
+            Self::SetAxis(Axis::Z) => "ws-menubar-design-move-to-z",
+            Self::CreateTriangulation => "ws-menubar-design-create-triangulation",
+            Self::ClipSurfaceByPolyline => "ws-menubar-triangulation-clip-by-polyline",
+            Self::SliceSurfaceByZ => "ws-menubar-triangulation-slice-by-z",
+            Self::TrimTopology => "ws-menubar-triangulation-trim-topology",
+            Self::CutTopologyByPitShell => "ws-menubar-triangulation-cut-by-pit-shell",
+            Self::MergeShellIntoTopology => "ws-menubar-triangulation-merge-shell",
+            Self::BuildSolidFromSurfaces => "ws-menubar-triangulation-build-solid",
+            Self::GenerateContours => "ws-menubar-triangulation-contours",
+            Self::PitOptimization => "ws-menubar-block-model-pit-optimization",
+            Self::UndrapeAllRasters => "ws-menubar-raster-undrape-all",
+            Self::CreateOreTriangulation => "ws-menubar-block-model-ore-triangulation",
+            Self::CreateBlockModel => "ws-menubar-drillholes-create-block-model",
+            Self::ReferencePoints => "ws-menubar-drillholes-reference-points",
+            Self::ReferenceSurface => "ws-menubar-drillholes-build-surface",
+            Self::SurveyDefinitions => "ws-menubar-coordinates-definitions",
+            Self::SurveyTransform => "ws-menubar-coordinates-transform",
+            Self::PointCloudTin => "ws-menubar-point-cloud-create-triangulation",
+            Self::PointCloudJoin => "ws-menubar-point-cloud-join",
+            Self::PointCloudClassify => "ws-menubar-point-cloud-classify",
+            Self::CleanStrings => "cmd-string-clean-clean-strings",
+            Self::ClipToSurface => "ws-menubar-triangulation-clip-to-surface",
             Self::Tool(tool) => match tool {
                 ActiveTool::MakePoint => "common-create-point",
                 ActiveTool::MakeLine => "common-create-line",
@@ -883,7 +1124,13 @@ impl GeologyRow {
                 | ActiveTool::BatterBermOffset
                 | ActiveTool::VerticalSlice => "",
             },
-            Self::Design(row) => row.key(),
+            Self::GeologyInsertAtCrossings => "ws-menubar-geology-insert-at-crossings",
+            Self::GeologyInsertAtElevation => "ws-menubar-geology-insert-at-elevation",
+            Self::GeologyCleanStrings => "ws-menubar-geology-clean-strings",
+            Self::GeologySetAxis(Axis::X) => "ws-menubar-geology-move-to-x",
+            Self::GeologySetAxis(Axis::Y) => "ws-menubar-geology-move-to-y",
+            Self::GeologySetAxis(Axis::Z) => "ws-menubar-geology-move-to-z",
+            Self::GeologyCreateTriangulation => "ws-menubar-geology-create-triangulation",
             Self::InsertAtSpacing => "ws-menubar-geology-insert-at-spacing",
             Self::Reverse => "toolbars-reverse-strings",
             Self::DrapeAlongTriangles => "ws-menubar-geology-drape-along-triangles",
@@ -898,125 +1145,36 @@ impl GeologyRow {
             Self::NudgeRl => "ws-menubar-geology-nudge-rl",
             Self::SurfaceLines => "ws-menubar-geology-surface-lines",
             Self::SaveSurfaceLines => "ws-menubar-geology-save-surface-lines",
+            Self::ThicknessPoints => "ws-menubar-modelling-thickness-points",
+            Self::ThicknessSurfaces => "ws-menubar-modelling-thickness-surfaces",
+            Self::ModellingClipToSurface => "ws-menubar-modelling-clip-to-surface",
+            Self::BuildPrismoidGrid => "ws-menubar-modelling-build-prismoid-grid",
+            Self::BuildStrata => "ws-menubar-modelling-build-strata",
+            Self::BlockModelFromPrismoidGrid => "ws-menubar-modelling-block-model-from-prismoid-grid",
+            Self::PrismoidQualities => "ws-menubar-modelling-prismoid-qualities",
+            Self::PrismoidGridToSurface => "ws-menubar-modelling-prismoid-grid-to-surface",
+            Self::DifferencePrismoidGrids => "ws-menubar-modelling-difference-prismoid-grids",
+            Self::MisfitAtHoles => "ws-menubar-modelling-misfit-at-holes",
+            Self::MaskPrismoidGridByPolyline => "ws-menubar-modelling-mask-prismoid-grid-polyline",
+            Self::MaskPrismoids => "ws-menubar-modelling-mask-prismoids",
         }
     }
 
     /// `None` for a key no row carries any more.
     pub(crate) fn from_key(key: &str) -> Option<Self> {
-        GEOLOGY_DESIGN_ROWS.into_iter().find(|row| row.key() == key)
+        Self::all().find(|row| row.key() == key)
     }
 
-    /// The way to the row through the menu bar: "Geology Design / Draw /
-    /// Create Point".
+    /// The way to the row through its workspace's menus, as the recent list
+    /// shows it: "Design / Insert Point / At intersection".
     pub(crate) fn path(self) -> String {
-        let index = GEOLOGY_DESIGN_ROWS.iter().position(|row| *row == self).unwrap_or_default();
-        let submenu = geology_design_groups().into_iter().find(|(_, run)| run.contains(&index)).map(|(title, _)| title);
-        let mut parts = vec![tr!("ws-menubar-geology-design")];
-        parts.extend(submenu);
+        let mut parts = Vec::new();
+        if let Some(place) = self.place() {
+            parts.push(place.menu.title.label());
+            parts.extend(place.group.submenu.map(MenuTitle::label));
+        }
         parts.push(self.label());
         parts.join(" / ")
-    }
-}
-
-/// A line of a recent functions list: a row of the Design menu of the
-/// workspace that keeps the list.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RecentRow {
-    Design(DesignRow),
-    Geology(GeologyRow),
-}
-
-impl RecentRow {
-    /// The row `workspace` keeps under `key`; `None` where it keeps no list
-    /// or no row carries the key.
-    pub(crate) fn from_key(workspace: Workspace, key: &str) -> Option<Self> {
-        match workspace {
-            Workspace::Production => DesignRow::from_key(key).map(Self::Design),
-            Workspace::Geology => GeologyRow::from_key(key).map(Self::Geology),
-            _ => None,
-        }
-    }
-
-    /// The row in `workspace` that pushes `command`, so a toolbar cell
-    /// running the same function as a menu row counts as a use of it.
-    pub(crate) fn running(workspace: Workspace, command: &UiCommand) -> Option<Self> {
-        match workspace {
-            Workspace::Production => DESIGN_ROWS.into_iter().find(|row| row.command() == *command).map(Self::Design),
-            Workspace::Geology => GEOLOGY_DESIGN_ROWS.into_iter().find(|row| row.command() == *command).map(Self::Geology),
-            _ => None,
-        }
-    }
-
-    /// Whether the row, just run, was used: a tool row's command toggles, so
-    /// a click that put its tool down, or that the tool refused, is not.
-    pub(crate) fn was_used(self, editor: &EditorState) -> bool {
-        match self {
-            Self::Geology(GeologyRow::Tool(tool)) => editor.active_tool == tool,
-            _ => true,
-        }
-    }
-
-    pub(crate) fn path(self) -> String {
-        match self {
-            Self::Design(row) => row.path(),
-            Self::Geology(row) => row.path(),
-        }
-    }
-
-    pub(crate) fn command(self) -> UiCommand {
-        match self {
-            Self::Design(row) => row.command(),
-            Self::Geology(row) => row.command(),
-        }
-    }
-
-    pub(crate) fn enabled(self, editor: &EditorState) -> bool {
-        match self {
-            Self::Design(row) => row.enabled(editor),
-            Self::Geology(row) => row.enabled(editor),
-        }
-    }
-
-    pub(crate) fn checked(self, editor: &EditorState) -> Option<bool> {
-        match self {
-            Self::Design(_) => None,
-            Self::Geology(row) => row.checked(editor),
-        }
-    }
-
-    pub(crate) fn key(self) -> &'static str {
-        match self {
-            Self::Design(row) => row.key(),
-            Self::Geology(row) => row.key(),
-        }
-    }
-}
-
-/// Geology Design's lower half: Leo's Design functions and every R116 tool,
-/// grouped by what each does to a string.
-#[cfg(not(target_os = "macos"))]
-fn draw_geology_design_entries(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
-    let row = |ui: &mut egui::Ui, row: GeologyRow, commands: &mut Vec<UiCommand>| {
-        let mut action = ContextMenuAction::new(row.label()).enabled(row.enabled(editor));
-        if let Some(checked) = row.checked(editor) {
-            action = action.checked(checked);
-        }
-        if action.show(ui).clicked() {
-            commands.push(row.command());
-            commands.push(UiCommand::NoteRecentFunction(row.key()));
-            ui.close();
-        }
-    };
-    let groups = geology_design_groups();
-    for (title, run) in &groups {
-        context_submenu(ui, title, true, |ui| {
-            for &each in &GEOLOGY_DESIGN_ROWS[run.clone()] {
-                row(ui, each, commands);
-            }
-        });
-    }
-    for &each in &GEOLOGY_DESIGN_ROWS[groups[groups.len() - 1].1.end..] {
-        row(ui, each, commands);
     }
 }
 
@@ -1051,321 +1209,37 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         spacing.button_padding = egui::vec2(MENU_LABEL_PADDING, 0.0);
         spacing.item_spacing.x = MENU_LABEL_GAP;
 
-        if editor.active_workspace == Workspace::Planning {
-            MenuBarMenu::new(&tr!("haul-roads")).enabled(project.has_active_project).show(ui, |ui| {
-                for (label, command) in [
-                    (tr!("haul-draw"), UiCommand::StartHaulRoad),
-                    (tr!("haul-convert"), UiCommand::ConvertHaulSelection),
-                    (tr!("haul-import"), UiCommand::OpenHaulImport),
-                    (tr!("haul-export"), UiCommand::ExportHaulRoads),
-                    (tr!("haul-open-layout"), UiCommand::EditHaulProperties),
-                ] {
-                    if ContextMenuAction::new(label).show(ui).clicked() {
-                        commands.push(command);
-                        ui.close();
+        // Every row is noted as it is run, for the workspace's recent
+        // functions list.
+        let draw_row = |ui: &mut egui::Ui, row: MenuRow, commands: &mut Vec<UiCommand>| {
+            let mut action = ContextMenuAction::new(row.label()).enabled(row.enabled(project) && row.ready(editor));
+            if let Some(needs) = row.needs() {
+                action = action.disabled_hover_text(needs);
+            }
+            if let Some(checked) = row.checked(editor) {
+                action = action.checked(checked);
+            }
+            if action.show(ui).clicked() {
+                commands.push(row.command());
+                commands.push(UiCommand::NoteRecentFunction(row));
+                ui.close();
+            }
+        };
+        for menu in workspace_menus(editor.active_workspace) {
+            MenuBarMenu::new(&menu.title.label()).show(ui, |ui| {
+                for (index, group) in menu.groups.iter().enumerate() {
+                    if index > 0 {
+                        context_menu_separator(ui);
+                    }
+                    match group.submenu {
+                        Some(title) => {
+                            let enabled = group.rows.iter().any(|row| row.enabled(project) && row.ready(editor));
+                            context_submenu(ui, &title.label(), enabled, |ui| group.rows.iter().for_each(|row| draw_row(ui, *row, commands)));
+                        }
+                        None => group.rows.iter().for_each(|row| draw_row(ui, *row, commands)),
                     }
                 }
             });
         }
-        // Drill & Blast and Planning carry no discipline menus of their own
-        // yet, and the run is what the workspace has rather than a fixed set of
-        // titles: a menu that opens on nothing is left off it.
-        if matches!(editor.active_workspace, Workspace::DrillAndBlast | Workspace::Planning) {
-            return;
-        }
-
-        if editor.active_workspace == Workspace::Survey {
-            MenuBarMenu::new(&tr!("survey-coordinates-menu")).show(ui, |ui| {
-                if ContextMenuAction::new(tr!("survey-definitions-action")).show(ui).clicked() {
-                    commands.push(UiCommand::OpenSurveyDefinitions);
-                    ui.close();
-                }
-                if ContextMenuAction::new(tr!("survey-transform-action"))
-                    .enabled(project.has_active_project)
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::OpenSurveyTransform);
-                    ui.close();
-                }
-            });
-
-            MenuBarMenu::new(&tr!("ws-menubar-point-cloud")).show(ui, |ui| {
-                // Every entry runs on the selected clouds: one is reconstructed
-                // at a time, a join needs two or more to join, and classifying
-                // takes any number.
-                let selected_clouds = editor.selection_counts.point_clouds;
-                if ContextMenuAction::new(tr!("common-create-triangulation")).enabled(selected_clouds == 1).show(ui).clicked() {
-                    commands.push(UiCommand::OpenPointCloudTin);
-                    ui.close();
-                }
-                if ContextMenuAction::new(tr!("common-join")).enabled(selected_clouds >= 2).show(ui).clicked() {
-                    commands.push(UiCommand::OpenPointCloudJoin);
-                    ui.close();
-                }
-                if ContextMenuAction::new(tr!("common-classify")).enabled(selected_clouds >= 1).show(ui).clicked() {
-                    commands.push(UiCommand::OpenPointCloudClassify);
-                    ui.close();
-                }
-            });
-            return;
-        }
-
-        if editor.active_workspace == Workspace::Geology {
-            MenuBarMenu::new(&tr!("ws-menubar-geology-design")).show(ui, |ui| {
-                context_menu_heading(ui, &tr!("ws-menubar-production-design"));
-                draw_design_menu_entries(ui, editor, commands);
-                context_menu_separator(ui);
-                context_menu_heading(ui, &tr!("ws-menubar-geology-design"));
-                draw_geology_design_entries(ui, editor, commands);
-            });
-            // Thresholding runs on the block model, so - like the entry below
-            // it - the menu is the input's own and the one selected model is
-            // what the tool opens on.
-            MenuBarMenu::new(&tr!("ws-menubar-block-model")).show(ui, |ui| {
-                if ContextMenuAction::new(tr!("common-create-ore-triangulation-ellipsis"))
-                    .enabled(editor.selection_counts.block_models == 1)
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::OpenCreateOreTriangulation);
-                    ui.close();
-                }
-            });
-
-            // Estimation runs on the drill holes, so the entry lives under
-            // them and takes the one selected collection as its input, the
-            // way the other select-first tools do.
-            MenuBarMenu::new(&tr!("ws-menubar-drillholes")).show(ui, |ui| {
-                if ContextMenuAction::new(tr!("common-create-block-model-ellipsis"))
-                    .enabled(editor.selection_counts.drill_holes == 1)
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::OpenCreateBlockModel);
-                    ui.close();
-                }
-            });
-
-            MenuBarMenu::new(&tr!("ws-menubar-modelling")).show(ui, |ui| {
-                // Select first, then act: placed on the holes selected at open.
-                let can_build_points = editor.selection_counts.reference_holes > 0;
-                if ContextMenuAction::new(tr!("common-reference-points"))
-                    .enabled(can_build_points)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-holes"))
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::OpenReferencePoints);
-                    ui.close();
-                }
-                // Select first, then act: the surface is built from the points
-                // that are selected when it opens, not from a layer picked
-                // inside the dialog.
-                let can_build_surface = editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS;
-                if ContextMenuAction::new(tr!("common-build-surface-ellipsis"))
-                    .enabled(can_build_surface)
-                    .disabled_hover_text(tr!(
-                        "ws-menubar-modelling-select-points",
-                        count = crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS.to_string()
-                    ))
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::OpenReferenceSurface);
-                    ui.close();
-                }
-                context_menu_separator(ui);
-                // Select first, then act: measured against the one surface
-                // selected, for the seam it was built from.
-                let can_make_thickness = editor.selection_counts.triangulations == 1;
-                if ContextMenuAction::new(tr!("common-thickness-points-ellipsis"))
-                    .enabled(can_make_thickness)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-surface"))
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::OpenThicknessPoints);
-                    ui.close();
-                }
-                // Select first, then act: the same one surface, once its
-                // thickness points are made.
-                if ContextMenuAction::new(tr!("common-thickness-surfaces-ellipsis"))
-                    .enabled(can_make_thickness)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-surface"))
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::OpenSeamSurface);
-                    ui.close();
-                }
-                context_menu_separator(ui);
-                // Select first, then act: the seam's roof and floor selected are
-                // clipped; the limits, surfaces of the same kind, are picked in
-                // the dialog.
-                if ContextMenuAction::new(tr!("common-clip-to-surface-ellipsis"))
-                    .enabled(editor.selection_counts.triangulations == 2)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-surfaces"))
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::OpenCutTriangulationToSurface);
-                    ui.close();
-                }
-                context_menu_separator(ui);
-                if ContextMenuAction::new(tr!("common-build-prismoid-grid-ellipsis")).show(ui).clicked() {
-                    commands.push(UiCommand::OpenBuildPrismoidGrid);
-                    ui.close();
-                }
-                if ContextMenuAction::new(tr!("common-build-strata-ellipsis")).show(ui).clicked() {
-                    commands.push(UiCommand::OpenBuildStrata);
-                    ui.close();
-                }
-                if ContextMenuAction::new(tr!("common-create-block-model-from-prismoid-grid"))
-                    .enabled(editor.selection_counts.prismoid_grids == 1)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-prismoid-grid"))
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::CreateBlockModelFromPrismoidGrid);
-                    ui.close();
-                }
-                if ContextMenuAction::new(tr!("common-add-prismoid-qualities-ellipsis"))
-                    .enabled(editor.selection_counts.prismoid_grids == 1)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-prismoid-grid"))
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::OpenAddPrismoidQualities);
-                    ui.close();
-                }
-                if ContextMenuAction::new(tr!("common-prismoid-grid-to-surface-ellipsis"))
-                    .enabled(editor.selection_counts.prismoid_grids == 1)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-prismoid-grid"))
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::OpenPrismoidGridToSurface);
-                    ui.close();
-                }
-                if ContextMenuAction::new(tr!("common-difference-prismoid-grids-ellipsis"))
-                    .enabled(matches!(editor.selection_counts.prismoid_grids, 1 | 2))
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-prismoid-grids"))
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::OpenDifferencePrismoidGrids);
-                    ui.close();
-                }
-                // Select first, then act: the grid, with any holes and
-                // quality points selected beside it.
-                if ContextMenuAction::new(tr!("common-misfit-at-holes-ellipsis"))
-                    .enabled(editor.selection_counts.prismoid_grids == 1)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-prismoid-grid"))
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::OpenHoleMisfit);
-                    ui.close();
-                }
-                if ContextMenuAction::new(tr!("common-mask-prismoid-grid-polyline"))
-                    .enabled(editor.selection_counts.prismoid_grids == 1 && editor.selection_counts.clip_boundaries == 1)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-prismoid-grid-polyline"))
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::OpenMaskPrismoidGridByPolyline);
-                    ui.close();
-                }
-                // One row masks the selected prismoids and, ticked when all
-                // are masked by hand, unmasks them.
-                let cells = editor.selection_counts.prismoid_cells;
-                if ContextMenuAction::new(tr!("common-mask-prismoids"))
-                    .checked(cells > 0 && editor.selection_counts.masked_prismoid_cells == cells)
-                    .enabled(cells > 0)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-prismoids"))
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::TogglePrismoidMask);
-                    ui.close();
-                }
-            });
-            return;
-        }
-
-        MenuBarMenu::new(&tr!("ws-menubar-design")).show(ui, |ui| draw_design_menu_entries(ui, editor, commands));
-
-        MenuBarMenu::new(&tr!("ws-menubar-triangulation")).show(ui, |ui| {
-            // The tools below whose inputs the selection can name take them
-            // from it; the tools taking two surfaces cannot tell one selected
-            // surface from the other, so they still pick theirs in the dialog.
-            let one_surface_selected = editor.selection_counts.triangulations == 1;
-            let can_clip = one_surface_selected && editor.selection_counts.clip_boundaries == 1;
-            if ContextMenuAction::new(tr!("common-clip-surface-polyline")).enabled(can_clip).show(ui).clicked() {
-                commands.push(UiCommand::OpenCutTriangulationByPolyline);
-                ui.close();
-            }
-            if ContextMenuAction::new(tr!("common-slice-triangulation-z-range"))
-                .enabled(one_surface_selected)
-                .show(ui)
-                .clicked()
-            {
-                commands.push(UiCommand::OpenCutTriangulationByZ);
-                ui.close();
-            }
-            if ContextMenuAction::new(tr!("common-trim-topology")).show(ui).clicked() {
-                commands.push(UiCommand::OpenCutTriangulationBySurface);
-                ui.close();
-            }
-            if ContextMenuAction::new(tr!("common-clip-to-surface-ellipsis"))
-                .enabled(editor.selection_counts.triangulations == 2)
-                .disabled_hover_text(tr!("ws-menubar-modelling-select-surfaces"))
-                .show(ui)
-                .clicked()
-            {
-                commands.push(UiCommand::OpenCutTriangulationToSurface);
-                ui.close();
-            }
-            context_menu_separator(ui);
-            if ContextMenuAction::new(tr!("common-cut-topology-pit-shell")).show(ui).clicked() {
-                commands.push(UiCommand::OpenCutTopologyByPitShell);
-                ui.close();
-            }
-            if ContextMenuAction::new(tr!("common-merge-shell-into-topology-ellipsis")).show(ui).clicked() {
-                commands.push(UiCommand::OpenIncludeSolidInTopology);
-                ui.close();
-            }
-            if ContextMenuAction::new(tr!("menu-build-solid-surfaces")).show(ui).clicked() {
-                commands.push(UiCommand::OpenBuildSolidFromSurfaces);
-                ui.close();
-            }
-            context_menu_separator(ui);
-            if ContextMenuAction::new(tr!("common-generate-contour-lines"))
-                .enabled(one_surface_selected)
-                .show(ui)
-                .clicked()
-            {
-                commands.push(UiCommand::OpenContourTriangulation);
-                ui.close();
-            }
-        });
-
-        // Pit optimization works over a block model, but it opens on its
-        // scenarios rather than on a selection: each scenario names its own.
-        MenuBarMenu::new(&tr!("ws-menubar-block-model")).show(ui, |ui| {
-            if ContextMenuAction::new(tr!("menu-pit-optimization")).show(ui).clicked() {
-                commands.push(UiCommand::OpenOptimizationScenarios);
-                ui.close();
-            }
-        });
-
-        MenuBarMenu::new(&tr!("ws-menubar-raster")).show(ui, |ui| {
-            let any_draped = project.raster_textures.iter().any(|raster| raster.is_draped);
-            if ContextMenuAction::new(tr!("common-undrape-all")).enabled(any_draped).show(ui).clicked() {
-                commands.push(UiCommand::UndrapeAllRasters);
-                ui.close();
-            }
-        });
     });
 }

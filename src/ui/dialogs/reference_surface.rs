@@ -1,17 +1,21 @@
 //! The build surface dialog: the points, controls and optional extent
-//! selected when it was opened, gridded into one new surface.
+//! selected when it opened or picked since, gridded into one new surface.
 
 use crate::{
     app::commands::triangulation::reference_surface::GRID_SPACINGS,
     i18n::tr,
     ui::{
         elements::properties::read_only_row,
-        state::{EditorState, UiCommand, UiProjectView},
-        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldText, selected_source_field},
+        state::{EditorState, SelectionPickTool, UiCommand, UiProjectView},
+        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldText, picked_selection_field, selected_source_field},
     },
 };
 
 pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(draft) = editor.reference_surface_dialog.as_mut() else {
         return;
     };
@@ -27,19 +31,16 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
         .max_width(460.0)
         .show(ui.ctx(), |ui| {
             let width = 220.0;
-            selected_source_field(
-                ui,
-                tr!("context-points"),
-                draft.points_label.clone(),
-                tr!("reference-surface-points-surface-built-from-selected"),
-                width,
-            );
+            // One pick names all three inputs: they are told apart by kind.
+            if picked_selection_field(ui, tr!("context-points"), draft.points_label.clone(), tr!("reference-surface-points-help"), width) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::ReferenceSurface));
+            }
             ui.add_space(4.0);
             selected_source_field(
                 ui,
                 tr!("reference-surface-controls"),
                 draft.controls_label.clone(),
-                tr!("reference-surface-selected-open-strings-surface-made"),
+                tr!("reference-surface-controls-help"),
                 width,
             );
             ui.add_space(4.0);
@@ -84,12 +85,14 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
             ui.small(project.modelling.summary());
             ui.small(tr!("reference-surface-change-these-in-preferences"));
             MenuFieldText::new(tr!("tri-create-output-name"), &mut draft.name)
-                .help_text(tr!("tri-create-output-name-help"))
                 .width(width)
                 .hint_text(tr!("tri-create-output-name-hint"))
                 .show(ui);
+            if let Some(problem) = &draft.problem {
+                ui.colored_label(egui::Color32::from_rgb(200, 70, 70), problem);
+            }
+            let ready = draft.problem.is_none() && !draft.name.trim().is_empty() && !over_budget;
             menu::menu_actions(ui, |ui| {
-                let ready = !draft.name.trim().is_empty() && !over_budget;
                 let confirm = ready && menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(ready)).clicked() || confirm {
                     build = true;

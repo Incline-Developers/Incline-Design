@@ -482,7 +482,7 @@ pub(crate) struct BlastAnalysis {
     /// Rock each hole is responsible for, cubic metres.
     pub(crate) volume: Vec<f64>,
     /// The pattern's median hole depth, which a rule is pictured on in the
-    /// products panel.
+    /// Charge Rules section.
     pub(crate) median_depth: Option<f64>,
     /// Reached holes in detonation order.
     pub(crate) firing_order: Vec<usize>,

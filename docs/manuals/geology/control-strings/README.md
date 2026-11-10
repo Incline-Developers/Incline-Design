@@ -26,7 +26,7 @@ A control string is an open line you draw where you know, or have decided, where
 
 Strings of one layer are used together, so keep the strings of one surface on one layer, and one surface per layer. A closed string is the extent: the deposit, or the area being mined. **Build Surface** takes at most one, selected with the points, and shows it on its own **Extent** line.
 
-The Geology workspace has a menu called **Geology Design**. Its top half, headed **Production Design**, is the **Design** menu of the Production workspace. Its lower half, headed **Geology Design**, groups the string tools by what each does to a string, in five submenus:
+The Geology workspace has a menu called **Geology Design**. It groups the string tools by what each does to a string, in five submenus:
 
 - **Draw**: make a string and keep drawing it.
 - **Edit**: change a whole string.
@@ -54,7 +54,7 @@ Fixes the small flaws and disagreements in the selected open strings themselves,
 ### Why a geologist uses it
 A string drawn by hand picks up small flaws: a point clicked twice, a spike, a stretch that doubles back, two strings that meet a few centimetres apart in height. **Build Surface** cleans these in its own copy at each build and leaves the strings as drawn. **Clean Strings** does the plain tidying in the strings themselves in one step and names every place it did not dare to change, so your judgement goes to the places that need it, such as two strings that miss each other by metres.
 ### Where it is
-- Geology workspace: **Geology Design > Edit > Clean Strings**. It is also in the top half of the same menu, under **Production Design**.
+- Geology workspace: **Geology Design > Edit > Clean Strings**.
 - Production workspace: **Design > Clean Strings**.
 - Right click anywhere on the canvas while open strings are selected: **Clean Strings**.
 ### Before you start

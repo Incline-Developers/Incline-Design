@@ -24,19 +24,19 @@ pub(crate) struct KrigingGrid {
 impl KrigingGrid {
     pub(crate) fn dimensions(self) -> Result<[usize; 3]> {
         if !self.lower.is_finite() || !self.upper.is_finite() || !self.cell.is_finite() || self.lower.cmpge(self.upper).any() || self.cell.min_element() <= 0.0 {
-            anyhow::bail!("Block-model bounds and cell sizes must be finite and positive");
+            anyhow::bail!(crate::i18n::tr!("err-bm-kriging-bad-bounds"));
         }
         let spans = ((self.upper - self.lower) / self.cell).ceil().to_array();
         let mut dims = [0usize; 3];
         for axis in 0..3 {
             if spans[axis] < 1.0 || spans[axis] > usize::MAX as f64 {
-                anyhow::bail!("Block-grid dimension is outside the supported range");
+                anyhow::bail!(crate::i18n::tr!("err-bm-kriging-dimension-range"));
             }
             dims[axis] = spans[axis] as usize;
         }
         dims.into_iter()
             .try_fold(1usize, |count, dim| count.checked_mul(dim))
-            .context("Block-grid cell count overflows")?;
+            .with_context(|| crate::i18n::tr!("err-bm-kriging-cell-overflow"))?;
         Ok(dims)
     }
 }
@@ -64,19 +64,19 @@ pub(crate) fn ordinary_kriging(samples: &[KrigingSample], grid: KrigingGrid, opt
     let count = dims
         .into_iter()
         .try_fold(1usize, |count, dim| count.checked_mul(dim))
-        .context("Block-grid cell count overflows")?;
+        .with_context(|| crate::i18n::tr!("err-bm-kriging-cell-overflow"))?;
     if samples.is_empty() || samples.iter().any(|sample| !sample.position.is_finite() || !sample.value.is_finite()) {
-        anyhow::bail!("Ordinary kriging requires at least one finite sample");
+        anyhow::bail!(crate::i18n::tr!("err-bm-kriging-no-samples"));
     }
     if !options.range.is_finite() || options.range <= 0.0 || !options.sill.is_finite() || options.sill <= 0.0 || !options.nugget.is_finite() || options.nugget < 0.0 {
-        anyhow::bail!("Variogram range and sill must be positive; nugget must be non-negative");
+        anyhow::bail!(crate::i18n::tr!("err-bm-kriging-bad-variogram"));
     }
     if options.min_samples == 0 || options.max_samples < options.min_samples || options.max_samples > 64 {
-        anyhow::bail!("Neighbour counts must satisfy 1 <= minimum <= maximum <= 64");
+        anyhow::bail!(crate::i18n::tr!("err-bm-kriging-bad-neighbours"));
     }
 
     let bins = SampleBins::new(samples, options.range);
-    let mut estimates = allocated_values(count, f64::NAN, "kriging estimates")?;
+    let mut estimates = allocated_values(count, f64::NAN)?;
     let total_covariance = options.sill + options.nugget;
 
     // Blocks are independent: each one reads the shared bins and writes only
@@ -94,7 +94,7 @@ pub(crate) fn ordinary_kriging(samples: &[KrigingSample], grid: KrigingGrid, opt
         let chunk_base = chunk_index * chunk_size;
         for (step, slice) in chunk.chunks_mut(PROGRESS_STRIDE).enumerate() {
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             let base = chunk_base + step * PROGRESS_STRIDE;
             for (offset, slot) in slice.iter_mut().enumerate() {
@@ -129,11 +129,11 @@ pub(crate) fn ordinary_kriging(samples: &[KrigingSample], grid: KrigingGrid, opt
 /// block batch.
 const PROGRESS_STRIDE: usize = 4096;
 
-fn allocated_values(count: usize, initial: f64, description: &str) -> Result<Vec<f64>> {
+fn allocated_values(count: usize, initial: f64) -> Result<Vec<f64>> {
     let mut values = Vec::new();
     values
         .try_reserve_exact(count)
-        .with_context(|| format!("Not enough memory to allocate {count} {description}"))?;
+        .with_context(|| crate::i18n::tr!("err-bm-kriging-out-of-memory", count = count.to_string()))?;
     values.resize(count, initial);
     Ok(values)
 }

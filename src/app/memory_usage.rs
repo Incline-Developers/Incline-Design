@@ -34,8 +34,9 @@ impl MemoryUsage {
 
 /// Takes readings no more often than [`SAMPLE_PERIOD`].
 pub(crate) struct MemorySampler {
+    /// `None` on a platform sysinfo does not support.
     #[cfg(not(target_arch = "wasm32"))]
-    system: sysinfo::System,
+    system: Option<sysinfo::System>,
     last: Option<Instant>,
 }
 
@@ -43,7 +44,7 @@ impl MemorySampler {
     pub(crate) fn new() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            system: sysinfo::System::new(),
+            system: sysinfo::System::new().ok(),
             last: None,
         }
     }
@@ -61,9 +62,10 @@ impl MemorySampler {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn read(&mut self) -> Option<MemoryUsage> {
-        self.system.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram());
-        let total = self.system.total_memory();
-        let used = self.system.used_memory().min(total);
+        let system = self.system.as_mut()?;
+        system.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram());
+        let total = system.total_memory();
+        let used = system.used_memory().min(total);
         (total > 0).then_some(MemoryUsage { used, total })
     }
 
@@ -95,7 +97,8 @@ pub(crate) const CPU_SAMPLE_PERIOD: Duration = Duration::from_secs(1);
 /// Native only: a browser says how many cores there are, never how busy.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct CpuSampler {
-    system: sysinfo::System,
+    /// `None` on a platform sysinfo does not support.
+    system: Option<sysinfo::System>,
     last: Option<Instant>,
 }
 
@@ -103,13 +106,13 @@ pub(crate) struct CpuSampler {
 impl CpuSampler {
     pub(crate) fn new() -> Self {
         Self {
-            system: sysinfo::System::new(),
+            system: sysinfo::System::new().ok(),
             last: None,
         }
     }
 
     /// Each core's load, `0.0..=1.0`, once the period has run out since the
-    /// last reading; `None` in between. Load is measured between two
+    /// last reading; `None` in between or when the platform cannot say. Load is measured between two
     /// refreshes, so the first reading is all zeros.
     pub(crate) fn poll(&mut self) -> Option<Vec<f32>> {
         let now = Instant::now();
@@ -117,7 +120,8 @@ impl CpuSampler {
             return None;
         }
         self.last = Some(now);
-        self.system.refresh_cpu_usage();
-        Some(self.system.cpus().iter().map(|cpu| (cpu.cpu_usage() / 100.0).clamp(0.0, 1.0)).collect())
+        let system = self.system.as_mut()?;
+        system.refresh_cpu_usage();
+        Some(system.cpus().iter().map(|cpu| (cpu.usage() / 100.0).clamp(0.0, 1.0)).collect())
     }
 }

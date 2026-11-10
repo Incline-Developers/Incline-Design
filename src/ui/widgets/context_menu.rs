@@ -12,6 +12,8 @@
 
 use std::{fmt::Debug, hash::Hash};
 
+use super::hint::Hint;
+
 const MENU_WIDTH: f32 = 220.0;
 const HEADER_HEIGHT: f32 = 20.0;
 const ROW_HEIGHT: f32 = 20.0;
@@ -222,6 +224,7 @@ pub(crate) struct ContextMenuAction {
     checked: Option<bool>,
     disabled_hover: Option<egui::WidgetText>,
     strikethrough: bool,
+    swatch: Option<egui::Color32>,
 }
 
 impl ContextMenuAction {
@@ -234,7 +237,15 @@ impl ContextMenuAction {
             checked: None,
             disabled_hover: None,
             strikethrough: false,
+            swatch: None,
         }
+    }
+
+    /// A colour square at the head of the row, in the tick column, for a
+    /// choice between things known by their colour: a delay type, say.
+    pub(crate) fn swatch(mut self, color: egui::Color32) -> Self {
+        self.swatch = Some(color);
+        self
     }
 
     /// Strike a line through the label: for a row naming something that is no
@@ -287,6 +298,7 @@ impl ContextMenuAction {
             checked,
             disabled_hover,
             strikethrough,
+            swatch,
         } = self;
         ui.add_enabled_ui(enabled, |ui| {
             let font_id = egui::TextStyle::Button.resolve(ui.style());
@@ -298,7 +310,11 @@ impl ContextMenuAction {
                     .size()
                     .x
             });
-            let text_left = if checked.is_some() { CHECK_COLUMN } else { f32::from(ROW_HORIZONTAL_PADDING) };
+            let text_left = if checked.is_some() || swatch.is_some() {
+                CHECK_COLUMN
+            } else {
+                f32::from(ROW_HORIZONTAL_PADDING)
+            };
             let right_padding = if submenu { 14.0 } else { 4.0 };
             let shortcut_gap = if shortcut.is_some() { 16.0 } else { 0.0 };
             let natural_width = text_left + label_width + shortcut_gap + shortcut_width + right_padding;
@@ -312,6 +328,10 @@ impl ContextMenuAction {
                     painter.rect_filled(rect, 1.0, visuals.bg_fill);
                 }
                 let text_color = visuals.fg_stroke.color;
+                if let Some(color) = swatch {
+                    let center = rect.left_center() + egui::vec2(CHECK_COLUMN / 2.0, 0.0);
+                    painter.rect_filled(egui::Rect::from_center_size(center, egui::vec2(9.0, 9.0)), CORNER_RADIUS, color);
+                }
                 if checked == Some(true) {
                     // A tick drawn rather than set as text: the row's glyphs
                     // come from the button style, and a checkmark character is
@@ -350,13 +370,9 @@ impl ContextMenuAction {
                     ));
                 }
             }
-            let response = if rect.width() + 0.5 < natural_width {
-                response.on_hover_text(full_label)
-            } else {
-                response
-            };
+            let response = if rect.width() + 0.5 < natural_width { response.hint(full_label) } else { response };
             match disabled_hover {
-                Some(text) => response.on_disabled_hover_text(text),
+                Some(text) => response.disabled_hint(text),
                 None => response,
             }
         })
@@ -381,14 +397,6 @@ pub(crate) fn context_menu_separator(ui: &mut egui::Ui) {
         egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
     );
     ui.add_space(2.0);
-}
-
-/// A subdued label naming the group of rows below it, in the header's type.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
-pub(crate) fn context_menu_heading(ui: &mut egui::Ui, title: &str) {
-    let color = ui.visuals().weak_text_color();
-    ui.add_space(2.0);
-    ui.label(egui::RichText::new(title).size(11.0).color(color));
 }
 
 /// A menu-bar dropdown wearing the context-menu frame, header and rows.
@@ -601,42 +609,36 @@ impl<'a> ChecklistRow<'a> {
                 };
                 painter.add(egui::Shape::convex_polygon(points, ui.visuals().weak_text_color(), egui::Stroke::NONE));
             }
-            let box_rect = egui::Rect::from_center_size(egui::pos2(box_left + CHECK_COLUMN / 2.0 - 2.0, rect.center().y), egui::vec2(11.0, 11.0));
-            painter.rect(
-                box_rect,
-                2.0,
-                if tick == Tick::Off {
-                    egui::Color32::TRANSPARENT
-                } else {
-                    ui.visuals().selection.bg_fill
-                },
-                egui::Stroke::new(1.0, ui.visuals().widgets.inactive.fg_stroke.color),
-                egui::StrokeKind::Inside,
-            );
-            match tick {
-                Tick::Off => {}
-                Tick::On => {
-                    let center = box_rect.center();
-                    painter.add(egui::Shape::line(
-                        vec![center + egui::vec2(-2.5, 0.0), center + egui::vec2(-0.5, 2.0), center + egui::vec2(2.5, -2.5)],
-                        egui::Stroke::new(1.4, ui.visuals().selection.stroke.color),
-                    ));
-                }
-                Tick::Mixed => {
-                    let center = box_rect.center();
-                    painter.add(egui::Shape::line(
-                        vec![center + egui::vec2(-2.5, 0.0), center + egui::vec2(2.5, 0.0)],
-                        egui::Stroke::new(1.4, ui.visuals().selection.stroke.color),
-                    ));
-                }
-            }
+            let box_rect = egui::Rect::from_center_size(egui::pos2(box_left + CHECK_COLUMN / 2.0 - 2.0, rect.center().y), egui::vec2(12.0, 12.0));
+            paint_check_box(&painter, ui.visuals(), box_rect, tick, response.hovered());
             painter.text(egui::pos2(box_rect.right() + 5.0, rect.center().y), egui::Align2::LEFT_CENTER, label, font_id, text_color);
         }
         if rect.width() + 0.5 < natural {
-            response.on_hover_text(label.to_owned());
+            response.hint(label.to_owned());
         }
         out
     }
+}
+
+/// A check box as the house draws one: an outline while it is off, and the
+/// accent the primary buttons carry, with a white tick or dash, once it is
+/// on. Rounded as every control is.
+pub(crate) fn paint_check_box(painter: &egui::Painter, visuals: &egui::Visuals, rect: egui::Rect, tick: Tick, hovered: bool) {
+    let radius = super::toolbar::GROUP_CORNER_RADIUS;
+    if tick == Tick::Off {
+        let color = if hovered { visuals.text_color() } else { visuals.weak_text_color() };
+        painter.rect_stroke(rect, radius, egui::Stroke::new(1.0, color), egui::StrokeKind::Inside);
+        return;
+    }
+    let accent = super::menu::accent_fill(visuals);
+    painter.rect_filled(rect, radius, if hovered { super::shifted(accent, 16) } else { accent });
+    let center = rect.center();
+    let mark = egui::Stroke::new(1.6, egui::Color32::WHITE);
+    let points = match tick {
+        Tick::Mixed => vec![center + egui::vec2(-3.0, 0.0), center + egui::vec2(3.0, 0.0)],
+        _ => vec![center + egui::vec2(-3.0, 0.2), center + egui::vec2(-0.8, 2.4), center + egui::vec2(3.2, -2.4)],
+    };
+    painter.add(egui::Shape::line(points, mark));
 }
 
 /// A multiple-selection popup opened by a widget the caller drew.

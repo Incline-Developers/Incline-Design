@@ -1,5 +1,5 @@
-//! Offscreen colour targets copied back to the CPU as RGBA8, shared by the
-//! viewport image export and the plot map render.
+//! Offscreen colour targets copied back to the CPU as RGBA8, for the viewport
+//! image and video exports.
 
 use anyhow::{Result, anyhow};
 
@@ -88,10 +88,12 @@ impl RgbaReadback {
         self.buffer.map_async(wgpu::MapMode::Read, .., move |result| {
             let _ = tx.send(result);
         });
-        device.poll(wgpu::PollType::wait_indefinitely()).map_err(|error| anyhow!("GPU poll failed: {error}"))?;
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| anyhow!(crate::i18n::tr!("err-gfx-poll-failed", error = error.to_string())))?;
         rx.recv()
-            .map_err(|_| anyhow!("Readback callback dropped"))?
-            .map_err(|error| anyhow!("Buffer map failed: {error}"))
+            .map_err(|_| anyhow!(crate::i18n::tr!("err-gfx-readback-dropped")))?
+            .map_err(|error| anyhow!(crate::i18n::tr!("err-gfx-buffer-map", error = error.to_string())))
     }
 
     /// The mapped pixels with wgpu's row padding stripped and the surface
@@ -100,7 +102,7 @@ impl RgbaReadback {
         let swap_bgra = match self.format.remove_srgb_suffix() {
             wgpu::TextureFormat::Bgra8Unorm => true,
             wgpu::TextureFormat::Rgba8Unorm => false,
-            other => return Err(anyhow!("Unsupported surface format for image export: {other:?}")),
+            other => return Err(anyhow!(crate::i18n::tr!("err-gfx-image-format", format = format!("{other:?}")))),
         };
         let padded = self.buffer.get_mapped_range(..)?;
         let row_bytes = self.width as usize * 4;

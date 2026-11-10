@@ -111,7 +111,7 @@ impl<'a> App<'a> {
             .point_clouds
             .iter()
             .find(|cloud| cloud.id == cloud_id)
-            .ok_or_else(|| anyhow::anyhow!("The selected point cloud is no longer loaded"))?;
+            .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-surf-tin-cloud-unloaded")))?;
         let points = cloud.points.clone();
         // Filtering runs on the worker with the reconstruction rather than here:
         // bare earth is a fraction of a delivery, but the scan that finds it is
@@ -134,7 +134,12 @@ impl<'a> App<'a> {
                 userspace_warn!("{}", tr!("cmd-point-cloud-tin-point-cloud-tin-failed-error", error = format!("{error:#}")));
             }
         };
-        self.spawn_job_reporting_progress("Point cloud TIN...", vec![crate::app::jobs::JobKey::PointCloud(cloud_id)], compute, apply);
+        self.spawn_job_reporting_progress(
+            crate::i18n::tr!("err-surf-tin-progress"),
+            vec![crate::app::jobs::JobKey::PointCloud(cloud_id)],
+            compute,
+            apply,
+        );
         Ok(())
     }
 }
@@ -147,7 +152,7 @@ impl<'a> App<'a> {
 /// in a scene and so the greediest for vertices.
 fn ground_points(points: &[DVec3], classifications: &[u8]) -> Result<Vec<DVec3>> {
     if classifications.len() != points.len() {
-        anyhow::bail!("The point cloud's classifications do not match its points");
+        anyhow::bail!(crate::i18n::tr!("err-surf-tin-classification-mismatch"));
     }
     let ground: Vec<DVec3> = points
         .par_iter()
@@ -156,7 +161,7 @@ fn ground_points(points: &[DVec3], classifications: &[u8]) -> Result<Vec<DVec3>>
         .map(|(point, _)| *point)
         .collect();
     if ground.len() < 3 {
-        anyhow::bail!("The point cloud classifies fewer than 3 points as ground; turn off 'Ground points only' to use every point");
+        anyhow::bail!(crate::i18n::tr!("err-surf-tin-too-few-ground"));
     }
     userspace_log!(
         "{}",
@@ -203,7 +208,7 @@ fn reconstruct_terrain_tin_from_point_cloud(
     progress: &crate::model::progress::Progress,
 ) -> Result<crate::model::triangulation::GeneratedTriangulation> {
     if points.len() < 3 {
-        anyhow::bail!("The point cloud has too few points to triangulate a terrain surface");
+        anyhow::bail!(crate::i18n::tr!("err-surf-tin-too-few-points"));
     }
 
     let max_points = terrain_budget_target(points.len(), params.budget);
@@ -232,20 +237,21 @@ fn reconstruct_terrain_tin(
     use spade::{DelaunayTriangulation, Triangulation as _};
 
     if sampled.len() < 3 {
-        anyhow::bail!("The point cloud has too few points to triangulate a terrain surface");
+        anyhow::bail!(crate::i18n::tr!("err-surf-tin-too-few-points"));
     }
 
     let unique = deduplicate_terrain_xy(sampled, cancel)?;
     if cancel.is_cancelled() {
-        anyhow::bail!("Terrain TIN reconstruction cancelled");
+        anyhow::bail!(crate::i18n::tr!("err-surf-tin-cancelled"));
     }
-    let tin: DelaunayTriangulation<TerrainVertex> = DelaunayTriangulation::bulk_load(unique).map_err(|error| anyhow::anyhow!("Terrain TIN bulk load failed: {error:?}"))?;
+    let tin: DelaunayTriangulation<TerrainVertex> =
+        DelaunayTriangulation::bulk_load(unique).map_err(|error| anyhow::anyhow!(crate::i18n::tr!("err-surf-tin-bulk-load-failed", error = format!("{error:?}"))))?;
 
     if tin.num_vertices() < 3 {
-        anyhow::bail!("The point cloud has fewer than 3 unique XY points");
+        anyhow::bail!(crate::i18n::tr!("err-surf-tin-too-few-unique"));
     }
     if cancel.is_cancelled() {
-        anyhow::bail!("Terrain TIN reconstruction cancelled");
+        anyhow::bail!(crate::i18n::tr!("err-surf-tin-cancelled"));
     }
 
     let vertices: Vec<mesh_data::Vertex> = tin
@@ -260,11 +266,11 @@ fn reconstruct_terrain_tin(
     let faces: Vec<[u32; 3]> = face_handles.par_iter().filter_map(|handle| terrain_face(&tin, *handle, max_edge_sq, occupancy)).collect();
 
     if cancel.is_cancelled() {
-        anyhow::bail!("Terrain TIN reconstruction cancelled");
+        anyhow::bail!(crate::i18n::tr!("err-surf-tin-cancelled"));
     }
 
     if faces.is_empty() {
-        anyhow::bail!("Terrain TIN produced no faces - increase Max edge or use more input points");
+        anyhow::bail!(crate::i18n::tr!("err-surf-tin-no-faces"));
     }
 
     let max_edge_suffix = if max_edge > 0.0 {
@@ -281,21 +287,21 @@ fn reconstruct_terrain_tin(
             suffix = max_edge_suffix.to_string()
         )
     );
-    session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)
+    session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, |_| Vec::new())
 }
 
 fn deduplicate_terrain_xy(sampled: Vec<DVec3>, cancel: &crate::app::jobs::CancelFlag) -> Result<Vec<TerrainVertex>> {
     let mut finite: Vec<DVec3> = sampled.into_par_iter().filter(|point| point.is_finite()).collect();
     finite.par_sort_unstable_by(|a, b| a.x.total_cmp(&b.x).then_with(|| a.y.total_cmp(&b.y)).then_with(|| a.z.total_cmp(&b.z)));
     if cancel.is_cancelled() {
-        anyhow::bail!("Terrain TIN reconstruction cancelled");
+        anyhow::bail!(crate::i18n::tr!("err-surf-tin-cancelled"));
     }
 
     let mut unique = Vec::with_capacity(finite.len());
     let mut start = 0usize;
     while start < finite.len() {
         if start.is_multiple_of(262_144) && cancel.is_cancelled() {
-            anyhow::bail!("Terrain TIN reconstruction cancelled");
+            anyhow::bail!(crate::i18n::tr!("err-surf-tin-cancelled"));
         }
         let mut end = start + 1;
         let mut z_sum = finite[start].z;
@@ -361,7 +367,7 @@ fn terrain_bounds(points: &[DVec3], cancel: &crate::app::jobs::CancelFlag) -> Re
         .par_chunks(262_144)
         .map(|chunk| -> Result<(DVec3, DVec3, usize)> {
             if cancel.is_cancelled() {
-                anyhow::bail!("Terrain TIN reconstruction cancelled");
+                anyhow::bail!(crate::i18n::tr!("err-surf-tin-cancelled"));
             }
             Ok(chunk
                 .iter()
@@ -376,7 +382,7 @@ fn terrain_bounds(points: &[DVec3], cancel: &crate::app::jobs::CancelFlag) -> Re
         |(min, max, count), (chunk_min, chunk_max, chunk_count)| (min.min(chunk_min), max.max(chunk_max), count.saturating_add(chunk_count)),
     );
     if finite_count < 3 {
-        anyhow::bail!("The point cloud has fewer than 3 finite points");
+        anyhow::bail!(crate::i18n::tr!("err-surf-tin-too-few-finite"));
     }
     Ok((min, max, finite_count))
 }
@@ -390,7 +396,7 @@ fn spatial_grid_subsample_terrain(
     if points.len() <= max_points {
         let finite = points.par_iter().copied().filter(|point| point.is_finite()).collect();
         if cancel.is_cancelled() {
-            anyhow::bail!("Terrain TIN reconstruction cancelled");
+            anyhow::bail!(crate::i18n::tr!("err-surf-tin-cancelled"));
         }
         return Ok((finite, None));
     }
@@ -622,7 +628,7 @@ fn choose_terrain_cell_size(points: &[DVec3], min: DVec3, area: f64, target: usi
         .enumerate()
         .try_fold(CellSet::default, |mut occupied, (chunk_index, chunk)| -> Result<_> {
             if cancel.is_cancelled() {
-                anyhow::bail!("Terrain TIN reconstruction cancelled");
+                anyhow::bail!(crate::i18n::tr!("err-surf-tin-cancelled"));
             }
             // `par_chunks` yields full-width chunks except the last, so the
             // global index of each point is exact and the stride stays aligned
@@ -661,7 +667,7 @@ fn merge_terrain_cells(mut destination: CellMap, source: CellMap) -> Result<Cell
     for (key, (sum, count)) in source {
         let entry = destination.entry(key).or_insert((CellSum::default(), 0));
         entry.0.merge(&sum);
-        entry.1 = entry.1.checked_add(count).ok_or_else(|| anyhow::anyhow!("Terrain TIN cell point count overflow"))?;
+        entry.1 = entry.1.checked_add(count).ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-surf-tin-count-overflow")))?;
     }
     Ok(destination)
 }
@@ -674,7 +680,7 @@ fn bin_terrain_cells(points: &[DVec3], grid: &CellGrid, cancel: &crate::app::job
         .par_chunks(TERRAIN_BIN_CHUNK)
         .try_fold(CellMap::default, |mut cells, chunk| -> Result<CellMap> {
             if cancel.is_cancelled() {
-                anyhow::bail!("Terrain TIN reconstruction cancelled");
+                anyhow::bail!(crate::i18n::tr!("err-surf-tin-cancelled"));
             }
             for point in chunk {
                 if point.is_finite() {
@@ -688,7 +694,7 @@ fn bin_terrain_cells(points: &[DVec3], grid: &CellGrid, cancel: &crate::app::job
         })
         .try_reduce(CellMap::default, |left, right| -> Result<CellMap> {
             if cancel.is_cancelled() {
-                anyhow::bail!("Terrain TIN reconstruction cancelled");
+                anyhow::bail!(crate::i18n::tr!("err-surf-tin-cancelled"));
             }
             if left.len() < right.len() {
                 return merge_terrain_cells(right, left);
@@ -1061,7 +1067,7 @@ fn adaptive_quadtree_subsample_terrain(
     if points.len() <= max_points {
         let finite = points.par_iter().copied().filter(|point| point.is_finite()).collect();
         if cancel.is_cancelled() {
-            anyhow::bail!("Terrain TIN reconstruction cancelled");
+            anyhow::bail!(crate::i18n::tr!("err-surf-tin-cancelled"));
         }
         return Ok((finite, None));
     }
@@ -1081,7 +1087,7 @@ fn adaptive_quadtree_subsample_terrain(
     let grid = CellGrid::new(min, extent, fine_size, points.len());
     let cells = bin_terrain_cells(points, &grid, cancel)?;
     if cancel.is_cancelled() {
-        anyhow::bail!("Terrain TIN reconstruction cancelled");
+        anyhow::bail!(crate::i18n::tr!("err-surf-tin-cancelled"));
     }
     let occupancy = OccupancyGrid {
         cells: cells.keys().copied().collect(),
@@ -1115,7 +1121,7 @@ fn adaptive_quadtree_subsample_terrain(
     drop(leaves);
     let selected = greedy_cut(&tree, max_points);
     if cancel.is_cancelled() {
-        anyhow::bail!("Terrain TIN reconstruction cancelled");
+        anyhow::bail!(crate::i18n::tr!("err-surf-tin-cancelled"));
     }
     let vertices = selected.into_iter().map(|node| tree.nodes[node].mean() + min).collect();
     Ok((vertices, Some(occupancy)))

@@ -85,6 +85,10 @@ impl ImproveProgress {
     }
 
     pub(crate) fn apply(&mut self, event: ImproveEvent) {
+        // A worker still winding down has nothing to add to a run that ended.
+        if self.ended.is_some() {
+            return;
+        }
         let at_s = self.started.elapsed().as_secs_f64();
         match event {
             ImproveEvent::Stage(stage) => {

@@ -155,6 +155,12 @@ impl<R: ReadAt> Reader<R> {
         Ok((project, warnings))
     }
 
+    /// The CRC-32 and length of a member's data, as the archive's central
+    /// directory records them, read without touching the data itself.
+    pub fn member_checksum(&self, filename: &str) -> Result<(u32, u64), Error> {
+        self.archive.checksum(filename)
+    }
+
     /// Returns the size in bytes of the compressed array.
     pub fn array_compressed_size(&self, array: &array::Array<impl array::ArrayType>) -> Result<u64, Error> {
         Ok(self.archive.span(array.filename())?.size)

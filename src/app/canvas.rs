@@ -2,7 +2,7 @@ use crate::{
     app::{App, PICK_THRESHOLD_PX},
     i18n::tr,
     model::{Command, Object, SceneEntityId},
-    ui::state::{ActiveTool, DrapePhase, SelectionMode, TriangulationPickTarget, Workspace},
+    ui::state::{ActiveTool, DrapePhase, SelectionMode, ToolSubject, TriangulationPickTarget, Workspace},
 };
 
 impl<'a> App<'a> {
@@ -10,10 +10,10 @@ impl<'a> App<'a> {
         self.pending_selection_click = None;
 
         // A tool open on a snapshot of the selection freezes it - see
-        // `EditorState::selection_locked_by_tool`. The field pickers below run
-        // first: the two-surface tools still name their own inputs, and their
-        // pick is not a selection change.
-        if self.editor.selection_locked_by_tool() {
+        // `EditorState::selection_locked_by_tool`. A field pick still goes
+        // through: a tool naming one of its own inputs is not a selection
+        // change.
+        if self.editor.triangulation_pick_target.is_none() && self.editor.selection_locked_by_tool() {
             return;
         }
 
@@ -22,11 +22,31 @@ impl<'a> App<'a> {
             return;
         }
 
+        // The clip tool's boundary: only a closed polyline is taken, and a
+        // click on anything else leaves the pick waiting.
+        if self.editor.triangulation_pick_target.is_some_and(TriangulationPickTarget::picks_boundary) {
+            let picked = self
+                .graphics
+                .as_ref()
+                .and_then(|graphics| graphics.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.pick_frozen, self.editor.xray_enabled));
+            if let Some((SceneEntityId::Object(id), _)) = picked
+                && let Some(object) = self.scene_document.get_object(id)
+                && object.encloses_area()
+            {
+                let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.to_string());
+                self.editor.tri_cut_poly_object_id = Some(id);
+                self.editor.tri_cut_poly_object_name = layer.map_or_else(|| tr!("common-polyline"), |layer| tr!("common-polyline-layer", layer = layer));
+                self.editor.cancel_triangulation_pick();
+                self.invalidate_geometry();
+            }
+            return;
+        }
+
         if let Some(target) = self.editor.triangulation_pick_target {
             let picked = self
                 .graphics
                 .as_ref()
-                .and_then(|graphics| graphics.pick_triangulation_at_cursor(&self.triangulations, &self.editor.hidden_handles, &self.editor.frozen_handles));
+                .and_then(|graphics| graphics.pick_triangulation_at_cursor(&self.triangulations, &self.editor.hidden_handles, &self.editor.pick_frozen));
             if let Some((SceneEntityId::Triangulation(id), _)) = picked {
                 let name = self
                     .triangulations
@@ -43,7 +63,7 @@ impl<'a> App<'a> {
         // polyline and return immediately so the ordinary selection tools do
         // not also act on the same click.
         if self.editor.drill_pattern_awaiting_shape_pick {
-            let frozen = &self.editor.frozen_handles;
+            let frozen = &self.editor.pick_frozen;
             let active_object_ids = self.active_project_object_ids();
             if let Some((SceneEntityId::Object(id), _)) = self
                 .graphics
@@ -81,7 +101,7 @@ impl<'a> App<'a> {
             self.cancel_move_delta();
             self.editor.move_vertex_target = None;
         }
-        let frozen = &self.editor.frozen_handles;
+        let frozen = &self.editor.pick_frozen;
         let picked = self.graphics.as_ref().and_then(|graphics| {
             let pick = graphics
                 .pick_scene_entity_at_cursor(
@@ -136,11 +156,12 @@ impl<'a> App<'a> {
     /// viewport pickers. Work is invoked at the existing bounded hover-poll
     /// rate, and geometry is invalidated only when the candidate changes.
     pub(crate) fn update_viewport_field_pick_hover(&mut self) {
-        if self.editor.triangulation_pick_target.is_some() {
+        let boundary_picker = self.editor.triangulation_pick_target.is_some_and(TriangulationPickTarget::picks_boundary);
+        if self.editor.triangulation_pick_target.is_some() && !boundary_picker {
             let hovered = self
                 .graphics
                 .as_ref()
-                .and_then(|graphics| graphics.pick_triangulation_at_cursor(&self.triangulations, &self.editor.hidden_handles, &self.editor.frozen_handles))
+                .and_then(|graphics| graphics.pick_triangulation_at_cursor(&self.triangulations, &self.editor.hidden_handles, &self.editor.pick_frozen))
                 .and_then(|(entity, _)| match entity {
                     SceneEntityId::Triangulation(id) => Some(id),
                     _ => None,
@@ -163,13 +184,13 @@ impl<'a> App<'a> {
             return;
         }
 
-        if !self.editor.drill_pattern_awaiting_shape_pick {
+        if !self.editor.drill_pattern_awaiting_shape_pick && !boundary_picker {
             return;
         }
 
         let raw_hover = self.graphics.as_ref().and_then(|graphics| {
             graphics
-                .pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.frozen_handles, self.editor.xray_enabled)
+                .pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.pick_frozen, self.editor.xray_enabled)
                 .map(|(entity, _)| entity)
         });
         let active_object_ids = self.active_project_object_ids();
@@ -279,6 +300,11 @@ impl<'a> App<'a> {
                     &tr!("common-shell"),
                 );
             }
+            // Not a surface: taken in `begin_select_or_drag`.
+            TriangulationPickTarget::ClipBoundary => {}
+            TriangulationPickTarget::ClipSurface => self.set_tool_subject(ToolSubject::ClipSurface(id)),
+            TriangulationPickTarget::SliceSurface => self.set_tool_subject(ToolSubject::SliceSurface(id)),
+            TriangulationPickTarget::ContourSurface => self.set_tool_subject(ToolSubject::ContourSurface(id)),
             TriangulationPickTarget::IncludeShape => {
                 self.editor.tri_include_solid_shape_id = Some(id);
                 if self.editor.tri_include_solid_topology_id == Some(id) {
@@ -325,9 +351,9 @@ impl<'a> App<'a> {
                     .as_ref()
                     .map(|g| {
                         if cross_select {
-                            g.entities_touching_screen_rect(start, end, &self.editor.frozen_handles)
+                            g.entities_touching_screen_rect(start, end, &self.editor.pick_frozen)
                         } else {
-                            g.entities_in_screen_rect(start, end, &self.editor.frozen_handles)
+                            g.entities_in_screen_rect(start, end, &self.editor.pick_frozen)
                         }
                     })
                     .unwrap_or_default();
@@ -361,7 +387,9 @@ impl<'a> App<'a> {
             let on_network = pending_selection_click.is_some_and(|p| matches!(p.entity, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)));
             let toggle = self.modifiers.shift_key();
             let add = self.modifiers.control_key();
-            let block = (!on_network).then(|| self.haul_block_at_cursor()).flatten();
+            // A design line over a block is what Convert Selection wants.
+            let on_object = pending_selection_click.is_some_and(|p| matches!(p.entity, SceneEntityId::Object(_)));
+            let block = (!on_network && !on_object).then(|| self.haul_block_at_cursor()).flatten();
             if let Some(id) = block {
                 let selected = &mut self.editor.haul_selected_blocks;
                 if toggle && let Some(index) = selected.iter().position(|b| *b == id) {
@@ -387,12 +415,18 @@ impl<'a> App<'a> {
             }
             self.invalidate_overlay();
         }
+        if !dragged && self.editor.is_solids_view() && self.editor.active_tool == ActiveTool::None {
+            self.select_reserves_block_at_cursor();
+            self.invalidate_overlay();
+            return;
+        }
         if !dragged
             && self.editor.is_dig_strips_step()
             && self.editor.active_tool == ActiveTool::None
             && !pending_selection_click.is_some_and(|pick| matches!(pick.entity, SceneEntityId::Object(_)))
         {
-            self.editor.selected_dig_block = self.dig_block_at_cursor();
+            let block = self.dig_block_at_cursor();
+            self.select_dig_blocks(block.into_iter().collect());
             self.invalidate_overlay();
             return;
         }
@@ -415,9 +449,9 @@ impl<'a> App<'a> {
                     .as_ref()
                     .map(|graphics| {
                         if end.0 > start.0 {
-                            graphics.entities_touching_screen_rect(start, end, &self.editor.frozen_handles)
+                            graphics.entities_touching_screen_rect(start, end, &self.editor.pick_frozen)
                         } else {
-                            graphics.entities_in_screen_rect(start, end, &self.editor.frozen_handles)
+                            graphics.entities_in_screen_rect(start, end, &self.editor.pick_frozen)
                         }
                     })
                     .unwrap_or_default()
@@ -481,7 +515,8 @@ impl<'a> App<'a> {
                     Some(hole) => self.editor.selected_drill_holes.contains(&hole),
                     None => self.editor.selected_handles.contains(&handle),
                 };
-                let selection_mode = if self.modifiers.shift_key() {
+                // A tool's pick builds a set: a click never replaces it.
+                let selection_mode = if self.modifiers.shift_key() || self.editor.selection_pick.is_some() {
                     SelectionMode::Toggle
                 } else if self.modifiers.control_key() {
                     SelectionMode::Add
@@ -525,7 +560,7 @@ impl<'a> App<'a> {
                 return;
             }
 
-            let preserve = self.modifiers.shift_key() || self.modifiers.control_key();
+            let preserve = self.modifiers.shift_key() || self.modifiers.control_key() || self.editor.selection_pick.is_some();
             if !preserve {
                 self.editor.selected_handles.clear();
                 self.editor.selected_drill_holes.clear();
@@ -542,6 +577,13 @@ impl<'a> App<'a> {
         // Box selection: left-to-right (end.x > start.x) = cross select (any vertex
         // inside box); right-to-left (end.x < start.x) = window select (all vertices inside).
         let cross_select = end.0 > start.0;
+        // The Reserves view selects nothing but its dig blocks.
+        if self.editor.is_solids_view() && self.editor.active_tool == ActiveTool::None {
+            let blocks = self.reserves_blocks_in_screen_rect(start, end, cross_select);
+            self.select_dig_blocks(blocks);
+            self.invalidate_overlay();
+            return;
+        }
         // Drill & Blast gives connectors first refusal on the marquee. If no
         // tie-in is taken, it falls back to holes one at a time; Survey's
         // marquee takes point clouds, and production's the design geometry
@@ -559,21 +601,18 @@ impl<'a> App<'a> {
             .as_ref()
             .map(|graphics| {
                 if point_clouds_only {
-                    graphics.point_clouds_in_screen_rect(start, end, cross_select, &self.editor.hidden_handles, &self.editor.frozen_handles)
+                    graphics.point_clouds_in_screen_rect(start, end, cross_select, &self.editor.hidden_handles, &self.editor.pick_frozen)
                 } else if cross_select {
-                    graphics.entities_touching_screen_rect(start, end, &self.editor.frozen_handles)
+                    graphics.entities_touching_screen_rect(start, end, &self.editor.pick_frozen)
                 } else {
-                    graphics.entities_in_screen_rect(start, end, &self.editor.frozen_handles)
+                    graphics.entities_in_screen_rect(start, end, &self.editor.pick_frozen)
                 }
             })
             .unwrap_or_default();
         let active_object_ids = self.active_project_object_ids();
         enclosed.retain(|handle| match handle {
             SceneEntityId::Object(object_id) => active_object_ids.contains(object_id),
-            SceneEntityId::Triangulation(_) => !objects_only,
-            SceneEntityId::BlockModel(_) => !objects_only,
-            SceneEntityId::DrillHole(_) => !objects_only,
-            SceneEntityId::PointCloud(_) => !objects_only,
+            SceneEntityId::Triangulation(_) | SceneEntityId::BlockModel(_) | SceneEntityId::DrillHole(_) | SceneEntityId::PointCloud(_) => !objects_only,
             // Nothing to enclose: a raster is painted onto a surface rather
             // than occupying the scene, so a marquee never produces one.
             SceneEntityId::Raster(_) => false,
@@ -589,7 +628,7 @@ impl<'a> App<'a> {
             .graphics
             .as_ref()
             .filter(|_| !objects_only)
-            .map(|graphics| graphics.drill_holes_in_screen_rect(&self.drill_holes, start, end, cross_select, &self.editor.hidden_handles, &self.editor.frozen_handles))
+            .map(|graphics| graphics.drill_holes_in_screen_rect(&self.drill_holes, start, end, cross_select, &self.editor.hidden_handles, &self.editor.pick_frozen))
             .unwrap_or_default();
         // The Layout's dig blocks ride the same box, by their outlines.
         let blocks = if self.editor.is_haulage_page() && !objects_only {
@@ -597,6 +636,17 @@ impl<'a> App<'a> {
         } else {
             Vec::new()
         };
+        // So do Dig Strips' blocks, beside the strip lines over them.
+        if self.editor.is_dig_strips_step() && self.editor.active_tool == ActiveTool::None {
+            let dig = self.dig_blocks_in_screen_rect(start, end, cross_select);
+            let held = self.modifiers.shift_key() || self.modifiers.control_key();
+            if held || !dig.is_empty() {
+                self.select_dig_blocks(dig);
+            } else {
+                self.editor.selected_dig_blocks.clear();
+            }
+            self.invalidate_overlay();
+        }
         if self.modifiers.shift_key() {
             for id in blocks {
                 let selected = &mut self.editor.haul_selected_blocks;
@@ -618,7 +668,7 @@ impl<'a> App<'a> {
                 }
             }
         } else {
-            if !self.modifiers.control_key() {
+            if !self.modifiers.control_key() && self.editor.selection_pick.is_none() {
                 self.editor.selected_handles.clear();
                 // Cleared with the handles, or a box over empty ground would
                 // leave the previous box's holes selected.
@@ -685,6 +735,28 @@ impl<'a> App<'a> {
             .collect()
     }
 
+    /// Dig Strips' blocks a marquee takes: wholly inside it, or for a
+    /// crossing box any corner inside it, by their outlines.
+    fn dig_blocks_in_screen_rect(&self, start: (f32, f32), end: (f32, f32), cross_select: bool) -> Vec<crate::ui::state::BlastShapeRef> {
+        let Some(graphics) = self.graphics.as_ref() else { return Vec::new() };
+        let view_proj = graphics.view_proj();
+        let (min, max) = ((start.0.min(end.0), start.1.min(end.1)), (start.0.max(end.0), start.1.max(end.1)));
+        let inside = |p: (f32, f32)| p.0 >= min.0 && p.0 <= max.0 && p.1 >= min.1 && p.1 <= max.1;
+        self.editor
+            .dig_outlines
+            .iter()
+            .filter(|outline| {
+                let mut corners = outline.rings.iter().flatten().map(|point| graphics.world_to_window_px(&view_proj, *point));
+                if cross_select {
+                    corners.any(|p| p.is_some_and(inside))
+                } else {
+                    corners.all(|p| p.is_some_and(inside))
+                }
+            })
+            .map(|outline| crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor))
+            .collect()
+    }
+
     /// The Drill & Blast marquee: select tie-ins exclusively when the box
     /// takes any; otherwise select its holes one at a time rather than as the
     /// datasets they came from.
@@ -693,7 +765,7 @@ impl<'a> App<'a> {
             let enclosed = self
                 .graphics
                 .as_ref()
-                .map(|graphics| graphics.drill_holes_in_screen_rect(&self.drill_holes, start, end, cross_select, &self.editor.hidden_handles, &self.editor.frozen_handles))
+                .map(|graphics| graphics.drill_holes_in_screen_rect(&self.drill_holes, start, end, cross_select, &self.editor.hidden_handles, &self.editor.pick_frozen))
                 .unwrap_or_default();
             self.finish_charge_box(enclosed);
             return;
@@ -702,7 +774,7 @@ impl<'a> App<'a> {
             .graphics
             .as_ref()
             .filter(|_| !self.editor.active_tool.acts_on_collars())
-            .map(|graphics| graphics.tie_ins_in_screen_rect(&self.drill_holes, start, end, cross_select, &self.editor.hidden_handles, &self.editor.frozen_handles))
+            .map(|graphics| graphics.tie_ins_in_screen_rect(&self.drill_holes, start, end, cross_select, &self.editor.hidden_handles, &self.editor.pick_frozen))
             .unwrap_or_default();
         if !tie_ins.is_empty() {
             if self.modifiers.shift_key() {
@@ -726,7 +798,7 @@ impl<'a> App<'a> {
         let enclosed = self
             .graphics
             .as_ref()
-            .map(|graphics| graphics.drill_holes_in_screen_rect(&self.drill_holes, start, end, cross_select, &self.editor.hidden_handles, &self.editor.frozen_handles))
+            .map(|graphics| graphics.drill_holes_in_screen_rect(&self.drill_holes, start, end, cross_select, &self.editor.hidden_handles, &self.editor.pick_frozen))
             .unwrap_or_default();
         if self.modifiers.shift_key() {
             for hole in enclosed {
@@ -752,9 +824,9 @@ impl<'a> App<'a> {
                 .as_ref()
                 .map(|graphics| {
                     if cross_select {
-                        graphics.entities_touching_screen_rect(start, end, &self.editor.frozen_handles)
+                        graphics.entities_touching_screen_rect(start, end, &self.editor.pick_frozen)
                     } else {
-                        graphics.entities_in_screen_rect(start, end, &self.editor.frozen_handles)
+                        graphics.entities_in_screen_rect(start, end, &self.editor.pick_frozen)
                     }
                 })
                 .unwrap_or_default()
@@ -763,10 +835,10 @@ impl<'a> App<'a> {
                 .as_ref()
                 .and_then(|graphics| match self.editor.drape_phase {
                     DrapePhase::Designs => graphics
-                        .pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.frozen_handles, self.editor.xray_enabled)
+                        .pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.pick_frozen, self.editor.xray_enabled)
                         .map(|(handle, _)| vec![handle]),
                     DrapePhase::Topologies => graphics
-                        .pick_triangulation_at_cursor(&self.triangulations, &self.editor.hidden_handles, &self.editor.frozen_handles)
+                        .pick_triangulation_at_cursor(&self.triangulations, &self.editor.hidden_handles, &self.editor.pick_frozen)
                         .map(|(handle, _)| vec![handle]),
                 })
                 .unwrap_or_default()

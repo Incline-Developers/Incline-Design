@@ -33,7 +33,7 @@ pub(super) struct Scratch {
 pub(super) struct Block {
     center: DVec3,
     scale: f64,
-    faces: Polyhedron,
+    faces: [[DVec3; 4]; 6],
     /// The block's corners, in the same local frame as `faces`.
     corners: [DVec3; 8],
     /// For a block standing upright, its outline and levels in the same frame,
@@ -45,9 +45,31 @@ pub(super) struct Block {
 }
 
 impl Block {
+    /// Whether this block lies wholly outside `reach`, the box every piece of
+    /// a scan lies in, which can be told without setting the block up. A model
+    /// is mostly such blocks. One whose bounds are not usable is not passed
+    /// over, so it is still reported.
+    pub(super) fn out_of_reach(model: &BlockModelData, bounds: BlockBounds, (reach_min, reach_max): (DVec3, DVec3)) -> bool {
+        let size = bounds.upper - bounds.lower;
+        if !bounds.lower.is_finite() || !size.is_finite() || size.min_element() <= 0.0 {
+            return false;
+        }
+        let center = model.local_to_world(bounds.lower + size * 0.5);
+        // The box around the block's rotated half-size.
+        let half = size * 0.5;
+        let rotation = model.rotation();
+        let radius = rotation.x_axis.abs() * half.x + rotation.y_axis.abs() * half.y + rotation.z_axis.abs() * half.z;
+        // Above roundoff, as the block's own extent is worked out differently.
+        let margin = radius.max_element() * 1e-9;
+        (center + radius + margin).cmplt(reach_min).any() || (center - radius - margin).cmpgt(reach_max).any()
+    }
+
     pub(super) fn new(model: &BlockModelData, bounds: BlockBounds) -> anyhow::Result<Self> {
         let size = bounds.upper - bounds.lower;
-        anyhow::ensure!(bounds.lower.is_finite() && size.is_finite() && size.min_element() > 0.0, "Invalid block bounds");
+        anyhow::ensure!(
+            bounds.lower.is_finite() && size.is_finite() && size.min_element() > 0.0,
+            crate::i18n::tr!("err-solids-invalid-block-bounds")
+        );
         let center = model.local_to_world(bounds.lower + size * 0.5);
         let offsets = std::array::from_fn::<_, 8, _>(|i| {
             model.rotation()
@@ -59,12 +81,13 @@ impl Block {
                     ))
         });
         let scale = offsets.iter().map(|p| p.abs().max_element()).fold(0.0, f64::max);
-        anyhow::ensure!(center.is_finite() && scale.is_finite() && scale > 0.0, "Invalid block transform");
+        anyhow::ensure!(
+            center.is_finite() && scale.is_finite() && scale > 0.0,
+            crate::i18n::tr!("err-solids-invalid-block-transform")
+        );
         let points = offsets.map(|p| p / scale);
         let up = model.rotation() * DVec3::Z;
-        let faces = [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]]
-            .map(|face| face.map(|i| points[i]).to_vec())
-            .to_vec();
+        let faces = [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]].map(|face| face.map(|i| points[i]));
         let volume = polyhedron_volume(&faces);
         anyhow::ensure!(
             volume.is_finite() && volume > 0.0 && model.rotation().determinant().abs() > 0.0,
@@ -153,7 +176,11 @@ impl Block {
                     None => {
                         // Overwrites the retained face buffers rather than allocating
                         // a new set for every triangle.
-                        poly.clone_from(&self.faces);
+                        poly.resize_with(self.faces.len(), Vec::new);
+                        for (face, source) in poly.iter_mut().zip(&self.faces) {
+                            face.clear();
+                            face.extend_from_slice(source);
+                        }
                         for &(normal, distance) in &planes {
                             clip(poly, normal, distance, cap, output);
                             if poly.is_empty() {
@@ -169,7 +196,7 @@ impl Block {
                 correction = (next - sum) - value;
                 sum = next;
             });
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+        anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
         let fraction = sum / self.volume;
         anyhow::ensure!(
             fraction.is_finite() && (-1e-7..=1.0 + 1e-7).contains(&fraction),
@@ -259,15 +286,16 @@ const MISSES_COLUMN: f64 = 1e-9;
 
 /// Faces are convex and may have either winding. Tetrahedra measured from an
 /// interior point partition the polyhedron, so each contributes positive volume.
-fn polyhedron_volume(faces: &Polyhedron) -> f64 {
-    let count = faces.iter().map(Vec::len).sum::<usize>();
+fn polyhedron_volume<F: AsRef<[DVec3]>>(faces: &[F]) -> f64 {
+    let count = faces.iter().map(|face| face.as_ref().len()).sum::<usize>();
     if count == 0 {
         return 0.0;
     }
-    let center = faces.iter().flatten().copied().sum::<DVec3>() / count as f64;
+    let center = faces.iter().flat_map(|face| face.as_ref()).copied().sum::<DVec3>() / count as f64;
     faces
         .iter()
         .map(|face| {
+            let face = face.as_ref();
             (1..face.len().saturating_sub(1))
                 .map(|i| (face[0] - center).dot((face[i] - center).cross(face[i + 1] - center)).abs() / 6.0)
                 .sum::<f64>()
