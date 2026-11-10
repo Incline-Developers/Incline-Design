@@ -13,7 +13,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 
 use crate::{
     app::{
@@ -33,7 +33,7 @@ use crate::{
         plot::format_quantity,
         prismoid_grid::{
             AddedValues, BuildRefusal, CellReading, CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, OpenPrismoidGrid, PrismoidBuild, PrismoidColorBy, PrismoidGrid,
-            PrismoidGridId, PrismoidGridSummary, QualitySurface, SectionCrossing, ValuesRefusal, Weighting, ramp_position,
+            PrismoidGridId, PrismoidGridSummary, QualitySurface, SectionCrossing, SectionPoint, ValuesRefusal, Weighting, ramp_position,
         },
         progress::{Phase, Progress},
         project::{ModelEnvelope, ProjectItemState, unique_item_name},
@@ -46,7 +46,11 @@ use crate::{
     rendering::{
         camera::SectionSlab,
         color::linear_to_srgb_byte,
-        scene::{drill_hole_cache::evaluate_stops, section_surface_lines::SectionCellsOfGrid},
+        graphics::{Graphics, camera::ScenePick},
+        scene::{
+            drill_hole_cache::evaluate_stops,
+            section_surface_lines::{SECTION_FILL_DEPTH_TIE_M, SectionCellsOfGrid},
+        },
     },
     ui::state::{CellSelection, EditorState, InspectorRow, InspectorRows, SelectionMode, Workspace},
     userspace_error, userspace_log, userspace_warn,
@@ -431,6 +435,37 @@ impl App<'_> {
         true
     }
 
+    /// The prismoid under a 2D section's plane point `world`, as a pick on
+    /// its grid: of the drawn grids, shown and not frozen, the first in
+    /// explorer order with a cell there between the floor and the roof.
+    pub(crate) fn section_cell_pick(&self, world: DVec3) -> Option<ScenePick> {
+        if self.editor.active_workspace != Workspace::Geology {
+            return None;
+        }
+        section_grids(&self.editor, &self.prismoid_grids, &self.prismoid_drawn)
+            .filter(|item| !self.editor.frozen_handles.contains(&item.entity_id()))
+            .find(|item| item.grid.section_cell_at(world).is_some())
+            .map(|item| ScenePick {
+                entity: item.entity_id(),
+                world,
+                hole: None,
+            })
+    }
+
+    /// What a click in a 2D section picks, from Leo's ray `pick`: the
+    /// prismoid under the plane point when `accepts` takes it and nothing
+    /// drawn in front of its fill was hit. Both mouse buttons pick here.
+    pub(crate) fn with_section_cell_pick(&self, graphics: &Graphics<'_>, pick: Option<ScenePick>, accepts: impl Fn(&ScenePick) -> bool) -> Option<ScenePick> {
+        match graphics.section_slab().filter(|slab| slab.outlines) {
+            Some(slab) if section_cell_wins(pick.as_ref(), &slab, graphics.camera_orientation().0) => graphics
+                .cursor_world(self.editor.z_level)
+                .and_then(|world| self.section_cell_pick(world))
+                .filter(|pick| accepts(pick))
+                .or(pick.filter(|pick| !matches!(pick.entity, SceneEntityId::PrismoidGrid(_)))),
+            _ => pick,
+        }
+    }
+
     /// Apply a marquee to the cell selection after Leo's box has applied its
     /// own, in its modifier order: shift toggles each cell taken, ctrl adds,
     /// a plain box replaces. The grid is selected while any of its cells is.
@@ -468,7 +503,8 @@ impl App<'_> {
 
     /// The cells a marquee takes, as Lucas's dig blocks ride Leo's box: of
     /// one drawn grid, shown and not frozen, each active cell whose box
-    /// centre falls inside, kept to the section's slab when one is up. With
+    /// centre falls inside, kept to the section's slab when one is up; in a
+    /// 2D section each crossed cell by the middle of its crossing. With
     /// `keep_held` the grid holding cells is asked first; otherwise, or with
     /// none of its cells inside, the first grid in project order with any.
     fn prismoid_cells_in_screen_rect(&self, start: (f32, f32), end: (f32, f32), keep_held: bool) -> Option<(PrismoidGridId, Vec<usize>)> {
@@ -489,13 +525,13 @@ impl App<'_> {
                     .any(|drawn| drawn.surface.prismoid_grid == Some(item.id) && Arc::ptr_eq(&drawn.source, &item.grid))
         });
         let taken = |item: &OpenPrismoidGrid| {
-            let cells = centres_in_screen_rect(
-                item.grid.cell_centres_3d(),
-                |world| graphics.world_to_window_px(&view_proj, world),
-                slab.as_ref(),
-                start,
-                end,
-            );
+            let project = |world| graphics.world_to_window_px(&view_proj, world);
+            // A 2D section takes the cells it draws, a 3D slab those whose
+            // centres it holds.
+            let cells = match slab.filter(|slab| slab.outlines) {
+                Some(section) => centres_in_screen_rect(crossing_centres(&item.grid, &section), project, slab.as_ref(), start, end),
+                None => centres_in_screen_rect(item.grid.cell_centres_3d(), project, slab.as_ref(), start, end),
+            };
             (!cells.is_empty()).then_some((item.id, cells))
         };
         let held = editor.cell_selection.as_ref().filter(|_| keep_held).map(|selection| selection.entity);
@@ -796,6 +832,46 @@ fn centres_in_screen_rect(
         .filter(|(_, centre)| project(*centre).is_some_and(inside))
         .map(|(cell, _)| cell)
         .collect()
+}
+
+/// Each cell a 2D section crosses, by a point on the plane in the middle of
+/// its crossing: halfway along it, halfway between the floor and the roof
+/// there.
+fn crossing_centres(grid: &PrismoidGrid, slab: &SectionSlab) -> impl Iterator<Item = (usize, DVec3)> {
+    let (point, normal) = (slab.point.truncate(), slab.normal.truncate());
+    let along = DVec2::new(-normal.y, normal.x);
+    grid.section_crossings(point, normal).into_iter().filter_map(move |crossing| {
+        let middle = (crossing.along[0] + crossing.along[1]) / 2.0;
+        let at = |point_of: &SectionPoint| ((point_of.plan - point).dot(along), (point_of.roof + point_of.floor) / 2.0);
+        // Rounding can leave the middle of a sliver past its last point: the
+        // nearest point's height stands in.
+        let height = crossing
+            .points
+            .windows(2)
+            .map(|pair| (at(&pair[0]), at(&pair[1])))
+            .find(|(_, (to, _))| middle <= *to)
+            .map(|((from, low), (to, high))| low + (high - low) * ((middle - from) / (to - from).max(f64::MIN_POSITIVE)))
+            .or_else(|| {
+                crossing
+                    .points
+                    .iter()
+                    .map(at)
+                    .min_by(|(a, _), (b, _)| (a - middle).abs().total_cmp(&(b - middle).abs()))
+                    .map(|(_, height)| height)
+            })?;
+        Some((crossing.cell, (point + along * middle).extend(height)))
+    })
+}
+
+/// Whether, in a 2D section, a prismoid under the plane point takes a click
+/// over Leo's `pick`: with nothing picked, a pick on a surface or a grid,
+/// both drawn here only as cut lines, or a pick behind the cell's fill,
+/// which sits [`SECTION_FILL_DEPTH_TIE_M`] behind the plane and hides it.
+pub(crate) fn section_cell_wins(pick: Option<&ScenePick>, slab: &SectionSlab, forward: DVec3) -> bool {
+    pick.is_none_or(|pick| {
+        matches!(pick.entity, SceneEntityId::Triangulation(_) | SceneEntityId::PrismoidGrid(_))
+            || slab.signed_distance(pick.world) * slab.normal.dot(forward) > SECTION_FILL_DEPTH_TIE_M
+    })
 }
 
 /// A selection of `count` cells on the grid `name`, derived; `None` with

@@ -1367,14 +1367,15 @@ impl<'a> App<'a> {
                 let ring = self.editor.cursor_screen_px.and_then(|px| self.editor.string_ring_near(px, ring_radius));
                 let frozen = &self.editor.frozen_handles;
                 let picked = self.graphics.as_ref().filter(|_| ring.is_none()).and_then(|g| {
-                    g.pick_scene_entity_at_cursor(
+                    let pick = g.pick_scene_entity_at_cursor(
                         crate::app::PICK_THRESHOLD_PX,
                         with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                         &self.drill_holes,
                         &self.editor.hidden_handles,
                         frozen,
                         self.editor.xray_enabled,
-                    )
+                    );
+                    self.with_section_cell_pick(g, pick, |_| true)
                 });
                 // On the Haulage Layout a dig block under the cursor takes the
                 // menu, unless a road or node is nearer the click: it joins the

@@ -769,7 +769,6 @@ impl PrismoidGrid {
     /// The active cell a point on a section lies in, between the floor and
     /// the roof as drawn; `None` above the roof, below the floor, off the
     /// lattice or on an inactive cell.
-    #[allow(dead_code, reason = "picked from the section in a later commit")]
     pub(crate) fn section_cell_at(&self, at: DVec3) -> Option<usize> {
         let lattice = &self.lattice;
         let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));

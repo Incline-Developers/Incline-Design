@@ -83,7 +83,7 @@ impl<'a> App<'a> {
         }
         let frozen = &self.editor.frozen_handles;
         let picked = self.graphics.as_ref().and_then(|graphics| {
-            graphics
+            let pick = graphics
                 .pick_scene_entity_at_cursor(
                     PICK_THRESHOLD_PX,
                     crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
@@ -92,7 +92,8 @@ impl<'a> App<'a> {
                     frozen,
                     self.editor.xray_enabled,
                 )
-                .filter(|pick| self.tool_accepts_pick(pick))
+                .filter(|pick| self.tool_accepts_pick(pick));
+            self.with_section_cell_pick(graphics, pick, |pick| self.tool_accepts_pick(pick))
                 .map(|pick| (Some(pick), pick.world))
                 .or_else(|| graphics.cursor_world(self.editor.z_level).map(|world| (None, world)))
         });
