@@ -1135,9 +1135,12 @@ impl<'a> State<'a> {
         let input = self.input;
         let duration = interval.duration_h();
         let segments = topology.segments.len();
+        // Every column is keyed by what it stands for, so a program of a new
+        // shape - a loader on to its next block, a pile emptied - starts
+        // from the last one's basis (see `WarmStarts`).
         let mut problem = LinearProgram::default();
-        let lengths: Vec<Col> = (0..segments).map(|_| problem.add_column(0.0, 0.0..)).collect();
-        problem.add_row(duration..=duration, lengths.iter().map(|col| (*col, 1.0)).collect());
+        let lengths: Vec<Col> = (0..segments).map(|segment| problem.add_keyed_column(("length", segment), 0.0, 0.0..)).collect();
+        problem.add_keyed_row("lengths", duration..=duration, lengths.iter().map(|col| (*col, 1.0)).collect());
         // (candidate, segment) and its column.
         let mut columns: Vec<(usize, usize, Col)> = Vec::new();
         let mut extractions: Vec<((usize, GroundId, usize), Col)> = Vec::new();
@@ -1162,7 +1165,7 @@ impl<'a> State<'a> {
                             if position + 1 < bar.blocks.len() {
                                 pins.push((block, segment));
                             }
-                            let extract = problem.add_column(0.0, 0.0..=left);
+                            let extract = problem.add_keyed_column(("extract", bar.loader, block, segment), 0.0, 0.0..=left);
                             extractions.push(((bar.loader, block, segment), extract));
                             loader_total.push((extract, 1.0));
                             block_total.entry(block).or_default().push((extract, 1.0));
@@ -1172,11 +1175,11 @@ impl<'a> State<'a> {
                                 // authorises every dig of them by its loader.
                                 for &index in self.digs.get(&(bar.loader, block, share.material.0)).into_iter().flatten() {
                                     debug_assert!(task_authorises(task, &input.movements[index]));
-                                    let col = problem.add_column(self.weight[index], 0.0..);
+                                    let col = problem.add_keyed_column(("movement", index, segment), self.weight[index], 0.0..);
                                     columns.push((index, segment, col));
                                     portion.push((col, 1.0));
                                 }
-                                problem.add_row(0.0..=0.0, portion);
+                                problem.add_keyed_row(("portion", bar.loader, block, segment, share.material.0), 0.0..=0.0, portion);
                             }
                         }
                         rate.dig_tph
@@ -1191,7 +1194,7 @@ impl<'a> State<'a> {
                             };
                             for index in self.reclaim_candidates(bar.loader, *pile, bar.task, interval) {
                                 let value = conditional_value(input, index, &released.blend, released.tonnes);
-                                let col = problem.add_column(self.weight[index] + value, 0.0..);
+                                let col = problem.add_keyed_column(("movement", index, segment), self.weight[index] + value, 0.0..);
                                 columns.push((index, segment, col));
                                 loader_total.push((col, 1.0));
                                 pile_draw.entry(*pile).or_default().push((col, 1.0));
@@ -1203,11 +1206,11 @@ impl<'a> State<'a> {
                     TaskKind::Delay => 0.0,
                 };
                 loader_total.push((lengths[segment], -tph));
-                problem.add_row(..=0.0, loader_total);
+                problem.add_keyed_row(("loader", bar.loader, bar.task, segment), ..=0.0, loader_total);
             }
         }
         for (block, terms) in block_total {
-            problem.add_row(..=self.ground.get(&block).copied().unwrap_or(0.0), terms);
+            problem.add_keyed_row(("block", block), ..=self.ground.get(&block).copied().unwrap_or(0.0), terms);
         }
         // A block pinned to a segment is gone by its end.
         for (block, through) in pins {
@@ -1224,19 +1227,23 @@ impl<'a> State<'a> {
                     block = block.0.to_string()
                 ));
             }
-            problem.add_row(left..=left, terms);
+            problem.add_keyed_row(("pin", block), left..=left, terms);
         }
         for (pile, terms) in pile_draw {
-            problem.add_row(..=self.released.get(&pile).map_or(0.0, |released| released.tonnes), terms);
+            problem.add_keyed_row(("draw", pile), ..=self.released.get(&pile).map_or(0.0, |released| released.tonnes), terms);
         }
         for (task, draws) in caps {
             let TaskKind::Reclaim { maximum_t: Some(maximum), .. } = input.tasks[task].kind else {
                 continue;
             };
             let left = (maximum - self.reclaimed.get(&task).copied().unwrap_or(0.0)).max(0.0);
-            problem.add_row(..=left, draws.iter().map(|(_, col)| (*col, 1.0)).collect());
+            problem.add_keyed_row(("cap", task), ..=left, draws.iter().map(|(_, col)| (*col, 1.0)).collect());
             for &(_, through) in topology.spent.iter().filter(|(spent, _)| *spent == task) {
-                problem.add_row(left..=left, draws.iter().filter(|(segment, _)| *segment <= through).map(|(_, col)| (*col, 1.0)).collect());
+                problem.add_keyed_row(
+                    ("spent", task, through),
+                    left..=left,
+                    draws.iter().filter(|(segment, _)| *segment <= through).map(|(_, col)| (*col, 1.0)).collect(),
+                );
             }
         }
 
@@ -1264,16 +1271,16 @@ impl<'a> State<'a> {
             if let Some(hours) = input.trucks.iter().find(|entry| entry.id == truck).and_then(|entry| entry.hours.get(interval.index)) {
                 if duration > 0.0 {
                     terms.push((lengths[segment], -hours / duration));
-                    problem.add_row(..=0.0, terms);
+                    problem.add_keyed_row(("trucks", truck, segment), ..=0.0, terms);
                 } else {
-                    problem.add_row(..=*hours, terms);
+                    problem.add_keyed_row(("trucks", truck, segment), ..=*hours, terms);
                 }
             }
         }
         for (destination, terms) in destinations {
             let room = self.destination_room(destination, interval);
             if room.is_finite() {
-                problem.add_row(..=room, terms);
+                problem.add_keyed_row(("room", destination), ..=room, terms);
             }
         }
         // A pile's receipts up to the end of each segment fit on top of its
@@ -1289,7 +1296,7 @@ impl<'a> State<'a> {
                     .filter(|(at, _, sign)| *at < segment || (*at == segment && *sign > 0.0))
                     .map(|(_, col, sign)| (*col, *sign))
                     .collect();
-                problem.add_row(..=room.max(0.0), terms);
+                problem.add_keyed_row(("pile", pile, segment), ..=room.max(0.0), terms);
             }
         }
 
@@ -1318,8 +1325,11 @@ impl<'a> State<'a> {
             // Bands this interval can reach: it adds at most its own length.
             let reach = lower + duration / available + super::utilisation::BAND;
             let mut band_hours = Vec::new();
-            for (hours, per_hour) in super::utilisation::bands(lower, reach, rate.utilisation_target, available, rate.utilisation_incentive, rate.dig_tph) {
-                let col = problem.add_column(per_hour, 0.0..=hours);
+            for (band, (hours, per_hour)) in super::utilisation::bands(lower, reach, rate.utilisation_target, available, rate.utilisation_incentive, rate.dig_tph)
+                .into_iter()
+                .enumerate()
+            {
+                let col = problem.add_keyed_column(("band", loader, band), per_hour, 0.0..=hours);
                 incentive.push((col, per_hour));
                 band_hours.push((col, 1.0));
             }
@@ -1327,7 +1337,7 @@ impl<'a> State<'a> {
                 continue;
             }
             band_hours.extend(dug);
-            problem.add_row(..=0.0, band_hours);
+            problem.add_keyed_row(("bands", loader), ..=0.0, band_hours);
         }
 
         // A plan's targets: each loader's dug tonnes to each destination,
@@ -1393,15 +1403,15 @@ impl<'a> State<'a> {
                 });
                 self.guidance.uses.set(self.guidance.uses.get() + 1);
                 if let Some(room) = reclaim_room {
-                    problem.add_row(..=room, cols.iter().map(|col| (*col, 1.0)).collect());
+                    problem.add_keyed_row(("route room", loader, activity, destination), ..=room, cols.iter().map(|col| (*col, 1.0)).collect());
                 }
                 let kept = if due > NEGLIGIBLE_T && follow > 0.0 {
-                    let kept = problem.add_column(follow, 0.0..=due);
+                    let kept = problem.add_keyed_column(("kept", loader, activity, destination), follow, 0.0..=due);
                     incentive.push((kept, follow));
                     let mut row = Vec::with_capacity(cols.len() + 1);
                     row.push((kept, 1.0));
                     row.extend(cols.iter().map(|col| (*col, -1.0)));
-                    problem.add_row(..=0.0, row);
+                    problem.add_keyed_row(("kept", loader, activity, destination), ..=0.0, row);
                     Some(kept)
                 } else {
                     None
@@ -1412,10 +1422,10 @@ impl<'a> State<'a> {
                     if let Some(kept) = kept {
                         over.push((kept, -1.0));
                     }
-                    let past = problem.add_column(-overrun, 0.0..);
+                    let past = problem.add_keyed_column(("past", loader, activity, destination), -overrun, 0.0..);
                     incentive.push((past, -overrun));
                     over.push((past, -1.0));
-                    problem.add_row(..=0.0, over);
+                    problem.add_keyed_row(("past", loader, activity, destination), ..=0.0, over);
                 }
             }
         }
@@ -1446,14 +1456,14 @@ impl<'a> State<'a> {
                     Some((column, fraction))
                 })
                 .collect();
-            for (boundary, direction, slope) in target.specification.hinges() {
+            for (hinge, (boundary, direction, slope)) in target.specification.hinges().into_iter().enumerate() {
                 if slope == 0.0 {
                     continue;
                 }
-                let slack = problem.add_column(-slope, 0.0..);
+                let slack = problem.add_keyed_column(("hinge", index, hinge), -slope, 0.0..);
                 let mut terms = vec![(slack, -1.0)];
                 terms.extend(feed.iter().map(|&(column, fraction)| (column, direction * (fraction - boundary))));
-                problem.add_row(..=-direction * (opening_q - boundary * opening_t), terms);
+                problem.add_keyed_row(("hinge", index, hinge), ..=-direction * (opening_q - boundary * opening_t), terms);
             }
         }
         let solution = problem

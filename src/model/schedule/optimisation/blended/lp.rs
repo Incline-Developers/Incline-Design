@@ -6,7 +6,10 @@
 //! hands it to whichever backend the build has, so the same schedule logic
 //! runs natively and in the browser.
 
-use std::ops::{Bound, RangeBounds};
+use std::{
+    hash::{BuildHasher, Hash, Hasher},
+    ops::{Bound, RangeBounds},
+};
 
 /// A column of a [`LinearProgram`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +26,9 @@ pub(crate) struct LinearProgram {
     objective: Vec<f64>,
     column_bounds: Vec<(f64, f64)>,
     rows: Vec<Row>,
+    /// What each column stands for, where its builder said: how
+    /// [`WarmStarts`] carries a basis to a program of another shape.
+    keys: Vec<Option<u64>>,
 }
 
 #[derive(Clone)]
@@ -30,6 +36,12 @@ struct Row {
     lower: f64,
     upper: f64,
     terms: Vec<(Col, f64)>,
+    /// What the row stands for, where its builder said; see `keys`.
+    key: Option<u64>,
+}
+
+fn key_of(key: impl Hash) -> u64 {
+    foldhash::fast::FixedState::default().hash_one(key)
 }
 
 fn bounds(range: impl RangeBounds<f64>) -> (f64, f64) {
@@ -48,12 +60,30 @@ impl LinearProgram {
     pub(crate) fn add_column(&mut self, objective: f64, range: impl RangeBounds<f64>) -> Col {
         self.objective.push(objective);
         self.column_bounds.push(bounds(range));
+        self.keys.push(None);
         Col(self.objective.len() - 1)
+    }
+
+    /// [`Self::add_column`] for a column that stands for `key`: the same
+    /// thing in the next program, whatever else has changed, goes by the
+    /// same key.
+    pub(crate) fn add_keyed_column(&mut self, key: impl Hash, objective: f64, range: impl RangeBounds<f64>) -> Col {
+        let col = self.add_column(objective, range);
+        self.keys[col.0] = Some(key_of(key));
+        col
     }
 
     pub(crate) fn add_row(&mut self, range: impl RangeBounds<f64>, terms: Vec<(Col, f64)>) {
         let (lower, upper) = bounds(range);
-        self.rows.push(Row { lower, upper, terms });
+        self.rows.push(Row { lower, upper, terms, key: None });
+    }
+
+    /// [`Self::add_row`] for a row that stands for `key`, like
+    /// [`Self::add_keyed_column`]: the same limit in the next program goes
+    /// by the same key, whichever columns it then holds.
+    pub(crate) fn add_keyed_row(&mut self, key: impl Hash, range: impl RangeBounds<f64>, terms: Vec<(Col, f64)>) {
+        self.add_row(range, terms);
+        self.rows.last_mut().expect("just added").key = Some(key_of(key));
     }
 
     /// The objective at `solution`'s column values.
@@ -107,7 +137,6 @@ impl LinearProgram {
     /// What a basis carries over between programs: their columns, and each
     /// row's columns. Bounds, weights and coefficients may differ.
     fn shape(&self) -> u64 {
-        use std::hash::{BuildHasher, Hash, Hasher};
         let mut hasher = foldhash::fast::FixedState::default().build_hasher();
         self.objective.len().hash(&mut hasher);
         for row in &self.rows {
@@ -117,6 +146,39 @@ impl LinearProgram {
             }
         }
         hasher.finish()
+    }
+
+    /// Every column's key and every row's, or `None` while a column has no
+    /// key. A row without a key of its own goes by the keys of its columns:
+    /// after [`Self::tidy`] two rows over the same columns differ only in
+    /// their coefficients, and are told apart by their order. So do rows
+    /// given the same key.
+    fn keys(&self) -> Option<Keys> {
+        let cols: Vec<u64> = self.keys.iter().copied().collect::<Option<_>>()?;
+        let state = foldhash::fast::FixedState::default();
+        let mut seen: std::collections::HashMap<u64, u64, foldhash::fast::FixedState> = std::collections::HashMap::with_capacity_and_hasher(self.rows.len(), state.clone());
+        let mut members = Vec::new();
+        let rows = self
+            .rows
+            .iter()
+            .map(|row| {
+                let mut hasher = state.build_hasher();
+                match row.key {
+                    Some(key) => key.hash(&mut hasher),
+                    None => {
+                        members.clear();
+                        members.extend(row.terms.iter().map(|(col, _)| cols[col.0]));
+                        members.sort_unstable();
+                        members.hash(&mut hasher);
+                    }
+                }
+                let repeat = seen.entry(hasher.finish()).or_insert(0);
+                repeat.hash(&mut hasher);
+                *repeat += 1;
+                hasher.finish()
+            })
+            .collect();
+        Some(Keys { cols, rows })
     }
 
     /// This program as a [`solver::Problem`].
@@ -158,8 +220,6 @@ impl LinearProgram {
     /// Two parallel rows are the classic way to a basis that is singular
     /// apart from rounding.
     fn tidy(&mut self) -> Result<(), String> {
-        use std::hash::{BuildHasher, Hash, Hasher};
-
         let mut rows: Vec<Row> = Vec::with_capacity(self.rows.len());
         let state = foldhash::fast::FixedState::default();
         let mut seen: std::collections::HashMap<u64, usize, foldhash::fast::FixedState> = std::collections::HashMap::with_capacity_and_hasher(self.rows.len(), state.clone());
@@ -244,24 +304,32 @@ impl LinearProgram {
     fn maximise_solver(&self, warm: &mut WarmStarts) -> Result<Vec<f64>, String> {
         let shape = self.shape();
         let problem = self.to_solver();
+        let keys = self.keys();
         let options = solver::Options::default();
-        let mut solution = match warm.take(shape) {
-            Some(basis) => {
-                let found = solver::solve_from(&problem, &options, Some(&basis), None);
-                // A basis that does not suit this program is no reason to
-                // fail it: solve afresh.
-                if found.status == solver::Status::Optimal {
-                    found
-                } else {
-                    solver::solve(&problem, &options)
-                }
-            }
-            None => solver::solve(&problem, &options),
+        let found = match warm.take(shape) {
+            Some(basis) => Some(solver::solve_from(&problem, &options, Some(&basis), None)),
+            // A shape not held: the last program's basis, carried over by
+            // what its columns and rows stand for. Most of an interval's
+            // program is the one before it, so this is a few pivots where a
+            // solve from scratch is a presolve and tens of pivots.
+            None => keys
+                .as_ref()
+                .and_then(|keys| warm.carried(keys, &problem))
+                .map(|basis| solver::solve_from_alien(&problem, &options, &basis)),
+        };
+        // A basis that does not suit this program is no reason to fail it:
+        // solve afresh.
+        let mut solution = match found {
+            Some(found) if found.status == solver::Status::Optimal => found,
+            _ => solver::solve(&problem, &options),
         };
         if solution.status != solver::Status::Optimal {
             return Err(crate::i18n::tr!("err-sched-solver-ended", status = format!("{:?}", solution.status)));
         }
         if let Some(basis) = solution.basis.take() {
+            if let Some(keys) = keys {
+                warm.last = Some((keys, basis.clone()));
+            }
             warm.keep(shape, basis);
         }
         Ok(solution.col_value)
@@ -276,6 +344,14 @@ impl LinearProgram {
 #[derive(Default)]
 pub(crate) struct WarmStarts {
     bases: Vec<(u64, solver::Basis)>,
+    /// The last program solved with every column keyed, and its basis.
+    last: Option<(Keys, solver::Basis)>,
+}
+
+/// What each column and each row of a program stands for.
+struct Keys {
+    cols: Vec<u64>,
+    rows: Vec<u64>,
 }
 
 impl WarmStarts {
@@ -287,6 +363,50 @@ impl WarmStarts {
     fn take(&mut self, shape: u64) -> Option<solver::Basis> {
         let at = self.bases.iter().position(|(held, _)| *held == shape)?;
         Some(self.bases.remove(at).1)
+    }
+
+    /// The last program's basis for `problem`, whose columns and rows are
+    /// `keys`: each variable it shares with the last program keeps its
+    /// status, and the rest start nonbasic for the solver to place. Missing
+    /// basic variables the solver makes up with slacks; surplus ones, which
+    /// it would refuse, become nonbasic, rows' slacks first.
+    fn carried(&self, keys: &Keys, problem: &solver::Problem) -> Option<solver::Basis> {
+        use solver::BasisStatus;
+        let (held, basis) = self.last.as_ref()?;
+        let state = foldhash::fast::FixedState::default();
+        let index = |keys: &[u64], statuses: &[BasisStatus]| {
+            let mut map: std::collections::HashMap<u64, BasisStatus, foldhash::fast::FixedState> = std::collections::HashMap::with_capacity_and_hasher(keys.len(), state.clone());
+            map.extend(keys.iter().copied().zip(statuses.iter().copied()));
+            map
+        };
+        let (held_cols, held_rows) = (index(&held.cols, &basis.col_status), index(&held.rows, &basis.row_status));
+        // A nonbasic status names a bound, which this program may not have.
+        let fit = |status: BasisStatus, lower: f64, upper: f64| match status {
+            BasisStatus::Basic => BasisStatus::Basic,
+            BasisStatus::Lower if lower.is_finite() => BasisStatus::Lower,
+            BasisStatus::Upper if upper.is_finite() => BasisStatus::Upper,
+            BasisStatus::Zero if lower == f64::NEG_INFINITY && upper == f64::INFINITY => BasisStatus::Zero,
+            _ => BasisStatus::Nonbasic,
+        };
+        let carry = |keys: &[u64], held: &std::collections::HashMap<u64, BasisStatus, foldhash::fast::FixedState>, lower: &[f64], upper: &[f64]| -> Vec<BasisStatus> {
+            keys.iter()
+                .enumerate()
+                .map(|(at, key)| held.get(key).map_or(BasisStatus::Nonbasic, |&status| fit(status, lower[at], upper[at])))
+                .collect()
+        };
+        let mut col_status = carry(&keys.cols, &held_cols, &problem.col_lower, &problem.col_upper);
+        let mut row_status = carry(&keys.rows, &held_rows, &problem.row_lower, &problem.row_upper);
+        let mut surplus = (col_status.iter().chain(&row_status).filter(|status| **status == BasisStatus::Basic).count()).saturating_sub(row_status.len());
+        for status in row_status.iter_mut().rev().chain(col_status.iter_mut().rev()) {
+            if surplus == 0 {
+                break;
+            }
+            if *status == BasisStatus::Basic {
+                *status = BasisStatus::Nonbasic;
+                surplus -= 1;
+            }
+        }
+        Some(solver::Basis { col_status, row_status })
     }
 
     fn keep(&mut self, shape: u64, basis: solver::Basis) {
