@@ -2506,6 +2506,26 @@ fn stable_fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
         target.specification.penalty_per_tonne.to_bits().hash(&mut hasher);
         target.specification.outside_multiplier.to_bits().hash(&mut hasher);
     }
+    // What the model gained after schedules were first saved, hashed only
+    // where it is set, so a schedule saved before then is still recognised.
+    for pile in &input.piles {
+        if !pile.modes.is_empty() || pile.exclusive || pile.rest_h != 0.0 {
+            pile.id.0.hash(&mut hasher);
+            for mode in &pile.modes {
+                (*mode as u8).hash(&mut hasher);
+            }
+            pile.exclusive.hash(&mut hasher);
+            pile.rest_h.to_bits().hash(&mut hasher);
+        }
+    }
+    for loader in &input.loaders {
+        for rate in loader.rates.iter().filter(|rate| rate.utilisation_target != 1.0 || rate.utilisation_incentive != 0.0) {
+            loader.id.0.hash(&mut hasher);
+            rate.interval.hash(&mut hasher);
+            rate.utilisation_target.to_bits().hash(&mut hasher);
+            rate.utilisation_incentive.to_bits().hash(&mut hasher);
+        }
+    }
     hasher.finish()
 }
 

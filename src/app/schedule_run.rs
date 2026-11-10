@@ -407,12 +407,17 @@ impl crate::app::App<'_> {
             (agent.id.0, agent.class_id.0).hash(&mut hasher);
             agent.calendar.default_availability.to_bits().hash(&mut hasher);
             agent.calendar.default_utilisation.to_bits().hash(&mut hasher);
+            // What the dig incentive pays, which steers the dispatch.
+            agent.calendar.default_utilisation_target.to_bits().hash(&mut hasher);
+            agent.calendar.default_utilisation_incentive.to_bits().hash(&mut hasher);
             for (period, value) in &agent.calendar.periods {
                 period.0.hash(&mut hasher);
                 value.availability.map(f64::to_bits).hash(&mut hasher);
                 value.utilisation.map(f64::to_bits).hash(&mut hasher);
                 value.rate_tph.map(f64::to_bits).hash(&mut hasher);
                 value.reclaim_rate_tph.map(f64::to_bits).hash(&mut hasher);
+                value.utilisation_target.map(f64::to_bits).hash(&mut hasher);
+                value.utilisation_incentive.map(f64::to_bits).hash(&mut hasher);
             }
         }
         // Destinations: identity, kind, capacity, haul distance, crusher
@@ -448,7 +453,6 @@ impl crate::app::App<'_> {
         for rule in &routing.rules {
             rule.hash_content_public(&mut hasher);
         }
-        plan.trucks().hash_content(&mut hasher);
         plan.cashflow().hash_content(&mut hasher);
         // Ground taken out of mining.
         for solid in document.solids() {
