@@ -20,7 +20,7 @@ use crate::{
             mesh_data,
         },
         kriging::{KrigingGrid, KrigingSample, OrdinaryKrigingOptions, ordinary_kriging},
-        prismoid_grid::{PrismoidGrid, PrismoidGridId},
+        prismoid_grid::{CellValueRole, CellValues, PrismoidGrid, PrismoidGridId},
         project::ModelEnvelope,
     },
     ui::state::{OreFilterMode, TriSurfaceType},
@@ -570,6 +570,7 @@ impl<'a> App<'a> {
         let grid_name = item.name.clone();
         let name = tr!("cmd-prismoid-grid-block-model-name", grid = grid_name.clone());
         let label = grid_name.clone();
+        let carried = carried_line(&grid);
         let envelope = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
         let compute = move |cancel: &crate::app::jobs::CancelFlag, _: &crate::model::progress::Progress| -> Result<LoadedBlockModel> {
             if cancel.is_cancelled() {
@@ -590,6 +591,9 @@ impl<'a> App<'a> {
                         volume = format!("{volume:.2}")
                     )
                 );
+                if let Some(carried) = carried {
+                    userspace_log!("{carried}");
+                }
                 app.add_loaded_block_model(loaded);
             }
             Err(error) if error.to_string() != "Cancelled" => {
@@ -730,39 +734,32 @@ pub(super) fn prismoid_cells_too_fine(grid: &PrismoidGrid) -> Option<f64> {
 
 /// A block model of one box per active prismoid, from
 /// [`PrismoidGrid::blocks`] in the lattice's frame: each block's volume and
-/// vertical thickness, each cell value, and the grid's name as a category.
+/// vertical thickness, each cell value (the density as `density`, NaN where a
+/// cell has none), and the grid's name as a category.
 /// With an `envelope` the frame and extent are the envelope's, from its
 /// corner at the base RL, so every model of the project shares them.
 fn prismoid_block_model(grid: &PrismoidGrid, grid_name: &str, name: String, envelope: Option<&ModelEnvelope>) -> Result<LoadedBlockModel> {
     let lattice = &grid.lattice;
-    let (cells, bounds): (Vec<usize>, Vec<BlockBounds>) = grid.blocks().into_iter().unzip();
-    let (bounds, lower, upper, origin, rotation) = match envelope {
-        Some(envelope) => {
-            if (lattice.u, lattice.v) != (glam::DVec2::X, glam::DVec2::Y) {
-                anyhow::bail!("{}", tr!("cmd-prismoid-grid-block-model-off-envelope-axes", grid = grid_name.to_owned()));
-            }
-            if !grid.fits(envelope) {
-                anyhow::bail!(
-                    "{}",
-                    tr!("cmd-prismoid-grid-block-model-outside-envelope", grid = grid_name.to_owned(), envelope = envelope.summary())
-                );
-            }
-            let shift = lattice.origin.extend(0.0) - envelope.lower();
-            let bounds = bounds
-                .into_iter()
-                .map(|block| BlockBounds {
-                    lower: block.lower + shift,
-                    upper: block.upper + shift,
-                })
-                .collect();
-            (bounds, DVec3::ZERO, DVec3::from_array(envelope.size), envelope.lower(), DMat3::IDENTITY)
+    if let Some(envelope) = envelope {
+        if (lattice.u, lattice.v) != (glam::DVec2::X, glam::DVec2::Y) {
+            anyhow::bail!("{}", tr!("cmd-prismoid-grid-block-model-off-envelope-axes", grid = grid_name.to_owned()));
         }
+        if !grid.fits(envelope) {
+            anyhow::bail!(
+                "{}",
+                tr!("cmd-prismoid-grid-block-model-outside-envelope", grid = grid_name.to_owned(), envelope = envelope.summary())
+            );
+        }
+    }
+    let (cells, bounds): (Vec<usize>, Vec<BlockBounds>) = grid.model_blocks(envelope).into_iter().unzip();
+    let (lower, upper, origin, rotation) = match envelope {
+        Some(envelope) => (DVec3::ZERO, DVec3::from_array(envelope.size), envelope.lower(), DMat3::IDENTITY),
         None => {
             let (lower, upper) = bounds.iter().fold((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)), |(lower, upper), block| {
                 (lower.min(block.lower), upper.max(block.upper))
             });
             let rotation = DMat3::from_cols(lattice.u.extend(0.0), lattice.v.extend(0.0), DVec3::Z);
-            (bounds, lower, upper, lattice.origin.extend(0.0), rotation)
+            (lower, upper, lattice.origin.extend(0.0), rotation)
         }
     };
     // The expression `block_volumes` measures each block with, on the boxes
@@ -779,7 +776,7 @@ fn prismoid_block_model(grid: &PrismoidGrid, grid_name: &str, name: String, enve
         numeric("vertical_thickness", bounds.iter().map(|block| block.upper.z - block.lower.z).collect()),
     ];
     for values in &grid.cell_values {
-        columns.push(numeric(&values.name, cells.iter().map(|cell| values.values[*cell].unwrap_or(f64::NAN)).collect()));
+        columns.push(numeric(column_name(values), cells.iter().map(|cell| values.values[*cell].unwrap_or(f64::NAN)).collect()));
     }
     columns.push(BlockModelColumn {
         name: "prismoid_grid".to_owned(),
@@ -815,6 +812,32 @@ fn prismoid_block_model(grid: &PrismoidGrid, grid_name: &str, name: String, enve
         active_color_variable,
         active_values_cache,
     })
+}
+
+/// What a derived model does to the grid's values, units dropped and the
+/// density renamed; `None` when it does neither.
+fn carried_line(grid: &PrismoidGrid) -> Option<String> {
+    let values = &grid.cell_values;
+    if !values.iter().any(|values| values.role == CellValueRole::Density || !values.unit.is_empty()) {
+        return None;
+    }
+    let names: Vec<String> = values
+        .iter()
+        .map(|values| match column_name(values) {
+            renamed if renamed != values.name => tr!("cmd-prismoid-grid-block-model-density-as", name = values.name.clone()),
+            same => same.to_owned(),
+        })
+        .collect();
+    Some(tr!("cmd-prismoid-grid-block-model-units", columns = names.join(", ")))
+}
+
+/// The block column a grid's values become: one name for every grid's
+/// density, so one Field List maps them all.
+fn column_name(values: &CellValues) -> &str {
+    match values.role {
+        CellValueRole::Density => "density",
+        CellValueRole::Quality => &values.name,
+    }
 }
 
 fn ore_block_indices(values: &[f64], renderable_block_indices: &RenderableBlockIndices, default: Option<f64>, mode: OreFilterMode, min: f64, max: f64) -> Vec<usize> {

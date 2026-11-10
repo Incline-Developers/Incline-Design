@@ -775,6 +775,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = La grille de prismoïdes '{ $g
 cmd-prismoid-grid-creating-block-model = Création du modèle de blocs à partir de la grille de prismoïdes…
 cmd-prismoid-grid-created-block-model = Modèle de blocs '{ $name }' créé à partir de la grille de prismoïdes '{ $grid }' : { $blocks } blocs, un par prismoïde actif, { $volume } m³ au total
 cmd-prismoid-grid-block-model-name = Modèle de blocs { $grid }
+cmd-prismoid-grid-block-model-units = Reportées dans les colonnes de blocs : { $columns } ; les unités ne sont pas conservées
+cmd-prismoid-grid-block-model-density-as = { $name } comme densité
 cmd-prismoid-grid-cells-too-fine = La grille de prismoïdes '{ $grid }' a des cellules de { $size } m ; les modèles de blocs pour l'ordonnancement prennent { $least } m ou plus tant que la taille du solveur n'est pas mesurée. Construisez la grille avec une taille de cellule plus grande.
 cmd-prismoid-grid-adding-qualities = Ajout des qualités à la grille de prismoïdes…
 cmd-prismoid-grid-quality-corners = { $quality } de { $surface } : lue aux coins des prismoïdes, { $read } cellule(s), { $missing } sans valeur
@@ -1747,6 +1749,14 @@ explorer-prismoid-grid-id =
     ID : prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } cellules, { $active } actives
 explorer-prismoid-grid-thickness = Épaisseur verticale de { $min } à { $max }
+explorer-prismoid-grid-volume-tonnes = Volume { $volume } m³, { $tonnes } t d'après { $density }
+explorer-prismoid-grid-volume-only = Volume { $volume } m³, pas de densité : pas de tonnes
+explorer-prismoid-grid-volume-no-density = Volume { $volume } m³, aucune cellule n'a de valeur pour { $density } : pas de tonnes
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } pondéré par les tonnes
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } pondéré par le volume
+explorer-prismoid-grid-quality-no-values = { $quality } : aucune cellule n'a de valeur
+explorer-prismoid-grid-quality-no-density = { $quality } : là où elle a une valeur, { $density } manque ou n'est pas au-dessus de 0
+explorer-prismoid-grid-left-out = , { $count } cellule(s) écartée(s)
 explorer-load = Charger
 explorer-lock = Verrouillage
 explorer-new-collection = Nouvelle collection

@@ -767,6 +767,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = प्रिज़्मॉइ
 cmd-prismoid-grid-creating-block-model = प्रिज़्मॉइड ग्रिड से ब्लॉक मॉडल बनाया जा रहा है…
 cmd-prismoid-grid-created-block-model = प्रिज़्मॉइड ग्रिड '{ $grid }' से ब्लॉक मॉडल '{ $name }' बनाया गया: { $blocks } ब्लॉक, हर सक्रिय प्रिज़्मॉइड का एक, कुल { $volume } मी³
 cmd-prismoid-grid-block-model-name = { $grid } ब्लॉक मॉडल
+cmd-prismoid-grid-block-model-units = ब्लॉक स्तंभों में ले जाए गए: { $columns }; इकाइयाँ नहीं रखी जातीं
+cmd-prismoid-grid-block-model-density-as = घनत्व के रूप में { $name }
 cmd-prismoid-grid-cells-too-fine = प्रिज़्मॉइड ग्रिड '{ $grid }' के सेल { $size } मी के हैं; सॉल्वर का आकार मापे जाने तक शेड्यूल के ब्लॉक मॉडल { $least } मी या अधिक लेते हैं। ग्रिड को बड़े सेल आकार पर बनाएँ।
 cmd-prismoid-grid-adding-qualities = प्रिज़्मॉइड ग्रिड में गुणवत्ताएँ जोड़ी जा रही हैं…
 cmd-prismoid-grid-quality-corners = { $surface } से { $quality }: प्रिज़्मॉइड के कोनों पर पढ़ी गई, { $read } सेल, { $missing } बिना मान
@@ -1739,6 +1741,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } सेल, { $active } सक्रिय
 explorer-prismoid-grid-thickness = ऊर्ध्वाधर मोटाई { $min } से { $max }
+explorer-prismoid-grid-volume-tonnes = आयतन { $volume } मी³, { $density } से { $tonnes } t
+explorer-prismoid-grid-volume-only = आयतन { $volume } मी³, कोई घनत्व नहीं: कोई टन नहीं
+explorer-prismoid-grid-volume-no-density = आयतन { $volume } मी³, किसी सेल में { $density } का मान नहीं: कोई टन नहीं
+explorer-prismoid-grid-quality-by-tonnes = टन के अनुसार { $quality } { $value }
+explorer-prismoid-grid-quality-by-volume = आयतन के अनुसार { $quality } { $value }
+explorer-prismoid-grid-quality-no-values = { $quality }: किसी सेल में मान नहीं
+explorer-prismoid-grid-quality-no-density = { $quality }: जहाँ मान है, वहाँ { $density } अनुपस्थित है या 0 से ऊपर नहीं
+explorer-prismoid-grid-left-out = , { $count } सेल छोड़े गए
 explorer-load = लोड करें
 explorer-lock = ताला
 explorer-new-collection = नया संग्रह

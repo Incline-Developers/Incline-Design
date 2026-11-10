@@ -5,7 +5,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use anyhow::{Result, bail};
-use glam::{DVec2, DVec3};
+use glam::{DMat3, DVec2, DVec3};
 
 use crate::{
     app::jobs::CancelFlag,
@@ -16,6 +16,7 @@ use crate::{
         grid_surface::{GridSurface, HEIGHT_TOLERANCE, NODE_TOLERANCE, surface_z_single},
         progress::Phase,
         project::{ModelEnvelope, ProjectItemState},
+        solid_reserves::NumericTotal,
         spatial::TriangleBvh,
         triangulation::{quality_key, same_quality_name},
     },
@@ -525,6 +526,37 @@ impl PrismoidGrid {
         blocks
     }
 
+    /// The boxes [`Self::blocks`] gives in the frame of a block model made
+    /// from the grid: the lattice's, or with an `envelope` (the grid on its
+    /// axes) the envelope's, from its corner at the base RL.
+    pub(crate) fn model_blocks(&self, envelope: Option<&ModelEnvelope>) -> Vec<(usize, BlockBounds)> {
+        let blocks = self.blocks();
+        let Some(envelope) = envelope else { return blocks };
+        let shift = self.lattice.origin.extend(0.0) - envelope.lower();
+        blocks
+            .into_iter()
+            .map(|(cell, block)| {
+                let (lower, upper) = (block.lower + shift, block.upper + shift);
+                (cell, BlockBounds { lower, upper })
+            })
+            .collect()
+    }
+
+    /// Each box [`Self::model_blocks`] gives, measured as `block_volumes`
+    /// and `per_volume_values` measure a block model's.
+    pub(crate) fn cell_measures(&self, envelope: Option<&ModelEnvelope>) -> Vec<CellMeasure> {
+        let lattice = &self.lattice;
+        let stretch = DMat3::from_cols(lattice.u.extend(0.0), lattice.v.extend(0.0), DVec3::Z).determinant().abs();
+        self.model_blocks(envelope)
+            .into_iter()
+            .map(|(cell, bounds)| CellMeasure {
+                cell,
+                sides: (bounds.upper - bounds.lower).element_product(),
+                stretch,
+            })
+            .collect()
+    }
+
     /// Thickness at every corner as a position from 0 to 1 across `range`,
     /// 0.5 where the range is flat. `None` unless the lattice is regular: the
     /// map to the texture is affine, and a tensor lattice's corners are not
@@ -567,8 +599,9 @@ impl PrismoidGrid {
         })
     }
 
-    /// The lattice size, the active cells, and the range of roof minus floor
-    /// over every corner of an active cell.
+    /// The lattice size, the active cells, the range of roof minus floor
+    /// over every corner of an active cell, and the totals: a derived block
+    /// model's bit for bit without an envelope, to rounding with one.
     pub(crate) fn summary(&self) -> PrismoidGridSummary {
         let (columns, rows) = (self.lattice.columns(), self.lattice.rows());
         let mut thickness: Option<(f64, f64)> = None;
@@ -586,12 +619,45 @@ impl PrismoidGrid {
                 thickness = Some(thickness.map_or((height, height), |(min, max)| (min.min(height), max.max(height))));
             }
         }
+        let density = self.cell_values.iter().find(|values| values.role == CellValueRole::Density);
+        let mut tonnes = density.map(|_| NumericTotal::default());
+        let mut qualities: Vec<(&CellValues, NumericTotal)> = self
+            .cell_values
+            .iter()
+            .filter(|values| values.role == CellValueRole::Quality)
+            .map(|values| (values, NumericTotal::default()))
+            .collect();
+        let mut volume = 0.0;
+        for measure in self.cell_measures(None) {
+            let cell_volume = measure.volume();
+            volume += cell_volume;
+            let cell_tonnes = density.map(|density| density.values[measure.cell].map(|value| measure.per_volume(value)));
+            if let Some(total) = tonnes.as_mut() {
+                add_summed(total, cell_tonnes.flatten());
+            }
+            // By tonnes where the grid has a density, never mixed with volume.
+            let weight = cell_tonnes.unwrap_or(Some(cell_volume));
+            for (values, total) in &mut qualities {
+                add_weighted(total, values.values[measure.cell], weight);
+            }
+        }
         PrismoidGridSummary {
             columns,
             rows,
-            cells: columns * rows,
             active_cells,
             vertical_thickness: thickness,
+            volume,
+            weighting: if tonnes.is_some() { Weighting::ByTonnes } else { Weighting::ByVolume },
+            tonnes,
+            density: density.map(|density| density.name.clone()),
+            qualities: qualities
+                .into_iter()
+                .map(|(values, total)| QualityTotal {
+                    name: values.name.clone(),
+                    unit: values.unit.clone(),
+                    total,
+                })
+                .collect(),
         }
     }
 
@@ -625,15 +691,94 @@ fn mesh_vertex(position: DVec3) -> mesh_data::Vertex {
     mesh_data::Vertex::new(position.x, position.y, position.z)
 }
 
+// One whole cell into a total by the rules the reserve scan's `add` adds a
+// block with: a value that is absent is missing; a weight absent, zero or
+// negative is unusable; a negative value reads as zero.
+fn add_summed(total: &mut NumericTotal, value: Option<f64>) {
+    let Some(value) = value.filter(|value| value.is_finite()) else {
+        total.missing += 1;
+        return;
+    };
+    if value < 0.0 {
+        total.negatives += 1;
+    } else {
+        total.sum += value;
+    }
+    total.contributions += 1;
+}
+
+fn add_weighted(total: &mut NumericTotal, value: Option<f64>, weight: Option<f64>) {
+    let Some(value) = value.filter(|value| value.is_finite()) else {
+        total.missing += 1;
+        return;
+    };
+    let Some(weight) = weight.filter(|weight| weight.is_finite() && *weight > 0.0) else {
+        total.unusable_weights += 1;
+        return;
+    };
+    if value < 0.0 {
+        total.negatives += 1;
+    } else {
+        total.sum += value * weight;
+    }
+    total.weight += weight;
+    total.contributions += 1;
+}
+
+/// One active cell's box, measured as a block model's: its sides'
+/// product, then the frame's stretch.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CellMeasure {
+    pub(crate) cell: usize,
+    sides: f64,
+    stretch: f64,
+}
+
+impl CellMeasure {
+    pub(crate) fn volume(self) -> f64 {
+        self.sides * self.stretch
+    }
+
+    /// A `value` per cubic metre over the box, multiplied in
+    /// `per_volume_values`' order.
+    pub(crate) fn per_volume(self, value: f64) -> f64 {
+        value * self.sides * self.stretch
+    }
+}
+
+/// What a grid's quality means are weighted by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Weighting {
+    /// Cell tonnes: the grid has a density.
+    ByTonnes,
+    ByVolume,
+}
+
+/// One quality's mean over a grid's cells.
+#[derive(Clone, Debug)]
+pub(crate) struct QualityTotal {
+    pub(crate) name: String,
+    pub(crate) unit: String,
+    pub(crate) total: NumericTotal,
+}
+
 /// What a prismoid grid's row reports about it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct PrismoidGridSummary {
     pub(crate) columns: usize,
     pub(crate) rows: usize,
-    pub(crate) cells: usize,
     pub(crate) active_cells: usize,
     /// Roof minus floor, smallest and largest; `None` with no active cell.
     pub(crate) vertical_thickness: Option<(f64, f64)>,
+    /// Cubic metres in the active prismoids.
+    pub(crate) volume: f64,
+    /// Volume times density, summed; `None` without a density.
+    pub(crate) tonnes: Option<NumericTotal>,
+    /// The density's name, with `tonnes`.
+    pub(crate) density: Option<String>,
+    pub(crate) weighting: Weighting,
+    /// Each quality's mean, density aside, in the grid's order.
+    pub(crate) qualities: Vec<QualityTotal>,
 }
 
 /// A prismoid grid open in the project.

@@ -22,17 +22,19 @@ use crate::{
     },
     i18n::tr,
     model::{
-        Command, ItemRef, MemberKind, OpenItem, SceneEntityId, SectionKind,
+        Command, ItemRef, MemberKind, OpenItem, ReserveAggregation, SceneEntityId, SectionKind,
         formats::mesh_data::Triangulation,
         grid_surface::GridSurface,
+        plot::format_quantity,
         prismoid_grid::{
             AddedValues, BuildRefusal, CellReading, CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, OpenPrismoidGrid, PrismoidBuild, PrismoidGrid, PrismoidGridId,
-            QualitySurface, THICKNESS_RAMP, ThicknessMap, ValuesRefusal,
+            PrismoidGridSummary, QualitySurface, THICKNESS_RAMP, ThicknessMap, ValuesRefusal, Weighting,
         },
         progress::{Phase, Progress},
         project::{ModelEnvelope, ProjectItemState, unique_item_name},
         raster::{OpenRasterTexture, RasterTextureId},
         rbf::NODE_BUDGET,
+        solid_reserves::NumericTotal,
         spatial::TriangleBvh,
         triangulation::{OpenTriangulation, QualityMark, TriangulationId, spatial_surface_face_order},
     },
@@ -143,7 +145,8 @@ impl App<'_> {
                 let Some(item) = app.prismoid_grids.iter().find(|item| item.id == id) else {
                     return;
                 };
-                let summary = item.summary;
+                let summary = &item.summary;
+                let totals = totals_lines(summary);
                 let (min, max) = summary.vertical_thickness.unwrap_or_default();
                 let size = cell_size(item.grid.lattice.u_sizes.first().copied().unwrap_or_default());
                 userspace_log!(
@@ -159,6 +162,9 @@ impl App<'_> {
                         max = format!("{max:.2}")
                     )
                 );
+                for line in totals {
+                    userspace_log!("{line}");
+                }
                 if crossed > 0 {
                     userspace_warn!(
                         "{}",
@@ -257,6 +263,7 @@ impl App<'_> {
             let grid_name = item.name.clone();
             let mut replacement = item.clone();
             replacement.summary = merged.summary();
+            let totals = totals_lines(&replacement.summary);
             replacement.grid = Arc::new(merged);
             app.execute_edit_for(
                 runtime_id,
@@ -266,7 +273,7 @@ impl App<'_> {
                 },
             );
             userspace_log!("{}", tr!("cmd-prismoid-grid-qualities-added", count = lines.len().to_string(), grid = grid_name));
-            for line in lines {
+            for line in lines.into_iter().chain(totals) {
                 userspace_log!("{line}");
             }
             userspace_log!("{}", tr!("cmd-prismoid-grid-qualities-rederive"));
@@ -489,6 +496,47 @@ pub(crate) fn values_refusal_words(refusal: ValuesRefusal, grid_name: &str) -> S
 /// vertices carries their rounding.
 pub(super) fn cell_size(size: f64) -> String {
     ((size * 100.0).round() / 100.0).to_string()
+}
+
+/// A grid's volume and tonnes, then each quality's mean, as its explorer row
+/// and the console show them.
+pub(crate) fn totals_lines(summary: &PrismoidGridSummary) -> Vec<String> {
+    let left_out = |total: &NumericTotal| match total.missing + total.unusable_weights {
+        0 => String::new(),
+        count => tr!("explorer-prismoid-grid-left-out", count = count.to_string()),
+    };
+    let volume = format_quantity(summary.volume, 0);
+    let first = match (&summary.tonnes, &summary.density) {
+        (Some(tonnes), Some(density)) => match tonnes.value(ReserveAggregation::Sum) {
+            Some(sum) => tr!(
+                "explorer-prismoid-grid-volume-tonnes",
+                volume = volume,
+                tonnes = format_quantity(sum, 0),
+                density = density.clone()
+            ),
+            None => tr!("explorer-prismoid-grid-volume-no-density", volume = volume, density = density.clone()),
+        },
+        _ => tr!("explorer-prismoid-grid-volume-only", volume = volume),
+    };
+    let mut lines = vec![format!("{first}{}", summary.tonnes.as_ref().map(left_out).unwrap_or_default())];
+    for quality in &summary.qualities {
+        let (total, name) = (&quality.total, quality.name.clone());
+        // `value` reads sum over weight for either average.
+        let line = match (total.value(ReserveAggregation::VolumeAverage), &summary.density) {
+            (Some(mean), _) => {
+                let mean = format_quantity(mean, 2);
+                let value = if quality.unit.is_empty() { mean } else { format!("{mean} {}", quality.unit) };
+                match summary.weighting {
+                    Weighting::ByTonnes => tr!("explorer-prismoid-grid-quality-by-tonnes", quality = name, value = value),
+                    Weighting::ByVolume => tr!("explorer-prismoid-grid-quality-by-volume", quality = name, value = value),
+                }
+            }
+            (None, Some(density)) if total.unusable_weights > 0 => tr!("explorer-prismoid-grid-quality-no-density", quality = name, density = density.clone()),
+            (None, _) => tr!("explorer-prismoid-grid-quality-no-values", quality = name),
+        };
+        lines.push(format!("{line}{}", left_out(total)));
+    }
+    lines
 }
 
 /// A thickness map in the ramp's colours, as a raster the drape can draw. Its

@@ -793,6 +793,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = Lưới prismoid '{ $grid }' b
 cmd-prismoid-grid-creating-block-model = Đang tạo mô hình khối từ lưới prismoid…
 cmd-prismoid-grid-created-block-model = Đã tạo mô hình khối '{ $name }' từ lưới prismoid '{ $grid }': { $blocks } khối, mỗi prismoid hoạt động một khối, tổng { $volume } m³
 cmd-prismoid-grid-block-model-name = Mô hình khối { $grid }
+cmd-prismoid-grid-block-model-units = Đưa vào các cột khối: { $columns }; không giữ đơn vị
+cmd-prismoid-grid-block-model-density-as = { $name } làm tỷ trọng
 cmd-prismoid-grid-cells-too-fine = Lưới prismoid '{ $grid }' có ô { $size } m; mô hình khối cho lập lịch dùng ô { $least } m trở lên cho đến khi đo được kích thước bộ giải. Hãy tạo lưới với kích thước ô lớn hơn.
 cmd-prismoid-grid-adding-qualities = Đang thêm chỉ tiêu vào lưới prismoid…
 cmd-prismoid-grid-quality-corners = { $quality } từ { $surface }: đọc tại các góc prismoid, { $read } ô, { $missing } ô không có giá trị
@@ -1765,6 +1767,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } ô, { $active } ô đang hoạt động
 explorer-prismoid-grid-thickness = Độ dày theo phương đứng từ { $min } đến { $max }
+explorer-prismoid-grid-volume-tonnes = Thể tích { $volume } m³, { $tonnes } t theo { $density }
+explorer-prismoid-grid-volume-only = Thể tích { $volume } m³, không có tỷ trọng: không có tấn
+explorer-prismoid-grid-volume-no-density = Thể tích { $volume } m³, không ô nào có giá trị { $density }: không có tấn
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } theo tấn
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } theo thể tích
+explorer-prismoid-grid-quality-no-values = { $quality }: không ô nào có giá trị
+explorer-prismoid-grid-quality-no-density = { $quality }: nơi có giá trị, { $density } bị thiếu hoặc không lớn hơn 0
+explorer-prismoid-grid-left-out = , bỏ qua { $count } ô
 explorer-load = Tải
 explorer-lock = Khóa
 explorer-new-collection = Bộ sưu tập mới

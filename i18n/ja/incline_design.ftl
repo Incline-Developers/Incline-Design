@@ -795,6 +795,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = プリズモイドグリッド
 cmd-prismoid-grid-creating-block-model = プリズモイドグリッドからブロックモデルを作成しています…
 cmd-prismoid-grid-created-block-model = プリズモイドグリッド '{ $grid }' からブロックモデル '{ $name }' を作成しました: アクティブなプリズモイドごとに1つ、{ $blocks } ブロック、合計 { $volume } m³
 cmd-prismoid-grid-block-model-name = { $grid } ブロックモデル
+cmd-prismoid-grid-block-model-units = ブロック列へ反映: { $columns }。単位は保持されません
+cmd-prismoid-grid-block-model-density-as = 密度として { $name }
 cmd-prismoid-grid-cells-too-fine = プリズモイドグリッド '{ $grid }' のセルは { $size } m です。ソルバーの規模を測るまで、スケジュール用のブロックモデルは { $least } m 以上を使います。より大きいセルサイズでグリッドを構築してください。
 cmd-prismoid-grid-adding-qualities = プリズモイドグリッドに品質を追加しています…
 cmd-prismoid-grid-quality-corners = { $surface } の { $quality }: プリズモイドの角で読み取り、{ $read } セル、値なし { $missing }
@@ -1767,6 +1769,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } セル、{ $active } 個が有効
 explorer-prismoid-grid-thickness = 鉛直厚さ { $min } から { $max }
+explorer-prismoid-grid-volume-tonnes = 体積 { $volume } m³、{ $density } から { $tonnes } t
+explorer-prismoid-grid-volume-only = 体積 { $volume } m³、密度なし: トンなし
+explorer-prismoid-grid-volume-no-density = 体積 { $volume } m³、{ $density } の値を持つセルなし: トンなし
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } (トン加重)
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } (体積加重)
+explorer-prismoid-grid-quality-no-values = { $quality }: 値を持つセルなし
+explorer-prismoid-grid-quality-no-density = { $quality }: 値がある所で { $density } が欠けているか 0 を超えていません
+explorer-prismoid-grid-left-out = 、除外セル { $count }
 explorer-load = 読み込み
 explorer-lock = ロック
 explorer-new-collection = 新しいコレクション

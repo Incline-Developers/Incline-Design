@@ -1556,6 +1556,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = Prismoid grid '{ $grid }' is r
 cmd-prismoid-grid-creating-block-model = Creating block model from prismoid grid…
 cmd-prismoid-grid-created-block-model = Created block model '{ $name }' from prismoid grid '{ $grid }': { $blocks } blocks, one per active prismoid, { $volume } m³ in all
 cmd-prismoid-grid-block-model-name = { $grid } Block Model
+cmd-prismoid-grid-block-model-units = Carried to block columns: { $columns }; units are not kept
+cmd-prismoid-grid-block-model-density-as = { $name } as density
 cmd-prismoid-grid-cells-too-fine = Prismoid grid '{ $grid }' has { $size } m cells; block models for the schedule take { $least } m or more until solver size is measured. Build the grid at a larger cell size.
 cmd-prismoid-grid-adding-qualities = Adding qualities to prismoid grid…
 cmd-prismoid-grid-quality-corners = { $quality } from { $surface }: read at the prismoids' corners, { $read } cell(s), { $missing } without a value
@@ -3534,6 +3536,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } cells, { $active } active
 explorer-prismoid-grid-thickness = Vertical thickness { $min } to { $max }
+explorer-prismoid-grid-volume-tonnes = Volume { $volume } m³, { $tonnes } t from { $density }
+explorer-prismoid-grid-volume-only = Volume { $volume } m³, no density: no tonnes
+explorer-prismoid-grid-volume-no-density = Volume { $volume } m³, no cell has a value for { $density }: no tonnes
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } by tonnes
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } by volume
+explorer-prismoid-grid-quality-no-values = { $quality }: no cell has a value
+explorer-prismoid-grid-quality-no-density = { $quality }: where it has a value, { $density } is missing or not above 0
+explorer-prismoid-grid-left-out = , { $count } cell(s) left out
 explorer-hide = Hide
 explorer-load = Load
 explorer-lock = Lock

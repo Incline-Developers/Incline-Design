@@ -773,6 +773,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = A grade de prismoides '{ $grid
 cmd-prismoid-grid-creating-block-model = Criando modelo de blocos a partir da grade de prismoides…
 cmd-prismoid-grid-created-block-model = Modelo de blocos '{ $name }' criado a partir da grade de prismoides '{ $grid }': { $blocks } blocos, um por prismoide ativo, { $volume } m³ no total
 cmd-prismoid-grid-block-model-name = Modelo de blocos { $grid }
+cmd-prismoid-grid-block-model-units = Levadas às colunas de blocos: { $columns }; as unidades não são mantidas
+cmd-prismoid-grid-block-model-density-as = { $name } como densidade
 cmd-prismoid-grid-cells-too-fine = A grade de prismoides '{ $grid }' tem células de { $size } m; os modelos de blocos para o planejamento usam { $least } m ou mais até o tamanho do solver ser medido. Construa a grade com um tamanho de célula maior.
 cmd-prismoid-grid-adding-qualities = Adicionando qualidades à grade de prismoides…
 cmd-prismoid-grid-quality-corners = { $quality } de { $surface }: lida nos cantos dos prismoides, { $read } célula(s), { $missing } sem valor
@@ -1745,6 +1747,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } células, { $active } ativas
 explorer-prismoid-grid-thickness = Espessura vertical de { $min } a { $max }
+explorer-prismoid-grid-volume-tonnes = Volume { $volume } m³, { $tonnes } t a partir de { $density }
+explorer-prismoid-grid-volume-only = Volume { $volume } m³, sem densidade: sem toneladas
+explorer-prismoid-grid-volume-no-density = Volume { $volume } m³, nenhuma célula tem valor para { $density }: sem toneladas
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } ponderada por toneladas
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } ponderada por volume
+explorer-prismoid-grid-quality-no-values = { $quality }: nenhuma célula tem valor
+explorer-prismoid-grid-quality-no-density = { $quality }: onde tem valor, { $density } falta ou não está acima de 0
+explorer-prismoid-grid-left-out = , { $count } célula(s) deixadas de fora
 explorer-load = Carregar
 explorer-lock = Bloquear
 explorer-new-collection = Nova coleção

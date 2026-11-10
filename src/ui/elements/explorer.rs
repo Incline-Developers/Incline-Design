@@ -1,6 +1,7 @@
 //! Left-side explorer panel for the active project's retained content.
 
 use crate::{
+    app::commands::prismoid_grid::totals_lines,
     i18n::tr,
     model::{Folder, FolderId, FolderMember, ItemRef, LayerId, MemberKind, SceneEntityId, SectionKind},
     ui::{
@@ -1626,6 +1627,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             ),
                             None => details,
                         };
+                        let details = std::iter::once(details).chain(totals_lines(&grid.summary)).collect::<Vec<_>>().join("\n");
                         let grid_handle = SceneEntityId::PrismoidGrid(grid.id);
                         rows.push(ExplorerRow::Entity(grid_handle));
                         let grid_locked = frozen_handles.contains(&grid_handle);

@@ -845,6 +845,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = Siatka prizmoidów '{ $grid }'
 cmd-prismoid-grid-creating-block-model = Tworzenie modelu blokowego z siatki prizmoidów…
 cmd-prismoid-grid-created-block-model = Utworzono model blokowy '{ $name }' z siatki prizmoidów '{ $grid }': bloków { $blocks }, po jednym na aktywny prizmoid, łącznie { $volume } m³
 cmd-prismoid-grid-block-model-name = Model blokowy { $grid }
+cmd-prismoid-grid-block-model-units = Przeniesione do kolumn bloków: { $columns }; jednostki nie są zachowywane
+cmd-prismoid-grid-block-model-density-as = { $name } jako gęstość
 cmd-prismoid-grid-cells-too-fine = Siatka prizmoidów '{ $grid }' ma komórki { $size } m; modele blokowe do harmonogramu przyjmują { $least } m lub więcej, dopóki rozmiar solvera nie zostanie zmierzony. Zbuduj siatkę o większym rozmiarze komórki.
 cmd-prismoid-grid-adding-qualities = Dodawanie jakości do siatki prizmoidów…
 cmd-prismoid-grid-quality-corners = { $quality } z { $surface }: odczytane w narożnikach prizmoidów, komórki: { $read }, bez wartości: { $missing }
@@ -1817,6 +1819,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } komórek, { $active } aktywnych
 explorer-prismoid-grid-thickness = Miąższość pionowa od { $min } do { $max }
+explorer-prismoid-grid-volume-tonnes = Objętość { $volume } m³, { $tonnes } t z { $density }
+explorer-prismoid-grid-volume-only = Objętość { $volume } m³, brak gęstości: brak ton
+explorer-prismoid-grid-volume-no-density = Objętość { $volume } m³, żadna komórka nie ma wartości { $density }: brak ton
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } ważone tonami
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } ważone objętością
+explorer-prismoid-grid-quality-no-values = { $quality }: żadna komórka nie ma wartości
+explorer-prismoid-grid-quality-no-density = { $quality }: tam, gdzie ma wartość, brak { $density } albo nie jest powyżej 0
+explorer-prismoid-grid-left-out = , pominięte komórki: { $count }
 explorer-load = Wczytaj
 explorer-lock = Zablokuj
 explorer-new-collection = Nowa kolekcja

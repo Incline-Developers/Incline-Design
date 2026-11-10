@@ -817,6 +817,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = La griglia di prismoidi '{ $gr
 cmd-prismoid-grid-creating-block-model = Creazione del modello a blocchi dalla griglia di prismoidi…
 cmd-prismoid-grid-created-block-model = Modello a blocchi '{ $name }' creato dalla griglia di prismoidi '{ $grid }': { $blocks } blocchi, uno per prismoide attivo, { $volume } m³ in tutto
 cmd-prismoid-grid-block-model-name = Modello a blocchi { $grid }
+cmd-prismoid-grid-block-model-units = Portate nelle colonne dei blocchi: { $columns }; le unità non sono conservate
+cmd-prismoid-grid-block-model-density-as = { $name } come densità
 cmd-prismoid-grid-cells-too-fine = La griglia di prismoidi '{ $grid }' ha celle da { $size } m; i modelli a blocchi per la pianificazione usano { $least } m o più finché la dimensione del solutore non è misurata. Costruisci la griglia con una dimensione di cella maggiore.
 cmd-prismoid-grid-adding-qualities = Aggiunta delle qualità alla griglia di prismoidi…
 cmd-prismoid-grid-quality-corners = { $quality } da { $surface }: letta ai vertici dei prismoidi, { $read } cella/e, { $missing } senza valore
@@ -1789,6 +1791,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } celle, { $active } attive
 explorer-prismoid-grid-thickness = Spessore verticale da { $min } a { $max }
+explorer-prismoid-grid-volume-tonnes = Volume { $volume } m³, { $tonnes } t da { $density }
+explorer-prismoid-grid-volume-only = Volume { $volume } m³, nessuna densità: nessuna tonnellata
+explorer-prismoid-grid-volume-no-density = Volume { $volume } m³, nessuna cella ha un valore per { $density }: nessuna tonnellata
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } pesata sulle tonnellate
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } pesata sul volume
+explorer-prismoid-grid-quality-no-values = { $quality }: nessuna cella ha un valore
+explorer-prismoid-grid-quality-no-density = { $quality }: dove ha un valore, { $density } manca o non è sopra 0
+explorer-prismoid-grid-left-out = , { $count } cella/e escluse
 explorer-load = Carica
 explorer-lock = Blocca
 explorer-new-collection = Nuova raccolta

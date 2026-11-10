@@ -818,6 +818,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = '{ $grid }' призмоид �
 cmd-prismoid-grid-creating-block-model = Призмоид тороос блок загвар үүсгэж байна…
 cmd-prismoid-grid-created-block-model = '{ $grid }' призмоид тороос '{ $name }' блок загвар үүсгэлээ: { $blocks } блок, идэвхтэй призмоид бүрт нэг, нийт { $volume } м³
 cmd-prismoid-grid-block-model-name = { $grid } блок загвар
+cmd-prismoid-grid-block-model-units = Блокийн баганад шилжүүлэв: { $columns }; нэгжийг хадгалахгүй
+cmd-prismoid-grid-block-model-density-as = нягт болгон { $name }
 cmd-prismoid-grid-cells-too-fine = '{ $grid }' призмоид тор { $size } м-ийн нүдтэй; шийдэгчийн хэмжээг хэмжих хүртэл төлөвлөлтийн блок загвар { $least } м буюу түүнээс их нүд авна. Торыг илүү том нүдний хэмжээтэй бүтээнэ үү.
 cmd-prismoid-grid-adding-qualities = Призмоид торд чанар нэмж байна…
 cmd-prismoid-grid-quality-corners = { $surface }-ээс { $quality }: призмоидын булангуудад уншсан, { $read } нүд, { $missing } утгагүй
@@ -1790,6 +1792,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } нүд, { $active } идэвхтэй
 explorer-prismoid-grid-thickness = Босоо зузаан { $min }-аас { $max }
+explorer-prismoid-grid-volume-tonnes = Эзлэхүүн { $volume } м³, { $density }-ээс { $tonnes } т
+explorer-prismoid-grid-volume-only = Эзлэхүүн { $volume } м³, нягтгүй: тонн алга
+explorer-prismoid-grid-volume-no-density = Эзлэхүүн { $volume } м³, { $density }-ийн утгатай нүд алга: тонн алга
+explorer-prismoid-grid-quality-by-tonnes = тонноор жигнэсэн { $quality } { $value }
+explorer-prismoid-grid-quality-by-volume = эзлэхүүнээр жигнэсэн { $quality } { $value }
+explorer-prismoid-grid-quality-no-values = { $quality }: утгатай нүд алга
+explorer-prismoid-grid-quality-no-density = { $quality }: утгатай газарт { $density } алга эсвэл 0-ээс их биш
+explorer-prismoid-grid-left-out = , { $count } нүдийг орхив
 explorer-load = Ачаалах
 explorer-lock = Түгжих
 explorer-new-collection = Шинэ цуглуулга

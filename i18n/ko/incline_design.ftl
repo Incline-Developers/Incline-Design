@@ -800,6 +800,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = 프리즈모이드 격자 '{ $
 cmd-prismoid-grid-creating-block-model = 프리즈모이드 격자에서 블록 모델 만드는 중…
 cmd-prismoid-grid-created-block-model = 프리즈모이드 격자 '{ $grid }'에서 블록 모델 '{ $name }' 작성됨: 활성 프리즈모이드마다 하나씩 블록 { $blocks }개, 합계 { $volume } m³
 cmd-prismoid-grid-block-model-name = { $grid } 블록 모델
+cmd-prismoid-grid-block-model-units = 블록 열로 옮김: { $columns }; 단위는 유지되지 않습니다
+cmd-prismoid-grid-block-model-density-as = 밀도로 { $name }
 cmd-prismoid-grid-cells-too-fine = 프리즈모이드 격자 '{ $grid }'의 셀은 { $size } m입니다. 솔버 크기를 측정하기 전까지 일정용 블록 모델은 { $least } m 이상을 씁니다. 더 큰 셀 크기로 격자를 만드세요.
 cmd-prismoid-grid-adding-qualities = 프리즈모이드 격자에 품질 추가 중…
 cmd-prismoid-grid-quality-corners = { $surface }의 { $quality }: 프리즈모이드 모서리에서 읽음, 셀 { $read }개, 값 없음 { $missing }개
@@ -1772,6 +1774,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } 셀, { $active }개 활성
 explorer-prismoid-grid-thickness = 수직 두께 { $min }에서 { $max }
+explorer-prismoid-grid-volume-tonnes = 부피 { $volume } m³, { $density }로 { $tonnes } t
+explorer-prismoid-grid-volume-only = 부피 { $volume } m³, 밀도 없음: 톤 없음
+explorer-prismoid-grid-volume-no-density = 부피 { $volume } m³, { $density } 값이 있는 셀 없음: 톤 없음
+explorer-prismoid-grid-quality-by-tonnes = 톤 가중 { $quality } { $value }
+explorer-prismoid-grid-quality-by-volume = 부피 가중 { $quality } { $value }
+explorer-prismoid-grid-quality-no-values = { $quality }: 값이 있는 셀 없음
+explorer-prismoid-grid-quality-no-density = { $quality }: 값이 있는 곳에서 { $density }가 없거나 0보다 크지 않음
+explorer-prismoid-grid-left-out = , 제외된 셀 { $count }개
 explorer-load = 불러오기
 explorer-lock = 잠금
 explorer-new-collection = 새 컬렉션

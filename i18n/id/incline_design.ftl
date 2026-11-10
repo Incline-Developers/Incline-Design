@@ -767,6 +767,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = Grid prismoid '{ $grid }' terp
 cmd-prismoid-grid-creating-block-model = Membuat model blok dari grid prismoid…
 cmd-prismoid-grid-created-block-model = Model blok '{ $name }' dibuat dari grid prismoid '{ $grid }': { $blocks } blok, satu per prismoid aktif, total { $volume } m³
 cmd-prismoid-grid-block-model-name = Model Blok { $grid }
+cmd-prismoid-grid-block-model-units = Dibawa ke kolom blok: { $columns }; satuan tidak dipertahankan
+cmd-prismoid-grid-block-model-density-as = { $name } sebagai densitas
 cmd-prismoid-grid-cells-too-fine = Grid prismoid '{ $grid }' memiliki sel { $size } m; model blok untuk penjadwalan memakai { $least } m atau lebih sampai ukuran solver diukur. Bangun grid dengan ukuran sel yang lebih besar.
 cmd-prismoid-grid-adding-qualities = Menambahkan kualitas ke grid prismoid…
 cmd-prismoid-grid-quality-corners = { $quality } dari { $surface }: dibaca di sudut prismoid, { $read } sel, { $missing } tanpa nilai
@@ -1739,6 +1741,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } sel, { $active } aktif
 explorer-prismoid-grid-thickness = Ketebalan vertikal { $min } hingga { $max }
+explorer-prismoid-grid-volume-tonnes = Volume { $volume } m³, { $tonnes } t dari { $density }
+explorer-prismoid-grid-volume-only = Volume { $volume } m³, tanpa densitas: tanpa ton
+explorer-prismoid-grid-volume-no-density = Volume { $volume } m³, tidak ada sel yang bernilai untuk { $density }: tanpa ton
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } menurut ton
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } menurut volume
+explorer-prismoid-grid-quality-no-values = { $quality }: tidak ada sel yang bernilai
+explorer-prismoid-grid-quality-no-density = { $quality }: di tempat yang bernilai, { $density } hilang atau tidak di atas 0
+explorer-prismoid-grid-left-out = , { $count } sel dilewati
 explorer-load = Muat
 explorer-lock = Kunci
 explorer-new-collection = Koleksi Baru

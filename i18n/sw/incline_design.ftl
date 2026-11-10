@@ -799,6 +799,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = Gridi ya prismoidi '{ $grid }'
 cmd-prismoid-grid-creating-block-model = Inaunda modeli ya vitalu kutoka gridi ya prismoidi…
 cmd-prismoid-grid-created-block-model = Modeli ya vitalu '{ $name }' imeundwa kutoka gridi ya prismoidi '{ $grid }': vitalu { $blocks }, kimoja kwa kila prismoidi hai, jumla m³ { $volume }
 cmd-prismoid-grid-block-model-name = Modeli ya Vitalu { $grid }
+cmd-prismoid-grid-block-model-units = Zimepelekwa kwenye safu wima za vitalu: { $columns }; vipimo havihifadhiwi
+cmd-prismoid-grid-block-model-density-as = { $name } kama msongamano
 cmd-prismoid-grid-cells-too-fine = Gridi ya prismoidi '{ $grid }' ina seli za m { $size }; modeli za vitalu za ratiba huchukua m { $least } au zaidi hadi ukubwa wa kitatuzi upimwe. Jenga gridi kwa ukubwa mkubwa zaidi wa seli.
 cmd-prismoid-grid-adding-qualities = Inaongeza ubora kwenye gridi ya prismoidi…
 cmd-prismoid-grid-quality-corners = { $quality } kutoka { $surface }: imesomwa kwenye pembe za prismoidi, seli { $read }, { $missing } bila thamani
@@ -1771,6 +1773,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     Seli { $columns } × { $rows }, { $active } zinatumika
 explorer-prismoid-grid-thickness = Unene wima kutoka { $min } hadi { $max }
+explorer-prismoid-grid-volume-tonnes = Ujazo m³ { $volume }, t { $tonnes } kutoka { $density }
+explorer-prismoid-grid-volume-only = Ujazo m³ { $volume }, hakuna msongamano: hakuna tani
+explorer-prismoid-grid-volume-no-density = Ujazo m³ { $volume }, hakuna seli yenye thamani ya { $density }: hakuna tani
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } kwa tani
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } kwa ujazo
+explorer-prismoid-grid-quality-no-values = { $quality }: hakuna seli yenye thamani
+explorer-prismoid-grid-quality-no-density = { $quality }: pale ilipo na thamani, { $density } haipo au si juu ya 0
+explorer-prismoid-grid-left-out = , seli { $count } zimeachwa
 explorer-load = Pakia
 explorer-lock = Funga
 explorer-new-collection = Mkusanyiko Mpya

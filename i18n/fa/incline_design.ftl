@@ -767,6 +767,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = شبکه منشورگون '{ $
 cmd-prismoid-grid-creating-block-model = در حال ساخت مدل بلوکی از شبکه منشورگون…
 cmd-prismoid-grid-created-block-model = مدل بلوکی '{ $name }' از شبکه منشورگون '{ $grid }' ساخته شد: { $blocks } بلوک، یکی برای هر منشورگون فعال، روی هم { $volume } متر مکعب
 cmd-prismoid-grid-block-model-name = مدل بلوکی { $grid }
+cmd-prismoid-grid-block-model-units = به ستون‌های بلوک برده شد: { $columns }؛ یکاها نگه داشته نمی‌شوند
+cmd-prismoid-grid-block-model-density-as = { $name } به‌عنوان چگالی
 cmd-prismoid-grid-cells-too-fine = سلول‌های شبکه منشورگون '{ $grid }' { $size } متری‌اند؛ مدل‌های بلوکی برای برنامه‌ریزی تا وقتی اندازه حل‌کننده سنجیده نشده { $least } متر یا بیشتر می‌گیرند. شبکه را با اندازه سلول بزرگ‌تری بسازید.
 cmd-prismoid-grid-adding-qualities = در حال افزودن کیفیت‌ها به شبکه منشورگون…
 cmd-prismoid-grid-quality-corners = { $quality } از { $surface }: در گوشه‌های منشورگون‌ها خوانده شد، { $read } سلول، { $missing } بی‌مقدار
@@ -1739,6 +1741,14 @@ explorer-prismoid-grid-id =
     شناسه: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } سلول، { $active } فعال
 explorer-prismoid-grid-thickness = ضخامت عمودی از { $min } تا { $max }
+explorer-prismoid-grid-volume-tonnes = حجم { $volume } متر مکعب، { $tonnes } تن از { $density }
+explorer-prismoid-grid-volume-only = حجم { $volume } متر مکعب، بدون چگالی: بدون تن
+explorer-prismoid-grid-volume-no-density = حجم { $volume } متر مکعب، هیچ سلولی برای { $density } مقدار ندارد: بدون تن
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } بر پایه تن
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } بر پایه حجم
+explorer-prismoid-grid-quality-no-values = { $quality }: هیچ سلولی مقدار ندارد
+explorer-prismoid-grid-quality-no-density = { $quality }: جایی که مقدار دارد، { $density } نیست یا بالای 0 نیست
+explorer-prismoid-grid-left-out = ، { $count } سلول کنار گذاشته شد
 explorer-load = بارگذاری
 explorer-lock = قفل
 explorer-new-collection = مجموعه جدید

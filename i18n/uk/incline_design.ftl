@@ -822,6 +822,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = Сітка призмоїді�
 cmd-prismoid-grid-creating-block-model = Створення блокової моделі з сітки призмоїдів…
 cmd-prismoid-grid-created-block-model = Блокову модель '{ $name }' створено з сітки призмоїдів '{ $grid }': блоків { $blocks }, по одному на активний призмоїд, усього { $volume } м³
 cmd-prismoid-grid-block-model-name = Блокова модель { $grid }
+cmd-prismoid-grid-block-model-units = Перенесено до стовпців блоків: { $columns }; одиниці не зберігаються
+cmd-prismoid-grid-block-model-density-as = { $name } як густина
 cmd-prismoid-grid-cells-too-fine = Сітка призмоїдів '{ $grid }' має комірки { $size } м; блокові моделі для планування беруть { $least } м або більше, доки розмір розв'язувача не виміряно. Побудуйте сітку з більшим розміром комірки.
 cmd-prismoid-grid-adding-qualities = Додавання показників до сітки призмоїдів…
 cmd-prismoid-grid-quality-corners = { $quality } з { $surface }: зчитано в кутах призмоїдів, комірок { $read }, без значення { $missing }
@@ -1794,6 +1796,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } комірок, активних: { $active }
 explorer-prismoid-grid-thickness = Вертикальна потужність від { $min } до { $max }
+explorer-prismoid-grid-volume-tonnes = Об'єм { $volume } м³, { $tonnes } т за { $density }
+explorer-prismoid-grid-volume-only = Об'єм { $volume } м³, немає густини: немає тонн
+explorer-prismoid-grid-volume-no-density = Об'єм { $volume } м³, жодна комірка не має значення { $density }: немає тонн
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } зважено за тоннами
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } зважено за об'ємом
+explorer-prismoid-grid-quality-no-values = { $quality }: жодна комірка не має значення
+explorer-prismoid-grid-quality-no-density = { $quality }: де є значення, { $density } немає або не вище 0
+explorer-prismoid-grid-left-out = , пропущено комірок: { $count }
 explorer-load = Завантажити
 explorer-lock = Заблокувати
 explorer-new-collection = Нова колекція

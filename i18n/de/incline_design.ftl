@@ -816,6 +816,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = Prismoidgitter '{ $grid }' ist
 cmd-prismoid-grid-creating-block-model = Blockmodell aus Prismoidgitter wird erstellt…
 cmd-prismoid-grid-created-block-model = Blockmodell '{ $name }' aus Prismoidgitter '{ $grid }' erstellt: { $blocks } Blöcke, einer je aktivem Prismoid, insgesamt { $volume } m³
 cmd-prismoid-grid-block-model-name = { $grid } Blockmodell
+cmd-prismoid-grid-block-model-units = In Blockspalten übernommen: { $columns }; Einheiten bleiben nicht erhalten
+cmd-prismoid-grid-block-model-density-as = { $name } als Dichte
 cmd-prismoid-grid-cells-too-fine = Prismoidgitter '{ $grid }' hat Zellen von { $size } m; Blockmodelle für die Planung nehmen { $least } m oder mehr, bis die Lösergröße gemessen ist. Erstellen Sie das Gitter mit größerer Zellgröße.
 cmd-prismoid-grid-adding-qualities = Qualitäten werden dem Prismoidgitter hinzugefügt…
 cmd-prismoid-grid-quality-corners = { $quality } aus { $surface }: an den Ecken der Prismoide gelesen, { $read } Zelle(n), { $missing } ohne Wert
@@ -1788,6 +1790,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } Zellen, { $active } aktiv
 explorer-prismoid-grid-thickness = Vertikale Mächtigkeit { $min } bis { $max }
+explorer-prismoid-grid-volume-tonnes = Volumen { $volume } m³, { $tonnes } t aus { $density }
+explorer-prismoid-grid-volume-only = Volumen { $volume } m³, keine Dichte: keine Tonnen
+explorer-prismoid-grid-volume-no-density = Volumen { $volume } m³, keine Zelle hat einen Wert für { $density }: keine Tonnen
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } nach Tonnen
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } nach Volumen
+explorer-prismoid-grid-quality-no-values = { $quality }: keine Zelle hat einen Wert
+explorer-prismoid-grid-quality-no-density = { $quality }: wo es einen Wert gibt, fehlt { $density } oder liegt nicht über 0
+explorer-prismoid-grid-left-out = , { $count } Zelle(n) ausgelassen
 explorer-load = Laden
 explorer-lock = Sperren
 explorer-new-collection = Neue Sammlung

@@ -775,6 +775,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = شبكة شبه المنشور
 cmd-prismoid-grid-creating-block-model = جارٍ إنشاء نموذج كتل من شبكة شبه المنشورات…
 cmd-prismoid-grid-created-block-model = تم إنشاء نموذج الكتل '{ $name }' من شبكة شبه المنشورات '{ $grid }': { $blocks } كتلة، واحدة لكل شبه منشور نشط، بإجمالي { $volume } م³
 cmd-prismoid-grid-block-model-name = نموذج كتل { $grid }
+cmd-prismoid-grid-block-model-units = نُقلت إلى أعمدة الكتل: { $columns }؛ لا تُحفظ الوحدات
+cmd-prismoid-grid-block-model-density-as = { $name } ككثافة
 cmd-prismoid-grid-cells-too-fine = خلايا شبكة شبه المنشورات '{ $grid }' بطول { $size } م؛ تأخذ نماذج الكتل للجدولة { $least } م أو أكثر إلى أن يُقاس حجم المحلّل. ابنِ الشبكة بحجم خلية أكبر.
 cmd-prismoid-grid-adding-qualities = جارٍ إضافة الجودات إلى شبكة شبه المنشورات…
 cmd-prismoid-grid-quality-corners = { $quality } من { $surface }: قُرئت عند زوايا أشباه المنشورات، { $read } خلية، و { $missing } بلا قيمة
@@ -1747,6 +1749,14 @@ explorer-prismoid-grid-id =
     المعرّف: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } خلية، { $active } نشطة
 explorer-prismoid-grid-thickness = السماكة الرأسية من { $min } إلى { $max }
+explorer-prismoid-grid-volume-tonnes = الحجم { $volume } م³، و { $tonnes } طن من { $density }
+explorer-prismoid-grid-volume-only = الحجم { $volume } م³، بلا كثافة: بلا أطنان
+explorer-prismoid-grid-volume-no-density = الحجم { $volume } م³، لا خلية لها قيمة لـ { $density }: بلا أطنان
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } بحسب الأطنان
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } بحسب الحجم
+explorer-prismoid-grid-quality-no-values = { $quality }: لا خلية لها قيمة
+explorer-prismoid-grid-quality-no-density = { $quality }: حيث توجد قيمة، { $density } مفقودة أو ليست فوق 0
+explorer-prismoid-grid-left-out = ، و { $count } خلية متروكة
 explorer-load = تحميل
 explorer-lock = قفل
 explorer-new-collection = مجموعة جديدة

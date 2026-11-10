@@ -767,6 +767,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = 拟柱体网格 '{ $grid }' �
 cmd-prismoid-grid-creating-block-model = 正在从拟柱体网格创建块体模型…
 cmd-prismoid-grid-created-block-model = 已从拟柱体网格 '{ $grid }' 创建块体模型 '{ $name }':{ $blocks } 个块,每个有效拟柱体一个,共 { $volume } m³
 cmd-prismoid-grid-block-model-name = { $grid } 块体模型
+cmd-prismoid-grid-block-model-units = 已带入块体列:{ $columns };不保留单位
+cmd-prismoid-grid-block-model-density-as = { $name } 作为密度
 cmd-prismoid-grid-cells-too-fine = 拟柱体网格 '{ $grid }' 的单元为 { $size } m;在测出求解器规模之前,排程用的块体模型取 { $least } m 或更大。请以更大的单元尺寸构建网格。
 cmd-prismoid-grid-adding-qualities = 正在向拟柱体网格添加品质…
 cmd-prismoid-grid-quality-corners = 来自 { $surface } 的 { $quality }:在拟柱体角点读取,{ $read } 个单元,{ $missing } 个无值
@@ -1739,6 +1741,14 @@ explorer-prismoid-grid-id =
     ID：prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } 个单元，{ $active } 个有效
 explorer-prismoid-grid-thickness = 垂直厚度 { $min } 至 { $max }
+explorer-prismoid-grid-volume-tonnes = 体积 { $volume } m³,按 { $density } 计 { $tonnes } t
+explorer-prismoid-grid-volume-only = 体积 { $volume } m³,无密度:无吨位
+explorer-prismoid-grid-volume-no-density = 体积 { $volume } m³,没有单元具有 { $density } 值:无吨位
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value }(按吨加权)
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value }(按体积加权)
+explorer-prismoid-grid-quality-no-values = { $quality }:没有单元有值
+explorer-prismoid-grid-quality-no-density = { $quality }:在有值处,{ $density } 缺失或不大于 0
+explorer-prismoid-grid-left-out = ,略去 { $count } 个单元
 explorer-load = 加载
 explorer-lock = 锁
 explorer-new-collection = 新建集合

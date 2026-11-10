@@ -773,6 +773,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = La malla de prismoides '{ $gri
 cmd-prismoid-grid-creating-block-model = Creando modelo de bloques a partir de la malla de prismoides…
 cmd-prismoid-grid-created-block-model = Modelo de bloques '{ $name }' creado a partir de la malla de prismoides '{ $grid }': { $blocks } bloques, uno por prismoide activo, { $volume } m³ en total
 cmd-prismoid-grid-block-model-name = Modelo de bloques { $grid }
+cmd-prismoid-grid-block-model-units = Llevadas a columnas de bloques: { $columns }; las unidades no se conservan
+cmd-prismoid-grid-block-model-density-as = { $name } como densidad
 cmd-prismoid-grid-cells-too-fine = La malla de prismoides '{ $grid }' tiene celdas de { $size } m; los modelos de bloques para el programa usan { $least } m o más hasta medir el tamaño del solver. Cree la malla con un tamaño de celda mayor.
 cmd-prismoid-grid-adding-qualities = Añadiendo calidades a la malla de prismoides…
 cmd-prismoid-grid-quality-corners = { $quality } de { $surface }: leída en las esquinas de los prismoides, { $read } celda(s), { $missing } sin valor
@@ -1745,6 +1747,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } celdas, { $active } activas
 explorer-prismoid-grid-thickness = Espesor vertical de { $min } a { $max }
+explorer-prismoid-grid-volume-tonnes = Volumen { $volume } m³, { $tonnes } t a partir de { $density }
+explorer-prismoid-grid-volume-only = Volumen { $volume } m³, sin densidad: sin toneladas
+explorer-prismoid-grid-volume-no-density = Volumen { $volume } m³, ninguna celda tiene valor de { $density }: sin toneladas
+explorer-prismoid-grid-quality-by-tonnes = { $quality } { $value } por toneladas
+explorer-prismoid-grid-quality-by-volume = { $quality } { $value } por volumen
+explorer-prismoid-grid-quality-no-values = { $quality }: ninguna celda tiene valor
+explorer-prismoid-grid-quality-no-density = { $quality }: donde tiene valor, falta { $density } o no supera 0
+explorer-prismoid-grid-left-out = , { $count } celda(s) omitidas
 explorer-load = Cargar
 explorer-lock = Bloquear
 explorer-new-collection = Colección nueva

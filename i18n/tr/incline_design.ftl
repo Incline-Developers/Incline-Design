@@ -809,6 +809,8 @@ cmd-prismoid-grid-block-model-off-envelope-axes = '{ $grid }' prizmoid ızgaras�
 cmd-prismoid-grid-creating-block-model = Prizmoid ızgarasından blok modeli oluşturuluyor…
 cmd-prismoid-grid-created-block-model = '{ $grid }' prizmoid ızgarasından '{ $name }' blok modeli oluşturuldu: { $blocks } blok, her etkin prizmoid için bir tane, toplam { $volume } m³
 cmd-prismoid-grid-block-model-name = { $grid } Blok Modeli
+cmd-prismoid-grid-block-model-units = Blok sütunlarına taşındı: { $columns }; birimler korunmaz
+cmd-prismoid-grid-block-model-density-as = yoğunluk olarak { $name }
 cmd-prismoid-grid-cells-too-fine = '{ $grid }' prizmoid ızgarasının hücreleri { $size } m; çözücü boyutu ölçülene kadar planlama için blok modelleri { $least } m veya daha büyük hücre alır. Izgarayı daha büyük bir hücre boyutuyla oluşturun.
 cmd-prismoid-grid-adding-qualities = Prizmoid ızgarasına kaliteler ekleniyor…
 cmd-prismoid-grid-quality-corners = { $surface } yüzeyinden { $quality }: prizmoidlerin köşelerinde okundu, { $read } hücre, { $missing } değersiz
@@ -1781,6 +1783,14 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } hücre, { $active } etkin
 explorer-prismoid-grid-thickness = Dikey kalınlık { $min } ile { $max } arası
+explorer-prismoid-grid-volume-tonnes = Hacim { $volume } m³, { $density } yüzeyinden { $tonnes } t
+explorer-prismoid-grid-volume-only = Hacim { $volume } m³, yoğunluk yok: ton yok
+explorer-prismoid-grid-volume-no-density = Hacim { $volume } m³, hiçbir hücrede { $density } değeri yok: ton yok
+explorer-prismoid-grid-quality-by-tonnes = tona göre { $quality } { $value }
+explorer-prismoid-grid-quality-by-volume = hacme göre { $quality } { $value }
+explorer-prismoid-grid-quality-no-values = { $quality }: hiçbir hücrede değer yok
+explorer-prismoid-grid-quality-no-density = { $quality }: değer olan yerde { $density } eksik ya da 0'ın üzerinde değil
+explorer-prismoid-grid-left-out = , { $count } hücre dışarıda bırakıldı
 explorer-load = Yükle
 explorer-lock = Kilitle
 explorer-new-collection = Yeni Koleksiyon

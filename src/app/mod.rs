@@ -2550,7 +2550,7 @@ fn prismoid_grid_entry(grid: &crate::model::prismoid_grid::OpenPrismoidGrid) -> 
         is_loaded: grid.state.loaded,
         is_hidden: grid.state.hidden,
         dirty: grid.state.is_dirty(),
-        summary: grid.summary,
+        summary: grid.summary.clone(),
         values: grid.grid.cell_values.iter().map(|values| (values.name.clone(), values.role)).collect(),
         regular: grid.grid.lattice.is_regular(),
         folder: grid.state.folder,
