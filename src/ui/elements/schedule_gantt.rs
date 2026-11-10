@@ -377,7 +377,9 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent], bar_height: f32) -> V
             height: 0.0,
         });
     }
-    for agent in plan.ordered_agents() {
+    // Dozers, drills and MPUs, and their bars, only while drill & blast is
+    // sequenced; their bars are kept for when it is turned back on.
+    for agent in plan.ordered_agents().into_iter().filter(|agent| plan.schedules_agent(agent.id)) {
         let subtitle = match plan.class(agent.class_id) {
             Some(class) => format!(
                 "{} · {} {}",
@@ -420,7 +422,13 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent], bar_height: f32) -> V
     // non-overlapping sub-rows once the lane is complete.
     for (index, bar) in plan.bars().iter().enumerate() {
         let agent = placed(bar);
-        let row = rows.iter_mut().find(|row| !row.blasting && row.agent == agent).expect("every bar's row was made above");
+        if agent.is_some_and(|agent| !plan.schedules_agent(agent)) {
+            continue;
+        }
+        let row = rows
+            .iter_mut()
+            .find(|row| !row.blasting && row.agent == agent)
+            .expect("every shown bar's row was made above");
         let lane = match row.lanes.binary_search_by_key(&bar.priority, |lane| lane.priority) {
             Ok(lane) => lane,
             Err(lane) => {
@@ -799,7 +807,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     draw_row_resize(ui, header, editor, plan, &layout.rows, session, commands);
     draw_grid(ui, body, editor.gantt);
     draw_calendar_delays(ui, body, editor.gantt, editor.gantt.row_scroll, plan, &layout.rows);
-    draw_palette(ui, corner, editor);
+    draw_palette(ui, corner, editor, plan.drill_blast().enabled);
     // Taken out for the duration of the frame rather than cloned: the bars
     // need it while `editor` is borrowed mutably for the drag and the
     // selection, and a calculated schedule is not a small value to copy once
@@ -848,7 +856,10 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
             }
         }
     } else if plan.bars().is_empty()
-        && let Some(agent) = plan.ordered_agents().first().copied()
+        && let Some(agent) = plan
+            .ordered_agents()
+            .into_iter()
+            .find(|agent| plan.agent_kind(agent.id) == Some(crate::model::schedule::MachineKind::Loader))
     {
         // A single empty-state action remains reachable even when the fleet's
         // empty rows fill the viewport.
@@ -2559,11 +2570,10 @@ fn draw_bars(
                         }
                         // Only machines that can do this work: a dig bar goes to
                         // loaders, a blast bar to dozers, drills and MPUs.
-                        for agent in plan
-                            .ordered_agents()
-                            .into_iter()
-                            .filter(|agent| plan.agent_kind(agent.id).is_some_and(|kind| crate::model::schedule::work_fits(&bar.work, kind)))
-                        {
+                        for agent in plan.ordered_agents().into_iter().filter(|agent| {
+                            plan.agent_kind(agent.id)
+                                .is_some_and(|kind| plan.schedules_kind(kind) && crate::model::schedule::work_fits(&bar.work, kind))
+                        }) {
                             if ContextMenuAction::new(agent.name.clone()).checked(bar.agent == Some(agent.id)).show(ui).clicked() {
                                 commands.push(UiCommand::schedule(
                                     session,
@@ -2932,17 +2942,23 @@ fn palette_color(item: GanttPaletteItem) -> egui::Color32 {
 
 /// The chips in the corner above the machine names: drag one onto a row to
 /// make that kind of bar there.
-fn draw_palette(ui: &mut egui::Ui, corner: egui::Rect, editor: &mut EditorState) {
+fn draw_palette(ui: &mut egui::Ui, corner: egui::Rect, editor: &mut EditorState, drill_blast: bool) {
     const COLUMNS: usize = 3;
     const GAP: f32 = 3.0;
     const EDGE: f32 = 3.0;
-    let items = [
-        GanttPaletteItem::Dig,
-        GanttPaletteItem::Reclaim,
-        GanttPaletteItem::Delay,
-        GanttPaletteItem::Blast,
-        GanttPaletteItem::Follow,
-    ];
+    // Blast and follow bars go on dozers, drills and MPUs, which are listed
+    // only while drill & blast is sequenced.
+    let items: &[GanttPaletteItem] = if drill_blast {
+        &[
+            GanttPaletteItem::Dig,
+            GanttPaletteItem::Reclaim,
+            GanttPaletteItem::Delay,
+            GanttPaletteItem::Blast,
+            GanttPaletteItem::Follow,
+        ]
+    } else {
+        &[GanttPaletteItem::Dig, GanttPaletteItem::Reclaim, GanttPaletteItem::Delay]
+    };
     let inner = corner.shrink2(egui::vec2(6.0, 4.0));
     if !inner.is_positive() {
         return;
@@ -2959,7 +2975,7 @@ fn draw_palette(ui: &mut egui::Ui, corner: egui::Rect, editor: &mut EditorState)
     let top = inner.center().y - (size.y * rows as f32 + GAP * (rows - 1) as f32) * 0.5;
     let rest = crate::ui::widgets::shifted(ruler_fill(&visuals), if visuals.dark_mode { -10 } else { 8 });
     let hot = crate::ui::widgets::shifted(ruler_fill(&visuals), if visuals.dark_mode { 14 } else { 12 });
-    for (index, item) in items.into_iter().enumerate() {
+    for (index, item) in items.iter().copied().enumerate() {
         let (column, row) = (index % COLUMNS, index / COLUMNS);
         let chip = egui::Rect::from_min_size(egui::pos2(inner.left() + column as f32 * (size.x + GAP), top + row as f32 * (size.y + GAP)), size);
         let response = ui

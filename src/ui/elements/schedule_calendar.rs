@@ -449,7 +449,7 @@ fn draw_rows_panel(
         let ordered = plan.ordered_agents();
         for (index, kind) in (0u8..).zip(plan.machine_groups()) {
             let agents: Vec<_> = ordered.iter().filter(|agent| machine_kind(plan, agent.id) == kind).collect();
-            if agents.is_empty() {
+            if agents.is_empty() || !plan.schedules_kind(kind) {
                 continue;
             }
             let mut shown = view.shows_section(Section::Machines(kind));
@@ -758,7 +758,8 @@ fn rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorSta
         }
     }
     let ordered = plan.ordered_agents();
-    for kind in plan.machine_groups() {
+    // Dozers, drills and MPUs only while drill & blast is sequenced.
+    for kind in plan.machine_groups().into_iter().filter(|kind| plan.schedules_kind(*kind)) {
         let agents: Vec<_> = ordered
             .iter()
             .filter(|agent| machine_kind(plan, agent.id) == kind && view.shows_owner(Owner::Machine(agent.id)))

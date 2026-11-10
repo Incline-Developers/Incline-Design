@@ -2008,6 +2008,19 @@ impl SchedulePlan {
         groups
     }
 
+    /// Whether the schedule pages list machines of `kind`: dozers, drills and
+    /// MPUs only while drill & blast is sequenced, since until then they do
+    /// no work and their bars are left out of the calculation.
+    pub(crate) fn schedules_kind(&self, kind: MachineKind) -> bool {
+        !kind.is_drill_blast() || self.drill_blast.enabled
+    }
+
+    /// Whether the schedule pages list `agent`; see [`Self::schedules_kind`].
+    /// A machine whose class is gone is listed, so its bars stay reachable.
+    pub(crate) fn schedules_agent(&self, agent: LoaderAgentId) -> bool {
+        self.agent_kind(agent).is_none_or(|kind| self.schedules_kind(kind))
+    }
+
     /// The machines in the order they are listed: by group, then as the user
     /// arranged them within it. A machine whose class is gone comes last.
     pub(crate) fn ordered_agents(&self) -> Vec<&LoaderAgent> {
