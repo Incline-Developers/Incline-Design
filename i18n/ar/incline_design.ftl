@@ -1127,6 +1127,8 @@ cmd-hole-misfit-measure = { $measure }: المتوسط { $mean }، والأكب�
 cmd-hole-misfit-not-read = لم تُقرأ: ثقوب لم تعد مجموعة بياناتها محمّلة: { $holes }، ونقاط جودة لم تعد موجودة: { $points }
 cmd-hole-misfit-none = لم يُقارن شيء مع '{ $grid }': يبيّن الجدول سبب كل صف
 cmd-hole-misfit-grid-gone = لم تعد شبكة شبه المنشورات محمّلة
+cmd-hole-misfit-layer = { $grid } انحراف { $measure }
+cmd-hole-misfit-layers-made = رُسمت الفروق في { $count } طبقة نقاط موسومة، وz هي الفرق: { $layers }
 cmd-thickness-points-saved = حُفظت { $count } قيمة سماكة حقيقية في العمود "{ $column }" من { $dataset }، على كل فترة سقف
 cmd-thickness-points-saved-cleared = مُسحت { $count } قيمة سابقة على آبار استُبعدت في هذا التشغيل
 cmd-thickness-points-saved-replaced = استُبدلت { $count } قيمة سابقة من تشغيل سابق
@@ -1836,6 +1838,7 @@ explorer-new-collection = مجموعة جديدة
 explorer-no-collection = بلا مجموعة
 explorer-select-all-objects = اختيار جميع الكائنات
 explorer-show-thickness-table = عرض جدول السماكة
+explorer-show-misfit-table = عرض جدول الانحراف
 explorer-source-name = المصدر: { $name }
 explorer-quality-tag = الجودة { $quality } { $unit }
 explorer-quality-surface = سطح جودة: ارتفاعه { $quality } { $unit } وليس منسوبًا
@@ -2632,7 +2635,7 @@ hole-misfit-qualities-none = لم يُحدد شيء
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = الطبقة التي تمثلها الشبكة: يُقرأ سقفها وقاعها حيث يقابلها كل ثقب.
 hole-misfit-pick-seam = اختر الطبقة التي تمثلها هذه الشبكة
-hole-misfit-note = كل رقم هو النموذج ناقص التحديد: الموجب يعني سقفًا أو قاعًا للنموذج فوق التحديد، أو نموذجًا أسمك، أو قيمة أعلى.
+hole-misfit-note = كل رقم هو النموذج ناقص التحديد: الموجب يعني سقفًا أو قاعًا للنموذج فوق التحديد، أو نموذجًا أسمك، أو قيمة أعلى. تكتب المقارنة أيضًا فروق كل مقياس في التصاميم كطبقة من النقاط الموسومة تكون z فيها هي الفرق؛ في المسقط الأفقي، أخفِ الشبكة وكل سطح فوقها لقراءة الوسوم.
 hole-misfit-compare = مقارنة
 hole-misfit-table-title = انحراف { $grid } عند الثقوب، { $seam }
 hole-misfit-totals = { $measure }: قورن { $compared }، المتوسط { $mean }، والأكبر { $largest } عند { $source }، ولم يُقارن { $not }
@@ -2646,6 +2649,7 @@ hole-misfit-column-note = ملاحظة
 hole-misfit-measure-roof = منسوب السقف
 hole-misfit-measure-floor = منسوب الأرضية
 hole-misfit-unit-differs = النقاط بوحدة { $unit }، و{ $grid } بوحدة { $grid_unit }
+hole-misfit-mark = انحراف { $measure }
 
 ## Tie strings
 

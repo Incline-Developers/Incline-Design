@@ -17,6 +17,7 @@ use crate::{
     app::{
         App,
         commands::triangulation::{
+            CONTOUR_LABEL_HEIGHT,
             reference_surface::seam::{self, RunProblem, SeamGrid, ThicknessRunRecord, ThicknessSample},
             session::refuse_quality,
         },
@@ -24,12 +25,13 @@ use crate::{
     },
     i18n::tr,
     model::{
-        Command, LayerId, Object, ObjectId, SceneEntityId,
+        Command, Document, Layer, LayerId, Object, ObjectColor, ObjectId, SceneEntityId, SectionKind,
         drill_hole::{DrillHoleId, DrillHoleRef, OpenDrillHoleDataset, ReferenceSide, ReferenceTarget},
         grid_surface::{GridSurface, NotAGrid},
         prismoid_grid::{PrismoidGrid, PrismoidGridId},
+        project::unique_item_name,
         thickness_points::{self, ColumnClash, Intercept, InterceptSource, LeftOut, LeftOutReason, MisfitQuality, MisfitRow, PairsError, ThicknessRun},
-        triangulation::{GeneratedTriangulation, TriangulationId},
+        triangulation::{GeneratedTriangulation, QualityMark, TriangulationId},
     },
     ui::state::{
         GridCheck, HoleMisfitDraft, HoleMisfitTable, HoleMisfitUnit, PairsFile, SeamChoice, SeamSurfaceDraft, SeamTable, ThicknessPointsDraft, ThicknessTable, TriSurfaceType,
@@ -435,26 +437,7 @@ impl<'a> App<'a> {
     /// The selected points on quality-marked layers, and each such layer
     /// with its name and how many of them it holds, in document order.
     fn selected_quality_points(&self) -> (Vec<ObjectId>, Vec<(LayerId, String, usize)>) {
-        let document = &self.scene_document;
-        let mut points = Vec::new();
-        let mut layers: Vec<(LayerId, String, usize)> = Vec::new();
-        for object in document.objects() {
-            let Object::Point { id, layer, .. } = object else {
-                continue;
-            };
-            if !self.editor.selected_handles.contains(&SceneEntityId::Object(*id)) {
-                continue;
-            }
-            let Some(marked) = document.layer(*layer).filter(|marked| marked.quality.is_some()) else {
-                continue;
-            };
-            points.push(*id);
-            match layers.iter_mut().find(|(seen, ..)| seen == layer) {
-                Some((_, _, count)) => *count += 1,
-                None => layers.push((*layer, marked.name.clone(), 1)),
-            }
-        }
-        (points, layers)
+        quality_points_in(&self.scene_document, &self.editor.selected_handles)
     }
 
     /// The seam a grid named `category` models, set only where that name is
@@ -541,7 +524,7 @@ impl<'a> App<'a> {
             userspace_log!("{}", not_read);
         }
         let fingerprint = misfit_fingerprint(&rows, &units);
-        self.editor.hole_misfit_table = Some(Arc::new(HoleMisfitTable {
+        let table = Arc::new(HoleMisfitTable {
             grid: grid_name,
             seam,
             rows,
@@ -549,8 +532,30 @@ impl<'a> App<'a> {
             units,
             not_read,
             fingerprint,
-        }));
+        });
+        self.map_misfit(&table);
+        self.editor.hole_misfit_table = Some(table);
         Ok(())
+    }
+
+    /// Lay a run's compared rows down as labelled point layers in one undo
+    /// step, each layer keyed to the run's table for the session.
+    fn map_misfit(&mut self, table: &Arc<HoleMisfitTable>) {
+        let Some(project) = self.workspace.active_project_mut() else {
+            return;
+        };
+        let runtime_id = project.runtime_id;
+        let (commands, made) = misfit_layers(&mut project.project.document, table);
+        if commands.is_empty() {
+            return;
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.invalidate_geometry();
+        for (layer, _) in &made {
+            self.session.misfit_tables.insert((runtime_id, *layer), Arc::clone(table));
+        }
+        let layers = made.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>().join(", ");
+        userspace_log!("{}", tr!("cmd-hole-misfit-layers-made", count = made.len().to_string(), layers = layers));
     }
 
     /// The quality points named, one entry per layer in document order, and
@@ -943,6 +948,35 @@ fn with_unit(value: f64, unit: &str) -> String {
     if unit.is_empty() { number } else { format!("{number} {unit}") }
 }
 
+/// The `selected` points on quality-marked layers, less the layers a misfit
+/// map wrote, and each layer read with its name and count, in document
+/// order.
+fn quality_points_in(document: &Document, selected: &std::collections::HashSet<SceneEntityId>) -> (Vec<ObjectId>, Vec<(LayerId, String, usize)>) {
+    // The mark's own form, split where the measure goes.
+    let form = tr!("hole-misfit-mark", measure = "\u{1}".to_string());
+    let (before, after) = form.split_once('\u{1}').unwrap_or((form.as_str(), ""));
+    let mapped = |name: &str| name.len() > before.len() + after.len() && name.starts_with(before) && name.ends_with(after);
+    let mut points = Vec::new();
+    let mut layers: Vec<(LayerId, String, usize)> = Vec::new();
+    for object in document.objects() {
+        let Object::Point { id, layer, .. } = object else {
+            continue;
+        };
+        if !selected.contains(&SceneEntityId::Object(*id)) {
+            continue;
+        }
+        let Some(marked) = document.layer(*layer).filter(|marked| marked.quality.as_ref().is_some_and(|mark| !mapped(&mark.name))) else {
+            continue;
+        };
+        points.push(*id);
+        match layers.iter_mut().find(|(seen, ..)| seen == layer) {
+            Some((_, _, count)) => *count += 1,
+            None => layers.push((*layer, marked.name.clone(), 1)),
+        }
+    }
+    (points, layers)
+}
+
 /// A number that moves when a run's rows or units show something else.
 fn misfit_fingerprint(rows: &[MisfitRow], units: &[HoleMisfitUnit]) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -956,6 +990,76 @@ fn misfit_fingerprint(rows: &[MisfitRow], units: &[HoleMisfitUnit]) -> u64 {
         (&unit.name, &unit.unit, &unit.note).hash(&mut hasher);
     }
     hasher.finish()
+}
+
+/// One Designs layer per measure that compared anything, in slot order: at
+/// each compared row a point at z the difference and that difference as
+/// signed text, set down one text height per slot so the labels at one
+/// hole stand in a column. Quality-marked, so RL tools refuse a surface
+/// built from it.
+pub(crate) fn misfit_layers(document: &mut Document, table: &HoleMisfitTable) -> (Vec<Command>, Vec<(LayerId, String)>) {
+    let mut commands = Vec::new();
+    let mut made: Vec<(LayerId, String)> = Vec::new();
+    for total in table.totals.iter().filter(|total| total.compared > 0) {
+        let slot = total.measure.slot();
+        let Some(unit) = table.units.get(slot) else {
+            continue;
+        };
+        let requested = tr!("cmd-hole-misfit-layer", grid = table.grid.clone(), measure = unit.total_name.clone());
+        let taken = document.layers().iter().map(|layer| layer.name.as_str()).chain(made.iter().map(|(_, name)| name.as_str()));
+        let name = unique_item_name(requested, taken);
+        let id = document.allocate_layer_id();
+        let mut objects = Vec::new();
+        for row in table.rows.iter().filter(|row| row.measure == total.measure) {
+            let (Some(at), Ok(difference)) = (row.at, row.result) else {
+                continue;
+            };
+            let pos = at.extend(difference);
+            objects.push(Object::Point {
+                id: document.allocate_object_id(),
+                layer: id,
+                pos,
+                color: ObjectColor::ByLayer,
+            });
+            objects.push(Object::Text {
+                id: document.allocate_object_id(),
+                layer: id,
+                pos: pos - glam::DVec3::Y * (slot as f64 * CONTOUR_LABEL_HEIGHT),
+                content: signed_label(difference),
+                height: CONTOUR_LABEL_HEIGHT,
+                rotation: 0.0,
+                color: ObjectColor::ByLayer,
+            });
+        }
+        let layer = Layer {
+            id,
+            name: name.clone(),
+            color_index: None,
+            color: [1.0, 1.0, 1.0, 1.0],
+            loaded: true,
+            hidden: false,
+            elevation: 0.0,
+            folder: None,
+            section: SectionKind::Designs,
+            quality: Some(QualityMark {
+                name: tr!("hole-misfit-mark", measure = unit.name.clone()),
+                unit: unit.unit.clone(),
+            }),
+        };
+        commands.push(Command::AddLayerSnapshot { layer, objects });
+        made.push((id, name));
+    }
+    (commands, made)
+}
+
+/// A difference to two places with its sign, and "0.00" when it rounds to
+/// nothing.
+fn signed_label(difference: f64) -> String {
+    let text = format!("{difference:+.2}");
+    match text.strip_prefix(['+', '-']) {
+        Some(unsigned) if unsigned.chars().all(|c| c == '0' || c == '.') => unsigned.to_owned(),
+        _ => text,
+    }
 }
 
 /// The hole a point or left-out item came from, by name.

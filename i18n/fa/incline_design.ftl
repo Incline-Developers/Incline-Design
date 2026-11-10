@@ -1119,6 +1119,8 @@ cmd-hole-misfit-measure = { $measure }: میانگین { $mean }، بیشتری�
 cmd-hole-misfit-not-read = خوانده نشد: { $holes } گمانه که مجموعه‌داده‌شان دیگر بارگذاری نیست، { $points } نقطهٔ کیفیت که دیگر نیست
 cmd-hole-misfit-none = چیزی با '{ $grid }' مقایسه نشد: جدول دلیل هر ردیف را می‌دهد
 cmd-hole-misfit-grid-gone = شبکه منشورگون دیگر بارگذاری نیست
+cmd-hole-misfit-layer = { $grid } ناهم‌خوانی { $measure }
+cmd-hole-misfit-layers-made = اختلاف‌ها به صورت { $count } لایهٔ نقطهٔ برچسب‌دار نگاشته شد، z برابر اختلاف: { $layers }
 cmd-thickness-points-saved = { $count } مقدار ضخامت حقیقی در ستون "{ $column }" از { $dataset }، روی هر بازهٔ سقف ذخیره شد
 cmd-thickness-points-saved-cleared = { $count } مقدار پیشین روی گمانه‌های کنار گذاشته‌شده در این اجرا پاک شد
 cmd-thickness-points-saved-replaced = { $count } مقدار پیشین از یک اجرای قبلی جایگزین شد
@@ -1828,6 +1830,7 @@ explorer-new-collection = مجموعه جدید
 explorer-no-collection = بدون مجموعه
 explorer-select-all-objects = تمام اشیاء را انتخاب کنید
 explorer-show-thickness-table = نمایش جدول ضخامت
+explorer-show-misfit-table = نمایش جدول ناهم‌خوانی
 explorer-source-name = منبع: { $name }
 explorer-quality-tag = کیفیت { $quality } { $unit }
 explorer-quality-surface = سطح کیفیت: ارتفاعش { $quality } { $unit } است نه تراز
@@ -2624,7 +2627,7 @@ hole-misfit-qualities-none = چیزی انتخاب نشده
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = لایه‌ای که شبکه مدل می‌کند: سقف و کف آن در جایی که هر گمانه به آن‌ها می‌رسد خوانده می‌شود.
 hole-misfit-pick-seam = لایه‌ای را که این شبکه مدل می‌کند انتخاب کنید
-hole-misfit-note = هر عدد مدل منهای برداشت است: مثبت یعنی سقف یا کف مدل بالای برداشت، مدل ضخیم‌تر، یا مقدار بالاتر.
+hole-misfit-note = هر عدد مدل منهای برداشت است: مثبت یعنی سقف یا کف مدل بالای برداشت، مدل ضخیم‌تر، یا مقدار بالاتر. مقایسه همچنین اختلاف‌های هر کمیت را در طرح ها به صورت لایه‌ای از نقطه‌های برچسب‌دار با z برابر اختلاف می‌نویسد؛ در نمای پلان، برای خواندن برچسب‌ها شبکه و هر سطح بالای آن‌ها را پنهان کنید.
 hole-misfit-compare = مقایسه
 hole-misfit-table-title = ناهم‌خوانی { $grid } در گمانه‌ها، { $seam }
 hole-misfit-totals = { $measure }: { $compared } مقایسه شد، میانگین { $mean }، بیشترین { $largest } در { $source }، { $not } مقایسه نشد
@@ -2638,6 +2641,7 @@ hole-misfit-column-note = یادداشت
 hole-misfit-measure-roof = تراز سقف
 hole-misfit-measure-floor = تراز کف
 hole-misfit-unit-differs = نقطه‌ها بر حسب { $unit }، { $grid } بر حسب { $grid_unit }
+hole-misfit-mark = ناهم‌خوانی { $measure }
 
 ## Tie strings
 

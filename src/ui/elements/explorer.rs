@@ -518,6 +518,8 @@ struct LayerRowContext<'a> {
     folders: &'a crate::model::FolderRegistry,
     /// Thickness points layers whose table is still in memory.
     thickness_tables: &'a std::collections::HashSet<(u32, crate::model::LayerId)>,
+    /// Misfit layers whose run's table is still in memory.
+    misfit_tables: &'a std::collections::HashSet<(u32, crate::model::LayerId)>,
     /// Every selected row, for the menu's actions on all of them.
     selection: &'a [RowState],
     /// Layers taken into the selection from the tree.
@@ -591,6 +593,10 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
         let runtime_id = cx.entry.runtime_id;
         if layer.is_loaded && cx.thickness_tables.contains(&(runtime_id, layer_id)) && ContextMenuAction::new(tr!("explorer-show-thickness-table")).show(ui).clicked() {
             commands.push(UiCommand::ShowThicknessTable { runtime_id, layer: layer_id });
+            ui.close();
+        }
+        if layer.is_loaded && cx.misfit_tables.contains(&(runtime_id, layer_id)) && ContextMenuAction::new(tr!("explorer-show-misfit-table")).show(ui).clicked() {
+            commands.push(UiCommand::ShowHoleMisfitTable { runtime_id, layer: layer_id });
             ui.close();
         }
         if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!layer_locked).show(ui).clicked() {
@@ -1115,6 +1121,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     draggable: rows_draggable,
                     folders: &project.folders,
                     thickness_tables,
+                    misfit_tables: &project.misfit_table_layers,
                     selection: &selection,
                     selected_layers,
                 };

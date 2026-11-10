@@ -2498,6 +2498,7 @@ impl<'a> App<'a> {
             active_triangulation_for_menu,
             thickness_table_layers: self.session.thickness_tables.keys().copied().collect(),
             seam_table_surfaces: self.session.seam_tables.keys().copied().collect(),
+            misfit_table_layers: self.session.misfit_tables.keys().copied().collect(),
             schedule: self.workspace.active_document().map(|document| document.schedule().clone()).unwrap_or_default(),
             haulage: self.workspace.active_document().map(|document| document.haulage().clone()).unwrap_or_default(),
             haul_points: self.workspace.active_document().map(|document| self.haul_destination_points(document)).unwrap_or_default(),

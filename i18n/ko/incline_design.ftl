@@ -1152,6 +1152,8 @@ cmd-hole-misfit-measure = { $measure }: 평균 { $mean }, 최대 { $largest }({ 
 cmd-hole-misfit-not-read = 읽지 않음: 데이터 세트를 더는 불러오지 않은 시추공 { $holes }개, 더는 없는 품질 점 { $points }개
 cmd-hole-misfit-none = '{ $grid }'와 비교된 것이 없습니다: 표에 각 행의 사유가 있습니다
 cmd-hole-misfit-grid-gone = 프리즈모이드 격자가 더는 불러온 상태가 아닙니다
+cmd-hole-misfit-layer = { $grid } { $measure } 오차
+cmd-hole-misfit-layers-made = 차이를 레이블이 붙은 점 레이어 { $count }개로 나타냈습니다 (z는 차이): { $layers }
 cmd-thickness-points-saved = { $dataset }의 열 "{ $column }"에 진두께 값 { $count }개를 각 상반 구간에 저장했습니다
 cmd-thickness-points-saved-cleared = 이번 실행에서 제외된 시추공의 이전 값 { $count }개를 지웠습니다
 cmd-thickness-points-saved-replaced = 이전 실행의 값 { $count }개를 바꿨습니다
@@ -1861,6 +1863,7 @@ explorer-new-collection = 새 컬렉션
 explorer-no-collection = 컬렉션 없음
 explorer-select-all-objects = 모든 객체 선택
 explorer-show-thickness-table = 두께 표 보기
+explorer-show-misfit-table = 오차 표 보기
 explorer-source-name = 출처: { $name }
 explorer-quality-tag = 품질 { $quality } { $unit }
 explorer-quality-surface = 품질 면: 높이는 { $quality } { $unit }이며 표고가 아닙니다
@@ -2657,7 +2660,7 @@ hole-misfit-qualities-none = 선택 없음
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = 격자가 모델링하는 탄층: 각 시추공이 만나는 곳에서 상반과 하반을 읽습니다.
 hole-misfit-pick-seam = 이 격자가 모델링하는 탄층 선택
-hole-misfit-note = 모든 수치는 모델 빼기 해석값입니다. 양수는 모델의 상반이나 하반이 해석 위치보다 위에 있거나, 모델이 더 두껍거나, 값이 더 높다는 뜻입니다.
+hole-misfit-note = 모든 수치는 모델 빼기 해석값입니다. 양수는 모델의 상반이나 하반이 해석 위치보다 위에 있거나, 모델이 더 두껍거나, 값이 더 높다는 뜻입니다. 비교는 각 측정 항목의 차이를 z가 차이와 같은 레이블 점 레이어로 설계에도 기록합니다. 평면에서 레이블을 읽으려면 격자와 그 위의 모든 표면을 숨기십시오.
 hole-misfit-compare = 비교
 hole-misfit-table-title = { $grid }의 시추공 오차, { $seam }
 hole-misfit-totals = { $measure }: 비교 { $compared }건, 평균 { $mean }, 최대 { $largest }({ $source }), 비교 못함 { $not }건
@@ -2671,6 +2674,7 @@ hole-misfit-column-note = 비고
 hole-misfit-measure-roof = 상반 RL
 hole-misfit-measure-floor = 하반 RL
 hole-misfit-unit-differs = 점은 { $unit }, { $grid }는 { $grid_unit }
+hole-misfit-mark = { $measure } 오차
 
 ## Tie strings
 

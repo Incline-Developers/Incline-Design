@@ -1169,6 +1169,8 @@ cmd-hole-misfit-measure = { $measure }: media { $mean }, massimo { $largest } in
 cmd-hole-misfit-not-read = Non letti: { $holes } foro/i il cui set non è più caricato, { $points } punto/i di qualità non più presenti
 cmd-hole-misfit-none = Nulla è stato confrontato con '{ $grid }': la tabella dà il motivo di ogni riga
 cmd-hole-misfit-grid-gone = La griglia di prismoidi non è più caricata
+cmd-hole-misfit-layer = { $grid } scarto di { $measure }
+cmd-hole-misfit-layers-made = Differenze mappate come { $count } layer di punti etichettati, z pari alla differenza: { $layers }
 cmd-thickness-points-saved = Salvati { $count } spessori veri nella colonna "{ $column }" di { $dataset }, su ogni intervallo di tetto
 cmd-thickness-points-saved-cleared = Cancellati { $count } valori precedenti sui sondaggi esclusi in questa esecuzione
 cmd-thickness-points-saved-replaced = Sostituiti { $count } valori precedenti di un'esecuzione precedente
@@ -1878,6 +1880,7 @@ explorer-new-collection = Nuova raccolta
 explorer-no-collection = Nessuna raccolta
 explorer-select-all-objects = Seleziona tutti gli oggetti
 explorer-show-thickness-table = Mostra tabella degli spessori
+explorer-show-misfit-table = Mostra tabella degli scarti
 explorer-source-name = Sorgente: { $name }
 explorer-quality-tag = qualità { $quality } { $unit }
 explorer-quality-surface = Superficie di qualità: la sua altezza è { $quality } { $unit }, non una quota
@@ -2674,7 +2677,7 @@ hole-misfit-qualities-none = Nessuno selezionato
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = Lo strato che la griglia modella: il suo tetto e il suo letto sono letti dove ogni sondaggio li incontra.
 hole-misfit-pick-seam = Scegli lo strato che questa griglia modella
-hole-misfit-note = Ogni cifra è il modello meno l'interpretato: positivo significa un tetto o un letto del modello sopra l'interpretato, un modello più spesso o un valore più alto.
+hole-misfit-note = Ogni cifra è il modello meno l'interpretato: positivo significa un tetto o un letto del modello sopra l'interpretato, un modello più spesso o un valore più alto. Confronta scrive anche le differenze di ogni misura in Progettazioni come layer di punti etichettati con z pari alla differenza; in pianta, nascondi la griglia e ogni superficie sopra per leggere le etichette.
 hole-misfit-compare = Confronta
 hole-misfit-table-title = Scarto di { $grid } nei sondaggi, { $seam }
 hole-misfit-totals = { $measure }: { $compared } confrontate, media { $mean }, massimo { $largest } in { $source }, { $not } non confrontate
@@ -2688,6 +2691,7 @@ hole-misfit-column-note = Nota
 hole-misfit-measure-roof = RL del tetto
 hole-misfit-measure-floor = RL del letto
 hole-misfit-unit-differs = punti in { $unit }, { $grid } in { $grid_unit }
+hole-misfit-mark = scarto di { $measure }
 
 ## Tie strings
 

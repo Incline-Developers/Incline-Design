@@ -1174,6 +1174,8 @@ cmd-hole-misfit-measure = { $measure }: середнє { $mean }, найбіль
 cmd-hole-misfit-not-read = Не прочитано: свердловин, чий набір більше не завантажено: { $holes }; точок показників, яких більше немає: { $points }
 cmd-hole-misfit-none = З сіткою '{ $grid }' нічого не порівняно: причину для кожного рядка вказано в таблиці
 cmd-hole-misfit-grid-gone = Сітку призмоїдів більше не завантажено
+cmd-hole-misfit-layer = { $grid } нев'язка { $measure }
+cmd-hole-misfit-layers-made = Різниці нанесено як шари підписаних точок ({ $count }), z дорівнює різниці: { $layers }
 cmd-thickness-points-saved = Збережено { $count } значен(ь) істинної потужності у стовпець "{ $column }" набору { $dataset }, на кожному інтервалі покрівлі
 cmd-thickness-points-saved-cleared = Очищено { $count } попередн(іх) значен(ь) у свердловинах, пропущених цього запуску
 cmd-thickness-points-saved-replaced = Замінено { $count } попередн(іх) значен(ь) з попереднього запуску
@@ -1883,6 +1885,7 @@ explorer-new-collection = Нова колекція
 explorer-no-collection = Без колекції
 explorer-select-all-objects = Виберіть усі об'єкти
 explorer-show-thickness-table = Показати таблицю потужності
+explorer-show-misfit-table = Показати таблицю нев'язок
 explorer-source-name = Джерело: { $name }
 explorer-quality-tag = показник { $quality } { $unit }
 explorer-quality-surface = Поверхня показника: її висота — { $quality } { $unit }, не позначка
@@ -2679,7 +2682,7 @@ hole-misfit-qualities-none = Нічого не вибрано
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = Пласт, який моделює сітка: його покрівлю й підошву беруть там, де їх перетинає свердловина.
 hole-misfit-pick-seam = Укажіть пласт, який моделює ця сітка
-hole-misfit-note = Кожна величина дорівнює модель мінус відбивка: плюс означає покрівлю або підошву моделі вище відбивки, потужнішу модель або вище значення.
+hole-misfit-note = Кожна величина дорівнює модель мінус відбивка: плюс означає покрівлю або підошву моделі вище відбивки, потужнішу модель або вище значення. Порівняти також записує різниці кожної величини в Проектні об'єкти шаром підписаних точок із z, що дорівнює різниці; у плані сховайте сітку й усі поверхні над ними, щоб прочитати підписи.
 hole-misfit-compare = Порівняти
 hole-misfit-table-title = Нев'язка сітки { $grid } за свердловинами, { $seam }
 hole-misfit-totals = { $measure }: порівняно { $compared }, середнє { $mean }, найбільше { $largest } у { $source }, не порівняно { $not }
@@ -2693,6 +2696,7 @@ hole-misfit-column-note = Примітка
 hole-misfit-measure-roof = Позначка покрівлі
 hole-misfit-measure-floor = Позначка підошви
 hole-misfit-unit-differs = точки в { $unit }, { $grid } у { $grid_unit }
+hole-misfit-mark = нев'язка { $measure }
 
 ## Tie strings
 

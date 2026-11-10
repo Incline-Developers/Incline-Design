@@ -1197,6 +1197,8 @@ cmd-hole-misfit-measure = { $measure }: średnia { $mean }, największe { $large
 cmd-hole-misfit-not-read = Nie odczytano: otwory, których zbiór nie jest już wczytany: { $holes }; punkty jakości, których już nie ma: { $points }
 cmd-hole-misfit-none = Nic nie porównano z siatką '{ $grid }': tabela podaje powód dla każdego wiersza
 cmd-hole-misfit-grid-gone = Siatka prizmoidów nie jest już wczytana
+cmd-hole-misfit-layer = { $grid } niedopasowanie { $measure }
+cmd-hole-misfit-layers-made = Różnice odwzorowane jako warstwy punktów z etykietami ({ $count }), z równe różnicy: { $layers }
 cmd-thickness-points-saved = Zapisano { $count } wartości miąższości rzeczywistej w kolumnie "{ $column }" zbioru { $dataset }, na każdym interwale stropu
 cmd-thickness-points-saved-cleared = Wyczyszczono { $count } wcześniejszych wartości w otworach pominiętych w tym przebiegu
 cmd-thickness-points-saved-replaced = Zastąpiono { $count } wcześniejszych wartości z poprzedniego przebiegu
@@ -1906,6 +1908,7 @@ explorer-new-collection = Nowa kolekcja
 explorer-no-collection = Brak kolekcji
 explorer-select-all-objects = Zaznacz wszystkie obiekty
 explorer-show-thickness-table = Pokaż tabelę miąższości
+explorer-show-misfit-table = Pokaż tabelę niedopasowania
 explorer-source-name = Źródło: { $name }
 explorer-quality-tag = jakość { $quality } { $unit }
 explorer-quality-surface = Powierzchnia jakości: jej wysokość to { $quality } { $unit }, nie rzędna
@@ -2702,7 +2705,7 @@ hole-misfit-qualities-none = Nie wybrano
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = Pokład, który modeluje siatka: jego strop i spąg są odczytywane tam, gdzie otwór je przecina.
 hole-misfit-pick-seam = Wskaż pokład modelowany przez tę siatkę
-hole-misfit-note = Każda wartość to model minus odczyt: dodatnia oznacza strop lub spąg modelu nad odczytem, grubszy model albo wyższą wartość.
+hole-misfit-note = Każda wartość to model minus odczyt: dodatnia oznacza strop lub spąg modelu nad odczytem, grubszy model albo wyższą wartość. Porównaj zapisuje też różnice każdej wielkości w Projektach rysunkowych jako warstwę punktów z etykietami, z równe różnicy; w planie ukryj siatkę i każdą powierzchnię nad nimi, aby odczytać etykiety.
 hole-misfit-compare = Porównaj
 hole-misfit-table-title = Niedopasowanie siatki { $grid } w otworach, { $seam }
 hole-misfit-totals = { $measure }: porównano { $compared }, średnia { $mean }, największe { $largest } w { $source }, nie porównano { $not }
@@ -2716,6 +2719,7 @@ hole-misfit-column-note = Uwaga
 hole-misfit-measure-roof = Rzędna stropu
 hole-misfit-measure-floor = Rzędna spągu
 hole-misfit-unit-differs = punkty w { $unit }, { $grid } w { $grid_unit }
+hole-misfit-mark = niedopasowanie { $measure }
 
 ## Tie strings
 

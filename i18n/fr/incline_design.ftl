@@ -1127,6 +1127,8 @@ cmd-hole-misfit-measure = { $measure } : moyenne { $mean }, maximum { $largest }
 cmd-hole-misfit-not-read = Non lus : { $holes } sondage(s) dont le jeu n'est plus chargé, { $points } point(s) de qualité qui n'existent plus
 cmd-hole-misfit-none = Rien n'a été comparé avec '{ $grid }' : le tableau donne la raison de chaque ligne
 cmd-hole-misfit-grid-gone = La grille de prismoïdes n'est plus chargée
+cmd-hole-misfit-layer = { $grid } écart de { $measure }
+cmd-hole-misfit-layers-made = Écarts cartographiés en { $count } couche(s) de points étiquetés, z égal à l'écart : { $layers }
 cmd-thickness-points-saved = { $count } épaisseur(s) vraie(s) enregistrée(s) dans la colonne "{ $column }" de { $dataset }, sur chaque intervalle de toit
 cmd-thickness-points-saved-cleared = { $count } valeur(s) antérieure(s) effacée(s) sur les sondages écartés lors de ce calcul
 cmd-thickness-points-saved-replaced = { $count } valeur(s) antérieure(s) d'un calcul précédent remplacée(s)
@@ -1836,6 +1838,7 @@ explorer-new-collection = Nouvelle collection
 explorer-no-collection = Aucune collection
 explorer-select-all-objects = Sélectionnez tous les objets
 explorer-show-thickness-table = Afficher la table d'épaisseur
+explorer-show-misfit-table = Afficher la table des écarts
 explorer-source-name = Source : { $name }
 explorer-quality-tag = qualité { $quality } { $unit }
 explorer-quality-surface = Surface de qualité : sa hauteur est { $quality } { $unit }, pas une cote
@@ -2632,7 +2635,7 @@ hole-misfit-qualities-none = Aucun sélectionné
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = La couche que modélise la grille : son toit et son mur sont lus là où chaque sondage les rencontre.
 hole-misfit-pick-seam = Choisir la couche que modélise cette grille
-hole-misfit-note = Chaque chiffre est le modèle moins le pointé : positif signifie un toit ou un mur du modèle au-dessus du pointé, un modèle plus épais ou une valeur plus haute.
+hole-misfit-note = Chaque chiffre est le modèle moins le pointé : positif signifie un toit ou un mur du modèle au-dessus du pointé, un modèle plus épais ou une valeur plus haute. Comparer écrit aussi les écarts de chaque mesure dans Conceptions, en une couche de points étiquetés à z égal à l'écart ; en plan, masquez la grille et toute surface au-dessus pour lire les étiquettes.
 hole-misfit-compare = Comparer
 hole-misfit-table-title = Écart de { $grid } aux sondages, { $seam }
 hole-misfit-totals = { $measure } : { $compared } comparée(s), moyenne { $mean }, maximum { $largest } à { $source }, { $not } non comparée(s)
@@ -2646,6 +2649,7 @@ hole-misfit-column-note = Remarque
 hole-misfit-measure-roof = RL du toit
 hole-misfit-measure-floor = RL du mur
 hole-misfit-unit-differs = points en { $unit }, { $grid } en { $grid_unit }
+hole-misfit-mark = écart de { $measure }
 
 ## Tie strings
 

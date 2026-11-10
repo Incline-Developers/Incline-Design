@@ -1125,6 +1125,8 @@ cmd-hole-misfit-measure = { $measure }: média { $mean }, maior { $largest } em 
 cmd-hole-misfit-not-read = Não lidos: { $holes } furo(s) cujo conjunto não está mais carregado, { $points } ponto(s) de qualidade que não existem mais
 cmd-hole-misfit-none = Nada foi comparado com '{ $grid }': a tabela dá o motivo de cada linha
 cmd-hole-misfit-grid-gone = A grade de prismoides não está mais carregada
+cmd-hole-misfit-layer = { $grid } desvio de { $measure }
+cmd-hole-misfit-layers-made = Diferenças mapeadas como { $count } camada(s) de pontos rotulados, z igual à diferença: { $layers }
 cmd-thickness-points-saved = Guardada(s) { $count } espessura(s) verdadeira(s) na coluna "{ $column }" de { $dataset }, em cada intervalo de teto
 cmd-thickness-points-saved-cleared = Apagado(s) { $count } valor(es) anterior(es) em sondagens excluídas nesta execução
 cmd-thickness-points-saved-replaced = Substituído(s) { $count } valor(es) anterior(es) de uma execução prévia
@@ -1834,6 +1836,7 @@ explorer-new-collection = Nova coleção
 explorer-no-collection = Sem coleção
 explorer-select-all-objects = Selecionar todos os objetos
 explorer-show-thickness-table = Mostrar tabela de espessuras
+explorer-show-misfit-table = Mostrar tabela de desvios
 explorer-source-name = Origem: { $name }
 explorer-quality-tag = qualidade { $quality } { $unit }
 explorer-quality-surface = Superfície de qualidade: sua altura é { $quality } { $unit }, não uma cota
@@ -2630,7 +2633,7 @@ hole-misfit-qualities-none = Nenhum selecionado
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = A camada que a grade modela: seu teto e sua lapa são lidos onde cada furo os encontra.
 hole-misfit-pick-seam = Escolher a camada que esta grade modela
-hole-misfit-note = Cada valor é o modelo menos a marcação: positivo é um teto ou uma lapa do modelo acima da marcação, um modelo mais espesso ou um valor mais alto.
+hole-misfit-note = Cada valor é o modelo menos a marcação: positivo é um teto ou uma lapa do modelo acima da marcação, um modelo mais espesso ou um valor mais alto. Comparar também grava as diferenças de cada medida em Desenhos como uma camada de pontos rotulados com z igual à diferença; em planta, oculte a grade e toda superfície acima para ler os rótulos.
 hole-misfit-compare = Comparar
 hole-misfit-table-title = Desvio de { $grid } nos furos, { $seam }
 hole-misfit-totals = { $measure }: { $compared } comparadas, média { $mean }, maior { $largest } em { $source }, { $not } não comparadas
@@ -2644,6 +2647,7 @@ hole-misfit-column-note = Nota
 hole-misfit-measure-roof = RL do teto
 hole-misfit-measure-floor = RL da lapa
 hole-misfit-unit-differs = pontos em { $unit }, { $grid } em { $grid_unit }
+hole-misfit-mark = desvio de { $measure }
 
 ## Tie strings
 

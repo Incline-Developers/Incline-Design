@@ -1119,6 +1119,8 @@ cmd-hole-misfit-measure = { $measure }: rata-rata { $mean }, terbesar { $largest
 cmd-hole-misfit-not-read = Tidak dibaca: { $holes } lubang yang set datanya tidak lagi dimuat, { $points } titik kualitas yang sudah tidak ada
 cmd-hole-misfit-none = Tidak ada yang dibandingkan dengan '{ $grid }': tabel memberi alasan tiap baris
 cmd-hole-misfit-grid-gone = Grid prismoid tidak lagi dimuat
+cmd-hole-misfit-layer = { $grid } ketidakcocokan { $measure }
+cmd-hole-misfit-layers-made = Selisih dipetakan sebagai { $count } layer titik berlabel, z sama dengan selisih: { $layers }
 cmd-thickness-points-saved = Menyimpan { $count } nilai ketebalan sebenarnya ke kolom "{ $column }" pada { $dataset }, di setiap interval atap
 cmd-thickness-points-saved-cleared = Menghapus { $count } nilai lama pada lubang yang dikecualikan di proses ini
 cmd-thickness-points-saved-replaced = Mengganti { $count } nilai lama dari proses sebelumnya
@@ -1828,6 +1830,7 @@ explorer-new-collection = Koleksi Baru
 explorer-no-collection = Tanpa Koleksi
 explorer-select-all-objects = Pilih Semua Objek
 explorer-show-thickness-table = Tampilkan tabel ketebalan
+explorer-show-misfit-table = Tampilkan tabel ketidakcocokan
 explorer-source-name = Sumber: { $name }
 explorer-quality-tag = kualitas { $quality } { $unit }
 explorer-quality-surface = Permukaan kualitas: tingginya { $quality } { $unit }, bukan RL
@@ -2624,7 +2627,7 @@ hole-misfit-qualities-none = Tidak ada yang dipilih
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = Lapisan yang dimodelkan grid: atap dan lantainya dibaca di tempat tiap lubang menembusnya.
 hole-misfit-pick-seam = Pilih lapisan yang dimodelkan grid ini
-hole-misfit-note = Setiap angka adalah model dikurangi pick: positif berarti atap atau lantai model di atas pick, model lebih tebal, atau nilai lebih tinggi.
+hole-misfit-note = Setiap angka adalah model dikurangi pick: positif berarti atap atau lantai model di atas pick, model lebih tebal, atau nilai lebih tinggi. Bandingkan juga menulis selisih setiap ukuran ke Desain sebagai layer titik berlabel dengan z sama dengan selisih; pada tampak denah, sembunyikan grid dan setiap permukaan di atasnya untuk membaca label.
 hole-misfit-compare = Bandingkan
 hole-misfit-table-title = Ketidakcocokan { $grid } pada lubang, { $seam }
 hole-misfit-totals = { $measure }: { $compared } dibandingkan, rata-rata { $mean }, terbesar { $largest } pada { $source }, { $not } tidak dibandingkan
@@ -2638,6 +2641,7 @@ hole-misfit-column-note = Catatan
 hole-misfit-measure-roof = RL atap
 hole-misfit-measure-floor = RL lantai
 hole-misfit-unit-differs = titik dalam { $unit }, { $grid } dalam { $grid_unit }
+hole-misfit-mark = ketidakcocokan { $measure }
 
 ## Tie strings
 

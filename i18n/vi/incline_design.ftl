@@ -1145,6 +1145,8 @@ cmd-hole-misfit-measure = { $measure }: trung bình { $mean }, lớn nhất { $l
 cmd-hole-misfit-not-read = Không đọc: { $holes } lỗ khoan có bộ dữ liệu không còn được tải, { $points } điểm chỉ tiêu không còn nữa
 cmd-hole-misfit-none = Không có gì để so sánh với '{ $grid }': bảng nêu lý do của từng hàng
 cmd-hole-misfit-grid-gone = Lưới prismoid không còn được tải
+cmd-hole-misfit-layer = { $grid } sai lệch { $measure }
+cmd-hole-misfit-layers-made = Đã thể hiện các chênh lệch thành { $count } lớp điểm có nhãn, z là chênh lệch: { $layers }
 cmd-thickness-points-saved = Đã lưu { $count } giá trị chiều dày thật vào cột "{ $column }" của { $dataset }, trên mỗi khoảng vách
 cmd-thickness-points-saved-cleared = Đã xóa { $count } giá trị cũ trên các lỗ bị loại trong lần chạy này
 cmd-thickness-points-saved-replaced = Đã thay { $count } giá trị cũ từ lần chạy trước
@@ -1854,6 +1856,7 @@ explorer-new-collection = Bộ sưu tập mới
 explorer-no-collection = Không có bộ sưu tập
 explorer-select-all-objects = Chọn tất cả đối tượng
 explorer-show-thickness-table = Hiện bảng chiều dày
+explorer-show-misfit-table = Hiện bảng sai lệch
 explorer-source-name = Nguồn: { $name }
 explorer-quality-tag = chỉ tiêu { $quality } { $unit }
 explorer-quality-surface = Bề mặt chỉ tiêu: độ cao là { $quality } { $unit }, không phải cao độ
@@ -2650,7 +2653,7 @@ hole-misfit-qualities-none = Chưa chọn
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = Vỉa mà lưới mô hình hóa: vách trên và vách dưới của nó được đọc tại nơi mỗi lỗ khoan gặp chúng.
 hole-misfit-pick-seam = Chọn vỉa mà lưới này mô hình hóa
-hole-misfit-note = Mọi số liệu là mô hình trừ giá trị nhận định: số dương nghĩa là vách trên hoặc vách dưới của mô hình cao hơn giá trị nhận định, mô hình dày hơn, hoặc giá trị cao hơn.
+hole-misfit-note = Mọi số liệu là mô hình trừ giá trị nhận định: số dương nghĩa là vách trên hoặc vách dưới của mô hình cao hơn giá trị nhận định, mô hình dày hơn, hoặc giá trị cao hơn. So sánh cũng ghi chênh lệch của từng đại lượng vào Bản thiết kế thành một lớp điểm có nhãn với z là chênh lệch; ở mặt bằng, hãy ẩn lưới và mọi bề mặt phía trên để đọc nhãn.
 hole-misfit-compare = So sánh
 hole-misfit-table-title = Sai lệch của { $grid } tại các lỗ khoan, { $seam }
 hole-misfit-totals = { $measure }: đã so sánh { $compared }, trung bình { $mean }, lớn nhất { $largest } tại { $source }, { $not } chưa so sánh
@@ -2664,6 +2667,7 @@ hole-misfit-column-note = Ghi chú
 hole-misfit-measure-roof = RL vách trên
 hole-misfit-measure-floor = RL vách dưới
 hole-misfit-unit-differs = điểm tính bằng { $unit }, { $grid } tính bằng { $grid_unit }
+hole-misfit-mark = sai lệch { $measure }
 
 ## Tie strings
 

@@ -1170,6 +1170,8 @@ cmd-hole-misfit-measure = { $measure }: дундаж { $mean }, хамгийн �
 cmd-hole-misfit-not-read = Уншаагүй: өгөгдлийн багц нь ачаалагдаагүй болсон { $holes } цооног, байхгүй болсон { $points } чанарын цэг
 cmd-hole-misfit-none = '{ $grid }' торыг юутай ч харьцуулаагүй: мөр бүрийн шалтгааныг хүснэгт өгнө
 cmd-hole-misfit-grid-gone = Призмоид тор ачаалагдаагүй болсон
+cmd-hole-misfit-layer = { $grid } { $measure } үл тохирол
+cmd-hole-misfit-layers-made = Зөрүүг шошготой цэгийн { $count } давхаргаар зурав, z нь зөрүү: { $layers }
 cmd-thickness-points-saved = { $dataset }-ийн "{ $column }" баганад жинхэнэ зузааны { $count } утгыг дээд хучааны интервал бүрт хадгалсан
 cmd-thickness-points-saved-cleared = Энэ удаа орхигдсон цооногуудын өмнөх { $count } утгыг арилгасан
 cmd-thickness-points-saved-replaced = Өмнөх ажиллуулалтын { $count } утгыг сольсон
@@ -1879,6 +1881,7 @@ explorer-new-collection = Шинэ цуглуулга
 explorer-no-collection = Цуглуулгагүй
 explorer-select-all-objects = Бүх объектыг сонгох
 explorer-show-thickness-table = Зузааны хүснэгт харуулах
+explorer-show-misfit-table = Үл тохирлын хүснэгт харуулах
 explorer-source-name = Эх сурвалж: { $name }
 explorer-quality-tag = чанар { $quality } { $unit }
 explorer-quality-surface = Чанарын гадаргуу: өндөр нь { $quality } { $unit }, RL биш
@@ -2675,7 +2678,7 @@ hole-misfit-qualities-none = Сонгоогүй
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = Тороор загварчилсан давхарга: цооног бүр түүнтэй огтлолцох газраас дээвэр ба улыг нь уншина.
 hole-misfit-pick-seam = Энэ торын загварчилсан давхаргыг сонгоно уу
-hole-misfit-note = Тоо бүр загвар хасах тэмдэглэгээ: эерэг нь тэмдэглэгээнээс дээш загварын дээвэр буюу ул, илүү зузаан загвар, эсвэл илүү өндөр утга гэсэн үг.
+hole-misfit-note = Тоо бүр загвар хасах тэмдэглэгээ: эерэг нь тэмдэглэгээнээс дээш загварын дээвэр буюу ул, илүү зузаан загвар, эсвэл илүү өндөр утга гэсэн үг. Харьцуулах нь хэмжигдэхүүн бүрийн зөрүүг z нь зөрүүтэй тэнцүү шошготой цэгийн давхаргаар Зураг төслүүд рүү бас бичнэ; планаар шошгыг унших бол торыг болон тэдгээрийн дээрх бүх гадаргууг нуу.
 hole-misfit-compare = Харьцуулах
 hole-misfit-table-title = { $grid } торын цооногууд дахь үл тохирол, { $seam }
 hole-misfit-totals = { $measure }: { $compared } харьцуулсан, дундаж { $mean }, хамгийн их нь { $largest } ({ $source }), { $not } харьцуулаагүй
@@ -2689,6 +2692,7 @@ hole-misfit-column-note = Тэмдэглэл
 hole-misfit-measure-roof = Дээврийн RL
 hole-misfit-measure-floor = Улын RL
 hole-misfit-unit-differs = цэгүүд { $unit }-ээр, { $grid } { $grid_unit }-ээр
+hole-misfit-mark = { $measure } үл тохирол
 
 ## Tie strings
 

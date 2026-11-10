@@ -1125,6 +1125,8 @@ cmd-hole-misfit-measure = { $measure }: media { $mean }, mayor { $largest } en {
 cmd-hole-misfit-not-read = Sin leer: { $holes } sondaje(s) cuyo conjunto ya no está cargado, { $points } punto(s) de calidad que ya no están
 cmd-hole-misfit-none = No se comparó nada con '{ $grid }': la tabla da el motivo de cada fila
 cmd-hole-misfit-grid-gone = La malla de prismoides ya no está cargada
+cmd-hole-misfit-layer = { $grid } desajuste de { $measure }
+cmd-hole-misfit-layers-made = Diferencias mapeadas como { $count } capa(s) de puntos rotulados, z igual a la diferencia: { $layers }
 cmd-thickness-points-saved = Se guardaron { $count } espesor(es) verdadero(s) en la columna "{ $column }" de { $dataset }, en cada intervalo de techo
 cmd-thickness-points-saved-cleared = Se borraron { $count } valor(es) anterior(es) en sondajes excluidos en esta ejecución
 cmd-thickness-points-saved-replaced = Se reemplazaron { $count } valor(es) anterior(es) de una ejecución previa
@@ -1834,6 +1836,7 @@ explorer-new-collection = Colección nueva
 explorer-no-collection = Sin colección
 explorer-select-all-objects = Seleccione todos los objetos
 explorer-show-thickness-table = Mostrar tabla de espesores
+explorer-show-misfit-table = Mostrar tabla de desajustes
 explorer-source-name = Fuente: { $name }
 explorer-quality-tag = calidad { $quality } { $unit }
 explorer-quality-surface = Superficie de calidad: su altura es { $quality } { $unit }, no una cota
@@ -2630,7 +2633,7 @@ hole-misfit-qualities-none = Ninguno seleccionado
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = El manto que modela la malla: su techo y su muro se leen donde cada sondaje los corta.
 hole-misfit-pick-seam = Elegir el manto que modela esta malla
-hole-misfit-note = Cada cifra es el modelo menos la marca: positivo es un techo o muro del modelo sobre la marca, un modelo más espeso o un valor más alto.
+hole-misfit-note = Cada cifra es el modelo menos la marca: positivo es un techo o muro del modelo sobre la marca, un modelo más espeso o un valor más alto. Comparar también escribe las diferencias de cada medida en Diseños como una capa de puntos rotulados con z igual a la diferencia; en planta, oculte la malla y toda superficie encima para leer los rótulos.
 hole-misfit-compare = Comparar
 hole-misfit-table-title = Desajuste de { $grid } en sondajes, { $seam }
 hole-misfit-totals = { $measure }: { $compared } comparadas, media { $mean }, mayor { $largest } en { $source }, { $not } sin comparar
@@ -2644,6 +2647,7 @@ hole-misfit-column-note = Nota
 hole-misfit-measure-roof = RL del techo
 hole-misfit-measure-floor = RL del muro
 hole-misfit-unit-differs = puntos en { $unit }, { $grid } en { $grid_unit }
+hole-misfit-mark = desajuste de { $measure }
 
 ## Tie strings
 

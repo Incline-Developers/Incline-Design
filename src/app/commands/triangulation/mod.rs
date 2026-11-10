@@ -30,7 +30,7 @@ pub(crate) mod reference_surface;
 pub(crate) mod session;
 pub(crate) mod solid_between;
 
-pub(crate) use contours::section_surface_lines;
+pub(crate) use contours::{CONTOUR_LABEL_HEIGHT, section_surface_lines};
 pub(crate) use cuts::seam_targets;
 use geometry::*;
 pub(crate) use point_cloud_tin::{TerrainBudget, TerrainSampler, TerrainTinParams, estimate_terrain_tin_memory_bytes, terrain_budget_target};

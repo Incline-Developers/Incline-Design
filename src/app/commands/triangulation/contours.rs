@@ -6,7 +6,7 @@ use super::{
 };
 
 /// Standard text height in world units, independent of the viewport zoom.
-const CONTOUR_LABEL_HEIGHT: f64 = 15.0;
+pub(crate) const CONTOUR_LABEL_HEIGHT: f64 = 15.0;
 
 impl<'a> App<'a> {
     /// Generate contour polylines from a triangulation and store them in a new

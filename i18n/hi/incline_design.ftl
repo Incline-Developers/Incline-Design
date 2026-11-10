@@ -1119,6 +1119,8 @@ cmd-hole-misfit-measure = { $measure }: औसत { $mean }, सबसे बड
 cmd-hole-misfit-not-read = नहीं पढ़े गए: { $holes } होल जिनका डेटासेट अब लोड नहीं है, { $points } गुणवत्ता बिंदु जो अब नहीं हैं
 cmd-hole-misfit-none = '{ $grid }' से किसी की तुलना नहीं हुई: तालिका हर पंक्ति का कारण देती है
 cmd-hole-misfit-grid-gone = प्रिज़्मॉइड ग्रिड अब लोड नहीं है
+cmd-hole-misfit-layer = { $grid } { $measure } बेमेल
+cmd-hole-misfit-layers-made = अंतरों को { $count } लेबल वाली बिंदु परतों के रूप में दिखाया गया, z अंतर के बराबर: { $layers }
 cmd-thickness-points-saved = { $dataset } के कॉलम "{ $column }" में हर छत अंतराल पर { $count } वास्तविक मोटाई मान सहेजे गए
 cmd-thickness-points-saved-cleared = इस बार छोड़े गए होल पर { $count } पुराने मान हटाए गए
 cmd-thickness-points-saved-replaced = पिछले रन के { $count } पुराने मान बदले गए
@@ -1828,6 +1830,7 @@ explorer-new-collection = नया संग्रह
 explorer-no-collection = कोई संग्रह नहीं
 explorer-select-all-objects = सभी वस्तुओं का चयन करें
 explorer-show-thickness-table = मोटाई तालिका दिखाएँ
+explorer-show-misfit-table = बेमेल तालिका दिखाएँ
 explorer-source-name = स्रोत: { $name }
 explorer-quality-tag = गुणवत्ता { $quality } { $unit }
 explorer-quality-surface = गुणवत्ता सतह: इसकी ऊँचाई { $quality } { $unit } है, RL नहीं
@@ -2624,7 +2627,7 @@ hole-misfit-qualities-none = कुछ नहीं चुना गया
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = वह सीम जिसे ग्रिड मॉडल करता है: उसकी छत और तल वहाँ पढ़े जाते हैं जहाँ हर होल उनसे मिलता है।
 hole-misfit-pick-seam = वह सीम चुनें जिसे यह ग्रिड मॉडल करता है
-hole-misfit-note = हर आँकड़ा मॉडल घटा पिक है: धनात्मक का अर्थ है पिक से ऊपर मॉडल की छत या तल, अधिक मोटा मॉडल, या ऊँचा मान।
+hole-misfit-note = हर आँकड़ा मॉडल घटा पिक है: धनात्मक का अर्थ है पिक से ऊपर मॉडल की छत या तल, अधिक मोटा मॉडल, या ऊँचा मान। तुलना करें हर माप के अंतरों को डिजाइन में लेबल वाले बिंदुओं की परत के रूप में भी लिखता है, जिसमें z अंतर के बराबर है; प्लान में लेबल पढ़ने के लिए ग्रिड और उनके ऊपर की हर सतह छिपाएँ।
 hole-misfit-compare = तुलना करें
 hole-misfit-table-title = होल पर { $grid } का बेमेल, { $seam }
 hole-misfit-totals = { $measure }: { $compared } की तुलना हुई, औसत { $mean }, सबसे बड़ा { $largest } { $source } पर, { $not } की नहीं
@@ -2638,6 +2641,7 @@ hole-misfit-column-note = टिप्पणी
 hole-misfit-measure-roof = छत RL
 hole-misfit-measure-floor = तल RL
 hole-misfit-unit-differs = बिंदु { $unit } में, { $grid } { $grid_unit } में
+hole-misfit-mark = { $measure } बेमेल
 
 ## Tie strings
 

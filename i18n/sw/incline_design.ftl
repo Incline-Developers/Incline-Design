@@ -1151,6 +1151,8 @@ cmd-hole-misfit-measure = { $measure }: wastani { $mean }, kubwa zaidi { $larges
 cmd-hole-misfit-not-read = Hayakusomwa: mashimo { $holes } ambayo data yake haijapakiwa tena, pointi za ubora { $points } ambazo hazipo tena
 cmd-hole-misfit-none = Hakuna kilicholinganishwa na '{ $grid }': jedwali linatoa sababu ya kila safu
 cmd-hole-misfit-grid-gone = Gridi ya prismoidi haijapakiwa tena
+cmd-hole-misfit-layer = { $grid } kutolingana kwa { $measure }
+cmd-hole-misfit-layers-made = Tofauti zimeonyeshwa kama tabaka { $count } za pointi zenye lebo, z ikiwa ni tofauti: { $layers }
 cmd-thickness-points-saved = Imehifadhi thamani { $count } za unene halisi kwenye safu "{ $column }" ya { $dataset }, kwenye kila kipindi cha paa
 cmd-thickness-points-saved-cleared = Imefuta thamani { $count } za awali kwenye mashimo yaliyoachwa katika uendeshaji huu
 cmd-thickness-points-saved-replaced = Imebadilisha thamani { $count } za awali kutoka uendeshaji uliopita
@@ -1860,6 +1862,7 @@ explorer-new-collection = Mkusanyiko Mpya
 explorer-no-collection = Hakuna Mkusanyiko
 explorer-select-all-objects = Chagua Vitu Vyote
 explorer-show-thickness-table = Onyesha jedwali la unene
+explorer-show-misfit-table = Onyesha jedwali la kutolingana
 explorer-source-name = Chanzo: { $name }
 explorer-quality-tag = ubora { $quality } { $unit }
 explorer-quality-surface = Uso wa ubora: urefu wake ni { $quality } { $unit }, si RL
@@ -2656,7 +2659,7 @@ hole-misfit-qualities-none = Hakuna iliyochaguliwa
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = Mshipa ambao gridi inaiga: paa na sakafu yake husomwa pale kila shimo linapokutana nazo.
 hole-misfit-pick-seam = Chagua mshipa ambao gridi hii inaiga
-hole-misfit-note = Kila namba ni modeli toa alama: chanya ni paa au sakafu ya modeli iliyo juu ya alama, modeli nene zaidi, au thamani ya juu zaidi.
+hole-misfit-note = Kila namba ni modeli toa alama: chanya ni paa au sakafu ya modeli iliyo juu ya alama, modeli nene zaidi, au thamani ya juu zaidi. Linganisha pia huandika tofauti za kila kipimo ndani ya Miundo kama tabaka la pointi zenye lebo, z ikiwa ni tofauti; kwenye mwonekano wa juu, ficha gridi na kila uso ulio juu yake ili kusoma lebo.
 hole-misfit-compare = Linganisha
 hole-misfit-table-title = Kutolingana kwa { $grid } kwenye mashimo, { $seam }
 hole-misfit-totals = { $measure }: { $compared } zililinganishwa, wastani { $mean }, kubwa zaidi { $largest } kwenye { $source }, { $not } hazikulinganishwa
@@ -2670,6 +2673,7 @@ hole-misfit-column-note = Kumbuka
 hole-misfit-measure-roof = RL ya paa
 hole-misfit-measure-floor = RL ya sakafu
 hole-misfit-unit-differs = pointi katika { $unit }, { $grid } katika { $grid_unit }
+hole-misfit-mark = kutolingana kwa { $measure }
 
 ## Tie strings
 

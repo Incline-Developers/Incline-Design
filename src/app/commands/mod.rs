@@ -1086,6 +1086,10 @@ impl<'a> App<'a> {
                 self.editor.seam_table = self.session.seam_tables.get(&surface).cloned();
                 Ok(())
             }
+            UiCommand::ShowHoleMisfitTable { runtime_id, layer } => {
+                self.editor.hole_misfit_table = self.session.misfit_tables.get(&(runtime_id, layer)).cloned();
+                Ok(())
+            }
             UiCommand::MakeSeamSurface { surface } => self.make_seam_surface(surface),
             UiCommand::BuildCollarPoints { holes } => {
                 self.build_collar_points(holes);

@@ -1119,6 +1119,8 @@ cmd-hole-misfit-measure = { $measure }:平均 { $mean },最大 { $largest }(位�
 cmd-hole-misfit-not-read = 未读取：数据集已不再加载的钻孔 { $holes } 个，已不存在的品质点 { $points } 个
 cmd-hole-misfit-none = 没有任何内容与 '{ $grid }' 比较:表中给出了每行的原因
 cmd-hole-misfit-grid-gone = 拟柱体网格已不再加载
+cmd-hole-misfit-layer = { $grid } { $measure } 偏差
+cmd-hole-misfit-layers-made = 已将差值绘制为 { $count } 个带标注的点图层，z 为差值：{ $layers }
 cmd-thickness-points-saved = 已将 { $count } 个真厚度值保存到 { $dataset } 的列 "{ $column }"，位于各顶板区间
 cmd-thickness-points-saved-cleared = 已清除本次被排除钻孔上的 { $count } 个旧值
 cmd-thickness-points-saved-replaced = 已替换上次运行的 { $count } 个旧值
@@ -1828,6 +1830,7 @@ explorer-new-collection = 新建集合
 explorer-no-collection = 无集合
 explorer-select-all-objects = 选择所有对象
 explorer-show-thickness-table = 显示厚度表
+explorer-show-misfit-table = 显示偏差表
 explorer-source-name = 来源：{ $name }
 explorer-quality-tag = 品质 { $quality } { $unit }
 explorer-quality-surface = 品质表面:其高度是 { $quality } { $unit },不是标高
@@ -2624,7 +2627,7 @@ hole-misfit-qualities-none = 未选择
 hole-misfit-qualities-layer = { $layer }({ $count })
 hole-misfit-seam-help = 网格所建模的煤层:在每个钻孔与其相交处读取其顶板和底板。
 hole-misfit-pick-seam = 选择此网格所建模的煤层
-hole-misfit-note = 所有数字均为模型减拾取值:正值表示模型顶板或底板高于拾取位置、模型更厚,或数值更高。
+hole-misfit-note = 所有数字均为模型减拾取值:正值表示模型顶板或底板高于拾取位置、模型更厚,或数值更高。 比较还会将每个测量项的差值作为带标注的点图层写入设计，z 等于差值；在平面视图中，请隐藏网格及其上方的所有曲面以读取标注。
 hole-misfit-compare = 比较
 hole-misfit-table-title = { $grid } 在钻孔处的偏差,{ $seam }
 hole-misfit-totals = { $measure }:已比较 { $compared } 项,平均 { $mean },最大 { $largest }(位于 { $source }),未比较 { $not } 项
@@ -2638,6 +2641,7 @@ hole-misfit-column-note = 备注
 hole-misfit-measure-roof = 顶板 RL
 hole-misfit-measure-floor = 底板 RL
 hole-misfit-unit-differs = 点的单位为 { $unit },{ $grid } 的单位为 { $grid_unit }
+hole-misfit-mark = { $measure } 偏差
 
 ## Tie strings
 

@@ -1,6 +1,6 @@
 //! What thickness work leaves behind for the session, in one place.
 //!
-//! Five maps share one lifetime: held until the project changes or the layer
+//! Six maps share one lifetime: held until the project changes or the layer
 //! or surface they belong to is gone. They are results, not editor state, so
 //! they live on `App`; the explorer reads which entries exist through
 //! `UiProjectView` and asks for a table by command.
@@ -14,7 +14,7 @@ use std::{
 use crate::{
     app::commands::{thickness_points::ReferenceSource, triangulation::reference_surface::seam::ThicknessRunRecord},
     model::{LayerId, triangulation::TriangulationId},
-    ui::state::{SeamTable, ThicknessTable},
+    ui::state::{HoleMisfitTable, SeamTable, ThicknessTable},
 };
 
 /// Session-only results of Reference Points, Thickness Points and Thickness
@@ -36,6 +36,8 @@ pub(crate) struct SessionResults {
     /// Every surface made by Thickness Surfaces this session, with its
     /// grid's table, to show again from the explorer.
     pub(crate) seam_tables: HashMap<TriangulationId, Arc<SeamTable>>,
+    /// Every misfit layer made this session, each with its run's one table.
+    pub(crate) misfit_tables: HashMap<(u32, LayerId), Arc<HoleMisfitTable>>,
 }
 
 impl SessionResults {
@@ -48,6 +50,7 @@ impl SessionResults {
     pub(crate) fn retain_live(&mut self, layer_live: impl Fn(u32, LayerId) -> bool, surface_live: impl Fn(TriangulationId) -> bool) {
         self.reference_sources.retain(|&(runtime_id, layer), _| layer_live(runtime_id, layer));
         self.thickness_tables.retain(|&(runtime_id, layer), _| layer_live(runtime_id, layer));
+        self.misfit_tables.retain(|&(runtime_id, layer), _| layer_live(runtime_id, layer));
         self.surface_seams.retain(|&id, _| surface_live(id));
         self.thickness_runs.retain(|&id, _| surface_live(id));
         self.seam_tables.retain(|&id, _| surface_live(id));
@@ -63,6 +66,7 @@ impl SessionResults {
         };
         let layers = self.thickness_tables.keys().fold(0u64, |sum, key| sum.wrapping_add(one(&|hasher| key.hash(hasher))));
         let surfaces = self.seam_tables.keys().fold(0u64, |sum, key| sum.wrapping_add(one(&|hasher| key.hash(hasher))));
-        layers ^ surfaces.rotate_left(32)
+        let misfits = self.misfit_tables.keys().fold(0u64, |sum, key| sum.wrapping_add(one(&|hasher| key.hash(hasher))));
+        layers ^ surfaces.rotate_left(32) ^ misfits.rotate_left(16)
     }
 }

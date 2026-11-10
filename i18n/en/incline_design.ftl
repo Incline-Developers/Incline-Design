@@ -1905,6 +1905,8 @@ cmd-hole-misfit-measure = { $measure }: mean { $mean }, largest { $largest } at 
 cmd-hole-misfit-not-read = Not read: { $holes } hole(s) whose dataset is no longer loaded, { $points } quality point(s) no longer there
 cmd-hole-misfit-none = Nothing compared with '{ $grid }': the table gives each row's reason
 cmd-hole-misfit-grid-gone = The prismoid grid is no longer loaded
+cmd-hole-misfit-layer = { $grid } { $measure } misfit
+cmd-hole-misfit-layers-made = Mapped the differences as { $count } labelled point layer(s), z the difference: { $layers }
 cmd-thickness-points-saved = Saved { $count } true thickness value(s) to column "{ $column }" of { $dataset }, on each roof interval
 cmd-thickness-points-saved-cleared = Cleared { $count } earlier value(s) on holes left out this run
 cmd-thickness-points-saved-replaced = Replaced { $count } earlier value(s) from a previous run
@@ -3631,6 +3633,7 @@ explorer-select-all-objects = Select All Objects
 explorer-selected-count = { $count } Selected
 explorer-show = Show
 explorer-show-thickness-table = Show thickness table
+explorer-show-misfit-table = Show misfit table
 explorer-source-name = Source: { $name }
 explorer-quality-tag = quality { $quality } { $unit }
 explorer-quality-surface = Quality surface: its height is { $quality } { $unit }, not an RL
@@ -4456,7 +4459,7 @@ hole-misfit-qualities-none = None selected
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = The seam the grid models: its roof and floor are read where each hole meets them.
 hole-misfit-pick-seam = Pick the seam this grid models
-hole-misfit-note = Every figure is the model less the pick: positive is a model roof or floor above the pick, a thicker model, or a higher value.
+hole-misfit-note = Every figure is the model less the pick: positive is a model roof or floor above the pick, a thicker model, or a higher value. Compare also writes each measure's differences into Designs as a layer of labelled points at z the difference; in plan, hide the grid and any surface above them to read the labels.
 hole-misfit-compare = Compare
 hole-misfit-table-title = Misfit of { $grid } at holes, { $seam }
 hole-misfit-totals = { $measure }: { $compared } compared, mean { $mean }, largest { $largest } at { $source }, { $not } not compared
@@ -4470,6 +4473,7 @@ hole-misfit-column-note = Note
 hole-misfit-measure-roof = Roof RL
 hole-misfit-measure-floor = Floor RL
 hole-misfit-unit-differs = points in { $unit }, { $grid } in { $grid_unit }
+hole-misfit-mark = { $measure } misfit
 
 ## Tie strings
 

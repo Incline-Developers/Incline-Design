@@ -1161,6 +1161,8 @@ cmd-hole-misfit-measure = { $measure }: ortalama { $mean }, en büyük { $larges
 cmd-hole-misfit-not-read = Okunmadı: veri kümesi artık yüklü olmayan { $holes } delik, artık bulunmayan { $points } kalite noktası
 cmd-hole-misfit-none = '{ $grid }' ızgarasıyla hiçbir şey karşılaştırılmadı: tablo her satırın nedenini verir
 cmd-hole-misfit-grid-gone = Prizmoid ızgarası artık yüklü değil
+cmd-hole-misfit-layer = { $grid } { $measure } uyumsuzluğu
+cmd-hole-misfit-layers-made = Farklar { $count } etiketli nokta katmanı olarak eşlendi, z farkın kendisi: { $layers }
 cmd-thickness-points-saved = { $dataset } veri kümesinin "{ $column }" sütununa her tavan aralığında { $count } gerçek kalınlık değeri kaydedildi
 cmd-thickness-points-saved-cleared = Bu çalıştırmada dışarıda bırakılan kuyulardaki { $count } eski değer temizlendi
 cmd-thickness-points-saved-replaced = Önceki bir çalıştırmadan kalan { $count } eski değer değiştirildi
@@ -1870,6 +1872,7 @@ explorer-new-collection = Yeni Koleksiyon
 explorer-no-collection = Koleksiyon Yok
 explorer-select-all-objects = Tüm Nesneleri Seç
 explorer-show-thickness-table = Kalınlık tablosunu göster
+explorer-show-misfit-table = Uyumsuzluk tablosunu göster
 explorer-source-name = Kaynak: { $name }
 explorer-quality-tag = kalite { $quality } { $unit }
 explorer-quality-surface = Kalite yüzeyi: yüksekliği { $quality } { $unit }, kot değil
@@ -2666,7 +2669,7 @@ hole-misfit-qualities-none = Hiçbiri seçilmedi
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = Izgaranın modellediği damar: tavanı ve tabanı, her deliğin onlarla kesiştiği yerden okunur.
 hole-misfit-pick-seam = Bu ızgaranın modellediği damarı seçin
-hole-misfit-note = Her değer model eksi okumadır: pozitif, okumanın üstünde bir model tavanı ya da tabanı, daha kalın bir model ya da daha yüksek bir değer demektir.
+hole-misfit-note = Her değer model eksi okumadır: pozitif, okumanın üstünde bir model tavanı ya da tabanı, daha kalın bir model ya da daha yüksek bir değer demektir. Karşılaştır ayrıca her ölçünün farklarını Tasarımlar içine, z farka eşit etiketli noktalardan bir katman olarak yazar; planda etiketleri okumak için ızgarayı ve üstlerindeki her yüzeyi gizleyin.
 hole-misfit-compare = Karşılaştır
 hole-misfit-table-title = { $grid } ızgarasının deliklerde uyumsuzluğu, { $seam }
 hole-misfit-totals = { $measure }: { $compared } karşılaştırıldı, ortalama { $mean }, en büyük { $largest } ({ $source }), { $not } karşılaştırılmadı
@@ -2680,6 +2683,7 @@ hole-misfit-column-note = Not
 hole-misfit-measure-roof = Tavan RL
 hole-misfit-measure-floor = Taban RL
 hole-misfit-unit-differs = noktalar { $unit }, { $grid } { $grid_unit } cinsinden
+hole-misfit-mark = { $measure } uyumsuzluğu
 
 ## Tie strings
 

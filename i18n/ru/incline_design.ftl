@@ -1180,6 +1180,8 @@ cmd-hole-misfit-measure = { $measure }: среднее { $mean }, наиболь
 cmd-hole-misfit-not-read = Не прочитано: скважин, чей набор больше не загружен: { $holes }; точек показателей, которых больше нет: { $points }
 cmd-hole-misfit-none = С сеткой '{ $grid }' ничего не сравнено: причина для каждой строки указана в таблице
 cmd-hole-misfit-grid-gone = Сетка призмоидов больше не загружена
+cmd-hole-misfit-layer = { $grid } невязка { $measure }
+cmd-hole-misfit-layers-made = Разности нанесены как слои подписанных точек ({ $count }), z равно разности: { $layers }
 cmd-thickness-points-saved = Сохранено { $count } значени(й) истинной мощности в столбец "{ $column }" набора { $dataset }, на каждом интервале кровли
 cmd-thickness-points-saved-cleared = Очищено { $count } прежн(их) значени(й) у скважин, пропущенных в этом запуске
 cmd-thickness-points-saved-replaced = Заменено { $count } прежн(их) значени(й) из предыдущего запуска
@@ -1889,6 +1891,7 @@ explorer-new-collection = Новая коллекция
 explorer-no-collection = Без коллекции
 explorer-select-all-objects = Выберите все объекты
 explorer-show-thickness-table = Показать таблицу мощности
+explorer-show-misfit-table = Показать таблицу невязок
 explorer-source-name = Источник: { $name }
 explorer-quality-tag = показатель { $quality } { $unit }
 explorer-quality-surface = Поверхность показателя: её высота — { $quality } { $unit }, не отметка
@@ -2686,7 +2689,7 @@ hole-misfit-qualities-none = Ничего не выбрано
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = Пласт, который моделирует сетка: его кровля и почва берутся там, где их пересекает скважина.
 hole-misfit-pick-seam = Укажите пласт, который моделирует эта сетка
-hole-misfit-note = Каждая величина равна модель минус отбивка: плюс значит кровля или почва модели выше отбивки, модель мощнее или значение выше.
+hole-misfit-note = Каждая величина равна модель минус отбивка: плюс значит кровля или почва модели выше отбивки, модель мощнее или значение выше. Сравнить также записывает разности каждой величины в Проектные объекты слоем подписанных точек с z, равным разности; в плане скройте сетку и все поверхности над ними, чтобы прочитать подписи.
 hole-misfit-compare = Сравнить
 hole-misfit-table-title = Невязка сетки { $grid } по скважинам, { $seam }
 hole-misfit-totals = { $measure }: сравнено { $compared }, среднее { $mean }, наибольшее { $largest } в { $source }, не сравнено { $not }
@@ -2700,6 +2703,7 @@ hole-misfit-column-note = Примечание
 hole-misfit-measure-roof = Отметка кровли
 hole-misfit-measure-floor = Отметка почвы
 hole-misfit-unit-differs = точки в { $unit }, { $grid } в { $grid_unit }
+hole-misfit-mark = невязка { $measure }
 
 ## Tie strings
 

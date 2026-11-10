@@ -1168,6 +1168,8 @@ cmd-hole-misfit-measure = { $measure }: Mittel { $mean }, größte { $largest } 
 cmd-hole-misfit-not-read = Nicht gelesen: { $holes } Bohrloch/Bohrlöcher, deren Datensatz nicht mehr geladen ist, { $points } Qualitätspunkt(e), die nicht mehr vorhanden sind
 cmd-hole-misfit-none = Nichts mit '{ $grid }' verglichen: Die Tabelle nennt den Grund je Zeile
 cmd-hole-misfit-grid-gone = Das Prismoidgitter ist nicht mehr geladen
+cmd-hole-misfit-layer = { $grid } { $measure } Abweichung
+cmd-hole-misfit-layers-made = Die Differenzen als { $count } beschriftete Punktlayer abgebildet, z gleich der Differenz: { $layers }
 cmd-thickness-points-saved = { $count } wahre Mächtigkeit(en) in Spalte "{ $column }" von { $dataset } gespeichert, je am Hangendintervall
 cmd-thickness-points-saved-cleared = { $count } frühere(n) Wert(e) bei Bohrlöchern gelöscht, die diesmal ausgelassen wurden
 cmd-thickness-points-saved-replaced = { $count } frühere(n) Wert(e) aus einem vorigen Lauf ersetzt
@@ -1877,6 +1879,7 @@ explorer-new-collection = Neue Sammlung
 explorer-no-collection = Keine Sammlung
 explorer-select-all-objects = Alle Objekte auswählen
 explorer-show-thickness-table = Mächtigkeitstabelle anzeigen
+explorer-show-misfit-table = Abweichungstabelle anzeigen
 explorer-source-name = Quelle: { $name }
 explorer-quality-tag = Qualität { $quality } { $unit }
 explorer-quality-surface = Qualitätsfläche: ihre Höhe ist { $quality } { $unit }, keine RL
@@ -2673,7 +2676,7 @@ hole-misfit-qualities-none = Keine ausgewählt
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = Das Flöz, das das Gitter modelliert: Sein Hangendes und Liegendes werden dort gelesen, wo jedes Bohrloch sie trifft.
 hole-misfit-pick-seam = Das Flöz wählen, das dieses Gitter modelliert
-hole-misfit-note = Jede Zahl ist das Modell minus Pick: positiv bedeutet ein Hangendes oder Liegendes des Modells über dem Pick, ein mächtigeres Modell oder ein höherer Wert.
+hole-misfit-note = Jede Zahl ist das Modell minus Pick: positiv bedeutet ein Hangendes oder Liegendes des Modells über dem Pick, ein mächtigeres Modell oder ein höherer Wert. Vergleichen schreibt außerdem die Differenzen jeder Messgröße als Layer beschrifteter Punkte mit z gleich der Differenz in Designs; in der Draufsicht das Gitter und jede Fläche darüber ausblenden, um die Beschriftungen zu lesen.
 hole-misfit-compare = Vergleichen
 hole-misfit-table-title = Abweichung von { $grid } an Bohrlöchern, { $seam }
 hole-misfit-totals = { $measure }: { $compared } verglichen, Mittel { $mean }, größte { $largest } bei { $source }, { $not } nicht verglichen
@@ -2687,6 +2690,7 @@ hole-misfit-column-note = Hinweis
 hole-misfit-measure-roof = RL Hangendes
 hole-misfit-measure-floor = RL Liegendes
 hole-misfit-unit-differs = Punkte in { $unit }, { $grid } in { $grid_unit }
+hole-misfit-mark = { $measure } Abweichung
 
 ## Tie strings
 

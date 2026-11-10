@@ -6706,6 +6706,11 @@ pub(crate) enum UiCommand {
     /// Show again the thickness grid behind a surface Thickness Surfaces
     /// made this session.
     ShowSeamTable(TriangulationId),
+    /// Show again the table of the run that made a misfit layer this session.
+    ShowHoleMisfitTable {
+        runtime_id: u32,
+        layer: crate::model::LayerId,
+    },
     /// The project's modelling settings, whole, sent only when valid.
     SetModellingSettings(crate::model::project::ModellingSettings),
     /// One point per hole at the chosen boundary of a working section, as a
@@ -7377,6 +7382,7 @@ impl UiCommand {
             | Self::OpenCutTriangulationToSurface
             | Self::ShowThicknessTable { .. }
             | Self::ShowSeamTable(_)
+            | Self::ShowHoleMisfitTable { .. }
             | Self::InspectDrillHole(_)
             | Self::SetBlockModelSlice { .. }
             | Self::ChooseImportSourceFiles(_)
@@ -8330,6 +8336,8 @@ pub(crate) struct UiProjectView {
     pub(crate) thickness_table_layers: std::collections::HashSet<(u32, crate::model::LayerId)>,
     /// Surfaces made by Thickness Surfaces whose grid's table is still held.
     pub(crate) seam_table_surfaces: std::collections::HashSet<TriangulationId>,
+    /// Misfit layers whose run's table is still held.
+    pub(crate) misfit_table_layers: std::collections::HashSet<(u32, crate::model::LayerId)>,
 }
 
 /// How many remembered projects a Recent list offers before the file chooser

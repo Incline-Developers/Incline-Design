@@ -1147,6 +1147,8 @@ cmd-hole-misfit-measure = { $measure }: 平均 { $mean }、最大 { $largest } (
 cmd-hole-misfit-not-read = 読み取りなし: データセットが読み込まれていない孔 { $holes } 本、もう存在しない品質点 { $points } 点
 cmd-hole-misfit-none = '{ $grid }' と比較できたものはありません: 表に各行の理由があります
 cmd-hole-misfit-grid-gone = プリズモイドグリッドは読み込まれていません
+cmd-hole-misfit-layer = { $grid } { $measure } のずれ
+cmd-hole-misfit-layers-made = 差を { $count } 個のラベル付き点レイヤーとして配置しました (z は差): { $layers }
 cmd-thickness-points-saved = { $dataset } の列 "{ $column }" に真の層厚 { $count } 件を各上盤区間に保存しました
 cmd-thickness-points-saved-cleared = 今回除外された孔の以前の値 { $count } 件を消去しました
 cmd-thickness-points-saved-replaced = 前回の実行による以前の値 { $count } 件を置き換えました
@@ -1856,6 +1858,7 @@ explorer-new-collection = 新しいコレクション
 explorer-no-collection = コレクションなし
 explorer-select-all-objects = すべてのオブジェクトを選択
 explorer-show-thickness-table = 層厚表を表示
+explorer-show-misfit-table = ずれの表を表示
 explorer-source-name = ソース: { $name }
 explorer-quality-tag = 品質 { $quality } { $unit }
 explorer-quality-surface = 品質面: 高さは { $quality } { $unit } で標高ではありません
@@ -2652,7 +2655,7 @@ hole-misfit-qualities-none = 選択なし
 hole-misfit-qualities-layer = { $layer } ({ $count })
 hole-misfit-seam-help = グリッドがモデル化している炭層。各孔でそれに当たる位置から上盤と下盤を読み取ります。
 hole-misfit-pick-seam = このグリッドがモデル化する炭層を選択
-hole-misfit-note = 数値はすべて モデル − 判読値 です。正は、モデルの上盤または下盤が判読位置より上にある、モデルが厚い、または値が高いことを表します。
+hole-misfit-note = 数値はすべて モデル − 判読値 です。正は、モデルの上盤または下盤が判読位置より上にある、モデルが厚い、または値が高いことを表します。 比較は、各測定項目の差を z が差に等しいラベル付き点のレイヤーとしてデザインにも書き込みます。平面図でラベルを読むには、グリッドとその上にあるサーフェスを非表示にしてください。
 hole-misfit-compare = 比較
 hole-misfit-table-title = { $grid } の孔でのずれ、{ $seam }
 hole-misfit-totals = { $measure }: 比較 { $compared } 件、平均 { $mean }、最大 { $largest } ({ $source })、未比較 { $not } 件
@@ -2666,6 +2669,7 @@ hole-misfit-column-note = 備考
 hole-misfit-measure-roof = 上盤 RL
 hole-misfit-measure-floor = 下盤 RL
 hole-misfit-unit-differs = 点は { $unit }、{ $grid } は { $grid_unit }
+hole-misfit-mark = { $measure } のずれ
 
 ## Tie strings
 
