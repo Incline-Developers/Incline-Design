@@ -330,7 +330,7 @@ impl PrismoidGrid {
     /// Whether the grid is well formed: unit, perpendicular, right-handed
     /// axes; at least one cell, each size finite and positive; finite heights
     /// with the roof never below the floor; a mask and values for every cell,
-    /// each set of values named, no name twice, at most one density.
+    /// each named, no reserved or column name, none twice, one density at most.
     pub(crate) fn check(&self) -> Result<()> {
         let lattice = &self.lattice;
         if lattice.columns() == 0 || lattice.rows() == 0 {
@@ -370,6 +370,13 @@ impl PrismoidGrid {
         }
         if self.cell_values.iter().any(|values| values.name.trim().is_empty()) {
             bail!("has values without a name");
+        }
+        if let Some(values) = self
+            .cell_values
+            .iter()
+            .find(|values| RESERVED_NAMES.iter().chain(&CORNER_HEIGHT_COLUMNS).any(|name| same_quality_name(name, &values.name)))
+        {
+            bail!("has values under the reserved name '{}'", values.name);
         }
         let mut names = std::collections::HashSet::new();
         if let Some(values) = self.cell_values.iter().find(|values| !names.insert(quality_key(&values.name))) {
@@ -722,14 +729,20 @@ impl PrismoidGrid {
         let columns = self.lattice.columns();
         let mean = |heights: &[f64], [a, b, c, d]: [usize; 4]| (2.0 * heights[a] + heights[b] + 2.0 * heights[c] + heights[d]) / 6.0;
         let (column, row) = (cell % columns, cell / columns);
-        let a = row * (columns + 1) + column;
-        let d = a + columns + 1;
-        let corners = [a, a + 1, d + 1, d];
+        let corners = self.cell_corners(cell);
         let (top, bottom) = (mean(&self.roof, corners), mean(&self.floor, corners));
         (top > bottom).then(|| BlockBounds {
             lower: DVec3::new(u_edges[column], v_edges[row], bottom),
             upper: DVec3::new(u_edges[column + 1], v_edges[row + 1], top),
         })
+    }
+
+    /// The corner nodes of a cell, in [`CORNER_HEIGHT_COLUMNS`] order.
+    pub(crate) fn cell_corners(&self, cell: usize) -> [usize; 4] {
+        let columns = self.lattice.columns();
+        let a = (cell / columns) * (columns + 1) + cell % columns;
+        let d = a + columns + 1;
+        [a, a + 1, d + 1, d]
     }
 
     /// The active cell a hit point on the drawn body (roof, floor or an
@@ -1450,6 +1463,12 @@ pub(crate) enum ValuesRefusal {
 /// Names the derived block model and the file keep for their own columns.
 const RESERVED_NAMES: [&str; 4] = ["volume", "vertical_thickness", "prismoid_grid", "active"];
 
+/// The derived block model's columns holding each block's prismoid: roof,
+/// then floor RL at corners a, b, c, d, anticlockwise from above with a at
+/// the lattice's lowest `u` and `v`; prisms abc and acd split on the a-c
+/// diagonal, as [`PrismoidGrid::closed_mesh`] draws them.
+pub(crate) const CORNER_HEIGHT_COLUMNS: [&str; 8] = ["roof_a", "roof_b", "roof_c", "roof_d", "floor_a", "floor_b", "floor_c", "floor_d"];
+
 /// Whether `value` is a whole number, zero included, within `NODE_TOLERANCE`.
 fn is_whole_or_zero(value: f64) -> bool {
     (value - value.round()).abs() <= NODE_TOLERANCE
@@ -1576,7 +1595,7 @@ impl PrismoidGrid {
 /// before any cell is read, so a dialog can say it before the work starts.
 pub(crate) fn check_marks(held: &[(&str, CellValueRole)], added: &[ValuesMark<'_>]) -> Result<(), ValuesRefusal> {
     for one in added {
-        let reserved = RESERVED_NAMES.iter().any(|name| same_quality_name(name, one.name));
+        let reserved = RESERVED_NAMES.iter().chain(&CORNER_HEIGHT_COLUMNS).any(|name| same_quality_name(name, one.name));
         if reserved || (same_quality_name(one.name, "density") && one.role != CellValueRole::Density) {
             return Err(ValuesRefusal::Reserved {
                 surface: one.surface.to_owned(),

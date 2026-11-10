@@ -20,7 +20,7 @@ use crate::{
             mesh_data,
         },
         kriging::{KrigingGrid, KrigingSample, OrdinaryKrigingOptions, ordinary_kriging},
-        prismoid_grid::{CellValueRole, CellValues, PrismoidGrid, PrismoidGridId},
+        prismoid_grid::{CORNER_HEIGHT_COLUMNS, CellValueRole, CellValues, PrismoidGrid, PrismoidGridId},
         project::ModelEnvelope,
     },
     ui::state::{OreFilterMode, TriSurfaceType},
@@ -737,7 +737,8 @@ pub(super) fn prismoid_cells_too_fine(grid: &PrismoidGrid) -> Option<f64> {
 /// [`PrismoidGrid::blocks`] in the lattice's frame: each block's volume and
 /// vertical thickness, each cell value (the density as `density`, NaN where a
 /// cell has none), and its `category` (the interval in a strata, else the
-/// grid's name); `grid_name` names the grid in refusals.
+/// grid's name), then its prismoid's corner RLs as [`CORNER_HEIGHT_COLUMNS`];
+/// `grid_name` names the grid in refusals.
 /// With an `envelope` the frame and extent are the envelope's, from its
 /// corner at the base RL, so every model of the project shares them.
 fn prismoid_block_model(grid: &PrismoidGrid, grid_name: &str, category: &str, name: String, envelope: Option<&ModelEnvelope>) -> Result<LoadedBlockModel> {
@@ -786,6 +787,10 @@ fn prismoid_block_model(grid: &PrismoidGrid, grid_name: &str, category: &str, na
         categories: Some(std::collections::BTreeMap::from([(0, category.to_owned())])),
         category_colors: std::collections::BTreeMap::new(),
     });
+    for (corner, name) in CORNER_HEIGHT_COLUMNS.into_iter().enumerate() {
+        let heights = if corner < 4 { &grid.roof } else { &grid.floor };
+        columns.push(numeric(name, cells.iter().map(|cell| heights[grid.cell_corners(*cell)[corner % 4]]).collect()));
+    }
     let retained_geometry_bytes = bounds.len().checked_mul(std::mem::size_of::<BlockBounds>()).context("block geometry size overflows")?;
     let model = BlockModelData::from_columns(bounds.len(), lower, upper, columns, retained_geometry_bytes)?.with_transform(origin, rotation)?;
     let blocks = std::sync::Arc::new(BlockBoundsSource::Explicit(bounds));
