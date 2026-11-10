@@ -42,7 +42,7 @@ Incline supports: English, Español, Português, Français, 简体中文, Bahasa
 
 ## Example data
 
-The [`examples`](examples/) directory contains a small OMF 2 project with a pit-shell design, mine surface triangulation, point cloud, drillholes, and an orthophoto raster. Create a project, then use **File → Import** to load [`pit_design.omf`](examples/pit_design.omf) and explore the datasets together.
+The [`examples`](examples/) directory contains an OMF 2 project of the Centralia mine site: the site's topography, a pit shell and pit design, a dump design, a synthetic block model, haul roads, and a planned schedule with blasts, dig strips, loaders, trucks, stockpiles and a crusher. Create a project, then use **File → Import** to load [`CentraliaMineSite.omf`](examples/CentraliaMineSite.omf) and explore the datasets together.
 
 ## Citing Incline
 
