@@ -54,7 +54,11 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 tr!("reclaim-loader"),
                 &mut draft.agent,
                 agent_label,
-                plan.agents().iter().map(|agent| (Some(agent.id), agent.name.clone().into())),
+                // Loaders only: a dozer, drill or MPU cannot take a reclaim bar.
+                plan.ordered_agents()
+                    .into_iter()
+                    .filter(|agent| !plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
+                    .map(|agent| (Some(agent.id), agent.name.clone().into())),
             )
             .show(ui);
             MenuFieldText::new(tr!("schedule-window-start"), &mut draft.start).show(ui);
@@ -96,10 +100,7 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             {
                 let sources = draft.sources.clone();
                 match target {
-                    Some(bar) => {
-                        commands.push(UiCommand::schedule(session, ScheduleEdit::SetReclaimSources { bar, sources }));
-                        commands.push(UiCommand::schedule(session, ScheduleEdit::SetReclaimMaximum { bar, maximum_t }));
-                    }
+                    Some(bar) => commands.push(UiCommand::schedule(session, ScheduleEdit::SetReclaim { bar, sources, maximum_t })),
                     None => commands.push(UiCommand::schedule(
                         session,
                         ScheduleEdit::AddReclaimBar {

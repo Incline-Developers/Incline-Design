@@ -263,8 +263,7 @@ impl crate::app::App<'_> {
                 maximum_t,
                 insert_lane,
             } => self.add_reclaim_bar(name, agent, priority, window, sources, maximum_t, insert_lane),
-            ScheduleEdit::SetReclaimSources { bar, sources } => self.set_reclaim_sources(bar, sources),
-            ScheduleEdit::SetReclaimMaximum { bar, maximum_t } => self.edit_schedule(|plan| plan.set_reclaim_maximum(bar, maximum_t)),
+            ScheduleEdit::SetReclaim { bar, sources, maximum_t } => self.set_reclaim(bar, sources, maximum_t),
             ScheduleEdit::SetExperimentHorizon { end_day, interval_h } => self.edit_schedule(|plan| {
                 // One edit, both fields: a horizon and the resolution it is
                 // split at are typed together and are one undo step.
@@ -865,13 +864,29 @@ impl crate::app::App<'_> {
     /// A selection identical to the one the bar already holds is not an edit
     /// and is dropped before the undo history sees it, so reopening the popup
     /// and closing it again leaves nothing behind.
-    fn set_reclaim_sources(&mut self, bar: BarId, sources: Vec<crate::model::schedule::DestinationId>) {
-        if !self.reclaim_sources_are_stockpiles(&sources) {
+    /// A reclaim bar's sources and cap, as the one undo step its dialog's
+    /// Apply is.
+    fn set_reclaim(&mut self, bar: BarId, sources: Vec<crate::model::schedule::DestinationId>, maximum_t: Option<f64>) {
+        // Sources left as they were are not authored again, so a cap can
+        // still be changed on a bar holding an entry that needs repair.
+        let held = self.workspace.active_document().is_some_and(|document| {
+            document
+                .schedule()
+                .bars()
+                .iter()
+                .any(|other| other.id == bar && matches!(&other.work, crate::model::schedule::BarWork::Reclaim(work) if work.sources == sources))
+        });
+        if !held && !self.reclaim_sources_are_stockpiles(&sources) {
             return;
         }
-        // `edit_schedule` already drops an edit that changed nothing, so a
-        // selection equal to the one held never reaches the undo history.
-        self.edit_schedule(|plan| plan.set_reclaim_sources(bar, sources).map(|_| ()));
+        // `edit_schedule` already drops an edit that changed nothing, so an
+        // Apply with nothing changed never reaches the undo history.
+        self.edit_schedule(|plan| {
+            if !held {
+                plan.set_reclaim_sources(bar, sources)?;
+            }
+            plan.set_reclaim_maximum(bar, maximum_t)
+        });
     }
 
     /// Whether every *newly authored* source is a stockpile today.

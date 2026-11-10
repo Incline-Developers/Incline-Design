@@ -6376,8 +6376,7 @@ impl UiCommand {
                 | ScheduleEdit::MoveOpeningLot { .. }
                 | ScheduleEdit::SetOpeningPortionTonnes { .. }
                 | ScheduleEdit::SetOpeningPortionValue { .. }
-                | ScheduleEdit::SetReclaimSources { .. }
-                | ScheduleEdit::SetReclaimMaximum { .. }
+                | ScheduleEdit::SetReclaim { .. }
                 // Experimental optimiser settings: the Optimisation section
                 // and the stockpile's own page show the result where it was
                 // typed.
@@ -8224,17 +8223,13 @@ pub(crate) enum ScheduleEdit {
         /// Open a lane of its own at `priority` first, as a drop on a lane edge asks.
         insert_lane: bool,
     },
-    /// Replace the set of stockpiles a reclaim bar may draw on, as one edit.
-    /// Never empty, and never a silent repair of an entry that no longer
-    /// resolves.
-    SetReclaimSources {
+    /// Replace the set of stockpiles a reclaim bar may draw on and the most
+    /// it may take over the whole calculation (`None` for no cap of its own),
+    /// as one edit. The set is never empty, and never a silent repair of an
+    /// entry that no longer resolves.
+    SetReclaim {
         bar: crate::model::schedule::BarId,
         sources: Vec<crate::model::schedule::DestinationId>,
-    },
-    /// The most one reclaim bar may take over the whole calculation, or `None`
-    /// for no cap of its own.
-    SetReclaimMaximum {
-        bar: crate::model::schedule::BarId,
         maximum_t: Option<f64>,
     },
     /// Set what a machine class does: load, doze, drill or charge.

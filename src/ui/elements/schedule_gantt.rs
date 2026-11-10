@@ -855,7 +855,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
                 editor.open_schedule_step(ScheduleStep::LoaderAgents);
             }
         }
-    } else if plan.bars().is_empty()
+    } else if !plan.bars().iter().any(|bar| bar.agent.is_none_or(|agent| plan.schedules_agent(agent)))
         && let Some(agent) = plan
             .ordered_agents()
             .into_iter()
