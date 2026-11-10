@@ -472,6 +472,13 @@ prismoid-inspector-by-volume = объём, нет плотности
 prismoid-inspector-cell = Ячейка
 prismoid-inspector-cell-index = Столбец { $column }, строка { $row }
 prismoid-inspector-cells = Ячейки
+prismoid-inspector-strata = Пачка
+prismoid-inspector-interval = Интервал
+prismoid-inspector-interval-of = { $position } из { $count }
+prismoid-inspector-roof-horizon = Горизонт кровли
+prismoid-inspector-floor-horizon = Горизонт почвы
+prismoid-inspector-above = Выше
+prismoid-inspector-below = Ниже
 prismoid-inspector-corner = Угол { $column }, { $row }
 prismoid-inspector-mean-thickness = Средняя вертикальная мощность
 prismoid-inspector-no-density = У сетки нет плотности
@@ -1830,6 +1837,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } ячеек, активных: { $active }
 explorer-prismoid-grid-thickness = Вертикальная мощность от { $min } до { $max }
+explorer-prismoid-grid-stratum = Интервал { $position } из { $count } в { $strata }
 explorer-prismoid-grid-volume-tonnes = Объём { $volume } м³, { $tonnes } т по { $density }
 explorer-prismoid-grid-volume-only = Объём { $volume } м³, нет плотности: нет тонн
 explorer-prismoid-grid-volume-no-density = Объём { $volume } м³, ни у одной ячейки нет значения { $density }: нет тонн

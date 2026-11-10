@@ -453,6 +453,13 @@ prismoid-inspector-by-volume = 부피, 밀도 없음
 prismoid-inspector-cell = 셀
 prismoid-inspector-cell-index = 열 { $column }, 행 { $row }
 prismoid-inspector-cells = 셀
+prismoid-inspector-strata = 층군
+prismoid-inspector-interval = 구간
+prismoid-inspector-interval-of = { $count } 중 { $position }
+prismoid-inspector-roof-horizon = 상반 층준
+prismoid-inspector-floor-horizon = 하반 층준
+prismoid-inspector-above = 위
+prismoid-inspector-below = 아래
 prismoid-inspector-corner = 모서리 { $column }, { $row }
 prismoid-inspector-mean-thickness = 평균 수직 두께
 prismoid-inspector-no-density = 격자에 밀도가 없습니다
@@ -1802,6 +1809,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } 셀, { $active }개 활성
 explorer-prismoid-grid-thickness = 수직 두께 { $min }에서 { $max }
+explorer-prismoid-grid-stratum = { $strata }의 구간 { $position } / { $count }
 explorer-prismoid-grid-volume-tonnes = 부피 { $volume } m³, { $density }로 { $tonnes } t
 explorer-prismoid-grid-volume-only = 부피 { $volume } m³, 밀도 없음: 톤 없음
 explorer-prismoid-grid-volume-no-density = 부피 { $volume } m³, { $density } 값이 있는 셀 없음: 톤 없음

@@ -467,6 +467,13 @@ prismoid-inspector-by-volume = об'єм, немає густини
 prismoid-inspector-cell = Комірка
 prismoid-inspector-cell-index = Стовпець { $column }, рядок { $row }
 prismoid-inspector-cells = Комірки
+prismoid-inspector-strata = Пачка
+prismoid-inspector-interval = Інтервал
+prismoid-inspector-interval-of = { $position } з { $count }
+prismoid-inspector-roof-horizon = Горизонт покрівлі
+prismoid-inspector-floor-horizon = Горизонт підошви
+prismoid-inspector-above = Вище
+prismoid-inspector-below = Нижче
 prismoid-inspector-corner = Кут { $column }, { $row }
 prismoid-inspector-mean-thickness = Середня вертикальна потужність
 prismoid-inspector-no-density = Сітка не має густини
@@ -1824,6 +1831,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } комірок, активних: { $active }
 explorer-prismoid-grid-thickness = Вертикальна потужність від { $min } до { $max }
+explorer-prismoid-grid-stratum = Інтервал { $position } з { $count } у { $strata }
 explorer-prismoid-grid-volume-tonnes = Об'єм { $volume } м³, { $tonnes } т за { $density }
 explorer-prismoid-grid-volume-only = Об'єм { $volume } м³, немає густини: немає тонн
 explorer-prismoid-grid-volume-no-density = Об'єм { $volume } м³, жодна комірка не має значення { $density }: немає тонн

@@ -420,6 +420,13 @@ prismoid-inspector-by-volume = حجم، بدون چگالی
 prismoid-inspector-cell = سلول
 prismoid-inspector-cell-index = ستون { $column }، ردیف { $row }
 prismoid-inspector-cells = سلول‌ها
+prismoid-inspector-strata = چینه‌ها
+prismoid-inspector-interval = بازه
+prismoid-inspector-interval-of = { $position } از { $count }
+prismoid-inspector-roof-horizon = افق سقف
+prismoid-inspector-floor-horizon = افق کف
+prismoid-inspector-above = بالا
+prismoid-inspector-below = پایین
 prismoid-inspector-corner = گوشه { $column }، { $row }
 prismoid-inspector-mean-thickness = میانگین ضخامت عمودی
 prismoid-inspector-no-density = شبکه چگالی ندارد
@@ -1769,6 +1776,7 @@ explorer-prismoid-grid-id =
     شناسه: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } سلول، { $active } فعال
 explorer-prismoid-grid-thickness = ضخامت عمودی از { $min } تا { $max }
+explorer-prismoid-grid-stratum = بازه { $position } از { $count } در { $strata }
 explorer-prismoid-grid-volume-tonnes = حجم { $volume } متر مکعب، { $tonnes } تن از { $density }
 explorer-prismoid-grid-volume-only = حجم { $volume } متر مکعب، بدون چگالی: بدون تن
 explorer-prismoid-grid-volume-no-density = حجم { $volume } متر مکعب، هیچ سلولی برای { $density } مقدار ندارد: بدون تن

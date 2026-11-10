@@ -418,6 +418,13 @@ prismoid-inspector-by-volume = volumen, sin densidad
 prismoid-inspector-cell = Celda
 prismoid-inspector-cell-index = Columna { $column }, fila { $row }
 prismoid-inspector-cells = Celdas
+prismoid-inspector-strata = Estratos
+prismoid-inspector-interval = Intervalo
+prismoid-inspector-interval-of = { $position } de { $count }
+prismoid-inspector-roof-horizon = Horizonte de techo
+prismoid-inspector-floor-horizon = Horizonte de piso
+prismoid-inspector-above = Encima
+prismoid-inspector-below = Debajo
 prismoid-inspector-corner = Esquina { $column }, { $row }
 prismoid-inspector-mean-thickness = Espesor vertical medio
 prismoid-inspector-no-density = La malla no tiene densidad
@@ -1775,6 +1782,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } celdas, { $active } activas
 explorer-prismoid-grid-thickness = Espesor vertical de { $min } a { $max }
+explorer-prismoid-grid-stratum = Intervalo { $position } de { $count } en { $strata }
 explorer-prismoid-grid-volume-tonnes = Volumen { $volume } m³, { $tonnes } t a partir de { $density }
 explorer-prismoid-grid-volume-only = Volumen { $volume } m³, sin densidad: sin toneladas
 explorer-prismoid-grid-volume-no-density = Volumen { $volume } m³, ninguna celda tiene valor de { $density }: sin toneladas

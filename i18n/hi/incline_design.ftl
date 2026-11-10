@@ -420,6 +420,13 @@ prismoid-inspector-by-volume = आयतन, कोई घनत्व नही
 prismoid-inspector-cell = सेल
 prismoid-inspector-cell-index = स्तंभ { $column }, पंक्ति { $row }
 prismoid-inspector-cells = सेल
+prismoid-inspector-strata = स्तर समूह
+prismoid-inspector-interval = अंतराल
+prismoid-inspector-interval-of = { $count } में से { $position }
+prismoid-inspector-roof-horizon = छत क्षितिज
+prismoid-inspector-floor-horizon = तल क्षितिज
+prismoid-inspector-above = ऊपर
+prismoid-inspector-below = नीचे
 prismoid-inspector-corner = कोना { $column }, { $row }
 prismoid-inspector-mean-thickness = औसत ऊर्ध्वाधर मोटाई
 prismoid-inspector-no-density = ग्रिड का कोई घनत्व नहीं है
@@ -1769,6 +1776,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } सेल, { $active } सक्रिय
 explorer-prismoid-grid-thickness = ऊर्ध्वाधर मोटाई { $min } से { $max }
+explorer-prismoid-grid-stratum = { $strata } में { $count } में से अंतराल { $position }
 explorer-prismoid-grid-volume-tonnes = आयतन { $volume } मी³, { $density } से { $tonnes } t
 explorer-prismoid-grid-volume-only = आयतन { $volume } मी³, कोई घनत्व नहीं: कोई टन नहीं
 explorer-prismoid-grid-volume-no-density = आयतन { $volume } मी³, किसी सेल में { $density } का मान नहीं: कोई टन नहीं

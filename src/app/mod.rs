@@ -2563,6 +2563,7 @@ fn prismoid_grid_entry(grid: &crate::model::prismoid_grid::OpenPrismoidGrid) -> 
         regular: grid.grid.lattice.is_regular(),
         color: grid.color,
         color_by: grid.color_by.clone(),
+        stratum: grid.stratum.clone(),
         folder: grid.state.folder,
         section: grid.state.section,
     }

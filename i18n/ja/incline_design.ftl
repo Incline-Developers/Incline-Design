@@ -448,6 +448,13 @@ prismoid-inspector-by-volume = 体積、密度なし
 prismoid-inspector-cell = セル
 prismoid-inspector-cell-index = 列 { $column }、行 { $row }
 prismoid-inspector-cells = セル
+prismoid-inspector-strata = 層群
+prismoid-inspector-interval = 区間
+prismoid-inspector-interval-of = { $count } 中 { $position }
+prismoid-inspector-roof-horizon = 上盤層準
+prismoid-inspector-floor-horizon = 下盤層準
+prismoid-inspector-above = 上
+prismoid-inspector-below = 下
 prismoid-inspector-corner = 角 { $column }、{ $row }
 prismoid-inspector-mean-thickness = 平均鉛直厚さ
 prismoid-inspector-no-density = グリッドに密度がありません
@@ -1797,6 +1804,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } セル、{ $active } 個が有効
 explorer-prismoid-grid-thickness = 鉛直厚さ { $min } から { $max }
+explorer-prismoid-grid-stratum = { $strata } の区間 { $position } / { $count }
 explorer-prismoid-grid-volume-tonnes = 体積 { $volume } m³、{ $density } から { $tonnes } t
 explorer-prismoid-grid-volume-only = 体積 { $volume } m³、密度なし: トンなし
 explorer-prismoid-grid-volume-no-density = 体積 { $volume } m³、{ $density } の値を持つセルなし: トンなし

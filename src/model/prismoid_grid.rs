@@ -87,6 +87,29 @@ impl Stratum {
             && !self.horizons.iter().any(blank)
             && !self.intervals.iter().any(blank)
     }
+
+    /// This grid's interval name, the category its blocks carry.
+    pub(crate) fn category(&self) -> &str {
+        self.intervals.get(self.index).map_or("", String::as_str)
+    }
+
+    pub(crate) fn roof(&self) -> &str {
+        self.horizons.get(self.index).map_or("", String::as_str)
+    }
+
+    pub(crate) fn floor(&self) -> &str {
+        self.horizons.get(self.index + 1).map_or("", String::as_str)
+    }
+
+    /// The interval above this one, `None` at the top.
+    pub(crate) fn above(&self) -> Option<&str> {
+        self.intervals.get(self.index.checked_sub(1)?).map(String::as_str)
+    }
+
+    /// The interval below this one, `None` at the base.
+    pub(crate) fn below(&self) -> Option<&str> {
+        self.intervals.get(self.index + 1).map(String::as_str)
+    }
 }
 
 /// Build the interval between each pair of neighbouring `horizons`, listed
@@ -1296,6 +1319,12 @@ pub(crate) struct OpenPrismoidGrid {
 impl OpenPrismoidGrid {
     pub(crate) fn entity_id(&self) -> crate::model::SceneEntityId {
         crate::model::SceneEntityId::PrismoidGrid(self.id)
+    }
+
+    /// The category a derived block model gives its blocks: the interval's
+    /// name in a strata, else the grid's own.
+    pub(crate) fn category(&self) -> &str {
+        self.stratum.as_ref().map_or(&self.name, Stratum::category)
     }
 }
 

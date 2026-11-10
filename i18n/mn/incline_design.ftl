@@ -471,6 +471,13 @@ prismoid-inspector-by-volume = эзлэхүүн, нягтгүй
 prismoid-inspector-cell = Нүд
 prismoid-inspector-cell-index = Багана { $column }, мөр { $row }
 prismoid-inspector-cells = Нүднүүд
+prismoid-inspector-strata = Давхаргын багц
+prismoid-inspector-interval = Завсар
+prismoid-inspector-interval-of = { $count }-ээс { $position }
+prismoid-inspector-roof-horizon = Дээвэр хил
+prismoid-inspector-floor-horizon = Шал хил
+prismoid-inspector-above = Дээр
+prismoid-inspector-below = Доор
 prismoid-inspector-corner = Булан { $column }, { $row }
 prismoid-inspector-mean-thickness = Дундаж босоо зузаан
 prismoid-inspector-no-density = Торонд нягт алга
@@ -1820,6 +1827,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } нүд, { $active } идэвхтэй
 explorer-prismoid-grid-thickness = Босоо зузаан { $min }-аас { $max }
+explorer-prismoid-grid-stratum = { $strata } дахь { $count }-ээс { $position } дэх завсар
 explorer-prismoid-grid-volume-tonnes = Эзлэхүүн { $volume } м³, { $density }-ээс { $tonnes } т
 explorer-prismoid-grid-volume-only = Эзлэхүүн { $volume } м³, нягтгүй: тонн алга
 explorer-prismoid-grid-volume-no-density = Эзлэхүүн { $volume } м³, { $density }-ийн утгатай нүд алга: тонн алга

@@ -852,6 +852,9 @@ pub(crate) struct CellSelection {
     pub(crate) grid: std::sync::Arc<crate::model::prismoid_grid::PrismoidGrid>,
     /// The grid's name as the rows read it, followed on a rename.
     pub(crate) name: String,
+    /// The grid's place in its strata, copied when the selection is made:
+    /// a record never changes after the build.
+    pub(crate) stratum: Option<crate::model::prismoid_grid::Stratum>,
     /// One flag per cell, in cell order.
     pub(crate) cells: Vec<bool>,
     pub(crate) count: usize,
@@ -8078,6 +8081,7 @@ pub(crate) struct UiPrismoidGridEntry {
     /// The body's flat colour, which shows through cells without a value.
     pub(crate) color: [f32; 4],
     pub(crate) color_by: PrismoidColorBy,
+    pub(crate) stratum: Option<crate::model::prismoid_grid::Stratum>,
     /// Folder the grid sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,

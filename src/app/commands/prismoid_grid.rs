@@ -474,11 +474,11 @@ impl App<'_> {
     /// its cells is. False when the point is on no active cell.
     pub(crate) fn pick_prismoid_cell(&mut self, id: PrismoidGridId, world: DVec3) -> bool {
         let entity = SceneEntityId::PrismoidGrid(id);
-        let Some((grid, name)) = self
+        let Some((grid, name, stratum)) = self
             .prismoid_grids
             .iter()
             .find(|item| item.id == id && item.state.loaded)
-            .map(|item| (Arc::clone(&item.grid), item.name.clone()))
+            .map(|item| (Arc::clone(&item.grid), item.name.clone(), item.stratum.clone()))
         else {
             return false;
         };
@@ -510,7 +510,7 @@ impl App<'_> {
             self.editor.on_canvas_pick(entity, world, item_mode);
         }
         self.active_triangulation = None;
-        self.editor.cell_selection = cell_selection(entity, grid, &name, cells, count);
+        self.editor.cell_selection = cell_selection(entity, grid, &name, stratum, cells, count);
         true
     }
 
@@ -553,11 +553,11 @@ impl App<'_> {
         let Some((id, taken)) = self.prismoid_cells_in_screen_rect(start, end, toggle || add) else {
             return;
         };
-        let Some((grid, name)) = self
+        let Some((grid, name, stratum)) = self
             .prismoid_grids
             .iter()
             .find(|item| item.id == id)
-            .map(|item| (Arc::clone(&item.grid), item.name.clone()))
+            .map(|item| (Arc::clone(&item.grid), item.name.clone(), item.stratum.clone()))
         else {
             return;
         };
@@ -577,7 +577,7 @@ impl App<'_> {
         } else {
             self.editor.selected_handles.remove(&entity);
         }
-        self.editor.cell_selection = cell_selection(entity, grid, &name, cells, count);
+        self.editor.cell_selection = cell_selection(entity, grid, &name, stratum, cells, count);
     }
 
     /// The cells a marquee takes, as Lucas's dig blocks ride Leo's box: of
@@ -955,12 +955,13 @@ pub(crate) fn section_cell_wins(pick: Option<&ScenePick>, slab: &SectionSlab, fo
 
 /// A selection of `count` cells on the grid `name`, derived; `None` with
 /// none.
-fn cell_selection(entity: SceneEntityId, grid: Arc<PrismoidGrid>, name: &str, cells: Vec<bool>, count: usize) -> Option<CellSelection> {
+fn cell_selection(entity: SceneEntityId, grid: Arc<PrismoidGrid>, name: &str, stratum: Option<Stratum>, cells: Vec<bool>, count: usize) -> Option<CellSelection> {
     (count > 0).then(|| {
         let mut selection = CellSelection {
             entity,
             grid,
             name: name.to_owned(),
+            stratum,
             cells,
             count,
             revision: 0,
@@ -979,16 +980,44 @@ fn refresh_cell_selection(selection: &mut CellSelection) {
     selection.rows = cell_selection_rows(selection);
 }
 
-/// The inspector's rows for one picked prismoid or for several.
+/// The inspector's rows for one picked prismoid or for several, the grid's
+/// place in its strata after its name.
 fn cell_selection_rows(selection: &CellSelection) -> InspectorRows {
     let single = (selection.count == 1).then(|| selection.cells.iter().position(|selected| *selected)).flatten();
-    match single {
+    let mut rows = match single {
         Some(cell) => prismoid_cell_rows(&selection.name, &selection.grid, cell),
         None => {
             let cells = selection.cells.iter().enumerate().filter(|(_, selected)| **selected).map(|(cell, _)| cell);
             prismoid_selection_rows(&selection.name, &selection.grid.summary_of(cells))
         }
+    };
+    if let Some(stratum) = &selection.stratum {
+        rows.properties.splice(1..1, stratum_rows(stratum));
     }
+    rows
+}
+
+/// Which strata a grid was built in, its interval's position, the two
+/// horizons bounding it and the intervals either side.
+fn stratum_rows(stratum: &Stratum) -> Vec<InspectorRow> {
+    let neighbour = |name: Option<&str>| name.map_or_else(|| tr!("common-none"), str::to_owned);
+    vec![
+        inspector_row(tr!("prismoid-inspector-strata"), stratum.strata.clone(), None, None),
+        inspector_row(
+            tr!("prismoid-inspector-interval"),
+            tr!(
+                "prismoid-inspector-interval-of",
+                position = (stratum.index + 1).to_string(),
+                count = stratum.intervals.len().to_string()
+            ),
+            None,
+            None,
+        ),
+        inspector_row(tr!("prismoid-inspector-roof-horizon"), stratum.roof().to_owned(), None, None),
+        inspector_row(tr!("prismoid-inspector-floor-horizon"), stratum.floor().to_owned(), None, None),
+        inspector_row(tr!("prismoid-inspector-above"), neighbour(stratum.above()), None, None),
+        inspector_row(tr!("prismoid-inspector-below"), neighbour(stratum.below()), None, None),
+    ]
 }
 
 /// Carry a rename of the selection's grid into its rows.

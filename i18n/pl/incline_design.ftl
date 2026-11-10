@@ -490,6 +490,13 @@ prismoid-inspector-by-volume = objętość, brak gęstości
 prismoid-inspector-cell = Komórka
 prismoid-inspector-cell-index = Kolumna { $column }, wiersz { $row }
 prismoid-inspector-cells = Komórki
+prismoid-inspector-strata = Warstwy
+prismoid-inspector-interval = Interwał
+prismoid-inspector-interval-of = { $position } z { $count }
+prismoid-inspector-roof-horizon = Horyzont stropu
+prismoid-inspector-floor-horizon = Horyzont spągu
+prismoid-inspector-above = Powyżej
+prismoid-inspector-below = Poniżej
 prismoid-inspector-corner = Narożnik { $column }, { $row }
 prismoid-inspector-mean-thickness = Średnia grubość pionowa
 prismoid-inspector-no-density = Siatka nie ma gęstości
@@ -1847,6 +1854,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } komórek, { $active } aktywnych
 explorer-prismoid-grid-thickness = Miąższość pionowa od { $min } do { $max }
+explorer-prismoid-grid-stratum = Interwał { $position } z { $count } w { $strata }
 explorer-prismoid-grid-volume-tonnes = Objętość { $volume } m³, { $tonnes } t z { $density }
 explorer-prismoid-grid-volume-only = Objętość { $volume } m³, brak gęstości: brak ton
 explorer-prismoid-grid-volume-no-density = Objętość { $volume } m³, żadna komórka nie ma wartości { $density }: brak ton

@@ -462,6 +462,13 @@ prismoid-inspector-by-volume = hacim, yoğunluk yok
 prismoid-inspector-cell = Hücre
 prismoid-inspector-cell-index = Sütun { $column }, satır { $row }
 prismoid-inspector-cells = Hücreler
+prismoid-inspector-strata = Katmanlar
+prismoid-inspector-interval = Aralık
+prismoid-inspector-interval-of = { $count } içinde { $position }
+prismoid-inspector-roof-horizon = Tavan ufku
+prismoid-inspector-floor-horizon = Taban ufku
+prismoid-inspector-above = Üstte
+prismoid-inspector-below = Altta
 prismoid-inspector-corner = Köşe { $column }, { $row }
 prismoid-inspector-mean-thickness = Ortalama düşey kalınlık
 prismoid-inspector-no-density = Izgaranın yoğunluğu yok
@@ -1811,6 +1818,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } hücre, { $active } etkin
 explorer-prismoid-grid-thickness = Dikey kalınlık { $min } ile { $max } arası
+explorer-prismoid-grid-stratum = { $strata } içinde { $count } aralıktan { $position }
 explorer-prismoid-grid-volume-tonnes = Hacim { $volume } m³, { $density } yüzeyinden { $tonnes } t
 explorer-prismoid-grid-volume-only = Hacim { $volume } m³, yoğunluk yok: ton yok
 explorer-prismoid-grid-volume-no-density = Hacim { $volume } m³, hiçbir hücrede { $density } değeri yok: ton yok

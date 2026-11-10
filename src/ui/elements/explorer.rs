@@ -1627,7 +1627,15 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             ),
                             None => details,
                         };
-                        let details = std::iter::once(details).chain(totals_lines(&grid.summary)).collect::<Vec<_>>().join("\n");
+                        let place = grid.stratum.as_ref().map(|stratum| {
+                            tr!(
+                                "explorer-prismoid-grid-stratum",
+                                position = (stratum.index + 1).to_string(),
+                                count = stratum.intervals.len().to_string(),
+                                strata = stratum.strata.clone()
+                            )
+                        });
+                        let details = std::iter::once(details).chain(place).chain(totals_lines(&grid.summary)).collect::<Vec<_>>().join("\n");
                         let grid_handle = SceneEntityId::PrismoidGrid(grid.id);
                         rows.push(ExplorerRow::Entity(grid_handle));
                         let grid_locked = frozen_handles.contains(&grid_handle);

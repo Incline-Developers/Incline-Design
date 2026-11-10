@@ -446,6 +446,13 @@ prismoid-inspector-by-volume = thể tích, không có tỷ trọng
 prismoid-inspector-cell = Ô
 prismoid-inspector-cell-index = Cột { $column }, hàng { $row }
 prismoid-inspector-cells = Các ô
+prismoid-inspector-strata = Tầng
+prismoid-inspector-interval = Khoảng
+prismoid-inspector-interval-of = { $position } trên { $count }
+prismoid-inspector-roof-horizon = Ranh giới mái
+prismoid-inspector-floor-horizon = Ranh giới trụ
+prismoid-inspector-above = Phía trên
+prismoid-inspector-below = Phía dưới
 prismoid-inspector-corner = Góc { $column }, { $row }
 prismoid-inspector-mean-thickness = Chiều dày thẳng đứng trung bình
 prismoid-inspector-no-density = Lưới không có tỷ trọng
@@ -1795,6 +1802,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } ô, { $active } ô đang hoạt động
 explorer-prismoid-grid-thickness = Độ dày theo phương đứng từ { $min } đến { $max }
+explorer-prismoid-grid-stratum = Khoảng { $position } trên { $count } trong { $strata }
 explorer-prismoid-grid-volume-tonnes = Thể tích { $volume } m³, { $tonnes } t theo { $density }
 explorer-prismoid-grid-volume-only = Thể tích { $volume } m³, không có tỷ trọng: không có tấn
 explorer-prismoid-grid-volume-no-density = Thể tích { $volume } m³, không ô nào có giá trị { $density }: không có tấn

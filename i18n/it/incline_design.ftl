@@ -462,6 +462,13 @@ prismoid-inspector-by-volume = volume, nessuna densità
 prismoid-inspector-cell = Cella
 prismoid-inspector-cell-index = Colonna { $column }, riga { $row }
 prismoid-inspector-cells = Celle
+prismoid-inspector-strata = Strati
+prismoid-inspector-interval = Intervallo
+prismoid-inspector-interval-of = { $position } di { $count }
+prismoid-inspector-roof-horizon = Orizzonte del tetto
+prismoid-inspector-floor-horizon = Orizzonte del letto
+prismoid-inspector-above = Sopra
+prismoid-inspector-below = Sotto
 prismoid-inspector-corner = Vertice { $column }, { $row }
 prismoid-inspector-mean-thickness = Spessore verticale medio
 prismoid-inspector-no-density = La griglia non ha densità
@@ -1819,6 +1826,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } celle, { $active } attive
 explorer-prismoid-grid-thickness = Spessore verticale da { $min } a { $max }
+explorer-prismoid-grid-stratum = Intervallo { $position } di { $count } in { $strata }
 explorer-prismoid-grid-volume-tonnes = Volume { $volume } m³, { $tonnes } t da { $density }
 explorer-prismoid-grid-volume-only = Volume { $volume } m³, nessuna densità: nessuna tonnellata
 explorer-prismoid-grid-volume-no-density = Volume { $volume } m³, nessuna cella ha un valore per { $density }: nessuna tonnellata

@@ -461,6 +461,13 @@ prismoid-inspector-by-volume = Volumen, keine Dichte
 prismoid-inspector-cell = Zelle
 prismoid-inspector-cell-index = Spalte { $column }, Zeile { $row }
 prismoid-inspector-cells = Zellen
+prismoid-inspector-strata = Schichtfolge
+prismoid-inspector-interval = Intervall
+prismoid-inspector-interval-of = { $position } von { $count }
+prismoid-inspector-roof-horizon = Hangendhorizont
+prismoid-inspector-floor-horizon = Liegendhorizont
+prismoid-inspector-above = Darüber
+prismoid-inspector-below = Darunter
 prismoid-inspector-corner = Ecke { $column }, { $row }
 prismoid-inspector-mean-thickness = Mittlere vertikale Mächtigkeit
 prismoid-inspector-no-density = Das Gitter hat keine Dichte
@@ -1818,6 +1825,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } Zellen, { $active } aktiv
 explorer-prismoid-grid-thickness = Vertikale Mächtigkeit { $min } bis { $max }
+explorer-prismoid-grid-stratum = Intervall { $position } von { $count } in { $strata }
 explorer-prismoid-grid-volume-tonnes = Volumen { $volume } m³, { $tonnes } t aus { $density }
 explorer-prismoid-grid-volume-only = Volumen { $volume } m³, keine Dichte: keine Tonnen
 explorer-prismoid-grid-volume-no-density = Volumen { $volume } m³, keine Zelle hat einen Wert für { $density }: keine Tonnen

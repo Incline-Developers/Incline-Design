@@ -569,14 +569,15 @@ impl<'a> App<'a> {
         let grid = std::sync::Arc::clone(&item.grid);
         let grid_name = item.name.clone();
         let name = tr!("cmd-prismoid-grid-block-model-name", grid = grid_name.clone());
-        let label = grid_name.clone();
+        let label = item.category().to_owned();
+        let named = grid_name.clone();
         let carried = carried_line(&grid);
         let envelope = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
         let compute = move |cancel: &crate::app::jobs::CancelFlag, _: &crate::model::progress::Progress| -> Result<LoadedBlockModel> {
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }
-            prismoid_block_model(&grid, &label, name, envelope.as_ref())
+            prismoid_block_model(&grid, &named, &label, name, envelope.as_ref())
         };
         let apply = move |app: &mut App, result: Result<LoadedBlockModel>| match result {
             Ok(loaded) => {
@@ -735,10 +736,11 @@ pub(super) fn prismoid_cells_too_fine(grid: &PrismoidGrid) -> Option<f64> {
 /// A block model of one box per active prismoid, from
 /// [`PrismoidGrid::blocks`] in the lattice's frame: each block's volume and
 /// vertical thickness, each cell value (the density as `density`, NaN where a
-/// cell has none), and the grid's name as a category.
+/// cell has none), and its `category` (the interval in a strata, else the
+/// grid's name); `grid_name` names the grid in refusals.
 /// With an `envelope` the frame and extent are the envelope's, from its
 /// corner at the base RL, so every model of the project shares them.
-fn prismoid_block_model(grid: &PrismoidGrid, grid_name: &str, name: String, envelope: Option<&ModelEnvelope>) -> Result<LoadedBlockModel> {
+fn prismoid_block_model(grid: &PrismoidGrid, grid_name: &str, category: &str, name: String, envelope: Option<&ModelEnvelope>) -> Result<LoadedBlockModel> {
     let lattice = &grid.lattice;
     if let Some(envelope) = envelope {
         if (lattice.u, lattice.v) != (glam::DVec2::X, glam::DVec2::Y) {
@@ -781,7 +783,7 @@ fn prismoid_block_model(grid: &PrismoidGrid, grid_name: &str, name: String, enve
     columns.push(BlockModelColumn {
         name: "prismoid_grid".to_owned(),
         values: std::sync::Arc::new(vec![0.0; bounds.len()]),
-        categories: Some(std::collections::BTreeMap::from([(0, grid_name.to_owned())])),
+        categories: Some(std::collections::BTreeMap::from([(0, category.to_owned())])),
         category_colors: std::collections::BTreeMap::new(),
     });
     let retained_geometry_bytes = bounds.len().checked_mul(std::mem::size_of::<BlockBounds>()).context("block geometry size overflows")?;

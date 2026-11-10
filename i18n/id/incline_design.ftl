@@ -420,6 +420,13 @@ prismoid-inspector-by-volume = volume, tanpa densitas
 prismoid-inspector-cell = Sel
 prismoid-inspector-cell-index = Kolom { $column }, baris { $row }
 prismoid-inspector-cells = Sel
+prismoid-inspector-strata = Strata
+prismoid-inspector-interval = Interval
+prismoid-inspector-interval-of = { $position } dari { $count }
+prismoid-inspector-roof-horizon = Horizon atap
+prismoid-inspector-floor-horizon = Horizon lantai
+prismoid-inspector-above = Di atas
+prismoid-inspector-below = Di bawah
 prismoid-inspector-corner = Sudut { $column }, { $row }
 prismoid-inspector-mean-thickness = Ketebalan vertikal rata-rata
 prismoid-inspector-no-density = Grid tidak memiliki densitas
@@ -1769,6 +1776,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } sel, { $active } aktif
 explorer-prismoid-grid-thickness = Ketebalan vertikal { $min } hingga { $max }
+explorer-prismoid-grid-stratum = Interval { $position } dari { $count } di { $strata }
 explorer-prismoid-grid-volume-tonnes = Volume { $volume } m³, { $tonnes } t dari { $density }
 explorer-prismoid-grid-volume-only = Volume { $volume } m³, tanpa densitas: tanpa ton
 explorer-prismoid-grid-volume-no-density = Volume { $volume } m³, tidak ada sel yang bernilai untuk { $density }: tanpa ton

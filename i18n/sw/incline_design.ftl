@@ -452,6 +452,13 @@ prismoid-inspector-by-volume = ujazo, hakuna msongamano
 prismoid-inspector-cell = Seli
 prismoid-inspector-cell-index = Safu wima { $column }, safu { $row }
 prismoid-inspector-cells = Seli
+prismoid-inspector-strata = Matabaka
+prismoid-inspector-interval = Kipindi
+prismoid-inspector-interval-of = { $position } kati ya { $count }
+prismoid-inspector-roof-horizon = Upeo wa paa
+prismoid-inspector-floor-horizon = Upeo wa sakafu
+prismoid-inspector-above = Juu
+prismoid-inspector-below = Chini
 prismoid-inspector-corner = Pembe { $column }, { $row }
 prismoid-inspector-mean-thickness = Unene wima wa wastani
 prismoid-inspector-no-density = Gridi haina msongamano
@@ -1801,6 +1808,7 @@ explorer-prismoid-grid-id =
     ID: prismoid_grid:{ $id }{ $source }
     Seli { $columns } × { $rows }, { $active } zinatumika
 explorer-prismoid-grid-thickness = Unene wima kutoka { $min } hadi { $max }
+explorer-prismoid-grid-stratum = Kipindi { $position } kati ya { $count } katika { $strata }
 explorer-prismoid-grid-volume-tonnes = Ujazo m³ { $volume }, t { $tonnes } kutoka { $density }
 explorer-prismoid-grid-volume-only = Ujazo m³ { $volume }, hakuna msongamano: hakuna tani
 explorer-prismoid-grid-volume-no-density = Ujazo m³ { $volume }, hakuna seli yenye thamani ya { $density }: hakuna tani

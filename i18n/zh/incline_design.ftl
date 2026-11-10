@@ -420,6 +420,13 @@ prismoid-inspector-by-volume = 体积,无密度
 prismoid-inspector-cell = 单元
 prismoid-inspector-cell-index = 第 { $column } 列,第 { $row } 行
 prismoid-inspector-cells = 单元
+prismoid-inspector-strata = 地层组
+prismoid-inspector-interval = 区间
+prismoid-inspector-interval-of = 第 { $position } / { $count }
+prismoid-inspector-roof-horizon = 顶板层位
+prismoid-inspector-floor-horizon = 底板层位
+prismoid-inspector-above = 上方
+prismoid-inspector-below = 下方
 prismoid-inspector-corner = 角点 { $column },{ $row }
 prismoid-inspector-mean-thickness = 平均垂直厚度
 prismoid-inspector-no-density = 网格没有密度
@@ -1769,6 +1776,7 @@ explorer-prismoid-grid-id =
     ID：prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } 个单元，{ $active } 个有效
 explorer-prismoid-grid-thickness = 垂直厚度 { $min } 至 { $max }
+explorer-prismoid-grid-stratum = { $strata } 中第 { $position } / { $count } 区间
 explorer-prismoid-grid-volume-tonnes = 体积 { $volume } m³,按 { $density } 计 { $tonnes } t
 explorer-prismoid-grid-volume-only = 体积 { $volume } m³,无密度:无吨位
 explorer-prismoid-grid-volume-no-density = 体积 { $volume } m³,没有单元具有 { $density } 值:无吨位

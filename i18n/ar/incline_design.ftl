@@ -420,6 +420,13 @@ prismoid-inspector-by-volume = حجم، بلا كثافة
 prismoid-inspector-cell = الخلية
 prismoid-inspector-cell-index = العمود { $column }، الصف { $row }
 prismoid-inspector-cells = الخلايا
+prismoid-inspector-strata = الطبقات
+prismoid-inspector-interval = الفترة
+prismoid-inspector-interval-of = { $position } من { $count }
+prismoid-inspector-roof-horizon = أفق السقف
+prismoid-inspector-floor-horizon = أفق الأرضية
+prismoid-inspector-above = فوق
+prismoid-inspector-below = تحت
 prismoid-inspector-corner = الزاوية { $column }، { $row }
 prismoid-inspector-mean-thickness = متوسط السماكة الرأسية
 prismoid-inspector-no-density = ليس للشبكة كثافة
@@ -1777,6 +1784,7 @@ explorer-prismoid-grid-id =
     المعرّف: prismoid_grid:{ $id }{ $source }
     { $columns } × { $rows } خلية، { $active } نشطة
 explorer-prismoid-grid-thickness = السماكة الرأسية من { $min } إلى { $max }
+explorer-prismoid-grid-stratum = الفترة { $position } من { $count } في { $strata }
 explorer-prismoid-grid-volume-tonnes = الحجم { $volume } م³، و { $tonnes } طن من { $density }
 explorer-prismoid-grid-volume-only = الحجم { $volume } م³، بلا كثافة: بلا أطنان
 explorer-prismoid-grid-volume-no-density = الحجم { $volume } م³، لا خلية لها قيمة لـ { $density }: بلا أطنان
