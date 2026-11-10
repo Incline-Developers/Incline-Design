@@ -305,14 +305,16 @@ impl LinearProgram {
         let shape = self.shape();
         let problem = self.to_solver();
         let keys = self.keys();
-        // From a basis the matrix goes unscaled: on programs this small,
-        // scaling costs more than the pivots it saves.
-        let unscaled = solver::Options {
+        // From a basis the matrix goes unscaled, and the dual method prices
+        // by the plain rule: on programs this small, scaling and setting up
+        // steepest-edge weights cost more than the pivots they save.
+        let light = solver::Options {
             simplex_scale_strategy: solver::SCALE_STRATEGY_OFF,
+            dual_edge_weight_strategy: solver::EdgeWeightStrategy::Dantzig,
             ..solver::Options::default()
         };
         let found = match warm.take(shape) {
-            Some(basis) => Some(solver::solve_from(&problem, &unscaled, Some(&basis), None)),
+            Some(basis) => Some(solver::solve_from(&problem, &light, Some(&basis), None)),
             // A shape not held: the last program's basis, carried over by
             // what its columns and rows stand for. Most of an interval's
             // program is the one before it, so this is a few pivots where a
@@ -323,7 +325,7 @@ impl LinearProgram {
             None => keys.as_ref().and_then(|keys| warm.carried(keys, &problem)).map(|basis| {
                 let primal = solver::Options {
                     simplex_strategy: solver::SimplexStrategy::Primal,
-                    ..unscaled.clone()
+                    ..light.clone()
                 };
                 solver::solve_from_alien(&problem, &primal, &basis)
             }),
