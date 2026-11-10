@@ -536,6 +536,8 @@ pub(crate) struct Graphics<'a> {
     /// The model envelope's twelve edges in Geology, with the key they were
     /// built for, rebuilt only when it changes.
     pub(super) model_envelope_outline: Option<(u64, passes::ChunkBoundsOutline)>,
+    /// The rim round the picked prismoids, keyed by the selection's revision.
+    pub(super) cell_selection_outline: Option<(u64, passes::ChunkBoundsOutline)>,
     /// Live map render behind the engineering-drawing dialog's preview, and
     /// the framing/scene fingerprint it was rendered for.
     pub(super) plot_preview: Option<plot::PlotPreviewTarget>,

@@ -448,6 +448,25 @@ borehole-inspector-set-side = 세트의 층서 열
 borehole-inspector-strat = 층서
 borehole-inspector-strat-column = 층서 열
 borehole-inspector-summary = 요약
+prismoid-inspector-by-tonnes = 톤, { $density } 기준
+prismoid-inspector-by-volume = 부피, 밀도 없음
+prismoid-inspector-cell = 셀
+prismoid-inspector-cell-index = 열 { $column }, 행 { $row }
+prismoid-inspector-cells = 셀
+prismoid-inspector-corner = 모서리 { $column }, { $row }
+prismoid-inspector-mean-thickness = 평균 수직 두께
+prismoid-inspector-no-density = 격자에 밀도가 없습니다
+prismoid-inspector-no-density-value = 이 셀에는 { $density } 값이 없습니다
+prismoid-inspector-no-value = 값 없음
+prismoid-inspector-partial = 
+    부분: { $counted ->
+        [one] { $counted } 셀 집계
+       *[other] { $counted } 셀 집계
+    }, 제외 { $left }
+prismoid-inspector-plan-size = { $along_u } × { $along_v }
+prismoid-inspector-range = { $min }에서 { $max }
+prismoid-inspector-tonnes = 톤
+prismoid-inspector-vertical-thickness = 수직 두께
 canvas-circle-summary = 원 | 레이어: { $layer } | 반지름 { $radius }
 
 ## Canvas strings

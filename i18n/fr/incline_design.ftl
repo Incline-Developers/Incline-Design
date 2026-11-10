@@ -415,6 +415,25 @@ borehole-inspector-set-side = Colonne du jeu
 borehole-inspector-strat = Strat.
 borehole-inspector-strat-column = Colonne stratigraphique
 borehole-inspector-summary = Résumé
+prismoid-inspector-by-tonnes = tonnes, d'après { $density }
+prismoid-inspector-by-volume = volume, sans densité
+prismoid-inspector-cell = Cellule
+prismoid-inspector-cell-index = Colonne { $column }, ligne { $row }
+prismoid-inspector-cells = Cellules
+prismoid-inspector-corner = Coin { $column }, { $row }
+prismoid-inspector-mean-thickness = Épaisseur verticale moyenne
+prismoid-inspector-no-density = La grille n'a pas de densité
+prismoid-inspector-no-density-value = Cette cellule n'a pas de valeur de { $density }
+prismoid-inspector-no-value = Aucune valeur
+prismoid-inspector-partial = 
+    Partiel : { $counted ->
+        [one] { $counted } cellule comptée
+       *[other] { $counted } cellules comptées
+    }, { $left } écartées
+prismoid-inspector-plan-size = { $along_u } sur { $along_v }
+prismoid-inspector-range = { $min } à { $max }
+prismoid-inspector-tonnes = Tonnes
+prismoid-inspector-vertical-thickness = Épaisseur verticale
 canvas-circle-summary = Cercle | Calque : { $layer } | rayon { $radius }
 
 ## Canvas strings

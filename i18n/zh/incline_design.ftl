@@ -415,6 +415,25 @@ borehole-inspector-set-side = 数据集地层柱
 borehole-inspector-strat = 地层
 borehole-inspector-strat-column = 地层柱
 borehole-inspector-summary = 摘要
+prismoid-inspector-by-tonnes = 吨,按 { $density }
+prismoid-inspector-by-volume = 体积,无密度
+prismoid-inspector-cell = 单元
+prismoid-inspector-cell-index = 第 { $column } 列,第 { $row } 行
+prismoid-inspector-cells = 单元
+prismoid-inspector-corner = 角点 { $column },{ $row }
+prismoid-inspector-mean-thickness = 平均垂直厚度
+prismoid-inspector-no-density = 网格没有密度
+prismoid-inspector-no-density-value = 此单元没有 { $density } 值
+prismoid-inspector-no-value = 无值
+prismoid-inspector-partial = 
+    部分:{ $counted ->
+        [one] { $counted } 个单元计入
+       *[other] { $counted } 个单元计入
+    },略去 { $left } 个
+prismoid-inspector-plan-size = { $along_u } × { $along_v }
+prismoid-inspector-range = { $min } 至 { $max }
+prismoid-inspector-tonnes = 吨
+prismoid-inspector-vertical-thickness = 垂直厚度
 canvas-circle-summary = 圆 | 图层：{ $layer } | 半径 { $radius }
 
 ## Canvas strings

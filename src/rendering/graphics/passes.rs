@@ -15,6 +15,9 @@ const CHUNK_BOUNDS_LINE_WIDTH: f32 = 1.5;
 /// The model envelope's outline: the grey of excluded ground's outline.
 const MODEL_ENVELOPE_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 0.9];
 
+/// Width, in logical pixels, of the rim round the picked prismoids.
+const CELL_OUTLINE_WIDTH: f32 = 2.0;
+
 /// The model envelope the view outlines: set, and in Geology.
 pub(super) fn shown_model_envelope(editor: &EditorState) -> Option<&crate::model::project::ModelEnvelope> {
     editor.model_envelope.as_ref().filter(|_| editor.active_workspace == crate::ui::state::Workspace::Geology)
@@ -643,36 +646,74 @@ impl<'a> Graphics<'a> {
     /// Rebuild [`Self::model_envelope_outline`] when the envelope, the scene
     /// origin or the scale factor moved since it was built.
     fn rebuild_model_envelope_outline(&mut self, editor: &EditorState) {
-        let Some(envelope) = shown_model_envelope(editor) else {
-            self.model_envelope_outline = None;
-            return;
-        };
+        let held = self.model_envelope_outline.take();
+        self.model_envelope_outline = shown_model_envelope(editor).map(|envelope| {
+            self.keyed_outline(
+                held,
+                envelope.bits(),
+                envelope.edges(),
+                CHUNK_BOUNDS_LINE_WIDTH,
+                MODEL_ENVELOPE_COLOR,
+                "Model Envelope Outline Strokes",
+            )
+        });
+    }
+
+    /// Rebuild [`Self::cell_selection_outline`] when the selection, the
+    /// scene origin or the scale factor moved since it was built.
+    fn rebuild_cell_selection_outline(&mut self, editor: &EditorState) {
+        let held = self.cell_selection_outline.take();
+        let selection = editor.cell_selection.as_ref().filter(|_| editor.active_workspace == crate::ui::state::Workspace::Geology);
+        self.cell_selection_outline = selection.map(|selection| {
+            let segments = selection.outline.iter().map(|[from, to]| (*from, *to));
+            self.keyed_outline(
+                held,
+                selection.revision,
+                segments,
+                CELL_OUTLINE_WIDTH,
+                crate::ui::SELECTION_COLOR_F32,
+                "Cell Selection Outline Strokes",
+            )
+        });
+    }
+
+    /// `held` again when it was built for `key`, the scene origin and the
+    /// scale factor; else the strokes along `segments`, built for them.
+    fn keyed_outline(
+        &self,
+        held: Option<(u64, ChunkBoundsOutline)>,
+        key: impl std::hash::Hash,
+        segments: impl IntoIterator<Item = (DVec3, DVec3)>,
+        width: f32,
+        color: [f32; 4],
+        label: &str,
+    ) -> (u64, ChunkBoundsOutline) {
         let scale_factor = self.window.scale_factor() as f32;
         let key = {
             use std::hash::{DefaultHasher, Hash, Hasher};
             let mut hasher = DefaultHasher::new();
-            (envelope.bits(), self.scene_origin.to_array().map(f64::to_bits), scale_factor.to_bits()).hash(&mut hasher);
+            (key, self.scene_origin.to_array().map(f64::to_bits), scale_factor.to_bits()).hash(&mut hasher);
             hasher.finish()
         };
-        if self.model_envelope_outline.as_ref().is_some_and(|(built, _)| *built == key) {
-            return;
+        if let Some(held) = held.filter(|(built, _)| *built == key) {
+            return held;
         }
         let mut strokes = Vec::new();
         let mut unused_fill_vertices = Vec::new();
         let mut unused_fill_indices = Vec::new();
         let mut context = crate::rendering::geometry::DrawContext::unstyled(&mut strokes, &mut unused_fill_vertices, &mut unused_fill_indices, self.scene_origin, scale_factor);
-        for (from, to) in envelope.edges() {
-            crate::rendering::geometry::draw_line(&mut context, from, to, CHUNK_BOUNDS_LINE_WIDTH, MODEL_ENVELOPE_COLOR);
+        for (from, to) in segments {
+            crate::rendering::geometry::draw_line(&mut context, from, to, width, color);
         }
         let outline = ChunkBoundsOutline {
             instance_buffer: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Model Envelope Outline Strokes"),
+                label: Some(label),
                 contents: bytemuck::cast_slice(&strokes),
                 usage: wgpu::BufferUsages::VERTEX,
             }),
             instance_count: strokes.len() as u32,
         };
-        self.model_envelope_outline = Some((key, outline));
+        (key, outline)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -694,6 +735,7 @@ impl<'a> Graphics<'a> {
         if include_editor_overlays {
             self.rebuild_chunk_bounds_outline(editor, triangulations, point_clouds);
             self.rebuild_model_envelope_outline(editor);
+            self.rebuild_cell_selection_outline(editor);
         }
         let bg_color = editor.renderer_background_color;
         let clear_color = [bg_color[0].clamp(0.0, 1.0) as f64, bg_color[1].clamp(0.0, 1.0) as f64, bg_color[2].clamp(0.0, 1.0) as f64];
@@ -1469,7 +1511,7 @@ impl<'a> Graphics<'a> {
             render_pass.draw(0..6, 0..outline.instance_count);
         }
 
-        if let Some((_, outline)) = &self.model_envelope_outline {
+        for (_, outline) in [&self.model_envelope_outline, &self.cell_selection_outline].into_iter().flatten() {
             render_pass.set_pipeline(&self.pipes().stroke_render_pipeline);
             render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
             render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);

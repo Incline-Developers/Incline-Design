@@ -466,6 +466,13 @@ impl<'a> App<'a> {
                     }
                     _ => {}
                 }
+                if let SceneEntityId::PrismoidGrid(id) = handle
+                    && hole.is_none()
+                    && self.pick_prismoid_cell(id, world)
+                {
+                    self.invalidate_geometry();
+                    return;
+                }
                 // Clicking what is already selected takes it back out of the
                 // selection, so any scene entity can be dropped without
                 // going for empty space.
@@ -624,6 +631,10 @@ impl<'a> App<'a> {
             }
             self.editor.selected_handles.extend(enclosed);
             self.editor.selected_drill_holes.extend(holes);
+        }
+        // A drawn prismoid grid rides the same box by its cells' centres.
+        if !objects_only {
+            self.select_prismoid_cells_in_box(start, end);
         }
         if self.editor.active_tool == crate::ui::state::ActiveTool::Move {
             self.editor.move_vertex_target = None;

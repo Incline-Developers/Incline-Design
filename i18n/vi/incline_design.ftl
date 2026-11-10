@@ -441,6 +441,25 @@ borehole-inspector-set-side = Cột của bộ
 borehole-inspector-strat = Địa tầng
 borehole-inspector-strat-column = Cột địa tầng
 borehole-inspector-summary = Tóm tắt
+prismoid-inspector-by-tonnes = tấn, theo { $density }
+prismoid-inspector-by-volume = thể tích, không có tỷ trọng
+prismoid-inspector-cell = Ô
+prismoid-inspector-cell-index = Cột { $column }, hàng { $row }
+prismoid-inspector-cells = Các ô
+prismoid-inspector-corner = Góc { $column }, { $row }
+prismoid-inspector-mean-thickness = Chiều dày thẳng đứng trung bình
+prismoid-inspector-no-density = Lưới không có tỷ trọng
+prismoid-inspector-no-density-value = Ô này không có giá trị { $density }
+prismoid-inspector-no-value = Không có giá trị
+prismoid-inspector-partial = 
+    Một phần: { $counted ->
+        [one] { $counted } ô được tính
+       *[other] { $counted } ô được tính
+    }, bỏ qua { $left }
+prismoid-inspector-plan-size = { $along_u } x { $along_v }
+prismoid-inspector-range = { $min } đến { $max }
+prismoid-inspector-tonnes = Tấn
+prismoid-inspector-vertical-thickness = Chiều dày thẳng đứng
 canvas-circle-summary = Đường tròn | Lớp: { $layer } | bán kính { $radius }
 
 ## Canvas strings

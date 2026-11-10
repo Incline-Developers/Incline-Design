@@ -447,6 +447,25 @@ borehole-inspector-set-side = Safu wima ya seti
 borehole-inspector-strat = Stratigrafia
 borehole-inspector-strat-column = Safu wima ya stratigrafia
 borehole-inspector-summary = Muhtasari
+prismoid-inspector-by-tonnes = tani, kutoka { $density }
+prismoid-inspector-by-volume = ujazo, hakuna msongamano
+prismoid-inspector-cell = Seli
+prismoid-inspector-cell-index = Safu wima { $column }, safu { $row }
+prismoid-inspector-cells = Seli
+prismoid-inspector-corner = Pembe { $column }, { $row }
+prismoid-inspector-mean-thickness = Unene wima wa wastani
+prismoid-inspector-no-density = Gridi haina msongamano
+prismoid-inspector-no-density-value = Seli hii haina thamani ya { $density }
+prismoid-inspector-no-value = Hakuna thamani
+prismoid-inspector-partial = 
+    Sehemu: { $counted ->
+        [one] { $counted } seli imehesabiwa
+       *[other] { $counted } seli zimehesabiwa
+    }, { $left } zimeachwa
+prismoid-inspector-plan-size = { $along_u } kwa { $along_v }
+prismoid-inspector-range = { $min } hadi { $max }
+prismoid-inspector-tonnes = Tani
+prismoid-inspector-vertical-thickness = Unene wima
 canvas-circle-summary = Duara | Tabaka: { $layer } | radiasi { $radius }
 
 ## Canvas strings

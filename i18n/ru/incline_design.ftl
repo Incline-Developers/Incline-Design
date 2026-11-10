@@ -467,6 +467,25 @@ borehole-inspector-set-side = Колонка набора
 borehole-inspector-strat = Страт.
 borehole-inspector-strat-column = Стратиграфическая колонка
 borehole-inspector-summary = Сводка
+prismoid-inspector-by-tonnes = тонны, по { $density }
+prismoid-inspector-by-volume = объём, нет плотности
+prismoid-inspector-cell = Ячейка
+prismoid-inspector-cell-index = Столбец { $column }, строка { $row }
+prismoid-inspector-cells = Ячейки
+prismoid-inspector-corner = Угол { $column }, { $row }
+prismoid-inspector-mean-thickness = Средняя вертикальная мощность
+prismoid-inspector-no-density = У сетки нет плотности
+prismoid-inspector-no-density-value = У этой ячейки нет значения { $density }
+prismoid-inspector-no-value = Нет значения
+prismoid-inspector-partial = 
+    Частично: учтено { $counted ->
+        [one] { $counted } ячейка
+       *[other] { $counted } ячеек
+    }, пропущено { $left }
+prismoid-inspector-plan-size = { $along_u } на { $along_v }
+prismoid-inspector-range = { $min } – { $max }
+prismoid-inspector-tonnes = Тонны
+prismoid-inspector-vertical-thickness = Вертикальная мощность
 canvas-circle-summary = Окружность | Слой: { $layer } | радиус { $radius }
 
 ## Canvas strings

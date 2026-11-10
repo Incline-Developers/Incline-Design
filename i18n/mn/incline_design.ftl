@@ -466,6 +466,25 @@ borehole-inspector-set-side = Багцын багана
 borehole-inspector-strat = Страт
 borehole-inspector-strat-column = Страт багана
 borehole-inspector-summary = Хураангуй
+prismoid-inspector-by-tonnes = тонн, { $density }-ээс
+prismoid-inspector-by-volume = эзлэхүүн, нягтгүй
+prismoid-inspector-cell = Нүд
+prismoid-inspector-cell-index = Багана { $column }, мөр { $row }
+prismoid-inspector-cells = Нүднүүд
+prismoid-inspector-corner = Булан { $column }, { $row }
+prismoid-inspector-mean-thickness = Дундаж босоо зузаан
+prismoid-inspector-no-density = Торонд нягт алга
+prismoid-inspector-no-density-value = Энэ нүдэнд { $density } утга алга
+prismoid-inspector-no-value = Утга алга
+prismoid-inspector-partial = 
+    Хэсэгчлэн: { $counted ->
+        [one] { $counted } нүд тоолсон
+       *[other] { $counted } нүд тоолсон
+    }, { $left } орхисон
+prismoid-inspector-plan-size = { $along_u } x { $along_v }
+prismoid-inspector-range = { $min }-с { $max }
+prismoid-inspector-tonnes = Тонн
+prismoid-inspector-vertical-thickness = Босоо зузаан
 canvas-circle-summary = Тойрог | Давхарга: { $layer } | радиус { $radius }
 
 ## Canvas strings

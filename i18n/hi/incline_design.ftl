@@ -415,6 +415,25 @@ borehole-inspector-set-side = सेट का कॉलम
 borehole-inspector-strat = स्ट्रैट
 borehole-inspector-strat-column = स्ट्रैट कॉलम
 borehole-inspector-summary = सारांश
+prismoid-inspector-by-tonnes = टन, { $density } से
+prismoid-inspector-by-volume = आयतन, कोई घनत्व नहीं
+prismoid-inspector-cell = सेल
+prismoid-inspector-cell-index = स्तंभ { $column }, पंक्ति { $row }
+prismoid-inspector-cells = सेल
+prismoid-inspector-corner = कोना { $column }, { $row }
+prismoid-inspector-mean-thickness = औसत ऊर्ध्वाधर मोटाई
+prismoid-inspector-no-density = ग्रिड का कोई घनत्व नहीं है
+prismoid-inspector-no-density-value = इस सेल का { $density } मान नहीं है
+prismoid-inspector-no-value = कोई मान नहीं
+prismoid-inspector-partial = 
+    आंशिक: { $counted ->
+        [one] { $counted } सेल गिना गया
+       *[other] { $counted } सेल गिने गए
+    }, { $left } छोड़े गए
+prismoid-inspector-plan-size = { $along_u } × { $along_v }
+prismoid-inspector-range = { $min } से { $max }
+prismoid-inspector-tonnes = टन
+prismoid-inspector-vertical-thickness = ऊर्ध्वाधर मोटाई
 canvas-circle-summary = वृत्त | परत: { $layer } | त्रिज्या { $radius }
 
 ## Canvas strings

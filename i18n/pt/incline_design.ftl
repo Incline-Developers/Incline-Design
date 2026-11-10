@@ -413,6 +413,25 @@ borehole-inspector-set-side = Coluna do conjunto
 borehole-inspector-strat = Estrat.
 borehole-inspector-strat-column = Coluna estratigráfica
 borehole-inspector-summary = Resumo
+prismoid-inspector-by-tonnes = toneladas, a partir de { $density }
+prismoid-inspector-by-volume = volume, sem densidade
+prismoid-inspector-cell = Célula
+prismoid-inspector-cell-index = Coluna { $column }, linha { $row }
+prismoid-inspector-cells = Células
+prismoid-inspector-corner = Canto { $column }, { $row }
+prismoid-inspector-mean-thickness = Espessura vertical média
+prismoid-inspector-no-density = A grade não tem densidade
+prismoid-inspector-no-density-value = Esta célula não tem valor de { $density }
+prismoid-inspector-no-value = Sem valor
+prismoid-inspector-partial = 
+    Parcial: { $counted ->
+        [one] { $counted } célula contada
+       *[other] { $counted } células contadas
+    }, { $left } deixadas de fora
+prismoid-inspector-plan-size = { $along_u } por { $along_v }
+prismoid-inspector-range = { $min } a { $max }
+prismoid-inspector-tonnes = Toneladas
+prismoid-inspector-vertical-thickness = Espessura vertical
 canvas-circle-summary = Círculo | Camada: { $layer } | raio { $radius }
 
 ## Canvas strings

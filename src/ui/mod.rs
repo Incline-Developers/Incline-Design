@@ -952,6 +952,16 @@ fn draw_ui(
         // panel drawn after it receives a different unique id.
         root_ui.skip_ahead_auto_ids(1);
     }
+    // The picked prismoids, left of the borehole inspector when both show.
+    let prismoid_inspector = editor
+        .cell_selection
+        .as_ref()
+        .filter(|_| editor.active_workspace == state::Workspace::Geology)
+        .map(|selection| elements::prismoid_inspector::draw_prismoid_inspector(root_ui, &selection.rows));
+    if prismoid_inspector.is_none() {
+        // As above.
+        root_ui.skip_ahead_auto_ids(1);
+    }
 
     // The drawing tools are a docked column between the explorer and the
     // scene, so they are claimed before the scene's rect is worked out: what
@@ -1570,6 +1580,7 @@ fn draw_ui(
     let console_claimed = console_rect.unwrap_or(egui::Rect::NOTHING);
     let (planning_regions, planning_grips) = planning_island.unwrap_or_default();
     let borehole_inspector_claimed = borehole_inspector_rect.unwrap_or(egui::Rect::NOTHING);
+    let (prismoid_regions, prismoid_grip) = prismoid_inspector.map_or_else(Default::default, |island| (island.regions, Some(island.grip)));
     chrome::paint_regions(
         &ctx,
         [
@@ -1583,7 +1594,8 @@ fn draw_ui(
         ]
         .into_iter()
         .chain(explorer.regions)
-        .chain(planning_regions),
+        .chain(planning_regions)
+        .chain(prismoid_regions),
     );
     // Centre the explorer resize grip on its full-height column.
     let panel_id = |salt: &str| root_ui.scope_id().with(salt);
@@ -1598,7 +1610,8 @@ fn draw_ui(
             ])
             // The island names its own seam, so the grip lights up for whichever
             // of the right-edge panels the workspace drew.
-            .chain(planning_grips),
+            .chain(planning_grips)
+            .chain(prismoid_grip),
     );
 
     geometry_dirty

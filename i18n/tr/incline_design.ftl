@@ -457,6 +457,25 @@ borehole-inspector-set-side = Küme sütunu
 borehole-inspector-strat = Strat
 borehole-inspector-strat-column = Stratigrafik sütun
 borehole-inspector-summary = Özet
+prismoid-inspector-by-tonnes = ton, { $density } yüzeyinden
+prismoid-inspector-by-volume = hacim, yoğunluk yok
+prismoid-inspector-cell = Hücre
+prismoid-inspector-cell-index = Sütun { $column }, satır { $row }
+prismoid-inspector-cells = Hücreler
+prismoid-inspector-corner = Köşe { $column }, { $row }
+prismoid-inspector-mean-thickness = Ortalama düşey kalınlık
+prismoid-inspector-no-density = Izgaranın yoğunluğu yok
+prismoid-inspector-no-density-value = Bu hücrenin { $density } değeri yok
+prismoid-inspector-no-value = Değer yok
+prismoid-inspector-partial = 
+    Kısmi: { $counted ->
+        [one] { $counted } hücre sayıldı
+       *[other] { $counted } hücre sayıldı
+    }, { $left } dışarıda bırakıldı
+prismoid-inspector-plan-size = { $along_u } x { $along_v }
+prismoid-inspector-range = { $min } ile { $max }
+prismoid-inspector-tonnes = Ton
+prismoid-inspector-vertical-thickness = Düşey kalınlık
 canvas-circle-summary = Daire | Katman: { $layer } | yarıçap { $radius }
 
 ## Canvas strings

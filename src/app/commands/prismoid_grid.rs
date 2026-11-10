@@ -6,10 +6,14 @@ use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     num::NonZeroUsize,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use anyhow::{Context, Result};
+use glam::DVec3;
 
 use crate::{
     app::{
@@ -38,13 +42,16 @@ use crate::{
         spatial::TriangleBvh,
         triangulation::{OpenTriangulation, QualityMark, TriangulationId, spatial_surface_face_order},
     },
-    rendering::{color::linear_to_srgb_byte, scene::drill_hole_cache::evaluate_stops},
-    ui::state::Workspace,
+    rendering::{camera::SectionSlab, color::linear_to_srgb_byte, scene::drill_hole_cache::evaluate_stops},
+    ui::state::{CellSelection, EditorState, InspectorRow, InspectorRows, SelectionMode, Workspace},
     userspace_error, userspace_log, userspace_warn,
 };
 
 /// The dark line round a drawn grid's roof and floor.
 const PRISMOID_OUTLINE_COLOR: [f32; 4] = [0.05, 0.06, 0.08, 1.0];
+
+/// Counts cell selection changes over the session; each keys its outline.
+static NEXT_CELL_SELECTION_REVISION: AtomicU64 = AtomicU64::new(1);
 
 /// A prismoid grid as the view draws it, for as long as `source` stands.
 pub(crate) struct DrawnPrismoidGrid {
@@ -308,6 +315,18 @@ impl App<'_> {
     /// surfaces beside it moved.
     pub(crate) fn sync_prismoid_drawing(&mut self) {
         self.editor.model_envelope = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
+        if self
+            .editor
+            .cell_selection
+            .as_ref()
+            .is_some_and(|selection| !cell_selection_stands(selection, &self.prismoid_grids, &self.editor))
+        {
+            self.editor.cell_selection = None;
+            self.invalidate_geometry();
+        }
+        if let Some(selection) = self.editor.cell_selection.as_mut() {
+            follow_grid_rename(selection, &self.prismoid_grids);
+        }
         if self.editor.active_workspace == Workspace::Geology {
             let grids = &self.prismoid_grids;
             self.prismoid_drawn.retain(|drawn| {
@@ -328,6 +347,124 @@ impl App<'_> {
             }
         }
         self.refresh_prismoid_scene();
+    }
+
+    /// Pick the prismoid a click on a drawn grid landed on, by Leo's
+    /// selection modes one grain down: the grid stays selected while any of
+    /// its cells is. False when the point is on no active cell.
+    pub(crate) fn pick_prismoid_cell(&mut self, id: PrismoidGridId, world: DVec3) -> bool {
+        let entity = SceneEntityId::PrismoidGrid(id);
+        let Some((grid, name)) = self
+            .prismoid_grids
+            .iter()
+            .find(|item| item.id == id && item.state.loaded)
+            .map(|item| (Arc::clone(&item.grid), item.name.clone()))
+        else {
+            return false;
+        };
+        let Some(cell) = grid.picked_cell(world) else {
+            return false;
+        };
+        let held = self
+            .editor
+            .cell_selection
+            .take()
+            .filter(|selection| selection.entity == entity && Arc::ptr_eq(&selection.grid, &grid));
+        let (mut cells, count) = held.map_or_else(|| (vec![false; grid.lattice.cell_count()], 0), |selection| (selection.cells, selection.count));
+        let mode = if self.modifiers.shift_key() {
+            SelectionMode::Toggle
+        } else if self.modifiers.control_key() {
+            SelectionMode::Add
+        } else if cells[cell] {
+            SelectionMode::Toggle
+        } else {
+            SelectionMode::Replace
+        };
+        let count = apply_cell_pick(&mut cells, count, cell, mode);
+        let item_mode = match mode {
+            SelectionMode::Replace => Some(SelectionMode::Replace),
+            _ if count > 0 => Some(SelectionMode::Add),
+            _ => self.editor.selected_handles.contains(&entity).then_some(SelectionMode::Toggle),
+        };
+        if let Some(item_mode) = item_mode {
+            self.editor.on_canvas_pick(entity, world, item_mode);
+        }
+        self.active_triangulation = None;
+        self.editor.cell_selection = cell_selection(entity, grid, &name, cells, count);
+        true
+    }
+
+    /// Apply a marquee to the cell selection after Leo's box has applied its
+    /// own, in its modifier order: shift toggles each cell taken, ctrl adds,
+    /// a plain box replaces. The grid is selected while any of its cells is.
+    pub(crate) fn select_prismoid_cells_in_box(&mut self, start: (f32, f32), end: (f32, f32)) {
+        let (toggle, add) = (self.modifiers.shift_key(), self.modifiers.control_key());
+        let Some((id, taken)) = self.prismoid_cells_in_screen_rect(start, end, toggle || add) else {
+            return;
+        };
+        let Some((grid, name)) = self
+            .prismoid_grids
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| (Arc::clone(&item.grid), item.name.clone()))
+        else {
+            return;
+        };
+        let entity = SceneEntityId::PrismoidGrid(id);
+        let held = self
+            .editor
+            .cell_selection
+            .take()
+            .filter(|selection| (toggle || add) && selection.entity == entity && Arc::ptr_eq(&selection.grid, &grid));
+        let (mut cells, mut count) = held.map_or_else(|| (vec![false; grid.lattice.cell_count()], 0), |selection| (selection.cells, selection.count));
+        let mode = if toggle { SelectionMode::Toggle } else { SelectionMode::Add };
+        for cell in taken {
+            count = apply_cell_pick(&mut cells, count, cell, mode);
+        }
+        if count > 0 {
+            self.editor.selected_handles.insert(entity);
+        } else {
+            self.editor.selected_handles.remove(&entity);
+        }
+        self.editor.cell_selection = cell_selection(entity, grid, &name, cells, count);
+    }
+
+    /// The cells a marquee takes, as Lucas's dig blocks ride Leo's box: of
+    /// one drawn grid, shown and not frozen, each active cell whose box
+    /// centre falls inside, kept to the section's slab when one is up. With
+    /// `keep_held` the grid holding cells is asked first; otherwise, or with
+    /// none of its cells inside, the first grid in project order with any.
+    fn prismoid_cells_in_screen_rect(&self, start: (f32, f32), end: (f32, f32), keep_held: bool) -> Option<(PrismoidGridId, Vec<usize>)> {
+        if self.editor.active_workspace != Workspace::Geology {
+            return None;
+        }
+        let graphics = self.graphics.as_ref()?;
+        let (view_proj, slab) = (graphics.view_proj(), graphics.section_slab());
+        let editor = &self.editor;
+        let drawn = self.prismoid_grids.iter().filter(|item| {
+            let entity = item.entity_id();
+            item.state.loaded
+                && !editor.hidden_handles.contains(&entity)
+                && !editor.frozen_handles.contains(&entity)
+                && self
+                    .prismoid_drawn
+                    .iter()
+                    .any(|drawn| drawn.surface.prismoid_grid == Some(item.id) && Arc::ptr_eq(&drawn.source, &item.grid))
+        });
+        let taken = |item: &OpenPrismoidGrid| {
+            let cells = centres_in_screen_rect(
+                item.grid.cell_centres_3d(),
+                |world| graphics.world_to_window_px(&view_proj, world),
+                slab.as_ref(),
+                start,
+                end,
+            );
+            (!cells.is_empty()).then_some((item.id, cells))
+        };
+        let held = editor.cell_selection.as_ref().filter(|_| keep_held).map(|selection| selection.entity);
+        held.and_then(|held| drawn.clone().find(|item| item.entity_id() == held))
+            .and_then(taken)
+            .or_else(|| drawn.filter_map(taken).next())
     }
 
     /// Prepare a grid's mesh on the job queue. A grid over the node budget is
@@ -439,6 +576,243 @@ impl App<'_> {
         self.prismoid_rasters = self.raster_textures.iter().chain(maps).cloned().collect();
         self.prismoid_scene_key = Some(key);
     }
+}
+
+/// Apply a pick of `cell` to `cells`, `count` of them selected: Replace
+/// leaves that cell alone in the set, Add adds it, Toggle flips it. Returns
+/// the count after.
+fn apply_cell_pick(cells: &mut [bool], count: usize, cell: usize, mode: SelectionMode) -> usize {
+    match mode {
+        SelectionMode::Replace => {
+            cells.fill(false);
+            cells[cell] = true;
+            1
+        }
+        SelectionMode::Add if cells[cell] => count,
+        SelectionMode::Add => {
+            cells[cell] = true;
+            count + 1
+        }
+        SelectionMode::Toggle => {
+            cells[cell] = !cells[cell];
+            if cells[cell] { count + 1 } else { count - 1 }
+        }
+    }
+}
+
+/// The cells whose centres project inside the screen rectangle from `start`
+/// to `end`, within `slab` when one is given; a centre that projects nowhere
+/// (behind the camera, say) is out.
+fn centres_in_screen_rect(
+    centres: impl Iterator<Item = (usize, DVec3)>,
+    project: impl Fn(DVec3) -> Option<(f32, f32)>,
+    slab: Option<&SectionSlab>,
+    start: (f32, f32),
+    end: (f32, f32),
+) -> Vec<usize> {
+    let (min, max) = ((start.0.min(end.0), start.1.min(end.1)), (start.0.max(end.0), start.1.max(end.1)));
+    let inside = |p: (f32, f32)| p.0 >= min.0 && p.0 <= max.0 && p.1 >= min.1 && p.1 <= max.1;
+    centres
+        .filter(|(_, centre)| slab.is_none_or(|slab| slab.contains(*centre)))
+        .filter(|(_, centre)| project(*centre).is_some_and(inside))
+        .map(|(cell, _)| cell)
+        .collect()
+}
+
+/// A selection of `count` cells on the grid `name`, derived; `None` with
+/// none.
+fn cell_selection(entity: SceneEntityId, grid: Arc<PrismoidGrid>, name: &str, cells: Vec<bool>, count: usize) -> Option<CellSelection> {
+    (count > 0).then(|| {
+        let mut selection = CellSelection {
+            entity,
+            grid,
+            name: name.to_owned(),
+            cells,
+            count,
+            revision: 0,
+            outline: Vec::new(),
+            rows: InspectorRows::default(),
+        };
+        refresh_cell_selection(&mut selection);
+        selection
+    })
+}
+
+/// Derive what a changed selection shows, under a new revision.
+fn refresh_cell_selection(selection: &mut CellSelection) {
+    selection.revision = NEXT_CELL_SELECTION_REVISION.fetch_add(1, Ordering::Relaxed);
+    selection.outline = selection.grid.selection_outline(&selection.cells);
+    selection.rows = cell_selection_rows(selection);
+}
+
+/// The inspector's rows for one picked prismoid or for several.
+fn cell_selection_rows(selection: &CellSelection) -> InspectorRows {
+    let single = (selection.count == 1).then(|| selection.cells.iter().position(|selected| *selected)).flatten();
+    match single {
+        Some(cell) => prismoid_cell_rows(&selection.name, &selection.grid, cell),
+        None => {
+            let cells = selection.cells.iter().enumerate().filter(|(_, selected)| **selected).map(|(cell, _)| cell);
+            prismoid_selection_rows(&selection.name, &selection.grid.summary_of(cells))
+        }
+    }
+}
+
+/// Carry a rename of the selection's grid into its rows.
+fn follow_grid_rename(selection: &mut CellSelection, grids: &[OpenPrismoidGrid]) {
+    if let Some(item) = grids.iter().find(|item| item.entity_id() == selection.entity && item.name != selection.name) {
+        selection.name.clone_from(&item.name);
+        selection.rows = cell_selection_rows(selection);
+    }
+}
+
+/// The inspector's rows for several prismoids of the grid `name`: how many,
+/// their thickness range and what the means are weighted by, then their
+/// volume, tonnes and each quality's mean, each saying what it left out.
+fn prismoid_selection_rows(name: &str, summary: &PrismoidGridSummary) -> InspectorRows {
+    let absent = || tr!("inventory-portion-missing");
+    let left_out = |total: &NumericTotal| match total.missing + total.unusable_weights {
+        0 => None,
+        left => Some(tr!("prismoid-inspector-partial", counted = total.contributions, left = left)),
+    };
+    let (min, max) = summary.vertical_thickness.unwrap_or_default();
+    let weighted = match (summary.weighting, &summary.density) {
+        (Weighting::ByTonnes, Some(density)) => tr!("prismoid-inspector-by-tonnes", density = density.clone()),
+        _ => tr!("prismoid-inspector-by-volume"),
+    };
+    let properties = vec![
+        inspector_row(tr!("common-prismoid-grid"), name.to_owned(), None, None),
+        inspector_row(tr!("prismoid-inspector-cells"), summary.active_cells.to_string(), None, None),
+        inspector_row(
+            tr!("prismoid-inspector-vertical-thickness"),
+            tr!("prismoid-inspector-range", min = format_quantity(min, 2), max = format_quantity(max, 2)),
+            Some("m"),
+            None,
+        ),
+        inspector_row(tr!("reserve-weighted"), weighted, None, None),
+    ];
+    let tonnes = match &summary.tonnes {
+        Some(total) => match total.value(ReserveAggregation::Sum) {
+            Some(sum) => inspector_row(tr!("prismoid-inspector-tonnes"), format_quantity(sum, 1), Some("t"), left_out(total)),
+            None => inspector_row(tr!("prismoid-inspector-tonnes"), absent(), None, left_out(total)),
+        },
+        None => inspector_row(tr!("prismoid-inspector-tonnes"), absent(), None, Some(tr!("prismoid-inspector-no-density"))),
+    };
+    let mut contents = vec![inspector_row(tr!("tri-volume"), format_quantity(summary.volume, 1), Some("m³"), None), tonnes];
+    for quality in &summary.qualities {
+        let unit = (!quality.unit.is_empty()).then_some(quality.unit.as_str());
+        // `value` reads sum over weight for either average.
+        contents.push(match quality.total.value(ReserveAggregation::VolumeAverage) {
+            Some(mean) => inspector_row(quality.name.clone(), format_quantity(mean, 2), unit, left_out(&quality.total)),
+            None => inspector_row(quality.name.clone(), absent(), None, left_out(&quality.total)),
+        });
+    }
+    InspectorRows {
+        title: tr!("planning-properties"),
+        properties,
+        contents,
+    }
+}
+
+fn inspector_row(key: String, value: String, unit: Option<&str>, note: Option<String>) -> InspectorRow {
+    InspectorRow {
+        key,
+        value,
+        unit: unit.map(str::to_owned),
+        note,
+    }
+}
+
+/// The inspector's rows for one prismoid of the grid `name`: where it is,
+/// its size and thicknesses, then its volume, tonnes and every value it
+/// holds. Columns, rows and corners count from 1 at the lattice origin.
+fn prismoid_cell_rows(name: &str, grid: &PrismoidGrid, cell: usize) -> InspectorRows {
+    let lattice = &grid.lattice;
+    let columns = lattice.columns();
+    let (column, row) = (cell % columns, cell / columns);
+    let measure = grid.cell_measure(cell);
+    let ordinal = |index: usize| (index + 1).to_string();
+    let mut properties = vec![
+        inspector_row(tr!("common-prismoid-grid"), name.to_owned(), None, None),
+        inspector_row(
+            tr!("prismoid-inspector-cell"),
+            tr!("prismoid-inspector-cell-index", column = ordinal(column), row = ordinal(row)),
+            None,
+            None,
+        ),
+        inspector_row(
+            tr!("solids-plan-area"),
+            tr!(
+                "prismoid-inspector-plan-size",
+                along_u = cell_size(lattice.u_sizes[column]),
+                along_v = cell_size(lattice.v_sizes[row])
+            ),
+            Some("m"),
+            None,
+        ),
+        inspector_row(
+            tr!("prismoid-inspector-mean-thickness"),
+            format_quantity(measure.map_or(0.0, |(bounds, _)| bounds.upper.z - bounds.lower.z), 2),
+            Some("m"),
+            None,
+        ),
+    ];
+    // Round the cell from its origin corner, as `closed_mesh` takes them.
+    for (along_u, along_v) in [(column, row), (column + 1, row), (column + 1, row + 1), (column, row + 1)] {
+        let corner = along_v * (columns + 1) + along_u;
+        properties.push(inspector_row(
+            tr!("prismoid-inspector-corner", column = ordinal(along_u), row = ordinal(along_v)),
+            format_quantity(grid.roof[corner] - grid.floor[corner], 2),
+            Some("m"),
+            None,
+        ));
+    }
+    let volume = measure.map_or(0.0, |(_, measure)| measure.volume());
+    let tonnes = match grid.cell_values.iter().find(|values| values.role == CellValueRole::Density) {
+        None => inspector_row(
+            tr!("prismoid-inspector-tonnes"),
+            tr!("inventory-portion-missing"),
+            None,
+            Some(tr!("prismoid-inspector-no-density")),
+        ),
+        Some(density) => match density.values[cell] {
+            Some(value) => inspector_row(
+                tr!("prismoid-inspector-tonnes"),
+                format_quantity(measure.map_or(0.0, |(_, measure)| measure.per_volume(value)), 1),
+                Some("t"),
+                None,
+            ),
+            None => inspector_row(
+                tr!("prismoid-inspector-tonnes"),
+                tr!("inventory-portion-missing"),
+                None,
+                Some(tr!("prismoid-inspector-no-density-value", density = density.name.clone())),
+            ),
+        },
+    };
+    let mut contents = vec![inspector_row(tr!("tri-volume"), format_quantity(volume, 1), Some("m³"), None), tonnes];
+    for values in &grid.cell_values {
+        let unit = (!values.unit.is_empty()).then_some(values.unit.as_str());
+        contents.push(match values.values[cell] {
+            Some(value) => inspector_row(values.name.clone(), format_quantity(value, 2), unit, None),
+            None => inspector_row(values.name.clone(), tr!("inventory-portion-missing"), None, Some(tr!("prismoid-inspector-no-value"))),
+        });
+    }
+    InspectorRows {
+        title: tr!("planning-properties"),
+        properties,
+        contents,
+    }
+}
+
+/// Whether a cell selection still stands: in Geology, on a loaded, shown
+/// grid whose cells have not been replaced, and the grid still selected.
+fn cell_selection_stands(selection: &CellSelection, grids: &[OpenPrismoidGrid], editor: &EditorState) -> bool {
+    editor.active_workspace == Workspace::Geology
+        && editor.selected_handles.contains(&selection.entity)
+        && !editor.hidden_handles.contains(&selection.entity)
+        && grids
+            .iter()
+            .any(|item| item.entity_id() == selection.entity && item.state.loaded && Arc::ptr_eq(&item.grid, &selection.grid))
 }
 
 /// One ticked quality surface, as the job reads it.

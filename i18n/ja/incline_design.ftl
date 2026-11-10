@@ -443,6 +443,25 @@ borehole-inspector-set-side = セットの層序列
 borehole-inspector-strat = 層序
 borehole-inspector-strat-column = 層序列
 borehole-inspector-summary = サマリー
+prismoid-inspector-by-tonnes = トン ({ $density } から)
+prismoid-inspector-by-volume = 体積、密度なし
+prismoid-inspector-cell = セル
+prismoid-inspector-cell-index = 列 { $column }、行 { $row }
+prismoid-inspector-cells = セル
+prismoid-inspector-corner = 角 { $column }、{ $row }
+prismoid-inspector-mean-thickness = 平均鉛直厚さ
+prismoid-inspector-no-density = グリッドに密度がありません
+prismoid-inspector-no-density-value = このセルには { $density } の値がありません
+prismoid-inspector-no-value = 値なし
+prismoid-inspector-partial = 
+    一部: { $counted ->
+        [one] { $counted } セルを集計
+       *[other] { $counted } セルを集計
+    }、除外 { $left }
+prismoid-inspector-plan-size = { $along_u } × { $along_v }
+prismoid-inspector-range = { $min } から { $max }
+prismoid-inspector-tonnes = トン
+prismoid-inspector-vertical-thickness = 鉛直厚さ
 canvas-circle-summary = 円 | レイヤー: { $layer } | 半径 { $radius }
 
 ## Canvas strings

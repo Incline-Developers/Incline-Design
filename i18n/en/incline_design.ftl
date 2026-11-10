@@ -1190,6 +1190,28 @@ borehole-inspector-strat = Strat
 borehole-inspector-strat-column = Strat column
 borehole-inspector-summary = Summary
 
+## Prismoid inspector
+
+prismoid-inspector-by-tonnes = tonnes, from { $density }
+prismoid-inspector-by-volume = volume, no density
+prismoid-inspector-cell = Cell
+prismoid-inspector-cell-index = Column { $column }, row { $row }
+prismoid-inspector-cells = Cells
+prismoid-inspector-corner = Corner { $column }, { $row }
+prismoid-inspector-mean-thickness = Mean vertical thickness
+prismoid-inspector-no-density = The grid has no density
+prismoid-inspector-no-density-value = This cell has no { $density } value
+prismoid-inspector-no-value = No value
+prismoid-inspector-partial =
+    Partial: { $counted ->
+        [one] { $counted } cell
+       *[other] { $counted } cells
+    } counted, { $left } left out
+prismoid-inspector-plan-size = { $along_u } by { $along_v }
+prismoid-inspector-range = { $min } to { $max }
+prismoid-inspector-tonnes = Tonnes
+prismoid-inspector-vertical-thickness = Vertical thickness
+
 ## Canvas strings
 
 canvas-circle-summary = Circle | Layer: { $layer } | radius { $radius }

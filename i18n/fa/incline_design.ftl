@@ -415,6 +415,25 @@ borehole-inspector-set-side = ستون مجموعه
 borehole-inspector-strat = چینه‌شناسی
 borehole-inspector-strat-column = ستون چینه‌شناسی
 borehole-inspector-summary = خلاصه
+prismoid-inspector-by-tonnes = تن، از { $density }
+prismoid-inspector-by-volume = حجم، بدون چگالی
+prismoid-inspector-cell = سلول
+prismoid-inspector-cell-index = ستون { $column }، ردیف { $row }
+prismoid-inspector-cells = سلول‌ها
+prismoid-inspector-corner = گوشه { $column }، { $row }
+prismoid-inspector-mean-thickness = میانگین ضخامت عمودی
+prismoid-inspector-no-density = شبکه چگالی ندارد
+prismoid-inspector-no-density-value = این سلول مقدار { $density } ندارد
+prismoid-inspector-no-value = بدون مقدار
+prismoid-inspector-partial = 
+    بخشی: { $counted ->
+        [one] { $counted } سلول شمرده شد
+       *[other] { $counted } سلول شمرده شد
+    }، { $left } کنار گذاشته شد
+prismoid-inspector-plan-size = { $along_u } در { $along_v }
+prismoid-inspector-range = { $min } تا { $max }
+prismoid-inspector-tonnes = تن
+prismoid-inspector-vertical-thickness = ضخامت عمودی
 canvas-circle-summary = دایره | لایه: { $layer } | شعاع { $radius }
 
 ## Canvas strings

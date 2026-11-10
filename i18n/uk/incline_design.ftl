@@ -462,6 +462,25 @@ borehole-inspector-set-side = Колонка набору
 borehole-inspector-strat = Страт.
 borehole-inspector-strat-column = Стратиграфічна колонка
 borehole-inspector-summary = Підсумок
+prismoid-inspector-by-tonnes = тонни, за { $density }
+prismoid-inspector-by-volume = об'єм, немає густини
+prismoid-inspector-cell = Комірка
+prismoid-inspector-cell-index = Стовпець { $column }, рядок { $row }
+prismoid-inspector-cells = Комірки
+prismoid-inspector-corner = Кут { $column }, { $row }
+prismoid-inspector-mean-thickness = Середня вертикальна потужність
+prismoid-inspector-no-density = Сітка не має густини
+prismoid-inspector-no-density-value = Ця комірка не має значення { $density }
+prismoid-inspector-no-value = Немає значення
+prismoid-inspector-partial = 
+    Частково: враховано { $counted ->
+        [one] { $counted } комірку
+       *[other] { $counted } комірок
+    }, пропущено { $left }
+prismoid-inspector-plan-size = { $along_u } на { $along_v }
+prismoid-inspector-range = { $min } – { $max }
+prismoid-inspector-tonnes = Тонни
+prismoid-inspector-vertical-thickness = Вертикальна потужність
 canvas-circle-summary = Коло | Шар: { $layer } | радіус { $radius }
 
 ## Canvas strings

@@ -415,6 +415,25 @@ borehole-inspector-set-side = عمود المجموعة
 borehole-inspector-strat = الطبقات
 borehole-inspector-strat-column = عمود الطبقات
 borehole-inspector-summary = الملخص
+prismoid-inspector-by-tonnes = أطنان، من { $density }
+prismoid-inspector-by-volume = حجم، بلا كثافة
+prismoid-inspector-cell = الخلية
+prismoid-inspector-cell-index = العمود { $column }، الصف { $row }
+prismoid-inspector-cells = الخلايا
+prismoid-inspector-corner = الزاوية { $column }، { $row }
+prismoid-inspector-mean-thickness = متوسط السماكة الرأسية
+prismoid-inspector-no-density = ليس للشبكة كثافة
+prismoid-inspector-no-density-value = ليس لهذه الخلية قيمة لـ { $density }
+prismoid-inspector-no-value = لا قيمة
+prismoid-inspector-partial = 
+    جزئي: { $counted ->
+        [one] { $counted } خلية محسوبة
+       *[other] { $counted } خلية محسوبة
+    }، و { $left } متروكة
+prismoid-inspector-plan-size = { $along_u } في { $along_v }
+prismoid-inspector-range = من { $min } إلى { $max }
+prismoid-inspector-tonnes = الأطنان
+prismoid-inspector-vertical-thickness = السماكة الرأسية
 canvas-circle-summary = دائرة | الطبقة: { $layer } | نصف القطر { $radius }
 
 ## Canvas strings

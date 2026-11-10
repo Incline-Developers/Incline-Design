@@ -5,7 +5,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use anyhow::{Result, bail};
-use glam::{DMat3, DVec2, DVec3};
+use glam::{DMat2, DMat3, DVec2, DVec3};
 
 use crate::{
     app::jobs::CancelFlag,
@@ -107,6 +107,37 @@ impl Lattice {
             .iter()
             .flat_map(|along_v| u_edges.iter().map(move |along_u| self.origin + self.u * *along_u + self.v * *along_v))
             .collect()
+    }
+
+    /// The (column, row) of the cell holding a plan point; a point on a line
+    /// between cells belongs to the cell beyond it, and the far edge to the
+    /// last cell. `None` outside the lattice.
+    pub(crate) fn cell_at(&self, at: DVec2) -> Option<(usize, usize)> {
+        let (u_edges, v_edges) = (edges(&self.u_sizes), edges(&self.v_sizes));
+        // The exact inverse of `corners`, also for axes `check` admits a
+        // hair off unit and perpendicular.
+        let DVec2 { x: s, y: t } = DMat2::from_cols(self.u, self.v).inverse() * (at - self.origin);
+        let find = |edges: &[f64], along: f64| {
+            let total = edges[edges.len() - 1];
+            // Written so NaN is outside.
+            if !(0.0..=total).contains(&along) {
+                return None;
+            }
+            Some((edges.partition_point(|edge| *edge <= along) - 1).min(edges.len() - 2))
+        };
+        Some((find(&u_edges, s)?, find(&v_edges, t)?))
+    }
+
+    /// The plan position of the middle of a cell.
+    pub(crate) fn cell_centre(&self, column: usize, row: usize) -> DVec2 {
+        self.cell_centre_in(column, row, &edges(&self.u_sizes), &edges(&self.v_sizes))
+    }
+
+    /// [`Self::cell_centre`] from the lattice's edge distances.
+    fn cell_centre_in(&self, column: usize, row: usize, u_edges: &[f64], v_edges: &[f64]) -> DVec2 {
+        let s = (u_edges[column] + u_edges[column + 1]) / 2.0;
+        let t = (v_edges[row] + v_edges[row + 1]) / 2.0;
+        self.origin + self.u * s + self.v * t
     }
 
     /// Whether every column has one size and every row one size.
@@ -446,6 +477,43 @@ impl PrismoidGrid {
         (vertices, triangles)
     }
 
+    /// Roof and floor segments round the rim of a set of cells: `cells` is a
+    /// mask in cell order, and each side of a selected cell whose neighbour
+    /// is not selected (or is off the lattice) gives one roof and one floor
+    /// segment.
+    pub(crate) fn selection_outline(&self, cells: &[bool]) -> Vec<[DVec3; 2]> {
+        let lattice = &self.lattice;
+        let (columns, rows) = (lattice.columns(), lattice.rows());
+        let corners = lattice.corners();
+        let selected = |column: Option<usize>, row: Option<usize>| match (column, row) {
+            (Some(column), Some(row)) if column < columns && row < rows => cells[row * columns + column],
+            _ => false,
+        };
+        let mut segments = Vec::new();
+        for row in 0..rows {
+            for column in 0..columns {
+                if !selected(Some(column), Some(row)) {
+                    continue;
+                }
+                let sides = [
+                    ((column, row), (column + 1, row), (Some(column), row.checked_sub(1))),
+                    ((column + 1, row), (column + 1, row + 1), (Some(column + 1), Some(row))),
+                    ((column + 1, row + 1), (column, row + 1), (Some(column), Some(row + 1))),
+                    ((column, row + 1), (column, row), (column.checked_sub(1), Some(row))),
+                ];
+                for (from, to, (beside_column, beside_row)) in sides {
+                    if selected(beside_column, beside_row) {
+                        continue;
+                    }
+                    let [from, to] = [from, to].map(|(corner_column, corner_row)| corner_row * (columns + 1) + corner_column);
+                    segments.push([corners[from].extend(self.roof[from]), corners[to].extend(self.roof[to])]);
+                    segments.push([corners[from].extend(self.floor[from]), corners[to].extend(self.floor[to])]);
+                }
+            }
+        }
+        segments
+    }
+
     /// The closed body of the active cells: roof, floor facing down, and
     /// [`Self::outline_walls`] less the triangles a closed corner flattens.
     /// `None` with no active cell.
@@ -503,27 +571,57 @@ impl PrismoidGrid {
     /// the two triangles [`Self::closed_mesh`] draws, so a box holds its
     /// prismoid's volume. A cell whose box has no height is left out.
     pub(crate) fn blocks(&self) -> Vec<(usize, BlockBounds)> {
-        let columns = self.lattice.columns();
         let (u_edges, v_edges) = (edges(&self.lattice.u_sizes), edges(&self.lattice.v_sizes));
-        let mean = |heights: &[f64], [a, b, c, d]: [usize; 4]| (2.0 * heights[a] + heights[b] + 2.0 * heights[c] + heights[d]) / 6.0;
         let mut blocks = Vec::new();
         for (cell, _) in self.active.iter().enumerate().filter(|(_, active)| **active) {
-            let (column, row) = (cell % columns, cell / columns);
-            let a = row * (columns + 1) + column;
-            let d = a + columns + 1;
-            let corners = [a, a + 1, d + 1, d];
-            let (top, bottom) = (mean(&self.roof, corners), mean(&self.floor, corners));
-            if top > bottom {
-                blocks.push((
-                    cell,
-                    BlockBounds {
-                        lower: DVec3::new(u_edges[column], v_edges[row], bottom),
-                        upper: DVec3::new(u_edges[column + 1], v_edges[row + 1], top),
-                    },
-                ));
+            if let Some(bounds) = self.cell_box(cell, &u_edges, &v_edges) {
+                blocks.push((cell, bounds));
             }
         }
         blocks
+    }
+
+    /// The box of one cell as [`Self::blocks`] gives it, from the lattice's
+    /// edge distances; `None` when it has no height.
+    fn cell_box(&self, cell: usize, u_edges: &[f64], v_edges: &[f64]) -> Option<BlockBounds> {
+        let columns = self.lattice.columns();
+        let mean = |heights: &[f64], [a, b, c, d]: [usize; 4]| (2.0 * heights[a] + heights[b] + 2.0 * heights[c] + heights[d]) / 6.0;
+        let (column, row) = (cell % columns, cell / columns);
+        let a = row * (columns + 1) + column;
+        let d = a + columns + 1;
+        let corners = [a, a + 1, d + 1, d];
+        let (top, bottom) = (mean(&self.roof, corners), mean(&self.floor, corners));
+        (top > bottom).then(|| BlockBounds {
+            lower: DVec3::new(u_edges[column], v_edges[row], bottom),
+            upper: DVec3::new(u_edges[column + 1], v_edges[row + 1], top),
+        })
+    }
+
+    /// The active cell a hit point on the drawn body (roof, floor or an
+    /// outline wall) belongs to. A wall stands only where the neighbour is
+    /// inactive or off the lattice, so of its two sides only one is a body.
+    pub(crate) fn picked_cell(&self, at: DVec3) -> Option<usize> {
+        let lattice = &self.lattice;
+        let columns = lattice.columns();
+        let slack = 1e-6 * lattice.least_size();
+        let plan = at.truncate();
+        let (u, v) = (lattice.u * slack, lattice.v * slack);
+        let mut found: Vec<usize> = [DVec2::ZERO, u, -u, v, -v, u + v, u - v, v - u, -u - v]
+            .into_iter()
+            .filter_map(|shift| lattice.cell_at(plan + shift))
+            .map(|(column, row)| row * columns + column)
+            .filter(|cell| self.active[*cell])
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        let mut best: Option<(usize, f64)> = None;
+        for cell in found {
+            let distance = (lattice.cell_centre(cell % columns, cell / columns) - plan).length_squared();
+            if best.is_none_or(|(_, nearest)| distance < nearest) {
+                best = Some((cell, distance));
+            }
+        }
+        best.map(|(cell, _)| cell)
     }
 
     /// The boxes [`Self::blocks`] gives in the frame of a block model made
@@ -542,19 +640,42 @@ impl PrismoidGrid {
             .collect()
     }
 
-    /// Each box [`Self::model_blocks`] gives, measured as `block_volumes`
-    /// and `per_volume_values` measure a block model's.
-    pub(crate) fn cell_measures(&self, envelope: Option<&ModelEnvelope>) -> Vec<CellMeasure> {
+    /// One active cell's box in the lattice's frame, as [`Self::blocks`]
+    /// gives it, measured as `block_volumes` and `per_volume_values` measure
+    /// a block model's; `None` when the box has no height.
+    pub(crate) fn cell_measure(&self, cell: usize) -> Option<(BlockBounds, CellMeasure)> {
+        let (u_edges, v_edges) = (edges(&self.lattice.u_sizes), edges(&self.lattice.v_sizes));
+        self.measure_in(cell, &u_edges, &v_edges, self.stretch())
+    }
+
+    /// [`Self::cell_measure`] from the lattice's edge distances and stretch.
+    fn measure_in(&self, cell: usize, u_edges: &[f64], v_edges: &[f64], stretch: f64) -> Option<(BlockBounds, CellMeasure)> {
+        let bounds = self.cell_box(cell, u_edges, v_edges)?;
+        let measure = CellMeasure {
+            cell,
+            sides: (bounds.upper - bounds.lower).element_product(),
+            stretch,
+        };
+        Some((bounds, measure))
+    }
+
+    /// Each active cell with its box's centre: the cell's plan centre at the
+    /// middle of its box's height. A cell whose box has no height is left out.
+    pub(crate) fn cell_centres_3d(&self) -> impl Iterator<Item = (usize, DVec3)> + '_ {
         let lattice = &self.lattice;
-        let stretch = DMat3::from_cols(lattice.u.extend(0.0), lattice.v.extend(0.0), DVec3::Z).determinant().abs();
-        self.model_blocks(envelope)
-            .into_iter()
-            .map(|(cell, bounds)| CellMeasure {
-                cell,
-                sides: (bounds.upper - bounds.lower).element_product(),
-                stretch,
-            })
-            .collect()
+        let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));
+        let columns = lattice.columns();
+        self.active.iter().enumerate().filter(|(_, active)| **active).filter_map(move |(cell, _)| {
+            let bounds = self.cell_box(cell, &u_edges, &v_edges)?;
+            let centre = lattice.cell_centre_in(cell % columns, cell / columns, &u_edges, &v_edges);
+            Some((cell, centre.extend((bounds.lower.z + bounds.upper.z) / 2.0)))
+        })
+    }
+
+    /// How much the lattice's frame scales a volume.
+    fn stretch(&self) -> f64 {
+        let lattice = &self.lattice;
+        DMat3::from_cols(lattice.u.extend(0.0), lattice.v.extend(0.0), DVec3::Z).determinant().abs()
     }
 
     /// Thickness at every corner as a position from 0 to 1 across `range`,
@@ -603,10 +724,27 @@ impl PrismoidGrid {
     /// over every corner of an active cell, and the totals: a derived block
     /// model's bit for bit without an envelope, to rounding with one.
     pub(crate) fn summary(&self) -> PrismoidGridSummary {
+        self.summary_of(self.active.iter().enumerate().filter(|(_, active)| **active).map(|(cell, _)| cell))
+    }
+
+    /// [`Self::summary`] over the given active cells, taken in cell order:
+    /// `active_cells` counts them.
+    pub(crate) fn summary_of(&self, cells: impl Iterator<Item = usize>) -> PrismoidGridSummary {
         let (columns, rows) = (self.lattice.columns(), self.lattice.rows());
+        let (u_edges, v_edges) = (edges(&self.lattice.u_sizes), edges(&self.lattice.v_sizes));
+        let stretch = self.stretch();
         let mut thickness: Option<(f64, f64)> = None;
         let mut active_cells = 0;
-        for (cell, _) in self.active.iter().enumerate().filter(|(_, active)| **active) {
+        let density = self.cell_values.iter().find(|values| values.role == CellValueRole::Density);
+        let mut tonnes = density.map(|_| NumericTotal::default());
+        let mut qualities: Vec<(&CellValues, NumericTotal)> = self
+            .cell_values
+            .iter()
+            .filter(|values| values.role == CellValueRole::Quality)
+            .map(|values| (values, NumericTotal::default()))
+            .collect();
+        let mut volume = 0.0;
+        for cell in cells {
             active_cells += 1;
             let (column, row) = (cell % columns, cell / columns);
             for corner in [
@@ -618,17 +756,10 @@ impl PrismoidGrid {
                 let height = self.roof[corner] - self.floor[corner];
                 thickness = Some(thickness.map_or((height, height), |(min, max)| (min.min(height), max.max(height))));
             }
-        }
-        let density = self.cell_values.iter().find(|values| values.role == CellValueRole::Density);
-        let mut tonnes = density.map(|_| NumericTotal::default());
-        let mut qualities: Vec<(&CellValues, NumericTotal)> = self
-            .cell_values
-            .iter()
-            .filter(|values| values.role == CellValueRole::Quality)
-            .map(|values| (values, NumericTotal::default()))
-            .collect();
-        let mut volume = 0.0;
-        for measure in self.cell_measures(None) {
+            // A box with no height holds nothing, as `blocks` leaves it out.
+            let Some((_, measure)) = self.measure_in(cell, &u_edges, &v_edges, stretch) else {
+                continue;
+            };
             let cell_volume = measure.volume();
             volume += cell_volume;
             let cell_tonnes = density.map(|density| density.values[measure.cell].map(|value| measure.per_volume(value)));

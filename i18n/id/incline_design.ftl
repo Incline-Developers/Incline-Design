@@ -415,6 +415,25 @@ borehole-inspector-set-side = Kolom set
 borehole-inspector-strat = Strat
 borehole-inspector-strat-column = Kolom strat
 borehole-inspector-summary = Ringkasan
+prismoid-inspector-by-tonnes = ton, dari { $density }
+prismoid-inspector-by-volume = volume, tanpa densitas
+prismoid-inspector-cell = Sel
+prismoid-inspector-cell-index = Kolom { $column }, baris { $row }
+prismoid-inspector-cells = Sel
+prismoid-inspector-corner = Sudut { $column }, { $row }
+prismoid-inspector-mean-thickness = Ketebalan vertikal rata-rata
+prismoid-inspector-no-density = Grid tidak memiliki densitas
+prismoid-inspector-no-density-value = Sel ini tidak memiliki nilai { $density }
+prismoid-inspector-no-value = Tidak ada nilai
+prismoid-inspector-partial = 
+    Sebagian: { $counted ->
+        [one] { $counted } sel dihitung
+       *[other] { $counted } sel dihitung
+    }, { $left } dilewati
+prismoid-inspector-plan-size = { $along_u } kali { $along_v }
+prismoid-inspector-range = { $min } hingga { $max }
+prismoid-inspector-tonnes = Ton
+prismoid-inspector-vertical-thickness = Ketebalan vertikal
 canvas-circle-summary = Lingkaran | Lapisan: { $layer } | radius { $radius }
 
 ## Canvas strings

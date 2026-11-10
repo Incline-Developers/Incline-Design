@@ -456,6 +456,25 @@ borehole-inspector-set-side = Säule des Datensatzes
 borehole-inspector-strat = Strat
 borehole-inspector-strat-column = Strat-Säule
 borehole-inspector-summary = Zusammenfassung
+prismoid-inspector-by-tonnes = Tonnen, aus { $density }
+prismoid-inspector-by-volume = Volumen, keine Dichte
+prismoid-inspector-cell = Zelle
+prismoid-inspector-cell-index = Spalte { $column }, Zeile { $row }
+prismoid-inspector-cells = Zellen
+prismoid-inspector-corner = Ecke { $column }, { $row }
+prismoid-inspector-mean-thickness = Mittlere vertikale Mächtigkeit
+prismoid-inspector-no-density = Das Gitter hat keine Dichte
+prismoid-inspector-no-density-value = Diese Zelle hat keinen Wert für { $density }
+prismoid-inspector-no-value = Kein Wert
+prismoid-inspector-partial = 
+    Teilweise: { $counted ->
+        [one] { $counted } Zelle
+       *[other] { $counted } Zellen
+    } gezählt, { $left } ausgelassen
+prismoid-inspector-plan-size = { $along_u } mal { $along_v }
+prismoid-inspector-range = { $min } bis { $max }
+prismoid-inspector-tonnes = Tonnen
+prismoid-inspector-vertical-thickness = Vertikale Mächtigkeit
 canvas-circle-summary = Kreis | Ebene: { $layer } | Radius { $radius }
 
 ## Canvas strings

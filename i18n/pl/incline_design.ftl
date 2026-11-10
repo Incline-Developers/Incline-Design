@@ -485,6 +485,25 @@ borehole-inspector-set-side = Kolumna zbioru
 borehole-inspector-strat = Stratygrafia
 borehole-inspector-strat-column = Kolumna stratygraficzna
 borehole-inspector-summary = Podsumowanie
+prismoid-inspector-by-tonnes = tony, z { $density }
+prismoid-inspector-by-volume = objętość, brak gęstości
+prismoid-inspector-cell = Komórka
+prismoid-inspector-cell-index = Kolumna { $column }, wiersz { $row }
+prismoid-inspector-cells = Komórki
+prismoid-inspector-corner = Narożnik { $column }, { $row }
+prismoid-inspector-mean-thickness = Średnia grubość pionowa
+prismoid-inspector-no-density = Siatka nie ma gęstości
+prismoid-inspector-no-density-value = Ta komórka nie ma wartości { $density }
+prismoid-inspector-no-value = Brak wartości
+prismoid-inspector-partial = 
+    Częściowo: { $counted ->
+        [one] { $counted } komórka policzona
+       *[other] { $counted } komórek policzonych
+    }, pominięte: { $left }
+prismoid-inspector-plan-size = { $along_u } na { $along_v }
+prismoid-inspector-range = { $min } do { $max }
+prismoid-inspector-tonnes = Tony
+prismoid-inspector-vertical-thickness = Grubość pionowa
 canvas-circle-summary = Okrąg | Warstwa: { $layer } | promień { $radius }
 
 ## Canvas strings

@@ -841,6 +841,43 @@ pub(crate) struct DigBlockInfo {
     pub(crate) replaces: Vec<crate::model::DigBlockId>,
 }
 
+/// The prismoids picked on one drawn grid, with what the view outlines,
+/// derived App-side at each change.
+#[derive(Clone, Debug)]
+pub(crate) struct CellSelection {
+    pub(crate) entity: SceneEntityId,
+    pub(crate) grid: std::sync::Arc<crate::model::prismoid_grid::PrismoidGrid>,
+    /// The grid's name as the rows read it, followed on a rename.
+    pub(crate) name: String,
+    /// One flag per cell, in cell order.
+    pub(crate) cells: Vec<bool>,
+    pub(crate) count: usize,
+    /// Moves on every change, so the outline is rebuilt only then.
+    pub(crate) revision: u64,
+    /// Roof and floor segments round the rim of the selected cells.
+    pub(crate) outline: Vec<[DVec3; 2]>,
+    pub(crate) rows: InspectorRows,
+}
+
+/// What the inspector reads out about a pick, formatted App-side: one
+/// table of properties and one of contents.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct InspectorRows {
+    /// The properties table's title.
+    pub(crate) title: String,
+    pub(crate) properties: Vec<InspectorRow>,
+    pub(crate) contents: Vec<InspectorRow>,
+}
+
+/// One read-only row: a key, a value, its unit, and a note on the value.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct InspectorRow {
+    pub(crate) key: String,
+    pub(crate) value: String,
+    pub(crate) unit: Option<String>,
+    pub(crate) note: Option<String>,
+}
+
 /// One stage's status as the step tree reads it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PlanningStageView {
@@ -2880,6 +2917,8 @@ pub(crate) struct EditorState {
     /// The selected dig block as the figures panel reports it: identity,
     /// parents and what it is worth. Mirrored out of the committed artifacts.
     pub(crate) selected_dig_block_info: Option<DigBlockInfo>,
+    /// The prismoids picked on a drawn grid, in Geology.
+    pub(crate) cell_selection: Option<CellSelection>,
     /// Lines copied in a planning cut step, and whether they came from Dig
     /// Strips (flitch strips) or Blasting (bench blast lines): each pastes
     /// only into the step it was copied from.
@@ -4952,6 +4991,7 @@ impl EditorState {
             solid_preview_pivot: None,
             solid_preview_image_revision: 0,
             selected_dig_block_info: None,
+            cell_selection: None,
             cut_clipboard: (false, Vec::new()),
             selected_blast: None,
             scroll_to_blast: false,
