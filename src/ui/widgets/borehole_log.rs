@@ -4,7 +4,10 @@
 
 use std::{fmt::Debug, hash::Hash};
 
-use super::viewport::{Outline, format_grade, outlined_galley, trim_decimal_zeros};
+use super::{
+    hint::Hint,
+    viewport::{Outline, format_grade, outlined_galley, trim_decimal_zeros},
+};
 use crate::{
     i18n::tr,
     ui::{
@@ -354,7 +357,7 @@ impl<'a> BoreholeLog<'a> {
         // The compass has its own drag zone, separate from the plot's.
         let spin = ui
             .interact(compass, self.id.with("compass"), egui::Sense::click_and_drag())
-            .on_hover_text(tr!("viewport-drag-spin-view-around-hole"));
+            .hint(tr!("viewport-drag-spin-view-around-hole"));
         if spin.dragged() {
             azimuth = spun(azimuth, spin.drag_delta().x);
         }
@@ -440,7 +443,7 @@ impl<'a> BoreholeLog<'a> {
                 let fit = ContextMenuAction::new(tr!("viewport-fit-hole-track"))
                     .checked(squeeze == LogSqueeze::Fit)
                     .show(ui)
-                    .on_hover_text(tr!("viewport-squeeze-sideways-just-enough-keep"));
+                    .hint(tr!("viewport-squeeze-sideways-just-enough-keep"));
                 if fit.clicked() {
                     squeeze = LogSqueeze::Fit;
                     ui.close();
@@ -469,7 +472,7 @@ impl<'a> BoreholeLog<'a> {
             && let Some(pointer) = handle.hover_pos()
         {
             let depth = depth_at(plot, view, pointer.y);
-            handle.clone().on_hover_ui_at_pointer(|ui| log_traces::readout(ui, &traces, depth, &style));
+            handle.clone().hint_ui_at_pointer(|ui| log_traces::readout(ui, &traces, depth, &style));
         }
         if handle.hovered() && plot.height() > 0.0 {
             // Read and then spent, so a scroll aimed at the log zooms it.
@@ -613,9 +616,9 @@ impl<'a> BoreholeLog<'a> {
         buttons.set_clip_rect(room.intersect(ui.clip_rect()));
         let reset = buttons
             .add(menu::MenuButton::new(tr!("common-reset-view")).enabled(zoomed))
-            .on_hover_text(tr!("viewport-back-whole-log"))
+            .hint(tr!("viewport-back-whole-log"))
             // Disabled exactly when the log already shows the whole hole.
-            .on_disabled_hover_text(tr!("viewport-roll-wheel-over-log-zoom"))
+            .disabled_hint(tr!("viewport-roll-wheel-over-log-zoom"))
             .clicked();
 
         // Painted, not laid out, and dropped when the width is not there.

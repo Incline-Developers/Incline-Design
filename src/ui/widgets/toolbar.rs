@@ -3,6 +3,7 @@ use std::hash::Hash;
 use egui::{Color32, Response, Sense, Stroke, Ui, Vec2};
 use strum::IntoEnumIterator;
 
+use super::hint::Hint;
 use crate::{i18n::tr, ui::state::ToolHatch};
 
 /// A consistently styled icon button for application toolbars.
@@ -66,7 +67,8 @@ impl egui::Widget for ToolbarButton {
 
         let icon_rect = egui::Align2::CENTER_CENTER.align_size_within_rect(self.icon_size, rect);
         self.icon.fit_to_exact_size(self.icon_size).paint_at(ui, icon_rect);
-        response.on_hover_text(self.tooltip)
+        // A button whose icon says it all is given no tooltip.
+        if self.tooltip.is_empty() { response } else { response.hint(self.tooltip) }
     }
 }
 
@@ -116,7 +118,7 @@ impl<'a> HatchPicker<'a> {
                 }
             })
             .response
-            .on_hover_text(format!("{}: {}", tr!("toolbar-fill-type"), hatch_label(*self.selected_hatch)));
+            .hint(format!("{}: {}", tr!("toolbar-fill-type"), hatch_label(*self.selected_hatch)));
 
         let swatch_rect = egui::Rect::from_center_size(response.rect.center(), self.button_size);
 

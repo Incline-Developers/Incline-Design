@@ -24,12 +24,12 @@ pub(crate) fn date_popup(response: &egui::Response, current: Option<NaiveDate>) 
                 .data(|data| data.get_temp::<NaiveDate>(month_id))
                 .unwrap_or_else(|| current.unwrap_or(today).with_day(1).expect("day 1 exists"));
             ui.horizontal(|ui| {
-                if ui.small_button("‹").on_hover_text(tr!("date-picker-previous")).clicked() {
+                if ui.small_button("‹").clicked() {
                     shown = shown.checked_sub_months(Months::new(1)).unwrap_or(shown);
                 }
                 let title = egui::RichText::new(tr!("date-picker-month-year", month = month_name(shown.month()), year = shown.year().to_string())).strong();
                 ui.add_sized(egui::vec2(CELL.x * 7.0 - 52.0, CELL.y), egui::Label::new(title));
-                if ui.small_button("›").on_hover_text(tr!("date-picker-next")).clicked() {
+                if ui.small_button("›").clicked() {
                     shown = shown.checked_add_months(Months::new(1)).unwrap_or(shown);
                 }
             });

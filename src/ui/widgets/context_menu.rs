@@ -12,6 +12,8 @@
 
 use std::{fmt::Debug, hash::Hash};
 
+use super::hint::Hint;
+
 const MENU_WIDTH: f32 = 220.0;
 const HEADER_HEIGHT: f32 = 20.0;
 const ROW_HEIGHT: f32 = 20.0;
@@ -357,11 +359,7 @@ impl ContextMenuAction {
                     ));
                 }
             }
-            if rect.width() + 0.5 < natural_width {
-                response.on_hover_text(full_label)
-            } else {
-                response
-            }
+            if rect.width() + 0.5 < natural_width { response.hint(full_label) } else { response }
         })
         .inner
     }
@@ -601,7 +599,7 @@ impl<'a> ChecklistRow<'a> {
             painter.text(egui::pos2(box_rect.right() + 5.0, rect.center().y), egui::Align2::LEFT_CENTER, label, font_id, text_color);
         }
         if rect.width() + 0.5 < natural {
-            response.on_hover_text(label.to_owned());
+            response.hint(label.to_owned());
         }
         out
     }

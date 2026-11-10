@@ -11,6 +11,7 @@ use crate::{
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
             explorer::{EntryToggles, ExplorerEntry, ExplorerHeader, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
+            hint::Hint,
             island::{Island, Side},
         },
     },
@@ -1071,7 +1072,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
             if row.lock_clicked {
                 commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
             }
-            let response = row.response.on_hover_text(&tri_path);
+            let response = row.response.hint(&tri_path);
             response.dnd_set_drag_payload(TriangulationDrag(FolderMember::item(tri.section, ItemRef::Triangulation(tri_id))));
             if response.dragged() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -1213,7 +1214,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     if row.lock_clicked {
                         commands.push(UiCommand::ToggleRasterLocked(raster.id));
                     }
-                    let response = row.response.on_hover_text(&details);
+                    let response = row.response.hint(&details);
                     response.dnd_set_drag_payload(RasterDrag(FolderMember::item(raster.section, ItemRef::Raster(raster.id))));
                     if response.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -1326,7 +1327,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     if row.lock_clicked {
                         commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
                     }
-                    let response = row.response.on_hover_text(&tooltip);
+                    let response = row.response.hint(&tooltip);
                     response.dnd_set_drag_payload(PointCloudDrag(FolderMember::item(point_cloud.section, ItemRef::PointCloud(point_cloud.id))));
                     if response.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -1425,7 +1426,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                         .as_deref()
                         .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
                         .unwrap_or_default();
-                    let response = row.response.on_hover_text(tr!(
+                    let response = row.response.hint(tr!(
                         "explorer-id-block-model-id-source",
                         id = block_model.id.0.to_string(),
                         source = block_model_source_suffix.to_string(),
@@ -1530,7 +1531,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     if row.lock_clicked {
                         commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
                     }
-                    let response = row.response.on_hover_text(&tooltip);
+                    let response = row.response.hint(&tooltip);
                     response.dnd_set_drag_payload(DrillHoleDrag(FolderMember::item(dataset.section, ItemRef::DrillHole(dataset.id))));
                     if response.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);

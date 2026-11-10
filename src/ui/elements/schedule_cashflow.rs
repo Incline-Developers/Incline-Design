@@ -24,6 +24,7 @@ use crate::{
             context_menu::{ChecklistRow, ContextMenuAction, Tick, checklist_popup, context_menu_popup, context_menu_separator},
             data_grid::{DataGrid, GridRow, PropertyTable, grid_add_action_row, grid_checkbox_row, grid_choice_row, grid_named_row, grid_row, grid_select_row, grid_separator_row},
             explorer::explorer_note,
+            hint::Hint,
             menu,
         },
     },
@@ -50,7 +51,10 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                     },
                 );
                 let disabled = (!rule.enabled).then(|| tr!("cashflow-rule-disabled"));
-                let response = grid_row(ui, GridRow::new(&label).error(disabled.as_deref()).selected(selected == Some(rule.id))).on_hover_text(format!("{}\n{}", label, summary));
+                let response = grid_row(
+                    ui,
+                    GridRow::new(&label).error(disabled.as_deref()).selected(selected == Some(rule.id)).hint(summary.as_str()),
+                );
                 if response.clicked() {
                     selected = Some(rule.id);
                 }
@@ -132,7 +136,7 @@ pub(crate) fn draw_rule_editor(
                 if cell.is_positive() {
                     let response = ui.put(cell, egui::TextEdit::singleline(&mut draft.name).desired_width(cell.width()));
                     if let Some(message) = &name_error {
-                        response.clone().on_hover_text(message);
+                        response.clone().hint(message);
                     }
                     if response.lost_focus() && name_error.is_none() && draft.name.trim() != rule.name {
                         edits.push(UiCommand::schedule(
@@ -155,7 +159,7 @@ pub(crate) fn draw_rule_editor(
                 if cell.is_positive() {
                     let response = ui.put(cell, egui::TextEdit::singleline(&mut draft.value).desired_width(cell.width()));
                     let note = value_error.clone().unwrap_or_else(|| tr!("cashflow-help"));
-                    response.clone().on_hover_text(note);
+                    response.clone().hint(note);
                     if response.lost_focus()
                         && let Ok(value_per_tonne) = parse_value(&draft.value)
                         && value_per_tonne != rule.value_per_tonne
@@ -436,7 +440,8 @@ pub(crate) fn draw_rule_editor(
                     .map(|field| field.name.clone())
                     .unwrap_or_else(|| tr!("destination-stage-field-missing"));
                 let label = condition.summary(&field_name);
-                let response = grid_row(ui, GridRow::new(&label)).on_hover_text(condition_note(document, condition));
+                let note = condition_note(document, condition);
+                let response = grid_row(ui, GridRow::new(&label).hint(note.as_str()));
                 context_menu_popup(&response, &label, |ui| {
                     if ContextMenuAction::new(tr!("destination-edit-condition")).show(ui).clicked() {
                         condition_action = Some(ConditionAction::Edit(condition.field));
@@ -490,8 +495,7 @@ pub(crate) fn draw_rule_editor(
 fn draw_empty(ui: &mut egui::Ui, rect: egui::Rect) {
     PropertyTable::new("schedule_cashflow_empty", rect, &tr!("cashflow")).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
-        rows.readonly(&tr!("cashflow-rule"), &tr!("cashflow-select-rule"), None, None)
-            .on_hover_text(tr!("cashflow-help"));
+        rows.readonly(&tr!("cashflow-rule"), &tr!("cashflow-select-rule"), None, None).hint(tr!("cashflow-help"));
     });
 }
 

@@ -2,6 +2,7 @@
 //! glyphs painted, shared by the blast review's timeline, Animate's playback
 //! and the Gantt's Inspector.
 
+use super::hint::Hint;
 use crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS;
 
 #[derive(Clone, Copy)]
@@ -16,7 +17,10 @@ pub(crate) enum Transport {
 
 /// A small square transport button with its glyph painted rather than set
 /// in type, so it does not depend on the UI font carrying media symbols.
-pub(crate) fn transport_button(ui: &mut egui::Ui, kind: Transport, tooltip: String) -> egui::Response {
+///
+/// The glyphs say what they do, so a button takes a hint only for what its
+/// glyph cannot show, such as how far a step goes.
+pub(crate) fn transport_button(ui: &mut egui::Ui, kind: Transport, hint: Option<String>) -> egui::Response {
     let side = ui.spacing().interact_size.y;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -62,5 +66,8 @@ pub(crate) fn transport_button(ui: &mut egui::Ui, kind: Transport, tooltip: Stri
             ui.painter().add(egui::Shape::line(points, egui::Stroke::new(1.8, color)));
         }
     }
-    response.on_hover_text(tooltip)
+    match hint {
+        Some(hint) => response.hint(hint),
+        None => response,
+    }
 }

@@ -30,6 +30,7 @@ use crate::{
                 DataGrid, GridRow, PropertyTable, grid_add_action_row, grid_cell_entry, grid_cell_entry_flagged, grid_cell_fixed, grid_checkbox_row, grid_columns_row,
                 grid_empty_state, grid_named_row, grid_row, grid_select_row, grid_separator_row,
             },
+            hint::Hint,
             menu,
         },
     },
@@ -229,8 +230,8 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
                 },
             ));
         }
-        response.on_hover_text(tr!("truck-default-fleet-help"));
-        if rows.action_row(&tr!("truck-open-calendar")).on_hover_text(tr!("truck-open-calendar-help")).clicked() {
+        response.hint(tr!("truck-default-fleet-help"));
+        if rows.action_row(&tr!("truck-open-calendar")).clicked() {
             open_calendar = true;
         }
     });
@@ -268,7 +269,7 @@ pub(crate) fn draw_grade_speeds(ui: &mut egui::Ui, rect: egui::Rect, editor: &Ed
     DataGrid::new("schedule_truck_grade_speeds", rect, &title)
         .columns(&columns)
         .add_button(&add_band, &mut add)
-        .title_action(&defaults, &defaults_help, &mut reset)
+        .title_action(&defaults, Some(&defaults_help), &mut reset)
         .show(ui, |ui| {
             let removable = class.grade_speeds.len() > 1;
             // A speed over the class's maximum is driven at the maximum.
@@ -346,7 +347,7 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                     .collect();
                 let label = format!("{} → {}", rule.name, classes.join(", "));
                 let disabled = (!rule.enabled).then(|| tr!("truck-rule-disabled"));
-                let response = grid_row(ui, GridRow::new(&label).error(disabled.as_deref()).selected(selected == Some(rule.id))).on_hover_text(&label);
+                let response = grid_row(ui, GridRow::new(&label).error(disabled.as_deref()).selected(selected == Some(rule.id)));
                 if response.clicked() {
                     selected = Some(rule.id);
                 }
@@ -431,7 +432,7 @@ pub(crate) fn draw_rule_editor(
                 if cell.is_positive() {
                     let response = ui.put(cell, egui::TextEdit::singleline(&mut draft.name).desired_width(cell.width()));
                     if let Some(message) = &name_error {
-                        response.clone().on_hover_text(message);
+                        response.clone().hint(message);
                     }
                     if response.lost_focus() && name_error.is_none() && draft.name.trim() != rule.name {
                         edits.push(UiCommand::schedule(

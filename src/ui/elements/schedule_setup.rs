@@ -22,6 +22,7 @@ use crate::{
                 DataGrid, GridDrag, GridRow, PropertyTable, grid_add_action_row, grid_empty_state, grid_group_row, grid_group_row_draggable, grid_row, property_table_height,
             },
             explorer::ExplorerEntry,
+            hint::Hint,
         },
     },
 };
@@ -102,7 +103,7 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
                 markers.push((rect, if empty { crate::app::planning_pipeline::StageState::NotRun } else { status.state }));
             }
             // The badge's reason, where the badge is.
-            let response = entry_response.response.on_hover_ui(|ui| {
+            let response = entry_response.response.hint_ui(|ui| {
                 if empty {
                     ui.label(bold(&tr!("stage-state-empty")));
                     ui.label(tr!("stage-empty-hint"));
@@ -366,7 +367,7 @@ pub(crate) fn draw_class_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
                         rate_with_unit(class.default_dig_rate_tph)
                     };
                     let label = format!("{} · {}", class.name, rate);
-                    let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(class.id))).on_hover_text(&label);
+                    let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(class.id)));
                     if response.clicked() {
                         selected = Some(class.id);
                     }
@@ -379,7 +380,7 @@ pub(crate) fn draw_class_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
                             commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteClass(class.id)));
                             ui.close();
                         }
-                        delete.on_disabled_hover_text(tr!("schedule-error-class-in-use", agents = users.join(", ")));
+                        delete.disabled_hint(tr!("schedule-error-class-in-use", agents = users.join(", ")));
                     });
                 }
             }
@@ -473,7 +474,7 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
                     &type_label,
                     crate::model::schedule::LoaderType::ALL.map(|loader_type| (loader_type, loader_type.label())),
                 )
-                .on_hover_text(tr!("loader-type-help"))
+                .hint(tr!("loader-type-help"))
                 .changed()
             {
                 edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassLoaderType { class: class.id, loader_type }));
@@ -498,7 +499,6 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
         let loader = !class.kind.is_drill_blast();
         if loader {
             let reclaim = rows.field(&tr!("schedule-class-reclaim-rate"), &mut draft.reclaim_rate, reclaim_error.as_deref());
-            reclaim.clone().on_hover_text(tr!("schedule-class-reclaim-rate-help"));
             if reclaim.lost_focus()
                 && let Ok(value) = parse_rate(&draft.reclaim_rate)
                 && value != class.default_reclaim_rate_tph
@@ -560,7 +560,7 @@ pub(crate) fn draw_agent_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
                         .map(|class| class.name.clone())
                         .unwrap_or_else(|| tr!("schedule-error-unknown-class"));
                     let label = format!("{} · {}", agent.name, class);
-                    let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(agent.id)).draggable()).on_hover_text(&label);
+                    let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(agent.id)).draggable());
                     span = span.union(response.rect);
                     drag.row(MachineDrag::Machine(agent.id), run, response.rect, &response);
                     if response.clicked() {

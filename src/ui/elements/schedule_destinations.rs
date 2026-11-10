@@ -31,6 +31,7 @@ use crate::{
                 grid_select_row, grid_separator_row, property_table_height,
             },
             explorer::explorer_note,
+            hint::Hint,
             menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldText},
         },
     },
@@ -465,7 +466,7 @@ pub(crate) fn draw_stockpile(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
 
         rows.section(&tr!("pile-operation"));
         let mut simultaneous = operation.simultaneous;
-        rows.checkbox(&tr!("pile-simultaneous"), &mut simultaneous).on_hover_text(tr!("pile-simultaneous-help"));
+        rows.checkbox(&tr!("pile-simultaneous"), &mut simultaneous).hint(tr!("pile-simultaneous-help"));
         if simultaneous != operation.simultaneous {
             edits.push(UiCommand::schedule(
                 session,
@@ -479,7 +480,7 @@ pub(crate) fn draw_stockpile(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
         let rest_error = parse_rest(&draft.rest).err();
         let response = rows.field_with_unit(&tr!("pile-rest"), &mut draft.rest, "h", rest_error.as_deref());
         let committed = response.lost_focus();
-        response.on_hover_text(tr!("pile-rest-help"));
+        response.hint(tr!("pile-rest-help"));
         if committed
             && let Ok(rest_h) = parse_rest(&draft.rest)
             && rest_h != operation.rest_h
@@ -513,7 +514,7 @@ pub(crate) fn draw_stockpile(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
             &representation.label(),
             [StockpileRepresentation::Blended, StockpileRepresentation::Chunks].map(|option| (option, option.label())),
         );
-        response.on_hover_text(if chunked { tr!("experiment-chunks-help") } else { tr!("experiment-blended-help") });
+        response.hint(if chunked { tr!("experiment-chunks-help") } else { tr!("experiment-blended-help") });
         if chosen != representation {
             edits.push(UiCommand::schedule(
                 session,
@@ -539,7 +540,7 @@ pub(crate) fn draw_stockpile(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
             }
             let response = rows.field_with_unit(&tr!("experiment-chunk-size"), &mut draft.chunk, "t", chunk_error.as_deref());
             let committed = response.lost_focus();
-            response.on_hover_text(tr!("experiment-chunks-help"));
+            response.hint(tr!("experiment-chunks-help"));
             if committed
                 && let Ok(chunk) = parse_chunk(&draft.chunk)
                 && chunk != chunk_t
@@ -738,7 +739,7 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                 let disabled = (!rule.enabled).then(|| tr!("destination-rule-disabled"));
                 let unrouted = no_target.then(|| tr!("destination-rule-no-target-warning"));
                 let row = GridRow::new(&label).error(disabled.as_deref()).warning(unrouted.as_deref());
-                let response = grid_row(ui, row.selected(selected == Some(rule.id))).on_hover_text(format!("{}\n{}", label, summary));
+                let response = grid_row(ui, row.selected(selected == Some(rule.id)).hint(summary.as_str()));
                 if response.clicked() {
                     selected = Some(rule.id);
                 }
@@ -833,7 +834,7 @@ pub(crate) fn draw_rule_editor(
                 if cell.is_positive() {
                     let response = ui.put(cell, egui::TextEdit::singleline(&mut draft.name).desired_width(cell.width()));
                     if let Some(message) = &name_error {
-                        response.clone().on_hover_text(message);
+                        response.clone().hint(message);
                     }
                     if response.lost_focus() && name_error.is_none() && draft.name.trim() != rule.name {
                         edits.push(UiCommand::schedule(
@@ -1004,7 +1005,8 @@ pub(crate) fn draw_rule_editor(
                     .map(|field| field.name.clone())
                     .unwrap_or_else(|| tr!("destination-stage-field-missing"));
                 let label = condition.summary(&field_name);
-                let response = grid_row(ui, GridRow::new(&label)).on_hover_text(condition_note(document, condition));
+                let note = condition_note(document, condition);
+                let response = grid_row(ui, GridRow::new(&label).hint(note.as_str()));
                 context_menu_popup(&response, &label, |ui| {
                     if ContextMenuAction::new(tr!("destination-edit-condition")).show(ui).clicked() {
                         condition_action = Some(ConditionAction::Edit(condition.field));
@@ -1901,7 +1903,7 @@ fn draw_lot_editor(
             if cell.is_positive() {
                 let response = ui.put(cell, egui::TextEdit::singleline(&mut draft.name).desired_width(cell.width()));
                 if let Some(message) = &name_error {
-                    response.clone().on_hover_text(message);
+                    response.clone().hint(message);
                 }
                 if response.lost_focus() && name_error.is_none() && draft.name.trim() != lot.name {
                     edits.push(UiCommand::schedule(
@@ -1952,7 +1954,7 @@ fn draw_lot_editor(
                     let error = parse_lot_tonnes(text).err();
                     let response = ui.put(cell, egui::TextEdit::singleline(text).desired_width(cell.width()));
                     if let Some(message) = &error {
-                        response.clone().on_hover_text(message);
+                        response.clone().hint(message);
                     }
                     if response.lost_focus()
                         && let Ok(tonnes_t) = parse_lot_tonnes(text)
@@ -1997,7 +1999,7 @@ fn draw_lot_editor(
                     let label = |value: &Option<String>| value.clone().unwrap_or_else(|| tr!("inventory-portion-missing"));
                     let (cell, response) = grid_named_row(ui, &display_name, depth);
                     if !compatible {
-                        response.on_hover_text(tr!("inventory-field-incompatible-note"));
+                        response.hint(tr!("inventory-field-incompatible-note"));
                     }
                     if cell.is_positive() {
                         let id = egui::Id::unique(("lot_category", portion.id.0, field.0));
@@ -2032,7 +2034,7 @@ fn draw_lot_editor(
                 }
                 let (cell, response) = grid_named_row(ui, &display_name, depth);
                 if !compatible {
-                    response.on_hover_text(tr!("inventory-field-incompatible-note"));
+                    response.hint(tr!("inventory-field-incompatible-note"));
                 }
                 if !cell.is_positive() {
                     continue;
@@ -2056,7 +2058,7 @@ fn draw_lot_editor(
                 }
                 let response = ui.put(cell, egui::TextEdit::singleline(text).desired_width(cell.width()));
                 if let Some(message) = &error {
-                    response.clone().on_hover_text(message);
+                    response.clone().hint(message);
                 }
                 if response.lost_focus()
                     && let Ok(value) = parse_lot_value(text)

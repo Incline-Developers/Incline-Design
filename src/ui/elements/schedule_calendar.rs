@@ -29,6 +29,7 @@ use crate::{
     ui::{
         EditorState, UiProjectView, chrome,
         state::{CalendarCellAddress, CalendarCellDraft, CalendarOwner, CalendarRow, CalendarSelection, ScheduleEdit, ScheduleStep, UiCommand},
+        widgets::hint::Hint,
     },
 };
 
@@ -407,16 +408,11 @@ fn draw_rows_panel(
     let before = view.clone();
     let (mut close, mut save, mut delete) = (false, false, false);
     let title = tr!("calendar-rows");
-    let (close_help, save_label, save_help, delete_label) = (
-        tr!("inspector-collapse"),
-        tr!("calendar-view-save"),
-        tr!("calendar-view-save-help"),
-        tr!("calendar-view-delete"),
-    );
-    let mut grid = DataGrid::new("schedule_calendar_rows", rect, &title).title_close(&close_help, &mut close);
+    let (save_label, delete_label) = (tr!("calendar-view-save"), tr!("calendar-view-delete"));
+    let mut grid = DataGrid::new("schedule_calendar_rows", rect, &title).title_close(&mut close);
     grid = match saved {
-        Some(_) => grid.title_action(&delete_label, &delete_label, &mut delete),
-        None => grid.title_action(&save_label, &save_help, &mut save),
+        Some(_) => grid.title_action(&delete_label, None, &mut delete),
+        None => grid.title_action(&save_label, None, &mut save),
     };
     let mut moved = None;
     let mut switched = false;
@@ -627,7 +623,8 @@ pub(crate) fn draw_report_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan
     let ready = editor.schedule_result.is_some();
     let button = ui
         .add(crate::ui::widgets::menu::MenuButton::new(tr!("report-export")).enabled(ready))
-        .on_hover_text(if ready { tr!("report-export-help") } else { tr!("report-export-unavailable") });
+        .hint(tr!("report-export-help"))
+        .disabled_hint(tr!("report-export-unavailable"));
     let text = |editor: &EditorState, separator: char| -> Option<(String, String)> {
         let schedule = editor.schedule_result.as_deref()?;
         let destinations = destinations::available(document.solids(), plan.routing())
@@ -677,7 +674,7 @@ pub(crate) fn draw_report_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan
             }
         }
         context_menu_separator(ui);
-        if ContextMenuAction::new(tr!("report-copy")).show(ui).on_hover_text(tr!("report-copy-help")).clicked() {
+        if ContextMenuAction::new(tr!("report-copy")).show(ui).hint(tr!("report-copy-help")).clicked() {
             if let Some((_, text)) = text(editor, '\t') {
                 ui.ctx().copy_text(text);
                 crate::userspace_log!("{}", tr!("report-copied"));
@@ -1080,7 +1077,7 @@ fn paint_header(ui: &mut egui::Ui, rect: egui::Rect, text: String, hover: Option
     ui.painter().rect_filled(rect, 0.0, super::schedule_gantt::ruler_fill(ui.visuals()));
     let response = ui.put(rect.shrink(5.0), egui::Label::new(crate::ui::fonts::bold(&text)).truncate());
     if let Some(hover) = hover {
-        response.on_hover_text(hover);
+        response.hint(hover);
     }
 }
 
@@ -1218,7 +1215,7 @@ fn draw_row(
                 let label_rect = egui::Rect::from_min_max(egui::pos2(label_start, rect.top()), egui::pos2(hierarchy.right(), rect.bottom()));
                 let response = ui
                     .interact(label_rect, ui.scope_id().with(("schedule_calendar_grade", destination, field)), egui::Sense::click())
-                    .on_hover_text(tr!("grade-calendar-expand-help"));
+                    .hint(tr!("grade-calendar-expand-help"));
                 paint_label(
                     ui,
                     hierarchy,
@@ -1276,7 +1273,7 @@ fn draw_row(
                     // hover away, as on every day's cell.
                     if matches!(kind, CalendarRow::Value | CalendarRow::GradePenalty) {
                         ui.interact(total_rect, ui.scope_id().with(("schedule_calendar_total", owner, kind)), egui::Sense::hover())
-                            .on_hover_text(crate::model::schedule::cashflow::money_exact(total));
+                            .hint(crate::model::schedule::cashflow::money_exact(total));
                     }
                 }
             }
@@ -1552,7 +1549,7 @@ fn draw_cell(
     if editor.schedule_calendar.mode_menu == Some(address) {
         draw_mode_menu(ui, rect, address, editor, plan, session, commands);
     } else if let Some(hover) = hover_text(plan, destinations, agent, figures, address) {
-        response.on_hover_text(hover);
+        response.hint(hover);
     }
 }
 

@@ -16,7 +16,10 @@ use crate::{
         EditorState, UiProjectView,
         state::{ActiveTool, CursorMode, UiCommand, Workspace},
         themed_icon, unthemed_icon,
-        widgets::toolbar::{TOOL_CELL_SIZE, ToolbarButton},
+        widgets::{
+            hint::Hint,
+            toolbar::{TOOL_CELL_SIZE, ToolbarButton},
+        },
     },
 };
 
@@ -279,7 +282,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         .selected(selected);
     let mut response = ui.add_enabled_ui(tool.enabled, |ui| ui.add(button)).inner;
     if let Some(hint) = tool.hint.as_deref() {
-        response = response.on_disabled_hover_text(hint);
+        response = response.disabled_hint(hint);
     }
     if !response.clicked() {
         return;

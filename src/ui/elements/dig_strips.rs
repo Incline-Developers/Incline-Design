@@ -12,6 +12,7 @@ use crate::{
         widgets::{
             context_menu::context_menu_popup,
             data_grid::{DataGrid, grid_cell_entry, grid_columns_row, grid_empty_state, grid_group_row},
+            hint::Hint,
             island::{Island, IslandResponse, Side},
         },
     },
@@ -36,7 +37,7 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                     // blocks, as the Blasts panel carries the minimum blast.
                     if let Some(solid) = editor.solids_view_selection.first().and_then(|row| document.solid(row.solid)) {
                         let (response, cells) = grid_columns_row(ui, &FRACTIONS, &[&tr!("planning-min-strip-area"), ""], false);
-                        response.on_hover_text(tr!("planning-min-strip-area-help"));
+                        response.hint(tr!("planning-min-strip-area-help"));
                         let mut area = solid.exclusions.min_strip_area;
                         if grid_cell_entry(ui, ("planning_min_strip_area", solid.id), cells[1], &mut area, "m²") {
                             commands.push(UiCommand::UpdateSolid {

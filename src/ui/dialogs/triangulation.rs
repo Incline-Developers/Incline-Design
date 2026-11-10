@@ -8,8 +8,9 @@ use crate::{
         state::{
             ContourOutputLayer, EditorState, SolidRegion, TriCreatePhase, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriangulationPickTarget, UiCommand, UiProjectView,
         },
-        widgets::menu::{
-            self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRange, MenuFieldText, MenuFieldU32, selected_source_field,
+        widgets::{
+            hint::Hint,
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRange, MenuFieldText, MenuFieldU32, selected_source_field},
         },
     },
 };
@@ -210,12 +211,10 @@ fn triangulation_picker_field_with_width(
                         ui.separator();
                         ui.label(egui::RichText::new(tr!("triangulation-picker-loaded-only")).weak());
                     }
-                })
-                .response
-                .on_hover_text(selected_text);
+                });
             pick_clicked = ui
                 .add(MenuButton::new(pick_label).min_width(pick_width))
-                .on_hover_text(tr!("tri-choose-input-clicking-loaded-surface"))
+                .hint(tr!("tri-choose-input-clicking-loaded-surface"))
                 .clicked();
         })
         .response
@@ -316,7 +315,6 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
 
             // --- Name + Triangulate ---
             MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_name_input)
-                .help_text(tr!("tri-create-output-name-help"))
                 .width(PICK_SELECTOR_WIDTH)
                 .hint_text(tr!("tri-create-output-name-hint"))
                 .show(ui);
@@ -491,9 +489,7 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                 .width(width)
                 .hint_text(tr!("tri-e-g-mysurf-cut"))
                 .show(ui);
-            MenuFieldBool::new(tr!("tri-unload-source-surface"), &mut editor.tri_cut_poly_unload_source)
-                .help_text(tr!("tri-once-clip-succeeds-unload-source"))
-                .show(ui);
+            MenuFieldBool::new(tr!("tri-unload-source-surface"), &mut editor.tri_cut_poly_unload_source).show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -548,20 +544,16 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
                 &mut editor.tri_cut_z_max_input,
                 z_low..=z_high,
             )
-            .help_text(tr!("tri-minimum-maximum-elevations-retained"))
             .width(width)
             .show(ui);
 
             ui.add_space(4.0);
 
             MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_cut_z_name_input)
-                .help_text(tr!("tri-slice-output-name-help"))
                 .width(width)
                 .hint_text(tr!("tri-e-g-mysurf-slice"))
                 .show(ui);
-            MenuFieldBool::new(tr!("tri-unload-source-surface"), &mut editor.tri_cut_z_unload_source)
-                .help_text(tr!("tri-once-slice-succeeds-unload-source"))
-                .show(ui);
+            MenuFieldBool::new(tr!("tri-unload-source-surface"), &mut editor.tri_cut_z_unload_source).show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -698,7 +690,6 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             );
 
             if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_cut_surface_name_input)
-                .help_text(tr!("tri-name-assigned-trimmed-output-surface"))
                 .width(picker_control_width(ui))
                 .hint_text(tr!("tri-e-g-design-trimmed"))
                 .show(ui)
@@ -706,9 +697,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             {
                 editor.tri_cut_surface_name_auto = false;
             }
-            MenuFieldBool::new(tr!("tri-unload-source-surface"), &mut editor.tri_cut_surface_unload_source)
-                .help_text(tr!("tri-once-trim-succeeds-unload-surface"))
-                .show(ui);
+            MenuFieldBool::new(tr!("tri-unload-source-surface"), &mut editor.tri_cut_surface_unload_source).show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -827,7 +816,6 @@ pub(crate) fn draw_build_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             tool_help_panel(ui, tr!("tri-encloses-over-area-two", region = editor.tri_solid_region.description().to_string()));
 
             if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_solid_name_input)
-                .help_text(tr!("tri-name-assigned-solid"))
                 .width(picker_control_width(ui))
                 .hint_text(tr!("tri-north-pit-solid"))
                 .show(ui)
@@ -943,7 +931,6 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
             tool_help_panel(ui, tr!("tri-removes-topology-where-pit-shell"));
 
             if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_cut_pitshell_name_input)
-                .help_text(tr!("tri-name-assigned-topology-after-pit"))
                 .width(picker_control_width(ui))
                 .hint_text(tr!("tri-e-g-topo-cut"))
                 .show(ui)
@@ -951,9 +938,7 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
             {
                 editor.tri_cut_pitshell_name_auto = false;
             }
-            MenuFieldBool::new(tr!("tri-unload-source-topology"), &mut editor.tri_cut_pitshell_unload_source)
-                .help_text(tr!("tri-once-cut-succeeds-unload-original"))
-                .show(ui);
+            MenuFieldBool::new(tr!("tri-unload-source-topology"), &mut editor.tri_cut_pitshell_unload_source).show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -1056,7 +1041,6 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
             }
 
             if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_include_solid_name_input)
-                .help_text(tr!("tri-name-assigned-merged-topology-pit"))
                 .width(picker_control_width(ui))
                 .hint_text(tr!("tri-e-g-topo-pit"))
                 .show(ui)
@@ -1067,9 +1051,7 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
             MenuFieldBool::new(tr!("tri-save-two-entities"), &mut editor.tri_include_solid_save_as_two)
                 .help_text(tr!("tri-keep-clipped-topology-included-shape"))
                 .show(ui);
-            MenuFieldBool::new(tr!("tri-hide-unload-sources"), &mut editor.tri_include_solid_hide_old)
-                .help_text(tr!("tri-once-merge-succeeds-unload-source"))
-                .show(ui);
+            MenuFieldBool::new(tr!("tri-hide-unload-sources"), &mut editor.tri_include_solid_hide_old).show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -1159,9 +1141,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
             editor.tri_contour_minor_color = color32_to_rgba(minor_color);
             editor.tri_contour_major_color = color32_to_rgba(major_color);
 
-            MenuFieldBool::new(tr!("tri-limit-z-range"), &mut editor.tri_contour_use_z_range)
-                .help_text(tr!("tri-when-enabled-generate-contours-only"))
-                .show(ui);
+            MenuFieldBool::new(tr!("tri-limit-z-range"), &mut editor.tri_contour_use_z_range).show(ui);
             if editor.tri_contour_use_z_range {
                 let (z_low, z_high) = editor.tri_contour_z_limits;
                 MenuFieldRange::new(
@@ -1193,13 +1173,11 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                 output_layer_label,
                 std::iter::once((None, tr!("tri-new-layer").into())).chain(active_layers.iter().map(|layer| (Some(layer.id), layer.name.clone().into()))),
             )
-            .help_text(tr!("tri-create-new-layer-contours-append"))
             .width(control_width)
             .show(ui);
 
             if editor.tri_contour_target_layer.is_none()
                 && MenuFieldText::new(tr!("tri-new-layer-name"), &mut editor.tri_contour_layer_name_input)
-                    .help_text(tr!("tri-name-assigned-newly-created-contour"))
                     .width(control_width)
                     .hint_text(tr!("tri-e-g-surface-contour"))
                     .show(ui)
@@ -1345,7 +1323,6 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
                 budget_label,
                 [(true, tr!("tri-percentage-cloud").into()), (false, tr!("tri-vertex-count").into())],
             )
-            .help_text(tr!("tri-cap-surface-share-source-points"))
             .width(220.0)
             .show(ui);
 
@@ -1437,7 +1414,6 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
             ui.separator();
 
             MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.point_cloud_tin_name_input)
-                .help_text(tr!("tri-reconstruct-output-name-help"))
                 .width(220.0)
                 .hint_text(tr!("tri-type-open-surface"))
                 .show(ui);

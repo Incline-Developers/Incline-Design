@@ -27,6 +27,7 @@ use crate::{
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             explorer::{ExplorerEntry, ExplorerHeader, explorer_note},
+            hint::Hint,
         },
     },
 };
@@ -258,9 +259,9 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
         }
         let mut response = shown.response;
         if let Some(problem) = &problem {
-            response = response.on_hover_text(problem);
+            response = response.hint(problem);
         } else {
-            response = response.on_hover_text(rule_description(rule));
+            response = response.hint(rule_description(rule));
         }
         if response.clicked() {
             choose = Some(rule.name.clone());

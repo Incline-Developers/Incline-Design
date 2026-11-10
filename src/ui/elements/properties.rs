@@ -13,6 +13,7 @@ use crate::{
         widgets::{
             collapsible_section::CollapsibleSection,
             context_menu::{FIELD_WIDTH, context_menu_fields},
+            hint::Hint,
             menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, committed, menu_field_label},
             viewport::{BlockModelProperties, ViewportDockPanel},
         },
@@ -329,7 +330,7 @@ fn draw_block_model_heading_controls(
                         }
                     })
                     .response
-                    .on_hover_text(model.name.clone());
+                    .hint(model.name.clone());
             },
         );
     } else {
@@ -386,9 +387,7 @@ fn settings_section(
         let restore_clicked = ui
             .scope(|ui| {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                ui.add_enabled(draft != restored, egui::Button::new(tr!("properties-restore-defaults")))
-                    .on_hover_text(tr!("properties-restore-defaults-tooltip", heading = heading))
-                    .clicked()
+                ui.add_enabled(draft != restored, egui::Button::new(tr!("properties-restore-defaults"))).clicked()
             })
             .inner;
         if restore_clicked {

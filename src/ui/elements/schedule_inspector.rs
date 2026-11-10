@@ -32,6 +32,7 @@ use crate::{
         },
         fonts::bold,
         state::GanttView,
+        widgets::hint::Hint,
     },
 };
 
@@ -73,24 +74,20 @@ pub(crate) fn draw_inspector(
 
     let hour = editor.schedule_time_h.max(0.0);
     ui.horizontal(|ui| {
-        ui.label(bold(&instant_label(hour * GanttView::HOUR)).size(16.0)).on_hover_text(tr!("gantt-inspector-help"));
+        ui.label(bold(&instant_label(hour * GanttView::HOUR)).size(16.0)).hint(tr!("gantt-inspector-help"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             // Rightmost, where a panel's close belongs. It collapses the
             // panel to a strip down the edge, pressed to open it again.
-            if ui
-                .add(egui::Button::image(crate::ui::themed_icon!(ui, "close_project.svg")).frame(false))
-                .on_hover_text(tr!("inspector-collapse"))
-                .clicked()
-            {
+            if ui.add(egui::Button::image(crate::ui::themed_icon!(ui, "close_project.svg")).frame(false)).clicked() {
                 editor.show_schedule_inspector = false;
             }
             ui.add_space(4.0);
             use crate::ui::widgets::transport::{Transport, transport_button};
-            if transport_button(ui, Transport::StepForward, tr!("inspector-next-hour")).clicked() {
+            if transport_button(ui, Transport::StepForward, Some(tr!("inspector-next-hour"))).clicked() {
                 editor.schedule_time_h = editor.schedule_time_h.floor() + 1.0;
             }
-            if transport_button(ui, Transport::StepBack, tr!("inspector-previous-hour")).clicked() {
+            if transport_button(ui, Transport::StepBack, Some(tr!("inspector-previous-hour"))).clicked() {
                 editor.schedule_time_h = (editor.schedule_time_h.ceil() - 1.0).max(0.0);
             }
         });
@@ -433,7 +430,7 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
                 (tooltip, rest) => tooltip.or(rest),
             };
             if let Some(text) = text {
-                response.on_hover_text(text);
+                response.hint(text);
             }
         }
     }
@@ -555,7 +552,7 @@ fn stockpiles(ui: &mut egui::Ui, plan: &SchedulePlan, destinations: &[Destinatio
         }
         let response = draw_entry(ui, &entry);
         if !lines.is_empty() {
-            response.on_hover_text(lines.join("\n"));
+            response.hint(lines.join("\n"));
         }
     }
 }
@@ -638,7 +635,7 @@ fn crushers(ui: &mut egui::Ui, plan: &SchedulePlan, destinations: &[DestinationV
         }
         let response = draw_entry(ui, &entry);
         if !lines.is_empty() {
-            response.on_hover_text(lines.join("\n"));
+            response.hint(lines.join("\n"));
         }
     }
 }
@@ -708,7 +705,7 @@ fn trucks(ui: &mut egui::Ui, plan: &SchedulePlan, schedule: &CalculatedSchedule,
                 haul.distance_km()
             );
         }
-        draw_entry(ui, &entry).on_hover_text(help);
+        draw_entry(ui, &entry).hint(help);
     }
 }
 

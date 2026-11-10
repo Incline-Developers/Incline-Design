@@ -9,7 +9,7 @@
 //! given a rect of unbounded height, is as tall as its rows, so that several
 //! can follow one another in a [`table_stack`] and scroll as one.
 
-use super::explorer::row_height;
+use super::{explorer::row_height, hint::Hint};
 use crate::ui::{fonts::bold, unthemed_icon};
 
 /// Height of the bold section-title strip above a grid's rows.
@@ -112,11 +112,8 @@ fn framed_pane<R>(ui: &mut egui::Ui, id: &str, rect: egui::Rect, title: &str, ex
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(4.0);
-                if let Some((tooltip, clicked)) = extras.close {
-                    *clicked |= ui
-                        .add(egui::Button::image(crate::ui::themed_icon!(ui, "close_project.svg")).frame(false))
-                        .on_hover_text(tooltip)
-                        .clicked();
+                if let Some(clicked) = extras.close {
+                    *clicked |= ui.add(egui::Button::image(crate::ui::themed_icon!(ui, "close_project.svg")).frame(false)).clicked();
                 }
                 if let Some((tooltip, clicked)) = extras.add {
                     *clicked |= add_button(ui, (id, "title_add"), tooltip).clicked();
@@ -125,9 +122,14 @@ fn framed_pane<R>(ui: &mut egui::Ui, id: &str, rect: egui::Rect, title: &str, ex
                     ui.add_space(4.0);
                     ui.add(super::menu::SlidingToggle::new(value).label(label));
                 }
-                if let Some((label, tooltip, clicked)) = extras.action {
+                if let Some((label, hint, clicked)) = extras.action {
                     ui.add_space(4.0);
-                    *clicked |= ui.add(super::menu::MenuButton::new(label)).on_hover_text(tooltip).clicked();
+                    let response = ui.add(super::menu::MenuButton::new(label));
+                    let response = match hint {
+                        Some(hint) => response.hint(hint),
+                        None => response,
+                    };
+                    *clicked |= response.clicked();
                 }
             });
         });
@@ -181,11 +183,12 @@ struct TitleExtras<'a> {
     add: Option<(&'a str, &'a mut bool)>,
     /// A switch at the right, for a setting of the whole pane.
     toggle: Option<(&'a str, &'a mut bool)>,
-    /// A button at the right that acts on the whole pane, with its tooltip.
-    action: Option<(&'a str, &'a str, &'a mut bool)>,
+    /// A button at the right that acts on the whole pane, with a hint when
+    /// its label needs one.
+    action: Option<(&'a str, Option<&'a str>, &'a mut bool)>,
     /// A close button at the far right, for a pane in a panel that folds
-    /// away, with its tooltip.
-    close: Option<(&'a str, &'a mut bool)>,
+    /// away.
+    close: Option<&'a mut bool>,
 }
 
 /// One row in a [`DataGrid`].
@@ -196,6 +199,7 @@ pub(crate) struct GridRow<'a> {
     draggable: bool,
     error: Option<&'a str>,
     warning: Option<&'a str>,
+    hint: Option<&'a str>,
 }
 
 impl<'a> GridRow<'a> {
@@ -208,6 +212,7 @@ impl<'a> GridRow<'a> {
             draggable: false,
             error: None,
             warning: None,
+            hint: None,
         }
     }
 
@@ -220,6 +225,7 @@ impl<'a> GridRow<'a> {
             draggable: false,
             error: None,
             warning: None,
+            hint: None,
         }
     }
 
@@ -241,6 +247,13 @@ impl<'a> GridRow<'a> {
         self
     }
 
+    /// More about the row on hover, under its label when the row cuts that
+    /// short. Without one, a cut-short label is all the hover shows.
+    pub(crate) fn hint(mut self, hint: impl Into<Option<&'a str>>) -> Self {
+        self.hint = hint.into();
+        self
+    }
+
     /// Marks the row amber, with `message` on hover. An error outranks it.
     pub(crate) fn warning(mut self, message: Option<&'a str>) -> Self {
         self.warning = message;
@@ -257,6 +270,7 @@ pub(crate) fn grid_row(ui: &mut egui::Ui, row: GridRow<'_>) -> egui::Response {
         draggable,
         error,
         warning,
+        hint,
     } = row;
     let height = grid_row_height(ui);
     let sense = if header {
@@ -298,7 +312,7 @@ pub(crate) fn grid_row(ui: &mut egui::Ui, row: GridRow<'_>) -> egui::Response {
     if let Some((icon, message)) = mark {
         let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 12.0, rect.center().y), egui::vec2(16.0, 16.0));
         egui::Image::new(icon).paint_at(ui, icon_rect);
-        ui.interact(icon_rect, response.id.with("error_hint"), egui::Sense::hover()).on_hover_text(message);
+        ui.interact(icon_rect, response.id.with("error_hint"), egui::Sense::hover()).hint(message);
     }
     let text = if header { bold(label) } else { egui::RichText::new(label) }.color(text_color);
     let galley = egui::WidgetText::from(text).into_galley(
@@ -307,8 +321,14 @@ pub(crate) fn grid_row(ui: &mut egui::Ui, row: GridRow<'_>) -> egui::Response {
         (rect.right() - gutter - 16.0 - if marked { 20.0 } else { 0.0 }).max(0.0),
         egui::TextStyle::Body,
     );
+    let elided = galley.elided;
     ui.painter().galley(egui::pos2(gutter + 8.0, rect.center().y - galley.size().y * 0.5), galley, text_color);
-    response
+    match (elided, hint) {
+        (true, Some(hint)) => response.hint(format!("{label}\n{hint}")),
+        (true, None) => response.hint(label),
+        (false, Some(hint)) => response.hint(hint),
+        (false, None) => response,
+    }
 }
 
 /// The frame every named row shares: the fill, the rules and the name, with
@@ -737,7 +757,7 @@ pub(crate) fn grid_cell_warning(ui: &mut egui::Ui, id: impl std::hash::Hash + st
     const SIDE: f32 = 14.0;
     let mark = egui::Rect::from_center_size(egui::pos2(cell.right() - CELL_WARNING_WIDTH / 2.0, cell.center().y), egui::Vec2::splat(SIDE));
     egui::Image::new(unthemed_icon!("step_warning.svg")).paint_at(ui, mark);
-    ui.interact(mark, egui::Id::unique(id), egui::Sense::hover()).on_hover_text(message);
+    ui.interact(mark, egui::Id::unique(id), egui::Sense::hover()).hint(message);
 }
 
 /// A collapsible group heading inside a grid. Returns whether the group is
@@ -1018,15 +1038,15 @@ impl<'a> DataGrid<'a> {
 
     /// A button at the right of the title strip that acts on everything in
     /// the pane; `clicked` is set when it is pressed.
-    pub(crate) fn title_action(mut self, label: &'a str, tooltip: &'a str, clicked: &'a mut bool) -> Self {
-        self.extras.action = Some((label, tooltip, clicked));
+    pub(crate) fn title_action(mut self, label: &'a str, hint: Option<&'a str>, clicked: &'a mut bool) -> Self {
+        self.extras.action = Some((label, hint, clicked));
         self
     }
 
     /// A close button at the far right of the title strip; `clicked` is set
     /// when it is pressed.
-    pub(crate) fn title_close(mut self, tooltip: &'a str, clicked: &'a mut bool) -> Self {
-        self.extras.close = Some((tooltip, clicked));
+    pub(crate) fn title_close(mut self, clicked: &'a mut bool) -> Self {
+        self.extras.close = Some(clicked);
         self
     }
 
@@ -1255,7 +1275,7 @@ impl PropertyRows<'_> {
         let rect = self.begin_table_row(false);
         let cell = egui::Rect::from_min_max(egui::pos2(rect.left() + GUTTER, rect.top()), rect.max);
         paint_cell_text(self.ui, cell, egui::RichText::new(text), self.ui.visuals().weak_text_color());
-        self.ui.interact(cell, self.scope().with(("note", text)), egui::Sense::hover()).on_hover_text(text);
+        self.ui.interact(cell, self.scope().with(("note", text)), egui::Sense::hover()).hint(text);
     }
 
     /// A row across both columns, `height` tall, drawn by `add` into the rect
@@ -1383,15 +1403,15 @@ impl PropertyRows<'_> {
             // cells need only text, bounded by the same row as their unit.
             let text_rect = value_rect.shrink2(egui::vec2(4.0, 0.0));
             let galley = egui::WidgetText::from(value.as_str()).into_galley(self.ui, Some(egui::TextWrapMode::Truncate), text_rect.width().max(0.0), egui::TextStyle::Body);
+            let elided = galley.elided;
             self.ui.painter().with_clip_rect(self.ui.clip_rect().intersect(value_rect)).galley(
                 egui::pos2(text_rect.left(), text_rect.center().y - galley.size().y * 0.5),
                 galley,
                 self.ui.visuals().text_color(),
             );
-            let response = self
-                .ui
-                .interact(value_rect, self.scope().with(("calculated", key)), egui::Sense::hover())
-                .on_hover_text(value.as_str());
+            let response = self.ui.interact(value_rect, self.scope().with(("calculated", key)), egui::Sense::hover());
+            // Only a value the cell cuts short is worth repeating on hover.
+            let response = if elided { response.hint(value.as_str()) } else { response };
             self.badge(rect, badge);
             return response;
         }
@@ -1421,7 +1441,7 @@ impl PropertyRows<'_> {
             Badge::Warning(message) => (unthemed_icon!("step_warning.svg"), message),
         };
         self.place(icon_rect, egui::Image::new(icon).fit_to_exact_size(icon_rect.size()).sense(egui::Sense::hover()))
-            .on_hover_text(message);
+            .hint(message);
     }
 
     /// Put `widget` in `rect` of a row already allocated. `Ui::put`, or a

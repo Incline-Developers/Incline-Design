@@ -7,6 +7,7 @@ use crate::{
         EditorState, chrome,
         state::PlaybackSpan,
         widgets::{
+            hint::Hint,
             menu::MenuButton,
             toolbar::GROUP_CORNER_RADIUS,
             transport::{Transport, transport_button},
@@ -249,7 +250,7 @@ fn draw_readout_row(
 
     let response = ui.interact(readout, ui.scope_id().with("schedule_animation_readout"), egui::Sense::hover());
     if editor.schedule_animation_enabled {
-        response.on_hover_ui(|ui| {
+        response.hint_ui(|ui| {
             if let Some(schedule) = &editor.schedule_result {
                 let destinations = crate::model::schedule::destinations::available(document.solids(), plan.routing());
                 for pile in &schedule.piles {
@@ -316,13 +317,13 @@ fn draw_playback_controls(ui: &mut egui::Ui, editor: &mut EditorState, horizon: 
     ui.spacing_mut().interact_size.y = READOUT_ROW_H;
     ui.spacing_mut().item_spacing.x = 4.0;
     if editor.schedule_animation_playing {
-        if transport_button(ui, Transport::Pause, tr!("animate-pause")).clicked() {
+        if transport_button(ui, Transport::Pause, None).clicked() {
             editor.schedule_animation_playing = false;
         }
-    } else if transport_button(ui, Transport::Play, tr!("animate-play")).clicked() {
+    } else if transport_button(ui, Transport::Play, None).clicked() {
         play(editor, horizon);
     }
-    if transport_button(ui, Transport::Rewind, tr!("animate-reset")).clicked() {
+    if transport_button(ui, Transport::Rewind, None).clicked() {
         editor.schedule_time_h = 0.0;
         editor.schedule_animation_playing = false;
     }
@@ -337,7 +338,7 @@ fn draw_playback_controls(ui: &mut egui::Ui, editor: &mut EditorState, horizon: 
             }
         })
         .response
-        .on_hover_text(tr!("animate-speed-note"));
+        .hint(tr!("animate-speed-note"));
     ui.label("=");
     ui.add(
         egui::DragValue::new(&mut editor.schedule_animation_play_seconds)
@@ -346,7 +347,7 @@ fn draw_playback_controls(ui: &mut egui::Ui, editor: &mut EditorState, horizon: 
             .max_decimals(1)
             .suffix(" s"),
     )
-    .on_hover_text(tr!("animate-speed-note"));
+    .hint(tr!("animate-speed-note"));
 }
 
 /// Paints one line centred in `rect`, shortened with an ellipsis rather than

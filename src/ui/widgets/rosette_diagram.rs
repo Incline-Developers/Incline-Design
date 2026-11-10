@@ -6,6 +6,7 @@
 //! is the rosette's meaning at a glance: one row is the whole oval in one
 //! colour, two rows are two halves, and so on.
 
+use super::hint::Hint;
 use crate::{i18n::tr, model::optimization::SlopeSector};
 
 pub(crate) const HEIGHT: f32 = 300.0;
@@ -152,7 +153,7 @@ pub(crate) fn draw_rosette(ui: &mut egui::Ui, sectors: &[SlopeSector]) {
             weak,
         );
     }
-    response.on_hover_text(tr!("opt-rosette-diagram-hover"));
+    response.hint(tr!("opt-rosette-diagram-hover"));
 }
 
 fn zone_colour(zone: usize) -> egui::Color32 {

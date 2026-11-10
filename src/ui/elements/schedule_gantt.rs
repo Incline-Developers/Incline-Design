@@ -62,6 +62,7 @@ use crate::{
         },
         widgets::{
             context_menu::{ContextMenu, ContextMenuAction, context_menu_fields, context_menu_popup, context_menu_separator},
+            hint::Hint,
             island::{Island, Side},
             menu::MenuButton,
             toolbar::{GROUP_CORNER_RADIUS, ToolbarButton},
@@ -526,7 +527,7 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
             .button_side(side)
             .id_salt(format!("{salt}_run_period")),
         )
-        .on_disabled_hover_text(held_note(tr!("schedule-run-period-note")))
+        .disabled_hint(held_note(tr!("schedule-run-period-note")))
         .clicked()
     {
         commands.push(UiCommand::RunSchedulePeriod);
@@ -541,7 +542,7 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
             .button_side(side)
             .id_salt(format!("{salt}_run_whole")),
         )
-        .on_disabled_hover_text(held_note(tr!("schedule-run-whole-note")))
+        .disabled_hint(held_note(tr!("schedule-run-whole-note")))
         .clicked()
     {
         commands.push(UiCommand::RunAllSchedulePeriods);
@@ -564,7 +565,7 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
             .id_salt(format!("{salt}_improve")),
         )
         // Held while any run is working, when it still says what that is.
-        .on_disabled_hover_text(hover(if editor.schedule_run_improve {
+        .disabled_hint(hover(if editor.schedule_run_improve {
             tr!("schedule-improving-note")
         } else {
             tr!("schedule-improve-note")
@@ -587,7 +588,7 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
             .button_side(side)
             .id_salt(format!("{salt}_run_cancel")),
         )
-        .on_disabled_hover_text(hover(tr!("schedule-run-cancel-note")))
+        .disabled_hint(hover(tr!("schedule-run-cancel-note")))
         .clicked()
     {
         // Stopping Improve keeps the best schedule it has found.
@@ -604,7 +605,7 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     let mut auto = editor.auto_run().all();
     if ui
         .add(crate::ui::widgets::menu::SlidingToggle::new(&mut auto).label(tr!("planning-auto")))
-        .on_hover_text(tr!("setup-auto-note"))
+        .hint(tr!("setup-auto-note"))
         .changed()
     {
         commands.push(UiCommand::SetAutoRun(crate::model::schedule::AutoRun::every(auto)));
@@ -991,7 +992,7 @@ pub(super) fn draw_time_slider(ui: &mut egui::Ui, ruler: egui::Rect, body: egui:
         let response = ui
             .interact(pill, ui.scope_id().with("gantt_slider_away"), egui::Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text(tr!("gantt-slider-away"));
+            .hint(tr!("gantt-slider-away"));
         if response.clicked() {
             editor.gantt.pan(seconds - editor.gantt.start_seconds - editor.gantt.span_seconds / 2.0);
         }
@@ -1338,11 +1339,12 @@ fn draw_rows(ui: &mut egui::Ui, header: egui::Rect, body: egui::Rect, stripe: eg
         ui.painter_at(body).line_segment([band.left_bottom(), band.right_bottom()], rule);
         ui.painter_at(header).line_segment([name_cell.left_bottom(), name_cell.right_bottom()], rule);
 
-        // Truncated with the full text on hover, so a long machine name is
-        // still readable without widening the column.
+        // Truncated, and only then with the full text on hover, so a long
+        // machine name is still readable without widening the column.
         let width = (name_cell.width() - 16.0).max(0.0);
         let name = egui::WidgetText::from(bold(&row.title).color(text_color)).into_galley(ui, Some(egui::TextWrapMode::Truncate), width, egui::TextStyle::Body);
         let detail = egui::WidgetText::from(egui::RichText::new(&row.subtitle).color(weak)).into_galley(ui, Some(egui::TextWrapMode::Truncate), width, egui::TextStyle::Body);
+        let cut_short = name.elided || detail.elided;
         let painter = ui.painter_at(header);
         painter.galley(egui::pos2(name_cell.left() + 8.0, name_cell.top() + 4.0), name, text_color);
         painter.galley(egui::pos2(name_cell.left() + 8.0, name_cell.top() + 4.0 + ROW_HEIGHT * 0.45), detail, weak);
@@ -1363,9 +1365,9 @@ fn draw_rows(ui: &mut egui::Ui, header: egui::Rect, body: egui::Rect, stripe: eg
             }
         }
         let hover = name_cell.intersect(header);
-        if hover.is_positive() {
+        if cut_short && hover.is_positive() {
             ui.interact(hover, ui.scope_id().with(("gantt_row", index)), egui::Sense::hover())
-                .on_hover_text(format!("{}\n{}", row.title, row.subtitle));
+                .hint(format!("{}\n{}", row.title, row.subtitle));
         }
     }
 }
@@ -1394,7 +1396,7 @@ fn draw_row_resize(ui: &mut egui::Ui, header: egui::Rect, editor: &mut EditorSta
         let response = ui
             .interact(grab, ui.scope_id().with(("gantt_row_edge", index)), egui::Sense::click_and_drag())
             .on_hover_cursor(egui::CursorIcon::ResizeVertical)
-            .on_hover_text(tr!("gantt-row-resize-help"));
+            .hint(tr!("gantt-row-resize-help"));
         if response.hovered() || response.dragged() {
             ui.painter()
                 .hline(header.x_range(), bottom, egui::Stroke::new(2.0, crate::ui::widgets::menu::accent_fill(ui.visuals())));
@@ -1727,7 +1729,7 @@ fn draw_idle(
         else {
             continue;
         };
-        response.on_hover_ui_at_pointer(|ui| {
+        response.hint_ui_at_pointer(|ui| {
             ui.set_max_width(420.0);
             let (name, note) = idle_reason_text(span.reason);
             ui.label(bold(&tr!("idle-title", reason = name)));
@@ -2329,7 +2331,7 @@ fn draw_bars(
                             let mark = egui::Rect::from_center_size(egui::pos2(rect.left() + 6.0 + marker.galley.size().x + 12.0, rect.center().y), egui::Vec2::splat(14.0));
                             if rect.intersect(body).contains_rect(mark) {
                                 egui::Image::new(crate::ui::unthemed_icon!("step_warning.svg")).paint_at(ui, mark);
-                                ui.interact(mark, ui.scope_id().with(("gantt_unworked", bar.id)), egui::Sense::hover()).on_hover_text(why);
+                                ui.interact(mark, ui.scope_id().with(("gantt_unworked", bar.id)), egui::Sense::hover()).hint(why);
                             }
                         }
                     }
@@ -2370,7 +2372,7 @@ fn draw_bars(
                                     .filter(|execution| execution.start_h <= at_h && at_h < execution.end_h)
                                     .collect();
                                 if !working.is_empty() {
-                                    hover.on_hover_ui_at_pointer(|ui| {
+                                    hover.hint_ui_at_pointer(|ui| {
                                         ui.set_min_width(260.0);
                                         for (index, execution) in working.iter().enumerate() {
                                             if index > 0 {
@@ -2588,7 +2590,7 @@ fn draw_bars(
                     });
                     // At the pointer: a bar can span the whole week, and its
                     // left edge says nothing about the hour being asked about.
-                    response.on_hover_ui_at_pointer(|ui| {
+                    response.hint_ui_at_pointer(|ui| {
                         ui.set_min_width(260.0);
                         ui.label(bar_tooltip(bar, report, window, schedule, plan));
                         // A delay list or roster under the pointer: the bar
@@ -2680,7 +2682,7 @@ fn draw_blast_band(ui: &mut egui::Ui, body: egui::Rect, band: egui::Rect, view: 
     if working.is_empty() {
         return;
     }
-    hover.on_hover_ui_at_pointer(|ui| {
+    hover.hint_ui_at_pointer(|ui| {
         ui.set_min_width(220.0);
         for row in working {
             let blast = &result.blasts[row.blast];
@@ -2743,7 +2745,7 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                 && let Some(pos) = response.hover_pos()
                 && let Some((heading, span)) = calendar_delay_tooltip(plan, agent, view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR)
             {
-                response.clone().on_hover_ui_at_pointer(|ui| {
+                response.clone().hint_ui_at_pointer(|ui| {
                     ui.label(bold(&heading));
                     ui.label(span);
                     ui.label(egui::RichText::new(tr!("gantt-delay-calendar-note")).weak());
@@ -2980,7 +2982,7 @@ fn draw_palette(ui: &mut egui::Ui, corner: egui::Rect, editor: &mut EditorState,
         let chip = egui::Rect::from_min_size(egui::pos2(inner.left() + column as f32 * (size.x + GAP), top + row as f32 * (size.y + GAP)), size);
         let response = ui
             .interact(chip, ui.scope_id().with(("gantt_palette", index)), egui::Sense::drag())
-            .on_hover_text(tr!("gantt-palette-hint", item = palette_label(item)));
+            .hint(tr!("gantt-palette-hint", item = palette_label(item)));
         let carried = editor.gantt_palette_drag == Some(item);
         let painter = ui.painter_at(chip);
         painter.rect_filled(chip, GROUP_CORNER_RADIUS, if response.hovered() || carried { hot } else { rest });
@@ -3476,7 +3478,7 @@ fn draw_blasting_row(
             .rect_stroke(span, GROUP_CORNER_RADIUS, egui::Stroke::new(1.0, BLAST_COLOR), egui::StrokeKind::Inside);
         let hit = ui.interact(span, ui.scope_id().with(("blast_window", window.id, start.to_bits())), egui::Sense::click());
         on_window |= hit.hovered();
-        hit.clone().on_hover_text(format!(
+        hit.clone().hint(format!(
             "{} — {}\n{}",
             instant_label(start * GanttView::HOUR),
             instant_label(end * GanttView::HOUR),
@@ -3529,7 +3531,7 @@ fn draw_blasting_row(
             .and_then(|result| result.blasts.get(marker.blast))
         {
             ui.interact(target, ui.scope_id().with(("blast_firing", marker.blast)), egui::Sense::hover())
-                .on_hover_text(tr!("blast-fired-at", at = instant_label(blast.fired_h.unwrap_or(0.0) * GanttView::HOUR)));
+                .hint(tr!("blast-fired-at", at = instant_label(blast.fired_h.unwrap_or(0.0) * GanttView::HOUR)));
         }
     }
 }

@@ -16,6 +16,7 @@ use crate::{
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::{DataGrid, grid_cell_entry, grid_columns_row, grid_empty_state, grid_group_row},
+            hint::Hint,
             island::{Island, IslandResponse, Side},
         },
     },
@@ -60,7 +61,7 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                         solid_open = grid_group_row(ui, ("planning_blasts_solid", outline.solid), name, &tr!("planning-blast-count", count = blasts), 0);
                         if solid_open && let Some(solid) = document.solid(outline.solid) {
                             let (response, cells) = grid_columns_row(ui, &FRACTIONS, &[&tr!("planning-min-blast-area"), ""], false);
-                            response.on_hover_text(tr!("planning-min-blast-area-help"));
+                            response.hint(tr!("planning-min-blast-area-help"));
                             let mut area = solid.exclusions.min_blast_area;
                             if grid_cell_entry(ui, ("planning_min_blast_area", outline.solid), cells[1], &mut area, "m²") {
                                 commands.push(UiCommand::UpdateSolid {
@@ -118,7 +119,7 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                     if response.double_clicked() {
                         commands.push(UiCommand::BeginRenameItem(RenameTarget::BlastShape(blast)));
                     }
-                    response.clone().on_hover_text(tr!("planning-double-click-rename"));
+                    response.clone().hint(tr!("planning-double-click-rename"));
                     context_menu_popup(&response, &outline.name, |ui| {
                         if outline_menu(ui, outline, OutlineKind::Blast, document, commands) {
                             ui.close();

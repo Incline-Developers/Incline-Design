@@ -63,7 +63,6 @@ pub(crate) fn draw_point_cloud_join_dialog(ui: &mut egui::Ui, editor: &mut Edito
             ui.separator();
 
             MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.point_cloud_join_name_input)
-                .help_text(tr!("point-cloud-name-assigned-joined-point-cloud"))
                 .width(220.0)
                 .hint_text(tr!("common-joined-cloud"))
                 .show(ui);

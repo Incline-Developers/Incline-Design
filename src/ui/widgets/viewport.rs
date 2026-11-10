@@ -1,5 +1,6 @@
 use std::{fmt::Debug, hash::Hash};
 
+use super::hint::Hint;
 use crate::{
     i18n::tr,
     model::block_model::{BlockModelSlice, Boundary, ColorTransferFunction, MAX_GRADIENT_ENTRIES, OpenBlockModel, color_variable_default, render_value_range},
@@ -169,7 +170,7 @@ fn section_header_with_reset(ui: &mut egui::Ui, heading: impl Into<String>, rese
     let response = ui
         .interact(reset_rect, ui.scope_id().with(("section_reset", heading.text())), egui::Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(reset_tooltip.into());
+        .hint(reset_tooltip.into());
     // Filled like the card's other buttons at rest, so it reads as one.
     let visuals = ui.visuals();
     let widget = if response.is_pointer_button_down_on() {
@@ -602,14 +603,12 @@ impl<'a> BlockModelProperties<'a> {
                         egui::vec2(value_width, row_height),
                         egui::DragValue::new(&mut slice.min[axis]).range(lower[axis]..=slice.max[axis]).speed(speed).max_decimals(4),
                     )
-                    .on_hover_text(tr!("viewport-axis-minimum", axis = label.to_string()))
                     .changed();
                 changed |= ui
                     .add_sized(
                         egui::vec2(value_width, row_height),
                         egui::DragValue::new(&mut slice.max[axis]).range(slice.min[axis]..=upper[axis]).speed(speed).max_decimals(4),
                     )
-                    .on_hover_text(tr!("viewport-axis-maximum", axis = label.to_string()))
                     .changed();
             });
         }
@@ -644,7 +643,7 @@ impl<'a> BlockModelProperties<'a> {
 
         let popup_id = self.id.with(("variable_popup", model.id));
         let open = egui::Popup::is_id_open(ui.ctx(), popup_id);
-        let button_response = variable_field(ui, content_width, open, &selected_name, &selected_detail).on_hover_text(tr!("viewport-choose-active-block-model-variable"));
+        let button_response = variable_field(ui, content_width, open, &selected_name, &selected_detail);
         ui.add_space(2.0);
 
         let _ = egui::Popup::menu(&button_response)
@@ -738,14 +737,7 @@ impl<'a> BlockModelProperties<'a> {
                         );
                         if !is_default || !model.hide_empty_color_values {
                             let mut srgba = straight_to_unmultiplied_srgba(color);
-                            if super::color::edit_srgba_unmultiplied(ui, &mut srgba)
-                                .on_hover_text(if is_default {
-                                    tr!("viewport-edit-colour-used-empty-values")
-                                } else {
-                                    tr!("viewport-edit-category-colour")
-                                })
-                                .changed()
-                            {
+                            if super::color::edit_srgba_unmultiplied(ui, &mut srgba).changed() {
                                 gradient.insert(code, unmultiplied_srgba_to_straight(srgba));
                                 changed = true;
                             }
@@ -1044,7 +1036,7 @@ impl<'a> BlockModelProperties<'a> {
                     super::color::edit_srgba_unmultiplied(ui, &mut srgba)
                 })
                 .inner
-                .on_hover_text(tr!("viewport-click-edit-color-right-click"));
+                .hint(tr!("viewport-click-edit-color-right-click"));
             let picker_remove_clicked =
                 (response.secondary_clicked() || (ui.rect_contains_pointer(swatch_rect) && ui.input(|input| input.pointer.secondary_clicked()))) && ramp.stops.len() > 1;
             if picker_remove_clicked {
@@ -1813,9 +1805,9 @@ impl ViewportMiniMap {
                     commands.push(UiCommand::SetSlicePreviewDetached(true));
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                response.on_hover_text(tr!("viewport-navigation-hint-detach"));
+                response.hint(tr!("viewport-navigation-hint-detach"));
                 #[cfg(target_arch = "wasm32")]
-                response.on_hover_text(tr!("viewport-navigation-hint"));
+                response.hint(tr!("viewport-navigation-hint"));
             });
     }
 }

@@ -32,6 +32,7 @@ use crate::{
                 grid_cell_warning, grid_columns_row, grid_empty_state, grid_group_row, grid_row, grid_separator_row, stack_slot, table_stack,
             },
             explorer::{ExplorerEntry, paint_fixed_stripes, reserve_fixed_stripes},
+            hint::Hint,
             island::{Island, Side},
         },
     },
@@ -99,7 +100,7 @@ fn draw_haulage_summary(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Editor
             for step in HaulageStep::ALL {
                 let state = editor.haulage_stages[step.index()].state.label();
                 let (response, _) = grid_columns_row(ui, &FRACTIONS, &[&step.label(), &state], false);
-                if response.on_hover_text(tr!("schedule-haulage-open")).clicked() {
+                if response.clicked() {
                     editor.open_haulage_step(step);
                 }
             }
@@ -157,7 +158,7 @@ fn draw_destination_connections(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
                         grid_cell_warning(ui, ("schedule_haul_warning", kind as u8, index, column), cells[column], &link.label());
                     }
                 }
-                open |= response.on_hover_text(tr!("haul-connections-open")).clicked();
+                open |= response.hint(tr!("haul-connections-open")).clicked();
             }
         }
     });
@@ -190,7 +191,7 @@ fn draw_pit_connections(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Editor
                 let missed = tr!("haul-link-pit-problem", missed = (pit.total - pit.reached).to_string(), total = pit.total.to_string());
                 grid_cell_warning(ui, ("schedule_haul_pit_warning", index), cells[1], &missed);
             }
-            open |= response.on_hover_text(tr!("haul-connections-open")).clicked();
+            open |= response.hint(tr!("haul-connections-open")).clicked();
         }
     });
     if open {
@@ -207,7 +208,7 @@ fn draw_solids_summary(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorS
         for step in SolidsStep::ALL {
             let state = editor.planning_stages[step.index()].state.label();
             let (response, _) = grid_columns_row(ui, &FRACTIONS, &[&step.label(), &state], false);
-            if response.on_hover_text(tr!("schedule-solids-open")).clicked() {
+            if response.clicked() {
                 editor.open_solids_step(step);
             }
         }
@@ -233,7 +234,7 @@ fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
             if let Some(rect) = entry_response.icon_rect {
                 markers.push((rect, if empty { crate::app::planning_pipeline::StageState::NotRun } else { status.state }));
             }
-            let response = entry_response.response.on_hover_ui(|ui| {
+            let response = entry_response.response.hint_ui(|ui| {
                 if empty {
                     ui.label(bold(&tr!("stage-state-empty")));
                     ui.label(tr!("stage-empty-hint"));
@@ -277,7 +278,7 @@ fn draw_solids_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
                 markers.push((rect, if empty { crate::app::planning_pipeline::StageState::NotRun } else { status.state }));
             }
             // The badge's reason, where the badge is.
-            let response = entry_response.response.on_hover_ui(|ui| {
+            let response = entry_response.response.hint_ui(|ui| {
                 if empty {
                     ui.label(bold(&tr!("stage-state-empty")));
                     ui.label(tr!("stage-empty-hint"));
@@ -369,7 +370,7 @@ fn draw_run_buttons(ui: &mut egui::Ui, salt: &'static str, running: bool, run_st
     };
     if running {
         return ui
-            .add(button(unthemed_icon!("stop.svg"), CANCEL_TINT, tr!("stage-cancel"), "cancel"))
+            .add(button(unthemed_icon!("stop.svg"), CANCEL_TINT, String::new(), "cancel"))
             .clicked()
             .then_some(RunAction::Cancel);
     }
@@ -377,14 +378,14 @@ fn draw_run_buttons(ui: &mut egui::Ui, salt: &'static str, running: bool, run_st
     if run_step
         && ui
             .add_enabled(!held, button(unthemed_icon!("play.svg"), RUN_STEP_TINT, tr!("stage-run-step"), "step"))
-            .on_disabled_hover_text(tr!("stage-auto-holds"))
+            .disabled_hint(tr!("stage-auto-holds"))
             .clicked()
     {
         action = Some(RunAction::Step);
     }
     if ui
         .add_enabled(!held, button(unthemed_icon!("play_all.svg"), RUN_ALL_TINT, tr!("stage-run-all"), "all"))
-        .on_disabled_hover_text(tr!("stage-auto-holds"))
+        .disabled_hint(tr!("stage-auto-holds"))
         .clicked()
     {
         action = Some(RunAction::All);
@@ -409,7 +410,7 @@ fn run_header(ui: &mut egui::Ui, group: SetupGroup, running: bool, run_step: boo
     let action = draw_run_buttons(ui, salt, running, run_step, held);
     ui.add_space(8.0);
     ui.add(crate::ui::widgets::menu::SlidingToggle::new(auto).label(tr!("planning-auto")))
-        .on_hover_text(tr!("setup-auto-note"));
+        .hint(tr!("setup-auto-note"));
     action
 }
 
@@ -806,11 +807,7 @@ fn draw_field_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
             let weights: Vec<_> = fields.iter().filter(|other| other.id != field.id && other.aggregation == ReserveAggregation::Sum).collect();
             let fixed = field.aggregation == ReserveAggregation::Category || weights_others;
             let (response, cells) = grid_columns_row(ui, &FRACTIONS, &[&field.name, if fixed { &combines } else { "" }], false);
-            let response = if weights_others {
-                response.on_hover_text(tr!("reserve-weights-others"))
-            } else {
-                response
-            };
+            let response = if weights_others { response.hint(tr!("reserve-weights-others")) } else { response };
             if !fixed {
                 let mut choice = field.aggregation;
                 let options = [
@@ -865,11 +862,15 @@ fn draw_block_model_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Edito
                 // it is listed as one beside the others rather than being
                 // spliced into every row of the list.
                 let label = if entry.dirty { format!("{} *", entry.name) } else { entry.name.clone() };
-                let response = grid_row(ui, GridRow::new(&label).selected(editor.planning_selected_block_model == Some(entry.id))).on_hover_text(tr!(
+                let extents = tr!(
                     "planning-extents",
                     lower = format!("{:.1}, {:.1}, {:.1}", entry.lower.x, entry.lower.y, entry.lower.z),
                     upper = format!("{:.1}, {:.1}, {:.1}", entry.upper.x, entry.upper.y, entry.upper.z)
-                ));
+                );
+                let response = grid_row(
+                    ui,
+                    GridRow::new(&label).selected(editor.planning_selected_block_model == Some(entry.id)).hint(extents.as_str()),
+                );
                 if response.clicked() {
                     editor.planning_selected_block_model = Some(entry.id);
                 }

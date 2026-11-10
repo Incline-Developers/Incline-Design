@@ -10,6 +10,7 @@ pub(crate) mod data_table;
 pub(crate) mod date_picker;
 pub(crate) mod editable_grid;
 pub(crate) mod explorer;
+pub(crate) mod hint;
 pub(crate) mod island;
 pub(crate) mod log_traces;
 pub(crate) mod menu;

@@ -22,6 +22,7 @@ use crate::{
         widgets::{
             context_menu::{ChecklistRow, Tick, checklist_popup},
             data_grid::{PropertyRows, PropertyTable},
+            hint::Hint,
             menu,
         },
     },
@@ -81,7 +82,7 @@ pub(crate) fn horizon_row(rows: &mut PropertyRows<'_>, editor: &mut EditorState,
             },
         ));
     }
-    response.on_hover_text(tr!("experiment-end-day-help"));
+    response.hint(tr!("experiment-end-day-help"));
 }
 
 /// Which grades the schedule carries: a summary that opens a checklist of
@@ -117,7 +118,7 @@ pub(crate) fn grades_row(rows: &mut PropertyRows<'_>, plan: &SchedulePlan, docum
         [] => tr!("experiment-grades-none"),
         names => names.join(", "),
     };
-    let response = rows.select(&tr!("experiment-grades"), &summary).on_hover_text(tr!("experiment-grade-units-help"));
+    let response = rows.select(&tr!("experiment-grades"), &summary).hint(tr!("experiment-grade-units-help"));
     checklist_popup(&response, tr!("experiment-grades"), 260.0, |ui| {
         if candidates.is_empty() {
             menu::menu_note(ui, no_grades.clone());
@@ -173,7 +174,7 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
                 },
             ));
         }
-        response.on_hover_text(tr!("experiment-interval-help"));
+        response.hint(tr!("experiment-interval-help"));
         let response = rows.field(
             &tr!("experiment-solve-seconds"),
             &mut draft.solve_seconds,

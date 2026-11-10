@@ -23,7 +23,10 @@ use crate::{
         EditorState, UiCommand, UiProjectView,
         elements::title_bar,
         state::{ActiveTool, Workspace},
-        widgets::page_tabs::{PageTab, PageTabsPaint},
+        widgets::{
+            hint::Hint,
+            page_tabs::{PageTab, PageTabsPaint},
+        },
     },
 };
 
@@ -417,9 +420,9 @@ fn draw_open_recent(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut V
             // the full path tells them apart.
             #[cfg(not(target_arch = "wasm32"))]
             let row = if missing {
-                row.on_disabled_hover_text(tr!("menu-file-recent-project-missing", path = entry.path.display().to_string()))
+                row.disabled_hint(tr!("menu-file-recent-project-missing", path = entry.path.display().to_string()))
             } else {
-                row.on_hover_text(entry.path.display().to_string())
+                row.hint(entry.path.display().to_string())
             };
             if row.clicked() {
                 #[cfg(not(target_arch = "wasm32"))]

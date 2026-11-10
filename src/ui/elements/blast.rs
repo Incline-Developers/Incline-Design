@@ -673,16 +673,16 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 if review.playing {
-                    if transport_button(ui, Transport::Pause, tr!("blast-pause")).clicked() {
+                    if transport_button(ui, Transport::Pause, None).clicked() {
                         review.playing = false;
                     }
-                } else if transport_button(ui, Transport::Play, tr!("blast-play")).clicked() {
+                } else if transport_button(ui, Transport::Play, None).clicked() {
                     if review.playhead_ms >= end {
                         review.playhead_ms = 0.0;
                     }
                     review.playing = true;
                 }
-                if transport_button(ui, Transport::Rewind, tr!("blast-back-start")).clicked() {
+                if transport_button(ui, Transport::Rewind, None).clicked() {
                     review.playhead_ms = 0.0;
                 }
                 ui.add_space(4.0);

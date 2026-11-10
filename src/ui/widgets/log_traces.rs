@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::hint::Hint;
 use crate::{
     i18n::tr,
     model::geophysics::{HoleLogs, LogKind, LogTrace},
@@ -732,10 +733,7 @@ pub(crate) fn menu(ui: &mut egui::Ui, column: TraceColumn, draft: &mut WellLogSt
         Some(range) => tr!("log-traces-percentile-range", range = range_label(column, range).to_string()),
         None => tr!("log-traces-percentile-range-no-data"),
     };
-    let auto_row = ContextMenuAction::new(tr!("log-traces-auto-from-hole"))
-        .checked(scale.auto)
-        .show(ui)
-        .on_hover_text(auto_hover);
+    let auto_row = ContextMenuAction::new(tr!("log-traces-auto-from-hole")).checked(scale.auto).show(ui).hint(auto_hover);
     if auto_row.clicked() {
         draft.set_scale(column, TraceScale { auto: true, range: scale.range });
         ui.close();

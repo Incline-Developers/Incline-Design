@@ -10,6 +10,7 @@
 
 use thousands::Separable;
 
+use super::hint::Hint;
 use crate::{
     i18n::tr,
     ui::{EditorState, widgets::shifted},
@@ -162,8 +163,11 @@ fn draw_ring(ui: &mut egui::Ui, status: &str, task: &str, fill: RingFill, end_in
         return;
     }
     // The label is elided to whatever the counts leave it, so a long one - a
-    // full export path, say - is only readable on hover.
-    response.on_hover_text(task);
+    // full export path, say - is only readable on hover. One shown whole
+    // has nothing more to say there.
+    if !task.is_empty() && task_galley.as_ref().is_none_or(|galley| galley.elided) {
+        response.hint(task);
+    }
 
     let center = egui::pos2(rect.right() - end_inset - diameter / 2.0, rect.center().y);
     paint_ring(ui, &painter, center, diameter, fill);

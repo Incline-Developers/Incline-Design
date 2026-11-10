@@ -18,6 +18,7 @@ use crate::{
         state::{DataMenu, EditorState, OmfExportSection, UiCommand, UiProjectView},
         widgets::{
             explorer::{ExplorerEntry, ExplorerHeader, explorer_note, row_height, stripe_bands},
+            hint::Hint,
             menu::{self, DragableMenu, MenuButton, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldFilePicker},
             toolbar::GROUP_CORNER_RADIUS,
             tree_row_colors,
@@ -458,7 +459,6 @@ fn draw_import_source_picker(
     empty_text: impl Into<egui::WidgetText>,
 ) {
     if MenuFieldFilePicker::new(label, selected_import_source_paths(editor))
-        .help_text(tr!("io-choose-source-file-files-import"))
         .empty_text(empty_text)
         .button_text(tr!("common-choose"))
         .width(FIELD_WIDTH)
@@ -590,7 +590,7 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                                         }
                                     });
                                 if let Some(help) = column_role_help(mapping.role, selected) {
-                                    combo.response.on_hover_text(help);
+                                    combo.response.hint(help);
                                 }
                             }
                         });

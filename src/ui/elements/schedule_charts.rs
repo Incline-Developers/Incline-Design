@@ -39,6 +39,7 @@ use crate::{
         },
         fonts::bold,
         state::{GanttView, UiCommand},
+        widgets::hint::Hint,
     },
 };
 
@@ -373,7 +374,7 @@ fn draw_chart(
         ChartKind::Grade(..) => tr!("charts-grade-help"),
         ChartKind::Received => tr!("charts-received-help"),
     };
-    ui.interact(header, ui.scope_id().with("header"), egui::Sense::hover()).on_hover_text(help);
+    ui.interact(header, ui.scope_id().with("header"), egui::Sense::hover()).hint(help);
 
     let columns = ((plot.width() / COLUMN_W).ceil().max(0.0)) as usize;
     let xs = (0..columns).map(|index| plot.left() + index as f32 * COLUMN_W);
@@ -718,7 +719,7 @@ fn draw_chart(
     }
     if let (Some(pos), Some(lines)) = (pointer, hover_lines) {
         painter.line_segment([egui::pos2(pos.x, plot.top()), egui::pos2(pos.x, plot.bottom())], egui::Stroke::new(1.0, weak));
-        response.on_hover_ui_at_pointer(|ui| {
+        response.hint_ui_at_pointer(|ui| {
             for (index, line) in lines.iter().enumerate() {
                 if index == 0 {
                     ui.label(bold(line));
@@ -822,7 +823,7 @@ fn draw_trucks(
             .calendar
             .values_at(CalendarPeriod((hour / SCHEDULE_PERIOD_H).floor().max(0.0) as u32))
             .effective_units();
-        ui.interact(plot, ui.scope_id().with("haul_truck_hover"), egui::Sense::hover()).on_hover_text(tr!(
+        ui.interact(plot, ui.scope_id().with("haul_truck_hover"), egui::Sense::hover()).hint(tr!(
             "inspector-trucks-in-use",
             busy = format!("{:.1}", schedule.trucks_in_use(id, hour)),
             fleet = super::schedule_inspector::fleet_text(fleet)

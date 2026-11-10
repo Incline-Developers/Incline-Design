@@ -24,6 +24,7 @@ use crate::{
         widgets::{
             context_menu::ContextMenuAction,
             data_grid::{DataGrid, PropertyRows, PropertyTable, grid_cell_entry, grid_cell_warning, grid_columns_row, grid_empty_state, stack_slot, table_stack},
+            hint::Hint,
             island::{Island, Side},
             menu,
         },
@@ -277,7 +278,7 @@ fn selection(
     };
     PropertyTable::new("haul_selection", rect, &title).show(ui, |rows| match picked {
         Picked::Drawing(points) => {
-            rows.readonly(&tr!("haul-points"), &points.to_string(), None, None).on_hover_text(tr!("haul-draw-help"));
+            rows.readonly(&tr!("haul-points"), &points.to_string(), None, None).hint(tr!("haul-draw-help"));
             rows.note(&tr!("haul-drawing-keys"));
             if rows.action_row(&tr!("haul-finish")).clicked() {
                 commands.push(UiCommand::FinishHaulRoad);
@@ -297,7 +298,7 @@ fn selection(
             rows.readonly(&tr!("haul-blocks"), &blocks.to_string(), None, None);
             rows.readonly(&tr!("haul-nodes"), &points.to_string(), None, None);
             rows.note(&tr!("haul-link-picking"));
-            if points > 0 && rows.action_row(&tr!("haul-join-blocks")).on_hover_text(tr!("haul-join-blocks-help")).clicked() {
+            if points > 0 && rows.action_row(&tr!("haul-join-blocks")).hint(tr!("haul-join-blocks-help")).clicked() {
                 commands.push(UiCommand::LinkHaulBlocks(std::mem::take(&mut editor.haul_link_points)));
             }
             if rows.action_row(&tr!("haul-cancel")).clicked() {
@@ -316,7 +317,7 @@ fn selection(
                     (true, None) => (tr!("haul-block-no-roads"), Some(tr!("haul-block-no-roads"))),
                 };
                 rows.readonly_warning(&tr!("haul-access"), &access, None, warning.as_deref())
-                    .on_hover_text(tr!("haul-connected-help"));
+                    .hint(tr!("haul-connected-help"));
                 for (index, (node, _)) in block.links.iter().enumerate() {
                     let key = if index == 0 { tr!("haul-joined-to") } else { String::new() };
                     rows.readonly(&key, &node_label(network, destinations, *node), None, None);
@@ -332,11 +333,11 @@ fn selection(
                     (far > 0).then(|| tr!("haul-out-of-reach-help")).as_deref(),
                 );
             }
-            if !network.roads.is_empty() && rows.action_row(&tr!("haul-link-pick")).on_hover_text(tr!("haul-link-help")).clicked() {
+            if !network.roads.is_empty() && rows.action_row(&tr!("haul-link-pick")).hint(tr!("haul-link-help")).clicked() {
                 editor.haul_link_pick = true;
                 editor.haul_link_points.clear();
             }
-            if blocks.iter().any(|b| !b.links.is_empty()) && rows.action_row(&tr!("haul-link-clear")).on_hover_text(tr!("haul-link-clear-help")).clicked() {
+            if blocks.iter().any(|b| !b.links.is_empty()) && rows.action_row(&tr!("haul-link-clear")).clicked() {
                 commands.push(UiCommand::LinkHaulBlocks(Vec::new()));
             }
             if blocks.len() == 1 && route_question(editor, network, destinations).is_none() {
@@ -369,7 +370,7 @@ fn selection(
                 Some("km/h"),
                 &tr!("haul-speed-limit-truck"),
             );
-            response.on_hover_text(tr!("haul-speed-limit-help"));
+            response.hint(tr!("haul-speed-limit-help"));
             if let Some(typed) = typed {
                 let limit = match typed.trim() {
                     "" => Some(None),
@@ -379,7 +380,7 @@ fn selection(
                     command(commands, session, HaulEdit::RoadProperties(roads.clone(), None, limit));
                 }
             }
-            if rows.action_row(&tr!("haul-delete")).on_hover_text(tr!("haul-delete-help")).clicked() {
+            if rows.action_row(&tr!("haul-delete")).hint(tr!("haul-delete-help")).clicked() {
                 command(commands, session, HaulEdit::Many(roads.iter().map(|id| HaulEdit::DeleteRoad(*id)).collect()));
             }
         }
@@ -406,7 +407,7 @@ fn selection(
                         RoleChoice::New(kind) => commands.push(UiCommand::NewHaulDestination { node: id, kind }),
                     }
                 }
-                response.on_hover_text(tr!("haul-role-help"));
+                response.hint(tr!("haul-role-help"));
                 for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
                     let current = format!("{:.2}", node.pos[axis]);
                     let (_, typed) = rows.committed_entry(("haul_node_pos", id, axis), label, &current, Some("m"));
@@ -418,16 +419,16 @@ fn selection(
                 }
             }
             if let [keep, remove] = nodes[..]
-                && rows.action_row(&tr!("haul-join-nodes")).on_hover_text(tr!("haul-join-nodes-help")).clicked()
+                && rows.action_row(&tr!("haul-join-nodes")).clicked()
             {
                 command(commands, session, HaulEdit::Join(keep, remove));
             }
-            if rows.action_row(&tr!("haul-delete")).on_hover_text(tr!("haul-delete-help")).clicked() {
+            if rows.action_row(&tr!("haul-delete")).hint(tr!("haul-delete-help")).clicked() {
                 delete(editor, network, &[], &nodes, session, commands);
             }
         }
         Picked::Mixed(roads, nodes) => {
-            if rows.action_row(&tr!("haul-delete")).on_hover_text(tr!("haul-delete-help")).clicked() {
+            if rows.action_row(&tr!("haul-delete")).hint(tr!("haul-delete-help")).clicked() {
                 delete(editor, network, &roads, &nodes, session, commands);
             }
         }
@@ -497,7 +498,6 @@ fn destination_access(
     }
     let response = rows.combo(("haul_destination_access", destination.id), &tr!("haul-dump-method"), &mut access, &current, options);
     let changed = response.changed();
-    response.on_hover_text(tr!("haul-method-help"));
     rows.note(&tr!("haul-route-hint-destination"));
     if !changed {
         return;
@@ -547,7 +547,7 @@ fn issues(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, network
                     let help = issue_help(issue.kind);
                     let (response, cells) = grid_columns_row(ui, &ISSUE_FRACTIONS, &[&issue.kind.label(), &subject], selected);
                     grid_cell_warning(ui, ("haul_issue_mark", index), cells[1], &help);
-                    if response.on_hover_text(help).clicked() {
+                    if response.hint(help).clicked() {
                         editor.selected_handles.clear();
                         editor.selected_handles.extend(entity);
                         editor.haul_selected_blocks = issue.blocks.clone();
@@ -605,7 +605,7 @@ fn draw_network_settings(ui: &mut egui::Ui, rect: egui::Rect, network: &HaulNetw
         .show(ui, |ui| {
             for (index, (label, help, mut value, range, suffix)) in fields.into_iter().enumerate() {
                 let (response, cells) = grid_columns_row(ui, &SETTING_FRACTIONS, &[&label, ""], false);
-                response.on_hover_text(&help);
+                response.hint(&help);
                 if grid_cell_entry(ui, ("haul_setting", index), cells[1], &mut value, suffix) {
                     let mut settings = current.clone();
                     *[
@@ -660,8 +660,8 @@ fn node_menu(
     let blocker = network.merge_blocker(id);
     let remove = ContextMenuAction::new(tr!("haul-remove-node")).enabled(blocker.is_none()).show(ui);
     let remove = match blocker {
-        Some(reason) => remove.on_disabled_hover_text(reason),
-        None => remove.on_hover_text(tr!("haul-remove-node-help")),
+        Some(reason) => remove.disabled_hint(reason),
+        None => remove.hint(tr!("haul-remove-node-help")),
     };
     if remove.clicked() {
         command(commands, session, HaulEdit::RemoveNode(id));
@@ -980,7 +980,7 @@ fn result(rows: &mut PropertyRows<'_>, route: &RouteCheck, project: &UiProjectVi
         });
         if let Some(rate) = rate {
             rows.readonly(&tr!("haul-match-short"), &format!("{:.1}", rate / per_truck), None, None)
-                .on_hover_text(tr!("haul-match-help"));
+                .hint(tr!("haul-match-help"));
         }
     }
     for (label, hours) in [
@@ -1098,7 +1098,7 @@ fn profile(ui: &mut egui::Ui, rect: egui::Rect, points: &[[f64; 3]]) {
             };
             let z = pair[0][1] + (pair[1][1] - pair[0][1]) * t;
             painter.line_segment([egui::pos2(pointer.x, plot.top()), egui::pos2(pointer.x, plot.bottom())], egui::Stroke::new(1.0, weak));
-            response.on_hover_text(tr!(
+            response.hint(tr!(
                 "haul-profile-hover",
                 distance = format!("{distance:.0}"),
                 elevation = format!("{z:.1}"),

@@ -25,6 +25,7 @@ use crate::{
         EditorState, UiProjectView,
         state::{ScheduleEdit, SequenceDraft, SequenceListDrag, SequenceListDragMode, UiCommand},
         widgets::{
+            hint::Hint,
             menu::{self, DragableMenu, MenuButton},
             toolbar::GROUP_CORNER_RADIUS,
         },
@@ -550,7 +551,7 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
         // A reason too long for the row is cut short there, and read in full
         // on hover.
         let response = match view.and_then(|view| view.unresolved.as_ref()) {
-            Some(reason) => response.on_hover_text(reason),
+            Some(reason) => response.hint(reason),
             None => response,
         };
         rows.push(rect);

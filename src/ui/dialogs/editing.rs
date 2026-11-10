@@ -8,6 +8,7 @@ use crate::{
         themed_icon,
         widgets::{
             context_menu::{ContextMenu, ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
+            hint::Hint,
             menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
             viewport::ViewportDockPanel,
         },
@@ -707,7 +708,7 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
                     );
                     #[cfg(not(target_arch = "wasm32"))]
                     let row = if missing {
-                        row.on_hover_text(tr!("menu-file-recent-project-missing", path = entry.path.display().to_string()))
+                        row.hint(tr!("menu-file-recent-project-missing", path = entry.path.display().to_string()))
                     } else {
                         row
                     };
@@ -976,10 +977,7 @@ pub(crate) fn draw_text_edit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComm
                 .suffix(tr!("common-degree-suffix"))
                 .show(ui)
                 .changed();
-            *geometry_dirty |= MenuFieldRgba::new(tr!("common-colour"), &mut editor.pending_text_color)
-                .help_text(tr!("edit-text-colour-opacity"))
-                .show(ui)
-                .changed();
+            *geometry_dirty |= MenuFieldRgba::new(tr!("common-colour"), &mut editor.pending_text_color).show(ui).changed();
 
             let apply_from_enter = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             let cancel_from_escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
@@ -1096,7 +1094,6 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
                 0.0..=f64::MAX
             };
             MenuFieldF64::new(value_label, &mut editor.offset_value_input, value_range)
-                .help_text(tr!("edit-value-help"))
                 .speed(0.1)
                 .suffix(tr!("common-m"))
                 .show(ui);
@@ -1205,7 +1202,6 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
         .min_width(310.0)
         .show(ui.ctx(), |ui| {
             MenuFieldF64::new(tr!("edit-berm-width"), &mut editor.batter_berm_width, 0.1..=500.0)
-                .help_text(tr!("edit-horizontal-width-each-flat-berm"))
                 .width(CONTROL_WIDTH)
                 .speed(0.1)
                 .max_decimals(2)
@@ -1218,7 +1214,6 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
                 .max_decimals(1)
                 .show(ui);
             MenuFieldF64::new(tr!("edit-bench-height"), &mut editor.batter_berm_bench_height, 0.1..=500.0)
-                .help_text(tr!("edit-vertical-rise-fall-each-bench"))
                 .width(CONTROL_WIDTH)
                 .speed(0.1)
                 .max_decimals(2)
@@ -1357,7 +1352,7 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
                         .speed(0.1)
                         .suffix(tr!("common-m"))
                         .show(ui);
-                    MenuField::new(tr!("edit-move-which-end")).help_text(tr!("edit-endpoint-help")).show(ui, |ui, _, _| {
+                    MenuField::new(tr!("edit-move-which-end")).show(ui, |ui, _, _| {
                         ui.horizontal(|ui| {
                             ui.selectable_value(&mut editor.relimit_resize_end, TrimEnd::Start, tr!("edit-start"));
                             ui.selectable_value(&mut editor.relimit_resize_end, TrimEnd::End, tr!("edit-end"));
@@ -1406,18 +1401,9 @@ pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, comma
         tr!("common-move-design")
     };
     ViewportDockPanel::new("move_panel", title, viewport_rect).min_width(210.0).show(ui.ctx(), |ui| {
-        let dx_resp = MenuFieldF64::new(tr!("edit-dx"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX)
-            .help_text(tr!("edit-translation-axis-help", axis = crate::model::survey::axis_name(0).to_string()))
-            .speed(0.1)
-            .show(ui);
-        let dy_resp = MenuFieldF64::new(tr!("edit-dy"), &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX)
-            .help_text(tr!("edit-translation-axis-help", axis = crate::model::survey::axis_name(1).to_string()))
-            .speed(0.1)
-            .show(ui);
-        let dz_resp = MenuFieldF64::new(tr!("edit-dz"), &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX)
-            .help_text(tr!("edit-translation-axis-help", axis = crate::model::survey::axis_name(2).to_string()))
-            .speed(0.1)
-            .show(ui);
+        let dx_resp = MenuFieldF64::new(tr!("edit-dx"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX).speed(0.1).show(ui);
+        let dy_resp = MenuFieldF64::new(tr!("edit-dy"), &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX).speed(0.1).show(ui);
+        let dz_resp = MenuFieldF64::new(tr!("edit-dz"), &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX).speed(0.1).show(ui);
         if dx_resp.changed() || dy_resp.changed() || dz_resp.changed() {
             commands.push(UiCommand::PreviewMoveDelta(glam::DVec3::new(
                 editor.move_panel_delta[0],
@@ -1627,7 +1613,6 @@ pub(crate) fn draw_slice_panel(ui: &mut egui::Ui, editor: &mut EditorState, comm
                 .suffix(tr!("common-m"))
                 .show(ui);
             MenuFieldF64::new(tr!("edit-speed"), &mut editor.slice_speed_input, 0.0..=1.0e6)
-                .help_text(tr!("edit-movement-speed-slice-when-using"))
                 .speed(1.0)
                 .suffix(tr!("edit-m-s"))
                 .show(ui);

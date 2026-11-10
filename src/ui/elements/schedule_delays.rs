@@ -19,6 +19,7 @@ use crate::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::{DataGrid, GridRow, PropertyRows, PropertyTable, grid_add_action_row, grid_row, grid_separator_row, stack_slot, table_stack},
             explorer::{explorer_note, row_height},
+            hint::Hint,
             toolbar::GROUP_CORNER_RADIUS,
         },
     },
@@ -248,9 +249,9 @@ fn combo_in<T: Clone + PartialEq>(ui: &mut egui::Ui, id: egui::Id, cell: egui::R
     changed
 }
 
-fn delete_button(ui: &mut egui::Ui, cell: egui::Rect, hint: String) -> bool {
+fn delete_button(ui: &mut egui::Ui, cell: egui::Rect) -> bool {
     let cell = egui::Rect::from_center_size(cell.center() - egui::vec2(4.0, 0.0), egui::vec2(20.0, cell.height()));
-    ui.put(cell, egui::Button::new("×").frame(false)).on_hover_text(hint).clicked()
+    ui.put(cell, egui::Button::new("×").frame(false)).clicked()
 }
 
 /// Every delay type: its colour and its name, with a row to add another.
@@ -289,7 +290,7 @@ fn draw_types(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pla
             let problem = super::schedule_setup::name_problem(name, taken.clone());
             let response = ui.put(cells[1], egui::TextEdit::singleline(name).desired_width(cells[1].width()));
             if let Some(message) = &problem {
-                response.clone().on_hover_text(message);
+                response.clone().hint(message);
             }
             if response.lost_focus() && problem.is_none() && name.trim() != entry.name {
                 edits.push(UiCommand::schedule(
@@ -300,7 +301,7 @@ fn draw_types(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pla
                     },
                 ));
             }
-            if delete_button(ui, end, tr!("delay-delete-type")) {
+            if delete_button(ui, end) {
                 edits.push(UiCommand::schedule(session, ScheduleEdit::DeleteDelayType(entry.id)));
             }
         }
@@ -392,7 +393,7 @@ fn draw_list(
         let fractions = [0.34, 0.27, 0.27, 0.12];
         let (paste_label, paste_hint) = (tr!("delay-paste-rows"), tr!("delay-paste-hint"));
         DataGrid::new("schedule_delay_list", stack_slot(ui), &tr!("delay-entries"))
-            .title_action(&paste_label, &paste_hint, &mut open_paste)
+            .title_action(&paste_label, Some(&paste_hint), &mut open_paste)
             .show(ui, |ui| {
                 header_row(ui, &fractions, 32.0, &[tr!("delay-machine"), tr!("delay-start"), tr!("delay-end"), tr!("delay-hours")]);
                 if list.entries.is_empty() {
@@ -421,7 +422,7 @@ fn draw_list(
                         let parsed = read_time(text);
                         let response = ui.put(cell, egui::TextEdit::singleline(text).desired_width(cell.width()));
                         if parsed.is_none() {
-                            response.clone().on_hover_text(tr!("delay-instant-hint"));
+                            response.clone().hint(tr!("delay-instant-hint"));
                         }
                         if response.lost_focus()
                             && let Some(hours) = parsed
@@ -442,7 +443,7 @@ fn draw_list(
                         cells[3],
                         egui::Label::new(egui::RichText::new(hours_text(entry.end_h - entry.start_h)).color(ui.visuals().weak_text_color())).halign(egui::Align::Min),
                     );
-                    if delete_button(ui, end, tr!("delay-delete-entry")) {
+                    if delete_button(ui, end) {
                         remove = Some(index);
                     }
                 }

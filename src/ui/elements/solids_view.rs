@@ -19,6 +19,7 @@ use crate::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::PropertyTable,
             explorer::{ExplorerEntry, ExplorerHeader, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
+            hint::Hint,
         },
     },
 };
@@ -1123,7 +1124,7 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
             if coverage < 0.9995 {
                 table.readonly_warning(&label, &value, Some("%"), Some(&tr!("planning-reserve-coverage-partial")));
             } else {
-                table.readonly(&label, &value, Some("%"), None).on_hover_text(tr!("planning-reserve-coverage-note"));
+                table.readonly(&label, &value, Some("%"), None).hint(tr!("planning-reserve-coverage-note"));
             }
         }
         if let Some(status) = &editor.solid_view_reserve_status {
@@ -1131,9 +1132,7 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
         }
         let reserves = editor.solid_view_reserves.as_ref();
         if let Some(reserves) = reserves {
-            table
-                .readonly(&tr!("planning-reserve-blocks"), &reserve_number(reserves.all.equivalent_blocks), None, None)
-                .on_hover_text(tr!("planning-reserve-method"));
+            table.readonly(&tr!("planning-reserve-blocks"), &reserve_number(reserves.all.equivalent_blocks), None, None);
             table.readonly(&tr!("planning-reserve-scope"), &tr!("planning-reserve-method"), None, None);
         }
         for field in document.reserve_fields() {
