@@ -482,7 +482,7 @@ pub(crate) struct BlastAnalysis {
     /// Rock each hole is responsible for, cubic metres.
     pub(crate) volume: Vec<f64>,
     /// The pattern's median hole depth, which a rule is pictured on in the
-    /// products panel.
+    /// Charge Rules section.
     pub(crate) median_depth: Option<f64>,
     /// Reached holes in detonation order.
     pub(crate) firing_order: Vec<usize>,
@@ -643,7 +643,7 @@ impl BlastAnalysis {
     pub(crate) fn hole_powder_factor(&self, hole: usize) -> Option<f64> {
         let volume = *self.volume.get(hole)?;
         let mass = *self.mass_kg.get(hole)?;
-        (volume > 1.0e-9 && mass > 0.0).then(|| mass / volume)
+        (volume > 1.0e-9 && mass > 0.0).then_some(mass / volume)
     }
 
     /// Whether `hole` is left unloaded in a pattern being loaded.

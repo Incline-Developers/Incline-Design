@@ -42,6 +42,41 @@ pub(crate) struct DrillBlastInput {
     /// The timeline later solves keep, once the dispatch has found it.
     /// Also holds the clearance deadlines for overlying ground.
     pub(crate) fixed: Option<DrillBlastTimeline>,
+    /// Where an unfixed chain starts: a tail of a horizon resumes the chain
+    /// as the schedule before it left it. Never sent to a solver process.
+    #[serde(skip)]
+    pub(crate) resume: Option<ChainState>,
+}
+
+/// A chain partway through a horizon: what [`Chain`] carries from one
+/// interval to the next.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ChainState {
+    left: Vec<[f64; 3]>,
+    events: Vec<BlastEvents>,
+    work: Vec<BlastWork>,
+}
+
+/// Whether a blast's ground is available as a checkpoint opens.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Firing {
+    Fired,
+    /// Charged by then, and firing at this hour: the chain records a firing
+    /// as soon as charging finishes, before the window it fires in ends.
+    Scheduled(f64),
+    Open,
+}
+
+/// A blast as a checkpoint opens, as a plan reads it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BlastOpening {
+    /// Work left on each step.
+    pub(crate) left: [f64; 3],
+    pub(crate) cleared: bool,
+    /// Each step done by then. A step with no work left is not done until
+    /// the one before it is.
+    pub(crate) done: [bool; 3],
+    pub(crate) firing: Firing,
 }
 
 /// One blast: how much of each step it needs, how far it starts, the ground
@@ -136,6 +171,13 @@ impl DrillBlastInput {
             .collect()
     }
 
+    /// Whether any blast's release could move: one that releases ground and
+    /// is not yet charged, so work is left that machines might do sooner or
+    /// later. A charged blast fires at the first window's end whatever is dug.
+    pub(crate) fn movable(&self) -> bool {
+        self.blasts.iter().any(|blast| !blast.releases.is_empty() && blast.stage < BlastStage::Charged)
+    }
+
     /// The end of the first window ending after `charged_h`.
     pub(crate) fn fires_at(&self, charged_h: f64) -> f64 {
         if let Some(windows) = &self.windows {
@@ -171,6 +213,124 @@ impl DrillBlastInput {
         releases
     }
 
+    /// The earliest each blast's ground could be released, whatever is dug
+    /// and whatever else the machines do: each blast on its own, clear from
+    /// the start, worked by every machine with a bar that could ever take it,
+    /// at once and at full rate. Bar order, priorities, delay bars and other
+    /// blasts are left out, since contention is not monotone (clearing one
+    /// blast early can take a machine from another). No schedule finishes a
+    /// step sooner, and firing windows only end later for later charges,
+    /// so a bound may allow each blast this release.
+    pub(crate) fn earliest_releases(&self, intervals: &[Interval]) -> BTreeMap<GroundId, f64> {
+        let mut releases = BTreeMap::new();
+        for (index, blast) in self.blasts.iter().enumerate() {
+            let at = match blast.stage {
+                BlastStage::Fired => 0.0,
+                BlastStage::NotStarted if blast.never_clear => NEVER,
+                _ => {
+                    let mut done = 0.0;
+                    for activity in BlastActivity::ALL.into_iter().filter(|activity| !blast.stage.has_done(*activity)) {
+                        done = self.earliest_done(index, activity, blast.quantity[activity as usize], done, intervals);
+                        if done >= NEVER {
+                            break;
+                        }
+                    }
+                    if done >= NEVER { NEVER } else { self.fires_at(done) }
+                }
+            };
+            for ground in &blast.releases {
+                releases.insert(*ground, at);
+            }
+        }
+        releases
+    }
+
+    /// When `quantity` of `activity` on `blast`, started at `from_h`, could
+    /// be done by every machine able to work it, all at once.
+    fn earliest_done(&self, blast: usize, activity: BlastActivity, quantity: f64, from_h: f64, intervals: &[Interval]) -> f64 {
+        if quantity <= DONE {
+            return from_h;
+        }
+        let eligible = self.eligible(blast, activity);
+        let mut left = quantity;
+        for interval in intervals.iter().filter(|interval| interval.end_h > from_h + 1e-9) {
+            let open = interval.start_h.max(from_h);
+            let mut cuts = vec![open, interval.end_h];
+            for task in &eligible {
+                cuts.extend([task.start_h, task.end_h].into_iter().filter(|cut| *cut > open && *cut < interval.end_h));
+            }
+            cuts.sort_by(f64::total_cmp);
+            for span in cuts.windows(2).filter(|span| span[1] > span[0] + 1e-9) {
+                let middle = 0.5 * (span[0] + span[1]);
+                let mut agents: Vec<usize> = eligible
+                    .iter()
+                    .filter(|task| task.start_h <= middle && middle < task.end_h)
+                    .map(|task| task.agent)
+                    .collect();
+                agents.sort_unstable();
+                agents.dedup();
+                let rate: f64 = agents.iter().map(|&agent| self.agents[agent].rates.get(interval.index).copied().unwrap_or(0.0)).sum();
+                if rate <= 0.0 {
+                    continue;
+                }
+                if rate * (span[1] - span[0]) >= left - DONE {
+                    return span[0] + left / rate;
+                }
+                left -= rate * (span[1] - span[0]);
+            }
+        }
+        NEVER
+    }
+
+    /// The bars that could ever work `activity` on `blast`: those of a
+    /// machine doing it, not delays, holding the blast or following a
+    /// machine with a bar that holds it.
+    fn eligible(&self, blast: usize, activity: BlastActivity) -> Vec<&BlastTask> {
+        let holds = |task: &BlastTask| task.sequence.contains(&blast);
+        self.tasks
+            .iter()
+            .filter(|task| !task.delay && self.agents.get(task.agent).is_some_and(|agent| agent.activity == activity))
+            .filter(|task| match task.follow {
+                None => holds(task),
+                Some(leader) => self.tasks.iter().any(|lead| lead.agent == leader && !lead.delay && lead.follow.is_none() && holds(lead)),
+            })
+            .collect()
+    }
+
+    /// What `agent` can do over `intervals` while one of its bars that
+    /// could take `blast` is open, or with no blast while any bar of its
+    /// own (a delay aside) is: its rate times those hours.
+    pub(crate) fn work_capacity(&self, agent: usize, blast: Option<usize>, intervals: &[Interval]) -> f64 {
+        let Some(machine) = self.agents.get(agent) else { return 0.0 };
+        let bars: Vec<&BlastTask> = match blast {
+            Some(blast) => self.eligible(blast, machine.activity).into_iter().filter(|task| task.agent == agent).collect(),
+            None => self.tasks.iter().filter(|task| task.agent == agent && !task.delay).collect(),
+        };
+        let mut total = 0.0;
+        for interval in intervals {
+            let rate = machine.rates.get(interval.index).copied().unwrap_or(0.0);
+            if rate <= 0.0 {
+                continue;
+            }
+            // The bars' union within the interval.
+            let mut spans: Vec<(f64, f64)> = bars
+                .iter()
+                .map(|task| (task.start_h.max(interval.start_h), task.end_h.min(interval.end_h)))
+                .filter(|(start, end)| end > start)
+                .collect();
+            spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut reach = f64::NEG_INFINITY;
+            for (start, end) in spans {
+                let start = start.max(reach);
+                if end > start {
+                    total += rate * (end - start);
+                    reach = end;
+                }
+            }
+        }
+        total
+    }
+
     /// Ground that must be exhausted by the clearance times later solves keep.
     pub(crate) fn clearance_deadlines(&self, timeline: &DrillBlastTimeline) -> BTreeMap<GroundId, f64> {
         let mut deadlines = BTreeMap::<GroundId, f64>::new();
@@ -196,6 +356,85 @@ impl DrillBlastTimeline {
             .iter()
             .zip(&self.blasts)
             .flat_map(|(blast, events)| blast.releases.iter().map(move |ground| (*ground, events.fired_h.unwrap_or(NEVER))))
+            .collect()
+    }
+
+    /// Where this timeline leaves the chain at `at_h`, the start of an
+    /// interval: its work clipped there and the milestones reached by then,
+    /// as [`Chain`] would carry them once it has processed that interval's
+    /// opening; a firing stays once its charge is done.
+    pub(crate) fn state_at(&self, input: &DrillBlastInput, at_h: f64) -> ChainState {
+        let mut left: Vec<[f64; 3]> = input
+            .blasts
+            .iter()
+            .map(|blast| {
+                let mut remaining = blast.quantity;
+                for activity in BlastActivity::ALL.into_iter().filter(|activity| blast.stage.has_done(*activity)) {
+                    remaining[activity as usize] = 0.0;
+                }
+                remaining
+            })
+            .collect();
+        let mut work = Vec::new();
+        for row in self.work.iter().filter(|row| row.start_h < at_h - 1e-9) {
+            let mut clipped = *row;
+            if row.end_h > at_h {
+                clipped.end_h = at_h;
+                clipped.quantity = row.quantity * (at_h - row.start_h) / (row.end_h - row.start_h);
+            }
+            if let Some(slot) = left.get_mut(row.blast) {
+                let step = &mut slot[row.activity as usize];
+                *step = (*step - clipped.quantity).max(0.0);
+            }
+            work.push(clipped);
+        }
+        let reached = |at: Option<f64>| at.filter(|at| *at <= at_h + 1e-9);
+        // The state after `at_h`'s opening is processed: a blast cleared then,
+        // on ground dug before it, is clear, as are the empty steps that
+        // finished with it.
+        let events = self
+            .blasts
+            .iter()
+            .map(|events| {
+                let done_h = events.done_h.map(reached);
+                BlastEvents {
+                    cleared_h: reached(events.cleared_h),
+                    done_h,
+                    fired_h: events.fired_h.filter(|_| done_h[BlastActivity::Charge as usize].is_some()),
+                }
+            })
+            .collect();
+        for slot in &mut left {
+            for step in slot.iter_mut().filter(|step| **step <= DONE) {
+                *step = 0.0;
+            }
+        }
+        ChainState { left, events, work }
+    }
+}
+
+impl ChainState {
+    /// Each blast as the chain stands at `at_h`, its milestones read by
+    /// their times: one recorded for later has not happened yet.
+    pub(crate) fn checkpoint(&self, at_h: f64) -> Vec<BlastOpening> {
+        let by = |at: Option<f64>| at.is_some_and(|at| at <= at_h + 1e-9);
+        self.left
+            .iter()
+            .zip(&self.events)
+            .map(|(left, events)| {
+                let done = events.done_h.map(by);
+                let firing = match events.fired_h {
+                    Some(at) if at <= at_h + 1e-9 => Firing::Fired,
+                    Some(at) if done[BlastActivity::Charge as usize] => Firing::Scheduled(at),
+                    _ => Firing::Open,
+                };
+                BlastOpening {
+                    left: *left,
+                    cleared: by(events.cleared_h),
+                    done,
+                    firing,
+                }
+            })
             .collect()
     }
 }
@@ -238,18 +477,29 @@ impl<'a> Chain<'a> {
         if let Some(fixed) = &input.fixed {
             events.clone_from(&fixed.blasts);
         }
+        let mut work = Vec::new();
+        if input.fixed.is_none()
+            && let Some(state) = input.resume.as_ref().filter(|state| state.left.len() == input.blasts.len())
+        {
+            left.clone_from(&state.left);
+            events.clone_from(&state.events);
+            work.clone_from(&state.work);
+        }
         let owner = input
             .blasts
             .iter()
             .enumerate()
             .flat_map(|(index, blast)| blast.releases.iter().map(move |ground| (*ground, index)))
             .collect();
-        Self {
-            input,
-            left,
-            events,
-            work: Vec::new(),
-            owner,
+        Self { input, left, events, work, owner }
+    }
+
+    /// Where the chain stands, to resume a later part of the horizon from.
+    pub(crate) fn state(&self) -> ChainState {
+        ChainState {
+            left: self.left.clone(),
+            events: self.events.clone(),
+            work: self.work.clone(),
         }
     }
 

@@ -11,7 +11,10 @@
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::model::{ItemRef, LayerId};
+use crate::{
+    i18n::tr,
+    model::{ItemRef, LayerId},
+};
 
 /// Identity of a folder for as long as the project is open.
 ///
@@ -363,13 +366,13 @@ impl FolderRegistry {
             let mut names = std::collections::HashSet::new();
             for folder in self.folders(section) {
                 if folder.name.trim().is_empty() {
-                    bail!("{} has a folder with a blank name", section.key());
+                    bail!(tr!("err-store-folder-blank-name", section = section.key().to_string()));
                 }
                 if !names.insert(folder.name.as_str()) {
-                    bail!("duplicate {} folder '{}'", section.key(), folder.name);
+                    bail!(tr!("err-store-folder-duplicate-name", section = section.key().to_string(), name = folder.name.to_string()));
                 }
                 if !ids.insert(folder.id) {
-                    bail!("duplicate folder id {} ('{}')", folder.id.0, folder.name);
+                    bail!(tr!("err-store-folder-duplicate-id", id = folder.id.0.to_string(), name = folder.name.to_string()));
                 }
             }
         }

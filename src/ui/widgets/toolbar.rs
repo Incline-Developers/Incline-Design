@@ -3,6 +3,7 @@ use std::hash::Hash;
 use egui::{Color32, Response, Sense, Stroke, Ui, Vec2};
 use strum::IntoEnumIterator;
 
+use super::hint::Hint;
 use crate::{i18n::tr, ui::state::ToolHatch};
 
 /// A consistently styled icon button for application toolbars.
@@ -66,7 +67,8 @@ impl egui::Widget for ToolbarButton {
 
         let icon_rect = egui::Align2::CENTER_CENTER.align_size_within_rect(self.icon_size, rect);
         self.icon.fit_to_exact_size(self.icon_size).paint_at(ui, icon_rect);
-        response.on_hover_text(self.tooltip)
+        // A button whose icon says it all is given no tooltip.
+        if self.tooltip.is_empty() { response } else { response.hint(self.tooltip) }
     }
 }
 
@@ -116,7 +118,7 @@ impl<'a> HatchPicker<'a> {
                 }
             })
             .response
-            .on_hover_text(format!("{}: {}", tr!("toolbar-fill-type"), hatch_label(*self.selected_hatch)));
+            .hint(format!("{}: {}", tr!("toolbar-fill-type"), hatch_label(*self.selected_hatch)));
 
         let swatch_rect = egui::Rect::from_center_size(response.rect.center(), self.button_size);
 
@@ -285,47 +287,17 @@ impl<'a> ColorSquarePicker<'a> {
     }
 }
 
-/// A row of joined text buttons, one of which is always chosen: a switch
-/// between a handful of sibling views. Returns the index clicked this frame.
+/// A hairline between two runs of buttons, `gap` clear either side.
 ///
-/// Reads as one control rather than a run of tabs, so it can sit beside the
-/// tabs of whichever view it chose without the two levels running together.
-pub(crate) fn segmented(ui: &mut Ui, id_salt: impl Hash + std::fmt::Debug, labels: &[String], selected: usize) -> Option<usize> {
-    const PADDING: f32 = 12.0;
-    let font = egui::TextStyle::Button.resolve(ui.style());
-    let galleys: Vec<_> = labels
-        .iter()
-        .map(|label| ui.painter().layout_no_wrap(label.clone(), font.clone(), Color32::PLACEHOLDER))
-        .collect();
-    let height = ui.spacing().interact_size.y;
-    let width: f32 = galleys.iter().map(|galley| galley.size().x + PADDING * 2.0).sum();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
-    let visuals = ui.visuals().clone();
-    let stroke = visuals.widgets.inactive.bg_stroke;
-    ui.painter().rect(rect, GROUP_CORNER_RADIUS, visuals.extreme_bg_color, stroke, egui::StrokeKind::Inside);
-    let mut clicked = None;
-    let mut x = rect.left();
-    for (index, galley) in galleys.into_iter().enumerate() {
-        let segment = egui::Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(galley.size().x + PADDING * 2.0, height));
-        let response = ui.interact(segment, ui.scope_id().with((&id_salt, index)), Sense::click());
-        let chosen = index == selected;
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, chosen, galley.text()));
-        if chosen {
-            ui.painter().rect_filled(segment.shrink(2.0), GROUP_CORNER_RADIUS, visuals.selection.bg_fill);
-        } else if response.hovered() {
-            ui.painter().rect_filled(segment.shrink(2.0), GROUP_CORNER_RADIUS, visuals.widgets.hovered.bg_fill);
-        }
-        if index > 0 && !chosen && index != selected + 1 {
-            let rule = segment.left();
-            ui.painter()
-                .line_segment([egui::pos2(rule, segment.top() + 5.0), egui::pos2(rule, segment.bottom() - 5.0)], stroke);
-        }
-        let color = if chosen { visuals.selection.stroke.color } else { visuals.text_color() };
-        ui.painter().galley(segment.center() - galley.size() * 0.5, galley, color);
-        if response.clicked() {
-            clicked = Some(index);
-        }
-        x = segment.right();
-    }
-    clicked
+/// A hairline rather than a gap: a toolbar's buttons meet each other, so a
+/// space alone would read as a missing button. Held clear of the strip's top
+/// and bottom by the same `gap`, so it marks a seam between two runs rather
+/// than looking like an edge of the bar itself.
+pub(crate) fn divider(ui: &mut Ui, side: f32, gap: f32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0 + 2.0 * gap, side), Sense::hover());
+    let visuals = ui.visuals();
+    let color = super::shifted(visuals.panel_fill, if visuals.dark_mode { 26 } else { -46 });
+    let painter = ui.painter();
+    let x = painter.round_to_pixel_center(rect.center().x);
+    painter.vline(x, (rect.top() + gap)..=(rect.bottom() - gap), Stroke::new(1.0, color));
 }

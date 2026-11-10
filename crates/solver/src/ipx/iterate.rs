@@ -336,7 +336,8 @@ impl<'a> Iterate<'a> {
     pub fn optimal(&self) -> bool {
         let pobj = self.pobjective_after_postproc();
         let dobj = self.dobjective_after_postproc();
-        let ave_obj = 0.5 * (pobj + dobj);
+        // Measured without the offset (HiGHS #3427).
+        let ave_obj = 0.5 * (pobj + dobj - 2.0 * self.evaluated().offset);
         let gap = pobj - dobj;
         gap.abs() <= self.optimality_tol * (1.0 + ave_obj.abs())
     }

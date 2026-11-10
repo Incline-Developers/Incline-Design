@@ -26,13 +26,13 @@ impl<'a> App<'a> {
         output_layer: ContourOutputLayer,
     ) -> Result<()> {
         if !minor_interval.is_finite() || !major_interval.is_finite() || minor_interval <= 0.0 || major_interval <= 0.0 {
-            anyhow::bail!("Intervals must be positive finite numbers");
+            anyhow::bail!(crate::i18n::tr!("err-surf-contour-intervals-invalid"));
         }
         if minor_interval < 1e-6 {
-            anyhow::bail!("Minor contour interval is too small (minimum 0.000001); this would generate an unbounded number of contour levels");
+            anyhow::bail!(crate::i18n::tr!("err-surf-contour-minor-too-small"));
         }
         if major_interval < minor_interval {
-            anyhow::bail!("Major interval must be >= minor interval");
+            anyhow::bail!(crate::i18n::tr!("err-surf-contour-major-below-minor"));
         }
 
         let (mesh, spatial, tri_name) = {
@@ -40,7 +40,7 @@ impl<'a> App<'a> {
                 .triangulations
                 .iter()
                 .find(|t| t.id == tri_id)
-                .ok_or_else(|| anyhow::anyhow!("Triangulation not found"))?;
+                .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-surf-contour-triangulation-missing")))?;
             (tri.mesh.clone(), tri.spatial.clone(), tri.name.clone())
         };
 
@@ -49,45 +49,45 @@ impl<'a> App<'a> {
         let mut z_hi = bounds.max.z;
         if let Some((range_lo, range_hi)) = z_range {
             if !range_lo.is_finite() || !range_hi.is_finite() || range_lo >= range_hi {
-                anyhow::bail!("Contour Z range must be finite with min < max");
+                anyhow::bail!(crate::i18n::tr!("err-surf-contour-range-invalid"));
             }
             z_lo = z_lo.max(range_lo);
             z_hi = z_hi.min(range_hi);
             if z_lo >= z_hi {
-                anyhow::bail!("Contour Z range does not overlap the triangulation");
+                anyhow::bail!(crate::i18n::tr!("err-surf-contour-range-no-overlap"));
             }
         }
 
         if (z_hi - z_lo).abs() < 1e-10 {
-            anyhow::bail!("Triangulation has no Z extent to contour");
+            anyhow::bail!(crate::i18n::tr!("err-surf-contour-no-elevation-extent"));
         }
 
         const MAX_CONTOUR_LEVELS: f64 = 100_000.0;
         let level_estimate = (z_hi - z_lo) / minor_interval;
         if level_estimate > MAX_CONTOUR_LEVELS {
-            anyhow::bail!(
-                "These settings would generate about {level_estimate:.0} contour levels over a Z extent of {:.1} m. \
-                 Increase the minor interval, or restrict the Z range to contour a slice of the triangulation.",
-                z_hi - z_lo
-            );
+            anyhow::bail!(crate::i18n::tr!(
+                "err-surf-contour-too-many-levels",
+                levels = format!("{level_estimate:.0}"),
+                extent = format!("{:.1}", z_hi - z_lo)
+            ));
         }
 
         let active_project = self
             .workspace
             .active_project()
-            .ok_or_else(|| anyhow::anyhow!("No active project to store the contours in"))?;
+            .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-surf-contour-no-project")))?;
         match &output_layer {
             ContourOutputLayer::New(name) => {
                 if name.trim().is_empty() {
-                    anyhow::bail!("Enter a name for the new contour layer");
+                    anyhow::bail!(crate::i18n::tr!("err-surf-contour-name-required"));
                 }
                 if active_project.project.document.layer_id_by_name(name).is_some() {
-                    anyhow::bail!("A layer named '{name}' already exists; select it as the output layer or choose a different name");
+                    anyhow::bail!(crate::i18n::tr!("err-surf-contour-layer-exists", name = name.to_string()));
                 }
             }
             ContourOutputLayer::Existing(layer_id) => {
                 if active_project.project.document.layer(*layer_id).is_none() {
-                    anyhow::bail!("The selected contour output layer no longer exists");
+                    anyhow::bail!(crate::i18n::tr!("err-surf-contour-layer-missing"));
                 }
             }
         }
@@ -199,7 +199,12 @@ impl<'a> App<'a> {
             );
             app.invalidate_geometry();
         };
-        self.spawn_job_reporting_progress("Generating contours…", vec![crate::app::jobs::JobKey::Triangulation(tri_id)], compute, apply);
+        self.spawn_job_reporting_progress(
+            crate::i18n::tr!("err-surf-contour-progress"),
+            vec![crate::app::jobs::JobKey::Triangulation(tri_id)],
+            compute,
+            apply,
+        );
         Ok(())
     }
 }
@@ -242,7 +247,7 @@ fn compute_contour_polylines(
 
     for (levels_done, z_level) in levels.into_iter().enumerate() {
         if cancel.is_cancelled() {
-            anyhow::bail!("Cancelled");
+            anyhow::bail!(crate::app::jobs::Cancelled);
         }
         progress.set_items(levels_done as u64, level_count);
         // Admit faces whose span has reached this level, then retire the ones
@@ -267,7 +272,7 @@ fn compute_contour_polylines(
     }
 
     if polylines.is_empty() {
-        anyhow::bail!("No contour segments were generated for the selected intervals");
+        anyhow::bail!(crate::i18n::tr!("err-surf-contour-none"));
     }
     Ok(polylines)
 }
@@ -454,7 +459,7 @@ fn contour_height_labels(
     let mut occupied = Vec::new();
     for (done, (line, stations)) in majors.iter().enumerate() {
         if cancel.is_cancelled() {
-            anyhow::bail!("Cancelled");
+            anyhow::bail!(crate::app::jobs::Cancelled);
         }
         progress.set_items(done as u64, majors.len() as u64);
         let level = line[0].z;

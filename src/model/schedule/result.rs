@@ -580,6 +580,9 @@ pub(crate) struct SolveReport {
     /// boundaries applied.
     pub(crate) objective: f64,
     pub(crate) raw_objective: Option<f64>,
+    /// Read back from the project file rather than calculated, and checked by
+    /// the replay on the way.
+    pub(crate) restored: bool,
     pub(crate) bound: Option<f64>,
     pub(crate) gap: Option<f64>,
     pub(crate) bound_source: BoundSource,
@@ -606,9 +609,9 @@ pub(crate) struct SolveReport {
     /// The derived execution-event budget hit its ceiling, so some source
     /// transitions inside an interval may have been unavailable.
     pub(crate) event_budget_restricted: bool,
-    /// Blasts a dig bar needs that no machine bar works, so their loaders
-    /// wait on them all horizon.
-    pub(crate) unworked_blasts: usize,
+    /// Each dig bar's ground in a blast no machine bar works, so its loader
+    /// waits on it all horizon: the bar, and the blast with its unworked step.
+    pub(crate) unworked_blasts: Vec<(super::BarId, String)>,
     pub(crate) grade_margin: f64,
     pub(crate) boundary_rows: usize,
     pub(crate) boundary_tonnes_t: f64,
@@ -891,11 +894,60 @@ pub(crate) struct CalculatedSchedule {
     /// Drill and blast, when the project sequences it.
     pub(crate) drill_blast: Option<DrillBlastResult>,
     pub(crate) periods: PeriodTotals,
+    /// What a project file keeps of this schedule.
+    pub(crate) saved: Option<std::sync::Arc<super::optimisation::blended::saved::SavedSchedule>>,
     by_bar: HashMap<BarId, Vec<usize>>,
     by_block: HashMap<DigBlockId, usize>,
     inventory: HashMap<DestinationId, Vec<InventoryKnot>>,
     hourly: HashMap<DestinationId, HourlyReceipts>,
     truck_use: HashMap<TruckClassId, Vec<(f64, f64)>>,
+    executions_by_hour: HourIndex,
+    deliveries_by_hour: HourIndex,
+    /// When each destination's receipts end, ascending.
+    receipt_ends: HashMap<DestinationId, Vec<f64>>,
+    /// Tonnes each destination had received by the start of each hour.
+    receipts_to_hour: HashMap<DestinationId, Vec<f64>>,
+}
+
+/// Which spans touch each whole hour, in the order they are stored. A page
+/// showing one instant asks what is under way there many times a frame, and a
+/// schedule holds tens of thousands of spans.
+#[derive(Clone, Debug, Default)]
+struct HourIndex(Vec<Vec<u32>>);
+
+impl HourIndex {
+    fn build(spans: impl Iterator<Item = (f64, f64)>) -> Self {
+        let mut hours: Vec<Vec<u32>> = Vec::new();
+        for (index, (start_h, end_h)) in spans.enumerate() {
+            if end_h <= start_h || start_h < 0.0 {
+                continue;
+            }
+            let (first, past) = (start_h.floor() as usize, end_h.ceil() as usize);
+            if hours.len() < past {
+                hours.resize_with(past, Vec::new);
+            }
+            for hour in &mut hours[first..past] {
+                hour.push(index as u32);
+            }
+        }
+        Self(hours)
+    }
+
+    /// The spans touching the hour `at_h` falls in. Each still has to be
+    /// checked against the instant.
+    fn at(&self, at_h: f64) -> &[u32] {
+        if at_h < 0.0 { &[] } else { self.0.get(at_h as usize).map_or(&[], Vec::as_slice) }
+    }
+
+    /// The spans touching `[from_h, to_h)`, each once, in stored order.
+    fn between(&self, from_h: f64, to_h: f64) -> Vec<u32> {
+        let first = from_h.max(0.0) as usize;
+        let past = (to_h.max(0.0).ceil() as usize).min(self.0.len());
+        let mut spans: Vec<u32> = self.0.get(first..past).unwrap_or_default().iter().flatten().copied().collect();
+        spans.sort_unstable();
+        spans.dedup();
+        spans
+    }
 }
 
 /// Everything [`CalculatedSchedule::new`] indexes.
@@ -915,6 +967,12 @@ pub(crate) struct ScheduleParts {
     pub(crate) grade_targets: Vec<GradeTargetResult>,
     pub(crate) report: SolveReport,
     pub(crate) drill_blast: Option<DrillBlastResult>,
+    /// How many trucks of each class are working, as knots of (hour, units)
+    /// a step function holds from, in time order. One level for each solved
+    /// cell, which is what the fleet limits: blocks dug one after another
+    /// inside a cell need more trucks and then fewer than it, and only their
+    /// average is the model's.
+    pub(crate) truck_use: HashMap<TruckClassId, Vec<(f64, f64)>>,
 }
 
 impl CalculatedSchedule {
@@ -953,35 +1011,37 @@ impl CalculatedSchedule {
             by_bar.entry(execution.bar).or_default().push(index);
         }
         let by_block = parts.ground.iter().enumerate().map(|(index, balance)| (balance.block, index)).collect();
-        let periods = PeriodTotals::build(parts.requested_end_h, &executions, &parts.deliveries, &parts.piles);
-        let inventory = inventory_curves(&parts.piles, &parts.deliveries);
-        let hourly = hourly_receipts(parts.requested_end_h, parts.grades.len(), &parts.deliveries);
-        let mut truck_use: HashMap<TruckClassId, Vec<(f64, f64)>> = HashMap::new();
-        for delivery in &parts.deliveries {
-            let duration = delivery.end_h - delivery.start_h;
-            if duration > 0.0 {
-                let units = delivery.truck_hours / duration;
-                let events = truck_use.entry(delivery.truck).or_default();
-                events.push((delivery.start_h, units));
-                events.push((delivery.end_h, -units));
-            }
+        // Each a pass over every delivery, and none reads another: a year of
+        // hourly dispatch has hundreds of thousands.
+        let ((periods, inventory), hourly) = rayon::join(
+            || {
+                rayon::join(
+                    || PeriodTotals::build(parts.requested_end_h, &executions, &parts.deliveries, &parts.piles),
+                    || inventory_curves(&parts.piles, &parts.deliveries),
+                )
+            },
+            || hourly_receipts(parts.requested_end_h, parts.grades.len(), &parts.deliveries),
+        );
+        let executions_by_hour = HourIndex::build(executions.iter().map(|execution| (execution.start_h, execution.end_h)));
+        let deliveries_by_hour = HourIndex::build(parts.deliveries.iter().map(|delivery| (delivery.start_h, delivery.end_h)));
+        let mut receipt_ends: HashMap<DestinationId, Vec<f64>> = HashMap::new();
+        for delivery in parts.deliveries.iter().filter(|delivery| delivery.tonnes > 0.0) {
+            receipt_ends.entry(delivery.destination).or_default().push(delivery.end_h);
         }
-        for events in truck_use.values_mut() {
-            events.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let mut knots: Vec<(f64, f64)> = Vec::new();
-            let mut units = 0.0;
-            for &(hour, delta) in events.iter() {
-                units += delta;
-                if let Some(last) = knots.last_mut()
-                    && last.0 == hour
-                {
-                    last.1 = units.max(0.0);
-                } else {
-                    knots.push((hour, units.max(0.0)));
-                }
-            }
-            *events = knots;
+        for ends in receipt_ends.values_mut() {
+            ends.sort_by(f64::total_cmp);
         }
+        let receipts_to_hour = hourly
+            .iter()
+            .map(|(destination, series)| {
+                let mut total = 0.0;
+                let running = std::iter::once(0.0).chain(series.tonnes.iter().map(|tonnes| {
+                    total += tonnes;
+                    total
+                }));
+                (*destination, running.collect())
+            })
+            .collect();
         Self {
             run: parts.run,
             semantic: parts.semantic,
@@ -998,12 +1058,17 @@ impl CalculatedSchedule {
             grade_targets: parts.grade_targets,
             report: parts.report,
             drill_blast: parts.drill_blast,
+            saved: None,
             periods,
             by_bar,
             by_block,
             inventory,
             hourly,
-            truck_use,
+            truck_use: parts.truck_use,
+            executions_by_hour,
+            deliveries_by_hour,
+            receipt_ends,
+            receipts_to_hour,
         }
     }
 
@@ -1117,7 +1182,8 @@ impl CalculatedSchedule {
     /// Deliveries made by one loader under one bar from one source over one
     /// span, for a tooltip.
     pub(crate) fn deliveries_of<'a>(&'a self, execution: &'a Execution) -> impl Iterator<Item = &'a Delivery> + 'a {
-        self.deliveries.iter().filter(move |delivery| {
+        let spans = self.deliveries_by_hour.between(execution.start_h, execution.end_h);
+        spans.into_iter().map(|index| &self.deliveries[index as usize]).filter(move |delivery| {
             delivery.agent == execution.agent
                 && delivery.bar == execution.bar
                 && delivery.source == execution.source
@@ -1180,12 +1246,20 @@ impl CalculatedSchedule {
     /// The spans being worked at `hour`. Half-open, so an instant on a
     /// boundary belongs to the span that starts there.
     pub(crate) fn executions_at(&self, hour: f64) -> impl Iterator<Item = &Execution> {
-        self.executions.iter().filter(move |execution| execution.start_h <= hour && hour < execution.end_h)
+        self.executions_by_hour
+            .at(hour)
+            .iter()
+            .map(|&index| &self.executions[index as usize])
+            .filter(move |execution| execution.start_h <= hour && hour < execution.end_h)
     }
 
     /// The movements under way at `hour`, half-open like [`Self::executions_at`].
     pub(crate) fn deliveries_at(&self, hour: f64) -> impl Iterator<Item = &Delivery> {
-        self.deliveries.iter().filter(move |delivery| delivery.start_h <= hour && hour < delivery.end_h)
+        self.deliveries_by_hour
+            .at(hour)
+            .iter()
+            .map(|&index| &self.deliveries[index as usize])
+            .filter(move |delivery| delivery.start_h <= hour && hour < delivery.end_h)
     }
 
     /// The blasts a blast bar names, by position in [`Self::drill_blast`], in
@@ -1217,7 +1291,12 @@ impl CalculatedSchedule {
     pub(crate) fn received_between(&self, destination: DestinationId, from_h: f64, to_h: f64) -> (f64, Vec<f64>) {
         let mut tonnes = 0.0;
         let mut contained = vec![0.0; self.grades.len()];
-        for delivery in self.deliveries.iter().filter(|delivery| delivery.destination == destination) {
+        let spans = self.deliveries_by_hour.between(from_h, to_h);
+        for delivery in spans
+            .iter()
+            .map(|&index| &self.deliveries[index as usize])
+            .filter(|delivery| delivery.destination == destination)
+        {
             let duration = delivery.end_h - delivery.start_h;
             let overlap = delivery.end_h.min(to_h) - delivery.start_h.max(from_h);
             if duration <= 0.0 || overlap <= 0.0 {
@@ -1233,12 +1312,31 @@ impl CalculatedSchedule {
     }
 
     /// When a destination last finished receiving, at or before `hour`.
-    pub(crate) fn last_receipt_before(&self, destination: DestinationId, hour: f64) -> Option<f64> {
-        self.deliveries
+    /// Tonnes a destination had received by `hour`, to the rounding of a sum:
+    /// the to-date figure of a page showing one instant, without adding up
+    /// every delivery before it each frame.
+    pub(crate) fn received_to_date(&self, destination: DestinationId, hour: f64) -> f64 {
+        let Some(running) = self.receipts_to_hour.get(&destination) else { return 0.0 };
+        let hour = hour.max(0.0);
+        let whole = (hour.floor() as usize).min(running.len().saturating_sub(1));
+        let from = whole as f64;
+        let part: f64 = self
+            .deliveries_by_hour
+            .at(from)
             .iter()
-            .filter(|delivery| delivery.destination == destination && delivery.tonnes > 0.0 && delivery.end_h <= hour + 1e-9)
-            .map(|delivery| delivery.end_h)
-            .reduce(f64::max)
+            .map(|&index| &self.deliveries[index as usize])
+            .filter(|delivery| delivery.destination == destination && delivery.end_h > delivery.start_h)
+            .map(|delivery| {
+                let overlap = delivery.end_h.min(hour) - delivery.start_h.max(from);
+                delivery.tonnes * (overlap / (delivery.end_h - delivery.start_h)).max(0.0)
+            })
+            .sum();
+        running[whole] + part
+    }
+
+    pub(crate) fn last_receipt_before(&self, destination: DestinationId, hour: f64) -> Option<f64> {
+        let ends = self.receipt_ends.get(&destination)?;
+        ends[..ends.partition_point(|end_h| *end_h <= hour + 1e-9)].last().copied()
     }
 
     /// The last hour anything was worked, for framing a view.

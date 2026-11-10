@@ -26,8 +26,9 @@ use serde::{Deserialize, Serialize};
 use super::{DestinationId, ScheduleError, ScheduleResult};
 use crate::{i18n::tr, model::ReserveFieldId};
 
-/// Default planning horizon, in whole schedule periods (days).
-pub(crate) const DEFAULT_END_DAY: u32 = 1;
+/// Default planning horizon, in whole schedule periods (days): a week, so a
+/// new project's first schedule shows more than a single day.
+pub(crate) const DEFAULT_END_DAY: u32 = 7;
 /// Default calendar discretisation.
 pub(crate) const DEFAULT_INTERVAL_H: f64 = 1.0;
 /// Default solver wall-clock budget.

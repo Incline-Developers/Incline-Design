@@ -11,7 +11,9 @@ struct CameraUniform {
     inv_view_proj: mat4x4<f32>,
     // xy: the viewport rect's offset in physical pixels within its render
     // target, to be subtracted from `@builtin(position)`; zero except in the
-    // main window's toolbar-bounded canvas. zw: padding.
+    // main window's toolbar-bounded canvas. z: the projection's y scale
+    // (its matrix's [1][1]), for a pixel's world size at a view depth; w:
+    // padding.
     viewport_origin: vec4<f32>,
     // xyz: a point on the vertical section plane, relative to the scene
     // origin the vertex positions are relative to; w: half the slab width

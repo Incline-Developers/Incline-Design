@@ -43,18 +43,21 @@ impl Forest {
     pub(crate) fn parse(bytes: &[u8]) -> Result<Self> {
         let mut cursor = bytes;
         let mut take = |count: usize| -> Result<&[u8]> {
-            ensure!(cursor.len() >= count, "The classifier model is truncated");
+            ensure!(cursor.len() >= count, crate::i18n::tr!("err-bm-classifier-truncated"));
             let (head, tail) = cursor.split_at(count);
             cursor = tail;
             Ok(head)
         };
         if take(4)? != b"IRF1" {
-            bail!("The classifier model has an unknown format");
+            bail!(crate::i18n::tr!("err-bm-classifier-unknown-format"));
         }
         let header = take(4)?;
         let (feature_count, class_count) = (usize::from(header[0]), usize::from(header[1]));
         let tree_count = u16::from_le_bytes([header[2], header[3]]);
-        ensure!((1..=MAX_CLASSES).contains(&class_count), "The classifier model has {class_count} classes");
+        ensure!(
+            (1..=MAX_CLASSES).contains(&class_count),
+            crate::i18n::tr!("err-bm-classifier-class-count", class_count = class_count.to_string())
+        );
         let mut trees = Vec::with_capacity(usize::from(tree_count));
         for _ in 0..tree_count {
             let counts = take(4)?;
@@ -74,19 +77,19 @@ impl Forest {
             let leaves = take(leaf_count * class_count)?.to_vec();
             for node in &nodes {
                 if node.feature == LEAF {
-                    ensure!(usize::from(node.left) < leaf_count, "The classifier model has a leaf out of range");
+                    ensure!(usize::from(node.left) < leaf_count, crate::i18n::tr!("err-bm-classifier-leaf-range"));
                 } else {
-                    ensure!(usize::from(node.feature) < feature_count, "The classifier model splits on a feature it does not have");
+                    ensure!(usize::from(node.feature) < feature_count, crate::i18n::tr!("err-bm-classifier-missing-feature"));
                     ensure!(
                         usize::from(node.left) < node_count && usize::from(node.right) < node_count,
-                        "The classifier model has a branch out of range"
+                        crate::i18n::tr!("err-bm-classifier-branch-range")
                     );
                 }
             }
-            ensure!(!nodes.is_empty(), "The classifier model has an empty tree");
+            ensure!(!nodes.is_empty(), crate::i18n::tr!("err-bm-classifier-empty-tree"));
             trees.push(Tree { nodes, leaves });
         }
-        ensure!(cursor.is_empty(), "The classifier model has trailing data");
+        ensure!(cursor.is_empty(), crate::i18n::tr!("err-bm-classifier-trailing-data"));
         Ok(Self {
             feature_count,
             class_count,

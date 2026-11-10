@@ -162,7 +162,7 @@ fn login_name() -> String {
 
 /// What a surface build takes from a selection: the points to triangulate,
 /// the layers they came from, the open strings the surface is made to pass
-/// through, and the one closed string clipping the result.
+/// through, and the closed strings, of which one may clip the result.
 pub(crate) struct SurfaceInput {
     pub(crate) points: Vec<ObjectId>,
     /// Distinct layers the points sit on, in document order. One layer is the
@@ -171,15 +171,34 @@ pub(crate) struct SurfaceInput {
     /// Open strings, in document order. Each is a breakline the finished
     /// surface runs along, at the string's own elevations.
     pub(crate) controls: Vec<ObjectId>,
-    pub(crate) extent: Option<ObjectId>,
+    /// The vertices of those open strings together: they count toward the
+    /// fit's minimum beside the picks.
+    pub(crate) control_vertices: usize,
+    /// Closed strings, in document order. One is the extent; more than one
+    /// leaves no saying which, and is a problem.
+    pub(crate) extents: Vec<ObjectId>,
 }
 
-/// Read a surface build's inputs out of `selected`, or say why there are none.
+impl SurfaceInput {
+    /// Why a surface cannot be built from this, if it cannot.
+    pub(crate) fn problem(&self) -> Option<String> {
+        // Picks and control vertices both count; the fit refuses a line of them.
+        if self.points.len() + self.control_vertices < MINIMUM_POINTS {
+            Some(too_few_points(self.points.len(), self.control_vertices))
+        } else if self.extents.len() > 1 {
+            Some(tr!("cmd-reference-surface-select-exactly-one-closed-string"))
+        } else {
+            None
+        }
+    }
+}
+
+/// Read a surface build's inputs out of `selected`.
 ///
 /// Walked over `document.objects()` rather than `selected` itself, so the
 /// points and the layer list come back in document order rather than
 /// whatever order the selection's `HashSet` happens to iterate in.
-pub(crate) fn surface_input(document: &Document, selected: &HashSet<SceneEntityId>) -> Result<SurfaceInput> {
+pub(crate) fn surface_input(document: &Document, selected: &HashSet<SceneEntityId>) -> SurfaceInput {
     let mut points = Vec::new();
     let mut layers = Vec::new();
     let mut controls = Vec::new();
@@ -210,16 +229,13 @@ pub(crate) fn surface_input(document: &Document, selected: &HashSet<SceneEntityI
             _ => {}
         }
     }
-    // Picks and control vertices both count; the fit refuses a line of them.
-    if points.len() + control_vertices < MINIMUM_POINTS {
-        anyhow::bail!("{}", too_few_points(points.len(), control_vertices));
+    SurfaceInput {
+        points,
+        layers,
+        controls,
+        control_vertices,
+        extents,
     }
-    let extent = match extents.len() {
-        0 => None,
-        1 => Some(extents[0]),
-        _ => anyhow::bail!("{}", tr!("cmd-reference-surface-select-exactly-one-closed-string")),
-    };
-    Ok(SurfaceInput { points, layers, controls, extent })
 }
 
 /// One ring per refused position, naming its string and the drawn vertex at
@@ -362,7 +378,7 @@ impl<'a> App<'a> {
 
         let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)> {
             if cancel.is_cancelled() {
-                anyhow::bail!("{}", tr!("common-cancelled"));
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             let selected = SelectedControls {
                 strings: &controls,
@@ -741,7 +757,7 @@ fn grid_surface_from_points(
     if !surface.steep.is_empty() {
         userspace_warn!("{}", steep_report(&surface.steep, surface.settings.steep_distance, surface.settings.steep_degrees));
     }
-    let generated = session::build_generated_triangulation(name, surface.vertices, surface.faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
+    let generated = session::build_generated_triangulation(name, surface.vertices, surface.faces, TriSurfaceType::Surface, |_| Vec::new())?;
     Ok((generated, surface.left_out_strings))
 }
 
@@ -831,7 +847,7 @@ fn surface_mesh(
     // Controls in an order read off their own geometry, so the build cannot
     // depend on the order they were selected in; `names` keeps each one's
     // place in the selection for the messages.
-    let copy = string_clean::clean_copy(selected.strings, selected.layers, selected.keys, &cancelled).map_err(|_| anyhow::anyhow!("{}", tr!("common-cancelled")))?;
+    let copy = string_clean::clean_copy(selected.strings, selected.layers, selected.keys, &cancelled).map_err(|_| anyhow::Error::new(crate::app::jobs::Cancelled))?;
     let strings: Vec<Vec<DVec3>> = copy
         .pieces
         .iter()

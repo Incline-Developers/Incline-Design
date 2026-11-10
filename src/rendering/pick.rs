@@ -158,6 +158,9 @@ impl StrokeBlocks {
     }
 }
 
+/// How close, in screen pixels, a road node takes the pick from its roads.
+const NODE_PICK_PX: f64 = 6.0;
+
 fn build_block_node(blocks: &[(DVec3, DVec3)], order: &mut [u32], start: usize, end: usize, nodes: &mut Vec<StrokeBlockNode>) -> usize {
     let (min, max) = order[start..end]
         .iter()
@@ -426,11 +429,17 @@ pub(crate) fn pick_nearest(
                         let dist = (sa + (sb - sa) * t).distance(cursor);
                         let world = perspective_correct_segment_point(view_proj, wa, wb, t);
                         let depth = projected_depth(view_proj, world);
+                        // A node sits on its roads and is the far smaller
+                        // target, so one under the pointer wins whichever is
+                        // measured first. The road's nearest point is rarely
+                        // the node itself, so their depths need not agree.
                         let node_over_road = matches!(rec.entity, SceneEntityId::HaulNode(_))
                             && best_stroke_hit.is_some_and(|hit| matches!(hit.entity, SceneEntityId::HaulRoad(_)))
-                            && dist <= 6.0
-                            && (depth - best_stroke_depth).abs() <= 1e-6;
-                        if node_over_road || screen_hit_is_better(dist, depth, best_dist, best_stroke_depth) {
+                            && dist <= NODE_PICK_PX;
+                        let road_under_node = matches!(rec.entity, SceneEntityId::HaulRoad(_))
+                            && best_stroke_hit.is_some_and(|hit| matches!(hit.entity, SceneEntityId::HaulNode(_)))
+                            && best_dist <= NODE_PICK_PX;
+                        if !road_under_node && (node_over_road || screen_hit_is_better(dist, depth, best_dist, best_stroke_depth)) {
                             best_dist = dist;
                             best_stroke_depth = depth;
                             best_stroke_hit = Some(PickHit { entity: rec.entity, world });

@@ -90,11 +90,10 @@ impl<'a> App<'a> {
                 );
             }
         }
-        commands.extend(items.iter().map(|item| Command::DeleteItem {
-            item: *item,
-            index: 0,
-            removed: None,
-        }));
+        // Each item unlinks the solids that use it, as a lone delete does.
+        for item in &items {
+            commands.extend(self.delete_item_commands(*item));
+        }
 
         // Layers go last-first in the stack, and each records its objects'
         // positions as they stand once the layers before it are gone, so undo

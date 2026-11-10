@@ -28,6 +28,7 @@ use crate::{
         widgets::{
             borehole_log::{BoundaryPick, DrillHoleProperties, InsertPick, NameShift, SeamRename, strat_runs},
             collapsible_section::CollapsibleSection,
+            hint::Hint,
             menu::{self, MenuButton, MenuField, MenuFieldCombo},
             toolbar::GROUP_CORNER_RADIUS,
         },
@@ -290,7 +291,7 @@ fn draw_strat_check(ui: &mut egui::Ui, editor: &mut EditorState, dataset: &OpenD
         .show(ui, |ui| {
             if ui
                 .add(MenuButton::new(tr!("borehole-inspector-check-column")))
-                .on_hover_text(tr!("borehole-inspector-check-column-hint"))
+                .hint(tr!("borehole-inspector-check-column-hint"))
                 .clicked()
             {
                 commands.push(UiCommand::CheckStratColumn {
@@ -542,7 +543,7 @@ fn draw_strat_column(
                     ui.spacing_mut().item_spacing.x = 2.0;
                     if ui
                         .add(MenuButton::new(tr!("common-minus-sign")).min_width(24.0))
-                        .on_hover_text(tr!("borehole-inspector-remove-from-column"))
+                        .hint(tr!("borehole-inspector-remove-from-column"))
                         .clicked()
                     {
                         let mut codes = column.to_vec();
@@ -563,7 +564,7 @@ fn draw_strat_column(
                                 from: place,
                             });
                         }
-                        handle_response.on_hover_text(tr!("borehole-inspector-drag-to-reorder"));
+                        handle_response.hint(tr!("borehole-inspector-drag-to-reorder"));
                         // The colour the log and the scene give this code.
                         let [red, green, blue] = crate::ui::widgets::borehole_log::strat_run_color(&dataset.color, field, code);
                         let (swatch, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
@@ -576,7 +577,7 @@ fn draw_strat_column(
                             // Listed by the geologist but held by no interval
                             // of this set: kept, and shown as such.
                             ui.add(egui::Label::new(egui::RichText::new(text).weak()).truncate())
-                                .on_hover_text(tr!("borehole-inspector-code-not-in-set"));
+                                .hint(tr!("borehole-inspector-code-not-in-set"));
                         }
                     });
                 });
@@ -707,13 +708,12 @@ fn draw_hole_cell(
             .collect::<Vec<_>>();
         if !flagged.is_empty() {
             let mark = egui::RichText::new(tr!("borehole-inspector-order-mark")).strong().color(ui.visuals().warn_fg_color);
-            ui.label(mark)
-                .on_hover_text(format!("{}\n{}", flagged.join("\n"), tr!("borehole-inspector-order-mark-hint")));
+            ui.label(mark).hint(format!("{}\n{}", flagged.join("\n"), tr!("borehole-inspector-order-mark-hint")));
         }
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             let Some((from, to)) = depths else {
                 ui.label(egui::RichText::new(tr!("borehole-inspector-seam-gap")).weak())
-                    .on_hover_text(tr!("borehole-inspector-seam-missing"));
+                    .hint(tr!("borehole-inspector-seam-missing"));
                 return;
             };
             let [red, green, blue] = crate::ui::widgets::borehole_log::strat_run_color(&dataset.color, field, code);
@@ -724,7 +724,7 @@ fn draw_hole_cell(
             let style = ui.style();
             let mut text = egui::text::LayoutJob::simple_singleline(code.to_owned(), egui::TextStyle::Body.resolve(style), ui.visuals().text_color());
             text.append(&depths, 8.0, egui::TextFormat::simple(egui::TextStyle::Small.resolve(style), ui.visuals().text_color()));
-            ui.add(egui::Label::new(text).truncate()).on_hover_text(format!("{code}  {depths}"));
+            ui.add(egui::Label::new(text).truncate()).hint(format!("{code}  {depths}"));
         });
     });
 }
@@ -875,11 +875,7 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState) {
             ui.spacing_mut().item_spacing.x = 4.0;
             // Rightmost, where a panel's close belongs; the lock sits inboard.
             // The same switch Geology's viewport bar button throws.
-            if ui
-                .add(egui::Button::image(themed_icon!(ui, "close_project.svg")).frame(false))
-                .on_hover_text(tr!("borehole-inspector-close-inspector"))
-                .clicked()
-            {
+            if ui.add(egui::Button::image(themed_icon!(ui, "close_project.svg")).frame(false)).clicked() {
                 editor.show_borehole_inspector = false;
             }
             let locked = editor.borehole_inspector_locked;
@@ -890,7 +886,7 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState) {
             } else {
                 (unthemed_icon!("entry_unlocked.svg"), tr!("borehole-inspector-hold-hole-while-you-work"))
             };
-            if ui.add(egui::Button::image(icon).frame(locked)).on_hover_text(hint).clicked() {
+            if ui.add(egui::Button::image(icon).frame(locked)).hint(hint).clicked() {
                 editor.borehole_inspector_locked = !locked;
             }
         });

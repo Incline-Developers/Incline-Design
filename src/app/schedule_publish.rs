@@ -13,7 +13,12 @@
 //! Back-to-back dig sources divide their cell in authored order, proportional
 //! to their tonnes, so the timeline represents one block at a time per loader.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+
+use rayon::{
+    iter::{IntoParallelRefIterator, ParallelIterator},
+    slice::ParallelSliceMut,
+};
 
 use crate::{
     app::{commands::schedule_capture::CaptureIdentities, jobs::CancelFlag, schedule_solve::ScheduleCompletion},
@@ -55,7 +60,7 @@ pub(crate) struct PublishMeta<'a> {
     pub(crate) candidates: usize,
     pub(crate) ground_sources: usize,
     pub(crate) event_budget_restricted: bool,
-    pub(crate) unworked_blasts: usize,
+    pub(crate) unworked_blasts: Vec<(crate::model::schedule::BarId, String)>,
     pub(crate) notes: Vec<String>,
 }
 
@@ -88,11 +93,21 @@ impl<'a> Lookup<'a> {
     }
 }
 
+/// What publication reads of one candidate, in project terms.
+struct Resolved<'a> {
+    agent: Option<LoaderAgentId>,
+    source: Option<WorkSource>,
+    destination: Option<ProjectDestinationId>,
+    truck: Option<trucking::TruckClassId>,
+    fractions: &'a [f64],
+    per_tonne: Option<f64>,
+}
+
 /// When each execution cell starts and how long it lasts, from the solved
 /// event clock.
-fn cell_times(input: &BlendInput, solution: &BlendSolution) -> BTreeMap<(usize, usize), (f64, f64)> {
+fn cell_times(input: &BlendInput, solution: &BlendSolution) -> CellTimes {
     let segments = input.segments_per_interval.max(1);
-    let mut times = BTreeMap::new();
+    let mut times = CellTimes::with_capacity_and_hasher(input.intervals.len() * segments, Default::default());
     for interval in &input.intervals {
         let mut at = interval.start_h;
         for segment in 0..segments {
@@ -132,32 +147,35 @@ fn ordered_dig_spans(sequence: &[GroundId], tonnes: &BTreeMap<GroundId, f64>, st
         at = end;
     }
     if !remaining.is_empty() {
-        return Err("published digging names a block outside its authored sequence".to_owned());
+        return Err(crate::i18n::tr!("err-sched-pub-dig-outside-sequence"));
     }
     Ok(spans)
 }
 
-type DigTimes = BTreeMap<(LoaderId, TaskId, GroundId, usize, usize), (f64, f64)>;
+// Looked up once for each of a schedule's rows, which a year of hourly
+// dispatch runs to millions, and never walked in order.
+type CellTimes = HashMap<(usize, usize), (f64, f64), foldhash::fast::FixedState>;
+type DigTimes = HashMap<(LoaderId, TaskId, GroundId, usize, usize), (f64, f64), foldhash::fast::FixedState>;
 type ExecutionCellKey = (LoaderAgentId, BarId, u8, SourceKey, usize, usize);
 
-fn dig_times(input: &BlendInput, solution: &BlendSolution, replay: &ReplayReport, times: &BTreeMap<(usize, usize), (f64, f64)>) -> Result<DigTimes, String> {
+fn dig_times(input: &BlendInput, solution: &BlendSolution, replay: &ReplayReport, times: &CellTimes) -> Result<DigTimes, String> {
     let mut groups: BTreeMap<(LoaderId, TaskId, usize, usize), BTreeMap<GroundId, f64>> = BTreeMap::new();
     for (index, row) in solution.movements.iter().enumerate() {
         if row.tonnes_t <= DUST_T {
             continue;
         }
-        let candidate = input.movements.get(row.candidate).ok_or("published movement names an unknown candidate")?;
+        let candidate = input.movements.get(row.candidate).ok_or_else(|| crate::i18n::tr!("err-sched-pub-unknown-candidate"))?;
         let SourceId::Ground(ground) = candidate.source else { continue };
-        let task = replay.row_tasks[index].ok_or("published digging has no authored bar")?;
+        let task = replay.row_tasks[index].ok_or_else(|| crate::i18n::tr!("err-sched-pub-dig-no-bar"))?;
         *groups.entry((candidate.loader, task, row.interval, row.segment)).or_default().entry(ground).or_default() += row.tonnes_t;
     }
     let tasks: BTreeMap<_, _> = input.tasks.iter().map(|task| (task.id, task)).collect();
-    let mut result = BTreeMap::new();
+    let mut result = DigTimes::default();
     for ((loader, task, interval, segment), tonnes) in groups {
-        let TaskKind::Dig { sequence } = &tasks.get(&task).ok_or("published digging names an unknown bar")?.kind else {
-            return Err("published digging belongs to a non-dig bar".to_owned());
+        let TaskKind::Dig { sequence } = &tasks.get(&task).ok_or_else(|| crate::i18n::tr!("err-sched-pub-dig-unknown-bar"))?.kind else {
+            return Err(crate::i18n::tr!("err-sched-pub-dig-non-dig-bar"));
         };
-        let &(start_h, end_h) = times.get(&(interval, segment)).ok_or("published digging names an unknown cell")?;
+        let &(start_h, end_h) = times.get(&(interval, segment)).ok_or_else(|| crate::i18n::tr!("err-sched-pub-dig-unknown-cell"))?;
         for (ground, span) in ordered_dig_spans(sequence, &tonnes, start_h, end_h)? {
             result.insert((loader, task, ground, interval, segment), span);
         }
@@ -177,6 +195,26 @@ fn same_rate(left_tonnes: f64, left_h: f64, right_tonnes: f64, right_h: f64) -> 
     (left - right).abs() <= 1e-9 * left.abs().max(right.abs()).max(1.0)
 }
 
+/// How many trucks of one class are working, as knots of (hour, units) a step
+/// function holds from, off the truck-hours of each solved cell
+/// (`(start, end, truck-hours)`).
+fn truck_use(mut cells: Vec<(f64, f64, f64)>) -> Vec<(f64, f64)> {
+    cells.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let mut knots: Vec<(f64, f64)> = Vec::with_capacity(cells.len() + 1);
+    let mut busy_until = f64::NEG_INFINITY;
+    for (start_h, end_h, hours) in cells {
+        if start_h > busy_until && busy_until.is_finite() {
+            knots.push((busy_until, 0.0));
+        }
+        knots.push((start_h, hours / (end_h - start_h)));
+        busy_until = end_h;
+    }
+    if busy_until.is_finite() {
+        knots.push((busy_until, 0.0));
+    }
+    knots
+}
+
 /// Build the published schedule, or say why the solution cannot be one.
 pub(crate) fn publish(
     input: &BlendInput,
@@ -191,7 +229,7 @@ pub(crate) fn publish(
     let times = cell_times(input, solution);
     let grades = input.grades.count();
     if replay.row_tasks.len() != solution.movements.len() {
-        return Err("the replay did not attribute every published movement to a bar".to_owned());
+        return Err(crate::i18n::tr!("err-sched-pub-unattributed"));
     }
 
     let dig_times = dig_times(input, solution, replay, &times)?;
@@ -200,36 +238,60 @@ pub(crate) fn publish(
     // (agent, bar, activity, source, interval, segment) -> (start, end, tonnes)
     let mut cells: BTreeMap<ExecutionCellKey, (f64, f64, f64)> = BTreeMap::new();
     let cycles: Vec<_> = input.movements.iter().map(|c| std::sync::Arc::new(c.cycle)).collect();
+    // What a row reads of its candidate, resolved once for each candidate
+    // rather than for each row: a year of hourly dispatch has millions of
+    // rows over a few hundred thousand candidates, and each is a search.
+    let resolved: Vec<Resolved<'_>> = input
+        .movements
+        .par_iter()
+        .map(|candidate| Resolved {
+            agent: lookup.loaders.get(&candidate.loader).copied(),
+            source: lookup.source(candidate.source),
+            destination: lookup.destinations.get(&candidate.destination).copied(),
+            truck: lookup.trucks.get(&candidate.truck).copied(),
+            fractions: input.grades.fractions(candidate.material).unwrap_or_default(),
+            per_tonne: candidate.value_per_tonne().ok(),
+        })
+        .collect();
+    let mut conditional_of: HashMap<usize, Vec<&_>> = HashMap::new();
+    for payment in &input.conditional_values {
+        conditional_of.entry(payment.candidate).or_default().push(payment);
+    }
     let mut deliveries: Vec<Delivery> = Vec::with_capacity(solution.movements.len());
     let mut dug: BTreeMap<GroundId, (f64, f64)> = BTreeMap::new();
+    // (truck class, cell start) -> (cell end, truck-hours)
+    let mut truck_cells: BTreeMap<trucking::TruckClassId, HashMap<u64, (f64, f64), foldhash::fast::FixedState>> = BTreeMap::new();
     for (index, row) in solution.movements.iter().enumerate() {
         if index % 4096 == 0 && cancel.is_cancelled() {
-            return Err("cancelled during publication".to_owned());
+            return Err(crate::i18n::tr!("err-sched-cancelled-publication"));
         }
         let Some(candidate) = input.movements.get(row.candidate) else {
-            return Err(format!("movement row names unknown candidate {}", row.candidate));
+            return Err(crate::i18n::tr!("err-sched-pub-row-unknown-candidate", candidate = row.candidate.to_string()));
         };
         let Some(&(start_h, end_h)) = times.get(&(row.interval, row.segment)) else {
-            return Err(format!("movement row names an unknown cell ({}, {})", row.interval, row.segment));
+            return Err(crate::i18n::tr!(
+                "err-sched-pub-row-unknown-cell",
+                interval = row.interval.to_string(),
+                segment = row.segment.to_string()
+            ));
         };
         if row.tonnes_t <= DUST_T || end_h - start_h < MINIMUM_SPAN_H {
             omitted_rows += 1;
             omitted_tonnes_t += row.tonnes_t.max(0.0);
             continue;
         }
-        let task = replay.row_tasks[index].ok_or_else(|| format!("movement row {index} was worked under no authored bar"))?;
+        let task = replay.row_tasks[index].ok_or_else(|| crate::i18n::tr!("err-sched-pub-row-no-bar", index = index.to_string()))?;
+        let cell = (start_h, end_h);
         let (start_h, end_h) = match candidate.source {
             SourceId::Ground(ground) => dig_times[&(candidate.loader, task, ground, row.interval, row.segment)],
             SourceId::Stockpile(_) => (start_h, end_h),
         };
-        let bar = *lookup.tasks.get(&task).ok_or("a movement names a bar capture did not record")?;
-        let agent = *lookup.loaders.get(&candidate.loader).ok_or("a movement names a loader capture did not record")?;
-        let source = lookup.source(candidate.source).ok_or("a movement names a source capture did not record")?;
-        let destination = *lookup
-            .destinations
-            .get(&candidate.destination)
-            .ok_or("a movement names a destination capture did not record")?;
-        let truck = *lookup.trucks.get(&candidate.truck).ok_or("a movement names a truck class capture did not record")?;
+        let bar = *lookup.tasks.get(&task).ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-bar"))?;
+        let held = &resolved[row.candidate];
+        let agent = held.agent.ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-loader"))?;
+        let source = held.source.ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-source"))?;
+        let destination = held.destination.ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-destination"))?;
+        let truck = held.truck.ok_or_else(|| crate::i18n::tr!("err-sched-pub-no-truck"))?;
         let activity = match candidate.activity {
             Activity::Dig => ProjectActivity::Dig,
             Activity::Reclaim => ProjectActivity::Reclaim,
@@ -237,7 +299,7 @@ pub(crate) fn publish(
         // Contained quantity: a dig carries its captured material; a reclaim
         // carries the blend the replay says this interval actually drew.
         let contained: Vec<f64> = match candidate.source {
-            SourceId::Ground(_) => (0..grades).map(|g| row.tonnes_t * input.grades.fraction(candidate.material, g).unwrap_or(0.0)).collect(),
+            SourceId::Ground(_) => (0..grades).map(|g| row.tonnes_t * held.fractions.get(g).copied().unwrap_or(0.0)).collect(),
             SourceId::Stockpile(pile) => {
                 let blend = replay
                     .pile_intervals
@@ -249,14 +311,14 @@ pub(crate) fn publish(
         };
         // Movement value at the authored boundaries, exactly as the replay
         // valued it.
-        let mut per_tonne = candidate.value_per_tonne().map_err(|_| "a movement value is not finite".to_owned())?;
+        let mut per_tonne = held.per_tonne.ok_or_else(|| crate::i18n::tr!("err-sched-pub-value-not-finite"))?;
         if let SourceId::Stockpile(pile) = candidate.source {
             let blend = replay
                 .pile_intervals
                 .get(&(pile, row.interval))
                 .map(|state| state.delivered_blend.as_slice())
                 .unwrap_or_default();
-            for payment in input.conditional_values.iter().filter(|payment| payment.candidate == row.candidate) {
+            for payment in conditional_of.get(&row.candidate).into_iter().flatten() {
                 if payment.holds(blend) {
                     per_tonne += payment.value_per_tonne;
                 }
@@ -271,6 +333,7 @@ pub(crate) fn publish(
             .entry((agent, bar, activity as u8, SourceKey::of(source), row.interval, row.segment))
             .or_insert((start_h, end_h, 0.0))
             .2 += row.tonnes_t;
+        truck_cells.entry(truck).or_default().entry(cell.0.to_bits()).or_insert((cell.1, 0.0)).1 += row.tonnes_t * candidate.truck_hours_per_tonne;
         deliveries.push(Delivery {
             agent,
             bar,
@@ -328,12 +391,29 @@ pub(crate) fn publish(
         merged.push(execution);
     }
 
-    deliveries.sort_by(|left, right| {
-        (left.agent, left.bar, SourceKey::of(left.source), left.destination, left.truck, left.start_h)
-            .partial_cmp(&(right.agent, right.bar, SourceKey::of(right.source), right.destination, right.truck, right.start_h))
-            .unwrap_or(std::cmp::Ordering::Equal)
+    // In key order, and rows of equal keys in the order they came, as the
+    // merge below reads them. Each key is worked out once, not on every
+    // comparison: a year of hourly dispatch has millions of rows.
+    let mut order: Vec<_> = deliveries
+        .iter()
+        .enumerate()
+        .map(|(index, delivery)| {
+            (
+                (delivery.agent, delivery.bar, SourceKey::of(delivery.source), delivery.destination, delivery.truck),
+                delivery.start_h,
+                index,
+            )
+        })
+        .collect();
+    order.par_sort_unstable_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(left.1.partial_cmp(&right.1).unwrap_or(std::cmp::Ordering::Equal))
+            .then(left.2.cmp(&right.2))
     });
     let mut merged_deliveries: Vec<Delivery> = Vec::with_capacity(deliveries.len());
+    let mut unsorted: Vec<Option<Delivery>> = deliveries.into_iter().map(Some).collect();
+    let deliveries = order.into_iter().filter_map(|(_, _, index)| unsorted[index].take());
     for delivery in deliveries {
         if let Some(last) = merged_deliveries.last_mut()
             && last.agent == delivery.agent
@@ -377,7 +457,7 @@ pub(crate) fn publish(
             remaining_t = 0.0;
         }
         if remaining_t < 0.0 {
-            return Err(format!("dig block {} was depleted past its measured tonnes", block.0));
+            return Err(crate::i18n::tr!("err-sched-pub-depleted", block = block.0.to_string()));
         }
         ground.push(GroundBalance {
             block: *block,
@@ -464,6 +544,7 @@ pub(crate) fn publish(
         }),
         objective: replay.replayed_objective,
         raw_objective: completion.raw_objective,
+        restored: completion.restored,
         bound: completion.primary_bound,
         gap: completion.primary_gap,
         bound_source: completion.bound_source,
@@ -473,7 +554,12 @@ pub(crate) fn publish(
         extraction_s: completion.timings.extraction.as_secs_f64(),
         replay_s: completion.timings.replay.as_secs_f64(),
         publication_s: started.elapsed().as_secs_f64(),
-        backend: format!("{} · {}", completion.backend_version, completion.wrapper_version),
+        // The hourly schedule's solver has no wrapper of its own to name.
+        backend: if completion.wrapper_version.is_empty() {
+            completion.backend_version.clone()
+        } else {
+            format!("{} · {}", completion.backend_version, completion.wrapper_version)
+        },
         model_identity: meta.model_identity,
         candidates: meta.candidates,
         ground_sources: meta.ground_sources,
@@ -527,6 +613,15 @@ pub(crate) fn publish(
             .collect(),
         report,
         drill_blast: published_drill_blast(input, solution, identities),
+        truck_use: truck_cells
+            .into_iter()
+            .map(|(truck, cells)| {
+                (
+                    truck,
+                    truck_use(cells.into_iter().map(|(start, (end_h, hours))| (f64::from_bits(start), end_h, hours)).collect()),
+                )
+            })
+            .collect(),
     });
     explain_idle(&mut schedule, input, solution, &lookup);
     Ok(schedule)
@@ -629,6 +724,50 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
     }
     let (dug, received, hauled) = (Spans::index(dug), Spans::index(received), Spans::index(hauled));
     let sum_within = |spans: Option<&Spans>, from_h: f64, to_h: f64| spans.map_or(0.0, |spans| spans.within(from_h, to_h));
+    // Every idle span in every interval asks these, of inputs that can run to
+    // thousands of blocks and tens of thousands of movements.
+    let ground_by_id: HashMap<_, _> = input.ground.iter().map(|source| (source.id, source)).collect();
+    let pile_by_id: HashMap<_, _> = input.piles.iter().map(|pile| (pile.id, pile)).collect();
+    let destination_by_id: HashMap<_, _> = input.destinations.iter().map(|destination| (destination.id, destination)).collect();
+    let mut tasks_of: HashMap<LoaderId, Vec<_>> = HashMap::new();
+    for task in &input.tasks {
+        tasks_of.entry(task.loader).or_default().push(task);
+    }
+    let mut movements_of: HashMap<(LoaderId, SourceId), Vec<_>> = HashMap::new();
+    for movement in &input.movements {
+        movements_of.entry((movement.loader, movement.source)).or_default().push(movement);
+    }
+    let mut deliveries_to: HashMap<ProjectDestinationId, Vec<_>> = HashMap::new();
+    for delivery in &schedule.deliveries {
+        deliveries_to
+            .entry(delivery.destination)
+            .or_default()
+            .push((delivery.tonnes, delivery.start_h, delivery.end_h));
+    }
+    let mut reclaims_from: HashMap<ProjectDestinationId, Vec<_>> = HashMap::new();
+    for execution in &schedule.executions {
+        if let WorkSource::Stockpile(pile) = execution.source {
+            reclaims_from.entry(pile).or_default().push((execution.tonnes, execution.start_h, execution.end_h));
+        }
+    }
+    let no_tasks = Vec::new();
+    // The place each dig bar has reached in its sequence. What a block has
+    // left only falls with time, so asking at a later time need not start over.
+    let reached = std::cell::RefCell::new(HashMap::<_, (f64, usize)>::new());
+    let next_in_sequence = |task: &crate::model::schedule::optimisation::Task, sequence: &[crate::model::schedule::optimisation::GroundId], start_h: f64| {
+        let mut reached = reached.borrow_mut();
+        let from = reached.get(&task.id).filter(|(asked_h, _)| *asked_h <= start_h).map_or(0, |(_, place)| *place);
+        let place = sequence[from..]
+            .iter()
+            .position(|ground| {
+                let Some(block) = lookup.identities.ground_blocks.get(ground) else { return false };
+                let total = ground_by_id.get(ground).map_or(0.0, |source| source.tonnes_t);
+                total - sum_within(dug.get(block), f64::NEG_INFINITY, start_h) > IDLE_NEGLIGIBLE_T
+            })
+            .map(|offset| from + offset);
+        reached.insert(task.id, (start_h, place.unwrap_or(sequence.len())));
+        place.map(|place| sequence[place])
+    };
 
     // Which chunked piles release something in each interval: the cell
     // holding material next in the pile's order, once its last delivery has
@@ -686,10 +825,12 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         }
         let loader = *loaders.get(&agent)?;
         let start_h = input.intervals[position].start_h;
-        let mut open: Vec<_> = input
-            .tasks
+        let mut open: Vec<_> = tasks_of
+            .get(&loader)
+            .unwrap_or(&no_tasks)
             .iter()
-            .filter(|task| task.loader == loader && task.window_start_h <= start_h + 1e-9 && task.window_end_h > start_h + 1e-9)
+            .copied()
+            .filter(|task| task.window_start_h <= start_h + 1e-9 && task.window_end_h > start_h + 1e-9)
             .collect();
         open.sort_by(|left, right| {
             (left.priority, left.window_start_h, left.id)
@@ -698,18 +839,15 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         });
         for task in open {
             let TaskKind::Dig { sequence } = &task.kind else { return None };
-            let next = sequence.iter().find(|ground| {
-                let Some(block) = lookup.identities.ground_blocks.get(ground) else { return false };
-                let total = input.ground.iter().find(|source| source.id == **ground).map_or(0.0, |source| source.tonnes_t);
-                total - sum_within(dug.get(block), f64::NEG_INFINITY, start_h) > IDLE_NEGLIGIBLE_T
-            });
-            if let Some(ground) = next {
-                return releases.get(ground).filter(|(at, _)| *at > start_h + 1e-9).map(|(_, blast)| *blast);
+            if let Some(ground) = next_in_sequence(task, sequence, start_h) {
+                return releases.get(&ground).filter(|(at, _)| *at > start_h + 1e-9).map(|(_, blast)| *blast);
             }
         }
         None
     };
     let explain = |schedule: &CalculatedSchedule, agent: LoaderAgentId, position: usize| {
+        use std::collections::HashSet;
+
         let Some(&loader) = loaders.get(&agent) else {
             return (IdleReason::NoWork, Vec::new());
         };
@@ -732,10 +870,12 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         if dig_tph <= 0.0 && reclaim_tph <= 0.0 {
             return (IdleReason::Unavailable, Vec::new());
         }
-        let open: Vec<_> = input
-            .tasks
+        let open: Vec<_> = tasks_of
+            .get(&loader)
+            .unwrap_or(&no_tasks)
             .iter()
-            .filter(|task| task.loader == loader && task.window_start_h < end_h - 1e-9 && task.window_end_h > start_h + 1e-9)
+            .copied()
+            .filter(|task| task.window_start_h < end_h - 1e-9 && task.window_end_h > start_h + 1e-9)
             .collect();
         if open.is_empty() {
             return (IdleReason::NoWork, Vec::new());
@@ -745,7 +885,7 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             TaskKind::Reclaim { .. } => reclaim_tph,
             TaskKind::Delay => 0.0,
         };
-        let pile_entry = |pile: StockpileId| input.piles.iter().find(|entry| entry.id == pile);
+        let pile_entry = |pile: StockpileId| pile_by_id.get(&pile).copied();
         let project_pile = |pile: StockpileId| lookup.piles.get(&pile).copied();
         // An unchunked pile with a rest is not reclaimable while anything it
         // received is still resting.
@@ -753,12 +893,10 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             let Some(entry) = pile_entry(pile).filter(|entry| entry.rest_h > 0.0 && entry.chunks.is_empty()) else {
                 return false;
             };
-            let project = project_pile(pile);
-            schedule.deliveries.iter().any(|delivery| {
-                Some(delivery.destination) == project
-                    && delivery.tonnes > IDLE_NEGLIGIBLE_T
-                    && delivery.start_h < start_h - 1e-9
-                    && !entry.rested(delivery.end_h.min(start_h), interval)
+            project_pile(pile).and_then(|project| deliveries_to.get(&project)).is_some_and(|deliveries| {
+                deliveries
+                    .iter()
+                    .any(|&(tonnes, from_h, to_h)| tonnes > IDLE_NEGLIGIBLE_T && from_h < start_h - 1e-9 && !entry.rested(to_h.min(start_h), interval))
             })
         };
         // A chunked pile releases nothing while its chunks are filling or
@@ -767,12 +905,10 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         let reclaims = |pile: StockpileId| pile_entry(pile).is_none_or(|entry| entry.reclaims(interval)) && !resting(pile) && !unreleased(pile);
         // A pile that may not build and reclaim at once, reclaimed here.
         let reclaimed_here = |pile: StockpileId| {
-            let project = project_pile(pile);
-            schedule.executions.iter().any(|execution| {
-                matches!(execution.source, WorkSource::Stockpile(source) if Some(source) == project)
-                    && execution.tonnes > IDLE_NEGLIGIBLE_T
-                    && execution.start_h < end_h - 1e-9
-                    && execution.end_h > start_h + 1e-9
+            project_pile(pile).and_then(|project| reclaims_from.get(&project)).is_some_and(|reclaims| {
+                reclaims
+                    .iter()
+                    .any(|&(tonnes, from_h, to_h)| tonnes > IDLE_NEGLIGIBLE_T && from_h < end_h - 1e-9 && to_h > start_h + 1e-9)
             })
         };
         let builds = |pile: StockpileId| pile_entry(pile).is_none_or(|entry| entry.builds(interval) && !(entry.exclusive && reclaimed_here(pile)));
@@ -783,12 +919,7 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
                 // Ground is dug in order: what the machine could be on is the
                 // first block of the sequence that still holds any.
                 TaskKind::Dig { sequence } => {
-                    let next = sequence.iter().find(|ground| {
-                        let Some(block) = lookup.identities.ground_blocks.get(ground) else { return false };
-                        let total = input.ground.iter().find(|source| source.id == **ground).map_or(0.0, |source| source.tonnes_t);
-                        total - sum_within(dug.get(block), f64::NEG_INFINITY, start_h) > IDLE_NEGLIGIBLE_T
-                    });
-                    sources.extend(next.map(|ground| SourceId::Ground(*ground)));
+                    sources.extend(next_in_sequence(task, sequence, start_h).map(SourceId::Ground));
                 }
                 TaskKind::Reclaim { approved_sources, .. } => {
                     for pile in approved_sources {
@@ -863,26 +994,28 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             }
             return (IdleReason::WorkFinished, Vec::new());
         }
-        let candidates: Vec<_> = input
-            .movements
-            .iter()
-            .filter(|movement| movement.loader == loader && sources.contains(&movement.source))
-            .collect();
+        let mut sources = sources;
+        sources.sort_unstable();
+        sources.dedup();
+        let candidates: Vec<_> = sources.iter().filter_map(|source| movements_of.get(&(loader, *source))).flatten().copied().collect();
+        let routes: HashSet<_> = candidates.iter().map(|movement| (movement.source, movement.material)).collect();
         let routed = |source: SourceId| match source {
-            SourceId::Ground(ground) => input.ground.iter().find(|found| found.id == ground).is_some_and(|found| {
+            SourceId::Ground(ground) => ground_by_id.get(&ground).is_some_and(|found| {
                 found
                     .material
                     .iter()
                     .filter(|share| share.fraction > 0.0)
-                    .all(|share| candidates.iter().any(|movement| movement.source == source && movement.material == share.material))
+                    .all(|share| routes.contains(&(source, share.material)))
             }),
-            SourceId::Stockpile(_) => candidates.iter().any(|movement| movement.source == source),
+            SourceId::Stockpile(_) => movements_of.get(&(loader, source)).is_some_and(|movements| !movements.is_empty()),
         };
         if !sources.iter().any(|source| routed(*source)) {
             return (IdleReason::NoRoute, Vec::new());
         }
-        let has_room = |destination: DestinationId| {
-            let Some(found) = input.destinations.iter().find(|candidate| candidate.id == destination) else {
+        // Asked per movement, of far fewer destinations.
+        let room = std::cell::RefCell::new(HashMap::<DestinationId, bool>::new());
+        let work_out_room = |destination: DestinationId| {
+            let Some(found) = destination_by_id.get(&destination) else {
                 return false;
             };
             let project = lookup.destinations.get(&destination);
@@ -911,25 +1044,25 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
                 }),
             }
         };
+        let has_room = |destination: DestinationId| *room.borrow_mut().entry(destination).or_insert_with(|| work_out_room(destination));
         // Ground is dug whole, its materials in proportion, so a block can be
         // dug only while every material in it has somewhere to go - the
         // waste having room does not let the ore out. A source is open when
         // each of its materials has a candidate with room.
         let roomy: Vec<_> = candidates.iter().copied().filter(|movement| has_room(movement.destination)).collect();
-        let open_source = |source: SourceId| {
-            let materials: Vec<_> = match source {
-                SourceId::Ground(ground) => input
-                    .ground
-                    .iter()
-                    .find(|found| found.id == ground)
+        let materials_of = |source: SourceId| -> Vec<_> {
+            match source {
+                SourceId::Ground(ground) => ground_by_id
+                    .get(&ground)
                     .map(|found| found.material.iter().filter(|share| share.fraction > 0.0).map(|share| share.material).collect())
                     .unwrap_or_default(),
-                SourceId::Stockpile(_) => candidates.iter().filter(|movement| movement.source == source).map(|movement| movement.material).collect(),
-            };
-            !materials.is_empty()
-                && materials
-                    .iter()
-                    .all(|material| roomy.iter().any(|movement| movement.source == source && movement.material == *material))
+                SourceId::Stockpile(_) => movements_of.get(&(loader, source)).into_iter().flatten().map(|movement| movement.material).collect(),
+            }
+        };
+        let roomy_routes: HashSet<_> = roomy.iter().map(|movement| (movement.source, movement.material)).collect();
+        let open_source = |source: SourceId| {
+            let materials = materials_of(source);
+            !materials.is_empty() && materials.iter().all(|material| roomy_routes.contains(&(source, *material)))
         };
         let open_sources: Vec<_> = sources.iter().copied().filter(|source| open_source(*source)).collect();
         if open_sources.is_empty() {
@@ -944,7 +1077,7 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             // setting, so it is the reason given, before any full one.
             let mut closed: Vec<_> = candidates
                 .iter()
-                .filter_map(|movement| match input.destinations.iter().find(|found| found.id == movement.destination)?.kind {
+                .filter_map(|movement| match destination_by_id.get(&movement.destination)?.kind {
                     DestinationKind::Stockpile(pile) if !builds(pile) => lookup.destinations.get(&movement.destination).copied(),
                     _ => None,
                 })
@@ -968,7 +1101,17 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             let used = sum_within(lookup.trucks.get(&truck).and_then(|project| hauled.get(project)), start_h, end_h);
             available - used <= 1e-6 * available.max(1.0)
         };
-        if roomy.iter().all(|movement| trucks_spent(movement.truck)) {
+        // Dug whole again: one material with no truck left holds the block, so
+        // a truck free for the waste does not make this a question of value.
+        let spent = std::cell::RefCell::new(HashMap::<TruckClassId, bool>::new());
+        let spent_now = |truck: TruckClassId| *spent.borrow_mut().entry(truck).or_insert_with(|| trucks_spent(truck));
+        let haulable: HashSet<_> = roomy
+            .iter()
+            .filter(|movement| !spent_now(movement.truck))
+            .map(|movement| (movement.source, movement.material))
+            .collect();
+        let can_haul = |source: SourceId| materials_of(source).iter().all(|material| haulable.contains(&(source, *material)));
+        if !open_sources.iter().any(|source| can_haul(*source)) {
             return (IdleReason::NoTrucks, Vec::new());
         }
         (IdleReason::NotWorthIt, Vec::new())

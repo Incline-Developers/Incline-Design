@@ -529,6 +529,9 @@ impl<'c> Ipm<'c> {
 
     fn make_step_centring(&mut self, iterate: &mut Iterate<'_>, step: &Step, is_centring: bool) {
         self.step_sizes_centring(iterate, step, is_centring);
+        let presidual = iterate.presidual();
+        let dresidual = iterate.dresidual();
+        let complementarity = iterate.complementarity();
         iterate.update(
             self.step_primal,
             Some(&step.x),
@@ -540,7 +543,19 @@ impl<'c> Ipm<'c> {
             Some(&step.zu),
         );
         if !is_centring {
-            if std_min(self.step_primal, self.step_dual) < 0.05 {
+            // A step of length alpha should reduce the residuals by 1 - alpha.
+            // A long step that barely reduces a residual that is not yet
+            // small means the Newton systems are inconsistent (an infeasible
+            // LP); one that barely reduces the complementarity gap means the
+            // iterate has stagnated. Both count as bad iterations.
+            const LARGE_STEP: f64 = 0.9;
+            const REDUCTION: f64 = 0.9;
+            let model = iterate.model();
+            let tol = iterate.feasibility_tol();
+            let presidual_stalled = self.step_primal >= LARGE_STEP && iterate.presidual() > REDUCTION * presidual && iterate.presidual() > tol * (1.0 + model.norm_bounds());
+            let dresidual_stalled = self.step_dual >= LARGE_STEP && iterate.dresidual() > REDUCTION * dresidual && iterate.dresidual() > tol * (1.0 + model.norm_c());
+            let complementarity_stalled = std_min(self.step_primal, self.step_dual) >= LARGE_STEP && iterate.complementarity() > REDUCTION * complementarity;
+            if std_min(self.step_primal, self.step_dual) < 0.05 || presidual_stalled || dresidual_stalled || complementarity_stalled {
                 self.num_bad_iter += 1;
             } else {
                 self.num_bad_iter = 0;

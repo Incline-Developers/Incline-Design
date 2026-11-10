@@ -28,7 +28,7 @@ use crate::{
         scene::{
             BlockModelGpuCache, DesignPointGpuCache, DrillCell, DrillCollarInstance, DrillHoleGpuCache, DrillSegmentInstance, EdgeInstance, PointCloudGpuCache, PointInstance,
             PointPosition, RasterGpuCache, StaticStrokeCache, TriangulationGpuCache,
-            bounds::{scene_bounds, visible_object_aabbs},
+            bounds::visible_object_aabbs,
             build::{DocumentDrawBatch, DocumentObjectRanges, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
             document_style::{DocumentStyleGpu, DocumentStyleSlots},
             section_surface_lines::{SectionSurfaceStrokes, SurfaceLines},
@@ -50,7 +50,6 @@ pub(crate) mod frame;
 pub(crate) mod frustum;
 pub(crate) mod init;
 pub(crate) mod passes;
-pub(crate) mod plot;
 pub(crate) mod projections;
 mod readback;
 pub(crate) mod scene_pipelines;
@@ -60,6 +59,7 @@ pub(crate) mod solid_preview;
 pub(crate) mod targets;
 mod touch;
 pub(crate) mod video_capture;
+pub(crate) mod window_corners;
 
 /// Shared ownership of GPU handles: `Arc` natively, where a readback finishes
 /// on another thread, and `Rc` in the browser, where wgpu's handles are not
@@ -168,20 +168,38 @@ pub(super) struct RetiredAttachments {
     pub(super) buffers: Vec<wgpu::Buffer>,
 }
 
-/// Per-frame style and placement for the viewport's procedural world XY grid.
-/// Coordinates supplied to scene shaders are rebased around `scene_origin`,
-/// so the shader needs both the absolute XY offset (to keep the grid aligned
-/// to world coordinates) and world Z zero in rebased space.
+/// Per-frame placement and style for the viewport's procedural world XY grid;
+/// see `grid.wgsl`.
+///
+/// Everything the shader measures is relative to the eye: each pixel's ray is
+/// built from the camera's own axes and meets the plane at an offset from the
+/// eye, and the lines' phase about the eye is reduced on the CPU in f64. The
+/// f32 arithmetic therefore never sees a coordinate larger than the distance
+/// to the pixel's plane point, at any zoom and anywhere in a survey grid.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct GridUniform {
-    pub(super) origin_plane: [f32; 4],
+    pub(super) eye_view_proj: [[f32; 4]; 4],
+    pub(super) ray_right: [f32; 4],
+    pub(super) ray_up: [f32; 4],
+    pub(super) ray_forward: [f32; 4],
     pub(super) level_params: [f32; 4],
+    pub(super) phases: [[f32; 4]; GRID_LEVELS / 2],
     pub(super) minor_color: [f32; 4],
     pub(super) major_color: [f32; 4],
     pub(super) x_axis_color: [f32; 4],
     pub(super) y_axis_color: [f32; 4],
 }
+
+/// Powers of ten the XY grid's shader can draw in one frame, from the finest
+/// the view can show to well past the coarsest it reaches before the horizon.
+/// `grid.wgsl` relies on this number.
+const GRID_LEVELS: usize = 12;
+
+/// The spacing, in logical pixels, at which a grid level's lines are ten times
+/// too far apart to be its finest: a level appears at a tenth of this and
+/// becomes the major lines as it nears this.
+const GRID_LEVEL_PIXELS: f64 = 450.0;
 
 /// The section grid's shader inputs; see `section_grid.wgsl`.
 #[repr(C)]
@@ -235,7 +253,7 @@ impl GridUniform {
         camera: &Camera,
         projection: &Projection,
         vertical_exaggeration: f64,
-        fly_mode_enabled: bool,
+        viewport_height: f64,
         style: &crate::ui::state::PlanGridStyle,
         scale_factor: f64,
     ) -> Self {
@@ -243,6 +261,9 @@ impl GridUniform {
             let mut color = crate::rendering::color::rgb_bytes_to_linear_rgba(rgb);
             color[3] = alpha;
             color
+        }
+        fn vec4(v: DVec3, w: f64) -> [f32; 4] {
+            [v.x as f32, v.y as f32, v.z as f32, w as f32]
         }
 
         let luminance = crate::rendering::color::relative_luminance(background);
@@ -269,35 +290,58 @@ impl GridUniform {
         // physical pixels the shader measures in.
         let extra_width = ((style.thickness - 1.0) * scale_factor).max(0.0);
 
-        // Blender selects one grid level for the whole view from camera
-        // distance/zoom, then draws the level below and above it. Keeping the
-        // choice global is what lets lines converge and disappear naturally
-        // instead of maintaining a wallpaper-like density near the horizon.
+        // The view's axes, as `look_to_mat4` builds them. A pixel's ray runs
+        // from the eye along `forward` plus its NDC times these: per unit of
+        // depth in perspective, offset sideways in metres in orthographic.
+        let forward = camera.forward();
+        let right = forward.cross(camera.up()).normalize_or(DVec3::X);
+        let up = right.cross(forward);
+        let perspective = projection.is_perspective();
+        let half_height = if perspective { (projection.perspective_fov_y() * 0.5).tan() } else { projection.zoom };
+        let half_width = half_height * projection.aspect();
+
         // The XY grid represents the world XY plane, independently of the
-        // active drawing elevation selected in the toolbar.
+        // active drawing elevation selected in the toolbar. It sits where
+        // vertical exaggeration displays Z = 0.
         const PLANE_Z: f64 = 0.0;
         let displayed_plane_z = scene_origin.z + (PLANE_Z - scene_origin.z) * vertical_exaggeration;
-        let forward_z = camera.forward().z.abs();
-        let reference_distance = if projection.is_perspective() {
-            let height = (camera.position.z - displayed_plane_z).abs();
-            (height * (2.0 - forward_z)).max(projection.zoom * 1.0e-3)
-        } else {
-            projection.zoom
-        }
-        .max(1.0e-9);
-        let grid_level = reference_distance.log10();
+        let plane_height = displayed_plane_z - camera.position.z;
 
-        let plane_scene_z = PLANE_Z - scene_origin.z;
+        // The finest a pixel's footprint on the plane can be: straight below
+        // a perspective eye (halved for the corners' smaller pixels), and the
+        // same everywhere in orthographic. The levels start two powers of ten
+        // finer, so the shader's per-pixel choice never runs off the bottom.
+        let viewport_height = viewport_height.max(1.0);
+        let finest_footprint = if perspective {
+            plane_height.abs() * half_height / viewport_height
+        } else {
+            2.0 * projection.zoom / viewport_height
+        };
+        let level_pixels = GRID_LEVEL_PIXELS * scale_factor;
+        let base_level = ((finest_footprint.max(1.0e-9) * level_pixels).log10().floor() - 2.0).clamp(-12.0, 24.0);
+
+        // Each level's lines lie at whole multiples of its spacing. Their
+        // phase at the eye is reduced here in f64, where an eye millions of
+        // metres out still resolves a fraction of the finest spacing.
+        let mut phases = [[0.0f32; 4]; GRID_LEVELS / 2];
+        for level in 0..GRID_LEVELS {
+            let spacing = 10f64.powf(base_level + level as f64);
+            let phase = [(camera.position.x / spacing).rem_euclid(1.0) as f32, (camera.position.y / spacing).rem_euclid(1.0) as f32];
+            phases[level / 2][(level % 2) * 2..(level % 2) * 2 + 2].copy_from_slice(&phase);
+        }
+
+        // The projection of points measured from the eye: the camera
+        // uniform's matrix without its translation or exaggeration (the
+        // plane's points are already where they are displayed).
+        let eye_view_proj = projection.calc_matrix() * glam::dcamera::rh::view::look_to_mat4(DVec3::ZERO, forward, camera.up());
+
         Self {
-            origin_plane: [
-                scene_origin.x as f32,
-                scene_origin.y as f32,
-                plane_scene_z as f32,
-                if projection.is_perspective() { 1.0 } else { 0.0 },
-            ],
-            // y controls grazing-angle suppression. Fly mode deliberately
-            // leaves the grid at full opacity even when viewed edge-on.
-            level_params: [grid_level as f32, if fly_mode_enabled { 0.0 } else { 1.0 }, extra_width as f32, 0.0],
+            eye_view_proj: eye_view_proj.as_mat4().to_cols_array_2d(),
+            ray_right: vec4(right * half_width, if perspective { 1.0 } else { 0.0 }),
+            ray_up: vec4(up * half_height, plane_height),
+            ray_forward: vec4(forward, extra_width),
+            level_params: [base_level as f32, level_pixels as f32, camera.position.x as f32, camera.position.y as f32],
+            phases,
             minor_color,
             major_color,
             x_axis_color,
@@ -324,7 +368,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) scene_pipelines: Shared<scene_pipelines::ScenePipelines>,
     /// What the scene pass draws with and into while `frame::render` diverts
     /// it into the cinematic view's lit target. `None` everywhere else, so
-    /// every other pass - the overlay, the previews, the plot - draws with the
+    /// every other pass - the overlay, the previews - draws with the
     /// ordinary view's pipelines; see [`Self::pipes`].
     pub(super) active_scene: Option<ActiveScene>,
     pub(super) block_model_volume_pipeline: wgpu::RenderPipeline,
@@ -377,6 +421,9 @@ pub(crate) struct Graphics<'a> {
     pub(super) scene_cache_key: Option<u64>,
     pub(super) scene_cache_blit_layout: wgpu::BindGroupLayout,
     pub(super) scene_cache_blit_pipeline: wgpu::RenderPipeline,
+    /// The window's corners, where it has to cut them itself. See
+    /// `window_corners`.
+    window_corners: Option<window_corners::WindowCorners>,
     /// The present mode this surface uses with vsync off, if it has one.
     no_vsync_present_mode: Option<wgpu::PresentMode>,
     pub(super) depth_texture: wgpu::Texture,
@@ -533,10 +580,6 @@ pub(crate) struct Graphics<'a> {
     /// scene pass while the developer chunk-bounds view is on and drawn,
     /// depth-tested, by the editor overlay pass.
     pub(super) chunk_bounds_outline: Option<passes::ChunkBoundsOutline>,
-    /// Live map render behind the engineering-drawing dialog's preview, and
-    /// the framing/scene fingerprint it was rendered for.
-    pub(super) plot_preview: Option<plot::PlotPreviewTarget>,
-    pub(super) plot_preview_key: Option<u64>,
     /// Destination for a one-shot viewport image export; consumed by the next
     /// `render` call (see `screenshot.rs`).
     pub(super) pending_screenshot: Option<screenshot::ScreenshotTarget>,
@@ -976,6 +1019,29 @@ impl<'a> Graphics<'a> {
         self.gui.reload_fonts();
         self.text_system = TextSystem::new();
         self.cached_document_scene_key = None;
+    }
+
+    /// The UI's points to the window's physical pixels.
+    pub(crate) fn ui_pixels_per_point(&self) -> f32 {
+        self.gui.pixels_per_point()
+    }
+
+    /// Whether the window cuts its own corners round. See `window_corners`.
+    pub(crate) fn cuts_window_corners(&self) -> bool {
+        self.window_corners.is_some()
+    }
+
+    /// The window's corner radius in physical pixels, where it cuts its own
+    /// corners; zero leaves them square.
+    pub(crate) fn set_window_corner_radius(&mut self, radius: f32) {
+        if let Some(corners) = self.window_corners.as_mut() {
+            corners.set_radius(radius);
+        }
+    }
+
+    /// See [`crate::ui::Gui::release_pointer`].
+    pub(crate) fn release_ui_pointer(&mut self) {
+        self.gui.release_pointer();
     }
 
     #[cfg(target_arch = "wasm32")]

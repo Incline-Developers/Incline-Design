@@ -113,13 +113,11 @@ impl App<'_> {
         let preferences = self.editor.current_preferences();
         if let Err(error) = crate::app::io::save_config(&crate::app::commands::view::config_from(
             &preferences,
-            self.editor.workspace_order,
             self.editor.delay_products.iter().map(crate::ui::state::DelayProduct::to_stored).collect(),
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
-            self.editor.recent_design_functions.clone(),
-            self.editor.recent_geology_functions.clone(),
+            self.editor.recent_functions.clone(),
         )) {
             userspace_warn!("{}", tr!("blast-log-failed-save-charge-library-error", error = error.to_string()));
         }
@@ -194,7 +192,7 @@ impl App<'_> {
     }
 
     /// Load or unload the selected holes of the active dataset, from the
-    /// products panel's rule menu.
+    /// Charge Rules section's menu.
     pub(crate) fn charge_selected_holes(&mut self, rule: Option<String>) {
         let Some(id) = self.editor.active_drill_hole else {
             return;

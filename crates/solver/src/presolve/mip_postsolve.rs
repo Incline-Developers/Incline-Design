@@ -485,9 +485,11 @@ impl DuplicateColumn {
         col_value[col] = if self.col_lower != -INF { self.col_lower } else { 0.0f64.min(self.col_upper) };
         col_value[dup] = ((CDouble::new(merge_val) - col_value[col]) / self.col_scale).value();
         let mut recompute_col = false;
+        let mut duplicate_col_at_upper = false;
         if col_value[dup] > self.duplicate_col_upper {
             col_value[dup] = self.duplicate_col_upper;
             recompute_col = true;
+            duplicate_col_at_upper = true;
         } else if col_value[dup] < self.duplicate_col_lower {
             col_value[dup] = self.duplicate_col_lower;
             recompute_col = true;
@@ -498,7 +500,13 @@ impl DuplicateColumn {
         if recompute_col {
             col_value[col] = merge_val - self.col_scale * col_value[dup];
             if !self.duplicate_col_integral && self.col_integral {
-                col_value[col] = (col_value[col] - mip_tol).ceil();
+                // Round towards the side that keeps the twin in range
+                // (HiGHS #3285; 1.15 always rounded up).
+                col_value[col] = if duplicate_col_at_upper == (self.col_scale > 0.0) {
+                    (col_value[col] - mip_tol).ceil()
+                } else {
+                    (col_value[col] + mip_tol).floor()
+                };
                 col_value[dup] = ((CDouble::new(merge_val) - col_value[col]) / self.col_scale).value();
             }
         }

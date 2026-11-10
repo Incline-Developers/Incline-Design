@@ -4,6 +4,8 @@
 //! IPX's `Int` is HiGHS's `HighsInt`, 32 bits (BASICLU's `lu_int` too),
 //! signed since its index arrays carry negative markers.
 
+use std::borrow::Cow;
+
 use crate::pdqsort::pdqsort;
 
 pub(crate) type Int = i32;
@@ -368,11 +370,13 @@ fn scatter_sub(index: &[Int], value: &[f64], temp: f64, x: &mut [f64]) {
     }
 }
 
+#[inline(always)]
 pub(crate) fn dot_column(a: &SparseMatrix, j: Int, rhs: &[f64]) -> f64 {
     let (index, value) = column(a, j);
     gather_dot(index, value, rhs)
 }
 
+#[inline(always)]
 pub(crate) fn scatter_column(a: &SparseMatrix, j: Int, alpha: f64, lhs: &mut [f64]) {
     let (index, value) = column(a, j);
     for (&i, &v) in index.iter().zip(value) {
@@ -394,14 +398,90 @@ pub(crate) fn multiply_add(a: &SparseMatrix, rhs: &[f64], alpha: f64, lhs: &mut 
     }
 }
 
-/// `lhs += A * D^2 * A' * rhs`, `D` the identity if not given.
-pub(crate) fn add_normal_product(a: &SparseMatrix, d: Option<&[f64]>, rhs: &[f64], lhs: &mut [f64]) {
-    for j in 0..a.cols() {
-        let mut temp = dot_column(a, j, rhs);
-        if let Some(d) = d {
-            temp *= d[u(j)] * d[u(j)];
+// Most nonbasic routing columns have at most four entries. Fixed lengths
+// let the compiler remove their loop control without changing summation order.
+#[inline(always)]
+unsafe fn short_normal_product<const N: usize>(index: &[Int; N], value: &[f64; N], weight: Option<f64>, rhs: &[f64], lhs: &mut [f64]) {
+    let mut temp = 0.0;
+    for k in 0..N {
+        // SAFETY: the prepared product validates every row and both vectors.
+        temp += unsafe { *rhs.get_unchecked(u(index[k])) } * value[k];
+    }
+    if let Some(weight) = weight {
+        temp *= weight;
+    }
+    for k in 0..N {
+        // SAFETY: each mutable access ends before the next, even for repeated rows.
+        unsafe { *lhs.get_unchecked_mut(u(index[k])) += temp * value[k] };
+    }
+}
+
+/// A normal product keeps its matrix immutable after validating the row
+/// indices. Repeated Krylov products then check vector sizes once instead
+/// of checking each sparse gather and scatter.
+pub(crate) struct NormalProduct<'a> {
+    matrix: Cow<'a, SparseMatrix>,
+    rows: usize,
+    cols: Int,
+}
+
+impl<'a> NormalProduct<'a> {
+    fn new(matrix: Cow<'a, SparseMatrix>, cols: Int) -> Self {
+        assert!(cols >= 0 && cols <= matrix.cols());
+        let rows = u(matrix.rows());
+        let pointers = &matrix.colptr[..=u(cols)];
+        assert!(pointers[0] >= 0 && pointers.windows(2).all(|pair| pair[0] <= pair[1]));
+        let end = u(pointers[u(cols)]);
+        assert!(end <= matrix.rowidx.len() && end <= matrix.values.len());
+        assert!(matrix.rowidx[..end].iter().all(|&row| u(row) < rows));
+        Self { matrix, rows, cols }
+    }
+
+    pub fn borrowed(matrix: &'a SparseMatrix, cols: Int) -> Self {
+        Self::new(Cow::Borrowed(matrix), cols)
+    }
+
+    pub fn owned(matrix: SparseMatrix) -> Self {
+        let cols = matrix.cols();
+        Self::new(Cow::Owned(matrix), cols)
+    }
+
+    #[inline(always)]
+    pub fn add(&self, weights: Option<&[f64]>, rhs: &[f64], lhs: &mut [f64]) {
+        assert!(rhs.len() >= self.rows && lhs.len() >= self.rows);
+        let a = &self.matrix;
+        if let Some(weights) = weights {
+            assert!(weights.len() >= u(self.cols));
         }
-        scatter_column(a, j, temp, lhs);
+        for (j, pointers) in a.colptr[..=u(self.cols)].windows(2).enumerate() {
+            // SAFETY: construction checks that these pointers are ordered,
+            // nonnegative and within both arrays. The immutable matrix keeps
+            // those ranges and row indices valid; vector sizes are checked above.
+            unsafe {
+                let range = u(pointers[0])..u(pointers[1]);
+                let index = a.rowidx.get_unchecked(range.clone());
+                let value = a.values.get_unchecked(range);
+                let weight = weights.map(|w| *w.get_unchecked(j));
+                match index.len() {
+                    1 => short_normal_product::<1>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
+                    2 => short_normal_product::<2>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
+                    3 => short_normal_product::<3>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
+                    4 => short_normal_product::<4>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
+                    _ => {
+                        let mut temp = 0.0;
+                        for (&i, &v) in index.iter().zip(value) {
+                            temp += *rhs.get_unchecked(u(i)) * v;
+                        }
+                        if let Some(weight) = weight {
+                            temp *= weight;
+                        }
+                        for (&i, &v) in index.iter().zip(value) {
+                            *lhs.get_unchecked_mut(u(i)) += temp * v;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -409,6 +489,7 @@ pub(crate) fn add_normal_product(a: &SparseMatrix, d: Option<&[f64]>, rhs: &[f64
 /// `unitdiag` when its diagonal is implicit (otherwise each column's
 /// diagonal entry is its last if upper, first if lower). Returns the
 /// number of nonzeros in the solution.
+#[inline(always)]
 pub(crate) fn triangular_solve(a: &SparseMatrix, x: &mut [f64], trans: char, upper: bool, unitdiag: bool) -> Int {
     let ncol = a.cols();
     let ap = &a.colptr;
@@ -576,9 +657,52 @@ pub(crate) fn twonorm(x: &[f64]) -> f64 {
 
 /// `std::max` over |x|, which keeps the larger unless NaN comes second.
 pub(crate) fn infnorm(x: &[f64]) -> f64 {
-    let mut norm: f64 = 0.0;
-    for xi in x {
-        let v = xi.abs();
+    scaled_infnorm(x, None)
+}
+
+/// Infinity norms ignore NaNs. Independent lane maxima therefore preserve
+/// the scalar result, including its positive zero for an all-zero vector.
+pub(crate) fn scaled_infnorm(x: &[f64], scale: Option<&[f64]>) -> f64 {
+    if let Some(scale) = scale {
+        assert!(scale.len() >= x.len());
+    }
+    // Four entries at a time where SSE2 is baseline, the rest one by one.
+    #[cfg(target_arch = "x86_64")]
+    let (mut norm, start) = {
+        let mut i = 0;
+        use std::arch::x86_64::{_mm_andnot_pd, _mm_loadu_pd, _mm_max_pd, _mm_mul_pd, _mm_set1_pd, _mm_setzero_pd, _mm_storeu_pd};
+        // SAFETY: SSE2 is baseline on x86-64. Each iteration has four
+        // entries in x and, when present, in the checked scale slice.
+        unsafe {
+            let sign = _mm_set1_pd(-0.0);
+            let mut first = _mm_setzero_pd();
+            let mut second = _mm_setzero_pd();
+            if let Some(scale) = scale {
+                while i + 3 < x.len() {
+                    let a = _mm_mul_pd(_mm_loadu_pd(scale.as_ptr().add(i)), _mm_loadu_pd(x.as_ptr().add(i)));
+                    let b = _mm_mul_pd(_mm_loadu_pd(scale.as_ptr().add(i + 2)), _mm_loadu_pd(x.as_ptr().add(i + 2)));
+                    // Keep the accumulated maximum second: MAXPD then
+                    // ignores a NaN input just as `norm < abs` does.
+                    first = _mm_max_pd(_mm_andnot_pd(sign, a), first);
+                    second = _mm_max_pd(_mm_andnot_pd(sign, b), second);
+                    i += 4;
+                }
+            } else {
+                while i + 3 < x.len() {
+                    first = _mm_max_pd(_mm_andnot_pd(sign, _mm_loadu_pd(x.as_ptr().add(i))), first);
+                    second = _mm_max_pd(_mm_andnot_pd(sign, _mm_loadu_pd(x.as_ptr().add(i + 2))), second);
+                    i += 4;
+                }
+            }
+            let mut lanes = [0.0; 2];
+            _mm_storeu_pd(lanes.as_mut_ptr(), _mm_max_pd(first, second));
+            (lanes[0].max(lanes[1]), i)
+        }
+    };
+    #[cfg(not(target_arch = "x86_64"))]
+    let (mut norm, start) = (0.0, 0);
+    for j in start..x.len() {
+        let v = scale.map_or(x[j], |scale| scale[j] * x[j]).abs();
         if norm < v {
             norm = v;
         }

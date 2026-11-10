@@ -147,7 +147,14 @@ fn lpi_solve(lpi: &mut Lpi) -> ScipResult {
     }
     if !lpi.highs.has_invert() && lpi.highs.options.presolve {
         lpi.presolve = false;
+        // HiGHS's run clock keeps counting into the second run, so a solve
+        // stopped by the time limit is not given it again: the port's
+        // clock starts afresh with each run, so the second has what the
+        // first left.
+        let limit = lpi.highs.options.time_limit;
+        lpi.highs.options.time_limit = (limit - lpi.highs.run_time()).max(0.0);
         let retcode = lpi_solve(lpi);
+        lpi.highs.options.time_limit = limit;
         if retcode.is_err() {
             log::error!("HiGHS terminated with model status <{:?}> after trying to recover inverse", lpi.highs.status());
         }

@@ -9,6 +9,13 @@ struct SurfaceStyle {
     // and w: scene-relative threshold the pattern is drawn from (zero
     // direction draws it everywhere).
     pattern: vec4<f32>,
+    // The surface drawn as its cut in a 2D section (`section_cut.wgsl`).
+    cut: vec4<f32>,
+    // x: the pixel scale the contour bands are drawn at, 0 for none; y, z:
+    // the scene origin's elevation wrapped to 10 km and to 10 m, multiples
+    // of every coarse and fine contour interval; w: how far the surface is
+    // tinted toward the selection colour.
+    overlay: vec4<f32>,
 };
 @group(1) @binding(0)
 var<uniform> surface_style: SurfaceStyle;
@@ -57,6 +64,9 @@ struct VertexOutput {
     // Model-space position, for the cinematic lighting's shadow lookups.
     @location(5) world: vec3<f32>,
     @location(6) pattern_position: vec3<f32>,
+    // Distance in front of the eye in perspective, 1 in orthographic, for
+    // the size of a pixel on the ground.
+    @location(7) view_depth: f32,
 };
 
 @vertex
@@ -72,6 +82,7 @@ fn vs_main(model: VertexInput) -> VertexOutput {
     out.pattern_position = model.position + chunk.pattern_phase.xyz;
     out.scene_z = scene_position.z;
     out.clip_position = camera.view_proj * vec4<f32>(scene_position, 1.0);
+    out.view_depth = out.clip_position.w;
     out.section_offset = section_plane_offset(scene_position);
     return out;
 }
@@ -87,10 +98,68 @@ fn wire_coverage(barycentric: vec3<f32>, width: f32) -> f32 {
     return select(0.0, 1.0 - smoothstep(width * 0.5 - 0.5, width * 0.5 + 0.5, nearest), width > 0.0);
 }
 
+// World size of one pixel at this fragment, the same in every direction
+// across the screen, so the contour interval follows zoom and distance rather
+// than each facet's tilt. View depth times the projection's pixel size at unit
+// depth, rather than an unprojection, which loses it to f32 cancellation up
+// close; an orthographic `view_depth` is 1.
+fn pixel_footprint(view_depth: f32) -> f32 {
+    return view_depth * 2.0 / (max(camera.viewport_origin.z, 1e-12) * max(camera.viewport.y, 1.0));
+}
+
+// Coverage of one level of contours, `interval` metres apart, `width` pixels
+// wide; faded out where they crowd closer than a few pixels on screen. The
+// scene origin's elevation joins as its phase against the interval, wrapped
+// on the CPU, so it never rounds the fragment's own scene-relative height.
+fn contour_level(scene_z: f32, z_per_pixel: f32, interval: f32, width: f32) -> f32 {
+    let origin = select(surface_style.overlay.y, surface_style.overlay.z, interval <= 10.0);
+    let phase = scene_z / interval + fract(origin / interval);
+    let distance = abs(fract(phase + 0.5) - 0.5) * interval / z_per_pixel;
+    let line = 1.0 - smoothstep(width * 0.5 - 0.5, width * 0.5 + 0.5, distance);
+    return line * smoothstep(3.0, 6.0, interval / z_per_pixel);
+}
+
+// Width in logical pixels of the contour bands.
+const CONTOUR_WIDTH: f32 = 2.0;
+// How far apart in logical pixels the contours fall on a 1:1 slope; gentler
+// ground draws them further apart, as contours do.
+const CONTOUR_SPACING: f32 = 12.0;
+
+// Contour bands, drawn while the Contours view is on, on round elevations.
+// The interval steps through 0.1, 0.5, 1, 5, 10... metres with zoom, up to
+// 10 km; each coarser set contains the finer one, so the finer lines fade in
+// and out over lines that stay put.
+fn contour_coverage(scene_z: f32, normal: vec3<f32>, view_depth: f32, scale: f32) -> f32 {
+    let width = CONTOUR_WIDTH * scale;
+    let spacing = CONTOUR_SPACING * scale;
+    let z_per_pixel = max(fwidth(scene_z), 1e-7);
+    let level = clamp(log2(max(pixel_footprint(view_depth) * spacing, 1e-6)) / log2(10.0), -1.0, 3.999);
+    let decade = floor(level);
+    let within = level - decade;
+    let base = pow(10.0, decade);
+    let five = log2(5.0) / log2(10.0);
+    var fine = base;
+    var coarse = base * 5.0;
+    var blend = within / five;
+    if within >= five {
+        fine = base * 5.0;
+        coarse = base * 10.0;
+        blend = (within - five) / (1.0 - five);
+    }
+    let lines = max(contour_level(scene_z, z_per_pixel, coarse, width), contour_level(scene_z, z_per_pixel, fine, width) * (1.0 - blend));
+    // Level ground has no contours; one lying exactly on an interval would
+    // otherwise fill its whole face.
+    return select(0.0, lines * smoothstep(2e-6, 2e-5, 1.0 - normal.z), width > 0.0);
+}
+
 @fragment
 fn fs_main(in: VertexOutput, @builtin(barycentric) barycentric: vec3<f32>) -> @location(0) vec4<f32> {
     // Derivatives before anything that can end the invocation.
-    let wire = wire_coverage(barycentric, surface_style.params.y) * surface_style.wire_color.a;
+    let edges = max(
+        wire_coverage(barycentric, surface_style.params.y),
+        contour_coverage(in.scene_z, in.normal, in.view_depth, surface_style.overlay.x),
+    );
+    let wire = edges * surface_style.wire_color.a;
     // Project onto the dominant world plane, including vertical slab walls.
     var hatch_uv = in.pattern_position.xy;
     let axis = abs(in.normal);
@@ -146,6 +215,8 @@ fn fs_main(in: VertexOutput, @builtin(barycentric) barycentric: vec3<f32>) -> @l
         surface_color = vec4<f32>(mix(surface_color.rgb, surface_style.pattern_color.rgb,
             coverage * surface_style.pattern_color.a), surface_color.a);
     }
+    // Selection: tinted before lighting, so the surface keeps its relief.
+    surface_color = vec4<f32>(mix(surface_color.rgb, surface_style.wire_color.rgb, surface_style.overlay.w), surface_color.a);
     let shaded = shade_surface(surface_color, in.normal, in.world, in.clip_position.xy);
     // Unlit, like the instanced edges it replaces.
     return vec4<f32>(mix(shaded.rgb, surface_style.wire_color.rgb, wire), max(shaded.a, wire));

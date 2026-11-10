@@ -194,31 +194,38 @@ impl HaulNetwork {
         self.next_road_id = self.next_road_id.max(other.next_road_id);
     }
     pub(crate) fn add_node(&mut self, pos: DVec3) -> anyhow::Result<NodeId> {
-        anyhow::ensure!(pos.is_finite(), "invalid road position");
+        anyhow::ensure!(pos.is_finite(), crate::i18n::tr!("err-haul-invalid-position"));
         if let Some(id) = self.nodes.iter().map(|n| n.id.0).max() {
-            self.next_node_id = self.next_node_id.max(id.checked_add(1).ok_or_else(|| anyhow::anyhow!("node ids exhausted"))?);
+            self.next_node_id = self
+                .next_node_id
+                .max(id.checked_add(1).ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-haul-node-ids-exhausted")))?);
         }
         let id = NodeId(self.next_node_id);
         self.next_node_id = self
             .next_node_id
             .checked_add(1)
             .filter(|n| n & u64::from(u32::MAX) != 0)
-            .ok_or_else(|| anyhow::anyhow!("road node ids exhausted"))?;
+            .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-haul-node-ids-exhausted")))?;
         self.nodes.push(HaulNode { id, pos, role: None });
         Ok(id)
     }
     pub(crate) fn add_road(&mut self, name: String, from: NodeId, to: NodeId, verts: Vec<DVec3>) -> anyhow::Result<RoadId> {
-        anyhow::ensure!(from != to && self.node(from).is_some() && self.node(to).is_some(), "road needs two distinct nodes");
-        anyhow::ensure!(verts.iter().all(|p| p.is_finite()), "invalid road shape");
+        anyhow::ensure!(
+            from != to && self.node(from).is_some() && self.node(to).is_some(),
+            crate::i18n::tr!("err-haul-road-needs-two-nodes")
+        );
+        anyhow::ensure!(verts.iter().all(|p| p.is_finite()), crate::i18n::tr!("err-haul-invalid-road-shape"));
         if let Some(id) = self.roads.iter().map(|r| r.id.0).max() {
-            self.next_road_id = self.next_road_id.max(id.checked_add(1).ok_or_else(|| anyhow::anyhow!("road ids exhausted"))?);
+            self.next_road_id = self
+                .next_road_id
+                .max(id.checked_add(1).ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-haul-road-ids-exhausted")))?);
         }
         let id = RoadId(self.next_road_id);
         self.next_road_id = self
             .next_road_id
             .checked_add(1)
             .filter(|n| n & u64::from(u32::MAX) != 0)
-            .ok_or_else(|| anyhow::anyhow!("road ids exhausted"))?;
+            .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-haul-road-ids-exhausted")))?;
         self.roads.push(HaulRoad {
             id,
             name,
@@ -230,8 +237,12 @@ impl HaulNetwork {
         Ok(id)
     }
     pub(crate) fn move_node(&mut self, id: NodeId, pos: DVec3) -> anyhow::Result<()> {
-        anyhow::ensure!(pos.is_finite(), "invalid road position");
-        self.nodes.iter_mut().find(|n| n.id == id).ok_or_else(|| anyhow::anyhow!("unknown road node"))?.pos = pos;
+        anyhow::ensure!(pos.is_finite(), crate::i18n::tr!("err-haul-invalid-position"));
+        self.nodes
+            .iter_mut()
+            .find(|n| n.id == id)
+            .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-haul-unknown-node")))?
+            .pos = pos;
         Ok(())
     }
     pub(crate) fn delete_node(&mut self, id: NodeId) {
@@ -260,7 +271,7 @@ impl HaulNetwork {
     }
     /// Hold a block to `nodes`, or with none leave it to the nearest road.
     pub(crate) fn set_block_link(&mut self, solid: SolidId, flitch_base: f64, face: &[Vec<DVec2>], probe: [f64; 2], mut nodes: Vec<NodeId>) -> anyhow::Result<()> {
-        anyhow::ensure!(nodes.iter().all(|id| self.node(*id).is_some()), "unknown road node");
+        anyhow::ensure!(nodes.iter().all(|id| self.node(*id).is_some()), crate::i18n::tr!("err-haul-unknown-node"));
         nodes.sort();
         nodes.dedup();
         self.block_links.retain(|l| !l.covers(solid, flitch_base, face));
@@ -272,7 +283,7 @@ impl HaulNetwork {
     /// Give a node a role, taking whatever part of it another node held: a
     /// node that both tipped and loaded a pile keeps the half not moved.
     pub(crate) fn set_role(&mut self, id: NodeId, role: Option<NodeRole>) -> anyhow::Result<()> {
-        anyhow::ensure!(self.node(id).is_some(), "unknown road node");
+        anyhow::ensure!(self.node(id).is_some(), crate::i18n::tr!("err-haul-unknown-node"));
         if let Some(role) = role {
             let destination = role.destination();
             for node in self.nodes.iter_mut().filter(|n| n.id != id) {
@@ -331,9 +342,9 @@ impl HaulNetwork {
     }
     /// Split on a specific segment. The original id remains on the first half.
     pub(crate) fn split(&mut self, id: RoadId, segment: usize, pos: DVec3) -> anyhow::Result<NodeId> {
-        let road = self.road(id).ok_or_else(|| anyhow::anyhow!("unknown road"))?.clone();
+        let road = self.road(id).ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-haul-unknown-road")))?.clone();
         let points = self.points(&road);
-        anyhow::ensure!(segment + 1 < points.len(), "unknown road segment");
+        anyhow::ensure!(segment + 1 < points.len(), crate::i18n::tr!("err-haul-unknown-segment"));
         if pos.distance(points[0]) < 1e-6 {
             return Ok(road.from);
         }
@@ -356,12 +367,12 @@ impl HaulNetwork {
         Ok(node)
     }
     pub(crate) fn join(&mut self, keep: NodeId, remove: NodeId) -> anyhow::Result<()> {
-        let removed = self.node(remove).ok_or_else(|| anyhow::anyhow!("unknown road node"))?.clone();
-        let kept = self.node(keep).ok_or_else(|| anyhow::anyhow!("unknown road node"))?;
-        anyhow::ensure!(keep != remove, "select two nodes");
+        let removed = self.node(remove).ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-haul-unknown-node")))?.clone();
+        let kept = self.node(keep).ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-haul-unknown-node")))?;
+        anyhow::ensure!(keep != remove, crate::i18n::tr!("err-haul-select-two-nodes"));
         anyhow::ensure!(
             kept.role.is_none() || removed.role.is_none() || kept.role == removed.role,
-            "nodes have different destination roles"
+            crate::i18n::tr!("err-haul-node-roles-differ")
         );
         if kept.role.is_none() {
             self.set_role(keep, removed.role)?;
@@ -538,7 +549,7 @@ impl HaulNetwork {
             self.settings.bench_speed_kph,
             self.settings.acceleration_kph_s,
         ] {
-            anyhow::ensure!(v.is_finite() && v > 0.0, "haulage settings must be positive");
+            anyhow::ensure!(v.is_finite() && v > 0.0, crate::i18n::tr!("err-haul-settings-positive"));
         }
         let mut nodes = BTreeSet::new();
         let mut roads = BTreeSet::new();
@@ -546,33 +557,40 @@ impl HaulNetwork {
         for n in &self.nodes {
             if let Some(role) = n.role {
                 for (serves, reclaim) in [(role.dumps(), false), (role.reclaims(), true)] {
-                    anyhow::ensure!(!serves || roles.insert((role.destination(), reclaim)), "duplicate haul destination role");
+                    anyhow::ensure!(!serves || roles.insert((role.destination(), reclaim)), crate::i18n::tr!("err-haul-duplicate-role"));
                 }
             }
-            anyhow::ensure!(nodes.insert(n.id) && n.pos.is_finite(), "invalid or duplicate road node");
+            anyhow::ensure!(nodes.insert(n.id) && n.pos.is_finite(), crate::i18n::tr!("err-haul-invalid-node"));
         }
         for r in &self.roads {
             anyhow::ensure!(
                 roads.insert(r.id) && nodes.contains(&r.from) && nodes.contains(&r.to) && r.from != r.to,
-                "invalid road topology"
+                crate::i18n::tr!("err-haul-invalid-topology")
             );
             anyhow::ensure!(
                 r.verts.iter().all(|p| p.is_finite()) && r.speed_limit_kph.is_none_or(|v| v.is_finite() && v > 0.0),
-                "invalid road geometry or speed"
+                crate::i18n::tr!("err-haul-invalid-geometry")
             );
-            anyhow::ensure!(self.points(r).windows(2).all(|p| p[0].distance(p[1]) > 1e-6), "zero length road segment");
+            anyhow::ensure!(
+                self.points(r).windows(2).all(|p| p[0].distance(p[1]) > 1e-6),
+                crate::i18n::tr!("err-haul-zero-length-segment")
+            );
         }
         for link in &self.block_links {
             anyhow::ensure!(
                 !link.nodes.is_empty() && link.nodes.iter().all(|id| nodes.contains(id)) && link.flitch_base.is_finite() && link.probe.iter().all(|v| v.is_finite()),
-                "invalid block link"
+                crate::i18n::tr!("err-haul-invalid-block-link")
             );
         }
         if let Some(id) = nodes.last() {
-            self.next_node_id = self.next_node_id.max(id.0.checked_add(1).ok_or_else(|| anyhow::anyhow!("node ids exhausted"))?);
+            self.next_node_id = self
+                .next_node_id
+                .max(id.0.checked_add(1).ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-haul-node-ids-exhausted")))?);
         }
         if let Some(id) = roads.last() {
-            self.next_road_id = self.next_road_id.max(id.0.checked_add(1).ok_or_else(|| anyhow::anyhow!("road ids exhausted"))?);
+            self.next_road_id = self
+                .next_road_id
+                .max(id.0.checked_add(1).ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-haul-road-ids-exhausted")))?);
         }
         Ok(())
     }

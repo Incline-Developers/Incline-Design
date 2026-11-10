@@ -6,7 +6,7 @@
 //! Painted by hand so it looks the same on every platform and needs no plot
 //! crate. Hovering a column shows the caller's text for it; clicking selects it.
 
-use super::toolbar::GROUP_CORNER_RADIUS;
+use super::{hint::Hint, toolbar::GROUP_CORNER_RADIUS};
 
 /// Room left of the plot for the left axis numbers, and right of it for the right axis.
 const AXIS_WIDTH: f32 = 56.0;
@@ -236,7 +236,7 @@ impl<'a> BarLineChart<'a> {
         if let Some(column) = hovered {
             out.hovered = Some(column);
             if let Some(hover_text) = self.hover_text {
-                response.clone().on_hover_text_at_pointer(hover_text(column));
+                response.clone().hint_at_pointer(hover_text(column));
             }
             if response.clicked() {
                 out.clicked = Some(column);

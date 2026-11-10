@@ -1,4 +1,4 @@
-# Pit Optimization in Incline Design
+# Pit Optimisation in Incline Design
 
 *A hands-on tutorial on the McLaughlin gold deposit*
 
@@ -59,15 +59,15 @@ Every scenario you build is saved **inside the project file**. Save the project 
 
 ## 1. Concepts
 
-This chapter explains the ideas behind the buttons. If you already know Whittle-style pit optimization, skim the headings and go to [chapter 2](#2-open-the-tutorial-project).
+This chapter explains the ideas behind the buttons. If you already know Whittle-style pit optimisation, skim the headings and go to [chapter 2](#2-open-the-tutorial-project).
 
 ### 1.1 The ultimate pit problem
 
 A block model divides the deposit into blocks. Each block, if mined, brings money in (the metal it contains) and costs money (mining, haulage, processing). The **ultimate pit** is the set of blocks that, mined together, gives the largest total value, while keeping the pit walls no steeper than the rock allows.
 
-You can't mine a block without first mining the blocks above it that the wall slope requires. So a rich block deep down is only worth taking if it pays for all the waste above it. The optimizer weighs every such trade-off at once.
+You can't mine a block without first mining the blocks above it that the wall slope requires. So a rich block deep down is only worth taking if it pays for all the waste above it. The optimiser weighs every such trade-off at once.
 
-This is a **geometric problem with undiscounted money**: *which* blocks, not *when*. A dollar earned in year 10 counts the same as a dollar earned in year 1. Time value of money (NPV) needs a mining schedule and comes in a later release; see [1.9](#19-what-optimization-does-not-do).
+This is a **geometric problem with undiscounted money**: *which* blocks, not *when*. A dollar earned in year 10 counts the same as a dollar earned in year 1. Time value of money (NPV) needs a mining schedule and comes in a later release; see [1.9](#19-what-optimisation-does-not-do).
 
 ![The ultimate pit problem](images/c01-ultimate-pit.svg)
 
@@ -112,7 +112,7 @@ One block weighs 7.62 × 7.62 × 6.096 m × 2.7 t/m³ = **955.7 t**. 1 g/t over 
 | **As Mill ore** | **+26,985** | **−1,888** |
 | Destination | Mill | Mill |
 
-Block B loses money even as ore. But it loses *less* than it would as waste (−1,888 against −2,867). So once the pit has to dig it up anyway, it goes to the mill. This is why the optimizer works with **cash flow** rather than "ore or not".
+Block B loses money even as ore. But it loses *less* than it would as waste (−1,888 against −2,867). So once the pit has to dig it up anyway, it goes to the mill. This is why the optimiser works with **cash flow** rather than "ore or not".
 
 ![Block value, step by step](images/c02-block-value.svg)
 
@@ -134,20 +134,20 @@ Incline offers three ways to set the slope:
 
 ### 1.4 Revenue factors and nested shells
 
-Run the optimizer at a lower price and you get a smaller pit. Run it at a higher price and the pit grows. A **revenue adjustment factor (RAF)** multiplies the revenue: RAF 0.5 is half price, RAF 1 is the base price, RAF 1.5 is 50 % above it.
+Run the optimiser at a lower price and you get a smaller pit. Run it at a higher price and the pit grows. A **revenue factor (RF)** multiplies the revenue: RF 0.5 is half price, RF 1 is the base price, RF 1.5 is 50 % above it.
 
 Because value only grows as the price rises, the pits **nest**: each one sits inside the next. This nested set of **pit shells** shows how the deposit grows, from the most profitable core outwards.
 
 ![Nested shells](images/c04-nested-shells.svg)
 
-*Figure C4. Optimal pits on a small example section at five revenue factors, over grade coloured from blue (low) to red (high). Each pit contains the smaller ones; the RAF 1.3 pit also takes the small western lens.*
+*Figure C4. Optimal pits on a small example section at five revenue factors, over grade coloured from blue (low) to red (high). Each pit contains the smaller ones; the RF 1.3 pit also takes the small western lens.*
 
 ### 1.5 From shells to pushbacks
 
 A schedule doesn't mine dozens of shells one after another. It mines a few **pushbacks**, each a usable slice of the pit. Choosing them is about reading the shell-by-shell numbers:
 
 - **Look for jumps.** Where tonnes leap between two shells, a small price change opens a large area. A pushback boundary there separates two distinct mining zones.
-- **Watch cash flow at base price.** All shells are valued at RAF 1 in the report. The total cash flow usually rises, flattens and then falls; past the peak, extra pit loses money at today's price.
+- **Watch cash flow at base price.** All shells are valued at RF 1 in the report. The total cash flow usually rises, flattens and then falls; past the peak, extra pit loses money at today's price.
 - **Mind the width.** A pushback must be wide enough for equipment. Very close shells make slivers that can't be mined.
 
 ![Reading the pit-by-pit chart](images/c05-pit-by-pit.svg)
@@ -171,7 +171,7 @@ Ordinary nested shells grow wherever the money is, often in several places at on
 
 So the increments come out **rounded**, and they reach past the straight line where the walls need room. A West run gives pit-shaped increments that move west step by step, not flat strips.
 
-The shells are named with their share, for example `PS-W_RAF 0.50 DIR 60%`.
+The shells are named with their share, for example `PS-W_RF 0.50 DIR 60%`.
 
 ![Radial and straight fronts](images/c06-directional.svg)
 
@@ -179,7 +179,7 @@ The shells are named with their share, for example `PS-W_RAF 0.50 DIR 60%`.
 
 ### 1.7 Air
 
-A block model is a box. Above the topography it holds **air** blocks, which cost nothing and earn nothing. Air must not be valued as rock, or the optimizer would "pay" to mine the sky. Incline excludes air in one of two ways:
+A block model is a box. Above the topography it holds **air** blocks, which cost nothing and earn nothing. Air must not be valued as rock, or the optimiser would "pay" to mine the sky. Incline excludes air in one of two ways:
 
 - by a **rock type value** (here, rock type `air`),
 - by a **topography** surface: blocks above it are air.
@@ -192,18 +192,18 @@ Cells with no block at all are treated as air too.
 
 ### 1.8 The solver
 
-Incline solves each shell **exactly**, with the pseudoflow algorithm (the method behind modern commercial optimizers). The solver is `mineflow`, Incline's Rust port of the open-source **MineFlow** library by Matthew Deutsch, Kadri Dağdelen and Thys Johnson (Colorado School of Mines); see [12.4](#124-data-and-citation). The result is not an approximation: it is the most valuable pit for those values and slopes. For many shells, Incline solves the largest one first and then only the bands between shells, so 61 shells take seconds, not minutes.
+Incline solves each shell **exactly**, with the pseudoflow algorithm (the method behind modern commercial optimisers). The solver is `mineflow`, Incline's Rust port of the open-source **MineFlow** library by Matthew Deutsch, Kadri Dağdelen and Thys Johnson (Colorado School of Mines); see [12.4](#124-data-and-citation). The result is not an approximation: it is the most valuable pit for those values and slopes. For many shells, Incline solves the largest one first and then only the bands between shells, so 61 shells take seconds, not minutes.
 
-### 1.9 What optimization does not do
+### 1.9 What optimisation does not do
 
-- **No time value of money.** The optimizer solves a purely geometric task: the set of blocks with the greatest
+- **No time value of money.** The optimiser solves a purely geometric task: the set of blocks with the greatest
   *undiscounted* value under the slope constraints. It does not know when each block is mined, so it can't discount
   cash flows. Every figure in this manual is undiscounted cash flow at base price. Mining the high-value core first,
   which is what makes nested shells and pushbacks matter for NPV, is left to your judgement for now.
 - **NPV is coming.** Scheduling (best, worst and fixed-lag sequences) with discounted cash flow and NPV will come in a
-  later release of the optimizer. This tutorial will be updated then.
+  later release of the optimiser. This tutorial will be updated then.
 - **A shell is not a design.** Shells have block-stepped walls and no ramps or berms. Use them as a guide for the pit design.
-- **Regular, unrotated block models only.** Sub-blocked or rotated models can't be optimized yet.
+- **Regular, unrotated block models only.** Sub-blocked or rotated models can't be optimised yet.
 
 ---
 
@@ -211,7 +211,7 @@ Incline solves each shell **exactly**, with the pseudoflow algorithm (the method
 
 1. Start Incline and open `McLaughlin tutorial.omf` (**File → Open**).
 2. Make sure you are on the **Production** workspace (the workspace tabs at the top).
-3. On the top menu, select **Block Model → Pit Optimization...**
+3. On the top menu, select **Block Model → Pit Optimisation...**
 4. In the explorer, find the block model `mclaughlin_bm`. Double-click it to load it if it's greyed out.
 
 The block model has four fields:
@@ -233,7 +233,7 @@ The block model has four fields:
 
 A **scenario** is everything you type before a run: inputs, costs, prices, slopes and outputs. A project can hold any number of them.
 
-To open the list, select **Block Model → Pit Optimization...** on the top menu.
+To open the list, select **Block Model → Pit Optimisation...** on the top menu.
 
 ![The scenarios list](images/02-scenarios-list.png)
 
@@ -380,7 +380,7 @@ For the first run:
 
 | Field | Set to |
 |---|---|
-| Shells | **Multiple shells using RAFs** |
+| Shells | **Multiple shells using revenue factors** |
 | Factors from | **From, to and step** |
 | Revenue factor from / to | 0.2 / 1.7 |
 | Step / Number of shells | 0.025 / 61 (each updates the other) |
@@ -422,9 +422,9 @@ Click **Save scenario** and close the editor.
 - **The table** lists the same shells. The cog button (*Choose the table's columns*) picks the columns from every figure in the report: grades, contained and recovered metal, every cost, revenue and cash flow. Your choice is saved with the project.
 - **Export CSV** saves the report you are looking at.
 
-**Every shell is valued at the base price (RAF 1).** The revenue factor only decides each shell's *shape*. The numbers always tell you what that pit is worth at today's price.
+**Every shell is valued at the base price (RF 1).** The revenue factor only decides each shell's *shape*. The numbers always tell you what that pit is worth at today's price.
 
-You should see the RAF 1.00 shell at about **125.1 Mt**: 79.0 Mt of ore and 46.1 Mt of waste, with an undiscounted cash flow of about **1,341 million**. The cash flow peaks exactly at RAF 1.00. That is no coincidence: the RAF 1 pit is by definition the most valuable pit at the base price. Smaller shells leave money in the ground, and larger shells add material that does not pay for itself at today's price; by RAF 1.70 the cash flow has fallen to about 1,244 million.
+You should see the RF 1.00 shell at about **125.1 Mt**: 79.0 Mt of ore and 46.1 Mt of waste, with an undiscounted cash flow of about **1,341 million**. The cash flow peaks exactly at RF 1.00. That is no coincidence: the RF 1 pit is by definition the most valuable pit at the base price. Smaller shells leave money in the ground, and larger shells add material that does not pay for itself at today's price; by RF 1.70 the cash flow has fallen to about 1,244 million.
 
 ---
 
@@ -442,11 +442,11 @@ Sixty-one shells are too many to design. You now pick the handful that make good
 
 ![Filtered shells as pushbacks](images/13-shell-filter-applied.png)
 
-**Why these shells?** Look at two things in the chart. Where the bars jump between neighbouring shells, a small price change opens a new zone, so a pushback boundary there separates two mining areas. Where the cash flow line goes flat, extra tonnes add little value, so shells close together there would make thin pushbacks that are not worth mining separately. The six shells above sit at those breaks, and they end at RAF 1.00, the most valuable pit.
+**Why these shells?** Look at two things in the chart. Where the bars jump between neighbouring shells, a small price change opens a new zone, so a pushback boundary there separates two mining areas. Where the cash flow line goes flat, extra tonnes add little value, so shells close together there would make thin pushbacks that are not worth mining separately. The six shells above sit at those breaks, and they end at RF 1.00, the most valuable pit.
 
 ### 6.1 Copy the chosen shells into a new scenario
 
-With the filter applied, click **Copy filtered shells into a new optimization scenario** (the button right of the funnel).
+With the filter applied, click **Copy filtered shells into a new optimisation scenario** (the button right of the funnel).
 
 Incline creates a copy of the scenario right below the original, with:
 - Outputs set to **Type factors manually** with the six factors,
@@ -461,7 +461,7 @@ A message confirms it.
 2. Edit it: on **Outputs**, turn on **Create shell surfaces** and set **Shell name prefix** to `PS`.
 3. Save and run it.
 
-You get six surfaces in the Triangulations collection `McLaughlin - 6 PBs (…) PS surface`, named `PS_RAF 0.325` to `PS_RAF 1.00`.
+You get six surfaces in the Triangulations collection `McLaughlin - 6 PBs (…) PS surface`, named `PS_RF 0.325` to `PS_RF 1.00`.
 
 > **Try it yourself.** Look at the surfaces in 3D. Some may not make a good pushback once you see them, for example
 > two that are very close on one side. Drop or replace that factor in the list and run again.
@@ -491,7 +491,7 @@ Now make the pit grow outwards from a starting point.
    Use the outcrop of the high-grade core; this tutorial used **X 413.3, Y 990.6**.
 4. **Save scenario** and **Run**.
 
-You get five surfaces in the collection `McLaughlin directional - Radial PS-R surface`, named `PS-R_RAF 0.20 DIR 20%` to `PS-R_RAF 1.00 DIR 100%`. (A name ends in ` surface` only when a run makes solids and surfaces both.)
+You get five surfaces in the collection `McLaughlin directional - Radial PS-R surface`, named `PS-R_RF 0.20 DIR 20%` to `PS-R_RF 1.00 DIR 100%`. (A name ends in ` surface` only when a run makes solids and surfaces both.)
 
 A **surface** is the shell without its cap: the pit floor and walls, open where the pit meets the air. A **solid** is closed.
 
@@ -545,7 +545,7 @@ Shell surfaces show the shape. Writing the shells into the **block model** lets 
 
 1. Edit the scenario *McLaughlin directional - East*.
 2. On **Outputs**, turn on **Write shell value into BM**:
-   - value: **Sequence number** (1 = the smallest shell) or **RAF value**,
+   - value: **Sequence number** (1 = the smallest shell) or **Revenue factor**,
    - field: **New field**, named `pushback`.
 3. Save and run. The console says *Wrote 5 shell(s) into field 'pushback' of block model 'mclaughlin_bm'*.
 4. Colour the block model by `pushback`.
@@ -557,7 +557,7 @@ The field is a **category** field, so each shell gets its own colour: **the same
 **The legend** lists every pushback with its share of blocks.
 - Click a colour swatch (*Edit this category colour*) to recolour a pushback. Your colours are kept when you rerun the scenario.
 
-**Look at it in section.** Turn on **Vertical Slice View** and cut east–west through the deposit. Each pushback appears as a band, and you can check:
+**Look at it in section.** Turn on **Vertical Section View** and cut east–west through the deposit. Each pushback appears as a band, and you can check:
 - each pushback is wide enough to mine,
 - the first pushback reaches ore early,
 - no pushback is a thin sliver.
@@ -622,20 +622,20 @@ Revenue is net of selling costs; cash flow is undiscounted.
 | Processing costs | Haulage cost adjustment factor | Multiplies the ore haulage cost for this method. |
 | Processing costs | G&A costs | Per tonne of ore processed. *Same for all* uses one value for every method. |
 | Constraints | Between rows | Step (sectors), Linear, Cosine or Cubic; the last three need 2, 2 and 4 rows. |
-| Outputs | Single shell | One pit at RAF 1. |
+| Outputs | Single shell | One pit at RF 1. |
 | Outputs | Type factors manually | Numbers above 0, separated by commas or spaces; sorted, repeats dropped. |
 | Outputs | Shell name prefix | Starts every shell name; must differ from every other scenario's. |
 | Outputs | Write shell value into BM | Category field; existing text fields or a new one; overwritten on rerun. |
 
 ### 12.2 Glossary
 
-- **RAF (revenue adjustment factor)**: multiplier on revenue used to make smaller or larger pits.
-- **Shell**: the optimal pit at one RAF (and, for directional shells, one front position).
+- **RF (revenue factor)**: multiplier on revenue used to make smaller or larger pits.
+- **Shell**: the optimal pit at one RF (and, for directional shells, one front position).
 - **Pushback**: the material between two chosen shells, mined as one stage.
 - **OSA**: overall slope angle of the pit wall.
 - **Rosette**: slope angles by bearing.
 - **Strip ratio**: waste tonnes / ore tonnes.
-- **Base price**: RAF 1, the prices typed in Revenues.
+- **Base price**: RF 1, the prices typed in Revenues.
 
 ### 12.3 Common messages
 

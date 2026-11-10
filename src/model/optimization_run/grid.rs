@@ -109,7 +109,7 @@ impl BlockLayout {
             })
             .collect();
         if cancel.is_cancelled() {
-            bail!("Cancelled");
+            bail!(crate::app::jobs::Cancelled);
         }
         let mut block_of_cell = vec![NO_BLOCK; self.grid.cell_count()];
         for (block, cell) in cells.into_iter().enumerate() {

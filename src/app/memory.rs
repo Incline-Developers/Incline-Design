@@ -1,4 +1,5 @@
-//! Central limits for allocations that can approach the WASM32 address space.
+//! How the app uses system memory: the native allocator's settings, and central
+//! limits for allocations that can approach the WASM32 address space.
 
 #[cfg(target_arch = "wasm32")]
 use std::sync::Arc;
@@ -34,6 +35,52 @@ pub(crate) const FILE_CHUNK_BYTES: usize = 64 * 1024 * 1024;
 
 #[cfg(target_arch = "wasm32")]
 static RESERVED: AtomicUsize = AtomicUsize::new(0);
+
+/// Keep the system allocator from sitting on memory it has been given back.
+///
+/// glibc's defaults suit servers: an arena per thread up to eight per core, each
+/// holding on to what its thread freed, and a threshold for mapping large blocks
+/// directly that climbs as they are freed, until almost nothing is returned. A
+/// worker pool building meshes then keeps gigabytes nothing is using. Measured
+/// opening a dense 7.6M-triangle world: settled 5.9 -> 4.2 GB, peak 9.8 -> 8.8 GB,
+/// same time. Must run before any threads start. Other systems' allocators have
+/// no such settings, and return memory more readily.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn tune_allocator() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: called first thing in `main`, before anything else allocates on
+    // another thread; these are plain integer settings.
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 8);
+        libc::mallopt(libc::M_MMAP_THRESHOLD, 1024 * 1024);
+        libc::mallopt(libc::M_TRIM_THRESHOLD, 16 * 1024 * 1024);
+    }
+}
+
+/// Hand what the allocator holds free back to the system. Takes the allocator's
+/// locks for a moment, so it runs off the UI thread and not too often.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn release_free_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        use std::{
+            sync::Mutex,
+            time::{Duration, Instant},
+        };
+        static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+        {
+            let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if last.is_some_and(|last| last.elapsed() < Duration::from_secs(5)) {
+                return;
+            }
+            *last = Some(Instant::now());
+        }
+        crate::app::jobs::spawn_pool_task(|| {
+            // SAFETY: takes no pointers, and glibc locks each arena as it goes.
+            unsafe { libc::malloc_trim(0) };
+        });
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 #[derive(Clone, Debug)]
@@ -100,11 +147,15 @@ pub(crate) fn reserve(bytes: usize, description: &str) -> Result<MemoryReservati
 fn claim_counted(used: &AtomicUsize, bytes: usize, limit: usize, description: &str) -> Result<(), String> {
     loop {
         let current = used.load(Ordering::Acquire);
-        let requested = current.checked_add(bytes).ok_or_else(|| format!("{description} memory estimate overflows"))?;
+        let requested = current
+            .checked_add(bytes)
+            .ok_or_else(|| crate::i18n::tr!("err-memory-estimate-overflows", what = description.to_owned()))?;
         if requested > limit {
-            return Err(format!(
-                "{description} needs {bytes} bytes, but only {} bytes remain in Incline Design's 3 GiB browser working-set budget",
-                limit.saturating_sub(current)
+            return Err(crate::i18n::tr!(
+                "err-memory-over-budget",
+                what = description.to_owned(),
+                needed = (bytes / (1 << 20)).max(1).to_string(),
+                remaining = (limit.saturating_sub(current) / (1 << 20)).to_string()
             ));
         }
         if used.compare_exchange_weak(current, requested, Ordering::AcqRel, Ordering::Acquire).is_ok() {

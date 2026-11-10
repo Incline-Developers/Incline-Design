@@ -173,7 +173,7 @@ pub(crate) fn build_intervals(spec: HorizonSpec, windows: &[(f64, f64)], calenda
         .collect())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Activity {
     Dig,
     Reclaim,

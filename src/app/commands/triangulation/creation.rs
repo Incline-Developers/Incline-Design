@@ -4,8 +4,6 @@ use crate::{
     ui::state::TriCreateDiagnostic,
 };
 
-const DEGENERATE_OPEN_BOUNDARY_MESSAGE: &str = "Open strings form a closed boundary, but that boundary is degenerate or collinear";
-
 /// Structured form of the existing user-facing failure. Carrying the exact
 /// assembled ring through `anyhow` lets the UI highlight it without parsing
 /// coordinates back out of the message or rerunning the CDT.
@@ -16,7 +14,7 @@ struct DegenerateOpenBoundary {
 
 impl std::fmt::Display for DegenerateOpenBoundary {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(DEGENERATE_OPEN_BOUNDARY_MESSAGE)
+        formatter.write_str(&tr!("err-tri-open-boundary-degenerate"))
     }
 }
 
@@ -161,12 +159,9 @@ impl<'a> App<'a> {
         upper_surface: bool,
     ) -> Result<()> {
         if object_ids.is_empty() {
-            anyhow::bail!("No objects selected for triangulation");
+            anyhow::bail!(tr!("err-tri-no-objects-selected"));
         }
-        let project = self
-            .workspace
-            .active_project()
-            .ok_or_else(|| anyhow::anyhow!("Open a project before creating a triangulation"))?;
+        let project = self.workspace.active_project().ok_or_else(|| anyhow::anyhow!(tr!("err-tri-open-project-first")))?;
         let project_key = crate::app::jobs::JobKey::Project {
             runtime_id: project.runtime_id,
             document_revision: project.project.document.revision(),
@@ -177,7 +172,7 @@ impl<'a> App<'a> {
         let (paths, rejected) = self.collect_triangulation_paths(&object_ids);
 
         if paths.is_empty() {
-            anyhow::bail!("No usable polylines selected; triangulation requires a closed boundary, or open strings whose endpoints form one");
+            anyhow::bail!(tr!("err-tri-no-usable-polylines"));
         }
         if rejected > 0 {
             userspace_warn!("{}", tr!("cmd-creation-ignored-objects", rejected = rejected.to_string()));
@@ -200,11 +195,11 @@ impl<'a> App<'a> {
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag| -> Result<crate::model::triangulation::GeneratedTriangulation> {
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             let generated = build_created_triangulation(paths, name, surface_type, coarse_weld, upper_surface)?;
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             Ok(generated)
         };
@@ -339,7 +334,7 @@ fn build_created_triangulation(
     };
 
     if all_faces.is_empty() {
-        anyhow::bail!("Triangulation produced no faces; polylines may be collinear or degenerate");
+        anyhow::bail!(tr!("err-tri-no-faces-produced"));
     }
 
     userspace_log!(
@@ -351,7 +346,7 @@ fn build_created_triangulation(
             surface_type = format!("{surface_type:?}")
         )
     );
-    session::build_generated_triangulation(name, all_verts, all_faces, surface_type, crate::model::triangulation::unique_edges)
+    session::build_generated_triangulation(name, all_verts, all_faces, surface_type, |_| Vec::new())
 }
 
 /// Snap breakline vertices that coincide within the given tolerances (XY
@@ -423,7 +418,7 @@ fn assemble_triangulation_input(paths: Vec<BreaklinePath>) -> Result<Triangulati
 
     if open.is_empty() {
         if boundaries.is_empty() {
-            anyhow::bail!("Triangulation has no closed boundary");
+            anyhow::bail!(tr!("err-tri-no-closed-boundary"));
         }
         return Ok(TriangulationInput {
             boundaries,
@@ -510,7 +505,7 @@ fn assemble_triangulation_input(paths: Vec<BreaklinePath>) -> Result<Triangulati
                     .iter()
                     .copied()
                     .find(|candidate| active[*candidate] && !used[*candidate])
-                    .ok_or_else(|| anyhow::anyhow!("Open-string boundary cycle ended unexpectedly"))?;
+                    .ok_or_else(|| anyhow::anyhow!(tr!("err-tri-boundary-cycle-ended")))?;
             }
 
             // The walk repeats its first endpoint at the end; rings elsewhere
@@ -534,7 +529,11 @@ fn assemble_triangulation_input(paths: Vec<BreaklinePath>) -> Result<Triangulati
     if boundaries.is_empty() {
         let unmatched = original_degree.iter().filter(|degree| **degree == 1).count();
         let junctions = original_degree.iter().filter(|degree| **degree > 2).count();
-        anyhow::bail!("Selected open strings do not define an unambiguous closed boundary ({unmatched} unmatched endpoint(s), {junctions} branching junction(s))");
+        anyhow::bail!(tr!(
+            "err-tri-open-strings-ambiguous-boundary",
+            unmatched = unmatched.to_string(),
+            junctions = junctions.to_string()
+        ));
     }
     if assembled_count > 0 {
         userspace_log!("{}", tr!("cmd-creation-assembled-boundary-rings", assembled_count = assembled_count.to_string()));
@@ -580,14 +579,31 @@ fn diagnose_breakline_conflict(paths: &[BreaklineRef<'_>], path_index: usize, ed
             }
             if let Some(detail) = describe_edge_conflict(a, b, c, d) {
                 return (
-                    format!("breakline {path_index} edge {edge_index} ({a:.3}->{b:.3}) vs breakline {other_path_index} edge {other_edge_index} ({c:.3}->{d:.3}): {detail}"),
+                    tr!(
+                        "err-tri-breakline-edge-vs-edge",
+                        path_index = path_index.to_string(),
+                        edge_index = edge_index.to_string(),
+                        a = format!("{a:.3}"),
+                        b = format!("{b:.3}"),
+                        other_path_index = other_path_index.to_string(),
+                        other_edge_index = other_edge_index.to_string(),
+                        c = format!("{c:.3}"),
+                        d = format!("{d:.3}"),
+                        detail = detail
+                    ),
                     Some([[a, b], [c, d]]),
                 );
             }
         }
     }
     (
-        format!("breakline {path_index} edge {edge_index} ({a:.3}->{b:.3}): no conflicting edge found by direct geometric scan (likely a near-degenerate numerical case)"),
+        tr!(
+            "err-tri-breakline-edge-no-conflict-found",
+            path_index = path_index.to_string(),
+            edge_index = edge_index.to_string(),
+            a = format!("{a:.3}"),
+            b = format!("{b:.3}")
+        ),
         None,
     )
 }
@@ -599,7 +615,7 @@ fn describe_edge_conflict(a: glam::DVec3, b: glam::DVec3, c: glam::DVec3, d: gla
     use crate::model::kernel::{self, SegSeg};
     let (a2, b2, c2, d2) = (a.truncate(), b.truncate(), c.truncate(), d.truncate());
     match kernel::segment_segment(a2, b2, c2, d2) {
-        SegSeg::Crossing { t, u, .. } => Some(describe_crossing(a, b, c, d, t, u, "cross")),
+        SegSeg::Crossing { t, u, .. } => Some(describe_crossing(a, b, c, d, t, u, &tr!("err-tri-relation-cross"))),
         SegSeg::Touching { point, t, u } => {
             // An endpoint of one edge on the *interior* of the other fails
             // `try_add_constraint` (spade can't run a constraint through a
@@ -608,14 +624,12 @@ fn describe_edge_conflict(a: glam::DVec3, b: glam::DVec3, c: glam::DVec3, d: gla
             let a_endpoint = point.distance(a2) <= kernel::XY_TOL || point.distance(b2) <= kernel::XY_TOL;
             let b_endpoint = point.distance(c2) <= kernel::XY_TOL || point.distance(d2) <= kernel::XY_TOL;
             if a_endpoint != b_endpoint {
-                Some(describe_crossing(a, b, c, d, t, u, "touch"))
+                Some(describe_crossing(a, b, c, d, t, u, &tr!("err-tri-relation-touch")))
             } else {
                 nearest_endpoint_gap(a, b, c, d)
             }
         }
-        SegSeg::CollinearOverlap { t0, t1 } => Some(format!(
-            "collinear and overlapping along the same line for parameter range [{t0:.3}, {t1:.3}] of edge A \u{2014} these two breaklines run along the same wall without sharing vertices, so the CDT can't insert both without splitting them"
-        )),
+        SegSeg::CollinearOverlap { t0, t1 } => Some(tr!("err-tri-edges-collinear-overlap", t0 = format!("{t0:.3}"), t1 = format!("{t1:.3}"))),
         SegSeg::Disjoint => nearest_endpoint_gap(a, b, c, d),
     }
 }
@@ -625,13 +639,18 @@ fn describe_crossing(a: glam::DVec3, b: glam::DVec3, c: glam::DVec3, d: glam::DV
     let z_a = a.z + t * (b.z - a.z);
     let z_c = c.z + u * (d.z - c.z);
     let representable = if (z_a - z_c).abs() > 1e-3 {
-        "different elevations: not representable by a single-valued terrain surface"
+        tr!("err-tri-crossing-different-elevations")
     } else {
-        "same elevation: could be split at this point"
+        tr!("err-tri-crossing-same-elevation")
     };
-    format!(
-        "{relation} in XY at ({:.3}, {:.3}); edge A's Z there is {z_a:.3}, edge B's Z there is {z_c:.3} ({representable})",
-        point.x, point.y
+    tr!(
+        "err-tri-edges-crossing-detail",
+        relation = relation.to_string(),
+        x = format!("{:.3}", point.x),
+        y = format!("{:.3}", point.y),
+        z_a = format!("{z_a:.3}"),
+        z_c = format!("{z_c:.3}"),
+        representable = representable
     )
 }
 
@@ -641,14 +660,17 @@ fn describe_crossing(a: glam::DVec3, b: glam::DVec3, c: glam::DVec3, d: glam::DV
 /// digitized independently and differ by floating-point/snap noise.
 fn nearest_endpoint_gap(a: glam::DVec3, b: glam::DVec3, c: glam::DVec3, d: glam::DVec3) -> Option<String> {
     const NEAR_MISS: f64 = 0.05; // 5cm: plausible "meant to be the same vertex" gap
-    [(a, c, "A.start~B.start"), (a, d, "A.start~B.end"), (b, c, "A.end~B.start"), (b, d, "A.end~B.end")]
-        .into_iter()
-        .map(|(p, q, label)| ((p.truncate() - q.truncate()).length(), (p.z - q.z).abs(), label))
-        .filter(|(gap, ..)| *gap < NEAR_MISS)
-        .min_by(|x, y| x.0.total_cmp(&y.0))
-        .map(|(gap, dz, label)| {
-            format!("nearest endpoints ({label}) are {gap:.4} apart in XY (Z differs by {dz:.4}) \u{2014} likely meant to be the same shared vertex but digitized independently")
-        })
+    [
+        (a, c, tr!("err-tri-endpoints-start-start")),
+        (a, d, tr!("err-tri-endpoints-start-end")),
+        (b, c, tr!("err-tri-endpoints-end-start")),
+        (b, d, tr!("err-tri-endpoints-end-end")),
+    ]
+    .into_iter()
+    .map(|(p, q, label)| ((p.truncate() - q.truncate()).length(), (p.z - q.z).abs(), label))
+    .filter(|(gap, ..)| *gap < NEAR_MISS)
+    .min_by(|x, y| x.0.total_cmp(&y.0))
+    .map(|(gap, dz, label)| tr!("err-tri-nearest-endpoints-gap", label = label, gap = format!("{gap:.4}"), dz = format!("{dz:.4}")))
 }
 
 fn conflicting_z_detail(a: glam::DVec3, b: glam::DVec3, c: glam::DVec3, d: glam::DVec3) -> Option<String> {
@@ -662,7 +684,7 @@ fn conflicting_z_detail(a: glam::DVec3, b: glam::DVec3, c: glam::DVec3, d: glam:
             let z_a = a.z + t * (b.z - a.z);
             let z_c = c.z + u * (d.z - c.z);
             if (z_a - z_c).abs() > Z_EPS {
-                return Some(describe_crossing(a, b, c, d, t, u, "cross"));
+                return Some(describe_crossing(a, b, c, d, t, u, &tr!("err-tri-relation-cross")));
             }
             None
         }
@@ -674,9 +696,12 @@ fn conflicting_z_detail(a: glam::DVec3, b: glam::DVec3, c: glam::DVec3, d: glam:
                 let z_a = a.z + t * (b.z - a.z);
                 let z_c = c.z + u * (d.z - c.z);
                 if (z_a - z_c).abs() > Z_EPS {
-                    return Some(format!(
-                        "collinear overlap has conflicting elevations near ({:.3}, {:.3}); edge A's Z is {z_a:.3}, edge B's Z is {z_c:.3}",
-                        point.x, point.y
+                    return Some(tr!(
+                        "err-tri-collinear-overlap-conflicting-elevations",
+                        x = format!("{:.3}", point.x),
+                        y = format!("{:.3}", point.y),
+                        z_a = format!("{z_a:.3}"),
+                        z_c = format!("{z_c:.3}")
                     ));
                 }
             }
@@ -697,8 +722,17 @@ fn validate_breakline_edge_z(paths: &[BreaklineRef<'_>], path_index: usize, edge
             let (c, d) = breakline_edge(other_path, other_edge_index);
             if let Some(detail) = conflicting_z_detail(a, b, c, d) {
                 return Err(anyhow::Error::new(BreaklineConflictFailure {
-                    message: format!(
-                        "Selected breakline edges intersect in XY at conflicting elevations and cannot form a single-valued terrain surface (breakline {path_index} edge {edge_index} ({a:.3}->{b:.3}) vs breakline {other_path_index} edge {other_edge_index} ({c:.3}->{d:.3}): {detail})"
+                    message: tr!(
+                        "err-tri-breakline-edges-conflicting-elevations",
+                        path_index = path_index.to_string(),
+                        edge_index = edge_index.to_string(),
+                        a = format!("{a:.3}"),
+                        b = format!("{b:.3}"),
+                        other_path_index = other_path_index.to_string(),
+                        other_edge_index = other_edge_index.to_string(),
+                        c = format!("{c:.3}"),
+                        d = format!("{d:.3}"),
+                        detail = detail
                     ),
                     edges: [[a, b], [c, d]],
                     kind: BreaklineConflictKind::ConflictingElevation,
@@ -829,7 +863,7 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
     use spade::{ConstrainedDelaunayTriangulation, Point2};
 
     if boundaries.is_empty() {
-        anyhow::bail!("No closed breakline boundary supplied");
+        anyhow::bail!(tr!("err-tri-no-closed-breakline-boundary"));
     }
 
     let paths: Vec<BreaklineRef<'_>> = boundaries
@@ -849,15 +883,17 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
         let (points, closed) = path;
         let minimum = if closed { 3 } else { 2 };
         if points.len() < minimum {
-            anyhow::bail!("A selected breakline has too few vertices");
+            anyhow::bail!(tr!("err-tri-breakline-too-few-vertices"));
         }
 
         let mut handles = Vec::with_capacity(points.len());
         for point in points {
             if !point.is_finite() {
-                anyhow::bail!("A selected breakline contains non-finite coordinates");
+                anyhow::bail!(tr!("err-tri-breakline-non-finite"));
             }
-            let handle = cdt.insert(Point2::new(point.x, point.y)).map_err(|error| anyhow::anyhow!("CDT insert failed: {error:?}"))?;
+            let handle = cdt
+                .insert(Point2::new(point.x, point.y))
+                .map_err(|error| anyhow::anyhow!(tr!("err-tri-cdt-insert-failed", error = format!("{error:?}"))))?;
             // Same XY from two breaklines: keep the first elevation when they
             // agree within Z_TOL (survey noise); larger disagreement cannot be
             // represented by a single-valued terrain.
@@ -869,10 +905,11 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
                             existing.insert(point.z);
                         }
                     } else if (existing_z - point.z).abs() > crate::model::kernel::Z_TOL {
-                        anyhow::bail!(
-                            "Selected breaklines contain the same XY point at conflicting elevations ({existing_z:.3} and {:.3})",
-                            point.z
-                        );
+                        anyhow::bail!(tr!(
+                            "err-tri-breaklines-same-point-conflicting-elevations",
+                            first = format!("{existing_z:.3}"),
+                            second = format!("{:.3}", point.z)
+                        ));
                     }
                 }
                 std::collections::hash_map::Entry::Vacant(vacant) => {
@@ -902,7 +939,7 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
             let constraint_edges = crate::logging::catch_panic_quietly(|| cdt.add_constraint_and_split(a, b, |point| point)).unwrap_or_default();
             if constraint_edges.is_empty() {
                 let (detail, conflicting_edges) = diagnose_breakline_conflict(&paths, path_index, i);
-                let message = format!("Selected breakline edges intersect or overlap in XY and cannot form a terrain surface ({detail})");
+                let message = tr!("err-tri-breakline-edges-intersect", detail = detail);
                 if let Some(edges) = conflicting_edges {
                     return Err(anyhow::Error::new(BreaklineConflictFailure {
                         message,
@@ -936,10 +973,7 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
         .map(|vertex| {
             let index = vertex.fix().index();
             let position = vertex.position();
-            let z = handle_z
-                .get(&index)
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("CDT introduced an elevation-less vertex while resolving breaklines"))?;
+            let z = handle_z.get(&index).copied().ok_or_else(|| anyhow::anyhow!(tr!("err-tri-cdt-vertex-without-elevation")))?;
             Ok((index, position.x, position.y, z))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -977,7 +1011,7 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
     }
 
     if faces.is_empty() {
-        anyhow::bail!("Constrained surface triangulation produced no faces");
+        anyhow::bail!(tr!("err-tri-constrained-no-faces"));
     }
 
     Ok((vertices, faces))
@@ -1013,7 +1047,7 @@ pub(super) fn closed_solid_from_breaklines(boundaries: &[Vec<glam::DVec3>], cons
             .map(|point| point.z)
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), z| (min.min(z), max.max(z)));
         if outer_z_span.1 - outer_z_span.0 > 1e-7 {
-            anyhow::bail!("A closed solid requires each outer boundary to have one constant elevation");
+            anyhow::bail!(tr!("err-tri-solid-boundary-constant-elevation"));
         }
 
         let group_min_z = group_rings
@@ -1032,9 +1066,9 @@ pub(super) fn closed_solid_from_breaklines(boundaries: &[Vec<glam::DVec3>], cons
         let extends_above = group_max_z > closure_z + 1e-8;
         if extends_below == extends_above {
             if extends_below {
-                anyhow::bail!("A solid design cannot extend both above and below its outer boundary elevation");
+                anyhow::bail!(tr!("err-tri-solid-above-and-below"));
             }
-            anyhow::bail!("Each closed solid group requires breaklines at more than one elevation");
+            anyhow::bail!(tr!("err-tri-solid-needs-more-elevations"));
         }
         let is_pit = extends_below;
 
@@ -1044,7 +1078,7 @@ pub(super) fn closed_solid_from_breaklines(boundaries: &[Vec<glam::DVec3>], cons
                 surface_indices
                     .get(&(point.x.to_bits(), point.y.to_bits(), point.z.to_bits()))
                     .copied()
-                    .ok_or_else(|| anyhow::anyhow!("Outer breakline vertex is missing from the constrained surface"))
+                    .ok_or_else(|| anyhow::anyhow!(tr!("err-tri-outer-vertex-missing")))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -1070,7 +1104,7 @@ pub(super) fn closed_solid_from_breaklines(boundaries: &[Vec<glam::DVec3>], cons
         let mut cap_triangles: Vec<usize> = Vec::new();
         earcut::Earcut::new().earcut(flat.iter().copied(), &[], &mut cap_triangles);
         if cap_triangles.is_empty() && flat.len() >= 3 {
-            anyhow::bail!("Failed to triangulate solid closure: degenerate boundary ring");
+            anyhow::bail!(tr!("err-tri-solid-closure-degenerate"));
         }
         for triangle in cap_triangles.as_chunks::<3>().0 {
             let mut face = [boundary_indices[triangle[0]], boundary_indices[triangle[1]], boundary_indices[triangle[2]]];
@@ -1105,7 +1139,7 @@ pub(super) fn cdt_fill_ring(ring: &[glam::DVec3], flip_winding: bool) -> Result<
     use spade::{ConstrainedDelaunayTriangulation, Point2};
 
     if ring.len() < 3 {
-        anyhow::bail!("A selected polyline has fewer than 3 vertices");
+        anyhow::bail!(tr!("err-tri-polyline-fewer-than-three-vertices"));
     }
     validate_single_ring_crossing_z(ring)?;
 
@@ -1115,14 +1149,20 @@ pub(super) fn cdt_fill_ring(ring: &[glam::DVec3], flip_winding: bool) -> Result<
 
     for v in ring {
         if !v.is_finite() {
-            anyhow::bail!("A selected polyline contains non-finite coordinates");
+            anyhow::bail!(tr!("err-tri-polyline-non-finite"));
         }
-        let h = cdt.insert(Point2::new(v.x, v.y)).map_err(|error| anyhow::anyhow!("CDT insert failed: {error:?}"))?;
+        let h = cdt
+            .insert(Point2::new(v.x, v.y))
+            .map_err(|error| anyhow::anyhow!(tr!("err-tri-cdt-insert-failed", error = format!("{error:?}"))))?;
         match handle_z.entry(h.index()) {
             std::collections::hash_map::Entry::Occupied(existing) => {
                 let existing_z = *existing.get();
                 if (existing_z - v.z).abs() > crate::model::kernel::Z_TOL {
-                    anyhow::bail!("Selected polyline contains the same XY point at conflicting elevations ({existing_z:.3} and {:.3})", v.z);
+                    anyhow::bail!(tr!(
+                        "err-tri-polyline-same-point-conflicting-elevations",
+                        first = format!("{existing_z:.3}"),
+                        second = format!("{:.3}", v.z)
+                    ));
                 }
             }
             std::collections::hash_map::Entry::Vacant(vacant) => {
@@ -1140,8 +1180,8 @@ pub(super) fn cdt_fill_ring(ring: &[glam::DVec3], flip_winding: bool) -> Result<
         // Self-intersecting edges are split at their crossing points. Every
         // edge that reaches a split must agree on its interpolated elevation;
         // otherwise the ring cannot represent a single-valued surface.
-        let constraint_edges = crate::logging::catch_panic_quietly(|| cdt.add_constraint_and_split(ha, hb, |point| point))
-            .ok_or_else(|| anyhow::anyhow!("Selected polyline edges cross or overlap themselves too closely in XY to triangulate"))?;
+        let constraint_edges =
+            crate::logging::catch_panic_quietly(|| cdt.add_constraint_and_split(ha, hb, |point| point)).ok_or_else(|| anyhow::anyhow!(tr!("err-tri-polyline-edges-too-close")))?;
         for edge in constraint_edges {
             let edge = cdt.directed_edge(edge);
             for vertex in [edge.from(), edge.to()] {
@@ -1151,7 +1191,11 @@ pub(super) fn cdt_fill_ring(ring: &[glam::DVec3], flip_winding: bool) -> Result<
                 match handle_z.entry(index) {
                     std::collections::hash_map::Entry::Occupied(existing) => {
                         if (*existing.get() - edge_z).abs() > crate::model::kernel::Z_TOL {
-                            anyhow::bail!("Selected polyline edges cross in XY at conflicting elevations ({:.3} and {edge_z:.3})", existing.get());
+                            anyhow::bail!(tr!(
+                                "err-tri-polyline-edges-cross-conflicting-elevations",
+                                first = format!("{:.3}", existing.get()),
+                                second = format!("{edge_z:.3}")
+                            ));
                         }
                     }
                     std::collections::hash_map::Entry::Vacant(vacant) => {
@@ -1192,7 +1236,7 @@ pub(super) fn cdt_fill_ring(ring: &[glam::DVec3], flip_winding: bool) -> Result<
         .collect();
 
     if faces.is_empty() {
-        anyhow::bail!("Failed to triangulate polyline (may be degenerate or collinear)");
+        anyhow::bail!(tr!("err-tri-polyline-triangulation-failed"));
     }
     Ok((verts, faces))
 }
@@ -1206,7 +1250,12 @@ fn validate_single_ring_crossing_z(ring: &[glam::DVec3]) -> Result<()> {
             let d = ring[(other_edge_index + 1) % ring.len()];
             if let Some(detail) = conflicting_z_detail(a, b, c, d) {
                 return Err(anyhow::Error::new(BreaklineConflictFailure {
-                    message: format!("Selected polyline edges cross in XY at conflicting elevations (edge {edge_index} vs edge {other_edge_index}: {detail})"),
+                    message: tr!(
+                        "err-tri-polyline-edges-conflicting-elevations",
+                        edge_index = edge_index.to_string(),
+                        other_edge_index = other_edge_index.to_string(),
+                        detail = detail
+                    ),
                     edges: [[a, b], [c, d]],
                     kind: BreaklineConflictKind::ConflictingElevation,
                 }));

@@ -16,6 +16,7 @@
 
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
+use super::hint::Hint;
 use crate::{
     i18n::tr,
     model::optimization::{Constant, ConstantValue, ConstantsRow, FieldValue, ValueKind, ValueType},
@@ -309,7 +310,7 @@ impl<'a, T: FieldEditor> ValueField<'a, T> {
 /// A locked field with a usable constant has no problem to report; it says what
 /// the constant's value is on hover instead.
 fn return_value_hint(response: &egui::Response, value: &ConstantValue) -> Option<String> {
-    let _ = response.clone().on_disabled_hover_text(value.display());
+    let _ = response.clone().disabled_hint(value.display());
     None
 }
 
@@ -321,7 +322,7 @@ fn finish_locked(response: egui::Response, problem: Option<String>) -> egui::Res
                 .ctx
                 .layer_painter(response.layer_id)
                 .rect_stroke(response.rect, 2.0, egui::Stroke::new(1.5, egui::Color32::RED), egui::StrokeKind::Outside);
-            response.on_disabled_hover_text(message)
+            response.disabled_hint(message)
         }
         None => response,
     }
