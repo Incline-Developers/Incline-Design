@@ -1,8 +1,4 @@
-use std::{
-    collections::hash_map::DefaultHasher,
-    f64::consts::TAU,
-    hash::{Hash, Hasher},
-};
+use std::f64::consts::TAU;
 
 use anyhow::Result;
 use glam::{DMat4, DVec2, DVec3};
@@ -19,6 +15,7 @@ use crate::{
         rbf::DEFAULT_SPACING,
     },
     rendering::{camera::SectionSlab, pick},
+    ui::state::SelectionPickTool,
     userspace_log, userspace_warn,
 };
 
@@ -99,10 +96,13 @@ impl Curve {
 }
 
 impl<'a> App<'a> {
+    /// Insert at the crossings of the selected polylines. With fewer than two
+    /// selected there is nothing to cross, so the viewport picks them first
+    /// and the pick's Done comes back here.
     pub(crate) fn insert_points_at_selected_intersections(&mut self) {
         let selected = self.selected_polylines();
         if selected.len() < 2 {
-            userspace_warn!("{}", tr!("cmd-insert-point-select-least-two-polylines-before"));
+            self.begin_selection_pick(SelectionPickTool::InsertAtIntersection);
             return;
         }
 
@@ -112,53 +112,11 @@ impl<'a> App<'a> {
         self.commit_inserted_vertices(&source, updated, &tr!("cmd-insert-point-intersection"));
     }
 
-    /// Refresh Insert Point availability for the selected polylines.
-    ///
-    /// Menus need the answer every frame, so the scan result is cached against
-    /// the selection and the workspace composite key. Selections whose pairwise
-    /// edge count exceeds the scan budget report as available rather than
-    /// stalling the frame; the insert itself then reports finding nothing.
-    pub(crate) fn refresh_intersection_availability(&mut self) {
-        let key = {
-            // Order-insensitive fold over the selected object ids, matching the
-            // allocation-free style of `ProjectStore::composite_key`.
-            let (mut fold, mut count) = (0_u64, 0_u64);
-            for handle in &self.editor.selected_handles {
-                if let SceneEntityId::Object(id) = handle {
-                    fold ^= id.0.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-                    count += 1;
-                }
-            }
-            let mut hasher = DefaultHasher::new();
-            self.workspace.composite_key().hash(&mut hasher);
-            fold.hash(&mut hasher);
-            count.hash(&mut hasher);
-            hasher.finish()
-        };
-        if self.intersection_availability_key == Some(key) {
-            return;
-        }
-        self.intersection_availability_key = Some(key);
-
-        let selected = self.selected_polylines();
-        self.editor.selection_has_polylines = !selected.is_empty();
-        let shapes: Vec<(&[PolyVertex], bool)> = selected
-            .iter()
-            .filter_map(|id| match self.scene_document.get_object(*id) {
-                Some(Object::Polyline { verts, closed, .. }) => Some((verts.as_slice(), *closed)),
-                _ => None,
-            })
-            .collect();
-        let available = any_insertable_intersection(&shapes);
-        self.editor.selection_has_intersections = available;
-    }
-
+    /// Open Insert Point at Elevation on the selected polylines, or point the
+    /// open dialog at them, keeping the elevation it already holds. With none
+    /// selected it opens empty, for its Pick to fill.
     pub(crate) fn open_insert_point_at_elevation_dialog(&mut self) {
         let object_ids = self.selected_polylines();
-        if object_ids.is_empty() {
-            userspace_warn!("{}", tr!("cmd-insert-point-select-one-more-polylines-before"));
-            return;
-        }
         // Only elevations the selection actually spans can produce a point, so
         // the dialog's entry box is bounded to that band.
         let (mut min_elevation, mut max_elevation) = (f64::INFINITY, f64::NEG_INFINITY);
@@ -174,9 +132,10 @@ impl<'a> App<'a> {
         if !(min_elevation.is_finite() && max_elevation.is_finite()) {
             (min_elevation, max_elevation) = (f64::MIN, f64::MAX);
         }
+        let elevation = self.editor.insert_point_at_elevation_dialog.as_ref().map_or(self.editor.z_input, |dialog| dialog.elevation);
         self.editor.insert_point_at_elevation_dialog = Some(crate::ui::dialogs::InsertPointAtElevationDialog {
             object_ids,
-            elevation: self.editor.z_input.clamp(min_elevation, max_elevation),
+            elevation: elevation.clamp(min_elevation, max_elevation),
             min_elevation,
             max_elevation,
         });
@@ -681,57 +640,6 @@ fn push_interior_parameter(parameters: &mut Vec<f64>, curve: Curve, t: f64) {
     if parameters.iter().all(|existing| (existing - t).abs() * length > XY_TOL) {
         parameters.push(t);
     }
-}
-
-/// Pairwise edge tests the availability scan will run before giving up and
-/// reporting the action as available.
-const INTERSECTION_SCAN_BUDGET: u64 = 4_000_000;
-
-/// True when at least one crossing among `polylines` would insert a vertex.
-///
-/// Mirrors the filtering in [`insert_at_intersections`] so the menu never
-/// offers an action that would report "no new intersection points", but exits
-/// on the first hit instead of collecting them all.
-fn any_insertable_intersection(polylines: &[(&[PolyVertex], bool)]) -> bool {
-    if polylines.len() < 2 {
-        return false;
-    }
-    let edges: Vec<u64> = polylines.iter().map(|(verts, closed)| edge_count(verts, *closed) as u64).collect();
-    // Σ(i<j) Ei·Ej, without walking the pairs.
-    let total: u64 = edges.iter().sum();
-    let pairs = total
-        .saturating_mul(total)
-        .saturating_sub(edges.iter().map(|count| count.saturating_mul(*count)).sum::<u64>())
-        / 2;
-    if pairs > INTERSECTION_SCAN_BUDGET {
-        return true;
-    }
-
-    let bounds: Vec<Option<(DVec2, DVec2)>> = polylines.iter().map(|(verts, closed)| plan_bounds(verts, *closed)).collect();
-    for first in 0..polylines.len() {
-        for second in first + 1..polylines.len() {
-            let (Some(a_bounds), Some(b_bounds)) = (bounds[first], bounds[second]) else {
-                continue;
-            };
-            if !bounds_overlap(a_bounds, b_bounds) {
-                continue;
-            }
-            let (a_verts, a_closed) = polylines[first];
-            let (b_verts, b_closed) = polylines[second];
-            for a_edge in 0..edge_count(a_verts, a_closed) {
-                let a_curve = Curve::from_vertices(a_verts[a_edge], a_verts[(a_edge + 1) % a_verts.len()]);
-                for b_edge in 0..edge_count(b_verts, b_closed) {
-                    let b_curve = Curve::from_vertices(b_verts[b_edge], b_verts[(b_edge + 1) % b_verts.len()]);
-                    for (_, a_t, b_t) in curve_intersections(a_curve, b_curve) {
-                        if is_interior_parameter(a_curve, a_t) || is_interior_parameter(b_curve, b_t) {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    false
 }
 
 /// Plan-view bounds of a polyline, grown by the deepest arc sagitta so a

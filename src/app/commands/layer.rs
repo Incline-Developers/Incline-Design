@@ -76,8 +76,9 @@ impl<'a> App<'a> {
             .layers()
             .iter()
             .position(|candidate| candidate.id == layer_id)
-            .context("Layer position disappeared")?;
+            .with_context(|| tr!("err-store-layer-position-missing"))?;
         let on_layer = positioned_objects_on_layer(&project.project.document, layer_id);
+        let name = layer.name.clone();
         self.execute_edit(Command::DeleteLayerSnapshot {
             layer,
             layer_index,
@@ -88,7 +89,7 @@ impl<'a> App<'a> {
             self.editor.active_layer = None;
         }
         self.editor.selected_handles.clear();
-        userspace_log!("{}", tr!("cmd-layer-deleted-with-objects", layer_id = format!("{layer_id:?}")));
+        userspace_log!("{}", tr!("cmd-layer-deleted-with-objects", name = name));
         self.invalidate_geometry();
         Ok(())
     }
@@ -205,9 +206,10 @@ impl<'a> App<'a> {
         let Some(project) = self.workspace.active_project() else {
             return;
         };
-        if !project.project.document.layer(layer_id).is_some_and(Layer::is_visible) {
+        let Some(layer) = project.project.document.layer(layer_id).filter(|layer| layer.is_visible()) else {
             return;
-        }
+        };
+        let name = layer.name.clone();
         let handles: Vec<SceneEntityId> = project
             .project
             .document
@@ -222,10 +224,7 @@ impl<'a> App<'a> {
         self.editor.tri_selected_layer_ids.clear();
         self.editor.canvas_context_menu_open = false;
         let count = self.editor.selected_handles.len();
-        userspace_log!(
-            "{}",
-            tr!("cmd-layer-selected-count-object-s-layer", count = count.to_string(), layer_id = format!("{layer_id:?}"))
-        );
+        userspace_log!("{}", tr!("cmd-layer-selected-count-object-s-layer", count = count.to_string(), name = name));
         self.invalidate_geometry();
         self.invalidate_overlay();
     }

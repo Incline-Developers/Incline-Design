@@ -124,7 +124,7 @@ pub(crate) struct MachineMesh {
 
 impl MachineMesh {
     pub(crate) fn load(model: MachineModel) -> anyhow::Result<Self> {
-        read_glb(model.glb()).with_context(|| format!("reading the {model:?} model"))
+        read_glb(model.glb()).with_context(|| crate::i18n::tr!("err-gfx-model-read", model = format!("{model:?}")))
     }
 }
 
@@ -333,18 +333,18 @@ const UNSIGNED_INT: u32 = 5125;
 /// Reads a binary glTF into one triangle list in Z-up model space.
 fn read_glb(bytes: &[u8]) -> anyhow::Result<MachineMesh> {
     let word = |at: usize| -> anyhow::Result<u32> {
-        let slice = bytes.get(at..at + 4).context("truncated file")?;
+        let slice = bytes.get(at..at + 4).with_context(|| crate::i18n::tr!("err-gfx-model-truncated"))?;
         Ok(u32::from_le_bytes(slice.try_into()?))
     };
-    ensure!(word(0)? == 0x4654_6C67, "not a binary glTF");
-    ensure!(word(4)? == 2, "glTF version {} is not 2", word(4)?);
+    ensure!(word(0)? == 0x4654_6C67, crate::i18n::tr!("err-gfx-model-not-glb"));
+    ensure!(word(4)? == 2, crate::i18n::tr!("err-gfx-model-version", version = word(4)?.to_string()));
     let mut json = None;
     let mut binary: &[u8] = &[];
     let mut at = 12;
     while at + 8 <= bytes.len() {
         let length = word(at)? as usize;
         let kind = word(at + 4)?;
-        let chunk = bytes.get(at + 8..at + 8 + length).context("truncated chunk")?;
+        let chunk = bytes.get(at + 8..at + 8 + length).with_context(|| crate::i18n::tr!("err-gfx-model-chunk"))?;
         match kind {
             0x4E4F_534A => json = Some(chunk),
             0x004E_4942 => binary = chunk,
@@ -352,31 +352,34 @@ fn read_glb(bytes: &[u8]) -> anyhow::Result<MachineMesh> {
         }
         at += 8 + length;
     }
-    let gltf: Gltf = serde_json::from_slice(json.context("no JSON chunk")?)?;
+    let gltf: Gltf = serde_json::from_slice(json.with_context(|| crate::i18n::tr!("err-gfx-model-no-json"))?)?;
 
     let view = |accessor: &Accessor, components: usize| -> anyhow::Result<(&[u8], usize, usize)> {
-        let index = accessor.buffer_view.context("accessor without a buffer view")?;
-        let view = gltf.buffer_views.get(index).context("missing buffer view")?;
-        ensure!(view.buffer == 0, "only the embedded buffer is read");
+        let index = accessor.buffer_view.with_context(|| crate::i18n::tr!("err-gfx-model-no-view"))?;
+        let view = gltf.buffer_views.get(index).with_context(|| crate::i18n::tr!("err-gfx-model-view-missing"))?;
+        ensure!(view.buffer == 0, crate::i18n::tr!("err-gfx-model-embedded"));
         let size = match accessor.component_type {
             FLOAT | UNSIGNED_INT => 4,
             UNSIGNED_SHORT => 2,
             UNSIGNED_BYTE => 1,
-            other => bail!("component type {other} is not read"),
+            other => bail!(crate::i18n::tr!("err-gfx-model-component", kind = other.to_string())),
         };
         let data = binary
             .get(view.byte_offset..view.byte_offset + view.byte_length)
-            .context("buffer view outside the buffer")?;
+            .with_context(|| crate::i18n::tr!("err-gfx-model-view-range"))?;
         let stride = view.byte_stride.unwrap_or(size * components);
         let start = accessor.byte_offset;
         if accessor.count > 0 {
-            ensure!(start + stride * (accessor.count - 1) + size * components <= data.len(), "accessor outside its view");
+            ensure!(
+                start + stride * (accessor.count - 1) + size * components <= data.len(),
+                crate::i18n::tr!("err-gfx-model-accessor-range")
+            );
         }
         Ok((&data[start..], stride, size))
     };
     let floats = |index: usize| -> anyhow::Result<Vec<Vec3>> {
-        let accessor = gltf.accessors.get(index).context("missing accessor")?;
-        ensure!(accessor.kind == "VEC3" && accessor.component_type == FLOAT, "expected float vectors");
+        let accessor = gltf.accessors.get(index).with_context(|| crate::i18n::tr!("err-gfx-model-accessor"))?;
+        ensure!(accessor.kind == "VEC3" && accessor.component_type == FLOAT, crate::i18n::tr!("err-gfx-model-float-vectors"));
         let (data, stride, _) = view(accessor, 3)?;
         Ok((0..accessor.count)
             .map(|i| {
@@ -387,8 +390,8 @@ fn read_glb(bytes: &[u8]) -> anyhow::Result<MachineMesh> {
             .collect())
     };
     let indices = |index: usize| -> anyhow::Result<Vec<u32>> {
-        let accessor = gltf.accessors.get(index).context("missing accessor")?;
-        ensure!(accessor.kind == "SCALAR", "expected scalar indices");
+        let accessor = gltf.accessors.get(index).with_context(|| crate::i18n::tr!("err-gfx-model-accessor"))?;
+        ensure!(accessor.kind == "SCALAR", crate::i18n::tr!("err-gfx-model-scalar-indices"));
         let (data, stride, size) = view(accessor, 1)?;
         Ok((0..accessor.count)
             .map(|i| {
@@ -413,8 +416,8 @@ fn read_glb(bytes: &[u8]) -> anyhow::Result<MachineMesh> {
     let roots = gltf.scenes.get(gltf.scene.unwrap_or(0)).map(|scene| scene.nodes.clone()).unwrap_or_default();
     let mut stack: Vec<(usize, Mat4, usize)> = roots.into_iter().map(|node| (node, to_z_up, 0)).collect();
     while let Some((index, parent, depth)) = stack.pop() {
-        ensure!(depth < 64, "node tree too deep");
-        let node = gltf.nodes.get(index).context("missing node")?;
+        ensure!(depth < 64, crate::i18n::tr!("err-gfx-model-too-deep"));
+        let node = gltf.nodes.get(index).with_context(|| crate::i18n::tr!("err-gfx-model-node"))?;
         let local = match node.matrix {
             Some(matrix) => Mat4::from_cols_array(&matrix),
             None => Mat4::from_scale_rotation_translation(
@@ -426,11 +429,11 @@ fn read_glb(bytes: &[u8]) -> anyhow::Result<MachineMesh> {
         let world = parent * local;
         let normal_matrix = world.inverse().transpose();
         if let Some(mesh_index) = node.mesh {
-            for primitive in &gltf.meshes.get(mesh_index).context("missing mesh")?.primitives {
+            for primitive in &gltf.meshes.get(mesh_index).with_context(|| crate::i18n::tr!("err-gfx-model-mesh"))?.primitives {
                 if primitive.mode != 4 {
                     continue;
                 }
-                let positions = floats(*primitive.attributes.get("POSITION").context("primitive without positions")?)?;
+                let positions = floats(*primitive.attributes.get("POSITION").with_context(|| crate::i18n::tr!("err-gfx-model-positions"))?)?;
                 let normals = match primitive.attributes.get("NORMAL") {
                     Some(&index) => Some(floats(index)?),
                     None => None,
@@ -446,7 +449,10 @@ fn read_glb(bytes: &[u8]) -> anyhow::Result<MachineMesh> {
                     Some(index) => indices(index)?,
                     None => (0..positions.len() as u32).collect(),
                 };
-                ensure!(local_indices.iter().all(|&index| (index as usize) < positions.len()), "index past the vertices");
+                ensure!(
+                    local_indices.iter().all(|&index| (index as usize) < positions.len()),
+                    crate::i18n::tr!("err-gfx-model-index-range")
+                );
                 for (i, position) in positions.iter().enumerate() {
                     let normal = normals.as_ref().and_then(|normals| normals.get(i)).copied().unwrap_or(Vec3::Z);
                     mesh.vertices.push(MachineVertex {
@@ -460,7 +466,7 @@ fn read_glb(bytes: &[u8]) -> anyhow::Result<MachineMesh> {
         }
         stack.extend(node.children.iter().map(|&child| (child, world, depth + 1)));
     }
-    ensure!(!mesh.indices.is_empty(), "no triangles");
+    ensure!(!mesh.indices.is_empty(), crate::i18n::tr!("err-gfx-model-empty"));
     let (min, max) = mesh
         .vertices
         .iter()

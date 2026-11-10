@@ -44,7 +44,7 @@ mod util;
 
 pub use lp_solver::{LpSolver, NONE};
 #[doc(hidden)]
-pub use mip::{MipSettings, MipSolution, MipStatus, solve_mip};
+pub use mip::{MIP_FEASIBILITY_TOLERANCE, MipSettings, MipSolution, MipStatus, solve_mip};
 pub use problem::{Problem, Sense};
 pub use simplex::{
     Infeasibilities, ModelStatus as Status,
@@ -111,6 +111,24 @@ pub fn solve_from(problem: &Problem, options: &Options, basis: Option<&Basis>, i
     {
         solver.set_basis(basis);
     }
+    finish(solver, problem)
+}
+
+/// [`solve`] by the simplex method from `basis`, HiGHS's alien basis: one
+/// that may have too few basic variables, or basic variables that are
+/// linearly dependent. The factorisation keeps the basic variables it can
+/// pivot on and makes up the rest with slacks; a variable marked
+/// [`BasisStatus::Nonbasic`] goes to whichever bound suits it. More basic
+/// variables than rows is refused, as HiGHS refuses it.
+pub fn solve_from_alien(problem: &Problem, options: &Options, basis: &Basis) -> Solution {
+    let mut solver = LpSolver::new(problem, options.clone());
+    if options.solver == Solver::Simplex {
+        solver.set_alien_basis(basis);
+    }
+    finish(solver, problem)
+}
+
+fn finish(mut solver: LpSolver, problem: &Problem) -> Solution {
     let status = solver.run();
     let num_col = problem.num_cols();
     let num_row = problem.num_rows();

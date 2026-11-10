@@ -103,13 +103,18 @@ impl Triangulation {
         (0..self.faces.len()).filter_map(|index| self.triangle(index))
     }
 
+    /// Each face's vertex indices, as stored.
+    pub fn face_indices(&self) -> impl ExactSizeIterator<Item = [u32; 3]> + '_ {
+        self.faces.iter().map(|face| face.indices)
+    }
+
     pub fn face_vertex_indices_iter(&self) -> impl Iterator<Item = [usize; 3]> + '_ {
         self.faces.iter().copied().map(Face::indices_zero_based)
     }
 
     /// Construct a triangulation from a computed vertex list and face index triples.
     /// Face indices must be zero-based and within bounds.
-    pub fn from_vertices_and_faces(vertices: Vec<Vertex>, faces: Vec<[u32; 3]>) -> Result<Self, ReadError> {
+    pub fn from_vertices_and_faces(mut vertices: Vec<Vertex>, faces: Vec<[u32; 3]>) -> Result<Self, ReadError> {
         let vertex_count = vertices.len();
         let face_count = faces.len();
         if vertex_count == 0 || face_count == 0 {
@@ -132,7 +137,11 @@ impl Triangulation {
             });
         }
         let bounds = Bounds::from_vertices(&vertices);
-        let faces = faces.into_iter().map(|indices| Face { indices }).collect();
+        // Generated meshes are grown by pushing and then kept for as long as
+        // the project is open, so hand the spare capacity back.
+        vertices.shrink_to_fit();
+        let mut faces: Vec<Face> = faces.into_iter().map(|indices| Face { indices }).collect();
+        faces.shrink_to_fit();
         Ok(Self { vertices, faces, bounds })
     }
 }

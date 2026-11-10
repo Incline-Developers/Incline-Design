@@ -25,10 +25,10 @@ pub(crate) mod haulage;
 pub(crate) mod input;
 pub(crate) mod kernel;
 pub(crate) mod kriging;
+pub(crate) mod numbers;
 pub(crate) mod object_edit;
 pub(crate) mod optimization;
 pub(crate) mod optimization_run;
-pub(crate) mod plot;
 pub(crate) mod point_cloud;
 pub(crate) mod point_features;
 pub(crate) mod progress;
@@ -905,7 +905,7 @@ impl BenchingPlan {
 const MAX_BENCHES_PER_RANGE: f64 = 10_000.0;
 
 /// One field of a [`Solid`], as the Solids step's property table edits it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) enum SolidEdit {
     Kind(SolidKind),
     Color([f32; 4]),
@@ -1138,14 +1138,14 @@ impl Object {
     pub(crate) fn validate_geometry(&self) -> Result<(), String> {
         fn require_finite_verts(verts: &[PolyVertex], what: &str) -> Result<(), String> {
             if verts.len() < 2 {
-                return Err(format!("{what} needs at least 2 vertices"));
+                return Err(crate::i18n::tr!("err-bm-polyline-min-vertices", what = what.to_string()));
             }
             for vertex in verts {
                 if !vertex.pos.is_finite() {
-                    return Err(format!("{what} contains a non-finite vertex"));
+                    return Err(crate::i18n::tr!("err-bm-polyline-bad-vertex", what = what.to_string()));
                 }
                 if !vertex.bulge.is_finite() {
-                    return Err(format!("{what} contains a non-finite bulge"));
+                    return Err(crate::i18n::tr!("err-bm-polyline-bad-bulge", what = what.to_string()));
                 }
             }
             Ok(())
@@ -1153,45 +1153,45 @@ impl Object {
         if let ObjectColor::Fixed(rgba) = self.color()
             && rgba.iter().any(|channel| !channel.is_finite())
         {
-            return Err("non-finite colour".to_string());
+            return Err(crate::i18n::tr!("err-bm-object-bad-colour"));
         }
         match self {
             Object::Point { pos, .. } => {
                 if !pos.is_finite() {
-                    return Err("non-finite point position".to_string());
+                    return Err(crate::i18n::tr!("err-bm-point-bad-position"));
                 }
             }
             Object::Polyline { verts, closed, line_weight, .. } => {
-                require_finite_verts(verts, "polyline")?;
+                require_finite_verts(verts, &crate::i18n::tr!("common-polyline"))?;
                 // Two bulged vertices form a valid closed shape (most notably
                 // the compact two-semicircle representation of a circle).
                 if *closed && verts.len() < 3 && verts.iter().all(|vertex| vertex.bulge.abs() <= f64::EPSILON) {
-                    return Err("closed polyline needs at least 3 vertices unless it contains an arc".to_string());
+                    return Err(crate::i18n::tr!("err-bm-closed-polyline-min-vertices"));
                 }
                 if !line_weight.is_finite() || *line_weight < 0.0 {
-                    return Err("invalid polyline line weight".to_string());
+                    return Err(crate::i18n::tr!("err-bm-polyline-bad-line-weight"));
                 }
             }
             Object::Circle { center, radius, line_weight, .. } => {
                 if !center.is_finite() {
-                    return Err("non-finite circle centre".to_string());
+                    return Err(crate::i18n::tr!("err-bm-circle-bad-centre"));
                 }
                 if !radius.is_finite() || *radius <= 0.0 {
-                    return Err("circle radius must be greater than zero".to_string());
+                    return Err(crate::i18n::tr!("err-bm-circle-bad-radius"));
                 }
                 if !line_weight.is_finite() || *line_weight < 0.0 {
-                    return Err("invalid circle line weight".to_string());
+                    return Err(crate::i18n::tr!("err-bm-circle-bad-line-weight"));
                 }
             }
             Object::Text { pos, height, rotation, .. } => {
                 if !pos.is_finite() {
-                    return Err("non-finite text position".to_string());
+                    return Err(crate::i18n::tr!("err-bm-text-bad-position"));
                 }
                 if !height.is_finite() || *height < 0.0 {
-                    return Err("invalid text height".to_string());
+                    return Err(crate::i18n::tr!("err-bm-text-bad-height"));
                 }
                 if !rotation.is_finite() {
-                    return Err("non-finite text rotation".to_string());
+                    return Err(crate::i18n::tr!("err-bm-text-bad-rotation"));
                 }
             }
         }
@@ -1428,6 +1428,11 @@ pub(crate) struct Document {
     schedule: schedule::SchedulePlan,
     #[serde(default)]
     haulage: haulage::HaulNetwork,
+    /// The latest calculated schedule, kept with the project when it is saved.
+    /// Not part of its content: recalculating does not make a project unsaved,
+    /// and the one run that should says so itself.
+    #[serde(skip)]
+    saved_schedule: Option<std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>>,
     #[serde(skip)]
     revision: u64,
     /// Document revision at which each object was last mutated. Lets the
@@ -1538,22 +1543,22 @@ impl Document {
         self.haulage.clone().validate()?;
         anyhow::ensure!(
             self.haulage.nodes.iter().all(|n| n.id.0 <= LOCAL_MASK) && self.haulage.roads.iter().all(|r| r.id.0 <= LOCAL_MASK),
-            "haul ids outside project range"
+            crate::i18n::tr!("err-bm-haul-id-range")
         );
 
         let mut layer_ids = std::collections::HashSet::with_capacity(self.layers.len());
         for layer in self.layers.iter().chain(self.planning_benches().filter_map(|bench| bench.planning_layer.as_ref())) {
             if layer.id.0 > LOCAL_MASK {
-                bail!("layer '{}' has id {} outside the 32-bit project id range", layer.name, layer.id.0);
+                bail!(crate::i18n::tr!("err-bm-layer-id-range", name = layer.name.to_string(), id = layer.id.0.to_string()));
             }
             if !layer_ids.insert(layer.id) {
-                bail!("duplicate layer id {} ('{}')", layer.id.0, layer.name);
+                bail!(crate::i18n::tr!("err-bm-layer-id-duplicate", id = layer.id.0.to_string(), name = layer.name.to_string()));
             }
             if !layer.elevation.is_finite() {
-                bail!("layer '{}' has a non-finite elevation", layer.name);
+                bail!(crate::i18n::tr!("err-bm-layer-bad-elevation", name = layer.name.to_string()));
             }
             if layer.color.iter().any(|channel| !channel.is_finite()) {
-                bail!("layer '{}' has a non-finite colour", layer.name);
+                bail!(crate::i18n::tr!("err-bm-layer-bad-colour", name = layer.name.to_string()));
             }
         }
 
@@ -1561,19 +1566,26 @@ impl Document {
         for object in self.objects.iter().chain(self.planning_benches().flat_map(|bench| &bench.cuts)) {
             let id = object.id();
             if id.0 > LOCAL_MASK {
-                bail!("{} object has id {} outside the 32-bit project id range", object.kind_name(), id.0);
+                bail!(crate::i18n::tr!("err-bm-object-id-range", kind = object.kind_name().to_string(), id = id.0.to_string()));
             }
             if !object_ids.insert(id) {
-                bail!("duplicate object id {}", id.0);
+                bail!(crate::i18n::tr!("err-bm-object-id-duplicate", id = id.0.to_string()));
             }
             if !layer_ids.contains(&object.layer()) {
-                bail!("{} object {} references missing layer {}", object.kind_name(), id.0, object.layer().0);
+                bail!(crate::i18n::tr!(
+                    "err-bm-object-missing-layer",
+                    kind = object.kind_name().to_string(),
+                    id = id.0.to_string(),
+                    layer = object.layer().0.to_string()
+                ));
             }
-            object.validate_geometry().map_err(|error| anyhow::anyhow!("object {}: {error}", id.0))?;
+            object
+                .validate_geometry()
+                .map_err(|error| anyhow::anyhow!(crate::i18n::tr!("err-bm-object-invalid", id = id.0.to_string(), error = error)))?;
         }
         for id in &self.hidden_objects {
             if !object_ids.contains(id) {
-                bail!("hidden object id {} does not reference a design object", id.0);
+                bail!(crate::i18n::tr!("err-bm-hidden-object-missing", id = id.0.to_string()));
             }
         }
         Ok(())
@@ -1924,6 +1936,7 @@ impl Document {
     /// called once after the whole document is loaded.
     pub(crate) fn restore_reserve_fields(&mut self, reserve_fields: Vec<ReserveField>) {
         self.reserve_fields = reserve_fields;
+        self.touch();
     }
 
     pub(crate) fn reserve_field(&self, id: ReserveFieldId) -> Option<&ReserveField> {
@@ -1985,6 +1998,7 @@ impl Document {
                     field.aggregation = ReserveAggregation::Sum;
                 }
             }
+            self.schedule.forget_field(id);
             self.touch();
         }
         removed
@@ -2008,21 +2022,32 @@ impl Document {
 
     pub(crate) fn restore_haulage(&mut self, network: haulage::HaulNetwork) {
         self.haulage = network;
+        self.touch();
     }
 
     pub(crate) fn append_haulage_from(&mut self, source: &Document) {
         self.haulage.nodes.extend(source.haulage.nodes.iter().cloned());
         self.haulage.roads.extend(source.haulage.roads.iter().cloned());
+        self.touch();
     }
 
     pub(crate) fn merge_haulage_from(&mut self, source: &Document) {
         if self.haulage.nodes.is_empty() {
             self.haulage = source.haulage.clone();
+            self.touch();
         }
     }
 
     pub(crate) fn schedule(&self) -> &schedule::SchedulePlan {
         &self.schedule
+    }
+
+    pub(crate) fn saved_schedule(&self) -> Option<&std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>> {
+        self.saved_schedule.as_ref()
+    }
+
+    pub(crate) fn set_saved_schedule(&mut self, saved: Option<std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>>) {
+        self.saved_schedule = saved;
     }
 
     /// Swap in a whole schedule plan, as one undoable edit.
@@ -2047,6 +2072,7 @@ impl Document {
     pub(crate) fn restore_schedule(&mut self, mut schedule: schedule::SchedulePlan) {
         schedule.raise_allocator_to(&self.schedule);
         self.schedule = schedule;
+        self.touch();
     }
 
     /// Take `source`'s schedule if this document has none. Used when opening
@@ -2056,6 +2082,10 @@ impl Document {
     pub(crate) fn merge_schedule_from(&mut self, source: &Document) {
         if self.schedule.is_pristine() && !source.schedule.is_pristine() {
             self.schedule = source.schedule.clone();
+            self.touch();
+        }
+        if self.saved_schedule.is_none() {
+            self.saved_schedule.clone_from(&source.saved_schedule);
         }
     }
 
@@ -2087,6 +2117,7 @@ impl Document {
     /// `next_solid_id` is re-derived by [`Document::recompute_id_counters`].
     pub(crate) fn restore_solids(&mut self, solids: Vec<Solid>) {
         self.solids = solids;
+        self.touch();
     }
 
     pub(crate) fn add_solid(
@@ -2135,6 +2166,22 @@ impl Document {
     /// Apply one edit from the Solids step's property table. Returns whether
     /// anything actually changed, so a per-frame combo that hands back its
     /// unchanged value does not dirty the project.
+    /// The edit that would put back what `edit` is about to replace on this
+    /// solid. `None` when the solid has gone.
+    pub(crate) fn solid_edit_undo(&self, id: SolidId, edit: &SolidEdit) -> Option<SolidEdit> {
+        let solid = self.solids.iter().find(|solid| solid.id == id)?;
+        Some(match edit {
+            SolidEdit::Kind(_) => SolidEdit::Kind(solid.kind),
+            SolidEdit::Color(_) => SolidEdit::Color(solid.color),
+            SolidEdit::Benching(_) => SolidEdit::Benching(solid.benching.clone()),
+            SolidEdit::Surface(_) => SolidEdit::Surface(solid.surface),
+            SolidEdit::Topography(_) => SolidEdit::Topography(solid.topography),
+            SolidEdit::BlockModel(_) => SolidEdit::BlockModel(solid.block_model),
+            SolidEdit::Blasting(_) => SolidEdit::Blasting(solid.blasting.clone()),
+            SolidEdit::Exclusions(_) => SolidEdit::Exclusions(solid.exclusions.clone()),
+        })
+    }
+
     pub(crate) fn update_solid(&mut self, id: SolidId, edit: SolidEdit) -> bool {
         let Some(solid) = self.solids.iter_mut().find(|solid| solid.id == id) else {
             return false;
@@ -2155,35 +2202,36 @@ impl Document {
         changed
     }
 
-    /// Clear every solid reference to a triangulation that is going away, so
-    /// a later import reusing the id cannot silently adopt the reference.
-    pub(crate) fn forget_solid_triangulation(&mut self, id: triangulation::TriangulationId) {
-        let mut changed = false;
-        for solid in &mut self.solids {
-            for reference in [&mut solid.surface, &mut solid.topography] {
-                if *reference == Some(id) {
-                    *reference = None;
-                    changed = true;
+    /// The edits unlinking every solid from `item`, for a delete to carry in
+    /// its undo step. Solids reference surfaces and block models by id, and an
+    /// import can reuse a freed id, so a delete must not leave them pointing
+    /// at it; and undo, putting the item back, has to link them back too.
+    pub(crate) fn solid_unlinks(&self, item: ItemRef) -> Vec<Command> {
+        let unlink = |solid: SolidId, before: SolidEdit, after: SolidEdit| Command::EditSolid {
+            solid,
+            before: Box::new(before),
+            after: Box::new(after),
+        };
+        let mut commands = Vec::new();
+        for solid in &self.solids {
+            match item {
+                ItemRef::Triangulation(id) => {
+                    if solid.surface == Some(id) {
+                        commands.push(unlink(solid.id, SolidEdit::Surface(Some(id)), SolidEdit::Surface(None)));
+                    }
+                    if solid.topography == Some(id) {
+                        commands.push(unlink(solid.id, SolidEdit::Topography(Some(id)), SolidEdit::Topography(None)));
+                    }
                 }
+                ItemRef::BlockModel(id) => {
+                    if solid.block_model == Some(id) {
+                        commands.push(unlink(solid.id, SolidEdit::BlockModel(Some(id)), SolidEdit::BlockModel(None)));
+                    }
+                }
+                ItemRef::DrillHole(_) | ItemRef::PointCloud(_) | ItemRef::Raster(_) => {}
             }
         }
-        if changed {
-            self.touch();
-        }
-    }
-
-    /// Block-model counterpart of [`Document::forget_solid_triangulation`].
-    pub(crate) fn forget_solid_block_model(&mut self, id: block_model::BlockModelId) {
-        let mut changed = false;
-        for solid in &mut self.solids {
-            if solid.block_model == Some(id) {
-                solid.block_model = None;
-                changed = true;
-            }
-        }
-        if changed {
-            self.touch();
-        }
+        commands
     }
 
     pub(crate) fn set_layer_elevation(&mut self, id: LayerId, elevation: f32) {
@@ -2359,6 +2407,16 @@ impl Document {
     }
 
     /// Append a layer and its objects while retaining their runtime ids.
+    /// Lift layer `id` and every object on it out of the document, the
+    /// objects in draw order: what [`Self::append_layer_snapshot`] puts back.
+    pub(crate) fn take_layer_snapshot(&mut self, id: LayerId) -> Option<(Layer, Vec<Object>)> {
+        let layer = self.layer(id)?.clone();
+        let objects: Vec<Object> = self.objects.iter().filter(|object| object.layer() == id).cloned().collect();
+        self.remove_objects_bulk(&objects.iter().map(Object::id).collect());
+        self.delete_layer(id);
+        Some((layer, objects))
+    }
+
     pub(crate) fn append_layer_snapshot<'a>(&mut self, layer: &Layer, objects: impl Iterator<Item = &'a Object>) {
         if !self.layers.iter().any(|stored| stored.id == layer.id) {
             self.next_layer_id = self.next_layer_id.max(layer.id.0.saturating_add(1));
@@ -3546,6 +3604,13 @@ pub(crate) enum Command {
     /// handful of names and rates, and swapping it whole is what guarantees
     /// undo restores the same ids - which every Gantt row and, later, every
     /// block assignment is keyed by.
+    /// One field of one solid, as the planner set it. Only that field: blast
+    /// names and the rest of the solid follow from a run, not from history.
+    EditSolid {
+        solid: SolidId,
+        before: Box<SolidEdit>,
+        after: Box<SolidEdit>,
+    },
     SetHaulNetwork {
         before: Box<haulage::HaulNetwork>,
         after: Box<haulage::HaulNetwork>,
@@ -3631,6 +3696,7 @@ impl Command {
                 Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::SetSchedulePlan { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::SetHaulNetwork { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
+                Command::EditSolid { .. } => size_of::<SolidEdit>().saturating_mul(2),
                 Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
                 Command::SetTieIns { before, after, .. } => before
                     .iter()
@@ -3719,6 +3785,16 @@ impl Command {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// `commands` as one undo step: the command itself when there is only
+    /// one, a batch when there are more, nothing when there are none.
+    pub(crate) fn step(mut commands: Vec<Command>) -> Option<Command> {
+        match commands.len() {
+            0 => None,
+            1 => commands.pop(),
+            _ => Some(Command::Batch(commands)),
         }
     }
 
@@ -3821,6 +3897,7 @@ impl Command {
             | Command::RenameFolder { .. }
             | Command::SetLayerPlacement { .. }
             | Command::SetHaulNetwork { .. }
+            | Command::EditSolid { .. }
             | Command::SetSchedulePlan { .. } => {}
         }
     }
@@ -3952,6 +4029,13 @@ impl Command {
             }
             Command::SetObjectHidden { id, after, .. } => {
                 target.document.set_object_hidden(*id, *after);
+                target.effects.document_changed = true;
+            }
+            Command::EditSolid { solid, after, .. } => {
+                target.document.update_solid(*solid, (**after).clone());
+                // Solids are not in the content hash: the epoch is what makes
+                // this unsaved work, and undo puts it back.
+                target.content.touch();
                 target.effects.document_changed = true;
             }
             Command::SetHaulNetwork { after, .. } => {
@@ -4113,6 +4197,10 @@ impl Command {
             }
             Command::SetObjectHidden { id, before, .. } => {
                 target.document.set_object_hidden(*id, *before);
+                target.effects.document_changed = true;
+            }
+            Command::EditSolid { solid, before, .. } => {
+                target.document.update_solid(*solid, (**before).clone());
                 target.effects.document_changed = true;
             }
             Command::SetHaulNetwork { before, .. } => {
@@ -4402,6 +4490,30 @@ impl History {
         });
         self.retained_bytes = self.retained_bytes.saturating_add(estimated_bytes);
         self.enforce_memory_budget();
+    }
+
+    /// Make `command`, already applied, part of the newest undo step, so one
+    /// undo reverses both. For what an edit leads to once its results are in.
+    /// Leaves anything waiting to be redone alone. Returns whether there was a
+    /// step to join.
+    pub(crate) fn join_last_step(&mut self, project_epoch: u64, command: Command) -> bool {
+        let Some(entry) = self.project.undo.last_mut() else {
+            return false;
+        };
+        self.archive_revision = self.archive_revision.wrapping_add(1);
+        self.open_run = false;
+        let mut step = match std::mem::replace(&mut entry.command, Command::Batch(Vec::new())) {
+            Command::Batch(commands) => commands,
+            earlier => vec![earlier],
+        };
+        step.push(command);
+        entry.command = Command::Batch(step);
+        entry.after.project = project_epoch;
+        self.retained_bytes = self.retained_bytes.saturating_sub(entry.estimated_bytes);
+        entry.estimated_bytes = entry.command.estimated_bytes();
+        self.retained_bytes = self.retained_bytes.saturating_add(entry.estimated_bytes);
+        self.enforce_memory_budget();
+        true
     }
 
     /// Revert the most recent command. Returns `true` if something was undone.

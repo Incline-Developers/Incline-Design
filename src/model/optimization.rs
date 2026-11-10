@@ -169,7 +169,7 @@ pub(crate) fn copy_name<'a>(existing: impl IntoIterator<Item = &'a str>, name: &
 }
 
 /// Whether a scenario other than `id` already uses `prefix` (trimmed, any
-/// case) to name its shells. Shell names are `<prefix>_RAF 0.85`, so a
+/// case) to name its shells. Shell names are `<prefix>_RF 0.85`, so a
 /// unique prefix keeps every scenario's shells apart even if their
 /// collections are removed.
 pub(crate) fn shell_prefix_taken(scenarios: &[OptimizationScenario], id: u64, prefix: &str) -> bool {

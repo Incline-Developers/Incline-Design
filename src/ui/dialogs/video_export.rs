@@ -325,6 +325,8 @@ pub(crate) fn draw_video_export_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                 None => tr!("video-export-invalid-speed"),
             };
             menu::menu_note(ui, summary);
+            // The browser has no save dialog to choose in: it downloads an MP4.
+            #[cfg(not(target_arch = "wasm32"))]
             menu::menu_note(ui, tr!("video-export-format-note"));
             menu::menu_actions(ui, |ui| {
                 let ready = enabled && request.is_some();
@@ -358,7 +360,7 @@ fn time_field(ui: &mut egui::Ui, label: String, text: &mut String) {
             let parsed = parse_time(text, start);
             let mut picked = None;
             let button_width = if let Some(start) = start {
-                let response = calendar_button(ui, height).on_hover_text(tr!("video-export-pick-date"));
+                let response = calendar_button(ui, height);
                 let current = parsed.and_then(|hours| start.checked_add_signed(chrono::Duration::days((hours / SCHEDULE_PERIOD_H).floor() as i64)));
                 if let Some(date) = date_popup(&response, current) {
                     let day = (date - start).num_days().max(0) as f64;

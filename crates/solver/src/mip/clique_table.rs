@@ -922,7 +922,7 @@ impl CliqueTable {
                     let value = self.cliques[cliqueid].num_zero_fixed() + 1;
                     self.cliques[cliqueid].set_num_zero_fixed(value);
                     if self.cliques[cliqueid].num_active() <= 1 {
-                        self.remove_clique(cliqueid);
+                        self.fix_last_active_and_remove(globaldom, cliqueid, cc);
                     }
                 });
                 continue;
@@ -933,7 +933,7 @@ impl CliqueTable {
                 self.cliques[cliqueid].set_num_zero_fixed(value);
                 let clique = self.cliques[cliqueid];
                 if clique.num_active() <= 1 {
-                    self.remove_clique(cliqueid);
+                    self.fix_last_active_and_remove(globaldom, cliqueid, cc);
                 } else if clique.num_zero_fixed() >= 10usize.max((clique.end() - clique.start()) >> 1) {
                     let mut clq: Vec<CliqueVar> = self.cliqueentries[clique.start()..clique.end()].to_vec();
                     self.remove_clique(cliqueid);
@@ -945,6 +945,22 @@ impl CliqueTable {
             });
         }
         self.propagate_and_cleanup(globaldom, cc);
+    }
+
+    /// HiGHS's `fixLastActiveAndRemove` (#3220): an equality clique with one
+    /// literal left forces it to one before the clique goes.
+    fn fix_last_active_and_remove(&mut self, globaldom: &mut Domain, cliqueid: usize, cc: &mut CliqueCtx) {
+        let clique = self.cliques[cliqueid];
+        if clique.equality && clique.num_active() == 1 {
+            for i in clique.start()..clique.end() {
+                let entry = self.cliqueentries[i];
+                if !globaldom.is_fixed(entry.col()) {
+                    self.fix_col(globaldom, entry.complement(), false, cc);
+                    break;
+                }
+            }
+        }
+        self.remove_clique(cliqueid);
     }
 
     /// Fix every literal of clique `cliqueid` but column `col`'s; returns
@@ -1472,12 +1488,12 @@ impl CliqueTable {
                 if globaldom.col_lower[inds[i]] == -INF {
                     return;
                 }
-                minact += vals[i] * globaldom.col_lower[inds[i]];
+                minact += vals[i] * CDouble::new(globaldom.col_lower[inds[i]]);
             } else {
                 if globaldom.col_upper[inds[i]] == INF {
                     return;
                 }
-                minact += vals[i] * globaldom.col_upper[inds[i]];
+                minact += vals[i] * CDouble::new(globaldom.col_upper[inds[i]]);
             }
         }
         if (CDouble::new(rhs) - minact) < 0.0 {
@@ -1487,14 +1503,17 @@ impl CliqueTable {
             if model.is_col_continuous(inds[i]) {
                 continue;
             }
-            let mut bound_val = ((CDouble::new(rhs) - minact) / vals[i]).value();
+            // In double-double, with a tolerance that also covers epsilon
+            // over the coefficient (HiGHS #3223).
+            let implied_bound = (CDouble::new(rhs) - minact) / vals[i];
+            let bound_tol = feastol.max(cc.cx.epsilon / vals[i].abs());
             if vals[i] > 0.0 {
-                bound_val = (bound_val + globaldom.col_lower[inds[i]] + feastol).floor();
+                let bound_val = (implied_bound + globaldom.col_lower[inds[i]] + bound_tol).value().floor();
                 self.with_env(globaldom, cc, |dom, env| {
                     dom.change_bound(DomainChange::new(bound_val, inds[i], BoundType::Upper), Reason::unspecified(), env)
                 });
             } else {
-                bound_val = (bound_val + globaldom.col_upper[inds[i]] - feastol).ceil();
+                let bound_val = (implied_bound + globaldom.col_upper[inds[i]] - bound_tol).value().ceil();
                 self.with_env(globaldom, cc, |dom, env| {
                     dom.change_bound(DomainChange::new(bound_val, inds[i], BoundType::Lower), Reason::unspecified(), env)
                 });
@@ -1518,7 +1537,7 @@ impl CliqueTable {
                         continue;
                     }
                     if vals[perm[j]] > 0.0 {
-                        let mut implcolub = (implied_activity + vals[perm[j]] * globaldom.col_lower[col]).value() / vals[perm[j]];
+                        let mut implcolub = ((implied_activity + vals[perm[j]] * CDouble::new(globaldom.col_lower[col])) / vals[perm[j]]).value();
                         if model.is_col_integral(col) {
                             implcolub = (implcolub + feastol).floor();
                         }
@@ -1534,7 +1553,7 @@ impl CliqueTable {
                             cc.implications.add_vub(col, bincol, coef, constant, globaldom, model, feastol);
                         }
                     } else {
-                        let mut implcollb = (implied_activity + vals[perm[j]] * globaldom.col_upper[col]).value() / vals[perm[j]];
+                        let mut implcollb = ((implied_activity + vals[perm[j]] * CDouble::new(globaldom.col_upper[col])) / vals[perm[j]]).value();
                         if model.is_col_integral(col) {
                             implcollb = (implcollb - feastol).ceil();
                         }

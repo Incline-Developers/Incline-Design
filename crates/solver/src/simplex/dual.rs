@@ -241,6 +241,9 @@ impl Dual {
         }
         ekk.initialise_bound(Algorithm::Dual, self.solve_phase, false);
         ekk.initialise_nonbasic_value_and_move();
+        // Phase 1 boxes the free variables, so an earlier phase 2's list of
+        // them must not be used (HiGHS #3353).
+        self.dual_row.free_list.clear();
         if !ekk.info.valid_backtracking_basis {
             ekk.put_backtracking_basis();
         }

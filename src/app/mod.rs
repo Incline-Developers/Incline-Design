@@ -8,7 +8,7 @@ pub(crate) mod geophysics_web;
 pub(crate) mod haulage_pipeline; // The Haulage workspace's Setup run/invalidation model
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
-pub(crate) mod memory; // Browser address-space budgeting for large allocations
+pub(crate) mod memory; // Allocator settings, and browser address-space budgeting for large allocations
 pub(crate) mod memory_usage; // The status bar's memory and per-core CPU readouts
 pub(crate) mod planning_pipeline; // The Solids workspace's six-stage run/invalidation model
 pub(crate) mod schedule_animation; // Schedule Animate's derived, scrubbed geometry
@@ -24,6 +24,7 @@ pub(crate) mod video_export; // Animate played through the viewport into a video
 pub(crate) mod web_download;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_storage;
+pub(crate) mod window_frame; // The window's own title bar: its state, title and actions
 
 #[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
@@ -335,9 +336,20 @@ pub(crate) struct App<'a> {
     /// being discarded when there is otherwise no window activity.
     next_ui_repaint_deadline: Option<Instant>,
     window: Option<Arc<Window>>,
+    /// The title last given to the window, so it is set only when it changes.
+    window_title: String,
+    /// Whether the window may have been maximised, made fullscreen or
+    /// focused since its state was last mirrored. See `window_frame`.
+    window_state_stale: bool,
     /// Precision touchpad pan and pinch, which winit does not report on Windows.
     #[cfg(target_os = "windows")]
     trackpad: Option<crate::windows_trackpad::Trackpad>,
+    /// Snap Layouts on the title bar's maximise button.
+    #[cfg(target_os = "windows")]
+    maximize_button: Option<crate::windows_caption::MaximizeButton>,
+    /// Frames still to draw after a fullscreen change. See `window_frame`.
+    #[cfg(target_os = "macos")]
+    fullscreen_settling: u8,
     graphics: Option<Graphics<'static>>,
     #[cfg(target_arch = "wasm32")]
     web_graphics_state: GraphicsState,
@@ -437,12 +449,14 @@ pub(crate) struct App<'a> {
     /// `EditorState::locked_layers` onto `EditorState::frozen_handles`, so
     /// invalidation only walks the document when one of the two changed.
     layer_lock_key: Option<(u64, u64)>,
-    /// Selection + composite fingerprint behind `EditorState::selection_has_intersections`,
-    /// so the intersection scan only reruns when the selection or the documents change.
-    intersection_availability_key: Option<u64>,
     /// Remove Between Crossings: where the strings shown cross the string
     /// hovered, behind the key of what they were found from.
     removal_crossings: Option<(u64, commands::drawing::insert_point::CrossingCuts)>,
+    /// The solid build failures already raised in a dialog; see
+    /// [`App::warn_solid_failed`].
+    solid_failures_warned: std::collections::HashSet<(crate::model::SolidId, String)>,
+    /// What [`App::sync_page_locks`] last built its sets from.
+    page_lock_key: Option<u64>,
     history: crate::model::History,
     /// Whether the pointer was still driving a widget when the last UI frame
     /// ended. Edits that arrive while it is set belong to an unfinished
@@ -482,8 +496,20 @@ pub(crate) struct App<'a> {
     /// a restore that fails is not retried every frame.
     pub(crate) solid_view_cache: std::collections::HashMap<crate::model::SolidId, crate::app::commands::solids_view::ViewSolid>,
     pub(crate) solid_view_body: Vec<crate::model::triangulation::OpenTriangulation>,
+    /// The dig blocks the Reserves view draws, with their ground, for a drag
+    /// box to test against.
+    pub(crate) solid_view_shown_blocks: Vec<crate::app::commands::solids_view::ShownBlock>,
     pub(crate) solid_view_body_key: Option<u64>,
-    /// The Haulage Layout's dig blocks as one flat surface at their flitch
+    /// What the Reserves page draws in the viewport: the open surfaces and
+    /// the dig blocks together, assembled when either changes; see
+    /// `App::refresh_reserves_scene`.
+    pub(crate) reserves_scene: Vec<crate::model::triangulation::OpenTriangulation>,
+    pub(crate) reserves_scene_key: Option<u64>,
+    /// Every mesh of the solids' cached cuts, kept on the GPU between visits
+    /// to the pages that draw them. `App::refresh_solid_view_retained`.
+    pub(crate) solid_view_retained: std::collections::HashSet<crate::model::triangulation::TriangulationId>,
+    solid_view_retained_key: Option<u64>,
+    /// The Road Network's dig blocks as one flat surface at their flitch
     /// bases, for the orbit pivot and the rotation centre to land on. Never
     /// drawn: the blocks are filled in the document scene.
     pub(crate) haul_block_surface: Vec<crate::model::triangulation::OpenTriangulation>,
@@ -518,6 +544,14 @@ pub(crate) struct App<'a> {
     /// can always say what was true when it was last run. Its indexes are
     /// built once, when it is published. See [`crate::app::schedule_run`].
     pub(crate) schedule_calculation: Option<std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>>,
+    /// Whether the held result reached the planning end when it was
+    /// published. Such a schedule follows the end when it moves later; one
+    /// run a period at a time stops where it was taken to.
+    pub(crate) schedule_reached_end: bool,
+    /// The Dig Strips step's count of every flitch's dig blocks, under the
+    /// key of the ground and lines it counted. See
+    /// [`crate::app::App::dig_block_count`].
+    pub(crate) dig_block_count: Option<(u64, usize)>,
     /// A run in flight on the bounded worker pool. Dropping it and cancelling
     /// its job publishes nothing.
     pub(crate) pending_schedule_run: Option<crate::app::schedule_run::PendingScheduleRun>,
@@ -534,6 +568,10 @@ pub(crate) struct App<'a> {
     pub(crate) schedule_report_key_cache: std::cell::Cell<Option<(u32, u64, u64, u64)>>,
     /// [`App::planning_fingerprints`], with the key it was computed for.
     pub(crate) planning_fingerprint_cache: std::cell::Cell<Option<(u64, [u64; crate::ui::state::SolidsStep::ALL.len()])>>,
+    /// See [`App::schedule_fingerprints`].
+    pub(crate) schedule_fingerprint_cache: std::cell::Cell<Option<(u64, [u64; crate::ui::state::ScheduleStep::ALL.len()])>>,
+    /// See [`App::haulage_fingerprints`].
+    pub(crate) haulage_fingerprint_cache: std::cell::Cell<Option<(u64, [u64; crate::ui::state::HaulageStep::ALL.len()])>>,
     /// The last snapshot handed out, by what it was assembled from. Building
     /// one copies every dig block's ground and reserves, and it is asked for
     /// several times a frame; see [`App::planning_snapshot`].
@@ -578,6 +616,10 @@ pub(crate) struct App<'a> {
     /// Whether a Setup run was keeping unloaded items resident last frame;
     /// see [`Self::release_pipeline_residency`].
     pub(crate) residency_held_by_pipeline: bool,
+    /// Until when a hidden block model read back for a reserve scan stays
+    /// loaded. Edits come in runs, and reading a large model back takes far
+    /// longer than the scan that needs it.
+    pub(crate) scanned_model_kept_until: Option<Instant>,
     pub(crate) schedule_animation: crate::app::schedule_animation::ScheduleAnimation,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
     slice_preview_cursor_px: Option<(f64, f64)>,
@@ -644,8 +686,14 @@ impl<'a> Default for App<'a> {
             redraw_requested: false,
             next_ui_repaint_deadline: None,
             window: None,
+            window_title: String::new(),
+            window_state_stale: true,
             #[cfg(target_os = "windows")]
             trackpad: None,
+            #[cfg(target_os = "windows")]
+            maximize_button: None,
+            #[cfg(target_os = "macos")]
+            fullscreen_settling: 0,
             graphics: None,
             #[cfg(target_arch = "wasm32")]
             web_graphics_state: GraphicsState::NotStarted,
@@ -710,8 +758,9 @@ impl<'a> Default for App<'a> {
             snap_index_dirty: false,
             scene_document_key: None,
             layer_lock_key: None,
-            intersection_availability_key: None,
             removal_crossings: None,
+            solid_failures_warned: Default::default(),
+            page_lock_key: None,
             history: crate::model::History::new(),
             ui_pointer_gesture_active: false,
             reported_during_gesture: Vec::new(),
@@ -727,8 +776,13 @@ impl<'a> Default for App<'a> {
             solid_preview: None,
             solid_view_cache: Default::default(),
             solid_view_body: Vec::new(),
+            solid_view_shown_blocks: Vec::new(),
             haul_block_surface: Vec::new(),
             solid_view_body_key: None,
+            reserves_scene: Vec::new(),
+            reserves_scene_key: None,
+            solid_view_retained: std::collections::HashSet::new(),
+            solid_view_retained_key: None,
             dig_block_identities: Default::default(),
             planning_pipeline: None,
             schedule_pipeline: None,
@@ -738,6 +792,8 @@ impl<'a> Default for App<'a> {
             planning_entry_pending: false,
             planning_entry_step: None,
             schedule_calculation: None,
+            schedule_reached_end: false,
+            dig_block_count: None,
             pending_schedule_run: None,
             video_recording: None,
             schedule_run_diagnostics: None,
@@ -746,6 +802,8 @@ impl<'a> Default for App<'a> {
             schedule_semantic_cache: std::cell::Cell::new(None),
             schedule_report_key_cache: std::cell::Cell::new(None),
             planning_fingerprint_cache: std::cell::Cell::new(None),
+            schedule_fingerprint_cache: std::cell::Cell::new(None),
+            haulage_fingerprint_cache: std::cell::Cell::new(None),
             planning_snapshot_cache: std::cell::RefCell::new(None),
             schedule_run_serial: 0,
             schedule_auto_attempted: None,
@@ -762,6 +820,7 @@ impl<'a> Default for App<'a> {
             improve_progress: None,
             improve_progress_seen: None,
             residency_held_by_pipeline: false,
+            scanned_model_kept_until: None,
             schedule_animation: Default::default(),
             solid_preview_restore_requested: None,
             slice_preview_cursor_px: None,
@@ -822,54 +881,20 @@ impl<'a> App<'a> {
                 self.editor.show_export = true;
                 None
             }
-            MacMenuAction::DrawHaulRoad => Some(UiCommand::StartHaulRoad),
-            MacMenuAction::ConvertHaulSelection => Some(UiCommand::ConvertHaulSelection),
-            MacMenuAction::ImportHaulRoads => Some(UiCommand::OpenHaulImport),
-            MacMenuAction::ExportHaulRoads => Some(UiCommand::ExportHaulRoads),
-            MacMenuAction::EditHaulProperties => Some(UiCommand::EditHaulProperties),
             MacMenuAction::ExportViewportImage => Some(UiCommand::ExportViewportImage),
-            MacMenuAction::OpenPlotDialog => Some(UiCommand::OpenPlotDialog),
             MacMenuAction::OpenPreferences => Some(UiCommand::OpenPreferences),
             MacMenuAction::OpenAbout => {
                 self.editor.show_about = true;
                 None
             }
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
-            MacMenuAction::GeologyRow(index) => match crate::ui::elements::main_menu::GEOLOGY_DESIGN_ROWS.get(index) {
+            MacMenuAction::MenuRow(index) => match crate::ui::elements::main_menu::MenuRow::all().nth(index) {
                 Some(row) => {
-                    self.handle_ui_commands(vec![row.command(), UiCommand::NoteRecentFunction(row.key())]);
+                    self.handle_ui_commands(vec![row.command(), UiCommand::NoteRecentFunction(row)]);
                     return;
                 }
                 None => None,
             },
-            MacMenuAction::DesignRow(index) => match crate::ui::elements::main_menu::DESIGN_ROWS.get(index) {
-                Some(row) => {
-                    self.handle_ui_commands(vec![row.command(), UiCommand::NoteRecentFunction(row.key())]);
-                    return;
-                }
-                None => None,
-            },
-            MacMenuAction::OpenCutTriangulationByPolyline => Some(UiCommand::OpenCutTriangulationByPolyline),
-            MacMenuAction::OpenCutTriangulationByZ => Some(UiCommand::OpenCutTriangulationByZ),
-            MacMenuAction::OpenCutTriangulationBySurface => Some(UiCommand::OpenCutTriangulationBySurface),
-            MacMenuAction::OpenCutTopologyByPitShell => Some(UiCommand::OpenCutTopologyByPitShell),
-            MacMenuAction::OpenIncludeSolidInTopology => Some(UiCommand::OpenIncludeSolidInTopology),
-            MacMenuAction::OpenBuildSolidFromSurfaces => Some(UiCommand::OpenBuildSolidFromSurfaces),
-            MacMenuAction::OpenContourTriangulation => Some(UiCommand::OpenContourTriangulation),
-            MacMenuAction::OpenPointCloudTin => Some(UiCommand::OpenPointCloudTin),
-            MacMenuAction::OpenPointCloudJoin => Some(UiCommand::OpenPointCloudJoin),
-            MacMenuAction::OpenPointCloudClassify => Some(UiCommand::OpenPointCloudClassify),
-            MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
-            MacMenuAction::OpenReferencePoints => Some(UiCommand::OpenReferencePoints),
-            MacMenuAction::OpenReferenceSurface => Some(UiCommand::OpenReferenceSurface),
-            MacMenuAction::OpenThicknessPoints => Some(UiCommand::OpenThicknessPoints),
-            MacMenuAction::OpenSeamSurface => Some(UiCommand::OpenSeamSurface),
-            MacMenuAction::OpenModellingClipToSurface | MacMenuAction::OpenCutTriangulationToSurface => Some(UiCommand::OpenCutTriangulationToSurface),
-            MacMenuAction::OpenOptimizationScenarios => Some(UiCommand::OpenOptimizationScenarios),
-            MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
-            MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
-            MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
-            MacMenuAction::UndrapeAllRasters => Some(UiCommand::UndrapeAllRasters),
             MacMenuAction::ToggleView(index) => crate::mac::VIEW_TOGGLES.get(index).copied().map(UiCommand::ToggleViewOption),
         };
 
@@ -913,14 +938,6 @@ impl<'a> App<'a> {
     }
 
     fn apply_config(&mut self, config: io::Config) {
-        let mut order = Vec::new();
-        for workspace in config.workspace_order.iter().chain(crate::ui::state::Workspace::ALL.iter()) {
-            if !order.contains(workspace) {
-                order.push(*workspace);
-            }
-        }
-        self.editor.workspace_order = order.try_into().expect("all workspaces appear exactly once");
-        self.editor.active_workspace = self.editor.workspace_order[0];
         // A definition naming a parent that is not in the list, or itself,
         // cannot be resolved and would fail on every use; it is dropped on the
         // way in so the rest of the list still works.
@@ -971,15 +988,11 @@ impl<'a> App<'a> {
         self.editor.blast_library = config.blast_library.clone();
         self.editor.recent_functions_shown = config.recent_functions_shown.clamp(1, crate::ui::state::RECENT_FUNCTION_LIMIT as u32);
         // A key no row carries any more (a function since removed) is dropped.
-        let known = |workspace, keys: &[String]| {
-            let mut recent = Vec::new();
-            for key in keys.iter().filter(|key| crate::ui::elements::main_menu::RecentRow::from_key(workspace, key).is_some()) {
-                crate::ui::state::note_recent(&mut recent, key);
-            }
-            recent
-        };
-        self.editor.recent_design_functions = known(crate::ui::state::Workspace::Production, &config.recent_design_functions);
-        self.editor.recent_geology_functions = known(crate::ui::state::Workspace::Geology, &config.recent_geology_functions);
+        let mut recent = Vec::new();
+        for row in config.recent_functions.iter().filter_map(|key| crate::ui::elements::main_menu::MenuRow::from_key(key)) {
+            crate::ui::state::note_recent(&mut recent, row);
+        }
+        self.editor.recent_functions = recent;
         self.configure_graphics_camera_preferences();
     }
 
@@ -995,6 +1008,11 @@ impl<'a> App<'a> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => userspace_warn!("{}", crate::i18n::tr!("app-browser-preferences-load-failed", error = error.to_string())),
         }
+        // As on the desktop, there is always a project to draw into: the
+        // welcome splash sits over this one until it is dismissed, and its
+        // name titles the window from the start.
+        app.start_untitled_project()?;
+        app.startup_dialog_dismissed = false;
         crate::app::web_storage::install_dirty_guard();
         crate::app::web_storage::install_paste_listener(event_loop_proxy.clone());
         {
@@ -1174,10 +1192,138 @@ impl<'a> App<'a> {
     /// through `drop_editor_references_to_missing_items` rather than trying to
     /// restore them, so a restored item comes back unselected.
     pub(crate) fn delete_project_item(&mut self, item: ItemRef) {
-        if self.item_style(item).is_none() {
-            return;
+        if let Some(command) = Command::step(self.delete_item_commands(item)) {
+            self.execute_edit(command);
         }
-        self.execute_edit(Command::DeleteItem { item, index: 0, removed: None });
+    }
+
+    /// The commands deleting `item`, unlinking the solids that use it first
+    /// so undo puts the item back before linking them to it again. Empty
+    /// when the project has no such item.
+    pub(crate) fn delete_item_commands(&self, item: ItemRef) -> Vec<Command> {
+        if self.item_style(item).is_none() {
+            return Vec::new();
+        }
+        let mut commands = self.workspace.active_document().map(|document| document.solid_unlinks(item)).unwrap_or_default();
+        commands.push(Command::DeleteItem { item, index: 0, removed: None });
+        commands
+    }
+
+    /// What the active project holds, by id, so [`Self::record_additions`]
+    /// can tell what was added after.
+    pub(crate) fn project_members(&self) -> ProjectMembers {
+        let project = self.workspace.active_project();
+        ProjectMembers {
+            layers: project
+                .map(|project| project.project.document.layers().iter().map(|layer| layer.id).collect())
+                .unwrap_or_default(),
+            folders: project
+                .map(|project| {
+                    SectionKind::ALL
+                        .into_iter()
+                        .flat_map(|section| project.project.folders.folders(section).iter().map(move |folder| (section, folder.id)))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            items: (self.triangulations.iter().map(|item| ItemRef::Triangulation(item.id)))
+                .chain(self.block_models.iter().map(|item| ItemRef::BlockModel(item.id)))
+                .chain(self.drill_holes.iter().map(|item| ItemRef::DrillHole(item.id)))
+                .chain(self.point_clouds.iter().map(|item| ItemRef::PointCloud(item.id)))
+                .chain(self.raster_textures.iter().map(|item| ItemRef::Raster(item.id)))
+                .collect(),
+        }
+    }
+
+    /// Run `add`, which puts content into the project directly, and make
+    /// everything it added one undo step.
+    pub(crate) fn add_as_one_step<R>(&mut self, add: impl FnOnce(&mut Self) -> R) -> R {
+        let before = self.project_members();
+        let added = add(self);
+        self.record_additions(&before, Vec::new());
+        added
+    }
+
+    /// Take everything added to the active project since `before` (items,
+    /// design layers with their objects, collections) back out, and put it
+    /// back in as one undo step together with `also`. For an import, which
+    /// installs what it reads piecemeal, so that one undo takes it all away.
+    pub(crate) fn record_additions(&mut self, before: &ProjectMembers, also: Vec<Command>) {
+        fn lift<T>(list: &mut Vec<T>, is_new: impl Fn(&T) -> bool, wrap: impl Fn(T) -> crate::model::OpenItem, into: &mut Vec<Command>) {
+            let positions: Vec<usize> = list.iter().enumerate().filter(|(_, item)| is_new(item)).map(|(index, _)| index).collect();
+            let mut lifted: Vec<(usize, T)> = positions.into_iter().rev().map(|index| (index, list.remove(index))).collect();
+            // Put back lowest index first, each lands where it stood.
+            lifted.reverse();
+            into.extend(lifted.into_iter().map(|(index, item)| {
+                let item = wrap(item);
+                Command::AddItem {
+                    item: item.item_ref(),
+                    index,
+                    added: Some(item),
+                }
+            }));
+        }
+
+        // Collections go first, so the layers and items in them find them
+        // there when they come back, and last on undo.
+        let mut commands = Vec::new();
+        if let Some(project) = self.workspace.active_project_mut() {
+            for section in SectionKind::ALL {
+                let added: Vec<_> = project
+                    .project
+                    .folders
+                    .folders(section)
+                    .iter()
+                    .filter(|folder| !before.folders.contains(&(section, folder.id)))
+                    .cloned()
+                    .collect();
+                for folder in added {
+                    project.project.folders.remove(section, folder.id);
+                    commands.push(Command::AddFolder { section, folder });
+                }
+            }
+            let document = &mut project.project.document;
+            let added: Vec<LayerId> = document.layers().iter().map(|layer| layer.id).filter(|id| !before.layers.contains(id)).collect();
+            for id in added {
+                if let Some((layer, objects)) = document.take_layer_snapshot(id) {
+                    commands.push(Command::AddLayerSnapshot { layer, objects });
+                }
+            }
+        }
+        let is_new = |item: ItemRef| !before.items.contains(&item);
+        lift(
+            &mut self.raster_textures,
+            |item| is_new(ItemRef::Raster(item.id)),
+            |item| crate::model::OpenItem::Raster(Box::new(item)),
+            &mut commands,
+        );
+        lift(
+            &mut self.triangulations,
+            |item| is_new(ItemRef::Triangulation(item.id)),
+            |item| crate::model::OpenItem::Triangulation(Box::new(item)),
+            &mut commands,
+        );
+        lift(
+            &mut self.block_models,
+            |item| is_new(ItemRef::BlockModel(item.id)),
+            |item| crate::model::OpenItem::BlockModel(Box::new(item)),
+            &mut commands,
+        );
+        lift(
+            &mut self.drill_holes,
+            |item| is_new(ItemRef::DrillHole(item.id)),
+            |item| crate::model::OpenItem::DrillHole(Box::new(item)),
+            &mut commands,
+        );
+        lift(
+            &mut self.point_clouds,
+            |item| is_new(ItemRef::PointCloud(item.id)),
+            |item| crate::model::OpenItem::PointCloud(Box::new(item)),
+            &mut commands,
+        );
+        commands.extend(also);
+        if let Some(command) = Command::step(commands) {
+            self.execute_job_edit(command);
+        }
     }
 
     /// Take the pointer state the UI frame ended in, and settle anything that
@@ -1268,11 +1414,24 @@ impl<'a> App<'a> {
     /// [`Self::record_applied_edit`] for one already committed by a live drag -
     /// so that anything able to dirty the project can also be taken back.
     pub(crate) fn execute_edit(&mut self, command: Command) {
+        self.execute_edit_continuing(command, true);
+    }
+
+    /// Same, for the result of a background job applied on the UI thread: an
+    /// undo step of its own, never folded into a gesture the user happens to
+    /// be making when the job finishes.
+    pub(crate) fn execute_job_edit(&mut self, command: Command) {
+        self.execute_edit_continuing(command, false);
+    }
+
+    /// `may_continue` lets the edit extend the gesture the pointer is still
+    /// driving, if there is one.
+    fn execute_edit_continuing(&mut self, command: Command, may_continue: bool) {
         let mut layers = Vec::new();
         if let Some(document) = self.workspace.active_document() {
             command.required_layers(false, document, &mut layers);
             if layers.iter().any(|id| document.deferred_layers.contains_key(id)) {
-                self.restore_layers_for(layers, move |app| app.execute_edit(command));
+                self.restore_layers_for(layers, move |app| app.execute_edit_continuing(command, may_continue));
                 return;
             }
         }
@@ -1280,10 +1439,10 @@ impl<'a> App<'a> {
         let mut needed = Vec::new();
         command.required_items(false, &mut needed);
         if needed.iter().any(|item| self.project_item_state(*item).is_some_and(|state| state.deferred.is_some())) {
-            self.restore_items_for(needed, move |app| app.execute_edit(command));
+            self.restore_items_for(needed, move |app| app.execute_edit_continuing(command, may_continue));
             return;
         }
-        let continuing = self.ui_pointer_gesture_active;
+        let continuing = may_continue && self.ui_pointer_gesture_active;
         let Some(((), effects)) = self.with_edit_target(|history, target| history.execute(target, command, continuing)) else {
             return;
         };
@@ -1927,8 +2086,12 @@ impl<'a> App<'a> {
     /// reruns often enough that a readout would be a flicker rather than a
     /// report.
     pub(crate) fn begin_quiet_task(&mut self) -> (BackgroundTaskTicket, crate::model::progress::Progress) {
-        let ticket = self.begin_topology_load();
+        // Marked quiet before the pointer is set, or the busy pointer would
+        // show from now until the task settles.
+        let ticket = self.background_tasks.begin();
         self.background_tasks.quiet.insert(ticket);
+        self.update_background_task_cursor();
+        self.redraw_requested = true;
         (ticket, crate::model::progress::Progress::new())
     }
 
@@ -2048,7 +2211,7 @@ impl<'a> App<'a> {
             return;
         }
         let attributes = Window::default_attributes()
-            .with_title(format!("{} | Slice preview · Wheel zoom · Middle-drag pan · F fit", crate::APP_NAME))
+            .with_title(crate::i18n::tr!("err-file-section-preview-title", app = crate::APP_NAME.to_string()))
             .with_window_icon(window_icon())
             .with_min_inner_size(winit::dpi::PhysicalSize::new(320, 240))
             .with_inner_size(winit::dpi::PhysicalSize::new(800, 700));
@@ -2057,7 +2220,7 @@ impl<'a> App<'a> {
         let result = event_loop.create_window(attributes).map(Arc::new).map_err(anyhow::Error::from).and_then(|window| {
             self.graphics
                 .as_mut()
-                .ok_or_else(|| anyhow::anyhow!("renderer is not initialized"))?
+                .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-file-renderer-not-ready")))?
                 .open_slice_preview(window)
         });
         if let Err(error) = result {
@@ -2357,6 +2520,7 @@ impl<'a> App<'a> {
         point_clouds.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         raster_textures.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
 
+        #[cfg(not(target_arch = "wasm32"))]
         let active_path = self.workspace.active_project().and_then(|p| p.path.clone());
         let modelling = self.workspace.active_project().map(|p| p.project.metadata.modelling).unwrap_or_default();
         let same_membership = |current: &[u64], saved: &[(u64, u64)]| current.len() == saved.len() && current.iter().all(|id| saved.iter().any(|(saved_id, _)| saved_id == id));
@@ -2413,6 +2577,7 @@ impl<'a> App<'a> {
             rasters_membership_dirty,
             has_active_project: self.workspace.has_active_project(),
             needs_startup_dialog: !self.startup_dialog_dismissed,
+            #[cfg(not(target_arch = "wasm32"))]
             active_path,
             modelling,
             active_triangulation_for_menu,
@@ -2489,10 +2654,13 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             return;
         }
 
-        let window_attributes = Window::default_attributes()
-            .with_title(crate::APP_NAME.to_string())
-            .with_window_icon(window_icon())
-            .with_min_inner_size(winit::dpi::PhysicalSize::new(900, 500));
+        let window_attributes = window_frame::frameless(
+            Window::default_attributes()
+                .with_title(crate::APP_NAME.to_string())
+                .with_window_icon(window_icon())
+                .with_min_inner_size(winit::dpi::PhysicalSize::new(900, 500)),
+            event_loop,
+        );
 
         #[cfg(not(target_arch = "wasm32"))]
         let window_attributes = window_attributes.with_inner_size(winit::dpi::PhysicalSize::new(900, 500)).with_maximized(true);
@@ -2508,7 +2676,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             Err(e) => {
                 log::error!("{}", crate::i18n::tr!("app-failed-create-window-error", error = e.to_string()));
                 #[cfg(target_arch = "wasm32")]
-                crate::show_web_startup_error(&format!("failed to create the browser window: {e}"));
+                crate::show_web_startup_error(&crate::i18n::tr!("err-file-browser-window-failed", error = e.to_string()));
                 self.close_requested = true;
                 return;
             }
@@ -2523,6 +2691,9 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         {
             self.trackpad = crate::windows_trackpad::Trackpad::new(&window)
                 .inspect_err(|error| log::warn!("Precision touchpad gestures are unavailable: {error}"))
+                .ok();
+            self.maximize_button = crate::windows_caption::MaximizeButton::new(&window)
+                .inspect_err(|error| log::warn!("Snap Layouts are unavailable on the maximise button: {error}"))
                 .ok();
         }
 
@@ -2561,8 +2732,11 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         #[cfg(target_arch = "wasm32")]
         crate::app::web_storage::set_dirty(self.has_unsaved_changes_for_exit());
         #[cfg(target_os = "macos")]
-        for action in crate::mac::drain_actions() {
-            self.handle_mac_menu_action(action);
+        {
+            for action in crate::mac::drain_actions() {
+                self.handle_mac_menu_action(action);
+            }
+            self.watch_fullscreen();
         }
 
         // Background writers must be observed before honoring an exit request;
@@ -2624,6 +2798,10 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                 graphics.request_slice_preview_redraw();
             }
         }
+        if self.scanned_model_kept_until.is_some_and(|until| until <= now) {
+            self.scanned_model_kept_until = None;
+            self.evict_unloaded_items();
+        }
         let continuous_redraw = self.graphics.as_ref().is_some_and(Graphics::needs_continuous_redraw);
         if self.redraw_requested || continuous_redraw {
             self.frame_demanded_at.get_or_insert(now);
@@ -2660,6 +2838,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             .chain(self.schedule_auto_deadline)
             .chain(self.planning_auto_deadline)
             .chain(self.haulage_auto_deadline)
+            .chain(self.scanned_model_kept_until)
             .chain(trackpad_deadline)
             .min();
         if let Some(deadline) = wake_deadline {
@@ -2696,9 +2875,8 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                         }
                     }
                     Some(Err(error)) => {
-                        let err = format!("failed to initialize WebGPU: {error:#}");
-                        userspace_error!("{err}");
-                        crate::show_web_startup_error(&err);
+                        userspace_error!("failed to initialize WebGPU: {error:#}");
+                        crate::show_web_startup_error(&crate::i18n::tr!("web-startup-no-graphics"));
                         self.web_graphics_state = GraphicsState::Failed;
                         self.close_requested = true;
                     }
@@ -2726,7 +2904,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     Ok(Some(record)) => {
                         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| {
                             if cancel.is_cancelled() {
-                                anyhow::bail!("Cancelled");
+                                anyhow::bail!(crate::app::jobs::Cancelled);
                             }
                             progress.set_fraction(0.1);
                             let source_name = format!("{}.omf", record.name.trim_end_matches(".omf"));
@@ -2748,7 +2926,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                                 Err(error) => userspace_warn!("{}", crate::i18n::tr!("app-could-not-activate-browser-project", error = format!("{error:#}"))),
                             }
                         };
-                        self.spawn_job_reporting_progress("Switching project…", vec![crate::app::jobs::JobKey::Anonymous], compute, apply);
+                        self.spawn_job_reporting_progress(crate::i18n::tr!("cmd-file-switching-project"), vec![crate::app::jobs::JobKey::Anonymous], compute, apply);
                     }
                     Ok(None) => {
                         self.browser_project_loads_pending.remove(&project_id);
@@ -2987,3 +3165,10 @@ pub(crate) enum AppEvent {
 
 #[cfg(not(target_arch = "wasm32"))]
 type AppEvent = ();
+
+/// The ids the active project holds; see [`App::record_additions`].
+pub(crate) struct ProjectMembers {
+    layers: HashSet<LayerId>,
+    folders: HashSet<(SectionKind, crate::model::folders::FolderId)>,
+    items: HashSet<ItemRef>,
+}

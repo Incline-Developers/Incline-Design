@@ -28,6 +28,7 @@ use crate::{
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup, context_menu_separator},
             explorer::{ExplorerEntry, explorer_note, row_height, stripe_bands},
+            hint::Hint,
             menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldF64, MenuFieldText, committed},
             tree_row_colors,
         },
@@ -200,7 +201,7 @@ fn draw_definition_list(ui: &mut egui::Ui, state: &SurveyState, commands: &mut V
         if local {
             entry = entry.leading_icon(unthemed_icon!("local_system.svg"), ui.visuals().strong_text_color());
         }
-        let response = entry.show(ui).response.on_hover_text(definition.summary());
+        let response = entry.show(ui).response.hint(definition.summary());
         if response.clicked() {
             select = Some(Some(name.clone()));
         }
@@ -371,7 +372,6 @@ fn draw_definition_page(ui: &mut egui::Ui, state: &mut SurveyState, commands: &m
                 &MenuFieldF64::new(tr!("survey-scale"), &mut state.transform.scale, 0.0..=f64::MAX)
                     .speed(0.000001)
                     .max_decimals(10)
-                    .help_text(tr!("survey-scale-help"))
                     .show(ui),
             );
         }

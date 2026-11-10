@@ -152,6 +152,15 @@ impl<'a> App<'a> {
 
     /// Lock or unlock every item in one explorer section.
     pub(crate) fn set_section_locked(&mut self, section: ExplorerSection, locked: bool) {
+        // On a page that locks items by default, the section's padlock is
+        // that page's lock, and the production views keep theirs.
+        if self.editor.page_locks_items() {
+            for entity in self.section_entities(section) {
+                self.editor.set_page_locked(entity, locked);
+            }
+            self.invalidate_geometry();
+            return;
+        }
         let mut changed = 0usize;
         if let Some(tag) = section_layer_tag(section) {
             for id in self.section_layer_ids(tag) {

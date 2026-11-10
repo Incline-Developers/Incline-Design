@@ -11,7 +11,7 @@ use super::{
     *,
 };
 use crate::{
-    BasisStatus, Options,
+    BasisStatus, Options, SimplexStrategy,
     simplex::{
         self, ModelStatus, SimplexResult,
         ekk::{Interrupt, SimplexLp},
@@ -24,12 +24,42 @@ const INF: f64 = f64::INFINITY;
 /// the simplex method from IPX's basis (or from scratch, without one)
 /// when IPX's status is not one HiGHS accepts.
 pub(crate) fn solve_lp(lp: &SimplexLp, options: &Options, interrupt: Option<Interrupt>) -> SimplexResult {
+    solve_lp_falling_back(lp, options, interrupt, false)
+}
+
+/// [`solve_lp`] on a presolved LP. Where the simplex clean-up of an
+/// imprecise crossover fails, the crossover's basis is returned instead,
+/// unknown, for postsolve to carry to the original LP and the simplex
+/// method to finish there. HiGHS would fail the solve: on long's routing
+/// LPs, perturbing costs up to 1e8 left the reduced clean-up 22,000 dual
+/// infeasibilities from a basis the original LP finishes in 16 pivots.
+pub(crate) fn solve_reduced_lp(lp: &SimplexLp, options: &Options, interrupt: Option<Interrupt>) -> SimplexResult {
+    solve_lp_falling_back(lp, options, interrupt, true)
+}
+
+fn solve_lp_falling_back(lp: &SimplexLp, options: &Options, interrupt: Option<Interrupt>, keep_crossover: bool) -> SimplexResult {
     let mut result = solve_lp_ipx(lp, options, interrupt.clone());
     if result.status == ModelStatus::Unknown || result.status == ModelStatus::UnboundedOrInfeasible {
         let basis = result.basis_valid.then_some(&result.out.basis);
-        let mut cleanup = simplex::solve_lp_simplex(lp.clone(), options, basis, interrupt);
+        let mut cleanup = simplex::solve_lp_simplex(lp.clone(), options, basis, interrupt.clone());
         cleanup.ipm_iterations = result.out.ipm_iterations;
         cleanup.crossover_iterations = result.out.crossover_iterations;
+        if keep_crossover && cleanup.status == ModelStatus::SolveError && result.status == ModelStatus::Unknown && result.basis_valid {
+            let primal = Options {
+                simplex_strategy: SimplexStrategy::Primal,
+                ..options.clone()
+            };
+            let mut again = simplex::solve_lp_simplex(lp.clone(), &primal, Some(&result.out.basis), interrupt);
+            again.ipm_iterations = result.out.ipm_iterations;
+            again.crossover_iterations = result.out.crossover_iterations;
+            again.iterations += cleanup.iterations;
+            if again.status != ModelStatus::SolveError {
+                return again;
+            }
+            result.out.status = ModelStatus::Unknown;
+            result.out.iterations = again.iterations;
+            return result.out;
+        }
         return cleanup;
     }
     result.out.status = result.status;
@@ -41,6 +71,13 @@ pub(crate) fn solve_lp(lp: &SimplexLp, options: &Options, interrupt: Option<Inte
 /// with centring steps (`run_centring`), at most 200 iterations. Returns
 /// HiGHS's model status and, when IPX gave one, the interior point's
 /// column values.
+///
+/// The status is the one `Highs::optimizeLp` reports, after
+/// `callLpKktCheck` has judged the interior point: IPX can call a centre
+/// optimal whose optimality conditions are far off, and HiGHS then reports
+/// it unknown, so the MIP solver fixes nothing from it. Without that check
+/// a centre still short of the region's interior put columns at a bound
+/// that feasible points leave it, and fixing them cut off the optimum.
 pub(crate) fn analytic_centre(lp: &SimplexLp, options: &Options, interrupt: Option<Interrupt>) -> (ModelStatus, Option<Vec<f64>>) {
     let parameters = Parameters {
         dualize: -1,
@@ -87,9 +124,7 @@ pub(crate) fn analytic_centre(lp: &SimplexLp, options: &Options, interrupt: Opti
     if error_status(info.status_ipm) || error_status(info.status_crossover) {
         return (ModelStatus::SolveError, None);
     }
-    // `getHighsNonVertexSolution`: the columns' values are IPX's x.
-    let col_value = lps.interior_solution(&model).map(|(x, ..)| x[..lp.num_col].to_vec());
-    let status = if solve_status == IPX_STATUS_STOPPED {
+    let mut status = if solve_status == IPX_STATUS_STOPPED {
         match info.status_ipm {
             IPX_STATUS_USER_INTERRUPT => ModelStatus::Interrupt,
             IPX_STATUS_TIME_LIMIT => ModelStatus::TimeLimit,
@@ -108,7 +143,73 @@ pub(crate) fn analytic_centre(lp: &SimplexLp, options: &Options, interrupt: Opti
     } else {
         ModelStatus::Optimal
     };
-    (status, col_value)
+    // `getHighsNonVertexSolution`, then `callLpKktCheck`.
+    let Some((x, _, _, slack, y, zl, zu)) = lps.interior_solution(&model) else {
+        return (status, None);
+    };
+    let [col_value, row_value, col_dual, row_dual] = interior_solution_to_highs(lp, &data, &x, &slack, &y, &zl, &zu);
+    let kkt_lp = crate::kkt::KktLp {
+        sense: lp.sense,
+        offset: lp.offset,
+        col_cost: &lp.col_cost,
+        col_lower: &lp.col_lower,
+        col_upper: &lp.col_upper,
+        row_lower: &lp.row_lower,
+        row_upper: &lp.row_upper,
+        start: &lp.a.start,
+        index: &lp.a.index,
+        value: &lp.a.value,
+    };
+    let solution = crate::kkt::KktSolution {
+        col_value: &col_value,
+        row_value: &row_value,
+        col_dual: &col_dual,
+        row_dual: &row_dual,
+        dual_valid: true,
+    };
+    let tolerances = crate::kkt::KktTolerances::new(options.primal_feasibility_tolerance, options.dual_feasibility_tolerance);
+    crate::kkt::lp_kkt_check(&kkt_lp, &solution, false, tolerances, &mut status);
+    (status, Some(col_value))
+}
+
+/// HiGHS's `ipxSolutionToHighsSolution`: an IPX interior point as column
+/// and row values and duals, `[col_value, row_value, col_dual, row_dual]`.
+/// A boxed row's value and dual are its slack column's; a free row, which
+/// IPX does not have, takes its activity.
+fn interior_solution_to_highs(lp: &SimplexLp, data: &IpxData, x: &[f64], slack: &[f64], y: &[f64], zl: &[f64], zu: &[f64]) -> [Vec<f64>; 4] {
+    let col_value = x[..lp.num_col].to_vec();
+    let mut col_dual: Vec<f64> = (0..lp.num_col).map(|col| zl[col] - zu[col]).collect();
+    let mut activity = vec![0.0; lp.num_row];
+    if u(data.num_row) < lp.num_row {
+        for col in 0..lp.num_col {
+            for el in lp.a.start[col]..lp.a.start[col + 1] {
+                activity[lp.a.index[el]] += col_value[col] * lp.a.value[el];
+            }
+        }
+    }
+    let mut row_value = vec![0.0; lp.num_row];
+    let mut row_dual = vec![0.0; lp.num_row];
+    let (mut ipx_row, mut ipx_slack) = (0, lp.num_col);
+    for row in 0..lp.num_row {
+        let (lower, upper) = (lp.row_lower[row], lp.row_upper[row]);
+        if lower <= -INF && upper >= INF {
+            row_value[row] = activity[row];
+            continue;
+        }
+        if lower > -INF && upper < INF && lower < upper {
+            row_value[row] = x[ipx_slack];
+            row_dual[row] = zl[ipx_slack] - zu[ipx_slack];
+            ipx_slack += 1;
+        } else {
+            row_value[row] = data.rhs[ipx_row] - slack[ipx_row];
+            row_dual[row] = y[ipx_row];
+        }
+        ipx_row += 1;
+    }
+    if lp.sense < 0.0 {
+        col_dual.iter_mut().chain(row_dual.iter_mut()).for_each(|dual| *dual = -*dual);
+    }
+    [col_value, row_value, col_dual, row_dual]
 }
 
 struct IpxResult {
@@ -145,6 +246,7 @@ fn solve_lp_ipx(lp: &SimplexLp, options: &Options, interrupt: Option<Interrupt>)
         time_limit: options.time_limit,
         ipm_maxiter: options.ipm_iteration_limit.min(i32::MAX as usize) as Int,
         run_crossover: 1,
+        crossover_on_no_progress: options.ipm_crossover_on_no_progress,
         ..Parameters::default()
     };
     let mut control = Control::new(parameters, interrupt);
@@ -200,14 +302,17 @@ fn solve_lp_ipx(lp: &SimplexLp, options: &Options, interrupt: Option<Interrupt>)
     if info.status_ipm == IPX_STATUS_DUAL_INFEAS {
         return failed(ModelStatus::UnboundedOrInfeasible, out);
     }
-    if info.status_ipm != IPX_STATUS_OPTIMAL && info.status_ipm != IPX_STATUS_IMPRECISE {
+    let stalled = info.status_ipm == IPX_STATUS_NO_PROGRESS && info.status_crossover != IPX_STATUS_NOT_RUN;
+    if info.status_ipm != IPX_STATUS_OPTIMAL && info.status_ipm != IPX_STATUS_IMPRECISE && !stalled {
         return failed(ModelStatus::SolveError, out);
     }
     if info.status_crossover != IPX_STATUS_NOT_RUN && info.status_crossover != IPX_STATUS_OPTIMAL && info.status_crossover != IPX_STATUS_IMPRECISE {
         return failed(ModelStatus::SolveError, out);
     }
     let have_basic_solution = info.status_crossover != IPX_STATUS_NOT_RUN;
-    let imprecise_solution = info.status_crossover == IPX_STATUS_IMPRECISE || info.status_ipm == IPX_STATUS_IMPRECISE;
+    // A crossover from a stalled interior point leaves a basis for the
+    // simplex clean-up, not an answer.
+    let imprecise_solution = info.status_crossover == IPX_STATUS_IMPRECISE || info.status_ipm == IPX_STATUS_IMPRECISE || stalled;
     let mut basis_valid = false;
     if have_basic_solution {
         let Some((x, slack, y, z, cbasis, vbasis)) = lps.basic_solution(&model) else {

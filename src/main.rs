@@ -15,6 +15,8 @@ mod rendering;
 mod system_sound;
 mod ui;
 #[cfg(target_os = "windows")]
+mod windows_caption;
+#[cfg(target_os = "windows")]
 mod windows_trackpad;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -38,7 +40,9 @@ pub(crate) const APP_RELEASE: &str = env!("CARGO_PKG_VERSION");
 /// Desktop main function
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<()> {
+    app::memory::tune_allocator();
     let _logging_guard = logging::init();
+    std::thread::spawn(model::asset_storage::initialize_native);
     (|| {
         let event_loop = EventLoop::new()?;
         let mut app = App::new()?;
@@ -73,13 +77,13 @@ async fn start_web() -> std::result::Result<(), String> {
     let threads = web_sys::window().map(|window| window.navigator().hardware_concurrency() as usize).unwrap_or(1).clamp(1, 4);
     wasm_bindgen_futures::JsFuture::from(wasm_bindgen_rayon::init_thread_pool(threads))
         .await
-        .map_err(|error| format!("could not initialize the Web Worker pool: {error:?}"))?;
+        .map_err(|error| crate::i18n::tr!("err-file-worker-pool-failed", error = format!("{error:?}")))?;
 
     let event_loop = EventLoop::<AppEvent>::with_user_event()
         .build()
-        .map_err(|error| format!("failed to create the browser event loop: {error}"))?;
+        .map_err(|error| crate::i18n::tr!("err-file-event-loop-failed", error = error.to_string()))?;
     let proxy = event_loop.create_proxy();
-    let app = App::web_new(proxy).map_err(|error| format!("failed to create the application state: {error:#}"))?;
+    let app = App::web_new(proxy).map_err(|error| crate::i18n::tr!("err-file-app-state-failed", error = format!("{error:#}")))?;
 
     event_loop.spawn_app(app);
     Ok(())

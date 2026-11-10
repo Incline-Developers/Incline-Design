@@ -40,12 +40,13 @@ impl HVector {
         self.count = 0;
         self.index = vec![0; size];
         self.array = vec![0.0; size];
-        // Room for the factor's pivots and up to 6400 updates' worth.
-        self.cwork = vec![0; size + 6400];
-        self.iwork = vec![0; size * 4];
+        // Most vectors never need a hyper-sparse solve or a packed update.
+        // Allocate that scratch space only when the operation needs it.
+        self.cwork.clear();
+        self.iwork.clear();
         self.pack_count = 0;
-        self.pack_index = vec![0; size];
-        self.pack_value = vec![0.0; size];
+        self.pack_index.clear();
+        self.pack_value.clear();
         self.pack_flag = false;
         self.synthetic_tick = 0.0;
     }
@@ -98,7 +99,12 @@ impl HVector {
         }
         self.pack_flag = false;
         self.pack_count = 0;
-        for k in 0..self.count as usize {
+        let count = self.count as usize;
+        if self.pack_index.len() < count {
+            self.pack_index.resize(count, 0);
+            self.pack_value.resize(count, 0.0);
+        }
+        for k in 0..count {
             let i = self.index[k];
             self.pack_index[self.pack_count] = i;
             self.pack_value[self.pack_count] = self.array[i];
@@ -113,11 +119,28 @@ impl HVector {
         }
         let mut count = 0;
         let index = &mut self.index[..self.size];
-        for (i, &value) in self.array[..self.size].iter().enumerate() {
-            if value != 0.0 {
-                index[count] = i;
+        let array = &self.array[..self.size];
+        let end = self.size / 8 * 8;
+        // Classify a block together, then visit only its nonzeros. The mask
+        // keeps ascending row order without branching on each array entry.
+        for (block, values) in array[..end].as_chunks::<8>().0.iter().enumerate() {
+            let mut mask = u8::from(values[0] != 0.0)
+                | (u8::from(values[1] != 0.0) << 1)
+                | (u8::from(values[2] != 0.0) << 2)
+                | (u8::from(values[3] != 0.0) << 3)
+                | (u8::from(values[4] != 0.0) << 4)
+                | (u8::from(values[5] != 0.0) << 5)
+                | (u8::from(values[6] != 0.0) << 6)
+                | (u8::from(values[7] != 0.0) << 7);
+            while mask != 0 {
+                index[count] = block * 8 + mask.trailing_zeros() as usize;
                 count += 1;
+                mask &= mask - 1;
             }
+        }
+        for (i, &value) in array.iter().enumerate().skip(end) {
+            index[count] = i;
+            count += usize::from(value != 0.0);
         }
         self.count = count as isize;
     }

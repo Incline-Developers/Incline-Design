@@ -244,7 +244,7 @@ impl<R: ReadAt> Iterator for RegularSubblocks<R> {
 }
 
 #[inline]
-fn check_parent(block_count: [u32; 3], parent: [u32; 3]) -> Result<(), Error> {
+pub(crate) fn check_parent(block_count: [u32; 3], parent: [u32; 3]) -> Result<(), Error> {
     for (count, index) in block_count.into_iter().zip(parent) {
         if index >= count {
             return Err(InvalidData::BlockIndexOutOfRange {
@@ -281,7 +281,7 @@ fn check_regular_corners(subblock_count: [u32; 3], mode_and_sizes: &Option<(Subb
 }
 
 #[inline]
-fn check_freeform_corners<T: FloatType>(corners: [T; 6]) -> Result<(), Error> {
+pub(crate) fn check_freeform_corners<T: FloatType>(corners: [T; 6]) -> Result<(), Error> {
     for i in 0..3 {
         if corners[i] < T::ZERO {
             return Err(InvalidData::FreeformSubblockOutsideParent { corners: corners.map(Into::into) }.into());

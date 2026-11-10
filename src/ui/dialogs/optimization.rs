@@ -26,6 +26,7 @@ use crate::{
         widgets::{
             collapsible_section::CollapsibleSection,
             editable_grid::{DataGrid, GridAction, GridButtons, GridColumn, GridRow, apply_flat, move_to_slot},
+            hint::Hint,
             menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, menu_note},
             rosette_diagram::{HEIGHT as ROSETTE_HEIGHT, draw_rosette},
             toolbar::ToolbarButton,
@@ -160,7 +161,7 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
                                 let image = egui::Image::new(unthemed_icon!("status_broken.svg")).fit_to_exact_size(egui::Vec2::splat(ICON_SIDE - 8.0));
                                 let lines: Vec<String> = missing.iter().map(|issue| format!("• {issue}")).collect();
                                 ui.add_sized([ICON_SIDE, ICON_SIDE], image)
-                                    .on_hover_text(format!("{}\n{}", tr!("opt-missing-title"), lines.join("\n")));
+                                    .hint(format!("{}\n{}", tr!("opt-missing-title"), lines.join("\n")));
                             }
                             let delete = ToolbarButton::new(egui::Image::new(unthemed_icon!("delete_scenario.svg")), tr!("opt-delete"))
                                 .id_salt(("opt_delete", scenario.id))
@@ -299,7 +300,7 @@ fn status_icon(ui: &mut egui::Ui, status: ScenarioStatus) {
         ScenarioStatus::Stale => (unthemed_icon!("status_stale.svg"), tr!("opt-status-stale")),
     };
     let image = egui::Image::new(source).fit_to_exact_size(egui::Vec2::splat(ICON_SIDE - 8.0));
-    ui.add_sized([ICON_SIDE, ICON_SIDE], image).on_hover_text(tooltip);
+    ui.add_sized([ICON_SIDE, ICON_SIDE], image).hint(tooltip);
 }
 
 /// The green play button. While the scenario runs, a ring around it fills with
@@ -337,9 +338,10 @@ fn play_button(ui: &mut egui::Ui, status: ScenarioStatus) -> egui::Response {
             tr!("opt-status-running-percent", percent = ((progress * 100.0) as u32).to_string()),
             tr!("opt-cancel-run")
         ),
-        None => tr!("opt-run"),
+        // At rest it is a play button, which needs no caption.
+        None => return response,
     };
-    response.on_hover_text(tooltip)
+    response.hint(tooltip)
 }
 
 // ── Scenario editor ──
@@ -720,7 +722,7 @@ fn inline_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, v
     // model) stays shown, outlined red, rather than being cleared.
     if !value.is_empty() && !names.iter().any(|name| name == value) {
         mark_invalid(ui, &response);
-        response = response.on_hover_text(tr!("opt-missing-choice", name = value.clone()));
+        response = response.hint(tr!("opt-missing-choice", name = value.clone()));
     }
     response
 }
@@ -786,7 +788,7 @@ fn draw_inputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &
         // optimised is only known once it is loaded.
         if block_models.iter().any(|model| model.name == scenario.block_model && !model.state.loaded) {
             ui.add(egui::Label::new(egui::RichText::new(tr!("opt-block-model-unloaded")).color(ui.visuals().weak_text_color())).wrap())
-                .on_hover_text(tr!("opt-block-model-unloaded-hint"));
+                .hint(tr!("opt-block-model-unloaded-hint"));
         }
         let response = form_value(
             ui,
@@ -1565,7 +1567,7 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
             };
             let picked = output.shell_start.is_some();
             let response = field_row(ui, tr!("opt-start-point-label"), None, |ui, width| {
-                ui.add_enabled(can_pick, MenuButton::new(label).selected(picked).min_width(width)).on_hover_text(hint)
+                ui.add_enabled(can_pick, MenuButton::new(label).selected(picked).min_width(width)).hint(hint)
             });
             if !picked {
                 mark_invalid(ui, &response);
@@ -1628,7 +1630,7 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
                 let empty = output.shell_layer_name.trim().is_empty();
                 if empty || prefix_taken {
                     mark_invalid(ui, &response);
-                    response.on_hover_text(if empty { tr!("opt-shell-prefix-empty") } else { tr!("opt-shell-prefix-taken") });
+                    response.hint(if empty { tr!("opt-shell-prefix-empty") } else { tr!("opt-shell-prefix-taken") });
                 }
             });
         }
@@ -1676,7 +1678,7 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
         };
         if let Some(issue) = &shell_field_issue {
             mark_invalid(ui, &response);
-            response.on_hover_text(issue);
+            response.hint(issue);
         }
     });
 }

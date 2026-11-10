@@ -10,6 +10,7 @@ use crate::{
         state::{EditorState, InsertCodeField, IntervalInsertDraft, SeamRenameDraft, TypedDepth, UiCommand},
         widgets::{
             collapsible_section::CollapsibleSection,
+            hint::Hint,
             menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText},
         },
     },
@@ -734,17 +735,15 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                             )
                             .changed();
                     });
-                MenuField::new(tr!("drill-hole-never-thinner-than"))
-                    .help_text(tr!("drill-hole-however-far-eye-hole-drawn"))
-                    .show(ui, |ui, _, _| {
-                        width_changed |= ui
-                            .add(
-                                egui::Slider::new(&mut floor, crate::model::drill_hole::MIN_PIXEL_DIAMETER_RANGE)
-                                    .fixed_decimals(1)
-                                    .suffix(format!(" {}", tr!("drill-hole-px"))),
-                            )
-                            .changed();
-                    });
+                MenuField::new(tr!("drill-hole-never-thinner-than")).show(ui, |ui, _, _| {
+                    width_changed |= ui
+                        .add(
+                            egui::Slider::new(&mut floor, crate::model::drill_hole::MIN_PIXEL_DIAMETER_RANGE)
+                                .fixed_decimals(1)
+                                .suffix(format!(" {}", tr!("drill-hole-px"))),
+                        )
+                        .changed();
+                });
                 if width_changed {
                     commands.push(UiCommand::SetDrillHoleWidth {
                         id,
@@ -1124,11 +1123,7 @@ fn draw_code_filter(ui: &mut egui::Ui, id: egui::Id) -> String {
     let changed = MenuField::new(tr!("common-filter")).show(ui, |ui, row_height, column_width| {
         let before = ui.available_width();
         let mut changed = false;
-        if ui
-            .add_enabled(!text.is_empty(), egui::Button::new(tr!("common-times-sign")).small())
-            .on_hover_text(tr!("drill-hole-clear-filter"))
-            .clicked()
-        {
+        if ui.add_enabled(!text.is_empty(), egui::Button::new(tr!("common-times-sign")).small()).clicked() {
             text.clear();
             changed = true;
         }
@@ -1178,7 +1173,7 @@ fn draw_suggested_sections(ui: &mut egui::Ui, dataset: &OpenDrillHoleDataset, fi
                         add = Some(vec![suggestion.clone()]);
                     }
                     ui.label(egui::RichText::new(tr!("drill-hole-count-codes", count = suggestion.codes.len().to_string())).weak())
-                        .on_hover_text(suggestion.codes.join(", "));
+                        .hint(suggestion.codes.join(", "));
                 });
             }
             if ui.add(MenuButton::new(tr!("drill-hole-add-all"))).clicked() {

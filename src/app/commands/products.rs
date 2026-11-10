@@ -67,13 +67,11 @@ impl App<'_> {
         let products = self.editor.delay_products.iter().map(DelayProduct::to_stored).collect();
         if let Err(error) = crate::app::io::save_config(&config_from(
             &preferences,
-            self.editor.workspace_order,
             products,
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
-            self.editor.recent_design_functions.clone(),
-            self.editor.recent_geology_functions.clone(),
+            self.editor.recent_functions.clone(),
         )) {
             userspace_warn!("{}", tr!("cmd-products-failed-save-products-error", error = error.to_string()));
         }

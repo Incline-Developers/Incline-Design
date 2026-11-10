@@ -1,10 +1,13 @@
 //! Object editing and viewport tool dialogs.
 
+// Only the recent project rows take a hint, and the browser has none.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::ui::widgets::hint::Hint;
 use crate::{
     i18n::tr,
     model::{Axis, Document},
     ui::{
-        state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, OffsetMeasure, RelimitMode, RenameTarget, TrimEnd, UiCommand, UiProjectView},
+        state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, OffsetMeasure, RelimitMode, RenameTarget, SelectionPickTool, TrimEnd, UiCommand, UiProjectView},
         themed_icon,
         widgets::{
             context_menu::{ContextMenu, ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
@@ -103,6 +106,29 @@ fn draw_ground_context_menu(ui: &mut egui::Ui, editor: &EditorState, document: &
         commands.push(UiCommand::CloseCanvasContextMenu);
         return;
     };
+    // A block among several selected stands for them all.
+    let several: Vec<&crate::ui::state::BlastOutline> = if kind == OutlineKind::DigBlock && editor.selected_dig_blocks.len() > 1 && editor.selected_dig_blocks.contains(&shape) {
+        editor
+            .dig_outlines
+            .iter()
+            .filter(|outline| {
+                editor
+                    .selected_dig_blocks
+                    .contains(&crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if !several.is_empty() {
+        let title = tr!("planning-dig-blocks-title", count = several.len());
+        ContextMenu::new("canvas_ground", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
+            if crate::ui::elements::blasting::dig_blocks_menu(ui, &several, document, commands) {
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
+        });
+        return;
+    }
     let title = match kind {
         OutlineKind::Blast => tr!("planning-dig-blast-group", name = outline.name.clone()),
         OutlineKind::DigBlock => tr!("planning-dig-block-title", name = outline.name.clone()),
@@ -238,7 +264,9 @@ pub(crate) fn draw_right_click_context(
         let join_offered = (0..editor.string_rings.len()).any(|index| editor.string_ring_joinable(index));
         if open_string_selected && ContextMenuAction::new(tr!("cmd-string-clean-clean-strings")).show(ui).clicked() {
             commands.push(UiCommand::CleanStrings);
-            commands.push(UiCommand::NoteRecentFunction(crate::ui::elements::main_menu::DesignRow::CleanStrings.key()));
+            if let Some(row) = crate::ui::elements::main_menu::MenuRow::running(editor.active_workspace, &UiCommand::CleanStrings) {
+                commands.push(UiCommand::NoteRecentFunction(row));
+            }
             commands.push(UiCommand::CloseCanvasContextMenu);
         }
         if join_offered && ContextMenuAction::new(tr!("cmd-string-clean-join-all-at-halfway")).show(ui).clicked() {
@@ -255,7 +283,7 @@ pub(crate) fn draw_right_click_context(
         }
 
         if editor.keeps_recent_functions() {
-            context_submenu(ui, &tr!("edit-recent-functions"), true, |ui| draw_recent_function_rows(ui, editor, commands));
+            context_submenu(ui, &tr!("edit-recent-functions"), true, |ui| draw_recent_function_rows(ui, editor, project, commands));
         }
         if ContextMenuAction::new(tr!("survey-close")).show(ui).clicked() {
             commands.push(UiCommand::CloseCanvasContextMenu);
@@ -268,32 +296,32 @@ pub(crate) fn draw_right_click_context(
 
 /// The recent functions list a right click on empty space opens: the canvas
 /// menu's frame, place and closers, with the list as its only rows.
-pub(crate) fn draw_recent_functions_context(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>, px: f32, py: f32) {
+pub(crate) fn draw_recent_functions_context(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, px: f32, py: f32) {
     let ppp = ui.ctx().pixels_per_point();
     let pos = egui::pos2(px / ppp + 4.0, py / ppp + 4.0);
     let (_, dismissed) = ContextMenu::new("canvas_recent_functions", tr!("edit-recent-functions"))
         .position(pos)
         .width(220.0)
-        .show(ui.ctx(), |ui| draw_recent_function_rows(ui, editor, commands));
+        .show(ui.ctx(), |ui| draw_recent_function_rows(ui, editor, project, commands));
     if dismissed {
         commands.push(UiCommand::CloseCanvasContextMenu);
     }
 }
 
 /// One line per recent function, greyed exactly when its menu bar entry is.
-fn draw_recent_function_rows(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
-    let rows = editor.recent_rows().unwrap_or_default();
+fn draw_recent_function_rows(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    let rows = editor.recent_function_rows();
     if rows.is_empty() {
         ContextMenuAction::new(tr!("edit-no-recent-functions")).enabled(false).show(ui);
     }
     for row in rows {
-        let mut action = ContextMenuAction::new(row.path()).enabled(row.enabled(editor));
+        let mut action = ContextMenuAction::new(row.path()).enabled(row.enabled(project) && row.ready(editor));
         if let Some(checked) = row.checked(editor) {
             action = action.checked(checked);
         }
         if action.show(ui).clicked() {
             commands.push(row.command());
-            commands.push(UiCommand::NoteRecentFunction(row.key()));
+            commands.push(UiCommand::NoteRecentFunction(row));
             commands.push(UiCommand::CloseCanvasContextMenu);
         }
     }
@@ -371,7 +399,15 @@ pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
     }
 }
 
+/// Width of the count and its Pick button in the dialogs that work on a
+/// picked set of objects.
+const PICKED_FIELD_WIDTH: f32 = 190.0;
+
 pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(dialog) = editor.move_to_axis_dialog.as_mut() else {
         return;
     };
@@ -386,9 +422,18 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
 
     DragableMenu::new("move_to_axis_dialog", tr!("edit-set-axis", axis = axis_label.to_string()))
         .open(&mut open)
-        .min_width(260.0)
-        .max_width(280.0)
+        .min_width(320.0)
+        .max_width(340.0)
         .show(ui.ctx(), |ui| {
+            if menu::picked_selection_field(
+                ui,
+                tr!("sequence-objects"),
+                tr!("ui-selected-objects", count = object_count),
+                tr!("pick-selection-objects-help"),
+                PICKED_FIELD_WIDTH,
+            ) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::SetAxis));
+            }
             MenuFieldF64::new(tr!("edit-axis-value", axis = axis_label.to_string()), &mut dialog.value, f64::MIN..=f64::MAX)
                 .width(120.0)
                 .show(ui);
@@ -406,7 +451,6 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                     close = true;
                 }
             });
-            ui.label(tr!("ui-selected-objects", count = object_count));
         });
 
     if apply {
@@ -423,6 +467,10 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
 }
 
 pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(dialog) = editor.insert_point_at_elevation_dialog.as_mut() else {
         return;
     };
@@ -435,16 +483,25 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
 
     DragableMenu::new("insert_point_at_elevation_dialog", tr!("edit-insert-point-elevation"))
         .open(&mut open)
-        .min_width(280.0)
-        .max_width(300.0)
+        .min_width(320.0)
+        .max_width(340.0)
         .show(ui.ctx(), |ui| {
+            if menu::picked_selection_field(
+                ui,
+                tr!("context-polylines"),
+                tr!("ui-selected-polylines", count = object_count),
+                tr!("pick-selection-polylines-help"),
+                PICKED_FIELD_WIDTH,
+            ) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::InsertAtElevation));
+            }
             MenuFieldF64::new(tr!("common-elevation"), &mut dialog.elevation, dialog.min_elevation..=dialog.max_elevation)
                 .width(120.0)
                 .show(ui);
             if !dialog.elevation.is_finite() {
                 ui.colored_label(egui::Color32::from_rgb(200, 70, 70), tr!("edit-enter-valid-elevation"));
             }
-            if dialog.min_elevation > f64::MIN {
+            if object_count > 0 && dialog.min_elevation > f64::MIN {
                 ui.label(tr!(
                     "ui-selection-spans",
                     min = format!("{:.2}", dialog.min_elevation),
@@ -463,7 +520,6 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
                     close = true;
                 }
             });
-            ui.label(tr!("ui-selected-polylines", count = object_count));
         });
 
     if apply {
@@ -653,7 +709,11 @@ pub(crate) fn draw_smooth_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorS
 /// A project is already open behind it - startup lands on an empty, never-saved
 /// one - so the splash is an offer, not a gate: Escape, a click on the backdrop,
 /// or `New project` all simply dismiss it and leave that project in place.
-pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+///
+/// Everything below `title_bar_bottom` is blocked while it is up; the title
+/// bar above stays live, so the window can still be moved, maximised or
+/// closed, and the window's edges, laid over everything, still resize it.
+pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectView, title_bar_bottom: f32, commands: &mut Vec<UiCommand>) {
     const PANEL_SIZE: f32 = 500.0;
     const COLUMN_WIDTH: f32 = 190.0;
     const ROW_HEIGHT: f32 = 22.0;
@@ -673,8 +733,9 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
     // The splash floats over a live window, so something has to catch the
     // clicks that dismiss it, or they would fall through to the viewport and
     // orbit the camera instead. It paints nothing: the window behind the
-    // splash reads as it always does.
-    let screen = ui.ctx().viewport_rect();
+    // splash reads as it always does. It stops at the title bar, which is the
+    // window's own and stays in reach.
+    let screen = ui.ctx().viewport_rect().with_min_y(title_bar_bottom);
     let backdrop = egui::Area::new(egui::Id::unique("select_project_backdrop"))
         .fixed_pos(screen.min)
         .order(egui::Order::Middle)
@@ -915,7 +976,7 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
                     );
                     #[cfg(not(target_arch = "wasm32"))]
                     let row = if missing {
-                        row.on_hover_text(tr!("menu-file-recent-project-missing", path = entry.path.display().to_string()))
+                        row.hint(tr!("menu-file-recent-project-missing", path = entry.path.display().to_string()))
                     } else {
                         row
                     };
@@ -1018,30 +1079,55 @@ fn select_project_action_row_with_fill(
     response
 }
 
-/// Draw the browser-only prompt used to name a new project before it is created.
+/// Name a browser project the first time it is saved.
+///
+/// A browser has no file dialog to name a project in, so this floating
+/// dialog stands in for the one a desktop Save opens: it comes up on the
+/// first Save of a project, never on New, holding the project's name with
+/// all of it selected, so typing replaces it.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn draw_create_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("create_project_panel", tr!("edit-create-new-project"), viewport_rect)
-        .min_width(240.0)
+pub(crate) fn draw_name_browser_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
+    let opened_key = egui::Id::unique("name_browser_project_opened");
+    let Some(runtime_id) = editor.naming_browser_project else {
+        ui.data_mut(|data| data.remove::<u32>(opened_key));
+        return;
+    };
+    let mut open = true;
+    let mut cancelled = false;
+    DragableMenu::new("name_browser_project", tr!("menu-file-save-project"))
+        .open(&mut open)
+        .max_width(380.0)
         .show(ui.ctx(), |ui| {
-            let can_create = !editor.new_project_name.trim().is_empty();
-            MenuFieldText::new(tr!("edit-project-name"), &mut editor.new_project_name)
+            let response = MenuFieldText::new(tr!("edit-project-name"), &mut editor.browser_project_name)
+                .width(260.0)
                 .hint_text(tr!("dialog-rename-field-hint"))
                 .show(ui);
-            let submitted = menu::dialog_confirmed(ui.ctx());
-            let cancelled = menu::dialog_cancelled(ui.ctx());
+            if ui.data(|data| data.get_temp::<u32>(opened_key)) != Some(runtime_id) {
+                ui.data_mut(|data| data.insert_temp(opened_key, runtime_id));
+                response.request_focus();
+                let mut state = egui::TextEdit::load_state(ui.ctx(), response.id).unwrap_or_default();
+                let end = egui::text::CCursor::new(editor.browser_project_name.chars().count());
+                state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+                state.store(ui.ctx(), response.id);
+            }
             menu::menu_actions(ui, |ui| {
-                if (submitted || ui.add(MenuButton::new(tr!("edit-create-project")).primary().enabled(can_create)).clicked()) && can_create {
-                    commands.push(UiCommand::CreateBrowserProject {
-                        name: editor.new_project_name.trim().to_owned(),
+                let can_save = !editor.browser_project_name.trim().is_empty();
+                let submitted = menu::dialog_confirmed(ui.ctx());
+                if (submitted || ui.add(MenuButton::new(tr!("edit-save-project")).primary().enabled(can_save)).clicked()) && can_save {
+                    commands.push(UiCommand::SaveBrowserProjectAs {
+                        runtime_id,
+                        name: editor.browser_project_name.trim().to_owned(),
                     });
-                    editor.new_project_dialog_open = false;
+                    editor.naming_browser_project = None;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || cancelled {
-                    editor.new_project_dialog_open = false;
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    cancelled = true;
                 }
             });
         });
+    if (cancelled || !open) && editor.naming_browser_project.is_some() {
+        commands.push(UiCommand::CancelBrowserProjectSave);
+    }
 }
 
 /// Draw the "Create a new layer" dialog (opened when NewLayer tool is active).
@@ -1159,10 +1245,7 @@ pub(crate) fn draw_text_edit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComm
                 .suffix(tr!("common-degree-suffix"))
                 .show(ui)
                 .changed();
-            *geometry_dirty |= MenuFieldRgba::new(tr!("common-colour"), &mut editor.pending_text_color)
-                .help_text(tr!("edit-text-colour-opacity"))
-                .show(ui)
-                .changed();
+            *geometry_dirty |= MenuFieldRgba::new(tr!("common-colour"), &mut editor.pending_text_color).show(ui).changed();
 
             let apply_from_enter = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             let cancel_from_escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
@@ -1289,7 +1372,6 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
                     0.0..=f64::MAX
                 };
                 MenuFieldF64::new(value_label, &mut editor.offset_value_input, value_range)
-                    .help_text(tr!("edit-value-help"))
                     .speed(0.1)
                     .suffix(tr!("common-m"))
                     .show(ui);
@@ -1404,7 +1486,6 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
         .min_width(310.0)
         .show(ui.ctx(), |ui| {
             MenuFieldF64::new(tr!("edit-berm-width"), &mut editor.batter_berm_width, 0.1..=500.0)
-                .help_text(tr!("edit-horizontal-width-each-flat-berm"))
                 .width(CONTROL_WIDTH)
                 .speed(0.1)
                 .max_decimals(2)
@@ -1417,7 +1498,6 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
                 .max_decimals(1)
                 .show(ui);
             MenuFieldF64::new(tr!("edit-bench-height"), &mut editor.batter_berm_bench_height, 0.1..=500.0)
-                .help_text(tr!("edit-vertical-rise-fall-each-bench"))
                 .width(CONTROL_WIDTH)
                 .speed(0.1)
                 .max_decimals(2)
@@ -1556,7 +1636,7 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
                         .speed(0.1)
                         .suffix(tr!("common-m"))
                         .show(ui);
-                    MenuField::new(tr!("edit-move-which-end")).help_text(tr!("edit-endpoint-help")).show(ui, |ui, _, _| {
+                    MenuField::new(tr!("edit-move-which-end")).show(ui, |ui, _, _| {
                         ui.horizontal(|ui| {
                             ui.selectable_value(&mut editor.relimit_resize_end, TrimEnd::Start, tr!("edit-start"));
                             ui.selectable_value(&mut editor.relimit_resize_end, TrimEnd::End, tr!("edit-end"));
@@ -1605,18 +1685,9 @@ pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, comma
         tr!("common-move-design")
     };
     ViewportDockPanel::new("move_panel", title, viewport_rect).min_width(210.0).show(ui.ctx(), |ui| {
-        let dx_resp = MenuFieldF64::new(tr!("edit-dx"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX)
-            .help_text(tr!("edit-translation-axis-help", axis = crate::model::survey::axis_name(0).to_string()))
-            .speed(0.1)
-            .show(ui);
-        let dy_resp = MenuFieldF64::new(tr!("edit-dy"), &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX)
-            .help_text(tr!("edit-translation-axis-help", axis = crate::model::survey::axis_name(1).to_string()))
-            .speed(0.1)
-            .show(ui);
-        let dz_resp = MenuFieldF64::new(tr!("edit-dz"), &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX)
-            .help_text(tr!("edit-translation-axis-help", axis = crate::model::survey::axis_name(2).to_string()))
-            .speed(0.1)
-            .show(ui);
+        let dx_resp = MenuFieldF64::new(tr!("edit-dx"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX).speed(0.1).show(ui);
+        let dy_resp = MenuFieldF64::new(tr!("edit-dy"), &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX).speed(0.1).show(ui);
+        let dz_resp = MenuFieldF64::new(tr!("edit-dz"), &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX).speed(0.1).show(ui);
         if dx_resp.changed() || dy_resp.changed() || dz_resp.changed() {
             commands.push(UiCommand::PreviewMoveDelta(glam::DVec3::new(
                 editor.move_panel_delta[0],
@@ -1991,7 +2062,6 @@ pub(crate) fn draw_slice_panel(ui: &mut egui::Ui, editor: &mut EditorState, comm
                 .suffix(tr!("common-m"))
                 .show(ui);
             MenuFieldF64::new(tr!("edit-speed"), &mut editor.slice_speed_input, 0.0..=1.0e6)
-                .help_text(tr!("edit-movement-speed-slice-when-using"))
                 .speed(1.0)
                 .suffix(tr!("edit-m-s"))
                 .show(ui);

@@ -1457,6 +1457,17 @@ impl LpSolver {
         let num_col = self.lp.num_col;
         let num_row = self.lp.num_row;
         if num_col == 0 && self.empty_model_optimal {
+            // Every row's activity is zero: a row that cannot hold it makes
+            // the LP infeasible, as `solve_mip` says of the same problem.
+            let tolerance = self.options.primal_feasibility_tolerance;
+            if (0..num_row).any(|row| self.lp.row_lower[row] > tolerance || self.lp.row_upper[row] < -tolerance) {
+                self.status = ModelStatus::Infeasible;
+                self.invalidate_basis();
+                self.value_valid = false;
+                self.dual_valid = false;
+                self.infeasibilities = None;
+                return;
+            }
             self.status = ModelStatus::Optimal;
             self.objective = self.lp.offset;
             self.col_value.clear();
@@ -1511,6 +1522,12 @@ impl LpSolver {
             self.solve_lp(&options);
             return;
         }
+        // `runPresolve`: presolve off leaves the LP as it is.
+        if !self.options.presolve {
+            let options = self.options.clone();
+            self.solve_lp(&options);
+            return;
+        }
         let presolved = presolve::solve(&self.lp, &self.options, self.interrupt.clone());
         match presolved {
             Presolved::NotReduced => {
@@ -1559,6 +1576,20 @@ impl LpSolver {
                 self.ekk = None;
                 self.solve_lp(&options);
             }
+        }
+        // HiGHS stops here with an error. Presolve can hand back a basis
+        // that is singular once postsolved (no blasts' reclaim window: IPX
+        // and crossover optimal on the reduced LP, rank deficiency 1 on the
+        // original), and the simplex cannot recover from it; the LP itself
+        // is sound, so solve it again as it is.
+        if self.status == ModelStatus::SolveError {
+            self.ekk = None;
+            self.invalidate_basis();
+            let options = Options {
+                presolve: false,
+                ..self.options.clone()
+            };
+            self.solve_lp(&options);
         }
     }
 
@@ -1696,6 +1727,13 @@ impl LpSolver {
 
     /// HiGHS's `solveLp` on the incumbent LP.
     fn solve_lp(&mut self, options: &Options) {
+        // HiGHS reads one clock for the whole run, presolve and every solve
+        // after it included: each solve here has only what is left of it.
+        let left = Options {
+            time_limit: (options.time_limit - self.started.map_or(0.0, |started| started.elapsed().as_secs_f64())).max(0.0),
+            ..options.clone()
+        };
+        let options = &left;
         if self.lp.num_row == 0 || self.lp.a.value.is_empty() {
             self.solve_unconstrained();
             return;

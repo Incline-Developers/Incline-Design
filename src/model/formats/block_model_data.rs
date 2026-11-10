@@ -11,6 +11,7 @@ use std::{
 
 use glam::{DMat3, DVec3};
 
+use super::block_column::BlockColumn;
 use crate::model::block_model::RenderableBlockIndices;
 
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
@@ -23,16 +24,19 @@ static NEXT_CONTENT_VERSION: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Debug)]
 pub(crate) struct BlockModelData {
     content_version: u64,
+    /// What the source data is, stable from one session to the next, and the
+    /// content version it describes; see [`Self::source_fingerprint`].
+    source_fingerprint: Option<(u64, u64)>,
     pub(crate) metadata: BlockModelMetadata,
     rotation: DMat3,
-    numeric_values: BTreeMap<String, Arc<Vec<f64>>>,
+    numeric_values: BTreeMap<String, Arc<BlockColumn>>,
     _reservation: crate::app::memory::MemoryReservation,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct BlockModelColumn {
     pub(crate) name: String,
-    pub(crate) values: Arc<Vec<f64>>,
+    pub(crate) values: Arc<BlockColumn>,
     /// Category code to display label. `None` identifies an ordinary numeric
     /// column; categorical columns store their codes in `values` as exact
     /// non-negative integers and use `NaN` for blank CSV cells.
@@ -98,6 +102,7 @@ impl BlockModelData {
     pub(crate) fn unloaded(metadata: BlockModelMetadata) -> Self {
         Self {
             content_version: NEXT_CONTENT_VERSION.fetch_add(1, Ordering::Relaxed),
+            source_fingerprint: None,
             metadata,
             rotation: DMat3::IDENTITY,
             numeric_values: BTreeMap::new(),
@@ -110,11 +115,29 @@ impl BlockModelData {
         self.content_version
     }
 
+    /// Name the source this data was read from by `fingerprint`: a hash of the
+    /// stored content that a later session reading the same content derives
+    /// again, without having to load it.
+    pub(crate) fn with_source_fingerprint(mut self, fingerprint: Option<u64>) -> Self {
+        self.source_fingerprint = fingerprint.map(|fingerprint| (self.content_version, fingerprint));
+        self
+    }
+
+    /// The source's fingerprint, while the data is still what was read from
+    /// it. Anything that makes the data new content gives it a new content
+    /// version, and the fingerprint then no longer speaks for it.
+    pub(crate) fn source_fingerprint(&self) -> Option<u64> {
+        self.source_fingerprint
+            .filter(|(version, _)| *version == self.content_version)
+            .map(|(_, fingerprint)| fingerprint)
+    }
+
     /// Materialization discovers metadata and values for the existing source;
     /// it does not create new planning inputs. Ordinary replacement retains the
     /// freshly constructed data's version instead.
     pub(crate) fn restore_payload(&mut self, mut restored: Self) {
         restored.content_version = self.content_version;
+        restored.source_fingerprint = self.source_fingerprint;
         *self = restored;
     }
 
@@ -162,9 +185,9 @@ impl BlockModelData {
             if values.len() != n_blocks {
                 return Err(invalid(format!("in-memory block-model resource '{name}' has {} values; expected {n_blocks}", values.len())));
             }
-            validate_allocation::<f64>(values.len(), "in-memory numeric values")?;
+            validate_allocation::<u8>(values.heap_bytes(), "in-memory numeric values")?;
             retained_bytes = retained_bytes
-                .checked_add(values.len().checked_mul(size_of::<f64>()).ok_or_else(|| invalid("in-memory resource size overflows"))?)
+                .checked_add(values.heap_bytes())
                 .ok_or_else(|| invalid("in-memory model retained size overflows"))?;
             if let Some(categories) = categories.as_ref() {
                 for (&code, label) in categories {
@@ -174,7 +197,6 @@ impl BlockModelData {
                 }
                 if let Some(value) = values
                     .iter()
-                    .copied()
                     .find(|value| value.is_finite() && (value.fract() != 0.0 || !(0.0..=u32::MAX as f64).contains(value) || !categories.contains_key(&(*value as u32))))
                 {
                     return Err(invalid(format!("in-memory categorical resource '{name}' contains unmapped category code {value}")));
@@ -217,14 +239,67 @@ impl BlockModelData {
             is_irregular: true,
             variables,
         };
-        let reservation = crate::app::memory::reserve(retained_bytes, "in-memory block model").map_err(invalid)?;
+        let reservation = crate::app::memory::reserve(retained_bytes, &crate::i18n::tr!("err-memory-what-block-model")).map_err(invalid)?;
         Ok(Self {
             content_version: NEXT_CONTENT_VERSION.fetch_add(1, Ordering::Relaxed),
+            source_fingerprint: None,
             metadata,
             rotation: DMat3::IDENTITY,
             numeric_values,
             _reservation: reservation,
         })
+    }
+
+    /// The rows `rows`, which must ascend, of the columns `names` that this
+    /// model holds, as a model of their own in the same frame. Each column
+    /// keeps its own description, kind and categories as they are here, so a
+    /// mapping resolves against the part as it does against the whole; a
+    /// named column that is declared but not in memory gives `None`, as the
+    /// part could not say what the whole would.
+    pub(crate) fn rows_of(&self, rows: &[usize], names: &[String]) -> Option<Self> {
+        let mut numeric_values = BTreeMap::new();
+        let mut variables = Vec::new();
+        for variable in self.metadata.variables.iter().filter(|variable| names.contains(&variable.name)) {
+            let values = self.numeric_values.get(&variable.name)?;
+            if values.len() != self.metadata.n_blocks {
+                return None;
+            }
+            numeric_values.insert(variable.name.clone(), Arc::new(values.select(rows)));
+            variables.push(variable.clone());
+        }
+        let metadata = BlockModelMetadata {
+            n_blocks: rows.len(),
+            dims: [rows.len(), 1, 1],
+            is_irregular: true,
+            variables,
+            ..self.metadata.clone()
+        };
+        Self::from_parts(metadata, self.rotation, numeric_values).ok()
+    }
+
+    /// A model from what describes it and its columns, each `n_blocks` long.
+    pub(crate) fn from_parts(metadata: BlockModelMetadata, rotation: DMat3, numeric_values: BTreeMap<String, Arc<BlockColumn>>) -> Result<Self, BlockModelDataError> {
+        if metadata.n_blocks == 0 || !rotation.is_finite() || !metadata.origin.is_finite() {
+            return Err(invalid("block-model part is empty or has no frame"));
+        }
+        if numeric_values.values().any(|values| values.len() != metadata.n_blocks) {
+            return Err(invalid("block-model part has a column of the wrong length"));
+        }
+        let retained = numeric_values.values().map(|values| values.heap_bytes()).fold(0usize, usize::saturating_add);
+        let reservation = crate::app::memory::reserve(retained, "block model part").map_err(invalid)?;
+        Ok(Self {
+            content_version: NEXT_CONTENT_VERSION.fetch_add(1, Ordering::Relaxed),
+            source_fingerprint: None,
+            metadata,
+            rotation,
+            numeric_values,
+            _reservation: reservation,
+        })
+    }
+
+    /// The model's columns by name, as [`Self::from_parts`] takes them.
+    pub(crate) fn columns(&self) -> &BTreeMap<String, Arc<BlockColumn>> {
+        &self.numeric_values
     }
 
     /// Approximate retained size, used by the undo history's memory budget.
@@ -235,7 +310,7 @@ impl BlockModelData {
             + self
                 .numeric_values
                 .iter()
-                .map(|(name, values)| name.len() + values.len() * size_of::<f64>())
+                .map(|(name, values)| name.len() + values.heap_bytes())
                 .fold(0usize, usize::saturating_add)
     }
 
@@ -246,7 +321,7 @@ impl BlockModelData {
     pub(crate) fn set_category_column(
         &mut self,
         name: &str,
-        codes: Arc<Vec<f64>>,
+        codes: Arc<BlockColumn>,
         categories: BTreeMap<u32, String>,
         colors: BTreeMap<u32, [f32; 4]>,
     ) -> Result<(), BlockModelDataError> {
@@ -255,7 +330,6 @@ impl BlockModelData {
         }
         if let Some(code) = codes
             .iter()
-            .copied()
             .find(|code| code.is_finite() && (code.fract() != 0.0 || !(0.0..=u32::MAX as f64).contains(code) || !categories.contains_key(&(*code as u32))))
         {
             return Err(invalid(format!("column '{name}' holds unnamed category code {code}")));
@@ -278,16 +352,25 @@ impl BlockModelData {
         variable.strings = categories;
         variable.category_colors = colors;
         self.numeric_values.insert(name.to_owned(), codes);
+        // New content: anything measured over the model has to be measured
+        // again, and the source it was read from no longer describes it.
+        self.content_version = NEXT_CONTENT_VERSION.fetch_add(1, Ordering::Relaxed);
         // The reservation cannot grow, so it is taken again for the new total;
         // the values exist already, so a refusal leaves the model untracked.
         self._reservation = crate::app::memory::MemoryReservation::untracked();
-        if let Ok(reservation) = crate::app::memory::reserve(self.estimated_bytes(), "block model") {
+        if let Ok(reservation) = crate::app::memory::reserve(self.estimated_bytes(), &crate::i18n::tr!("err-memory-what-block-model")) {
             self._reservation = reservation;
         }
         Ok(())
     }
 
-    pub(crate) fn shared_numeric_values(&self, name: &str) -> Option<Arc<Vec<f64>>> {
+    /// Which allocation holds each column, in name order. A column is replaced
+    /// rather than edited in place, so these tell whether any has changed.
+    pub(crate) fn column_identities(&self) -> Vec<std::sync::Weak<BlockColumn>> {
+        self.numeric_values.values().map(Arc::downgrade).collect()
+    }
+
+    pub(crate) fn shared_numeric_values(&self, name: &str) -> Option<Arc<BlockColumn>> {
         self.numeric_values.get(name).map(Arc::clone)
     }
 
@@ -312,10 +395,6 @@ impl BlockModelData {
             .iter()
             .filter(|variable| matches!(variable.physical_type.as_str(), "namedbyte" | "namedshort"))
             .collect()
-    }
-
-    pub(crate) fn color_values(&self, name: &str) -> Result<Vec<f64>, BlockModelDataError> {
-        self.values_range(name, 0, self.metadata.n_blocks, is_color_type, "colour")
     }
 
     pub(crate) fn color_values_range(&self, name: &str, start: usize, end: usize) -> Result<Vec<f64>, BlockModelDataError> {
@@ -345,7 +424,7 @@ impl BlockModelData {
             .numeric_values
             .get(name)
             .ok_or_else(|| invalid(format!("block variable '{name}' has no value column")))?;
-        Ok(values[start..end].to_vec())
+        Ok(values.range(start, end))
     }
 
     #[cfg(not(target_arch = "wasm32"))]

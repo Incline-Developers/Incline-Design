@@ -40,6 +40,16 @@ impl MachineKind {
         }
     }
 
+    /// What a group of machines of this kind is called.
+    pub(crate) fn group_label(self) -> String {
+        match self {
+            Self::Loader => tr!("machine-group-loader"),
+            Self::Dozer => tr!("machine-group-dozer"),
+            Self::Drill => tr!("machine-group-drill"),
+            Self::Mpu => tr!("machine-group-mpu"),
+        }
+    }
+
     /// The unit its class rate is authored in.
     pub(crate) fn rate_unit(self) -> &'static str {
         match self {

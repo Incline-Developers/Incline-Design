@@ -1,3 +1,5 @@
+use super::hint::Hint;
+
 /// Width of the gutter an entry's label is indented by, matching the space the
 /// section heading's icon occupies so labels line up under the heading text.
 const ENTRY_LABEL_GUTTER: f32 = 20.0;
@@ -36,7 +38,11 @@ pub(crate) fn reserve_fixed_stripes(ui: &egui::Ui) -> (egui::layers::ShapeIdx, f
 /// painting one shape for the whole tree makes the pattern indifferent to
 /// which row currently sits where.
 pub(crate) fn paint_fixed_stripes(ui: &egui::Ui, slot: egui::layers::ShapeIdx, top: f32, stripe: egui::Color32) {
-    let bands = stripe_bands(ui.clip_rect().x_range(), top, ui.available_rect_before_wrap().bottom(), row_height(ui), stripe);
+    // To the foot of the pane - or, in a pane as tall as its rows (a table
+    // stack's), to the last row.
+    let bottom = ui.available_rect_before_wrap().bottom();
+    let bottom = if bottom.is_finite() { bottom } else { ui.cursor().top() };
+    let bands = stripe_bands(ui.clip_rect().x_range(), top, bottom, row_height(ui), stripe);
     ui.painter().set(slot, bands);
 }
 
@@ -297,7 +303,7 @@ impl ExplorerEntry {
                     Some((icon, color)) => {
                         let (rect, response) = ui.allocate_exact_size(egui::vec2(ENTRY_LABEL_GUTTER, height), egui::Sense::hover());
                         if let Some(hint) = &error {
-                            response.on_hover_text(hint.clone());
+                            response.hint(hint.clone());
                         }
                         {
                             let icon_rect = if header_aligned_icon {

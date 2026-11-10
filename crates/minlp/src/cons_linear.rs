@@ -5219,6 +5219,7 @@ fn extract_cliques_refresh(
 /// `extractCliques`: extracts cliques of the constraint and adds them to
 /// SCIP.
 ///
+/// ```text
 /// The following clique extraction mechanism are implemeneted
 ///
 /// 1. collect binary variables and sort them in non increasing order, then
@@ -5286,6 +5287,7 @@ fn extract_cliques_refresh(
 /// 2. if the linear constraint represents a set-packing or
 ///    set-partitioning constraint, the whole constraint is added as clique,
 ///    (this part is done at the end of the method)
+/// ```
 #[allow(clippy::too_many_arguments)]
 fn extract_cliques(scip: &mut Scip, cons: ConsId, maxeasyactivitydelta: f64, sortvars: bool, nfixedvars: &mut i32, nchgbds: &mut i32, cutoff: &mut bool) -> ScipResult {
     if cd(scip, cons).nvars < 2 {

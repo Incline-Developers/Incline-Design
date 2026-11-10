@@ -81,7 +81,7 @@ pub(crate) fn panel_size_limits(available: f32) -> (f32, f32) {
 /// and the properties tab column step away from it - see
 /// `widgets::tree_row_colors`. Deeper than either, because this is the
 /// backdrop the whole layout sits on rather than one surface beside another.
-fn window_fill(visuals: &egui::Visuals) -> Color32 {
+pub(crate) fn window_fill(visuals: &egui::Visuals) -> Color32 {
     crate::ui::widgets::shifted(visuals.panel_fill, if visuals.dark_mode { -13 } else { -22 })
 }
 
@@ -90,7 +90,7 @@ fn window_fill(visuals: &egui::Visuals) -> Color32 {
 /// The console fills itself with the extreme background, which in the dark
 /// theme is nearly the gap's own colour; without this the region would have no
 /// visible edge at all.
-fn region_stroke(visuals: &egui::Visuals) -> Stroke {
+pub(crate) fn region_stroke(visuals: &egui::Visuals) -> Stroke {
     let color = crate::ui::widgets::shifted(visuals.panel_fill, if visuals.dark_mode { 14 } else { -34 });
     Stroke::new(1.0, color)
 }
@@ -214,8 +214,8 @@ pub(crate) enum Edge {
 ///
 /// `claimed` is the rect the drag resizes, as its panel claimed it - so its
 /// named edge *is* the seam. That is not always one region: the explorer's
-/// column is dragged as a whole, so its grip is centred on the tree and the
-/// products island together.
+/// column is dragged as a whole, so its grip is centred on every pane in it
+/// together.
 #[derive(Clone, Copy)]
 pub(crate) struct Grip {
     claimed: Rect,

@@ -110,6 +110,12 @@ pub(crate) struct OpenTriangulation {
     pub(crate) spatial: Arc<crate::model::spatial::TriangleBvh>,
     /// Shared like the mesh: the Solids pages restyle every dig block on each
     /// pick, and a copy of each block's outline per restyle added up.
+    ///
+    /// Empty when the outline is every triangle side, as it is for a surface
+    /// not marked `always_show_edges`: those are drawn by the surface's own
+    /// shader wireframe, and the renderer derives the list only on a device
+    /// that has none. A survey's would otherwise hold a pair of indices for
+    /// every side of every face, for nothing.
     pub(crate) edges: Arc<Vec<[u32; 2]>>,
     /// Face indices in GPU-chunk order (see `spatial_surface_face_order`),
     /// precomputed off-thread so GPU surface chunking never sorts on the render
@@ -171,8 +177,9 @@ pub(crate) fn spatial_surface_face_order(mesh: &mesh_data::Triangulation) -> Vec
     use rayon::prelude::*;
 
     let face_count = mesh.face_count();
-    if face_count == 0 {
-        return Vec::new();
+    // One chunk has nothing to partition, so the faces stay in their order.
+    if face_count <= SURFACE_CHUNK_FACES {
+        return (0..face_count as u32).collect();
     }
     let vertices = mesh.vertices();
     // Relative to the mesh minimum so `f32` holds plenty of precision for
@@ -196,7 +203,10 @@ pub(crate) fn spatial_surface_face_order(mesh: &mesh_data::Triangulation) -> Vec
         })
         .collect();
     split_chunk_range(&mut faces);
-    faces.into_iter().map(|face| face.face).collect()
+    // Collecting reuses the allocation, which is four times too large for this.
+    let mut order: Vec<u32> = faces.into_iter().map(|face| face.face).collect();
+    order.shrink_to_fit();
+    order
 }
 
 struct FaceCentroid {
@@ -241,6 +251,74 @@ fn split_chunk_range(faces: &mut [FaceCentroid]) {
     rayon::join(|| split_chunk_range(left), || split_chunk_range(right));
 }
 
+/// For each of `count` items, the first with a key equal to its own: itself,
+/// or an earlier one.
+///
+/// Items are dealt by their key's hash into shards, in order, and each shard
+/// is matched up on its own, so the whole runs in parallel and needs no sort
+/// of all the keys - one of tens of millions, through an index, whose first
+/// partitions run on one thread.
+pub(crate) fn first_of_equal<K: std::hash::Hash + Eq + Send>(count: usize, key: impl Fn(usize) -> K + Sync) -> Vec<u32> {
+    use std::{
+        hash::BuildHasher,
+        sync::atomic::{AtomicU32, Ordering},
+    };
+
+    use rayon::prelude::*;
+    const SHARDS: usize = 256;
+    const RUN: usize = 1 << 16;
+    let hasher = foldhash::fast::FixedState::default();
+    let shard = |index: usize| (hasher.hash_one(key(index)) >> 56) as usize % SHARDS;
+    // Each run's items by shard, in order; a shard's items are its runs'
+    // lists one after another.
+    let dealt: Vec<Vec<Vec<u32>>> = (0..count.div_ceil(RUN))
+        .into_par_iter()
+        .map(|run| {
+            let mut shards: Vec<Vec<u32>> = vec![Vec::new(); SHARDS];
+            for index in run * RUN..((run + 1) * RUN).min(count) {
+                shards[shard(index)].push(index as u32);
+            }
+            shards
+        })
+        .collect();
+    let first: Vec<AtomicU32> = (0..count).map(|_| AtomicU32::new(0)).collect();
+    (0..SHARDS).into_par_iter().for_each(|shard| {
+        let mut seen: std::collections::HashMap<K, u32, foldhash::fast::FixedState> = std::collections::HashMap::default();
+        for index in dealt.iter().flat_map(|runs| runs[shard].iter().copied()) {
+            let earliest = *seen.entry(key(index as usize)).or_insert(index);
+            first[index as usize].store(earliest, Ordering::Relaxed);
+        }
+    });
+    drop(dealt);
+    first.into_iter().map(AtomicU32::into_inner).collect()
+}
+
+/// One vertex per bit-identical position, the first of each kept in order,
+/// and the faces renumbered onto them. A cut leaves every face with corners of
+/// its own; shared again, the mesh holds about a fifth of the vertices with
+/// nothing about its geometry changed.
+pub(crate) fn weld_identical_points(vertices: Vec<mesh_data::Vertex>, mut faces: Vec<[u32; 3]>) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>) {
+    use rayon::prelude::*;
+
+    // Each point's first occurrence.
+    let first = first_of_equal(vertices.len(), |index| {
+        let vertex = vertices[index];
+        [vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()]
+    });
+    let mut renumbered: Vec<u32> = vec![u32::MAX; vertices.len()];
+    let mut kept = Vec::with_capacity(vertices.len() / 4);
+    for (index, vertex) in vertices.iter().enumerate() {
+        if first[index] as usize == index {
+            renumbered[index] = kept.len() as u32;
+            kept.push(*vertex);
+        }
+    }
+    drop(vertices);
+    kept.shrink_to_fit();
+    faces.par_iter_mut().for_each(|face| *face = face.map(|index| renumbered[first[index as usize] as usize]));
+    (kept, faces)
+}
+
 pub(crate) fn unique_edges(mesh: &mesh_data::Triangulation) -> Vec<[u32; 2]> {
     use rayon::prelude::*;
 
@@ -257,5 +335,9 @@ pub(crate) fn unique_edges(mesh: &mesh_data::Triangulation) -> Vec<[u32; 2]> {
     packed.par_sort_unstable();
     packed.dedup();
 
-    packed.into_iter().map(|e| [(e >> 32) as u32, e as u32]).collect()
+    // Collected in place, so it would keep the room for every face's three
+    // sides, about twice what is left once the shared ones are gone.
+    let mut edges: Vec<[u32; 2]> = packed.into_iter().map(|e| [(e >> 32) as u32, e as u32]).collect();
+    edges.shrink_to_fit();
+    edges
 }

@@ -32,14 +32,12 @@ use crate::{
         },
         fonts::bold,
         state::GanttView,
+        widgets::hint::Hint,
     },
 };
 
-/// Width the Inspector takes from the Gantt while open.
+/// Width the Inspector's island opens at, before it is dragged.
 pub(crate) const INSPECTOR_WIDTH: f32 = 300.0;
-/// The Gantt keeps at least this much timeline beside it; narrower and the
-/// Inspector is not drawn, rather than squeezing the timeline to nothing.
-pub(crate) const MIN_TIMELINE_WIDTH: f32 = 420.0;
 
 const NAME_ROW_H: f32 = 20.0;
 const DETAIL_ROW_H: f32 = 16.0;
@@ -69,11 +67,6 @@ pub(crate) fn draw_inspector(
     destinations: &[DestinationView],
     fields: &[(ReserveFieldId, String)],
 ) {
-    let visuals = ui.visuals().clone();
-    let (surface, _) = crate::ui::widgets::tree_row_colors(ui);
-    ui.painter().rect_filled(rect, 0.0, surface);
-    ui.painter().line_segment([rect.left_top(), rect.left_bottom()], visuals.widgets.noninteractive.bg_stroke);
-
     let inner = rect.shrink2(egui::vec2(12.0, 8.0));
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt("gantt_inspector").max_rect(inner));
     child.set_clip_rect(rect);
@@ -81,21 +74,37 @@ pub(crate) fn draw_inspector(
 
     let hour = editor.schedule_time_h.max(0.0);
     ui.horizontal(|ui| {
-        ui.label(bold(&instant_label(hour * GanttView::HOUR)).size(16.0));
+        ui.label(bold(&instant_label(hour * GanttView::HOUR)).size(16.0)).hint(tr!("gantt-inspector-help"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            if ui.button("›").on_hover_text(tr!("inspector-next-hour")).clicked() {
+            // Rightmost, where a panel's close belongs. It collapses the
+            // panel to a strip down the edge, pressed to open it again.
+            if ui.add(egui::Button::image(crate::ui::themed_icon!(ui, "close_project.svg")).frame(false)).clicked() {
+                editor.show_schedule_inspector = false;
+            }
+            ui.add_space(4.0);
+            use crate::ui::widgets::transport::{Transport, transport_button};
+            if transport_button(ui, Transport::StepForward, Some(tr!("inspector-next-hour"))).clicked() {
                 editor.schedule_time_h = editor.schedule_time_h.floor() + 1.0;
             }
-            if ui.button("‹").on_hover_text(tr!("inspector-previous-hour")).clicked() {
+            if transport_button(ui, Transport::StepBack, Some(tr!("inspector-previous-hour"))).clicked() {
                 editor.schedule_time_h = (editor.schedule_time_h.ceil() - 1.0).max(0.0);
             }
         });
     });
     let hour = editor.schedule_time_h.max(0.0);
+    selected_bar(ui, editor, plan);
 
     let Some(schedule) = editor.schedule_result.clone() else {
         note(ui, tr!("inspector-no-schedule"));
+        // Why there is none: a recalculation nobody pressed for that cannot
+        // start says so here, not in a dialog.
+        if !editor.schedule_run_status.is_empty() {
+            note(ui, editor.schedule_run_status.clone());
+            for detail in &editor.schedule_run_details {
+                note(ui, detail.clone());
+            }
+        }
         return;
     };
     if hour >= schedule.requested_end_h {
@@ -125,8 +134,8 @@ fn drill_blast(ui: &mut egui::Ui, plan: &SchedulePlan, schedule: &CalculatedSche
     use crate::model::schedule::BlastStage;
     let Some(result) = schedule.drill_blast.as_ref() else { return };
     let machines: Vec<_> = plan
-        .agents()
-        .iter()
+        .ordered_agents()
+        .into_iter()
         .filter(|agent| plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
         .collect();
     section(ui, tr!("inspector-drill-blast"));
@@ -206,6 +215,63 @@ fn drill_blast_idle_detail(
     Some(format!("{} · {short}", super::schedule_gantt::blast_title(&result.blasts[waiting])))
 }
 
+/// The one bar selected on the Gantt: what it is, who works it and when, the
+/// work in it, what a current run dug of it, and anything stopping it. Shown
+/// with or without a calculated schedule - a bar's own facts do not wait on a
+/// run - and kept to those, since its hover says the rest.
+fn selected_bar(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan) {
+    let mut selected = editor.schedule_selected_bars.iter();
+    let (Some(id), None) = (selected.next(), selected.next()) else { return };
+    let Some(bar) = plan.bar(*id) else { return };
+    let report = editor.schedule_bar_reports.iter().find(|report| report.bar == bar.id);
+    section(ui, tr!("inspector-bar-section"));
+    let window = match bar.window.end_h {
+        Some(end) => tr!(
+            "schedule-gantt-window-span",
+            from = instant_label(bar.window.start_h * GanttView::HOUR),
+            to = instant_label(end * GanttView::HOUR)
+        ),
+        None => tr!("schedule-gantt-window-open", from = instant_label(bar.window.start_h * GanttView::HOUR)),
+    };
+    let machine = bar.agent.and_then(|agent| plan.agent(agent));
+    draw_entry(
+        ui,
+        &Entry {
+            name: super::schedule_gantt::bar_label(bar, report, Some(plan)),
+            value: machine.map_or_else(|| tr!("schedule-bar-unassigned"), |agent| agent.name.clone()),
+            value_weak: machine.is_none(),
+            detail: Some(window),
+            ..Entry::default()
+        },
+    );
+    let mut lines = Vec::new();
+    if let Some(order) = bar.blast_order() {
+        lines.push(tr!("inspector-bar-blasts", count = order.members.len()));
+    } else if bar.reclaim().is_some() {
+        if let Some(report) = report.filter(|report| !report.reclaim_sources.is_empty()) {
+            lines.push(tr!("reclaim-sources-tooltip", stockpiles = report.reclaim_sources.join(", ")));
+        }
+    } else if bar.dig_order().is_some() {
+        let count = bar.members().len().to_string();
+        lines.push(match report.and_then(|report| report.tonnes) {
+            Some(tonnes) => tr!("inspector-bar-blocks-tonnes", count = count, tonnes = format_tonnes(tonnes)),
+            None => tr!("inspector-bar-blocks", count = count),
+        });
+        if let Some(schedule) = editor.schedule_result.as_ref() {
+            lines.push(tr!("schedule-bar-worked", tonnes = format_tonnes(schedule.bar_tonnes(bar.id))));
+        }
+    }
+    for line in lines {
+        ui.label(egui::RichText::new(line).weak());
+    }
+    if let Some(text) = editor.schedule_result.as_ref().and_then(|schedule| super::schedule_gantt::unworked_text(schedule, bar.id)) {
+        ui.label(egui::RichText::new(text).color(ui.visuals().warn_fg_color));
+    }
+    for problem in report.map_or(&[][..], |report| &report.problems) {
+        ui.label(egui::RichText::new(problem).color(ui.visuals().warn_fg_color));
+    }
+}
+
 fn note(ui: &mut egui::Ui, text: String) {
     ui.add_space(8.0);
     ui.label(egui::RichText::new(text).weak());
@@ -223,8 +289,8 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
     }
     section(ui, tr!("inspector-loaders"));
     for agent in plan
-        .agents()
-        .iter()
+        .ordered_agents()
+        .into_iter()
         .filter(|agent| !plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
     {
         let mut entry = Entry {
@@ -255,9 +321,6 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
                 }
             }
             entry.detail = Some(if targets.is_empty() { source } else { format!("{source} → {}", targets.join(", ")) });
-            if let Some(bar) = bar {
-                hover = Some(execution_tooltip(execution, bar, report, schedule, plan, destinations));
-            }
         } else if let Some(span) = schedule.idle_at(agent.id, hour) {
             if span.reason == Some(IdleReason::Delayed) {
                 let (color, kind) = delay_at(plan, agent.id, hour).unwrap_or((IDLE_COLOR, None));
@@ -355,8 +418,20 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
             }
         }
         let response = draw_entry(ui, &entry);
-        if let Some(text) = hover {
-            response.on_hover_text(text);
+        // Built only on hover, as on the Gantt: it scans the result.
+        if response.hovered() {
+            let tooltip = schedule.executions_at(hour).find(|execution| execution.agent == agent.id).and_then(|execution| {
+                let bar = plan.bar(execution.bar)?;
+                let report = editor.schedule_bar_reports.iter().find(|report| report.bar == execution.bar);
+                Some(execution_tooltip(execution, bar, report, schedule, plan, destinations))
+            });
+            let text = match (tooltip, hover) {
+                (Some(tooltip), Some(rest)) => Some(format!("{tooltip}\n{rest}")),
+                (tooltip, rest) => tooltip.or(rest),
+            };
+            if let Some(text) = text {
+                response.hint(text);
+            }
         }
     }
 }
@@ -477,7 +552,7 @@ fn stockpiles(ui: &mut egui::Ui, plan: &SchedulePlan, destinations: &[Destinatio
         }
         let response = draw_entry(ui, &entry);
         if !lines.is_empty() {
-            response.on_hover_text(lines.join("\n"));
+            response.hint(lines.join("\n"));
         }
     }
 }
@@ -560,7 +635,7 @@ fn crushers(ui: &mut egui::Ui, plan: &SchedulePlan, destinations: &[DestinationV
         }
         let response = draw_entry(ui, &entry);
         if !lines.is_empty() {
-            response.on_hover_text(lines.join("\n"));
+            response.hint(lines.join("\n"));
         }
     }
 }
@@ -573,7 +648,7 @@ fn dumps(ui: &mut egui::Ui, destinations: &[DestinationView], schedule: &Calcula
     section(ui, tr!("inspector-dumps"));
     for dump in dumps {
         let feed: f64 = schedule.deliveries_at(hour).filter(|d| d.destination == dump.id).map(rate).sum();
-        let (received, _) = schedule.received_between(dump.id, 0.0, hour);
+        let received = schedule.received_to_date(dump.id, hour);
         let entry = Entry {
             name: dump.name.clone(),
             value: if feed > 1e-6 {
@@ -610,7 +685,7 @@ fn trucks(ui: &mut egui::Ui, plan: &SchedulePlan, schedule: &CalculatedSchedule,
         let fleet = class.calendar.values_at(day).effective_units();
         let entry = Entry {
             name: class.name.clone(),
-            value: tr!("inspector-trucks-in-use", busy = format!("{busy:.1}"), fleet = format!("{fleet:.1}")),
+            value: tr!("inspector-trucks-in-use", busy = format!("{busy:.1}"), fleet = fleet_text(fleet)),
             meter: (fleet > 0.0).then(|| (busy / fleet).clamp(0.0, 1.0) as f32),
             ..Entry::default()
         };
@@ -630,7 +705,7 @@ fn trucks(ui: &mut egui::Ui, plan: &SchedulePlan, schedule: &CalculatedSchedule,
                 haul.distance_km()
             );
         }
-        draw_entry(ui, &entry).on_hover_text(help);
+        draw_entry(ui, &entry).hint(help);
     }
 }
 
@@ -686,4 +761,14 @@ fn draw_entry(ui: &mut egui::Ui, entry: &Entry) -> egui::Response {
         }
     }
     response
+}
+
+/// A truck fleet's size: whole trucks as they are, and a tenth only where
+/// availability leaves part of one.
+pub(crate) fn fleet_text(fleet: f64) -> String {
+    if (fleet - fleet.round()).abs() < 1e-9 {
+        format!("{fleet:.0}")
+    } else {
+        format!("{fleet:.1}")
+    }
 }
