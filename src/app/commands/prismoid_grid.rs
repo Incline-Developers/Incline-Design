@@ -1,6 +1,6 @@
 //! Prismoid grid commands: building one from two surfaces, adding qualities
-//! to one, removing one from the explorer, and preparing what the view draws
-//! of each.
+//! to one, making a surface from one, removing one from the explorer, and
+//! preparing what the view draws of each.
 
 use std::{
     collections::hash_map::DefaultHasher,
@@ -23,7 +23,10 @@ use crate::{
             solids::preview_triangulation,
             solids_view::next_view_id,
             thickness_points::not_a_grid_reason,
-            triangulation::{session::refuse_quality, solid_between::ring_contains},
+            triangulation::{
+                session::{build_generated_triangulation, refuse_quality},
+                solid_between::ring_contains,
+            },
         },
         jobs::{CancelFlag, JobKey},
     },
@@ -44,7 +47,7 @@ use crate::{
         rbf::NODE_BUDGET,
         solid_reserves::NumericTotal,
         spatial::TriangleBvh,
-        triangulation::{OpenTriangulation, QualityMark, TriangulationId, spatial_surface_face_order},
+        triangulation::{GeneratedTriangulationLog, OpenTriangulation, QualityMark, TriangulationId, same_quality_name, spatial_surface_face_order, unique_edges},
     },
     rendering::{
         camera::SectionSlab,
@@ -55,7 +58,7 @@ use crate::{
             section_surface_lines::{SECTION_FILL_DEPTH_TIE_M, SectionCellsOfGrid},
         },
     },
-    ui::state::{CellSelection, EditorState, InspectorRow, InspectorRows, SelectionMode, TriPolylineClipMode, Workspace},
+    ui::state::{CellSelection, EditorState, InspectorRow, InspectorRows, SelectionMode, TriPolylineClipMode, TriSurfaceType, Workspace},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -376,6 +379,57 @@ impl App<'_> {
             userspace_log!("{}", tr!("cmd-prismoid-grid-qualities-rederive"));
         };
         self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-adding-qualities"), keys, compute, apply);
+        Ok(())
+    }
+
+    /// Make a surface whose height is a prismoid grid's vertical thickness,
+    /// or one of its values named by `value`, marked as that quality and so
+    /// inserted hidden, for Generate Contour Lines to contour.
+    pub(crate) fn prismoid_grid_to_surface(&mut self, grid_id: PrismoidGridId, value: Option<String>, name: String) -> Result<()> {
+        let item = self
+            .prismoid_grids
+            .iter()
+            .find(|item| item.id == grid_id && item.state.loaded)
+            .ok_or_else(|| anyhow::anyhow!("{}", tr!("ws-menubar-modelling-select-prismoid-grid")))?;
+        let (grid, grid_name) = (Arc::clone(&item.grid), item.name.clone());
+        let index = match value.as_deref() {
+            None => None,
+            Some(value) => Some(
+                grid.cell_values
+                    .iter()
+                    .position(|held| same_quality_name(&held.name, value))
+                    .ok_or_else(|| no_value_surface(&grid_name, value))?,
+            ),
+        };
+        let mark = surface_mark(index.map(|index| &grid.cell_values[index]));
+        let (quantity, label) = (mark.name.clone(), name.clone());
+        let contoured = quantity.clone();
+        let compute = move |cancel: &CancelFlag, _: &Progress| -> Result<GeneratedTriangulationLog> {
+            if cancel.is_cancelled() {
+                anyhow::bail!("{}", tr!("common-cancelled"));
+            }
+            let (vertices, faces) = grid.value_mesh(index).ok_or_else(|| no_value_surface(&grid_name, &quantity))?;
+            let nodes = vertices.len();
+            let generated = build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, unique_edges)?.with_quality(Some(mark));
+            let message = tr!(
+                "cmd-prismoid-grid-surface-made",
+                name = label,
+                grid = grid_name,
+                quantity = quantity,
+                nodes = nodes.to_string()
+            );
+            Ok(GeneratedTriangulationLog { generated, message })
+        };
+        let apply = move |app: &mut App, result: Result<GeneratedTriangulationLog>| {
+            let made = result.is_ok();
+            app.apply_generated_triangulation_job(result, &[]);
+            // Contour Lines reads z, so the lines of this surface are values;
+            // said here, as the contour tool does not carry the mark.
+            if made {
+                userspace_log!("{}", tr!("cmd-prismoid-grid-surface-contours-are-values", quantity = contoured));
+            }
+        };
+        self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-making-surface"), vec![JobKey::PrismoidGrid(grid_id)], compute, apply);
         Ok(())
     }
 
@@ -1431,6 +1485,26 @@ fn add_qualities(grid: &PrismoidGrid, grid_name: &str, inputs: Vec<QualityInput>
 }
 
 /// A refusal to add values to the prismoid grid `grid_name`, in words.
+/// The mark a surface made from a grid's `values` carries, or from its
+/// vertical thickness with `None`.
+fn surface_mark(values: Option<&CellValues>) -> QualityMark {
+    match values {
+        Some(values) => QualityMark {
+            name: values.name.clone(),
+            unit: values.unit.clone(),
+        },
+        None => QualityMark {
+            name: tr!("thickness-points-column-vertical"),
+            unit: "m".to_owned(),
+        },
+    }
+}
+
+/// Why `quantity` of the grid `name` makes no surface.
+fn no_value_surface(name: &str, quantity: &str) -> anyhow::Error {
+    anyhow::anyhow!("{}", tr!("cmd-prismoid-grid-surface-empty", grid = name.to_owned(), quantity = quantity.to_owned()))
+}
+
 pub(crate) fn values_refusal_words(refusal: ValuesRefusal, grid_name: &str) -> String {
     match refusal {
         ValuesRefusal::Twice { first, second, quality } => tr!("cmd-prismoid-grid-quality-twice", first = first, second = second, quality = quality),

@@ -1807,6 +1807,10 @@ fn draw_global_dialogs(
         dialogs::triangulation::draw_add_prismoid_qualities_dialog(root_ui, editor, project, commands);
     }
 
+    if editor.tri_prismoid_surface_open {
+        dialogs::triangulation::draw_prismoid_grid_surface_dialog(root_ui, editor, project, commands);
+    }
+
     if editor.tri_prismoid_mask_open {
         dialogs::triangulation::draw_mask_prismoid_grid_dialog(root_ui, editor, document, project, commands);
     }

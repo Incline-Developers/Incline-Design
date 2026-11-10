@@ -64,6 +64,9 @@ struct MenuState {
     /// Whether exactly one loaded prismoid grid is selected, which qualities
     /// are added to.
     can_add_prismoid_qualities: bool,
+    /// Whether exactly one loaded prismoid grid is selected, which Prismoid
+    /// Grid to Surface makes a surface from.
+    can_prismoid_grid_to_surface: bool,
     /// Whether one loaded prismoid grid and one closed polyline are
     /// selected, which Mask Prismoid Grid by Polyline takes.
     can_mask_prismoid_grid_by_polyline: bool,
@@ -169,6 +172,9 @@ pub(crate) enum MacMenuAction {
     /// The Modelling menu's row that masks or unmasks the selected
     /// prismoids.
     TogglePrismoidMask,
+    /// The Modelling menu's row that opens Prismoid Grid to Surface on the
+    /// selected prismoid grid.
+    OpenPrismoidGridToSurface,
     /// The Block Model menu's row that opens the pit optimization scenarios.
     OpenOptimizationScenarios,
     /// One row of File > Open Recent, by its index in the recent list the menu
@@ -272,6 +278,7 @@ impl MacMenuAction {
         Self::OpenBuildStrata,
         Self::TogglePrismoidMask,
         Self::OpenMaskPrismoidGridByPolyline,
+        Self::OpenPrismoidGridToSurface,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -691,6 +698,14 @@ pub(crate) fn install_menu_bar() {
     );
     add_action(
         &modelling_menu,
+        &tr!("common-prismoid-grid-to-surface-ellipsis"),
+        "",
+        MacMenuAction::OpenPrismoidGridToSurface,
+        &target,
+        mtm,
+    );
+    add_action(
+        &modelling_menu,
         &tr!("common-mask-prismoid-grid-polyline"),
         "",
         MacMenuAction::OpenMaskPrismoidGridByPolyline,
@@ -875,6 +890,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_create_block_model_from_grid: editor.selection_counts.prismoid_grids == 1,
         can_add_prismoid_qualities: editor.selection_counts.prismoid_grids == 1,
+        can_prismoid_grid_to_surface: editor.selection_counts.prismoid_grids == 1,
         can_mask_prismoid_grid_by_polyline: editor.selection_counts.prismoid_grids == 1 && editor.selection_counts.clip_boundaries == 1,
         can_mask_prismoids: editor.selection_counts.prismoid_cells > 0,
         prismoids_masked: editor.selection_counts.prismoid_cells > 0 && editor.selection_counts.masked_prismoid_cells == editor.selection_counts.prismoid_cells,
@@ -932,6 +948,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
     set_enabled(&root, MacMenuAction::CreateBlockModelFromPrismoidGrid, state.can_create_block_model_from_grid);
     set_enabled(&root, MacMenuAction::OpenAddPrismoidQualities, state.can_add_prismoid_qualities);
+    set_enabled(&root, MacMenuAction::OpenPrismoidGridToSurface, state.can_prismoid_grid_to_surface);
     set_enabled(&root, MacMenuAction::OpenMaskPrismoidGridByPolyline, state.can_mask_prismoid_grid_by_polyline);
     set_enabled(&root, MacMenuAction::TogglePrismoidMask, state.can_mask_prismoids);
     set_checked(&root, MacMenuAction::TogglePrismoidMask, state.prismoids_masked);

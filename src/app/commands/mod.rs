@@ -208,6 +208,8 @@ impl<'a> App<'a> {
                 | UiCommand::CreateBlockModelFromPrismoidGrid
                 | UiCommand::OpenAddPrismoidQualities
                 | UiCommand::ExecuteAddPrismoidQualities { .. }
+                | UiCommand::OpenPrismoidGridToSurface
+                | UiCommand::ExecutePrismoidGridToSurface { .. }
                 | UiCommand::TogglePrismoidMask
                 | UiCommand::OpenMaskPrismoidGridByPolyline
                 | UiCommand::ExecuteMaskPrismoidGridByPolyline { .. }
@@ -2082,6 +2084,26 @@ impl<'a> App<'a> {
                 let result = self.add_prismoid_qualities(grid, surfaces, density);
                 if result.is_ok() {
                     self.editor.tri_prismoid_qualities_open = false;
+                }
+                result
+            }
+            UiCommand::OpenPrismoidGridToSurface => {
+                let selected = self.selected_prismoid_grids();
+                let [grid_id] = selected[..] else {
+                    userspace_warn!("{}", tr!("ws-menubar-modelling-select-prismoid-grid"));
+                    return Ok(());
+                };
+                self.editor.tri_prismoid_surface_open = true;
+                self.editor.tri_prismoid_surface_grid = Some(grid_id);
+                self.editor.tri_prismoid_surface_value = None;
+                self.editor.tri_prismoid_surface_name_input.clear();
+                self.editor.tri_prismoid_surface_name_auto = true;
+                Ok(())
+            }
+            UiCommand::ExecutePrismoidGridToSurface { grid, value, name } => {
+                let result = self.prismoid_grid_to_surface(grid, value, name);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_surface_open = false;
                 }
                 result
             }

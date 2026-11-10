@@ -671,6 +671,7 @@ impl EditorState {
             || self.insert_point_at_spacing_dialog.is_some()
             || self.smooth_strings_dialog.is_some()
             || self.tri_prismoid_qualities_open
+            || self.tri_prismoid_surface_open
             || self.tri_prismoid_mask_open
     }
 
@@ -3322,6 +3323,13 @@ pub(crate) struct EditorState {
     pub(crate) tri_prismoid_qualities_grid: Option<PrismoidGridId>,
     pub(crate) tri_prismoid_qualities_ticked: Vec<TriangulationId>,
     pub(crate) tri_prismoid_qualities_density: Option<TriangulationId>,
+    /// Prismoid Grid to Surface: the grid selected at open, the value the
+    /// surface's height is (`None` for vertical thickness) and its name.
+    pub(crate) tri_prismoid_surface_open: bool,
+    pub(crate) tri_prismoid_surface_grid: Option<PrismoidGridId>,
+    pub(crate) tri_prismoid_surface_value: Option<String>,
+    pub(crate) tri_prismoid_surface_name_input: String,
+    pub(crate) tri_prismoid_surface_name_auto: bool,
     /// Mask Prismoid Grid by Polyline: the grid and the closed polyline
     /// selected at open, and which side of it is kept.
     pub(crate) tri_prismoid_mask_open: bool,
@@ -4250,6 +4258,8 @@ impl EditorState {
             || self.tri_create_open
             || self.tri_create_failure.is_some()
             || self.tri_cut_poly_open
+            || self.tri_prismoid_qualities_open
+            || self.tri_prismoid_surface_open
             || self.tri_prismoid_mask_open
             || self.tri_cut_z_open
             || self.tri_cut_surface_open
@@ -4768,6 +4778,9 @@ impl EditorState {
         self.tri_cut_poly_object_name.clear();
         self.tri_prismoid_mask_open = false;
         self.tri_prismoid_mask_object_id = None;
+        self.tri_prismoid_qualities_open = false;
+        self.tri_prismoid_surface_open = false;
+        self.tri_prismoid_surface_grid = None;
         // Snapshotted object ids, and a hold on the selection while it is up:
         // neither can outlive the project they were taken from.
         self.reference_surface_dialog = None;
@@ -5221,6 +5234,11 @@ impl EditorState {
             tri_prismoid_qualities_grid: None,
             tri_prismoid_qualities_ticked: Vec::new(),
             tri_prismoid_qualities_density: None,
+            tri_prismoid_surface_open: false,
+            tri_prismoid_surface_grid: None,
+            tri_prismoid_surface_value: None,
+            tri_prismoid_surface_name_input: String::new(),
+            tri_prismoid_surface_name_auto: true,
             tri_prismoid_mask_open: false,
             tri_prismoid_mask_grid: None,
             tri_prismoid_mask_object_id: None,
@@ -7042,6 +7060,15 @@ pub(crate) enum UiCommand {
         surfaces: Vec<TriangulationId>,
         density: Option<TriangulationId>,
     },
+    /// Open Prismoid Grid to Surface on the one selected prismoid grid.
+    OpenPrismoidGridToSurface,
+    /// Make a surface whose height is one of a prismoid grid's values, or
+    /// its vertical thickness with `None`, marked as that quality.
+    ExecutePrismoidGridToSurface {
+        grid: PrismoidGridId,
+        value: Option<String>,
+        name: String,
+    },
     /// Mask the selected prismoids by hand, or unmask them when every one
     /// is masked by hand.
     TogglePrismoidMask,
@@ -7271,6 +7298,7 @@ impl UiCommand {
             | Self::OpenBuildStrata
             | Self::OpenMaskPrismoidGridByPolyline
             | Self::OpenAddPrismoidQualities
+            | Self::OpenPrismoidGridToSurface
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
             | Self::OpenContourTriangulation
@@ -7824,6 +7852,7 @@ impl UiCommand {
             Self::ExecuteBuildStrata { name, .. } => report(tr!("tri-build-strata"), name.clone()),
             Self::CreateBlockModelFromPrismoidGrid => report(tr!("common-create-block-model-from-prismoid-grid"), tr!("state-selected-prismoid-grid")),
             Self::ExecuteAddPrismoidQualities { .. } => report(tr!("state-add-prismoid-qualities"), tr!("state-selected-prismoid-grid")),
+            Self::ExecutePrismoidGridToSurface { name, .. } => report(tr!("state-prismoid-grid-to-surface"), name.clone()),
             Self::TogglePrismoidMask => report(tr!("common-mask-prismoids"), tr!("state-selected-prismoid-grid")),
             Self::ExecuteMaskPrismoidGridByPolyline { .. } => report(tr!("state-mask-prismoid-grid"), tr!("state-selected-prismoid-grid")),
             Self::SetPrismoidGridColorValue { value, .. } => report(tr!("state-colour-prismoid-grid"), value.clone().unwrap_or_else(|| tr!("thickness-points-column-vertical"))),

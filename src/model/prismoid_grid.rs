@@ -287,6 +287,20 @@ impl Lattice {
     }
 }
 
+/// Two triangles on the a-c diagonal of every quad of `columns` by `rows`
+/// that `nodes` gives the four nodes of, a, b (along `u`), c and d.
+fn quads(columns: usize, rows: usize, mut nodes: impl FnMut(usize, usize) -> Option<[u32; 4]>) -> Vec<[u32; 3]> {
+    let mut faces = Vec::new();
+    for row in 0..rows {
+        for column in 0..columns {
+            if let Some([a, b, c, d]) = nodes(column, row) {
+                faces.extend([[a, b, c], [a, c, d]]);
+            }
+        }
+    }
+    faces
+}
+
 /// Distances from the lattice origin to each line between cells, from 0.
 fn edges(sizes: &[f64]) -> Vec<f64> {
     let mut edges = vec![0.0];
@@ -716,6 +730,53 @@ impl PrismoidGrid {
             })
             .collect();
         Some(PrismoidMesh { vertices, faces, outline })
+    }
+
+    /// A surface whose height is the vertical thickness with `None`: the
+    /// roof's triangles of [`Self::closed_mesh`] with z = roof less floor at
+    /// each corner. With `Some(index)`, one set of values: a node at the
+    /// centre of every active cell holding a finite value, z the value, and
+    /// two triangles on each 2 by 2 block of such cells, so a cell without a
+    /// value leaves a hole. `None` with no face, or an `index` naming no
+    /// values.
+    pub(crate) fn value_mesh(&self, index: Option<usize>) -> Option<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>)> {
+        const UNSET: u32 = u32::MAX;
+        let lattice = &self.lattice;
+        let (columns, rows) = (lattice.columns(), lattice.rows());
+        let mut vertices = Vec::new();
+        let faces = match index {
+            None => {
+                let plan = lattice.corners();
+                let mut at = vec![UNSET; plan.len()];
+                let mut place = |corner: usize| {
+                    if at[corner] == UNSET {
+                        at[corner] = vertices.len() as u32;
+                        vertices.push(mesh_vertex(plan[corner].extend(self.roof[corner] - self.floor[corner])));
+                    }
+                    at[corner]
+                };
+                quads(columns, rows, |column, row| {
+                    let cell = row * columns + column;
+                    self.active[cell].then(|| self.cell_corners(cell).map(&mut place))
+                })
+            }
+            Some(index) => {
+                let values = &self.cell_values.get(index)?.values;
+                let mut at = vec![UNSET; lattice.cell_count()];
+                for (cell, centre) in self.cell_centres() {
+                    if let Some(value) = values[cell].filter(|value| value.is_finite() && self.active[cell]) {
+                        at[cell] = vertices.len() as u32;
+                        vertices.push(mesh_vertex(centre.extend(value)));
+                    }
+                }
+                let node = |column: usize, row: usize| at[row * columns + column];
+                quads(columns.saturating_sub(1), rows.saturating_sub(1), |column, row| {
+                    let nodes = [node(column, row), node(column + 1, row), node(column + 1, row + 1), node(column, row + 1)];
+                    nodes.iter().all(|node| *node != UNSET).then_some(nodes)
+                })
+            }
+        };
+        (!faces.is_empty()).then_some((vertices, faces))
     }
 
     /// One box per active prismoid with its cell, in cell order, in the

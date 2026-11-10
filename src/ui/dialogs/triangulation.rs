@@ -1487,6 +1487,96 @@ pub(crate) fn draw_add_prismoid_qualities_dialog(ui: &mut egui::Ui, editor: &mut
     }
 }
 
+/// Prismoid Grid to Surface: the grid selected at open, the value its
+/// surface's height is (vertical thickness, or one of the grid's values)
+/// and the surface's name, derived from the grid and the value until typed.
+pub(crate) fn draw_prismoid_grid_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_prismoid_surface_open {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("prismoid_grid_surface_dialog", tr!("tri-prismoid-grid-surface"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let width = picker_control_width(ui);
+            let grid = loaded_prismoid_grid(project, editor.tri_prismoid_surface_grid);
+            let values: Vec<&str> = grid.map(|grid| grid.values.iter().map(|(name, _)| name.as_str()).collect()).unwrap_or_default();
+            if editor
+                .tri_prismoid_surface_value
+                .as_deref()
+                .is_some_and(|value| !values.iter().any(|name| same_quality_name(name, value)))
+            {
+                editor.tri_prismoid_surface_value = None;
+            }
+
+            tool_help_panel(ui, tr!("tri-prismoid-grid-surface-help"));
+            selected_source_field(
+                ui,
+                tr!("common-prismoid-grid"),
+                grid.map_or_else(|| tr!("tri-no-prismoid-grid-selected"), |grid| grid.name.clone()),
+                tr!("tri-prismoid-grid-surface-grid-help"),
+                width,
+            );
+
+            ui.add_space(4.0);
+
+            let thickness = tr!("thickness-points-column-vertical");
+            let chosen = editor.tri_prismoid_surface_value.clone().unwrap_or_else(|| thickness.clone());
+            MenuFieldCombo::new(
+                "prismoid_grid_surface_value",
+                tr!("tri-prismoid-grid-surface-value"),
+                &mut editor.tri_prismoid_surface_value,
+                chosen.clone(),
+                std::iter::once((None, thickness.into())).chain(values.iter().map(|name| (Some((*name).to_owned()), (*name).into()))),
+            )
+            .width(width)
+            .show(ui);
+
+            if editor.tri_prismoid_surface_name_auto
+                && let Some(grid) = grid
+            {
+                let derived = crate::app::canvas::derived_triangulation_name(&grid.name, &chosen);
+                if editor.tri_prismoid_surface_name_input != derived {
+                    editor.tri_prismoid_surface_name_input = derived;
+                }
+            }
+            if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_prismoid_surface_name_input)
+                .width(width)
+                .show(ui)
+                .changed()
+            {
+                editor.tri_prismoid_surface_name_auto = false;
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let can_run = grid.is_some() && !editor.tri_prismoid_surface_name_input.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("common-ok")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let Some(grid) = editor.tri_prismoid_surface_grid
+                {
+                    commands.push(UiCommand::ExecutePrismoidGridToSurface {
+                        grid,
+                        value: editor.tri_prismoid_surface_value.clone(),
+                        name: editor.tri_prismoid_surface_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_prismoid_surface_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_prismoid_surface_open = false;
+    }
+}
+
 /// Mask Prismoid Grid by Polyline: the grid and the closed polyline
 /// selected at open, and the side kept, as the polyline cut takes them;
 /// nothing new is made, so there is no name.
