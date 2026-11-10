@@ -81,7 +81,6 @@ confirm-delete-product =
 ## Dialog „Triangulation erstellen“
 
 tri-create-title = Triangulation erstellen
-tri-create-help = Trianguliert die Objekte, die beim Öffnen dieses Dialogs ausgewählt waren. Schließen Sie ihn, um die Auswahl zu ändern.
 tri-create-type-label = Triangulationstyp
 tri-create-type-help =
     Eine offene Oberfläche erzeugt ein geländeartiges Blatt. Ein Volumenkörper
@@ -90,7 +89,6 @@ tri-create-type-help =
 tri-create-output-name = Ausgabename
 tri-create-output-name-hint = Triangulationsname
 tri-create-run = Triangulieren
-tri-selection-none = Die ausgewählten Objekte sind nicht mehr verfügbar.
 
 tri-selection-selected = { $summary } ausgewählt
 
@@ -379,9 +377,6 @@ cmd-commands-count-point-s-across-layers = { $count } Punkt(e) in { $layers } Eb
 cmd-commands-count-point-s-layer = { $count } Punkt(e) auf '{ $layer }'
 cmd-commands-kind-layer = { $kind } auf '{ $layer }'
 cmd-commands-no-extent = Keine Ausdehnung
-cmd-commands-select-holes-place-reference-points = Wählen Sie die Bohrlöcher aus, auf denen Referenzpunkte platziert werden sollen
-cmd-triangulate-needs-selection = Wählen Sie die zu triangulierenden Objekte aus, bevor Sie „Triangulation erstellen“ ausführen
-cmd-commands-select-one-more-objects-before = Wählen Sie ein oder mehrere Objekte aus, bevor Sie { $axis } festlegen
 cmd-contours-contour-generation-failed-error = Höhenlinienerzeugung fehlgeschlagen: { $error }
 cmd-contours-discarded-layer-exists = Höhenlinien für '{ $name }' wurden verworfen: Ebene '{ $layer_name }' existiert nun
 cmd-contours-discarded-project-closed = Höhenlinien für '{ $name }' wurden verworfen: das Projekt wurde geschlossen
@@ -516,8 +511,6 @@ cmd-insert-point-insert-points = Punkte einfügen
 cmd-insert-point-inserted-count-operation-point-s = { $count } { $operation }-Punkt(e) eingefügt
 cmd-insert-point-intersection = Schnittpunkt
 cmd-insert-point-no-new-operation-points-were = Es wurden keine neuen { $operation }-Punkte gefunden
-cmd-insert-point-select-least-two-polylines-before = Wählen Sie mindestens zwei Polylinien aus, bevor Sie Schnittpunkte einfügen
-cmd-insert-point-select-one-more-polylines-before = Wählen Sie eine oder mehrere Polylinien aus, bevor Sie einen Punkt auf Höhenkote einfügen
 cmd-layer-created-layer-name = Ebene '{ $name }' erstellt
 cmd-layer-deleted-with-objects = Ebene { $layer_id } (und alle darauf befindlichen Objekte) gelöscht
 cmd-layer-duplicated-layer-duplicate-name = Ebene '{ $duplicate_name }' dupliziert
@@ -1451,7 +1444,6 @@ properties-zoom-sensitivity = Zoomempfindlichkeit
 reference-points-count-holes-from-dataset = { $count } Bohrlöcher aus '{ $dataset }'
 reference-points-holes-from-datasets = { $count } Bohrlöcher aus { $datasets } Datensätzen
 reference-points-holes = Bohrlöcher
-reference-points-holes-points-placed-selected-when = Die Bohrlöcher, auf denen die Punkte platziert werden, wie beim Öffnen des Dialogs ausgewählt. Schließen Sie den Dialog, um andere auszuwählen.
 reference-points-make = Erstellen
 reference-points-no-categorical-field = Kein kategoriales Feld
 reference-points-no-values = Keine Werte
@@ -1463,7 +1455,6 @@ reference-points-working-section-field = Abbauabschnittsfeld
 reference-surface-controls = Kontrollen
 reference-surface-extent = Ausdehnung
 reference-surface-points-outside-extent-still-shape = Punkte außerhalb der Ausdehnung formen die Oberfläche weiterhin; nur die Oberfläche wird darauf beschnitten.
-reference-surface-points-surface-built-from-selected = Die Punkte, aus denen die Oberfläche erstellt wird, wie beim Öffnen des Dialogs ausgewählt. Schließen Sie den Dialog, um andere auszuwählen.
 reference-surface-triangulates-selected-points-plan-in = Trianguliert die ausgewählten Punkte im Grundriss zu einer neuen Oberfläche. Jeder Aufbau fügt eine Oberfläche hinzu.
 
 ## Screenshot strings
@@ -3783,7 +3774,6 @@ menu-build-solid-surfaces = Körper aus Oberflächen erstellen...
 omf-damaged = Diese Datei ist beschädigt oder kein Incline-Projekt
 omf-optimization-scenarios-unreadable = Die Optimierungsszenarien des Projekts konnten nicht gelesen werden und wurden ausgelassen: { $error }
 reference-surface-extent-help = Die gewählte geschlossene Polylinie, auf die die fertige Oberfläche beschnitten wird; Punkte außerhalb formen die Oberfläche weiterhin.
-reference-surface-selected-open-strings-surface-made = Die gewählten offenen Polylinien, durch die die Oberfläche geführt wird, wie beim Öffnen des Dialogs gewählt. Schließen Sie den Dialog, um andere zu wählen.
 state-click-topology-viewport = Klicken Sie im Viewport auf die Topografie.
 state-count-objects = { $count } Objekt(e)
 state-points-controls-clipped = { $count } Punkt(e) · { $controls } Steuerpolylinie(n) · auf die Begrenzungspolylinie beschnitten

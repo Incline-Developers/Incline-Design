@@ -1465,11 +1465,8 @@ impl TriangulationGpuCache {
             // Selection is represented by the hatching below. A live
             // picker hover temporarily overrides the face colour as well so the
             // candidate remains obvious even when it was already selected.
-            let mut color = if editor.tri_hover_handles.contains(&entity) {
-                YELLOW_HIGHLIGHT_COLOR
-            } else {
-                triangulation.color
-            };
+            let hovered = editor.tri_hover_handles.contains(&entity);
+            let mut color = if hovered { YELLOW_HIGHLIGHT_COLOR } else { triangulation.color };
             if editor.translucent_handles.contains(&entity) {
                 make_translucent(&mut color);
             }
@@ -1511,7 +1508,14 @@ impl TriangulationGpuCache {
             let surface_style = SurfaceStyleUniform {
                 color,
                 params: [
-                    if raster_texture.is_some() { triangulation.raster_opacity.clamp(0.0, 1.0) } else { 0.0 },
+                    // A draped image covers the face colour, so it gives way
+                    // while the surface is a picker's candidate, or the
+                    // highlight would never show.
+                    if raster_texture.is_some() && !hovered {
+                        triangulation.raster_opacity.clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    },
                     if shader_wireframe { edge_width } else { 0.0 },
                     depth_low,
                     depth_high,
@@ -1535,7 +1539,7 @@ impl TriangulationGpuCache {
                     scene_origin.z.rem_euclid(10_000.0) as f32,
                     scene_origin.z.rem_euclid(10.0) as f32,
                     // A hovered picker candidate keeps its yellow untinted.
-                    if selected && !editor.tri_hover_handles.contains(&entity) { SELECTION_TINT } else { 0.0 },
+                    if selected && !hovered { SELECTION_TINT } else { 0.0 },
                 ],
             };
 

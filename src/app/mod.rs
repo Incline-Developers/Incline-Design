@@ -437,9 +437,6 @@ pub(crate) struct App<'a> {
     solid_failures_warned: std::collections::HashSet<(crate::model::SolidId, String)>,
     /// What [`App::sync_page_locks`] last built its sets from.
     page_lock_key: Option<u64>,
-    /// Selection + composite fingerprint behind `EditorState::selection_has_intersections`,
-    /// so the intersection scan only reruns when the selection or the documents change.
-    intersection_availability_key: Option<u64>,
     history: crate::model::History,
     /// Whether the pointer was still driving a widget when the last UI frame
     /// ended. Edits that arrive while it is set belong to an unfinished
@@ -735,7 +732,6 @@ impl<'a> Default for App<'a> {
             layer_lock_key: None,
             solid_failures_warned: Default::default(),
             page_lock_key: None,
-            intersection_availability_key: None,
             history: crate::model::History::new(),
             ui_pointer_gesture_active: false,
             reported_during_gesture: Vec::new(),

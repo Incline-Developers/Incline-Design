@@ -4,12 +4,20 @@
 //! Each opens whatever is selected: on the item when the selection names
 //! exactly one of the right kind, and otherwise empty, for its dialog to
 //! choose. Either way the same code derives what follows from the item.
+//!
+//! The tools that work on a set of design objects or holes are here too.
+//! Those have no names to list, so each opens on what the selection holds of
+//! its kind, empty if nothing, and its dialog's Pick hands the viewport's
+//! selection back until Done, when the same code reads it again.
 
 use crate::{
-    app::App,
+    app::{App, commands::triangulation::reference_surface::surface_input},
     i18n::tr,
-    model::{block_model::BlockModelId, point_cloud::PointCloudId, triangulation::TriangulationId},
-    ui::state::{ToolSubject, TriPolylineClipMode},
+    model::{Axis, ObjectId, SceneEntityId, block_model::BlockModelId, point_cloud::PointCloudId, triangulation::TriangulationId},
+    ui::{
+        dialogs::MoveToAxisDialog,
+        state::{ReferencePointsDraft, ReferenceSurfaceDraft, SelectionPick, SelectionPickTool, ToolSubject, TriCreatePhase, TriPolylineClipMode},
+    },
 };
 
 /// The one item of a selection, when it holds exactly one.
@@ -213,5 +221,189 @@ impl App<'_> {
             .map(|cloud| (cloud.id, (cloud.bounds.1 - cloud.bounds.0).truncate()))
             .collect();
         self.editor.point_cloud_classify_sources = sources;
+    }
+
+    /// Hide `tool`'s dialog and let the viewport select its input. The
+    /// selection carries on from what the tool holds, which is what is
+    /// selected already: nothing else could select while its dialog was up.
+    pub(crate) fn begin_selection_pick(&mut self, tool: SelectionPickTool) {
+        self.editor.cancel_triangulation_pick();
+        self.editor.selection_pick = Some(SelectionPick {
+            tool,
+            handles_before: self.editor.selected_handles.clone(),
+            holes_before: self.editor.selected_drill_holes.clone(),
+        });
+        self.invalidate_geometry();
+    }
+
+    /// Done: the tool reads the selection again, as it did when it opened.
+    pub(crate) fn finish_selection_pick(&mut self) {
+        let Some(pick) = self.editor.selection_pick.take() else {
+            return;
+        };
+        match pick.tool {
+            SelectionPickTool::SetAxis => {
+                if let Some(axis) = self.editor.move_to_axis_dialog.as_ref().map(|dialog| dialog.axis) {
+                    self.open_move_to_axis(axis);
+                }
+            }
+            SelectionPickTool::InsertAtElevation => self.open_insert_point_at_elevation_dialog(),
+            SelectionPickTool::InsertAtIntersection => self.insert_points_at_selected_intersections(),
+            SelectionPickTool::CreateTriangulation => self.take_triangulation_sources(),
+            SelectionPickTool::ReferencePoints => self.open_reference_points(),
+            SelectionPickTool::ReferenceSurface => self.open_reference_surface(),
+        }
+        self.invalidate_geometry();
+    }
+
+    /// Put the pick down: the selection goes back to what it started from,
+    /// and the tool keeps what it had.
+    pub(crate) fn cancel_selection_pick(&mut self) {
+        let Some(pick) = self.editor.selection_pick.take() else {
+            return;
+        };
+        self.editor.selected_handles = pick.handles_before;
+        self.editor.selected_drill_holes = pick.holes_before;
+        self.invalidate_geometry();
+    }
+
+    pub(crate) fn clear_selection_pick(&mut self) {
+        if self.editor.selection_pick.is_none() {
+            return;
+        }
+        self.editor.selected_handles.clear();
+        self.editor.selected_drill_holes.clear();
+        self.active_triangulation = None;
+        self.invalidate_geometry();
+    }
+
+    /// Open Set X/Y/Z on the selected objects, or point the open dialog at
+    /// them, keeping the value it already holds.
+    pub(crate) fn open_move_to_axis(&mut self, axis: Axis) {
+        let object_ids: Vec<ObjectId> = self
+            .editor
+            .selected_handles
+            .iter()
+            .filter_map(|&handle| match handle {
+                SceneEntityId::Object(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+        // A value typed over an empty set was typed blind, so only one that
+        // had objects under it is kept.
+        let held = self
+            .editor
+            .move_to_axis_dialog
+            .as_ref()
+            .filter(|dialog| dialog.axis == axis && !dialog.object_ids.is_empty())
+            .map(|dialog| dialog.value);
+        // Seed Z from the toolbar plane, X and Y from the first selected object.
+        let value = held.unwrap_or_else(|| {
+            if axis == Axis::Z {
+                self.editor.z_input
+            } else {
+                object_ids
+                    .first()
+                    .and_then(|id| self.workspace.active_project()?.project.document.get_object(*id))
+                    .map_or(0.0, |object| object.axis_position(axis))
+            }
+        });
+        self.editor.move_to_axis_dialog = Some(MoveToAxisDialog { object_ids, axis, value });
+    }
+
+    /// Open Create Triangulation on the selected objects that can contribute
+    /// an edge, or on none, for its Pick to fill.
+    pub(crate) fn open_create_triangulation(&mut self) {
+        self.editor.tri_create_open = true;
+        self.editor.tri_create_phase = TriCreatePhase::MainDialog;
+        self.editor.tri_selected_layer_ids.clear();
+        self.editor.tri_name_input = tr!("tri-type-open-surface");
+        self.editor.tri_hover_handles.clear();
+        self.take_triangulation_sources();
+    }
+
+    /// Objects that cannot contribute an edge are dropped from the selection
+    /// as well as from the tool's list, keeping the viewport highlight and
+    /// the dialog's count in agreement.
+    fn take_triangulation_sources(&mut self) {
+        let object_ids = self.selected_triangulation_sources();
+        self.editor.selected_handles = object_ids.iter().map(|&object_id| SceneEntityId::Object(object_id)).collect();
+        self.editor.tri_selected_object_ids = object_ids;
+    }
+
+    /// Open Reference Points on the selected holes, or point the open dialog
+    /// at them. Both ways of naming holes feed it: a collection taken whole,
+    /// and holes picked one at a time.
+    pub(crate) fn open_reference_points(&mut self) {
+        let mut holes = Vec::new();
+        self.for_each_reference_hole(|hole| holes.push(hole));
+        // The selection is two unordered sets; sorting here keeps the
+        // layer's points and the flagged list in a settled order.
+        holes.sort_unstable_by_key(|hole| (hole.dataset.0, hole.hole));
+        match self.editor.reference_points_dialog.as_mut() {
+            Some(draft) => draft.holes = holes,
+            None => self.editor.reference_points_dialog = Some(ReferencePointsDraft { holes, ..Default::default() }),
+        }
+    }
+
+    /// Open Build Surface on the selection, or point the open dialog at it.
+    /// Its inputs are of different kinds, so one selection names them all
+    /// without anything having to say which is which.
+    pub(crate) fn open_reference_surface(&mut self) {
+        let input = surface_input(&self.scene_document, &self.editor.selected_handles);
+        let layer_name = |id| self.scene_document.layer(id).map(|layer| layer.name.clone()).unwrap_or_default();
+        let points_label = match input.layers.as_slice() {
+            [] => tr!("reference-surface-no-points"),
+            [layer] => tr!(
+                "cmd-commands-count-point-s-layer",
+                count = input.points.len().to_string(),
+                layer = layer_name(*layer).to_string()
+            ),
+            layers => tr!(
+                "cmd-commands-count-point-s-across-layers",
+                count = input.points.len().to_string(),
+                layers = layers.len().to_string()
+            ),
+        };
+        let extent_label = match input.extents.as_slice() {
+            [] => tr!("cmd-commands-no-extent"),
+            [id] => self
+                .scene_document
+                .get_object(*id)
+                .map(|object| {
+                    tr!(
+                        "cmd-commands-kind-layer",
+                        kind = object.kind_name().to_string(),
+                        layer = layer_name(object.layer()).to_string()
+                    )
+                })
+                .unwrap_or_else(|| tr!("cmd-commands-no-extent")),
+            extents => tr!("reference-surface-count-closed-polylines", count = extents.len().to_string()),
+        };
+        let controls_label = match input.controls.len() {
+            0 => tr!("cmd-commands-no-control-strings"),
+            count => {
+                let mut control_layers = input.controls.iter().map(|id| self.scene_document.get_object(*id).map(|object| object.layer()));
+                match control_layers.next().flatten() {
+                    Some(layer) if control_layers.all(|other| other == Some(layer)) => {
+                        tr!(
+                            "cmd-commands-count-control-string-s-layer",
+                            count = count.to_string(),
+                            layer = layer_name(layer).to_string()
+                        )
+                    }
+                    _ => tr!("cmd-commands-count-control-string-s", count = count.to_string()),
+                }
+            }
+        };
+        self.editor.reference_surface_dialog = Some(ReferenceSurfaceDraft {
+            problem: input.problem(),
+            extent: only(&input.extents),
+            points: input.points,
+            controls: input.controls,
+            points_label,
+            controls_label,
+            extent_label,
+        });
     }
 }

@@ -21,7 +21,7 @@ use crate::ui::{
 };
 use crate::{
     i18n::tr,
-    model::{Axis, SceneEntityId},
+    model::Axis,
     ui::{
         EditorState, UiCommand, UiProjectView,
         elements::title_bar,
@@ -667,21 +667,17 @@ impl MenuRow {
         }
     }
 
-    /// Whether the row can run. Most rows run on the scene selection they are
-    /// opened with: the selection names what the tool acts on, and anything
-    /// further it needs is picked in its dialog. The tools taking two
-    /// surfaces cannot tell one selected surface from the other, so they pick
-    /// both in the dialog and are always on.
-    pub(crate) fn enabled(self, editor: &EditorState, project: &UiProjectView) -> bool {
-        let counts = &editor.selection_counts;
+    /// Whether the row can run. No row waits on the selection: a tool opens
+    /// on whatever is selected of the kind it works on, and what it works on
+    /// is chosen or changed in its dialog.
+    pub(crate) fn enabled(self, project: &UiProjectView) -> bool {
         match self {
-            // Needs two or more crossing polylines to insert anything.
-            Self::InsertAtIntersection => editor.selection_has_intersections,
-            Self::InsertAtElevation => editor.selection_has_polylines,
-            Self::SetAxis(_) => editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
-            // Only objects that can contribute an edge count towards it.
-            Self::CreateTriangulation => counts.triangulation_sources > 0,
-            // Clipping picks the polyline it clips against in its dialog.
+            // These work on a set of design objects or holes, which their
+            // dialog states and changes with Pick. Insert at Intersection has
+            // no dialog, and opens straight into the pick when the selection
+            // has nothing to cross.
+            Self::InsertAtIntersection | Self::InsertAtElevation | Self::SetAxis(_) | Self::CreateTriangulation | Self::ReferencePoints | Self::ReferenceSurface => true,
+            // The tools taking two surfaces pick both in their dialog.
             Self::TrimTopology | Self::CutTopologyByPitShell | Self::MergeShellIntoTopology | Self::BuildSolidFromSurfaces | Self::PitOptimization | Self::SurveyDefinitions => {
                 true
             }
@@ -689,14 +685,7 @@ impl MenuRow {
             // These work on one named item, which their dialog lists: the
             // selection only saves choosing it there.
             Self::ClipSurfaceByPolyline | Self::SliceSurfaceByZ | Self::GenerateContours | Self::PointCloudTin | Self::PointCloudJoin | Self::PointCloudClassify => true,
-            Self::CreateOreTriangulation | Self::CreateBlockModel => project.has_active_project,
-            // Placed on the holes selected at open.
-            Self::ReferencePoints => counts.reference_holes > 0,
-            // Built from the points that are selected when it opens.
-            Self::ReferenceSurface => counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS,
-            Self::SurveyTransform => project.has_active_project,
-            // One cloud is reconstructed at a time, a join needs two or more
-            // to join, and classifying takes any number.
+            Self::CreateOreTriangulation | Self::CreateBlockModel | Self::SurveyTransform => project.has_active_project,
         }
     }
 
@@ -784,7 +773,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         // Every row is noted as it is run, for the workspace's recent
         // functions list.
         let draw_row = |ui: &mut egui::Ui, row: MenuRow, commands: &mut Vec<UiCommand>| {
-            if ContextMenuAction::new(row.label()).enabled(row.enabled(editor, project)).show(ui).clicked() {
+            if ContextMenuAction::new(row.label()).enabled(row.enabled(project)).show(ui).clicked() {
                 commands.push(row.command());
                 commands.push(UiCommand::NoteRecentFunction(row));
                 ui.close();
@@ -798,7 +787,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     }
                     match group.submenu {
                         Some(title) => {
-                            let enabled = group.rows.iter().any(|row| row.enabled(editor, project));
+                            let enabled = group.rows.iter().any(|row| row.enabled(project));
                             context_submenu(ui, &title.label(), enabled, |ui| group.rows.iter().for_each(|row| draw_row(ui, *row, commands)));
                         }
                         None => group.rows.iter().for_each(|row| draw_row(ui, *row, commands)),

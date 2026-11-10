@@ -23,6 +23,7 @@ pub(crate) mod reference_points;
 pub(crate) mod reference_surface;
 pub(crate) mod reserve_fields;
 pub(crate) mod schedule;
+pub(crate) mod selection_pick;
 pub(crate) mod sequence_editor;
 pub(crate) mod solids;
 pub(crate) mod survey;

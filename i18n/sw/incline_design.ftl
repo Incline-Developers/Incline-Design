@@ -74,7 +74,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = Unda Mtandao wa pembetatu
-tri-create-help = Inatatua vitu vilivyochaguliwa wakati dirisha hili lilipofunguliwa. Lifunge ili kubadilisha uteuzi.
 tri-create-type-label = Aina ya mtandao wa pembetatu
 tri-create-type-help =
     Uso wazi huunda karatasi ya mtindo wa ardhi. Kigumu huunda mfumo
@@ -82,7 +81,6 @@ tri-create-type-help =
 tri-create-output-name = Jina la matokeo
 tri-create-output-name-hint = jina la mtandao wa pembetatu
 tri-create-run = Tatua (Triangulate)
-tri-selection-none = Vitu vilivyochaguliwa havipatikani tena.
 
 tri-selection-selected = { $summary } vimechaguliwa
 
@@ -370,9 +368,6 @@ cmd-commands-count-point-s-across-layers = vidokezo { $count } katika tabaka { $
 cmd-commands-count-point-s-layer = vidokezo { $count } kwenye '{ $layer }'
 cmd-commands-kind-layer = { $kind } kwenye '{ $layer }'
 cmd-commands-no-extent = Hakuna wigo
-cmd-commands-select-holes-place-reference-points = Chagua mashimo ya kuwekea vidokezo vya marejeo
-cmd-triangulate-needs-selection = Chagua vitu vya kutatua kabla ya kuendesha Unda Mtandao wa pembetatu
-cmd-commands-select-one-more-objects-before = Chagua kitu kimoja au zaidi kabla ya kuweka { $axis }
 cmd-contours-contour-generation-failed-error = Uzalishaji wa mistari ya mwinuko umeshindwa: { $error }
 cmd-contours-discarded-layer-exists = Mistari ya mwinuko ya '{ $name }' imeondolewa: tabaka '{ $layer_name }' sasa lipo
 cmd-contours-discarded-project-closed = Mistari ya mwinuko ya '{ $name }' imeondolewa: mradi umefungwa
@@ -507,8 +502,6 @@ cmd-insert-point-insert-points = Ingiza Vidokezo
 cmd-insert-point-inserted-count-operation-point-s = Vidokezo { $count } vya { $operation } vimeingizwa
 cmd-insert-point-intersection = Makutano
 cmd-insert-point-no-new-operation-points-were = Hakuna vidokezo vipya vya { $operation } vilivyopatikana
-cmd-insert-point-select-least-two-polylines-before = Chagua angalau mistari miwili ya pointi nyingi kabla ya kuingiza vidokezo vya makutano
-cmd-insert-point-select-one-more-polylines-before = Chagua mstari mmoja au zaidi wa pointi nyingi kabla ya kuingiza kidokezo kwenye kimo
 cmd-layer-created-layer-name = Umeunda tabaka '{ $name }'
 cmd-layer-deleted-with-objects = Tabaka { $layer_id } limefutwa (pamoja na vitu vyote vilivyomo)
 cmd-layer-duplicated-layer-duplicate-name = Umenakili tabaka '{ $duplicate_name }'
@@ -1442,7 +1435,6 @@ properties-zoom-sensitivity = Uelekevu wa kukuza
 reference-points-count-holes-from-dataset = mashimo { $count } kutoka '{ $dataset }'
 reference-points-holes-from-datasets = mashimo { $count } kutoka seti { $datasets } za data
 reference-points-holes = Mashimo
-reference-points-holes-points-placed-selected-when = Mashimo ambayo vidokezo vimewekwa juu yake, kama yalivyochaguliwa dirisha lilipofunguliwa. Funga dirisha ili kuchagua tofauti.
 reference-points-make = Tengeneza
 reference-points-no-categorical-field = Hakuna sehemu ya kategoria
 reference-points-no-values = Hakuna thamani
@@ -1454,7 +1446,6 @@ reference-points-working-section-field = Sehemu ya sehemu ya kazi
 reference-surface-controls = Vidhibiti
 reference-surface-extent = Wigo
 reference-surface-points-outside-extent-still-shape = Vidokezo vilivyo nje ya wigo bado huumba uso; uso pekee ndio hukatwa kwa wigo.
-reference-surface-points-surface-built-from-selected = Vidokezo ambavyo uso unajengwa kutoka kwavyo, kama vilivyochaguliwa dirisha lilipofunguliwa. Funga dirisha ili kuchagua tofauti.
 reference-surface-triangulates-selected-points-plan-in = Hutatua vidokezo vilivyochaguliwa kwenye mpango kuwa uso mpya. Kila ujenzi huongeza uso.
 
 ## Screenshot strings
@@ -3774,7 +3765,6 @@ menu-build-solid-surfaces = Jenga Kigumu kutoka kwenye Nyuso...
 omf-damaged = Faili hii imeharibika au si mradi wa Incline
 omf-optimization-scenarios-unreadable = Hali za uboreshaji za mradi hazikuweza kusomwa na ziliachwa nje: { $error }
 reference-surface-extent-help = Mstari wa pointi nyingi uliofungwa uliochaguliwa ambao uso uliokamilika unakatwa kwa mipaka yake; vidokezo vilivyo nje yake bado vinaumba uso.
-reference-surface-selected-open-strings-surface-made = Mistari ya pointi nyingi iliyo wazi iliyochaguliwa ambayo uso unatengenezwa kupita kwayo, kama ilivyochaguliwa kisanduku kilipofunguliwa. Funga kisanduku ili kuchagua mingine.
 state-click-topology-viewport = Bofya topografia kwenye mwonekano.
 state-count-objects = kitu/vitu { $count }
 state-points-controls-clipped = kidokezo/vidokezo { $count } · mstari/mistari { $controls } ya udhibiti · imekatwa kwa mstari wa mipaka

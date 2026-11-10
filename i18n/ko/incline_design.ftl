@@ -80,7 +80,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = 삼각망 생성
-tri-create-help = 이 대화상자를 열 때 선택한 객체를 삼각화합니다. 선택을 변경하려면 대화상자를 닫으세요.
 tri-create-type-label = 삼각망 유형
 tri-create-type-help =
     개방형 표면은 지형 형태의 표면을 생성합니다. 솔리드는 완전히 밀폐된
@@ -88,7 +87,6 @@ tri-create-type-help =
 tri-create-output-name = 출력 이름
 tri-create-output-name-hint = 삼각망 이름
 tri-create-run = 삼각망 생성
-tri-selection-none = 선택한 객체를 더 이상 사용할 수 없습니다.
 
 tri-selection-selected = { $summary } 선택됨
 
@@ -372,9 +370,6 @@ cmd-commands-count-point-s-across-layers = 레이어 { $layers }개에 걸친 �
 cmd-commands-count-point-s-layer = '{ $layer }'의 점 { $count }개
 cmd-commands-kind-layer = '{ $layer }'의 { $kind }
 cmd-commands-no-extent = 범위 없음
-cmd-commands-select-holes-place-reference-points = 기준점을 배치할 시추공을 선택하세요
-cmd-triangulate-needs-selection = 삼각망 생성을 실행하기 전에 삼각화할 객체를 선택하세요
-cmd-commands-select-one-more-objects-before = { $axis }을(를) 설정하기 전에 객체를 하나 이상 선택하세요
 cmd-contours-contour-generation-failed-error = 등고선 생성 실패: { $error }
 cmd-contours-discarded-layer-exists = '{ $name }'의 등고선이 취소되었습니다: 레이어 '{ $layer_name }'이(가) 이제 존재합니다
 cmd-contours-discarded-project-closed = '{ $name }'의 등고선이 취소되었습니다: 프로젝트가 닫혔습니다
@@ -509,8 +504,6 @@ cmd-insert-point-insert-points = 점 삽입
 cmd-insert-point-inserted-count-operation-point-s = { $operation } 점 { $count }개를 삽입했습니다
 cmd-insert-point-intersection = 교차점
 cmd-insert-point-no-new-operation-points-were = 새로운 { $operation } 점을 찾지 못했습니다
-cmd-insert-point-select-least-two-polylines-before = 교차점을 삽입하기 전에 폴리라인을 최소 두 개 선택하세요
-cmd-insert-point-select-one-more-polylines-before = 표고에 점을 삽입하기 전에 폴리라인을 하나 이상 선택하세요
 cmd-layer-created-layer-name = 레이어 '{ $name }'을(를) 생성했습니다
 cmd-layer-deleted-with-objects = 레이어 { $layer_id }(및 그 안의 모든 객체)를 삭제했습니다
 cmd-layer-duplicated-layer-duplicate-name = 레이어 '{ $duplicate_name }'을(를) 복제했습니다
@@ -1444,7 +1437,6 @@ properties-zoom-sensitivity = 확대/축소 감도
 reference-points-count-holes-from-dataset = '{ $dataset }'의 시추공 { $count }개
 reference-points-holes-from-datasets = 데이터 세트 { $datasets }개의 시추공 { $count }개
 reference-points-holes = 시추공
-reference-points-holes-points-placed-selected-when = 점을 배치할 시추공으로, 대화상자를 열 때 선택한 항목입니다. 다른 시추공을 선택하려면 대화상자를 닫으세요.
 reference-points-make = 생성
 reference-points-no-categorical-field = 범주형 필드 없음
 reference-points-no-values = 값 없음
@@ -1456,7 +1448,6 @@ reference-points-working-section-field = 작업 구간 필드
 reference-surface-controls = 제어선
 reference-surface-extent = 범위
 reference-surface-points-outside-extent-still-shape = 범위 밖의 점도 표면 형태에 영향을 주며, 표면만 범위에 맞춰 클립됩니다.
-reference-surface-points-surface-built-from-selected = 표면을 만드는 데 사용할 점으로, 대화상자를 열 때 선택한 항목입니다. 다른 점을 선택하려면 대화상자를 닫으세요.
 reference-surface-triangulates-selected-points-plan-in = 선택한 점을 평면상에서 삼각화하여 새 표면을 만듭니다. 실행할 때마다 표면이 추가됩니다.
 
 ## Screenshot strings
@@ -3776,7 +3767,6 @@ menu-build-solid-surfaces = 표면으로 솔리드 생성...
 omf-damaged = 이 파일이 손상되었거나 Incline 프로젝트가 아닙니다
 omf-optimization-scenarios-unreadable = 프로젝트의 최적화 시나리오를 읽을 수 없어 제외했습니다: { $error }
 reference-surface-extent-help = 완성된 표면을 잘라낼 때 기준이 되는, 선택한 닫힌 폴리라인입니다. 바깥의 점도 여전히 표면 형상에 영향을 줍니다.
-reference-surface-selected-open-strings-surface-made = 표면이 통과하도록 만들어지는, 대화상자를 열 때 선택한 열린 폴리라인입니다. 다른 것을 선택하려면 대화상자를 닫으세요.
 state-click-topology-viewport = 뷰포트에서 지형을 클릭하세요.
 state-count-objects = 객체 { $count }개
 state-points-controls-clipped = 점 { $count }개 · 제어 폴리라인 { $controls }개 · 범위 폴리라인으로 클립됨

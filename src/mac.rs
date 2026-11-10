@@ -442,7 +442,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     let state = MenuState {
         can_save: project.projects.iter().any(crate::ui::state::UiProjectEntry::needs_save),
         has_project: project.projects.iter().any(|entry| entry.is_active),
-        menu_rows: MenuRow::all().map(|row| row.enabled(editor, project)).collect(),
+        menu_rows: MenuRow::all().map(|row| row.enabled(project)).collect(),
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
         view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),

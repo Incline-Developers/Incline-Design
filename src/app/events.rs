@@ -257,7 +257,6 @@ impl<'a> App<'a> {
                     // This event satisfies any queued redraw request, including
                     // redraws generated directly by the compositor during resize.
                     self.redraw_requested = false;
-                    self.refresh_intersection_availability();
                     self.refresh_selection_counts();
                     self.refresh_tie_preview();
                     self.refresh_blast_round();
@@ -1274,7 +1273,7 @@ impl<'a> App<'a> {
             } else if is_quick_press && self.editor.active_tool != ActiveTool::None {
                 self.cancel_active_tool();
                 self.redraw_requested = true;
-            } else if is_quick_press && self.editor.active_tool == ActiveTool::None && !self.editor.selection_locked_by_tool() {
+            } else if is_quick_press && self.editor.active_tool == ActiveTool::None && !self.editor.selection_locked_by_tool() && self.editor.selection_pick.is_none() {
                 let frozen = &self.editor.pick_frozen;
                 let picked = self.graphics.as_ref().and_then(|g| {
                     g.pick_scene_entity_at_cursor(

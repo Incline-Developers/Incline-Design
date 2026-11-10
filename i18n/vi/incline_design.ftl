@@ -82,7 +82,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = Tạo lưới tam giác
-tri-create-help = Tạo lưới tam giác từ các đối tượng đã chọn khi hộp thoại này được mở. Đóng hộp thoại để thay đổi vùng chọn.
 tri-create-type-label = Loại lưới tam giác
 tri-create-type-help =
     Mặt hở tạo ra một tấm bề mặt kiểu địa hình. Khối đặc tạo ra một lưới
@@ -90,7 +89,6 @@ tri-create-type-help =
 tri-create-output-name = Tên đầu ra
 tri-create-output-name-hint = tên lưới tam giác
 tri-create-run = Tạo lưới tam giác
-tri-selection-none = Các đối tượng đã chọn không còn khả dụng.
 
 tri-selection-selected = Đã chọn { $summary }
 
@@ -365,9 +363,6 @@ cmd-commands-count-point-s-across-layers = { $count } điểm trên { $layers } 
 cmd-commands-count-point-s-layer = { $count } điểm trên '{ $layer }'
 cmd-commands-kind-layer = { $kind } trên '{ $layer }'
 cmd-commands-no-extent = Không có phạm vi
-cmd-commands-select-holes-place-reference-points = Chọn các lỗ khoan để đặt điểm tham chiếu
-cmd-triangulate-needs-selection = Chọn các đối tượng cần tạo lưới tam giác trước khi chạy Tạo lưới tam giác
-cmd-commands-select-one-more-objects-before = Chọn một hoặc nhiều đối tượng trước khi đặt { $axis }
 cmd-contours-contour-generation-failed-error = Tạo đường đồng mức thất bại: { $error }
 cmd-contours-discarded-layer-exists = Đường đồng mức cho '{ $name }' đã bị bỏ qua: lớp '{ $layer_name }' hiện đã tồn tại
 cmd-contours-discarded-project-closed = Đường đồng mức cho '{ $name }' đã bị bỏ qua: dự án đã đóng
@@ -502,8 +497,6 @@ cmd-insert-point-insert-points = Chèn điểm
 cmd-insert-point-inserted-count-operation-point-s = Đã chèn { $count } điểm { $operation }
 cmd-insert-point-intersection = Giao điểm
 cmd-insert-point-no-new-operation-points-were = Không tìm thấy điểm { $operation } mới nào
-cmd-insert-point-select-least-two-polylines-before = Chọn ít nhất hai đường đa tuyến trước khi chèn điểm giao
-cmd-insert-point-select-one-more-polylines-before = Chọn một hoặc nhiều đường đa tuyến trước khi chèn điểm tại cao độ
 cmd-layer-created-layer-name = Đã tạo lớp '{ $name }'
 cmd-layer-deleted-with-objects = Đã xóa lớp { $layer_id } (và tất cả đối tượng trên đó)
 cmd-layer-duplicated-layer-duplicate-name = Đã nhân bản lớp '{ $duplicate_name }'
@@ -1437,7 +1430,6 @@ properties-zoom-sensitivity = Độ nhạy thu phóng
 reference-points-count-holes-from-dataset = { $count } lỗ khoan từ '{ $dataset }'
 reference-points-holes-from-datasets = { $count } lỗ khoan từ { $datasets } bộ dữ liệu
 reference-points-holes = Lỗ khoan
-reference-points-holes-points-placed-selected-when = Các lỗ khoan mà điểm được đặt lên, như đã chọn khi hộp thoại mở. Đóng hộp thoại để chọn lỗ khác.
 reference-points-make = Tạo
 reference-points-no-categorical-field = Không có trường phân loại
 reference-points-no-values = Không có giá trị
@@ -1449,7 +1441,6 @@ reference-points-working-section-field = Trường phân đoạn làm việc
 reference-surface-controls = Điều khiển
 reference-surface-extent = Phạm vi
 reference-surface-points-outside-extent-still-shape = Các điểm nằm ngoài phạm vi vẫn định hình bề mặt; chỉ bề mặt bị cắt theo phạm vi.
-reference-surface-points-surface-built-from-selected = Các điểm dùng để dựng bề mặt, như đã chọn khi hộp thoại mở. Đóng hộp thoại để chọn điểm khác.
 reference-surface-triangulates-selected-points-plan-in = Tạo lưới tam giác từ các điểm đã chọn trong mặt bằng thành một bề mặt mới. Mỗi lần dựng thêm một bề mặt.
 
 ## Screenshot strings
@@ -3769,7 +3760,6 @@ menu-build-solid-surfaces = Dựng khối đặc từ các mặt...
 omf-damaged = Tệp này bị hỏng hoặc không phải dự án Incline
 omf-optimization-scenarios-unreadable = Không đọc được các kịch bản tối ưu hóa của dự án nên đã bỏ chúng ra: { $error }
 reference-surface-extent-help = Đường đa tuyến khép kín đã chọn mà mặt hoàn thiện được xén theo; các điểm bên ngoài nó vẫn định hình mặt.
-reference-surface-selected-open-strings-surface-made = Các đường đa tuyến hở đã chọn mà mặt được tạo để đi qua, như đã chọn khi hộp thoại mở. Hãy đóng hộp thoại để chọn những đường khác.
 state-click-topology-viewport = Nhấp vào địa hình trong khung nhìn.
 state-count-objects = { $count } đối tượng
 state-points-controls-clipped = { $count } điểm · { $controls } đường đa tuyến điều khiển · đã xén theo đường đa tuyến phạm vi

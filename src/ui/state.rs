@@ -421,12 +421,17 @@ impl EditorState {
     /// These tools read the selection once, as they open, so the viewport and
     /// the explorer tree both stop taking selection while one is up: a click
     /// that appeared to add or drop an input would not reach the run. What
-    /// the tool works on is changed in its dialog instead (a list, or a field
-    /// pick in the viewport, which is not a selection). Create Triangulation
-    /// and the reference tools work on design objects, which have no names
-    /// to list, so those still mean closing, selecting and reopening.
+    /// the tool works on is changed in its dialog instead: a list, a field
+    /// pick in the viewport (which is not a selection), or, for the tools
+    /// working on design objects and holes, its Pick button, which hands the
+    /// selection back for as long as [`SelectionPick`] is up.
     pub(crate) fn selection_locked_by_tool(&self) -> bool {
+        if self.selection_pick.is_some() {
+            return false;
+        }
         self.tri_create_open
+            || self.move_to_axis_dialog.is_some()
+            || self.insert_point_at_elevation_dialog.is_some()
             || self.tri_cut_poly_open
             || self.tri_cut_z_open
             || self.tri_contour_open
@@ -1100,14 +1105,15 @@ pub(crate) enum ContourOutputLayer {
 
 /// What the current scene selection offers the tools that run on it.
 ///
-/// Create Triangulation, the terrain tools, the point-cloud tools and the
-/// estimation tools act on whatever was selected when they were opened, so
-/// their menu entries have to know every frame whether the selection can feed
-/// them. Counting here rather
-/// than at each menu keeps the document out of the menu code and the scan off
-/// the frame: `App::refresh_selection_counts` fills this in once.
+/// Counting here rather than where it is shown keeps the document out of the
+/// UI code and the scan off the frame: `App::refresh_selection_counts` fills
+/// this in once.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SelectionCounts {
+    /// Selected design objects of any kind.
+    pub(crate) objects: usize,
+    /// Selected polylines; circles are not among them.
+    pub(crate) polylines: usize,
     /// Selected design objects able to contribute an edge to a triangulation.
     pub(crate) triangulation_sources: usize,
     /// Selected design points, which a surface can be triangulated from.
@@ -1124,6 +1130,31 @@ pub(crate) struct SelectionCounts {
     pub(crate) reference_holes: usize,
     /// Selected block models that are loaded, and so have blocks to work on.
     pub(crate) block_models: usize,
+}
+
+/// The tools that work on a set of design objects or holes, which have no
+/// names to list: their dialogs state the set and change it with Pick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SelectionPickTool {
+    SetAxis,
+    InsertAtElevation,
+    /// Has no dialog: opens straight into the pick when the selection holds
+    /// too little to run on, and runs on Done.
+    InsertAtIntersection,
+    CreateTriangulation,
+    ReferencePoints,
+    ReferenceSurface,
+}
+
+/// A tool's Pick in progress. Its dialog is hidden and the viewport selects
+/// again, a click adding or dropping one item and a box adding what it
+/// takes; Done hands the selection to the tool, and cancelling puts back the
+/// selection the pick started from.
+#[derive(Clone, Debug)]
+pub(crate) struct SelectionPick {
+    pub(crate) tool: SelectionPickTool,
+    pub(crate) handles_before: HashSet<SceneEntityId>,
+    pub(crate) holes_before: HashSet<DrillHoleRef>,
 }
 
 /// A triangulation tool's input temporarily being filled from a viewport
@@ -2383,17 +2414,13 @@ pub(crate) struct EditorState {
     pub(crate) design_line_weight_input: Option<(Vec<ObjectId>, f32)>,
     pub(crate) move_to_layer_dialog: Option<MoveToLayerDialog>,
     pub(crate) move_to_axis_dialog: Option<crate::ui::dialogs::MoveToAxisDialog>,
-    /// Whether the selected polylines cross anywhere, refreshed by
-    /// `App::refresh_intersection_availability` before each frame's UI. Gates
-    /// Design > Insert Point > At intersection.
-    pub(crate) selection_has_intersections: bool,
-    /// Whether Insert Point has a selected polyline to act on; circles are excluded.
-    pub(crate) selection_has_polylines: bool,
     /// How much of the scene selection each selection-driven tool can act on,
     /// refreshed by `App::refresh_selection_counts` before each frame's UI.
-    /// The menus decide their own availability from this, and never see the
-    /// document the counts are derived from.
+    /// The pick prompt reports from this, and never sees the document the
+    /// counts are derived from.
     pub(crate) selection_counts: SelectionCounts,
+    /// A tool's Pick is up: the viewport selects for that tool until Done.
+    pub(crate) selection_pick: Option<SelectionPick>,
     pub(crate) insert_point_at_elevation_dialog: Option<crate::ui::dialogs::InsertPointAtElevationDialog>,
     /// The "Edit Object" dialog, holding a working copy of one design object
     /// until Apply or OK hands it back to the document.
@@ -3619,6 +3646,7 @@ impl EditorState {
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
     fn dialog_owns_both_keys(&self) -> bool {
         self.alerts.is_showing()
+            || self.selection_pick.is_some()
             || self.copy_cuts_dialog.is_some()
             || self.grid_dialog.is_some()
             || self.exit_confirm_open
@@ -3985,6 +4013,7 @@ impl EditorState {
         self.tri_create_diagnostic_markers_screen_px.clear();
         self.tri_create_diagnostic_segments_screen_px.clear();
         self.triangulation_pick_target = None;
+        self.selection_pick = None;
         self.viewport_pick_hover_label = None;
         self.tri_cut_poly_open = false;
         self.tri_cut_poly_object_id = None;
@@ -4195,9 +4224,8 @@ impl EditorState {
             design_line_weight_input: None,
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
-            selection_has_intersections: false,
-            selection_has_polylines: false,
             selection_counts: SelectionCounts::default(),
+            selection_pick: None,
             insert_point_at_elevation_dialog: None,
             object_edit_dialog: None,
             xray_enabled: false,
@@ -5698,6 +5726,14 @@ pub(crate) enum UiCommand {
     NoteRecentFunction(MenuRow),
     /// Point an open tool at the item chosen in its dialog.
     SetToolSubject(ToolSubject),
+    /// Hide a tool's dialog and select its input in the viewport.
+    BeginSelectionPick(SelectionPickTool),
+    /// Hand the picked selection to the tool.
+    FinishSelectionPick,
+    /// Put the pick down and the selection back as it was.
+    CancelSelectionPick,
+    /// Empty the selection being picked.
+    ClearSelectionPick,
     LoadTriangulation(TriangulationId),
     LoadBlockModel(BlockModelId),
     CloseBlockModel(BlockModelId),
@@ -6122,6 +6158,10 @@ impl UiCommand {
             | Self::CloseCanvasContextMenu
             | Self::NoteRecentFunction(_)
             | Self::SetToolSubject(_)
+            | Self::BeginSelectionPick(_)
+            | Self::FinishSelectionPick
+            | Self::CancelSelectionPick
+            | Self::ClearSelectionPick
             | Self::OpenOptimizationScenarios
             | Self::AddOptimizationScenario
             | Self::EditOptimizationScenario(_)
@@ -9511,28 +9551,30 @@ pub(crate) enum DataMenu {
 /// open strings the surface passes through, the one closed string clipping
 /// them, and the text it reports each as.
 ///
-/// Snapshotted when the command opens and never re-derived: the viewport and
-/// the tree stop taking selection while it is up, so what the dialog reports
-/// is what the build runs on. `None` extent means the whole triangulation.
+/// Read from the selection when the command opens and again when its Pick
+/// is done: the viewport and the tree stop taking selection otherwise, so
+/// what the dialog reports is what the build runs on. `None` extent means
+/// the whole triangulation.
 #[derive(Clone, Debug)]
 pub(crate) struct ReferenceSurfaceDraft {
     pub(crate) points: Vec<ObjectId>,
     pub(crate) controls: Vec<ObjectId>,
     pub(crate) extent: Option<ObjectId>,
-    /// Rendered at open time rather than each frame, the same as the other
-    /// select-first tools' input labels.
+    /// Rendered when the selection is read rather than each frame.
     pub(crate) points_label: String,
     pub(crate) controls_label: String,
     pub(crate) extent_label: String,
+    /// Why this selection cannot be built from, if it cannot.
+    pub(crate) problem: Option<String>,
 }
 
 /// What the reference points dialog holds while open: the holes it was
 /// opened on, the categorical field standing in for the working section, its
 /// value, and the side. Transient, like every dialog draft.
 ///
-/// The holes are snapshotted when the command opens and never re-derived:
-/// the viewport and the tree stop taking selection while it is up, so what
-/// the dialog reports is what the build runs on.
+/// The holes are read from the selection when the command opens and again
+/// when its Pick is done: the viewport and the tree stop taking selection
+/// otherwise, so what the dialog reports is what the build runs on.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ReferencePointsDraft {
     pub(crate) holes: Vec<DrillHoleRef>,

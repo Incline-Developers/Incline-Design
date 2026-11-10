@@ -77,7 +77,6 @@ confirm-delete-product =
 ## Диалог «Создать триангуляцию»
 
 tri-create-title = Создать триангуляцию
-tri-create-help = Триангулирует объекты, выбранные при открытии этого диалога. Закройте его, чтобы изменить выбор.
 tri-create-type-label = Тип триангуляции
 tri-create-type-help =
     «Открытая поверхность» создаёт полотно рельефного типа. «Тело» создаёт
@@ -86,7 +85,6 @@ tri-create-type-help =
 tri-create-output-name = Имя результата
 tri-create-output-name-hint = имя триангуляции
 tri-create-run = Триангулировать
-tri-selection-none = Выбранные объекты больше недоступны.
 
 tri-selection-selected = Выбрано: { $summary }
 
@@ -389,9 +387,6 @@ cmd-commands-count-point-s-across-layers = Точек: { $count } (слоёв: {
 cmd-commands-count-point-s-layer = Точек на слое «{ $layer }»: { $count }
 cmd-commands-kind-layer = { $kind } на слое «{ $layer }»
 cmd-commands-no-extent = Нет границ
-cmd-commands-select-holes-place-reference-points = Выберите скважины, на которых нужно разместить опорные точки
-cmd-triangulate-needs-selection = Выберите объекты для триангуляции перед запуском команды «Создать триангуляцию»
-cmd-commands-select-one-more-objects-before = Перед заданием { $axis } выберите один или несколько объектов
 cmd-contours-contour-generation-failed-error = Ошибка создания горизонталей: { $error }
 cmd-contours-discarded-layer-exists = Горизонтали для «{ $name }» отброшены: слой «{ $layer_name }» уже существует
 cmd-contours-discarded-project-closed = Горизонтали для «{ $name }» отброшены: проект закрыт
@@ -526,8 +521,6 @@ cmd-insert-point-insert-points = Вставить точки
 cmd-insert-point-inserted-count-operation-point-s = Вставлено точек операции «{ $operation }»: { $count }
 cmd-insert-point-intersection = Пересечение
 cmd-insert-point-no-new-operation-points-were = Новые точки операции «{ $operation }» не найдены
-cmd-insert-point-select-least-two-polylines-before = Перед вставкой точек пересечения выберите не менее двух полилиний
-cmd-insert-point-select-one-more-polylines-before = Перед вставкой точки на отметке выберите одну или несколько полилиний
 cmd-layer-created-layer-name = Создан слой «{ $name }»
 cmd-layer-deleted-with-objects = Удалён слой { $layer_id } (и все объекты на нём)
 cmd-layer-duplicated-layer-duplicate-name = Создана копия слоя «{ $duplicate_name }»
@@ -1462,7 +1455,6 @@ properties-zoom-sensitivity = Чувствительность к увеличе
 reference-points-count-holes-from-dataset = Скважин: { $count } из «{ $dataset }»
 reference-points-holes-from-datasets = Скважин: { $count } из наборов: { $datasets }
 reference-points-holes = Скважины
-reference-points-holes-points-placed-selected-when = Скважины, на которых размещаются точки, — выбранные при открытии диалога. Закройте диалог, чтобы выбрать другие.
 reference-points-make = Создать
 reference-points-no-categorical-field = Нет категориального поля
 reference-points-no-values = Нет значений
@@ -1474,7 +1466,6 @@ reference-points-working-section-field = Поле рабочей пачки
 reference-surface-controls = Управляющие линии
 reference-surface-extent = Границы
 reference-surface-points-outside-extent-still-shape = Точки вне границ по-прежнему формируют поверхность; обрезается только сама поверхность.
-reference-surface-points-surface-built-from-selected = Точки, по которым строится поверхность, — выбранные при открытии диалога. Закройте диалог, чтобы выбрать другие.
 reference-surface-triangulates-selected-points-plan-in = Триангулирует выбранные точки в плане в новую поверхность. Каждое построение добавляет поверхность.
 
 ## Screenshot strings
@@ -4183,7 +4174,6 @@ menu-build-solid-surfaces = Построить тело по поверхнос�
 omf-damaged = Этот файл повреждён или не является проектом Incline
 omf-optimization-scenarios-unreadable = Сценарии оптимизации проекта не удалось прочитать, и они пропущены: { $error }
 reference-surface-extent-help = Выбранная замкнутая полилиния, по которой обрезается готовая поверхность; точки за её пределами всё равно влияют на форму поверхности.
-reference-surface-selected-open-strings-surface-made = Выбранные разомкнутые полилинии, через которые проходит поверхность, в том виде, как они были выбраны при открытии диалога. Закройте диалог, чтобы выбрать другие.
 state-click-topology-viewport = Щёлкните топографию в окне просмотра.
 state-count-objects = Объектов: { $count }
 state-points-controls-clipped = Точек: { $count } · управляющих полилиний: { $controls } · обрезано по полилинии границы

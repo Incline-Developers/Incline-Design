@@ -81,7 +81,6 @@ confirm-delete-product =
 ## «Триангуляц үүсгэх» диалог
 
 tri-create-title = Триангуляц үүсгэх
-tri-create-help = Энэ цонх нээгдэх үед сонгогдсон объектуудыг триангуляц хийнэ. Сонголтыг өөрчлөхийн тулд цонхыг хаана уу.
 tri-create-type-label = Триангуляцын төрөл
 tri-create-type-help =
     Задгай гадаргуу нь рельефийн маягийн хавтгай үүсгэнэ. Хатуу бие нь бүрэн
@@ -90,7 +89,6 @@ tri-create-type-help =
 tri-create-output-name = Гаралтын нэр
 tri-create-output-name-hint = триангуляцын нэр
 tri-create-run = Триангуляц хийх
-tri-selection-none = Сонгосон объектууд цаашид боломжгүй байна.
 
 tri-selection-selected = { $summary } сонгогдсон
 
@@ -389,9 +387,6 @@ cmd-commands-count-point-s-across-layers = { $layers } давхарга дахь
 cmd-commands-count-point-s-layer = '{ $layer }' дээр { $count } цэг
 cmd-commands-kind-layer = '{ $layer }' дээр { $kind }
 cmd-commands-no-extent = Хамрах хүрээ алга
-cmd-commands-select-holes-place-reference-points = Лавлах цэг байрлуулах цооногуудыг сонгоно уу
-cmd-triangulate-needs-selection = Триангуляц үүсгэхийн өмнө триангуляц хийх объектуудыг сонгоно уу
-cmd-commands-select-one-more-objects-before = { $axis }-ыг тохируулахаас өмнө нэг буюу түүнээс олон объект сонгоно уу
 cmd-contours-contour-generation-failed-error = Изолиниа үүсгэлт амжилтгүй боллоо: { $error }
 cmd-contours-discarded-layer-exists = '{ $name }'-н изолиниа хаягдлаа: '{ $layer_name }' давхарга аль хэдийн байна
 cmd-contours-discarded-project-closed = '{ $name }'-н изолиниа хаягдлаа: төсөл хаагдсан байна
@@ -526,8 +521,6 @@ cmd-insert-point-insert-points = Цэгүүд оруулах
 cmd-insert-point-inserted-count-operation-point-s = { $count } { $operation } цэг оруулав
 cmd-insert-point-intersection = Огтлолцол
 cmd-insert-point-no-new-operation-points-were = Шинэ { $operation } цэг олдсонгүй
-cmd-insert-point-select-least-two-polylines-before = Огтлолцлын цэг оруулахаас өмнө дор хаяж хоёр полилиниа сонгоно уу
-cmd-insert-point-select-one-more-polylines-before = Өндөрлөг дээр цэг оруулахаас өмнө нэг буюу түүнээс олон полилиниа сонгоно уу
 cmd-layer-created-layer-name = '{ $name }' давхаргыг үүсгэлээ
 cmd-layer-deleted-with-objects = { $layer_id } давхаргыг (бүх объектын хамт) устгалаа
 cmd-layer-duplicated-layer-duplicate-name = '{ $duplicate_name }' давхаргыг хувиллаа
@@ -1461,7 +1454,6 @@ properties-zoom-sensitivity = Томруулах мэдрэмж
 reference-points-count-holes-from-dataset = '{ $dataset }'-с { $count } цооног
 reference-points-holes-from-datasets = { $datasets } өгөгдлийн багцаас { $count } цооног
 reference-points-holes = Цооногууд
-reference-points-holes-points-placed-selected-when = Цэгүүдийг байрлуулах цооногууд, цонх нээгдэх үед сонгогдсон ёсоор. Өөрийг сонгохын тулд цонхыг хаана уу.
 reference-points-make = Үүсгэх
 reference-points-no-categorical-field = Ангиллын талбар алга
 reference-points-no-values = Утга алга
@@ -1473,7 +1465,6 @@ reference-points-working-section-field = Ажлын үеийн талбар
 reference-surface-controls = Удирдах шугамууд
 reference-surface-extent = Хамрах хүрээ
 reference-surface-points-outside-extent-still-shape = Хамрах хүрээнээс гадуурх цэгүүд гадаргууг хэвээр хэлбэржүүлнэ; зөвхөн гадаргууг түүнд огтолно.
-reference-surface-points-surface-built-from-selected = Гадаргууг бүтээх цэгүүд, цонх нээгдэх үед сонгогдсон ёсоор. Өөрийг сонгохын тулд цонхыг хаана уу.
 reference-surface-triangulates-selected-points-plan-in = Сонгосон цэгүүдийг төлөвлөгөөн дээр триангуляц хийж шинэ гадаргуу үүсгэнэ. Бүтээлт бүр гадаргуу нэмнэ.
 
 ## Screenshot strings
@@ -3793,7 +3784,6 @@ menu-build-solid-surfaces = Гадаргуунаас хатуу биет бүт�
 omf-damaged = Энэ файл эвдэрсэн эсвэл Incline төсөл биш байна
 omf-optimization-scenarios-unreadable = Төслийн оновчлолын хувилбаруудыг уншиж чадаагүй тул орхисон: { $error }
 reference-surface-extent-help = Дууссан гадаргууг тайрах сонгосон хаалттай полилиниа; түүнээс гадуурх цэгүүд гадаргууг хэлбэржүүлсээр байна.
-reference-surface-selected-open-strings-surface-made = Гадаргууг дайрч өнгөрөхөөр хийгдэх, харилцах цонх нээгдэх үеийн сонгосон нээлттэй полилиниа. Өөрийг сонгохын тулд харилцах цонхыг хаана уу.
 state-click-topology-viewport = Харагдах хэсэгт топографийг товшино уу.
 state-count-objects = { $count } объект
 state-points-controls-clipped = { $count } цэг · { $controls } хяналтын полилиниа · хүрээний полилиниагаар тайрсан

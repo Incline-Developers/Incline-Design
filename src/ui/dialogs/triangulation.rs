@@ -2,12 +2,12 @@
 
 use crate::{
     i18n::tr,
-    model::{Document, Object, ObjectId, SceneEntityId, triangulation::TriangulationId},
+    model::{Document, Object, ObjectId, triangulation::TriangulationId},
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         state::{
-            ContourOutputLayer, EditorState, SolidRegion, ToolSubject, TriCreatePhase, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriangulationPickTarget, UiCommand,
-            UiProjectView,
+            ContourOutputLayer, EditorState, SelectionPickTool, SolidRegion, ToolSubject, TriCreatePhase, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType,
+            TriangulationPickTarget, UiCommand, UiProjectView,
         },
         widgets::{
             hint::Hint,
@@ -87,6 +87,9 @@ fn tri_surface_type_label(surface_type: TriSurfaceType) -> String {
 
 const PICK_SELECTOR_WIDTH: f32 = 210.0;
 const PICK_BUTTON_WIDTH: f32 = 52.0;
+/// Width of the prompt shown while a viewport pick waits. Fixed, so the name
+/// under the cursor cannot resize it.
+pub(super) const PICK_PROMPT_WIDTH: f32 = 360.0;
 const PICKER_DIALOG_MIN_WIDTH: f32 = 430.0;
 const PICKER_DIALOG_MAX_WIDTH: f32 = 450.0;
 
@@ -159,8 +162,11 @@ fn viewport_pick_status(ui: &mut egui::Ui, editor: &EditorState, empty_text: &st
         .corner_radius(3.0)
         .inner_margin(egui::Margin::symmetric(8, 5))
         .show(ui, |ui| {
-            ui.set_min_width(250.0);
-            ui.label(egui::RichText::new(text).italics());
+            // The name under the cursor changes as it moves, so the row keeps
+            // its width and a long name is cut short rather than resizing
+            // the window.
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(egui::RichText::new(text).italics()).truncate());
         });
 }
 
@@ -265,7 +271,8 @@ pub(crate) fn draw_triangulation_pick_prompt(ui: &mut egui::Ui, editor: &mut Edi
     let mut open = true;
     DragableMenu::new("triangulation_pick_from_view_dialog", tr!("tri-pick-from-view"))
         .open(&mut open)
-        .min_width(280.0)
+        .min_width(PICK_PROMPT_WIDTH)
+        .max_width(PICK_PROMPT_WIDTH)
         .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui.ctx(), |ui| {
             ui.label(target.prompt());
@@ -289,7 +296,8 @@ pub(crate) fn draw_triangulation_pick_prompt(ui: &mut egui::Ui, editor: &mut Edi
 
 /// Movable main dialog for the Create Triangulation workflow.
 pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
-    if !editor.tri_create_open || editor.tri_create_phase != TriCreatePhase::MainDialog {
+    // Hidden while its Pick has the viewport.
+    if !editor.tri_create_open || editor.tri_create_phase != TriCreatePhase::MainDialog || editor.selection_pick.is_some() {
         return;
     }
 
@@ -298,28 +306,20 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
         .open(&mut open)
         .min_width(370.0)
         .show(ui.ctx(), |ui| {
-            tool_help_panel(ui, tr!("tri-create-help"));
+            tool_help_panel(ui, tr!("tri-create-objects-help"));
             ui.add_space(4.0);
 
-            // --- Selection summary ---
-            // The run works on the selection the dialog opened with, so the
-            // set is reported here rather than offered for editing: changing
-            // it means closing the dialog and selecting again.
+            // The objects the run works on: those selected when the dialog
+            // opened, changed with Pick.
             let has_selection = !editor.tri_selected_object_ids.is_empty();
-            let hover_selection = if has_selection {
-                let summary = tr!("tri-selection-selected", summary = selection_summary(&editor.tri_selected_object_ids, document));
-                ui.label(summary).hovered()
+            let summary = if has_selection {
+                tr!("tri-selection-selected", summary = selection_summary(&editor.tri_selected_object_ids, document))
             } else {
-                ui.colored_label(egui::Color32::GRAY, tr!("tri-selection-none"));
-                false
+                tr!("ui-selected-objects", count = 0)
             };
-
-            // Hovering the summary highlights the whole selection in the viewport.
-            editor.tri_hover_handles = if hover_selection {
-                editor.tri_selected_object_ids.iter().map(|&oid| SceneEntityId::Object(oid)).collect()
-            } else {
-                std::collections::HashSet::new()
-            };
+            if menu::picked_selection_field(ui, tr!("sequence-objects"), summary, tr!("pick-selection-edges-help"), picker_control_width(ui)) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::CreateTriangulation));
+            }
 
             ui.add_space(4.0);
             {

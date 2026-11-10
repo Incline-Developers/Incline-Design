@@ -932,6 +932,40 @@ pub(crate) fn selected_source_field(ui: &mut egui::Ui, label: impl Into<egui::Wi
     });
 }
 
+/// A row stating the set of items a tool works on, beside a Pick button for
+/// selecting them in the viewport.
+///
+/// Design objects and holes have no names to list, so the set is stated as a
+/// count and changed by picking. Returns whether Pick was pressed; the caller
+/// answers with `UiCommand::BeginSelectionPick`.
+pub(crate) fn picked_selection_field(
+    ui: &mut egui::Ui,
+    label: impl Into<egui::WidgetText>,
+    value: impl Into<egui::WidgetText>,
+    help_text: impl Into<egui::WidgetText>,
+    width: f32,
+) -> bool {
+    const PICK_BUTTON_WIDTH: f32 = 52.0;
+    let value = value.into();
+    let pick_label = tr!("drill-pattern-pick");
+    let pick_width = natural_button_width(ui, &pick_label, PICK_BUTTON_WIDTH);
+    let mut picked = false;
+    MenuField::new(label).help_text(help_text).show(ui, |ui, row_height, _| {
+        let value_width = width - ui.spacing().item_spacing.x - pick_width;
+        ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.allocate_ui_with_layout(egui::vec2(value_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                // The count keeps its width whatever it reads, so the button
+                // does not move as the set changes.
+                ui.set_min_width(value_width);
+                ui.add(egui::Label::new(value.clone()).truncate()).hint(value);
+            });
+            picked = ui.add(MenuButton::new(pick_label).min_width(pick_width)).clicked();
+        })
+        .response
+    });
+    picked
+}
+
 /// A labelled file-picker row showing the selected file count/name and a choose button.
 pub(crate) struct MenuFieldFilePicker<'paths> {
     label: egui::WidgetText,

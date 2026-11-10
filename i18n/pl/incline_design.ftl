@@ -78,7 +78,6 @@ confirm-delete-product =
 ## Okno „Utwórz triangulację”
 
 tri-create-title = Utwórz triangulację
-tri-create-help = Triangulacja obiektów zaznaczonych w chwili otwarcia tego okna. Zamknij je, aby zmienić zaznaczenie.
 tri-create-type-label = Typ triangulacji
 tri-create-type-help =
     Powierzchnia otwarta tworzy płat w stylu terenu. Bryła tworzy w pełni
@@ -86,7 +85,6 @@ tri-create-type-help =
 tri-create-output-name = Nazwa wyniku
 tri-create-output-name-hint = nazwa triangulacji
 tri-create-run = Triangulacja
-tri-selection-none = Zaznaczone obiekty nie są już dostępne.
 
 tri-selection-selected = Wybrano: { $summary }
 
@@ -406,9 +404,6 @@ cmd-commands-count-point-s-across-layers = Punkty: { $count } w warstwach: { $la
 cmd-commands-count-point-s-layer = Punkty: { $count } w warstwie „{ $layer }”
 cmd-commands-kind-layer = { $kind } w warstwie „{ $layer }”
 cmd-commands-no-extent = Brak zasięgu
-cmd-commands-select-holes-place-reference-points = Wybierz otwory, na których mają zostać umieszczone punkty odniesienia
-cmd-triangulate-needs-selection = Wybierz obiekty do triangulacji przed uruchomieniem polecenia Utwórz triangulację
-cmd-commands-select-one-more-objects-before = Wybierz jeden lub więcej obiektów przed ustawieniem { $axis }
 cmd-contours-contour-generation-failed-error = Generowanie poziomic nie powiodło się: { $error }
 cmd-contours-discarded-layer-exists = Poziomice dla „{ $name }” zostały odrzucone: warstwa „{ $layer_name }” już istnieje
 cmd-contours-discarded-project-closed = Poziomice dla „{ $name }” zostały odrzucone: projekt został zamknięty
@@ -543,8 +538,6 @@ cmd-insert-point-insert-points = Wstaw punkty
 cmd-insert-point-inserted-count-operation-point-s = Wstawiono { $count } punktów { $operation }
 cmd-insert-point-intersection = Przecięcie
 cmd-insert-point-no-new-operation-points-were = Nie znaleziono nowych punktów operacji { $operation }
-cmd-insert-point-select-least-two-polylines-before = Wybierz co najmniej dwie polilinie przed wstawieniem punktów przecięcia
-cmd-insert-point-select-one-more-polylines-before = Wybierz jedną lub więcej polilinii przed wstawieniem punktu na wysokości
 cmd-layer-created-layer-name = Utworzono warstwę „{ $name }”
 cmd-layer-deleted-with-objects = Usunięto warstwę { $layer_id } (oraz wszystkie znajdujące się na niej obiekty)
 cmd-layer-duplicated-layer-duplicate-name = Zduplikowano warstwę „{ $duplicate_name }”
@@ -1478,7 +1471,6 @@ properties-zoom-sensitivity = Czułość przybliżania
 reference-points-count-holes-from-dataset = Otwory: { $count } z „{ $dataset }”
 reference-points-holes-from-datasets = Otwory: { $count } z { $datasets } zbiorów danych
 reference-points-holes = Otwory
-reference-points-holes-points-placed-selected-when = Otwory, na których umieszczane są punkty, zaznaczone w chwili otwarcia okna. Zamknij okno, aby wybrać inne.
 reference-points-make = Utwórz
 reference-points-no-categorical-field = Brak pola kategorialnego
 reference-points-no-values = Brak wartości
@@ -1490,7 +1482,6 @@ reference-points-working-section-field = Pole przekroju roboczego
 reference-surface-controls = Linie kontrolne
 reference-surface-extent = Zasięg
 reference-surface-points-outside-extent-still-shape = Punkty poza zasięgiem nadal kształtują powierzchnię; przycinana jest tylko powierzchnia.
-reference-surface-points-surface-built-from-selected = Punkty, z których budowana jest powierzchnia, zaznaczone w chwili otwarcia okna. Zamknij okno, aby wybrać inne.
 reference-surface-triangulates-selected-points-plan-in = Triangulacja wybranych punktów w rzucie do nowej powierzchni. Każda budowa dodaje powierzchnię.
 
 ## Screenshot strings
@@ -3866,7 +3857,6 @@ menu-build-solid-surfaces = Zbuduj bryłę z powierzchni...
 omf-damaged = Ten plik jest uszkodzony lub nie jest projektem Incline
 omf-optimization-scenarios-unreadable = Nie udało się odczytać scenariuszy optymalizacji projektu i pominięto je: { $error }
 reference-surface-extent-help = Wybrana zamknięta polilinia, do której przycinana jest gotowa powierzchnia; punkty poza nią nadal kształtują powierzchnię.
-reference-surface-selected-open-strings-surface-made = Wybrane otwarte polilinie, przez które przechodzi powierzchnia, takie jak wybrano przy otwarciu okna. Zamknij okno, aby wybrać inne.
 state-click-topology-viewport = Kliknij topografię w widoku.
 state-count-objects = Obiekty: { $count }
 state-points-controls-clipped = punkty: { $count } · polilinie kontrolne: { $controls } · przycięte do polilinii zasięgu

@@ -83,7 +83,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = Crea triangolazione
-tri-create-help = Triangola gli oggetti selezionati all'apertura di questa finestra. Chiudila per cambiare la selezione.
 tri-create-type-label = Tipo di triangolazione
 tri-create-type-help =
     La superficie aperta crea una maglia in stile terreno. Il solido crea una
@@ -91,7 +90,6 @@ tri-create-type-help =
 tri-create-output-name = Nome di output
 tri-create-output-name-hint = nome della triangolazione
 tri-create-run = Triangola
-tri-selection-none = Gli oggetti selezionati non sono più disponibili.
 
 tri-selection-selected = { $summary } selezionati
 
@@ -380,9 +378,6 @@ cmd-commands-count-point-s-across-layers = { $count } punto/i su { $layers } liv
 cmd-commands-count-point-s-layer = { $count } punto/i su '{ $layer }'
 cmd-commands-kind-layer = { $kind } su '{ $layer }'
 cmd-commands-no-extent = Nessuna estensione
-cmd-commands-select-holes-place-reference-points = Seleziona i fori su cui posizionare i punti di riferimento
-cmd-triangulate-needs-selection = Seleziona gli oggetti da triangolare prima di eseguire Crea triangolazione
-cmd-commands-select-one-more-objects-before = Seleziona uno o più oggetti prima di impostare { $axis }
 cmd-contours-contour-generation-failed-error = Generazione delle curve di livello non riuscita: { $error }
 cmd-contours-discarded-layer-exists = Le curve di livello per '{ $name }' sono state scartate: il livello '{ $layer_name }' esiste già
 cmd-contours-discarded-project-closed = Le curve di livello per '{ $name }' sono state scartate: il progetto è stato chiuso
@@ -517,8 +512,6 @@ cmd-insert-point-insert-points = Inserisci punti
 cmd-insert-point-inserted-count-operation-point-s = Inserito/i { $count } punto/i di { $operation }
 cmd-insert-point-intersection = Intersezione
 cmd-insert-point-no-new-operation-points-were = Non è stato trovato alcun nuovo punto di { $operation }
-cmd-insert-point-select-least-two-polylines-before = Seleziona almeno due polilinee prima di inserire punti di intersezione
-cmd-insert-point-select-one-more-polylines-before = Seleziona una o più polilinee prima di inserire un punto a quota
 cmd-layer-created-layer-name = Creato il livello '{ $name }'
 cmd-layer-deleted-with-objects = Eliminato il livello { $layer_id } (e tutti gli oggetti che contiene)
 cmd-layer-duplicated-layer-duplicate-name = Duplicato il livello '{ $duplicate_name }'
@@ -1452,7 +1445,6 @@ properties-zoom-sensitivity = Sensibilità zoom
 reference-points-count-holes-from-dataset = { $count } fori da '{ $dataset }'
 reference-points-holes-from-datasets = { $count } fori da { $datasets } dataset
 reference-points-holes = Fori
-reference-points-holes-points-placed-selected-when = I fori su cui vengono posizionati i punti, come selezionati all'apertura della finestra. Chiudi la finestra per selezionarne altri.
 reference-points-make = Crea
 reference-points-no-categorical-field = Nessun campo categorico
 reference-points-no-values = Nessun valore
@@ -1464,7 +1456,6 @@ reference-points-working-section-field = Campo della sezione di lavoro
 reference-surface-controls = Controlli
 reference-surface-extent = Estensione
 reference-surface-points-outside-extent-still-shape = I punti fuori dall'estensione modellano comunque la superficie; solo la superficie viene ritagliata su di essa.
-reference-surface-points-surface-built-from-selected = I punti da cui è costruita la superficie, come selezionati all'apertura della finestra. Chiudi la finestra per selezionarne altri.
 reference-surface-triangulates-selected-points-plan-in = Triangola in pianta i punti selezionati in una nuova superficie. Ogni costruzione aggiunge una superficie.
 
 ## Screenshot strings
@@ -3784,7 +3775,6 @@ menu-build-solid-surfaces = Costruisci solido da superfici...
 omf-damaged = Questo file è danneggiato oppure non è un progetto Incline
 omf-optimization-scenarios-unreadable = Non è stato possibile leggere gli scenari di ottimizzazione del progetto, che sono stati esclusi: { $error }
 reference-surface-extent-help = La polilinea chiusa selezionata a cui viene ritagliata la superficie finita; i punti al di fuori di essa ne determinano comunque la forma.
-reference-surface-selected-open-strings-surface-made = Le polilinee aperte selezionate attraverso cui passa la superficie, come selezionate all'apertura della finestra. Chiudi la finestra per selezionarne altre.
 state-click-topology-viewport = Fai clic sulla topografia nella vista.
 state-count-objects = { $count } oggetto/i
 state-points-controls-clipped = { $count } punto/i · { $controls } polilinea/e di controllo · ritagliati alla polilinea di estensione

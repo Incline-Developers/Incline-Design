@@ -83,7 +83,6 @@ confirm-delete-product =
 ## Create Triangulation dialog
 
 tri-create-title = 三角網を作成
-tri-create-help = このダイアログを開いたときに選択されていたオブジェクトを三角網化します。選択を変更するには閉じてください。
 tri-create-type-label = 三角網の種類
 tri-create-type-help =
     開いた曲面は地形状のシートを作成します。ソリッドは完全に閉じた
@@ -91,7 +90,6 @@ tri-create-type-help =
 tri-create-output-name = 出力名
 tri-create-output-name-hint = 三角網の名前
 tri-create-run = 三角網化
-tri-selection-none = 選択したオブジェクトは利用できなくなりました。
 
 tri-selection-selected = { $summary }を選択中
 
@@ -367,9 +365,6 @@ cmd-commands-count-point-s-across-layers = { $layers } 個のレイヤーにま�
 cmd-commands-count-point-s-layer = '{ $layer }' 上の点 { $count } 個
 cmd-commands-kind-layer = '{ $layer }' 上の { $kind }
 cmd-commands-no-extent = 範囲がありません
-cmd-commands-select-holes-place-reference-points = 基準点を配置する孔を選択してください
-cmd-triangulate-needs-selection = 三角網を作成を実行する前に、三角網化するオブジェクトを選択してください
-cmd-commands-select-one-more-objects-before = { $axis } を設定する前に1つ以上のオブジェクトを選択してください
 cmd-contours-contour-generation-failed-error = コンター生成に失敗しました: { $error }
 cmd-contours-discarded-layer-exists = 「{ $name }」のコンターは破棄されました: レイヤー「{ $layer_name }」が既に存在します
 cmd-contours-discarded-project-closed = 「{ $name }」のコンターは破棄されました: プロジェクトが閉じられました
@@ -504,8 +499,6 @@ cmd-insert-point-insert-points = 点を挿入
 cmd-insert-point-inserted-count-operation-point-s = { $count } 個の{ $operation }点を挿入しました
 cmd-insert-point-intersection = 交点
 cmd-insert-point-no-new-operation-points-were = 新しい{ $operation }点は見つかりませんでした
-cmd-insert-point-select-least-two-polylines-before = 交点を挿入する前に少なくとも2本のポリラインを選択してください
-cmd-insert-point-select-one-more-polylines-before = 標高で点を挿入する前に1本以上のポリラインを選択してください
 cmd-layer-created-layer-name = レイヤー「{ $name }」を作成しました
 cmd-layer-deleted-with-objects = レイヤー { $layer_id } とその中のすべてのオブジェクトを削除しました
 cmd-layer-duplicated-layer-duplicate-name = レイヤー「{ $duplicate_name }」を複製しました
@@ -1439,7 +1432,6 @@ properties-zoom-sensitivity = ズーム感度
 reference-points-count-holes-from-dataset = '{ $dataset }' の { $count } 孔
 reference-points-holes-from-datasets = { $datasets } 個のデータセットの { $count } 孔
 reference-points-holes = 孔
-reference-points-holes-points-placed-selected-when = 点を配置する孔。ダイアログを開いたときの選択です。別の孔を選択するにはダイアログを閉じてください。
 reference-points-make = 作成
 reference-points-no-categorical-field = カテゴリフィールドなし
 reference-points-no-values = 値なし
@@ -1451,7 +1443,6 @@ reference-points-working-section-field = 作業セクションフィールド
 reference-surface-controls = コントロール
 reference-surface-extent = 範囲
 reference-surface-points-outside-extent-still-shape = 範囲外の点も曲面の形状に影響します。クリップされるのは曲面のみです。
-reference-surface-points-surface-built-from-selected = 曲面の構築に使用する点。ダイアログを開いたときの選択です。別の点を選択するにはダイアログを閉じてください。
 reference-surface-triangulates-selected-points-plan-in = 選択した点を平面上で三角網化し、新しい曲面を作成します。構築のたびに曲面が追加されます。
 
 ## Screenshot strings
@@ -3771,7 +3762,6 @@ menu-build-solid-surfaces = 曲面からソリッドを構築...
 omf-damaged = このファイルは破損しているか、Inclineのプロジェクトではありません
 omf-optimization-scenarios-unreadable = プロジェクトの最適化シナリオを読み取れなかったため、除外されました: { $error }
 reference-surface-extent-help = 完成した曲面をクリップする、選択済みの閉じたポリライン。その外側の点も曲面の形状に影響します。
-reference-surface-selected-open-strings-surface-made = 曲面が通過するように作られる、ダイアログを開いた時点で選択されていた開いたポリライン。別のものを選択するには、ダイアログを閉じてください。
 state-click-topology-viewport = ビューポートで地形をクリックしてください。
 state-count-objects = オブジェクト { $count } 個
 state-points-controls-clipped = 点 { $count } 個 · コントロールポリライン { $controls } 本 · 範囲ポリラインでクリップ済み

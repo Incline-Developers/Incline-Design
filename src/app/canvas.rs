@@ -480,7 +480,8 @@ impl<'a> App<'a> {
                     Some(hole) => self.editor.selected_drill_holes.contains(&hole),
                     None => self.editor.selected_handles.contains(&handle),
                 };
-                let selection_mode = if self.modifiers.shift_key() {
+                // A tool's pick builds a set: a click never replaces it.
+                let selection_mode = if self.modifiers.shift_key() || self.editor.selection_pick.is_some() {
                     SelectionMode::Toggle
                 } else if self.modifiers.control_key() {
                     SelectionMode::Add
@@ -524,7 +525,7 @@ impl<'a> App<'a> {
                 return;
             }
 
-            let preserve = self.modifiers.shift_key() || self.modifiers.control_key();
+            let preserve = self.modifiers.shift_key() || self.modifiers.control_key() || self.editor.selection_pick.is_some();
             if !preserve {
                 self.editor.selected_handles.clear();
                 self.editor.selected_drill_holes.clear();
@@ -630,7 +631,7 @@ impl<'a> App<'a> {
                 }
             }
         } else {
-            if !self.modifiers.control_key() {
+            if !self.modifiers.control_key() && self.editor.selection_pick.is_none() {
                 self.editor.selected_handles.clear();
                 // Cleared with the handles, or a box over empty ground would
                 // leave the previous box's holes selected.

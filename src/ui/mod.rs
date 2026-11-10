@@ -1719,6 +1719,7 @@ fn draw_global_dialogs(
     if editor.triangulation_pick_target.is_some() {
         dialogs::triangulation::draw_triangulation_pick_prompt(root_ui, editor);
     }
+    dialogs::selection_pick::draw_selection_pick_prompt(root_ui, editor, commands);
     if editor.block_model_create_open {
         elements::block_model::draw_create_block_model_dialog(root_ui, editor, drill_holes, commands);
     }

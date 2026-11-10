@@ -82,7 +82,6 @@ confirm-delete-product =
 ## Üçgenleme Oluştur iletişim kutusu
 
 tri-create-title = Üçgenleme Oluştur
-tri-create-help = Bu iletişim kutusu açıldığında seçili olan nesneleri üçgenler. Seçimi değiştirmek için kapatın.
 tri-create-type-label = Üçgenleme türü
 tri-create-type-help =
     Açık yüzey, arazi tarzı bir levha oluşturur. Katı, tam kapalı bir ağ
@@ -90,7 +89,6 @@ tri-create-type-help =
 tri-create-output-name = Çıktı adı
 tri-create-output-name-hint = üçgenleme adı
 tri-create-run = Üçgenle
-tri-selection-none = Seçili nesneler artık kullanılamıyor.
 
 tri-selection-selected = { $summary } seçildi
 
@@ -380,9 +378,6 @@ cmd-commands-count-point-s-across-layers = { $layers } katmanda { $count } nokta
 cmd-commands-count-point-s-layer = '{ $layer }' üzerinde { $count } nokta
 cmd-commands-kind-layer = '{ $layer }' üzerinde { $kind }
 cmd-commands-no-extent = Kapsam yok
-cmd-commands-select-holes-place-reference-points = Referans noktalarının yerleştirileceği delikleri seçin
-cmd-triangulate-needs-selection = Üçgenleme Oluştur'u çalıştırmadan önce üçgenlenecek nesneleri seçin
-cmd-commands-select-one-more-objects-before = { $axis } değerini ayarlamadan önce bir veya daha fazla nesne seçin
 cmd-contours-contour-generation-failed-error = Kontur oluşturma başarısız oldu: { $error }
 cmd-contours-discarded-layer-exists = '{ $name }' için konturlar atıldı: '{ $layer_name }' katmanı artık mevcut
 cmd-contours-discarded-project-closed = '{ $name }' için konturlar atıldı: proje kapatıldı
@@ -517,8 +512,6 @@ cmd-insert-point-insert-points = Noktalar Ekle
 cmd-insert-point-inserted-count-operation-point-s = { $count } { $operation } nokta eklendi
 cmd-insert-point-intersection = Kesişim
 cmd-insert-point-no-new-operation-points-were = Yeni { $operation } noktası bulunamadı
-cmd-insert-point-select-least-two-polylines-before = Kesişim noktaları eklemeden önce en az iki çoklu çizgi seçin
-cmd-insert-point-select-one-more-polylines-before = Kotta nokta eklemeden önce bir veya daha fazla çoklu çizgi seçin
 cmd-layer-created-layer-name = '{ $name }' katmanı oluşturuldu
 cmd-layer-deleted-with-objects = { $layer_id } katmanı (ve üzerindeki tüm nesneler) silindi
 cmd-layer-duplicated-layer-duplicate-name = '{ $duplicate_name }' katmanı çoğaltıldı
@@ -1452,7 +1445,6 @@ properties-zoom-sensitivity = Yakınlaştırma duyarlılığı
 reference-points-count-holes-from-dataset = '{ $dataset }' içinden { $count } delik
 reference-points-holes-from-datasets = { $datasets } veri kümesinden { $count } delik
 reference-points-holes = Delikler
-reference-points-holes-points-placed-selected-when = Noktaların yerleştirildiği delikler, iletişim kutusu açıldığında seçili olanlar. Farklılarını seçmek için iletişim kutusunu kapatın.
 reference-points-make = Oluştur
 reference-points-no-categorical-field = Kategorik alan yok
 reference-points-no-values = Değer yok
@@ -1464,7 +1456,6 @@ reference-points-working-section-field = Çalışma damarı alanı
 reference-surface-controls = Kontroller
 reference-surface-extent = Kapsam
 reference-surface-points-outside-extent-still-shape = Kapsam dışındaki noktalar yüzeyi yine de şekillendirir; yalnızca yüzey ona göre kırpılır.
-reference-surface-points-surface-built-from-selected = Yüzeyin oluşturulduğu noktalar, iletişim kutusu açıldığında seçili olanlar. Farklılarını seçmek için iletişim kutusunu kapatın.
 reference-surface-triangulates-selected-points-plan-in = Seçili noktaları planda yeni bir yüzeye üçgenler. Her oluşturma bir yüzey ekler.
 
 ## Screenshot strings
@@ -3784,7 +3775,6 @@ menu-build-solid-surfaces = Yüzeylerden Katı Oluştur...
 omf-damaged = Bu dosya hasarlı veya bir Incline projesi değil
 omf-optimization-scenarios-unreadable = Projenin optimizasyon senaryoları okunamadı ve dışarıda bırakıldı: { $error }
 reference-surface-extent-help = Bitmiş yüzeyin kırpıldığı, seçili kapalı çoklu çizgi; dışında kalan noktalar yine de yüzeyi şekillendirir.
-reference-surface-selected-open-strings-surface-made = Yüzeyin içlerinden geçecek şekilde yapıldığı, iletişim kutusu açıldığında seçili olan açık çoklu çizgiler. Farklılarını seçmek için iletişim kutusunu kapatın.
 state-click-topology-viewport = Görüntü alanında topografyaya tıklayın.
 state-count-objects = { $count } nesne
 state-points-controls-clipped = { $count } nokta · { $controls } kontrol çoklu çizgisi · kapsam çoklu çizgisine kırpıldı

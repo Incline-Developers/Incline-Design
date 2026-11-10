@@ -613,7 +613,7 @@ impl<'a> App<'a> {
     /// derived from the holes and never edited; running again makes another
     /// layer, so a corrected pick shows up as a new set beside the old.
     ///
-    /// Runs on the holes the dialog was opened on, which may span datasets.
+    /// Runs on the holes the dialog holds, which may span datasets.
     pub(crate) fn build_reference_points(
         &mut self,
         holes: Vec<DrillHoleRef>,

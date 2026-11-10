@@ -4,7 +4,7 @@ use crate::{
     i18n::tr,
     model::{Axis, Document},
     ui::{
-        state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, OffsetMeasure, RelimitMode, RenameTarget, TrimEnd, UiCommand, UiProjectView},
+        state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, OffsetMeasure, RelimitMode, RenameTarget, SelectionPickTool, TrimEnd, UiCommand, UiProjectView},
         themed_icon,
         widgets::{
             context_menu::{ContextMenu, ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
@@ -249,7 +249,7 @@ fn draw_recent_function_rows(ui: &mut egui::Ui, editor: &EditorState, project: &
         ContextMenuAction::new(tr!("edit-no-recent-functions")).enabled(false).show(ui);
     }
     for row in rows {
-        if ContextMenuAction::new(row.path()).enabled(row.enabled(editor, project)).show(ui).clicked() {
+        if ContextMenuAction::new(row.path()).enabled(row.enabled(project)).show(ui).clicked() {
             commands.push(row.command());
             commands.push(UiCommand::NoteRecentFunction(row));
             commands.push(UiCommand::CloseCanvasContextMenu);
@@ -329,7 +329,15 @@ pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
     }
 }
 
+/// Width of the count and its Pick button in the dialogs that work on a
+/// picked set of objects.
+const PICKED_FIELD_WIDTH: f32 = 190.0;
+
 pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(dialog) = editor.move_to_axis_dialog.as_mut() else {
         return;
     };
@@ -344,9 +352,18 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
 
     DragableMenu::new("move_to_axis_dialog", tr!("edit-set-axis", axis = axis_label.to_string()))
         .open(&mut open)
-        .min_width(260.0)
-        .max_width(280.0)
+        .min_width(320.0)
+        .max_width(340.0)
         .show(ui.ctx(), |ui| {
+            if menu::picked_selection_field(
+                ui,
+                tr!("sequence-objects"),
+                tr!("ui-selected-objects", count = object_count),
+                tr!("pick-selection-objects-help"),
+                PICKED_FIELD_WIDTH,
+            ) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::SetAxis));
+            }
             MenuFieldF64::new(tr!("edit-axis-value", axis = axis_label.to_string()), &mut dialog.value, f64::MIN..=f64::MAX)
                 .width(120.0)
                 .show(ui);
@@ -364,7 +381,6 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                     close = true;
                 }
             });
-            ui.label(tr!("ui-selected-objects", count = object_count));
         });
 
     if apply {
@@ -381,6 +397,10 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
 }
 
 pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(dialog) = editor.insert_point_at_elevation_dialog.as_mut() else {
         return;
     };
@@ -393,16 +413,25 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
 
     DragableMenu::new("insert_point_at_elevation_dialog", tr!("edit-insert-point-elevation"))
         .open(&mut open)
-        .min_width(280.0)
-        .max_width(300.0)
+        .min_width(320.0)
+        .max_width(340.0)
         .show(ui.ctx(), |ui| {
+            if menu::picked_selection_field(
+                ui,
+                tr!("context-polylines"),
+                tr!("ui-selected-polylines", count = object_count),
+                tr!("pick-selection-polylines-help"),
+                PICKED_FIELD_WIDTH,
+            ) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::InsertAtElevation));
+            }
             MenuFieldF64::new(tr!("common-elevation"), &mut dialog.elevation, dialog.min_elevation..=dialog.max_elevation)
                 .width(120.0)
                 .show(ui);
             if !dialog.elevation.is_finite() {
                 ui.colored_label(egui::Color32::from_rgb(200, 70, 70), tr!("edit-enter-valid-elevation"));
             }
-            if dialog.min_elevation > f64::MIN {
+            if object_count > 0 && dialog.min_elevation > f64::MIN {
                 ui.label(tr!(
                     "ui-selection-spans",
                     min = format!("{:.2}", dialog.min_elevation),
@@ -421,7 +450,6 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
                     close = true;
                 }
             });
-            ui.label(tr!("ui-selected-polylines", count = object_count));
         });
 
     if apply {
