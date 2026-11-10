@@ -116,6 +116,9 @@ struct Identity {
     runtime: u32,
     run: u64,
     solids_generation: u64,
+    /// The held schedule itself, by address: an Improve run publishes its
+    /// first schedule and then the improved one under the one run number.
+    schedule: usize,
 }
 
 struct SourceBlock {
@@ -564,6 +567,7 @@ impl crate::app::App<'_> {
             runtime,
             run: calculation.run,
             solids_generation: calculation.generation,
+            schedule: Arc::as_ptr(calculation) as usize,
         });
 
         if !animate {
