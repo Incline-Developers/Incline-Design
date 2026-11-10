@@ -311,11 +311,17 @@ impl LinearProgram {
             // A shape not held: the last program's basis, carried over by
             // what its columns and rows stand for. Most of an interval's
             // program is the one before it, so this is a few pivots where a
-            // solve from scratch is a presolve and tens of pivots.
-            None => keys
-                .as_ref()
-                .and_then(|keys| warm.carried(keys, &problem))
-                .map(|basis| solver::solve_from_alien(&problem, &options, &basis)),
+            // solve from scratch is a presolve and tens of pivots. By the
+            // primal method: with the program's new columns the basis is
+            // no longer optimal in the dual's sense, which the dual method
+            // all but solves afresh to repair.
+            None => keys.as_ref().and_then(|keys| warm.carried(keys, &problem)).map(|basis| {
+                let primal = solver::Options {
+                    simplex_strategy: solver::SimplexStrategy::Primal,
+                    ..solver::Options::default()
+                };
+                solver::solve_from_alien(&problem, &primal, &basis)
+            }),
         };
         // A basis that does not suit this program is no reason to fail it:
         // solve afresh.
