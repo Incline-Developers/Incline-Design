@@ -32,7 +32,7 @@ const BLAST_OUTLINE_WIDTH: f32 = 2.5;
 /// back, but grey against the live outlines around it.
 const EXCLUDED_OUTLINE_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 0.9];
 
-/// The Haulage Layout's selected dig block, and the line to where it joins
+/// The Road Network's selected dig block, and the line to where it joins
 /// the roads: the selection orange the rest of the scene uses.
 pub(crate) const HAUL_SELECTED_BLOCK: [f32; 4] = [1.0, 0.7, 0.1, 1.0];
 /// How a dig block meets the roads, as the Layout tints it: left to the
@@ -160,7 +160,9 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     // it shows its benches undivided.
     if editor.is_dig_strips_step() {
         for outline in &editor.dig_outlines {
-            let selected = editor.selected_dig_block == Some(crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
+            let selected = editor
+                .selected_dig_blocks
+                .contains(&crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
             overlay.fade_size_m = if selected { 0.0 } else { plan_fade_size(&outline.rings) };
             for ring in &outline.rings {
                 let verts: Vec<_> = ring.iter().map(|point| crate::model::PolyVertex::straight(*point)).collect();

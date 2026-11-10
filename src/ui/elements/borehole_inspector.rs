@@ -18,6 +18,7 @@ use crate::{
         widgets::{
             borehole_log::DrillHoleProperties,
             collapsible_section::CollapsibleSection,
+            hint::Hint,
             menu::{self, MenuButton, MenuFieldCombo},
         },
     },
@@ -191,11 +192,7 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState) {
             ui.spacing_mut().item_spacing.x = 4.0;
             // Rightmost, where a panel's close belongs; the lock sits inboard.
             // The same switch Geology's viewport bar button throws.
-            if ui
-                .add(egui::Button::image(themed_icon!(ui, "close_project.svg")).frame(false))
-                .on_hover_text(tr!("borehole-inspector-close-inspector"))
-                .clicked()
-            {
+            if ui.add(egui::Button::image(themed_icon!(ui, "close_project.svg")).frame(false)).clicked() {
                 editor.show_borehole_inspector = false;
             }
             let locked = editor.borehole_inspector_locked;
@@ -206,7 +203,7 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState) {
             } else {
                 (unthemed_icon!("entry_unlocked.svg"), tr!("borehole-inspector-hold-hole-while-you-work"))
             };
-            if ui.add(egui::Button::image(icon).frame(locked)).on_hover_text(hint).clicked() {
+            if ui.add(egui::Button::image(icon).frame(locked)).hint(hint).clicked() {
                 editor.borehole_inspector_locked = !locked;
             }
         });

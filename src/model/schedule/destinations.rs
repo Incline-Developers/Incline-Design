@@ -533,7 +533,8 @@ pub(crate) struct DestinationRule {
     /// rule the user has switched off, not a rule that is broken.
     pub(crate) enabled: bool,
     pub(crate) name: String,
-    /// In the order they are tried. Never empty.
+    /// In the order they are tried. Empty on a rule still being set up, which
+    /// accepts nothing until it is given somewhere to deliver.
     pub(crate) destinations: Vec<DestinationId>,
     pub(crate) loaders: LoaderSelection,
     /// Ground *and* stockpiles: a rule may route what a loader digs out of a
@@ -628,7 +629,9 @@ impl DestinationRule {
     /// apply". Callers that know the material use [`Self::accepts`], which is
     /// this plus the conditions and is the only path routing takes.
     pub(crate) fn accepts_identity(&self, loader: LoaderAgentId, source: super::RouteSource) -> bool {
-        if !self.enabled {
+        // Nowhere to deliver is not a match: the material stays free for the
+        // rules after this one rather than being routed to nothing.
+        if !self.enabled || self.destinations.is_empty() {
             return false;
         }
         match &self.loaders {
@@ -668,17 +671,14 @@ pub(crate) struct RoutingConfig {
 /// An empty list is refused rather than stored: a rule that matches material
 /// and names nowhere to send it would read as a restriction and behave as a
 /// hole in the configuration.
-fn checked_destinations(destinations: Vec<DestinationId>) -> ScheduleResult<Vec<DestinationId>> {
+fn checked_destinations(destinations: Vec<DestinationId>) -> Vec<DestinationId> {
     let mut ordered: Vec<DestinationId> = Vec::with_capacity(destinations.len());
     for destination in destinations {
         if !ordered.contains(&destination) {
             ordered.push(destination);
         }
     }
-    if ordered.is_empty() {
-        return Err(ScheduleError::EmptyRuleSelection);
-    }
-    Ok(ordered)
+    ordered
 }
 
 /// The movement sources one rule names, deduplicated and never empty.
@@ -733,14 +733,24 @@ pub(crate) fn checked_sources(sources: MovementSourceSelection) -> ScheduleResul
 /// when it was last looked at. A planner who wants the ground half says so by
 /// naming the pits.
 ///
-/// A mixed rule is not split automatically. Which half keeps the category and
-/// which loses it is the planner's decision, and guessing it would reroute
-/// material nobody chose.
+/// Choosing a category is what narrows a rule: see [`sources_for_category`].
+/// A rule saved holding both is marked invalid rather than rewritten on load.
 pub(crate) fn category_conditions_available(sources: &MovementSourceSelection) -> bool {
     match sources {
         MovementSourceSelection::All => false,
         MovementSourceSelection::Only(scopes) => !scopes.is_empty() && scopes.iter().all(|scope| scope.ground().is_some()),
     }
+}
+
+/// The sources a rule keeps once it tests a category: its ground, without the
+/// stockpiles a category cannot be read from. `All` stands for `pits`. `None`
+/// when that leaves nothing, a rule that only ever reclaims.
+pub(crate) fn sources_for_category(sources: &MovementSourceSelection, pits: impl IntoIterator<Item = MovementSourceScope>) -> Option<MovementSourceSelection> {
+    let kept: Vec<MovementSourceScope> = match sources {
+        MovementSourceSelection::All => pits.into_iter().collect(),
+        MovementSourceSelection::Only(scopes) => scopes.iter().copied().filter(|scope| scope.ground().is_some()).collect(),
+    };
+    (!kept.is_empty()).then_some(MovementSourceSelection::Only(kept))
 }
 
 /// The fields whose category conditions this combination cannot evaluate.
@@ -792,6 +802,15 @@ fn checked_capacity(value: f64) -> ScheduleResult<f64> {
 }
 
 impl RoutingConfig {
+    /// Clear a reserve field gone from the project off every opening stock.
+    pub(crate) fn forget_field(&mut self, field: ReserveFieldId) {
+        let solids = self.solids.iter_mut().map(|entry| &mut entry.inventory);
+        let standalone = self.standalone.iter_mut().map(|entry| &mut entry.inventory);
+        for portion in solids.chain(standalone).flat_map(|inventory| &mut inventory.lots).flat_map(|lot| &mut lot.portions) {
+            portion.values.retain(|(held, _)| *held != field);
+        }
+    }
+
     /// Whether nothing here has ever been configured, so an untouched project
     /// is not reported as holding routing setup.
     pub(crate) fn is_pristine(&self) -> bool {
@@ -1101,7 +1120,7 @@ impl RoutingConfig {
         }
         let id = RuleId(self.next_rule_id);
         self.next_rule_id = self.next_rule_id.checked_add(1).ok_or(ScheduleError::IdsExhausted)?;
-        let destinations = checked_destinations(destinations)?;
+        let destinations = checked_destinations(destinations);
         self.rules.push(DestinationRule {
             id,
             enabled: true,
@@ -1158,11 +1177,10 @@ impl RoutingConfig {
     /// Replace the destinations one rule may deliver to.
     ///
     /// Ordered, so the caller's order is the order they are tried; deduplicated,
-    /// because naming one twice would say nothing the first mention has not; and
-    /// never empty, which would be a rule that matches material and then has
-    /// nowhere to put it.
+    /// because naming one twice would say nothing the first mention has not.
+    /// Empty leaves the rule accepting nothing until it is given one.
     pub(crate) fn set_rule_destinations(&mut self, id: RuleId, destinations: Vec<DestinationId>) -> ScheduleResult {
-        let destinations = checked_destinations(destinations)?;
+        let destinations = checked_destinations(destinations);
         self.rule_mut(id)?.destinations = destinations;
         Ok(())
     }
@@ -1266,9 +1284,6 @@ impl RoutingConfig {
             checked_name(&rule.name)?;
             if self.rules[..index].iter().any(|earlier| same_name(&earlier.name, &rule.name)) {
                 return Err(ScheduleError::DuplicateName(rule.name.clone()));
-            }
-            if rule.destinations.is_empty() {
-                return Err(ScheduleError::EmptyRuleSelection);
             }
             for (position, destination) in rule.destinations.iter().enumerate() {
                 if rule.destinations[..position].contains(destination) {
@@ -1464,7 +1479,7 @@ impl DestinationRule {
         }
         match &self.sources {
             MovementSourceSelection::All => {}
-            MovementSourceSelection::Only(scopes) => parts.push(tr!("destination-rule-sources-count", count = scopes.len().to_string())),
+            MovementSourceSelection::Only(scopes) => parts.push(tr!("destination-rule-sources-count", count = scopes.len())),
         }
         for condition in &self.conditions {
             parts.push(condition.summary(&field_name(condition.field)));

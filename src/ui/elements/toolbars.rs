@@ -16,7 +16,10 @@ use crate::{
         EditorState, UiProjectView,
         state::{ActiveTool, CursorMode, UiCommand, Workspace},
         themed_icon, unthemed_icon,
-        widgets::toolbar::{TOOL_CELL_SIZE, ToolbarButton},
+        widgets::{
+            hint::Hint,
+            toolbar::{TOOL_CELL_SIZE, ToolbarButton},
+        },
     },
 };
 
@@ -70,7 +73,13 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
         let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses();
         LeftTool {
             icon: egui::Image::new(icon),
-            hint: (blocked_by_section && editing_enabled && layer_ok).then(|| tr!("toolbars-tool-not-available-section-view", tool = tooltip.as_str().to_string())),
+            hint: if !editing_enabled {
+                None
+            } else if !layer_ok {
+                Some(tr!("toolbars-tool-needs-layer", tool = tooltip.as_str().to_string()))
+            } else {
+                blocked_by_section.then(|| tr!("toolbars-tool-not-available-section-view", tool = tooltip.as_str().to_string()))
+            },
             tooltip,
             action: LeftToolAction::Tool(tool),
             enabled: editing_enabled && layer_ok && !blocked_by_section,
@@ -136,7 +145,7 @@ fn blasting_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool) ->
     ]
 }
 
-/// The Haulage Layout tools: draw a road, turn design strings into roads,
+/// The Road Network tools: draw a road, turn design strings into roads,
 /// and bring roads in from or out to DXF.
 fn haulage_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, project_active: bool) -> Vec<LeftTool> {
     let objects = editor.selected_handles.iter().any(|h| matches!(h, crate::model::SceneEntityId::Object(_)));
@@ -273,7 +282,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         .selected(selected);
     let mut response = ui.add_enabled_ui(tool.enabled, |ui| ui.add(button)).inner;
     if let Some(hint) = tool.hint.as_deref() {
-        response = response.on_disabled_hover_text(hint);
+        response = response.disabled_hint(hint);
     }
     if !response.clicked() {
         return;

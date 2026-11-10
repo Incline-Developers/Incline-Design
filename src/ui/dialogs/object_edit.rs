@@ -334,11 +334,7 @@ fn draw_properties_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
     // Touching the swatch pins a fixed colour on the object; the toggle
     // above returns to the layer's.
     let mut by_layer = matches!(dialog.object.color(), ObjectColor::ByLayer);
-    if MenuFieldBool::new(tr!("object-edit-colour-layer"), &mut by_layer)
-        .help_text(tr!("object-edit-follow-owning-layer-s-colour"))
-        .show(ui)
-        .changed()
-    {
+    if MenuFieldBool::new(tr!("object-edit-colour-layer"), &mut by_layer).show(ui).changed() {
         set_object_color(&mut dialog.object, if by_layer { ObjectColor::ByLayer } else { ObjectColor::Fixed(layer_rgba) });
     }
     if !by_layer {
@@ -359,10 +355,7 @@ fn draw_properties_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
     let mut rescan = false;
     match &mut dialog.object {
         Object::Polyline { closed, fill, line_weight, .. } => {
-            rescan |= MenuFieldBool::new(tr!("common-closed"), closed)
-                .help_text(tr!("object-edit-join-last-vertex-back-first"))
-                .show(ui)
-                .changed();
+            rescan |= MenuFieldBool::new(tr!("common-closed"), closed).show(ui).changed();
             let current_fill = *fill;
             MenuFieldCombo::new(
                 "object_edit_fill",

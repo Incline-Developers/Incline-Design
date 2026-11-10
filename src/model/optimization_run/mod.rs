@@ -85,12 +85,12 @@ pub(crate) struct RunResult {
     pub(crate) report: std::sync::Arc<OptimizationReport>,
 }
 
-/// The name of a shell's triangulation: `<prefix>_RAF 0.85`, with ` DIR 50%`
+/// The name of a shell's triangulation: `<prefix>_RF 0.85`, with ` DIR 50%`
 /// after it for a directional shell (its share of the distance). The
 /// scenario's name is on the collection the shell goes in, not on the shell.
 pub(crate) fn shell_name(prefix: &str, factor: f64, distance: Option<f64>) -> String {
     let factor = crate::model::optimization::format_factor(factor);
-    let base = if prefix.is_empty() { format!("RAF {factor}") } else { format!("{prefix}_RAF {factor}") };
+    let base = if prefix.is_empty() { format!("RF {factor}") } else { format!("{prefix}_RF {factor}") };
     match distance {
         None => base,
         Some(share) => format!("{base} DIR {:.0}%", share * 100.0),
@@ -119,7 +119,7 @@ pub(crate) fn run(input: RunInput, cancel: &CancelFlag, progress: &Progress) -> 
         _ => None,
     };
     if cancel.is_cancelled() {
-        bail!("Cancelled");
+        bail!(crate::app::jobs::Cancelled);
     }
     progress.set_fraction(0.1);
     let values = values::compute(&prepared.economics, &grid, &block_of_cell, heights.as_deref(), cancel)?;
@@ -142,7 +142,7 @@ pub(crate) fn run(input: RunInput, cancel: &CancelFlag, progress: &Progress) -> 
         .filter(|&(_, solid)| if solid { make_solids } else { make_surfaces })
         .collect();
     if cancel.is_cancelled() {
-        bail!("Cancelled");
+        bail!(crate::app::jobs::Cancelled);
     }
     let both = make_solids && make_surfaces;
     let meshes = wanted

@@ -114,7 +114,7 @@ impl<'a> App<'a> {
             }
         };
         if self.graphics.is_none() {
-            bail!("The renderer is not initialised yet");
+            bail!("{}", crate::i18n::tr!("err-video-renderer-not-ready"));
         }
         // Encoders work on whole 2x2 blocks of chroma.
         let (width, height) = (request.width & !1, request.height & !1);
@@ -168,7 +168,7 @@ impl<'a> App<'a> {
                 #[cfg(target_arch = "wasm32")]
                 Ok((path, bytes)) => {
                     let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-                    Self::trigger_browser_download(name, bytes, format.mime_type(), "video");
+                    Self::trigger_browser_download(name, bytes, format.mime_type(), crate::i18n::tr!("err-file-desc-video"));
                 }
                 Err(error) => {
                     // An encoder that failed leaves the capture with nowhere

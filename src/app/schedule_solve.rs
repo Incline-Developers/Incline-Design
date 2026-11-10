@@ -28,7 +28,8 @@ use crate::model::schedule::{
             greedy,
             input::BlendInput,
             lp,
-            replay::{BlendSolution, ExtractionAdjustments, ReplayReport},
+            reduce::Reduced,
+            replay::{BlendSolution, ExtractionAdjustments, ReplayReport, replay_as_published},
         },
         progress::{ImproveEvent, ImproveStage},
     },
@@ -97,6 +98,7 @@ pub(crate) struct PhaseTimings {
     pub(crate) replay: Duration,
 }
 
+#[derive(Clone)]
 pub(crate) struct ScheduleCompletion {
     pub(crate) identity: ScheduleRunIdentity,
     /// The options this run was solved under, held with the result so a
@@ -125,6 +127,8 @@ pub(crate) struct ScheduleCompletion {
     pub(crate) interrupt_calls: u64,
     /// Present when the horizon was first solved day by day.
     pub(crate) day_by_day: Option<DayByDaySummary>,
+    /// Read back from the project file; see [`restore_saved`].
+    pub(crate) restored: bool,
 }
 
 impl ScheduleCompletion {
@@ -153,6 +157,7 @@ impl ScheduleCompletion {
             event_callbacks: 0,
             interrupt_calls: 0,
             day_by_day: None,
+            restored: false,
         }
     }
 
@@ -270,7 +275,7 @@ pub(crate) fn hourly_dispatch(out: &mut ScheduleCompletion, cancel: &CancelFlag)
     // schedules, so that time is counted as the solver's.
     let (solution, checked) = match greedy::dispatch_cancellable(&out.input, &cancel.signal()) {
         Ok(Some(found)) => (found.solution, found.replay),
-        Ok(None) => return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during dispatch".into()),
+        Ok(None) => return DayByDay::Stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-dispatch")),
         Err(reason) => return DayByDay::Failed(reason),
     };
     out.timings.solver += started.elapsed();
@@ -279,7 +284,7 @@ pub(crate) fn hourly_dispatch(out: &mut ScheduleCompletion, cancel: &CancelFlag)
             log::warn!("schedule run {}: hourly dispatch schedule: {issue}", out.identity.run_id);
         }
         let issue = checked.issues.iter().chain(&checked.grade_issues).next().cloned().unwrap_or_default();
-        return DayByDay::Failed(format!("the replay rejected it: {issue}"));
+        return DayByDay::Failed(crate::i18n::tr!("err-sched-replay-rejected", issue = issue.to_string()));
     }
     let summary = DayByDaySummary {
         method: StartMethod::Hourly,
@@ -380,7 +385,14 @@ pub(crate) fn consistent_relaxation(proved: Option<f64>, published: f64, run_id:
 
 pub(crate) fn exceeds_bound(published: f64, bound: f64) -> Option<String> {
     let tolerance = 1e-4_f64.max(bound.abs() * 1e-8);
-    (published > bound + tolerance).then(|| format!("published objective {published} exceeds SCIP bound {bound} beyond {tolerance}"))
+    (published > bound + tolerance).then(|| {
+        crate::i18n::tr!(
+            "err-sched-exceeds-bound",
+            published = published.to_string(),
+            bound = bound.to_string(),
+            tolerance = tolerance.to_string()
+        )
+    })
 }
 
 pub(crate) fn log_outcome(out: &ScheduleCompletion) {
@@ -432,13 +444,13 @@ pub(crate) fn log_outcome(out: &ScheduleCompletion) {
 /// holds is an error either way.
 pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, options: ScheduleSolveOptions, cancel: &CancelFlag) -> Result<(), String> {
     if options.time_limit.is_some_and(|limit| limit.is_zero() || !limit.as_secs_f64().is_finite()) {
-        return Err("SCIP time limit must be positive and finite".into());
+        return Err(crate::i18n::tr!("err-sched-time-limit"));
     }
     if options.relative_gap.is_some_and(|gap| !gap.is_finite() || !(0.0..=1.0).contains(&gap)) {
-        return Err("SCIP relative gap must lie in 0..=1".into());
+        return Err(crate::i18n::tr!("err-sched-gap-range"));
     }
     if input.segments_per_interval == 0 || input.intervals.is_empty() {
-        return Err("the blended event grid is empty".into());
+        return Err(crate::i18n::tr!("err-sched-grid-empty"));
     }
     for (position, interval) in input.intervals.iter().enumerate() {
         if cancel.is_cancelled() {
@@ -451,7 +463,7 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             || interval.end_h <= interval.start_h
             || (position > 0 && (interval.start_h - input.intervals[position - 1].end_h).abs() > 1e-9)
         {
-            return Err(format!("invalid interval at position {position}"));
+            return Err(crate::i18n::tr!("err-sched-invalid-interval", position = position.to_string()));
         }
     }
     if let Some(chain) = &input.drill_blast
@@ -473,7 +485,7 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             })
             || chain.fixed.as_ref().is_some_and(|timeline| timeline.blasts.len() != chain.blasts.len()))
     {
-        return Err("invalid drill and blast input".to_owned());
+        return Err(crate::i18n::tr!("err-sched-invalid-drill-blast"));
     }
     let grades = input.grades.count();
     let mut pile_ids = BTreeSet::new();
@@ -482,23 +494,23 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             return Ok(());
         }
         if !pile_ids.insert(pile.id) || !pile.capacity_t.is_finite() || pile.capacity_t <= 0.0 {
-            return Err(format!("invalid or duplicate pile {}", pile.id.0));
+            return Err(crate::i18n::tr!("err-sched-invalid-pile", id = pile.id.0.to_string()));
         }
         if !pile.opening_t.is_finite()
             || pile.opening_t < 0.0
             || pile.opening_q.len() != grades
             || pile.opening_q.iter().any(|q| !q.is_finite() || *q < 0.0 || (pile.opening_t == 0.0 && *q != 0.0))
         {
-            return Err(format!("invalid opening data on pile {}", pile.id.0));
+            return Err(crate::i18n::tr!("err-sched-invalid-pile-opening-data", id = pile.id.0.to_string()));
         }
         if pile.chunks.is_empty() && !pile.chunk_opening.is_empty() {
-            return Err(format!("chunk opening without chunks on pile {}", pile.id.0));
+            return Err(crate::i18n::tr!("err-sched-pile-opening-no-parcels", id = pile.id.0.to_string()));
         }
         if pile.chunk_receiving.is_some_and(|receiving| receiving >= pile.chunks.len()) {
-            return Err(format!("the receiving chunk is not one of the chunks on pile {}", pile.id.0));
+            return Err(crate::i18n::tr!("err-sched-pile-receiving-parcel", id = pile.id.0.to_string()));
         }
         if pile.chunk_opening.len() > pile.chunks.len() || pile.chunks.iter().any(|cap| !cap.is_finite() || *cap <= 0.0) {
-            return Err(format!("invalid chunks on pile {}", pile.id.0));
+            return Err(crate::i18n::tr!("err-sched-invalid-pile-parcels", id = pile.id.0.to_string()));
         }
         for (position, (tonnes, contained)) in pile.chunk_opening.iter().enumerate() {
             if contained.len() != grades
@@ -507,7 +519,11 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
                 || *tonnes > pile.chunks[position]
                 || contained.iter().any(|q| !q.is_finite() || *q < 0.0 || (*tonnes == 0.0 && *q != 0.0))
             {
-                return Err(format!("invalid opening on pile {} chunk {position}", pile.id.0));
+                return Err(crate::i18n::tr!(
+                    "err-sched-invalid-parcel-opening",
+                    id = pile.id.0.to_string(),
+                    position = position.to_string()
+                ));
             }
         }
         let (opening_t, opening_q) = pile.total_opening(grades);
@@ -517,7 +533,7 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             || opening_q.len() != grades
             || opening_q.iter().any(|q| !q.is_finite() || *q < 0.0 || (opening_t == 0.0 && *q != 0.0))
         {
-            return Err(format!("invalid opening on pile {}", pile.id.0));
+            return Err(crate::i18n::tr!("err-sched-invalid-pile-opening", id = pile.id.0.to_string()));
         }
     }
     let mut ground_ids = BTreeSet::new();
@@ -526,13 +542,13 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             return Ok(());
         }
         if !ground_ids.insert(source.id) || !source.tonnes_t.is_finite() || source.tonnes_t < 0.0 {
-            return Err(format!("invalid or duplicate ground source {}", source.id.0));
+            return Err(crate::i18n::tr!("err-sched-invalid-ground", id = source.id.0.to_string()));
         }
         if source.material.is_empty()
             || source.material.iter().any(|share| !share.fraction.is_finite() || !(0.0..=1.0).contains(&share.fraction))
             || (source.material.iter().map(|share| share.fraction).sum::<f64>() - 1.0).abs() > 1e-9
         {
-            return Err(format!("invalid material shares on ground source {}", source.id.0));
+            return Err(crate::i18n::tr!("err-sched-invalid-material-shares", id = source.id.0.to_string()));
         }
     }
     let referable: BTreeSet<_> = ground_ids
@@ -542,7 +558,7 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
         .collect();
     let loaders: BTreeSet<_> = input.loaders.iter().map(|loader| loader.id).collect();
     if loaders.len() != input.loaders.len() {
-        return Err("duplicate loader".into());
+        return Err(crate::i18n::tr!("err-sched-duplicate-loader"));
     }
     for loader in &input.loaders {
         if cancel.is_cancelled() {
@@ -553,12 +569,12 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             .iter()
             .any(|rate| rate.interval >= input.intervals.len() || !rate.dig_tph.is_finite() || rate.dig_tph < 0.0 || !rate.reclaim_tph.is_finite() || rate.reclaim_tph < 0.0)
         {
-            return Err(format!("invalid rates for loader {}", loader.id.0));
+            return Err(crate::i18n::tr!("err-sched-invalid-loader-rates", id = loader.id.0.to_string()));
         }
     }
     let destinations: BTreeSet<_> = input.destinations.iter().map(|destination| destination.id).collect();
     if destinations.len() != input.destinations.len() {
-        return Err("duplicate destination".into());
+        return Err(crate::i18n::tr!("err-sched-duplicate-destination"));
     }
     for destination in &input.destinations {
         if cancel.is_cancelled() {
@@ -568,7 +584,7 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             || destination.crusher_daily_t.iter().flatten().any(|cap| !cap.is_finite() || *cap < 0.0)
             || matches!(destination.kind, DestinationKind::Stockpile(pile) if !pile_ids.contains(&pile))
         {
-            return Err(format!("invalid destination {}", destination.id.0));
+            return Err(crate::i18n::tr!("err-sched-invalid-destination", id = destination.id.0.to_string()));
         }
     }
     let mut target_ids = BTreeSet::new();
@@ -584,7 +600,7 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             || !target_ids.insert((target.destination, target.grade, target.day))
             || specification.validate().is_err()
         {
-            return Err(format!("invalid grade target {index}"));
+            return Err(crate::i18n::tr!("err-sched-invalid-grade-target", index = index.to_string()));
         }
         marginal_cost += specification
             .hinges()
@@ -597,11 +613,11 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             .iter()
             .any(|interval| interval.end_h > (f64::from(target_day(interval.start_h)) + 1.0) * TARGET_PERIOD_H + 1e-9)
         {
-            return Err(format!("an interval crosses grade target {index}'s period boundary"));
+            return Err(crate::i18n::tr!("err-sched-target-period-boundary", index = index.to_string()));
         }
     }
     if !marginal_cost.is_finite() {
-        return Err("grade target marginal costs cannot be represented".into());
+        return Err(crate::i18n::tr!("err-sched-target-marginal-cost"));
     }
     let mut opening_ids = BTreeSet::new();
     for &(target, period, tonnes, contained) in &input.target_opening {
@@ -613,19 +629,19 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             || contained < 0.0
             || (tonnes == 0.0 && contained != 0.0)
         {
-            return Err("invalid carried grade target receipts".into());
+            return Err(crate::i18n::tr!("err-sched-invalid-carried-receipts"));
         }
     }
     let trucks: BTreeSet<_> = input.trucks.iter().map(|truck| truck.id).collect();
     if trucks.len() != input.trucks.len() {
-        return Err("duplicate truck class".into());
+        return Err(crate::i18n::tr!("err-sched-duplicate-truck"));
     }
     for truck in &input.trucks {
         if cancel.is_cancelled() {
             return Ok(());
         }
         if truck.hours.len() < input.intervals.len() || truck.hours.iter().any(|hours| !hours.is_finite() || *hours < 0.0) {
-            return Err(format!("invalid truck class {}", truck.id.0));
+            return Err(crate::i18n::tr!("err-sched-invalid-truck", id = truck.id.0.to_string()));
         }
     }
     let mut task_ids = BTreeSet::new();
@@ -639,16 +655,16 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             || !task.window_end_h.is_finite()
             || task.window_end_h <= task.window_start_h
         {
-            return Err(format!("invalid task {}", task.id.0));
+            return Err(crate::i18n::tr!("err-sched-invalid-task", id = task.id.0.to_string()));
         }
         match &task.kind {
             TaskKind::Dig { sequence } if sequence.is_empty() || sequence.iter().any(|id| !referable.contains(id)) => {
-                return Err(format!("invalid dig sequence on task {}", task.id.0));
+                return Err(crate::i18n::tr!("err-sched-invalid-dig-sequence", id = task.id.0.to_string()));
             }
             TaskKind::Reclaim { approved_sources, maximum_t }
                 if approved_sources.is_empty() || approved_sources.iter().any(|id| !pile_ids.contains(id)) || maximum_t.is_some_and(|value| !value.is_finite() || value < 0.0) =>
             {
-                return Err(format!("invalid reclaim sources or cap on task {}", task.id.0));
+                return Err(crate::i18n::tr!("err-sched-invalid-reclaim-sources", id = task.id.0.to_string()));
             }
             _ => {}
         }
@@ -674,7 +690,7 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             || movement.value_per_tonne().is_err()
             || (movement.activity == Activity::Dig && (0..grades).any(|g| input.grades.fraction(movement.material, g).is_none()))
         {
-            return Err(format!("invalid movement candidate {index}"));
+            return Err(crate::i18n::tr!("err-sched-invalid-movement", index = index.to_string()));
         }
     }
     for limit in &input.grade_limits {
@@ -682,7 +698,7 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             return Ok(());
         }
         if !destinations.contains(&limit.destination) || limit.grade >= grades || !limit.minimum.is_finite() || limit.minimum < 0.0 {
-            return Err("invalid grade limit".into());
+            return Err(crate::i18n::tr!("err-sched-invalid-grade-limit"));
         }
     }
     let valid_bounds = |bounds: &[crate::model::schedule::optimisation::blended::input::GradeBound]| {
@@ -703,7 +719,7 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             || qualification.alternatives.is_empty()
             || qualification.alternatives.iter().any(|alternative| !valid_bounds(&alternative.bounds))
         {
-            return Err("invalid reclaim grade qualification".into());
+            return Err(crate::i18n::tr!("err-sched-invalid-qualification"));
         }
     }
     for payment in &input.conditional_values {
@@ -712,7 +728,7 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
             || payment.bounds.is_empty()
             || !valid_bounds(&payment.bounds)
         {
-            return Err("invalid conditional reclaim cashflow".into());
+            return Err(crate::i18n::tr!("err-sched-invalid-conditional-value"));
         }
     }
     Ok(())
@@ -725,6 +741,40 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
 /// before an Improve run starts its whole-horizon solve, so a caller can show
 /// it while the rest of the run looks for a better one. It is called at most
 /// once, and never for a run that stops at the first schedule.
+/// A schedule saved with the project, checked against the model just captured.
+/// `None` when the replay will not have it: the caller then calculates, so a
+/// saved schedule can never be what stops a project having one.
+pub(crate) fn restore_saved(
+    input: &Arc<BlendInput>,
+    identity: ScheduleRunIdentity,
+    options: ScheduleSolveOptions,
+    saved: &crate::model::schedule::optimisation::blended::saved::SavedSchedule,
+    cancel: &CancelFlag,
+) -> Option<ScheduleCompletion> {
+    let started = Instant::now();
+    // The rows were worked against this timeline; every solve fixes its own.
+    let mut worked = (**input).clone();
+    if let (Some(chain), Some(timeline)) = (worked.drill_blast.as_mut(), saved.solution.drill_blast.as_ref()) {
+        chain.fixed = Some(timeline.clone());
+    }
+    let mut solution = (*saved.solution).clone();
+    let stop = AtomicBool::new(cancel.is_cancelled());
+    let Some(report) = replay_as_published(&worked, &mut solution, &stop).filter(ReplayReport::is_valid) else {
+        log::info!("schedule run {}: the saved schedule did not replay on this model, so it was calculated", identity.run_id);
+        return None;
+    };
+    let mut out = ScheduleCompletion::new(identity, options, Arc::new(worked));
+    out.termination = SolveTermination::FeasibleLimit;
+    out.restored = true;
+    out.raw_objective = Some(solution.reported_objective);
+    out.published_objective = Some(report.replayed_objective);
+    out.adjustments = Some(solution.adjustments);
+    out.replay = Some(Arc::new(report));
+    out.solution = Some(Arc::new(solution));
+    out.timings.replay = started.elapsed();
+    Some(out)
+}
+
 pub(crate) fn execute_schedule(
     input: Arc<BlendInput>,
     identity: ScheduleRunIdentity,
@@ -735,7 +785,7 @@ pub(crate) fn execute_schedule(
 ) -> ScheduleCompletion {
     let mut out = ScheduleCompletion::new(identity, options, input);
     if cancel.is_cancelled() {
-        out.stop(SolveTermination::Cancelled, "cancelled before validation");
+        out.stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-validation"));
         return out;
     }
 
@@ -744,7 +794,7 @@ pub(crate) fn execute_schedule(
     let validation = validate_input(&out.input, None, options, cancel);
     out.timings.input_validation = started.elapsed();
     if cancel.is_cancelled() {
-        out.stop(SolveTermination::Cancelled, "cancelled during input validation");
+        out.stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-input-validation"));
         return out;
     }
     if let Err(problem) = validation {
@@ -757,11 +807,20 @@ pub(crate) fn execute_schedule(
     // seeds an Improve run's whole-horizon solve.
 
     let budget_started = Instant::now();
+    // The run works on the input with the columns that only stand in for
+    // others merged (`blended::reduce`): the dispatch, the search and SCIP
+    // all solve the smaller problem, and every schedule is mapped back onto
+    // the captured input before it is shown.
+    let captured = Arc::clone(&out.input);
+    let reduced = Reduced::new(&captured);
+    out.input = Arc::new(reduced.input.clone());
+    let early = |shown: &ScheduleCompletion| early(&mapped_back(shown.clone(), &reduced, &captured));
     activity.set(3);
     activity.stage(ImproveStage::FirstSchedule);
     let attempt = hourly_dispatch(&mut out, cancel);
     if !options.first_schedule_only {
-        return super::scip_blend::improve(out, attempt, budget_started, cancel, activity, early);
+        let out = super::scip_blend::improve(out, attempt, budget_started, cancel, activity, &early);
+        return mapped_back(out, &reduced, &captured);
     }
     match attempt {
         DayByDay::Seed(found) => adopt_seed(&mut out, *found, None, None, DayByDayRole::Only),
@@ -771,5 +830,36 @@ pub(crate) fn execute_schedule(
         }
         DayByDay::Stop(reason, diagnostic) => out.stop(reason, diagnostic),
     }
-    out
+    mapped_back(out, &reduced, &captured)
+}
+
+/// `completion`, worked on `reduced`'s input, as a run of `captured`: its
+/// schedule expanded and replayed there, with the drill and blast timeline
+/// the run fixed.
+fn mapped_back(mut completion: ScheduleCompletion, reduced: &Reduced, captured: &Arc<BlendInput>) -> ScheduleCompletion {
+    let mut input = (**captured).clone();
+    if let (Some(chain), Some(worked)) = (input.drill_blast.as_mut(), completion.input.drill_blast.as_ref()) {
+        chain.fixed = worked.fixed.clone();
+    }
+    completion.input = Arc::new(input);
+    let Some(solution) = completion.solution.take() else {
+        return completion;
+    };
+    let mut expanded = reduced.expand((*solution).clone());
+    match replay_as_published(&completion.input, &mut expanded, &AtomicBool::new(false)) {
+        Some(report) if report.is_valid() => {
+            completion.published_objective = Some(report.replayed_objective);
+            completion.replay = Some(Arc::new(report));
+            completion.solution = Some(Arc::new(expanded));
+        }
+        report => {
+            let issue = report
+                .and_then(|report| report.issues.iter().chain(&report.grade_issues).next().cloned())
+                .unwrap_or_default();
+            log::error!("schedule run {}: the schedule did not replay on the captured input: {issue}", completion.identity.run_id);
+            completion.replay = None;
+            completion.stop(SolveTermination::ValidationFailure, crate::i18n::tr!("err-sched-replay-failed", issue = issue.to_string()));
+        }
+    }
+    completion
 }

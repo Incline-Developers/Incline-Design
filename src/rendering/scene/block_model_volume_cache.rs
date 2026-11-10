@@ -316,18 +316,20 @@ const MAX_VOLUME_RAM_CELL_BYTES: usize = 1024 * 1024 * 1024;
 
 impl CellBackingBuilder {
     fn new(cell_count: usize) -> Result<Self, String> {
-        let bytes = cell_count.checked_mul(size_of::<u16>()).ok_or_else(|| "cell byte size overflows usize".to_owned())?;
+        let bytes = cell_count
+            .checked_mul(size_of::<u16>())
+            .ok_or_else(|| crate::i18n::tr!("err-bm-volume-cell-bytes-overflow"))?;
         if bytes <= MAX_VOLUME_RAM_CELL_BYTES {
-            let reservation = crate::app::memory::reserve(bytes, "block-volume cells")?;
+            let reservation = crate::app::memory::reserve(bytes, &crate::i18n::tr!("err-memory-what-block-volume"))?;
             let mut cells = Vec::new();
             cells
                 .try_reserve_exact(cell_count)
-                .map_err(|error| format!("allocating {bytes} bytes for volume cells: {error}"))?;
+                .map_err(|error| crate::i18n::tr!("err-bm-volume-cells-alloc", bytes = bytes.to_string(), error = error.to_string()))?;
             cells.resize(cell_count, EMPTY_CELL_PAYLOAD);
             return Ok(CellBackingBuilder::Ram { cells, reservation });
         }
         #[cfg(target_arch = "wasm32")]
-        return Err(format!("volume cells require {bytes} bytes, exceeding the 1 GiB browser cache limit"));
+        return Err(crate::i18n::tr!("err-bm-volume-cells-browser-limit", bytes = bytes.to_string()));
         #[cfg(not(target_arch = "wasm32"))]
         Self::new_mapped(cell_count)
     }
@@ -339,13 +341,16 @@ impl CellBackingBuilder {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn new_mapped_in(cell_count: usize, directory: &std::path::Path) -> Result<Self, String> {
-        let bytes = cell_count.checked_mul(size_of::<u16>()).ok_or_else(|| "cell byte size overflows usize".to_owned())?;
+        let bytes = cell_count
+            .checked_mul(size_of::<u16>())
+            .ok_or_else(|| crate::i18n::tr!("err-bm-volume-cell-bytes-overflow"))?;
         // Unlike a named PID/counter path, `tempfile_in` creates a private,
         // unpredictable file and asks the OS to make it anonymous. Its File
         // handle owns cleanup immediately, including every failure below.
         let file = create_anonymous_cell_file(directory)?;
-        file.set_len(bytes as u64).map_err(|e| format!("sizing temp cell file to {bytes} bytes: {e}"))?;
-        let mut mmap = unsafe { memmap2::MmapMut::map_mut(&file) }.map_err(|e| format!("mapping temp cell file: {e}"))?;
+        file.set_len(bytes as u64)
+            .map_err(|e| crate::i18n::tr!("err-bm-volume-temp-size", bytes = bytes.to_string(), error = e.to_string()))?;
+        let mut mmap = unsafe { memmap2::MmapMut::map_mut(&file) }.map_err(|e| crate::i18n::tr!("err-bm-volume-temp-map", error = e.to_string()))?;
         let words: &mut [u16] = bytemuck::cast_slice_mut(&mut mmap[..]);
         words.fill(EMPTY_CELL_PAYLOAD);
         Ok(CellBackingBuilder::Mapped(MappedCellBackingBuilder { mmap, file }))
@@ -364,8 +369,11 @@ impl CellBackingBuilder {
             CellBackingBuilder::Ram { cells, reservation } => Ok(CellBacking::Ram { cells, _reservation: reservation }),
             #[cfg(not(target_arch = "wasm32"))]
             CellBackingBuilder::Mapped(mapped) => {
-                mapped.mmap.flush().map_err(|e| format!("flushing temp cell file: {e}"))?;
-                let mmap = mapped.mmap.make_read_only().map_err(|e| format!("sealing temp cell file: {e}"))?;
+                mapped.mmap.flush().map_err(|e| crate::i18n::tr!("err-bm-volume-temp-flush", error = e.to_string()))?;
+                let mmap = mapped
+                    .mmap
+                    .make_read_only()
+                    .map_err(|e| crate::i18n::tr!("err-bm-volume-temp-seal", error = e.to_string()))?;
                 Ok(CellBacking::Mapped(MappedCells { mmap, _file: mapped.file }))
             }
         }
@@ -374,7 +382,7 @@ impl CellBackingBuilder {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn create_anonymous_cell_file(directory: &std::path::Path) -> Result<std::fs::File, String> {
-    let file = tempfile::tempfile_in(directory).map_err(|e| format!("creating anonymous temp cell file: {e}"))?;
+    let file = tempfile::tempfile_in(directory).map_err(|e| crate::i18n::tr!("err-bm-volume-temp-create", error = e.to_string()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -383,7 +391,7 @@ fn create_anonymous_cell_file(directory: &std::path::Path) -> Result<std::fs::Fi
         // file is already anonymous here, so tightening it has no exposure
         // window, and the owned handle still cleans up if chmod fails.
         file.set_permissions(std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("restricting anonymous temp cell file permissions: {e}"))?;
+            .map_err(|e| crate::i18n::tr!("err-bm-volume-temp-permissions", error = e.to_string()))?;
     }
     Ok(file)
 }
@@ -1111,9 +1119,9 @@ fn validate_volume_metadata_budget(brick_count: usize) -> Result<(), String> {
     const BYTES_PER_BRICK_UPPER_BOUND: usize = 64;
     let bytes = brick_count
         .checked_mul(BYTES_PER_BRICK_UPPER_BOUND)
-        .ok_or_else(|| "brick metadata byte size overflows usize".to_owned())?;
+        .ok_or_else(|| crate::i18n::tr!("err-bm-volume-metadata-overflow"))?;
     if bytes > MAX_VOLUME_METADATA_BYTES || brick_count > u32::MAX as usize {
-        return Err(format!("brick grid metadata would require at least {} MiB", bytes / (1024 * 1024)));
+        return Err(crate::i18n::tr!("err-bm-volume-metadata-too-large", mib = (bytes / (1024 * 1024)).to_string()));
     }
     Ok(())
 }
@@ -1134,10 +1142,10 @@ pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel, cancel: &cr
     let brick_count = brick_dims_usize
         .into_iter()
         .try_fold(1usize, |acc, dim| acc.checked_mul(dim))
-        .ok_or_else(|| "brick grid dimensions overflow usize".to_owned())?;
+        .ok_or_else(|| crate::i18n::tr!("err-bm-volume-brick-grid-overflow"))?;
     validate_volume_metadata_budget(brick_count)?;
-    let metadata_bytes = brick_count.checked_mul(64).ok_or_else(|| "brick metadata byte size overflows usize".to_owned())?;
-    let metadata_reservation = crate::app::memory::reserve(metadata_bytes, "block-volume metadata")?;
+    let metadata_bytes = brick_count.checked_mul(64).ok_or_else(|| crate::i18n::tr!("err-bm-volume-metadata-overflow"))?;
+    let metadata_reservation = crate::app::memory::reserve(metadata_bytes, &crate::i18n::tr!("err-memory-what-block-volume"))?;
     let color_values = block_model_color_values(block_model);
 
     let x_lookup = PlaneLookup::new(&x_planes);
@@ -1225,7 +1233,7 @@ pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel, cancel: &cr
     let mut brick_occupied = Vec::new();
     brick_occupied
         .try_reserve_exact(brick_count)
-        .map_err(|error| format!("could not allocate brick occupancy table: {error}"))?;
+        .map_err(|error| crate::i18n::tr!("err-bm-volume-occupancy-alloc", error = error.to_string()))?;
     brick_occupied.resize(brick_count, false);
     for (bindex, occupied) in brick_occupied.iter_mut().enumerate() {
         *occupied = occupancy_words[bindex / 64] & (1 << (bindex % 64)) != 0;
@@ -1236,18 +1244,20 @@ pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel, cancel: &cr
         return Ok(None);
     }
 
-    let sparse_cell_count = occupied_count.checked_mul(CELLS_PER_BRICK).ok_or_else(|| "sparse cell count overflows usize".to_owned())?;
+    let sparse_cell_count = occupied_count
+        .checked_mul(CELLS_PER_BRICK)
+        .ok_or_else(|| crate::i18n::tr!("err-bm-volume-sparse-count-overflow"))?;
     let sparse_cell_bytes = sparse_cell_count
         .checked_mul(size_of::<u16>())
-        .ok_or_else(|| "sparse cell byte size overflows usize".to_owned())?;
+        .ok_or_else(|| crate::i18n::tr!("err-bm-volume-sparse-bytes-overflow"))?;
     if sparse_cell_bytes > MAX_VOLUME_CELL_BYTES {
-        return Err(format!("sparse brick volume would require {} MiB of cell payloads", sparse_cell_bytes / (1024 * 1024)));
+        return Err(crate::i18n::tr!("err-bm-volume-sparse-too-large", mib = (sparse_cell_bytes / (1024 * 1024)).to_string()));
     }
 
     let mut brick_table = Vec::new();
     brick_table
         .try_reserve_exact(brick_count)
-        .map_err(|error| format!("could not allocate brick address table: {error}"))?;
+        .map_err(|error| crate::i18n::tr!("err-bm-volume-address-alloc", error = error.to_string()))?;
     brick_table.resize(brick_count, EMPTY_BRICK);
     let mut brick_centers = vec![[0.0f32; 3]; occupied_count];
     let mut occupied_brick_indices = Vec::with_capacity(occupied_count);
@@ -1307,9 +1317,9 @@ pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel, cancel: &cr
     let reference_len = reference_cell_length(&x_planes, &y_planes, &z_planes);
 
     let dims = [
-        dims_usize[0].try_into().map_err(|_| "x cell count exceeds u32".to_owned())?,
-        dims_usize[1].try_into().map_err(|_| "y cell count exceeds u32".to_owned())?,
-        dims_usize[2].try_into().map_err(|_| "z cell count exceeds u32".to_owned())?,
+        dims_usize[0].try_into().map_err(|_| crate::i18n::tr!("err-bm-volume-x-cells-range"))?,
+        dims_usize[1].try_into().map_err(|_| crate::i18n::tr!("err-bm-volume-y-cells-range"))?,
+        dims_usize[2].try_into().map_err(|_| crate::i18n::tr!("err-bm-volume-z-cells-range"))?,
     ];
     let brick_dims = [brick_dims_usize[0] as u32, brick_dims_usize[1] as u32, brick_dims_usize[2] as u32];
     let mut asset = BlockVolumeAsset {

@@ -81,7 +81,7 @@ impl<'a> Graphics<'a> {
                 apply_limit_buckets: false,
             })
             .await
-            .map_err(|e| anyhow!("No compatible GPU adapter found: {e:?}"))?;
+            .map_err(|e| anyhow!(tr!("err-gfx-no-adapter", error = format!("{e:?}"))))?;
 
         let adapter_info = adapter.get_info();
         userspace_log!(
@@ -154,7 +154,7 @@ impl<'a> Graphics<'a> {
                 required_limits,
                 label: None,
                 experimental_features,
-                memory_hints: wgpu::MemoryHints::default(),
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
                 trace: wgpu::Trace::Off,
             })
             .await?;
@@ -191,14 +191,14 @@ impl<'a> Graphics<'a> {
                     .copied()
                     .find(|format| matches!(*format, wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm))
             })
-            .ok_or_else(|| anyhow!("Surface reports no supported 8-bit sRGB-compatible format"))?;
+            .ok_or_else(|| anyhow!(tr!("err-gfx-no-surface-format")))?;
         let present_mode = surface_caps
             .present_modes
             .iter()
             .copied()
             .find(|m| *m == wgpu::PresentMode::Fifo)
             .or_else(|| surface_caps.present_modes.first().copied())
-            .ok_or_else(|| anyhow!("Surface reports no supported present modes"))?;
+            .ok_or_else(|| anyhow!(tr!("err-gfx-no-present-modes")))?;
         // What "vsync off" means on this adapter. Mailbox renders freely and
         // presents the newest frame each refresh, so it drops the wait without
         // tearing; Immediate is the tearing fallback. Neither is guaranteed -
@@ -208,17 +208,19 @@ impl<'a> Graphics<'a> {
             .into_iter()
             .find(|mode| surface_caps.present_modes.contains(mode));
         userspace_log!("{}", tr!("init-surface-present-mode", mode = format!("{present_mode:?}")));
-        let alpha_mode = surface_caps
-            .alpha_modes
-            .first()
-            .copied()
-            .ok_or_else(|| anyhow!("Surface reports no supported alpha modes"))?;
+        // Blended by its alpha only where the window cuts its own corners.
+        let corners_alpha_mode = window_corners::WindowCorners::alpha_mode(&window, &surface_caps);
+        let alpha_mode = match corners_alpha_mode {
+            Some(mode) => mode,
+            None => surface_caps.alpha_modes.first().copied().ok_or_else(|| anyhow!(tr!("err-gfx-no-alpha-modes")))?,
+        };
         // Scene shaders output linear colour and therefore render through an
         // sRGB view. egui applies gamma itself and renders through the base
         // unorm view of the same surface texture.
         let scene_format = surface_format.add_srgb_suffix();
         let gui_format = surface_format.remove_srgb_suffix();
         let view_formats = vec![if surface_format.is_srgb() { gui_format } else { scene_format }];
+        let window_corners = corners_alpha_mode.map(|_| window_corners::WindowCorners::new(&device, gui_format));
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -819,6 +821,7 @@ impl<'a> Graphics<'a> {
             scene_cache,
             scene_cache_blit_layout,
             scene_cache_blit_pipeline,
+            window_corners,
             no_vsync_present_mode,
             scene_cache_key: None,
             depth_texture,
@@ -907,8 +910,6 @@ impl<'a> Graphics<'a> {
             surface_render_stats: Default::default(),
             point_render_stats: Default::default(),
             chunk_bounds_outline: None,
-            plot_preview: None,
-            plot_preview_key: None,
             pending_screenshot: None,
             camera_lock: None,
             video_target: None,

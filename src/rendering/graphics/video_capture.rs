@@ -317,7 +317,7 @@ impl Graphics<'_> {
                 MAP_PENDING => break,
                 MAP_FAILED => {
                     target.in_flight.clear();
-                    anyhow::bail!("A video frame could not be read back from the GPU");
+                    anyhow::bail!(crate::i18n::tr!("err-gfx-video-frame-read"));
                 }
                 _ => {
                     let done = target.in_flight.pop_front().expect("checked above");

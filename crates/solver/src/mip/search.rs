@@ -292,7 +292,7 @@ impl Search {
         let mut objval = CDouble::new(0.0);
         let mut integerfeasible = true;
         for i in 0..data.model.num_col {
-            objval += sol[i] * data.model.col_cost[i];
+            objval += CDouble::new(sol[i]) * data.model.col_cost[i];
             if !integerfeasible || !data.model.is_col_integer(i) {
                 continue;
             }
@@ -926,8 +926,9 @@ impl Search {
 
     /// HiGHS's `installNode`.
     pub fn install_node(&mut self, node: OpenNode, data: &mut MipData) {
+        let detect_symmetries = data.detect_symmetries;
         on_local(&mut self.localdom, data, |dom, env| {
-            dom.set_domain_change_stack_with_branching(&node.domchgstack, &node.branchings, env)
+            dom.set_domain_change_stack_with_branching(&node.domchgstack, &node.branchings, detect_symmetries, env)
         });
         let mut global_symmetries_valid = true;
         if data.global_orbits.is_some() {

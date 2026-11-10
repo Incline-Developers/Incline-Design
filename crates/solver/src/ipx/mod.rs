@@ -17,7 +17,7 @@ pub(crate) mod maxvolume;
 pub(crate) mod model;
 pub(crate) mod sparse;
 
-pub(crate) use highs::{analytic_centre, solve_lp};
+pub(crate) use highs::{analytic_centre, solve_lp, solve_reduced_lp};
 use sparse::Int;
 
 pub(crate) const IPX_STATUS_NOT_RUN: Int = 0;

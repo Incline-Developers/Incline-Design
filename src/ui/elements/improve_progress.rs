@@ -19,6 +19,7 @@ use crate::{
         fonts::{bold, bold_font},
         state::UiCommand,
         widgets::{
+            hint::Hint,
             menu::{DragableMenu, MenuButton, MenuFieldCombo},
             progress::{ring, ring_fill},
             toolbar::GROUP_CORNER_RADIUS,
@@ -31,6 +32,8 @@ const CARD_WIDTH: f32 = 380.0;
 const RING: f32 = 40.0;
 const FOLDED_RING: f32 = 16.0;
 const CHART_HEIGHT: f32 = 128.0;
+/// The label, value and gain at the top right of the card.
+const VALUE_HEIGHT: f32 = 58.0;
 /// The time strip: how the run's time has gone, stage by stage, against its
 /// limit.
 const STRIP_HEIGHT: f32 = 8.0;
@@ -99,7 +102,7 @@ fn draw_folded(ui: &mut egui::Ui, editor: &mut EditorState, progress: &ImprovePr
         ring(ui, FOLDED_RING, progress.ended.map(|_| 1.0));
         ui.label(bold(&clock(progress.elapsed_s())));
         if let Some(best) = progress.best() {
-            ui.label(money(best.value));
+            ui.label(money(best.value)).hint(crate::model::schedule::cashflow::money_exact(best.value));
             if let Some(text) = gain_text(progress) {
                 ui.label(egui::RichText::new(text).color(ring_fill(ui.visuals())));
             }
@@ -124,11 +127,15 @@ fn draw_full(ui: &mut egui::Ui, editor: &mut EditorState, progress: &ImproveProg
             ui.add_space(6.0);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
+                // As tall as it gets, so the buttons below stay put when a gain
+                // first appears: see `draw_standing`.
+                ui.set_min_height(VALUE_HEIGHT);
                 ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                     ui.label(egui::RichText::new(tr!("improve-card-best")).weak().small());
                     match progress.best() {
                         Some(best) => {
-                            ui.label(egui::RichText::new(money(best.value)).font(bold_font(18.0)));
+                            ui.label(egui::RichText::new(money(best.value)).font(bold_font(18.0)))
+                                .hint(crate::model::schedule::cashflow::money_exact(best.value));
                             match gain_text(progress) {
                                 Some(text) => ui.label(egui::RichText::new(text).color(ring_fill(ui.visuals()))),
                                 None => ui.label(egui::RichText::new(tr!("improve-card-no-gain")).weak().small()),
@@ -162,11 +169,6 @@ fn fold_button(ui: &mut egui::Ui, editor: &mut EditorState) {
         ui.painter().rect_filled(rect, GROUP_CORNER_RADIUS, ui.visuals().widgets.hovered.bg_fill);
     }
     chevron.paint_at(ui, egui::Rect::from_center_size(rect.center(), egui::vec2(10.0, 10.0)));
-    let response = response.on_hover_text(if editor.improve_card_collapsed {
-        tr!("improve-card-expand")
-    } else {
-        tr!("improve-card-collapse")
-    });
     if response.clicked() {
         editor.improve_card_collapsed = !editor.improve_card_collapsed;
     }
@@ -313,7 +315,7 @@ fn draw_chart(ui: &mut egui::Ui, progress: &ImproveProgress) {
     if let Some(pointer) = response.hover_pos().filter(|pointer| plot.contains(*pointer)) {
         let at_s = f64::from((pointer.x - plot.left()) / plot.width()) * span;
         if let Some(point) = progress.points.iter().take_while(|point| point.at_s <= at_s).last() {
-            response.on_hover_text(format!("{}  {}", clock(at_s), money(point.value)));
+            response.hint(format!("{}  {}", clock(at_s), money(point.value)));
         }
     }
 }
@@ -323,13 +325,9 @@ fn draw_chart(ui: &mut egui::Ui, progress: &ImproveProgress) {
 fn draw_standing(ui: &mut egui::Ui, progress: &ImproveProgress) {
     ui.horizontal(|ui| {
         match progress.gap() {
-            Some(gap) => ui.label(tr!("improve-card-gap", gap = percent(gap))).on_hover_text(tr!("improve-card-gap-note")),
-            None if progress.ended.is_some() => ui
-                .label(egui::RichText::new(tr!("improve-card-no-bound-ended")).weak())
-                .on_hover_text(tr!("improve-card-gap-note")),
-            None => ui
-                .label(egui::RichText::new(tr!("improve-card-no-bound")).weak())
-                .on_hover_text(tr!("improve-card-gap-note")),
+            Some(gap) => ui.label(tr!("improve-card-gap", gap = percent(gap))).hint(tr!("improve-card-gap-note")),
+            None if progress.ended.is_some() => ui.label(egui::RichText::new(tr!("improve-card-no-bound-ended")).weak()).hint(tr!("improve-card-gap-note")),
+            None => ui.label(egui::RichText::new(tr!("improve-card-no-bound")).weak()).hint(tr!("improve-card-gap-note")),
         };
         if let Some(at_s) = progress.improved_at_s.filter(|_| progress.ended.is_none()) {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -341,6 +339,13 @@ fn draw_standing(ui: &mut egui::Ui, progress: &ImproveProgress) {
             });
         }
     });
+    // A loose bound reads like a shortfall, so the card says what a bound is
+    // where it shows one, not on hover alone. Held while the run looks for one
+    // too: the card is centred on nothing, and a line arriving mid-run would
+    // move Discard and Stop out from under the pointer.
+    if progress.gap().is_some() || progress.ended.is_none() {
+        ui.label(egui::RichText::new(tr!("improve-card-bound-optimistic")).weak().small());
+    }
 }
 
 fn draw_controls(ui: &mut egui::Ui, editor: &mut EditorState, progress: &ImproveProgress, commands: &mut Vec<UiCommand>) {
@@ -375,18 +380,10 @@ fn draw_controls(ui: &mut egui::Ui, editor: &mut EditorState, progress: &Improve
             .show(ui);
             crate::ui::widgets::menu::menu_actions(ui, |ui| {
                 let finishing = progress.finishing;
-                if ui
-                    .add(MenuButton::new(tr!("improve-card-stop")).primary().enabled(!finishing))
-                    .on_hover_text(tr!("improve-card-stop-note"))
-                    .clicked()
-                {
+                if ui.add(MenuButton::new(tr!("improve-card-stop")).primary().enabled(!finishing)).clicked() {
                     commands.push(UiCommand::FinishImprove);
                 }
-                if ui
-                    .add(MenuButton::new(tr!("improve-card-discard")))
-                    .on_hover_text(tr!("improve-card-discard-note"))
-                    .clicked()
-                {
+                if ui.add(MenuButton::new(tr!("improve-card-discard"))).clicked() {
                     commands.push(UiCommand::CancelScheduleCalculation);
                 }
             });
@@ -444,20 +441,6 @@ fn percent(share: f64) -> String {
     format!("{share:.decimals$}%")
 }
 
-/// Money to two decimals of its unit, which is fine enough to see a search's
-/// gains on a schedule worth hundreds of millions.
 fn money(value: f64) -> String {
-    let symbol = tr!("common-currency-symbol");
-    let size = value.abs();
-    let (scaled, suffix) = if size >= 1e9 {
-        (value / 1e9, "B")
-    } else if size >= 1e6 {
-        (value / 1e6, "M")
-    } else if size >= 1e3 {
-        (value / 1e3, "k")
-    } else {
-        (value, "")
-    };
-    let sign = if scaled < 0.0 { "-" } else { "" };
-    format!("{sign}{symbol}{:.2}{suffix}", scaled.abs())
+    crate::model::schedule::cashflow::money_text(value)
 }

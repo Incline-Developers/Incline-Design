@@ -165,7 +165,7 @@ impl<'a> App<'a> {
         self.clear_browser_import_selection(crate::ui::state::DataMenu::CsvDrillHole);
         let display_path = crate::app::browser_source_filename(&source.display_name());
         remap_browser_source_path(&mut source, display_path);
-        let proxy = self.web_event_loop_proxy.clone().context("browser event loop is unavailable")?;
+        let proxy = self.web_event_loop_proxy.clone().with_context(|| tr!("err-drill-browser-loop-unavailable"))?;
         let (ticket, _progress) = self.begin_reported_task(tr!("cmd-drill-hole-reading-name", name = source.display_name().to_string()));
         let workspace = self.workspace_generation;
         wasm_bindgen_futures::spawn_local(async move {
@@ -232,7 +232,7 @@ impl<'a> App<'a> {
         let apply = move |app: &mut App, result: Result<LoadedDrillHoleDataset>| match result {
             Ok(loaded) => {
                 let should_fit = !app.scene_has_renderables();
-                let id = app.add_loaded_drill_holes(loaded);
+                let id = app.add_as_one_step(|app| app.add_loaded_drill_holes(loaded));
                 if should_fit {
                     app.fit_view_to_extents();
                 }
@@ -253,7 +253,7 @@ impl<'a> App<'a> {
             .workspace
             .active_project()
             .map(|project| project.runtime_id)
-            .context("Open a project before importing drillholes")?;
+            .with_context(|| tr!("err-drill-open-project-first"))?;
         let key = drill_hole_load_key(source, runtime_id);
         if self.job_pending(&key) {
             userspace_log!("{}", tr!("cmd-drill-hole-name-already-loading", name = source.display_name().to_string()));
@@ -265,8 +265,8 @@ impl<'a> App<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn import_drill_hole_source(&mut self, source: DrillHoleSource) -> Result<()> {
         match &source {
-            DrillHoleSource::LegacyDhd { .. } => anyhow::bail!("DHD drillhole sources are no longer supported"),
-            DrillHoleSource::Csv { files, .. } if files.iter().any(|file| !file.path.is_file()) => anyhow::bail!("One or more drillhole CSV sources no longer exist"),
+            DrillHoleSource::LegacyDhd { .. } => anyhow::bail!(tr!("err-drill-dhd-unsupported")),
+            DrillHoleSource::Csv { files, .. } if files.iter().any(|file| !file.path.is_file()) => anyhow::bail!(tr!("err-drill-csv-sources-missing")),
             _ => {}
         }
         self.open_drill_hole_source(source)
@@ -286,9 +286,9 @@ impl<'a> App<'a> {
                 cancelled: &|| cancel.is_cancelled(),
             };
             let parsed = match &source {
-                DrillHoleSource::LegacyDhd { .. } => anyhow::bail!("DHD drillhole sources are no longer supported"),
-                DrillHoleSource::Csv { files, .. } => csv_drill_hole::parse_paths(files, control).with_context(|| "Failed to parse mapped drillhole CSV bundle")?,
-                DrillHoleSource::Omf { .. } => anyhow::bail!("OMF drillhole data is loaded through the project importer"),
+                DrillHoleSource::LegacyDhd { .. } => anyhow::bail!(tr!("err-drill-dhd-unsupported")),
+                DrillHoleSource::Csv { files, .. } => csv_drill_hole::parse_paths(files, control).with_context(|| tr!("err-drill-csv-bundle-parse-failed"))?,
+                DrillHoleSource::Omf { .. } => anyhow::bail!(tr!("err-drill-omf-via-importer")),
             };
             progress.set_fraction(1.0);
             let loaded = LoadedDrillHoleDataset {
@@ -305,7 +305,7 @@ impl<'a> App<'a> {
     /// A CSV bundle's dataset, then the link to its geophysics files.
     #[cfg(not(target_arch = "wasm32"))]
     fn add_loaded_bundle(&mut self, (loaded, geophysics): LoadedBundle) {
-        let id = self.add_loaded_drill_holes(loaded);
+        let id = self.add_as_one_step(|app| app.add_loaded_drill_holes(loaded));
         if let Some(link) = geophysics {
             self.keep_geophysics_link(id, link);
         }
@@ -613,7 +613,7 @@ impl<'a> App<'a> {
     /// derived from the holes and never edited; running again makes another
     /// layer, so a corrected pick shows up as a new set beside the old.
     ///
-    /// Runs on the holes the dialog was opened on, which may span datasets.
+    /// Runs on the holes the dialog holds, which may span datasets.
     pub(crate) fn build_reference_points(
         &mut self,
         holes: Vec<DrillHoleRef>,

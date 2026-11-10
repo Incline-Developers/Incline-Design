@@ -90,15 +90,17 @@ pub(crate) fn from_dxf(drawing: &Drawing) -> Document {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn read_document(path: impl AsRef<Path>) -> Result<Document> {
     let path = path.as_ref();
-    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let bytes = fs::read(path).with_context(|| crate::i18n::tr!("err-dxf-read-failed", name = path.display().to_string()))?;
     document_from_bytes(path.to_string_lossy().as_ref(), &bytes)
 }
 
 pub(crate) fn document_from_bytes(source_name: &str, bytes: &[u8]) -> Result<Document> {
     let mut cursor = Cursor::new(bytes);
-    let drawing = Drawing::load(&mut cursor).with_context(|| format!("parse {source_name}"))?;
+    let drawing = Drawing::load(&mut cursor).with_context(|| crate::i18n::tr!("err-dxf-parse-failed", name = source_name.to_string()))?;
     let document = from_dxf(&drawing);
-    document.validate().with_context(|| format!("validate imported DXF {source_name}"))?;
+    document
+        .validate()
+        .with_context(|| crate::i18n::tr!("err-dxf-validate-failed", name = source_name.to_string()))?;
     Ok(document)
 }
 
@@ -121,7 +123,7 @@ fn export_layers(project: &ProjectFile, only_layer: Option<LayerId>, path: impl 
         Write::flush(&mut writer)?;
         Ok(())
     })
-    .with_context(|| format!("write {}", path.as_ref().display()))
+    .with_context(|| crate::i18n::tr!("err-dxf-write-failed", name = path.as_ref().display().to_string()))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -419,7 +421,7 @@ fn dxf_entity_alpha(raw: i32) -> Option<f32> {
     let raw = raw as u32;
     // 0 means no explicit transparency. Method byte 0x02 carries a direct
     // alpha value in the low byte (0 transparent, 255 opaque).
-    ((raw & 0xff00_0000) == 0x0200_0000).then(|| (raw & 0xff) as f32 / 255.0)
+    ((raw & 0xff00_0000) == 0x0200_0000).then_some((raw & 0xff) as f32 / 255.0)
 }
 
 fn import_entities<'e>(entities: impl IntoIterator<Item = &'e Entity>, ctx: &mut ImportCtx<'_>, transform: &Transform, scope: BlockScope<'_>) {

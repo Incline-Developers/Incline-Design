@@ -135,6 +135,11 @@ pub(crate) enum JobKey {
     },
     /// Animate's video export encoding the frames it is sent.
     VideoExport,
+    /// The Dig Strips step's count of every flitch's dig blocks, `key`
+    /// standing for the ground and lines counted.
+    DigBlockCount {
+        key: u64,
+    },
     /// A job not tied to any tracked source (always applied).
     #[allow(dead_code)]
     Anonymous,
@@ -158,11 +163,25 @@ impl CancelFlag {
     pub(crate) fn signal(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.0)
     }
+}
 
-    /// A flag raised by whoever holds `signal`, not by a job's own cancel.
-    pub(crate) fn from_signal(signal: Arc<AtomicBool>) -> Self {
-        Self(signal)
+/// The error a computation returns when its [`CancelFlag`] stops it:
+/// `bail!(Cancelled)` or `ensure!(!cancel.is_cancelled(), Cancelled)`. Its text
+/// is translated, so callers recognise it with [`is_cancelled`], never by text.
+#[derive(Debug)]
+pub(crate) struct Cancelled;
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&crate::i18n::tr!("common-cancelled"))
     }
+}
+
+impl std::error::Error for Cancelled {}
+
+/// Whether `error` is, or was caused by, a [`Cancelled`] computation.
+pub(crate) fn is_cancelled(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| cause.is::<Cancelled>())
 }
 
 /// A heavy operation running on a background thread.
@@ -259,8 +278,8 @@ pub(crate) fn run_compute_catching_panic<T>(compute: impl FnOnce() -> anyhow::Re
             .downcast_ref::<&str>()
             .map(|s| (*s).to_owned())
             .or_else(|| payload.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "unknown panic".to_owned());
-        Err(anyhow::anyhow!("background task panicked: {message}"))
+            .unwrap_or_else(|| tr!("err-file-unknown-panic"));
+        Err(anyhow::anyhow!(tr!("err-file-task-panicked", message = message)))
     })
 }
 
@@ -287,6 +306,9 @@ impl<'a> App<'a> {
             JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
             // Its result is a finished video, wanted whatever moved.
             JobKey::VideoExport => true,
+            // Held under its key, which a reader checks against the ground
+            // and lines it is counting.
+            JobKey::DigBlockCount { .. } => true,
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects
@@ -411,7 +433,7 @@ impl<'a> App<'a> {
             let mut poll_once = || match rx.try_recv() {
                 Ok(result) => {
                     if !app.job_dependencies_are_current(&poll_keys) {
-                        crate::userspace_warn!("{}", tr!("jobs-discarded-stale-result", poll_label = poll_label.clone().to_string()));
+                        crate::userspace_log!("{}", tr!("jobs-discarded-stale-result", poll_label = poll_label.clone().to_string()));
                     } else if let Some(apply) = apply.take() {
                         apply(app, result);
                     }
@@ -458,7 +480,12 @@ impl<'a> App<'a> {
     /// Whether any pending job lists `key` among its dependencies. Lets a
     /// caller refuse to start a second job for a source already in flight.
     pub(crate) fn job_pending(&self, key: &JobKey) -> bool {
-        self.pending_jobs.iter().any(|job| job.keys.contains(key))
+        self.any_job_pending(|job| job == key)
+    }
+
+    /// Whether any pending job lists a dependency `matches` accepts.
+    pub(crate) fn any_job_pending(&self, matches: impl Fn(&JobKey) -> bool) -> bool {
+        self.pending_jobs.iter().any(|job| job.keys.iter().any(&matches))
     }
 
     /// Drain finished background jobs, running their apply closures on the UI
@@ -504,6 +531,11 @@ impl<'a> App<'a> {
         if residency_settled {
             self.evict_unloaded_items();
             self.evict_unloaded_layers();
+        }
+        // Everything is done, so what the jobs built and threw away can go.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.pending_jobs.is_empty() {
+            crate::app::memory::release_free_memory();
         }
         // The status bar is driven from the ticket registry (see
         // `App::refresh_status_message`), which each job joined when it began.

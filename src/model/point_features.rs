@@ -61,7 +61,7 @@ pub(crate) fn point_features<T: Send>(
     cancel: &CancelFlag,
     progress: &Phase,
 ) -> Result<Vec<(u32, T)>> {
-    ensure!(u32::try_from(points.len()).is_ok(), "The point cloud has too many points to classify in one pass");
+    ensure!(u32::try_from(points.len()).is_ok(), crate::i18n::tr!("err-cloud-too-many-to-classify"));
     let Some((min, max)) = points
         .par_iter()
         .zip(member.par_iter())
@@ -94,7 +94,7 @@ pub(crate) fn point_features<T: Send>(
     order.par_sort_unstable();
     let starts: Vec<usize> = (0..=cols * rows).map(|tile| order.partition_point(|(key, _)| (*key as usize) < tile)).collect();
     progress.set_fraction(0.05);
-    ensure!(!cancel.is_cancelled(), "Cancelled");
+    ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
 
     let done = std::sync::atomic::AtomicUsize::new(0);
     let results: Vec<Vec<(u32, T)>> = (0..cols * rows)
@@ -131,7 +131,7 @@ pub(crate) fn point_features<T: Send>(
             output
         })
         .collect();
-    ensure!(!cancel.is_cancelled(), "Cancelled");
+    ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
     Ok(results.into_iter().flatten().collect())
 }
 

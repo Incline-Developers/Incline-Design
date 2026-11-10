@@ -10,6 +10,7 @@
 
 use thousands::Separable;
 
+use super::hint::Hint;
 use crate::{
     i18n::tr,
     ui::{EditorState, widgets::shifted},
@@ -162,8 +163,11 @@ fn draw_ring(ui: &mut egui::Ui, status: &str, task: &str, fill: RingFill, end_in
         return;
     }
     // The label is elided to whatever the counts leave it, so a long one - a
-    // full export path, say - is only readable on hover.
-    response.on_hover_text(task);
+    // full export path, say - is only readable on hover. One shown whole
+    // has nothing more to say there.
+    if !task.is_empty() && task_galley.as_ref().is_none_or(|galley| galley.elided) {
+        response.hint(task);
+    }
 
     let center = egui::pos2(rect.right() - end_inset - diameter / 2.0, rect.center().y);
     paint_ring(ui, &painter, center, diameter, fill);
@@ -285,9 +289,4 @@ fn paint_arc(painter: &egui::Painter, center: egui::Pos2, radius: f32, start: f3
     painter.circle_filled(points[0], stroke.width / 2.0, stroke.color);
     painter.circle_filled(points[steps], stroke.width / 2.0, stroke.color);
     painter.add(egui::Shape::line(points, stroke));
-}
-
-/// Pipeline completion uses the same readout as background tasks.
-pub(crate) fn draw_planning_progress(ui: &mut egui::Ui, label: &str, fraction: f32) {
-    draw_ring(ui, label, "", RingFill::Fraction(fraction), END_INSET);
 }

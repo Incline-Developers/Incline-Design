@@ -669,7 +669,9 @@ impl PrimalHeuristics {
                     let fixval = if fixtolpsol {
                         (relaxationsol[col] + 0.5).floor()
                     } else {
-                        calc_fix_val(fracval - rootlpsol[col], fracval, col_cost[col])
+                        // No root LP values: no change from them, as above.
+                        let rootchange = rootlpsol.get(col).map_or(0.0, |root| fracval - root);
+                        calc_fix_val(rootchange, fracval, col_cost[col])
                     };
                     fixval.min(heur.localdom.col_upper[col]).max(heur.localdom.col_lower[col])
                 };

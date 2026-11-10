@@ -13,6 +13,7 @@ struct SurfaceStyle {
     pattern_color: vec4<f32>,
     pattern: vec4<f32>,
     cut: vec4<f32>,
+    overlay: vec4<f32>,
 };
 @group(1) @binding(0)
 var<uniform> surface_style: SurfaceStyle;

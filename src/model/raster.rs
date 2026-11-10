@@ -57,16 +57,20 @@ pub(crate) fn downscale_rgba(source: &[u8], source_size: [u32; 2], preview_size:
     let [source_width, source_height] = source_size;
     let [preview_width, preview_height] = preview_size;
     if source_width == 0 || source_height == 0 || preview_width == 0 || preview_height == 0 {
-        anyhow::bail!("Raster dimensions must be non-zero");
+        anyhow::bail!(crate::i18n::tr!("err-raster-zero-size"));
     }
-    let expected = usize::try_from(u64::from(source_width) * u64::from(source_height) * 4).context("Raster dimensions exceed addressable memory")?;
+    let expected = usize::try_from(u64::from(source_width) * u64::from(source_height) * 4).with_context(|| crate::i18n::tr!("err-raster-too-large"))?;
     if source.len() != expected {
-        anyhow::bail!("Raster pixel buffer has {} bytes; expected {expected}", source.len());
+        anyhow::bail!(crate::i18n::tr!(
+            "err-raster-buffer-size",
+            actual = source.len().to_string(),
+            expected = expected.to_string()
+        ));
     }
     if source_size == preview_size {
         return Ok(source.to_vec());
     }
-    let output_len = usize::try_from(u64::from(preview_width) * u64::from(preview_height) * 4).context("Raster preview dimensions exceed addressable memory")?;
+    let output_len = usize::try_from(u64::from(preview_width) * u64::from(preview_height) * 4).with_context(|| crate::i18n::tr!("err-raster-preview-too-large"))?;
     let mut output = vec![0; output_len];
     for y in 0..preview_height {
         let source_y = ((u64::from(y) * u64::from(source_height)) / u64::from(preview_height)).min(u64::from(source_height - 1)) as usize;
@@ -90,7 +94,7 @@ pub(crate) fn is_supported_raster_path(path: &Path) -> bool {
 fn world_to_uv_transform(transform: [f64; 6], size: [u32; 2]) -> Result<[f64; 6]> {
     let determinant = transform[1] * transform[5] - transform[2] * transform[4];
     if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
-        anyhow::bail!("Raster has a singular geotransform");
+        anyhow::bail!(crate::i18n::tr!("err-raster-singular-geotransform"));
     }
     let width = f64::from(size[0]);
     let height = f64::from(size[1]);
@@ -133,7 +137,7 @@ fn read_geotransform<R: Read + Seek>(decoder: &mut Decoder<R>) -> Result<[f64; 6
         let origin_y = tiepoint[4] + tiepoint[1] * scale[1];
         return Ok([origin_x, scale[0], 0.0, origin_y, 0.0, -scale[1]]);
     }
-    anyhow::bail!("Missing ModelTransformation or PixelScale/Tiepoint GeoTIFF tags")
+    anyhow::bail!(crate::i18n::tr!("err-raster-missing-geotags"))
 }
 
 /// Human-readable CRS: "EPSG:code" from the GeoKey directory plus the citation
@@ -283,10 +287,10 @@ fn integer_chunk_samples<R: Read + Seek>(decoder: &mut Decoder<R>, chunk_index: 
             let samples = match decoder.read_chunk(band_chunk)? {
                 DecodingResult::U8(samples) => samples,
                 DecodingResult::U16(samples) => samples.into_iter().map(|value| (value >> 8) as u8).collect(),
-                _ => anyhow::bail!("Raster has an unsupported integer sample format"),
+                _ => anyhow::bail!(crate::i18n::tr!("err-raster-unsupported-integer")),
             };
             if samples.len() < pixels {
-                anyhow::bail!("Planar raster produced a truncated band chunk");
+                anyhow::bail!(crate::i18n::tr!("err-raster-truncated-band"));
             }
             planes.push(samples);
         }
@@ -295,7 +299,7 @@ fn integer_chunk_samples<R: Read + Seek>(decoder: &mut Decoder<R>, chunk_index: 
     match decoder.read_chunk(chunk_index)? {
         DecodingResult::U8(samples) => Ok(samples),
         DecodingResult::U16(samples) => Ok(samples.into_iter().map(|value| (value >> 8) as u8).collect()),
-        _ => anyhow::bail!("Raster has an unsupported integer sample format"),
+        _ => anyhow::bail!(crate::i18n::tr!("err-raster-unsupported-integer")),
     }
 }
 
@@ -307,10 +311,10 @@ fn float_chunk_samples<R: Read + Seek>(decoder: &mut Decoder<R>, chunk_index: u3
         for channel in 0..channels {
             let band_chunk = chunk_index + channel as u32 * chunks_per_plane;
             let DecodingResult::F32(samples) = decoder.read_chunk(band_chunk)? else {
-                anyhow::bail!("Raster has an unsupported floating-point sample format");
+                anyhow::bail!(crate::i18n::tr!("err-raster-unsupported-float"));
             };
             if samples.len() < pixels {
-                anyhow::bail!("Planar raster produced a truncated band chunk");
+                anyhow::bail!(crate::i18n::tr!("err-raster-truncated-band"));
             }
             planes.push(samples);
         }
@@ -318,7 +322,7 @@ fn float_chunk_samples<R: Read + Seek>(decoder: &mut Decoder<R>, chunk_index: u3
     }
     match decoder.read_chunk(chunk_index)? {
         DecodingResult::F32(samples) => Ok(samples),
-        _ => anyhow::bail!("Raster has an unsupported floating-point sample format"),
+        _ => anyhow::bail!(crate::i18n::tr!("err-raster-unsupported-float")),
     }
 }
 
@@ -342,7 +346,7 @@ fn chunk_pixel_rgba(samples: &[u8], layout: PixelLayout, pixel: usize) -> [u8; 4
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn decode_raster(path: &Path, max_preview_dimension: u32) -> Result<LoadedRasterTexture> {
-    let bytes = std::fs::read(path).with_context(|| format!("Failed to open raster {}", path.display()))?;
+    let bytes = std::fs::read(path).with_context(|| crate::i18n::tr!("err-raster-open-failed", path = path.display().to_string()))?;
     decode_retained_raster(&bytes, path, max_preview_dimension)
 }
 
@@ -362,17 +366,18 @@ fn decode_retained_raster(bytes: &[u8], path: &Path, max_preview_dimension: u32)
 }
 
 fn decode_raster_reader<R: Read + Seek>(reader: R, path: &Path, max_preview_dimension: u32) -> Result<LoadedRasterTexture> {
-    let mut decoder = Decoder::new(reader).with_context(|| format!("Failed to read raster {}", path.display()))?;
+    let mut decoder = Decoder::new(reader).with_context(|| crate::i18n::tr!("err-raster-read-failed", path = path.display().to_string()))?;
 
     let (source_width, source_height) = decoder.dimensions()?;
     if source_width == 0 || source_height == 0 {
-        anyhow::bail!("Raster {} has no pixels", path.display());
+        anyhow::bail!(crate::i18n::tr!("err-raster-no-pixels", path = path.display().to_string()));
     }
 
     // Georeferencing always comes from the full-resolution IFD; overviews span
     // the same extent so the normalized UV transform is shared.
-    let transform = read_geotransform(&mut decoder).with_context(|| format!("Raster {} has no usable geotransform", path.display()))?;
-    let world_to_uv = world_to_uv_transform(transform, [source_width, source_height]).with_context(|| format!("Raster {} has an invalid geotransform", path.display()))?;
+    let transform = read_geotransform(&mut decoder).with_context(|| crate::i18n::tr!("err-raster-no-geotransform", path = path.display().to_string()))?;
+    let world_to_uv =
+        world_to_uv_transform(transform, [source_width, source_height]).with_context(|| crate::i18n::tr!("err-raster-invalid-geotransform", path = path.display().to_string()))?;
     let projection = read_projection(&mut decoder);
 
     let limit = max_preview_dimension.max(1);
@@ -401,7 +406,11 @@ fn decode_raster_reader<R: Read + Seek>(reader: R, path: &Path, max_preview_dime
                 nodata,
             }
         }
-        other => anyhow::bail!("Raster {} has unsupported pixel format {other:?}", path.display()),
+        other => anyhow::bail!(crate::i18n::tr!(
+            "err-raster-unsupported-format",
+            path = path.display().to_string(),
+            format = format!("{other:?}")
+        )),
     };
 
     let scale = (f64::from(limit) / f64::from(decode_width.max(decode_height))).min(1.0);
@@ -419,7 +428,7 @@ fn decode_raster_reader<R: Read + Seek>(reader: R, path: &Path, max_preview_dime
 
     let (chunk_width, chunk_height) = decoder.chunk_dimensions();
     if chunk_width == 0 || chunk_height == 0 {
-        anyhow::bail!("Raster {} has an invalid chunk layout", path.display());
+        anyhow::bail!(crate::i18n::tr!("err-raster-invalid-chunks", path = path.display().to_string()));
     }
     let chunks_across = decode_width.div_ceil(chunk_width);
     let chunk_count = chunks_across * decode_height.div_ceil(chunk_height);
@@ -427,14 +436,16 @@ fn decode_raster_reader<R: Read + Seek>(reader: R, path: &Path, max_preview_dime
         let (data_width, data_height) = decoder.chunk_data_dimensions(chunk_index);
         let integer_samples = match mode {
             RasterDecodeMode::Integer(layout) => Some(
-                integer_chunk_samples(&mut decoder, chunk_index, chunk_count, layout.channels(), planar).with_context(|| format!("Failed to decode raster {}", path.display()))?,
+                integer_chunk_samples(&mut decoder, chunk_index, chunk_count, layout.channels(), planar)
+                    .with_context(|| crate::i18n::tr!("err-raster-decode-failed", path = path.display().to_string()))?,
             ),
             RasterDecodeMode::FloatRgb { .. } => None,
         };
         let float_samples = match mode {
-            RasterDecodeMode::FloatRgb { source_channels, .. } => {
-                Some(float_chunk_samples(&mut decoder, chunk_index, chunk_count, source_channels, planar).with_context(|| format!("Failed to decode raster {}", path.display()))?)
-            }
+            RasterDecodeMode::FloatRgb { source_channels, .. } => Some(
+                float_chunk_samples(&mut decoder, chunk_index, chunk_count, source_channels, planar)
+                    .with_context(|| crate::i18n::tr!("err-raster-decode-failed", path = path.display().to_string()))?,
+            ),
             RasterDecodeMode::Integer(_) => None,
         };
         let x0 = (chunk_index % chunks_across) * chunk_width;
@@ -450,7 +461,7 @@ fn decode_raster_reader<R: Read + Seek>(reader: R, path: &Path, max_preview_dime
                         let samples = integer_samples.as_ref().unwrap();
                         let expected = (source_pixel + 1) * layout.channels();
                         if samples.len() < expected {
-                            anyhow::bail!("Raster {} produced a truncated chunk", path.display());
+                            anyhow::bail!(crate::i18n::tr!("err-raster-truncated-chunk", path = path.display().to_string()));
                         }
                         let rgba = chunk_pixel_rgba(samples, layout, source_pixel);
                         let alpha = u64::from(rgba[3]);
@@ -468,7 +479,7 @@ fn decode_raster_reader<R: Read + Seek>(reader: R, path: &Path, max_preview_dime
                         let samples = float_samples.as_ref().unwrap();
                         let base = source_pixel * source_channels;
                         if samples.len() < base + source_channels {
-                            anyhow::bail!("Raster {} produced a truncated chunk", path.display());
+                            anyhow::bail!(crate::i18n::tr!("err-raster-truncated-chunk", path = path.display().to_string()));
                         }
                         let rgb = rgb_bands.map(|band| samples[base + band]);
                         if rgb.iter().all(|value| value.is_finite()) && !nodata.is_some_and(|nodata| rgb.contains(&nodata)) {

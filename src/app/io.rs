@@ -200,11 +200,6 @@ pub(crate) struct Config {
     /// same reason.
     #[serde(default)]
     pub(crate) blast_library: crate::model::blast::BlastLibrary,
-    /// Lenient: a tab that no longer exists (the old Optimization workspace)
-    /// is dropped rather than failing the whole file.
-    #[serde(default)]
-    #[serde(deserialize_with = "lenient_list")]
-    pub(crate) workspace_order: Vec<crate::ui::state::Workspace>,
     #[serde(default)]
     #[serde(deserialize_with = "lenient_list")]
     pub(crate) coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
@@ -213,11 +208,13 @@ pub(crate) struct Config {
     pub(crate) mine_coordinate_system: Option<String>,
     #[serde(default = "default_recent_functions_shown")]
     pub(crate) recent_functions_shown: u32,
-    /// Production's recent functions, newest last. A habit, not a project's
-    /// data, so it is kept here and survives every project switch.
+    /// Every workspace's recent functions, newest last. A habit, not a
+    /// project's data, so it is kept here and survives every project switch.
+    /// The alias is the name it had while only the Design menu was listed.
     #[serde(default)]
+    #[serde(alias = "recent_design_functions")]
     #[serde(deserialize_with = "lenient_list")]
-    pub(crate) recent_design_functions: Vec<String>,
+    pub(crate) recent_functions: Vec<String>,
 }
 
 /// Deserialize a list, dropping entries this build cannot read instead of
@@ -281,11 +278,10 @@ impl Default for Config {
             fly_max_clip_span: default_fly_max_clip_span(),
             delay_products: default_delay_products(),
             blast_library: Default::default(),
-            workspace_order: crate::ui::state::Workspace::ALL.to_vec(),
             coordinate_systems: Vec::new(),
             mine_coordinate_system: None,
             recent_functions_shown: default_recent_functions_shown(),
-            recent_design_functions: Vec::new(),
+            recent_functions: Vec::new(),
         }
     }
 }

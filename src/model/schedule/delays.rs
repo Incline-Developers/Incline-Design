@@ -570,10 +570,17 @@ pub(crate) fn parse_instant(text: &str) -> Option<f64> {
     if let Ok(hours) = text.parse::<f64>() {
         return (hours.is_finite() && hours >= 0.0).then_some(hours);
     }
-    let lower = text.to_ascii_lowercase();
-    let rest = lower.strip_prefix("day").or_else(|| lower.strip_prefix('d')).unwrap_or(&lower).trim_start();
+    // The word for "Day" is translated (`Day 3`, `День 3`, `第3日`), so skip
+    // whatever comes before the day number and read only its digits.
+    let rest = text.trim_start_matches(|c: char| !c.is_ascii_digit());
     let mut parts = rest.split(|c: char| c.is_whitespace() || c == ',' || c == 'T' || c == 't').filter(|part| !part.is_empty());
-    let day: u32 = parts.next()?.parse().ok()?;
+    // A word may follow the number (`3日目`), but not a date's `/` or `-`.
+    let token = parts.next()?;
+    let digits = token.chars().take_while(char::is_ascii_digit).count();
+    if !token[digits..].chars().all(char::is_alphabetic) {
+        return None;
+    }
+    let day: u32 = token[..digits].parse().ok()?;
     if day == 0 {
         return None;
     }

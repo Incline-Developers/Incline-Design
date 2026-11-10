@@ -768,6 +768,7 @@ fn del_coef_pos(scip: &mut Scip, cons: ConsId, pos: i32) -> ScipResult {
 /// independent of everything else (is locked only by this constraint), we
 /// can perform dual reductions:
 ///
+/// ```text
 /// (1) set covering
 ///
 ///   - fix all independent variables with negative object coefficient to
@@ -837,6 +838,7 @@ fn del_coef_pos(scip: &mut Scip, cons: ConsId, pos: i32) -> ScipResult {
 /// or packing constraint with two variables, one can aggregate variables.
 ///
 /// Returns whether presolving was performed (C's `SCIP_SUCCESS`).
+/// ```
 fn dual_presolving(scip: &mut Scip, cons: ConsId, nfixedvars: &mut i32, ndelconss: &mut i32, naggrvars: &mut i32) -> ScipResult<bool> {
     use crate::var::{var_get_n_locks_down_type as locksdown, var_get_n_locks_up_type as locksup};
     const M: LockType = LockType::Model;

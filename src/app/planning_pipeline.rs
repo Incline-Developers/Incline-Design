@@ -4,7 +4,10 @@
 //! The pipeline is *explicitly executed*. Opening a page, selecting a blast or
 //! moving a camera never finishes a calculation; Run to Step, Run All, and the
 //! Auto switch (which reruns stale steps once edits settle, see
-//! [`crate::app::App::auto_run_planning`]) do. What a page does is show the
+//! [`crate::app::App::auto_run_planning`]) do. The one exception is an edit
+//! to the blast or strip cuts, which runs Blasting and Dig Strips at once
+//! whether Auto is on or not: a cut has to show what it makes as soon as it
+//! is drawn. What a page does is show the
 //! stage status and the artifacts that are already there, so a scheduler can
 //! consume a completed run without any page having been opened at all.
 //!
@@ -102,6 +105,29 @@ pub(crate) struct StageDiagnostic {
     pub(crate) blocking: bool,
 }
 
+impl StageDiagnostic {
+    /// The line it is listed as: its entity first, where it has one.
+    pub(crate) fn line(&self) -> String {
+        match &self.entity {
+            Some(entity) => format!("{entity}: {}", self.message),
+            None => self.message.clone(),
+        }
+    }
+}
+
+/// What a stage that failed says in one line: the problem itself when there
+/// is only one, which is what a Run refused for it then repeats, or else how
+/// many there are.
+pub(crate) fn failed_message(diagnostics: &[StageDiagnostic]) -> String {
+    let mut blocking = diagnostics.iter().filter(|entry| entry.blocking);
+    let first = blocking.next();
+    let count: usize = usize::from(first.is_some()) + blocking.count();
+    match first {
+        Some(only) if count == 1 => only.line(),
+        _ => tr!("stage-failed-count", count = count),
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StageStatus {
     pub(crate) state: StageState,
@@ -115,6 +141,8 @@ pub(crate) struct StageStatus {
     pub(crate) diagnostics: Vec<StageDiagnostic>,
     /// How many entities the stage covered when it last completed.
     pub(crate) last_success: Option<StageSummary>,
+    /// How many entities its latest settled run saw, failed or not.
+    pub(crate) last_seen: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -279,6 +307,16 @@ impl PlanningPipeline {
         true
     }
 
+    /// Whether `stage` can run by itself now: nothing else is running, and
+    /// every stage before it is current for the inputs it has now.
+    fn can_run_alone(&self, stage: SolidsStep) -> bool {
+        !self.is_running()
+            && SolidsStep::ALL
+                .into_iter()
+                .take(stage.index())
+                .all(|earlier| self.stages[earlier.index()].state.is_current() && self.stage_inputs_match(earlier))
+    }
+
     /// The stage that has to run before `stage` can, if any.
     pub(crate) fn blocked_by(&self, stage: SolidsStep) -> Option<SolidsStep> {
         SolidsStep::ALL
@@ -332,7 +370,7 @@ impl PlanningPipeline {
                 status.message = None;
                 if blocking > 0 {
                     status.state = StageState::Failed;
-                    status.message = Some(tr!("stage-failed-count", count = blocking));
+                    status.message = Some(failed_message(&status.diagnostics));
                     self.running = None;
                     // A failed stage stops everything after it.
                     for later in std::mem::take(&mut self.queue) {
@@ -375,13 +413,7 @@ impl PlanningPipeline {
             // A stage that completed with a blocking diagnostic did not
             // reconcile; its numbers are not schedulable inventory.
             if let Some(blocking) = status.diagnostics.iter().find(|entry| entry.blocking) {
-                return Err(StageNotReady::Failed {
-                    stage,
-                    message: blocking
-                        .entity
-                        .clone()
-                        .map_or_else(|| blocking.message.clone(), |entity| format!("{entity}: {}", blocking.message)),
-                });
+                return Err(StageNotReady::Failed { stage, message: blocking.line() });
             }
         }
         Ok(self.status(SolidsStep::LAST).run_generation)
@@ -475,12 +507,14 @@ impl crate::app::App<'_> {
                 // request that will never land.
                 self.cancel_jobs(|job| matches!(job, crate::app::jobs::JobKey::SolidArtifact { .. }));
                 self.discard_incomplete_solid_requests();
-                // Said out loud, and naming the stage whose inputs moved: a run
-                // that ends by itself part way through otherwise looks like a
-                // button that only does one step. An Auto run is simply started
-                // again once the edits settle, so it goes unremarked.
+                // Noted in the console, naming the stage whose inputs moved: a
+                // run that ends by itself part way through otherwise looks like
+                // a button that only does one step. Not a dialog: the edit that
+                // stopped it was the user's own, and Run starts it again. An
+                // Auto run is simply started again once the edits settle, so it
+                // goes unremarked.
                 if !self.planning_pipeline.as_ref().is_some_and(|pipeline| pipeline.auto_run) {
-                    crate::userspace_warn!("{}", tr!("stage-run-stopped-by-edit", stage = stage.label()));
+                    crate::userspace_log!("{}", tr!("stage-run-stopped-by-edit", stage = stage.label()));
                 }
             }
         }
@@ -499,8 +533,17 @@ impl crate::app::App<'_> {
                 pipeline.demand = None;
             }
         }
+        // A cut is drawn to be seen, and the blasts and strips it makes are
+        // quick to work out in plan, so an edit that reaches no further back
+        // than the cuts runs Blasting and Dig Strips straight away, Auto or
+        // not. Auto is for Reserving, which cuts and measures every block.
+        if let Some(stage) = earliest_change.filter(|stage| matches!(stage, SolidsStep::Blasting | SolidsStep::DigStrips))
+            && self.planning_pipeline.as_ref().is_some_and(|pipeline| pipeline.can_run_alone(stage))
+        {
+            self.resume_planning_stages(SolidsStep::DigStrips);
+        }
         self.advance_planning_run();
-        if self.editor.planning_page == crate::ui::state::PlanningPage::Schedule {
+        if self.editor.is_schedule_context() {
             // The blasts drill and blast lists, refreshed as the run or the
             // project (blast names included) moves.
             let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::LAST).completed_inputs);
@@ -516,10 +559,15 @@ impl crate::app::App<'_> {
         let haul_page = self.editor.is_haulage_page();
         if self.editor.haul_page_drawn != haul_page {
             self.editor.haul_page_drawn = haul_page;
+            // A road half drawn over the Road Network is put down on leaving
+            // it, however it was left: a click elsewhere must not place one.
+            if !haul_page {
+                self.editor.cancel_haul_edit();
+            }
             self.invalidate_geometry();
             self.invalidate_overlay();
         }
-        if self.editor.planning_page == crate::ui::state::PlanningPage::Haulage {
+        if self.editor.is_setup_group(crate::ui::state::SetupGroup::Haulage) {
             let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::LAST).completed_inputs);
             // The document revision covers road, truck-class and destination
             // edits, undo included, so the connection tint and issue list
@@ -577,13 +625,6 @@ impl crate::app::App<'_> {
             }
         });
         let running = pipeline.is_running();
-        // What a scheduler would get if it asked right now, shown where the
-        // run controls are: the readiness gate is the point of the pipeline,
-        // so it should not be invisible until something consumes it.
-        let snapshot = match self.planning_snapshot() {
-            Ok(snapshot) => tr!("planning-snapshot-ready", blocks = snapshot.blocks.len().to_string()),
-            Err(reason) => reason.describe(),
-        };
         // Run Step moves the list on to the next step once the step it ran
         // succeeds, so setup reads top to bottom. Only while the user is still
         // looking at that step: having picked another, they have moved on.
@@ -602,10 +643,9 @@ impl crate::app::App<'_> {
                 }
             }
         }
-        if self.editor.planning_stages != views || self.editor.planning_run_active != running || self.editor.planning_snapshot_status != snapshot {
+        if self.editor.planning_stages != views || self.editor.planning_run_active != running {
             self.editor.planning_stages = views;
             self.editor.planning_run_active = running;
-            self.editor.planning_snapshot_status = snapshot;
             self.redraw_requested = true;
         }
     }
@@ -722,7 +762,9 @@ impl crate::app::App<'_> {
                         (bench.base.to_bits(), bench.cuts.iter().map(crate::model::Object::geometry_hash).collect::<Vec<_>>(), names)
                     })
                     .collect();
-                (solid.id.0, cuts)
+                // A blast under the minimum takes no name, and naming is this
+                // stage's work.
+                (solid.id.0, cuts, solid.exclusions.min_blast_area.to_bits())
             })
             .collect();
         let blasting_stage = hash_of((benching_stage, blasting));
@@ -781,16 +823,14 @@ impl crate::app::App<'_> {
     ///
     /// Like the schedule's Auto: at most once for one set of inputs, so a step
     /// that fails, or a run the user cancelled, is not retried until something
-    /// changes. A project with no solids has nothing to plan, and is left with
-    /// its steps not run rather than failed.
+    /// changes. It runs what Run All runs, so the two leave the steps alike.
     pub(crate) fn auto_run_planning(&mut self) {
         self.planning_auto_deadline = None;
         let Some(pipeline) = self.planning_pipeline.as_ref() else {
             self.planning_auto_settle = None;
             return;
         };
-        let has_solids = self.workspace.active_document().is_some_and(|document| !document.solids().is_empty());
-        if !self.editor.planning_auto_run || !has_solids || pipeline.is_running() {
+        if !self.editor.planning_auto_run || pipeline.is_running() {
             self.planning_auto_settle = None;
             // Switched off, edits can leave steps stale over inputs Auto has
             // already seen; switching it back on has to look again.
@@ -1035,9 +1075,13 @@ impl crate::app::App<'_> {
         // plan, the other reads the blocks through the record API and
         // reconciles them against the bench measurements.
         match outcome {
-            StageOutcome::Settled { diagnostics, .. } if stage == SolidsStep::DigStrips && !diagnostics.iter().any(|entry| entry.blocking) => StageOutcome::Settled {
-                entities: crate::app::commands::dig_strips::count_dig_block_faces(&solids, &self.solid_view_cache),
-                diagnostics,
+            // Counted in the background: a survey pit's flitches take seconds
+            // to divide, and this is checked with no page open.
+            StageOutcome::Settled { diagnostics, .. } if stage == SolidsStep::DigStrips && !diagnostics.iter().any(|entry| entry.blocking) => match self.dig_block_count(&solids) {
+                Some(entities) => StageOutcome::Settled { entities, diagnostics },
+                None => StageOutcome::Working {
+                    message: Some(tr!("stage-counting-dig-blocks")),
+                },
             },
             StageOutcome::Settled { mut diagnostics, entities } if stage == SolidsStep::Reserving && !diagnostics.iter().any(|entry| entry.blocking) => {
                 let records = match self.planning_dig_blocks() {
@@ -1050,8 +1094,11 @@ impl crate::app::App<'_> {
                 };
                 diagnostics.extend(self.reconcile_dig_blocks(&records));
                 let _ = entities;
+                // Excluded ground is measured so the blocks still add back up
+                // to their benches, but it is not dig blocks to anyone reading
+                // the count: the Schedule's Blocks step leaves it out too.
                 StageOutcome::Settled {
-                    entities: records.len(),
+                    entities: records.iter().filter(|record| !record.excluded).count(),
                     diagnostics,
                 }
             }

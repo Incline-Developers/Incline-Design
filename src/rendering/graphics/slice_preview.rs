@@ -35,6 +35,7 @@ pub(super) fn slice_preview_scene_key(
     document.revision().hash(&mut hasher);
     editor.render_style_key().hash(&mut hasher);
     editor.topology_wireframes_enabled.hash(&mut hasher);
+    editor.topology_contours_enabled.hash(&mut hasher);
     editor.show_points.hash(&mut hasher);
     editor.xray_enabled.hash(&mut hasher);
     editor.debug_surface_chunks.hash(&mut hasher);
@@ -226,7 +227,7 @@ impl DetachedSlicePreview {
         let surface = graphics.instance.create_surface(window.clone())?;
         let capabilities = surface.get_capabilities(&graphics.adapter);
         if !capabilities.formats.contains(&graphics.config.format) {
-            anyhow::bail!("top-down window does not support the main viewport format");
+            anyhow::bail!(crate::i18n::tr!("err-gfx-preview-format"));
         }
         let present_mode = capabilities
             .present_modes
@@ -234,12 +235,12 @@ impl DetachedSlicePreview {
             .copied()
             .find(|mode| *mode == wgpu::PresentMode::Fifo)
             .or_else(|| capabilities.present_modes.first().copied())
-            .ok_or_else(|| anyhow::anyhow!("top-down window has no present mode"))?;
+            .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-gfx-preview-present-mode")))?;
         let alpha_mode = capabilities
             .alpha_modes
             .first()
             .copied()
-            .ok_or_else(|| anyhow::anyhow!("top-down window has no alpha mode"))?;
+            .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-gfx-preview-alpha-mode")))?;
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: graphics.config.format,

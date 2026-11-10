@@ -1,6 +1,6 @@
 use std::{fmt::Debug, hash::Hash, path::PathBuf};
 
-use super::shifted;
+use super::{hint::Hint, shifted};
 use crate::i18n::tr;
 
 /// Height of a floating menu's drag bar, and of a docked panel's heading.
@@ -294,7 +294,7 @@ pub(crate) fn accent_fill(visuals: &egui::Visuals) -> egui::Color32 {
 }
 
 /// The fill a destructive action takes, in place of [`accent_fill`].
-fn danger_fill(visuals: &egui::Visuals) -> egui::Color32 {
+pub(crate) fn danger_fill(visuals: &egui::Visuals) -> egui::Color32 {
     if visuals.dark_mode {
         egui::Color32::from_rgb(0xC4, 0x4B, 0x4B)
     } else {
@@ -699,7 +699,7 @@ impl egui::Widget for MenuButton {
             ui.painter().with_clip_rect(rect).galley(text_pos, galley, text_color);
         }
 
-        if width + 0.5 < natural_width { response.on_hover_text(full_text) } else { response }
+        if width + 0.5 < natural_width { response.hint(full_text) } else { response }
     }
 }
 
@@ -926,16 +926,49 @@ pub(crate) fn selected_source_field(ui: &mut egui::Ui, label: impl Into<egui::Wi
     let value = value.into();
     MenuField::new(label).help_text(help_text).show(ui, |ui, row_height, _| {
         ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.add(egui::Label::new(value.clone()).truncate()).on_hover_text(value);
+            ui.add(egui::Label::new(value.clone()).truncate()).hint(value);
         })
         .response
     });
 }
 
+/// A row stating the set of items a tool works on, beside a Pick button for
+/// selecting them in the viewport.
+///
+/// Design objects and holes have no names to list, so the set is stated as a
+/// count and changed by picking. Returns whether Pick was pressed; the caller
+/// answers with `UiCommand::BeginSelectionPick`.
+pub(crate) fn picked_selection_field(
+    ui: &mut egui::Ui,
+    label: impl Into<egui::WidgetText>,
+    value: impl Into<egui::WidgetText>,
+    help_text: impl Into<egui::WidgetText>,
+    width: f32,
+) -> bool {
+    const PICK_BUTTON_WIDTH: f32 = 52.0;
+    let value = value.into();
+    let pick_label = tr!("drill-pattern-pick");
+    let pick_width = natural_button_width(ui, &pick_label, PICK_BUTTON_WIDTH);
+    let mut picked = false;
+    MenuField::new(label).help_text(help_text).show(ui, |ui, row_height, _| {
+        let value_width = width - ui.spacing().item_spacing.x - pick_width;
+        ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.allocate_ui_with_layout(egui::vec2(value_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                // The count keeps its width whatever it reads, so the button
+                // does not move as the set changes.
+                ui.set_min_width(value_width);
+                ui.add(egui::Label::new(value.clone()).truncate()).hint(value);
+            });
+            picked = ui.add(MenuButton::new(pick_label).min_width(pick_width)).clicked();
+        })
+        .response
+    });
+    picked
+}
+
 /// A labelled file-picker row showing the selected file count/name and a choose button.
 pub(crate) struct MenuFieldFilePicker<'paths> {
     label: egui::WidgetText,
-    help_text: Option<egui::WidgetText>,
     paths: &'paths [PathBuf],
     empty_text: egui::WidgetText,
     button_text: egui::WidgetText,
@@ -946,7 +979,6 @@ impl<'paths> MenuFieldFilePicker<'paths> {
     pub(crate) fn new(label: impl Into<egui::WidgetText>, paths: &'paths [PathBuf]) -> Self {
         Self {
             label: label.into(),
-            help_text: None,
             paths,
             empty_text: tr!("common-no-file-chosen").into(),
             button_text: tr!("common-choose").into(),
@@ -956,11 +988,6 @@ impl<'paths> MenuFieldFilePicker<'paths> {
 
     pub(crate) fn empty_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
         self.empty_text = text.into();
-        self
-    }
-
-    pub(crate) fn help_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
-        self.help_text = Some(text.into());
         self
     }
 
@@ -977,14 +1004,13 @@ impl<'paths> MenuFieldFilePicker<'paths> {
     pub(crate) fn show(self, ui: &mut egui::Ui) -> egui::Response {
         let Self {
             label,
-            help_text,
             paths,
             empty_text,
             button_text,
             width,
         } = self;
         let text = selected_file_label(paths, empty_text);
-        menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
+        menu_field_row(ui, label, None, |ui, row_height, column_width| {
             let width = width.unwrap_or(column_width);
             let inner = ui.horizontal(|ui| {
                 let clicked = ui.add(MenuButton::new(button_text).min_width(row_height * 3.8)).clicked();
@@ -1056,7 +1082,7 @@ pub(crate) fn menu_field_label(ui: &mut egui::Ui, label: egui::WidgetText, help_
         ui.painter().galley(rect.min, galley, ui.visuals().text_color());
     }
     if elided {
-        response.on_hover_text(full_text);
+        response.hint(full_text);
     }
 
     if let Some(help_text) = help_text {
@@ -1079,7 +1105,7 @@ fn paint_help_marker(ui: &egui::Ui, rect: egui::Rect, response: egui::Response, 
             color,
         );
     }
-    response.on_hover_text(help_text);
+    response.hint(help_text);
 }
 
 macro_rules! menu_field_float {
@@ -1207,32 +1233,55 @@ impl<'value> MenuFieldBool<'value> {
     }
 }
 
-/// The switch a [`MenuFieldBool`] shows, for rows that lay out their own label.
+/// The switch a [`MenuFieldBool`] shows, for rows that lay out their own label,
+/// or with its label beside it where a lone setting sits in a toolbar or a
+/// title strip.
+///
+/// A checkbox reads as "include this item"; a switch reads as "this mode is
+/// on", which is what an Auto run is.
 pub(crate) struct SlidingToggle<'value> {
     value: &'value mut bool,
+    label: Option<egui::WidgetText>,
 }
 
 impl<'value> SlidingToggle<'value> {
     pub(crate) fn new(value: &'value mut bool) -> Self {
-        Self { value }
+        Self { value, label: None }
+    }
+
+    /// Text after the switch, clickable with it.
+    pub(crate) fn label(mut self, label: impl Into<egui::WidgetText>) -> Self {
+        self.label = Some(label.into());
+        self
     }
 }
 
 impl egui::Widget for SlidingToggle<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        const LABEL_GAP: f32 = 6.0;
+        let galley = self
+            .label
+            .map(|label| label.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body));
+        let label_width = galley.as_ref().map_or(0.0, |galley| LABEL_GAP + galley.size().x);
         // The track is a fixed size, but the row's full height stays clickable
         // so the switch is no harder to hit than the fields above it.
         let height = ui.spacing().interact_size.y.max(TOGGLE_HEIGHT);
-        let (rect, mut response) = ui.allocate_exact_size(egui::vec2(TOGGLE_WIDTH, height), egui::Sense::click());
+        let (rect, mut response) = ui.allocate_exact_size(egui::vec2(TOGGLE_WIDTH + label_width, height), egui::Sense::click());
 
         if response.clicked() {
             *self.value = !*self.value;
             response.mark_changed();
         }
 
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *self.value, ""));
+        let text = galley.as_ref().map_or("", |galley| galley.text());
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *self.value, text));
 
         if ui.is_rect_visible(rect) {
+            let rect = egui::Rect::from_min_size(rect.min, egui::vec2(TOGGLE_WIDTH, height));
+            if let Some(galley) = galley {
+                let text_pos = egui::pos2(rect.right() + LABEL_GAP, rect.center().y - galley.size().y / 2.0);
+                ui.painter().galley(text_pos, galley, ui.style().interact(&response).text_color());
+            }
             let visuals = ui.style().interact_selectable(&response, *self.value);
             // Keyed by the bool's own address rather than `response.id`: that id is
             // assigned by allocation order within the enclosing panel, so switching
@@ -1324,7 +1373,6 @@ impl<'value> MenuFieldU32<'value> {
 /// the two numbers, which can also be dragged or typed into.
 pub(crate) struct MenuFieldRange<'value> {
     label: egui::WidgetText,
-    help_text: Option<egui::WidgetText>,
     low: &'value mut f64,
     high: &'value mut f64,
     limits: std::ops::RangeInclusive<f64>,
@@ -1336,7 +1384,6 @@ impl<'value> MenuFieldRange<'value> {
     pub(crate) fn new(label: impl Into<egui::WidgetText>, low: &'value mut f64, high: &'value mut f64, limits: std::ops::RangeInclusive<f64>) -> Self {
         Self {
             label: label.into(),
-            help_text: None,
             low,
             high,
             limits,
@@ -1349,21 +1396,9 @@ impl<'value> MenuFieldRange<'value> {
         self
     }
 
-    pub(crate) fn help_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
-        self.help_text = Some(text.into());
-        self
-    }
-
     pub(crate) fn show(self, ui: &mut egui::Ui) -> egui::Response {
-        let Self {
-            label,
-            help_text,
-            low,
-            high,
-            limits,
-            width,
-        } = self;
-        menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
+        let Self { label, low, high, limits, width } = self;
+        menu_field_row(ui, label, None, |ui, row_height, column_width| {
             let width = width.unwrap_or(column_width);
             ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 // Each number gets a little under a third of the row and the
@@ -1497,27 +1532,17 @@ impl<'value> MenuFieldColor32<'value> {
 /// A consistently aligned premultiplied RGBA colour field.
 pub(crate) struct MenuFieldRgba<'value> {
     label: egui::WidgetText,
-    help_text: Option<egui::WidgetText>,
     value: &'value mut [f32; 4],
 }
 
 impl<'value> MenuFieldRgba<'value> {
     pub(crate) fn new(label: impl Into<egui::WidgetText>, value: &'value mut [f32; 4]) -> Self {
-        Self {
-            label: label.into(),
-            help_text: None,
-            value,
-        }
-    }
-
-    pub(crate) fn help_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
-        self.help_text = Some(text.into());
-        self
+        Self { label: label.into(), value }
     }
 
     pub(crate) fn show(self, ui: &mut egui::Ui) -> egui::Response {
-        let Self { label, help_text, value } = self;
-        menu_field_row(ui, label, help_text, |ui, _, _| super::color::edit_rgba_premultiplied(ui, value))
+        let Self { label, value } = self;
+        menu_field_row(ui, label, None, |ui, _, _| super::color::edit_rgba_premultiplied(ui, value))
     }
 }
 
@@ -1593,7 +1618,7 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
                 .response;
             // Only a value the box cuts short is worth repeating on hover.
             if selected_needs > width + 0.5 {
-                response = response.on_hover_text(selected_tooltip);
+                response = response.hint(selected_tooltip);
             }
             if selection_changed {
                 response.mark_changed();

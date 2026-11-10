@@ -21,6 +21,13 @@ const COORD_FIELD_PADDING: f32 = 10.0;
 /// Shrink factor on the coordinate fields: the worst-case template is wider
 /// than the values normally seen, so the fields don't need its full width.
 const COORD_FIELD_SCALE: f32 = 0.9;
+/// How far the bar's contents sit above the middle of its height. Centred,
+/// the text reads low: the space under its baseline is held for descenders
+/// the readouts rarely have.
+const CONTENT_RAISE: i8 = 1;
+/// How much further up the rules between readouts sit than the text: a rule
+/// spans the row, and centred on the bar it reads a touch low beside them.
+const SEPARATOR_LIFT: f32 = 1.0;
 
 /// Fixed width for each coordinate readout, measured from a worst-case value so
 /// the fields (and everything after them) don't shift as the cursor moves.
@@ -184,13 +191,29 @@ fn load_color(dark: bool, free: f32) -> egui::Color32 {
     if dark { dark_fill } else { light_fill }
 }
 
+/// A rule between two readouts, [`SEPARATOR_LIFT`] above where the row would
+/// put it, taking the same room in the row as if it had not moved.
+fn separator(ui: &mut egui::Ui) {
+    let lift = egui::vec2(0.0, -SEPARATOR_LIFT);
+    let row = ui.available_rect_before_wrap();
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row.translate(lift)).layout(*ui.layout()));
+    child.separator();
+    ui.advance_cursor_after_rect(child.min_rect().translate(-lift));
+}
+
 /// Draw the bottom status bar panel.
 pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
     // The other bar that spans the window rather than sitting in a region, and
     // dressed the same way: the gap's colour, and no separator line.
+    let frame = crate::ui::chrome::window_bar_frame(ui);
+    let frame = frame.inner_margin(egui::Margin {
+        top: frame.inner_margin.top - CONTENT_RAISE,
+        bottom: frame.inner_margin.bottom + CONTENT_RAISE,
+        ..frame.inner_margin
+    });
     egui::Panel::bottom("status_bar")
         .show_separator_line(false)
-        .frame(crate::ui::chrome::window_bar_frame(ui))
+        .frame(frame)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(format!("{} {}", crate::APP_NAME, crate::APP_RELEASE));
@@ -209,15 +232,15 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                     // back here; otherwise the separator sits further from the
                     // name than it does from the plain labels.
                     ui.add_space(-LANGUAGE_PADDING);
-                    ui.separator();
+                    separator(ui);
                     let fps = editor.measured_fps.map_or_else(|| "--".to_owned(), |fps| format!("{fps:.0}"));
                     ui.label(tr!("status-fps", fps = fps));
                     if editor.memory_usage.is_some() {
-                        ui.separator();
+                        separator(ui);
                         draw_memory_usage(ui, editor);
                     }
                     if !editor.cpu_usage.is_empty() {
-                        ui.separator();
+                        separator(ui);
                         draw_cpu_usage(ui, editor);
                     }
                 });
@@ -230,9 +253,9 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
 /// The cursor, selection and debug render readouts, drawn only when a viewport
 /// is on screen to report them.
 fn draw_viewport_readouts(ui: &mut egui::Ui, editor: &EditorState) {
-    ui.separator();
+    separator(ui);
     ui.label(tr!("status-selected", count = editor.selected_handles.len()));
-    ui.separator();
+    separator(ui);
     if editor.debug_surface_chunks {
         match editor.debug_surface_stats {
             Some(stats) => ui.label(tr!(
@@ -244,7 +267,7 @@ fn draw_viewport_readouts(ui: &mut egui::Ui, editor: &EditorState) {
             )),
             None => ui.label(tr!("status-faces-chunks")),
         };
-        ui.separator();
+        separator(ui);
     }
     if editor.debug_clip_planes {
         match editor.debug_clip_plane_distances {
@@ -256,7 +279,7 @@ fn draw_viewport_readouts(ui: &mut egui::Ui, editor: &EditorState) {
             )),
             None => ui.label(tr!("status-clip-near-far")),
         };
-        ui.separator();
+        separator(ui);
     }
     if editor.debug_point_cloud_chunks {
         match editor.debug_point_stats {
@@ -270,7 +293,7 @@ fn draw_viewport_readouts(ui: &mut egui::Ui, editor: &EditorState) {
             )),
             None => ui.label(tr!("status-points-chunks")),
         };
-        ui.separator();
+        separator(ui);
     }
     let coord_width = coord_field_width(ui);
     let cursor_in_viewport = ui.input(|input| input.pointer.hover_pos().is_some()) && !ui.ctx().is_pointer_over_egui();

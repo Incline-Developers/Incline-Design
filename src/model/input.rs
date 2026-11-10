@@ -37,14 +37,14 @@ pub(crate) async fn read_browser_range(file: &web_sys::File, start: u64, end: u6
 pub(crate) async fn read_browser_file(file: web_sys::File) -> Result<InputFile, String> {
     let size = file.size();
     if !size.is_finite() || size < 0.0 || size > crate::app::memory::INPUT_FILE_LIMIT as f64 {
-        return Err(format!("{} is too large; browser imports are limited to 2 GiB", file.name()));
+        return Err(crate::i18n::tr!("err-input-too-large", name = file.name().to_string()));
     }
     let len = size as usize;
-    let reservation = crate::app::memory::reserve(len, &format!("input '{}'", file.name()))?;
+    let reservation = crate::app::memory::reserve(len, &crate::i18n::tr!("err-input-label-file", name = file.name().to_string()))?;
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(len)
-        .map_err(|error| format!("could not allocate {len} bytes for {}: {error}", file.name()))?;
+        .map_err(|error| crate::i18n::tr!("err-input-allocate", bytes = len.to_string(), name = file.name().to_string(), error = error.to_string()))?;
 
     // Copied straight into the reserved buffer: a chunk read on its own
     // would hold a second copy of up to 64 MiB for a moment.
@@ -53,10 +53,10 @@ pub(crate) async fn read_browser_file(file: web_sys::File) -> Result<InputFile, 
         let end = start.saturating_add(crate::app::memory::FILE_CHUNK_BYTES).min(len);
         let blob = file
             .slice_with_f64_and_f64(start as f64, end as f64)
-            .map_err(|error| format!("could not slice {}: {error:?}", file.name()))?;
+            .map_err(|error| crate::i18n::tr!("input-could-not-slice-name-error", name = file.name().to_string(), error = format!("{error:?}")))?;
         let value = wasm_bindgen_futures::JsFuture::from(blob.array_buffer())
             .await
-            .map_err(|error| format!("could not read {}: {error:?}", file.name()))?;
+            .map_err(|error| crate::i18n::tr!("input-could-not-read-name-error", name = file.name().to_string(), error = format!("{error:?}")))?;
         let chunk = js_sys::Uint8Array::new(&value);
         let old_len = bytes.len();
         bytes.resize(old_len + chunk.length() as usize, 0);
@@ -85,7 +85,7 @@ pub(crate) async fn read_browser_head(file: &web_sys::File, max_len: usize) -> R
     }
     let head_len = (max_len as f64).min(size).max(0.0) as u64;
     let bytes = read_browser_range(file, 0, head_len).await?;
-    let reservation = crate::app::memory::reserve(bytes.len(), &format!("input head '{}'", file.name()))?;
+    let reservation = crate::app::memory::reserve(bytes.len(), &crate::i18n::tr!("err-input-label-head", name = file.name().to_string()))?;
     Ok(InputFile {
         source: SourceRef {
             name: file.name(),

@@ -38,12 +38,12 @@ impl VideoFormat {
 
     /// The save dialog's name for the format.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    pub(crate) fn filter_name(self) -> &'static str {
+    pub(crate) fn filter_name(self) -> String {
         match self {
-            Self::Mp4 => "MP4 video (AV1)",
-            Self::Mov => "QuickTime movie (AV1)",
-            Self::WebM => "WebM video (AV1)",
-            Self::Gif => "GIF animation",
+            Self::Mp4 => crate::i18n::tr!("video-filter-mp4"),
+            Self::Mov => crate::i18n::tr!("video-filter-mov"),
+            Self::WebM => crate::i18n::tr!("video-filter-webm"),
+            Self::Gif => crate::i18n::tr!("video-filter-gif"),
         }
     }
 
@@ -92,7 +92,7 @@ impl Destination {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use anyhow::Context as _;
-            let file = std::fs::File::create(&self.path).with_context(|| format!("Could not create {}", self.path.display()))?;
+            let file = std::fs::File::create(&self.path).with_context(|| crate::i18n::tr!("err-video-create-file", path = self.path.display().to_string()))?;
             Ok(Box::new(file))
         }
         #[cfg(target_arch = "wasm32")]
@@ -253,7 +253,7 @@ mod av1 {
             let context: Context<u8> = Config::new()
                 .with_encoder_config(encoder)
                 .new_context()
-                .map_err(|error| anyhow!("The AV1 encoder refused the settings: {error}"))?;
+                .map_err(|error| anyhow!(crate::i18n::tr!("err-video-encoder-settings", error = error.to_string())))?;
             let config = context.container_sequence_header();
             let chroma = width.div_ceil(2) * height.div_ceil(2);
             Ok(Self {
@@ -275,7 +275,7 @@ mod av1 {
                     Ok(packet) => self.write_packet(&packet.data, packet.frame_type == FrameType::KEY)?,
                     Err(EncoderStatus::Encoded) => continue,
                     Err(EncoderStatus::NeedMoreData | EncoderStatus::LimitReached) => return Ok(()),
-                    Err(error) => return Err(anyhow!("AV1 encoding failed: {error}")),
+                    Err(error) => return Err(anyhow!(crate::i18n::tr!("err-video-encode-failed", error = error.to_string()))),
                 }
             }
         }
@@ -302,7 +302,9 @@ mod av1 {
             frame.planes[0].copy_from_raw_u8(&self.luma, self.width, 1);
             frame.planes[1].copy_from_raw_u8(&self.chroma_u, chroma_stride, 1);
             frame.planes[2].copy_from_raw_u8(&self.chroma_v, chroma_stride, 1);
-            self.context.send_frame(frame).map_err(|error| anyhow!("AV1 encoding failed: {error}"))?;
+            self.context
+                .send_frame(frame)
+                .map_err(|error| anyhow!(crate::i18n::tr!("err-video-encode-failed", error = error.to_string())))?;
             self.drain()
         }
 
@@ -329,7 +331,7 @@ mod av1 {
             let has_size = header & 0x02 != 0;
             let mut cursor = at + 1 + usize::from(extension);
             let payload = if has_size {
-                let (size, read) = leb128(&data[cursor.min(data.len())..]).ok_or_else(|| anyhow!("A malformed OBU came out of the encoder"))?;
+                let (size, read) = leb128(&data[cursor.min(data.len())..]).ok_or_else(|| anyhow!(crate::i18n::tr!("err-video-malformed-output")))?;
                 cursor += read;
                 size
             } else {
@@ -338,7 +340,7 @@ mod av1 {
             let end = cursor
                 .checked_add(payload)
                 .filter(|end| *end <= data.len())
-                .ok_or_else(|| anyhow!("A truncated OBU came out of the encoder"))?;
+                .ok_or_else(|| anyhow!(crate::i18n::tr!("err-video-truncated-output")))?;
             match kind {
                 TEMPORAL_DELIMITER => {}
                 SEQUENCE_HEADER => {
@@ -431,7 +433,7 @@ impl GifEncoder {
     fn new(file: BufWriter<Box<dyn VideoOutput>>, width: u32, height: u32, fps: f64) -> Result<Self> {
         let factor = width.div_ceil(GIF_MAX_WIDTH).max(1);
         let (out_width, out_height) = ((width / factor).max(1), (height / factor).max(1));
-        let size = |value: u32| u16::try_from(value).map_err(|_| anyhow!("The viewport is too large for a GIF"));
+        let size = |value: u32| u16::try_from(value).map_err(|_| anyhow!(crate::i18n::tr!("err-video-gif-too-large")));
         let mut encoder = gif::Encoder::new(file, size(out_width)?, size(out_height)?, &[])?;
         encoder.set_repeat(gif::Repeat::Infinite)?;
         Ok(Self {

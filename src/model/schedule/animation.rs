@@ -319,6 +319,6 @@ impl BlastTop {
                 weight += w;
             }
         }
-        (weight > 1e-9).then(|| sum / weight)
+        (weight > 1e-9).then_some(sum / weight)
     }
 }

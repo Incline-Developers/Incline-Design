@@ -20,7 +20,10 @@ impl From<Compression> for PqWriteOptions {
 
 impl<W: Write + Seek + Send> Writer<W> {
     fn array_writer<'a>(&self) -> PqArrayWriter<'a> {
-        PqArrayWriter::new(self.compression().into())
+        PqArrayWriter::new(PqWriteOptions {
+            dictionary: self.dictionary_encoding(),
+            ..self.compression().into()
+        })
     }
 
     fn array_write<A: ArrayType>(&mut self, writer: PqArrayWriter) -> Result<Array<A>, Error> {

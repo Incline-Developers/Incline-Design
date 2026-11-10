@@ -1,4 +1,4 @@
-//! The Solids Setup subpage's New Solid dialog (Solids step).
+//! The Solids Setup's New Solid dialog (Solids step).
 
 use crate::{
     i18n::tr,
