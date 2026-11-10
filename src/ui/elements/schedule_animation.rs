@@ -43,6 +43,9 @@ const MIN_PLAY_SECONDS: f64 = 0.1;
 /// by a stall, or the page left and come back to, moves on by this much of
 /// the schedule rather than by the whole gap.
 const MAX_PLAY_STEP_S: f64 = 0.25;
+/// How long an arrow is held before the cursor stops stepping and runs, as
+/// in the blast review.
+const SCRUB_HOLD_S: f64 = 0.35;
 const READOUT_SIZE: f32 = 16.0;
 const STATUS_SIZE: f32 = 12.0;
 
@@ -60,6 +63,7 @@ pub(crate) fn draw_timeline(
         .frame(chrome::region_frame(ui).inner_margin(egui::Margin::symmetric(14, 8)))
         .show(ui, |ui| {
             let horizon = editor.schedule_animation_horizon_h.max(0.0);
+            timeline_keys(ui.ctx(), editor, horizon);
             advance_playback(ui, editor, horizon);
 
             // The band no longer names its periods, so this line is the only
@@ -118,14 +122,93 @@ fn advance_playback(ui: &egui::Ui, editor: &mut EditorState, horizon: f64) {
     let now = ui.input(|input| input.time);
     let step_s = editor.schedule_animation_play_clock.map_or(0.0, |last| (now - last).clamp(0.0, MAX_PLAY_STEP_S));
     editor.schedule_animation_play_clock = Some(now);
-    let hours_per_second = editor.schedule_animation_play_span.hours() / editor.schedule_animation_play_seconds.max(MIN_PLAY_SECONDS);
-    editor.schedule_time_h = (editor.schedule_time_h.max(0.0) + step_s * hours_per_second).min(horizon);
+    editor.schedule_time_h = (editor.schedule_time_h.max(0.0) + step_s * play_rate(editor)).min(horizon);
     if editor.schedule_time_h >= horizon {
         editor.schedule_animation_playing = false;
         editor.schedule_animation_play_clock = None;
     } else {
         ui.ctx().request_repaint();
     }
+}
+
+/// The schedule's hours played through per real second, at the set speed.
+fn play_rate(editor: &EditorState) -> f64 {
+    editor.schedule_animation_play_span.hours() / editor.schedule_animation_play_seconds.max(MIN_PLAY_SECONDS)
+}
+
+/// Start playback, from the start again once it has played through.
+fn play(editor: &mut EditorState, horizon: f64) {
+    if editor.schedule_time_h >= horizon {
+        editor.schedule_time_h = 0.0;
+    }
+    editor.schedule_animation_playing = true;
+}
+
+/// The timeline's keys, as the blast review's: Space plays and pauses, and
+/// the arrows step the cursor an hour (a day with Shift), running at the
+/// playback speed once held. Left alone while a field is typed in, while the
+/// animation is off, and while a video records.
+fn timeline_keys(ctx: &egui::Context, editor: &mut EditorState, horizon: f64) {
+    let hold_id = egui::Id::unique("schedule_animation_scrub_hold");
+    if ctx.egui_wants_keyboard_input() || !editor.schedule_animation_enabled || editor.video_export_progress.is_some() {
+        ctx.data_mut(|data| data.remove::<f64>(hold_id));
+        return;
+    }
+    // Consumed, so a transport button left with focus is not clicked by the
+    // same Space press. Every arrow press counts, each with its own Shift.
+    let (space, step, back_down, forward_down, dt) = ctx.input_mut(|input| {
+        let space = input.consume_key(egui::Modifiers::NONE, egui::Key::Space);
+        let mut step = 0.0;
+        for modifiers in [egui::Modifiers::NONE, egui::Modifiers::SHIFT] {
+            let unit = if modifiers.shift { 24.0 } else { 1.0 };
+            while input.consume_key(modifiers, egui::Key::ArrowLeft) {
+                step -= unit;
+            }
+            while input.consume_key(modifiers, egui::Key::ArrowRight) {
+                step += unit;
+            }
+        }
+        (
+            space,
+            step,
+            input.key_down(egui::Key::ArrowLeft),
+            input.key_down(egui::Key::ArrowRight),
+            f64::from(input.stable_dt.min(0.1)),
+        )
+    });
+    if space {
+        if editor.schedule_animation_playing {
+            editor.schedule_animation_playing = false;
+        } else {
+            play(editor, horizon);
+        }
+    }
+    let direction = match (back_down, forward_down) {
+        (true, false) => -1.0,
+        (false, true) => 1.0,
+        _ => 0.0,
+    };
+    if direction == 0.0 && step == 0.0 {
+        ctx.data_mut(|data| data.remove::<f64>(hold_id));
+        return;
+    }
+    editor.schedule_animation_playing = false;
+    let held = ctx.data_mut(|data| {
+        let held = data.get_temp_mut_or_default::<f64>(hold_id);
+        *held += dt;
+        *held
+    });
+    // Repeats from the OS are swallowed by the run, so a held key moves
+    // smoothly. A step goes from the whole hour, so a cursor dropped at 14:15
+    // steps to 15:00 rather than carrying the quarter along, as on the Gantt.
+    if direction != 0.0 && held >= SCRUB_HOLD_S {
+        editor.schedule_time_h += direction * dt * play_rate(editor);
+    } else if step != 0.0 {
+        let from = if step > 0.0 { editor.schedule_time_h.floor() } else { editor.schedule_time_h.ceil() };
+        editor.schedule_time_h = from + step;
+    }
+    editor.schedule_time_h = editor.schedule_time_h.clamp(0.0, horizon);
+    ctx.request_repaint();
 }
 
 /// The readout row: the playback controls, or a recording's progress, from
@@ -237,11 +320,7 @@ fn draw_playback_controls(ui: &mut egui::Ui, editor: &mut EditorState, horizon: 
             editor.schedule_animation_playing = false;
         }
     } else if transport_button(ui, Transport::Play, tr!("animate-play")).clicked() {
-        // From the start again once it has played through.
-        if editor.schedule_time_h >= horizon {
-            editor.schedule_time_h = 0.0;
-        }
-        editor.schedule_animation_playing = true;
+        play(editor, horizon);
     }
     if transport_button(ui, Transport::Rewind, tr!("animate-reset")).clicked() {
         editor.schedule_time_h = 0.0;
