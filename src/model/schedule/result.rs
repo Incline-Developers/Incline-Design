@@ -950,38 +950,6 @@ impl HourIndex {
     }
 }
 
-/// How many trucks of each class are working, as knots of (hour, units) a
-/// step function holds from.
-fn truck_use(deliveries: &[Delivery]) -> HashMap<TruckClassId, Vec<(f64, f64)>> {
-    let mut truck_use: HashMap<TruckClassId, Vec<(f64, f64)>> = HashMap::new();
-    for delivery in deliveries {
-        let duration = delivery.end_h - delivery.start_h;
-        if duration > 0.0 {
-            let units = delivery.truck_hours / duration;
-            let events = truck_use.entry(delivery.truck).or_default();
-            events.push((delivery.start_h, units));
-            events.push((delivery.end_h, -units));
-        }
-    }
-    for events in truck_use.values_mut() {
-        events.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut knots: Vec<(f64, f64)> = Vec::new();
-        let mut units = 0.0;
-        for &(hour, delta) in events.iter() {
-            units += delta;
-            if let Some(last) = knots.last_mut()
-                && last.0 == hour
-            {
-                last.1 = units.max(0.0);
-            } else {
-                knots.push((hour, units.max(0.0)));
-            }
-        }
-        *events = knots;
-    }
-    truck_use
-}
-
 /// Everything [`CalculatedSchedule::new`] indexes.
 pub(crate) struct ScheduleParts {
     pub(crate) run: u64,
@@ -999,6 +967,12 @@ pub(crate) struct ScheduleParts {
     pub(crate) grade_targets: Vec<GradeTargetResult>,
     pub(crate) report: SolveReport,
     pub(crate) drill_blast: Option<DrillBlastResult>,
+    /// How many trucks of each class are working, as knots of (hour, units)
+    /// a step function holds from, in time order. One level for each solved
+    /// cell, which is what the fleet limits: blocks dug one after another
+    /// inside a cell need more trucks and then fewer than it, and only their
+    /// average is the model's.
+    pub(crate) truck_use: HashMap<TruckClassId, Vec<(f64, f64)>>,
 }
 
 impl CalculatedSchedule {
@@ -1039,19 +1013,14 @@ impl CalculatedSchedule {
         let by_block = parts.ground.iter().enumerate().map(|(index, balance)| (balance.block, index)).collect();
         // Each a pass over every delivery, and none reads another: a year of
         // hourly dispatch has hundreds of thousands.
-        let ((periods, inventory), (hourly, truck_use)) = rayon::join(
+        let ((periods, inventory), hourly) = rayon::join(
             || {
                 rayon::join(
                     || PeriodTotals::build(parts.requested_end_h, &executions, &parts.deliveries, &parts.piles),
                     || inventory_curves(&parts.piles, &parts.deliveries),
                 )
             },
-            || {
-                rayon::join(
-                    || hourly_receipts(parts.requested_end_h, parts.grades.len(), &parts.deliveries),
-                    || truck_use(&parts.deliveries),
-                )
-            },
+            || hourly_receipts(parts.requested_end_h, parts.grades.len(), &parts.deliveries),
         );
         let executions_by_hour = HourIndex::build(executions.iter().map(|execution| (execution.start_h, execution.end_h)));
         let deliveries_by_hour = HourIndex::build(parts.deliveries.iter().map(|delivery| (delivery.start_h, delivery.end_h)));
@@ -1095,7 +1064,7 @@ impl CalculatedSchedule {
             by_block,
             inventory,
             hourly,
-            truck_use,
+            truck_use: parts.truck_use,
             executions_by_hour,
             deliveries_by_hour,
             receipt_ends,
@@ -1213,7 +1182,8 @@ impl CalculatedSchedule {
     /// Deliveries made by one loader under one bar from one source over one
     /// span, for a tooltip.
     pub(crate) fn deliveries_of<'a>(&'a self, execution: &'a Execution) -> impl Iterator<Item = &'a Delivery> + 'a {
-        self.deliveries.iter().filter(move |delivery| {
+        let spans = self.deliveries_by_hour.between(execution.start_h, execution.end_h);
+        spans.into_iter().map(|index| &self.deliveries[index as usize]).filter(move |delivery| {
             delivery.agent == execution.agent
                 && delivery.bar == execution.bar
                 && delivery.source == execution.source

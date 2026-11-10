@@ -195,6 +195,26 @@ fn same_rate(left_tonnes: f64, left_h: f64, right_tonnes: f64, right_h: f64) -> 
     (left - right).abs() <= 1e-9 * left.abs().max(right.abs()).max(1.0)
 }
 
+/// How many trucks of one class are working, as knots of (hour, units) a step
+/// function holds from, off the truck-hours of each solved cell
+/// (`(start, end, truck-hours)`).
+fn truck_use(mut cells: Vec<(f64, f64, f64)>) -> Vec<(f64, f64)> {
+    cells.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let mut knots: Vec<(f64, f64)> = Vec::with_capacity(cells.len() + 1);
+    let mut busy_until = f64::NEG_INFINITY;
+    for (start_h, end_h, hours) in cells {
+        if start_h > busy_until && busy_until.is_finite() {
+            knots.push((busy_until, 0.0));
+        }
+        knots.push((start_h, hours / (end_h - start_h)));
+        busy_until = end_h;
+    }
+    if busy_until.is_finite() {
+        knots.push((busy_until, 0.0));
+    }
+    knots
+}
+
 /// Build the published schedule, or say why the solution cannot be one.
 pub(crate) fn publish(
     input: &BlendInput,
@@ -239,6 +259,8 @@ pub(crate) fn publish(
     }
     let mut deliveries: Vec<Delivery> = Vec::with_capacity(solution.movements.len());
     let mut dug: BTreeMap<GroundId, (f64, f64)> = BTreeMap::new();
+    // (truck class, cell start) -> (cell end, truck-hours)
+    let mut truck_cells: BTreeMap<trucking::TruckClassId, HashMap<u64, (f64, f64), foldhash::fast::FixedState>> = BTreeMap::new();
     for (index, row) in solution.movements.iter().enumerate() {
         if index % 4096 == 0 && cancel.is_cancelled() {
             return Err(crate::i18n::tr!("err-sched-cancelled-publication"));
@@ -259,6 +281,7 @@ pub(crate) fn publish(
             continue;
         }
         let task = replay.row_tasks[index].ok_or_else(|| crate::i18n::tr!("err-sched-pub-row-no-bar", index = index.to_string()))?;
+        let cell = (start_h, end_h);
         let (start_h, end_h) = match candidate.source {
             SourceId::Ground(ground) => dig_times[&(candidate.loader, task, ground, row.interval, row.segment)],
             SourceId::Stockpile(_) => (start_h, end_h),
@@ -310,6 +333,7 @@ pub(crate) fn publish(
             .entry((agent, bar, activity as u8, SourceKey::of(source), row.interval, row.segment))
             .or_insert((start_h, end_h, 0.0))
             .2 += row.tonnes_t;
+        truck_cells.entry(truck).or_default().entry(cell.0.to_bits()).or_insert((cell.1, 0.0)).1 += row.tonnes_t * candidate.truck_hours_per_tonne;
         deliveries.push(Delivery {
             agent,
             bar,
@@ -589,6 +613,15 @@ pub(crate) fn publish(
             .collect(),
         report,
         drill_blast: published_drill_blast(input, solution, identities),
+        truck_use: truck_cells
+            .into_iter()
+            .map(|(truck, cells)| {
+                (
+                    truck,
+                    truck_use(cells.into_iter().map(|(start, (end_h, hours))| (f64::from_bits(start), end_h, hours)).collect()),
+                )
+            })
+            .collect(),
     });
     explain_idle(&mut schedule, input, solution, &lookup);
     Ok(schedule)
