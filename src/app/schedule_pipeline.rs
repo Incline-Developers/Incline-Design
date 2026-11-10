@@ -1480,9 +1480,12 @@ fn compute_schedule_fingerprints(document: &crate::model::Document, solids: (u8,
             .collect::<Vec<_>>()
     };
     let by_kind = |kind: crate::model::schedule::DestinationKind| solid_destinations.iter().filter(|(_, _, solid_kind, _)| *solid_kind == kind).cloned().collect::<Vec<_>>();
-    // Which piles are used, and how each is represented: a used pile has
-    // to have a representation. Only the reclaim bars' sources, so moving
-    // a bar does not send Setup back to be run.
+    // Which piles are used, how each is represented and what it opens
+    // with: a used pile has to have a representation, a chunked one a chunk
+    // size, and its opening lots a value for every tracked grade. Only the
+    // reclaim bars' sources, so moving a bar does not send Setup back to be
+    // run.
+    let tracked_grades: Vec<_> = plan.experiment().grades.iter().map(|(field, _)| field.0).collect();
     let pile_use: Vec<_> = crate::model::schedule::destinations::available(document.solids(), routing)
         .iter()
         .filter(|entry| entry.kind == crate::model::schedule::DestinationKind::Stockpile)
@@ -1492,6 +1495,12 @@ fn compute_schedule_fingerprints(document: &crate::model::Document, solids: (u8,
                 format!("{:?}", plan.experiment().representation(entry.id)),
                 routing.rules.iter().any(|rule| rule.enabled && rule.destinations.contains(&entry.id))
                     || plan.bars().iter().any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id))),
+                plan.experiment().chunk_t(entry.id).map(f64::to_bits),
+                routing.inventory(entry.id).map(|inventory| {
+                    let mut hasher = DefaultHasher::new();
+                    inventory.hash_content(&mut hasher);
+                    hasher.finish()
+                }),
             )
         })
         .collect();
@@ -1500,6 +1509,7 @@ fn compute_schedule_fingerprints(document: &crate::model::Document, solids: (u8,
         by_kind(crate::model::schedule::DestinationKind::Stockpile),
         standalone(crate::model::schedule::DestinationKind::Stockpile),
         pile_use,
+        &tracked_grades,
     ));
     let dumps_step = hash_of((
         stockpiles_step,
@@ -1600,7 +1610,9 @@ fn compute_schedule_fingerprints(document: &crate::model::Document, solids: (u8,
         }
         hasher.finish()
     };
-    let solids_step = hash_of((cashflow_step, solids, plan.unmeasured_as_zero(), exclusions));
+    // The tracked grades too: the step counts the blocks holding a negative
+    // value of each.
+    let solids_step = hash_of((cashflow_step, solids, plan.unmeasured_as_zero(), exclusions, &tracked_grades));
     // Haulage checks the destinations and the Solids run's dig blocks
     // against the roads, so all three are its inputs.
     let haulage_step = {
