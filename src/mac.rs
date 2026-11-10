@@ -64,6 +64,13 @@ struct MenuState {
     /// Whether exactly one loaded prismoid grid is selected, which qualities
     /// are added to.
     can_add_prismoid_qualities: bool,
+    /// Whether one loaded prismoid grid and one closed polyline are
+    /// selected, which Mask Prismoid Grid by Polyline takes.
+    can_mask_prismoid_grid_by_polyline: bool,
+    /// Whether any prismoid is selected, which Mask Prismoids acts on.
+    can_mask_prismoids: bool,
+    /// Whether every selected prismoid is masked by hand, which ticks it.
+    prismoids_masked: bool,
     can_undrape_rasters: bool,
     /// Whether any design object is selected, which is what Convert to Road
     /// turns into haul roads.
@@ -156,6 +163,12 @@ pub(crate) enum MacMenuAction {
     /// The Modelling menu's row that opens Add Qualities on the selected
     /// prismoid grid.
     OpenAddPrismoidQualities,
+    /// The Modelling menu's row that opens Mask Prismoid Grid by Polyline on
+    /// the selected grid and closed polyline.
+    OpenMaskPrismoidGridByPolyline,
+    /// The Modelling menu's row that masks or unmasks the selected
+    /// prismoids.
+    TogglePrismoidMask,
     /// The Block Model menu's row that opens the pit optimization scenarios.
     OpenOptimizationScenarios,
     /// One row of File > Open Recent, by its index in the recent list the menu
@@ -257,6 +270,8 @@ impl MacMenuAction {
         Self::CreateBlockModelFromPrismoidGrid,
         Self::OpenAddPrismoidQualities,
         Self::OpenBuildStrata,
+        Self::TogglePrismoidMask,
+        Self::OpenMaskPrismoidGridByPolyline,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -674,6 +689,15 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
+    add_action(
+        &modelling_menu,
+        &tr!("common-mask-prismoid-grid-polyline"),
+        "",
+        MacMenuAction::OpenMaskPrismoidGridByPolyline,
+        &target,
+        mtm,
+    );
+    add_action(&modelling_menu, &tr!("common-mask-prismoids"), "", MacMenuAction::TogglePrismoidMask, &target, mtm);
     let modelling_item = add_submenu(&root, &tr!("ws-menubar-modelling"), &modelling_menu, mtm);
     modelling_item.setTag(MODELLING_MENU_TAG);
 
@@ -851,6 +875,9 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_create_block_model_from_grid: editor.selection_counts.prismoid_grids == 1,
         can_add_prismoid_qualities: editor.selection_counts.prismoid_grids == 1,
+        can_mask_prismoid_grid_by_polyline: editor.selection_counts.prismoid_grids == 1 && editor.selection_counts.clip_boundaries == 1,
+        can_mask_prismoids: editor.selection_counts.prismoid_cells > 0,
+        prismoids_masked: editor.selection_counts.prismoid_cells > 0 && editor.selection_counts.masked_prismoid_cells == editor.selection_counts.prismoid_cells,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         has_polyline_selection: editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_))),
         design_rows: DESIGN_ROWS.map(|row| row.enabled(editor)),
@@ -905,6 +932,9 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
     set_enabled(&root, MacMenuAction::CreateBlockModelFromPrismoidGrid, state.can_create_block_model_from_grid);
     set_enabled(&root, MacMenuAction::OpenAddPrismoidQualities, state.can_add_prismoid_qualities);
+    set_enabled(&root, MacMenuAction::OpenMaskPrismoidGridByPolyline, state.can_mask_prismoid_grid_by_polyline);
+    set_enabled(&root, MacMenuAction::TogglePrismoidMask, state.can_mask_prismoids);
+    set_checked(&root, MacMenuAction::TogglePrismoidMask, state.prismoids_masked);
     for action in [MacMenuAction::OpenCutTriangulationByZ, MacMenuAction::OpenContourTriangulation] {
         set_enabled(&root, action, state.one_surface_selected);
     }

@@ -197,6 +197,9 @@ impl App<'_> {
         let mut reference_holes = 0usize;
         self.for_each_reference_hole(|_| reference_holes += 1);
         counts.reference_holes = reference_holes;
+        if let Some(selection) = &self.editor.cell_selection {
+            (counts.prismoid_cells, counts.masked_prismoid_cells) = (selection.count, selection.masked);
+        }
         self.editor.selection_counts = counts;
         self.prune_selected_layers();
     }

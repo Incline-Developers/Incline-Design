@@ -1365,7 +1365,8 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
 /// Write a prismoid grid as standard OMF elements under one composite: the
 /// roof and the floor as grid surfaces on the one lattice, each carrying the
 /// active-cell mask, and the walls round the active cells as a surface. The
-/// cell values ride on the roof, each with its unit.
+/// cells masked by hand, when any is, and the cell values ride on the roof,
+/// each set of values with its unit.
 fn write_prismoid_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenPrismoidGrid) -> Result<omf_crate::Element> {
     use omf_crate::{Attribute, Element, GridSurface, Location, Orient2, Surface};
 
@@ -1386,6 +1387,11 @@ fn write_prismoid_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
         Ok(element)
     };
     let mut roof = part(writer, "roof", "prismoid_roof", &grid.roof)?;
+    // Only when used: a grid without hand masks writes as before.
+    if grid.masked.contains(&true) {
+        let masked = writer.array_booleans(grid.masked.iter().map(|masked| Some(*masked)))?;
+        roof.attributes.push(Attribute::from_booleans("masked", Location::Primitives, masked));
+    }
     for cell_values in &grid.cell_values {
         let values = writer.array_numbers(cell_values.values.iter().map(|value| value.filter(|value| value.is_finite())))?;
         let mut attribute = Attribute::from_numbers(cell_values.name.clone(), Location::Primitives, values);
@@ -3531,6 +3537,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             v_sizes,
         };
         let mut active = vec![true; lattice.cell_count()];
+        let mut masked = vec![false; lattice.cell_count()];
         let mut cell_values = Vec::new();
         for attribute in roof.attributes.iter().filter(|attribute| attribute.location == omf_crate::Location::Primitives) {
             match &attribute.data {
@@ -3539,6 +3546,13 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     active = collect_results(self.reader.array_booleans(values)?)?
                         .into_iter()
                         .map(|value| value.unwrap_or(true))
+                        .collect();
+                }
+                omf_crate::AttributeData::Boolean { values } if attribute.name == "masked" => {
+                    ensure_items(values.item_count(), "cell mask values")?;
+                    masked = collect_results(self.reader.array_booleans(values)?)?
+                        .into_iter()
+                        .map(|value| value.unwrap_or(false))
                         .collect();
                 }
                 omf_crate::AttributeData::Number { values, .. } => cell_values.push(CellValues {
@@ -3559,6 +3573,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             roof: elevations(roof_heights),
             floor: elevations(floor_heights),
             active,
+            masked,
             cell_values,
         };
         grid.check().with_context(|| format!("Prismoid grid '{name}'"))?;

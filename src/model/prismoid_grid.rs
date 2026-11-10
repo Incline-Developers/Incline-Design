@@ -323,14 +323,18 @@ pub(crate) struct PrismoidGrid {
     pub(crate) roof: Vec<f64>,
     pub(crate) floor: Vec<f64>,
     pub(crate) active: Vec<bool>,
+    /// The cells masked by hand: never active, and the only cells an unmask
+    /// brings back.
+    pub(crate) masked: Vec<bool>,
     pub(crate) cell_values: Vec<CellValues>,
 }
 
 impl PrismoidGrid {
     /// Whether the grid is well formed: unit, perpendicular, right-handed
     /// axes; at least one cell, each size finite and positive; finite heights
-    /// with the roof never below the floor; a mask and values for every cell,
-    /// each named, no reserved or column name, none twice, one density at most.
+    /// with the roof never below the floor; both masks and values for every
+    /// cell, no cell masked by hand still active, each set of values named,
+    /// no reserved or column name, no name twice, at most one density.
     pub(crate) fn check(&self) -> Result<()> {
         let lattice = &self.lattice;
         if lattice.columns() == 0 || lattice.rows() == 0 {
@@ -364,6 +368,12 @@ impl PrismoidGrid {
         let cells = lattice.cell_count();
         if self.active.len() != cells {
             bail!("has {} mask values for {cells} cells", self.active.len());
+        }
+        if self.masked.len() != cells {
+            bail!("has {} hand mask values for {cells} cells", self.masked.len());
+        }
+        if let Some(cell) = self.active.iter().zip(&self.masked).position(|(active, masked)| *active && *masked) {
+            bail!("has cell {cell} masked by hand and active");
         }
         if let Some(values) = self.cell_values.iter().find(|values| values.values.len() != cells) {
             bail!("has {} '{}' values for {cells} cells", values.values.len(), values.name);
@@ -549,6 +559,7 @@ impl PrismoidGrid {
             roof: roof_heights,
             floor: floor_heights,
             active,
+            masked: vec![false; kept_columns * kept_rows],
             cell_values: Vec::new(),
         };
         grid.check().map_err(BuildRefusal::Malformed)?;
@@ -925,10 +936,16 @@ impl PrismoidGrid {
     /// Each active cell with its box's centre: the cell's plan centre at the
     /// middle of its box's height. A cell whose box has no height is left out.
     pub(crate) fn cell_centres_3d(&self) -> impl Iterator<Item = (usize, DVec3)> + '_ {
+        self.centres_3d_of(&self.active)
+    }
+
+    /// [`Self::cell_centres_3d`] of the cells set in `cells`, a mask in cell
+    /// order.
+    pub(crate) fn centres_3d_of<'a>(&'a self, cells: &'a [bool]) -> impl Iterator<Item = (usize, DVec3)> + 'a {
         let lattice = &self.lattice;
         let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));
         let columns = lattice.columns();
-        self.active.iter().enumerate().filter(|(_, active)| **active).filter_map(move |(cell, _)| {
+        cells.iter().enumerate().filter(|(_, set)| **set).filter_map(move |(cell, _)| {
             let bounds = self.cell_box(cell, &u_edges, &v_edges)?;
             let centre = lattice.cell_centre_in(cell % columns, cell / columns, &u_edges, &v_edges);
             Some((cell, centre.extend((bounds.lower.z + bounds.upper.z) / 2.0)))
@@ -1112,14 +1129,32 @@ impl PrismoidGrid {
         }
     }
 
-    /// Bytes held by the heights, the mask and the cell values.
+    /// Bytes held by the heights, the masks and the cell values.
     pub(crate) fn estimated_bytes(&self) -> usize {
         let values: usize = self
             .cell_values
             .iter()
             .map(|cell_values| cell_values.name.len() + cell_values.unit.len() + cell_values.values.len() * size_of::<Option<f64>>())
             .sum();
-        (self.roof.len() + self.floor.len()) * size_of::<f64>() + self.active.len() + values
+        (self.roof.len() + self.floor.len()) * size_of::<f64>() + self.active.len() + self.masked.len() + values
+    }
+
+    /// A copy with `cells` masked by hand, or with `mask` false unmasked, and
+    /// how many changed. A mask takes only active cells and an unmask only
+    /// cells masked by hand, so a cell the build left out stays out. `None`
+    /// when no cell changes.
+    pub(crate) fn with_mask(&self, cells: impl IntoIterator<Item = usize>, mask: bool) -> Option<(PrismoidGrid, usize)> {
+        let mut grid: Option<PrismoidGrid> = None;
+        let mut changed = 0;
+        for cell in cells {
+            let held = grid.as_ref().unwrap_or(self);
+            if (mask && held.active[cell]) || (!mask && held.masked[cell]) {
+                let grid = grid.get_or_insert_with(|| self.clone());
+                (grid.active[cell], grid.masked[cell]) = (!mask, mask);
+                changed += 1;
+            }
+        }
+        grid.map(|grid| (grid, changed))
     }
 }
 
@@ -1501,7 +1536,7 @@ impl PrismoidGrid {
     }
 
     /// The plan position of every cell's centre, row by row.
-    fn cell_centres(&self) -> impl Iterator<Item = (usize, DVec2)> + '_ {
+    pub(crate) fn cell_centres(&self) -> impl Iterator<Item = (usize, DVec2)> + '_ {
         let lattice = &self.lattice;
         let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));
         let columns = lattice.columns();

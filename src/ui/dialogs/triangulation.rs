@@ -6,14 +6,14 @@ use crate::{
     i18n::tr,
     model::{
         Document, Object, ObjectId, SceneEntityId,
-        prismoid_grid::{CellValueRole, ValuesMark, check_marks},
+        prismoid_grid::{CellValueRole, PrismoidGridId, ValuesMark, check_marks},
         triangulation::{TriangulationId, same_quality_name},
     },
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         state::{
             ContourOutputLayer, EditorState, SolidRegion, TriCreatePhase, TriCutSource, TriLowerCut, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriUpperCut,
-            TriangulationPickTarget, UiCommand, UiProjectView, apply_strata_actions, refresh_strata_drafts,
+            TriangulationPickTarget, UiCommand, UiPrismoidGridEntry, UiProjectView, apply_strata_actions, refresh_strata_drafts,
         },
         widgets::{
             editable_grid::{DataGrid, GridButtons, GridColumn, GridRow, cell_choice, cell_text},
@@ -244,6 +244,13 @@ fn surface_name(project: &UiProjectView, tri_id: Option<TriangulationId>) -> Str
     tri_id
         .and_then(|id| project.triangulations.iter().find(|entry| entry.is_loaded && entry.id == id))
         .map_or_else(|| tr!("tri-no-surface-selected"), |entry| entry.name.clone())
+}
+
+/// A loaded prismoid grid's entry, or `None` once it was unloaded or deleted
+/// while the dialog was open, as `surface_name` treats a surface: the run
+/// button is disabled by then.
+fn loaded_prismoid_grid(project: &UiProjectView, id: Option<PrismoidGridId>) -> Option<&UiPrismoidGridEntry> {
+    id.and_then(|id| project.prismoid_grids.iter().find(|entry| entry.is_loaded && entry.id == id))
 }
 
 pub(crate) fn draw_triangulation_pick_prompt(ui: &mut egui::Ui, editor: &mut EditorState) {
@@ -1342,7 +1349,7 @@ pub(crate) fn draw_add_prismoid_qualities_dialog(ui: &mut egui::Ui, editor: &mut
         .min_width(PICKER_DIALOG_MIN_WIDTH)
         .max_width(PICKER_DIALOG_MAX_WIDTH)
         .show(ui.ctx(), |ui| {
-            let grid = editor.tri_prismoid_qualities_grid.and_then(|id| project.prismoid_grids.iter().find(|entry| entry.id == id));
+            let grid = loaded_prismoid_grid(project, editor.tri_prismoid_qualities_grid);
             let marked: Vec<_> = project
                 .triangulations
                 .iter()
@@ -1351,7 +1358,7 @@ pub(crate) fn draw_add_prismoid_qualities_dialog(ui: &mut egui::Ui, editor: &mut
             editor.tri_prismoid_qualities_ticked.retain(|id| marked.iter().any(|(entry, _)| entry.id == *id));
 
             tool_help_panel(ui, tr!("tri-add-prismoid-qualities-help"));
-            let grid_name = grid.map_or_else(String::new, |grid| grid.name.clone());
+            let grid_name = grid.map_or_else(|| tr!("tri-no-prismoid-grid-selected"), |grid| grid.name.clone());
             selected_source_field(
                 ui,
                 tr!("common-prismoid-grid"),
@@ -1477,6 +1484,104 @@ pub(crate) fn draw_add_prismoid_qualities_dialog(ui: &mut egui::Ui, editor: &mut
 
     if !open {
         editor.tri_prismoid_qualities_open = false;
+    }
+}
+
+/// Mask Prismoid Grid by Polyline: the grid and the closed polyline
+/// selected at open, and the side kept, as the polyline cut takes them;
+/// nothing new is made, so there is no name.
+pub(crate) fn draw_mask_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_prismoid_mask_open {
+        return;
+    }
+    if editor
+        .tri_prismoid_mask_object_id
+        .is_some_and(|id| !document.get_object(id).is_some_and(Object::encloses_area))
+    {
+        editor.tri_prismoid_mask_object_id = None;
+        editor.tri_prismoid_mask_object_name.clear();
+    }
+
+    let mut open = true;
+    DragableMenu::new("mask_prismoid_grid_by_polyline_dialog", tr!("tri-mask-prismoid-grid-polyline"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .inner_margin(egui::Margin::symmetric(8, 6))
+        .show(ui.ctx(), |ui| {
+            let width = picker_control_width(ui);
+            let grid = loaded_prismoid_grid(project, editor.tri_prismoid_mask_grid);
+            selected_source_field(
+                ui,
+                tr!("common-prismoid-grid"),
+                grid.map_or_else(|| tr!("tri-no-prismoid-grid-selected"), |grid| grid.name.clone()),
+                tr!("tri-selected-prismoid-grid-masked"),
+                width,
+            );
+
+            ui.add_space(4.0);
+
+            selected_source_field(
+                ui,
+                tr!("tri-boundary-polyline"),
+                if editor.tri_prismoid_mask_object_id.is_some() {
+                    editor.tri_prismoid_mask_object_name.clone()
+                } else {
+                    tr!("tri-no-boundary-selected")
+                },
+                tr!("tri-selected-closed-polyline-mask"),
+                width,
+            );
+
+            ui.add_space(4.0);
+
+            MenuField::new(tr!("tri-result")).show(ui, |ui, row_height, _| {
+                let (response, clicked) = centered_choice_buttons(
+                    ui,
+                    row_height,
+                    [
+                        (TriPolylineClipMode::KeepInside.label(), editor.tri_prismoid_mask_mode == TriPolylineClipMode::KeepInside),
+                        (TriPolylineClipMode::KeepOutside.label(), editor.tri_prismoid_mask_mode == TriPolylineClipMode::KeepOutside),
+                    ],
+                );
+                if clicked == Some(0) {
+                    editor.tri_prismoid_mask_mode = TriPolylineClipMode::KeepInside;
+                } else if clicked == Some(1) {
+                    editor.tri_prismoid_mask_mode = TriPolylineClipMode::KeepOutside;
+                }
+                response
+            });
+            tool_help_panel(
+                ui,
+                match editor.tri_prismoid_mask_mode {
+                    TriPolylineClipMode::KeepInside => tr!("tri-mask-keep-inside-help"),
+                    TriPolylineClipMode::KeepOutside => tr!("tri-mask-keep-outside-help"),
+                },
+            );
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let can_run = grid.is_some() && editor.tri_prismoid_mask_object_id.is_some();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("tri-mask")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let (Some(grid), Some(polyline_id)) = (editor.tri_prismoid_mask_grid, editor.tri_prismoid_mask_object_id)
+                {
+                    commands.push(UiCommand::ExecuteMaskPrismoidGridByPolyline {
+                        grid,
+                        polyline_id,
+                        mode: editor.tri_prismoid_mask_mode,
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_prismoid_mask_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_prismoid_mask_open = false;
     }
 }
 

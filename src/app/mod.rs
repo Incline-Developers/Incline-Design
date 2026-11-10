@@ -882,6 +882,8 @@ impl<'a> App<'a> {
             MacMenuAction::OpenBuildStrata => Some(UiCommand::OpenBuildStrata),
             MacMenuAction::CreateBlockModelFromPrismoidGrid => Some(UiCommand::CreateBlockModelFromPrismoidGrid),
             MacMenuAction::OpenAddPrismoidQualities => Some(UiCommand::OpenAddPrismoidQualities),
+            MacMenuAction::OpenMaskPrismoidGridByPolyline => Some(UiCommand::OpenMaskPrismoidGridByPolyline),
+            MacMenuAction::TogglePrismoidMask => Some(UiCommand::TogglePrismoidMask),
             MacMenuAction::OpenContourTriangulation => Some(UiCommand::OpenContourTriangulation),
             MacMenuAction::OpenPointCloudTin => Some(UiCommand::OpenPointCloudTin),
             MacMenuAction::OpenPointCloudJoin => Some(UiCommand::OpenPointCloudJoin),

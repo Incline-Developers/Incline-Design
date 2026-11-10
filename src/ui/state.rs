@@ -671,6 +671,7 @@ impl EditorState {
             || self.insert_point_at_spacing_dialog.is_some()
             || self.smooth_strings_dialog.is_some()
             || self.tri_prismoid_qualities_open
+            || self.tri_prismoid_mask_open
     }
 
     /// Lock or unlock one scene entity by name. Layer locks go through
@@ -858,6 +859,8 @@ pub(crate) struct CellSelection {
     /// One flag per cell, in cell order.
     pub(crate) cells: Vec<bool>,
     pub(crate) count: usize,
+    /// How many of the cells are masked by hand.
+    pub(crate) masked: usize,
     /// Moves on every change, so the outline is rebuilt only then.
     pub(crate) revision: u64,
     /// Roof and floor segments round the rim of the selected cells.
@@ -1414,6 +1417,10 @@ pub(crate) struct SelectionCounts {
     /// Selected prismoid grids that are loaded, which a block model is
     /// created from.
     pub(crate) prismoid_grids: usize,
+    /// Selected prismoids, which Mask Prismoids masks or unmasks.
+    pub(crate) prismoid_cells: usize,
+    /// Of those, the ones masked by hand.
+    pub(crate) masked_prismoid_cells: usize,
 }
 
 /// A triangulation selector temporarily being filled from a viewport click.
@@ -3315,6 +3322,13 @@ pub(crate) struct EditorState {
     pub(crate) tri_prismoid_qualities_grid: Option<PrismoidGridId>,
     pub(crate) tri_prismoid_qualities_ticked: Vec<TriangulationId>,
     pub(crate) tri_prismoid_qualities_density: Option<TriangulationId>,
+    /// Mask Prismoid Grid by Polyline: the grid and the closed polyline
+    /// selected at open, and which side of it is kept.
+    pub(crate) tri_prismoid_mask_open: bool,
+    pub(crate) tri_prismoid_mask_grid: Option<PrismoidGridId>,
+    pub(crate) tri_prismoid_mask_object_id: Option<ObjectId>,
+    pub(crate) tri_prismoid_mask_object_name: String,
+    pub(crate) tri_prismoid_mask_mode: TriPolylineClipMode,
     /// The active project's model envelope, mirrored each frame for the
     /// view's outline.
     pub(crate) model_envelope: Option<crate::model::project::ModelEnvelope>,
@@ -4236,6 +4250,7 @@ impl EditorState {
             || self.tri_create_open
             || self.tri_create_failure.is_some()
             || self.tri_cut_poly_open
+            || self.tri_prismoid_mask_open
             || self.tri_cut_z_open
             || self.tri_cut_surface_open
             || self.tri_solid_open
@@ -4751,6 +4766,8 @@ impl EditorState {
         self.tri_cut_poly_open = false;
         self.tri_cut_poly_object_id = None;
         self.tri_cut_poly_object_name.clear();
+        self.tri_prismoid_mask_open = false;
+        self.tri_prismoid_mask_object_id = None;
         // Snapshotted object ids, and a hold on the selection while it is up:
         // neither can outlive the project they were taken from.
         self.reference_surface_dialog = None;
@@ -5204,6 +5221,11 @@ impl EditorState {
             tri_prismoid_qualities_grid: None,
             tri_prismoid_qualities_ticked: Vec::new(),
             tri_prismoid_qualities_density: None,
+            tri_prismoid_mask_open: false,
+            tri_prismoid_mask_grid: None,
+            tri_prismoid_mask_object_id: None,
+            tri_prismoid_mask_object_name: String::new(),
+            tri_prismoid_mask_mode: TriPolylineClipMode::KeepInside,
             model_envelope: None,
             tri_cut_surface_unload_source: true,
             tri_cut_to_open: false,
@@ -7020,6 +7042,19 @@ pub(crate) enum UiCommand {
         surfaces: Vec<TriangulationId>,
         density: Option<TriangulationId>,
     },
+    /// Mask the selected prismoids by hand, or unmask them when every one
+    /// is masked by hand.
+    TogglePrismoidMask,
+    /// Open Mask Prismoid Grid by Polyline on the one selected grid and the
+    /// one selected closed polyline.
+    OpenMaskPrismoidGridByPolyline,
+    /// Mask by hand every active prismoid of `grid` whose centre falls on
+    /// the side of the polyline `mode` does not keep.
+    ExecuteMaskPrismoidGridByPolyline {
+        grid: PrismoidGridId,
+        polyline_id: ObjectId,
+        mode: TriPolylineClipMode,
+    },
     /// Colour a prismoid grid by one of its values, or by its vertical
     /// thickness with `None`.
     SetPrismoidGridColorValue {
@@ -7234,6 +7269,7 @@ impl UiCommand {
             | Self::OpenBuildSolidFromSurfaces
             | Self::OpenBuildPrismoidGrid
             | Self::OpenBuildStrata
+            | Self::OpenMaskPrismoidGridByPolyline
             | Self::OpenAddPrismoidQualities
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
@@ -7788,6 +7824,8 @@ impl UiCommand {
             Self::ExecuteBuildStrata { name, .. } => report(tr!("tri-build-strata"), name.clone()),
             Self::CreateBlockModelFromPrismoidGrid => report(tr!("common-create-block-model-from-prismoid-grid"), tr!("state-selected-prismoid-grid")),
             Self::ExecuteAddPrismoidQualities { .. } => report(tr!("state-add-prismoid-qualities"), tr!("state-selected-prismoid-grid")),
+            Self::TogglePrismoidMask => report(tr!("common-mask-prismoids"), tr!("state-selected-prismoid-grid")),
+            Self::ExecuteMaskPrismoidGridByPolyline { .. } => report(tr!("state-mask-prismoid-grid"), tr!("state-selected-prismoid-grid")),
             Self::SetPrismoidGridColorValue { value, .. } => report(tr!("state-colour-prismoid-grid"), value.clone().unwrap_or_else(|| tr!("thickness-points-column-vertical"))),
             Self::SetPrismoidGridColorPreset { preset, .. } => report(tr!("state-set-prismoid-grid-colour-preset"), preset.label()),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),

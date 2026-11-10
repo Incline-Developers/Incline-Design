@@ -1239,6 +1239,28 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     commands.push(UiCommand::OpenAddPrismoidQualities);
                     ui.close();
                 }
+                if ContextMenuAction::new(tr!("common-mask-prismoid-grid-polyline"))
+                    .enabled(editor.selection_counts.prismoid_grids == 1 && editor.selection_counts.clip_boundaries == 1)
+                    .disabled_hover_text(tr!("ws-menubar-modelling-select-prismoid-grid-polyline"))
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::OpenMaskPrismoidGridByPolyline);
+                    ui.close();
+                }
+                // One row masks the selected prismoids and, ticked when all
+                // are masked by hand, unmasks them.
+                let cells = editor.selection_counts.prismoid_cells;
+                if ContextMenuAction::new(tr!("common-mask-prismoids"))
+                    .checked(cells > 0 && editor.selection_counts.masked_prismoid_cells == cells)
+                    .enabled(cells > 0)
+                    .disabled_hover_text(tr!("ws-menubar-modelling-select-prismoids"))
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::TogglePrismoidMask);
+                    ui.close();
+                }
             });
             return;
         }

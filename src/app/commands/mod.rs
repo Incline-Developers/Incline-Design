@@ -208,6 +208,9 @@ impl<'a> App<'a> {
                 | UiCommand::CreateBlockModelFromPrismoidGrid
                 | UiCommand::OpenAddPrismoidQualities
                 | UiCommand::ExecuteAddPrismoidQualities { .. }
+                | UiCommand::TogglePrismoidMask
+                | UiCommand::OpenMaskPrismoidGridByPolyline
+                | UiCommand::ExecuteMaskPrismoidGridByPolyline { .. }
                 | UiCommand::BuildCollarPoints { .. }
                 | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
@@ -2079,6 +2082,38 @@ impl<'a> App<'a> {
                 let result = self.add_prismoid_qualities(grid, surfaces, density);
                 if result.is_ok() {
                     self.editor.tri_prismoid_qualities_open = false;
+                }
+                result
+            }
+            UiCommand::TogglePrismoidMask => {
+                self.toggle_prismoid_mask();
+                Ok(())
+            }
+            UiCommand::OpenMaskPrismoidGridByPolyline => {
+                // A grid and a polyline: two kinds, so the selection names
+                // both, as the polyline cut takes its surface and boundary.
+                let selected = self.selected_prismoid_grids();
+                let ([grid_id], Some(polyline_id)) = (&selected[..], self.selected_clip_boundary()) else {
+                    userspace_warn!("{}", tr!("cmd-commands-select-one-prismoid-grid-polyline"));
+                    return Ok(());
+                };
+                let boundary_name = self
+                    .scene_document
+                    .get_object(polyline_id)
+                    .and_then(|object| self.scene_document.layer(object.layer()))
+                    .map(|layer| tr!("common-polyline-layer", layer = layer.name.to_string()))
+                    .unwrap_or_else(|| tr!("common-polyline"));
+                self.editor.tri_prismoid_mask_open = true;
+                self.editor.tri_prismoid_mask_grid = Some(*grid_id);
+                self.editor.tri_prismoid_mask_object_id = Some(polyline_id);
+                self.editor.tri_prismoid_mask_object_name = boundary_name;
+                self.editor.tri_prismoid_mask_mode = crate::ui::state::TriPolylineClipMode::KeepInside;
+                Ok(())
+            }
+            UiCommand::ExecuteMaskPrismoidGridByPolyline { grid, polyline_id, mode } => {
+                let result = self.mask_prismoid_grid_by_polyline(grid, polyline_id, mode);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_mask_open = false;
                 }
                 result
             }

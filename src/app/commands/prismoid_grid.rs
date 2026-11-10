@@ -19,16 +19,19 @@ use crate::{
     app::{
         App,
         commands::{
-            raster::MAX_RASTER_PREVIEW_DIMENSION, solids::preview_triangulation, solids_view::next_view_id, thickness_points::not_a_grid_reason,
-            triangulation::session::refuse_quality,
+            raster::MAX_RASTER_PREVIEW_DIMENSION,
+            solids::preview_triangulation,
+            solids_view::next_view_id,
+            thickness_points::not_a_grid_reason,
+            triangulation::{session::refuse_quality, solid_between::ring_contains},
         },
         jobs::{CancelFlag, JobKey},
     },
     i18n::tr,
     model::{
-        Command, FolderId, ItemRef, ItemStyle, MemberKind, OpenItem, ReserveAggregation, SceneEntityId, SectionKind,
+        Command, FolderId, ItemRef, ItemStyle, MemberKind, Object, ObjectId, OpenItem, ReserveAggregation, SceneEntityId, SectionKind,
         drill_hole::DrillColorPreset,
-        formats::mesh_data::Triangulation,
+        formats::mesh_data::{self, Triangulation},
         grid_surface::GridSurface,
         plot::format_quantity,
         prismoid_grid::{
@@ -52,7 +55,7 @@ use crate::{
             section_surface_lines::{SECTION_FILL_DEPTH_TIE_M, SectionCellsOfGrid},
         },
     },
-    ui::state::{CellSelection, EditorState, InspectorRow, InspectorRows, SelectionMode, Workspace},
+    ui::state::{CellSelection, EditorState, InspectorRow, InspectorRows, SelectionMode, TriPolylineClipMode, Workspace},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -376,6 +379,119 @@ impl App<'_> {
         Ok(())
     }
 
+    /// Mask the selected prismoids by hand as one undoable step, or unmask
+    /// them when every one is masked by hand; a mixed selection masks its
+    /// active cells.
+    pub(crate) fn toggle_prismoid_mask(&mut self) {
+        let Some(runtime_id) = self.workspace.active_project().map(|project| project.runtime_id) else {
+            return;
+        };
+        let Some(selection) = &self.editor.cell_selection else {
+            return;
+        };
+        let SceneEntityId::PrismoidGrid(id) = selection.entity else {
+            return;
+        };
+        let mask = selection.masked < selection.count;
+        let cells: Vec<usize> = selection.cells.iter().enumerate().filter(|(_, selected)| **selected).map(|(cell, _)| cell).collect();
+        let (source, name) = (Arc::clone(&selection.grid), selection.name.clone());
+        self.spawn_mask_edit(runtime_id, id, name, source, mask, move |grid, _, _| Ok(mask_cells(grid, cells, mask)));
+    }
+
+    /// Run a mask edit's `compute` on the job queue keyed by the grid, as
+    /// the grid is copied whole however few cells change, and put its result
+    /// in place with [`Self::replace_prismoid_mask`].
+    fn spawn_mask_edit(
+        &mut self,
+        runtime_id: u32,
+        grid_id: PrismoidGridId,
+        name: String,
+        source: Arc<PrismoidGrid>,
+        mask: bool,
+        compute: impl FnOnce(&PrismoidGrid, &CancelFlag, &Progress) -> Result<Option<MaskedGrid>> + Send + 'static,
+    ) {
+        let grid = Arc::clone(&source);
+        let compute = move |cancel: &CancelFlag, progress: &Progress| compute(&grid, cancel, progress);
+        let apply = move |app: &mut App, result: Result<Option<MaskedGrid>>| match result {
+            Ok(changed) => app.replace_prismoid_mask(runtime_id, grid_id, &name, &source, changed, mask),
+            Err(refusal) => {
+                userspace_warn!("{refusal:#}");
+            }
+        };
+        self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-masking"), vec![JobKey::PrismoidGrid(grid_id)], compute, apply);
+    }
+
+    /// Put a grid's masked or unmasked copy in place as one undoable step,
+    /// unless the grid is gone or moved on from `source`, nothing changed, or
+    /// no active cell would be left. A cell selection on `source` follows to
+    /// the copy, less the cells no longer active.
+    fn replace_prismoid_mask(&mut self, runtime_id: u32, grid_id: PrismoidGridId, name: &str, source: &Arc<PrismoidGrid>, changed: Option<MaskedGrid>, mask: bool) {
+        let current = self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id);
+        let item = match masked_item(&self.prismoid_grids, current, grid_id, source, name) {
+            Ok(item) => item,
+            Err(refusal) => {
+                userspace_warn!("{refusal}");
+                return;
+            }
+        };
+        let grid_name = item.name.clone();
+        let Some((grid, summary, count)) = changed else {
+            userspace_log!("{}", tr!("cmd-prismoid-grid-mask-nothing", grid = grid_name));
+            return;
+        };
+        let active = summary.active_cells;
+        if active == 0 {
+            userspace_warn!("{}", tr!("cmd-prismoid-grid-mask-leaves-none", grid = grid_name));
+            return;
+        }
+        let mut replacement = item.clone();
+        replacement.summary = summary;
+        let totals = totals_lines(&replacement.summary);
+        let grid = Arc::new(grid);
+        replacement.grid = Arc::clone(&grid);
+        self.execute_edit_for(
+            runtime_id,
+            Command::ReplaceItem {
+                item: ItemRef::PrismoidGrid(grid_id),
+                other: Some(OpenItem::PrismoidGrid(Box::new(replacement))),
+            },
+        );
+        let entity = SceneEntityId::PrismoidGrid(grid_id);
+        if let Some(selection) = self
+            .editor
+            .cell_selection
+            .take_if(|selection| selection.entity == entity && Arc::ptr_eq(&selection.grid, source))
+        {
+            self.editor.cell_selection = carry_cell_selection(&selection, grid);
+        }
+        let (count, active) = (count.to_string(), active.to_string());
+        if mask {
+            userspace_log!("{}", tr!("cmd-prismoid-grid-masked", count = count, grid = grid_name, active = active));
+        } else {
+            userspace_log!("{}", tr!("cmd-prismoid-grid-unmasked", count = count, grid = grid_name, active = active));
+        }
+        for line in totals {
+            userspace_log!("{line}");
+        }
+        userspace_log!("{}", tr!("cmd-prismoid-grid-mask-rederive"));
+    }
+
+    /// Mask by hand, on the job queue and as one undoable step, every active
+    /// prismoid whose centre lies on the side of a closed polyline that
+    /// `mode` does not keep.
+    pub(crate) fn mask_prismoid_grid_by_polyline(&mut self, grid_id: PrismoidGridId, polyline_id: ObjectId, mode: TriPolylineClipMode) -> Result<()> {
+        let gone = || anyhow::anyhow!("{}", tr!("cmd-commands-select-one-prismoid-grid-polyline"));
+        let runtime_id = self.workspace.active_project().map(|project| project.runtime_id).ok_or_else(gone)?;
+        let item = self.prismoid_grids.iter().find(|item| item.id == grid_id && item.state.loaded).ok_or_else(gone)?;
+        let (source, name) = (Arc::clone(&item.grid), item.name.clone());
+        let ring = mask_ring(self.scene_document.get_object(polyline_id).and_then(Object::closed_boundary))?;
+        self.spawn_mask_edit(runtime_id, grid_id, name, source, true, move |grid, cancel, progress| {
+            let cells = cells_by_ring(grid, &ring, mode, cancel, &progress.phase(0.0, 1.0)).ok_or_else(|| anyhow::anyhow!("{}", tr!("common-cancelled")))?;
+            Ok(mask_cells(grid, cells, true))
+        });
+        Ok(())
+    }
+
     /// Add a built prismoid grid to the project, dirty, at its section's
     /// root, and select it.
     pub(crate) fn insert_prismoid_grid(&mut self, name: String, grid: PrismoidGrid, section: SectionKind) -> PrismoidGridId {
@@ -582,8 +698,9 @@ impl App<'_> {
 
     /// The cells a marquee takes, as Lucas's dig blocks ride Leo's box: of
     /// one drawn grid, shown and not frozen, each active cell whose box
-    /// centre falls inside, kept to the section's slab when one is up; in a
-    /// 2D section each crossed cell by the middle of its crossing. With
+    /// centre falls inside, or with none the cells masked by hand there,
+    /// kept to the section's slab when one is up; in a 2D section each
+    /// crossed cell by the middle of its crossing. With
     /// `keep_held` the grid holding cells is asked first; otherwise, or with
     /// none of its cells inside, the first grid in project order with any.
     fn prismoid_cells_in_screen_rect(&self, start: (f32, f32), end: (f32, f32), keep_held: bool) -> Option<(PrismoidGridId, Vec<usize>)> {
@@ -609,7 +726,7 @@ impl App<'_> {
             // centres it holds.
             let cells = match slab.filter(|slab| slab.outlines) {
                 Some(section) => centres_in_screen_rect(crossing_centres(&item.grid, &section), project, slab.as_ref(), start, end),
-                None => centres_in_screen_rect(item.grid.cell_centres_3d(), project, slab.as_ref(), start, end),
+                None => box_cells(&item.grid, project, slab.as_ref(), start, end),
             };
             (!cells.is_empty()).then_some((item.id, cells))
         };
@@ -913,6 +1030,55 @@ fn centres_in_screen_rect(
         .collect()
 }
 
+/// A closed polyline's outline as the ring a mask is judged by; an open
+/// string, a circle too small to bound a region or a deleted object is
+/// refused.
+fn mask_ring(boundary: Option<Vec<DVec3>>) -> Result<Vec<mesh_data::Vertex>> {
+    let boundary = boundary.ok_or_else(|| anyhow::anyhow!("{}", tr!("cmd-commands-select-one-prismoid-grid-polyline")))?;
+    Ok(boundary.into_iter().map(|point| mesh_data::Vertex::new(point.x, point.y, point.z)).collect())
+}
+
+/// The active cells `mode` masks against `ring`, each judged by its plan
+/// centre: Keep inside masks those outside the ring, Keep outside those
+/// inside. A centre on the ring takes the one answer `ring_contains` gives
+/// it. `None` when cancelled.
+fn cells_by_ring(grid: &PrismoidGrid, ring: &[mesh_data::Vertex], mode: TriPolylineClipMode, cancel: &CancelFlag, progress: &Phase) -> Option<Vec<usize>> {
+    let (low, high) = ring.iter().fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(low, high), point| {
+        let point = DVec2::new(point.x, point.y);
+        (low.min(point), high.max(point))
+    });
+    let keep_inside = mode == TriPolylineClipMode::KeepInside;
+    let cells = grid.lattice.cell_count();
+    let mut masked = Vec::new();
+    for (cell, centre) in grid.cell_centres() {
+        if cell % 4096 == 0 {
+            if cancel.is_cancelled() {
+                return None;
+            }
+            progress.set_fraction(cell as f32 / cells as f32);
+        }
+        if !grid.active[cell] {
+            continue;
+        }
+        let inside = centre.cmpge(low).all() && centre.cmple(high).all() && ring_contains(ring, mesh_data::Vertex::new(centre.x, centre.y, 0.0));
+        if inside != keep_inside {
+            masked.push(cell);
+        }
+    }
+    Some(masked)
+}
+
+/// The cells a marquee takes off a grid in 3D: the active cells whose
+/// centres project inside, or with none, the cells masked by hand there. A
+/// masked cell is drawn as a hole, and a box over it is how it is picked.
+fn box_cells(grid: &PrismoidGrid, project: impl Fn(DVec3) -> Option<(f32, f32)>, slab: Option<&SectionSlab>, start: (f32, f32), end: (f32, f32)) -> Vec<usize> {
+    let active = centres_in_screen_rect(grid.cell_centres_3d(), &project, slab, start, end);
+    if !active.is_empty() {
+        return active;
+    }
+    centres_in_screen_rect(grid.centres_3d_of(&grid.masked), project, slab, start, end)
+}
+
 /// Each cell a 2D section crosses, by a point on the plane in the middle of
 /// its crossing: halfway along it, halfway between the floor and the roof
 /// there.
@@ -964,6 +1130,7 @@ fn cell_selection(entity: SceneEntityId, grid: Arc<PrismoidGrid>, name: &str, st
             stratum,
             cells,
             count,
+            masked: 0,
             revision: 0,
             outline: Vec::new(),
             rows: InspectorRows::default(),
@@ -973,9 +1140,51 @@ fn cell_selection(entity: SceneEntityId, grid: Arc<PrismoidGrid>, name: &str, st
     })
 }
 
+/// A grid's masked or unmasked copy with its summary, both made off the UI
+/// thread, and the count of cells changed.
+type MaskedGrid = (PrismoidGrid, PrismoidGridSummary, usize);
+
+/// [`PrismoidGrid::with_mask`] with the copy's summary; `None` when no cell
+/// changed.
+fn mask_cells(grid: &PrismoidGrid, cells: impl IntoIterator<Item = usize>, mask: bool) -> Option<MaskedGrid> {
+    grid.with_mask(cells, mask).map(|(grid, count)| {
+        let summary = grid.summary();
+        (grid, summary, count)
+    })
+}
+
+/// The grid a mask edit was made on, still in the active project (`current`)
+/// and still `source`; else why the edit is dropped: the grid is gone or its
+/// project is no longer active (another project's grid can carry the same
+/// id), or the grid moved on while the edit was made.
+fn masked_item<'g>(grids: &'g [OpenPrismoidGrid], current: bool, grid_id: PrismoidGridId, source: &Arc<PrismoidGrid>, name: &str) -> Result<&'g OpenPrismoidGrid, String> {
+    let Some(item) = grids.iter().find(|item| item.id == grid_id).filter(|_| current) else {
+        return Err(tr!("cmd-prismoid-grid-mask-discarded", grid = name.to_owned()));
+    };
+    if Arc::ptr_eq(&item.grid, source) {
+        Ok(item)
+    } else {
+        Err(tr!("cmd-prismoid-grid-changed-while-masking", grid = item.name.clone()))
+    }
+}
+
+/// A selection carried to its grid's masked or unmasked copy: the cells
+/// still active stay selected, the rest leave; `None` with none left.
+fn carry_cell_selection(selection: &CellSelection, grid: Arc<PrismoidGrid>) -> Option<CellSelection> {
+    let cells: Vec<bool> = selection.cells.iter().zip(&grid.active).map(|(selected, active)| *selected && *active).collect();
+    let count = cells.iter().filter(|selected| **selected).count();
+    cell_selection(selection.entity, grid, &selection.name, selection.stratum.clone(), cells, count)
+}
+
 /// Derive what a changed selection shows, under a new revision.
 fn refresh_cell_selection(selection: &mut CellSelection) {
     selection.revision = NEXT_CELL_SELECTION_REVISION.fetch_add(1, Ordering::Relaxed);
+    selection.masked = selection
+        .cells
+        .iter()
+        .zip(&selection.grid.masked)
+        .filter(|(selected, masked)| **selected && **masked)
+        .count();
     selection.outline = selection.grid.selection_outline(&selection.cells);
     selection.rows = cell_selection_rows(selection);
 }
@@ -993,6 +1202,10 @@ fn cell_selection_rows(selection: &CellSelection) -> InspectorRows {
     };
     if let Some(stratum) = &selection.stratum {
         rows.properties.splice(1..1, stratum_rows(stratum));
+    }
+    if selection.masked > 0 {
+        rows.properties
+            .push(inspector_row(tr!("prismoid-inspector-masked"), selection.masked.to_string(), None, None));
     }
     rows
 }
