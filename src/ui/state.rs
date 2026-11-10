@@ -184,6 +184,13 @@ impl EditorState {
         }
     }
 
+    /// Whether the open Setup step draws the offscreen solid preview in place
+    /// of the viewport: the Solids and Benching steps. The viewport bar's
+    /// camera buttons drive that preview there.
+    pub(crate) fn shows_solid_preview(&self) -> bool {
+        self.is_setup_group(SetupGroup::Solids) && matches!(self.planning_solids_step, SolidsStep::Solids | SolidsStep::Benching)
+    }
+
     pub(crate) fn is_dig_strips_step(&self) -> bool {
         self.is_setup_group(SetupGroup::Solids) && self.planning_solids_step == SolidsStep::DigStrips
     }

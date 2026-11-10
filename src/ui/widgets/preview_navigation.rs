@@ -98,9 +98,21 @@ pub(crate) fn orientation_gizmo(ui: &mut egui::Ui, id: &str, image: egui::Rect, 
     true
 }
 
+/// Frame the whole preview again, keeping the angle it is seen from.
+pub(crate) fn zoom_to_extents(view: &mut SolidPreviewView) {
+    view.zoom_multiplier = 1.0;
+    view.pan = [0.0; 2];
+}
+
+/// Put the preview back to its opening view.
+pub(crate) fn reset_view(view: &mut SolidPreviewView) {
+    *view = SolidPreviewView::default();
+}
+
 /// The main viewport's two ways back to the whole view, in the top left of a
-/// preview: zoom to extents, keeping the angle, and reset to plan view.
-/// Returns whether either moved `view`.
+/// preview in a dialog, which has no viewport bar to carry them: zoom to
+/// extents, keeping the angle, and reset to plan view. Returns whether either
+/// moved `view`.
 pub(crate) fn view_buttons(ui: &mut egui::Ui, id: &str, image: egui::Rect, view: &mut SolidPreviewView) -> bool {
     use crate::ui::{unthemed_icon, widgets::toolbar::ToolbarButton};
     let side = crate::ui::widgets::toolbar::TOOL_CELL_SIZE;
@@ -118,8 +130,7 @@ pub(crate) fn view_buttons(ui: &mut egui::Ui, id: &str, image: egui::Rect, view:
             .id_salt((id, "zoom_to_extents")),
     );
     if zoom.clicked() {
-        view.zoom_multiplier = 1.0;
-        view.pan = [0.0; 2];
+        zoom_to_extents(view);
         changed = true;
     }
     let home = ui.put(
@@ -129,7 +140,7 @@ pub(crate) fn view_buttons(ui: &mut egui::Ui, id: &str, image: egui::Rect, view:
             .id_salt((id, "reset_view")),
     );
     if home.clicked() {
-        *view = SolidPreviewView::default();
+        reset_view(view);
         changed = true;
     }
     if changed {

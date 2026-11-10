@@ -126,6 +126,8 @@ pub(crate) fn draw_viewport_bar(
                     let right = super::cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if !editor.is_planning_setup() {
                             draw_view_tools(ui, editor, project, commands, side);
+                        } else if editor.shows_solid_preview() {
+                            draw_solid_preview_camera_tools(ui, editor, side);
                         }
                         // The timeline's zoom, at the end the camera tools
                         // take elsewhere.
@@ -566,6 +568,33 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     );
     if reset.clicked() {
         commands.push(UiCommand::ResetView);
+    }
+}
+
+/// The camera's two ways back to the whole view, on the Setup steps that show
+/// the solid preview rather than the viewport, driving the preview's camera.
+/// They hold the place they take on every other page, against the bar's end.
+fn draw_solid_preview_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
+    use crate::ui::widgets::preview_navigation;
+
+    let zoom = ui.add(
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), tr!("common-zoom-extents"))
+            .id_salt("solid_preview_zoom_to_extents")
+            .button_side(side),
+    );
+    if zoom.clicked() {
+        preview_navigation::zoom_to_extents(&mut editor.solid_preview_view);
+        ui.ctx().request_repaint();
+    }
+
+    let reset = ui.add(
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), tr!("common-reset-view"))
+            .id_salt("solid_preview_reset_view")
+            .button_side(side),
+    );
+    if reset.clicked() {
+        preview_navigation::reset_view(&mut editor.solid_preview_view);
+        ui.ctx().request_repaint();
     }
 }
 
