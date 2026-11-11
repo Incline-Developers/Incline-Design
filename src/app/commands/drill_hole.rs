@@ -971,6 +971,7 @@ impl<'a> App<'a> {
             elevation: 0.0,
             folder: None,
             section: crate::model::SectionKind::Designs,
+            quality: None,
         };
         let objects: Vec<crate::model::Object> = picks
             .iter()
@@ -1040,6 +1041,7 @@ impl<'a> App<'a> {
             elevation: 0.0,
             folder: None,
             section: crate::model::SectionKind::Designs,
+            quality: None,
         };
         let objects: Vec<crate::model::Object> = collars
             .iter()

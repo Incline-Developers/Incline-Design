@@ -11,8 +11,10 @@ pub(crate) mod object_edit;
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod optimization; // Handles pit optimization's scenario list, editor and scenarios file.
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
+pub(crate) mod prismoid_grid;
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
+pub(crate) mod quality_points;
 pub(crate) mod raster; // Handles georeferenced image textures.
 pub(crate) mod rename; // Handles renaming layers and project items.
 pub(crate) mod reserves; // Handles the Solids workspace's Reserves setup (Field List, block model mappings).
@@ -41,7 +43,7 @@ use crate::{
     app::App,
     i18n::tr,
     model::Command,
-    ui::state::{ActiveTool, TriCutSource, UiCommand},
+    ui::state::{ActiveTool, UiCommand},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -177,6 +179,7 @@ impl<'a> App<'a> {
                 | UiCommand::ImportRasterPaths(_)
                 | UiCommand::ChooseImportSourceFiles(_)
                 | UiCommand::ImportCsvBlockModel { .. }
+                | UiCommand::ImportQualityPoints { .. }
                 | UiCommand::ImportDrillHole(_)
                 | UiCommand::ToggleCreateDrillPattern
                 | UiCommand::BeginDrillPatternShapePick
@@ -198,6 +201,23 @@ impl<'a> App<'a> {
                 | UiCommand::MakeSeamSurface { .. }
                 | UiCommand::OpenCutTriangulationToSurface
                 | UiCommand::ExecuteCutTriangulationToSurface { .. }
+                | UiCommand::OpenBuildPrismoidGrid
+                | UiCommand::ExecuteBuildPrismoidGrid { .. }
+                | UiCommand::OpenBuildStrata
+                | UiCommand::ExecuteBuildStrata { .. }
+                | UiCommand::OpenCreateBlockModelFromPrismoidGrid
+                | UiCommand::CreateBlockModelFromPrismoidGrid(_)
+                | UiCommand::OpenAddPrismoidQualities
+                | UiCommand::ExecuteAddPrismoidQualities { .. }
+                | UiCommand::OpenPrismoidGridToSurface
+                | UiCommand::ExecutePrismoidGridToSurface { .. }
+                | UiCommand::OpenDifferencePrismoidGrids
+                | UiCommand::ExecuteDifferencePrismoidGrids { .. }
+                | UiCommand::OpenHoleMisfit
+                | UiCommand::ExecuteHoleMisfit { .. }
+                | UiCommand::TogglePrismoidMask
+                | UiCommand::OpenMaskPrismoidGridByPolyline
+                | UiCommand::ExecuteMaskPrismoidGridByPolyline { .. }
                 | UiCommand::BuildCollarPoints { .. }
                 | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
@@ -411,6 +431,18 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ClearActiveTriangulationRaster => self.clear_active_triangulation_raster(),
+            UiCommand::LoadPrismoidGrid(id) => {
+                self.set_item_loaded(crate::model::ItemRef::PrismoidGrid(id), true);
+                Ok(())
+            }
+            UiCommand::ClosePrismoidGrid(id) => {
+                self.set_item_loaded(crate::model::ItemRef::PrismoidGrid(id), false);
+                Ok(())
+            }
+            UiCommand::RemovePrismoidGrid(id) => {
+                self.remove_prismoid_grid(id);
+                Ok(())
+            }
             UiCommand::LoadPointCloud(id) => {
                 self.set_item_loaded(crate::model::ItemRef::PointCloud(id), true);
                 Ok(())
@@ -441,6 +473,7 @@ impl<'a> App<'a> {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.import_block_model_source(crate::model::block_model::BlockModelSource { path, csv_columns: Some(mapping) })
             }
+            UiCommand::ImportQualityPoints { path, mapping } => self.import_quality_points(path, mapping),
             UiCommand::ExportOmf(selection) => self.choose_export_omf(&selection),
             UiCommand::ExportProjectDxf(runtime_id) => {
                 self.choose_export_project_dxf(runtime_id);
@@ -953,7 +986,13 @@ impl<'a> App<'a> {
                 self.open_reference_surface();
                 Ok(())
             }
-            UiCommand::BuildReferenceSurface { points, controls, extent, name } => self.build_reference_surface(points, controls, extent, name),
+            UiCommand::BuildReferenceSurface {
+                points,
+                controls,
+                extent,
+                spacing,
+                name,
+            } => self.build_reference_surface(points, controls, extent, spacing, name),
             UiCommand::OpenThicknessPoints => {
                 self.open_thickness_points();
                 Ok(())
@@ -987,6 +1026,10 @@ impl<'a> App<'a> {
             }
             UiCommand::ShowSeamTable(surface) => {
                 self.editor.seam_table = self.session.seam_tables.get(&surface).cloned();
+                Ok(())
+            }
+            UiCommand::ShowHoleMisfitTable { runtime_id, layer } => {
+                self.editor.hole_misfit_table = self.session.misfit_tables.get(&(runtime_id, layer)).cloned();
                 Ok(())
             }
             UiCommand::MakeSeamSurface { surface } => self.make_seam_surface(surface),
@@ -1661,26 +1704,7 @@ impl<'a> App<'a> {
                 result
             }
             UiCommand::OpenCutTriangulationToSurface => {
-                // Select first, then act: the seam clipped is the roof and floor
-                // selected; the limits, surfaces of the same kind, are picked in
-                // the dialog.
-                let targets = self.selected_triangulations();
-                if triangulation::seam_targets(&targets).is_none() {
-                    userspace_warn!("{}", tr!("cmd-cuts-to-surface-select-seam"));
-                    return Ok(());
-                }
-                // A surface is the primary choice for both rows; the deposit's
-                // last depth waits in its field for when Depth is chosen.
-                let depth = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.cut_depth);
-                self.editor.tri_cut_to_open = true;
-                self.editor.tri_cut_to_targets = targets;
-                self.editor.tri_cut_to_upper_source = TriCutSource::Surface;
-                self.editor.tri_cut_to_upper_id = None;
-                self.editor.tri_cut_to_upper_level_input.clear();
-                self.editor.tri_cut_to_lower_source = TriCutSource::Surface;
-                self.editor.tri_cut_to_lower_id = None;
-                self.editor.tri_cut_to_lower_level_input.clear();
-                self.editor.tri_cut_to_depth_input = depth.map(|depth| depth.to_string()).unwrap_or_default();
+                self.open_clip_to_surface();
                 Ok(())
             }
             UiCommand::ExecuteCutTriangulationToSurface { targets, upper, lower } => {
@@ -1740,6 +1764,139 @@ impl<'a> App<'a> {
                 let result = self.create_solid_from_surfaces(design_id, topography_id, region, name);
                 if result.is_ok() {
                     self.editor.tri_solid_open = false;
+                }
+                result
+            }
+            UiCommand::OpenBuildPrismoidGrid => {
+                self.editor.tri_prismoid_open = true;
+                self.editor.tri_prismoid_roof_id = None;
+                self.editor.tri_prismoid_floor_id = None;
+                self.editor.tri_prismoid_step = std::num::NonZeroUsize::MIN;
+                self.editor.tri_prismoid_name_input.clear();
+                self.editor.tri_prismoid_name_auto = true;
+                Ok(())
+            }
+            UiCommand::ExecuteBuildPrismoidGrid { roof_id, floor_id, step, name } => {
+                let result = self.build_prismoid_grid(roof_id, floor_id, step, name);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_open = false;
+                }
+                result
+            }
+            UiCommand::OpenBuildStrata => {
+                self.editor.tri_strata_open = true;
+                self.editor.tri_strata_rows.clear();
+                self.editor.tri_strata_intervals.clear();
+                self.editor.tri_strata_selected = None;
+                self.editor.tri_strata_step = std::num::NonZeroUsize::MIN;
+                self.editor.tri_strata_name_input.clear();
+                self.editor.tri_strata_name_auto = true;
+                Ok(())
+            }
+            UiCommand::ExecuteBuildStrata { horizons, intervals, step, name } => {
+                let result = self.build_strata(horizons, intervals, step, name);
+                if result.is_ok() {
+                    self.editor.tri_strata_open = false;
+                }
+                result
+            }
+            UiCommand::SetPrismoidGridColorValue { id, value } => {
+                self.set_prismoid_grid_color_by(id, |color_by| color_by.value = value);
+                Ok(())
+            }
+            UiCommand::SetPrismoidGridColorPreset { id, preset } => {
+                self.set_prismoid_grid_color_by(id, |color_by| color_by.preset = preset);
+                Ok(())
+            }
+            UiCommand::OpenCreateBlockModelFromPrismoidGrid => {
+                self.open_prismoid_block_model();
+                Ok(())
+            }
+            UiCommand::CreateBlockModelFromPrismoidGrid(grid_id) => {
+                let too_fine = self
+                    .prismoid_grids
+                    .iter()
+                    .find(|item| item.id == grid_id)
+                    .and_then(|item| block_model::prismoid_cells_too_fine(&item.grid).map(|size| (item.name.clone(), size)));
+                if let Some((grid, size)) = too_fine {
+                    userspace_warn!(
+                        "{}",
+                        tr!(
+                            "cmd-prismoid-grid-cells-too-fine",
+                            grid = grid,
+                            size = prismoid_grid::cell_size(size),
+                            least = prismoid_grid::cell_size(block_model::LEAST_PRISMOID_BLOCK_SIZE)
+                        )
+                    );
+                    return Ok(());
+                }
+                let result = self.create_block_model_from_prismoid_grid(grid_id);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_block_open = false;
+                }
+                result
+            }
+            UiCommand::OpenAddPrismoidQualities => {
+                self.open_add_prismoid_qualities();
+                Ok(())
+            }
+            UiCommand::ExecuteAddPrismoidQualities { grid, surfaces, density } => {
+                let result = self.add_prismoid_qualities(grid, surfaces, density);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_qualities_open = false;
+                }
+                result
+            }
+            UiCommand::OpenPrismoidGridToSurface => {
+                self.open_prismoid_grid_surface();
+                Ok(())
+            }
+            UiCommand::ExecutePrismoidGridToSurface { grid, value, name } => {
+                let result = self.prismoid_grid_to_surface(grid, value, name);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_surface_open = false;
+                }
+                result
+            }
+            UiCommand::OpenDifferencePrismoidGrids => {
+                self.open_difference_prismoid_grids();
+                Ok(())
+            }
+            UiCommand::ExecuteDifferencePrismoidGrids { grid, other, value, name } => {
+                let result = self.difference_prismoid_grids(grid, other, value, name);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_difference_open = false;
+                }
+                result
+            }
+            UiCommand::OpenHoleMisfit => {
+                self.open_hole_misfit();
+                Ok(())
+            }
+            UiCommand::ExecuteHoleMisfit {
+                grid,
+                holes,
+                quality_points,
+                seam,
+            } => {
+                let result = self.misfit_at_holes(grid, holes, &quality_points, seam.as_ref());
+                if result.is_ok() {
+                    self.editor.hole_misfit_dialog = None;
+                }
+                result
+            }
+            UiCommand::TogglePrismoidMask => {
+                self.toggle_prismoid_mask();
+                Ok(())
+            }
+            UiCommand::OpenMaskPrismoidGridByPolyline => {
+                self.open_mask_prismoid_grid();
+                Ok(())
+            }
+            UiCommand::ExecuteMaskPrismoidGridByPolyline { grid, polyline_id, mode } => {
+                let result = self.mask_prismoid_grid_by_polyline(grid, polyline_id, mode);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_mask_open = false;
                 }
                 result
             }

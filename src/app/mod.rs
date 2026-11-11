@@ -413,6 +413,9 @@ pub(crate) struct App<'a> {
     section_surface_lines_key: Option<u64>,
     /// The colours those lines were last drawn in, one per shown surface.
     section_surface_colors: Vec<[f32; 4]>,
+    /// What the section's prismoid cells were last cut from, `None` while
+    /// none are drawn.
+    section_cells_key: Option<u64>,
     editor: EditorState,
     workspace: ProjectStore,
     /// Explorer/menu snapshot reused while its allocation-free source
@@ -432,6 +435,18 @@ pub(crate) struct App<'a> {
     next_point_cloud_id: u64,
     raster_textures: Vec<OpenRasterTexture>,
     next_raster_texture_id: u64,
+    prismoid_grids: Vec<crate::model::prismoid_grid::OpenPrismoidGrid>,
+    /// What the view draws of each grid; kept off Geology.
+    prismoid_drawn: Vec<commands::prismoid_grid::DrawnPrismoidGrid>,
+    /// The project's surfaces and the drawn grids, or empty when none is
+    /// drawn: read through `with_prismoid_scene`.
+    prismoid_scene: Vec<crate::model::triangulation::OpenTriangulation>,
+    /// The same for rasters: the project's and the thickness maps.
+    prismoid_rasters: Vec<OpenRasterTexture>,
+    prismoid_scene_key: Option<u64>,
+    /// Grids that will not be drawn this session: one warning each.
+    prismoid_refused: std::collections::HashSet<crate::model::prismoid_grid::PrismoidGridId>,
+    next_prismoid_grid_id: u64,
     empty_document: Document,
     scene_document: Document,
     /// Layers of `scene_document` with at least one object on them, rebuilt
@@ -735,6 +750,7 @@ impl<'a> Default for App<'a> {
             last_snap_poll_instant: None,
             section_surface_lines_key: None,
             section_surface_colors: Vec::new(),
+            section_cells_key: None,
             editor: EditorState::new(),
             workspace: ProjectStore::default(),
             ui_project_view_cache: RefCell::new(None),
@@ -751,6 +767,13 @@ impl<'a> Default for App<'a> {
             next_point_cloud_id: 0,
             raster_textures: Vec::new(),
             next_raster_texture_id: 0,
+            prismoid_grids: Vec::new(),
+            prismoid_drawn: Vec::new(),
+            prismoid_scene: Vec::new(),
+            prismoid_rasters: Vec::new(),
+            prismoid_scene_key: None,
+            prismoid_refused: std::collections::HashSet::new(),
+            next_prismoid_grid_id: 0,
             empty_document: Document::new(),
             scene_document: Document::new(),
             populated_layers: std::collections::HashSet::new(),
@@ -1063,7 +1086,7 @@ impl<'a> App<'a> {
     pub(crate) fn pick_under_cursor(&self) -> Option<(SceneEntityId, DVec3)> {
         self.graphics.as_ref()?.pick_at_cursor(
             PICK_THRESHOLD_PX,
-            &self.triangulations,
+            crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
             &self.editor.hidden_handles,
             &self.editor.frozen_handles,
             self.editor.xray_enabled,
@@ -1162,6 +1185,7 @@ impl<'a> App<'a> {
             ItemRef::DrillHole(id) => self.drill_holes.iter().find(|entry| entry.id == id).map(ItemStyle::of_drill_hole),
             ItemRef::PointCloud(id) => self.point_clouds.iter().find(|entry| entry.id == id).map(ItemStyle::of_point_cloud),
             ItemRef::Raster(id) => self.raster_textures.iter().find(|entry| entry.id == id).map(ItemStyle::of_raster),
+            ItemRef::PrismoidGrid(id) => self.prismoid_grids.iter().find(|entry| entry.id == id).map(ItemStyle::of_prismoid_grid),
         }
     }
 
@@ -1393,6 +1417,7 @@ impl<'a> App<'a> {
             drill_holes: &mut self.drill_holes,
             point_clouds: &mut self.point_clouds,
             rasters: &mut self.raster_textures,
+            prismoid_grids: &mut self.prismoid_grids,
             effects: StepEffects::default(),
         };
         let result = body(&mut self.history, &mut target);
@@ -1496,6 +1521,7 @@ impl<'a> App<'a> {
             SceneEntityId::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == *id),
             SceneEntityId::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == *id),
             SceneEntityId::Raster(id) => self.raster_textures.iter().any(|item| item.id == *id),
+            SceneEntityId::PrismoidGrid(id) => self.prismoid_grids.iter().any(|item| item.id == *id),
         };
         let missing: Vec<SceneEntityId> = self
             .editor
@@ -1555,6 +1581,7 @@ impl<'a> App<'a> {
                 ItemRef::DrillHole(id) => self.release_drillhole_runtime(id),
                 ItemRef::PointCloud(id) => self.release_pointcloud_runtime(id),
                 ItemRef::Raster(id) => self.release_raster_runtime(id),
+                ItemRef::PrismoidGrid(_) => {}
             }
         }
         self.evict_unloaded_items();
@@ -1594,6 +1621,7 @@ impl<'a> App<'a> {
             || self.drill_holes.iter().any(|item| item.state.is_dirty())
             || self.point_clouds.iter().any(|item| item.state.is_dirty())
             || self.raster_textures.iter().any(|item| item.state.is_dirty())
+            || self.prismoid_grids.iter().any(|item| item.state.is_dirty())
             || membership_changed(
                 &self.triangulations.iter().map(|item| item.id.0).collect::<Vec<_>>(),
                 &self.project_asset_baseline.triangulations,
@@ -1608,6 +1636,10 @@ impl<'a> App<'a> {
                 &self.project_asset_baseline.point_clouds,
             )
             || membership_changed(&self.raster_textures.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.rasters)
+            || membership_changed(
+                &self.prismoid_grids.iter().map(|item| item.id.0).collect::<Vec<_>>(),
+                &self.project_asset_baseline.prismoid_grids,
+            )
     }
 
     pub(super) fn project_asset_save_token(&self) -> SaveToken {
@@ -1618,6 +1650,7 @@ impl<'a> App<'a> {
             drill_holes: self.drill_holes.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
             point_clouds: self.point_clouds.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
             rasters: self.raster_textures.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
+            prismoid_grids: self.prismoid_grids.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
         }
     }
 
@@ -1647,6 +1680,11 @@ impl<'a> App<'a> {
                 item.state.mark_snapshot_saved(*epoch);
             }
         }
+        for (id, epoch) in &token.prismoid_grids {
+            if let Some(item) = self.prismoid_grids.iter_mut().find(|item| item.id.0 == *id) {
+                item.state.mark_snapshot_saved(*epoch);
+            }
+        }
         self.project_asset_baseline = token.clone();
     }
 
@@ -1664,6 +1702,9 @@ impl<'a> App<'a> {
             item.state.mark_saved();
         }
         for item in &mut self.raster_textures {
+            item.state.mark_saved();
+        }
+        for item in &mut self.prismoid_grids {
             item.state.mark_saved();
         }
         if let Some(project) = self.workspace.active_project_mut() {
@@ -1736,6 +1777,13 @@ impl<'a> App<'a> {
         self.next_point_cloud_id = 0;
         self.raster_textures.clear();
         self.next_raster_texture_id = 0;
+        self.prismoid_grids.clear();
+        self.prismoid_drawn.clear();
+        self.prismoid_scene.clear();
+        self.prismoid_rasters.clear();
+        self.prismoid_scene_key = None;
+        self.prismoid_refused.clear();
+        self.next_prismoid_grid_id = 0;
         self.project_asset_baseline = SaveToken::default();
         self.clear_editor_transient_state();
         // Scenarios, runs and results belong to the outgoing project; the next
@@ -1744,15 +1792,17 @@ impl<'a> App<'a> {
         self.scene_document_key = None;
         self.section_surface_lines_key = None;
         self.section_surface_colors.clear();
+        self.section_cells_key = None;
         // Item and object ids restart with the replacement project, so the
         // renderer's id-keyed caches would otherwise keep drawing this
         // project's geometry under the next one's items until something
         // that clears them (a view fit) happened to run.
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.clear_item_caches();
-            // Leaving the section above cut nothing, so the lines go with
-            // the key, or they stay drawn over the next project.
+            // Leaving the section above cut nothing, so the lines and cells
+            // go with their keys, or they stay drawn over the next project.
             graphics.set_section_surface_lines(Vec::new());
+            graphics.set_section_cells(Vec::new());
         }
         self.redraw_requested = true;
     }
@@ -1911,6 +1961,7 @@ impl<'a> App<'a> {
             .chain(self.block_models.iter().filter(|item| item.state.hidden).map(|item| item.entity_id()))
             .chain(self.drill_holes.iter().filter(|item| item.state.hidden).map(|item| item.entity_id()))
             .chain(self.point_clouds.iter().filter(|item| item.state.hidden).map(|item| item.entity_id()))
+            .chain(self.prismoid_grids.iter().filter(|item| item.state.hidden).map(|item| item.entity_id()))
             .chain(self.raster_textures.iter().filter(|item| item.state.hidden).map(|item| SceneEntityId::Raster(item.id)));
         self.editor.hidden_handles.extend(hidden);
         // One entity shown alone, hidden or not (a pick on it).
@@ -1924,6 +1975,7 @@ impl<'a> App<'a> {
                 .chain(self.block_models.iter().map(|item| item.entity_id()))
                 .chain(self.drill_holes.iter().map(|item| item.entity_id()))
                 .chain(self.point_clouds.iter().map(|item| item.entity_id()))
+                .chain(self.prismoid_grids.iter().map(|item| item.entity_id()))
                 .chain(self.raster_textures.iter().map(|item| SceneEntityId::Raster(item.id)))
                 .filter(|entity| *entity != keep)
                 .collect::<Vec<_>>();
@@ -2141,7 +2193,7 @@ impl<'a> App<'a> {
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.fit_to_extents(
                 &self.scene_document,
-                &self.triangulations,
+                crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,
@@ -2167,6 +2219,7 @@ impl<'a> App<'a> {
             || self.drill_holes.iter().any(|item| item.state.loaded)
             || self.point_clouds.iter().any(|item| item.state.loaded)
             || self.raster_textures.iter().any(|item| item.state.loaded)
+            || !self.prismoid_scene.is_empty()
     }
 
     /// Apply what a precision touchpad gesture moved since the last loop
@@ -2193,6 +2246,7 @@ impl<'a> App<'a> {
         self.graphics = None;
         // A new renderer starts with no surface lines: cut them again for it.
         self.section_surface_lines_key = None;
+        self.section_cells_key = None;
         #[cfg(target_os = "windows")]
         {
             self.trackpad = None;
@@ -2276,6 +2330,7 @@ impl<'a> App<'a> {
             (triangulation.state.loaded && !self.editor.hidden_handles.contains(&triangulation.entity_id())).hash(&mut hasher);
             triangulation.raster_texture.hash(&mut hasher);
             triangulation.color.map(f32::to_bits).hash(&mut hasher);
+            triangulation.quality.hash(&mut hasher);
             triangulation.state.hash_row(&mut hasher);
         }
 
@@ -2310,6 +2365,13 @@ impl<'a> App<'a> {
             raster.driver_name.hash(&mut hasher);
             raster.projection.hash(&mut hasher);
             raster.state.hash_row(&mut hasher);
+        }
+
+        for grid in &self.prismoid_grids {
+            grid.id.hash(&mut hasher);
+            grid.name.hash(&mut hasher);
+            Arc::as_ptr(&grid.grid).hash(&mut hasher);
+            grid.state.hash_row(&mut hasher);
         }
         hasher.finish()
     }
@@ -2420,6 +2482,7 @@ impl<'a> App<'a> {
                 color: tri.color,
                 folder: tri.state.folder,
                 section: tri.state.section,
+                quality: tri.quality.clone(),
             })
             .collect::<Vec<_>>();
         let mut block_models = self
@@ -2499,6 +2562,7 @@ impl<'a> App<'a> {
                 section: raster.state.section,
             })
             .collect::<Vec<_>>();
+        let mut prismoid_grids = self.prismoid_grids.iter().map(prismoid_grid_entry).collect::<Vec<_>>();
 
         // Explorer display order is natural (alphanumeric) by item name.
         // Sorting the view only leaves retained project order untouched.
@@ -2519,6 +2583,7 @@ impl<'a> App<'a> {
         drill_holes.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         point_clouds.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         raster_textures.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
+        prismoid_grids.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
 
         #[cfg(not(target_arch = "wasm32"))]
         let active_path = self.workspace.active_project().and_then(|p| p.path.clone());
@@ -2559,6 +2624,10 @@ impl<'a> App<'a> {
         ) || section_folders_dirty(SectionKind::PointClouds);
         let rasters_membership_dirty = !same_membership(&self.raster_textures.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.rasters)
             || section_folders_dirty(SectionKind::Rasters);
+        let prismoid_grids_membership_dirty = !same_membership(
+            &self.prismoid_grids.iter().map(|item| item.id.0).collect::<Vec<_>>(),
+            &self.project_asset_baseline.prismoid_grids,
+        ) || section_folders_dirty(SectionKind::PrismoidGrids);
         let active_triangulation_for_menu = self
             .active_triangulation
             .and_then(|id| self.triangulations.iter().find(|tri| tri.id == id).map(|tri| (tri.id, tri.color)));
@@ -2570,11 +2639,13 @@ impl<'a> App<'a> {
             drill_holes,
             point_clouds,
             raster_textures,
+            prismoid_grids,
             triangulations_membership_dirty,
             block_models_membership_dirty,
             drill_holes_membership_dirty,
             point_clouds_membership_dirty,
             rasters_membership_dirty,
+            prismoid_grids_membership_dirty,
             has_active_project: self.workspace.has_active_project(),
             needs_startup_dialog: !self.startup_dialog_dismissed,
             #[cfg(not(target_arch = "wasm32"))]
@@ -2583,6 +2654,7 @@ impl<'a> App<'a> {
             active_triangulation_for_menu,
             thickness_table_layers: self.session.thickness_tables.keys().copied().collect(),
             seam_table_surfaces: self.session.seam_tables.keys().copied().collect(),
+            misfit_table_layers: self.session.misfit_tables.keys().copied().collect(),
             schedule: self.workspace.active_document().map(|document| document.schedule().clone()).unwrap_or_default(),
             haulage: self.workspace.active_document().map(|document| document.haulage().clone()).unwrap_or_default(),
             haul_points: self.workspace.active_document().map(|document| self.haul_destination_points(document)).unwrap_or_default(),
@@ -2636,6 +2708,26 @@ impl<'a> App<'a> {
                 userspace_warn!("{}", crate::i18n::tr!("app-failed-save-browser-session-error", error = error.to_string()));
             }
         });
+    }
+}
+
+/// One prismoid grid's explorer row.
+fn prismoid_grid_entry(grid: &crate::model::prismoid_grid::OpenPrismoidGrid) -> crate::ui::state::UiPrismoidGridEntry {
+    crate::ui::state::UiPrismoidGridEntry {
+        id: grid.id,
+        name: grid.name.clone(),
+        source_name: grid.state.source_name.clone(),
+        is_loaded: grid.state.loaded,
+        is_hidden: grid.state.hidden,
+        dirty: grid.state.is_dirty(),
+        summary: grid.summary.clone(),
+        values: grid.grid.cell_values.iter().map(|values| (values.name.clone(), values.role)).collect(),
+        regular: grid.grid.lattice.is_regular(),
+        color: grid.color,
+        color_by: grid.color_by.clone(),
+        stratum: grid.stratum.clone(),
+        folder: grid.state.folder,
+        section: grid.state.section,
     }
 }
 

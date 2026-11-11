@@ -156,6 +156,23 @@ impl ViewportDockPanel {
     }
 }
 
+/// A colour ramp filling `bar`, each stop's position running from 0 at the
+/// left end to 1 at the right.
+pub(crate) fn color_ramp_bar(painter: &egui::Painter, bar: egui::Rect, stops: &[(f32, egui::Color32)]) {
+    let mut mesh = egui::Mesh::default();
+    for pair in stops.windows(2) {
+        let base = mesh.vertices.len() as u32;
+        for (position, color) in pair {
+            let x = bar.left() + position * bar.width();
+            mesh.colored_vertex(egui::pos2(x, bar.top()), *color);
+            mesh.colored_vertex(egui::pos2(x, bar.bottom()), *color);
+        }
+        mesh.add_triangle(base, base + 1, base + 2);
+        mesh.add_triangle(base + 1, base + 2, base + 3);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
 /// A section heading in the block-model card: [`menu::menu_section`]'s small
 /// weak title and hairline, ending in a small "Reset" button. Returns whether
 /// the link was clicked.

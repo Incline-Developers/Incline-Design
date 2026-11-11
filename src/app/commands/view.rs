@@ -46,7 +46,7 @@ impl<'a> App<'a> {
             let drawn = crate::app::events::drawn_surfaces(
                 &self.editor,
                 self.showing_solid_preview(),
-                &self.triangulations,
+                crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                 &self.solid_view_body,
                 &self.reserves_scene,
                 &self.schedule_animation,
@@ -340,7 +340,7 @@ impl<'a> App<'a> {
         crate::app::events::drawn_surfaces(
             &self.editor,
             self.showing_solid_preview(),
-            &self.triangulations,
+            crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
             &self.solid_view_body,
             &self.reserves_scene,
             &self.schedule_animation,

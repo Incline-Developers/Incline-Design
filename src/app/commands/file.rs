@@ -281,7 +281,7 @@ enum PendingSaveKind {
         runtime_id: u32,
         snapshot_hash: u64,
         snapshot_layer_hashes: std::collections::HashMap<u64, u64>,
-        asset_token: crate::model::project::SaveToken,
+        asset_token: Box<crate::model::project::SaveToken>,
         /// Close once this write finishes. Set when a close request arrives
         /// after the worker has already started and can no longer be stopped.
         close_after: bool,
@@ -733,6 +733,14 @@ impl<'a> App<'a> {
                     }
                     crate::model::formats::csv_drill_hole::settle_collars(&mut self.editor.import_drill_csv);
                 }
+                if kind == DataMenu::QualityPoints {
+                    let preview = self
+                        .editor
+                        .import_source_paths
+                        .first()
+                        .map(|path| crate::model::formats::csv_quality_points::preview_path(path));
+                    self.set_quality_preview(preview);
+                }
                 Ok(())
             }
             #[cfg(target_arch = "wasm32")]
@@ -761,6 +769,9 @@ impl<'a> App<'a> {
                             self.editor.import_csv_error = Some(error.to_string());
                         }
                     }
+                }
+                if kind == DataMenu::QualityPoints {
+                    self.set_quality_preview(accepted.first().map(|file| crate::model::formats::csv_quality_points::preview(&file.bytes)));
                 }
                 if kind == DataMenu::CsvDrillHole {
                     self.editor.import_drill_csv.clear();
@@ -900,7 +911,7 @@ impl<'a> App<'a> {
                     runtime_id: project_runtime_id,
                     snapshot_hash,
                     snapshot_layer_hashes,
-                    asset_token,
+                    asset_token: Box::new(asset_token),
                     close_after: false,
                     save_as_previous_name: Some(previous_name),
                 };
@@ -1038,7 +1049,7 @@ impl<'a> App<'a> {
                     let tables = crate::model::formats::csv_drill_hole::write_worksheet(dataset);
                     vec![tables.worksheet, tables.corrections]
                 },
-                "corrections worksheet".to_owned(),
+                tr!("err-file-desc-corrections-worksheet"),
                 |error| userspace_warn!("{}", tr!("cmd-file-worksheet-export-failed-error", error = format!("{error:#}"))),
             ),
             #[cfg(target_arch = "wasm32")]
@@ -1693,10 +1704,11 @@ impl<'a> App<'a> {
                 DataMenu::Pcd => AsyncFileDialog::new().add_filter("Point Cloud Data", &["pcd"]),
                 DataMenu::CsvBlockModel => AsyncFileDialog::new().add_filter("CSV block model", &["csv"]),
                 DataMenu::CsvDrillHole => AsyncFileDialog::new().add_filter("Drillhole CSV files", &["csv"]),
+                DataMenu::QualityPoints => AsyncFileDialog::new().add_filter(tr!("io-quality-points-csv"), &["csv"]),
                 DataMenu::Geotiff => AsyncFileDialog::new().add_filter("GeoTIFF", &["tif", "tiff"]),
                 _ => AsyncFileDialog::new(),
             };
-            let handles = if kind == DataMenu::CsvBlockModel {
+            let handles = if matches!(kind, DataMenu::CsvBlockModel | DataMenu::QualityPoints) {
                 vec![dialog.pick_file().await?]
             } else {
                 dialog.pick_files().await?
@@ -1736,10 +1748,11 @@ impl<'a> App<'a> {
                 DataMenu::Pcd => AsyncFileDialog::new().add_filter("Point Cloud Data", &["pcd"]),
                 DataMenu::CsvBlockModel => AsyncFileDialog::new().add_filter("CSV block model", &["csv"]),
                 DataMenu::CsvDrillHole => AsyncFileDialog::new().add_filter("Drillhole CSV files", &["csv"]),
+                DataMenu::QualityPoints => AsyncFileDialog::new().add_filter(tr!("io-quality-points-csv"), &["csv"]),
                 DataMenu::Geotiff => AsyncFileDialog::new().add_filter("GeoTIFF", &["tif", "tiff"]),
                 _ => AsyncFileDialog::new(),
             };
-            let paths: Vec<PathBuf> = if kind == DataMenu::CsvBlockModel {
+            let paths: Vec<PathBuf> = if matches!(kind, DataMenu::CsvBlockModel | DataMenu::QualityPoints) {
                 vec![dialog.pick_file().await?.into_path()]
             } else {
                 dialog.pick_files().await?.into_iter().map(FileHandleExt::into_path).collect()
@@ -2072,7 +2085,7 @@ impl<'a> App<'a> {
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel| {
                 if cancel.is_cancelled() {
-                    anyhow::bail!("Cancelled");
+                    anyhow::bail!(crate::app::jobs::Cancelled);
                 }
                 let crate::model::OpenItem::DrillHole(item) = crate::model::OpenItem::DrillHole(Box::new(snapshot)).materialize()? else {
                     unreachable!()
@@ -2485,7 +2498,7 @@ impl<'a> App<'a> {
                 runtime_id,
                 snapshot_hash,
                 snapshot_layer_hashes,
-                asset_token,
+                asset_token: Box::new(asset_token),
                 close_after: false,
                 save_as_previous_name: None,
             };

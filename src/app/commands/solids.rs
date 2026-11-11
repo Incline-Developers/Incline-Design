@@ -364,6 +364,8 @@ pub(crate) fn preview_triangulation(
         always_show_edges: false,
         depth_shade: None,
         pattern_from: None,
+        prismoid_grid: None,
+        quality: None,
     }
 }
 
@@ -899,6 +901,7 @@ impl crate::app::App<'_> {
             edges: mesh.edges.to_vec(),
             surface_face_order: mesh.surface_face_order.clone(),
             surface_type: crate::ui::state::TriSurfaceType::SolidClosed,
+            quality: None,
         };
         crate::userspace_log!(
             "{}",

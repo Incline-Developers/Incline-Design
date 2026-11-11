@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use crate::{
     app::{App, canvas::is_triangulation_polyline},
     model::{Object, ObjectId, SceneEntityId, block_model::BlockModelId, drill_hole::DrillHoleId, point_cloud::PointCloudId, triangulation::TriangulationId},
-    ui::state::{ExplorerRow, SelectionCounts},
+    ui::state::{ExplorerRow, SelectionCounts, SelectionPickTool},
 };
 
 impl App<'_> {
@@ -194,6 +194,14 @@ impl App<'_> {
         let mut reference_holes = 0usize;
         self.for_each_reference_hole(|_| reference_holes += 1);
         counts.reference_holes = reference_holes;
+        if let Some(selection) = &self.editor.cell_selection {
+            (counts.prismoid_cells, counts.masked_prismoid_cells) = (selection.count, selection.masked);
+        }
+        // Read off each point's layer mark, so only while the one prompt
+        // that shows it is up.
+        if self.editor.selection_pick.as_ref().is_some_and(|pick| pick.tool == SelectionPickTool::HoleMisfit) {
+            counts.quality_points = super::thickness_points::quality_point_count(&self.scene_document, &self.editor.selected_handles);
+        }
         self.editor.selection_counts = counts;
         self.prune_selected_layers();
     }

@@ -1,17 +1,24 @@
 //! Triangulation creation and processing dialogs.
 
+use std::num::NonZeroUsize;
+
 use crate::{
     i18n::tr,
-    model::{Document, Object, ObjectId, triangulation::TriangulationId},
+    model::{
+        Document, Object, ObjectId,
+        prismoid_grid::{CellValueRole, PrismoidGridId, ValuesMark, check_difference_name, check_marks},
+        triangulation::{TriangulationId, same_quality_name},
+    },
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         state::{
             ContourOutputLayer, EditorState, SelectionPickTool, SolidRegion, ToolSubject, TriCreatePhase, TriCutSource, TriLowerCut, TriPolylineClipMode, TriSurfaceCutSide,
-            TriSurfaceType, TriUpperCut, TriangulationPickTarget, UiCommand, UiProjectView,
+            TriSurfaceType, TriUpperCut, TriangulationPickTarget, UiCommand, UiPrismoidGridEntry, UiProjectView, apply_strata_actions, refresh_strata_drafts,
         },
         widgets::{
+            editable_grid::{DataGrid, GridButtons, GridColumn, GridRow, cell_choice, cell_text},
             hint::Hint,
-            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRange, MenuFieldText, MenuFieldU32, selected_source_field},
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRange, MenuFieldText, MenuFieldU32},
         },
     },
 };
@@ -92,6 +99,12 @@ const PICK_BUTTON_WIDTH: f32 = 52.0;
 pub(super) const PICK_PROMPT_WIDTH: f32 = 360.0;
 const PICKER_DIALOG_MIN_WIDTH: f32 = 430.0;
 const PICKER_DIALOG_MAX_WIDTH: f32 = 450.0;
+/// Room for Build Strata's three columns.
+const STRATA_DIALOG_WIDTH: f32 = 560.0;
+
+/// The cell sizes Build Prismoid Grid offers, as multiples of the surfaces'
+/// spacing.
+const PRISMOID_CELL_STEPS: [usize; 6] = [1, 2, 3, 4, 5, 10];
 
 fn pick_button_label() -> String {
     tr!("drill-pattern-pick")
@@ -234,7 +247,7 @@ fn triangulation_picker_field_with_width(
 /// opened is already here. Returns the surface chosen from the list, and
 /// whether Pick was pressed; the caller sends the first to the app, which
 /// derives the tool's other fields from it.
-fn subject_surface_field(
+pub(crate) fn subject_surface_field(
     ui: &mut egui::Ui,
     id_source: &'static str,
     current: Option<TriangulationId>,
@@ -262,6 +275,44 @@ fn subject_surface_field(
         width,
     );
     (value.filter(|_| value != shown), pick)
+}
+
+/// A loaded prismoid grid's entry, or `None` once it was unloaded or deleted
+/// while the dialog was open, as `surface_name` treats a surface: the run
+/// button is disabled by then.
+fn loaded_prismoid_grid(project: &UiProjectView, id: Option<PrismoidGridId>) -> Option<&UiPrismoidGridEntry> {
+    id.and_then(|id| project.prismoid_grids.iter().find(|entry| entry.is_loaded && entry.id == id))
+}
+
+/// The prismoid grid a tool works on, from a list of the loaded ones; one
+/// selected when the tool opened is already here. Returns the grid chosen,
+/// for the caller to send to the app.
+pub(crate) fn prismoid_grid_field(
+    ui: &mut egui::Ui,
+    id_source: &'static str,
+    label: impl Into<egui::WidgetText>,
+    current: Option<PrismoidGridId>,
+    help_text: impl Into<egui::WidgetText>,
+    project: &UiProjectView,
+    width: f32,
+) -> Option<PrismoidGridId> {
+    let shown = loaded_prismoid_grid(project, current);
+    let mut value = shown.map(|entry| entry.id);
+    MenuFieldCombo::new(
+        id_source,
+        label,
+        &mut value,
+        shown.map_or_else(|| tr!("tri-select"), |entry| entry.name.clone()),
+        project
+            .prismoid_grids
+            .iter()
+            .filter(|entry| entry.is_loaded)
+            .map(|entry| (Some(entry.id), entry.name.as_str().into())),
+    )
+    .help_text(help_text)
+    .width(width)
+    .show(ui);
+    value.filter(|id| shown.is_none_or(|entry| entry.id != *id))
 }
 
 pub(crate) fn draw_triangulation_pick_prompt(ui: &mut egui::Ui, editor: &mut EditorState) {
@@ -776,10 +827,10 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     }
 }
 
-/// Clip to Surface: the seam whose roof and floor were selected when it
-/// opened is clipped to the Keep below and Keep above limits, into a new
-/// roof, floor and solid. Each limit is a surface, the usual choice, or a
-/// typed RL; Keep above may also be a depth below a surface.
+/// Clip to Surface: the seam's roof and floor, chosen in either slot, are
+/// clipped to the Keep below and Keep above limits, into a new roof, floor
+/// and solid. Each limit is a surface, the usual choice, or a typed RL; Keep
+/// above may also be a depth below a surface.
 pub(crate) fn draw_cut_to_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     if !editor.tri_cut_to_open || editor.triangulation_pick_target.is_some() {
         return;
@@ -791,11 +842,57 @@ pub(crate) fn draw_cut_to_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorS
         .min_width(PICKER_DIALOG_MIN_WIDTH)
         .max_width(PICKER_DIALOG_MAX_WIDTH)
         .show(ui.ctx(), |ui| {
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
+            for slot in &mut editor.tri_cut_to_seam {
+                if slot.is_some_and(|id| !loaded.iter().any(|(loaded_id, _)| *loaded_id == id)) {
+                    *slot = None;
+                }
+            }
+            // Each slot lists the loaded surfaces less the other slot's and
+            // the limits', as the limits leave out the seam's.
+            let limits = editor.clip_to_limit_surfaces();
+            for (slot, id_source, label, target) in [
+                (0, "clip_to_surface_seam", tr!("tri-clip-to-surface-seam"), TriangulationPickTarget::ClipToSeam),
+                (
+                    1,
+                    "clip_to_surface_seam_other",
+                    tr!("tri-clip-to-surface-seam-other"),
+                    TriangulationPickTarget::ClipToSeamOther,
+                ),
+            ] {
+                let other = editor.tri_cut_to_seam[1 - slot];
+                let shown = editor.tri_cut_to_seam[slot]
+                    .and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id))
+                    .map_or_else(|| tr!("tri-select"), |(_, name)| (*name).to_owned());
+                if triangulation_picker_field(
+                    ui,
+                    id_source,
+                    label,
+                    &mut editor.tri_cut_to_seam[slot],
+                    shown,
+                    loaded
+                        .iter()
+                        .filter(|(id, _)| Some(*id) != other && !limits.contains(&Some(*id)))
+                        .map(|(id, name)| (Some(*id), (*name).into())),
+                    tr!("tri-clip-to-surface-seam-help"),
+                    project,
+                ) {
+                    editor.triangulation_pick_target = Some(target);
+                }
+            }
+            ui.add_space(4.0);
+            let seam = editor.tri_cut_to_seam;
+
             // A surface being clipped is never offered as a cut.
             let cuts: Vec<(TriangulationId, &str)> = project
                 .triangulations
                 .iter()
-                .filter(|entry| entry.is_loaded && !editor.tri_cut_to_targets.contains(&entry.id))
+                .filter(|entry| entry.is_loaded && !seam.contains(&Some(entry.id)))
                 .map(|entry| (entry.id, entry.name.as_str()))
                 .collect();
             for value in [&mut editor.tri_cut_to_upper_id, &mut editor.tri_cut_to_lower_id] {
@@ -821,15 +918,6 @@ pub(crate) fn draw_cut_to_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                 }
                 input.parse::<f64>().ok().filter(|level| level.is_finite()).map(Some).ok_or(())
             };
-
-            selected_source_field(
-                ui,
-                tr!("tri-clip-to-surface-targets"),
-                tr!("state-clip-to-surface-count", count = editor.tri_cut_to_targets.len().to_string()),
-                tr!("tri-clip-to-surface-targets-help"),
-                picker_control_width(ui),
-            );
-            ui.add_space(4.0);
 
             // Keep below: a surface or an RL. Ok(None) is a row left empty,
             // Err a row that cannot run as typed.
@@ -940,8 +1028,10 @@ pub(crate) fn draw_cut_to_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorS
             };
             tool_help_panel(ui, tr!("tri-clip-to-surface-note"));
 
-            // At least one row complete, and no row half typed.
-            let can_run = matches!((upper, lower), (Ok(upper), Ok(lower)) if upper.is_some() || lower.is_some());
+            // Both seam surfaces, at least one row complete, and no row half
+            // typed.
+            let targets: Vec<TriangulationId> = seam.iter().flatten().copied().collect();
+            let can_run = targets.len() == 2 && matches!((upper, lower), (Ok(upper), Ok(lower)) if upper.is_some() || lower.is_some());
 
             ui.add_space(6.0);
             ui.separator();
@@ -951,7 +1041,7 @@ pub(crate) fn draw_cut_to_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                     && let (Ok(upper), Ok(lower)) = (upper, lower)
                 {
                     commands.push(UiCommand::ExecuteCutTriangulationToSurface {
-                        targets: editor.tri_cut_to_targets.clone(),
+                        targets: targets.clone(),
                         upper,
                         lower,
                     });
@@ -1088,6 +1178,810 @@ pub(crate) fn draw_build_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
 
     if !open {
         editor.tri_solid_open = false;
+    }
+}
+
+/// The Build Prismoid Grid tool: pick a roof and a floor on one grid and get
+/// the cells between them.
+pub(crate) fn draw_build_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_prismoid_open || editor.triangulation_pick_target.is_some() {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("build_prismoid_grid_dialog", tr!("tri-build-prismoid-grid"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
+            let loaded_name = |id: Option<TriangulationId>| id.and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name));
+
+            tool_help_panel(ui, tr!("tri-build-prismoid-grid-help"));
+
+            let floor_id = editor.tri_prismoid_floor_id;
+            let roof_label = loaded_name(editor.tri_prismoid_roof_id).map_or_else(|| tr!("tri-select"), str::to_owned);
+            let old_roof = editor.tri_prismoid_roof_id;
+            if triangulation_picker_field(
+                ui,
+                "build_prismoid_roof",
+                tr!("drill-hole-roof"),
+                &mut editor.tri_prismoid_roof_id,
+                roof_label,
+                loaded.iter().filter(|(id, _)| Some(*id) != floor_id).map(|(id, name)| (Some(*id), (*name).into())),
+                tr!("tri-prismoid-roof-help"),
+                project,
+            ) {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::PrismoidRoof);
+            }
+
+            let roof_id = editor.tri_prismoid_roof_id;
+            let floor_label = loaded_name(editor.tri_prismoid_floor_id).map_or_else(|| tr!("tri-select"), str::to_owned);
+            if triangulation_picker_field(
+                ui,
+                "build_prismoid_floor",
+                tr!("drill-hole-floor"),
+                &mut editor.tri_prismoid_floor_id,
+                floor_label,
+                loaded.iter().filter(|(id, _)| Some(*id) != roof_id).map(|(id, name)| (Some(*id), (*name).into())),
+                tr!("tri-prismoid-floor-help"),
+                project,
+            ) {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::PrismoidFloor);
+            }
+
+            if editor.tri_prismoid_roof_id != old_roof
+                && editor.tri_prismoid_name_auto
+                && let Some(name) = loaded_name(editor.tri_prismoid_roof_id)
+            {
+                editor.tri_prismoid_name_input = crate::app::canvas::derived_triangulation_name(name, &tr!("common-prismoid-grid"));
+            }
+
+            ui.add_space(4.0);
+
+            cell_size_field(ui, "build_prismoid_cell_size", &mut editor.tri_prismoid_step);
+
+            if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_prismoid_name_input)
+                .help_text(tr!("tri-name-assigned-prismoid-grid"))
+                .width(picker_control_width(ui))
+                .hint_text(tr!("tri-prismoid-grid-name-hint"))
+                .show(ui)
+                .changed()
+            {
+                editor.tri_prismoid_name_auto = false;
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let can_run = loaded_name(editor.tri_prismoid_roof_id).is_some()
+                && loaded_name(editor.tri_prismoid_floor_id).is_some()
+                && editor.tri_prismoid_roof_id != editor.tri_prismoid_floor_id
+                && !editor.tri_prismoid_name_input.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("tri-build")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let (Some(roof_id), Some(floor_id)) = (editor.tri_prismoid_roof_id, editor.tri_prismoid_floor_id)
+                {
+                    commands.push(UiCommand::ExecuteBuildPrismoidGrid {
+                        roof_id,
+                        floor_id,
+                        step: editor.tri_prismoid_step,
+                        name: editor.tri_prismoid_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_prismoid_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_prismoid_open = false;
+    }
+}
+
+/// The cell size of a prismoid, as a whole multiple of the surfaces'
+/// spacing.
+fn cell_size_field(ui: &mut egui::Ui, id: &str, step: &mut NonZeroUsize) {
+    let step_label = |step: NonZeroUsize| match step.get() {
+        1 => tr!("tri-prismoid-cell-size-surfaces"),
+        times => tr!("tri-prismoid-cell-size-times", times = times.to_string()),
+    };
+    let selected = step_label(*step);
+    MenuFieldCombo::new(
+        id,
+        tr!("tri-prismoid-cell-size"),
+        step,
+        selected,
+        PRISMOID_CELL_STEPS.into_iter().filter_map(NonZeroUsize::new).map(|step| (step, step_label(step).into())),
+    )
+    .help_text(tr!("tri-prismoid-cell-size-help"))
+    .width(picker_control_width(ui))
+    .show(ui);
+}
+
+/// The Build Strata tool: horizons listed top down, each a surface, its name
+/// and the name of the interval below it, built into a prismoid grid for
+/// every interval.
+pub(crate) fn draw_build_strata_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_strata_open {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("build_strata_dialog", tr!("tri-build-strata"))
+        .open(&mut open)
+        .min_width(STRATA_DIALOG_WIDTH)
+        .max_width(STRATA_DIALOG_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
+            let loaded_name = |id: TriangulationId| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name);
+            let surface_name = |id: TriangulationId| loaded_name(id).map(str::to_owned);
+
+            tool_help_panel(ui, tr!("tri-build-strata-help"));
+
+            refresh_strata_drafts(&mut editor.tri_strata_rows, &mut editor.tri_strata_intervals, surface_name);
+            let (rows, intervals) = (&mut editor.tri_strata_rows, &mut editor.tri_strata_intervals);
+            let chosen: Vec<Option<TriangulationId>> = rows.iter().map(|row| row.surface).collect();
+            let grid_rows = vec![GridRow::Item; rows.len()];
+            let columns = vec![
+                GridColumn::new(tr!("tri-strata-surface"), 35.0),
+                GridColumn::new(tr!("tri-strata-horizon"), 30.0),
+                GridColumn::new(tr!("tri-strata-interval-below"), 35.0),
+            ];
+            let actions = DataGrid::new("build_strata_horizons", columns).buttons(GridButtons::default().reorder()).show(
+                ui,
+                &mut editor.tri_strata_selected,
+                &grid_rows,
+                |ui, row, column| match column {
+                    0 => {
+                        // Each surface is offered once across the list.
+                        let choices: Vec<_> = std::iter::once(None)
+                            .chain(loaded.iter().map(|(id, _)| Some(*id)).filter(|id| *id == chosen[row] || !chosen.contains(id)))
+                            .collect();
+                        let label = |id: Option<TriangulationId>| id.and_then(loaded_name).map_or_else(|| tr!("tri-select"), str::to_owned);
+                        cell_choice(ui, ("build_strata_surface", row), &mut rows[row].surface, &choices, label);
+                    }
+                    1 => {
+                        let before = rows[row].horizon.clone();
+                        cell_text(ui, &mut rows[row].horizon, true);
+                        if rows[row].horizon != before {
+                            rows[row].horizon_typed = true;
+                        }
+                    }
+                    _ => match intervals.get_mut(row) {
+                        Some(interval) => {
+                            let before = interval.name.clone();
+                            cell_text(ui, &mut interval.name, true);
+                            if interval.name != before {
+                                interval.typed = true;
+                            }
+                        }
+                        None => {
+                            ui.label(tr!("inventory-portion-missing"));
+                        }
+                    },
+                },
+            );
+            apply_strata_actions(rows, intervals, &mut editor.tri_strata_selected, actions);
+            refresh_strata_drafts(rows, intervals, surface_name);
+            menu::menu_note(ui, tr!("tri-strata-list-help"));
+
+            ui.add_space(4.0);
+
+            cell_size_field(ui, "build_strata_cell_size", &mut editor.tri_strata_step);
+
+            if editor.tri_strata_name_auto {
+                editor.tri_strata_name_input = editor
+                    .tri_strata_rows
+                    .first()
+                    .and_then(|row| row.surface)
+                    .and_then(loaded_name)
+                    .map(|top| crate::app::canvas::derived_triangulation_name(top, &tr!("common-strata")))
+                    .unwrap_or_default();
+            }
+            if MenuFieldText::new(tr!("tri-strata-name"), &mut editor.tri_strata_name_input)
+                .help_text(tr!("tri-strata-name-help"))
+                .width(picker_control_width(ui))
+                .hint_text(tr!("tri-strata-name-hint"))
+                .show(ui)
+                .changed()
+            {
+                editor.tri_strata_name_auto = false;
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let rows = &editor.tri_strata_rows;
+            let surfaces_once = rows
+                .iter()
+                .enumerate()
+                .all(|(index, row)| row.surface.and_then(loaded_name).is_some() && !rows[..index].iter().any(|earlier| earlier.surface == row.surface));
+            let horizons_once = rows
+                .iter()
+                .enumerate()
+                .all(|(index, row)| !row.horizon.trim().is_empty() && !rows[..index].iter().any(|earlier| earlier.horizon.trim() == row.horizon.trim()));
+            let can_run = rows.len() >= 2
+                && surfaces_once
+                && horizons_once
+                && editor.tri_strata_intervals.iter().all(|interval| !interval.name.trim().is_empty())
+                && !editor.tri_strata_name_input.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if ui.add(MenuButton::new(tr!("tri-build")).primary().enabled(can_run)).clicked() || (confirm && can_run) {
+                    commands.push(UiCommand::ExecuteBuildStrata {
+                        horizons: rows.iter().filter_map(|row| Some((row.surface?, row.horizon.trim().to_owned()))).collect(),
+                        intervals: editor.tri_strata_intervals.iter().map(|interval| interval.name.trim().to_owned()).collect(),
+                        step: editor.tri_strata_step,
+                        name: editor.tri_strata_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_strata_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_strata_open = false;
+    }
+}
+
+/// Add Qualities: the prismoid grid, the quality surfaces read into it, each
+/// ticked by hand, and the ticked one chosen as its density.
+pub(crate) fn draw_add_prismoid_qualities_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_prismoid_qualities_open {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("add_prismoid_qualities_dialog", tr!("tri-add-prismoid-qualities"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let grid = loaded_prismoid_grid(project, editor.tri_prismoid_qualities_grid);
+            let marked: Vec<_> = project
+                .triangulations
+                .iter()
+                .filter_map(|entry| entry.quality.as_ref().map(|quality| (entry, quality)))
+                .collect();
+            editor.tri_prismoid_qualities_ticked.retain(|id| marked.iter().any(|(entry, _)| entry.id == *id));
+
+            tool_help_panel(ui, tr!("tri-add-prismoid-qualities-help"));
+            if let Some(id) = prismoid_grid_field(
+                ui,
+                "add_prismoid_qualities_grid",
+                tr!("common-prismoid-grid"),
+                editor.tri_prismoid_qualities_grid,
+                tr!("tri-prismoid-qualities-grid-help"),
+                project,
+                picker_control_width(ui),
+            ) {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::PrismoidQualities(id)));
+            }
+
+            menu::menu_section(ui, tr!("tri-prismoid-qualities-surfaces"));
+            if marked.is_empty() {
+                menu::menu_note(ui, tr!("tri-prismoid-qualities-none"));
+            }
+            for (entry, quality) in &marked {
+                let was = editor.tri_prismoid_qualities_ticked.contains(&entry.id);
+                let mut ticked = was;
+                let row = tr!(
+                    "tri-prismoid-qualities-row",
+                    surface = entry.name.clone(),
+                    quality = quality.name.clone(),
+                    unit = quality.unit.clone()
+                );
+                MenuFieldBool::new(row.trim_end(), &mut ticked).show(ui);
+                if ticked && !was {
+                    editor.tri_prismoid_qualities_ticked.push(entry.id);
+                } else if was && !ticked {
+                    editor.tri_prismoid_qualities_ticked.retain(|id| *id != entry.id);
+                }
+                let notes: Vec<String> = [
+                    (editor.tri_prismoid_qualities_density == Some(entry.id)).then(|| tr!("tri-prismoid-qualities-density")),
+                    (!entry.is_loaded).then(|| tr!("tri-prismoid-qualities-loads")),
+                    grid.is_some_and(|grid| grid.values.iter().any(|(name, _)| same_quality_name(name, &quality.name)))
+                        .then(|| tr!("tri-prismoid-qualities-replaces")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                if !notes.is_empty() {
+                    menu::menu_note(ui, notes.join(", "));
+                }
+            }
+
+            let ticked: Vec<(TriangulationId, &str)> = editor
+                .tri_prismoid_qualities_ticked
+                .iter()
+                .filter_map(|id| marked.iter().find(|(entry, _)| entry.id == *id).map(|(_, quality)| (*id, quality.name.as_str())))
+                .collect();
+            if editor.tri_prismoid_qualities_density.is_some_and(|density| !ticked.iter().any(|(id, _)| *id == density)) {
+                editor.tri_prismoid_qualities_density = None;
+            }
+            let surface_name = |id: TriangulationId| marked.iter().find(|(entry, _)| entry.id == id).map_or("", |(entry, _)| entry.name.as_str());
+            let chosen = editor.tri_prismoid_qualities_density.map(surface_name);
+            ui.add_space(4.0);
+            ui.add_enabled_ui(!ticked.is_empty(), |ui| {
+                MenuFieldCombo::new(
+                    "add_prismoid_qualities_density",
+                    tr!("tri-prismoid-qualities-density-field"),
+                    &mut editor.tri_prismoid_qualities_density,
+                    chosen.map_or_else(|| tr!("common-none"), str::to_owned),
+                    std::iter::once((None, tr!("common-none").into())).chain(ticked.iter().map(|(id, _)| (Some(*id), surface_name(*id).to_owned().into()))),
+                )
+                .help_text(tr!("tri-prismoid-qualities-density-field-help"))
+                .width(picker_control_width(ui))
+                .show(ui);
+            });
+
+            // A density the grid holds stays unless a ticked surface of its
+            // quality replaces it.
+            let held = grid
+                .and_then(|grid| grid.values.iter().find(|(_, role)| *role == CellValueRole::Density))
+                .map(|(name, _)| name.as_str())
+                .filter(|name| !ticked.iter().any(|(_, quality)| same_quality_name(quality, name)));
+            let basis = match editor.tri_prismoid_qualities_density.map(surface_name).or(held) {
+                Some(density) => tr!("tri-prismoid-qualities-by-tonnes", density = density.to_owned()),
+                None => tr!("tri-prismoid-qualities-by-volume"),
+            };
+            menu::menu_note(ui, basis);
+
+            // The refusals the marks alone decide, said before the work starts.
+            let refusal = grid.and_then(|grid| {
+                let held: Vec<_> = grid.values.iter().map(|(name, role)| (name.as_str(), *role)).collect();
+                let marks: Vec<_> = ticked
+                    .iter()
+                    .filter_map(|(id, _)| marked.iter().find(|(entry, _)| entry.id == *id))
+                    .map(|(entry, quality)| ValuesMark {
+                        surface: &entry.name,
+                        name: &quality.name,
+                        unit: &quality.unit,
+                        role: if editor.tri_prismoid_qualities_density == Some(entry.id) {
+                            CellValueRole::Density
+                        } else {
+                            CellValueRole::Quality
+                        },
+                    })
+                    .collect();
+                check_marks(&held, &marks)
+                    .err()
+                    .map(|refusal| crate::app::commands::prismoid_grid::values_refusal_words(refusal, &grid.name))
+            });
+            if let Some(refusal) = &refusal {
+                menu::menu_note(ui, refusal.as_str());
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let can_run = grid.is_some() && !ticked.is_empty() && refusal.is_none();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("tri-add")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let Some(grid) = editor.tri_prismoid_qualities_grid
+                {
+                    commands.push(UiCommand::ExecuteAddPrismoidQualities {
+                        grid,
+                        surfaces: editor.tri_prismoid_qualities_ticked.clone(),
+                        density: editor.tri_prismoid_qualities_density,
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_prismoid_qualities_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_prismoid_qualities_open = false;
+    }
+}
+
+/// Prismoid Grid to Surface: the grid, the value its surface's height is
+/// (vertical thickness, or one of the grid's values) and the surface's
+/// name, derived from the grid and the value until typed.
+pub(crate) fn draw_prismoid_grid_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_prismoid_surface_open {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("prismoid_grid_surface_dialog", tr!("tri-prismoid-grid-surface"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let width = picker_control_width(ui);
+            let grid = loaded_prismoid_grid(project, editor.tri_prismoid_surface_grid);
+            let values: Vec<&str> = grid.map(|grid| grid.values.iter().map(|(name, _)| name.as_str()).collect()).unwrap_or_default();
+            if editor
+                .tri_prismoid_surface_value
+                .as_deref()
+                .is_some_and(|value| !values.iter().any(|name| same_quality_name(name, value)))
+            {
+                editor.tri_prismoid_surface_value = None;
+            }
+
+            tool_help_panel(ui, tr!("tri-prismoid-grid-surface-help"));
+            if let Some(id) = prismoid_grid_field(
+                ui,
+                "prismoid_grid_surface_grid",
+                tr!("common-prismoid-grid"),
+                editor.tri_prismoid_surface_grid,
+                tr!("tri-prismoid-grid-surface-grid-help"),
+                project,
+                width,
+            ) {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::PrismoidSurface(id)));
+            }
+
+            ui.add_space(4.0);
+
+            let thickness = tr!("thickness-points-column-vertical");
+            let chosen = editor.tri_prismoid_surface_value.clone().unwrap_or_else(|| thickness.clone());
+            MenuFieldCombo::new(
+                "prismoid_grid_surface_value",
+                tr!("tri-prismoid-grid-surface-value"),
+                &mut editor.tri_prismoid_surface_value,
+                chosen.clone(),
+                std::iter::once((None, thickness.into())).chain(values.iter().map(|name| (Some((*name).to_owned()), (*name).into()))),
+            )
+            .width(width)
+            .show(ui);
+
+            if editor.tri_prismoid_surface_name_auto
+                && let Some(grid) = grid
+            {
+                let derived = crate::app::canvas::derived_triangulation_name(&grid.name, &chosen);
+                if editor.tri_prismoid_surface_name_input != derived {
+                    editor.tri_prismoid_surface_name_input = derived;
+                }
+            }
+            if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_prismoid_surface_name_input)
+                .width(width)
+                .show(ui)
+                .changed()
+            {
+                editor.tri_prismoid_surface_name_auto = false;
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let can_run = grid.is_some() && !editor.tri_prismoid_surface_name_input.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("common-ok")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let Some(grid) = editor.tri_prismoid_surface_grid
+                {
+                    commands.push(UiCommand::ExecutePrismoidGridToSurface {
+                        grid,
+                        value: editor.tri_prismoid_surface_value.clone(),
+                        name: editor.tri_prismoid_surface_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_prismoid_surface_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_prismoid_surface_open = false;
+    }
+}
+
+/// Difference between Prismoid Grids: this grid and the other, pre-set from
+/// the selection and swappable over the loaded grids, the quantity compared
+/// (vertical thickness, or a value both hold) and the name the difference
+/// is kept under on this grid, derived from the quantity until typed.
+pub(crate) fn draw_difference_prismoid_grids_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_prismoid_difference_open {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("difference_prismoid_grids_dialog", tr!("tri-difference-prismoid-grids"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let width = picker_control_width(ui);
+            let grids: Vec<&UiPrismoidGridEntry> = project.prismoid_grids.iter().filter(|entry| entry.is_loaded).collect();
+            let this = loaded_prismoid_grid(project, editor.tri_prismoid_difference_grid);
+            let other = loaded_prismoid_grid(project, editor.tri_prismoid_difference_other);
+            // The values both grids hold, by this grid's names.
+            let shared: Vec<&str> = match (this, other) {
+                (Some(this), Some(other)) => this
+                    .values
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .filter(|name| other.values.iter().any(|(held, _)| same_quality_name(held, name)))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            if editor
+                .tri_prismoid_difference_value
+                .as_deref()
+                .is_some_and(|value| !shared.iter().any(|name| same_quality_name(name, value)))
+            {
+                editor.tri_prismoid_difference_value = None;
+            }
+
+            tool_help_panel(ui, tr!("tri-difference-prismoid-grids-help"));
+            let grid_name = |entry: Option<&UiPrismoidGridEntry>| entry.map_or_else(|| tr!("tri-select"), |entry| entry.name.clone());
+            MenuFieldCombo::new(
+                "difference_prismoid_grids_this",
+                tr!("tri-prismoid-this-grid"),
+                &mut editor.tri_prismoid_difference_grid,
+                grid_name(this),
+                grids.iter().map(|entry| (Some(entry.id), entry.name.clone().into())),
+            )
+            .width(width)
+            .show(ui);
+            MenuFieldCombo::new(
+                "difference_prismoid_grids_other",
+                tr!("tri-prismoid-other-grid"),
+                &mut editor.tri_prismoid_difference_other,
+                grid_name(other),
+                grids.iter().map(|entry| (Some(entry.id), entry.name.clone().into())),
+            )
+            .width(width)
+            .show(ui);
+
+            ui.add_space(4.0);
+
+            let thickness = tr!("thickness-points-column-vertical");
+            let chosen = editor.tri_prismoid_difference_value.clone().unwrap_or_else(|| thickness.clone());
+            MenuFieldCombo::new(
+                "difference_prismoid_grids_quantity",
+                tr!("tri-prismoid-quantity"),
+                &mut editor.tri_prismoid_difference_value,
+                chosen.clone(),
+                std::iter::once((None, thickness.into())).chain(shared.iter().map(|name| (Some((*name).to_owned()), (*name).into()))),
+            )
+            .width(width)
+            .show(ui);
+
+            if editor.tri_prismoid_difference_name_auto {
+                let derived = tr!("tri-prismoid-difference-default", quantity = chosen);
+                if editor.tri_prismoid_difference_name_input != derived {
+                    editor.tri_prismoid_difference_name_input = derived;
+                }
+            }
+            if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_prismoid_difference_name_input)
+                .width(width)
+                .show(ui)
+                .changed()
+            {
+                editor.tri_prismoid_difference_name_auto = false;
+            }
+
+            // The name's refusal, said before the work starts.
+            let refusal = difference_name_refusal(this, other, &editor.tri_prismoid_difference_name_input);
+            if let Some(refusal) = &refusal {
+                menu::menu_note(ui, refusal.as_str());
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let loaded = |id: Option<PrismoidGridId>| id.filter(|id| grids.iter().any(|entry| entry.id == *id));
+            let pair = match (loaded(editor.tri_prismoid_difference_grid), loaded(editor.tri_prismoid_difference_other)) {
+                (Some(grid), Some(other)) if grid != other => Some((grid, other)),
+                _ => None,
+            };
+            let can_run = pair.is_some() && refusal.is_none() && !editor.tri_prismoid_difference_name_input.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("common-ok")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let Some((grid, other)) = pair
+                {
+                    commands.push(UiCommand::ExecuteDifferencePrismoidGrids {
+                        grid,
+                        other,
+                        value: editor.tri_prismoid_difference_value.clone(),
+                        name: editor.tri_prismoid_difference_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_prismoid_difference_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_prismoid_difference_open = false;
+    }
+}
+
+/// Why a difference of `this` grid less `other` cannot be kept as `name`,
+/// in words: a name the grid keeps for its own values, or its density's.
+fn difference_name_refusal(this: Option<&UiPrismoidGridEntry>, other: Option<&UiPrismoidGridEntry>, name: &str) -> Option<String> {
+    let (this, other) = (this?, other?);
+    let held: Vec<_> = this.values.iter().map(|(name, role)| (name.as_str(), *role)).collect();
+    check_difference_name(&held, &other.name, name.trim())
+        .err()
+        .map(|refusal| crate::app::commands::prismoid_grid::values_refusal_words(refusal, &this.name))
+}
+
+/// Mask Prismoid Grid by Polyline: the grid, the closed polyline and the
+/// side kept, as the polyline cut takes them; nothing new is made, so there
+/// is no name.
+pub(crate) fn draw_mask_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_prismoid_mask_open || editor.triangulation_pick_target.is_some() {
+        return;
+    }
+    if let Some(object_id) = editor.tri_prismoid_mask_object_id
+        && !document.get_object(object_id).is_some_and(Object::encloses_area)
+    {
+        editor.tri_prismoid_mask_object_id = None;
+        editor.tri_prismoid_mask_object_name.clear();
+        if editor.tool_highlight_id == Some(object_id) {
+            editor.tool_highlight_id = None;
+        }
+    }
+
+    let mut open = true;
+    DragableMenu::new("mask_prismoid_grid_by_polyline_dialog", tr!("tri-mask-prismoid-grid-polyline"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .inner_margin(egui::Margin::symmetric(8, 6))
+        .show(ui.ctx(), |ui| {
+            let width = picker_control_width(ui);
+            let grid = loaded_prismoid_grid(project, editor.tri_prismoid_mask_grid);
+            if let Some(id) = prismoid_grid_field(
+                ui,
+                "mask_prismoid_grid_grid",
+                tr!("common-prismoid-grid"),
+                editor.tri_prismoid_mask_grid,
+                tr!("tri-mask-grid-help"),
+                project,
+                width,
+            ) {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::MaskGrid(id)));
+            }
+
+            ui.add_space(4.0);
+
+            // Polylines carry no names to list, so the boundary is picked by
+            // clicking it; one selected with the grid is already here.
+            let boundary = if editor.tri_prismoid_mask_object_id.is_some() {
+                editor.tri_prismoid_mask_object_name.clone()
+            } else {
+                tr!("tri-no-boundary-selected")
+            };
+            let pick_label = pick_button_label();
+            let pick_width = pick_button_width(ui, &pick_label);
+            MenuField::new(tr!("tri-boundary-polyline"))
+                .help_text(tr!("tri-mask-boundary-help"))
+                .show(ui, |ui, row_height, _| {
+                    ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let name_width = width - ui.spacing().item_spacing.x - pick_width;
+                        ui.allocate_ui_with_layout(egui::vec2(name_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.set_min_width(name_width);
+                            ui.add(egui::Label::new(boundary.clone()).truncate());
+                        });
+                        if ui.add(MenuButton::new(pick_label).min_width(pick_width)).clicked() {
+                            editor.triangulation_pick_target = Some(TriangulationPickTarget::PrismoidMaskBoundary);
+                        }
+                    })
+                    .response
+                });
+
+            ui.add_space(4.0);
+
+            MenuField::new(tr!("tri-result")).show(ui, |ui, row_height, _| {
+                let (response, clicked) = centered_choice_buttons(
+                    ui,
+                    row_height,
+                    [
+                        (TriPolylineClipMode::KeepInside.label(), editor.tri_prismoid_mask_mode == TriPolylineClipMode::KeepInside),
+                        (TriPolylineClipMode::KeepOutside.label(), editor.tri_prismoid_mask_mode == TriPolylineClipMode::KeepOutside),
+                    ],
+                );
+                if clicked == Some(0) {
+                    editor.tri_prismoid_mask_mode = TriPolylineClipMode::KeepInside;
+                } else if clicked == Some(1) {
+                    editor.tri_prismoid_mask_mode = TriPolylineClipMode::KeepOutside;
+                }
+                response
+            });
+            tool_help_panel(
+                ui,
+                match editor.tri_prismoid_mask_mode {
+                    TriPolylineClipMode::KeepInside => tr!("tri-mask-keep-inside-help"),
+                    TriPolylineClipMode::KeepOutside => tr!("tri-mask-keep-outside-help"),
+                },
+            );
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let can_run = grid.is_some() && editor.tri_prismoid_mask_object_id.is_some();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("tri-mask")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let (Some(grid), Some(polyline_id)) = (editor.tri_prismoid_mask_grid, editor.tri_prismoid_mask_object_id)
+                {
+                    commands.push(UiCommand::ExecuteMaskPrismoidGridByPolyline {
+                        grid,
+                        polyline_id,
+                        mode: editor.tri_prismoid_mask_mode,
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_prismoid_mask_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_prismoid_mask_open = false;
+    }
+}
+
+/// Create Block Model from Prismoid Grid: only the grid, whose prismoids
+/// become the blocks.
+pub(crate) fn draw_prismoid_block_model_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_prismoid_block_open {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("prismoid_block_model_dialog", tr!("common-create-block-model-from-prismoid-grid"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            if let Some(id) = prismoid_grid_field(
+                ui,
+                "prismoid_block_model_grid",
+                tr!("common-prismoid-grid"),
+                editor.tri_prismoid_block_grid,
+                tr!("tri-prismoid-block-model-grid-help"),
+                project,
+                picker_control_width(ui),
+            ) {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::PrismoidBlockModel(id)));
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let grid = loaded_prismoid_grid(project, editor.tri_prismoid_block_grid).map(|entry| entry.id);
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("common-create")).primary().enabled(grid.is_some())).clicked() || confirm)
+                    && let Some(grid) = grid
+                {
+                    commands.push(UiCommand::CreateBlockModelFromPrismoidGrid(grid));
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_prismoid_block_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_prismoid_block_open = false;
     }
 }
 

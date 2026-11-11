@@ -1,27 +1,34 @@
 //! Application preferences and selection appearance controls.
 
+use glam::DVec3;
+
 use crate::{
+    app::commands::prismoid_grid::ramp_bar_stops,
     i18n::tr,
     model::{
         Document, FillStyle, ObjectColor, ObjectId, SceneEntityId,
         block_model::{BlockModelId, OpenBlockModel},
-        project::ModellingSettings,
+        drill_hole::DrillColorPreset,
+        prismoid_grid::{PrismoidColorBy, PrismoidGridId, ValueSpread},
+        project::{LATTICE_UNIT, ModelEnvelope, ModellingSettings},
     },
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         UiCommand, UiProjectView,
-        state::{EditorState, PreferencesDraft, PropertyTab},
+        elements::block_model::vector_fields,
+        state::{EditorState, PreferencesDraft, PropertyTab, Workspace},
         widgets::{
             collapsible_section::CollapsibleSection,
             context_menu::{FIELD_WIDTH, context_menu_fields},
             hint::Hint,
-            menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, committed, menu_field_label},
-            viewport::{BlockModelProperties, ViewportDockPanel},
+            menu::{self, MenuButton, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, committed, menu_field_label},
+            toolbar::GROUP_CORNER_RADIUS,
+            viewport::{BlockModelProperties, ViewportDockPanel, color_ramp_bar},
         },
     },
 };
 
-pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, modelling: Option<&ModellingSettings>, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, modelling: Option<(u32, &ModellingSettings)>, commands: &mut Vec<UiCommand>) {
     if !editor.show_preferences {
         return;
     }
@@ -124,7 +131,7 @@ pub(crate) fn draw_selection_appearance(
             SceneEntityId::DrillHole(_) => 5,
             SceneEntityId::PointCloud(_) => 6,
             SceneEntityId::Raster(_) => 7,
-            SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) => continue,
+            SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) | SceneEntityId::PrismoidGrid(_) => continue,
         };
         selected_types[kind] = true;
     }
@@ -206,6 +213,179 @@ pub(crate) fn draw_selection_appearance(
     if has_appearance {
         crate::ui::widgets::context_menu::context_menu_separator(ui);
     }
+}
+
+/// Width of the prismoid grid's key in the viewport.
+const PRISMOID_LEGEND_WIDTH: f32 = 240.0;
+const PRISMOID_LEGEND_BAR_HEIGHT: f32 = 14.0;
+
+/// What a prismoid grid's key says.
+#[derive(Debug, PartialEq)]
+struct PrismoidKeyText {
+    title: String,
+    bar: PrismoidKeyBar,
+    /// How many cells have no value, beside the body's own colour.
+    no_value: Option<String>,
+}
+
+#[derive(Debug, PartialEq)]
+enum PrismoidKeyBar {
+    /// The range's two ends.
+    Ends(String, String),
+    /// In the bar's place when no cell has a value.
+    Empty(String),
+}
+
+/// The key's words for the value a grid is coloured by, or for its vertical
+/// thickness with `None`.
+fn prismoid_key_text(spread: Option<&ValueSpread>, thickness: (f64, f64)) -> PrismoidKeyText {
+    let ends = |(min, max): (f64, f64)| PrismoidKeyBar::Ends(format!("{min:.2}"), format!("{max:.2}"));
+    let Some(spread) = spread else {
+        return PrismoidKeyText {
+            title: tr!("thickness-points-column-vertical"),
+            bar: ends(thickness),
+            no_value: None,
+        };
+    };
+    let title = if spread.unit.is_empty() {
+        spread.name.clone()
+    } else {
+        tr!("viewport-prismoid-value-unit", value = spread.name.clone(), unit = spread.unit.clone())
+    };
+    let (bar, no_value) = match spread.range {
+        Some(range) => (
+            ends(range),
+            (spread.missing > 0).then(|| tr!("viewport-prismoid-no-value-cells", count = spread.missing.to_string())),
+        ),
+        None => (PrismoidKeyBar::Empty(tr!("explorer-prismoid-grid-quality-no-values", quality = spread.name.clone())), None),
+    };
+    PrismoidKeyText { title, bar, no_value }
+}
+
+/// The Colour-by combo's value and options: vertical thickness, the grid's
+/// values, and a chosen name the grid does not hold, so the combo says what
+/// the item keeps while thickness is drawn.
+fn prismoid_color_choices(color_by: &PrismoidColorBy, spreads: &[ValueSpread], index: Option<usize>) -> (Option<String>, Vec<(Option<String>, String)>) {
+    let mut options: Vec<_> = std::iter::once((None, tr!("thickness-points-column-vertical")))
+        .chain(spreads.iter().map(|spread| (Some(spread.name.clone()), spread.name.clone())))
+        .collect();
+    let value = match index {
+        Some(index) => Some(spreads[index].name.clone()),
+        None => color_by.value.clone(),
+    };
+    if let (None, Some(name)) = (index, &value) {
+        options.push((value.clone(), tr!("viewport-prismoid-value-not-held", value = name.clone())));
+    }
+    (value, options)
+}
+
+/// The key's Colour-by and Colour-scale rows, both as wide as the label
+/// column leaves, so a long value name neither hides a label nor widens
+/// its row.
+fn draw_prismoid_color_fields(ui: &mut egui::Ui, id: PrismoidGridId, color_by: &PrismoidColorBy, spreads: &[ValueSpread], index: Option<usize>, commands: &mut Vec<UiCommand>) {
+    let label = tr!("viewport-prismoid-colour-by");
+    let width = menu::field_column_for(ui, &label, false);
+    let (mut value, options) = prismoid_color_choices(color_by, spreads, index);
+    if fitted_combo(ui, ("prismoid_color_value", id), label, &mut value, options, width) {
+        commands.push(UiCommand::SetPrismoidGridColorValue { id, value });
+    }
+    let mut preset = color_by.preset;
+    let presets = DrillColorPreset::ALL.map(|preset| (preset, preset.label())).into();
+    if fitted_combo(ui, ("prismoid_color_preset", id), tr!("drill-hole-colour-scale"), &mut preset, presets, width) {
+        commands.push(UiCommand::SetPrismoidGridColorPreset { id, preset });
+    }
+}
+
+/// A combo `width` wide with its texts cut to fit, the chosen one named in
+/// full on hover when cut; true when the choice changed.
+fn fitted_combo<T: PartialEq>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, label: String, value: &mut T, options: Vec<(T, String)>, width: f32) -> bool {
+    let full = options.iter().find(|(option, _)| option == value).map_or_else(String::new, |(_, text)| text.clone());
+    let selected = menu::elide_for_combo(ui, &full, width);
+    let options: Vec<_> = options.into_iter().map(|(option, text)| (option, menu::elide_for_combo(ui, &text, width).into())).collect();
+    let response = MenuFieldCombo::new(id, label, value, selected.clone(), options).width(width).show(ui);
+    if selected == full { response } else { response.hint(full) }.changed()
+}
+
+/// The key to one selected prismoid grid's colours, with what they follow
+/// and their scale: the ramp, with the grid's own range at its ends.
+pub(crate) fn draw_prismoid_grid_legend(
+    ui: &egui::Ui,
+    editor: &EditorState,
+    project: &UiProjectView,
+    models: &[OpenBlockModel],
+    commands: &mut Vec<UiCommand>,
+    canvas: egui::Rect,
+) {
+    if editor.active_workspace != Workspace::Geology {
+        return;
+    }
+    let mut shown = project.prismoid_grids.iter().filter(|grid| {
+        let entity = SceneEntityId::PrismoidGrid(grid.id);
+        grid.is_loaded && editor.selected_handles.contains(&entity) && !editor.hidden_handles.contains(&entity)
+    });
+    let (Some(grid), None) = (shown.next(), shown.next()) else {
+        return;
+    };
+    let Some(thickness) = grid.summary.vertical_thickness.filter(|_| grid.regular) else {
+        return;
+    };
+    // Along the bottom edge clear of the tool panels' corner, as the
+    // block-model card is, and above that card while it is up. Not drawn once
+    // it would reach the scale bar. A dock panel hashes the id it is handed.
+    let card_id = egui::Id::unique(egui::Id::unique("block_model_viewport_controls"));
+    let (card, scale_bar) = ui
+        .ctx()
+        .memory(|memory| (memory.area_rect(card_id), memory.area_rect(egui::Id::unique("viewport_scale_bar"))));
+    let left = crate::ui::widgets::viewport::docked_left_edge(ui.ctx()).unwrap_or(canvas.left()) + BLOCK_MODEL_CARD_GAP;
+    if left + PRISMOID_LEGEND_WIDTH + 20.0 > scale_bar.map_or(canvas.right(), |rect| rect.left()) - BLOCK_MODEL_CARD_GAP {
+        return;
+    }
+    let card_up = models.iter().any(|model| Some(model.id) == editor.viewport_block_model_id && model.state.loaded);
+    let bottom = card.filter(|_| card_up).map_or(canvas.bottom(), |card| card.top());
+    let spreads = &grid.summary.spreads;
+    let index = grid.color_by.index(spreads.iter().map(|spread| spread.name.as_str()));
+    let text = prismoid_key_text(index.map(|index| &spreads[index]), thickness);
+    let stops: Vec<_> = ramp_bar_stops(grid.color_by.preset)
+        .into_iter()
+        .map(|(t, [red, green, blue])| (t, rgba_to_color32([red, green, blue, 1.0])))
+        .collect();
+    ViewportDockPanel::new("prismoid_grid_legend", text.title, canvas)
+        .anchor(egui::Align2::LEFT_BOTTOM, egui::pos2(left, bottom - BLOCK_MODEL_CARD_GAP))
+        .order(egui::Order::Middle)
+        .min_width(PRISMOID_LEGEND_WIDTH + 20.0)
+        .max_width(PRISMOID_LEGEND_WIDTH + 20.0)
+        .show(ui.ctx(), |ui| {
+            ui.set_width(PRISMOID_LEGEND_WIDTH);
+            draw_prismoid_color_fields(ui, grid.id, &grid.color_by, spreads, index, commands);
+            let weak = ui.visuals().weak_text_color();
+            let font = egui::TextStyle::Small.resolve(ui.style());
+            let (row, _) = ui.allocate_exact_size(egui::vec2(PRISMOID_LEGEND_WIDTH, PRISMOID_LEGEND_BAR_HEIGHT + 8.0), egui::Sense::hover());
+            match text.bar {
+                PrismoidKeyBar::Ends(low, high) => {
+                    let low = ui.painter().layout_no_wrap(low, font.clone(), weak);
+                    let high = ui.painter().layout_no_wrap(high, font, weak);
+                    let gap = 6.0;
+                    let bar = egui::Rect::from_x_y_ranges(
+                        row.left() + low.size().x + gap..=row.right() - high.size().x - gap,
+                        row.center().y - PRISMOID_LEGEND_BAR_HEIGHT / 2.0..=row.center().y + PRISMOID_LEGEND_BAR_HEIGHT / 2.0,
+                    );
+                    color_ramp_bar(ui.painter(), bar, &stops);
+                    let (low_at, high_at) = (row.center().y - low.size().y / 2.0, row.right() - high.size().x);
+                    ui.painter().galley(egui::pos2(row.left(), low_at), low, weak);
+                    ui.painter().galley(egui::pos2(high_at, low_at), high, weak);
+                }
+                PrismoidKeyBar::Empty(line) => {
+                    ui.painter().text(row.center(), egui::Align2::CENTER_CENTER, line, font, weak);
+                }
+            }
+            if let Some(line) = text.no_value {
+                ui.horizontal(|ui| {
+                    let (swatch, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                    ui.painter().rect_filled(swatch, GROUP_CORNER_RADIUS, rgba_to_color32(grid.color));
+                    ui.label(egui::RichText::new(line).small().color(weak));
+                });
+            }
+        });
 }
 
 /// Width of the block-model card in the viewport.
@@ -631,9 +811,9 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
 
 /// The open project's settings for Build Surface. A number being dragged is
 /// held in the window's memory and sent once, when the drag ends.
-fn draw_modelling_settings(ui: &mut egui::Ui, modelling: Option<&ModellingSettings>, commands: &mut Vec<UiCommand>) {
+fn draw_modelling_settings(ui: &mut egui::Ui, modelling: Option<(u32, &ModellingSettings)>, commands: &mut Vec<UiCommand>) {
     menu::menu_section(ui, tr!("properties-modelling"));
-    let Some(stored) = modelling.copied() else {
+    let Some((session, &stored)) = modelling else {
         ui.label(egui::RichText::new(tr!("common-no-open-project")).weak());
         return;
     };
@@ -661,6 +841,73 @@ fn draw_modelling_settings(ui: &mut egui::Ui, modelling: Option<&ModellingSettin
     if responses.iter().any(committed) && settings != stored && settings.problem().is_none() {
         commands.push(UiCommand::SetModellingSettings(settings));
     }
+    draw_model_envelope(ui, session, stored, commands);
+}
+
+/// The model envelope rows: typed as two corners, sent only on Apply, the
+/// plan edges shown snapped outward before they are.
+fn draw_model_envelope(ui: &mut egui::Ui, session: u32, stored: ModellingSettings, commands: &mut Vec<UiCommand>) {
+    menu::menu_section(ui, tr!("properties-envelope"));
+    // Salted with the project's runtime id and its stored envelope, so no
+    // other project is offered this one's draft.
+    let scope = ui.scope_id().with("model_envelope_draft");
+    let draft_id = |envelope: Option<ModelEnvelope>| scope.with((session, envelope.map(|envelope| envelope.bits())));
+    let id = draft_id(stored.envelope);
+    let seeded = stored.envelope.map(|envelope| (envelope.lower(), envelope.upper()));
+    let Some((mut lower, mut upper)) = ui.data(|data| data.get_temp::<(DVec3, DVec3)>(id)).or(seeded) else {
+        menu::menu_note(ui, tr!("properties-envelope-none"));
+        if menu::menu_actions(ui, |ui| ui.add(MenuButton::new(tr!("properties-envelope-add"))).clicked()) {
+            ui.data_mut(|data| data.insert_temp(id, (DVec3::ZERO, DVec3::splat(100.0))));
+        }
+        return;
+    };
+    vector_fields(ui, &tr!("block-model-minimum"), &tr!("properties-envelope-minimum-help"), &mut lower, f64::MIN..=f64::MAX);
+    vector_fields(ui, &tr!("block-model-maximum"), &tr!("properties-envelope-maximum-help"), &mut upper, f64::MIN..=f64::MAX);
+    if Some((lower, upper)) == seeded {
+        ui.data_mut(|data| data.remove::<(DVec3, DVec3)>(id));
+    } else {
+        ui.data_mut(|data| data.insert_temp(id, (lower, upper)));
+    }
+    let typed = if !(lower.is_finite() && upper.is_finite() && upper.x > lower.x && upper.y > lower.y) {
+        menu::menu_note(ui, tr!("properties-envelope-plan-empty"));
+        None
+    } else if upper.z <= lower.z {
+        menu::menu_note(ui, tr!("properties-envelope-top-below"));
+        None
+    } else {
+        Some(ModelEnvelope::from_box(lower, upper))
+    };
+    if let Some(envelope) = typed
+        && (envelope.lower().truncate(), envelope.upper().truncate()) != (lower.truncate(), upper.truncate())
+    {
+        let (west_south, east_north) = (envelope.lower(), envelope.upper());
+        menu::menu_note(
+            ui,
+            tr!(
+                "properties-envelope-steer",
+                west = west_south.x.to_string(),
+                east = east_north.x.to_string(),
+                south = west_south.y.to_string(),
+                north = east_north.y.to_string(),
+                unit = LATTICE_UNIT.to_string()
+            ),
+        );
+    }
+    let can_apply = typed.is_some_and(|envelope| stored.envelope != Some(envelope));
+    let (apply, remove) = menu::menu_actions(ui, |ui| {
+        let apply = ui.add(MenuButton::new(tr!("common-apply")).primary().enabled(can_apply)).clicked();
+        let remove = stored.envelope.is_some() && ui.add(MenuButton::new(tr!("properties-envelope-remove"))).clicked();
+        (apply, remove)
+    });
+    if !(apply || remove) {
+        return;
+    }
+    ui.data_mut(|data| {
+        data.remove::<(DVec3, DVec3)>(id);
+        data.remove::<(DVec3, DVec3)>(draft_id(None));
+    });
+    let envelope = if apply { typed } else { None };
+    commands.push(UiCommand::SetModellingSettings(ModellingSettings { envelope, ..stored }));
 }
 
 /// A labelled value the panel only reports, laid out like the editable fields

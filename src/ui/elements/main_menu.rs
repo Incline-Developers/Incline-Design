@@ -501,6 +501,15 @@ pub(crate) enum MenuRow {
     ThicknessPoints,
     ThicknessSurfaces,
     ModellingClipToSurface,
+    BuildPrismoidGrid,
+    BuildStrata,
+    BlockModelFromPrismoidGrid,
+    PrismoidQualities,
+    PrismoidGridToSurface,
+    DifferencePrismoidGrids,
+    MisfitAtHoles,
+    MaskPrismoidGridByPolyline,
+    MaskPrismoids,
 }
 
 /// The name of a workspace menu, or of a submenu inside one.
@@ -695,6 +704,19 @@ const GEOLOGY_MENUS: &[WorkspaceMenu] = &[
             rows(&[MenuRow::ReferencePoints, MenuRow::ReferenceSurface]),
             rows(&[MenuRow::ThicknessPoints, MenuRow::ThicknessSurfaces]),
             rows(&[MenuRow::ModellingClipToSurface]),
+            rows(&[
+                MenuRow::BuildPrismoidGrid,
+                MenuRow::BuildStrata,
+                MenuRow::BlockModelFromPrismoidGrid,
+                MenuRow::PrismoidQualities,
+                MenuRow::PrismoidGridToSurface,
+                MenuRow::DifferencePrismoidGrids,
+                MenuRow::MisfitAtHoles,
+                MenuRow::MaskPrismoidGridByPolyline,
+                // One row masks the selected prismoids, or picks them first,
+                // and, ticked when all are masked by hand, unmasks them.
+                MenuRow::MaskPrismoids,
+            ]),
         ],
     },
 ];
@@ -824,6 +846,15 @@ impl MenuRow {
             Self::SaveSurfaceLines => tr!("ws-menubar-geology-save-surface-lines"),
             Self::ThicknessPoints => tr!("common-thickness-points-ellipsis"),
             Self::ThicknessSurfaces => tr!("common-thickness-surfaces-ellipsis"),
+            Self::BuildPrismoidGrid => tr!("common-build-prismoid-grid-ellipsis"),
+            Self::BuildStrata => tr!("common-build-strata-ellipsis"),
+            Self::BlockModelFromPrismoidGrid => tr!("common-create-block-model-from-prismoid-grid-ellipsis"),
+            Self::PrismoidQualities => tr!("common-add-prismoid-qualities-ellipsis"),
+            Self::PrismoidGridToSurface => tr!("common-prismoid-grid-to-surface-ellipsis"),
+            Self::DifferencePrismoidGrids => tr!("common-difference-prismoid-grids-ellipsis"),
+            Self::MisfitAtHoles => tr!("common-misfit-at-holes-ellipsis"),
+            Self::MaskPrismoidGridByPolyline => tr!("common-mask-prismoid-grid-polyline"),
+            Self::MaskPrismoids => tr!("common-mask-prismoids"),
         }
     }
 
@@ -874,6 +905,15 @@ impl MenuRow {
             Self::SaveSurfaceLines => UiCommand::SaveSectionSurfaceLines,
             Self::ThicknessPoints => UiCommand::OpenThicknessPoints,
             Self::ThicknessSurfaces => UiCommand::OpenSeamSurface,
+            Self::BuildPrismoidGrid => UiCommand::OpenBuildPrismoidGrid,
+            Self::BuildStrata => UiCommand::OpenBuildStrata,
+            Self::BlockModelFromPrismoidGrid => UiCommand::OpenCreateBlockModelFromPrismoidGrid,
+            Self::PrismoidQualities => UiCommand::OpenAddPrismoidQualities,
+            Self::PrismoidGridToSurface => UiCommand::OpenPrismoidGridToSurface,
+            Self::DifferencePrismoidGrids => UiCommand::OpenDifferencePrismoidGrids,
+            Self::MisfitAtHoles => UiCommand::OpenHoleMisfit,
+            Self::MaskPrismoidGridByPolyline => UiCommand::OpenMaskPrismoidGridByPolyline,
+            Self::MaskPrismoids => UiCommand::TogglePrismoidMask,
         }
     }
 
@@ -922,26 +962,31 @@ impl MenuRow {
             | Self::SaveSurfaceLines
             | Self::ThicknessPoints
             | Self::ThicknessSurfaces
-            | Self::ModellingClipToSurface => true,
+            | Self::ModellingClipToSurface
+            | Self::BuildPrismoidGrid
+            | Self::BuildStrata
+            | Self::BlockModelFromPrismoidGrid
+            | Self::PrismoidQualities
+            | Self::PrismoidGridToSurface
+            | Self::DifferencePrismoidGrids
+            | Self::MisfitAtHoles
+            | Self::MaskPrismoidGridByPolyline
+            | Self::MaskPrismoids => true,
         }
     }
 
     /// Whether the row can run as the editor stands, beside
-    /// [`MenuRow::enabled`]: select first, then act, for the rows that still
-    /// open on the selection, and a tool as its toolbar cell is (layer, fly,
-    /// section). The Design menu's functions Geology offers run as that menu
-    /// runs them.
+    /// [`MenuRow::enabled`]: a tool as its toolbar cell is (layer, fly,
+    /// section), and a row on the stroke being drawn. No row waits on the
+    /// selection. The Design menu's functions Geology offers run as that
+    /// menu runs them.
     pub(crate) fn ready(self, editor: &EditorState) -> bool {
         match self {
-            Self::CleanStrings | Self::GeologyCleanStrings => editor.selection_counts.open_strings > 0,
-            Self::ClipToSurface | Self::ModellingClipToSurface => editor.selection_counts.triangulations == 2,
-            Self::ThicknessPoints | Self::ThicknessSurfaces => editor.selection_counts.triangulations == 1,
             Self::Tool(tool) => {
                 !editor.fly_mode_enabled
                     && (!tool.requires_active_layer() || editor.active_layer.is_some())
                     && !(editor.slice_mode_enabled && tool.section_refuses(editor.active_workspace))
             }
-            Self::InsertAtSpacing | Self::Reverse | Self::Thin | Self::Smooth => editor.selection_counts.polylines > 0,
             // Carrying on, the string's end is not the stroke's to give back.
             Self::RemoveLastVertex => {
                 !editor.pending_stroke.is_empty() && !editor.poly_finish_dialog && !(editor.pending_stroke.len() == 1 && string_rework_live(editor).is_some())
@@ -957,20 +1002,16 @@ impl MenuRow {
         }
     }
 
-    /// Why a row [`MenuRow::ready`] holds back is greyed, for the rows that
-    /// wait on a selection the menu can name. The macOS menus show no hint.
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
-    pub(crate) fn needs(self) -> Option<String> {
-        match self {
-            Self::ThicknessPoints | Self::ThicknessSurfaces => Some(tr!("ws-menubar-modelling-select-surface")),
-            Self::ClipToSurface | Self::ModellingClipToSurface => Some(tr!("ws-menubar-modelling-select-surfaces")),
-            _ => None,
-        }
-    }
-
     /// A switch row's tick; `None` for a row that is not a switch.
     pub(crate) fn checked(self, editor: &EditorState) -> Option<bool> {
-        (self == Self::SurfaceLines).then_some(editor.section_surface_lines)
+        match self {
+            Self::SurfaceLines => Some(editor.section_surface_lines),
+            Self::MaskPrismoids => {
+                let cells = editor.selection_counts.prismoid_cells;
+                Some(cells > 0 && editor.selection_counts.masked_prismoid_cells == cells)
+            }
+            _ => None,
+        }
     }
 
     /// The row of `workspace` that pushes `command`, so a toolbar cell
@@ -1080,6 +1121,15 @@ impl MenuRow {
             Self::ThicknessPoints => "ws-menubar-modelling-thickness-points",
             Self::ThicknessSurfaces => "ws-menubar-modelling-thickness-surfaces",
             Self::ModellingClipToSurface => "ws-menubar-modelling-clip-to-surface",
+            Self::BuildPrismoidGrid => "ws-menubar-modelling-build-prismoid-grid",
+            Self::BuildStrata => "ws-menubar-modelling-build-strata",
+            Self::BlockModelFromPrismoidGrid => "ws-menubar-modelling-block-model-from-prismoid-grid",
+            Self::PrismoidQualities => "ws-menubar-modelling-prismoid-qualities",
+            Self::PrismoidGridToSurface => "ws-menubar-modelling-prismoid-grid-to-surface",
+            Self::DifferencePrismoidGrids => "ws-menubar-modelling-difference-prismoid-grids",
+            Self::MisfitAtHoles => "ws-menubar-modelling-misfit-at-holes",
+            Self::MaskPrismoidGridByPolyline => "ws-menubar-modelling-mask-prismoid-grid-polyline",
+            Self::MaskPrismoids => "ws-menubar-modelling-mask-prismoids",
         }
     }
 
@@ -1136,9 +1186,6 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         // functions list.
         let draw_row = |ui: &mut egui::Ui, row: MenuRow, commands: &mut Vec<UiCommand>| {
             let mut action = ContextMenuAction::new(row.label()).enabled(row.enabled(project) && row.ready(editor));
-            if let Some(needs) = row.needs() {
-                action = action.disabled_hover_text(needs);
-            }
             if let Some(checked) = row.checked(editor) {
                 action = action.checked(checked);
             }

@@ -15,7 +15,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use glam::{DMat3, DVec3};
+use glam::{DMat3, DVec2, DVec3};
 use omf as omf_crate;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -36,10 +36,11 @@ use crate::{
             mesh_data::{Triangulation, Vertex},
         },
         point_cloud::{LoadedPointCloud, OpenPointCloud, prepare_for_render},
+        prismoid_grid::{CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, Lattice, LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidColorBy, PrismoidGrid, Stratum},
         progress::Phase,
         project::{self, ModellingSettings, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
-        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, spatial_surface_face_order},
+        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, QualityMark, spatial_surface_face_order},
     },
     rendering::color::{linear_to_srgb_byte, rgb_bytes_to_linear_rgba},
 };
@@ -74,6 +75,11 @@ const META_FOLDER: &str = "incline:folder";
 /// file whose items are all where their kind puts them is byte for byte what
 /// it was before.
 const META_SECTION: &str = "incline:section";
+/// A surface's or a design layer's [`QualityMark`], written only when set.
+const META_QUALITY: &str = "incline:quality";
+/// A prismoid grid's place in the strata it was built in, written only when
+/// it has one.
+const META_STRATUM: &str = "incline:stratum";
 const META_SOURCE: &str = "incline:source";
 const META_STYLE: &str = "incline:style";
 const META_ID: &str = "incline:id";
@@ -136,6 +142,8 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_FOLDERS,
     META_FOLDER,
     META_SECTION,
+    META_QUALITY,
+    META_STRATUM,
     META_SOURCE,
     META_STYLE,
     META_ID,
@@ -152,6 +160,9 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_SCHEDULE_RESULT,
     META_HAULAGE,
 ];
+/// On a prismoid grid's cell values, not an element: what they are for,
+/// written only for a density.
+const META_ROLE: &str = "incline:role";
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_ARRAY_ITEMS: u64 = u32::MAX as u64;
 #[cfg(target_arch = "wasm32")]
@@ -167,6 +178,7 @@ pub(crate) struct ProjectSnapshot {
     pub(crate) drill_holes: Vec<OpenDrillHoleDataset>,
     pub(crate) point_clouds: Vec<OpenPointCloud>,
     pub(crate) rasters: Vec<OpenRasterTexture>,
+    pub(crate) prismoid_grids: Vec<OpenPrismoidGrid>,
     /// Every explorer folder in the project, for every section. The single
     /// source of truth for export: `designs`'s own `ProjectFile::folders` is
     /// not consulted, so there is exactly one registry to keep in sync.
@@ -187,6 +199,7 @@ impl std::fmt::Debug for ProjectSnapshot {
             .field("drill_holes", &self.drill_holes.len())
             .field("point_clouds", &self.point_clouds.len())
             .field("rasters", &self.rasters.len())
+            .field("prismoid_grids", &self.prismoid_grids.len())
             .field("folders", &self.folders)
             .field("optimization", &self.optimization.as_ref().map(|file| file.scenarios.len()))
             .finish()
@@ -205,12 +218,19 @@ impl ProjectSnapshot {
             && self.drill_holes.is_empty()
             && self.point_clouds.is_empty()
             && self.rasters.is_empty()
+            && self.prismoid_grids.is_empty()
             && self.folders.is_empty()
             && self.optimization.is_none()
     }
 
     pub(crate) fn item_count(&self) -> usize {
-        usize::from(self.designs.is_some()) + self.triangulations.len() + self.block_models.len() + self.drill_holes.len() + self.point_clouds.len() + self.rasters.len()
+        usize::from(self.designs.is_some())
+            + self.triangulations.len()
+            + self.block_models.len()
+            + self.drill_holes.len()
+            + self.point_clouds.len()
+            + self.rasters.len()
+            + self.prismoid_grids.len()
     }
 }
 
@@ -234,6 +254,7 @@ pub(crate) struct ImportedTriangulation {
     pub(crate) folder: Option<FolderId>,
     /// The section this item is shown under, as its element recorded it.
     pub(crate) section: SectionKind,
+    pub(crate) quality: Option<QualityMark>,
 }
 
 pub(crate) struct ImportedBlockModel {
@@ -302,6 +323,17 @@ pub(crate) struct ImportedRaster {
     pub(crate) section: SectionKind,
 }
 
+pub(crate) struct ImportedPrismoidGrid {
+    pub(crate) preferred_id: Option<u64>,
+    pub(crate) source_name: Option<String>,
+    pub(crate) source_format: Option<String>,
+    pub(crate) loaded: LoadedPrismoidGrid,
+    pub(crate) is_loaded: bool,
+    pub(crate) folder: Option<FolderId>,
+    /// The section this item is shown under, as its element recorded it.
+    pub(crate) section: SectionKind,
+}
+
 #[derive(Default)]
 pub(crate) struct ImportBundle {
     pub(crate) project_name: String,
@@ -314,6 +346,7 @@ pub(crate) struct ImportBundle {
     pub(crate) drill_holes: Vec<ImportedDrillHoles>,
     pub(crate) point_clouds: Vec<ImportedPointCloud>,
     pub(crate) rasters: Vec<ImportedRaster>,
+    pub(crate) prismoid_grids: Vec<ImportedPrismoidGrid>,
     /// Every explorer folder decoded so far, for every section. Populated
     /// from the OMF project record before any element is walked, so
     /// per-element membership below always resolves against it, and grown by
@@ -329,7 +362,7 @@ pub(crate) struct ImportBundle {
 
 impl ImportBundle {
     pub(crate) fn item_count(&self) -> usize {
-        self.designs.len() + self.triangulations.len() + self.block_models.len() + self.drill_holes.len() + self.point_clouds.len() + self.rasters.len()
+        self.designs.len() + self.triangulations.len() + self.block_models.len() + self.drill_holes.len() + self.point_clouds.len() + self.rasters.len() + self.prismoid_grids.len()
     }
 }
 
@@ -518,6 +551,14 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
         complete += 1;
         progress.set_items(complete, total);
     }
+    for prismoid_grid in &snapshot.prismoid_grids {
+        let mut element = write_prismoid_grid(&mut writer, prismoid_grid)?;
+        tag_folder(&mut element, &snapshot.folders, prismoid_grid.state.section, prismoid_grid.state.folder);
+        tag_section(&mut element, MemberKind::PrismoidGrid, prismoid_grid.state.section);
+        elements.push(element);
+        complete += 1;
+        progress.set_items(complete, total);
+    }
 
     make_element_names_unique(&mut elements);
     let fallback_name = tr!("common-incline-design-project");
@@ -549,7 +590,7 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
     if let Some(design) = snapshot.designs.as_ref()
         && design.metadata.modelling != ModellingSettings::default()
     {
-        let settings = serde_json::to_value(design.metadata.modelling).context("write modelling settings")?;
+        let settings = serde_json::to_value(design.metadata.modelling).with_context(|| tr!("err-omf-encode-modelling"))?;
         project.metadata.insert(META_MODELLING.to_owned(), settings);
     }
     if let Some(optimization) = &snapshot.optimization {
@@ -581,6 +622,12 @@ fn tag_folder(element: &mut omf_crate::Element, folders: &FolderRegistry, sectio
 fn tag_section(element: &mut omf_crate::Element, kind: MemberKind, section: SectionKind) {
     if section != SectionKind::natural_for(kind) {
         put(element, META_SECTION, section.key());
+    }
+}
+
+fn put_quality(element: &mut omf_crate::Element, quality: Option<&QualityMark>) {
+    if let Some(quality) = quality {
+        put(element, META_QUALITY, json!({ "name": quality.name, "unit": quality.unit }));
     }
 }
 
@@ -745,6 +792,7 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
         // blob denies unknown fields.
         portable_layer.folder = None;
         portable_layer.section = SectionKind::natural_layer();
+        portable_layer.quality = None;
         // The file records visibility: a hidden layer opens unloaded.
         portable_layer.loaded = layer.is_visible();
         portable_layer.hidden = false;
@@ -753,6 +801,7 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
             put(&mut element, META_FOLDER, folder);
         }
         tag_section(&mut element, MemberKind::Layer, layer.section);
+        put_quality(&mut element, layer.quality.as_ref());
         layers.push(element);
     }
     // The layers still sit inside this "Designs" composite element regardless
@@ -1025,6 +1074,7 @@ fn triangulation_element(triangulation: &OpenTriangulation, geometry: omf_crate:
             "raster_texture_id": triangulation.raster_texture.map(|id| id.0),
         }),
     );
+    put_quality(&mut element, triangulation.quality.as_ref());
     element
 }
 
@@ -1352,6 +1402,88 @@ fn write_block_model_arrays<W: Write + Seek + Send>(writer: &mut omf_crate::file
         }),
     );
     Ok(element)
+}
+
+/// Write a prismoid grid as standard OMF elements under one composite: the
+/// roof and the floor as grid surfaces on the one lattice, each carrying the
+/// active-cell mask, and the walls round the active cells as a surface. The
+/// cells masked by hand, when any is, and the cell values ride on the roof,
+/// each set of values with its unit.
+fn write_prismoid_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenPrismoidGrid) -> Result<omf_crate::Element> {
+    use omf_crate::{Attribute, Element, GridSurface, Location, Orient2, Surface};
+
+    let grid = &open.grid;
+    grid.check().with_context(|| tr!("err-omf-prismoid-grid", name = open.name.clone()))?;
+    let lattice = &grid.lattice;
+    let horizontal = |plan: DVec2| [plan.x, plan.y, 0.0];
+    let orient = Orient2::new(horizontal(lattice.origin), horizontal(lattice.u), horizontal(lattice.v));
+    let color = Some(rgba8(open.color));
+    let cells = lattice_grid(writer, lattice)?;
+    let part = |writer: &mut omf_crate::file::Writer<W>, role: &str, part_kind: &str, heights: &[f64]| -> Result<Element> {
+        let surface = GridSurface::new(orient, cells.clone(), Some(writer.array_scalars(heights.iter().copied())?));
+        let mut element = Element::new(format!("{} {role}", open.name), surface);
+        element.color = color;
+        let mask = writer.array_booleans(grid.active.iter().map(|active| Some(*active)))?;
+        element.attributes.push(Attribute::from_booleans("active", Location::Primitives, mask));
+        put(&mut element, META_KIND, part_kind);
+        Ok(element)
+    };
+    let mut roof = part(writer, "roof", "prismoid_roof", &grid.roof)?;
+    // Only when used: a grid without hand masks writes as before.
+    if grid.masked.contains(&true) {
+        let masked = writer.array_booleans(grid.masked.iter().map(|masked| Some(*masked)))?;
+        roof.attributes.push(Attribute::from_booleans("masked", Location::Primitives, masked));
+    }
+    for cell_values in &grid.cell_values {
+        let values = writer.array_numbers(cell_values.values.iter().map(|value| value.filter(|value| value.is_finite())))?;
+        let mut attribute = Attribute::from_numbers(cell_values.name.clone(), Location::Primitives, values);
+        attribute.units.clone_from(&cell_values.unit);
+        if cell_values.role == CellValueRole::Density {
+            attribute.metadata.insert(META_ROLE.to_owned(), "density".into());
+        }
+        roof.attributes.push(attribute);
+    }
+    let mut parts = vec![roof, part(writer, "floor", "prismoid_floor", &grid.floor)?];
+    let (vertices, triangles) = grid.outline_walls();
+    if !triangles.is_empty() {
+        let walls = Surface::new(writer.array_vertices(vertices.iter().map(|vertex| vertex.to_array()))?, writer.array_triangles(triangles)?);
+        let mut outline = Element::new(format!("{} outline", open.name), walls);
+        outline.color = color;
+        put(&mut outline, META_KIND, "prismoid_outline");
+        parts.push(outline);
+    }
+    let mut element = Element::new(open.name.clone(), omf_crate::Composite::new(parts));
+    element.color = color;
+    put(&mut element, META_KIND, "prismoid_grid");
+    put_item_identity(
+        &mut element,
+        open.id.0,
+        open.state.source_name.as_deref(),
+        open.state.source_format.as_deref(),
+        "prismoid_grid",
+    );
+    let mut style = json!({ "loaded": open.state.is_visible(), "color": open.color });
+    // Only a choice: a grid left on its thickness writes as before.
+    if open.color_by != PrismoidColorBy::default() {
+        style["color_by"] = serde_json::to_value(&open.color_by)?;
+    }
+    put(&mut element, META_STYLE, style);
+    if let Some(stratum) = &open.stratum {
+        put(&mut element, META_STRATUM, serde_json::to_value(stratum)?);
+    }
+    Ok(element)
+}
+
+/// A lattice's cell sizes as a regular grid where they allow one.
+fn lattice_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, lattice: &Lattice) -> Result<omf_crate::Grid2> {
+    if lattice.is_regular() {
+        let count = [u32::try_from(lattice.columns())?, u32::try_from(lattice.rows())?];
+        return Ok(omf_crate::Grid2::from_size_and_count([lattice.u_sizes[0], lattice.v_sizes[0]], count));
+    }
+    Ok(omf_crate::Grid2::from_arrays(
+        writer.array_scalars(lattice.u_sizes.iter().copied())?,
+        writer.array_scalars(lattice.v_sizes.iter().copied())?,
+    ))
 }
 
 /// Write a drillhole dataset as three standard OMF elements under one
@@ -2259,6 +2391,27 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 self.read_textures(element)?;
                 return Ok(());
             }
+            // One that breaks a rule opens as the plain surfaces it is made of.
+            Some("prismoid_grid") => match self.read_prismoid_grid(element) {
+                Ok(loaded) => {
+                    let section = self.element_section(element, MemberKind::PrismoidGrid);
+                    let folder = self.element_folder(element, section);
+                    self.bundle.prismoid_grids.push(ImportedPrismoidGrid {
+                        preferred_id: element_id(element),
+                        source_name: element_source_name(element),
+                        source_format: element_source_format(element),
+                        loaded,
+                        is_loaded: style_loaded(element.metadata.get(META_STYLE)),
+                        folder,
+                        section,
+                    });
+                    return Ok(());
+                }
+                Err(error) => self
+                    .bundle
+                    .warnings
+                    .push(tr!("omf-prismoid-grid-not-kept", name = element_name(element).to_string(), error = format!("{error:#}"))),
+            },
             _ => {}
         }
 
@@ -2292,6 +2445,22 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .get(META_FOLDER)
             .and_then(Value::as_str)
             .and_then(|name| self.bundle.folders.ensure(section, name))
+    }
+
+    /// The quality `element`, a surface or a layer by `kind`, is marked
+    /// with. A mark that does not decode is said, and the item reads
+    /// unmarked.
+    fn element_quality(&mut self, element: &omf_crate::Element, kind: MemberKind) -> Option<QualityMark> {
+        let value = element.metadata.get(META_QUALITY)?;
+        QualityMark::deserialize(value)
+            .inspect_err(|_| {
+                let name = element.name.to_string();
+                self.bundle.warnings.push(match kind {
+                    MemberKind::Layer => tr!("omf-layer-quality-mark-unreadable", name = name),
+                    _ => tr!("omf-quality-mark-unreadable", name = name),
+                });
+            })
+            .ok()
     }
 
     /// The section `element` says its item is shown under, or the one its kind
@@ -2431,6 +2600,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
                 let section = self.element_section(element, MemberKind::Triangulation);
                 let folder = self.element_folder(element, section);
+                let quality = self.element_quality(element, MemberKind::Triangulation);
                 self.bundle.triangulations.push(ImportedTriangulation {
                     preferred_id,
                     source_name,
@@ -2460,6 +2630,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     raster_texture_id: style_value(style, "raster_texture_id"),
                     folder,
                     section,
+                    quality,
                 });
             }
             omf_crate::Geometry::PointSet(points) => {
@@ -2698,6 +2869,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             {
                 document.set_layer_folder(layer_id, Some(folder));
             }
+            document.set_layer_quality(layer_id, self.element_quality(layer_element, MemberKind::Layer));
             let children = match &layer_element.geometry {
                 omf_crate::Geometry::Composite(layer) => layer.elements.as_slice(),
                 _ => std::slice::from_ref(layer_element),
@@ -3019,13 +3191,11 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         self.push_triangulation(element, vertices, faces)
     }
 
-    fn read_grid_surface(&mut self, element: &omf_crate::Element, surface: &omf_crate::GridSurface) -> Result<()> {
+    /// A grid surface's cell sizes along `u` and `v`, and its height at every
+    /// corner: zero where the file stores none.
+    fn grid_surface_heights(&self, element: &omf_crate::Element, surface: &omf_crate::GridSurface) -> Result<([Vec<f64>; 2], Vec<f64>)> {
         let [u_sizes, v_sizes] = self.grid2_sizes(&surface.grid)?;
-        let u_edges = cumulative_edges(&u_sizes);
-        let v_edges = cumulative_edges(&v_sizes);
-        let width = u_edges.len();
-        let height = v_edges.len();
-        let vertex_count = width.checked_mul(height).with_context(|| tr!("err-omf-grid-vertex-overflow"))?;
+        let vertex_count = (u_sizes.len() + 1).checked_mul(v_sizes.len() + 1).with_context(|| tr!("err-omf-grid-vertex-overflow"))?;
         ensure_items(vertex_count as u64, &tr!("err-omf-items-grid-vertices"))?;
         let heights = if let Some(values) = &surface.heights {
             let values = collect_results(self.reader.array_scalars(values)?)?;
@@ -3041,6 +3211,15 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         } else {
             vec![0.0; vertex_count]
         };
+        Ok(([u_sizes, v_sizes], heights))
+    }
+
+    fn read_grid_surface(&mut self, element: &omf_crate::Element, surface: &omf_crate::GridSurface) -> Result<()> {
+        let ([u_sizes, v_sizes], heights) = self.grid_surface_heights(element, surface)?;
+        let u_edges = cumulative_edges(&u_sizes);
+        let v_edges = cumulative_edges(&v_sizes);
+        let width = u_edges.len();
+        let vertex_count = heights.len();
         let origin = self.project_origin + DVec3::from_array(surface.orient.origin);
         let u = DVec3::from_array(surface.orient.u);
         let v = DVec3::from_array(surface.orient.v);
@@ -3082,6 +3261,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let color = style_value(style, "color").unwrap_or_else(|| element_color(element, [0.65, 0.68, 0.72, 1.0]));
         let section = self.element_section(element, MemberKind::Triangulation);
         let folder = self.element_folder(element, section);
+        let quality = self.element_quality(element, MemberKind::Triangulation);
         let payload_source = self.payload_locator();
         self.bundle.triangulations.push(ImportedTriangulation {
             preferred_id: element_id(element),
@@ -3109,6 +3289,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             raster_texture_id: style_value(style, "raster_texture_id"),
             folder,
             section,
+            quality,
         });
         Ok(())
     }
@@ -3517,6 +3698,95 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             transfer.sanitise(variable_range(name));
         }
         transfers
+    }
+
+    /// Rebuild a prismoid grid written by [`write_prismoid_grid`] from its
+    /// roof, floor and mask; the outline is derived, so it is not read.
+    fn read_prismoid_grid(&mut self, element: &omf_crate::Element) -> Result<LoadedPrismoidGrid> {
+        let name = element_name(element);
+        let omf_crate::Geometry::Composite(composite) = &element.geometry else {
+            bail!(tr!("err-omf-prismoid-not-composite", name = name.to_string()));
+        };
+        let part = |part_kind: &str| composite.elements.iter().find(|child| kind(child) == Some(part_kind));
+        let (Some(roof), Some(floor)) = (part("prismoid_roof"), part("prismoid_floor")) else {
+            bail!(tr!("err-omf-prismoid-no-roof-floor", name = name.to_string()));
+        };
+        let (omf_crate::Geometry::GridSurface(roof_surface), omf_crate::Geometry::GridSurface(floor_surface)) = (&roof.geometry, &floor.geometry) else {
+            bail!(tr!("err-omf-prismoid-not-grid-surfaces", name = name.to_string()));
+        };
+        let (sizes, roof_heights) = self.grid_surface_heights(roof, roof_surface)?;
+        let (floor_sizes, floor_heights) = self.grid_surface_heights(floor, floor_surface)?;
+        let orient = roof_surface.orient;
+        if orient != floor_surface.orient || sizes != floor_sizes {
+            bail!(tr!("err-omf-prismoid-lattices-differ", name = name.to_string()));
+        }
+        if orient.u[2].abs() > 1e-9 || orient.v[2].abs() > 1e-9 {
+            bail!(tr!("err-omf-prismoid-not-horizontal", name = name.to_string()));
+        }
+        // Heights are elevations above the orient's plane.
+        let base = self.project_origin + DVec3::from_array(orient.origin);
+        let [u_sizes, v_sizes] = sizes;
+        let lattice = Lattice {
+            origin: base.truncate(),
+            u: DVec2::new(orient.u[0], orient.u[1]),
+            v: DVec2::new(orient.v[0], orient.v[1]),
+            u_sizes,
+            v_sizes,
+        };
+        let mut active = vec![true; lattice.cell_count()];
+        let mut masked = vec![false; lattice.cell_count()];
+        let mut cell_values = Vec::new();
+        for attribute in roof.attributes.iter().filter(|attribute| attribute.location == omf_crate::Location::Primitives) {
+            match &attribute.data {
+                omf_crate::AttributeData::Boolean { values } if attribute.name == "active" => {
+                    ensure_items(values.item_count(), &tr!("err-omf-items-cell-mask"))?;
+                    active = collect_results(self.reader.array_booleans(values)?)?
+                        .into_iter()
+                        .map(|value| value.unwrap_or(true))
+                        .collect();
+                }
+                omf_crate::AttributeData::Boolean { values } if attribute.name == "masked" => {
+                    ensure_items(values.item_count(), &tr!("err-omf-items-cell-mask"))?;
+                    masked = collect_results(self.reader.array_booleans(values)?)?
+                        .into_iter()
+                        .map(|value| value.unwrap_or(false))
+                        .collect();
+                }
+                omf_crate::AttributeData::Number { values, .. } => cell_values.push(CellValues {
+                    name: attribute.name.clone(),
+                    unit: attribute.units.clone(),
+                    role: match attribute.metadata.get(META_ROLE).and_then(Value::as_str) {
+                        Some("density") => CellValueRole::Density,
+                        _ => CellValueRole::Quality,
+                    },
+                    values: read_numbers(self.reader, values)?,
+                }),
+                _ => {}
+            }
+        }
+        let elevations = |heights: Vec<f64>| heights.into_iter().map(|height| base.z + height).collect::<Vec<_>>();
+        let grid = PrismoidGrid {
+            lattice,
+            roof: elevations(roof_heights),
+            floor: elevations(floor_heights),
+            active,
+            masked,
+            cell_values,
+        };
+        grid.check().with_context(|| tr!("err-omf-prismoid-grid", name = name.to_string()))?;
+        let style = element.metadata.get(META_STYLE);
+        let stratum = element.metadata.get(META_STRATUM).map(|record| Stratum::deserialize(record).ok().filter(Stratum::is_whole));
+        if let Some(None) = stratum {
+            self.bundle.warnings.push(tr!("omf-prismoid-stratum-dropped", name = name.to_string()));
+        }
+        Ok(LoadedPrismoidGrid {
+            name: name.to_owned(),
+            color: style_value(style, "color").unwrap_or_else(|| element_color(element, DEFAULT_PRISMOID_GRID_COLOR)),
+            summary: grid.summary(),
+            grid: Arc::new(grid),
+            color_by: style_value(style, "color_by").unwrap_or_default(),
+            stratum: stratum.flatten(),
+        })
     }
 
     /// Rebuild a dataset written by [`write_drill_holes`].

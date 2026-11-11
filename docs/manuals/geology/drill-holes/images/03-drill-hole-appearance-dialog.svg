@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 420" width="540" height="420" role="img" aria-label="Any workspace, Drill Hole Appearance dialog, Field SEAM: Width card with Style String and discs, Disc diameter and String width; Colour scale card with its note, Filter, rows A and B, Reset colours.">
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <rect x="50" y="5" width="440" height="410"/>
+    <line x1="50" y1="35" x2="490" y2="35"/>
+    <rect x="270" y="46" width="210" height="22"/>
+    <rect x="270" y="76" width="210" height="22"/>
+    <rect x="62" y="112" width="416" height="112"/>
+    <rect x="270" y="136" width="200" height="22"/>
+    <rect x="270" y="162" width="200" height="22"/>
+    <rect x="270" y="188" width="200" height="22"/>
+    <rect x="62" y="234" width="416" height="170"/>
+    <rect x="270" y="278" width="200" height="22"/>
+    <rect x="450" y="306" width="20" height="18" fill="#ccc"/>
+    <rect x="450" y="332" width="20" height="18" fill="#888"/>
+  </g>
+  <rect x="72" y="362" width="120" height="30" fill="#fff" stroke="#d9622b" stroke-width="3"/>
+  <g font-family="sans-serif" font-size="15" fill="#000">
+    <text x="62" y="26">Drill Hole Appearance: S-collars + 1 files</text>
+  </g>
+  <g font-family="sans-serif" font-size="13" fill="#000">
+    <text x="62" y="62">Dataset</text>
+    <text x="278" y="62">S-collars + 1 files</text>
+    <text x="62" y="92">Field</text>
+    <text x="278" y="92">SEAM</text>
+    <text x="72" y="130" font-weight="bold">Width</text>
+    <text x="72" y="152">Style</text>
+    <text x="278" y="152">String and discs</text>
+    <text x="72" y="178">Disc diameter</text>
+    <text x="278" y="178">1.00 m</text>
+    <text x="72" y="204">String width</text>
+    <text x="278" y="204">2.0 px</text>
+    <text x="72" y="252" font-weight="bold">Colour scale</text>
+    <text x="72" y="272" fill="#888">2 codes. An interval with no logged value stays white.</text>
+    <text x="72" y="294">Filter</text>
+    <text x="72" y="320">A</text>
+    <text x="72" y="346">B</text>
+    <text x="132" y="382" text-anchor="middle">Reset colours</text>
+  </g>
+</svg>

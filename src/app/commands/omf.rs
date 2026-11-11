@@ -10,6 +10,7 @@ use crate::{
     model::{
         FolderId, FolderRegistry, LayerId, MemberKind, SectionKind,
         formats::omf::{self, ImportBundle, PayloadSource, ProjectSnapshot},
+        prismoid_grid::{LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidGridId},
         project,
         triangulation::{LoadedTriangulation, OpenTriangulation, TriangulationId},
     },
@@ -107,6 +108,7 @@ fn referenced_folders(snapshot: &ProjectSnapshot) -> std::collections::HashSet<F
     }
     referenced.extend(snapshot.triangulations.iter().filter_map(|item| item.state.folder));
     referenced.extend(snapshot.rasters.iter().filter_map(|item| item.state.folder));
+    referenced.extend(snapshot.prismoid_grids.iter().filter_map(|item| item.state.folder));
     referenced.extend(snapshot.point_clouds.iter().filter_map(|item| item.state.folder));
     referenced.extend(snapshot.block_models.iter().filter_map(|item| item.state.folder));
     referenced.extend(snapshot.drill_holes.iter().filter_map(|item| item.state.folder));
@@ -186,6 +188,7 @@ impl<'a> App<'a> {
             drill_holes: self.drill_holes.iter().filter(|item| selection.drill_holes.includes(item.id)).cloned().collect(),
             point_clouds: self.point_clouds.iter().filter(|item| selection.point_clouds.includes(item.id)).cloned().collect(),
             rasters: self.raster_textures.iter().filter(|item| selection.rasters.includes(item.id)).cloned().collect(),
+            prismoid_grids: self.prismoid_grids.iter().filter(|item| selection.prismoid_grids.includes(item.id)).cloned().collect(),
             optimization: None,
         };
         if scope == FolderScope::Whole
@@ -238,6 +241,7 @@ impl<'a> App<'a> {
             drill_holes,
             point_clouds,
             rasters,
+            prismoid_grids,
             warnings: _,
             folders,
             modelling,
@@ -291,7 +295,16 @@ impl<'a> App<'a> {
             project.lossy_save_confirmed = false;
         }
 
-        self.install_bundle_items(BundleIds::Preserve, &folder_map, rasters, triangulations, block_models, drill_holes, point_clouds);
+        self.install_bundle_items(
+            BundleIds::Preserve,
+            &folder_map,
+            rasters,
+            triangulations,
+            block_models,
+            drill_holes,
+            point_clouds,
+            prismoid_grids,
+        );
 
         // Every membership above came from `folder_map`, so it already
         // resolves in the project's (just-installed) folder registry; no
@@ -407,6 +420,7 @@ impl<'a> App<'a> {
                 drill_holes,
                 point_clouds,
                 rasters,
+                prismoid_grids,
                 warnings: _,
                 folders,
                 // A merge brings data in, not the other project's way of
@@ -493,7 +507,16 @@ impl<'a> App<'a> {
                 }
             }
 
-            self.install_bundle_items(BundleIds::Fresh, &folder_map, rasters, triangulations, block_models, drill_holes, point_clouds);
+            self.install_bundle_items(
+                BundleIds::Fresh,
+                &folder_map,
+                rasters,
+                triangulations,
+                block_models,
+                drill_holes,
+                point_clouds,
+                prismoid_grids,
+            );
             imported_items += count;
             userspace_log!(
                 "{}",
@@ -528,6 +551,7 @@ impl<'a> App<'a> {
         block_models: Vec<omf::ImportedBlockModel>,
         drill_holes: Vec<omf::ImportedDrillHoles>,
         point_clouds: Vec<omf::ImportedPointCloud>,
+        prismoid_grids: Vec<omf::ImportedPrismoidGrid>,
     ) {
         let fresh = ids == BundleIds::Fresh;
         let preferred = |id: Option<u64>| if fresh { None } else { id };
@@ -601,6 +625,8 @@ impl<'a> App<'a> {
                 always_show_edges: false,
                 depth_shade: None,
                 pattern_from: None,
+                prismoid_grid: None,
+                quality: imported.quality,
             });
             if let Some(open) = self.triangulations.last_mut() {
                 open.state.payload_source = PayloadSource::for_triangulation(imported.payload_source, open);
@@ -687,6 +713,37 @@ impl<'a> App<'a> {
                 open.state.set_provenance(imported.source_name, imported.source_format);
                 open.state.payload_source = PayloadSource::for_point_cloud(imported.payload_source, open);
             }
+        }
+
+        for imported in prismoid_grids {
+            let id = allocate_item_id(
+                preferred(imported.preferred_id),
+                &mut self.next_prismoid_grid_id,
+                self.prismoid_grids.iter().map(|item| item.id.0),
+            );
+            let folder = project::merged_folder(folder_map, imported.folder);
+            let LoadedPrismoidGrid {
+                name,
+                color,
+                grid,
+                summary,
+                color_by,
+                stratum,
+            } = imported.loaded;
+            let name = project::unique_item_name(name, self.prismoid_grids.iter().map(|item| item.name.as_str()));
+            self.prismoid_grids.push(OpenPrismoidGrid {
+                id: PrismoidGridId(id),
+                state: crate::model::project::ProjectItemState::dirty_with_format(MemberKind::PrismoidGrid, imported.source_name, imported.source_format)
+                    .with_loaded(imported.is_loaded)
+                    .with_section(imported.section)
+                    .with_folder(folder),
+                name,
+                color,
+                grid,
+                summary,
+                color_by,
+                stratum,
+            });
         }
     }
 

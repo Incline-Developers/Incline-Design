@@ -719,21 +719,22 @@ impl App<'_> {
         if design_id == topography_id {
             anyhow::bail!(crate::i18n::tr!("err-surf-solid-same-surface"));
         }
-        let (design_mesh, design_name) = {
+        let (design_mesh, design_name, design_quality) = {
             let design = self
                 .triangulations
                 .iter()
                 .find(|triangulation| triangulation.id == design_id)
                 .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-surf-solid-design-missing")))?;
-            (design.mesh.clone(), design.name.clone())
+            (design.mesh.clone(), design.name.clone(), design.quality.as_ref())
         };
-        let (topography_mesh, topography_name) = {
+        let (topography_mesh, topography_name, quality) = {
             let topography = self
                 .triangulations
                 .iter()
                 .find(|triangulation| triangulation.id == topography_id)
                 .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-surf-solid-topography-missing")))?;
-            (topography.mesh.clone(), topography.name.clone())
+            let quality = session::shared_quality((&design_name, design_quality), (&topography.name, topography.quality.as_ref()))?;
+            (topography.mesh.clone(), topography.name.clone(), quality)
         };
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulationLog> {
@@ -749,7 +750,9 @@ impl App<'_> {
                 edges: std::sync::Arc::unwrap_or_clone(solid.edges),
                 surface_face_order: solid.surface_face_order,
                 surface_type: TriSurfaceType::SolidClosed,
-            };
+                quality: None,
+            }
+            .with_quality(quality);
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
                 message: tr!(

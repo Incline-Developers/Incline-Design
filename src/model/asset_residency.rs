@@ -26,6 +26,7 @@ impl OpenItem {
             Self::DrillHole(item) => &item.state,
             Self::PointCloud(item) => &item.state,
             Self::Raster(item) => &item.state,
+            Self::PrismoidGrid(item) => &item.state,
         }
     }
 
@@ -36,11 +37,13 @@ impl OpenItem {
             Self::DrillHole(item) => &mut item.state,
             Self::PointCloud(item) => &mut item.state,
             Self::Raster(item) => &mut item.state,
+            Self::PrismoidGrid(item) => &mut item.state,
         }
     }
 
     pub(crate) fn evict(mut self, progress: &Phase) -> Result<Self> {
-        if self.state().deferred.is_some() {
+        // A prismoid grid is a few arrays: it stays in memory, never deferred.
+        if self.state().deferred.is_some() || matches!(self, Self::PrismoidGrid(_)) {
             return Ok(self);
         }
         // Read back for a moment and not changed since: what it was read from
@@ -59,6 +62,7 @@ impl OpenItem {
             Self::DrillHole(item) => snapshot.drill_holes.push((**item).clone()),
             Self::PointCloud(item) => snapshot.point_clouds.push((**item).clone()),
             Self::Raster(item) => snapshot.rasters.push((**item).clone()),
+            Self::PrismoidGrid(_) => unreachable!("returned above"),
         }
         let backing = omf::to_backing(snapshot, omf::Compression::Scratch, progress)?;
         self.state_mut().deferred = Some(DeferredAsset::new(backing, vec![0]));
@@ -74,6 +78,7 @@ impl OpenItem {
             Self::DrillHole(item) => omf::PayloadIdentity::DrillHole(Arc::downgrade(&item.dataset)),
             Self::PointCloud(item) => omf::PayloadIdentity::point_cloud(item),
             Self::Raster(item) => omf::PayloadIdentity::raster(item),
+            Self::PrismoidGrid(_) => unreachable!("a prismoid grid is never deferred"),
         }
     }
 
@@ -84,7 +89,7 @@ impl OpenItem {
             Self::Triangulation(item) => Some(omf::PayloadIdentity::triangulation(item)),
             Self::PointCloud(item) => Some(omf::PayloadIdentity::point_cloud(item)),
             Self::Raster(item) => Some(omf::PayloadIdentity::raster(item)),
-            Self::BlockModel(_) | Self::DrillHole(_) => None,
+            Self::BlockModel(_) | Self::DrillHole(_) | Self::PrismoidGrid(_) => None,
         }
     }
 
@@ -145,6 +150,7 @@ impl OpenItem {
                 item.rgba = Arc::new(Vec::new());
                 AssetSummary::default()
             }
+            Self::PrismoidGrid(_) => unreachable!("only evict releases, and not a prismoid grid"),
         };
         self.state_mut().summary = Some(summary);
     }
@@ -199,6 +205,7 @@ impl OpenItem {
                 item.world_to_uv = data.world_to_uv;
                 item.projection = data.projection;
             }
+            Self::PrismoidGrid(_) => unreachable!("a prismoid grid is never deferred"),
         }
         self.state_mut().deferred = None;
         self.state_mut().summary = None;

@@ -221,7 +221,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
     }
 }
 
-fn vector_fields(ui: &mut egui::Ui, label: &str, help_text: &str, value: &mut glam::DVec3, range: std::ops::RangeInclusive<f64>) {
+pub(crate) fn vector_fields(ui: &mut egui::Ui, label: &str, help_text: &str, value: &mut glam::DVec3, range: std::ops::RangeInclusive<f64>) {
     // Three boxes sharing the column the fields above them use, so the grid
     // rows line up with the rest of the dialog rather than sizing themselves
     // to whatever numbers they happen to hold.

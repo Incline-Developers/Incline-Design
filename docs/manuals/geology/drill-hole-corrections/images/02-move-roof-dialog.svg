@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 300" width="540" height="300" role="img" aria-label="Geology workspace, Move Roof dialog on S1: Above Nothing touches it, Below 20.00 to 22.00 m, A, Roof at 20.00 m, New depth 19.5 m, Reason, Move and Cancel.">
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <rect x="70" y="10" width="400" height="280"/>
+    <line x1="70" y1="42" x2="470" y2="42"/>
+    <rect x="262" y="170" width="188" height="24"/>
+    <rect x="262" y="204" width="188" height="24"/>
+    <rect x="365" y="248" width="80" height="28"/>
+    <rect x="270" y="248" width="80" height="28"/>
+  </g>
+  <rect x="262" y="170" width="188" height="24" fill="none" stroke="#d9622b" stroke-width="3"/>
+  <g font-family="sans-serif" font-size="15" fill="#000">
+    <text x="84" y="32">Move Roof</text>
+  </g>
+  <g font-family="sans-serif" font-size="13" fill="#000">
+    <text x="84" y="66">Hole</text>
+    <text x="270" y="66">S1</text>
+    <text x="84" y="92">Above</text>
+    <text x="270" y="92">Nothing touches it</text>
+    <text x="84" y="118">Below</text>
+    <text x="270" y="118">20.00 to 22.00 m, A</text>
+    <text x="84" y="144">Roof at</text>
+    <text x="270" y="144">20.00 m</text>
+    <text x="84" y="187">New depth</text>
+    <text x="270" y="187">19.5 m</text>
+    <text x="84" y="221">Reason</text>
+    <text x="270" y="221">Core photo shows 19.5</text>
+  </g>
+  <g font-family="sans-serif" font-size="15" fill="#000" text-anchor="middle">
+    <text x="405" y="267">Move</text>
+    <text x="310" y="267">Cancel</text>
+  </g>
+</svg>

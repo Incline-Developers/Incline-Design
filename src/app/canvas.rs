@@ -22,22 +22,15 @@ impl<'a> App<'a> {
             return;
         }
 
-        // The clip tool's boundary: only a closed polyline is taken, and a
-        // click on anything else leaves the pick waiting.
-        if self.editor.triangulation_pick_target.is_some_and(TriangulationPickTarget::picks_boundary) {
+        // A tool's boundary: only a closed polyline is taken, and a click on
+        // anything else leaves the pick waiting.
+        if let Some(target) = self.editor.triangulation_pick_target.filter(|target| target.picks_boundary()) {
             let picked = self
                 .graphics
                 .as_ref()
                 .and_then(|graphics| graphics.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.pick_frozen, self.editor.xray_enabled));
-            if let Some((SceneEntityId::Object(id), _)) = picked
-                && let Some(object) = self.scene_document.get_object(id)
-                && object.encloses_area()
-            {
-                let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.to_string());
-                self.editor.tri_cut_poly_object_id = Some(id);
-                self.editor.tri_cut_poly_object_name = layer.map_or_else(|| tr!("common-polyline"), |layer| tr!("common-polyline-layer", layer = layer));
-                self.editor.cancel_triangulation_pick();
-                self.invalidate_geometry();
+            if let Some((SceneEntityId::Object(id), _)) = picked {
+                self.apply_boundary_pick(target, id);
             }
             return;
         }
@@ -103,16 +96,17 @@ impl<'a> App<'a> {
         }
         let frozen = &self.editor.pick_frozen;
         let picked = self.graphics.as_ref().and_then(|graphics| {
-            graphics
+            let pick = graphics
                 .pick_scene_entity_at_cursor(
                     PICK_THRESHOLD_PX,
-                    &self.triangulations,
+                    crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                     &self.drill_holes,
                     &self.editor.hidden_handles,
                     frozen,
                     self.editor.xray_enabled,
                 )
-                .filter(|pick| self.tool_accepts_pick(pick))
+                .filter(|pick| self.tool_accepts_pick(pick));
+            self.with_section_cell_pick(graphics, pick, |pick| self.tool_accepts_pick(pick))
                 .map(|pick| (Some(pick), pick.world))
                 .or_else(|| graphics.cursor_world(self.editor.z_level).map(|world| (None, world)))
         });
@@ -218,6 +212,24 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Take `id` as the boundary of the tool `target` picks for, if it
+    /// encloses an area; otherwise the pick waits.
+    fn apply_boundary_pick(&mut self, target: TriangulationPickTarget, id: crate::model::ObjectId) {
+        if !self.scene_document.get_object(id).is_some_and(Object::encloses_area) {
+            return;
+        }
+        let name = self.boundary_name(id);
+        if target == TriangulationPickTarget::PrismoidMaskBoundary {
+            self.editor.tri_prismoid_mask_object_id = Some(id);
+            self.editor.tri_prismoid_mask_object_name = name;
+        } else {
+            self.editor.tri_cut_poly_object_id = Some(id);
+            self.editor.tri_cut_poly_object_name = name;
+        }
+        self.editor.cancel_triangulation_pick();
+        self.invalidate_geometry();
+    }
+
     fn apply_triangulation_field_pick(&mut self, target: TriangulationPickTarget, id: crate::model::triangulation::TriangulationId, name: &str) {
         match target {
             TriangulationPickTarget::TrimTopology => {
@@ -251,6 +263,24 @@ impl<'a> App<'a> {
                     self.editor.tri_solid_design_id = None;
                 }
             }
+            TriangulationPickTarget::PrismoidRoof => {
+                self.editor.tri_prismoid_roof_id = Some(id);
+                if self.editor.tri_prismoid_floor_id == Some(id) {
+                    self.editor.tri_prismoid_floor_id = None;
+                }
+                update_auto_derived_name(
+                    &mut self.editor.tri_prismoid_name_input,
+                    self.editor.tri_prismoid_name_auto,
+                    name,
+                    &tr!("common-prismoid-grid"),
+                );
+            }
+            TriangulationPickTarget::PrismoidFloor => {
+                self.editor.tri_prismoid_floor_id = Some(id);
+                if self.editor.tri_prismoid_roof_id == Some(id) {
+                    self.editor.tri_prismoid_roof_id = None;
+                }
+            }
             TriangulationPickTarget::CutPitTopology => {
                 self.editor.tri_cut_pitshell_topology_id = Some(id);
                 if self.editor.tri_cut_pitshell_pitshell_id == Some(id) {
@@ -282,7 +312,7 @@ impl<'a> App<'a> {
                 );
             }
             // Not a surface: taken in `begin_select_or_drag`.
-            TriangulationPickTarget::ClipBoundary => {}
+            TriangulationPickTarget::ClipBoundary | TriangulationPickTarget::PrismoidMaskBoundary => {}
             TriangulationPickTarget::ClipSurface => self.set_tool_subject(ToolSubject::ClipSurface(id)),
             TriangulationPickTarget::SliceSurface => self.set_tool_subject(ToolSubject::SliceSurface(id)),
             TriangulationPickTarget::ContourSurface => self.set_tool_subject(ToolSubject::ContourSurface(id)),
@@ -292,7 +322,7 @@ impl<'a> App<'a> {
                     self.editor.tri_include_solid_topology_id = None;
                 }
             }
-            TriangulationPickTarget::ClipToUpper | TriangulationPickTarget::ClipToLower if self.editor.tri_cut_to_targets.contains(&id) => {
+            TriangulationPickTarget::ClipToUpper | TriangulationPickTarget::ClipToLower if self.editor.tri_cut_to_seam.contains(&Some(id)) => {
                 crate::userspace_warn!("{}", tr!("cmd-cuts-to-surface-cuts-itself"));
             }
             TriangulationPickTarget::ClipToUpper => {
@@ -301,6 +331,13 @@ impl<'a> App<'a> {
             TriangulationPickTarget::ClipToLower => {
                 self.editor.tri_cut_to_lower_id = Some(id);
             }
+            TriangulationPickTarget::ClipToSeam | TriangulationPickTarget::ClipToSeamOther if self.editor.clip_to_limit_surfaces().contains(&Some(id)) => {
+                crate::userspace_warn!("{}", tr!("cmd-cuts-to-surface-cuts-itself"));
+            }
+            TriangulationPickTarget::ClipToSeam => fill_seam_slot(&mut self.editor.tri_cut_to_seam, 0, id),
+            TriangulationPickTarget::ClipToSeamOther => fill_seam_slot(&mut self.editor.tri_cut_to_seam, 1, id),
+            TriangulationPickTarget::ThicknessSurface => self.set_tool_subject(ToolSubject::ThicknessSurface(id)),
+            TriangulationPickTarget::SeamSurface => self.set_tool_subject(ToolSubject::SeamSurface(id)),
         }
         self.editor.triangulation_pick_target = None;
         self.editor.viewport_pick_hover_label = None;
@@ -482,6 +519,13 @@ impl<'a> App<'a> {
                     }
                     _ => {}
                 }
+                if let SceneEntityId::PrismoidGrid(id) = handle
+                    && hole.is_none()
+                    && self.pick_prismoid_cell(id, world)
+                {
+                    self.invalidate_geometry();
+                    return;
+                }
                 // Clicking what is already selected takes it back out of the
                 // selection, so any scene entity can be dropped without
                 // going for empty space.
@@ -590,6 +634,7 @@ impl<'a> App<'a> {
             // Nothing to enclose: a raster is painted onto a surface rather
             // than occupying the scene, so a marquee never produces one.
             SceneEntityId::Raster(_) => false,
+            SceneEntityId::PrismoidGrid(_) => false,
             SceneEntityId::HaulRoad(id) => !objects_only && self.workspace.active_document().is_some_and(|d| d.haulage().road(*id).is_some()),
             SceneEntityId::HaulNode(id) => !objects_only && self.workspace.active_document().is_some_and(|d| d.haulage().node(*id).is_some()),
         });
@@ -655,6 +700,10 @@ impl<'a> App<'a> {
             }
             self.editor.selected_handles.extend(enclosed);
             self.editor.selected_drill_holes.extend(holes);
+        }
+        // A drawn prismoid grid rides the same box by its cells' centres.
+        if !objects_only {
+            self.select_prismoid_cells_in_box(start, end);
         }
         if self.editor.active_tool == crate::ui::state::ActiveTool::Move {
             self.editor.move_vertex_target = None;
@@ -959,4 +1008,13 @@ fn is_drill_pattern_boundary(object: &Object) -> bool {
 /// to hand back a polyline - so the tool does not offer one.
 fn is_drapeable(object: &Object) -> bool {
     !matches!(object, Object::Circle { .. })
+}
+
+/// Put `id` in one of a seam's two slots; the other gives it up, as one
+/// surface cannot be both the roof and the floor.
+fn fill_seam_slot(seam: &mut [Option<crate::model::triangulation::TriangulationId>; 2], slot: usize, id: crate::model::triangulation::TriangulationId) {
+    seam[slot] = Some(id);
+    if seam[1 - slot] == Some(id) {
+        seam[1 - slot] = None;
+    }
 }

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 390" width="540" height="390" role="img" aria-label="Geology workspace, plan view, the three strings of layer Seam A roof selected after the run: a ring on the crossing of strings 1 and 3, none on strings 1 and 2.">
+  <g stroke="#000" stroke-width="1" fill="none">
+    <line x1="120" y1="190" x2="420" y2="190"/>
+    <line x1="270" y1="340" x2="270" y2="40"/>
+    <line x1="195" y1="340" x2="195" y2="40"/>
+  </g>
+  <g fill="#000">
+    <circle cx="120" cy="190" r="3"/><circle cx="420" cy="190" r="3"/>
+    <circle cx="270" cy="40" r="3"/><circle cx="270" cy="340" r="3"/>
+    <circle cx="195" cy="40" r="3"/><circle cx="195" cy="340" r="3"/>
+    <circle cx="270" cy="190" r="3"/><circle cx="195" cy="190" r="3"/>
+  </g>
+  <circle cx="195" cy="190" r="12" stroke="#d9622b" stroke-width="3" fill="none"/>
+  <g font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">
+    <text x="455" y="194">string 1</text>
+    <text x="270" y="360">string 2</text>
+    <text x="195" y="360">string 3</text>
+    <text x="140" y="224">(1050, 1100)</text>
+    <text x="320" y="224">(1100, 1100)</text>
+    <text x="120" y="384" text-anchor="start">strings 1, 2 and 3 of layer Seam A roof selected</text>
+  </g>
+  <line x1="505" y1="52" x2="505" y2="24" stroke="#000" stroke-width="1"/>
+  <path d="M505 23 l-3 6 l6 0 z" fill="#000"/>
+  <text x="505" y="16" font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">N</text>
+</svg>

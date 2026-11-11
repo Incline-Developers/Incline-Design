@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 300" width="540" height="300" role="img" aria-label="Geology workspace, plan view: Build Surface dialog open with Points, Controls and Extent lines and the Make button">
+<g stroke="#000" stroke-width="1" fill="#fff" font-family="sans-serif" transform="translate(-5,0)">
+<rect x="15" y="35" width="210" height="210"/>
+<polyline points="50.0,210.0 120.0,210.0 190.0,210.0" stroke="#d9622b" stroke-width="3" fill="none"/>
+<circle cx="50.0" cy="210.0" r="6"/>
+<circle cx="50.0" cy="210.0" r="3" fill="#d9622b" stroke="#d9622b"/>
+<circle cx="190.0" cy="210.0" r="6"/>
+<circle cx="190.0" cy="210.0" r="3" fill="#d9622b" stroke="#d9622b"/>
+<circle cx="120.0" cy="70.0" r="6"/>
+<circle cx="120.0" cy="70.0" r="3" fill="#d9622b" stroke="#d9622b"/>
+</g>
+<g font-family="sans-serif" fill="#000" transform="translate(-5,0)">
+<text x="60.0" y="215.0" font-size="15" text-anchor="start" >S1</text>
+<text x="200.0" y="215.0" font-size="15" text-anchor="start" >S2</text>
+<text x="130.0" y="75.0" font-size="15" text-anchor="start" >S3</text>
+<text x="211" y="61" font-size="13" text-anchor="middle" >N</text>
+<line x1="211" y1="79" x2="211" y2="65" stroke="#000" stroke-width="1"/>
+<path d="M211 64 l-3 6 l6 0 z"/>
+</g>
+<g stroke="#000" stroke-width="1" fill="#fff">
+<rect x="230" y="35" width="300" height="192"/>
+<line x1="230" y1="63" x2="530" y2="63"/>
+<rect x="342" y="145" width="178" height="22"/>
+</g>
+<g font-family="sans-serif" fill="#000">
+<text x="238" y="55" font-size="15" text-anchor="start" >Build Surface</text>
+<text x="240" y="83" font-size="13" text-anchor="start" >Points</text>
+<text x="520" y="83" font-size="13" text-anchor="end" >3 point(s) on &#x27;A Roof points&#x27;</text>
+<text x="240" y="109" font-size="13" text-anchor="start" >Controls</text>
+<text x="520" y="109" font-size="13" text-anchor="end" >1 control string(s) on &#x27;A controls&#x27;</text>
+<text x="240" y="135" font-size="13" text-anchor="start" >Extent</text>
+<text x="520" y="135" font-size="13" text-anchor="end" >No extent</text>
+<text x="240" y="161" font-size="13" text-anchor="start" >Output name</text>
+<text x="350" y="161" font-size="13" text-anchor="start" >A Roof</text>
+</g>
+<rect x="386" y="181" width="64" height="26" fill="#fff" stroke="#000" stroke-width="1"/>
+<rect x="456" y="181" width="64" height="26" fill="#fff" stroke="#000" stroke-width="1"/>
+<g font-family="sans-serif"><text x="418" y="199" font-size="13" text-anchor="middle" >Cancel</text>
+<text x="488" y="199" font-size="13" text-anchor="middle" >Make</text>
+</g>
+</svg>

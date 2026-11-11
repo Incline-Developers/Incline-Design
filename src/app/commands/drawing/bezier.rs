@@ -204,17 +204,12 @@ impl<'a> App<'a> {
         self.editor.bezier_dialog_open = false;
     }
 
-    /// Open Smooth Strings on every selected string the canvas may edit.
+    /// Open Smooth Strings on every selected string the canvas may edit, or
+    /// point the open dialog at them, keeping its tolerance.
     pub(crate) fn open_smooth_strings_dialog(&mut self) {
         let object_ids: Vec<ObjectId> = self.editable_polyline_sources(self.selected_polylines()).into_iter().map(|(id, _, _)| id).collect();
-        if object_ids.is_empty() {
-            userspace_warn!("{}", tr!("cmd-smooth-select-strings"));
-            return;
-        }
-        self.editor.smooth_strings_dialog = Some(SmoothStringsDialog {
-            object_ids,
-            tolerance: self.editor.smooth_tolerance,
-        });
+        let tolerance = self.editor.smooth_strings_dialog.as_ref().map_or(self.editor.smooth_tolerance, |dialog| dialog.tolerance);
+        self.editor.smooth_strings_dialog = Some(SmoothStringsDialog { object_ids, tolerance });
     }
 
     /// Round the strings' corners in place as one undoable batch. Only a

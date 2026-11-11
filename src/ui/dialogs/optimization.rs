@@ -25,7 +25,7 @@ use crate::{
         themed_icon, unthemed_icon,
         widgets::{
             collapsible_section::CollapsibleSection,
-            editable_grid::{DataGrid, GridAction, GridButtons, GridColumn, GridRow, apply_flat, move_to_slot},
+            editable_grid::{DataGrid, GridAction, GridButtons, GridColumn, GridRow, apply_flat, cell_choice, cell_text, move_to_slot},
             hint::Hint,
             menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, menu_note},
             rosette_diagram::{HEIGHT as ROSETTE_HEIGHT, draw_rosette},
@@ -733,24 +733,6 @@ fn cell_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, val
     let width = ui.available_width().max(40.0);
     let response = inline_combo(ui, id, value, names, empty_label, width);
     if required && value.is_empty() {
-        mark_invalid(ui, &response);
-    }
-}
-
-/// A drop-down over a fixed list of choices that fills the grid cell it is drawn in.
-fn cell_choice<T: Copy + PartialEq>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut T, all: &[T], label: impl Fn(T) -> String) {
-    let width = ui.available_width().max(40.0);
-    egui::ComboBox::from_id_salt(id).selected_text(label(*value)).width(width).truncate().show_ui(ui, |ui| {
-        for option in all {
-            ui.selectable_value(value, *option, label(*option));
-        }
-    });
-}
-
-/// A text box that fills its grid cell, outlined in red when `required` and empty.
-fn cell_text(ui: &mut egui::Ui, value: &mut String, required: bool) {
-    let response = ui.add(egui::TextEdit::singleline(value).desired_width(ui.available_width()));
-    if required && value.trim().is_empty() {
         mark_invalid(ui, &response);
     }
 }

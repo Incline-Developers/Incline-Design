@@ -11,17 +11,20 @@
 //! selection back until Done, when the same code reads it again.
 
 use crate::{
-    app::{App, commands::triangulation::reference_surface::surface_input},
+    app::{
+        App,
+        commands::triangulation::{reference_surface::surface_input, seam_targets},
+    },
     i18n::tr,
-    model::{Axis, ObjectId, SceneEntityId, block_model::BlockModelId, point_cloud::PointCloudId, triangulation::TriangulationId},
+    model::{Axis, ObjectId, SceneEntityId, block_model::BlockModelId, point_cloud::PointCloudId, prismoid_grid::PrismoidGridId, triangulation::TriangulationId},
     ui::{
         dialogs::MoveToAxisDialog,
-        state::{ReferencePointsDraft, ReferenceSurfaceDraft, SelectionPick, SelectionPickTool, ToolSubject, TriCreatePhase, TriPolylineClipMode},
+        state::{ReferencePointsDraft, ReferenceSurfaceDraft, SelectionPick, SelectionPickTool, ToolSubject, TriCreatePhase, TriCutSource, TriPolylineClipMode},
     },
 };
 
 /// The one item of a selection, when it holds exactly one.
-fn only<T: Copy>(items: &[T]) -> Option<T> {
+pub(super) fn only<T: Copy>(items: &[T]) -> Option<T> {
     match items {
         [item] => Some(*item),
         _ => None,
@@ -38,6 +41,13 @@ impl App<'_> {
             ToolSubject::BlockModelDrillholes(id) => self.open_create_block_model_dialog(id, None),
             ToolSubject::TinPointCloud(id) => self.set_tin_point_cloud(id),
             ToolSubject::ClassifyPointClouds(ids) => self.set_classify_point_clouds(ids),
+            ToolSubject::PrismoidQualities(id) => self.set_prismoid_qualities_grid(id),
+            ToolSubject::PrismoidSurface(id) => self.set_prismoid_surface_grid(id),
+            ToolSubject::MisfitGrid(id) => self.set_misfit_grid(id),
+            ToolSubject::PrismoidBlockModel(id) => self.set_prismoid_block_grid(id),
+            ToolSubject::MaskGrid(id) => self.set_mask_grid(id),
+            ToolSubject::ThicknessSurface(id) => self.set_thickness_surface(id),
+            ToolSubject::SeamSurface(id) => self.set_seam_surface(id),
         }
     }
 
@@ -223,6 +233,131 @@ impl App<'_> {
         self.editor.point_cloud_classify_sources = sources;
     }
 
+    fn prismoid_grid_loaded(&self, id: PrismoidGridId) -> bool {
+        self.prismoid_grids.iter().any(|item| item.id == id && item.state.loaded)
+    }
+
+    pub(crate) fn open_add_prismoid_qualities(&mut self) {
+        self.editor.tri_prismoid_qualities_open = true;
+        self.editor.tri_prismoid_qualities_grid = None;
+        self.editor.tri_prismoid_qualities_ticked.clear();
+        self.editor.tri_prismoid_qualities_density = None;
+        if let Some(id) = only(&self.selected_prismoid_grids()) {
+            self.set_prismoid_qualities_grid(id);
+        }
+    }
+
+    /// What was ticked was ticked against the grid before, so it goes.
+    fn set_prismoid_qualities_grid(&mut self, id: PrismoidGridId) {
+        if !self.prismoid_grid_loaded(id) {
+            return;
+        }
+        self.editor.tri_prismoid_qualities_grid = Some(id);
+        self.editor.tri_prismoid_qualities_ticked.clear();
+        self.editor.tri_prismoid_qualities_density = None;
+    }
+
+    pub(crate) fn open_prismoid_grid_surface(&mut self) {
+        self.editor.tri_prismoid_surface_open = true;
+        self.editor.tri_prismoid_surface_grid = None;
+        self.editor.tri_prismoid_surface_value = None;
+        self.editor.tri_prismoid_surface_name_input.clear();
+        self.editor.tri_prismoid_surface_name_auto = true;
+        if let Some(id) = only(&self.selected_prismoid_grids()) {
+            self.set_prismoid_surface_grid(id);
+        }
+    }
+
+    /// The value and the name were the grid before's, so both start over.
+    fn set_prismoid_surface_grid(&mut self, id: PrismoidGridId) {
+        if !self.prismoid_grid_loaded(id) {
+            return;
+        }
+        self.editor.tri_prismoid_surface_grid = Some(id);
+        self.editor.tri_prismoid_surface_value = None;
+        self.editor.tri_prismoid_surface_name_input.clear();
+        self.editor.tri_prismoid_surface_name_auto = true;
+    }
+
+    /// Open Difference between Prismoid Grids on the one or two grids
+    /// selected, in the project's order of grids, not the order clicked, or
+    /// on none for its two lists.
+    pub(crate) fn open_difference_prismoid_grids(&mut self) {
+        let (grid, other) = match self.selected_prismoid_grids()[..] {
+            [grid] => (Some(grid), None),
+            [grid, other] => (Some(grid), Some(other)),
+            _ => (None, None),
+        };
+        self.editor.tri_prismoid_difference_open = true;
+        self.editor.tri_prismoid_difference_grid = grid;
+        self.editor.tri_prismoid_difference_other = other;
+        self.editor.tri_prismoid_difference_value = None;
+        self.editor.tri_prismoid_difference_name_input.clear();
+        self.editor.tri_prismoid_difference_name_auto = true;
+    }
+
+    pub(crate) fn open_prismoid_block_model(&mut self) {
+        self.editor.tri_prismoid_block_open = true;
+        self.editor.tri_prismoid_block_grid = None;
+        if let Some(id) = only(&self.selected_prismoid_grids()) {
+            self.set_prismoid_block_grid(id);
+        }
+    }
+
+    fn set_prismoid_block_grid(&mut self, id: PrismoidGridId) {
+        if self.prismoid_grid_loaded(id) {
+            self.editor.tri_prismoid_block_grid = Some(id);
+        }
+    }
+
+    /// A closed polyline as a boundary row names it: by its layer.
+    pub(crate) fn boundary_name(&self, id: ObjectId) -> String {
+        self.scene_document
+            .get_object(id)
+            .and_then(|object| self.scene_document.layer(object.layer()))
+            .map(|layer| tr!("common-polyline-layer", layer = layer.name.to_string()))
+            .unwrap_or_else(|| tr!("common-polyline"))
+    }
+
+    /// Open Mask Prismoid Grid by Polyline. A closed polyline in the
+    /// selection is taken as the boundary; otherwise the dialog picks one
+    /// from the viewport.
+    pub(crate) fn open_mask_prismoid_grid(&mut self) {
+        let polyline_id = self.selected_clip_boundary();
+        self.editor.tri_prismoid_mask_open = true;
+        self.editor.tri_prismoid_mask_grid = None;
+        self.editor.tri_prismoid_mask_object_name = polyline_id.map_or_else(String::new, |id| self.boundary_name(id));
+        self.editor.tri_prismoid_mask_object_id = polyline_id;
+        self.editor.tri_prismoid_mask_mode = TriPolylineClipMode::KeepInside;
+        if let Some(id) = only(&self.selected_prismoid_grids()) {
+            self.set_mask_grid(id);
+        }
+    }
+
+    fn set_mask_grid(&mut self, id: PrismoidGridId) {
+        if self.prismoid_grid_loaded(id) {
+            self.editor.tri_prismoid_mask_grid = Some(id);
+        }
+    }
+
+    /// Open Clip to Surface, on the seam's two surfaces when the selection
+    /// holds exactly two. Either slot takes either surface: the higher is
+    /// the roof, so nothing is read from the order.
+    pub(crate) fn open_clip_to_surface(&mut self) {
+        // A surface is the primary choice for both limits; the deposit's
+        // last depth waits in its field for when Depth is chosen.
+        let depth = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.cut_depth);
+        self.editor.tri_cut_to_open = true;
+        self.editor.tri_cut_to_seam = seam_targets(&self.selected_triangulations()).map_or([None; 2], |seam| seam.map(Some));
+        self.editor.tri_cut_to_upper_source = TriCutSource::Surface;
+        self.editor.tri_cut_to_upper_id = None;
+        self.editor.tri_cut_to_upper_level_input.clear();
+        self.editor.tri_cut_to_lower_source = TriCutSource::Surface;
+        self.editor.tri_cut_to_lower_id = None;
+        self.editor.tri_cut_to_lower_level_input.clear();
+        self.editor.tri_cut_to_depth_input = depth.map(|depth| depth.to_string()).unwrap_or_default();
+    }
+
     /// Hide `tool`'s dialog and let the viewport select its input. The
     /// selection carries on from what the tool holds, which is what is
     /// selected already: nothing else could select while its dialog was up.
@@ -252,6 +387,14 @@ impl App<'_> {
             SelectionPickTool::CreateTriangulation => self.take_triangulation_sources(),
             SelectionPickTool::ReferencePoints => self.open_reference_points(),
             SelectionPickTool::ReferenceSurface => self.open_reference_surface(),
+            SelectionPickTool::HoleMisfit => self.open_hole_misfit(),
+            SelectionPickTool::MaskPrismoids => self.toggle_prismoid_mask(),
+            SelectionPickTool::ThicknessPoints => self.open_thickness_points(),
+            SelectionPickTool::InsertAtSpacing => self.open_insert_point_at_spacing_dialog(),
+            SelectionPickTool::Thin => self.open_thin_strings_dialog(),
+            SelectionPickTool::Smooth => self.open_smooth_strings_dialog(),
+            SelectionPickTool::Reverse => self.reverse_selected_strings(),
+            SelectionPickTool::CleanStrings => self.clean_selected_strings(),
         }
         self.invalidate_geometry();
     }
@@ -264,6 +407,10 @@ impl App<'_> {
         };
         self.editor.selected_handles = pick.handles_before;
         self.editor.selected_drill_holes = pick.holes_before;
+        // The pick opened on no prismoids, so none stays picked.
+        if pick.tool == SelectionPickTool::MaskPrismoids {
+            self.editor.cell_selection = None;
+        }
         self.invalidate_geometry();
     }
 
@@ -407,6 +554,13 @@ impl App<'_> {
             Some(open) if open.name != self.reference_surface_name(&open.points) => open.name.clone(),
             _ => offered,
         };
+        let plan_extent = crate::app::commands::triangulation::reference_surface::plan_extent(&self.scene_document, &input);
+        // Shown only when the points agree on one; a mix is refused
+        // and a unit clash warned at Build.
+        let marks = input.layers.iter().map(|id| self.scene_document.layer(*id).and_then(|layer| layer.quality.as_ref()));
+        let quality = crate::app::commands::triangulation::reference_surface::surface_quality(marks)
+            .ok()
+            .and_then(|(quality, _)| quality);
         self.editor.reference_surface_dialog = Some(ReferenceSurfaceDraft {
             name,
             problem: input.problem(),
@@ -416,6 +570,8 @@ impl App<'_> {
             points_label,
             controls_label,
             extent_label,
+            plan_extent,
+            quality,
         });
     }
 }

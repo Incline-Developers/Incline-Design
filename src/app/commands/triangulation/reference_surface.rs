@@ -17,12 +17,14 @@ use crate::{
             BoxGrid, Crossing, MisshapenControls, PlanCells, SEARCH_MARGIN, SELF_SHAPE_LINES, canonical_order, cell_of, cells_across, control_crossings, control_points,
             control_points_spaced, elevation_along, grid_cell, nearer_end, segment_box, self_intersects, stop_if_cancelled, too_few_control_vertices, validate_controls,
         },
+        geometry::{clip_polyline_by_xy_edge, deduplicate_ring_by},
         kernel::{self, PolyContainment},
         progress::Progress,
-        project::ModellingSettings,
+        project::{ModelEnvelope, ModellingSettings, trimmed},
         rbf::{self, DEFAULT_SPACING, MERGE_DISTANCE, POINT_BUDGET, RbfSurface, SteepPair},
         rbf_spans::{LatticeBox, RowRuns, SpanLattice},
         string_clean::{self, LeftOut, NotLeftOut, OddOneOut, Problem, ProblemKind},
+        triangulation::{QualityMark, unit_label},
     },
     ui::state::{StringRing, StringRingKind},
 };
@@ -113,6 +115,8 @@ struct SurfaceMesh {
     steep: Vec<SteepPair>,
     /// The settings the surface was built with.
     settings: ModellingSettings,
+    /// Whether the points' outline was cut to the model envelope.
+    cut_to_envelope: bool,
 }
 
 /// How a build thinned its copy of the control strings to fit the
@@ -283,7 +287,7 @@ impl<'a> App<'a> {
 
     /// Grid a thin plate spline through the selected points into a new
     /// surface named `name`. Every run adds a surface; nothing is replaced.
-    pub(crate) fn build_reference_surface(&mut self, points: Vec<ObjectId>, controls: Vec<ObjectId>, extent: Option<ObjectId>, name: String) -> Result<()> {
+    pub(crate) fn build_reference_surface(&mut self, points: Vec<ObjectId>, controls: Vec<ObjectId>, extent: Option<ObjectId>, spacing: f64, name: String) -> Result<()> {
         // The last refusal's rings go as the next build starts, whatever it
         // finds; a fresh refusal rings its own.
         if !self.editor.string_rings.is_empty() {
@@ -339,6 +343,10 @@ impl<'a> App<'a> {
                 _ => None,
             })
             .collect();
+        let (quality, clash) = surface_quality(layers.iter().map(|id| self.scene_document.layer(*id).and_then(|layer| layer.quality.as_ref())))?;
+        if let Some(clash) = clash {
+            userspace_warn!("{clash}");
+        }
         // Not counted again here: `surface_mesh` owns that contract, and a
         // selection thinned by a layer going hidden is reported by the build
         // it fails rather than by a second count beside it.
@@ -385,12 +393,29 @@ impl<'a> App<'a> {
                 keys: &keys,
                 layers: &control_layers,
             };
-            grid_surface_from_points(points, selected, ring, &settings, name, &stamp, cancel, progress)
+            let quality = quality.as_ref();
+            grid_surface_from_points(
+                points,
+                selected,
+                ring,
+                spacing,
+                &settings,
+                heights_within(&settings, quality),
+                quality,
+                name,
+                &stamp,
+                cancel,
+                progress,
+            )
         };
         let apply = move |app: &mut App, result: Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)>| match result {
             Ok((generated, left_out)) => {
+                let marked = generated.quality.is_some();
                 app.insert_generated_triangulation_in(generated, section);
-                app.keep_surface_source(source);
+                // A quality surface is not selected, and measures no seam.
+                if !marked {
+                    app.keep_surface_source(source);
+                }
                 // The strings left out stay selected and ringed, nothing
                 // hidden: the surface is there to look at beside them.
                 if !left_out.is_empty() {
@@ -621,6 +646,71 @@ fn extent_ring(document: &crate::model::Document, id: ObjectId) -> Result<Vec<DV
     Ok(ring)
 }
 
+/// The grid spacings Build Surface offers, in metres. Each is a whole
+/// number of half metres, so every node, a whole multiple of it, is exact
+/// in f64 far from the origin and [`GridSurface::read`] finds it again.
+///
+/// [`GridSurface::read`]: crate::model::grid_surface::GridSurface::read
+pub(crate) const GRID_SPACINGS: [f64; 9] = [0.5, 1.0, 2.0, 2.5, 5.0, 10.0, 20.0, 25.0, 50.0];
+
+/// The plan box a build would grid, for the dialog's estimate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlanExtent {
+    lower: DVec2,
+    upper: DVec2,
+}
+
+impl PlanExtent {
+    fn of_ring(ring: &[DVec2]) -> Self {
+        let (lower, upper) = plan_box(ring.iter().copied());
+        Self { lower, upper }
+    }
+
+    /// The nodes of the box [`LatticeBox::covering`] lays over the extent
+    /// at `spacing`. The build lays no node outside it, and reading the
+    /// surface back counts the box of its nodes, so a count within the
+    /// budget here is within it at both.
+    pub(crate) fn nodes(self, spacing: f64) -> f64 {
+        let sides = (self.upper / spacing).ceil() - (self.lower / spacing).floor() + 1.0;
+        sides.x * sides.y
+    }
+
+    pub(crate) fn over_budget(self, spacing: f64) -> bool {
+        self.nodes(spacing) > rbf::NODE_BUDGET as f64
+    }
+
+    /// The finest of [`GRID_SPACINGS`] within the node budget.
+    pub(crate) fn finest_fitting(self) -> Option<f64> {
+        GRID_SPACINGS.into_iter().find(|&spacing| !self.over_budget(spacing))
+    }
+}
+
+/// The plan extent of `input`: its extent, else the outline its points and
+/// controls would be given. `None` when neither can be read.
+pub(crate) fn plan_extent(document: &Document, input: &SurfaceInput) -> Option<PlanExtent> {
+    let ring = match input.extents.as_slice() {
+        [id] => extent_ring(document, *id).ok()?,
+        [_, _, ..] => return None,
+        [] => {
+            let mut points: Vec<DVec3> = input
+                .points
+                .iter()
+                .filter_map(|id| match document.get_object(*id) {
+                    Some(Object::Point { pos, .. }) => Some(*pos),
+                    _ => None,
+                })
+                .collect();
+            for id in &input.controls {
+                if let Some(Object::Polyline { verts, .. }) = document.get_object(*id) {
+                    points.extend(crate::model::geometry::tessellate_polyline_bulges(verts, false));
+                }
+            }
+            buffered_outline(&points).ok()?
+        }
+    };
+    Some(PlanExtent::of_ring(&ring))
+}
+
 /// The chosen control strings as 3D lines, in selection order, arcs
 /// expanded into straight segments. A string whose layer went hidden since
 /// the dialog opened is refused by its place in `ids`, like the extent, so
@@ -654,20 +744,47 @@ fn control_strings(document: &crate::model::Document, ids: &[ObjectId]) -> Resul
     Ok(strings)
 }
 
-/// Worker half: the spline through the points and controls, gridded, cut
-/// to the extent or the points' outline, and reported with its run record.
+/// Worker half: the spline through the points and controls, gridded at
+/// `spacing`, cut to the extent or the points' outline, and reported with
+/// its run record. Refused when a height leaves the RLs of `heights_within`,
+/// `None` for a surface whose heights are not RLs. A `quality` is held at 0
+/// wherever the spline dips below it.
 #[allow(clippy::too_many_arguments)]
 fn grid_surface_from_points(
     points: Vec<DVec3>,
     controls: SelectedControls,
     extent: Option<Vec<DVec2>>,
+    spacing: f64,
     settings: &ModellingSettings,
+    heights_within: Option<&ModelEnvelope>,
+    quality: Option<&QualityMark>,
     name: String,
     stamp: &RunStamp,
     cancel: &CancelFlag,
     progress: &Progress,
 ) -> Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)> {
-    let surface = surface_mesh(&points, controls, extent.as_deref(), settings, cancel, progress)?;
+    let mut surface = surface_mesh(&points, controls, extent.as_deref(), spacing, settings, cancel, progress)?;
+    let held = if quality.is_some() { held_at_zero(&mut surface.vertices) } else { 0 };
+    if let Some(envelope) = heights_within {
+        let (low, high) = surface
+            .vertices
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), vertex| (low.min(vertex.z), high.max(vertex.z)));
+        let (base, top) = (envelope.lower().z, envelope.upper().z);
+        if let Some(height) = [high, low].into_iter().find(|height| !envelope.contains_z(*height)) {
+            // At the precision of `contains_z`'s slack, so a refused height
+            // never prints as inside.
+            anyhow::bail!(
+                "{}",
+                tr!(
+                    "cmd-reference-surface-heights-outside-envelope",
+                    height = trimmed(height, 4),
+                    base = trimmed(base, 4),
+                    top = trimmed(top, 4)
+                )
+            );
+        }
+    }
     // What the build cleaned in its copy and the strings it left out come
     // first, each under its own heading, so the build line that follows
     // reads as what was built from them.
@@ -686,7 +803,7 @@ fn grid_surface_from_points(
         }
     }
     userspace_log!(
-        "{}\n{}",
+        "{}\n{}{}{}",
         tr!(
             "cmd-reference-surface-built-surface-name-inside-grid",
             name = name.to_string(),
@@ -726,7 +843,17 @@ fn grid_surface_from_points(
             spacing = surface.lattice.spacing().to_string(),
             author = stamp.author.to_string(),
             date = stamp.date.to_string()
-        )
+        ),
+        if surface.cut_to_envelope {
+            format!("\n{}", tr!("cmd-reference-surface-outline-cut"))
+        } else {
+            String::new()
+        },
+        if held > 0 {
+            format!("\n{}", tr!("cmd-reference-surface-held-at-zero", count = held.to_string()))
+        } else {
+            String::new()
+        }
     );
     // Each pick a control took over is named, for the geologist to explain,
     // in one message so the worker takes the console once.
@@ -754,11 +881,70 @@ fn grid_surface_from_points(
     }
     // So is every pair too steep for the grid, for the geologist to judge;
     // the surface is built from them all the same.
-    if !surface.steep.is_empty() {
-        userspace_warn!("{}", steep_report(&surface.steep, surface.settings.steep_distance, surface.settings.steep_degrees));
+    if let Some(report) = slope_warning(&surface, quality) {
+        userspace_warn!("{}", report);
     }
     let generated = session::build_generated_triangulation(name, surface.vertices, surface.faces, TriSurfaceType::Surface, |_| Vec::new())?;
-    Ok((generated, surface.left_out_strings))
+    Ok((generated.with_quality(quality.cloned()), surface.left_out_strings))
+}
+
+/// The one quality the points' layers are marked with, by name, with the
+/// first unit given, and a warning when they give it in more than one;
+/// `None` when they are heights. Refused when they carry two qualities, or
+/// marks and heights together.
+pub(crate) fn surface_quality<'m>(marks: impl IntoIterator<Item = Option<&'m QualityMark>>) -> Result<(Option<QualityMark>, Option<String>)> {
+    let mut kinds: Vec<Option<&QualityMark>> = Vec::new();
+    let mut units: Vec<&str> = Vec::new();
+    for mark in marks {
+        if let Some(mark) = mark
+            && !units.contains(&mark.unit.as_str())
+        {
+            units.push(&mark.unit);
+        }
+        if !kinds.iter().any(|kind| match (kind, mark) {
+            (Some(kind), Some(mark)) => kind.same_quality(mark),
+            (kind, mark) => kind.is_none() && mark.is_none(),
+        }) {
+            kinds.push(mark);
+        }
+    }
+    let first = match kinds.as_slice() {
+        [] | [None] => return Ok((None, None)),
+        [Some(first)] => first,
+        _ => anyhow::bail!("{}", tr!("cmd-reference-surface-mixed-qualities", count = kinds.len().to_string())),
+    };
+    let mark = QualityMark {
+        name: first.name.clone(),
+        unit: units.iter().find(|unit| !unit.is_empty()).map_or_else(String::new, |unit| (*unit).to_owned()),
+    };
+    let clash = (units.len() > 1).then(|| {
+        let given = units.iter().map(|unit| unit_label(unit)).collect::<Vec<_>>().join(", ");
+        tr!("cmd-reference-surface-unit-clash", quality = mark.name.clone(), units = given, kept = mark.unit_label())
+    });
+    Ok((Some(mark), clash))
+}
+
+/// The envelope whose RLs a surface's heights must keep to: none for a
+/// quality, whose heights are not RLs. Its plan check stands either way.
+fn heights_within<'s>(settings: &'s ModellingSettings, quality: Option<&QualityMark>) -> Option<&'s ModelEnvelope> {
+    settings.envelope.as_ref().filter(|_| quality.is_none())
+}
+
+/// The steep pairs' warning, none for a quality: the check is in degrees,
+/// which a change in quality over a distance is not.
+fn slope_warning(surface: &SurfaceMesh, quality: Option<&QualityMark>) -> Option<String> {
+    (quality.is_none() && !surface.steep.is_empty()).then(|| steep_report(&surface.steep, surface.settings.steep_distance, surface.settings.steep_degrees))
+}
+
+/// Raise every vertex below 0 to 0, as a quality cannot be negative; how
+/// many were.
+fn held_at_zero(vertices: &mut [mesh_data::Vertex]) -> usize {
+    let mut held = 0;
+    for vertex in vertices.iter_mut().filter(|vertex| vertex.z < 0.0) {
+        vertex.z = 0.0;
+        held += 1;
+    }
+    held
 }
 
 /// The line saying a build thinned its copy of the control strings, and
@@ -812,12 +998,13 @@ fn steep_report(pairs: &[SteepPair], within: f64, degrees: f64) -> String {
     report
 }
 
-/// Fit the spline through the picks and the controls, grid it over the
-/// extent, else over the points' outline plus [`OUTLINE_BUFFER`], and
-/// triangulate it cut to that ring.
+/// Fit the spline through the picks and the controls, grid it at `spacing`
+/// over the extent, else over the points' outline plus [`OUTLINE_BUFFER`],
+/// and triangulate it cut to that ring.
 ///
-/// A control enters as its vertices and its segments densified at the grid
-/// spacing, so the spline holds the whole string; a pick the string passes
+/// A control enters as its vertices and its segments densified at
+/// [`DEFAULT_SPACING`] whatever the grid's spacing, so one spline serves
+/// every spacing and the string is held whole; a pick the string passes
 /// over is left out, the string winning. When those points and the picks
 /// would pass the spline's point budget, the controls enter as their
 /// thinned copy instead, as [`within_budget`] makes it; their checks, the
@@ -830,6 +1017,7 @@ fn surface_mesh(
     points: &[DVec3],
     selected: SelectedControls,
     extent: Option<&[DVec2]>,
+    spacing: f64,
     settings: &ModellingSettings,
     cancel: &CancelFlag,
     progress: &Progress,
@@ -884,6 +1072,24 @@ fn surface_mesh(
         }
     }
 
+    // The model envelope bounds the grid: a drawn extent must lie in it,
+    // and without one every point and control the outline is made from.
+    if let Some(envelope) = &settings.envelope {
+        if let Some(ring) = extent {
+            if ring.iter().any(|vertex| !envelope.contains_xy(*vertex)) {
+                anyhow::bail!("{}", tr!("cmd-reference-surface-extent-outside-envelope", envelope = envelope.summary()));
+            }
+        } else {
+            let outside = points.iter().chain(controls.iter().flatten()).filter(|at| !envelope.contains_xy(at.truncate())).count();
+            if outside > 0 {
+                anyhow::bail!(
+                    "{}",
+                    tr!("cmd-reference-surface-points-outside-envelope", count = outside.to_string(), envelope = envelope.summary())
+                );
+            }
+        }
+    }
+
     let (picks, overridden, left_out) = picks_off_controls(points, controls, &cancelled)?;
     let budgeted = if !controls.is_empty() && picks.len() + entered.len() > POINT_BUDGET {
         Some(within_budget(controls, names, crossings, picks.len(), &cancelled)?)
@@ -920,11 +1126,19 @@ fn surface_mesh(
             buffered_outline(&whole)?
         }
     };
+    // Only the buffer can pass the envelope here; it is cut to it.
+    let envelope = settings
+        .envelope
+        .filter(|envelope| extent.is_none() && outline.iter().any(|vertex| !envelope.contains_xy(*vertex)));
+    let outline = match envelope {
+        Some(envelope) => cut_to_envelope(outline, &envelope),
+        None => outline,
+    };
     let ring = extent.unwrap_or(&outline);
     let bands = drawn.unwrap_or_else(|| RingBands::new(ring));
     // The grid is planned before the fit, so a grid over the node budget
     // is refused before the system is allocated.
-    let plan = grid_plan(ring, &bands, DEFAULT_SPACING, cancel)?;
+    let plan = grid_plan(ring, &bands, spacing, cancel)?;
     let spline = RbfSurface::fit(&fitted, cancel, &progress.phase(0.0, 0.5))?;
     // Read off the merged points, so a pair the merge settled is not named
     // again; a warning only, nothing is dropped or moved.
@@ -958,6 +1172,7 @@ fn surface_mesh(
         left_out,
         steep,
         settings: *settings,
+        cut_to_envelope: envelope.is_some(),
         left_out_strings: checked.left_out,
         cleaned: copy.changes,
     })
@@ -1558,6 +1773,26 @@ fn buffered_outline(points: &[DVec3]) -> Result<Vec<DVec2>> {
         ring.pop();
     }
     Ok(ring)
+}
+
+/// `outline` cut to the envelope's rectangle, a vertex within
+/// [`kernel::XY_TOL`] of a side moved onto it, so the cut runs along a
+/// line of every grid spacing's lattice.
+fn cut_to_envelope(outline: Vec<DVec2>, envelope: &ModelEnvelope) -> Vec<DVec2> {
+    let ring = envelope.ring();
+    let cut = (0..4).fold(outline, |cut, side| clip_polyline_by_xy_edge(&cut, ring[side], ring[(side + 1) % 4], true));
+    let (lower, upper) = (ring[0], ring[2]);
+    let onto = |value: f64, low: f64, high: f64| {
+        if (value - low).abs() <= kernel::XY_TOL {
+            low
+        } else if (value - high).abs() <= kernel::XY_TOL {
+            high
+        } else {
+            value
+        }
+    };
+    let cut = cut.into_iter().map(|at| DVec2::new(onto(at.x, lower.x, upper.x), onto(at.y, lower.y, upper.y))).collect();
+    deduplicate_ring_by(cut, |a: DVec2, b: DVec2| a.distance(b) <= kernel::XY_TOL)
 }
 
 /// The picks no control passes within [`MERGE_DISTANCE`] of in plan, with

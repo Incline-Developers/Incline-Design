@@ -19,7 +19,7 @@ use crate::{
     userspace_log,
 };
 
-const MAX_RASTER_PREVIEW_DIMENSION: u32 = 4096;
+pub(crate) const MAX_RASTER_PREVIEW_DIMENSION: u32 = 4096;
 
 fn raster_preview_dimension_limit(downscale: bool, hardware_limit: u32) -> u32 {
     if downscale { MAX_RASTER_PREVIEW_DIMENSION.min(hardware_limit) } else { hardware_limit }
@@ -158,6 +158,7 @@ impl<'a> App<'a> {
             world_to_uv: loaded.world_to_uv,
             projection: loaded.projection,
             driver_name: loaded.driver_name,
+            nearest: false,
         });
         self.touch_active_project_content();
         self.redraw_requested = true;
