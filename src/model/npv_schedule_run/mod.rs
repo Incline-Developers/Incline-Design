@@ -1,4 +1,4 @@
-//! Running a schedule (stage 2): from a scenario's run to the NPV of every
+//! Running a schedule: from a scenario's run to the NPV of every
 //! candidate pit, scheduled three ways.
 //!
 //! The scenario's run keeps only its grid and each cell's shell, so the job
@@ -6,8 +6,7 @@
 //! without the solver) and lays them into panels ([`panels`]): what each
 //! shell holds on each bench. Every shell is then a candidate final pit,
 //! mined in the worst, best and fixed-lead orders ([`sequence`]) and
-//! simulated period by period ([`simulate`]). See
-//! `.claude/specs/scheduling/stage-2-engine.md`.
+//! simulated period by period ([`simulate`]).
 
 pub(crate) mod panels;
 pub(crate) mod report;

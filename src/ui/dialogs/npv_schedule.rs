@@ -2,7 +2,7 @@
 //! scenario editor's frame - the same section menu at the right, the same
 //! fixed-height body, the same form rows and grids (borrowed from
 //! `optimization.rs`). Value cells resolve against the parent scenario's
-//! constants. See `.claude/specs/scheduling/stage-1-ui.md`.
+//! constants.
 
 use super::optimization::{
     EDITOR_WIDTH, MENU_ITEM_HEIGHT, SIDE_GAP, body_height, cell_combo, cell_text, constants_menu_item, field_row, form_choice, form_combo, form_toggle, form_value, menu_item,

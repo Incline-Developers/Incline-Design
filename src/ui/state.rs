@@ -7629,7 +7629,7 @@ impl OptimizationState {
 /// time its blocks of that step vanish (a schedule's mining, bench by bench).
 ///
 /// Built for schedules first; meant to become a general command animating
-/// any field by the order of its values (see the `scheduling` skill).
+/// any field by the order of its values.
 #[derive(Clone, Debug)]
 pub(crate) struct FieldAnimation {
     pub(crate) block_model: crate::model::block_model::BlockModelId,

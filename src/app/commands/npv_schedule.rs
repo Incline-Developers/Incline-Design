@@ -1,9 +1,8 @@
 //! Schedules of optimization scenarios: add, edit, save, delete, duplicate,
 //! rename, and move or copy one to another scenario. Every change is handed
 //! to the project with the scenarios (`write_optimization_scenarios`), so the
-//! project reads unsaved until it is saved. See
-//! `.claude/specs/scheduling/stage-1-ui.md`. Running one is stage 2
-//! (`stage-2-engine.md`): the job is [`npv_schedule_run::run`].
+//! project reads unsaved until it is saved. Running one is a job:
+//! [`npv_schedule_run::run`].
 
 use std::{
     collections::HashMap,

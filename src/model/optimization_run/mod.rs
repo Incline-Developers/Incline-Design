@@ -1,12 +1,10 @@
-//! Running an optimization scenario (stage 2): from settings and a block
+//! Running an optimization scenario: from settings and a block
 //! model to nested pit shells.
 //!
 //! [`prepare`] checks and resolves a scenario on the UI thread. [`run`] does
 //! the rest on a worker: lays the blocks onto the optimizer's grid
 //! ([`grid`]), values every cell ([`values`]), solves the shells with mineflow
-//! ([`shells`]) and meshes them ([`mesh`]). See
-//! `.claude/skills/optimization/SKILL.md` for the value formula and the shell
-//! algorithm.
+//! ([`shells`]) and meshes them ([`mesh`]).
 
 pub(crate) mod grid;
 pub(crate) mod mesh;

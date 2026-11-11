@@ -3,7 +3,7 @@
 //! of the shells whose columns the user picks.
 //!
 //! It shows a scenario's last run this session, or an `optimization_results.csv`
-//! opened from disk. See `.claude/skills/optimization/SKILL.md` (stage 3).
+//! opened from disk.
 
 use crate::{
     i18n::tr,

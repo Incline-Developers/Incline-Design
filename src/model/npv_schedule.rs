@@ -8,9 +8,9 @@
 //! the same period, whatever the user means by it.
 //!
 //! Schedules are saved inside their scenario, so they go wherever it goes
-//! (project, Export/Import, Duplicate). Running one is the scheduling engine's
-//! job (see `.claude/specs/scheduling/`). Its value cells resolve against the
-//! parent scenario's constants.
+//! (project, Export/Import, Duplicate). Running one is the job in
+//! [`npv_schedule_run`](crate::model::npv_schedule_run). Its value cells
+//! resolve against the parent scenario's constants.
 
 use std::hash::{Hash, Hasher};
 

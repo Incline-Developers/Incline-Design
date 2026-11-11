@@ -1,6 +1,6 @@
 //! The playback deck: a block model played through in the order of a field,
 //! its blocks vanishing step by step - for now a schedule's mining, bench by
-//! bench (`.claude/specs/scheduling/stage-3-results.md`, *Animation*).
+//! bench.
 //!
 //! The order goes into a temporary numeric column; each step is shown by
 //! that column's colour ramp alone: a transparent band below the steps done,
@@ -11,7 +11,7 @@
 //! the column.
 //!
 //! Meant to become a general command (animate any field by the order of its
-//! values); see the `scheduling` skill before extending it.
+//! values).
 
 use std::sync::Arc;
 

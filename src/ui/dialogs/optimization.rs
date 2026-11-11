@@ -6,10 +6,7 @@
 //! Processing costs, Revenues, Constraints, Outputs. The constants are not a
 //! section: one list serves every scenario and schedule, in a window that
 //! takes the place of the list or editor that opened it
-//! ([`draw_constants_window`]). See
-//! `.claude/skills/optimization/SKILL.md` for what each field means and
-//! `.claude/skills/ui-components/SKILL.md` for the grid and the input/constant
-//! field the sections are built from.
+//! ([`draw_constants_window`]).
 
 use std::time::Duration;
 

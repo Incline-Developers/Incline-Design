@@ -7,8 +7,6 @@
 //! - **Pit by pit**: each pushback's pit as the final pit, its NPV in the
 //!   three cases on one axis, with a table; picking pushbacks makes a new
 //!   schedule mining just those.
-//!
-//! See `.claude/specs/scheduling/stage-3-results.md`.
 
 use std::hash::{Hash, Hasher};
 
