@@ -375,22 +375,27 @@ impl<'a> App<'a> {
                 return Ok(ToSurfaceOutcome::NotCut { seam, cut });
             }
             let named = |name: &str, word: String| crate::app::canvas::derived_triangulation_name(name, &word);
-            let edges = crate::model::triangulation::unique_edges;
             let faces = std::mem::take(&mut cut.faces);
             let roof = session::build_generated_triangulation(
                 named(&roof_name, tr!("common-cut")),
                 std::mem::take(&mut cut.roof),
                 faces.clone(),
                 TriSurfaceType::Surface,
-                edges,
+                |_| Vec::new(),
             )?;
-            let floor = session::build_generated_triangulation(named(&floor_name, tr!("common-cut")), std::mem::take(&mut cut.floor), faces, TriSurfaceType::Surface, edges)?;
+            let floor = session::build_generated_triangulation(
+                named(&floor_name, tr!("common-cut")),
+                std::mem::take(&mut cut.floor),
+                faces,
+                TriSurfaceType::Surface,
+                |_| Vec::new(),
+            )?;
             let solid = session::build_generated_triangulation(
                 named(&roof_name, tr!("cmd-cuts-to-surface-solid")),
                 std::mem::take(&mut cut.solid_vertices),
                 std::mem::take(&mut cut.solid_faces),
                 TriSurfaceType::SolidClosed,
-                edges,
+                |_| Vec::new(),
             )?;
             Ok(ToSurfaceOutcome::Made {
                 seam,
@@ -401,10 +406,11 @@ impl<'a> App<'a> {
         let apply = move |app: &mut App, result: Result<ToSurfaceOutcome>| {
             let outcome = match result {
                 Ok(outcome) => outcome,
-                Err(error) => {
+                Err(error) if !crate::app::jobs::is_cancelled(&error) => {
                     userspace_warn!("{}", tr!("cmd-session-triangulation-failed", message = format!("{error:#}")));
                     return;
                 }
+                Err(_) => return,
             };
             match outcome {
                 ToSurfaceOutcome::Made { seam, generated, cut } => {
@@ -3162,7 +3168,7 @@ pub(super) fn clip_seam_by_cuts(
         .zip(flags.par_chunks_mut(CANCEL_STRIDE))
         .try_for_each(|(((plan, roof), floor), flags)| -> Result<()> {
             if cancel.is_cancelled() {
-                anyhow::bail!("{}", tr!("common-cancelled"));
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             for (((&at, roof), floor), flag) in plan.iter().zip(roof.iter_mut()).zip(floor.iter_mut()).zip(flags.iter_mut()) {
                 let upper_height = upper.and_then(|cut| cut.height(at));

@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     app::jobs::CancelFlag,
+    i18n::tr,
     model::{
         block_model::BlockBounds,
         drill_hole::DrillColorPreset,
@@ -375,62 +376,72 @@ impl PrismoidGrid {
     pub(crate) fn check(&self) -> Result<()> {
         let lattice = &self.lattice;
         if lattice.columns() == 0 || lattice.rows() == 0 {
-            bail!("has no cells");
+            bail!(tr!("err-prismoid-grid-no-cells"));
         }
         // The tolerances the OMF writer validates an orientation with.
         const THRESHOLD: f64 = 1e-6;
         if [lattice.u, lattice.v].iter().any(|axis| (1.0 - axis.length_squared()).abs() >= THRESHOLD) {
-            bail!("lattice axes are not unit length");
+            bail!(tr!("err-prismoid-grid-axes-not-unit"));
         }
         let direction = |axis: DVec2| if axis.length() == 0.0 { DVec2::ZERO } else { axis / axis.length() };
         if direction(lattice.u).dot(direction(lattice.v)).abs() >= THRESHOLD {
-            bail!("lattice axes are not perpendicular");
+            bail!(tr!("err-prismoid-grid-axes-not-square"));
         }
         if lattice.u.perp_dot(lattice.v) <= 0.0 {
-            bail!("lattice is not right-handed");
+            bail!(tr!("err-prismoid-grid-not-right-handed"));
         }
         if !lattice.u_sizes.iter().chain(&lattice.v_sizes).all(|size| size.is_finite() && *size > 0.0) {
-            bail!("has a cell size that is not finite and positive");
+            bail!(tr!("err-prismoid-grid-cell-size"));
         }
         let corners = lattice.corner_count();
         if self.roof.len() != corners || self.floor.len() != corners {
-            bail!("has {} roof and {} floor heights for {corners} corners", self.roof.len(), self.floor.len());
+            bail!(tr!(
+                "err-prismoid-grid-height-count",
+                roof = self.roof.len().to_string(),
+                floor = self.floor.len().to_string(),
+                corners = corners.to_string()
+            ));
         }
         if !self.roof.iter().chain(&self.floor).all(|height| height.is_finite()) {
-            bail!("has a height that is not finite");
+            bail!(tr!("err-prismoid-grid-height-not-finite"));
         }
         if let Some(corner) = self.roof.iter().zip(&self.floor).position(|(roof, floor)| roof < floor) {
-            bail!("has its floor above its roof at corner {corner}");
+            bail!(tr!("err-prismoid-grid-floor-above-roof", corner = corner.to_string()));
         }
         let cells = lattice.cell_count();
         if self.active.len() != cells {
-            bail!("has {} mask values for {cells} cells", self.active.len());
+            bail!(tr!("err-prismoid-grid-mask-count", count = self.active.len().to_string(), cells = cells.to_string()));
         }
         if self.masked.len() != cells {
-            bail!("has {} hand mask values for {cells} cells", self.masked.len());
+            bail!(tr!("err-prismoid-grid-hand-mask-count", count = self.masked.len().to_string(), cells = cells.to_string()));
         }
         if let Some(cell) = self.active.iter().zip(&self.masked).position(|(active, masked)| *active && *masked) {
-            bail!("has cell {cell} masked by hand and active");
+            bail!(tr!("err-prismoid-grid-masked-and-active", cell = cell.to_string()));
         }
         if let Some(values) = self.cell_values.iter().find(|values| values.values.len() != cells) {
-            bail!("has {} '{}' values for {cells} cells", values.values.len(), values.name);
+            bail!(tr!(
+                "err-prismoid-grid-value-count",
+                count = values.values.len().to_string(),
+                name = values.name.clone(),
+                cells = cells.to_string()
+            ));
         }
         if self.cell_values.iter().any(|values| values.name.trim().is_empty()) {
-            bail!("has values without a name");
+            bail!(tr!("err-prismoid-grid-unnamed-values"));
         }
         if let Some(values) = self
             .cell_values
             .iter()
             .find(|values| RESERVED_NAMES.iter().chain(&CORNER_HEIGHT_COLUMNS).any(|name| same_quality_name(name, &values.name)))
         {
-            bail!("has values under the reserved name '{}'", values.name);
+            bail!(tr!("err-prismoid-grid-reserved-name", name = values.name.clone()));
         }
         let mut names = std::collections::HashSet::new();
         if let Some(values) = self.cell_values.iter().find(|values| !names.insert(quality_key(&values.name))) {
-            bail!("has '{}' values twice", values.name);
+            bail!(tr!("err-prismoid-grid-values-twice", name = values.name.clone()));
         }
         if self.cell_values.iter().filter(|values| values.role == CellValueRole::Density).count() > 1 {
-            bail!("has more than one density");
+            bail!(tr!("err-prismoid-grid-two-densities"));
         }
         Ok(())
     }

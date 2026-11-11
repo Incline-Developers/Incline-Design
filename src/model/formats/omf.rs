@@ -590,7 +590,7 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
     if let Some(design) = snapshot.designs.as_ref()
         && design.metadata.modelling != ModellingSettings::default()
     {
-        let settings = serde_json::to_value(design.metadata.modelling).context("write modelling settings")?;
+        let settings = serde_json::to_value(design.metadata.modelling).with_context(|| tr!("err-omf-encode-modelling"))?;
         project.metadata.insert(META_MODELLING.to_owned(), settings);
     }
     if let Some(optimization) = &snapshot.optimization {
@@ -1413,7 +1413,7 @@ fn write_prismoid_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
     use omf_crate::{Attribute, Element, GridSurface, Location, Orient2, Surface};
 
     let grid = &open.grid;
-    grid.check().with_context(|| format!("Prismoid grid '{}'", open.name))?;
+    grid.check().with_context(|| tr!("err-omf-prismoid-grid", name = open.name.clone()))?;
     let lattice = &grid.lattice;
     let horizontal = |plan: DVec2| [plan.x, plan.y, 0.0];
     let orient = Orient2::new(horizontal(lattice.origin), horizontal(lattice.u), horizontal(lattice.v));
@@ -3705,23 +3705,23 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     fn read_prismoid_grid(&mut self, element: &omf_crate::Element) -> Result<LoadedPrismoidGrid> {
         let name = element_name(element);
         let omf_crate::Geometry::Composite(composite) = &element.geometry else {
-            bail!("Prismoid grid '{name}' is not a composite");
+            bail!(tr!("err-omf-prismoid-not-composite", name = name.to_string()));
         };
         let part = |part_kind: &str| composite.elements.iter().find(|child| kind(child) == Some(part_kind));
         let (Some(roof), Some(floor)) = (part("prismoid_roof"), part("prismoid_floor")) else {
-            bail!("Prismoid grid '{name}' is missing its roof or floor");
+            bail!(tr!("err-omf-prismoid-no-roof-floor", name = name.to_string()));
         };
         let (omf_crate::Geometry::GridSurface(roof_surface), omf_crate::Geometry::GridSurface(floor_surface)) = (&roof.geometry, &floor.geometry) else {
-            bail!("Roof and floor of prismoid grid '{name}' are not grid surfaces");
+            bail!(tr!("err-omf-prismoid-not-grid-surfaces", name = name.to_string()));
         };
         let (sizes, roof_heights) = self.grid_surface_heights(roof, roof_surface)?;
         let (floor_sizes, floor_heights) = self.grid_surface_heights(floor, floor_surface)?;
         let orient = roof_surface.orient;
         if orient != floor_surface.orient || sizes != floor_sizes {
-            bail!("Roof and floor of prismoid grid '{name}' are not on the same lattice");
+            bail!(tr!("err-omf-prismoid-lattices-differ", name = name.to_string()));
         }
         if orient.u[2].abs() > 1e-9 || orient.v[2].abs() > 1e-9 {
-            bail!("Prismoid grid '{name}' is not on a horizontal lattice");
+            bail!(tr!("err-omf-prismoid-not-horizontal", name = name.to_string()));
         }
         // Heights are elevations above the orient's plane.
         let base = self.project_origin + DVec3::from_array(orient.origin);
@@ -3739,14 +3739,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         for attribute in roof.attributes.iter().filter(|attribute| attribute.location == omf_crate::Location::Primitives) {
             match &attribute.data {
                 omf_crate::AttributeData::Boolean { values } if attribute.name == "active" => {
-                    ensure_items(values.item_count(), "cell mask values")?;
+                    ensure_items(values.item_count(), &tr!("err-omf-items-cell-mask"))?;
                     active = collect_results(self.reader.array_booleans(values)?)?
                         .into_iter()
                         .map(|value| value.unwrap_or(true))
                         .collect();
                 }
                 omf_crate::AttributeData::Boolean { values } if attribute.name == "masked" => {
-                    ensure_items(values.item_count(), "cell mask values")?;
+                    ensure_items(values.item_count(), &tr!("err-omf-items-cell-mask"))?;
                     masked = collect_results(self.reader.array_booleans(values)?)?
                         .into_iter()
                         .map(|value| value.unwrap_or(false))
@@ -3773,7 +3773,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             masked,
             cell_values,
         };
-        grid.check().with_context(|| format!("Prismoid grid '{name}'"))?;
+        grid.check().with_context(|| tr!("err-omf-prismoid-grid", name = name.to_string()))?;
         let style = element.metadata.get(META_STYLE);
         let stratum = element.metadata.get(META_STRATUM).map(|record| Stratum::deserialize(record).ok().filter(Stratum::is_whole));
         if let Some(None) = stratum {

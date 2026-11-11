@@ -668,17 +668,18 @@ impl<'a> App<'a> {
         self.begin_run(&label, jobs.iter().map(|job| job.ids.len()).sum(), jobs.len());
         let compute = move |cancel: &CancelFlag, progress: &Progress| {
             let cleaned = compute_clean(&jobs, &|| cancel.is_cancelled(), &|done, total| progress.set_items(done as u64, total as u64))
-                .map_err(|_| anyhow::anyhow!("{}", tr!("common-cancelled")))?;
+                .map_err(|_| anyhow::Error::new(crate::app::jobs::Cancelled))?;
             Ok((jobs, cleaned))
         };
         let run_label = label.clone();
         let apply = move |app: &mut App, result: anyhow::Result<(Vec<LayerJob>, Vec<Option<LayerClean>>)>| {
             let (jobs, cleaned) = match result {
                 Ok(done) => done,
-                Err(error) => {
+                Err(error) if !crate::app::jobs::is_cancelled(&error) => {
                     userspace_error!("{}: {error:#}", run_label);
                     return;
                 }
+                Err(_) => return,
             };
             let Some(project) = app.workspace.active_project_mut().filter(|project| project.runtime_id == runtime_id) else {
                 return;
@@ -726,17 +727,18 @@ impl<'a> App<'a> {
         self.begin_run(&label, with_at.iter().map(|(job, _)| job.ids.len()).sum(), with_at.len());
         let compute = move |cancel: &CancelFlag, progress: &Progress| {
             let joined = compute_join(&with_at, &|| cancel.is_cancelled(), &|done, total| progress.set_items(done as u64, total as u64))
-                .map_err(|_| anyhow::anyhow!("{}", tr!("common-cancelled")))?;
+                .map_err(|_| anyhow::Error::new(crate::app::jobs::Cancelled))?;
             Ok((with_at, joined))
         };
         let run_label = label.clone();
         let apply = move |app: &mut App, result: anyhow::Result<(Vec<JoinJob>, Vec<Option<string_clean::LayerJoin>>)>| {
             let (with_at, joined) = match result {
                 Ok(done) => done,
-                Err(error) => {
+                Err(error) if !crate::app::jobs::is_cancelled(&error) => {
                     userspace_error!("{}: {error:#}", run_label);
                     return;
                 }
+                Err(_) => return,
             };
             if app.workspace.active_project().is_none_or(|project| project.runtime_id != runtime_id) {
                 return;

@@ -573,7 +573,7 @@ impl<'a> App<'a> {
         let envelope = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
         let compute = move |cancel: &crate::app::jobs::CancelFlag, _: &crate::model::progress::Progress| -> Result<LoadedBlockModel> {
             if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             prismoid_block_model(&grid, &named, &label, name, envelope.as_ref())
         };
@@ -595,7 +595,7 @@ impl<'a> App<'a> {
                 }
                 app.add_loaded_block_model(loaded);
             }
-            Err(error) if error.to_string() != "Cancelled" => {
+            Err(error) if !crate::app::jobs::is_cancelled(&error) => {
                 userspace_warn!("{}", tr!("cmd-block-model-could-not-create-block-model", error = format!("{error:#}")))
             }
             Err(_) => {}

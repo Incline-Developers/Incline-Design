@@ -352,7 +352,8 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            Err(error) => crate::userspace_error!("{}", tr!("cmd-thickness-points-failed", error = format!("{error:#}"))),
+            Err(error) if !crate::app::jobs::is_cancelled(&error) => crate::userspace_error!("{}", tr!("cmd-thickness-points-failed", error = format!("{error:#}"))),
+            Err(_) => {}
         };
         self.spawn_job(tr!("cmd-thickness-points-making"), vec![project_key], compute, apply);
         Ok(())
@@ -795,8 +796,7 @@ impl<'a> App<'a> {
             let mut grid = seam::seam_grid(&fit, side, &samples, cancel, progress)?;
             let spacing = fit.spacing();
             let (vertices, faces) = (std::mem::take(&mut grid.vertices), std::mem::take(&mut grid.faces));
-            let generated =
-                super::triangulation::session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
+            let generated = super::triangulation::session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, |_| Vec::new())?;
             Ok((generated, grid, spacing))
         };
         let apply = move |app: &mut App, result: Result<(GeneratedTriangulation, SeamGrid, f64)>| match result {
@@ -833,7 +833,8 @@ impl<'a> App<'a> {
                     app.session.seam_tables.insert(id, table);
                 }
             }
-            Err(error) => crate::userspace_error!("{}", tr!("cmd-seam-surface-failed", error = format!("{error:#}"))),
+            Err(error) if !crate::app::jobs::is_cancelled(&error) => crate::userspace_error!("{}", tr!("cmd-seam-surface-failed", error = format!("{error:#}"))),
+            Err(_) => {}
         };
         self.spawn_job_reporting_progress(tr!("cmd-seam-surface-making"), vec![project_key], compute, apply);
         Ok(())

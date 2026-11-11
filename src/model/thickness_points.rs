@@ -280,7 +280,7 @@ pub(crate) fn thickness_points(intercepts: Vec<Intercept>, reference: &GridSurfa
     let mut run = ThicknessRun::default();
     for (index, intercept) in intercepts.into_iter().enumerate() {
         if index % 256 == 0 && cancel.is_cancelled() {
-            anyhow::bail!("{}", tr!("common-cancelled"));
+            anyhow::bail!(crate::app::jobs::Cancelled);
         }
         let Intercept { source, roof, floor, repeated } = intercept;
         let reason = match floor {
@@ -459,7 +459,7 @@ pub(crate) fn misfit_at_holes(
     let mut tick = || -> anyhow::Result<()> {
         items += 1;
         if items % 256 == 0 && cancel.is_cancelled() {
-            anyhow::bail!("{}", tr!("common-cancelled"));
+            anyhow::bail!(crate::app::jobs::Cancelled);
         }
         Ok(())
     };

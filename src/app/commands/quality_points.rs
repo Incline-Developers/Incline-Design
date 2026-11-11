@@ -60,13 +60,14 @@ impl App<'_> {
             move |cancel, _| {
                 let bytes = read()?;
                 if cancel.is_cancelled() {
-                    anyhow::bail!("Cancelled");
+                    anyhow::bail!(crate::app::jobs::Cancelled);
                 }
                 Ok(csv_quality_points::parse(&bytes, &mapping)?)
             },
             move |app, result| match result {
                 Ok(parsed) => app.add_quality_points(runtime_id, &file, &parsed),
-                Err(error) => userspace_warn!("{error:#}"),
+                Err(error) if !crate::app::jobs::is_cancelled(&error) => userspace_warn!("{error:#}"),
+                Err(_) => {}
             },
         );
         Ok(())

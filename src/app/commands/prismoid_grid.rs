@@ -48,7 +48,7 @@ use crate::{
         rbf::NODE_BUDGET,
         solid_reserves::NumericTotal,
         spatial::TriangleBvh,
-        triangulation::{GeneratedTriangulationLog, OpenTriangulation, QualityMark, TriangulationId, same_quality_name, spatial_surface_face_order, unique_edges, unit_label},
+        triangulation::{GeneratedTriangulationLog, OpenTriangulation, QualityMark, TriangulationId, same_quality_name, spatial_surface_face_order, unit_label},
     },
     rendering::{
         camera::SectionSlab,
@@ -132,7 +132,8 @@ impl App<'_> {
             }
         };
         let apply = move |app: &mut App, result: Result<Result<PrismoidBuild>>| match result {
-            Err(refusal) => userspace_warn!("{refusal:#}"),
+            Err(refusal) if !crate::app::jobs::is_cancelled(&refusal) => userspace_warn!("{refusal:#}"),
+            Err(_) => {}
             Ok(Err(fault)) => userspace_error!("{fault:#}"),
             Ok(Ok(PrismoidBuild { grid, crossed, holes })) => {
                 let id = app.insert_prismoid_grid(name, grid, section);
@@ -187,7 +188,7 @@ impl App<'_> {
             match build_strata(&grids, step, envelope.as_ref(), cancel, &progress.phase(0.0, 1.0)) {
                 Ok(built) => Ok(Ok(built)),
                 Err((index, BuildRefusal::Malformed(error))) => Ok(Err(error.context(words.intervals[index].clone()))),
-                Err((_, BuildRefusal::Cancelled)) => anyhow::bail!("{}", tr!("common-cancelled")),
+                Err((_, BuildRefusal::Cancelled)) => anyhow::bail!(crate::app::jobs::Cancelled),
                 Err((index, refusal)) => {
                     let reason = refusal_words(refusal, &surfaces[index], &surfaces[index + 1], size, envelope.as_ref());
                     anyhow::bail!(
@@ -209,10 +210,11 @@ impl App<'_> {
                     userspace_error!("{fault:#}");
                     return;
                 }
-                Err(refusal) => {
+                Err(refusal) if !crate::app::jobs::is_cancelled(&refusal) => {
                     userspace_warn!("{refusal:#}");
                     return;
                 }
+                Err(_) => return,
             };
             let count = built.len();
             for (index, _) in built.iter().enumerate().filter(|(_, build)| build.is_none()) {
@@ -361,10 +363,11 @@ impl App<'_> {
     fn replace_prismoid_values(&mut self, runtime_id: u32, grid_id: PrismoidGridId, name: &str, source: &Arc<PrismoidGrid>, result: Result<(PrismoidGrid, Vec<String>)>) {
         let (merged, lines) = match result {
             Ok(added) => added,
-            Err(refusal) => {
+            Err(refusal) if !crate::app::jobs::is_cancelled(&refusal) => {
                 userspace_warn!("{refusal:#}");
                 return;
             }
+            Err(_) => return,
         };
         let current = self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id);
         let Some(item) = self.prismoid_grids.iter().find(|item| item.id == grid_id).filter(|_| current) else {
@@ -482,11 +485,11 @@ impl App<'_> {
         let contoured = quantity.clone();
         let compute = move |cancel: &CancelFlag, _: &Progress| -> Result<GeneratedTriangulationLog> {
             if cancel.is_cancelled() {
-                anyhow::bail!("{}", tr!("common-cancelled"));
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             let (vertices, faces) = grid.value_mesh(index).ok_or_else(|| no_value_surface(&grid_name, &quantity))?;
             let nodes = vertices.len();
-            let generated = build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, unique_edges)?.with_quality(Some(mark));
+            let generated = build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, |_| Vec::new())?.with_quality(Some(mark));
             let message = tr!(
                 "cmd-prismoid-grid-surface-made",
                 name = label,
@@ -544,9 +547,10 @@ impl App<'_> {
         let compute = move |cancel: &CancelFlag, progress: &Progress| compute(&grid, cancel, progress);
         let apply = move |app: &mut App, result: Result<Option<MaskedGrid>>| match result {
             Ok(changed) => app.replace_prismoid_mask(runtime_id, grid_id, &name, &source, changed, mask),
-            Err(refusal) => {
+            Err(refusal) if !crate::app::jobs::is_cancelled(&refusal) => {
                 userspace_warn!("{refusal:#}");
             }
+            Err(_) => {}
         };
         self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-masking"), vec![JobKey::PrismoidGrid(grid_id)], compute, apply);
     }
@@ -616,7 +620,7 @@ impl App<'_> {
         let (source, name) = (Arc::clone(&item.grid), item.name.clone());
         let ring = mask_ring(self.scene_document.get_object(polyline_id).and_then(Object::closed_boundary))?;
         self.spawn_mask_edit(runtime_id, grid_id, name, source, true, move |grid, cancel, progress| {
-            let cells = cells_by_ring(grid, &ring, mode, cancel, &progress.phase(0.0, 1.0)).ok_or_else(|| anyhow::anyhow!("{}", tr!("common-cancelled")))?;
+            let cells = cells_by_ring(grid, &ring, mode, cancel, &progress.phase(0.0, 1.0)).ok_or(crate::app::jobs::Cancelled)?;
             Ok(mask_cells(grid, cells, true))
         });
         Ok(())
@@ -892,7 +896,7 @@ impl App<'_> {
             let phase = progress.phase(0.0, 1.0);
             let proceed = || -> Result<()> {
                 if cancel.is_cancelled() {
-                    anyhow::bail!("{}", tr!("common-cancelled"));
+                    anyhow::bail!(crate::app::jobs::Cancelled);
                 }
                 Ok(())
             };
@@ -932,10 +936,11 @@ impl App<'_> {
                 app.invalidate_topology_bounds_and_redraw();
             }
             // A second try would meet the same fault, every frame.
-            Err(fault) => {
+            Err(fault) if !crate::app::jobs::is_cancelled(&fault) => {
                 app.prismoid_refused.insert(id);
                 userspace_error!("{fault:#}");
             }
+            Err(_) => {}
         };
         self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-preparing"), vec![JobKey::PrismoidGrid(id)], compute, apply);
     }
@@ -1538,7 +1543,7 @@ fn add_qualities(grid: &PrismoidGrid, grid_name: &str, inputs: Vec<QualityInput>
     for (done, input) in inputs.into_iter().enumerate() {
         let read = grid
             .read_cells(&QualitySurface::read(input.mesh, input.spatial), cancel)
-            .ok_or_else(|| anyhow::anyhow!("{}", tr!("common-cancelled")))?;
+            .ok_or(crate::app::jobs::Cancelled)?;
         let (quality, surface, cells, missing) = (input.mark.label(), input.surface.clone(), read.read.to_string(), read.missing.to_string());
         lines.push(match read.reading {
             CellReading::Corners => tr!("cmd-prismoid-grid-quality-corners", quality = quality, surface = surface, read = cells, missing = missing),
@@ -1597,7 +1602,7 @@ fn no_difference(grid: &str, other: &str, quantity: &str) -> anyhow::Error {
 /// their cell sizes.
 fn difference_refusal_words(refusal: DifferenceRefusal, grid: &PrismoidGrid, other: &PrismoidGrid, grid_name: &str, other_name: &str) -> anyhow::Error {
     let words = match refusal {
-        DifferenceRefusal::Cancelled => tr!("common-cancelled"),
+        DifferenceRefusal::Cancelled => return anyhow::Error::new(crate::app::jobs::Cancelled),
         DifferenceRefusal::NotOneLattice => tr!(
             "cmd-prismoid-grid-difference-lattices",
             grid = grid_name.to_owned(),
@@ -1704,7 +1709,7 @@ fn refusal_words(refusal: BuildRefusal, roof: &str, floor: &str, size: f64, enve
     let (roof, floor) = (roof.to_string(), floor.to_string());
     let words = match refusal {
         BuildRefusal::Malformed(error) => return error,
-        BuildRefusal::Cancelled => tr!("common-cancelled"),
+        BuildRefusal::Cancelled => return anyhow::Error::new(crate::app::jobs::Cancelled),
         BuildRefusal::NotOneLattice => tr!("cmd-prismoid-grid-not-one-lattice", roof = roof, floor = floor),
         BuildRefusal::NoOverlap => tr!("cmd-prismoid-grid-no-overlap", roof = roof, floor = floor),
         BuildRefusal::CellTooLarge => tr!("cmd-prismoid-grid-cell-too-large", roof = roof, floor = floor, size = cell_size(size)),

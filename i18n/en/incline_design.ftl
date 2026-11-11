@@ -5449,6 +5449,7 @@ err-file-desc-drillhole-csv = drillhole CSV
 err-file-desc-block-model-csv = block model CSV
 err-file-desc-haul-roads = haul roads file
 err-file-desc-schedule-report = schedule report
+err-file-desc-corrections-worksheet = corrections worksheet
 err-file-create-folder = Could not create { $path }
 err-file-read-failed = Could not read { $path }
 err-file-save-project-failed = Could not save the project to { $path }
@@ -5621,6 +5622,7 @@ err-cloud-label-joined-classes = the joined point cloud classifications
 err-omf-nothing-to-export = There is no open Incline Design data to export
 err-omf-create-writer = Could not create the OMF writer
 err-omf-encode-optimisation = Could not encode the optimisation scenarios
+err-omf-encode-modelling = Could not encode the modelling settings
 err-omf-finish-project = Could not finish writing the project
 err-omf-schedule-format-unsupported = The schedule format { $found } is not read by this version, which reads { $supported }. Scheduling is in development and keeps no backwards compatibility
 err-omf-schedule-format-unstated = unstated
@@ -5708,6 +5710,31 @@ err-omf-items-regular-subblocks = regular sub-blocks
 err-omf-items-texcoords = texture coordinates
 err-omf-items-vertices = vertices
 err-omf-items-number-values = number values
+err-omf-items-cell-mask = cell mask values
+err-omf-prismoid-not-composite = Prismoid grid '{ $name }' is not a composite
+err-omf-prismoid-no-roof-floor = Prismoid grid '{ $name }' is missing its roof or floor
+err-omf-prismoid-not-grid-surfaces = Roof and floor of prismoid grid '{ $name }' are not grid surfaces
+err-omf-prismoid-lattices-differ = Roof and floor of prismoid grid '{ $name }' are not on the same lattice
+err-omf-prismoid-not-horizontal = Prismoid grid '{ $name }' is not on a horizontal lattice
+err-omf-prismoid-grid = Prismoid grid '{ $name }'
+
+# src/model/prismoid_grid.rs
+err-prismoid-grid-no-cells = has no cells
+err-prismoid-grid-axes-not-unit = lattice axes are not unit length
+err-prismoid-grid-axes-not-square = lattice axes are not perpendicular
+err-prismoid-grid-not-right-handed = lattice is not right-handed
+err-prismoid-grid-cell-size = has a cell size that is not finite and positive
+err-prismoid-grid-height-count = has { $roof } roof and { $floor } floor heights for { $corners } corners
+err-prismoid-grid-height-not-finite = has a height that is not finite
+err-prismoid-grid-floor-above-roof = has its floor above its roof at corner { $corner }
+err-prismoid-grid-mask-count = has { $count } mask values for { $cells } cells
+err-prismoid-grid-hand-mask-count = has { $count } hand mask values for { $cells } cells
+err-prismoid-grid-masked-and-active = has cell { $cell } masked by hand and active
+err-prismoid-grid-value-count = has { $count } '{ $name }' values for { $cells } cells
+err-prismoid-grid-unnamed-values = has values without a name
+err-prismoid-grid-reserved-name = has values under the reserved name '{ $name }'
+err-prismoid-grid-values-twice = has '{ $name }' values twice
+err-prismoid-grid-two-densities = has more than one density
 
 # src/model/project.rs
 err-store-project-format-version = Unsupported legacy design format version { $found } (expected { $expected })

@@ -1049,7 +1049,7 @@ impl<'a> App<'a> {
                     let tables = crate::model::formats::csv_drill_hole::write_worksheet(dataset);
                     vec![tables.worksheet, tables.corrections]
                 },
-                "corrections worksheet".to_owned(),
+                tr!("err-file-desc-corrections-worksheet"),
                 |error| userspace_warn!("{}", tr!("cmd-file-worksheet-export-failed-error", error = format!("{error:#}"))),
             ),
             #[cfg(target_arch = "wasm32")]
@@ -2085,7 +2085,7 @@ impl<'a> App<'a> {
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel| {
                 if cancel.is_cancelled() {
-                    anyhow::bail!("Cancelled");
+                    anyhow::bail!(crate::app::jobs::Cancelled);
                 }
                 let crate::model::OpenItem::DrillHole(item) = crate::model::OpenItem::DrillHole(Box::new(snapshot)).materialize()? else {
                     unreachable!()
