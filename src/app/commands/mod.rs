@@ -205,7 +205,8 @@ impl<'a> App<'a> {
                 | UiCommand::ExecuteBuildPrismoidGrid { .. }
                 | UiCommand::OpenBuildStrata
                 | UiCommand::ExecuteBuildStrata { .. }
-                | UiCommand::CreateBlockModelFromPrismoidGrid
+                | UiCommand::OpenCreateBlockModelFromPrismoidGrid
+                | UiCommand::CreateBlockModelFromPrismoidGrid(_)
                 | UiCommand::OpenAddPrismoidQualities
                 | UiCommand::ExecuteAddPrismoidQualities { .. }
                 | UiCommand::OpenPrismoidGridToSurface
@@ -1826,12 +1827,11 @@ impl<'a> App<'a> {
                 self.set_prismoid_grid_color_by(id, |color_by| color_by.preset = preset);
                 Ok(())
             }
-            UiCommand::CreateBlockModelFromPrismoidGrid => {
-                let selected = self.selected_prismoid_grids();
-                let [grid_id] = selected[..] else {
-                    userspace_warn!("{}", tr!("cmd-commands-select-one-loaded-prismoid-grid"));
-                    return Ok(());
-                };
+            UiCommand::OpenCreateBlockModelFromPrismoidGrid => {
+                self.open_prismoid_block_model();
+                Ok(())
+            }
+            UiCommand::CreateBlockModelFromPrismoidGrid(grid_id) => {
                 let too_fine = self
                     .prismoid_grids
                     .iter()
@@ -1849,18 +1849,14 @@ impl<'a> App<'a> {
                     );
                     return Ok(());
                 }
-                self.create_block_model_from_prismoid_grid(grid_id)
+                let result = self.create_block_model_from_prismoid_grid(grid_id);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_block_open = false;
+                }
+                result
             }
             UiCommand::OpenAddPrismoidQualities => {
-                let selected = self.selected_prismoid_grids();
-                let [grid_id] = selected[..] else {
-                    userspace_warn!("{}", tr!("cmd-commands-select-one-loaded-prismoid-grid-qualities"));
-                    return Ok(());
-                };
-                self.editor.tri_prismoid_qualities_open = true;
-                self.editor.tri_prismoid_qualities_grid = Some(grid_id);
-                self.editor.tri_prismoid_qualities_ticked.clear();
-                self.editor.tri_prismoid_qualities_density = None;
+                self.open_add_prismoid_qualities();
                 Ok(())
             }
             UiCommand::ExecuteAddPrismoidQualities { grid, surfaces, density } => {
@@ -1871,16 +1867,7 @@ impl<'a> App<'a> {
                 result
             }
             UiCommand::OpenPrismoidGridToSurface => {
-                let selected = self.selected_prismoid_grids();
-                let [grid_id] = selected[..] else {
-                    userspace_warn!("{}", tr!("ws-menubar-modelling-select-prismoid-grid"));
-                    return Ok(());
-                };
-                self.editor.tri_prismoid_surface_open = true;
-                self.editor.tri_prismoid_surface_grid = Some(grid_id);
-                self.editor.tri_prismoid_surface_value = None;
-                self.editor.tri_prismoid_surface_name_input.clear();
-                self.editor.tri_prismoid_surface_name_auto = true;
+                self.open_prismoid_grid_surface();
                 Ok(())
             }
             UiCommand::ExecutePrismoidGridToSurface { grid, value, name } => {
@@ -1891,21 +1878,7 @@ impl<'a> App<'a> {
                 result
             }
             UiCommand::OpenDifferencePrismoidGrids => {
-                let selected = self.selected_prismoid_grids();
-                let (grid, other) = match selected[..] {
-                    [grid] => (Some(grid), None),
-                    [grid, other] => (Some(grid), Some(other)),
-                    _ => {
-                        userspace_warn!("{}", tr!("ws-menubar-modelling-select-prismoid-grids"));
-                        return Ok(());
-                    }
-                };
-                self.editor.tri_prismoid_difference_open = true;
-                self.editor.tri_prismoid_difference_grid = grid;
-                self.editor.tri_prismoid_difference_other = other;
-                self.editor.tri_prismoid_difference_value = None;
-                self.editor.tri_prismoid_difference_name_input.clear();
-                self.editor.tri_prismoid_difference_name_auto = true;
+                self.open_difference_prismoid_grids();
                 Ok(())
             }
             UiCommand::ExecuteDifferencePrismoidGrids { grid, other, value, name } => {
@@ -1936,24 +1909,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::OpenMaskPrismoidGridByPolyline => {
-                // A grid and a polyline: two kinds, so the selection names
-                // both, as the polyline cut takes its surface and boundary.
-                let selected = self.selected_prismoid_grids();
-                let ([grid_id], Some(polyline_id)) = (&selected[..], self.selected_clip_boundary()) else {
-                    userspace_warn!("{}", tr!("cmd-commands-select-one-prismoid-grid-polyline"));
-                    return Ok(());
-                };
-                let boundary_name = self
-                    .scene_document
-                    .get_object(polyline_id)
-                    .and_then(|object| self.scene_document.layer(object.layer()))
-                    .map(|layer| tr!("common-polyline-layer", layer = layer.name.to_string()))
-                    .unwrap_or_else(|| tr!("common-polyline"));
-                self.editor.tri_prismoid_mask_open = true;
-                self.editor.tri_prismoid_mask_grid = Some(*grid_id);
-                self.editor.tri_prismoid_mask_object_id = Some(polyline_id);
-                self.editor.tri_prismoid_mask_object_name = boundary_name;
-                self.editor.tri_prismoid_mask_mode = crate::ui::state::TriPolylineClipMode::KeepInside;
+                self.open_mask_prismoid_grid();
                 Ok(())
             }
             UiCommand::ExecuteMaskPrismoidGridByPolyline { grid, polyline_id, mode } => {

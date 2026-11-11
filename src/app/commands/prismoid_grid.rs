@@ -59,7 +59,7 @@ use crate::{
             section_surface_lines::{SECTION_FILL_DEPTH_TIE_M, SectionCellsOfGrid},
         },
     },
-    ui::state::{CellSelection, EditorState, InspectorRow, InspectorRows, SelectionMode, TriPolylineClipMode, TriSurfaceType, Workspace},
+    ui::state::{CellSelection, EditorState, InspectorRow, InspectorRows, SelectionMode, SelectionPickTool, TriPolylineClipMode, TriSurfaceType, Workspace},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -514,12 +514,14 @@ impl App<'_> {
 
     /// Mask the selected prismoids by hand as one undoable step, or unmask
     /// them when every one is masked by hand; a mixed selection masks its
-    /// active cells.
+    /// active cells. With none selected the viewport picks them first, and
+    /// the pick's Done comes back here.
     pub(crate) fn toggle_prismoid_mask(&mut self) {
         let Some(runtime_id) = self.workspace.active_project().map(|project| project.runtime_id) else {
             return;
         };
         let Some(selection) = &self.editor.cell_selection else {
+            self.begin_selection_pick(SelectionPickTool::MaskPrismoids);
             return;
         };
         let SceneEntityId::PrismoidGrid(id) = selection.entity else {
@@ -741,15 +743,7 @@ impl App<'_> {
             .take()
             .filter(|selection| selection.entity == entity && Arc::ptr_eq(&selection.grid, &grid));
         let (mut cells, count) = held.map_or_else(|| (vec![false; grid.lattice.cell_count()], 0), |selection| (selection.cells, selection.count));
-        let mode = if self.modifiers.shift_key() {
-            SelectionMode::Toggle
-        } else if self.modifiers.control_key() {
-            SelectionMode::Add
-        } else if cells[cell] {
-            SelectionMode::Toggle
-        } else {
-            SelectionMode::Replace
-        };
+        let mode = cell_click_mode(self.modifiers.shift_key(), self.modifiers.control_key(), self.editor.selection_pick.is_some(), cells[cell]);
         let count = apply_cell_pick(&mut cells, count, cell, mode);
         let item_mode = match mode {
             SelectionMode::Replace => Some(SelectionMode::Replace),
@@ -797,9 +791,10 @@ impl App<'_> {
 
     /// Apply a marquee to the cell selection after Leo's box has applied its
     /// own, in its modifier order: shift toggles each cell taken, ctrl adds,
-    /// a plain box replaces. The grid is selected while any of its cells is.
+    /// as a plain box does during a tool's pick, and otherwise a plain box
+    /// replaces. The grid is selected while any of its cells is.
     pub(crate) fn select_prismoid_cells_in_box(&mut self, start: (f32, f32), end: (f32, f32)) {
-        let (toggle, add) = (self.modifiers.shift_key(), self.modifiers.control_key());
+        let (toggle, add) = (self.modifiers.shift_key(), self.modifiers.control_key() || self.editor.selection_pick.is_some());
         let Some((id, taken)) = self.prismoid_cells_in_screen_rect(start, end, toggle || add) else {
             return;
         };
@@ -1121,6 +1116,22 @@ fn section_colors(item: &OpenPrismoidGrid, crossing: &SectionCrossing) -> Vec<[f
             None => flat,
         },
         None => crossing.points.iter().map(|point| ramp(point.roof - point.floor)).collect(),
+    }
+}
+
+/// How a click on a prismoid, `selected` or not, picks it, by the canvas's
+/// rule: shift toggles, as any click does while a tool's pick builds its
+/// set; ctrl adds; a plain click toggles a selected prismoid and replaces
+/// the set with an unselected one.
+fn cell_click_mode(shift: bool, control: bool, picking: bool, selected: bool) -> SelectionMode {
+    if shift || picking {
+        SelectionMode::Toggle
+    } else if control {
+        SelectionMode::Add
+    } else if selected {
+        SelectionMode::Toggle
+    } else {
+        SelectionMode::Replace
     }
 }
 

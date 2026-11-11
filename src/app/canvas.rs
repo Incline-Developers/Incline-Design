@@ -22,22 +22,15 @@ impl<'a> App<'a> {
             return;
         }
 
-        // The clip tool's boundary: only a closed polyline is taken, and a
-        // click on anything else leaves the pick waiting.
-        if self.editor.triangulation_pick_target.is_some_and(TriangulationPickTarget::picks_boundary) {
+        // A tool's boundary: only a closed polyline is taken, and a click on
+        // anything else leaves the pick waiting.
+        if let Some(target) = self.editor.triangulation_pick_target.filter(|target| target.picks_boundary()) {
             let picked = self
                 .graphics
                 .as_ref()
                 .and_then(|graphics| graphics.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.pick_frozen, self.editor.xray_enabled));
-            if let Some((SceneEntityId::Object(id), _)) = picked
-                && let Some(object) = self.scene_document.get_object(id)
-                && object.encloses_area()
-            {
-                let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.to_string());
-                self.editor.tri_cut_poly_object_id = Some(id);
-                self.editor.tri_cut_poly_object_name = layer.map_or_else(|| tr!("common-polyline"), |layer| tr!("common-polyline-layer", layer = layer));
-                self.editor.cancel_triangulation_pick();
-                self.invalidate_geometry();
+            if let Some((SceneEntityId::Object(id), _)) = picked {
+                self.apply_boundary_pick(target, id);
             }
             return;
         }
@@ -219,6 +212,24 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Take `id` as the boundary of the tool `target` picks for, if it
+    /// encloses an area; otherwise the pick waits.
+    fn apply_boundary_pick(&mut self, target: TriangulationPickTarget, id: crate::model::ObjectId) {
+        if !self.scene_document.get_object(id).is_some_and(Object::encloses_area) {
+            return;
+        }
+        let name = self.boundary_name(id);
+        if target == TriangulationPickTarget::PrismoidMaskBoundary {
+            self.editor.tri_prismoid_mask_object_id = Some(id);
+            self.editor.tri_prismoid_mask_object_name = name;
+        } else {
+            self.editor.tri_cut_poly_object_id = Some(id);
+            self.editor.tri_cut_poly_object_name = name;
+        }
+        self.editor.cancel_triangulation_pick();
+        self.invalidate_geometry();
+    }
+
     fn apply_triangulation_field_pick(&mut self, target: TriangulationPickTarget, id: crate::model::triangulation::TriangulationId, name: &str) {
         match target {
             TriangulationPickTarget::TrimTopology => {
@@ -301,7 +312,7 @@ impl<'a> App<'a> {
                 );
             }
             // Not a surface: taken in `begin_select_or_drag`.
-            TriangulationPickTarget::ClipBoundary => {}
+            TriangulationPickTarget::ClipBoundary | TriangulationPickTarget::PrismoidMaskBoundary => {}
             TriangulationPickTarget::ClipSurface => self.set_tool_subject(ToolSubject::ClipSurface(id)),
             TriangulationPickTarget::SliceSurface => self.set_tool_subject(ToolSubject::SliceSurface(id)),
             TriangulationPickTarget::ContourSurface => self.set_tool_subject(ToolSubject::ContourSurface(id)),

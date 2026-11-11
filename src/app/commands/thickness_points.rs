@@ -400,19 +400,10 @@ impl<'a> App<'a> {
         (gathered, missing)
     }
 
-    /// Open Misfit at Holes on the one prismoid grid selected, with any
-    /// holes and quality points selected beside it.
+    /// Open Misfit at Holes on the holes and quality points selected, and
+    /// the one prismoid grid selected if any; or point the open dialog at
+    /// the holes and points, keeping its grid and seam.
     pub(crate) fn open_hole_misfit(&mut self) {
-        let selected = self.selected_prismoid_grids();
-        let item = match selected[..] {
-            [grid] => self.prismoid_grids.iter().find(|item| item.id == grid),
-            _ => None,
-        };
-        let Some(item) = item else {
-            userspace_warn!("{}", tr!("ws-menubar-modelling-select-prismoid-grid"));
-            return;
-        };
-        let (grid, grid_label, category) = (item.id, item.name.clone(), item.category().to_owned());
         let mut holes = Vec::new();
         self.for_each_reference_hole(|hole| holes.push(hole));
         holes.sort_unstable_by_key(|hole| (hole.dataset.0, hole.hole));
@@ -423,16 +414,44 @@ impl<'a> App<'a> {
             let layer = |(_, name, count): &(LayerId, String, usize)| tr!("hole-misfit-qualities-layer", layer = name.clone(), count = count.to_string());
             layers.iter().map(layer).collect::<Vec<_>>().join(", ")
         };
-        let seam = self.misfit_seam(&category, &holes);
+        if let Some(draft) = self.editor.hole_misfit_dialog.as_mut() {
+            draft.holes = holes;
+            draft.quality_points = quality_points;
+            draft.qualities_label = qualities_label;
+            // Read from the holes, so read again.
+            draft.codes = None;
+            return;
+        }
         self.editor.hole_misfit_dialog = Some(HoleMisfitDraft {
-            grid,
-            grid_label,
+            grid: None,
             holes,
             quality_points,
             qualities_label,
-            seam,
+            seam: SeamChoice::default(),
             codes: None,
         });
+        if let Some(id) = super::tool_subject::only(&self.selected_prismoid_grids()) {
+            self.set_misfit_grid(id);
+        }
+    }
+
+    /// The seam is offered afresh from the grid's name.
+    pub(super) fn set_misfit_grid(&mut self, id: PrismoidGridId) {
+        let Some(category) = self
+            .prismoid_grids
+            .iter()
+            .find(|item| item.id == id && item.state.loaded)
+            .map(|item| item.category().to_owned())
+        else {
+            return;
+        };
+        let holes = self.editor.hole_misfit_dialog.as_ref().map(|draft| draft.holes.clone()).unwrap_or_default();
+        let seam = self.misfit_seam(&category, &holes);
+        if let Some(draft) = self.editor.hole_misfit_dialog.as_mut() {
+            draft.grid = Some(id);
+            draft.seam = seam;
+            draft.codes = None;
+        }
     }
 
     /// The selected points on quality-marked layers, and each such layer

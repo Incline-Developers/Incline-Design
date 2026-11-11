@@ -284,6 +284,37 @@ fn loaded_prismoid_grid(project: &UiProjectView, id: Option<PrismoidGridId>) -> 
     id.and_then(|id| project.prismoid_grids.iter().find(|entry| entry.is_loaded && entry.id == id))
 }
 
+/// The prismoid grid a tool works on, from a list of the loaded ones; one
+/// selected when the tool opened is already here. Returns the grid chosen,
+/// for the caller to send to the app.
+pub(crate) fn prismoid_grid_field(
+    ui: &mut egui::Ui,
+    id_source: &'static str,
+    label: impl Into<egui::WidgetText>,
+    current: Option<PrismoidGridId>,
+    help_text: impl Into<egui::WidgetText>,
+    project: &UiProjectView,
+    width: f32,
+) -> Option<PrismoidGridId> {
+    let shown = loaded_prismoid_grid(project, current);
+    let mut value = shown.map(|entry| entry.id);
+    MenuFieldCombo::new(
+        id_source,
+        label,
+        &mut value,
+        shown.map_or_else(|| tr!("tri-select"), |entry| entry.name.clone()),
+        project
+            .prismoid_grids
+            .iter()
+            .filter(|entry| entry.is_loaded)
+            .map(|entry| (Some(entry.id), entry.name.as_str().into())),
+    )
+    .help_text(help_text)
+    .width(width)
+    .show(ui);
+    value.filter(|id| shown.is_none_or(|entry| entry.id != *id))
+}
+
 pub(crate) fn draw_triangulation_pick_prompt(ui: &mut egui::Ui, editor: &mut EditorState) {
     let Some(target) = editor.triangulation_pick_target else {
         return;
@@ -1369,8 +1400,8 @@ pub(crate) fn draw_build_strata_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
     }
 }
 
-/// Add Qualities: the quality surfaces read into the prismoid grid selected
-/// at open, each ticked by hand, and the ticked one chosen as its density.
+/// Add Qualities: the prismoid grid, the quality surfaces read into it, each
+/// ticked by hand, and the ticked one chosen as its density.
 pub(crate) fn draw_add_prismoid_qualities_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     if !editor.tri_prismoid_qualities_open {
         return;
@@ -1391,14 +1422,17 @@ pub(crate) fn draw_add_prismoid_qualities_dialog(ui: &mut egui::Ui, editor: &mut
             editor.tri_prismoid_qualities_ticked.retain(|id| marked.iter().any(|(entry, _)| entry.id == *id));
 
             tool_help_panel(ui, tr!("tri-add-prismoid-qualities-help"));
-            let grid_name = grid.map_or_else(|| tr!("tri-no-prismoid-grid-selected"), |grid| grid.name.clone());
-            selected_source_field(
+            if let Some(id) = prismoid_grid_field(
                 ui,
+                "add_prismoid_qualities_grid",
                 tr!("common-prismoid-grid"),
-                grid_name,
+                editor.tri_prismoid_qualities_grid,
                 tr!("tri-prismoid-qualities-grid-help"),
+                project,
                 picker_control_width(ui),
-            );
+            ) {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::PrismoidQualities(id)));
+            }
 
             menu::menu_section(ui, tr!("tri-prismoid-qualities-surfaces"));
             if marked.is_empty() {
@@ -1520,9 +1554,9 @@ pub(crate) fn draw_add_prismoid_qualities_dialog(ui: &mut egui::Ui, editor: &mut
     }
 }
 
-/// Prismoid Grid to Surface: the grid selected at open, the value its
-/// surface's height is (vertical thickness, or one of the grid's values)
-/// and the surface's name, derived from the grid and the value until typed.
+/// Prismoid Grid to Surface: the grid, the value its surface's height is
+/// (vertical thickness, or one of the grid's values) and the surface's
+/// name, derived from the grid and the value until typed.
 pub(crate) fn draw_prismoid_grid_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     if !editor.tri_prismoid_surface_open {
         return;
@@ -1546,13 +1580,17 @@ pub(crate) fn draw_prismoid_grid_surface_dialog(ui: &mut egui::Ui, editor: &mut 
             }
 
             tool_help_panel(ui, tr!("tri-prismoid-grid-surface-help"));
-            selected_source_field(
+            if let Some(id) = prismoid_grid_field(
                 ui,
+                "prismoid_grid_surface_grid",
                 tr!("common-prismoid-grid"),
-                grid.map_or_else(|| tr!("tri-no-prismoid-grid-selected"), |grid| grid.name.clone()),
+                editor.tri_prismoid_surface_grid,
                 tr!("tri-prismoid-grid-surface-grid-help"),
+                project,
                 width,
-            );
+            ) {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::PrismoidSurface(id)));
+            }
 
             ui.add_space(4.0);
 
@@ -1744,19 +1782,21 @@ fn difference_name_refusal(this: Option<&UiPrismoidGridEntry>, other: Option<&Ui
         .map(|refusal| crate::app::commands::prismoid_grid::values_refusal_words(refusal, &this.name))
 }
 
-/// Mask Prismoid Grid by Polyline: the grid and the closed polyline
-/// selected at open, and the side kept, as the polyline cut takes them;
-/// nothing new is made, so there is no name.
+/// Mask Prismoid Grid by Polyline: the grid, the closed polyline and the
+/// side kept, as the polyline cut takes them; nothing new is made, so there
+/// is no name.
 pub(crate) fn draw_mask_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
-    if !editor.tri_prismoid_mask_open {
+    if !editor.tri_prismoid_mask_open || editor.triangulation_pick_target.is_some() {
         return;
     }
-    if editor
-        .tri_prismoid_mask_object_id
-        .is_some_and(|id| !document.get_object(id).is_some_and(Object::encloses_area))
+    if let Some(object_id) = editor.tri_prismoid_mask_object_id
+        && !document.get_object(object_id).is_some_and(Object::encloses_area)
     {
         editor.tri_prismoid_mask_object_id = None;
         editor.tri_prismoid_mask_object_name.clear();
+        if editor.tool_highlight_id == Some(object_id) {
+            editor.tool_highlight_id = None;
+        }
     }
 
     let mut open = true;
@@ -1768,27 +1808,44 @@ pub(crate) fn draw_mask_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut Edi
         .show(ui.ctx(), |ui| {
             let width = picker_control_width(ui);
             let grid = loaded_prismoid_grid(project, editor.tri_prismoid_mask_grid);
-            selected_source_field(
+            if let Some(id) = prismoid_grid_field(
                 ui,
+                "mask_prismoid_grid_grid",
                 tr!("common-prismoid-grid"),
-                grid.map_or_else(|| tr!("tri-no-prismoid-grid-selected"), |grid| grid.name.clone()),
-                tr!("tri-selected-prismoid-grid-masked"),
+                editor.tri_prismoid_mask_grid,
+                tr!("tri-mask-grid-help"),
+                project,
                 width,
-            );
+            ) {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::MaskGrid(id)));
+            }
 
             ui.add_space(4.0);
 
-            selected_source_field(
-                ui,
-                tr!("tri-boundary-polyline"),
-                if editor.tri_prismoid_mask_object_id.is_some() {
-                    editor.tri_prismoid_mask_object_name.clone()
-                } else {
-                    tr!("tri-no-boundary-selected")
-                },
-                tr!("tri-selected-closed-polyline-mask"),
-                width,
-            );
+            // Polylines carry no names to list, so the boundary is picked by
+            // clicking it; one selected with the grid is already here.
+            let boundary = if editor.tri_prismoid_mask_object_id.is_some() {
+                editor.tri_prismoid_mask_object_name.clone()
+            } else {
+                tr!("tri-no-boundary-selected")
+            };
+            let pick_label = pick_button_label();
+            let pick_width = pick_button_width(ui, &pick_label);
+            MenuField::new(tr!("tri-boundary-polyline"))
+                .help_text(tr!("tri-mask-boundary-help"))
+                .show(ui, |ui, row_height, _| {
+                    ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let name_width = width - ui.spacing().item_spacing.x - pick_width;
+                        ui.allocate_ui_with_layout(egui::vec2(name_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.set_min_width(name_width);
+                            ui.add(egui::Label::new(boundary.clone()).truncate());
+                        });
+                        if ui.add(MenuButton::new(pick_label).min_width(pick_width)).clicked() {
+                            editor.triangulation_pick_target = Some(TriangulationPickTarget::PrismoidMaskBoundary);
+                        }
+                    })
+                    .response
+                });
 
             ui.add_space(4.0);
 
@@ -1839,6 +1896,53 @@ pub(crate) fn draw_mask_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut Edi
 
     if !open {
         editor.tri_prismoid_mask_open = false;
+    }
+}
+
+/// Create Block Model from Prismoid Grid: only the grid, whose prismoids
+/// become the blocks.
+pub(crate) fn draw_prismoid_block_model_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_prismoid_block_open {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("prismoid_block_model_dialog", tr!("common-create-block-model-from-prismoid-grid"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            if let Some(id) = prismoid_grid_field(
+                ui,
+                "prismoid_block_model_grid",
+                tr!("common-prismoid-grid"),
+                editor.tri_prismoid_block_grid,
+                tr!("tri-prismoid-block-model-grid-help"),
+                project,
+                picker_control_width(ui),
+            ) {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::PrismoidBlockModel(id)));
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let grid = loaded_prismoid_grid(project, editor.tri_prismoid_block_grid).map(|entry| entry.id);
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("common-create")).primary().enabled(grid.is_some())).clicked() || confirm)
+                    && let Some(grid) = grid
+                {
+                    commands.push(UiCommand::CreateBlockModelFromPrismoidGrid(grid));
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_prismoid_block_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_prismoid_block_open = false;
     }
 }
 

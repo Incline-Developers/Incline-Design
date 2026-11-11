@@ -5,19 +5,16 @@ use crate::{
     i18n::tr,
     ui::{
         dialogs::triangulation::PICK_PROMPT_WIDTH,
-        state::{EditorState, SelectionPickTool, UiCommand},
+        state::{EditorState, SelectionCounts, SelectionPickTool, UiCommand},
         widgets::menu::{self, DragableMenu, MenuButton},
     },
 };
 
-pub(crate) fn draw_selection_pick_prompt(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
-    let Some(pick) = editor.selection_pick.as_ref() else {
-        return;
-    };
-    let counts = editor.selection_counts;
+/// The prompt's words for `tool`, its count, and whether Done can run.
+fn pick_status(tool: SelectionPickTool, counts: SelectionCounts) -> (String, String, bool) {
     // What the tool will take from the selection, which may hold other
     // things besides: the count is of those alone.
-    let (prompt, status, ready) = match pick.tool {
+    match tool {
         SelectionPickTool::SetAxis => (tr!("pick-selection-objects-prompt"), tr!("ui-selected-objects", count = counts.objects.to_string()), true),
         SelectionPickTool::InsertAtElevation => (
             tr!("pick-selection-polylines-prompt"),
@@ -45,7 +42,25 @@ pub(crate) fn draw_selection_pick_prompt(ui: &mut egui::Ui, editor: &EditorState
             tr!("pick-selection-points-selected", count = counts.surface_points.to_string()),
             true,
         ),
+        // None picked compares every loaded hole.
+        SelectionPickTool::HoleMisfit => (
+            tr!("pick-selection-misfit-prompt"),
+            tr!("pick-selection-holes-selected", count = counts.reference_holes.to_string()),
+            true,
+        ),
+        SelectionPickTool::MaskPrismoids => (
+            tr!("pick-selection-prismoids-prompt"),
+            tr!("pick-selection-prismoids-selected", count = counts.prismoid_cells.to_string()),
+            counts.prismoid_cells >= 1,
+        ),
+    }
+}
+
+pub(crate) fn draw_selection_pick_prompt(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
+    let Some(pick) = editor.selection_pick.as_ref() else {
+        return;
     };
+    let (prompt, status, ready) = pick_status(pick.tool, editor.selection_counts);
     let mut open = true;
     let (mut done, mut cancel) = (false, false);
     DragableMenu::new("selection_pick_prompt", tr!("tri-pick-from-view"))

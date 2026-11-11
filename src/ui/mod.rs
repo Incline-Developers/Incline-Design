@@ -1765,7 +1765,7 @@ fn draw_global_dialogs(
     dialogs::reference_surface::draw_reference_surface_dialog(root_ui, editor, project, commands);
     dialogs::thickness_points::draw_thickness_points_dialog(root_ui, editor, drill_holes, commands);
     dialogs::thickness_points::draw_thickness_table(root_ui, editor);
-    dialogs::thickness_points::draw_hole_misfit_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::thickness_points::draw_hole_misfit_dialog(root_ui, editor, drill_holes, project, commands);
     dialogs::thickness_points::draw_hole_misfit_table(root_ui, editor);
     dialogs::thickness_points::draw_seam_surface_dialog(root_ui, editor, commands);
     dialogs::thickness_points::draw_seam_table(root_ui, editor);
@@ -1879,6 +1879,10 @@ fn draw_global_dialogs(
 
     if editor.tri_prismoid_mask_open {
         dialogs::triangulation::draw_mask_prismoid_grid_dialog(root_ui, editor, document, project, commands);
+    }
+
+    if editor.tri_prismoid_block_open {
+        dialogs::triangulation::draw_prismoid_block_model_dialog(root_ui, editor, project, commands);
     }
 
     if editor.tri_solid_open {

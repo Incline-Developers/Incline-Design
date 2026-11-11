@@ -165,9 +165,6 @@ impl App<'_> {
                         if is_triangulation_polyline(object) {
                             counts.triangulation_sources += 1;
                         }
-                        if object.encloses_area() {
-                            counts.clip_boundaries += 1;
-                        }
                         if matches!(object, Object::Point { .. }) {
                             counts.surface_points += 1;
                         }
@@ -187,9 +184,6 @@ impl App<'_> {
                 }
                 SceneEntityId::BlockModel(id) if self.block_models.iter().any(|model| model.id == *id && model.state.loaded) => {
                     counts.block_models += 1;
-                }
-                SceneEntityId::PrismoidGrid(id) if self.prismoid_grids.iter().any(|item| item.id == *id && item.state.loaded) => {
-                    counts.prismoid_grids += 1;
                 }
                 _ => {}
             }

@@ -711,6 +711,7 @@ impl EditorState {
             || self.tri_prismoid_surface_open
             || self.tri_prismoid_difference_open
             || self.tri_prismoid_mask_open
+            || self.tri_prismoid_block_open
     }
 
     /// Lock or unlock one scene entity by name. Layer locks go through
@@ -1473,16 +1474,10 @@ pub(crate) struct SelectionCounts {
     /// Selected design polylines that are not closed, which Clean Strings
     /// works on.
     pub(crate) open_strings: usize,
-    /// Selected prismoid grids that are loaded, which a block model is
-    /// created from.
-    pub(crate) prismoid_grids: usize,
     /// Selected prismoids, which Mask Prismoids masks or unmasks.
     pub(crate) prismoid_cells: usize,
     /// Of those, the ones masked by hand.
     pub(crate) masked_prismoid_cells: usize,
-    /// Selected design objects that enclose an area, which Mask Prismoid
-    /// Grid by Polyline masks along.
-    pub(crate) clip_boundaries: usize,
 }
 
 /// The tools that work on a set of design objects or holes, which have no
@@ -1497,6 +1492,11 @@ pub(crate) enum SelectionPickTool {
     CreateTriangulation,
     ReferencePoints,
     ReferenceSurface,
+    /// The holes and quality points compared; the grid is chosen apart.
+    HoleMisfit,
+    /// Has no dialog: opens straight into the pick when no prismoid is
+    /// selected, and masks or unmasks on Done.
+    MaskPrismoids,
 }
 
 /// A tool's Pick in progress. Its dialog is hidden and the viewport selects
@@ -1540,6 +1540,8 @@ pub(crate) enum TriangulationPickTarget {
     PrismoidRoof,
     /// The floor half of the Build Prismoid Grid tool.
     PrismoidFloor,
+    /// The closed polyline Mask Prismoid Grid by Polyline masks along.
+    PrismoidMaskBoundary,
 }
 
 /// What a tool works on, chosen in its dialog. The app derives what follows
@@ -1556,6 +1558,11 @@ pub(crate) enum ToolSubject {
     BlockModelDrillholes(crate::model::drill_hole::DrillHoleId),
     TinPointCloud(PointCloudId),
     ClassifyPointClouds(Vec<PointCloudId>),
+    PrismoidQualities(PrismoidGridId),
+    PrismoidSurface(PrismoidGridId),
+    MisfitGrid(PrismoidGridId),
+    PrismoidBlockModel(PrismoidGridId),
+    MaskGrid(PrismoidGridId),
 }
 
 impl TriangulationPickTarget {
@@ -1574,13 +1581,13 @@ impl TriangulationPickTarget {
             | Self::ClipToLower
             | Self::PrismoidRoof
             | Self::PrismoidFloor => tr!("state-click-surface-viewport"),
-            Self::ClipBoundary => tr!("state-click-closed-polyline-viewport"),
+            Self::ClipBoundary | Self::PrismoidMaskBoundary => tr!("state-click-closed-polyline-viewport"),
         }
     }
 
     /// Whether the click picks a closed polyline rather than a surface.
     pub(crate) fn picks_boundary(self) -> bool {
-        self == Self::ClipBoundary
+        matches!(self, Self::ClipBoundary | Self::PrismoidMaskBoundary)
     }
 }
 
@@ -3471,14 +3478,14 @@ pub(crate) struct EditorState {
     pub(crate) tri_strata_step: std::num::NonZeroUsize,
     pub(crate) tri_strata_name_input: String,
     pub(crate) tri_strata_name_auto: bool,
-    /// Add Qualities: the grid selected at open, the quality surfaces ticked
-    /// in the order ticked, and the one chosen as the density.
+    /// Add Qualities: the grid, the quality surfaces ticked in the order
+    /// ticked, and the one chosen as the density.
     pub(crate) tri_prismoid_qualities_open: bool,
     pub(crate) tri_prismoid_qualities_grid: Option<PrismoidGridId>,
     pub(crate) tri_prismoid_qualities_ticked: Vec<TriangulationId>,
     pub(crate) tri_prismoid_qualities_density: Option<TriangulationId>,
-    /// Prismoid Grid to Surface: the grid selected at open, the value the
-    /// surface's height is (`None` for vertical thickness) and its name.
+    /// Prismoid Grid to Surface: the grid, the value the surface's height is
+    /// (`None` for vertical thickness) and its name.
     pub(crate) tri_prismoid_surface_open: bool,
     pub(crate) tri_prismoid_surface_grid: Option<PrismoidGridId>,
     pub(crate) tri_prismoid_surface_value: Option<String>,
@@ -3493,13 +3500,16 @@ pub(crate) struct EditorState {
     pub(crate) tri_prismoid_difference_value: Option<String>,
     pub(crate) tri_prismoid_difference_name_input: String,
     pub(crate) tri_prismoid_difference_name_auto: bool,
-    /// Mask Prismoid Grid by Polyline: the grid and the closed polyline
-    /// selected at open, and which side of it is kept.
+    /// Mask Prismoid Grid by Polyline: the grid, the closed polyline and
+    /// which side of it is kept.
     pub(crate) tri_prismoid_mask_open: bool,
     pub(crate) tri_prismoid_mask_grid: Option<PrismoidGridId>,
     pub(crate) tri_prismoid_mask_object_id: Option<ObjectId>,
     pub(crate) tri_prismoid_mask_object_name: String,
     pub(crate) tri_prismoid_mask_mode: TriPolylineClipMode,
+    /// Create Block Model from Prismoid Grid: the grid its blocks come from.
+    pub(crate) tri_prismoid_block_open: bool,
+    pub(crate) tri_prismoid_block_grid: Option<PrismoidGridId>,
     /// The active project's model envelope, mirrored each frame for the
     /// view's outline.
     pub(crate) model_envelope: Option<crate::model::project::ModelEnvelope>,
@@ -4448,6 +4458,7 @@ impl EditorState {
             || self.point_cloud_classify_open
             || self.block_model_create_open
             || self.ore_triangulation_open
+            || self.tri_prismoid_block_open
             || self.optimization.dialog_open()
             || {
                 #[cfg(target_arch = "wasm32")]
@@ -4965,6 +4976,8 @@ impl EditorState {
         self.tri_prismoid_difference_open = false;
         self.tri_prismoid_difference_grid = None;
         self.tri_prismoid_difference_other = None;
+        self.tri_prismoid_block_open = false;
+        self.tri_prismoid_block_grid = None;
         // Snapshotted object ids, and a hold on the selection while it is up:
         // neither can outlive the project they were taken from.
         self.reference_surface_dialog = None;
@@ -5443,6 +5456,8 @@ impl EditorState {
             tri_prismoid_mask_object_id: None,
             tri_prismoid_mask_object_name: String::new(),
             tri_prismoid_mask_mode: TriPolylineClipMode::KeepInside,
+            tri_prismoid_block_open: false,
+            tri_prismoid_block_grid: None,
             model_envelope: None,
             tri_cut_surface_unload_source: true,
             tri_cut_to_open: false,
@@ -7331,9 +7346,12 @@ pub(crate) enum UiCommand {
         step: std::num::NonZeroUsize,
         name: String,
     },
-    /// Create a block model from the one selected prismoid grid.
-    CreateBlockModelFromPrismoidGrid,
-    /// Open Add Qualities on the one selected prismoid grid.
+    /// Open Create Block Model from Prismoid Grid, on the one prismoid grid
+    /// selected if any.
+    OpenCreateBlockModelFromPrismoidGrid,
+    /// Create a block model from a prismoid grid.
+    CreateBlockModelFromPrismoidGrid(PrismoidGridId),
+    /// Open Add Qualities, on the one prismoid grid selected if any.
     OpenAddPrismoidQualities,
     /// Read quality surfaces into a prismoid grid's cells, `density` as its
     /// density.
@@ -7342,7 +7360,8 @@ pub(crate) enum UiCommand {
         surfaces: Vec<TriangulationId>,
         density: Option<TriangulationId>,
     },
-    /// Open Prismoid Grid to Surface on the one selected prismoid grid.
+    /// Open Prismoid Grid to Surface, on the one prismoid grid selected if
+    /// any.
     OpenPrismoidGridToSurface,
     /// Make a surface whose height is one of a prismoid grid's values, or
     /// its vertical thickness with `None`, marked as that quality.
@@ -7351,8 +7370,8 @@ pub(crate) enum UiCommand {
         value: Option<String>,
         name: String,
     },
-    /// Open Difference between Prismoid Grids on the one or two selected
-    /// prismoid grids.
+    /// Open Difference between Prismoid Grids, on the one or two prismoid
+    /// grids selected if any.
     OpenDifferencePrismoidGrids,
     /// Keep `grid` less `other`, cell by cell, as a value named `name` on
     /// `grid`: one of their values, or vertical thickness with `None`.
@@ -7362,8 +7381,8 @@ pub(crate) enum UiCommand {
         value: Option<String>,
         name: String,
     },
-    /// Open Misfit at Holes on the one selected prismoid grid, with any
-    /// holes and quality points selected beside it.
+    /// Open Misfit at Holes, on the one prismoid grid selected if any, with
+    /// any holes and quality points selected beside it.
     OpenHoleMisfit,
     /// List `grid` less the picks of the seam at `holes` (none: every
     /// loaded hole), and less the values of `quality_points`. Without a
@@ -7375,10 +7394,10 @@ pub(crate) enum UiCommand {
         seam: Option<(String, crate::model::drill_hole::ReferenceTarget)>,
     },
     /// Mask the selected prismoids by hand, or unmask them when every one
-    /// is masked by hand.
+    /// is masked by hand; with none selected, pick them first.
     TogglePrismoidMask,
-    /// Open Mask Prismoid Grid by Polyline on the one selected grid and the
-    /// one selected closed polyline.
+    /// Open Mask Prismoid Grid by Polyline, on the one grid and the one
+    /// closed polyline selected if any.
     OpenMaskPrismoidGridByPolyline,
     /// Mask by hand every active prismoid of `grid` whose centre falls on
     /// the side of the polyline `mode` does not keep.
@@ -7604,6 +7623,7 @@ impl UiCommand {
             | Self::OpenPrismoidGridToSurface
             | Self::OpenDifferencePrismoidGrids
             | Self::OpenHoleMisfit
+            | Self::OpenCreateBlockModelFromPrismoidGrid
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
             | Self::OpenContourTriangulation
@@ -8124,7 +8144,7 @@ impl UiCommand {
             Self::ExecuteBuildSolidFromSurfaces { name, .. } => report(tr!("tri-build-solid-surfaces"), name.clone()),
             Self::ExecuteBuildPrismoidGrid { name, .. } => report(tr!("tri-build-prismoid-grid"), name.clone()),
             Self::ExecuteBuildStrata { name, .. } => report(tr!("tri-build-strata"), name.clone()),
-            Self::CreateBlockModelFromPrismoidGrid => report(tr!("common-create-block-model-from-prismoid-grid"), tr!("state-selected-prismoid-grid")),
+            Self::CreateBlockModelFromPrismoidGrid(_) => report(tr!("common-create-block-model-from-prismoid-grid"), tr!("state-selected-prismoid-grid")),
             Self::ExecuteAddPrismoidQualities { .. } => report(tr!("state-add-prismoid-qualities"), tr!("state-selected-prismoid-grid")),
             Self::ExecutePrismoidGridToSurface { name, .. } => report(tr!("state-prismoid-grid-to-surface"), name.clone()),
             Self::ExecuteDifferencePrismoidGrids { name, .. } => report(tr!("state-difference-prismoid-grids"), name.clone()),
@@ -8588,9 +8608,11 @@ impl EditorState {
     /// Put down a triangulation tool's viewport pick without taking
     /// anything, leaving the tool's dialog as it was.
     pub(crate) fn cancel_triangulation_pick(&mut self) {
-        if self.triangulation_pick_target.take().is_some_and(TriangulationPickTarget::picks_boundary) {
-            // The hover highlight gives way to the boundary already chosen.
-            self.tool_highlight_id = self.tri_cut_poly_object_id;
+        // The hover highlight gives way to the boundary already chosen.
+        match self.triangulation_pick_target.take() {
+            Some(TriangulationPickTarget::PrismoidMaskBoundary) => self.tool_highlight_id = self.tri_prismoid_mask_object_id,
+            Some(target) if target.picks_boundary() => self.tool_highlight_id = self.tri_cut_poly_object_id,
+            _ => {}
         }
         self.viewport_pick_hover_label = None;
         self.tri_hover_handles.clear();
@@ -11254,12 +11276,12 @@ pub(crate) struct ThicknessTable {
     pub(crate) points: Vec<crate::model::thickness_points::ThicknessPoint>,
 }
 
-/// What Misfit at Holes was opened on: the grid, the holes and quality
-/// points selected with it, and the seam the user says the grid models.
+/// What Misfit at Holes works on: the grid, the holes and quality points,
+/// and the seam the user says the grid models.
 #[derive(Clone, Debug)]
 pub(crate) struct HoleMisfitDraft {
-    pub(crate) grid: PrismoidGridId,
-    pub(crate) grid_label: String,
+    /// `None` until one is chosen.
+    pub(crate) grid: Option<PrismoidGridId>,
     /// None means every loaded hole.
     pub(crate) holes: Vec<DrillHoleRef>,
     pub(crate) quality_points: Vec<ObjectId>,

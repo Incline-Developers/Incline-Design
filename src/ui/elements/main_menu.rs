@@ -711,12 +711,10 @@ const GEOLOGY_MENUS: &[WorkspaceMenu] = &[
                 MenuRow::PrismoidQualities,
                 MenuRow::PrismoidGridToSurface,
                 MenuRow::DifferencePrismoidGrids,
-                // Select first, then act: the grid, with any holes and
-                // quality points selected beside it.
                 MenuRow::MisfitAtHoles,
                 MenuRow::MaskPrismoidGridByPolyline,
-                // One row masks the selected prismoids and, ticked when all
-                // are masked by hand, unmasks them.
+                // One row masks the selected prismoids, or picks them first,
+                // and, ticked when all are masked by hand, unmasks them.
                 MenuRow::MaskPrismoids,
             ]),
         ],
@@ -850,7 +848,7 @@ impl MenuRow {
             Self::ThicknessSurfaces => tr!("common-thickness-surfaces-ellipsis"),
             Self::BuildPrismoidGrid => tr!("common-build-prismoid-grid-ellipsis"),
             Self::BuildStrata => tr!("common-build-strata-ellipsis"),
-            Self::BlockModelFromPrismoidGrid => tr!("common-create-block-model-from-prismoid-grid"),
+            Self::BlockModelFromPrismoidGrid => tr!("common-create-block-model-from-prismoid-grid-ellipsis"),
             Self::PrismoidQualities => tr!("common-add-prismoid-qualities-ellipsis"),
             Self::PrismoidGridToSurface => tr!("common-prismoid-grid-to-surface-ellipsis"),
             Self::DifferencePrismoidGrids => tr!("common-difference-prismoid-grids-ellipsis"),
@@ -909,7 +907,7 @@ impl MenuRow {
             Self::ThicknessSurfaces => UiCommand::OpenSeamSurface,
             Self::BuildPrismoidGrid => UiCommand::OpenBuildPrismoidGrid,
             Self::BuildStrata => UiCommand::OpenBuildStrata,
-            Self::BlockModelFromPrismoidGrid => UiCommand::CreateBlockModelFromPrismoidGrid,
+            Self::BlockModelFromPrismoidGrid => UiCommand::OpenCreateBlockModelFromPrismoidGrid,
             Self::PrismoidQualities => UiCommand::OpenAddPrismoidQualities,
             Self::PrismoidGridToSurface => UiCommand::OpenPrismoidGridToSurface,
             Self::DifferencePrismoidGrids => UiCommand::OpenDifferencePrismoidGrids,
@@ -1004,10 +1002,6 @@ impl MenuRow {
             Self::DragVertex | Self::NudgeRl => !editor.fly_mode_enabled,
             // Saved only while drawn: the switch on and a section up.
             Self::SaveSurfaceLines => editor.slice_mode_enabled && editor.section_surface_lines_on(),
-            Self::BlockModelFromPrismoidGrid | Self::PrismoidQualities | Self::PrismoidGridToSurface | Self::MisfitAtHoles => editor.selection_counts.prismoid_grids == 1,
-            Self::DifferencePrismoidGrids => matches!(editor.selection_counts.prismoid_grids, 1 | 2),
-            Self::MaskPrismoidGridByPolyline => editor.selection_counts.prismoid_grids == 1 && editor.selection_counts.clip_boundaries == 1,
-            Self::MaskPrismoids => editor.selection_counts.prismoid_cells > 0,
             _ => true,
         }
     }
@@ -1019,12 +1013,6 @@ impl MenuRow {
         match self {
             Self::ThicknessPoints | Self::ThicknessSurfaces => Some(tr!("ws-menubar-modelling-select-surface")),
             Self::ClipToSurface | Self::ModellingClipToSurface => Some(tr!("ws-menubar-modelling-select-surfaces")),
-            Self::BlockModelFromPrismoidGrid | Self::PrismoidQualities | Self::PrismoidGridToSurface | Self::MisfitAtHoles => {
-                Some(tr!("ws-menubar-modelling-select-prismoid-grid"))
-            }
-            Self::DifferencePrismoidGrids => Some(tr!("ws-menubar-modelling-select-prismoid-grids")),
-            Self::MaskPrismoidGridByPolyline => Some(tr!("ws-menubar-modelling-select-prismoid-grid-polyline")),
-            Self::MaskPrismoids => Some(tr!("ws-menubar-modelling-select-prismoids")),
             _ => None,
         }
     }

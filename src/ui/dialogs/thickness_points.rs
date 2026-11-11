@@ -1,8 +1,11 @@
 //! The thickness points and thickness surfaces dialogs, each opened on the
-//! one surface selected, Misfit at Holes on the one prismoid grid selected,
-//! and the tables of what they made.
+//! one surface selected, Misfit at Holes on its chosen prismoid grid, and
+//! the tables of what they made.
 
-use super::reference_points::{hole_of, logged_codes, seam_controls, seam_value_controls};
+use super::{
+    reference_points::{hole_of, logged_codes, seam_controls, seam_value_controls},
+    triangulation::prismoid_grid_field,
+};
 use crate::{
     i18n::tr,
     model::{
@@ -10,11 +13,11 @@ use crate::{
         thickness_points::{InterceptSource, MisfitRow, ThicknessPoint, three_places},
     },
     ui::{
-        state::{EditorState, GridCheck, HoleMisfitTable, UiCommand},
+        state::{EditorState, GridCheck, HoleMisfitTable, SelectionPickTool, ToolSubject, UiCommand, UiProjectView},
         widgets::{
             collapsible_section::CollapsibleSection,
             data_table::DataTable,
-            menu::{self, DragableMenu, MenuButton, selected_source_field},
+            menu::{self, DragableMenu, MenuButton, picked_selection_field, selected_source_field},
         },
     },
 };
@@ -210,12 +213,18 @@ fn cells(point: &ThicknessPoint, rounded: bool) -> Vec<String> {
     ]
 }
 
-/// Misfit at Holes, on the grid, holes and quality points selected when it
-/// opened; it asks only the seam the grid models.
-pub(crate) fn draw_hole_misfit_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
+/// Misfit at Holes: the grid chosen from the loaded ones, the holes and
+/// quality points picked in the viewport, and the seam the grid models.
+pub(crate) fn draw_hole_misfit_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(draft) = editor.hole_misfit_dialog.as_mut() else {
         return;
     };
+    // A grid unloaded or deleted from under the dialog reads as none chosen.
+    let grid = draft.grid.filter(|id| project.prismoid_grids.iter().any(|entry| entry.is_loaded && entry.id == *id));
     let involved: Vec<&OpenDrillHoleDataset> = datasets
         .iter()
         .filter(|dataset| dataset.state.loaded && (draft.holes.is_empty() || draft.holes.iter().any(|hole| hole.dataset == dataset.id)))
@@ -247,15 +256,19 @@ pub(crate) fn draw_hole_misfit_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
         .max_width(460.0)
         .show(ui.ctx(), |ui| {
             let width = 220.0;
-            selected_source_field(ui, tr!("hole-misfit-grid"), draft.grid_label.clone(), tr!("hole-misfit-grid-help"), width);
+            if let Some(id) = prismoid_grid_field(ui, "hole_misfit_grid", tr!("hole-misfit-grid"), grid, tr!("hole-misfit-grid-help"), project, width) {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::MisfitGrid(id)));
+            }
             ui.add_space(4.0);
-            selected_source_field(ui, tr!("thickness-points-holes"), holes_label.clone(), tr!("hole-misfit-holes-help"), width);
+            if picked_selection_field(ui, tr!("thickness-points-holes"), holes_label.clone(), tr!("hole-misfit-holes-help"), width) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::HoleMisfit));
+            }
             ui.add_space(4.0);
             selected_source_field(ui, tr!("hole-misfit-qualities"), draft.qualities_label.clone(), tr!("hole-misfit-qualities-help"), width);
             ui.add_space(4.0);
             seam_value_controls(ui, "hole_misfit", &involved, &codes, &mut draft.seam, false);
             let chosen = draft.seam.value.is_some();
-            let ready = chosen || quality_only;
+            let ready = grid.is_some() && (chosen || quality_only);
             ui.small(match (chosen, quality_only) {
                 (true, _) => tr!("hole-misfit-seam-help"),
                 (false, true) => tr!("hole-misfit-no-seam"),
@@ -273,9 +286,9 @@ pub(crate) fn draw_hole_misfit_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             });
         });
     // Closed by the command once the table is made.
-    if compare {
+    if compare && let Some(grid) = grid {
         commands.push(UiCommand::ExecuteHoleMisfit {
-            grid: draft.grid,
+            grid,
             holes: draft.holes.clone(),
             quality_points: draft.quality_points.clone(),
             seam: draft.seam.field.clone().zip(draft.seam.value.clone()),
