@@ -5357,3 +5357,4 @@ err-file-desc-video = видео
 err-file-desc-project = проект
 err-file-desc-opt-scenarios = сценарии оптимизации
 err-file-desc-opt-report = отчёт об оптимизации
+err-file-desc-sched-report = отчёт о календарном плане

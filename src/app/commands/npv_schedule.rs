@@ -549,8 +549,8 @@ impl<'a> App<'a> {
         let stem = folder_name(&result.name);
         #[cfg(target_arch = "wasm32")]
         {
-            Self::trigger_browser_download(format!("{stem}_{}", report::PERIODS_FILE), periods, "text/csv", "schedule report");
-            Self::trigger_browser_download(format!("{stem}_{}", report::PITS_FILE), pits, "text/csv", "schedule report");
+            Self::trigger_browser_download(format!("{stem}_{}", report::PERIODS_FILE), periods, "text/csv", tr!("err-file-desc-sched-report"));
+            Self::trigger_browser_download(format!("{stem}_{}", report::PITS_FILE), pits, "text/csv", tr!("err-file-desc-sched-report"));
         }
         #[cfg(not(target_arch = "wasm32"))]
         {

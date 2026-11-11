@@ -5587,3 +5587,4 @@ err-file-desc-video = video
 err-file-desc-project = project
 err-file-desc-opt-scenarios = optimisation scenarios
 err-file-desc-opt-report = optimisation report
+err-file-desc-sched-report = schedule report
