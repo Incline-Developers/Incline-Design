@@ -322,7 +322,7 @@ impl<'a> App<'a> {
                     self.editor.tri_include_solid_topology_id = None;
                 }
             }
-            TriangulationPickTarget::ClipToUpper | TriangulationPickTarget::ClipToLower if self.editor.tri_cut_to_targets.contains(&id) => {
+            TriangulationPickTarget::ClipToUpper | TriangulationPickTarget::ClipToLower if self.editor.tri_cut_to_seam.contains(&Some(id)) => {
                 crate::userspace_warn!("{}", tr!("cmd-cuts-to-surface-cuts-itself"));
             }
             TriangulationPickTarget::ClipToUpper => {
@@ -331,6 +331,13 @@ impl<'a> App<'a> {
             TriangulationPickTarget::ClipToLower => {
                 self.editor.tri_cut_to_lower_id = Some(id);
             }
+            TriangulationPickTarget::ClipToSeam | TriangulationPickTarget::ClipToSeamOther if self.editor.clip_to_limit_surfaces().contains(&Some(id)) => {
+                crate::userspace_warn!("{}", tr!("cmd-cuts-to-surface-cuts-itself"));
+            }
+            TriangulationPickTarget::ClipToSeam => fill_seam_slot(&mut self.editor.tri_cut_to_seam, 0, id),
+            TriangulationPickTarget::ClipToSeamOther => fill_seam_slot(&mut self.editor.tri_cut_to_seam, 1, id),
+            TriangulationPickTarget::ThicknessSurface => self.set_tool_subject(ToolSubject::ThicknessSurface(id)),
+            TriangulationPickTarget::SeamSurface => self.set_tool_subject(ToolSubject::SeamSurface(id)),
         }
         self.editor.triangulation_pick_target = None;
         self.editor.viewport_pick_hover_label = None;
@@ -1001,4 +1008,13 @@ fn is_drill_pattern_boundary(object: &Object) -> bool {
 /// to hand back a polyline - so the tool does not offer one.
 fn is_drapeable(object: &Object) -> bool {
     !matches!(object, Object::Circle { .. })
+}
+
+/// Put `id` in one of a seam's two slots; the other gives it up, as one
+/// surface cannot be both the roof and the floor.
+fn fill_seam_slot(seam: &mut [Option<crate::model::triangulation::TriangulationId>; 2], slot: usize, id: crate::model::triangulation::TriangulationId) {
+    seam[slot] = Some(id);
+    if seam[1 - slot] == Some(id) {
+        seam[1 - slot] = None;
+    }
 }

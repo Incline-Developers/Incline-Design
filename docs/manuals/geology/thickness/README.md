@@ -66,7 +66,7 @@ A hole logs the true thickness only where it crosses the seam square on; otherwi
 ### Where it is
 Geology workspace: **Modelling > Thickness Points...**
 ### Before you start
-Select first, then act. Select the one reference surface, the seam's roof or floor (here `A Roof plane`), in the explorer or the view. Holes selected with it are measured; if no hole is selected, every loaded hole is used. Drill holes must be loaded and must log the seam.
+The tool is always enabled. Selecting the one reference surface, the seam's roof or floor (here `A Roof plane`), in the explorer or the view prefills **Surface**; otherwise choose it from the list or **Pick** it. Holes selected are measured; if none is picked, every loaded hole holding the working section is used. Drill holes must be loaded and must log the seam.
 ### Steps
 1. Select `A Roof plane`, the roof of the worked example, and nothing else. Choose **Modelling > Thickness Points...**
 2. The dialog **Thickness Points** opens. **Surface** shows `A Roof plane`. **Holes** shows "Every loaded hole holding the working section (1 dataset(s))".
@@ -79,18 +79,17 @@ Select first, then act. Select the one reference surface, the seam's roof or flo
 ### Options and defaults
 | Option | Default | What it does |
 | --- | --- | --- |
-| **Surface** | The one selected surface | Shown only. Its slope at each hole gives the bedding. |
-| **Holes** | The holes selected with the surface, else every loaded hole | Shown only. Each hole that logs the seam gives a point. |
+| **Surface** | The selected surface, if exactly one is selected; else **Select...** | A list of the loaded surfaces plus **Pick**. Its slope at each hole gives the bedding. |
+| **Holes** | The holes selected, shown as a count; with none, every loaded hole holding the working section | A count plus **Pick** (prompt "Select the drillholes to measure thickness at."). Each hole that logs the seam gives a point. |
 | **Working section field** | The first categorical field | The field that holds the seam names. |
 | **Working section** | A named working section if one is logged, else the first code | The seam to measure. |
-| **Side** | **Roof** | Whether the selected surface is the seam's roof or its floor. |
+| **Side** | **Roof** | Whether the chosen surface is the seam's roof or its floor. |
 | **Field measurements: Measured pairs** | None | Optional CSV (**Choose CSV...**, **Clear**) of surveyed roof and floor points, with columns `id`, `roof_x`, `roof_y`, `roof_z`, `floor_x`, `floor_y`, `floor_z`. |
 | **Then make the other surface** | On | After the points, makes the seam's other surface, as **Thickness Surfaces** does. |
 
 When the surface was built this session, the dialog opens on the seam it was built from; otherwise on the last seam chosen.
 ### What it refuses and why
-- Greyed menu entry, hover *Select one grid surface*: it needs exactly one surface selected.
-- **Make** stays greyed while the dialog says "Checking the surface...", while no working section is chosen, and when the surface cannot serve as a reference: "A Roof plane cannot be measured against: it is not one regular grid of square cells, as Build Surface makes". Other reasons: "two of its vertices share a grid node at different heights", "its grid would pass the node budget of 4000000". A clipped or imported mesh may fail this; a **Build Surface** result does not.
+- **Make** stays greyed until a surface is chosen, a seam value is set and the grid check has passed. The note "Checking the surface..." shows only once a surface is chosen. It also stays greyed when the surface cannot serve as a reference: "A Roof plane cannot be measured against: it is not one regular grid of square cells, as Build Surface makes". Other reasons: "two of its vertices share a grid node at different heights", "its grid would pass the node budget of 4000000". A clipped or imported mesh may fail this; a **Build Surface** result does not.
 - A hole is left out, not measured, and an alert titled **Thickness Points** opens with the list under **Details**: "Left out (1):" and a line "hole S4: no floor" (the hole ends inside the seam). Other reasons: "overturned: out of scope", "outside the reference surface", "no trace to place it on", and for measured pairs "a roof or floor coordinate is blank or not a number".
 - A hole that logs the seam twice uses the upper run, with a warning in the **Thickness Points** alert: "Uppermost run used, flagged: S5".
 - A `True thickness` column that came in with the data is never overwritten, and the **Thickness Points** alert says: 'Drillholes already holds a column "True thickness" that came with the data, so no thickness was saved to it. The points were made all the same.' (your dataset's name stands in for `Drillholes`)
@@ -102,13 +101,13 @@ When the surface was built this session, the dialog opens on the seam it was bui
 ## 3. Thickness Surfaces
 
 ### What it does
-Grids the true thickness of the latest thickness points of the selected surface at the same points in plan as its heights, turns it at each point into apparent vertical thickness with the surface's dip and strike there, and makes the seam's other surface: it subtracts that from a roof to give the floor, or adds it to a floor to give the roof.
+Grids the true thickness of the latest thickness points of the chosen surface at the same points in plan as its heights, turns it at each point into apparent vertical thickness with the surface's dip and strike there, and makes the seam's other surface: it subtracts that from a roof to give the floor, or adds it to a floor to give the roof.
 ### Why a geologist uses it
 The holes give thickness at points. The seam model needs the second surface everywhere, and it must sit on the same grid as the first so the pair can be clipped and reported node for node.
 ### Where it is
 Geology workspace: **Modelling > Thickness Surfaces...**
 ### Before you start
-Select the one reference surface, the same one used for the thickness points (`A Roof plane`). Make its thickness points first, this session. Rebuilding the surface afterwards makes the points out of date, so make them again.
+The reference surface is the same one used for the thickness points (`A Roof plane`). Selecting it first prefills the dialog; you can also choose it from the list or **Pick** it. Make its thickness points first, this session. Rebuilding the surface afterwards makes the points out of date, so make them again.
 ### Steps
 1. With `A Roof plane` selected, choose **Modelling > Thickness Surfaces...**
 2. The dialog **Thickness Surfaces** opens. **Surface**: `A Roof plane`. **Thickness points**: "A thickness points, 3 point(s)". **Makes**: `A Floor`.
@@ -120,16 +119,15 @@ Select the one reference surface, the same one used for the thickness points (`A
 ### Options and defaults
 | Option | Default | What it does |
 | --- | --- | --- |
-| **Surface** | The one selected surface | Shown only. The new surface follows its grid and outline. |
+| **Surface** | The selected surface, if exactly one is selected; else **Select...** | A list of the loaded surfaces plus **Pick**. The new surface follows its grid and outline. The rows below show once a usable surface is chosen. |
 | **Thickness points** | The last run on this surface this session | Shown only. |
 | **Makes** | The floor under a roof surface, or the roof over a floor surface | Shown only. Named from the seam and whether it is the roof or the floor, for example `A Floor`. |
 
 Each run adds a surface: a second run on the same points makes `A Floor (2)`. Away from the points, the thickness trend carries on for a short reach and then holds; the console says how many nodes were held this way.
 ### What it refuses and why
-- Greyed menu entry, hover *Select one grid surface*.
-- Warning alert "A Roof plane has no thickness points yet: make thickness points for it first" (nothing made this session for that surface; thickness points are not kept when a project is reopened).
-- Warning alert "A Roof plane was built again after its thickness points were made: make thickness points again".
-- **Make** stays greyed while the surface is checked, and when it is not one regular grid (same reasons as **Thickness Points**).
+- **Make** stays greyed, with the reason in a red line under the fields, when the chosen surface has no thickness points yet: "A Roof plane has no thickness points yet: make thickness points for it first" (nothing made this session for that surface; thickness points are not kept when a project is reopened).
+- **Make** stays greyed, with a red line, when the surface was built again after its thickness points were made: "A Roof plane was built again after its thickness points were made: make thickness points again".
+- **Make** stays greyed while no surface is chosen, while the surface is checked, and when it is not one regular grid (same reasons as **Thickness Points**).
 - Error alert "Thickness surface failed: 2 thickness point(s); a thickness surface needs at least 3".
 - Error alert "Thickness surface failed:" followed by "1 pair(s) of thickness points share a place with different thicknesses; an exact surface cannot pass through both:", naming both points and their thicknesses. Two holes at one place cannot both be right.
 - Error alert "Thickness surface failed: Not enough memory for the thickness grid".
@@ -145,10 +143,10 @@ A seam is limited by what lies over and under it: the base of weathering, a subc
 ### Where it is
 Geology workspace: **Modelling > Clip to Surface...** Also in the **Triangulation** menu of the Production workspace.
 ### Before you start
-Select the seam's roof and floor, two grid surfaces on one grid, and nothing else (`A Roof plane` and `A Floor`). The higher is the roof. Have the limit surfaces loaded if you use surfaces: make them with **Build Surface** from points placed with **Create Point**, covering the seam's outline. Or type a level.
+The seam's roof and floor are two grid surfaces on one grid (`A Roof plane` and `A Floor`). Selecting exactly those two first fills both slots; otherwise choose them in the dialog. The higher is the roof. Have the limit surfaces loaded if you use surfaces: make them with **Build Surface** from points placed with **Create Point**, covering the seam's outline. Or type a level.
 ### Steps
 1. Select `A Roof plane` and `A Floor`. Choose **Modelling > Clip to Surface...**
-2. The dialog **Clip to Surface** opens. **Seam** shows "2 surface(s)".
+2. The dialog **Clip to Surface** opens. **Seam surface** shows `A Roof plane` and **Other seam surface** shows `A Floor`. (With other things selected, choose each from its list, or use **Pick** and click the surface in the viewport.)
 3. For **Keep below** choose the source **RL** and type **RL (m)** 77. For **Keep above** choose **RL** and type **RL (m)** 75. (A surface, or for **Keep above** a depth below a surface, works the same way.)
 4. Choose **Clip**.
 5. Three surfaces are made and selected: `A Roof plane Cut`, `A Floor Cut` and the solid `A Roof plane Solid`. The console says "Made A Roof plane Cut, A Floor Cut and A Roof plane Solid from A Roof plane and A Floor: ...; solid ... m3; limits: keep below RL 77, keep above RL 75".
@@ -158,7 +156,7 @@ Select the seam's roof and floor, two grid surfaces on one grid, and nothing els
 ### Options and defaults
 | Option | Default | What it does |
 | --- | --- | --- |
-| **Seam** | The two selected surfaces | Shown only. |
+| **Seam surface** and **Other seam surface** | The two selected surfaces, if exactly two are selected; else **Select...** | Each a list of the loaded surfaces plus **Pick**. Either slot takes either surface, and the higher one is the roof. Each list leaves out the surface in the other slot and the surfaces set as **Keep below** or **Keep above**. |
 | **Keep below** | **Surface**, none chosen | Nothing stays above this limit. Source **Surface** or **RL**. Empty clips from below only. |
 | **Keep above** | **Surface**, none chosen | Nothing stays below this limit. Source **Surface**, **RL**, or **Depth below a surface**. Empty clips from above only. |
 | **Surface** | None | The limit surface. Choose it in the dialog or click it in the view. |
@@ -167,9 +165,7 @@ Select the seam's roof and floor, two grid surfaces on one grid, and nothing els
 
 **Keep below** is applied first, then **Keep above**.
 ### What it refuses and why
-- Greyed menu entry, hover *Select a seam's roof and floor, two grid surfaces*.
-- On opening with another selection, a warning alert: "Select a seam's roof and floor, two grid surfaces on one lattice, to clip".
-- **Clip** stays greyed until one row is complete and none is half typed. Notes: "The RL must be a number of metres"; "The cut depth must be a number of metres above 0". Error alert: "Command failed: Choose Keep below, Keep above, or both".
+- **Clip** stays greyed until both seam slots are filled and one limit row is complete and none is half typed. Notes: "The RL must be a number of metres"; "The cut depth must be a number of metres above 0". Error alert: "Command failed: Choose Keep below, Keep above, or both".
 - The seam's own surfaces are not offered as limits; clicking one in the view warns "A surface being clipped cannot also be its own limit".
 - Warning alerts: "A Floor cannot be measured against: it is not one regular grid of square cells, as Build Surface makes", and "Triangulation operation failed: The roof and floor do not share a lattice: select a seam's roof and floor built on one grid". A floor from **Thickness Surfaces** shares its roof's grid.
 - Warning alert "Triangulation operation failed: Nothing of the seam is left between the limits, so nothing was made".

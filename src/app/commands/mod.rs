@@ -43,7 +43,7 @@ use crate::{
     app::App,
     i18n::tr,
     model::Command,
-    ui::state::{ActiveTool, TriCutSource, UiCommand},
+    ui::state::{ActiveTool, UiCommand},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -1704,26 +1704,7 @@ impl<'a> App<'a> {
                 result
             }
             UiCommand::OpenCutTriangulationToSurface => {
-                // Select first, then act: the seam clipped is the roof and floor
-                // selected; the limits, surfaces of the same kind, are picked in
-                // the dialog.
-                let targets = self.selected_triangulations();
-                if triangulation::seam_targets(&targets).is_none() {
-                    userspace_warn!("{}", tr!("cmd-cuts-to-surface-select-seam"));
-                    return Ok(());
-                }
-                // A surface is the primary choice for both rows; the deposit's
-                // last depth waits in its field for when Depth is chosen.
-                let depth = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.cut_depth);
-                self.editor.tri_cut_to_open = true;
-                self.editor.tri_cut_to_targets = targets;
-                self.editor.tri_cut_to_upper_source = TriCutSource::Surface;
-                self.editor.tri_cut_to_upper_id = None;
-                self.editor.tri_cut_to_upper_level_input.clear();
-                self.editor.tri_cut_to_lower_source = TriCutSource::Surface;
-                self.editor.tri_cut_to_lower_id = None;
-                self.editor.tri_cut_to_lower_level_input.clear();
-                self.editor.tri_cut_to_depth_input = depth.map(|depth| depth.to_string()).unwrap_or_default();
+                self.open_clip_to_surface();
                 Ok(())
             }
             UiCommand::ExecuteCutTriangulationToSurface { targets, upper, lower } => {

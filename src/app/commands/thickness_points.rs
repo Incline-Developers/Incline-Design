@@ -155,27 +155,48 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Open the dialog on the one surface selected, with any holes selected
-    /// beside it, its seam prefilled when the surface was built this
-    /// session.
+    /// Open the dialog on the holes selected, and the one surface selected
+    /// if any; or point the open dialog at the holes, keeping its surface
+    /// and seam.
     pub(crate) fn open_thickness_points(&mut self) {
-        let Some(surface) = self.one_selected_surface() else {
-            return;
-        };
         let mut holes = Vec::new();
         self.for_each_reference_hole(|hole| holes.push(hole));
         holes.sort_unstable_by_key(|hole| (hole.dataset.0, hole.hole));
-        let seam = seam_prefill(self.session.surface_seams.get(&surface), self.editor.last_seam.as_ref());
+        if let Some(draft) = self.editor.thickness_points_dialog.as_mut() {
+            draft.holes = holes;
+            // Read from the holes, so read again.
+            draft.codes = None;
+            return;
+        }
         self.editor.thickness_points_dialog = Some(ThicknessPointsDraft {
-            surface,
-            surface_label: self.triangulation_name(surface),
+            surface: None,
             holes,
-            seam,
+            seam: seam_prefill(None, self.editor.last_seam.as_ref()),
             codes: None,
             pairs: None,
             then_surface: true,
             grid: GridCheck::Checking,
         });
+        if let Some(id) = super::tool_subject::only(&self.selected_triangulations()) {
+            self.set_thickness_surface(id);
+        }
+    }
+
+    /// The seam is prefilled when the surface was built this session, and
+    /// the surface is read as a grid afresh.
+    pub(super) fn set_thickness_surface(&mut self, surface: TriangulationId) {
+        if !self.triangulations.iter().any(|triangulation| triangulation.id == surface && triangulation.state.loaded) {
+            return;
+        }
+        let built_on = self.session.surface_seams.get(&surface).map(|source| seam_prefill(Some(source), None));
+        let Some(draft) = self.editor.thickness_points_dialog.as_mut() else {
+            return;
+        };
+        draft.surface = Some(surface);
+        draft.grid = GridCheck::Checking;
+        if let Some(seam) = built_on {
+            draft.seam = seam;
+        }
         self.check_grid(surface);
     }
 
@@ -204,10 +225,10 @@ impl<'a> App<'a> {
 
     /// Hand a grid check to whichever dialog is open on `surface`.
     fn set_grid_check(&mut self, surface: TriangulationId, check: GridCheck) {
-        if let Some(draft) = self.editor.thickness_points_dialog.as_mut().filter(|draft| draft.surface == surface) {
+        if let Some(draft) = self.editor.thickness_points_dialog.as_mut().filter(|draft| draft.surface == Some(surface)) {
             draft.grid = check.clone();
         }
-        if let Some(draft) = self.editor.seam_surface_dialog.as_mut().filter(|draft| draft.surface == surface) {
+        if let Some(draft) = self.editor.seam_surface_dialog.as_mut().filter(|draft| draft.surface == Some(surface)) {
             draft.grid = check;
         }
     }
@@ -696,6 +717,10 @@ impl<'a> App<'a> {
             }
         }
         self.session.thickness_runs.insert(against.0, run_record(against.1, name.clone(), &chosen, &run.points));
+        // A Thickness Surfaces dialog open on the surface reads its run anew.
+        if self.editor.seam_surface_dialog.as_ref().is_some_and(|draft| draft.surface == Some(against.0)) {
+            self.set_seam_surface(against.0);
+        }
         // The surface stays the selection, so Thickness Surfaces is ready.
         self.select_only([SceneEntityId::Triangulation(against.0)]);
         let Some(layer) = made_layer else {
@@ -771,24 +796,42 @@ impl<'a> App<'a> {
         })
     }
 
-    /// Open the thickness surfaces dialog on the one surface selected, or
-    /// say why it cannot make one.
+    /// Open the thickness surfaces dialog, on the one surface selected if
+    /// any.
     pub(crate) fn open_seam_surface(&mut self) {
-        let Some(surface) = self.one_selected_surface() else {
+        self.editor.seam_surface_dialog = Some(SeamSurfaceDraft {
+            surface: None,
+            run_label: String::new(),
+            output_label: String::new(),
+            grid: GridCheck::Checking,
+            problem: None,
+        });
+        if let Some(id) = super::tool_subject::only(&self.selected_triangulations()) {
+            self.set_seam_surface(id);
+        }
+    }
+
+    /// The run and the surface made follow the surface chosen, or the
+    /// dialog says why it cannot make one.
+    pub(super) fn set_seam_surface(&mut self, surface: TriangulationId) {
+        let input = self.seam_surface_input(surface);
+        let Some(draft) = self.editor.seam_surface_dialog.as_mut() else {
             return;
         };
-        match self.seam_surface_input(surface) {
+        draft.surface = Some(surface);
+        draft.grid = GridCheck::Checking;
+        match input {
             Ok(input) => {
-                self.editor.seam_surface_dialog = Some(SeamSurfaceDraft {
-                    surface,
-                    surface_label: input.surface.name,
-                    run_label: tr!("cmd-seam-surface-run", name = input.run, count = input.samples.len().to_string()),
-                    output_label: input.output,
-                    grid: GridCheck::Checking,
-                });
+                draft.run_label = tr!("cmd-seam-surface-run", name = input.run, count = input.samples.len().to_string());
+                draft.output_label = input.output;
+                draft.problem = None;
                 self.check_grid(surface);
             }
-            Err(reason) => userspace_warn!("{}", reason),
+            Err(reason) => {
+                draft.run_label.clear();
+                draft.output_label.clear();
+                draft.problem = Some(reason);
+            }
         }
     }
 
@@ -857,23 +900,6 @@ impl<'a> App<'a> {
         };
         self.spawn_job_reporting_progress(tr!("cmd-seam-surface-making"), vec![project_key], compute, apply);
         Ok(())
-    }
-
-    /// The one loaded surface selected, or `None` with the count said.
-    fn one_selected_surface(&self) -> Option<TriangulationId> {
-        let selected: Vec<TriangulationId> = self
-            .triangulations
-            .iter()
-            .filter(|triangulation| triangulation.state.loaded && self.editor.selected_handles.contains(&SceneEntityId::Triangulation(triangulation.id)))
-            .map(|triangulation| triangulation.id)
-            .collect();
-        match selected[..] {
-            [surface] => Some(surface),
-            _ => {
-                userspace_warn!("{}", tr!("cmd-thickness-points-select-one-surface", count = selected.len().to_string()));
-                None
-            }
-        }
     }
 
     pub(super) fn triangulation_name(&self, id: TriangulationId) -> String {
@@ -968,14 +994,34 @@ fn with_unit(value: f64, unit: &str) -> String {
     if unit.is_empty() { number } else { format!("{number} {unit}") }
 }
 
+/// Whether a quality mark is one a misfit map wrote: the mark's own form,
+/// split where the measure goes.
+fn misfit_map_mark() -> impl Fn(&str) -> bool {
+    let form = tr!("hole-misfit-mark", measure = "\u{1}".to_string());
+    let (before, after) = form.split_once('\u{1}').unwrap_or((form.as_str(), ""));
+    let (before, after) = (before.to_owned(), after.to_owned());
+    move |name: &str| name.len() > before.len() + after.len() && name.starts_with(&before) && name.ends_with(&after)
+}
+
+/// How many of `selected` are the quality points [`quality_points_in`]
+/// takes, walking the selection rather than the document.
+pub(super) fn quality_point_count(document: &Document, selected: &std::collections::HashSet<SceneEntityId>) -> usize {
+    let mapped = misfit_map_mark();
+    let marked = |layer: LayerId| document.layer(layer).is_some_and(|layer| layer.quality.as_ref().is_some_and(|mark| !mapped(&mark.name)));
+    selected
+        .iter()
+        .filter(|handle| match handle {
+            SceneEntityId::Object(id) => matches!(document.get_object(*id), Some(Object::Point { layer, .. }) if marked(*layer)),
+            _ => false,
+        })
+        .count()
+}
+
 /// The `selected` points on quality-marked layers, less the layers a misfit
 /// map wrote, and each layer read with its name and count, in document
 /// order.
 fn quality_points_in(document: &Document, selected: &std::collections::HashSet<SceneEntityId>) -> (Vec<ObjectId>, Vec<(LayerId, String, usize)>) {
-    // The mark's own form, split where the measure goes.
-    let form = tr!("hole-misfit-mark", measure = "\u{1}".to_string());
-    let (before, after) = form.split_once('\u{1}').unwrap_or((form.as_str(), ""));
-    let mapped = |name: &str| name.len() > before.len() + after.len() && name.starts_with(before) && name.ends_with(after);
+    let mapped = misfit_map_mark();
     let mut points = Vec::new();
     let mut layers: Vec<(LayerId, String, usize)> = Vec::new();
     for object in document.objects() {

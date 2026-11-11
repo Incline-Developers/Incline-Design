@@ -538,6 +538,10 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
 /// Thin Strings: a tolerance typed or slid, the strings as they would be
 /// drawn over the scene, Apply to keep it. Nothing changes until Apply.
 pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(dialog) = editor.thin_strings_dialog.as_mut() else {
         return;
     };
@@ -553,6 +557,15 @@ pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
         .min_width(280.0)
         .max_width(320.0)
         .show(ui.ctx(), |ui| {
+            if menu::picked_selection_field(
+                ui,
+                tr!("context-polylines"),
+                tr!("ui-selected-polylines", count = object_count.to_string()),
+                tr!("edit-thin-polylines-help"),
+                PICKED_FIELD_WIDTH,
+            ) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::Thin));
+            }
             MenuFieldF64::new(tr!("edit-thin-tolerance"), &mut tolerance, 0.0..=f64::MAX)
                 .help_text(tr!("edit-thin-tolerance-help"))
                 .speed(0.01)
@@ -588,7 +601,6 @@ pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                     close = true;
                 }
             });
-            ui.label(tr!("ui-selected-polylines", count = object_count));
         });
 
     if tolerance.is_finite() && tolerance != dialog.tolerance {
@@ -607,6 +619,10 @@ pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
 }
 
 pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(dialog) = editor.insert_point_at_spacing_dialog.as_mut() else {
         return;
     };
@@ -622,6 +638,15 @@ pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mu
         .min_width(280.0)
         .max_width(300.0)
         .show(ui.ctx(), |ui| {
+            if menu::picked_selection_field(
+                ui,
+                tr!("context-polylines"),
+                tr!("ui-selected-polylines", count = object_count.to_string()),
+                tr!("pick-selection-polylines-help"),
+                PICKED_FIELD_WIDTH,
+            ) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::InsertAtSpacing));
+            }
             MenuFieldF64::new(tr!("edit-spacing"), &mut dialog.spacing, 0.001..=f64::MAX)
                 .help_text(tr!("edit-spacing-help"))
                 .width(120.0)
@@ -640,7 +665,6 @@ pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mu
                     close = true;
                 }
             });
-            ui.label(tr!("ui-selected-polylines", count = object_count.to_string()));
         });
 
     // The run closes the dialog only when it succeeds, so a refused spacing
@@ -657,6 +681,10 @@ pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mu
 
 /// Smooth Strings: a tolerance typed, Apply to round the corners.
 pub(crate) fn draw_smooth_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(dialog) = editor.smooth_strings_dialog.as_mut() else {
         return;
     };
@@ -672,6 +700,15 @@ pub(crate) fn draw_smooth_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorS
         .min_width(280.0)
         .max_width(300.0)
         .show(ui.ctx(), |ui| {
+            if menu::picked_selection_field(
+                ui,
+                tr!("context-polylines"),
+                tr!("ui-selected-polylines", count = object_count.to_string()),
+                tr!("edit-smooth-polylines-help"),
+                PICKED_FIELD_WIDTH,
+            ) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::Smooth));
+            }
             MenuFieldF64::new(tr!("edit-smooth-tolerance"), &mut dialog.tolerance, 0.001..=f64::MAX)
                 .help_text(tr!("edit-smooth-tolerance-help"))
                 .width(120.0)
@@ -690,7 +727,6 @@ pub(crate) fn draw_smooth_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                     close = true;
                 }
             });
-            ui.label(tr!("ui-selected-polylines", count = object_count.to_string()));
         });
 
     // The run closes the dialog only when it succeeds, so a refused

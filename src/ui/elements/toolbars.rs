@@ -12,7 +12,7 @@
 
 use crate::{
     i18n::tr,
-    model::{Axis, SceneEntityId},
+    model::Axis,
     ui::{
         EditorState, UiProjectView,
         elements::main_menu::MenuRow,
@@ -119,7 +119,6 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
 fn drawing_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
     let mut tools = left_tools(ui, editor, editing_enabled, project_active);
     tools.retain(|tool| !matches!(tool.action, LeftToolAction::Tool(active) if active.designs_pit()));
-    let has_object = editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
     let cell = |icon: egui::ImageSource<'static>, tooltip: String, action: LeftToolAction, enabled: bool| LeftTool {
         icon: egui::Image::new(icon),
         tooltip,
@@ -144,7 +143,7 @@ fn drawing_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, pro
             themed_icon!(ui, "set_z.svg"),
             tr!("common-set") + " Z...",
             LeftToolAction::Command(Box::new(UiCommand::OpenMoveToAxisDialog(Axis::Z))),
-            has_object,
+            true,
         ),
         cell(
             themed_icon!(ui, "insert_crossings.svg"),
@@ -157,13 +156,14 @@ fn drawing_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, pro
             themed_icon!(ui, "reverse_string.svg"),
             tr!("toolbars-reverse-strings"),
             LeftToolAction::Command(Box::new(UiCommand::ReverseSelectedStrings)),
-            editor.selection_counts.polylines > 0,
+            // Opens straight into the pick when no polyline is selected.
+            true,
         ),
         cell(
             themed_icon!(ui, "thin_string.svg"),
             tr!("toolbars-thin-strings"),
             LeftToolAction::Command(Box::new(UiCommand::OpenThinStringsDialog)),
-            editor.selection_counts.polylines > 0,
+            true,
         ),
     ]);
     tools

@@ -976,21 +976,17 @@ impl MenuRow {
     }
 
     /// Whether the row can run as the editor stands, beside
-    /// [`MenuRow::enabled`]: select first, then act, for the rows that still
-    /// open on the selection, and a tool as its toolbar cell is (layer, fly,
-    /// section). The Design menu's functions Geology offers run as that menu
-    /// runs them.
+    /// [`MenuRow::enabled`]: a tool as its toolbar cell is (layer, fly,
+    /// section), and a row on the stroke being drawn. No row waits on the
+    /// selection. The Design menu's functions Geology offers run as that
+    /// menu runs them.
     pub(crate) fn ready(self, editor: &EditorState) -> bool {
         match self {
-            Self::CleanStrings | Self::GeologyCleanStrings => editor.selection_counts.open_strings > 0,
-            Self::ClipToSurface | Self::ModellingClipToSurface => editor.selection_counts.triangulations == 2,
-            Self::ThicknessPoints | Self::ThicknessSurfaces => editor.selection_counts.triangulations == 1,
             Self::Tool(tool) => {
                 !editor.fly_mode_enabled
                     && (!tool.requires_active_layer() || editor.active_layer.is_some())
                     && !(editor.slice_mode_enabled && tool.section_refuses(editor.active_workspace))
             }
-            Self::InsertAtSpacing | Self::Reverse | Self::Thin | Self::Smooth => editor.selection_counts.polylines > 0,
             // Carrying on, the string's end is not the stroke's to give back.
             Self::RemoveLastVertex => {
                 !editor.pending_stroke.is_empty() && !editor.poly_finish_dialog && !(editor.pending_stroke.len() == 1 && string_rework_live(editor).is_some())
@@ -1003,17 +999,6 @@ impl MenuRow {
             // Saved only while drawn: the switch on and a section up.
             Self::SaveSurfaceLines => editor.slice_mode_enabled && editor.section_surface_lines_on(),
             _ => true,
-        }
-    }
-
-    /// Why a row [`MenuRow::ready`] holds back is greyed, for the rows that
-    /// wait on a selection the menu can name. The macOS menus show no hint.
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
-    pub(crate) fn needs(self) -> Option<String> {
-        match self {
-            Self::ThicknessPoints | Self::ThicknessSurfaces => Some(tr!("ws-menubar-modelling-select-surface")),
-            Self::ClipToSurface | Self::ModellingClipToSurface => Some(tr!("ws-menubar-modelling-select-surfaces")),
-            _ => None,
         }
     }
 
@@ -1201,9 +1186,6 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         // functions list.
         let draw_row = |ui: &mut egui::Ui, row: MenuRow, commands: &mut Vec<UiCommand>| {
             let mut action = ContextMenuAction::new(row.label()).enabled(row.enabled(project) && row.ready(editor));
-            if let Some(needs) = row.needs() {
-                action = action.disabled_hover_text(needs);
-            }
             if let Some(checked) = row.checked(editor) {
                 action = action.checked(checked);
             }

@@ -1763,11 +1763,11 @@ fn draw_global_dialogs(
     dialogs::drill_hole::draw_interval_delete_dialog(root_ui, editor, drill_holes, commands);
     dialogs::reference_points::draw_reference_points_dialog(root_ui, editor, drill_holes, commands);
     dialogs::reference_surface::draw_reference_surface_dialog(root_ui, editor, project, commands);
-    dialogs::thickness_points::draw_thickness_points_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::thickness_points::draw_thickness_points_dialog(root_ui, editor, drill_holes, project, commands);
     dialogs::thickness_points::draw_thickness_table(root_ui, editor);
     dialogs::thickness_points::draw_hole_misfit_dialog(root_ui, editor, drill_holes, project, commands);
     dialogs::thickness_points::draw_hole_misfit_table(root_ui, editor);
-    dialogs::thickness_points::draw_seam_surface_dialog(root_ui, editor, commands);
+    dialogs::thickness_points::draw_seam_surface_dialog(root_ui, editor, project, commands);
     dialogs::thickness_points::draw_seam_table(root_ui, editor);
     geometry_dirty |= dialogs::drill_pattern::draw_drill_pattern_dialog(root_ui, editor, document, commands);
     dialogs::charging::draw_charge_product_dialog(root_ui, editor, commands);

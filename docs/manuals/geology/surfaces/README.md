@@ -41,7 +41,7 @@ The hole logs say where the seam is down the hole; the surface needs where it is
 ### Where it is
 Geology workspace > **Modelling > Reference Points...**
 ### Before you start
-Select first, then act: select the holes you want points on, either the whole drill hole dataset or single holes. For the example, select S1, S2 and S3. The seam you chose last time is remembered.
+The entry is always enabled. Selecting the holes you want points on first, either the whole drill hole dataset or single holes, prefills the dialog; **Pick** can also set them. For the example, select S1, S2 and S3. The seam you chose last time is remembered.
 ### Steps
 1. Select S1, S2 and S3 and open **Modelling > Reference Points...** The dialog is titled **Reference Points** and its **Holes** line reads "3 holes from" the dataset name.
 2. Leave **Points at** on **A logged pick**.
@@ -55,15 +55,14 @@ Select first, then act: select the holes you want points on, either the whole dr
 ### Options and defaults
 | Option | Default | What it does |
 |---|---|---|
-| **Holes** | The holes selected when the dialog opened | Read only. Close the dialog to pick others. |
+| **Holes** | The holes selected when the dialog opened | A count plus **Pick**, which opens the **Pick from View** prompt to choose others. |
 | **Points at** | **A logged pick** | Or **The collars**, one point per hole at its collar. |
 | **Working section field** | The first categorical field | The field that carries the seam or working section. |
 | **Working section** | The first section the holes log, else the first code | A named working section, or one code. |
 | **Side** | **Roof** | **Roof** is the top of the seam, **Floor** its base. |
 
 ### What it refuses and why
-- Menu entry greyed, hover *Select drillholes first*: no hole is selected.
-- Warning alert "Select the holes to place reference points on": the dialog was opened with no holes.
+- The entry is always enabled. With no hole selected the **Holes** row reads "No holes selected"; **Pick** fills it.
 - **Make** greyed: no working section is chosen.
 - Warning alert "No hole holds 'A' in that field": none of the holes logs that value; nothing is made.
 - A hole that logs the seam twice gives its upper run and is named: "Uppermost run used, flagged: S2". Two or more datasets with differing working sections: "Working section 'A' is not the same in every selected dataset; each dataset's own was used." Each is a warning: an alert titled **Build Reference Points** opens, with the run's other lines under **Details**.
@@ -80,7 +79,7 @@ It turns picks into a surface you can cut, measure thickness against and check. 
 ### Where it is
 Geology workspace > **Modelling > Build Surface...**
 ### Before you start
-Select first, then act: select the points and, if you want them, the control strings (open polylines) and one extent (a closed polyline). The selected points and the vertices of the selected control strings must number at least 3, or the entry stays grey. For the example, with the three points of `A Roof points` still selected, draw one open string on a new layer `A controls`, with vertices (1000, 1000, 79.5), (1100, 1000, 77.5) and (1200, 1000, 76), then hold Shift and click it to add it to the selection.
+The entry is always enabled. Selecting the points and, if you want them, the control strings (open polylines) and one extent (a closed polyline) first prefills the dialog; the **Points** row's **Pick** can also set all three, told apart by kind. The points and the vertices of the control strings must number at least 3, or **Make** stays grey. For the example, with the three points of `A Roof points` still selected, draw one open string on a new layer `A controls`, with vertices (1000, 1000, 79.5), (1100, 1000, 77.5) and (1200, 1000, 76), then hold Shift and click it to add it to the selection.
 ### Steps
 1. Open **Modelling > Build Surface...** The dialog **Build Surface** shows **Points** "3 point(s) on 'A Roof points'", **Controls** "1 control string(s) on 'A controls'", **Extent** "No extent", and the settings line with "Change these in Preferences, Modelling" under it.
 2. Type `A Roof` in **Output name**. It is offered already when the points were made by **Reference Points** in this session; points made in an earlier session offer their layer's name, `A Roof points`.
@@ -94,13 +93,13 @@ Select first, then act: select the points and, if you want them, the control str
 ### Options and defaults
 | Option | Default | What it does |
 |---|---|---|
-| **Points** | The points selected at open | Read only. Points outside the extent still shape the surface. |
-| **Controls** | The open strings selected at open | Read only. The surface runs through them at their own heights. |
-| **Extent** | The one closed string selected, else none | The surface is cut to it. Without one: the points' outline plus 25 m. |
+| **Points** | The points selected at open | A count plus **Pick**, which reads points, control strings and extent again from the new selection. Points outside the extent still shape the surface. |
+| **Controls** | The open strings selected at open | Shown only; set by the **Points** row's **Pick**. The surface runs through them at their own heights. |
+| **Extent** | The one closed string selected, else none | Shown only; set by the **Points** row's **Pick**. The surface is cut to it. Without one: the points' outline plus 25 m. |
 | **Output name** | The seam's roof or floor name for reference points made this session, else the name of the points' one layer, else `Surface` | Name of the new surface. |
 
 ### What it refuses and why
-- Entry greyed, hover *Select at least 3 points*.
+- The entry is always enabled. For the next two, **Make** stays greyed with the reason in a red line under the fields.
 - "2 point(s) selected; a surface needs at least 3", or with strings "1 point(s) and 1 control string vertex(es) selected; a surface needs at least 3 between them".
 - More than one closed string selected: "Select exactly one closed string to clip the surface to".
 - Extent: "The extent string crosses itself in plan"; "No part of the surface falls inside the extent"; "1 point(s) inside the extent; a surface needs at least 3".

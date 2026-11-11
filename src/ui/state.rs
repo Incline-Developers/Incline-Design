@@ -1478,6 +1478,9 @@ pub(crate) struct SelectionCounts {
     pub(crate) prismoid_cells: usize,
     /// Of those, the ones masked by hand.
     pub(crate) masked_prismoid_cells: usize,
+    /// Selected points on quality-marked layers, which Misfit at Holes
+    /// compares; counted only while its pick is up.
+    pub(crate) quality_points: usize,
 }
 
 /// The tools that work on a set of design objects or holes, which have no
@@ -1497,6 +1500,15 @@ pub(crate) enum SelectionPickTool {
     /// Has no dialog: opens straight into the pick when no prismoid is
     /// selected, and masks or unmasks on Done.
     MaskPrismoids,
+    /// The holes measured; the surface is chosen apart.
+    ThicknessPoints,
+    InsertAtSpacing,
+    Thin,
+    Smooth,
+    /// Reverse and Clean Strings have no dialog: each opens straight into
+    /// the pick when the selection holds nothing for it, and runs on Done.
+    Reverse,
+    CleanStrings,
 }
 
 /// A tool's Pick in progress. Its dialog is hidden and the viewport selects
@@ -1542,6 +1554,14 @@ pub(crate) enum TriangulationPickTarget {
     PrismoidFloor,
     /// The closed polyline Mask Prismoid Grid by Polyline masks along.
     PrismoidMaskBoundary,
+    /// One of the seam's two surfaces Clip to Surface clips.
+    ClipToSeam,
+    /// The seam's other surface.
+    ClipToSeamOther,
+    /// The surface Thickness Points measures against.
+    ThicknessSurface,
+    /// The surface Thickness Surfaces hangs the seam's other surface from.
+    SeamSurface,
 }
 
 /// What a tool works on, chosen in its dialog. The app derives what follows
@@ -1563,6 +1583,8 @@ pub(crate) enum ToolSubject {
     MisfitGrid(PrismoidGridId),
     PrismoidBlockModel(PrismoidGridId),
     MaskGrid(PrismoidGridId),
+    ThicknessSurface(TriangulationId),
+    SeamSurface(TriangulationId),
 }
 
 impl TriangulationPickTarget {
@@ -1582,6 +1604,7 @@ impl TriangulationPickTarget {
             | Self::PrismoidRoof
             | Self::PrismoidFloor => tr!("state-click-surface-viewport"),
             Self::ClipBoundary | Self::PrismoidMaskBoundary => tr!("state-click-closed-polyline-viewport"),
+            Self::ClipToSeam | Self::ClipToSeamOther | Self::ThicknessSurface | Self::SeamSurface => tr!("state-click-surface-viewport"),
         }
     }
 
@@ -3515,9 +3538,10 @@ pub(crate) struct EditorState {
     pub(crate) model_envelope: Option<crate::model::project::ModelEnvelope>,
     pub(crate) tri_cut_surface_unload_source: bool,
 
-    // Clip to Surface: the seam's roof and floor selected at open, and its limits
+    // Clip to Surface: the seam's roof and floor, in either slot, and its
+    // limits
     pub(crate) tri_cut_to_open: bool,
-    pub(crate) tri_cut_to_targets: Vec<TriangulationId>,
+    pub(crate) tri_cut_to_seam: [Option<TriangulationId>; 2],
     /// Keep below: a surface, or an RL as typed.
     pub(crate) tri_cut_to_upper_source: TriCutSource,
     pub(crate) tri_cut_to_upper_id: Option<TriangulationId>,
@@ -4987,7 +5011,7 @@ impl EditorState {
         self.hole_misfit_table = None;
         self.seam_surface_dialog = None;
         self.tri_cut_to_open = false;
-        self.tri_cut_to_targets.clear();
+        self.tri_cut_to_seam = [None; 2];
         self.seam_table = None;
         self.seam_rename_dialog = None;
         self.name_shift_dialog = None;
@@ -5461,7 +5485,7 @@ impl EditorState {
             model_envelope: None,
             tri_cut_surface_unload_source: true,
             tri_cut_to_open: false,
-            tri_cut_to_targets: Vec::new(),
+            tri_cut_to_seam: [None; 2],
             tri_cut_to_upper_source: TriCutSource::Surface,
             tri_cut_to_upper_id: None,
             tri_cut_to_upper_level_input: String::new(),
@@ -7313,7 +7337,8 @@ pub(crate) enum UiCommand {
         /// Unload the source surface once the slice lands.
         unload_source: bool,
     },
-    /// Open the "Clip to Surface" dialog on the surfaces selected.
+    /// Open the "Clip to Surface" dialog, on the seam's two surfaces when
+    /// the selection holds exactly two.
     OpenCutTriangulationToSurface,
     /// Clip the seam whose roof and floor are `targets` to the limits, Keep
     /// below first, into a new roof, floor and solid on the same lattice.
@@ -8616,6 +8641,16 @@ impl EditorState {
         }
         self.viewport_pick_hover_label = None;
         self.tri_hover_handles.clear();
+    }
+
+    /// The surfaces Clip to Surface's Keep below and Keep above rows hold
+    /// as limits; a row set to an RL holds none.
+    pub(crate) fn clip_to_limit_surfaces(&self) -> [Option<TriangulationId>; 2] {
+        let surface = |source: TriCutSource, id: Option<TriangulationId>| id.filter(|_| source != TriCutSource::Level);
+        [
+            surface(self.tri_cut_to_upper_source, self.tri_cut_to_upper_id),
+            surface(self.tri_cut_to_lower_source, self.tri_cut_to_lower_id),
+        ]
     }
 }
 
@@ -11211,14 +11246,13 @@ pub(crate) struct ReferenceSurfaceDraft {
     pub(crate) quality: Option<crate::model::triangulation::QualityMark>,
 }
 
-/// What the thickness points dialog was opened on and has chosen: the
-/// selected surface, the holes, the seam, and the measured pairs file.
+/// What the thickness points dialog works on: the surface, the holes, the
+/// seam, and the measured pairs file.
 #[derive(Clone, Debug)]
 pub(crate) struct ThicknessPointsDraft {
-    pub(crate) surface: TriangulationId,
-    pub(crate) surface_label: String,
-    /// The holes selected alongside the surface; none means every loaded
-    /// hole holding the section.
+    /// `None` until one is chosen.
+    pub(crate) surface: Option<TriangulationId>,
+    /// The holes picked; none means every loaded hole holding the section.
     pub(crate) holes: Vec<DrillHoleRef>,
     pub(crate) seam: SeamChoice,
     /// The codes the holes log in a field, read once each time the field
@@ -11239,15 +11273,17 @@ pub(crate) enum GridCheck {
     Refused(String),
 }
 
-/// What the thickness surfaces dialog was opened on: the selected surface,
-/// the thickness run it will grid, and the surface it makes.
+/// What the thickness surfaces dialog works on: the surface, the thickness
+/// run it will grid, and the surface it makes.
 #[derive(Clone, Debug)]
 pub(crate) struct SeamSurfaceDraft {
-    pub(crate) surface: TriangulationId,
-    pub(crate) surface_label: String,
+    /// `None` until one is chosen.
+    pub(crate) surface: Option<TriangulationId>,
     pub(crate) run_label: String,
     pub(crate) output_label: String,
     pub(crate) grid: GridCheck,
+    /// Why the chosen surface cannot make one, if it cannot.
+    pub(crate) problem: Option<String>,
 }
 
 /// One thickness grid as its node table shows it.

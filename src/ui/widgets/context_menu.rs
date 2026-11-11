@@ -222,7 +222,6 @@ pub(crate) struct ContextMenuAction {
     enabled: bool,
     submenu: bool,
     checked: Option<bool>,
-    disabled_hover: Option<egui::WidgetText>,
     strikethrough: bool,
     swatch: Option<egui::Color32>,
 }
@@ -235,7 +234,6 @@ impl ContextMenuAction {
             enabled: true,
             submenu: false,
             checked: None,
-            disabled_hover: None,
             strikethrough: false,
             swatch: None,
         }
@@ -276,14 +274,6 @@ impl ContextMenuAction {
         self
     }
 
-    /// What hovering the row says while it is greyed out: usually what to
-    /// select first.
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
-    pub(crate) fn disabled_hover_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
-        self.disabled_hover = Some(text.into());
-        self
-    }
-
     pub(crate) fn submenu(mut self, submenu: bool) -> Self {
         self.submenu = submenu;
         self
@@ -296,7 +286,6 @@ impl ContextMenuAction {
             enabled,
             submenu,
             checked,
-            disabled_hover,
             strikethrough,
             swatch,
         } = self;
@@ -370,11 +359,7 @@ impl ContextMenuAction {
                     ));
                 }
             }
-            let response = if rect.width() + 0.5 < natural_width { response.hint(full_label) } else { response };
-            match disabled_hover {
-                Some(text) => response.disabled_hint(text),
-                None => response,
-            }
+            if rect.width() + 0.5 < natural_width { response.hint(full_label) } else { response }
         })
         .inner
     }

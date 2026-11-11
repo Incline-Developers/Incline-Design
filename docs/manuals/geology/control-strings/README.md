@@ -42,7 +42,7 @@ The string tools below are in the Geology workspace only, except **Clean Strings
 
 Tools that work in the plane of a section are on the [sections page](../sections/README.md).
 
-Select first, then act: tools that work on whole strings take the selected strings.
+Tools that work on whole strings take the selected strings. They are always enabled; with nothing suitable selected, **Clean Strings** and **Reverse String Direction** open a **Pick from View** prompt instead.
 
 Where this page says the console, it means the activity console. It is closed at first; **View > Show Console** shows and hides it and remembers your choice. A warning or an error also opens an alert with its words.
 
@@ -58,7 +58,7 @@ A string drawn by hand picks up small flaws: a point clicked twice, a spike, a s
 - Production workspace: **Design > Clean Strings**.
 - Right click anywhere on the canvas while open strings are selected: **Clean Strings**.
 ### Before you start
-Select one or more open strings (closed lines are not taken). The entry is greyed while none is selected. A project must be open. Each layer is cleaned on its own, so strings are never compared with another layer's. Strings are numbered from 1 among the selected strings of each layer, in the order they were made, and the console uses those numbers. **Clean this string** on a ring cleans one string, so it reports it as String 1.
+Select one or more open strings (closed lines are not taken); they are cleaned at once. The entry is always enabled. With no open string selected it opens the **Pick from View** prompt "Select the open polylines to clean."; **Done** stays disabled until at least one is picked, then the tool runs. A project must be open. Each layer is cleaned on its own, so strings are never compared with another layer's. Strings are numbered from 1 among the selected strings of each layer, in the order they were made, and the console uses those numbers. **Clean this string** on a ring cleans one string, so it reports it as String 1.
 ### Steps
 Set-up: the S1 to S3 set loaded as in [Import drill holes](../drill-holes/README.md#2-import-drill-holes). Make a layer called `Seam A roof` and draw three open polylines on it, in this order, with two vertices each. Set the vertices (X, Y, RL) in the object's vertex table:
 
@@ -98,7 +98,7 @@ Set-up: the S1 to S3 set loaded as in [Import drill holes](../drill-holes/README
 
 **Clean Strings** has no dialog, so these are fixed. The pass runs in this order on each layer: repeated points, spikes, doubling back and loops in each string; bad heights; stretches where two strings run along each other, where the shorter loses the shared stretch; then crossings. A last check names what would still stop a build.
 ### What it refuses and why
-- Greyed when no open string is selected.
+- With no open string selected the tool opens the **Pick from View** prompt, and **Done** stays disabled until one is picked. The canvas right-click entry is shown only while open strings are selected.
 - "Nothing to clean in the selected strings": the run found nothing to change. When nothing in the selection was an open string, the same line is a warning.
 - "String 4 left as drawn: it has arcs" and "String 4 left as drawn: it has non-finite coordinates": that string is skipped, the number is the object's own.
 - Flaws it does not change are listed as "For hand fixing: ..." warnings and ringed: a string with fewer than two distinct vertices, one that ends where it starts, turns back or crosses itself, two points at one place and far apart in height, strings running along each other, strings that pass close without meeting, and strings missing by more than 5 m. Strings missing by more than 0.5 m and up to 5 m get "For Join all at halfway: ..." instead. "For hand fixing: Build Surface still refuses ..." has no place, so it is listed but not ringed.
@@ -247,7 +247,7 @@ The vertex table numbers a string's vertices from its first. Reversing lets you 
 ### Where it is
 Geology workspace: **Geology Design > Edit > Reverse String Direction**. The left toolbar in the Geology workspace has a button with the tooltip *Reverse String Direction*.
 ### Before you start
-Select first, then act: select one or more strings, open or closed. The entry and the button are greyed while no string is selected. Strings that are hidden, on a locked layer or frozen are left alone. For the example, on the layer `Seam A roof` draw one open string and set its vertices in the vertex table as X, Y and RL: 1 (1000, 1100, 79.0), 2 (1100, 1100, 78.0), 3 (1200, 1100, 77.0).
+Select one or more strings, open or closed, and the tool runs at once. The entry and the button are always enabled; with no polyline selected they open the **Pick from View** prompt "Select the polylines to reverse.", and **Done** stays disabled until at least one is picked, then the tool runs. Strings that are hidden, on a locked layer or frozen are left alone. For the example, on the layer `Seam A roof` draw one open string and set its vertices in the vertex table as X, Y and RL: 1 (1000, 1100, 79.0), 2 (1100, 1100, 78.0), 3 (1200, 1100, 77.0).
 ### Steps
 1. Select the string and choose **Geology Design > Edit > Reverse String Direction**.
 2. Open the vertex table. Row 1 is now (1200, 1100, 77.0), row 2 is (1100, 1100, 78.0) and row 3 is (1000, 1100, 79.0). The line on the canvas has not moved.
@@ -257,7 +257,7 @@ Select first, then act: select one or more strings, open or closed. The entry an
 ### Options and defaults
 None.
 ### What it refuses and why
-- Greyed when no string is selected.
+- With no polyline selected, the **Pick from View** prompt opens and **Done** stays disabled until one is picked.
 - Console "No selected string can be reversed (hidden or locked)": every selected string was hidden, locked or frozen. Nothing changes.
 ### Related tools
 [Clean Strings](#2-clean-strings), [Carry On a String](#6-carry-on-a-string)

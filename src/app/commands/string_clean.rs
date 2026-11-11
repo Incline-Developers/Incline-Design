@@ -604,7 +604,9 @@ pub(crate) fn vertex_at(verts: &[PolyVertex], at: DVec3) -> Option<usize> {
 }
 
 impl<'a> App<'a> {
-    /// Clean the selected open polylines of the active project.
+    /// Clean the selected open polylines of the active project. With none
+    /// selected the viewport picks them first, and the pick's Done comes
+    /// back here.
     pub(crate) fn clean_selected_strings(&mut self) {
         let ids: Vec<ObjectId> = self
             .editor
@@ -615,6 +617,11 @@ impl<'a> App<'a> {
                 _ => None,
             })
             .collect();
+        let open_string = |id: &ObjectId| matches!(self.scene_document.get_object(*id), Some(Object::Polyline { closed: false, .. }));
+        if !ids.iter().any(open_string) {
+            self.begin_selection_pick(crate::ui::state::SelectionPickTool::CleanStrings);
+            return;
+        }
         self.clean_strings(&ids);
     }
 

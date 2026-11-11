@@ -34,7 +34,7 @@ The tools on this page are in the **Geology Design** menu of the Geology workspa
 
 The **Recent functions** list and the segment readout of **Measure Distance** help with both. What a control string is, why the strings of one surface share a layer, and how **Clean Strings** finds crossings that disagree in height are on the [Control Strings](../control-strings/README.md#1-concepts) page.
 
-Select first, then act: tools that work on whole strings take the selected strings.
+Tools that work on whole strings take the selected strings. They are always enabled, and a selection only prefills the tool's input; where a tool has a **Polylines** row, **Pick** sets it.
 
 Where this page says the console, it means the activity console. It is closed at first; **View > Show Console** shows and hides it and remembers your choice. A warning or an error also opens an alert with its words.
 
@@ -204,12 +204,12 @@ To give whole strings evenly spaced vertices in one step, so a later edit or a s
 ### Where it is
 - Geology workspace: **Geology Design > Vertices > Insert Points at Spacing...**
 ### Before you start
-Select first, then act: select one or more polylines, open or closed, on layers that are visible and not locked. The entry is greyed while no polyline is selected.
+The entry is always enabled. Selecting one or more polylines, open or closed, on layers that are visible and not locked prefills the **Polylines** row; **Pick** can also set it. With none selected the dialog opens with a count of 0 and **Apply** is greyed.
 ### Steps
 1. On layer `Seam A roof`, away from the other strings, draw an open polyline, set its two vertices in the vertex table as X, Y and RL: (1000, 950, 80.0) and (1200, 950, 76.0), and select it.
-2. Choose **Geology Design > Vertices > Insert Points at Spacing...** The **Insert Point at Spacing** window opens and says "1 polyline(s) selected". Set **Spacing** to 60 and choose **Apply**. The console says "Inserted 3 Spacing point(s)" and the window closes. The string has five vertices, at X 1000, 1050, 1100, 1150 and 1200, with Z 80.00, 79.00, 78.00, 77.00 and 76.00.
+2. Choose **Geology Design > Vertices > Insert Points at Spacing...** The **Insert Point at Spacing** window opens and its **Polylines** row says "1 polyline(s) selected". Set **Spacing** to 60 and choose **Apply**. The console says "Inserted 3 Spacing point(s)" and the window closes. The string has five vertices, at X 1000, 1050, 1100, 1150 and 1200, with Z 80.00, 79.00, 78.00, 77.00 and 76.00.
 
-![Geology workspace, the Insert Point at Spacing window with Spacing 60 m, the Cancel and Apply buttons, and the line 1 polyline(s) selected.](images/07-insert-points-spacing-dialog.svg)
+![Geology workspace, the Insert Point at Spacing window with Spacing 60 m, the Cancel and Apply buttons, and the Polylines row reading 1 polyline(s) selected.](images/07-insert-points-spacing-dialog.svg)
 ### Options and defaults
 | Option | Default | What it does |
 | --- | --- | --- |
@@ -281,9 +281,9 @@ A string traced by clicking or draped on a rough surface carries more vertices t
 ### Where it is
 Geology workspace: **Geology Design > Vertices > Thin Strings...** The Geology toolbar has a **Thin Strings** button too.
 ### Before you start
-Select first, then act: one or more visible, unlocked strings. The entry and the button are greyed while no string is selected. The dialog works on the strings selected when it opened.
+The entry and the button are always enabled. Selecting one or more visible, unlocked strings first prefills the **Polylines** row; **Pick** can also set it. With none selected the dialog opens with a count of 0 and **Apply** is greyed.
 ### Steps
-1. Draw one open string on layer `Seam A roof` with the vertices (1000, 1100, 78.00), (1050, 1100, 78.05), (1100, 1100, 78.00), (1150, 1100, 78.30) and (1200, 1100, 78.00), select it and choose **Geology Design > Vertices > Thin Strings...** The dialog opens with **Tolerance** 0.1 m and says "Vertices: 5 now, 4 after". The string is drawn over the scene as it would be left, its kept vertices marked.
+1. Draw one open string on layer `Seam A roof` with the vertices (1000, 1100, 78.00), (1050, 1100, 78.05), (1100, 1100, 78.00), (1150, 1100, 78.30) and (1200, 1100, 78.00), select it and choose **Geology Design > Vertices > Thin Strings...** The dialog opens with **Tolerance** 0.1 m and says "Vertices: 5 now, 4 after". Opening it again, or **Done** after **Pick**, keeps the tolerance typed. The string is drawn over the scene as it would be left, its kept vertices marked.
 2. Click **Apply**. Vertex 2 (1050, 1100, 78.05) is 0.05 m off the line between its neighbours and goes, and the other four stay. The console says "Thinned 1 string(s), 1 vertices removed". Ctrl+Z brings the vertex back.
 
 ![Geology workspace, section view along the string, five vertices before thinning in grey and the four vertices left after Thin Strings at Tolerance 0.1 m in orange.](images/10-thin-strings-section.svg)
@@ -292,7 +292,7 @@ Select first, then act: one or more visible, unlocked strings. The entry and the
 | --- | --- | --- |
 | **Tolerance** | 0.1 m, then the last tolerance applied | A vertex goes when the string without it stays within this distance of it, measured in 3D. Typed, or set with the slider under it, which runs up to a little past the tolerance at which nothing more can go. |
 ### What it refuses and why
-- "Select one or more visible, unlocked strings before thinning": none of the selected strings can be edited, so the dialog does not open.
+- With no editable string selected the dialog still opens, with a count of 0, and **Apply** stays greyed.
 - **Apply** is greyed while the vertex count after is not lower than the count now, as at **Tolerance** 0.
 ### Related tools
 [Smooth Strings](#12-smooth-strings), [Clean Strings](../control-strings/README.md#2-clean-strings)
@@ -307,9 +307,9 @@ A string traced by clicking has sharp corners that a seam does not have, and a s
 ### Where it is
 Geology workspace: **Geology Design > Vertices > Smooth Strings...**, right after **Thin Strings...**
 ### Before you start
-Select first, then act: one or more visible, unlocked strings. The entry is greyed while no string is selected. Closed strings are rounded at every corner.
+The entry is always enabled. Selecting one or more visible, unlocked strings first prefills the **Polylines** row; **Pick** can also set it. With none selected the dialog opens with a count of 0 and **Apply** is greyed. Closed strings are rounded at every corner.
 ### Steps
-1. Draw one open string on layer `Seam A roof` with the vertices (1000, 1100, 78.0), (1100, 1100, 78.0) and (1100, 1000, 78.0), select it and choose **Geology Design > Vertices > Smooth Strings...** The dialog opens with **Tolerance** 0.5 m and "1 polyline(s) selected".
+1. Draw one open string on layer `Seam A roof` with the vertices (1000, 1100, 78.0), (1100, 1100, 78.0) and (1100, 1000, 78.0), select it and choose **Geology Design > Vertices > Smooth Strings...** The dialog opens with **Tolerance** 0.5 m and its **Polylines** row says "1 polyline(s) selected".
 2. Click **Apply**. The console says "Smoothed 1 string(s), 1 corner(s) rounded". The corner vertex (1100, 1100, 78.0) is replaced by 17 vertices from (1098.586, 1100.000, 78.0) to (1100.000, 1098.586, 78.0), so the string has 19. The middle one, (1099.646, 1099.646, 78.0), is 0.5 m from the old corner. Ctrl+Z brings the corner back.
 
 ![Geology workspace, plan view zoomed to the corner of a string at (1100, 1100), the corner in grey and the rounded string after Smooth Strings at Tolerance 0.5 m in orange.](images/11-smooth-strings-plan.svg)
@@ -318,7 +318,7 @@ Select first, then act: one or more visible, unlocked strings. The entry is grey
 | --- | --- | --- |
 | **Tolerance** | 0.5 m, then the last tolerance applied | The most the smoothed string may lie from the original, measured in 3D, from 0.001 m up. **Apply** is greyed unless it is above zero. |
 ### What it refuses and why
-- "Select one or more visible, unlocked strings before smoothing": none of the selected strings can be edited, so the dialog does not open. The same line shows if you lock the strings while the dialog is open and click **Apply**.
+- With no editable string selected the dialog still opens, with a count of 0, and **Apply** stays greyed. The warning "Select one or more visible, unlocked strings before smoothing" shows if you lock the strings while the dialog is open and click **Apply**.
 - "No corner to round; nothing smoothed": nothing changes and the dialog closes. A straight string gives this.
 ### Related tools
 [Thin Strings](#11-thin-strings), [Clean Strings](../control-strings/README.md#2-clean-strings)
@@ -345,7 +345,7 @@ A line enters the list when you run that function from **Geology Design**, from 
 | **Recent functions shown** | 10 | How many lines the list shows: 10, 15 or 20. The list remembers the last 20 functions, and a function used again moves to the top and shows once. |
 ### What it refuses and why
 - "No recent functions": the one greyed line shown before any function has been used.
-- A line is greyed exactly when its **Geology Design** entry is greyed, for example **Reverse String Direction** while no string is selected. With a tool armed, a right click opens no list. On **Create Polyline** it does what Enter does, and on **Create Line** and **Create Circle** it drops the part half drawn. With nothing half drawn, or on any other tool, it puts the tool down.
+- A line is greyed exactly when its **Geology Design** entry is greyed, for example **Drag a Vertex** while **Fly Mode** is on. With a tool armed, a right click opens no list. On **Create Polyline** it does what Enter does, and on **Create Line** and **Create Circle** it drops the part half drawn. With nothing half drawn, or on any other tool, it puts the tool down.
 ### Related tools
 [Clean Strings](../control-strings/README.md#2-clean-strings), [Thin Strings](#11-thin-strings)
 

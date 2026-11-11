@@ -11,12 +11,15 @@
 //! selection back until Done, when the same code reads it again.
 
 use crate::{
-    app::{App, commands::triangulation::reference_surface::surface_input},
+    app::{
+        App,
+        commands::triangulation::{reference_surface::surface_input, seam_targets},
+    },
     i18n::tr,
     model::{Axis, ObjectId, SceneEntityId, block_model::BlockModelId, point_cloud::PointCloudId, prismoid_grid::PrismoidGridId, triangulation::TriangulationId},
     ui::{
         dialogs::MoveToAxisDialog,
-        state::{ReferencePointsDraft, ReferenceSurfaceDraft, SelectionPick, SelectionPickTool, ToolSubject, TriCreatePhase, TriPolylineClipMode},
+        state::{ReferencePointsDraft, ReferenceSurfaceDraft, SelectionPick, SelectionPickTool, ToolSubject, TriCreatePhase, TriCutSource, TriPolylineClipMode},
     },
 };
 
@@ -43,6 +46,8 @@ impl App<'_> {
             ToolSubject::MisfitGrid(id) => self.set_misfit_grid(id),
             ToolSubject::PrismoidBlockModel(id) => self.set_prismoid_block_grid(id),
             ToolSubject::MaskGrid(id) => self.set_mask_grid(id),
+            ToolSubject::ThicknessSurface(id) => self.set_thickness_surface(id),
+            ToolSubject::SeamSurface(id) => self.set_seam_surface(id),
         }
     }
 
@@ -275,7 +280,8 @@ impl App<'_> {
     }
 
     /// Open Difference between Prismoid Grids on the one or two grids
-    /// selected, in selection order, or on none for its two lists.
+    /// selected, in the project's order of grids, not the order clicked, or
+    /// on none for its two lists.
     pub(crate) fn open_difference_prismoid_grids(&mut self) {
         let (grid, other) = match self.selected_prismoid_grids()[..] {
             [grid] => (Some(grid), None),
@@ -334,6 +340,24 @@ impl App<'_> {
         }
     }
 
+    /// Open Clip to Surface, on the seam's two surfaces when the selection
+    /// holds exactly two. Either slot takes either surface: the higher is
+    /// the roof, so nothing is read from the order.
+    pub(crate) fn open_clip_to_surface(&mut self) {
+        // A surface is the primary choice for both limits; the deposit's
+        // last depth waits in its field for when Depth is chosen.
+        let depth = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.cut_depth);
+        self.editor.tri_cut_to_open = true;
+        self.editor.tri_cut_to_seam = seam_targets(&self.selected_triangulations()).map_or([None; 2], |seam| seam.map(Some));
+        self.editor.tri_cut_to_upper_source = TriCutSource::Surface;
+        self.editor.tri_cut_to_upper_id = None;
+        self.editor.tri_cut_to_upper_level_input.clear();
+        self.editor.tri_cut_to_lower_source = TriCutSource::Surface;
+        self.editor.tri_cut_to_lower_id = None;
+        self.editor.tri_cut_to_lower_level_input.clear();
+        self.editor.tri_cut_to_depth_input = depth.map(|depth| depth.to_string()).unwrap_or_default();
+    }
+
     /// Hide `tool`'s dialog and let the viewport select its input. The
     /// selection carries on from what the tool holds, which is what is
     /// selected already: nothing else could select while its dialog was up.
@@ -365,6 +389,12 @@ impl App<'_> {
             SelectionPickTool::ReferenceSurface => self.open_reference_surface(),
             SelectionPickTool::HoleMisfit => self.open_hole_misfit(),
             SelectionPickTool::MaskPrismoids => self.toggle_prismoid_mask(),
+            SelectionPickTool::ThicknessPoints => self.open_thickness_points(),
+            SelectionPickTool::InsertAtSpacing => self.open_insert_point_at_spacing_dialog(),
+            SelectionPickTool::Thin => self.open_thin_strings_dialog(),
+            SelectionPickTool::Smooth => self.open_smooth_strings_dialog(),
+            SelectionPickTool::Reverse => self.reverse_selected_strings(),
+            SelectionPickTool::CleanStrings => self.clean_selected_strings(),
         }
         self.invalidate_geometry();
     }

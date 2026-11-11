@@ -18,7 +18,7 @@ use crate::{
         widgets::{
             editable_grid::{DataGrid, GridButtons, GridColumn, GridRow, cell_choice, cell_text},
             hint::Hint,
-            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRange, MenuFieldText, MenuFieldU32, selected_source_field},
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRange, MenuFieldText, MenuFieldU32},
         },
     },
 };
@@ -247,7 +247,7 @@ fn triangulation_picker_field_with_width(
 /// opened is already here. Returns the surface chosen from the list, and
 /// whether Pick was pressed; the caller sends the first to the app, which
 /// derives the tool's other fields from it.
-fn subject_surface_field(
+pub(crate) fn subject_surface_field(
     ui: &mut egui::Ui,
     id_source: &'static str,
     current: Option<TriangulationId>,
@@ -827,10 +827,10 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     }
 }
 
-/// Clip to Surface: the seam whose roof and floor were selected when it
-/// opened is clipped to the Keep below and Keep above limits, into a new
-/// roof, floor and solid. Each limit is a surface, the usual choice, or a
-/// typed RL; Keep above may also be a depth below a surface.
+/// Clip to Surface: the seam's roof and floor, chosen in either slot, are
+/// clipped to the Keep below and Keep above limits, into a new roof, floor
+/// and solid. Each limit is a surface, the usual choice, or a typed RL; Keep
+/// above may also be a depth below a surface.
 pub(crate) fn draw_cut_to_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     if !editor.tri_cut_to_open || editor.triangulation_pick_target.is_some() {
         return;
@@ -842,11 +842,57 @@ pub(crate) fn draw_cut_to_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorS
         .min_width(PICKER_DIALOG_MIN_WIDTH)
         .max_width(PICKER_DIALOG_MAX_WIDTH)
         .show(ui.ctx(), |ui| {
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
+            for slot in &mut editor.tri_cut_to_seam {
+                if slot.is_some_and(|id| !loaded.iter().any(|(loaded_id, _)| *loaded_id == id)) {
+                    *slot = None;
+                }
+            }
+            // Each slot lists the loaded surfaces less the other slot's and
+            // the limits', as the limits leave out the seam's.
+            let limits = editor.clip_to_limit_surfaces();
+            for (slot, id_source, label, target) in [
+                (0, "clip_to_surface_seam", tr!("tri-clip-to-surface-seam"), TriangulationPickTarget::ClipToSeam),
+                (
+                    1,
+                    "clip_to_surface_seam_other",
+                    tr!("tri-clip-to-surface-seam-other"),
+                    TriangulationPickTarget::ClipToSeamOther,
+                ),
+            ] {
+                let other = editor.tri_cut_to_seam[1 - slot];
+                let shown = editor.tri_cut_to_seam[slot]
+                    .and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id))
+                    .map_or_else(|| tr!("tri-select"), |(_, name)| (*name).to_owned());
+                if triangulation_picker_field(
+                    ui,
+                    id_source,
+                    label,
+                    &mut editor.tri_cut_to_seam[slot],
+                    shown,
+                    loaded
+                        .iter()
+                        .filter(|(id, _)| Some(*id) != other && !limits.contains(&Some(*id)))
+                        .map(|(id, name)| (Some(*id), (*name).into())),
+                    tr!("tri-clip-to-surface-seam-help"),
+                    project,
+                ) {
+                    editor.triangulation_pick_target = Some(target);
+                }
+            }
+            ui.add_space(4.0);
+            let seam = editor.tri_cut_to_seam;
+
             // A surface being clipped is never offered as a cut.
             let cuts: Vec<(TriangulationId, &str)> = project
                 .triangulations
                 .iter()
-                .filter(|entry| entry.is_loaded && !editor.tri_cut_to_targets.contains(&entry.id))
+                .filter(|entry| entry.is_loaded && !seam.contains(&Some(entry.id)))
                 .map(|entry| (entry.id, entry.name.as_str()))
                 .collect();
             for value in [&mut editor.tri_cut_to_upper_id, &mut editor.tri_cut_to_lower_id] {
@@ -872,15 +918,6 @@ pub(crate) fn draw_cut_to_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                 }
                 input.parse::<f64>().ok().filter(|level| level.is_finite()).map(Some).ok_or(())
             };
-
-            selected_source_field(
-                ui,
-                tr!("tri-clip-to-surface-targets"),
-                tr!("state-clip-to-surface-count", count = editor.tri_cut_to_targets.len().to_string()),
-                tr!("tri-clip-to-surface-targets-help"),
-                picker_control_width(ui),
-            );
-            ui.add_space(4.0);
 
             // Keep below: a surface or an RL. Ok(None) is a row left empty,
             // Err a row that cannot run as typed.
@@ -991,8 +1028,10 @@ pub(crate) fn draw_cut_to_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorS
             };
             tool_help_panel(ui, tr!("tri-clip-to-surface-note"));
 
-            // At least one row complete, and no row half typed.
-            let can_run = matches!((upper, lower), (Ok(upper), Ok(lower)) if upper.is_some() || lower.is_some());
+            // Both seam surfaces, at least one row complete, and no row half
+            // typed.
+            let targets: Vec<TriangulationId> = seam.iter().flatten().copied().collect();
+            let can_run = targets.len() == 2 && matches!((upper, lower), (Ok(upper), Ok(lower)) if upper.is_some() || lower.is_some());
 
             ui.add_space(6.0);
             ui.separator();
@@ -1002,7 +1041,7 @@ pub(crate) fn draw_cut_to_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                     && let (Ok(upper), Ok(lower)) = (upper, lower)
                 {
                     commands.push(UiCommand::ExecuteCutTriangulationToSurface {
-                        targets: editor.tri_cut_to_targets.clone(),
+                        targets: targets.clone(),
                         upper,
                         lower,
                     });

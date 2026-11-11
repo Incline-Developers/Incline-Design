@@ -1,10 +1,10 @@
-//! The thickness points and thickness surfaces dialogs, each opened on the
-//! one surface selected, Misfit at Holes on its chosen prismoid grid, and
-//! the tables of what they made.
+//! The thickness points and thickness surfaces dialogs, each on its chosen
+//! surface, Misfit at Holes on its chosen prismoid grid, and the tables of
+//! what they made.
 
 use super::{
     reference_points::{hole_of, logged_codes, seam_controls, seam_value_controls},
-    triangulation::prismoid_grid_field,
+    triangulation::{prismoid_grid_field, subject_surface_field},
 };
 use crate::{
     i18n::tr,
@@ -13,7 +13,7 @@ use crate::{
         thickness_points::{InterceptSource, MisfitRow, ThicknessPoint, three_places},
     },
     ui::{
-        state::{EditorState, GridCheck, HoleMisfitTable, SelectionPickTool, ToolSubject, UiCommand, UiProjectView},
+        state::{EditorState, GridCheck, HoleMisfitTable, SelectionPickTool, ToolSubject, TriangulationPickTarget, UiCommand, UiProjectView},
         widgets::{
             collapsible_section::CollapsibleSection,
             data_table::DataTable,
@@ -22,12 +22,18 @@ use crate::{
     },
 };
 
-pub(crate) fn draw_thickness_points_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_thickness_points_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    // Hidden while either of its picks has the viewport.
+    if editor.selection_pick.is_some() || editor.triangulation_pick_target.is_some() {
+        return;
+    }
     let Some(draft) = editor.thickness_points_dialog.as_mut() else {
         return;
     };
-    // The selected holes' datasets, or every loaded one when no hole came
-    // in with the surface.
+    // A surface unloaded or deleted from under the dialog reads as none
+    // chosen.
+    let surface = draft.surface.filter(|id| project.triangulations.iter().any(|entry| entry.is_loaded && entry.id == *id));
+    // The picked holes' datasets, or every loaded one when none is picked.
     let involved: Vec<&OpenDrillHoleDataset> = datasets
         .iter()
         .filter(|dataset| dataset.state.loaded && (draft.holes.is_empty() || draft.holes.iter().any(|hole| hole.dataset == dataset.id)))
@@ -51,21 +57,22 @@ pub(crate) fn draw_thickness_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
     let mut open = true;
     let mut make = false;
     let mut cancel = false;
+    let mut pick_surface = false;
     DragableMenu::new("thickness_points_dialog", tr!("common-thickness-points"))
         .open(&mut open)
         .min_width(380.0)
         .max_width(460.0)
         .show(ui.ctx(), |ui| {
             let width = 220.0;
-            selected_source_field(
-                ui,
-                tr!("thickness-points-surface"),
-                draft.surface_label.clone(),
-                tr!("thickness-points-surface-help"),
-                width,
-            );
+            let (chosen, pick) = subject_surface_field(ui, "thickness_points_surface", surface, tr!("thickness-points-surface-help"), project, width);
+            if let Some(id) = chosen {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::ThicknessSurface(id)));
+            }
+            pick_surface = pick;
             ui.add_space(4.0);
-            selected_source_field(ui, tr!("thickness-points-holes"), holes_label.clone(), tr!("thickness-points-holes-help"), width);
+            if picked_selection_field(ui, tr!("thickness-points-holes"), holes_label.clone(), tr!("thickness-points-holes-help"), width) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::ThicknessPoints));
+            }
             ui.add_space(4.0);
             seam_controls(ui, "thickness_points", &involved, &codes, &mut draft.seam);
             ui.small(tr!("thickness-points-side-note"));
@@ -88,9 +95,11 @@ pub(crate) fn draw_thickness_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 .help_text(tr!("thickness-points-then-surface-help"))
                 .show(ui);
             menu::menu_note(ui, tr!("thickness-points-note"));
-            grid_note(ui, &draft.grid);
+            if surface.is_some() {
+                grid_note(ui, &draft.grid);
+            }
             menu::menu_actions(ui, |ui| {
-                let ready = draft.seam.value.is_some() && draft.grid == GridCheck::Grid;
+                let ready = surface.is_some() && draft.seam.value.is_some() && draft.grid == GridCheck::Grid;
                 let confirm = ready && menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(ready)).clicked() || confirm {
                     make = true;
@@ -100,10 +109,10 @@ pub(crate) fn draw_thickness_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 }
             });
         });
-    if make && let (Some(field), Some(target)) = (draft.seam.field.clone(), draft.seam.value.clone()) {
+    if make && let (Some(surface), Some(field), Some(target)) = (surface, draft.seam.field.clone(), draft.seam.value.clone()) {
         editor.last_seam = Some(draft.seam.clone());
         commands.push(UiCommand::MakeThicknessPoints {
-            surface: draft.surface,
+            surface,
             holes: draft.holes.clone(),
             field,
             target,
@@ -115,6 +124,8 @@ pub(crate) fn draw_thickness_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
     }
     if !open || cancel {
         editor.thickness_points_dialog = None;
+    } else if pick_surface {
+        editor.triangulation_pick_target = Some(TriangulationPickTarget::ThicknessSurface);
     }
 }
 
@@ -390,28 +401,48 @@ fn misfit_cells(table: &HoleMisfitTable, row: &MisfitRow, rounded: bool) -> Vec<
     ]
 }
 
-pub(crate) fn draw_seam_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_seam_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.triangulation_pick_target.is_some() {
+        return;
+    }
     let Some(draft) = editor.seam_surface_dialog.as_ref() else {
         return;
     };
+    // A surface unloaded or deleted from under the dialog reads as none
+    // chosen.
+    let surface = draft.surface.filter(|id| project.triangulations.iter().any(|entry| entry.is_loaded && entry.id == *id));
     let mut open = true;
     let mut make = false;
     let mut cancel = false;
+    let mut pick_surface = false;
     DragableMenu::new("seam_surface_dialog", tr!("common-thickness-surfaces"))
         .open(&mut open)
         .min_width(380.0)
         .max_width(460.0)
         .show(ui.ctx(), |ui| {
             let width = 220.0;
-            selected_source_field(ui, tr!("thickness-points-surface"), draft.surface_label.clone(), tr!("seam-surface-reference-help"), width);
-            ui.add_space(4.0);
-            selected_source_field(ui, tr!("seam-surface-run"), draft.run_label.clone(), tr!("seam-surface-run-help"), width);
-            ui.add_space(4.0);
-            selected_source_field(ui, tr!("seam-surface-output"), draft.output_label.clone(), tr!("seam-surface-output-help"), width);
+            let (chosen, pick) = subject_surface_field(ui, "seam_surface_surface", surface, tr!("seam-surface-reference-help"), project, width);
+            if let Some(id) = chosen {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::SeamSurface(id)));
+            }
+            pick_surface = pick;
+            let usable = surface.is_some() && draft.problem.is_none();
+            if usable {
+                ui.add_space(4.0);
+                selected_source_field(ui, tr!("seam-surface-run"), draft.run_label.clone(), tr!("seam-surface-run-help"), width);
+                ui.add_space(4.0);
+                selected_source_field(ui, tr!("seam-surface-output"), draft.output_label.clone(), tr!("seam-surface-output-help"), width);
+            }
             menu::menu_note(ui, tr!("seam-surface-note"));
-            grid_note(ui, &draft.grid);
+            if let Some(problem) = draft.problem.as_ref().filter(|_| surface.is_some()) {
+                ui.colored_label(egui::Color32::from_rgb(200, 70, 70), problem);
+            }
+            if usable {
+                grid_note(ui, &draft.grid);
+            }
             menu::menu_actions(ui, |ui| {
-                let ready = draft.grid == GridCheck::Grid;
+                let ready = usable && draft.grid == GridCheck::Grid;
                 let confirm = ready && menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(ready)).clicked() || confirm {
                     make = true;
@@ -421,12 +452,14 @@ pub(crate) fn draw_seam_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                 }
             });
         });
-    if make {
-        commands.push(UiCommand::MakeSeamSurface { surface: draft.surface });
+    if make && let Some(surface) = surface {
+        commands.push(UiCommand::MakeSeamSurface { surface });
         open = false;
     }
     if !open || cancel {
         editor.seam_surface_dialog = None;
+    } else if pick_surface {
+        editor.triangulation_pick_target = Some(TriangulationPickTarget::SeamSurface);
     }
 }
 

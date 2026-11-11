@@ -18,8 +18,14 @@ use crate::{
 impl<'a> App<'a> {
     /// Reverse every selected string as one undoable batch, the way the
     /// dialog's Reverse does one; hidden and locked strings are left alone.
+    /// With none selected the viewport picks them first, and the pick's Done
+    /// comes back here.
     pub(crate) fn reverse_selected_strings(&mut self) {
         let selected = self.selected_polylines();
+        if selected.is_empty() {
+            self.begin_selection_pick(crate::ui::state::SelectionPickTool::Reverse);
+            return;
+        }
         let Some(document) = self.workspace.active_document() else {
             return;
         };
