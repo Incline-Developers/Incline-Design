@@ -180,6 +180,13 @@ pub(crate) enum FileDialogAction {
     OpenOptimizationReport(PathBuf),
     #[cfg(target_arch = "wasm32")]
     WebOpenOptimizationReport(std::result::Result<crate::model::input::InputFile, String>),
+    /// The schedule's periods file goes here, its pits file beside it.
+    #[cfg(not(target_arch = "wasm32"))]
+    ExportNpvScheduleReport { path: PathBuf, periods: Vec<u8>, pits: Vec<u8> },
+    #[cfg(not(target_arch = "wasm32"))]
+    OpenNpvScheduleReport(PathBuf),
+    #[cfg(target_arch = "wasm32")]
+    WebOpenScheduleReport(std::result::Result<crate::model::input::InputFile, String>),
     #[cfg(not(target_arch = "wasm32"))]
     ExportHaulRoads { project: Box<crate::model::project::ProjectFile>, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
@@ -895,6 +902,19 @@ impl<'a> App<'a> {
             FileDialogAction::WebOpenOptimizationReport(file) => {
                 let file = file.map_err(anyhow::Error::msg)?;
                 self.show_optimization_report_file(file.source.name.clone(), &file.bytes)
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ExportNpvScheduleReport { path, periods, pits } => self.write_npv_schedule_report_export(path, periods, pits),
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::OpenNpvScheduleReport(path) => {
+                let bytes = std::fs::read(&path).with_context(|| format!("Could not read {}", path.display()))?;
+                let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+                self.show_npv_schedule_report_file(name, &bytes)
+            }
+            #[cfg(target_arch = "wasm32")]
+            FileDialogAction::WebOpenScheduleReport(file) => {
+                let file = file.map_err(anyhow::Error::msg)?;
+                self.show_npv_schedule_report_file(file.source.name.clone(), &file.bytes)
             }
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::OptimizationReportsFolder(path) => {
@@ -2074,6 +2094,8 @@ impl<'a> App<'a> {
     /// Save the project when its stored copy is missing or out of date.
     /// Returns false when Save As is still pending for a never-saved project.
     pub(crate) fn save_dirty_project(&mut self) -> Result<bool> {
+        // The playback deck's column is not the project's: never saved.
+        self.close_field_animation();
         if self.has_pending_move_delta() {
             self.commit_pending_move();
         }
@@ -2278,6 +2300,8 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn save_project(&mut self, runtime_id: u32) -> Result<()> {
+        // The playback deck's column is not the project's: never saved.
+        self.close_field_animation();
         #[cfg(not(target_arch = "wasm32"))]
         if self.project_revert_is_pending(runtime_id) {
             anyhow::bail!(tr!("err-file-wait-revert-save"));
@@ -2795,7 +2819,9 @@ impl<'a> App<'a> {
             // a folder deleted since the last save must stay gone even
             // though the file on disk still names it.
             design.folders = live_folders;
-            let scenarios_json = |file: &crate::model::optimization::ScenarioFile| serde_json::to_string(&(&file.scenarios, &file.report_columns)).unwrap_or_default();
+            let scenarios_json = |file: &crate::model::optimization::ScenarioFile| {
+                serde_json::to_string(&(&file.scenarios, &file.report_columns, &file.animation_speed, &file.schedule_columns, &file.constants)).unwrap_or_default()
+            };
             let optimization_diverges = scenarios_json(&live_optimization) != scenarios_json(&bundle.optimization.unwrap_or_default());
             design.optimization = live_optimization;
             let folder_map = reloaded_folder_map(&design.folders, &bundle.folders);

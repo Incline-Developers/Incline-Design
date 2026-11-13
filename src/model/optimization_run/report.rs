@@ -195,18 +195,9 @@ pub(crate) fn strip_ratio(ore: f64, waste: f64) -> Option<f64> {
     (ore > 0.0).then_some(waste / ore)
 }
 
-/// Build the report from a finished run. Runs on the worker while the values
-/// and the block lookup are still there.
-pub(crate) fn build(
-    scenario: &str,
-    economics: &Economics,
-    grid: &Grid,
-    block_of_cell: &[u32],
-    values: &BlockValues,
-    shells: &Shells,
-    cancel: &CancelFlag,
-) -> Result<OptimizationReport> {
-    // Destinations: waste, then each method name once.
+/// The report's destinations - waste, then each method name once - and each
+/// method row's destination.
+pub(crate) fn destinations(economics: &Economics) -> (Vec<String>, Vec<usize>) {
     let mut destinations = vec![WASTE.to_owned()];
     let method_destination: Vec<usize> = economics
         .methods
@@ -219,6 +210,21 @@ pub(crate) fn build(
             }
         })
         .collect();
+    (destinations, method_destination)
+}
+
+/// Build the report from a finished run. Runs on the worker while the values
+/// and the block lookup are still there.
+pub(crate) fn build(
+    scenario: &str,
+    economics: &Economics,
+    grid: &Grid,
+    block_of_cell: &[u32],
+    values: &BlockValues,
+    shells: &Shells,
+    cancel: &CancelFlag,
+) -> Result<OptimizationReport> {
+    let (destinations, method_destination) = destinations(economics);
     let elements = economics.elements.len();
     let shell_count = shells.summaries.len();
     let volume = grid.cell.x * grid.cell.y * grid.cell.z;

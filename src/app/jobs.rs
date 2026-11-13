@@ -75,6 +75,8 @@ pub(crate) enum JobKey {
     BlockModel(crate::model::block_model::BlockModelId),
     /// A pit optimization run of the scenario with this id.
     OptimizationRun(u64),
+    /// A run of the schedule with this id.
+    NpvScheduleRun(u64),
     DrillHole(crate::model::drill_hole::DrillHoleId),
     /// The Solids Setup page's inspection mesh. Keyed by the solid, so
     /// selecting another one - or changing this one's surfaces - cancels the
@@ -328,7 +330,7 @@ impl<'a> App<'a> {
             }
             #[cfg(target_arch = "wasm32")]
             JobKey::BrowserProjectSave { .. } => true,
-            JobKey::OptimizationRun(_) => true,
+            JobKey::OptimizationRun(_) | JobKey::NpvScheduleRun(_) => true,
             JobKey::Anonymous => true,
         })
     }

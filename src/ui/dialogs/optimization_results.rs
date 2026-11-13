@@ -3,7 +3,7 @@
 //! of the shells whose columns the user picks.
 //!
 //! It shows a scenario's last run this session, or an `optimization_results.csv`
-//! opened from disk. See `.claude/skills/optimization/SKILL.md` (stage 3).
+//! opened from disk.
 
 use crate::{
     i18n::tr,
@@ -16,32 +16,31 @@ use crate::{
         state::{OptimizationState, ResultsSource, ShellFilter, UiCommand},
         themed_icon,
         widgets::{
-            bar_line_chart::{BarLineChart, BarSeries, LineSeries},
+            bar_line_chart::{BarLineChart, BarSeries, LineScale, LineSeries},
             context_menu::context_menu_separator,
             data_table::DataTable,
             hint::Hint,
-            menu::{self, DragableMenu, MenuButton, menu_note},
+            menu::{self, DragableMenu, MenuButton, SlidingToggle, menu_note},
             toolbar::ToolbarButton,
         },
     },
 };
 
-const WIDTH: f32 = 860.0;
-const CHART_HEIGHT: f32 = 280.0;
-const TABLE_HEIGHT: f32 = 240.0;
+/// The least a chart is given while there is room for it.
+const CHART_MIN_HEIGHT: f32 = 160.0;
 /// Cash flow line: the green of the run button.
-const CASH_FLOW: egui::Color32 = egui::Color32::from_rgb(0x2f, 0xb3, 0x44);
+pub(super) const CASH_FLOW: egui::Color32 = egui::Color32::from_rgb(0x2f, 0xb3, 0x44);
 /// Main grade line: a muted violet, apart from the bars and the cash flow.
-const GRADE: egui::Color32 = egui::Color32::from_rgb(150, 110, 210);
+pub(super) const GRADE: egui::Color32 = egui::Color32::from_rgb(150, 110, 210);
 /// Ore bars: a calm amber; waste bars: stone grey.
-const ORE: egui::Color32 = egui::Color32::from_rgb(214, 160, 72);
-const WASTE_BARS: egui::Color32 = egui::Color32::from_rgb(150, 152, 160);
+pub(super) const ORE: egui::Color32 = egui::Color32::from_rgb(214, 160, 72);
+pub(super) const WASTE_BARS: egui::Color32 = egui::Color32::from_rgb(150, 152, 160);
 /// Where the grade line sits, as fractions of the chart's height: the middle,
 /// clear of the bars' tops and of the cash flow's ends.
-const GRADE_BAND: (f32, f32) = (0.35, 0.65);
-const ICON_SIDE: f32 = crate::ui::widgets::toolbar::TOOL_CELL_SIZE;
+pub(super) const GRADE_BAND: (f32, f32) = (0.35, 0.65);
+pub(super) const ICON_SIDE: f32 = crate::ui::widgets::toolbar::TOOL_CELL_SIZE;
 
-pub(crate) fn draw_results_window(ui: &mut egui::Ui, state: &mut OptimizationState, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_results_window(ui: &mut egui::Ui, state: &mut OptimizationState, canvas_rect: egui::Rect, commands: &mut Vec<UiCommand>) {
     let Some(view) = state.results_view.as_ref() else {
         return;
     };
@@ -54,12 +53,43 @@ pub(crate) fn draw_results_window(ui: &mut egui::Ui, state: &mut OptimizationSta
         Some((name, _)) => tr!("opt-results-title", name = name.clone()),
         None => tr!("opt-results-title-empty"),
     };
+    // The whole 3D canvas, for room to read the chart and the table.
     DragableMenu::new("optimization_results_dialog", title)
         .open(&mut open)
-        .min_width(WIDTH)
-        .max_width(WIDTH)
+        .cover(canvas_rect)
         .show(ui.ctx(), |ui| {
-            match &report {
+            // The note and the buttons are pinned to the bottom; the controls,
+            // chart and table fill exactly what is left above them.
+            let note = report.as_ref().map(|_| {
+                if matches!(filter, ShellFilter::Applied(_)) && basis == Basis::Incremental {
+                    tr!("opt-results-basis-note-chosen")
+                } else {
+                    tr!("opt-results-basis-note")
+                }
+            });
+            egui::Panel::bottom("opt_results_bottom")
+                .frame(egui::Frame::NONE.inner_margin(egui::Margin { top: 6, ..egui::Margin::ZERO }))
+                .resizable(false)
+                .show_separator_line(false)
+                .show(ui, |ui| {
+                    if let Some(note) = note {
+                        menu_note(ui, note);
+                    }
+                    menu::menu_actions(ui, |ui| {
+                        // Escape leaves choosing first; the window stays.
+                        let escape = !matches!(filter, ShellFilter::Choosing(_)) && menu::dialog_cancelled(ui.ctx());
+                        if ui.add(MenuButton::new(tr!("common-close"))).clicked() || escape {
+                            close = true;
+                        }
+                        if ui.add(MenuButton::new(tr!("opt-results-export")).enabled(report.is_some())).clicked() {
+                            commands.push(UiCommand::ExportOptimizationReport);
+                        }
+                        if ui.add(MenuButton::new(tr!("opt-results-open"))).clicked() {
+                            commands.push(UiCommand::OpenOptimizationReport);
+                        }
+                    });
+                });
+            egui::CentralPanel::no_frame().show(ui, |ui| match &report {
                 None => menu_note(ui, tr!("opt-results-none")),
                 Some((_, report)) => {
                     let columns = catalogue(report);
@@ -97,7 +127,7 @@ pub(crate) fn draw_results_window(ui: &mut egui::Ui, state: &mut OptimizationSta
                         ShellFilter::Choosing(chosen) => chosen.clone(),
                         _ => selected.into_iter().collect(),
                     };
-                    if let Some(clicked) = draw_chart(ui, report, &rows, &highlighted) {
+                    if let Some(clicked) = draw_chart(ui, report, &rows, &highlighted, chart_height(ui)) {
                         match &mut filter {
                             // A click adds the shell; a click on a chosen one takes it out.
                             ShellFilter::Choosing(chosen) => match chosen.iter().position(|&shell| shell == clicked) {
@@ -110,28 +140,8 @@ pub(crate) fn draw_results_window(ui: &mut egui::Ui, state: &mut OptimizationSta
                         }
                     }
                     ui.add_space(6.0);
-                    draw_table(ui, report, basis, destination, &rows, &shown);
-                    menu_note(
-                        ui,
-                        if matches!(filter, ShellFilter::Applied(_)) && basis == Basis::Incremental {
-                            tr!("opt-results-basis-note-chosen")
-                        } else {
-                            tr!("opt-results-basis-note")
-                        },
-                    );
-                }
-            }
-            menu::menu_actions(ui, |ui| {
-                // Escape leaves choosing first; the window stays.
-                let escape = !matches!(filter, ShellFilter::Choosing(_)) && menu::dialog_cancelled(ui.ctx());
-                if ui.add(MenuButton::new(tr!("common-close"))).clicked() || escape {
-                    close = true;
-                }
-                if ui.add(MenuButton::new(tr!("opt-results-export")).enabled(report.is_some())).clicked() {
-                    commands.push(UiCommand::ExportOptimizationReport);
-                }
-                if ui.add(MenuButton::new(tr!("opt-results-open"))).clicked() {
-                    commands.push(UiCommand::OpenOptimizationReport);
+                    // The table takes all that is left.
+                    draw_table(ui, report, basis, destination, &rows, &shown, f32::INFINITY);
                 }
             });
         });
@@ -143,6 +153,55 @@ pub(crate) fn draw_results_window(ui: &mut egui::Ui, state: &mut OptimizationSta
         view.selected = selected;
         view.filter = filter;
     }
+}
+
+/// The chart's height in what is left of a window covering the canvas: a
+/// little over half, the table taking the rest (it fills what it is given).
+pub(super) fn chart_height(ui: &egui::Ui) -> f32 {
+    let free = (ui.available_height() - 12.0).max(0.0);
+    (free * 0.55).max(free.min(CHART_MIN_HEIGHT))
+}
+
+/// The switches of a table's column chooser: **Show all** on top (on while
+/// every column shows; switching it turns them all on, or all off), then one
+/// switch per column. `rows` are each column's name and whether it is fixed
+/// (always shown, with no switch). Returns whether a switch changed.
+pub(super) fn column_switches(ui: &mut egui::Ui, rows: &[(String, bool)], on: &mut [bool]) -> bool {
+    let mut changed = false;
+    let mut all = on.iter().all(|on| *on);
+    // `all` and `on` are rebuilt every frame, so each switch is named.
+    if switch_row(ui, "opt_columns_all", &tr!("opt-results-columns-all"), &mut all) {
+        for (on, (_, fixed)) in on.iter_mut().zip(rows) {
+            *on = all || *fixed;
+        }
+        changed = true;
+    }
+    context_menu_separator(ui);
+    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+        // A fixed column (the shell, the period) names the rows: always shown,
+        // so it has no switch.
+        for (on, (name, fixed)) in on.iter_mut().zip(rows) {
+            if *fixed {
+                *on = true;
+                continue;
+            }
+            changed |= switch_row(ui, ("opt_column_switch", name), name, on);
+        }
+    });
+    changed
+}
+
+/// One switch with its name after it; the name toggles it too.
+fn switch_row(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, name: &str, on: &mut bool) -> bool {
+    ui.horizontal(|ui| {
+        let mut changed = ui.add(SlidingToggle::new(on).id_salt(id)).changed();
+        if ui.add(egui::Label::new(name).sense(egui::Sense::click())).clicked() {
+            *on = !*on;
+            changed = true;
+        }
+        changed
+    })
+    .inner
 }
 
 /// The name a destination is shown by: waste translated, methods as named.
@@ -195,17 +254,13 @@ fn draw_controls(
             let response = ui.add(cog);
             egui::Popup::menu(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
                 ui.set_min_width(220.0);
-                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                    for column in columns {
-                        let mut on = shown.contains(column);
-                        // The shell number names the row: always shown.
-                        let fixed = *column == Column::Shell;
-                        if ui.add_enabled(!fixed, egui::Checkbox::new(&mut on, column.header(report))).changed() {
-                            *shown = columns.iter().copied().filter(|other| if other == column { on } else { shown.contains(other) }).collect();
-                            changed = true;
-                        }
-                    }
-                });
+                // The shell number names the row: always shown.
+                let rows: Vec<(String, bool)> = columns.iter().map(|column| (column.header(report), *column == Column::Shell)).collect();
+                let mut on: Vec<bool> = columns.iter().map(|column| shown.contains(column)).collect();
+                if column_switches(ui, &rows, &mut on) {
+                    *shown = columns.iter().copied().zip(&on).filter(|(_, on)| **on).map(|(column, _)| column).collect();
+                    changed = true;
+                }
                 context_menu_separator(ui);
                 if ui.add(MenuButton::new(tr!("opt-results-columns-default"))).clicked() {
                     *shown = default_columns(columns);
@@ -249,7 +304,7 @@ fn draw_controls(
 
 /// While shells are being chosen: what to do, how many are chosen, and Apply
 /// and Cancel. `Some(true)` when applied, `Some(false)` when cancelled.
-fn draw_choosing_bar(ui: &mut egui::Ui, chosen: usize) -> Option<bool> {
+pub(super) fn draw_choosing_bar(ui: &mut egui::Ui, chosen: usize) -> Option<bool> {
     let mut outcome = None;
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -330,7 +385,7 @@ fn rows(report: &OptimizationReport, basis: Basis, destination: Option<usize>, v
 }
 
 /// The chart; returns the shell (0-based) of a clicked column.
-fn draw_chart(ui: &mut egui::Ui, report: &OptimizationReport, rows: &[Row], highlighted: &[usize]) -> Option<usize> {
+fn draw_chart(ui: &mut egui::Ui, report: &OptimizationReport, rows: &[Row], highlighted: &[usize], height: f32) -> Option<usize> {
     let labels: Vec<String> = rows.iter().map(|row| shell_label(report, row.shell)).collect();
     let cash_flow: Vec<f64> = rows.iter().map(|row| row.bucket.cash_flow()).collect();
     let ore: Vec<f64> = rows.iter().map(|row| row.ore).collect();
@@ -369,7 +424,8 @@ fn draw_chart(ui: &mut egui::Ui, report: &OptimizationReport, rows: &[Row], high
         lines.join("\n")
     };
     let mut chart = BarLineChart::new(&labels)
-        .height(CHART_HEIGHT)
+        .height(height)
+        .id_salt("opt_results_chart")
         .bars(BarSeries {
             name: tr!("opt-results-ore-tonnes"),
             color: ORE,
@@ -384,14 +440,14 @@ fn draw_chart(ui: &mut egui::Ui, report: &OptimizationReport, rows: &[Row], high
             name: tr!("opt-results-cash-flow"),
             color: CASH_FLOW,
             values: &cash_flow,
-            band: None,
+            scale: LineScale::Own(None),
         });
     if let Some(name) = &grade_name {
         chart = chart.line(LineSeries {
             name: name.clone(),
             color: GRADE,
             values: &grade,
-            band: Some(GRADE_BAND),
+            scale: LineScale::Own(Some(GRADE_BAND)),
         });
     }
     let columns = rows.iter().enumerate().filter(|(_, row)| highlighted.contains(&row.shell)).map(|(column, _)| column);
@@ -501,6 +557,13 @@ impl Column {
                 | Self::Waste
                 | Self::Strip
                 | Self::Grade(_)
+                | Self::Mining
+                | Self::WasteHaulage
+                | Self::Rehab
+                | Self::OreHaulage
+                | Self::Processing
+                | Self::Ga
+                | Self::ElementCosts
                 | Self::Revenue
                 | Self::TotalCost
                 | Self::CashFlow
@@ -589,7 +652,7 @@ fn shown_columns(report: &OptimizationReport, columns: &[Column], saved: Option<
         .collect()
 }
 
-fn draw_table(ui: &mut egui::Ui, report: &OptimizationReport, basis: Basis, destination: Option<usize>, rows: &[Row], shown: &[Column]) {
+fn draw_table(ui: &mut egui::Ui, report: &OptimizationReport, basis: Basis, destination: Option<usize>, rows: &[Row], shown: &[Column], height: f32) {
     let header: Vec<String> = shown.iter().map(|column| column.header(report)).collect();
     let aligns: Vec<egui::Align> = shown.iter().map(|_| egui::Align::Max).collect();
     let row = |index: usize, exact: bool| -> Vec<String> {
@@ -612,6 +675,6 @@ fn draw_table(ui: &mut egui::Ui, report: &OptimizationReport, basis: Basis, dest
         .aligns(&aligns)
         .copy_cells(&exact)
         .fingerprint(fingerprint)
-        .max_height(TABLE_HEIGHT)
+        .max_height(height)
         .show(ui);
 }

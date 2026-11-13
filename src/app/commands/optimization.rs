@@ -22,8 +22,8 @@ use crate::{
         block_model::{BlockModelId, ColorTransferFunction},
         folders::{Folder, FolderId},
         optimization::{
-            AirMode, BlockModelFields, FactorInput, GridIssue, OptimizationScenario, ScenarioFile, ShellMode, copy_name, format_factor, shell_prefix_taken, unique_name,
-            unique_shell_prefix,
+            AirMode, BlockModelFields, ConstantsRow, FactorInput, GridIssue, OptimizationScenario, ScenarioFile, ShellMode, copy_name, format_factor, merge_constants,
+            shell_prefix_taken, unique_name, unique_shell_prefix,
         },
         optimization_run::{
             self, RunInput, RunOutcome, RunResult, ShellField,
@@ -35,7 +35,7 @@ use crate::{
         project::ProjectItemState,
         triangulation::{GeneratedTriangulation, TriangulationId},
     },
-    ui::state::{LoadPrompt, LoadThen, MAX_CONCURRENT_RUNS, ResultsSource, ResultsView, RunState, ScenarioDraft, ShellStartPick, TriSurfaceType},
+    ui::state::{LoadPrompt, LoadThen, MAX_CONCURRENT_RUNS, ResultsSource, ResultsView, RunInputsKey, RunState, ScenarioDraft, ShellStartPick, TriSurfaceType},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -53,7 +53,7 @@ impl<'a> App<'a> {
     /// Read the project's scenarios once per opened project, before anything
     /// that shows or writes them - a write before the read would replace the
     /// saved scenarios with an empty list.
-    fn ensure_optimization_scenarios_loaded(&mut self) {
+    pub(super) fn ensure_optimization_scenarios_loaded(&mut self) {
         if !self.editor.optimization.loaded_from_file {
             self.editor.optimization.loaded_from_file = true;
             self.load_saved_optimization_scenarios();
@@ -80,6 +80,7 @@ impl<'a> App<'a> {
             &tr!("opt-scenario-default-name", number = (self.editor.optimization.scenarios.len() + 1).to_string()),
         );
         let mut scenario = OptimizationScenario::new(id, name);
+        scenario.constants = self.editor.optimization.constants.clone();
         // Each scenario names its shells with its own prefix.
         scenario.output.shell_layer_name = unique_shell_prefix(&self.editor.optimization.scenarios, &scenario.output.shell_layer_name);
         self.editor.optimization.draft = Some(ScenarioDraft::new(scenario, true));
@@ -103,6 +104,8 @@ impl<'a> App<'a> {
         // The name is changed in the list only; the editor's copy never wins over it.
         if let Some(existing) = state.scenarios.iter().find(|existing| existing.id == scenario.id) {
             scenario.name = existing.name.clone();
+            // Schedules are kept in the list, not in the scenario editor.
+            scenario.schedules = existing.schedules.clone();
         }
         match state.scenarios.iter_mut().find(|existing| existing.id == scenario.id) {
             Some(existing) => *existing = scenario.clone(),
@@ -123,8 +126,17 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn delete_optimization_scenario(&mut self, id: u64) -> Result<()> {
-        self.editor.optimization.scenarios.retain(|scenario| scenario.id != id);
-        self.editor.optimization.runs.remove(&id);
+        let state = &mut self.editor.optimization;
+        if let Some(scenario) = state.scenarios.iter().find(|scenario| scenario.id == id) {
+            for schedule in &scenario.schedules {
+                state.schedule_runs.remove(&schedule.id);
+                state.schedule_summaries.remove(&schedule.id);
+                state.schedule_results.remove(&schedule.id);
+            }
+        }
+        state.scenarios.retain(|scenario| scenario.id != id);
+        state.runs.remove(&id);
+        state.expanded.remove(&id);
         self.write_optimization_scenarios()
     }
 
@@ -136,6 +148,7 @@ impl<'a> App<'a> {
         };
         let mut copy = state.scenarios[position].clone();
         copy.id = state.fresh_id();
+        state.refresh_npv_schedule_ids(&mut copy);
         copy.name = scenario_copy_name(&state.scenarios, &copy.name);
         copy.output.shell_layer_name = copy_prefix(&state.scenarios, &copy.output.shell_layer_name);
         state.scenarios.insert(position + 1, copy);
@@ -160,6 +173,7 @@ impl<'a> App<'a> {
         let taken = |name: &str| state.scenarios.iter().any(|scenario| scenario.name.eq_ignore_ascii_case(name));
         copy.name = if taken(&wanted) { scenario_copy_name(&state.scenarios, &wanted) } else { wanted };
         copy.id = state.fresh_id();
+        state.refresh_npv_schedule_ids(&mut copy);
         copy.output.shell_layer_name = copy_prefix(&state.scenarios, &copy.output.shell_layer_name);
         copy.output.mode = ShellMode::Multiple;
         copy.output.factor_input = FactorInput::List;
@@ -190,6 +204,38 @@ impl<'a> App<'a> {
         self.write_optimization_scenarios()
     }
 
+    /// The scenarios and the constants they share, as a file holds them.
+    fn optimization_scenario_file(&self) -> ScenarioFile {
+        let mut file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
+        file.constants = self.editor.optimization.constants.clone();
+        file
+    }
+
+    /// Open the global constants in place of the dialog that asked.
+    pub(crate) fn open_optimization_constants(&mut self) {
+        self.ensure_optimization_scenarios_loaded();
+        let state = &mut self.editor.optimization;
+        state.constants_draft = Some(crate::ui::state::ConstantsDraft::new(state.constants.clone()));
+    }
+
+    /// Keep the edited global constants and write the file. Runs whose fields
+    /// name a changed constant go stale (see `used_constants_hash`).
+    pub(crate) fn save_optimization_constants(&mut self, rows: Vec<ConstantsRow>, then_close: bool) -> Result<()> {
+        // A write before the read would replace the saved scenarios.
+        self.ensure_optimization_scenarios_loaded();
+        self.editor.optimization.constants = rows.clone();
+        self.write_optimization_scenarios()?;
+        userspace_log!("{}", tr!("opt-constants-saved", count = rows.iter().filter_map(ConstantsRow::constant).count().to_string()));
+        let state = &mut self.editor.optimization;
+        if then_close {
+            state.constants_draft = None;
+        } else if let Some(draft) = state.constants_draft.as_mut() {
+            draft.saved = rows;
+            draft.confirm_close = false;
+        }
+        Ok(())
+    }
+
     /// Read the active project's scenarios into the list.
     fn load_saved_optimization_scenarios(&mut self) {
         let Some(project) = self.workspace.active_project() else {
@@ -199,15 +245,26 @@ impl<'a> App<'a> {
         if !file.scenarios.is_empty() {
             userspace_log!("{}", tr!("opt-scenarios-loaded", count = file.scenarios.len().to_string()));
         }
+        let (constants, clashes) = file.take_constants();
+        if !clashes.is_empty() {
+            userspace_warn!("{}", tr!("opt-constants-merged-clash", names = clashes.join(", ")));
+        }
+        self.editor.optimization.constants = constants;
         self.editor.optimization.scenarios = file.scenarios;
+        self.editor.optimization.sync_constants();
         self.editor.optimization.report_columns = file.report_columns;
+        self.editor.optimization.animation_speed = file.animation_speed;
+        self.editor.optimization.schedule_columns = file.schedule_columns;
     }
 
     /// Hand the scenarios to the active project, which then reads as unsaved
     /// until the project itself is saved.
-    fn write_optimization_scenarios(&mut self) -> Result<()> {
-        let mut file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
+    pub(crate) fn write_optimization_scenarios(&mut self) -> Result<()> {
+        self.editor.optimization.sync_constants();
+        let mut file = self.optimization_scenario_file();
         file.report_columns = self.editor.optimization.report_columns.clone();
+        file.animation_speed = self.editor.optimization.animation_speed;
+        file.schedule_columns = self.editor.optimization.schedule_columns.clone();
         let Some(project) = self.workspace.active_project_mut() else {
             anyhow::bail!("{}", tr!("opt-scenarios-save-failed", error = tr!("opt-scenarios-no-project")));
         };
@@ -217,7 +274,7 @@ impl<'a> App<'a> {
 
     /// Ask where to write the scenarios, and write them there.
     pub(crate) fn export_optimization_scenarios(&mut self) {
-        let file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
+        let file = self.optimization_scenario_file();
         #[cfg(target_arch = "wasm32")]
         match serde_json::to_vec_pretty(&file) {
             Ok(bytes) => Self::trigger_browser_download("optimization_scenarios.json".to_owned(), bytes, "application/json", tr!("err-file-desc-opt-scenarios")),
@@ -242,7 +299,7 @@ impl<'a> App<'a> {
         if path.extension().is_none() {
             path.set_extension("json");
         }
-        let file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
+        let file = self.optimization_scenario_file();
         crate::app::io::export_optimization_scenarios(&path, &file).map_err(|error| anyhow::anyhow!("{}", tr!("opt-scenarios-save-failed", error = error.to_string())))?;
         userspace_log!(
             "{}",
@@ -272,9 +329,17 @@ impl<'a> App<'a> {
         // Merged into the project's own list, not into one not read yet.
         self.ensure_optimization_scenarios_loaded();
         let count = file.scenarios.len();
+        let (imported, _) = file.take_constants();
         let state = &mut self.editor.optimization;
+        // Into the list's constants, the list's value winning a clash.
+        let mut clashes = Vec::new();
+        merge_constants(&mut state.constants, &imported, &mut clashes);
+        if !clashes.is_empty() {
+            userspace_warn!("{}", tr!("opt-constants-merged-clash", names = clashes.join(", ")));
+        }
         for mut scenario in file.scenarios {
             scenario.id = state.fresh_id();
+            state.refresh_npv_schedule_ids(&mut scenario);
             scenario.name = unique_name(state.scenarios.iter().map(|existing| existing.name.as_str()), &scenario.name);
             state.scenarios.push(scenario);
         }
@@ -445,6 +510,7 @@ impl<'a> App<'a> {
         {
             userspace_log!("{}", tr!("opt-run-cancelled", name = scenario.name.clone()));
         }
+        self.after_scenario_run(id, false);
         self.start_queued_optimization_runs();
     }
 
@@ -472,6 +538,7 @@ impl<'a> App<'a> {
     /// Drop the state of runs whose job is gone without applying (its block
     /// model closed, say), so they do not show as running for ever.
     pub(crate) fn reconcile_optimization_runs(&mut self) {
+        self.stale_runs_on_edited_inputs();
         let restoring = self.restore_pending();
         let lost: Vec<u64> = self
             .editor
@@ -485,6 +552,22 @@ impl<'a> App<'a> {
             })
             .map(|(id, _)| *id)
             .collect();
+        let lost_schedules: Vec<u64> = self
+            .editor
+            .optimization
+            .schedule_runs
+            .iter()
+            .filter(|(id, run)| {
+                matches!(run, RunState::Running { .. })
+                    && !self.job_pending(&JobKey::NpvScheduleRun(**id))
+                    && !(restoring && self.editor.optimization.awaiting_restore.contains(id))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in lost_schedules {
+            self.editor.optimization.schedule_runs.remove(&id);
+            self.editor.optimization.awaiting_restore.remove(&id);
+        }
         if lost.is_empty() {
             return;
         }
@@ -495,6 +578,52 @@ impl<'a> App<'a> {
         self.start_queued_optimization_runs();
     }
 
+    /// A finished run whose block model inputs were edited since is stale
+    /// (its schedules then wait for a rerun). Cheap each frame: the input
+    /// columns' addresses are compared, and only when one moved (an edit, or
+    /// the model read back in) are the values hashed again; the same values
+    /// read back keep the run up to date. Shell and period fields the runs
+    /// write are never inputs, so they do not count.
+    fn stale_runs_on_edited_inputs(&mut self) {
+        let state = &self.editor.optimization;
+        let checks: Vec<(u64, RunInputsKey)> = state
+            .run_inputs
+            .iter()
+            .filter(|(id, _)| matches!(state.runs.get(id), Some(RunState::Finished { .. })))
+            .map(|(id, key)| (*id, key.clone()))
+            .collect();
+        for (id, key) in checks {
+            let Some(scenario) = self.editor.optimization.scenarios.iter().find(|scenario| scenario.id == id).cloned() else {
+                self.editor.optimization.run_inputs.remove(&id);
+                continue;
+            };
+            let stale = match self.block_models.iter().find(|model| model.id == key.model) {
+                None => true,
+                Some(model) if !model.state.loaded => continue,
+                Some(model) => {
+                    let columns = input_columns(model, &scenario);
+                    let addresses = column_addresses(&columns);
+                    if addresses == key.columns {
+                        continue;
+                    }
+                    if columns_hash(&columns) == key.hash {
+                        if let Some(key) = self.editor.optimization.run_inputs.get_mut(&id) {
+                            key.columns = addresses;
+                        }
+                        continue;
+                    }
+                    true
+                }
+            };
+            if stale {
+                let state = &mut self.editor.optimization;
+                state.run_inputs.remove(&id);
+                state.runs.insert(id, RunState::Finished { fingerprint: 0 });
+                userspace_log!("{}", tr!("opt-run-inputs-changed", name = scenario.name.clone()));
+            }
+        }
+    }
+
     fn fail_optimization_run(&mut self, id: u64, name: &str, issues: &[String]) {
         userspace_error!("{}", tr!("opt-run-cannot-start", name = name.to_owned()));
         for issue in issues {
@@ -502,6 +631,7 @@ impl<'a> App<'a> {
         }
         self.editor.optimization.runs.remove(&id);
         self.editor.optimization.awaiting_restore.remove(&id);
+        self.after_scenario_run(id, false);
         self.start_queued_optimization_runs();
     }
 
@@ -519,7 +649,7 @@ impl<'a> App<'a> {
     }
 
     /// The block model and air topography `scenario` needs that are unloaded.
-    fn unloaded_optimization_inputs(&self, scenario: &OptimizationScenario) -> Vec<(ItemRef, String)> {
+    pub(super) fn unloaded_optimization_inputs(&self, scenario: &OptimizationScenario) -> Vec<(ItemRef, String)> {
         let model = self
             .block_models
             .iter()
@@ -554,6 +684,13 @@ impl<'a> App<'a> {
                     }
                 }
             }
+            (LoadThen::Schedules(runs), LoadThen::Schedules(more)) => {
+                for run in more {
+                    if !runs.contains(&run) {
+                        runs.push(run);
+                    }
+                }
+            }
             (current, then) => *current = then,
         }
     }
@@ -571,12 +708,21 @@ impl<'a> App<'a> {
         }
         let items: Vec<ItemRef> = items.into_iter().map(|(item, _)| item).collect();
         // Runs show as running while their inputs load.
-        if let LoadThen::Run(ids) = &then {
-            let state = &mut self.editor.optimization;
-            for id in ids {
-                state.runs.insert(*id, RunState::Running { progress: Progress::new() });
-                state.awaiting_restore.insert(*id);
+        let state = &mut self.editor.optimization;
+        match &then {
+            LoadThen::Run(ids) => {
+                for id in ids {
+                    state.runs.insert(*id, RunState::Running { progress: Progress::new() });
+                    state.awaiting_restore.insert(*id);
+                }
             }
+            LoadThen::Schedules(runs) => {
+                for (_, id) in runs {
+                    state.schedule_runs.insert(*id, RunState::Running { progress: Progress::new() });
+                    state.awaiting_restore.insert(*id);
+                }
+            }
+            LoadThen::Pick => {}
         }
         let deferred = self.restore_items_for(items.clone(), {
             let (items, then) = (items.clone(), then.clone());
@@ -605,8 +751,43 @@ impl<'a> App<'a> {
                     }
                 }
             }
+            LoadThen::Schedules(runs) => {
+                for (parent, id) in runs {
+                    let state = &mut self.editor.optimization;
+                    if state.awaiting_restore.remove(&id) {
+                        state.schedule_runs.remove(&id);
+                        self.run_npv_schedule(parent, id);
+                    }
+                }
+            }
             LoadThen::Pick => self.begin_shell_start_pick(),
         }
+    }
+
+    /// What a run of `scenario` reads, prepared: its economics resolved on
+    /// the block model (and air topography), and the blocks laid on the grid.
+    /// The scenario's run and its schedules' runs both start from here.
+    pub(super) fn prepare_scenario_inputs(&self, scenario: &OptimizationScenario) -> Result<(prepare::Prepared, BlockLayout, BlockModelId), Vec<String>> {
+        let Some(model) = self.block_models.iter().find(|model| model.name == scenario.block_model) else {
+            return Err(vec![tr!("opt-run-needs-block-model", name = scenario.name.clone(), model = scenario.block_model.clone())]);
+        };
+        if let Some(issue) = GridIssue::of(model) {
+            return Err(vec![issue.message()]);
+        }
+        let topography = (scenario.exclude_air && scenario.air_mode == AirMode::Topography)
+            .then(|| self.triangulations.iter().find(|item| item.name == scenario.air_topography))
+            .flatten()
+            .map(|item| Topography {
+                mesh: Arc::clone(&item.mesh),
+                spatial: Arc::clone(&item.spatial),
+            });
+        let prepared = prepare::prepare(scenario, &model.model, topography)?;
+        let layout = model
+            .uniform_grid
+            .clone()
+            .and_then(|uniform| BlockLayout::new(Arc::clone(&model.blocks), uniform, |local| model.model.local_to_world(local)))
+            .ok_or_else(|| vec![GridIssue::Irregular.message()])?;
+        Ok((prepared, layout, model.id))
     }
 
     /// Everything the scenario needs is in memory: prepare it and spawn the job.
@@ -618,17 +799,6 @@ impl<'a> App<'a> {
             self.fail_optimization_run(id, &scenario.name, &[issue]);
             return;
         };
-        if let Some(issue) = GridIssue::of(model) {
-            self.fail_optimization_run(id, &scenario.name, &[issue.message()]);
-            return;
-        }
-        let topography = (scenario.exclude_air && scenario.air_mode == AirMode::Topography)
-            .then(|| self.triangulations.iter().find(|item| item.name == scenario.air_topography))
-            .flatten()
-            .map(|item| Topography {
-                mesh: Arc::clone(&item.mesh),
-                spatial: Arc::clone(&item.spatial),
-            });
         // Checked before the run, so a field that cannot be written does not
         // cost the run's time first.
         let shell_field = match scenario.shell_field_target(&BlockModelFields::of_open(model)) {
@@ -652,22 +822,13 @@ impl<'a> App<'a> {
             self.fail_optimization_run(id, &scenario.name, &[tr!("opt-run-reports-folder-missing")]);
             return;
         }
-        let prepared = match prepare::prepare(&scenario, &model.model, topography) {
-            Ok(prepared) => prepared,
+        let (prepared, layout, model_id) = match self.prepare_scenario_inputs(&scenario) {
+            Ok(inputs) => inputs,
             Err(issues) => {
                 self.fail_optimization_run(id, &scenario.name, &issues);
                 return;
             }
         };
-        let layout = model
-            .uniform_grid
-            .clone()
-            .and_then(|uniform| BlockLayout::new(Arc::clone(&model.blocks), uniform, |local| model.model.local_to_world(local)));
-        let Some(layout) = layout else {
-            self.fail_optimization_run(id, &scenario.name, &[GridIssue::Irregular.message()]);
-            return;
-        };
-        let model_id = model.id;
         let cells = layout.grid.cell_count();
         let output = &scenario.output;
         let input = RunInput {
@@ -683,6 +844,10 @@ impl<'a> App<'a> {
         userspace_log!("{}", tr!("opt-run-started", name = scenario.name.clone(), cells = cells.to_string()));
 
         let fingerprint = scenario.fingerprint();
+        // What the run reads, so an edit to it later makes the run stale.
+        if let Some(key) = self.block_models.iter().find(|model| model.id == model_id).map(|model| run_inputs_key(model, &scenario)) {
+            self.editor.optimization.run_inputs.insert(id, key);
+        }
         let started = web_time::Instant::now();
         let progress = self.spawn_job_sharing_progress(
             tr!("opt-run-label", name = scenario.name.clone()),
@@ -784,11 +949,14 @@ impl<'a> App<'a> {
                         report: Arc::new(outcome.report),
                         grid: outcome.grid,
                         shells: outcome.shells,
+                        air: outcome.air,
                     }),
                 );
+                self.after_scenario_run(id, true);
             }
             Err(error) => {
                 self.editor.optimization.runs.remove(&id);
+                self.after_scenario_run(id, false);
                 if crate::app::jobs::is_cancelled(&error) {
                     userspace_log!("{}", tr!("opt-run-cancelled", name = scenario.name.clone()));
                 } else {
@@ -893,6 +1061,23 @@ impl<'a> App<'a> {
         (colors, commands)
     }
 
+    /// Write a run's shells into categorical field `field` of block model
+    /// `model_id` as an undo step, adding the field or overwriting it. A block
+    /// model moved out of memory since the run is read back first.
+    pub(super) fn write_shell_field(&mut self, model_id: BlockModelId, field: String, values: ShellField, colors: HashMap<usize, [f32; 4]>, seed: u64) {
+        let item = ItemRef::BlockModel(model_id);
+        if self.project_item_state(item).is_some_and(|state| state.deferred.is_some()) {
+            self.restore_items_for(vec![item], move |app| {
+                if let Some(command) = app.shell_field_command(model_id, &field, values, &colors, seed) {
+                    app.execute_job_edit(command);
+                }
+            });
+        } else if let Some(command) = self.shell_field_command(model_id, &field, values, &colors, seed) {
+            self.execute_job_edit(command);
+        }
+        self.invalidate_geometry();
+    }
+
     /// The command writing a run's shells into categorical field `field` of
     /// block model `model_id` (in memory), adding the field or overwriting it.
     /// Each category's colour: the one its name already had in the field (so a
@@ -958,17 +1143,19 @@ impl<'a> App<'a> {
     /// replacing only the report file (the folder and anything else in it are
     /// left alone); in the browser, as a download.
     fn write_optimization_report(&mut self, scenario: &OptimizationScenario, bytes: Vec<u8>) {
+        self.write_scenario_report_file(scenario, report::FILE_NAME, bytes);
+    }
+
+    /// Write report `file_name` of `scenario` (its own, or one of its
+    /// schedules'): on the desktop into `<reports folder>/<scenario>/`,
+    /// replacing only that file; in the browser, as a download.
+    pub(super) fn write_scenario_report_file(&mut self, scenario: &OptimizationScenario, file_name: &str, bytes: Vec<u8>) {
         #[cfg(target_arch = "wasm32")]
-        Self::trigger_browser_download(
-            format!("{}_{}", folder_name(&scenario.name), report::FILE_NAME),
-            bytes,
-            "text/csv",
-            tr!("err-file-desc-opt-report"),
-        );
+        Self::trigger_browser_download(format!("{}_{}", folder_name(&scenario.name), file_name), bytes, "text/csv", tr!("err-file-desc-opt-report"));
         #[cfg(not(target_arch = "wasm32"))]
         {
             let folder = std::path::Path::new(scenario.output.reports_folder.trim()).join(folder_name(&scenario.name));
-            let path = folder.join(report::FILE_NAME);
+            let path = folder.join(file_name);
             let written = std::fs::create_dir_all(&folder)
                 .map_err(anyhow::Error::from)
                 .and_then(|()| crate::model::atomic_file::write_atomic(&path, |file| Ok(std::io::Write::write_all(file, &bytes)?)));
@@ -1040,6 +1227,46 @@ impl<'a> App<'a> {
     }
 }
 
+/// The columns of `model` that `scenario` reads, by name, sorted.
+fn input_columns(
+    model: &crate::model::block_model::OpenBlockModel,
+    scenario: &OptimizationScenario,
+) -> Vec<(String, Option<Arc<crate::model::formats::block_column::BlockColumn>>)> {
+    let mut names: Vec<&str> = scenario.used_fields().into_iter().filter(|name| !name.is_empty()).collect();
+    names.sort_unstable();
+    names.into_iter().map(|name| (name.to_owned(), model.model.shared_numeric_values(name))).collect()
+}
+
+fn column_addresses(columns: &[(String, Option<Arc<crate::model::formats::block_column::BlockColumn>>)]) -> Vec<(String, usize)> {
+    columns
+        .iter()
+        .map(|(name, values)| (name.clone(), values.as_ref().map_or(0, |values| Arc::as_ptr(values) as usize)))
+        .collect()
+}
+
+fn columns_hash(columns: &[(String, Option<Arc<crate::model::formats::block_column::BlockColumn>>)]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (name, values) in columns {
+        name.hash(&mut hasher);
+        if let Some(values) = values {
+            values.len().hash(&mut hasher);
+            for value in values.iter() {
+                value.to_bits().hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
+}
+
+fn run_inputs_key(model: &crate::model::block_model::OpenBlockModel, scenario: &OptimizationScenario) -> RunInputsKey {
+    let columns = input_columns(model, scenario);
+    RunInputsKey {
+        model: model.id,
+        columns: column_addresses(&columns),
+        hash: columns_hash(&columns),
+    }
+}
+
 /// A copied scenario's shell prefix: `<prefix>-copy`, numbered if taken.
 fn copy_prefix(scenarios: &[OptimizationScenario], prefix: &str) -> String {
     copy_name(scenarios.iter().map(|scenario| scenario.output.shell_layer_name.as_str()), prefix, "-", "copy")
@@ -1054,7 +1281,7 @@ fn scenario_copy_name(scenarios: &[OptimizationScenario], name: &str) -> String 
 /// A scenario name made safe as a folder or file name: characters no file
 /// system takes become `_`, and invisible direction marks (pasted names often
 /// carry them) are dropped.
-fn folder_name(name: &str) -> String {
+pub(super) fn folder_name(name: &str) -> String {
     let safe: String = name
         .trim()
         .chars()
@@ -1073,7 +1300,7 @@ fn folder_name(name: &str) -> String {
 
 /// A random, easily told apart colour for a shell: hues a golden angle apart
 /// from a random start, at a calm saturation.
-fn shell_color(seed: u64, shell: usize) -> [f32; 4] {
+pub(super) fn shell_color(seed: u64, shell: usize) -> [f32; 4] {
     let hue = ((seed % 360) as f32 / 360.0 + shell as f32 * 0.618_034).fract();
     let (saturation, value) = (0.55, 0.85);
     let sector = hue * 6.0;
