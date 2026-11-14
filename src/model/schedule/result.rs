@@ -1123,7 +1123,7 @@ impl CalculatedSchedule {
         self.by_block.get(&block).map(|index| &self.ground[*index])
     }
 
-    fn blocks_of(&self, bar: BarId) -> Option<&[DigBlockId]> {
+    pub(crate) fn blocks_of(&self, bar: BarId) -> Option<&[DigBlockId]> {
         self.bar_blocks.iter().find(|(id, _)| *id == bar).map(|(_, blocks)| blocks.as_slice())
     }
 

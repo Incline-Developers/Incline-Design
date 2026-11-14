@@ -137,7 +137,17 @@ pub(crate) enum BarWork {
     /// own open blast bar has next, its rate adding to whatever is working
     /// them. See [`drill_blast`].
     Follow(FollowWork),
+    /// Ground nobody has sequenced, dug in an order the schedule works out:
+    /// everything the loader's and the other loaders' dig bars leave. The
+    /// order is a result of each calculation, never stored here.
+    Auto(AutoWork),
 }
+
+/// An automatic bar's own settings: none yet. A struct so one can be added
+/// without changing how the bar is saved.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AutoWork {}
 
 /// A follow bar's own settings: the machine it follows, `None` once that
 /// machine is removed.
@@ -343,14 +353,14 @@ impl ScheduleBar {
     pub(crate) fn members(&self) -> &[DigBlockRef] {
         match &self.work {
             BarWork::Dig(order) => order.members(),
-            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => &[],
+            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => &[],
         }
     }
 
     pub(crate) fn dig_order(&self) -> Option<&DigOrder> {
         match &self.work {
             BarWork::Dig(order) => Some(order),
-            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => None,
+            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => None,
         }
     }
 
@@ -365,15 +375,20 @@ impl ScheduleBar {
     pub(crate) fn reclaim(&self) -> Option<&ReclaimWork> {
         match &self.work {
             BarWork::Reclaim(work) => Some(work),
-            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => None,
+            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => None,
         }
     }
 
     pub(crate) fn delay(&self) -> Option<&DelayWork> {
         match &self.work {
             BarWork::Delay(work) => Some(work),
-            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Blast(_) | BarWork::Follow(_) => None,
+            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => None,
         }
+    }
+
+    /// Whether the schedule works out what this bar digs.
+    pub(crate) fn is_auto(&self) -> bool {
+        matches!(self.work, BarWork::Auto(_))
     }
 
     /// The machine a follow bar follows, if this is one.
@@ -1617,7 +1632,7 @@ impl SchedulePlan {
         }
         match &mut self.bar_mut(id)?.work {
             BarWork::Delay(work) => work.kind = kind,
-            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Blast(_) | BarWork::Follow(_) => return Err(ScheduleError::WrongActivity),
+            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => return Err(ScheduleError::WrongActivity),
         }
         Ok(())
     }
@@ -1672,7 +1687,7 @@ impl SchedulePlan {
                 work.sources = sources;
                 Ok(true)
             }
-            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => Err(ScheduleError::WrongActivity),
+            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => Err(ScheduleError::WrongActivity),
         }
     }
 
@@ -1684,7 +1699,7 @@ impl SchedulePlan {
         let bar = self.bar_mut(id)?;
         match &mut bar.work {
             BarWork::Reclaim(work) => work.maximum_t = maximum_t,
-            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => return Err(ScheduleError::WrongActivity),
+            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => return Err(ScheduleError::WrongActivity),
         }
         Ok(())
     }
@@ -1955,7 +1970,7 @@ impl SchedulePlan {
     fn dig_order_mut(&mut self, id: BarId) -> ScheduleResult<&mut DigOrder> {
         match &mut self.bar_mut(id)?.work {
             BarWork::Dig(order) => Ok(order),
-            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => Err(ScheduleError::WrongActivity),
+            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => Err(ScheduleError::WrongActivity),
         }
     }
 
@@ -2192,6 +2207,45 @@ impl SchedulePlan {
         Ok(id)
     }
 
+    /// Add an automatic bar: while it is its loader's highest-priority open
+    /// bar with work, the loader digs the ground no dig bar has sequenced.
+    pub(crate) fn add_auto_bar(&mut self, agent: Option<LoaderAgentId>, priority: u32, window: WorkWindow) -> ScheduleResult<BarId> {
+        if let Some(agent) = agent
+            && self.agent_kind(agent).ok_or(ScheduleError::UnknownAgent)?.is_drill_blast()
+        {
+            return Err(ScheduleError::WrongMachine);
+        }
+        if !window.is_valid() {
+            return Err(ScheduleError::InvalidWindow);
+        }
+        self.check_lane(None, agent, priority, window)?;
+        let id = self.allocate_bar_id()?;
+        self.bars.push(ScheduleBar {
+            id,
+            name: String::new(),
+            work: BarWork::Auto(AutoWork::default()),
+            agent,
+            priority,
+            window,
+        });
+        Ok(id)
+    }
+
+    /// Make an automatic bar a dig bar holding `members`, the order a
+    /// schedule worked out for it: from here on the ground is the planner's
+    /// to arrange, and no longer follows what the other bars leave.
+    pub(crate) fn convert_auto_bar(&mut self, id: BarId, members: Vec<DigBlockRef>) -> ScheduleResult {
+        if !self.bar(id).ok_or(ScheduleError::UnknownBar)?.is_auto() {
+            return Err(ScheduleError::WrongActivity);
+        }
+        let mut order = DigOrder::default();
+        for member in members {
+            order.insert(usize::MAX, member)?;
+        }
+        self.bar_mut(id)?.work = BarWork::Dig(order);
+        Ok(())
+    }
+
     /// Change which machine a follow bar follows.
     pub(crate) fn set_follow_leader(&mut self, id: BarId, leader: LoaderAgentId) -> ScheduleResult {
         self.agent_kind(leader).ok_or(ScheduleError::UnknownAgent)?;
@@ -2279,6 +2333,7 @@ impl SchedulePlan {
             self.check_fits(bar.id, bar.agent)?;
             match &bar.work {
                 BarWork::Dig(order) => order.check_loaded()?,
+                BarWork::Auto(_) => {}
                 // The sources are deliberately *not* required to resolve: a
                 // stockpile deleted or retyped since leaves the bar holding an
                 // unresolved reference, which the readiness report names. A file
@@ -2394,6 +2449,7 @@ impl SchedulePlan {
             bar.name.hash(hasher);
             match &bar.work {
                 BarWork::Dig(_) => 0u8.hash(hasher),
+                BarWork::Auto(_) => 5u8.hash(hasher),
                 BarWork::Reclaim(work) => {
                     1u8.hash(hasher);
                     work.sources.hash(hasher);
@@ -2474,7 +2530,7 @@ pub(crate) fn work_fits(work: &BarWork, kind: MachineKind) -> bool {
     match work {
         BarWork::Delay(_) => true,
         BarWork::Blast(_) | BarWork::Follow(_) => kind.is_drill_blast(),
-        BarWork::Dig(_) | BarWork::Reclaim(_) => !kind.is_drill_blast(),
+        BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Auto(_) => !kind.is_drill_blast(),
     }
 }
 

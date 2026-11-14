@@ -302,6 +302,13 @@ impl crate::app::App<'_> {
                 leader,
                 insert_lane,
             } => self.add_follow_bar(agent, priority, window, leader, insert_lane),
+            ScheduleEdit::AddAutoBar {
+                agent,
+                priority,
+                window,
+                insert_lane,
+            } => self.add_auto_bar(agent, priority, window, insert_lane),
+            ScheduleEdit::ConvertAutoBar(bar) => self.convert_auto_bar(bar),
             ScheduleEdit::SetFollowLeader { bar, leader } => self.edit_schedule(|plan| plan.set_follow_leader(bar, leader)),
             ScheduleEdit::AddDelayType { name, color } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.add_type(&name, color).map(|_| ()))),
             ScheduleEdit::RenameDelayType { kind, name } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.rename_type(kind, &name))),
@@ -803,6 +810,52 @@ impl crate::app::App<'_> {
             self.editor.schedule_selected_bars = std::iter::once(id).collect();
             self.editor.schedule_selected_member = None;
         }
+    }
+
+    /// Add an automatic bar, and select it.
+    fn add_auto_bar(&mut self, agent: Option<LoaderAgentId>, priority: u32, window: crate::model::schedule::WorkWindow, insert_lane: bool) {
+        let mut added = None;
+        self.edit_schedule(|plan| {
+            // A lane of its own is opened first, so the bar never shares one.
+            if insert_lane {
+                plan.open_lane(agent, priority);
+            }
+            added = Some(plan.add_auto_bar(agent, priority, window)?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_bars = std::iter::once(id).collect();
+            self.editor.schedule_selected_member = None;
+        }
+    }
+
+    /// Make an automatic bar a dig bar of the blocks the current schedule
+    /// dealt it, in the order it digs them.
+    fn convert_auto_bar(&mut self, bar: crate::model::schedule::BarId) {
+        let blocks = self.editor.schedule_result.as_ref().and_then(|schedule| schedule.blocks_of(bar).map(<[_]>::to_vec));
+        let Some(blocks) = blocks.filter(|blocks| !blocks.is_empty()) else {
+            userspace_warn!("{}", tr!("auto-bar-convert-needs-schedule"));
+            return;
+        };
+        let snapshot = match self.planning_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(reason) => {
+                userspace_warn!("{}", reason.describe());
+                return;
+            }
+        };
+        // Every block must be one the current Solids run holds: a schedule
+        // from an earlier run names ground that may no longer be cut that way.
+        let by_id: std::collections::HashMap<_, _> = snapshot.blocks.iter().map(|block| (block.id, block)).collect();
+        let Some(members) = blocks
+            .iter()
+            .map(|id| by_id.get(id).map(|block| self.dig_block_reference(block)))
+            .collect::<Option<Vec<_>>>()
+        else {
+            userspace_warn!("{}", tr!("auto-bar-convert-needs-schedule"));
+            return;
+        };
+        self.edit_schedule(|plan| plan.convert_auto_bar(bar, members));
     }
 
     /// Add a delay list, of the first delay type when there is one, and open

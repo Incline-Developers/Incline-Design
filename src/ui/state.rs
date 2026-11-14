@@ -6461,6 +6461,8 @@ impl UiCommand {
                 ScheduleEdit::DeleteCashflowRule(_) => report(tr!("cashflow-delete-rule"), String::new()),
                 ScheduleEdit::AddDelayBar { .. } => report(tr!("delay-add-bar"), String::new()),
                 ScheduleEdit::AddFollowBar { .. } => report(tr!("schedule-add-follow-bar"), String::new()),
+                ScheduleEdit::AddAutoBar { .. } => report(tr!("schedule-add-auto-bar"), String::new()),
+                ScheduleEdit::ConvertAutoBar(_) => report(tr!("auto-bar-convert"), String::new()),
                 ScheduleEdit::AddBlastBar { .. } => report(tr!("blast-add-bar"), String::new()),
                 ScheduleEdit::SetClassKind { .. }
                 | ScheduleEdit::SetClassLoaderType { .. }
@@ -8045,6 +8047,8 @@ pub(crate) enum GanttPaletteItem {
     Blast,
     /// A drill and blast bar working another machine's blasts.
     Follow,
+    /// A loader bar whose ground the schedule sequences.
+    Auto,
 }
 
 /// Where a delay or follow bar was dropped, held while its type or the
@@ -8908,6 +8912,17 @@ pub(crate) enum ScheduleEdit {
         leader: crate::model::schedule::LoaderAgentId,
         insert_lane: bool,
     },
+    /// Add an automatic bar: while it has priority the loader digs the
+    /// ground no dig bar has sequenced, in an order the schedule works out.
+    AddAutoBar {
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        insert_lane: bool,
+    },
+    /// Make an automatic bar a dig bar holding the order the current
+    /// schedule worked out for it.
+    ConvertAutoBar(crate::model::schedule::BarId),
     /// Change which machine a follow bar follows.
     SetFollowLeader {
         bar: crate::model::schedule::BarId,

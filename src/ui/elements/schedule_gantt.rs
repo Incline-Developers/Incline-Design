@@ -1485,6 +1485,8 @@ pub(super) fn bar_label(bar: &ScheduleBar, report: Option<&ScheduleBarView>, pla
         report
             .map(|report| report.default_name.clone())
             .unwrap_or_else(|| tr!("reclaim-bar-default-name", stockpile = tr!("destination-unresolved")))
+    } else if bar.is_auto() {
+        tr!("auto-bar-default-name")
     } else if bar.blast_order().is_some() {
         format!("✹ {}", report.map(|report| report.default_name.clone()).unwrap_or_else(|| tr!("blast-bar-default-empty")))
     } else if let Some(work) = bar.follow() {
@@ -1594,6 +1596,8 @@ pub(super) const RECLAIM_COLOR: egui::Color32 = egui::Color32::from_rgb(0x3F, 0x
 /// band above the bar at a glance and at a small size. One colour whatever
 /// the reason; the reason is the hover's to say.
 pub(super) const IDLE_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE8, 0xC0, 0x4A);
+/// The palette chip that makes an automatic bar.
+const AUTO_COLOR: egui::Color32 = egui::Color32::from_rgb(0x8E, 0x7C, 0xD8);
 /// Drill and blast bars, and the palette chip that makes them.
 pub(super) const BLAST_COLOR: egui::Color32 = egui::Color32::from_rgb(0xC9, 0x7B, 0x4A);
 
@@ -2481,6 +2485,17 @@ fn draw_bars(
                             open_blast = Some(blast_bar_dialog(session, bar, order));
                             ui.close();
                         }
+                        // Freezes the order the schedule worked out, so it can
+                        // be arranged by hand like any dig bar.
+                        if bar.is_auto()
+                            && ContextMenuAction::new(tr!("auto-bar-convert"))
+                                .enabled(schedule.is_some_and(|schedule| schedule.blocks_of(bar.id).is_some_and(|blocks| !blocks.is_empty())))
+                                .show(ui)
+                                .clicked()
+                        {
+                            commands.push(UiCommand::schedule(session, ScheduleEdit::ConvertAutoBar(bar.id)));
+                            ui.close();
+                        }
                         if let Some(work) = bar.reclaim()
                             && ContextMenuAction::new(tr!("reclaim-edit-bar")).show(ui).clicked()
                         {
@@ -2915,7 +2930,7 @@ pub(super) fn centred_note(ui: &egui::Ui, rect: egui::Rect, text: String) {
 fn new_bar_end_h(plan: &SchedulePlan, item: GanttPaletteItem, start_h: f64) -> f64 {
     let period = crate::model::schedule::SCHEDULE_PERIOD_H;
     match item {
-        GanttPaletteItem::Dig | GanttPaletteItem::Reclaim | GanttPaletteItem::Blast | GanttPaletteItem::Follow => {
+        GanttPaletteItem::Dig | GanttPaletteItem::Reclaim | GanttPaletteItem::Blast | GanttPaletteItem::Follow | GanttPaletteItem::Auto => {
             (f64::from(plan.experiment().planning_end_day) * period).max(start_h + period)
         }
         GanttPaletteItem::Delay => start_h + 12.0,
@@ -2929,6 +2944,7 @@ fn palette_label(item: GanttPaletteItem) -> String {
         GanttPaletteItem::Delay => tr!("gantt-palette-delay"),
         GanttPaletteItem::Blast => tr!("gantt-palette-blast"),
         GanttPaletteItem::Follow => tr!("gantt-palette-follow"),
+        GanttPaletteItem::Auto => tr!("gantt-palette-auto"),
     }
 }
 
@@ -2939,6 +2955,7 @@ fn palette_color(item: GanttPaletteItem) -> egui::Color32 {
         GanttPaletteItem::Delay => super::schedule_delays::UNTYPED_DELAY_COLOR,
         GanttPaletteItem::Blast => BLAST_COLOR,
         GanttPaletteItem::Follow => BLAST_COLOR.gamma_multiply(0.6),
+        GanttPaletteItem::Auto => AUTO_COLOR,
     }
 }
 
@@ -2955,11 +2972,12 @@ fn draw_palette(ui: &mut egui::Ui, corner: egui::Rect, editor: &mut EditorState,
             GanttPaletteItem::Dig,
             GanttPaletteItem::Reclaim,
             GanttPaletteItem::Delay,
+            GanttPaletteItem::Auto,
             GanttPaletteItem::Blast,
             GanttPaletteItem::Follow,
         ]
     } else {
-        &[GanttPaletteItem::Dig, GanttPaletteItem::Reclaim, GanttPaletteItem::Delay]
+        &[GanttPaletteItem::Dig, GanttPaletteItem::Reclaim, GanttPaletteItem::Delay, GanttPaletteItem::Auto]
     };
     let inner = corner.shrink2(egui::vec2(6.0, 4.0));
     if !inner.is_positive() {
@@ -2980,9 +2998,10 @@ fn draw_palette(ui: &mut egui::Ui, corner: egui::Rect, editor: &mut EditorState,
     for (index, item) in items.iter().copied().enumerate() {
         let (column, row) = (index % COLUMNS, index / COLUMNS);
         let chip = egui::Rect::from_min_size(egui::pos2(inner.left() + column as f32 * (size.x + GAP), top + row as f32 * (size.y + GAP)), size);
-        let response = ui
-            .interact(chip, ui.scope_id().with(("gantt_palette", index)), egui::Sense::drag())
-            .hint(tr!("gantt-palette-hint", item = palette_label(item)));
+        let response = ui.interact(chip, ui.scope_id().with(("gantt_palette", index)), egui::Sense::drag()).hint(match item {
+            GanttPaletteItem::Auto => tr!("gantt-palette-auto-hint"),
+            _ => tr!("gantt-palette-hint", item = palette_label(item)),
+        });
         let carried = editor.gantt_palette_drag == Some(item);
         let painter = ui.painter_at(chip);
         painter.rect_filled(chip, GROUP_CORNER_RADIUS, if response.hovered() || carried { hot } else { rest });
@@ -3119,6 +3138,15 @@ fn draw_palette_drop(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorSta
                 pos,
             });
         }
+        GanttPaletteItem::Auto => commands.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::AddAutoBar {
+                agent: placement.agent,
+                priority: placement.priority,
+                window,
+                insert_lane: placement.insert,
+            },
+        )),
         GanttPaletteItem::Follow => {
             editor.gantt_follow_drop = Some(DelayDrop {
                 session,

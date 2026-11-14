@@ -752,6 +752,72 @@ fn excluded(block: &crate::app::commands::solids_view::DigBlockRecord, exclusion
     })
 }
 
+/// The ground no dig bar has sequenced, dealt between `bars` automatic bars:
+/// each one's blocks with their tonnes, in the order it digs them, and how
+/// many blocks were left out for want of a measured tonnage.
+///
+/// A dig bar owns the ground it names whatever its window, so that ground is
+/// never dealt. What is left is taken from the top down - bench by bench,
+/// blast by blast, flitch by flitch - and each blast goes whole to the bar
+/// holding the fewest tonnes so far, so the bars work down a pit together
+/// and no loader is sent under ground another has yet to reach.
+fn deal_auto_ground(source: &CaptureSnapshot, bars: usize) -> (Vec<Vec<(usize, f64)>>, usize) {
+    let blocks = &source.snapshot.blocks;
+    let claimed: std::collections::HashSet<crate::model::DigBlockId> = source
+        .reports
+        .iter()
+        .flat_map(|report| report.members.iter().filter_map(|member| member.resolved))
+        .collect();
+    let zero = source.plan.unmeasured_as_zero();
+    let mut unmeasured = 0usize;
+    let mut open: Vec<(usize, f64)> = Vec::new();
+    for (position, block) in blocks.iter().enumerate() {
+        if claimed.contains(&block.id) || excluded(block, &source.exclusions) {
+            continue;
+        }
+        match super::schedule_readiness::block_tonnes_for_stage(block, source.tonnage_field, zero) {
+            Ok(tonnes) if tonnes > 0.0 => open.push((position, tonnes)),
+            Ok(_) => {}
+            Err(_) => unmeasured += 1,
+        }
+    }
+    // A blast is named by its anchor; ground in none is its own flitch's.
+    let blast = |position: usize| blocks[position].blast.map(|blast| blast.anchor());
+    let number = |name: &str| name.trim().parse::<u64>().unwrap_or(u64::MAX);
+    open.sort_by(|a, b| {
+        let (a, b) = (&blocks[a.0], &blocks[b.0]);
+        b.bench
+            .top
+            .total_cmp(&a.bench.top)
+            .then_with(|| a.solid_name.cmp(&b.solid_name))
+            .then_with(|| a.solid.cmp(&b.solid))
+            .then_with(|| {
+                let key = |block: &super::solids_view::DigBlockRecord| block.blast.map_or([f64::NEG_INFINITY; 2], |blast| blast.anchor());
+                let (a, b) = (key(a), key(b));
+                a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1]))
+            })
+            .then_with(|| b.flitch.top.total_cmp(&a.flitch.top))
+            .then_with(|| number(&a.name).cmp(&number(&b.name)))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    let mut shares: Vec<Vec<(usize, f64)>> = vec![Vec::new(); bars];
+    let mut held = vec![0.0_f64; bars];
+    let mut start = 0;
+    while start < open.len() {
+        let first = &blocks[open[start].0];
+        let same = |position: usize| {
+            let block = &blocks[position];
+            block.solid == first.solid && block.bench.base.to_bits() == first.bench.base.to_bits() && blast(position) == blast(open[start].0)
+        };
+        let end = start + open[start..].iter().take_while(|(position, _)| same(*position)).count();
+        let to = (0..bars).min_by(|a, b| held[*a].total_cmp(&held[*b])).unwrap_or(0);
+        held[to] += open[start..end].iter().map(|(_, tonnes)| tonnes).sum::<f64>();
+        shares[to].extend_from_slice(&open[start..end]);
+        start = end;
+    }
+    (shares, unmeasured)
+}
+
 /// Resolve one owned snapshot into the experimental model, or every reason it
 /// cannot be.
 ///
@@ -788,6 +854,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
 
     // ---- bars in scope -----------------------------------------------------
     let mut scoped: Vec<ScopedBar> = Vec::new();
+    // Where in `scoped` each automatic bar is.
+    let mut auto_bars: Vec<usize> = Vec::new();
     for (bar, report) in plan.bars().iter().zip(source.reports.iter()) {
         if cancel.is_cancelled() {
             return Err(Vec::new());
@@ -818,6 +886,14 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         }
         let work = if bar.delay().is_some() {
             ScopedWork::Delay
+        } else if bar.is_auto() {
+            // Its ground is dealt out once every dig bar's is known; see
+            // `deal_auto_ground`.
+            auto_bars.push(scoped.len());
+            ScopedWork::Dig {
+                members: Vec::new(),
+                empty: Vec::new(),
+            }
         } else if let Some(reclaim) = bar.reclaim() {
             ScopedWork::Reclaim {
                 sources: reclaim.sources.clone(),
@@ -880,6 +956,18 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             end_h,
             work,
         });
+    }
+    let auto_ids: Vec<BarId> = auto_bars.iter().map(|index| scoped[*index].bar).collect();
+    if !auto_bars.is_empty() {
+        let (shares, unmeasured) = deal_auto_ground(source, auto_bars.len());
+        for (index, members) in auto_bars.iter().zip(shares) {
+            scoped[*index].work = ScopedWork::Dig { members, empty: Vec::new() };
+        }
+        if unmeasured > 0 {
+            notes.push(tr!("schedule-capture-auto-unmeasured", count = unmeasured.to_string()));
+        }
+        // An automatic bar the dig bars left nothing for has no work.
+        scoped.retain(|bar| !matches!(&bar.work, ScopedWork::Dig { members, .. } if members.is_empty()));
     }
     let has_blast_work = plan.drill_blast().enabled
         && plan
@@ -1854,11 +1942,31 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     let event_budget_restricted = derived > event_capacity;
     let segments_per_interval = derived.clamp(1, event_capacity);
     // ---- drill and blast ----------------------------------------------------
-    let drill_blast = if plan.drill_blast().enabled {
+    let mut drill_blast = if plan.drill_blast().enabled {
         capture_drill_blast(source, horizon_h, &intervals, &block_ground, &scoped, &mut identities, &mut notes, &mut problems, cancel)
     } else {
         None
     };
+    // An automatic bar's ground in a blast no machine bar works is dug
+    // without waiting on it: nobody has sequenced that blast, and ground the
+    // schedule sequences for itself cannot wait on work nobody was given.
+    if let Some(input) = drill_blast.as_mut()
+        && !auto_ids.is_empty()
+    {
+        let auto_ground: std::collections::HashSet<GroundId> = scoped
+            .iter()
+            .filter(|bar| auto_ids.contains(&bar.bar))
+            .filter_map(|bar| match &bar.work {
+                ScopedWork::Dig { members, .. } => Some(members),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|(position, _)| block_ground.get(position).copied())
+            .collect();
+        for (index, _) in input.unworked() {
+            input.blasts[index].releases.retain(|ground| !auto_ground.contains(ground));
+        }
+    }
     if cancel.is_cancelled() {
         return Err(Vec::new());
     }

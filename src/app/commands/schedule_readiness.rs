@@ -1250,6 +1250,11 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
         }
         return report;
     }
+    // An automatic bar names no ground to resolve or measure: what it digs is
+    // whatever the dig bars leave, dealt as the schedule is calculated.
+    if bar.is_auto() {
+        return report;
+    }
     if bar.members().is_empty() {
         report.problems.push(ReadinessProblem::Empty);
     }
