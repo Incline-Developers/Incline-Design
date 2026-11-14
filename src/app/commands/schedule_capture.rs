@@ -2447,7 +2447,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     // Two orders for the automatic bars' ground: the long-term plan's, and
     // the ground from the top down. The plan sees the loaders, crushers and
     // trucks but not grade targets, stockpiles or routing, so the dispatch -
-    // which sees everything - schedules both, and the better is kept.
+    // which sees everything - schedules both, and the one worth more
+    // discounted is kept.
     if !auto_ids.is_empty() {
         use crate::model::schedule::optimisation::longterm;
         let auto_tasks: Vec<TaskId> = identities.tasks.iter().filter(|(_, bar, _)| auto_ids.contains(bar)).map(|(task, _, _)| *task).collect();
@@ -2488,7 +2489,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         let worth = |trial: &BlendInput| {
             let reduced = crate::model::schedule::optimisation::blended::reduce::Reduced::new(trial);
             match crate::model::schedule::optimisation::blended::greedy::dispatch_cancellable(&reduced.input, &cancel.signal()) {
-                Ok(Some(found)) if found.replay.is_valid() => Some(found.replay.replayed_objective),
+                Ok(Some(found)) if found.replay.is_valid() => Some(longterm::discounted_value(&reduced.input, &found.solution, &found.replay, experiment.discount_rate)),
                 _ => None,
             }
         };
@@ -2500,7 +2501,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         if cancel.is_cancelled() {
             return Err(Vec::new());
         }
-        // The plan's order unless the top-down one schedules for more.
+        // The plan's order unless the top-down one schedules for more, both
+        // discounted as the plan values ground.
         let chosen = match values.as_slice() {
             [Some(planned), Some(top_down)] if top_down > planned => 1,
             _ => 0,
@@ -2522,10 +2524,11 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 crate::model::schedule::cashflow::money_exact(*planned),
                 crate::model::schedule::cashflow::money_exact(*top_down),
             );
+            let rate = format!("{}%", experiment.discount_rate * 100.0);
             notes.push(if chosen == 0 {
-                tr!("schedule-capture-auto-planned", planned = planned, top_down = top_down)
+                tr!("schedule-capture-auto-planned", rate = rate, planned = planned, top_down = top_down)
             } else {
-                tr!("schedule-capture-auto-top-down", planned = planned, top_down = top_down)
+                tr!("schedule-capture-auto-top-down", rate = rate, planned = planned, top_down = top_down)
             });
         }
         let (trial, named, _) = candidates.swap_remove(chosen);
