@@ -101,6 +101,8 @@ pub(crate) enum IdleReason {
     /// Its bar's next block has not been blasted yet; the span names the
     /// blast. See [`super::drill_blast`].
     WaitingOnBlast,
+    /// Its automatic bar's next block lies under ground still standing.
+    WaitingOnGround,
 }
 
 /// What drill and blast did in a calculated schedule: every blast with its

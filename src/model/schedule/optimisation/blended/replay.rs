@@ -725,7 +725,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                 if blast.stage != crate::model::schedule::BlastStage::Fired
                     && events
                         .fired_h
-                        .is_some_and(|fired| !events.done_h[2].is_some_and(|charged| (chain.fires_at(charged) - fired).abs() < 1e-9))
+                        .is_some_and(|fired| !events.done_h[2].is_some_and(|charged| (chain.released_after(blast, charged) - fired).abs() < 1e-9))
                 {
                     checker.report.issues.push(format!("blast {blast_index} fires outside its window"));
                 }

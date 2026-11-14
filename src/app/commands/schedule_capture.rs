@@ -538,6 +538,7 @@ fn capture_drill_blast(
                 releases,
                 above,
                 never_clear: blocked,
+                gate: false,
             };
             let captured = CapturedBlast {
                 reference,
@@ -752,15 +753,84 @@ fn excluded(block: &crate::app::commands::solids_view::DigBlockRecord, exclusion
     })
 }
 
+/// A dependency for each block at `positions` with ground above it: the
+/// block is available once that ground is dug.
+///
+/// "Above" is the nearest level over the block that some bar digs, within
+/// `buffer_m` of it in plan. Only the nearest: the ground over that is held
+/// by its own dependency when the schedule sequences it, and is the
+/// planner's to order when a dig bar names it. Ground no bar digs -
+/// excluded, unmeasured or empty - is treated as not there.
+fn ground_gates(
+    source: &CaptureSnapshot,
+    block_ground: &BTreeMap<usize, GroundId>,
+    positions: &[usize],
+    buffer_m: f64,
+) -> Vec<crate::model::schedule::optimisation::blended::drill_blast::BlastJob> {
+    use rayon::prelude::*;
+
+    use crate::model::schedule::optimisation::blended::drill_blast::BlastJob;
+    let blocks = &source.snapshot.blocks;
+    let bounds = |face: &crate::model::arrangement::Face| {
+        face.first().map_or((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |ring| {
+            ring.iter()
+                .fold((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |(lo, hi), point| (lo.min(*point), hi.max(*point)))
+        })
+    };
+    // Only ground some bar digs can hold anything up.
+    let dug: Vec<(usize, GroundId, (glam::DVec2, glam::DVec2))> = block_ground
+        .iter()
+        .map(|(position, ground)| (*position, *ground, bounds(&blocks[*position].ground)))
+        .collect();
+    let reach = buffer_m + 1e-9;
+    positions
+        .par_iter()
+        .filter_map(|position| {
+            let block = &blocks[*position];
+            let ground = *block_ground.get(position)?;
+            let (lo, hi) = bounds(&block.ground);
+            let mut over: Vec<(f64, GroundId)> = Vec::new();
+            for (other_position, other_ground, (other_lo, other_hi)) in &dug {
+                let other = &blocks[*other_position];
+                if other.flitch.base < block.flitch.top - 1e-6 {
+                    continue;
+                }
+                let gap = (lo - *other_hi).max(*other_lo - hi).max(glam::DVec2::ZERO);
+                if gap.x > reach || gap.y > reach || !plan_within(&other.ground, &block.ground, reach) {
+                    continue;
+                }
+                // With no buffer, only ground over the block itself holds it:
+                // ground that merely shares an edge with it does not.
+                if buffer_m <= 0.0 && crate::model::arrangement::overlap_area(&other.ground, &block.ground) <= SHARED_GROUND_M2 {
+                    continue;
+                }
+                over.push((other.flitch.base, *other_ground));
+            }
+            let nearest = over.iter().map(|(base, _)| *base).fold(f64::INFINITY, f64::min);
+            let above: Vec<GroundId> = over.into_iter().filter(|(base, _)| *base <= nearest + 1e-6).map(|(_, ground)| ground).collect();
+            (!above.is_empty()).then(|| BlastJob {
+                quantity: [0.0; 3],
+                stage: crate::model::schedule::BlastStage::NotStarted,
+                releases: vec![ground],
+                above,
+                never_clear: false,
+                gate: true,
+            })
+        })
+        .collect()
+}
+
 /// The ground no dig bar has sequenced, dealt between `bars` automatic bars:
 /// each one's blocks with their tonnes, in the order it digs them, and how
 /// many blocks were left out for want of a measured tonnage.
 ///
 /// A dig bar owns the ground it names whatever its window, so that ground is
-/// never dealt. What is left is taken from the top down - bench by bench,
-/// blast by blast, flitch by flitch - and each blast goes whole to the bar
-/// holding the fewest tonnes so far, so the bars work down a pit together
-/// and no loader is sent under ground another has yet to reach.
+/// never dealt. What is left is taken from the top down, a flitch level at a
+/// time, and on each level every blast's ground goes whole to the bar
+/// holding the fewest tonnes so far. Every bar's order therefore runs
+/// strictly downwards, which is what lets a block wait on the ground above
+/// it (see [`ground_gates`]) without ever waiting on ground later in its
+/// own bar.
 fn deal_auto_ground(source: &CaptureSnapshot, bars: usize) -> (Vec<Vec<(usize, f64)>>, usize) {
     let blocks = &source.snapshot.blocks;
     let claimed: std::collections::HashSet<crate::model::DigBlockId> = source
@@ -786,9 +856,9 @@ fn deal_auto_ground(source: &CaptureSnapshot, bars: usize) -> (Vec<Vec<(usize, f
     let number = |name: &str| name.trim().parse::<u64>().unwrap_or(u64::MAX);
     open.sort_by(|a, b| {
         let (a, b) = (&blocks[a.0], &blocks[b.0]);
-        b.bench
+        b.flitch
             .top
-            .total_cmp(&a.bench.top)
+            .total_cmp(&a.flitch.top)
             .then_with(|| a.solid_name.cmp(&b.solid_name))
             .then_with(|| a.solid.cmp(&b.solid))
             .then_with(|| {
@@ -796,7 +866,6 @@ fn deal_auto_ground(source: &CaptureSnapshot, bars: usize) -> (Vec<Vec<(usize, f
                 let (a, b) = (key(a), key(b));
                 a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1]))
             })
-            .then_with(|| b.flitch.top.total_cmp(&a.flitch.top))
             .then_with(|| number(&a.name).cmp(&number(&b.name)))
             .then_with(|| a.name.cmp(&b.name))
     });
@@ -807,7 +876,7 @@ fn deal_auto_ground(source: &CaptureSnapshot, bars: usize) -> (Vec<Vec<(usize, f
         let first = &blocks[open[start].0];
         let same = |position: usize| {
             let block = &blocks[position];
-            block.solid == first.solid && block.bench.base.to_bits() == first.bench.base.to_bits() && blast(position) == blast(open[start].0)
+            block.solid == first.solid && block.flitch.top.to_bits() == first.flitch.top.to_bits() && blast(position) == blast(open[start].0)
         };
         let end = start + open[start..].iter().take_while(|(position, _)| same(*position)).count();
         let to = (0..bars).min_by(|a, b| held[*a].total_cmp(&held[*b])).unwrap_or(0);
@@ -1965,6 +2034,44 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             .collect();
         for (index, _) in input.unworked() {
             input.blasts[index].releases.retain(|ground| !auto_ground.contains(ground));
+        }
+    }
+    // Ground the schedule sequences for itself is held until the ground
+    // directly above it is dug, whoever digs that: a dependency in the
+    // chain beside the blasts, which is what holds ground back everywhere.
+    // Ground a blast releases is already held by that blast's clearance.
+    if !auto_ids.is_empty() {
+        let blasted: std::collections::HashSet<GroundId> = drill_blast
+            .iter()
+            .flat_map(|input| input.blasts.iter().flat_map(|blast| blast.releases.iter().copied()))
+            .collect();
+        let auto_positions: Vec<usize> = scoped
+            .iter()
+            .filter(|bar| auto_ids.contains(&bar.bar))
+            .filter_map(|bar| match &bar.work {
+                ScopedWork::Dig { members, .. } => Some(members),
+                _ => None,
+            })
+            .flatten()
+            .map(|(position, _)| *position)
+            .filter(|position| block_ground.get(position).is_some_and(|ground| !blasted.contains(ground)))
+            .collect();
+        let buffer_m = if plan.drill_blast().enabled { plan.drill_blast().buffer_m } else { 0.0 };
+        let gates = ground_gates(source, &block_ground, &auto_positions, buffer_m);
+        if !gates.is_empty() {
+            let config = plan.drill_blast();
+            drill_blast
+                .get_or_insert_with(|| crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput {
+                    blasts: Vec::new(),
+                    agents: Vec::new(),
+                    tasks: Vec::new(),
+                    window_end_h: config.window_end_h,
+                    windows: None,
+                    fixed: None,
+                    resume: None,
+                })
+                .blasts
+                .extend(gates);
         }
     }
     if cancel.is_cancelled() {

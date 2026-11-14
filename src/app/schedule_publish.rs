@@ -1118,6 +1118,10 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
     };
     schedule.classify_idle(&intervals, |schedule, agent, position| {
         if let Some(blast) = waiting(agent, position) {
+            // A dependency past the real blasts: ground above, not a blast.
+            if blast >= lookup.identities.blasts.len() {
+                return (IdleReason::WaitingOnGround, Vec::new(), None);
+            }
             return (IdleReason::WaitingOnBlast, Vec::new(), Some(blast));
         }
         let (reason, full) = explain(schedule, agent, position);
@@ -1134,6 +1138,11 @@ fn published_drill_blast(
 ) -> Option<crate::model::schedule::result::DrillBlastResult> {
     use crate::model::schedule::result::{DrillBlastResult, PublishedBlast, PublishedBlastWork};
     let chain = input.drill_blast.as_ref()?;
+    // A chain holding only the dependencies of automatic bars' ground is
+    // not drill and blast: there is nothing of it to show.
+    if identities.blasts.is_empty() && identities.blast_agents.is_empty() {
+        return None;
+    }
     let timeline = solution.drill_blast.as_ref();
     // Which blast releases each piece of ground, so a blast can name the
     // blasts standing over it.
@@ -1141,6 +1150,7 @@ fn published_drill_blast(
         .blasts
         .iter()
         .enumerate()
+        .filter(|(_, blast)| !blast.gate)
         .flat_map(|(index, blast)| blast.releases.iter().map(move |ground| (*ground, index)))
         .collect();
     let unworked: BTreeMap<usize, _> = chain.unworked().into_iter().collect();

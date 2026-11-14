@@ -90,6 +90,12 @@ pub(crate) struct BlastJob {
     pub(crate) above: Vec<GroundId>,
     /// Ground above it that no bar digs stands for good, so it never clears.
     pub(crate) never_clear: bool,
+    /// A dependency rather than a blast: nothing to prep, drill or charge
+    /// and no window to wait for, so its ground is available the moment
+    /// the ground above it is dug. How ground the schedule sequences for
+    /// itself is kept from being dug out from under ground still standing.
+    #[serde(default)]
+    pub(crate) gate: bool,
 }
 
 /// A dozer, drill or MPU: what it does, and how much an hour in each
@@ -155,7 +161,7 @@ impl DrillBlastInput {
         self.blasts
             .iter()
             .enumerate()
-            .filter(|(_, blast)| !blast.releases.is_empty() && blast.stage < BlastStage::Fired)
+            .filter(|(_, blast)| !blast.gate && !blast.releases.is_empty() && blast.stage < BlastStage::Fired)
             .filter_map(|(index, blast)| {
                 BlastActivity::ALL
                     .into_iter()
@@ -190,6 +196,13 @@ impl DrillBlastInput {
     fn firing(&self, charged_h: f64) -> Option<f64> {
         let at = self.fires_at(charged_h);
         (at < NEVER).then_some(at)
+    }
+
+    /// When `blast`'s ground is available once its last step is done at
+    /// `charged_h`: the end of the window it fires in, or for a
+    /// [`BlastJob::gate`] that very hour.
+    pub(crate) fn released_after(&self, blast: &BlastJob, charged_h: f64) -> f64 {
+        if blast.gate { charged_h } else { self.fires_at(charged_h) }
     }
 
     /// When each blast's ground is available: what the dispatch found, or
@@ -235,7 +248,7 @@ impl DrillBlastInput {
                             break;
                         }
                     }
-                    if done >= NEVER { NEVER } else { self.fires_at(done) }
+                    if done >= NEVER { NEVER } else { self.released_after(blast, done) }
                 }
             };
             for ground in &blast.releases {
@@ -640,7 +653,8 @@ impl<'a> Chain<'a> {
                 if self.left[blast][step] <= DONE && self.events[blast].done_h[step].is_none() && before.is_some_and(|done| done <= at + 1e-9) {
                     self.events[blast].done_h[step] = Some(at);
                     if activity == BlastActivity::Charge {
-                        self.events[blast].fired_h = self.input.firing(at);
+                        let released = self.input.released_after(&self.input.blasts[blast], at);
+                        self.events[blast].fired_h = (released < NEVER).then_some(released);
                     }
                 }
             }

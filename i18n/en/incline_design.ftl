@@ -785,6 +785,8 @@ schedule-bar-unworked-blasts = { $count ->
 }
 idle-waiting-on-blast = Waiting on blast
 idle-waiting-on-blast-note = The bar's next block is in a blast that has not fired yet.
+idle-waiting-on-ground = Waiting on ground above
+idle-waiting-on-ground-note = The automatic bar's next block lies under ground that is still standing.
 idle-waiting-on-blast-named = Waiting on blast { $blast }
 blast-hold-never-clears = never clears
 blast-hold-never-clears-note = Ground above this blast, within the clearance buffer, is in no dig bar, so it is never dug and the blast never clears. Add that ground to a dig bar, or set this blast's starting stage in Setup → Drill & Blast.
