@@ -806,55 +806,124 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
     }
     // The plan is a mix of closures, each block dug in some of them, so no
     // one closure is the order. Each period is filled instead, to what the
-    // loaders and crushers can take in it, with the blocks free to be dug
-    // that the plan has most of dug by then: a period carries the ore the
-    // plan meant for it as well as the ground over it, where an order by
-    // when blocks are dug on average would put all the stripping first.
-    let mut waiting: Vec<usize> = blocks.iter().map(|block| block.above.len()).collect();
+    // loaders and crushers can take in it: first with the crusher feed the
+    // plan has most of dug by then and whatever is still over it, then with
+    // the rest of the ground it has most of dug, up to what the plan digs
+    // besides feed in that period. A period carries the ore the plan meant
+    // for it as well as the ground over it, where an order by when blocks
+    // are dug on average would put all the stripping first.
+    let waiting: Vec<usize> = blocks.iter().map(|block| block.above.len()).collect();
     let mut below: Vec<Vec<usize>> = vec![Vec::new(); count];
     for (index, block) in blocks.iter().enumerate() {
         for over in &block.above {
             below[*over].push(index);
         }
     }
+    // What the plan crushes and digs besides in each period: a period's
+    // ground is split between the two as the plan splits it, or the ground
+    // the plan is surest of - the stripping every closure digs early - takes
+    // all of a period and leaves the crusher idle.
+    let crushed_of = |block: &Block| block.crushed.iter().map(|(_, tonnes)| tonnes).sum::<f64>();
+    let mut other_room = vec![0.0; spans];
+    for (index, block) in blocks.iter().enumerate() {
+        let other = (block.tonnes - crushed_of(block)).max(0.0);
+        for (period, room) in other_room.iter_mut().enumerate() {
+            let earlier = if period > 0 { by[index][period - 1] } else { 0.0 };
+            *room += other * (by[index][period] - earlier).max(0.0);
+        }
+    }
     let key = |index: usize, period: usize| (by[index][period].to_bits(), std::cmp::Reverse(rank[index]), index);
-    let mut placed = vec![false; count];
-    let mut order: Vec<usize> = Vec::with_capacity(count);
-    let mut ready: Vec<usize> = (0..count).filter(|index| waiting[*index] == 0).collect();
+    let mut fill = Fill {
+        placed: vec![false; count],
+        order: Vec::with_capacity(count),
+        freed: (0..count).filter(|index| waiting[*index] == 0).collect(),
+        waiting,
+    };
+    // Blocks that are mostly crusher feed.
+    let ore: Vec<usize> = (0..count)
+        .filter(|index| blocks[*index].tonnes > 0.0 && crushed_of(&blocks[*index]) >= 0.5 * blocks[*index].tonnes)
+        .collect();
+    let mut stamp = vec![usize::MAX; count];
     for period in 0..spans {
+        let first = fill.order.len();
         let mut room = dig[period];
+        let mut other_left = other_room[period];
         let mut crushing: BTreeMap<usize, f64> = crush_row.iter().filter(|((_, at), _)| *at == period).map(|(_, row)| (*row, limits[*row])).collect();
-        let mut heap: std::collections::BinaryHeap<(u64, std::cmp::Reverse<usize>, usize)> =
-            ready.drain(..).filter(|index| !placed[*index]).map(|index| key(index, period)).collect();
-        let mut held: Vec<usize> = Vec::new();
-        while let Some((_, _, index)) = heap.pop() {
-            if placed[index] {
-                continue;
-            }
-            let block = &blocks[index];
-            let rows: Vec<usize> = block.crushed.iter().filter_map(|(crusher, _)| crush_row.get(&(*crusher, period)).copied()).collect();
-            let full = (block.tonnes > 0.0 && room <= 0.0) || rows.iter().any(|row| crushing.get(row).is_some_and(|left| *left <= 0.0));
-            if by[index][period] < 1e-6 || full {
-                held.push(index);
-                continue;
-            }
-            placed[index] = true;
-            order.push(index);
-            room -= block.tonnes;
+        let rows_of = |block: &Block| -> Vec<usize> { block.crushed.iter().filter_map(|(crusher, _)| crush_row.get(&(*crusher, period)).copied()).collect() };
+        let take = |block: &Block, room: &mut f64, other_left: &mut f64, crushing: &mut BTreeMap<usize, f64>| {
+            *room -= block.tonnes;
+            *other_left -= (block.tonnes - crushed_of(block)).max(0.0);
             for (crusher, tonnes) in &block.crushed {
                 if let Some(left) = crush_row.get(&(*crusher, period)).and_then(|row| crushing.get_mut(row)) {
                     *left -= tonnes;
                 }
             }
-            for under in &below[index] {
-                waiting[*under] = waiting[*under].saturating_sub(1);
-                if waiting[*under] == 0 {
-                    heap.push(key(*under, period));
+        };
+        // The crusher first: the ore the plan is surest of by now, with
+        // whatever is still over it, while the loaders have room for both.
+        let mut candidates: Vec<usize> = ore.iter().copied().filter(|index| !fill.placed[*index] && by[*index][period] >= 1e-6).collect();
+        candidates.sort_by(|a, b| by[*b][period].total_cmp(&by[*a][period]).then(rank[*a].cmp(&rank[*b])));
+        for index in candidates {
+            if room <= 0.0 {
+                break;
+            }
+            let crusher_full = |crushing: &BTreeMap<usize, f64>| rows_of(&blocks[index]).iter().any(|row| crushing.get(row).is_some_and(|left| *left <= 0.0));
+            if fill.placed[index] || crusher_full(&crushing) {
+                continue;
+            }
+            // Everything still over it, while it fits.
+            let mut needed = vec![index];
+            let mut stack = vec![index];
+            stamp[index] = index;
+            let mut tonnes = blocks[index].tonnes;
+            let limit = room + blocks[index].tonnes;
+            while let Some(at) = stack.pop() {
+                for over in &blocks[at].above {
+                    if !fill.placed[*over] && stamp[*over] != index {
+                        stamp[*over] = index;
+                        tonnes += blocks[*over].tonnes;
+                        needed.push(*over);
+                        stack.push(*over);
+                    }
+                }
+                if tonnes > limit {
+                    break;
                 }
             }
+            if tonnes > limit {
+                continue;
+            }
+            needed.sort_by_key(|at| rank[*at]);
+            for at in needed {
+                take(&blocks[at], &mut room, &mut other_left, &mut crushing);
+                fill.place(at, &below);
+            }
         }
-        ready = held;
+        // Then the rest of the period, by how sure the plan is of each.
+        let mut heap: std::collections::BinaryHeap<(u64, std::cmp::Reverse<usize>, usize)> =
+            fill.freed.drain(..).filter(|index| !fill.placed[*index]).map(|index| key(index, period)).collect();
+        let mut held: Vec<usize> = Vec::new();
+        while let Some((_, _, index)) = heap.pop() {
+            if fill.placed[index] {
+                continue;
+            }
+            let block = &blocks[index];
+            let other = block.tonnes - crushed_of(block);
+            let full = (block.tonnes > 0.0 && room <= 0.0)
+                || (other > 0.5 * block.tonnes && other_left <= 0.0)
+                || rows_of(block).iter().any(|row| crushing.get(row).is_some_and(|left| *left <= 0.0));
+            if by[index][period] < 1e-6 || full {
+                held.push(index);
+                continue;
+            }
+            take(block, &mut room, &mut other_left, &mut crushing);
+            fill.place(index, &below);
+            heap.extend(fill.freed.drain(..).map(|index| key(index, period)));
+        }
+        fill.freed = held;
+        interleave(&mut fill.order[first..], blocks, &rank, &crushed_of);
     }
+    let Fill { placed, mut order, .. } = fill;
     // What no period took follows, by when the plan digs it on average and
     // never before anything it waits on.
     let dug: Vec<f64> = (0..count).map(|index| by[index][spans - 1]).collect();
@@ -890,6 +959,100 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             bound,
         },
     ))
+}
+
+/// A period's blocks put in the order they are dug in: crusher feed and the
+/// rest in step, each as far through its own tonnes as the other, so the
+/// crusher is fed through the period rather than all at its start - it
+/// takes only so much a day - and nothing before what it waits on.
+fn interleave(slice: &mut [usize], blocks: &[Block], rank: &[usize], crushed_of: &dyn Fn(&Block) -> f64) {
+    use std::{cmp::Reverse, collections::BinaryHeap};
+    if slice.len() < 2 {
+        return;
+    }
+    let local: BTreeMap<usize, usize> = slice.iter().enumerate().map(|(at, index)| (*index, at)).collect();
+    let mut waiting: Vec<usize> = slice
+        .iter()
+        .map(|index| blocks[*index].above.iter().filter(|over| local.contains_key(over)).count())
+        .collect();
+    let mut below: Vec<Vec<usize>> = vec![Vec::new(); slice.len()];
+    for (at, index) in slice.iter().enumerate() {
+        for over in &blocks[*index].above {
+            if let Some(from) = local.get(over) {
+                below[*from].push(at);
+            }
+        }
+    }
+    let feed = |at: usize| {
+        let block = &blocks[slice[at]];
+        block.tonnes > 0.0 && crushed_of(block) >= 0.5 * block.tonnes
+    };
+    let total = |want: bool| {
+        slice
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| feed(*at) == want)
+            .map(|(_, index)| blocks[*index].tonnes)
+            .sum::<f64>()
+            .max(1e-9)
+    };
+    let (feed_total, other_total) = (total(true), total(false));
+    let mut queues: [BinaryHeap<Reverse<(usize, usize)>>; 2] = [BinaryHeap::new(), BinaryHeap::new()];
+    for (at, count) in waiting.iter().enumerate() {
+        if *count == 0 {
+            queues[usize::from(feed(at))].push(Reverse((rank[slice[at]], at)));
+        }
+    }
+    let (mut fed, mut other) = (0.0, 0.0);
+    let mut out = Vec::with_capacity(slice.len());
+    while out.len() < slice.len() {
+        let want_feed = fed / feed_total <= other / other_total;
+        let pick = if queues[usize::from(want_feed)].is_empty() {
+            usize::from(!want_feed)
+        } else {
+            usize::from(want_feed)
+        };
+        let Some(Reverse((_, at))) = queues[pick].pop() else { break };
+        if pick == 1 {
+            fed += blocks[slice[at]].tonnes;
+        } else {
+            other += blocks[slice[at]].tonnes;
+        }
+        out.push(slice[at]);
+        for under in &below[at] {
+            waiting[*under] -= 1;
+            if waiting[*under] == 0 {
+                queues[usize::from(feed(*under))].push(Reverse((rank[slice[*under]], *under)));
+            }
+        }
+    }
+    if out.len() == slice.len() {
+        slice.copy_from_slice(&out);
+    }
+}
+
+/// The order a plan's periods are filled in, as it grows.
+struct Fill {
+    placed: Vec<bool>,
+    order: Vec<usize>,
+    /// What each block still waits on.
+    waiting: Vec<usize>,
+    /// Blocks free to be dug that have not been looked at yet.
+    freed: Vec<usize>,
+}
+
+impl Fill {
+    /// Put a block next in the order, freeing what waited only on it.
+    fn place(&mut self, index: usize, below: &[Vec<usize>]) {
+        self.placed[index] = true;
+        self.order.push(index);
+        for under in &below[index] {
+            self.waiting[*under] = self.waiting[*under].saturating_sub(1);
+            if self.waiting[*under] == 0 {
+                self.freed.push(*under);
+            }
+        }
+    }
 }
 
 /// Each block's place in an order that puts it after everything it waits
