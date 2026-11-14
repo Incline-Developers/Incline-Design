@@ -12,16 +12,17 @@
 //! graph whose nodes are "block dug by the end of period" - a block by a
 //! period needs it by every later period and needs the ground above it by
 //! the same period - which `mineflow` solves in one pass however many
-//! blocks there are. A small linear program over the closures found so far
-//! (a convex combination of them, within the capacities) sets the next
-//! prices, and the loop ends when no closure beats the combination at its
-//! own prices: Lagrangian relaxation, with the closures as its columns.
+//! blocks there are. The closures found so far split the nodes into groups
+//! that every one of them agrees on, and a small linear program gives each
+//! group a share, within the capacities and the precedence between groups,
+//! and sets the next prices (Bienstock and Zuckerberg). The loop ends when
+//! no closure beats that plan at its own prices, or splits a group.
 //!
-//! The combination is fractional, so it is read as an order rather than a
-//! schedule: blocks by the period they are expected in. That order respects
-//! every dependency, since each closure does. It is then dealt to the bars,
-//! and the hourly dispatch works out what actually happens - this plan
-//! decides only the sequence the dispatch is handed.
+//! The plan is fractional, so it is rounded into an order rather than read
+//! as a schedule: each period filled with the blocks the plan digs in it,
+//! never before what they wait on. It is then dealt to the bars, and the
+//! hourly dispatch works out what actually happens - this plan decides only
+//! the sequence the dispatch is handed.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -32,8 +33,6 @@ use super::{DestinationId, DestinationKind, GroundId, LoaderId, SourceId, TaskId
 const MAX_PERIODS: usize = 48;
 /// The most closures priced before the order is taken from what was found.
 const MAX_ROUNDS: usize = 200;
-/// How far each round's prices lean towards the best found so far.
-const SMOOTHING: f64 = 0.8;
 /// A closure must beat the combination by this share of its value to be
 /// worth another round.
 const IMPROVEMENT: f64 = 1e-6;
@@ -674,7 +673,6 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         }
     }
     let precedence = mineflow::Precedence::explicit((count * spans) as i64, &edges).ok()?;
-    drop(edges);
     // Values go to the closure solver as integers: scaled so the largest is
     // well inside what it sums exactly.
     let largest = blocks.iter().map(|block| block.value.abs()).fold(0.0, f64::max).max(1.0);
@@ -683,46 +681,51 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
     let mut solver = mineflow::Solver::new(&precedence, &weights).ok()?;
 
     let never = spans as u16;
-    let mut columns: Vec<Column> = vec![vec![never; count]];
-    let mut theta = vec![1.0];
+    let nodes = count * spans;
+    let forbidden = |node: usize| node % spans < opens[node / spans];
+    // What each block dug in each period adds to each side row, and what it
+    // is worth then.
+    let uses_in = |block: &Block, period: usize| -> Vec<(usize, f64)> {
+        let mut out = vec![(period, block.tonnes)];
+        for (crusher, tonnes) in &block.crushed {
+            if let Some(row) = crush_row.get(&(*crusher, period)) {
+                out.push((*row, *tonnes));
+            }
+        }
+        for (truck, hours) in &block.hauled {
+            if let Some(row) = haul_row.get(&(*truck, period)) {
+                out.push((*row, *hours));
+            }
+        }
+        for (step, amount) in block.worked.iter().enumerate() {
+            if let Some(row) = machine_row.get(&(step, period)).filter(|_| *amount > 0.0) {
+                out.push((*row, *amount));
+            }
+        }
+        out
+    };
+    // The plan is a partition of the "dug by" nodes into groups, each node
+    // dug by its period to its group's share (Bienstock and Zuckerberg): the
+    // nodes every closure found so far agrees on are one group. Each closure
+    // splits the groups it cuts across, and the master gives every group a
+    // share of its own, within the capacities and with a group needing
+    // whatever group its nodes need - far more plans than a mix of whole
+    // closures, so far fewer rounds to the best.
+    let mut group: Vec<u32> = vec![0; nodes];
+    let mut groups = 1_usize;
+    let mut share: Vec<f64> = vec![0.0];
     let mut prices = vec![0.0; limits.len()];
-    // Prices are smoothed towards the best seen so far (Wentges): the
-    // master's own prices swing from one round to the next, and closures
-    // priced at them chase the swings rather than closing the gap.
-    let mut centre: Option<(Vec<f64>, f64)> = None;
-    let mut smoothing = SMOOTHING;
     let started = std::time::Instant::now();
     let (mut value, mut bound, mut rounds) = (0.0, f64::INFINITY, 0);
     while rounds < MAX_ROUNDS && started.elapsed() < request.budget {
         if cancelled() {
             return None;
         }
-        let at: Vec<f64> = match &centre {
-            Some((best, _)) => best.iter().zip(&prices).map(|(best, now)| smoothing * best + (1.0 - smoothing) * now).collect(),
-            None => prices.clone(),
-        };
+        let at = &prices;
         // The best closure at these prices. A block dug in a period earns
         // its discounted value less the capacity it pays for; as "dug by"
         // nodes that is the difference between one period and the next.
-        let gain = |block: &Block, period: usize| {
-            let mut gain = block.value * discount[period] - at[period] * block.tonnes;
-            for (crusher, tonnes) in &block.crushed {
-                if let Some(row) = crush_row.get(&(*crusher, period)) {
-                    gain -= at[*row] * tonnes;
-                }
-            }
-            for (truck, hours) in &block.hauled {
-                if let Some(row) = haul_row.get(&(*truck, period)) {
-                    gain -= at[*row] * hours;
-                }
-            }
-            for (step, amount) in block.worked.iter().enumerate() {
-                if let Some(row) = machine_row.get(&(step, period)).filter(|_| *amount > 0.0) {
-                    gain -= at[*row] * amount;
-                }
-            }
-            gain
-        };
+        let gain = |block: &Block, period: usize| block.value * discount[period] - uses_in(block, period).iter().map(|(row, used)| at[*row] * used).sum::<f64>();
         for (index, block) in blocks.iter().enumerate() {
             for period in 0..spans {
                 let here = gain(block, period);
@@ -740,70 +743,103 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             .map(|index| (0..spans).find(|period| chosen[index * spans + period]).map_or(never, |period| period as u16))
             .collect();
         rounds += 1;
-        // What this closure is worth at the prices, against what the
-        // combination is: no closure beating it means the prices are right.
+        // What this closure is worth at the prices, against what the plan
+        // is: no closure beating it means the prices are right.
         let used = usage(&column);
-        let priced = worth(&column) - used.iter().zip(&at).map(|(used, price)| used * price).sum::<f64>();
-        let allowance: f64 = limits.iter().zip(&at).map(|(limit, price)| limit * price).sum();
-        let lagrangian = priced + allowance;
-        bound = bound.min(lagrangian);
-        if centre.as_ref().is_none_or(|(_, best)| lagrangian < *best) {
-            centre = Some((at.clone(), lagrangian));
-        }
+        let priced = worth(&column) - used.iter().zip(at).map(|(used, price)| used * price).sum::<f64>();
+        let allowance: f64 = limits.iter().zip(at).map(|(limit, price)| limit * price).sum();
+        bound = bound.min(priced + allowance);
         if bound - value <= IMPROVEMENT * value.abs().max(1.0) {
             break;
         }
-        if columns.contains(&column) {
-            // Nothing new at the master's own prices: the combination is
-            // the best there is. At smoothed ones it only means they were
-            // smoothed too far, so the next round leans on the master more.
-            if smoothing <= 0.0 {
-                break;
+        // Split each group by the closure.
+        let mut relabel: Vec<u32> = vec![u32::MAX; groups * 2];
+        let mut next = 0_u32;
+        for (node, held) in group.iter_mut().enumerate() {
+            let key = *held as usize * 2 + usize::from(chosen[node]);
+            if relabel[key] == u32::MAX {
+                relabel[key] = next;
+                next += 1;
             }
-            smoothing = if smoothing < 0.1 { 0.0 } else { smoothing * 0.5 };
-            continue;
+            *held = relabel[key];
         }
-        columns.push(column);
-        // The best combination of the closures so far, within the limits.
+        if next as usize == groups {
+            // The closure is a plan the master could already make: at its
+            // own prices nothing better exists.
+            break;
+        }
+        groups = next as usize;
+        // The master: each group's worth and what it takes of each side row,
+        // summed over its nodes, and what it needs of other groups.
+        let mut objective = vec![0.0; groups];
+        let mut coefficients: Vec<Vec<f64>> = vec![vec![0.0; groups]; limits.len()];
+        let mut closed = vec![false; groups];
+        for (index, block) in blocks.iter().enumerate() {
+            for period in 0..spans {
+                let node = index * spans + period;
+                let held = group[node];
+                if forbidden(node) {
+                    closed[held as usize] = true;
+                }
+                let later = if period + 1 < spans { block.value * discount[period + 1] } else { 0.0 };
+                objective[held as usize] += block.value * discount[period] - later;
+                for (row, used) in uses_in(block, period) {
+                    coefficients[row][held as usize] += used;
+                }
+                if period + 1 < spans {
+                    for (row, used) in uses_in(block, period + 1) {
+                        coefficients[row][held as usize] -= used;
+                    }
+                }
+            }
+        }
+        let mut needs: Vec<(u32, u32)> = edges
+            .iter()
+            .map(|(from, to)| (group[*from as usize], group[*to as usize]))
+            .filter(|(from, to)| from != to)
+            .collect();
+        needs.sort_unstable();
+        needs.dedup();
         let mut master = solver::Problem::new(solver::Sense::Maximise);
-        let cols: Vec<usize> = columns.iter().map(|column| master.add_col(worth(column), 0.0, f64::INFINITY)).collect();
-        let uses: Vec<Vec<f64>> = columns.iter().map(&usage).collect();
+        let cols: Vec<usize> = (0..groups).map(|held| master.add_col(objective[held], 0.0, if closed[held] { 0.0 } else { 1.0 })).collect();
         for (row, limit) in limits.iter().enumerate() {
             master.add_row(
                 f64::NEG_INFINITY,
                 *limit,
-                cols.iter().zip(&uses).filter(|(_, used)| used[row] != 0.0).map(|(col, used)| (*col, used[row])),
+                coefficients[row]
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, used)| used.abs() > 1e-12)
+                    .map(|(held, used)| (cols[held], *used)),
             );
         }
-        master.add_row(1.0, 1.0, cols.iter().map(|col| (*col, 1.0)));
-        let solution = solver::solve(&master, &solver::Options::default());
+        for (from, to) in &needs {
+            master.add_row(f64::NEG_INFINITY, 0.0, [(cols[*from as usize], 1.0), (cols[*to as usize], -1.0)]);
+        }
+        // Never past the budget, however hard the master gets.
+        let options = solver::Options {
+            time_limit: request.budget.saturating_sub(started.elapsed()).as_secs_f64().max(0.1),
+            ..solver::Options::default()
+        };
+        let solution = solver::solve(&master, &options);
         if solution.status != solver::Status::Optimal {
-            // The combination before this closure still stands: the order
-            // is taken from it.
-            columns.pop();
             break;
         }
         value = solution.objective;
-        theta = solution.col_value;
+        share = solution.col_value;
         // A limit's price is what one more tonne of it would add.
         for (price, dual) in prices.iter_mut().zip(&solution.row_dual) {
             *price = dual.abs();
         }
     }
     // How much of each block the plan has dug by the end of each period.
-    let mut by: Vec<Vec<f64>> = vec![vec![0.0; spans]; count];
-    for (column, weight) in columns.iter().zip(&theta) {
-        for (index, period) in column.iter().enumerate() {
-            if *period < never {
-                by[index][usize::from(*period)] += weight;
-            }
-        }
-    }
-    for row in &mut by {
-        for period in 1..spans {
-            row[period] += row[period - 1];
-        }
-    }
+    let by: Vec<Vec<f64>> = (0..count)
+        .map(|index| {
+            (0..spans)
+                .map(|period| share.get(group[index * spans + period] as usize).copied().unwrap_or(0.0).clamp(0.0, 1.0))
+                .collect()
+        })
+        .collect();
     // The plan is a mix of closures, each block dug in some of them, so no
     // one closure is the order. Each period is filled instead, to what the
     // loaders and crushers can take in it: first with the crusher feed the
@@ -929,11 +965,8 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
     let dug: Vec<f64> = (0..count).map(|index| by[index][spans - 1]).collect();
     let when: Vec<f64> = (0..count)
         .map(|index| {
-            let total: f64 = columns
-                .iter()
-                .zip(&theta)
-                .filter(|(column, _)| column[index] < never)
-                .map(|(column, weight)| weight * f64::from(column[index]))
+            let total: f64 = (0..spans)
+                .map(|period| period as f64 * (by[index][period] - if period > 0 { by[index][period - 1] } else { 0.0 }))
                 .sum();
             if dug[index] > 1e-12 { total / dug[index] } else { f64::from(never) }
         })
