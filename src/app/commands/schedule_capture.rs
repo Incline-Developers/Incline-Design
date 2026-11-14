@@ -826,35 +826,51 @@ struct OpenGround {
     open: Vec<(usize, f64)>,
     /// Each of those blocks' group.
     groups: Vec<(usize, u32)>,
+    /// The hour each block a dig bar names is the automatic bars' to take.
+    after: BTreeMap<usize, f64>,
     /// Blocks left out for want of a measured tonnage.
     unmeasured: usize,
 }
 
-/// The ground no dig bar has sequenced, for the automatic bars: its blocks
-/// with their tonnes from the top down, which group each belongs to, and
-/// how many blocks were left out for want of a measured tonnage.
+/// The ground the automatic bars may dig: its blocks with their tonnes from
+/// the top down, which group each belongs to, and how many blocks were left
+/// out for want of a measured tonnage.
 ///
-/// A dig bar owns the ground it names whatever its window, so that ground is
-/// never offered. What is left is listed a flitch level at a time, so the
-/// list runs strictly downwards: a block can wait on the ground above it
-/// (see [`ground_gates`]) without ever waiting on ground listed after it. A
-/// group is one blast's ground on one level, which goes to one bar whole.
-fn open_auto_ground(source: &CaptureSnapshot) -> OpenGround {
+/// Ground no dig bar names is theirs from the start. Ground a dig bar names
+/// is that bar's while its window is open - and once the window of every bar
+/// naming it has closed, whatever is left of it is the automatic bars' to
+/// take, as any later bar takes what an earlier one leaves. Ground named by
+/// a bar open to the end of the horizon is never offered.
+///
+/// The list runs a flitch level at a time, strictly downwards: a block can
+/// wait on the ground above it (see [`ground_gates`]) without ever waiting
+/// on ground listed after it. A group is one blast's ground on one level
+/// that comes free at one time, which goes to one bar whole.
+fn open_auto_ground(source: &CaptureSnapshot, horizon_h: f64) -> OpenGround {
     let blocks = &source.snapshot.blocks;
-    let claimed: std::collections::HashSet<crate::model::DigBlockId> = source
-        .reports
-        .iter()
-        .flat_map(|report| report.members.iter().filter_map(|member| member.resolved))
-        .collect();
+    let mut closes: std::collections::HashMap<crate::model::DigBlockId, f64> = std::collections::HashMap::new();
+    for (bar, report) in source.plan.bars().iter().zip(source.reports.iter()) {
+        let end_h = bar.window.end_h.unwrap_or(f64::INFINITY);
+        for block in report.members.iter().filter_map(|member| member.resolved) {
+            closes.entry(block).and_modify(|held| *held = held.max(end_h)).or_insert(end_h);
+        }
+    }
     let zero = source.plan.unmeasured_as_zero();
     let mut unmeasured = 0usize;
     let mut open: Vec<(usize, f64)> = Vec::new();
+    let mut after: BTreeMap<usize, f64> = BTreeMap::new();
     for (position, block) in blocks.iter().enumerate() {
-        if claimed.contains(&block.id) || excluded(block, &source.exclusions) {
+        let closes = closes.get(&block.id).copied();
+        if closes.is_some_and(|end_h| end_h >= horizon_h - 1e-9) || excluded(block, &source.exclusions) {
             continue;
         }
         match super::schedule_readiness::block_tonnes_for_stage(block, source.tonnage_field, zero) {
-            Ok(tonnes) if tonnes > 0.0 => open.push((position, tonnes)),
+            Ok(tonnes) if tonnes > 0.0 => {
+                open.push((position, tonnes));
+                if let Some(end_h) = closes {
+                    after.insert(position, end_h.max(0.0));
+                }
+            }
             Ok(_) => {}
             Err(_) => unmeasured += 1,
         }
@@ -877,18 +893,19 @@ fn open_auto_ground(source: &CaptureSnapshot) -> OpenGround {
             .then_with(|| number(&a.name).cmp(&number(&b.name)))
             .then_with(|| a.name.cmp(&b.name))
     });
+    let free = |position: usize| after.get(&position).map(|at| at.to_bits());
     let mut groups = Vec::with_capacity(open.len());
     let mut group = 0u32;
     for (index, (position, _)) in open.iter().enumerate() {
         if let Some((before, _)) = index.checked_sub(1).map(|index| open[index]) {
             let (block, last) = (&blocks[*position], &blocks[before]);
-            if block.solid != last.solid || block.flitch.top.to_bits() != last.flitch.top.to_bits() || blast(*position) != blast(before) {
+            if block.solid != last.solid || block.flitch.top.to_bits() != last.flitch.top.to_bits() || blast(*position) != blast(before) || free(*position) != free(before) {
                 group += 1;
             }
         }
         groups.push((*position, group));
     }
-    OpenGround { open, groups, unmeasured }
+    OpenGround { open, groups, after, unmeasured }
 }
 
 /// Resolve one owned snapshot into the experimental model, or every reason it
@@ -1034,9 +1051,12 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     // Which blast's ground on which level each automatic block is, so the
     // plan hands such ground to one bar together.
     let mut auto_groups: Vec<(usize, u32)> = Vec::new();
+    // When each automatic block a dig bar names comes free.
+    let mut auto_after: BTreeMap<usize, f64> = BTreeMap::new();
     if !auto_bars.is_empty() {
-        let OpenGround { open, groups, unmeasured } = open_auto_ground(source);
+        let OpenGround { open, groups, after, unmeasured } = open_auto_ground(source, horizon_h);
         auto_groups = groups;
+        auto_after = after;
         // Every automatic bar is offered all of it; the long-term plan then
         // gives each block to one of them (`longterm::assign`).
         for index in &auto_bars {
@@ -2035,6 +2055,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     if let Some(input) = drill_blast.as_mut()
         && !auto_ids.is_empty()
     {
+        // Not ground a dig bar names: that bar waits on its blast as ever.
         let auto_ground: std::collections::HashSet<GroundId> = scoped
             .iter()
             .filter(|bar| auto_ids.contains(&bar.bar))
@@ -2043,6 +2064,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 _ => None,
             })
             .flatten()
+            .filter(|(position, _)| !auto_after.contains_key(position))
             .filter_map(|(position, _)| block_ground.get(position).copied())
             .collect();
         for (index, _) in input.unworked() {
@@ -2053,12 +2075,15 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     // directly above it is dug, whoever digs that: a dependency in the
     // chain beside the blasts, which is what holds ground back everywhere.
     // Ground a blast releases is already held by that blast's clearance.
+    // Ground a dig bar names is held by nothing here, or that bar would be
+    // held too; the plan still orders what is left of it from the top down.
+    let mut left_above: BTreeMap<GroundId, Vec<GroundId>> = BTreeMap::new();
     if !auto_ids.is_empty() {
         let blasted: std::collections::HashSet<GroundId> = drill_blast
             .iter()
             .flat_map(|input| input.blasts.iter().flat_map(|blast| blast.releases.iter().copied()))
             .collect();
-        let auto_positions: Vec<usize> = scoped
+        let offered: BTreeSet<usize> = scoped
             .iter()
             .filter(|bar| auto_ids.contains(&bar.bar))
             .filter_map(|bar| match &bar.work {
@@ -2069,7 +2094,13 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             .map(|(position, _)| *position)
             .filter(|position| block_ground.get(position).is_some_and(|ground| !blasted.contains(ground)))
             .collect();
+        let (left, auto_positions): (Vec<usize>, Vec<usize>) = offered.into_iter().partition(|position| auto_after.contains_key(position));
         let buffer_m = if plan.drill_blast().enabled { plan.drill_blast().buffer_m } else { 0.0 };
+        for job in ground_gates(source, &block_ground, &left, buffer_m) {
+            for ground in job.releases {
+                left_above.insert(ground, job.above.clone());
+            }
+        }
         let gates = ground_gates(source, &block_ground, &auto_positions, buffer_m);
         if !gates.is_empty() {
             let config = plan.drill_blast();
@@ -2146,6 +2177,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         use crate::model::schedule::optimisation::longterm;
         let auto_tasks: Vec<TaskId> = identities.tasks.iter().filter(|(_, bar, _)| auto_ids.contains(bar)).map(|(task, _, _)| *task).collect();
         let groups: BTreeMap<GroundId, u32> = auto_groups.iter().filter_map(|(position, group)| Some((*block_ground.get(position)?, *group))).collect();
+        let not_before_h: BTreeMap<GroundId, f64> = auto_after.iter().filter_map(|(position, after)| Some((*block_ground.get(position)?, *after))).collect();
         let scale = plan.period_scale();
         let days = (horizon_h / SCHEDULE_PERIOD_H).ceil().max(1.0) as u32;
         let period_ends_h: Vec<f64> = (0..scale.count(days)).map(|period| scale.start_h(period + 1).min(horizon_h)).collect();
@@ -2156,6 +2188,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 period_ends_h: &period_ends_h,
                 discount_rate: experiment.discount_rate,
                 groups: &groups,
+                not_before_h: &not_before_h,
+                also_above: &left_above,
                 budget: Duration::from_secs(20),
             },
             &|| cancel.is_cancelled(),
@@ -2163,15 +2197,77 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         if cancel.is_cancelled() {
             return Err(Vec::new());
         }
-        // Each automatic bar's blocks as the plan dealt them.
-        for (task, bar, _) in &identities.tasks {
-            if !auto_ids.contains(bar) {
+        // A bar whose next block is not ready has no work, and its loader
+        // works its next bar. So that one block out of reach does not hold
+        // the rest of an automatic bar, each run of its blocks from one
+        // group is a task of its own, in order: the loader takes the first
+        // of them that is ready.
+        for (task, bar, name) in identities.tasks.clone() {
+            if !auto_ids.contains(&bar) {
                 continue;
             }
-            let Some(TaskKind::Dig { sequence }) = input.tasks.iter().find(|entry| entry.id == *task).map(|entry| &entry.kind) else {
-                continue;
+            let Some(index) = input.tasks.iter().position(|entry| entry.id == task) else { continue };
+            let TaskKind::Dig { sequence } = &input.tasks[index].kind else { continue };
+            let mut runs: Vec<Vec<GroundId>> = Vec::new();
+            let mut last = None;
+            for ground in sequence {
+                let group = groups.get(ground).copied();
+                match runs.last_mut().filter(|_| group.is_some() && group == last) {
+                    Some(run) => run.push(*ground),
+                    None => runs.push(vec![*ground]),
+                }
+                last = group;
+            }
+            let template = input.tasks[index].clone();
+            // What a dig bar left is worked from when that bar's window
+            // closed; a run that comes free after this bar closes is not.
+            let opens = |run: &[GroundId]| {
+                run.first()
+                    .and_then(|ground| not_before_h.get(ground))
+                    .map_or(template.window_start_h, |after| after.max(template.window_start_h))
             };
-            let blocks: Vec<crate::model::DigBlockId> = sequence.iter().filter_map(|ground| identities.ground_blocks.get(ground).copied()).collect();
+            let mut runs = runs.into_iter().filter(|run| opens(run) < template.window_end_h - 1e-9);
+            match runs.next() {
+                Some(first) => {
+                    input.tasks[index].window_start_h = opens(&first);
+                    input.tasks[index].kind = TaskKind::Dig { sequence: first };
+                }
+                None => input.tasks[index].kind = TaskKind::Dig { sequence: Vec::new() },
+            }
+            for run in runs {
+                let id = TaskId(input.tasks.len() as u32);
+                identities.tasks.push((id, bar, name.clone()));
+                input.tasks.push(Task {
+                    id,
+                    window_start_h: opens(&run),
+                    kind: TaskKind::Dig { sequence: run },
+                    ..template.clone()
+                });
+            }
+        }
+        // A bar the plan gave nothing has no task at all.
+        let empty: Vec<TaskId> = input
+            .tasks
+            .iter()
+            .filter(|task| matches!(&task.kind, TaskKind::Dig { sequence } if sequence.is_empty()))
+            .map(|task| task.id)
+            .collect();
+        input.tasks.retain(|task| !empty.contains(&task.id));
+        identities.tasks.retain(|(task, _, _)| !empty.contains(task));
+        // Each automatic bar's blocks as the plan dealt them.
+        for bar in &auto_ids {
+            let blocks: Vec<crate::model::DigBlockId> = identities
+                .tasks
+                .iter()
+                .filter(|(_, held, _)| held == bar)
+                .filter_map(|(task, _, _)| input.tasks.iter().find(|entry| entry.id == *task))
+                .filter_map(|task| match &task.kind {
+                    TaskKind::Dig { sequence } => Some(sequence),
+                    _ => None,
+                })
+                .flatten()
+                .filter_map(|ground| identities.ground_blocks.get(ground).copied())
+                .collect();
             if let Some((_, held)) = identities.bar_blocks.iter_mut().find(|(held, _)| held == bar) {
                 *held = blocks;
             }
@@ -2182,6 +2278,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 blocks = summary.blocks.to_string(),
                 periods = summary.periods.to_string(),
                 rounds = summary.rounds.to_string(),
+                seconds = format!("{:.1}", summary.seconds),
                 value = crate::model::schedule::cashflow::money_exact(summary.value),
                 bound = crate::model::schedule::cashflow::money_exact(summary.bound)
             ));

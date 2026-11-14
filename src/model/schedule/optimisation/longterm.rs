@@ -52,6 +52,12 @@ pub(crate) struct PlanRequest<'a> {
     pub(crate) discount_rate: f64,
     /// Ground that goes to one bar together: a blast's blocks on one level.
     pub(crate) groups: &'a BTreeMap<GroundId, u32>,
+    /// The hour before which a block is not the automatic bars' to dig:
+    /// ground a dig bar names, until that bar's window closes.
+    pub(crate) not_before_h: &'a BTreeMap<GroundId, f64>,
+    /// Ground to keep ahead of a block in the order though nothing in the
+    /// chain holds the block to it.
+    pub(crate) also_above: &'a BTreeMap<GroundId, Vec<GroundId>>,
     /// How long the pricing may run.
     pub(crate) budget: std::time::Duration,
 }
@@ -63,6 +69,7 @@ pub(crate) struct PlanSummary {
     pub(crate) periods: usize,
     /// Closures priced; zero when there was nothing to choose between.
     pub(crate) rounds: usize,
+    pub(crate) seconds: f64,
     /// The plan's discounted value, and the most any plan could reach at
     /// the last prices.
     pub(crate) value: f64,
@@ -181,10 +188,15 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
                 crushed,
                 above: Vec::new(),
                 lead_h: lead.get(ground).copied().unwrap_or(0.0),
-                earliest_h: 0.0,
+                earliest_h: request.not_before_h.get(ground).copied().unwrap_or(0.0),
             }
         })
         .collect();
+    for (index, ground) in grounds.iter().enumerate() {
+        if let Some(over) = request.also_above.get(ground) {
+            out[index].above.extend(over.iter().filter_map(|ground| position.get(ground).copied()));
+        }
+    }
     // What holds each block. A dependency capture put in the chain holds
     // its block until the ground above it is dug. A blast's ground waits on
     // the blast's clearance, which waits on the ground above the blast -
@@ -221,9 +233,22 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
             });
         }
         for task in chain.tasks.iter().filter(|task| !task.delay && task.follow.is_none()) {
-            let listed: Vec<usize> = task.sequence.iter().filter_map(|blast| clearance.get(blast).copied()).collect();
-            for pair in listed.windows(2) {
-                out[pair[1]].above.push(pair[0]);
+            // Only where this is the one bar of its step holding the blast:
+            // held by several, it is worked from whichever reaches it first.
+            let step = chain.agents.get(task.agent).map(|agent| agent.activity);
+            let only_here = |blast: usize| {
+                chain
+                    .tasks
+                    .iter()
+                    .filter(|other| !other.delay && other.follow.is_none() && chain.agents.get(other.agent).map(|agent| agent.activity) == step)
+                    .filter(|other| other.sequence.contains(&blast))
+                    .count()
+                    == 1
+            };
+            for pair in task.sequence.windows(2).filter(|pair| only_here(pair[1])) {
+                if let (Some(ahead), Some(behind)) = (clearance.get(&pair[0]), clearance.get(&pair[1])) {
+                    out[*behind].above.push(*ahead);
+                }
             }
             // The bar's own step on each blast in turn, from when the bar
             // opens, at the rate of every machine that could be on it.
@@ -361,9 +386,8 @@ type Column = Vec<u16>;
 /// nothing to plan: no value on any block, a single period, or a solver
 /// that could not be run.
 fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block], cancelled: &dyn Fn() -> bool) -> Option<(Vec<usize>, PlanSummary)> {
-    // A place for each block after everything it waits on. Blasts authored
-    // to wait on one another in a ring have none, and neither has a plan.
-    let rank = topological_rank(blocks)?;
+    // A place for each block after everything it waits on.
+    let rank = topological_rank(blocks);
     let periods = periods(request);
     let (count, spans) = (blocks.len(), periods.len());
     if count < 2 || spans < 2 || !blocks.iter().any(|block| block.value.abs() > 1e-9) {
@@ -510,7 +534,10 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         master.add_row(1.0, 1.0, cols.iter().map(|col| (*col, 1.0)));
         let solution = solver::solve(&master, &solver::Options::default());
         if solution.status != solver::Status::Optimal {
-            return None;
+            // The combination before this closure still stands: the order
+            // is taken from it.
+            columns.pop();
+            break;
         }
         value = solution.objective;
         theta = solution.col_value;
@@ -533,6 +560,7 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             blocks: count,
             periods: spans,
             rounds,
+            seconds: started.elapsed().as_secs_f64(),
             value,
             bound,
         },
@@ -540,9 +568,14 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
 }
 
 /// Each block's place in an order that puts it after everything it waits
-/// on, earlier-listed blocks first where they are free to be; `None` when
-/// the dependencies form a ring.
-fn topological_rank(blocks: &[Block]) -> Option<Vec<usize>> {
+/// on, earlier-listed blocks first where they are free to be.
+///
+/// Blasts can be authored to wait on one another in a ring - a machine bar
+/// listing a lower blast ahead of the one over it - and ground caught in one
+/// is never reached. It is placed where the ring is met, earliest-listed
+/// first, so everything outside the ring still follows what it waits on.
+fn topological_rank(blocks: &[Block]) -> Vec<usize> {
+    use std::{cmp::Reverse, collections::BinaryHeap};
     let mut waiting: Vec<usize> = blocks.iter().map(|block| block.above.len()).collect();
     let mut below: Vec<Vec<usize>> = vec![Vec::new(); blocks.len()];
     for (index, block) in blocks.iter().enumerate() {
@@ -550,25 +583,34 @@ fn topological_rank(blocks: &[Block]) -> Option<Vec<usize>> {
             below[*over].push(index);
         }
     }
-    let mut ready: std::collections::BinaryHeap<std::cmp::Reverse<usize>> = waiting
-        .iter()
-        .enumerate()
-        .filter(|(_, count)| **count == 0)
-        .map(|(index, _)| std::cmp::Reverse(index))
-        .collect();
+    let mut ready: BinaryHeap<Reverse<usize>> = waiting.iter().enumerate().filter(|(_, count)| **count == 0).map(|(index, _)| Reverse(index)).collect();
     let mut rank = vec![usize::MAX; blocks.len()];
     let mut placed = 0;
-    while let Some(std::cmp::Reverse(index)) = ready.pop() {
+    let mut unplaced = 0;
+    while placed < blocks.len() {
+        let index = match ready.pop() {
+            Some(Reverse(index)) => index,
+            None => {
+                // A ring: take its earliest-listed member as though free.
+                while rank[unplaced] != usize::MAX {
+                    unplaced += 1;
+                }
+                unplaced
+            }
+        };
+        if rank[index] != usize::MAX {
+            continue;
+        }
         rank[index] = placed;
         placed += 1;
         for under in &below[index] {
-            waiting[*under] -= 1;
-            if waiting[*under] == 0 {
-                ready.push(std::cmp::Reverse(*under));
+            waiting[*under] = waiting[*under].saturating_sub(1);
+            if waiting[*under] == 0 && rank[*under] == usize::MAX {
+                ready.push(Reverse(*under));
             }
         }
     }
-    (placed == blocks.len()).then_some(rank)
+    rank
 }
 
 /// Hand the blocks, in `order`, to the automatic bars: each to the bar that
