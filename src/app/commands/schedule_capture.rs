@@ -185,6 +185,9 @@ pub(crate) struct CaptureIdentities {
     /// the machine each chain agent is.
     pub(crate) blasts: Vec<CapturedBlast>,
     pub(crate) blast_agents: Vec<LoaderAgentId>,
+    /// The chain's tasks that automatic bars on machines work, by position:
+    /// one blast each.
+    pub(crate) auto_blast_tasks: Vec<usize>,
     /// Each dig bar's ground in a blast no machine bar will prep, drill or
     /// charge, so its loader waits on it all horizon: the bar, and the
     /// blast with the step nobody works.
@@ -401,6 +404,7 @@ fn capture_drill_blast(
     intervals: &[Interval],
     block_ground: &BTreeMap<usize, GroundId>,
     scoped: &[ScopedBar],
+    auto_ground: &BTreeSet<GroundId>,
     identities: &mut CaptureIdentities,
     notes: &mut Vec<String>,
     problems: &mut Diagnostics,
@@ -581,8 +585,10 @@ fn capture_drill_blast(
     // Follow bars name their leader by id; its index is known only once
     // every bar has been read.
     let mut leaders: Vec<(usize, crate::model::schedule::LoaderAgentId)> = Vec::new();
+    // Automatic bars on machines, worked out once every other bar is read.
+    let mut automatic: Vec<(usize, u32, f64, f64)> = Vec::new();
     for bar in plan.bars() {
-        if bar.blast_order().is_none() && bar.delay().is_none() && bar.follow().is_none() {
+        if bar.blast_order().is_none() && bar.delay().is_none() && bar.follow().is_none() && !bar.is_auto() {
             continue;
         }
         let members = bar.blast_order().map_or(&[][..], |order| order.members.as_slice());
@@ -624,6 +630,10 @@ fn capture_drill_blast(
                 agents.len() - 1
             }
         };
+        if bar.is_auto() {
+            automatic.push((agent_index, bar.priority, start_h, end_h));
+            continue;
+        }
         let mut sequence = Vec::new();
         let mut missing = 0usize;
         for member in members {
@@ -649,6 +659,48 @@ fn capture_drill_blast(
             delay: bar.delay().is_some(),
             follow: None,
         });
+    }
+    // An automatic bar on a machine works every blast holding ground the
+    // automatic dig bars may take that no other bar of its kind works and
+    // that still needs its step, from the top down for now: capture puts
+    // them in the order the dig bars reach them once that is known
+    // (`order_auto_blasts`). Each is a task of its own, as an automatic dig
+    // bar's runs are, so a blast not yet clear holds none of the others.
+    if !automatic.is_empty() {
+        let worked: BTreeSet<(usize, usize)> = tasks
+            .iter()
+            .filter(|task| !task.delay)
+            .flat_map(|task| task.sequence.iter().map(|blast| (agents[task.agent].activity as usize, *blast)))
+            .collect();
+        let mut held: Vec<usize> = (0..blasts.len())
+            .filter(|index| blasts[*index].releases.iter().any(|ground| auto_ground.contains(ground)))
+            .collect();
+        held.sort_by(|a, b| {
+            let (a, b) = (&snapshot.blasts[*a], &snapshot.blasts[*b]);
+            b.bench
+                .top
+                .total_cmp(&a.bench.top)
+                .then_with(|| a.solid_name.cmp(&b.solid_name))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        for (agent, priority, start_h, end_h) in automatic {
+            let activity = agents[agent].activity;
+            for blast in held.iter().copied() {
+                if worked.contains(&(activity as usize, blast)) || blasts[blast].stage.has_done(activity) {
+                    continue;
+                }
+                identities.auto_blast_tasks.push(tasks.len());
+                tasks.push(BlastTask {
+                    agent,
+                    priority,
+                    start_h,
+                    end_h,
+                    sequence: vec![blast],
+                    delay: false,
+                    follow: None,
+                });
+            }
+        }
     }
     // A leader with no blast bars of its own has nothing to follow, and the
     // bar idles.
@@ -990,6 +1042,40 @@ fn split_auto_runs(input: &mut BlendInput, identities: &mut CaptureIdentities, a
         if let Some((_, held)) = identities.bar_blocks.iter_mut().find(|(held, _)| held == bar) {
             *held = blocks;
         }
+    }
+}
+
+/// Put the automatic machine bars' blasts in the order the automatic dig
+/// bars reach their ground: each blast where its first block comes in the
+/// dig bars' lists, those holding none of it last, in the order they were.
+fn order_auto_blasts(input: &mut BlendInput, identities: &CaptureIdentities, auto_ids: &[BarId]) {
+    let Some(chain) = input.drill_blast.as_mut() else { return };
+    if identities.auto_blast_tasks.is_empty() {
+        return;
+    }
+    let mut reached: BTreeMap<GroundId, usize> = BTreeMap::new();
+    for (task, _, _) in identities.tasks.iter().filter(|(_, bar, _)| auto_ids.contains(bar)) {
+        let Some(TaskKind::Dig { sequence }) = input.tasks.iter().find(|entry| entry.id == *task).map(|task| &task.kind) else {
+            continue;
+        };
+        for ground in sequence {
+            let next = reached.len();
+            reached.entry(*ground).or_insert(next);
+        }
+    }
+    let first = |task: &crate::model::schedule::optimisation::blended::drill_blast::BlastTask| {
+        task.sequence
+            .first()
+            .and_then(|blast| chain.blasts.get(*blast))
+            .and_then(|blast| blast.releases.iter().filter_map(|ground| reached.get(ground)).min().copied())
+            .unwrap_or(usize::MAX)
+    };
+    let mut slots: Vec<usize> = identities.auto_blast_tasks.clone();
+    slots.sort_unstable();
+    let mut moved: Vec<_> = slots.iter().map(|slot| chain.tasks[*slot].clone()).collect();
+    moved.sort_by_key(|task| first(task));
+    for (slot, task) in slots.into_iter().zip(moved) {
+        chain.tasks[slot] = task;
     }
 }
 
@@ -2218,7 +2304,30 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     let segments_per_interval = derived.clamp(1, event_capacity);
     // ---- drill and blast ----------------------------------------------------
     let mut drill_blast = if plan.drill_blast().enabled {
-        capture_drill_blast(source, horizon_h, &intervals, &block_ground, &scoped, &mut identities, &mut notes, &mut problems, cancel)
+        // The ground the automatic dig bars may take, for automatic bars on
+        // machines to work the blasts of.
+        let offered: BTreeSet<GroundId> = scoped
+            .iter()
+            .filter(|bar| auto_ids.contains(&bar.bar))
+            .filter_map(|bar| match &bar.work {
+                ScopedWork::Dig { members, .. } => Some(members),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|(position, _)| block_ground.get(position).copied())
+            .collect();
+        capture_drill_blast(
+            source,
+            horizon_h,
+            &intervals,
+            &block_ground,
+            &scoped,
+            &offered,
+            &mut identities,
+            &mut notes,
+            &mut problems,
+            cancel,
+        )
     } else {
         None
     };
@@ -2355,6 +2464,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             not_before_h: &not_before_h,
             also_above: &left_above,
             dependencies: &dependencies,
+            machine_tasks: &identities.auto_blast_tasks,
             budget: Duration::from_secs(20),
         };
         let mut candidates: Vec<(BlendInput, CaptureIdentities, longterm::PlanSummary)> = Vec::new();
@@ -2369,6 +2479,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 continue;
             }
             split_auto_runs(&mut trial, &mut named, &auto_ids, &groups, &not_before_h);
+            order_auto_blasts(&mut trial, &named, &auto_ids);
             if !dependencies.is_empty() {
                 apply_dependencies(trial.drill_blast.get_or_insert_with(|| empty_chain(plan.drill_blast())), &dependencies);
             }

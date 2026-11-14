@@ -2227,13 +2227,12 @@ impl SchedulePlan {
         Ok(id)
     }
 
-    /// Add an automatic bar: while it is its loader's highest-priority open
-    /// bar with work, the loader digs the ground no dig bar has sequenced.
+    /// Add an automatic bar: while it is its machine's highest-priority open
+    /// bar with work, a loader digs the ground no dig bar has sequenced, and
+    /// a dozer, drill or MPU works the blasts that ground is in.
     pub(crate) fn add_auto_bar(&mut self, agent: Option<LoaderAgentId>, priority: u32, window: WorkWindow) -> ScheduleResult<BarId> {
-        if let Some(agent) = agent
-            && self.agent_kind(agent).ok_or(ScheduleError::UnknownAgent)?.is_drill_blast()
-        {
-            return Err(ScheduleError::WrongMachine);
+        if let Some(agent) = agent {
+            self.agent_kind(agent).ok_or(ScheduleError::UnknownAgent)?;
         }
         if !window.is_valid() {
             return Err(ScheduleError::InvalidWindow);
@@ -2551,9 +2550,9 @@ impl SchedulePlan {
 /// dozers, drills and MPUs work blasts, and any machine can stand.
 pub(crate) fn work_fits(work: &BarWork, kind: MachineKind) -> bool {
     match work {
-        BarWork::Delay(_) => true,
+        BarWork::Delay(_) | BarWork::Auto(_) => true,
         BarWork::Blast(_) | BarWork::Follow(_) => kind.is_drill_blast(),
-        BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Auto(_) => !kind.is_drill_blast(),
+        BarWork::Dig(_) | BarWork::Reclaim(_) => !kind.is_drill_blast(),
     }
 }
 

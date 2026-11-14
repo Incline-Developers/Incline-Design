@@ -2346,7 +2346,7 @@ fn draw_bars(
                     // the band is simply not there. One hover for the whole
                     // band, answering for the instant under the pointer.
                     if let Some(schedule) = schedule
-                        && (bar.blast_order().is_some() || bar.follow().is_some())
+                        && (bar.blast_order().is_some() || bar.follow().is_some() || bar.is_auto())
                     {
                         draw_blast_band(ui, body, band, view, bar, schedule);
                     }
@@ -2671,9 +2671,10 @@ fn draw_bars(
 fn draw_blast_band(ui: &mut egui::Ui, body: egui::Rect, band: egui::Rect, view: GanttView, bar: &ScheduleBar, schedule: &CalculatedSchedule) {
     let Some(result) = schedule.drill_blast.as_ref() else { return };
     let blasts = schedule.bar_blasts(bar);
-    // A follow bar works whatever its leader has next, so all of its
-    // machine's work inside its window is its own.
-    let follows = bar.follow().is_some();
+    // A follow bar works whatever its leader has next, and an automatic bar
+    // whatever blasts its machine is given, so all of its machine's work
+    // inside its window is its own. On a loader there is none.
+    let follows = bar.follow().is_some() || bar.is_auto();
     let clip = band.intersect(body);
     let rows: Vec<&crate::model::schedule::result::PublishedBlastWork> = result
         .work

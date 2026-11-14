@@ -67,6 +67,9 @@ pub(crate) struct PlanRequest<'a> {
     /// Authored dependencies: ground that waits, and the ground it waits
     /// for. Not yet in the chain, which would hold them block by block.
     pub(crate) dependencies: &'a [(Vec<GroundId>, Vec<GroundId>)],
+    /// The chain's tasks automatic bars on machines work, by position: one
+    /// blast each, in no order yet - the plan's is what will order them.
+    pub(crate) machine_tasks: &'a [usize],
     /// How long the pricing may run.
     pub(crate) budget: std::time::Duration,
 }
@@ -100,6 +103,9 @@ struct Block {
     crushed: Vec<(usize, f64)>,
     /// Truck hours its haul to those destinations takes, by truck class.
     hauled: Vec<(usize, f64)>,
+    /// Its share of its blast's prep, drilling and charging, where machines
+    /// working on automatic bars do them: square metres, metres, tonnes.
+    worked: [f64; 3],
     /// Blocks that must be dug before it, by position.
     above: Vec<usize>,
     /// Hours its blast takes to prep, drill, charge and fire once it is
@@ -214,6 +220,7 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
                 value,
                 crushed,
                 hauled,
+                worked: [0.0; 3],
                 above: Vec::new(),
                 lead_h: lead.get(ground).copied().filter(|at| *at < never_h).unwrap_or(0.0),
                 earliest_h: if lead.get(ground).is_some_and(|at| *at >= never_h) {
@@ -263,12 +270,18 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
                 value: 0.0,
                 crushed: Vec::new(),
                 hauled: Vec::new(),
+                worked: [0.0; 3],
                 above: over,
                 lead_h: 0.0,
                 earliest_h: 0.0,
             });
         }
-        for task in chain.tasks.iter().filter(|task| !task.delay && task.follow.is_none()) {
+        for (_, task) in chain
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(index, task)| !task.delay && task.follow.is_none() && !request.machine_tasks.contains(index))
+        {
             // Only where this is the one bar of its step holding the blast:
             // held by several, it is worked from whichever reaches it first.
             let step = chain.agents.get(task.agent).map(|agent| agent.activity);
@@ -308,6 +321,31 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
             }
         }
     }
+    // Automatic machines' blasts: each step still to do on one, shared out
+    // over its ground by tonnes. Their tasks hold one blast each, so they
+    // add no order between blasts, and no machine pace: what limits them is
+    // their machines' hours, priced like the loaders'.
+    if let Some(chain) = &input.drill_blast {
+        let mut counted: BTreeSet<(usize, usize)> = BTreeSet::new();
+        for task in request.machine_tasks.iter().filter_map(|index| chain.tasks.get(*index)) {
+            let (Some(blast), Some(agent)) = (task.sequence.first(), chain.agents.get(task.agent)) else {
+                continue;
+            };
+            let step = agent.activity as usize;
+            let Some(job) = chain.blasts.get(*blast) else { continue };
+            if job.stage.has_done(agent.activity) || !counted.insert((step, *blast)) {
+                continue;
+            }
+            let held: Vec<usize> = job.releases.iter().filter_map(|ground| position.get(ground).copied()).collect();
+            let tonnes: f64 = held.iter().map(|block| out[*block].tonnes).sum();
+            if tonnes <= 0.0 {
+                continue;
+            }
+            for block in held {
+                out[block].worked[step] += job.quantity[step] * out[block].tonnes / tonnes;
+            }
+        }
+    }
     // Each dependency is one step that waits on the ground it names, which
     // the waiting ground waits on - through its blast's clearance where it
     // has one, as the chain will hold it - rather than an arc from every
@@ -324,6 +362,7 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
             value: 0.0,
             crushed: Vec::new(),
             hauled: Vec::new(),
+            worked: [0.0; 3],
             above: over,
             lead_h: 0.0,
             earliest_h: 0.0,
@@ -370,6 +409,43 @@ fn periods(request: &PlanRequest<'_>) -> Vec<(f64, f64)> {
         if end > start {
             out.push((start, end));
             start = end;
+        }
+    }
+    out
+}
+
+/// What machines on automatic bars can prep, drill and charge in each
+/// period, by step then period: each machine's rate over the hours one of
+/// its automatic bars is open. `None` for a step no such machine does.
+fn machine_capacity(input: &BlendInput, request: &PlanRequest<'_>, periods: &[(f64, f64)]) -> [Vec<Option<f64>>; 3] {
+    let mut out: [Vec<Option<f64>>; 3] = std::array::from_fn(|_| vec![None; periods.len()]);
+    let Some(chain) = &input.drill_blast else { return out };
+    let agents: BTreeSet<usize> = request.machine_tasks.iter().filter_map(|index| chain.tasks.get(*index)).map(|task| task.agent).collect();
+    for agent in agents {
+        let Some(machine) = chain.agents.get(agent) else { continue };
+        let step = machine.activity as usize;
+        let windows: Vec<(f64, f64)> = request
+            .machine_tasks
+            .iter()
+            .filter_map(|index| chain.tasks.get(*index))
+            .filter(|task| task.agent == agent)
+            .map(|task| (task.start_h, task.end_h))
+            .collect();
+        for (interval, rate) in input.intervals.iter().zip(&machine.rates) {
+            let middle = 0.5 * (interval.start_h + interval.end_h);
+            if !windows.iter().any(|(start, end)| *start <= middle && middle < *end) {
+                continue;
+            }
+            if let Some(period) = periods.iter().position(|(start, end)| *start <= middle && middle < *end) {
+                *out[step][period].get_or_insert(0.0) += rate.max(0.0) * (interval.end_h - interval.start_h);
+            }
+        }
+    }
+    for by_period in &mut out {
+        if by_period.iter().any(Option::is_some) {
+            for limit in by_period.iter_mut() {
+                limit.get_or_insert(0.0);
+            }
         }
     }
     out
@@ -510,6 +586,17 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             }
         }
     }
+    // What the automatic bars' machines can prep, drill and charge in each
+    // period.
+    let mut machine_row: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    for (step, by_period) in machine_capacity(input, request, &periods).into_iter().enumerate() {
+        for (period, limit) in by_period.into_iter().enumerate() {
+            if let Some(limit) = limit {
+                machine_row.insert((step, period), limits.len());
+                limits.push(limit);
+            }
+        }
+    }
     // Each truck class's hours in each period, for the classes with a fleet.
     let mut haul_row: BTreeMap<(usize, usize), usize> = BTreeMap::new();
     for (class, hours) in truck_capacity(input, &periods).into_iter().enumerate() {
@@ -536,6 +623,11 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             for (truck, hours) in &block.hauled {
                 if let Some(row) = haul_row.get(&(*truck, period)) {
                     used[*row] += hours;
+                }
+            }
+            for (step, amount) in block.worked.iter().enumerate() {
+                if let Some(row) = machine_row.get(&(step, period)).filter(|_| *amount > 0.0) {
+                    used[*row] += amount;
                 }
             }
         }
@@ -622,6 +714,11 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             for (truck, hours) in &block.hauled {
                 if let Some(row) = haul_row.get(&(*truck, period)) {
                     gain -= at[*row] * hours;
+                }
+            }
+            for (step, amount) in block.worked.iter().enumerate() {
+                if let Some(row) = machine_row.get(&(step, period)).filter(|_| *amount > 0.0) {
+                    gain -= at[*row] * amount;
                 }
             }
             gain
