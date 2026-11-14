@@ -2055,6 +2055,12 @@ planning-copy-cuts-button =
 planning-copy-cuts-title-benches = Copy lines to benches
 planning-copy-cuts-title-flitches = Copy lines to flitches
 planning-copy-cuts-confirm = Copy to { $count }
+planning-panel-size = Panel size
+planning-draw-panels = Draw Panels on Undrawn Benches
+planning-panels-help = Draws a square grid of cut lines this far apart on every bench of this solid that has no cut lines, so each panel is a blast a long-term schedule can order. They are ordinary cut lines, edited and undone like any other.
+planning-panels-not-ready = Panels are drawn over the dig blocks, so the Solids pipeline has to have run first.
+planning-panels-none = Every bench with ground already has cut lines.
+planning-panels-done = Drew { $lines } cut lines on { $benches } benches.
 planning-copy-cuts-done-benches =
     { $targets ->
         [one] Copied { $lines } lines to { $targets } bench
@@ -2506,6 +2512,8 @@ planning-results = Results
 planning-no-bench-holds-any = No bench holds any of this solid
 schedule-capture-excluded = { $bar }: { $count } excluded blocks skipped
 schedule-capture-auto-plan = Automatic bars: { $blocks } blocks ordered over { $periods } periods in { $rounds } rounds and { $seconds } s; planned value { $value } against a bound of { $bound }.
+schedule-capture-auto-planned = The plan's order scheduled { $planned } and the top-down order { $top_down }; the plan's is used.
+schedule-capture-auto-top-down = The plan's order scheduled { $planned } and the top-down order { $top_down }; the top-down order is used.
 schedule-capture-auto-unmeasured = { $count } blocks with no measured tonnes were left out of the automatic bars
 schedule-capture-empty = { $bar }: { $count } blocks of 0 t dug at once
 gantt-palette-dig = Dig

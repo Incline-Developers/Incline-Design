@@ -15,7 +15,7 @@ use crate::{
         state::{BlastShapeRef, RenameTarget, UiCommand},
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
-            data_grid::{DataGrid, grid_cell_entry, grid_columns_row, grid_empty_state, grid_group_row},
+            data_grid::{DataGrid, grid_add_action_row, grid_cell_entry, grid_columns_row, grid_empty_state, grid_group_row},
             hint::Hint,
             island::{Island, IslandResponse, Side},
         },
@@ -70,6 +70,19 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                                         min_blast_area: area.max(0.0),
                                         ..solid.exclusions.clone()
                                     }),
+                                });
+                            }
+                            // Panels for the benches nobody has drawn on.
+                            let (response, cells) = grid_columns_row(ui, &FRACTIONS, &[&tr!("planning-panel-size"), ""], false);
+                            response.hint(tr!("planning-panels-help"));
+                            let mut size = editor.blast_panel_size_m;
+                            if grid_cell_entry(ui, ("planning_panel_size", outline.solid), cells[1], &mut size, "m") && size.is_finite() && size > 0.0 {
+                                editor.blast_panel_size_m = size;
+                            }
+                            if grid_add_action_row(ui, &tr!("planning-draw-panels")) {
+                                commands.push(UiCommand::DrawBlastPanels {
+                                    solid: solid.id,
+                                    size_m: editor.blast_panel_size_m,
                                 });
                             }
                         }
