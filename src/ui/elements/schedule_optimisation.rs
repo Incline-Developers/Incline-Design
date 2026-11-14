@@ -199,6 +199,23 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
         {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetExperimentSolveLimits { seconds, relative_gap }));
         }
+        // What the plan ordering the automatic bars' ground weighs later
+        // value by.
+        let (response, typed) = rows.committed_entry(
+            "schedule_discount_rate",
+            &tr!("experiment-discount-rate"),
+            &percent_text(experiment.discount_rate),
+            Some("%"),
+        );
+        response.hint(tr!("experiment-discount-rate-help"));
+        if let Some(typed) = typed {
+            match typed.trim().trim_end_matches('%').trim_end().parse::<f64>() {
+                Ok(percent) if percent.is_finite() && (0.0..=100.0).contains(&percent) => {
+                    edits.push(UiCommand::schedule(session, ScheduleEdit::SetDiscountRate(percent / 100.0)));
+                }
+                _ => crate::userspace_warn!("{}", invalid),
+            }
+        }
     });
     commands.append(&mut edits);
 }

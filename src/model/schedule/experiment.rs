@@ -39,6 +39,8 @@ pub(crate) const MIN_INTERVAL_H: f64 = 1.0 / 60.0;
 /// The longest solver budget accepted: a week, well inside what a
 /// `Duration` holds.
 pub(crate) const MAX_SOLVE_SECONDS: f64 = 7.0 * 86_400.0;
+/// Default yearly discount rate for the long-term plan: ten per cent.
+pub(crate) const DEFAULT_DISCOUNT_RATE: f64 = 0.10;
 /// The relative MIP gap Stage 5A verified and this reuses rather than
 /// restating: one default, in one place.
 pub(crate) const DEFAULT_RELATIVE_GAP: f64 = 1e-4;
@@ -156,6 +158,10 @@ pub(crate) struct ExperimentConfig {
     /// Solver wall-clock budget. Preparation and replay sit outside it.
     pub(crate) solve_seconds: f64,
     pub(crate) relative_gap: f64,
+    /// The yearly rate, as a fraction, at which the plan that orders the
+    /// automatic bars' ground discounts later value. Zero weighs a tonne
+    /// moved in the last year as one moved in the first.
+    pub(crate) discount_rate: f64,
     /// The tracked grade columns. Legacy unit tags are retained for file
     /// compatibility; capture now uses stored numbers directly. Ordered,
     /// because the model indexes grades by position.
@@ -173,6 +179,7 @@ impl Default for ExperimentConfig {
             event_capacity: None,
             solve_seconds: DEFAULT_SOLVE_SECONDS,
             relative_gap: DEFAULT_RELATIVE_GAP,
+            discount_rate: DEFAULT_DISCOUNT_RATE,
             grades: Vec::new(),
             stockpiles: Vec::new(),
         }
@@ -243,6 +250,14 @@ impl ExperimentConfig {
         Ok(())
     }
 
+    pub(crate) fn set_discount_rate(&mut self, rate: f64) -> ScheduleResult {
+        if !rate.is_finite() || !(0.0..=1.0).contains(&rate) {
+            return Err(ScheduleError::InvalidExperimentSetting);
+        }
+        self.discount_rate = rate;
+        Ok(())
+    }
+
     /// Map one field to a unit, or clear the mapping. Ordered by field id so
     /// the grade positions a capture produces do not depend on edit order.
     pub(crate) fn set_grade_unit(&mut self, field: ReserveFieldId, unit: Option<GradeUnit>) -> ScheduleResult {
@@ -295,6 +310,7 @@ impl ExperimentConfig {
         self.event_capacity.hash(hasher);
         self.solve_seconds.to_bits().hash(hasher);
         self.relative_gap.to_bits().hash(hasher);
+        self.discount_rate.to_bits().hash(hasher);
         for (field, unit) in &self.grades {
             field.0.hash(hasher);
             unit.hash(hasher);
@@ -316,6 +332,7 @@ impl ExperimentConfig {
     pub(crate) fn hash_semantics<H: std::hash::Hasher>(&self, hasher: &mut H) {
         self.interval_h.to_bits().hash(hasher);
         self.event_capacity.hash(hasher);
+        self.discount_rate.to_bits().hash(hasher);
         for (field, unit) in &self.grades {
             field.0.hash(hasher);
             unit.hash(hasher);

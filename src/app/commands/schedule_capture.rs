@@ -820,18 +820,26 @@ fn ground_gates(
         .collect()
 }
 
-/// The ground no dig bar has sequenced, dealt between `bars` automatic bars:
-/// each one's blocks with their tonnes, in the order it digs them, and how
-/// many blocks were left out for want of a measured tonnage.
+/// What [`open_auto_ground`] found.
+struct OpenGround {
+    /// Each block's position in the run and its tonnes, from the top down.
+    open: Vec<(usize, f64)>,
+    /// Each of those blocks' group.
+    groups: Vec<(usize, u32)>,
+    /// Blocks left out for want of a measured tonnage.
+    unmeasured: usize,
+}
+
+/// The ground no dig bar has sequenced, for the automatic bars: its blocks
+/// with their tonnes from the top down, which group each belongs to, and
+/// how many blocks were left out for want of a measured tonnage.
 ///
 /// A dig bar owns the ground it names whatever its window, so that ground is
-/// never dealt. What is left is taken from the top down, a flitch level at a
-/// time, and on each level every blast's ground goes whole to the bar
-/// holding the fewest tonnes so far. Every bar's order therefore runs
-/// strictly downwards, which is what lets a block wait on the ground above
-/// it (see [`ground_gates`]) without ever waiting on ground later in its
-/// own bar.
-fn deal_auto_ground(source: &CaptureSnapshot, bars: usize) -> (Vec<Vec<(usize, f64)>>, usize) {
+/// never offered. What is left is listed a flitch level at a time, so the
+/// list runs strictly downwards: a block can wait on the ground above it
+/// (see [`ground_gates`]) without ever waiting on ground listed after it. A
+/// group is one blast's ground on one level, which goes to one bar whole.
+fn open_auto_ground(source: &CaptureSnapshot) -> OpenGround {
     let blocks = &source.snapshot.blocks;
     let claimed: std::collections::HashSet<crate::model::DigBlockId> = source
         .reports
@@ -869,22 +877,18 @@ fn deal_auto_ground(source: &CaptureSnapshot, bars: usize) -> (Vec<Vec<(usize, f
             .then_with(|| number(&a.name).cmp(&number(&b.name)))
             .then_with(|| a.name.cmp(&b.name))
     });
-    let mut shares: Vec<Vec<(usize, f64)>> = vec![Vec::new(); bars];
-    let mut held = vec![0.0_f64; bars];
-    let mut start = 0;
-    while start < open.len() {
-        let first = &blocks[open[start].0];
-        let same = |position: usize| {
-            let block = &blocks[position];
-            block.solid == first.solid && block.flitch.top.to_bits() == first.flitch.top.to_bits() && blast(position) == blast(open[start].0)
-        };
-        let end = start + open[start..].iter().take_while(|(position, _)| same(*position)).count();
-        let to = (0..bars).min_by(|a, b| held[*a].total_cmp(&held[*b])).unwrap_or(0);
-        held[to] += open[start..end].iter().map(|(_, tonnes)| tonnes).sum::<f64>();
-        shares[to].extend_from_slice(&open[start..end]);
-        start = end;
+    let mut groups = Vec::with_capacity(open.len());
+    let mut group = 0u32;
+    for (index, (position, _)) in open.iter().enumerate() {
+        if let Some((before, _)) = index.checked_sub(1).map(|index| open[index]) {
+            let (block, last) = (&blocks[*position], &blocks[before]);
+            if block.solid != last.solid || block.flitch.top.to_bits() != last.flitch.top.to_bits() || blast(*position) != blast(before) {
+                group += 1;
+            }
+        }
+        groups.push((*position, group));
     }
-    (shares, unmeasured)
+    OpenGround { open, groups, unmeasured }
 }
 
 /// Resolve one owned snapshot into the experimental model, or every reason it
@@ -1027,10 +1031,19 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         });
     }
     let auto_ids: Vec<BarId> = auto_bars.iter().map(|index| scoped[*index].bar).collect();
+    // Which blast's ground on which level each automatic block is, so the
+    // plan hands such ground to one bar together.
+    let mut auto_groups: Vec<(usize, u32)> = Vec::new();
     if !auto_bars.is_empty() {
-        let (shares, unmeasured) = deal_auto_ground(source, auto_bars.len());
-        for (index, members) in auto_bars.iter().zip(shares) {
-            scoped[*index].work = ScopedWork::Dig { members, empty: Vec::new() };
+        let OpenGround { open, groups, unmeasured } = open_auto_ground(source);
+        auto_groups = groups;
+        // Every automatic bar is offered all of it; the long-term plan then
+        // gives each block to one of them (`longterm::assign`).
+        for index in &auto_bars {
+            scoped[*index].work = ScopedWork::Dig {
+                members: open.clone(),
+                empty: Vec::new(),
+            };
         }
         if unmeasured > 0 {
             notes.push(tr!("schedule-capture-auto-unmeasured", count = unmeasured.to_string()));
@@ -2110,7 +2123,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         return Err(problems.entries);
     }
 
-    let input = BlendInput {
+    let mut input = BlendInput {
         intervals,
         segments_per_interval,
         grades: grade_table,
@@ -2128,6 +2141,52 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         target_opening: Vec::new(),
         drill_blast,
     };
+    // ---- the automatic bars' order ------------------------------------------
+    if !auto_ids.is_empty() {
+        use crate::model::schedule::optimisation::longterm;
+        let auto_tasks: Vec<TaskId> = identities.tasks.iter().filter(|(_, bar, _)| auto_ids.contains(bar)).map(|(task, _, _)| *task).collect();
+        let groups: BTreeMap<GroundId, u32> = auto_groups.iter().filter_map(|(position, group)| Some((*block_ground.get(position)?, *group))).collect();
+        let scale = plan.period_scale();
+        let days = (horizon_h / SCHEDULE_PERIOD_H).ceil().max(1.0) as u32;
+        let period_ends_h: Vec<f64> = (0..scale.count(days)).map(|period| scale.start_h(period + 1).min(horizon_h)).collect();
+        let summary = longterm::assign(
+            &mut input,
+            &longterm::PlanRequest {
+                tasks: &auto_tasks,
+                period_ends_h: &period_ends_h,
+                discount_rate: experiment.discount_rate,
+                groups: &groups,
+                budget: Duration::from_secs(20),
+            },
+            &|| cancel.is_cancelled(),
+        );
+        if cancel.is_cancelled() {
+            return Err(Vec::new());
+        }
+        // Each automatic bar's blocks as the plan dealt them.
+        for (task, bar, _) in &identities.tasks {
+            if !auto_ids.contains(bar) {
+                continue;
+            }
+            let Some(TaskKind::Dig { sequence }) = input.tasks.iter().find(|entry| entry.id == *task).map(|entry| &entry.kind) else {
+                continue;
+            };
+            let blocks: Vec<crate::model::DigBlockId> = sequence.iter().filter_map(|ground| identities.ground_blocks.get(ground).copied()).collect();
+            if let Some((_, held)) = identities.bar_blocks.iter_mut().find(|(held, _)| held == bar) {
+                *held = blocks;
+            }
+        }
+        if summary.rounds > 0 {
+            notes.push(tr!(
+                "schedule-capture-auto-plan",
+                blocks = summary.blocks.to_string(),
+                periods = summary.periods.to_string(),
+                rounds = summary.rounds.to_string(),
+                value = crate::model::schedule::cashflow::money_exact(summary.value),
+                bound = crate::model::schedule::cashflow::money_exact(summary.bound)
+            ));
+        }
+    }
     let stats = CaptureStats {
         duration: started.elapsed(),
         candidates: input.movements.len(),

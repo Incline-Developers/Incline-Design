@@ -260,7 +260,7 @@ impl DrillBlastInput {
 
     /// When `quantity` of `activity` on `blast`, started at `from_h`, could
     /// be done by every machine able to work it, all at once.
-    fn earliest_done(&self, blast: usize, activity: BlastActivity, quantity: f64, from_h: f64, intervals: &[Interval]) -> f64 {
+    pub(crate) fn earliest_done(&self, blast: usize, activity: BlastActivity, quantity: f64, from_h: f64, intervals: &[Interval]) -> f64 {
         if quantity <= DONE {
             return from_h;
         }

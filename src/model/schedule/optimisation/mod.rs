@@ -23,6 +23,7 @@
 /// browser.
 pub(crate) mod background;
 pub(crate) mod blended;
+pub(crate) mod longterm;
 
 /// How an Improve run is going, for its progress card.
 pub(crate) mod progress;

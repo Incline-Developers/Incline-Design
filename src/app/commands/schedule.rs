@@ -283,6 +283,7 @@ impl crate::app::App<'_> {
                 plan.set_period_unit(unit);
                 Ok(())
             }),
+            ScheduleEdit::SetDiscountRate(rate) => self.edit_schedule(|plan| plan.experiment_mut().set_discount_rate(rate)),
             ScheduleEdit::SetExperimentSolveLimits { seconds, relative_gap } => self.edit_schedule(|plan| {
                 plan.experiment_mut().set_solve_seconds(seconds)?;
                 plan.experiment_mut().set_relative_gap(relative_gap)

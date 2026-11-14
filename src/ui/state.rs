@@ -6568,6 +6568,7 @@ impl UiCommand {
                 | ScheduleEdit::SetHorizon(_)
                 | ScheduleEdit::SetPeriodUnit(_)
                 | ScheduleEdit::SetExperimentSolveLimits { .. }
+                | ScheduleEdit::SetDiscountRate(_)
                 | ScheduleEdit::SetExperimentGradeUnit { .. }
                 | ScheduleEdit::SetStockpileRepresentation { .. }
                 | ScheduleEdit::SetStockpileChunkSize { .. }
@@ -8871,6 +8872,8 @@ pub(crate) enum ScheduleEdit {
     SetHorizon(crate::model::schedule::periods::Horizon),
     /// Read the open horizon in days, weeks or months.
     SetPeriodUnit(crate::model::schedule::periods::PeriodUnit),
+    /// The yearly rate, as a fraction, the long-term plan discounts at.
+    SetDiscountRate(f64),
     SetExperimentSolveLimits {
         seconds: f64,
         relative_gap: f64,
