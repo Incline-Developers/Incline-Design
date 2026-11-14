@@ -523,10 +523,17 @@ fn truck_capacity(input: &BlendInput, periods: &[(f64, f64)]) -> Vec<Vec<f64>> {
 /// rate over the hours one of its automatic bars is open, less the hours
 /// its dig bars need for the ground they name and the hours it is delayed.
 fn loader_capacity(input: &BlendInput, request: &PlanRequest<'_>, periods: &[(f64, f64)]) -> Vec<f64> {
+    let each = loader_capacity_each(input, request, periods);
+    (0..periods.len()).map(|period| each.iter().map(|capacity| capacity[period]).sum()).collect()
+}
+
+/// [`loader_capacity`] loader by loader.
+fn loader_capacity_each(input: &BlendInput, request: &PlanRequest<'_>, periods: &[(f64, f64)]) -> Vec<Vec<f64>> {
     let tonnes: BTreeMap<GroundId, f64> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
-    let mut capacity = vec![0.0; periods.len()];
+    let mut out = Vec::new();
     let loaders: BTreeSet<LoaderId> = input.tasks.iter().filter(|task| request.tasks.contains(&task.id)).map(|task| task.loader).collect();
     for loader in loaders {
+        let mut capacity = vec![0.0; periods.len()];
         let Some(machine) = input.loaders.iter().find(|entry| entry.id == loader) else {
             continue;
         };
@@ -578,8 +585,9 @@ fn loader_capacity(input: &BlendInput, request: &PlanRequest<'_>, periods: &[(f6
                 capacity[period] += free[index];
             }
         }
+        out.push(capacity);
     }
-    capacity
+    out
 }
 
 /// Tonnes each crusher takes in each period, `None` where a day of it has
@@ -655,6 +663,32 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             }
         }
     }
+    // Each loader limit's area, where it holds fewer loaders than the
+    // automatic bars have: no more out of it in a period than its most
+    // productive loaders that many could dig.
+    let each = loader_capacity_each(input, request, &periods);
+    let position: BTreeMap<GroundId, usize> = blocks.iter().enumerate().filter_map(|(index, block)| Some((block.ground?, index))).collect();
+    let mut block_areas: Vec<Vec<usize>> = vec![Vec::new(); count];
+    let mut area_row: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    for (area, entry) in input.loader_areas.iter().enumerate() {
+        let allowed = entry.loaders as usize;
+        if allowed >= each.len() {
+            continue;
+        }
+        let members: Vec<usize> = entry.ground.iter().filter_map(|ground| position.get(ground).copied()).collect();
+        if members.is_empty() {
+            continue;
+        }
+        for member in members {
+            block_areas[member].push(area);
+        }
+        for period in 0..spans {
+            let mut capacities: Vec<f64> = each.iter().map(|capacity| capacity[period]).collect();
+            capacities.sort_by(|a, b| b.total_cmp(a));
+            area_row.insert((area, period), limits.len());
+            limits.push(capacities[..allowed].iter().sum());
+        }
+    }
     // What the dig bars' own ground takes of the crushers and trucks, in
     // the period they should dig it.
     for block in blocks {
@@ -675,12 +709,15 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
     }
     let usage = |column: &Column| {
         let mut used = vec![0.0; limits.len()];
-        for (block, period) in blocks.iter().zip(column) {
+        for (index, (block, period)) in blocks.iter().zip(column).enumerate() {
             let period = usize::from(*period);
             if period >= spans {
                 continue;
             }
             used[period] += block.tonnes;
+            for area in &block_areas[index] {
+                used[area_row[&(*area, period)]] += block.tonnes;
+            }
             // A dig bar's ground: its feed and hauls are off the limits.
             let (crushed, hauled) = block.on_limits();
             for (crusher, tonnes) in crushed {
@@ -754,8 +791,12 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
     let forbidden = |node: usize| node % spans < opens[node / spans];
     // What each block dug in each period adds to each side row, and what it
     // is worth then.
-    let uses_in = |block: &Block, period: usize| -> Vec<(usize, f64)> {
+    let uses_in = |index: usize, period: usize| -> Vec<(usize, f64)> {
+        let block = &blocks[index];
         let mut out = vec![(period, block.tonnes)];
+        for area in &block_areas[index] {
+            out.push((area_row[&(*area, period)], block.tonnes));
+        }
         let (crushed, hauled) = block.on_limits();
         for (crusher, tonnes) in crushed {
             if let Some(row) = crush_row.get(&(*crusher, period)) {
@@ -795,11 +836,11 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         // The best closure at these prices. A block dug in a period earns
         // its discounted value less the capacity it pays for; as "dug by"
         // nodes that is the difference between one period and the next.
-        let gain = |block: &Block, period: usize| block.value * discount[period] - uses_in(block, period).iter().map(|(row, used)| at[*row] * used).sum::<f64>();
+        let gain = |index: usize, period: usize| blocks[index].value * discount[period] - uses_in(index, period).iter().map(|(row, used)| at[*row] * used).sum::<f64>();
         for (index, block) in blocks.iter().enumerate() {
             for period in 0..spans {
-                let here = gain(block, period);
-                let next = if period + 1 < spans { gain(block, period + 1) } else { 0.0 };
+                let here = gain(index, period);
+                let next = if period + 1 < spans { gain(index, period + 1) } else { 0.0 };
                 // Before its blast could be ready the block is not to be had
                 // at any price.
                 // A dig bar's ground is gone from when it should be dug: no
@@ -862,11 +903,11 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                 }
                 let later = if period + 1 < spans { block.value * discount[period + 1] } else { 0.0 };
                 objective[held as usize] += block.value * discount[period] - later;
-                for (row, used) in uses_in(block, period) {
+                for (row, used) in uses_in(index, period) {
                     coefficients[row][held as usize] += used;
                 }
                 if period + 1 < spans {
-                    for (row, used) in uses_in(block, period + 1) {
+                    for (row, used) in uses_in(index, period + 1) {
                         coefficients[row][held as usize] -= used;
                     }
                 }

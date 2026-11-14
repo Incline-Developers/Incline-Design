@@ -211,6 +211,18 @@ impl crate::app::App<'_> {
             }
             ScheduleEdit::SetDependency { id, ground, after } => self.edit_schedule(|plan| plan.dependencies_mut().set(id, ground, after)),
             ScheduleEdit::DeleteDependency(id) => self.edit_schedule(|plan| plan.dependencies_mut().remove(id)),
+            ScheduleEdit::AddLoaderLimit => {
+                let mut added = None;
+                self.edit_schedule(|plan| {
+                    added = Some(plan.loader_limits_mut().add()?);
+                    Ok(())
+                });
+                if added.is_some() {
+                    self.editor.schedule_selected_loader_limit = added;
+                }
+            }
+            ScheduleEdit::SetLoaderLimit(changed) => self.edit_schedule(|plan| plan.loader_limits_mut().set(changed)),
+            ScheduleEdit::DeleteLoaderLimit(id) => self.edit_schedule(|plan| plan.loader_limits_mut().remove(id)),
             ScheduleEdit::DuplicateCashflowRule(rule) => self.duplicate_cashflow_rule(rule),
             ScheduleEdit::DeleteCashflowRule(rule) => self.delete_cashflow_rule(rule),
             ScheduleEdit::RenameCashflowRule { rule, name } => self.edit_cashflow(|cashflow| cashflow.rename_rule(rule, &name)),

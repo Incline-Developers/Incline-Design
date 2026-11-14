@@ -875,6 +875,38 @@ fn ground_gates(
 /// Each authored dependency's ground among what the bars dig: the ground
 /// that waits, and the ground it waits for. Ground both sides hold waits for
 /// nothing, and a rule with nothing on either side is left out.
+/// Each loader limit's areas of ground: all of its ground together, each
+/// bench of it or each blast of it. Ground in no blast is in no blast's area.
+fn loader_areas(source: &CaptureSnapshot, block_ground: &BTreeMap<usize, GroundId>) -> Vec<crate::model::schedule::optimisation::blended::input::LoaderArea> {
+    use crate::model::schedule::loader_limits::LimitArea;
+    let blocks = &source.snapshot.blocks;
+    let mut out = Vec::new();
+    for rule in &source.plan.loader_limits().rules {
+        let Some(scope) = rule.scope else { continue };
+        let mut areas: BTreeMap<(crate::model::SolidId, u64, [u64; 2]), Vec<GroundId>> = BTreeMap::new();
+        for (position, ground) in block_ground {
+            let block = &blocks[*position];
+            if !scope.covers(block.solid, (block.bench.base, block.bench.top), (block.flitch.base, block.flitch.top)) {
+                continue;
+            }
+            let key = match rule.area {
+                LimitArea::Whole => Some((block.solid, 0, [0, 0])),
+                LimitArea::EachBench => Some((block.solid, block.bench.base.to_bits(), [0, 0])),
+                LimitArea::EachBlast => block.blast.map(|blast| (blast.solid, blast.bench, blast.anchor)),
+            };
+            if let Some(key) = key {
+                areas.entry(key).or_default().push(*ground);
+            }
+        }
+        out.extend(
+            areas
+                .into_values()
+                .map(|ground| crate::model::schedule::optimisation::blended::input::LoaderArea { loaders: rule.loaders, ground }),
+        );
+    }
+    out
+}
+
 fn dependency_ground(source: &CaptureSnapshot, block_ground: &BTreeMap<usize, GroundId>) -> Vec<(Vec<GroundId>, Vec<GroundId>)> {
     let blocks = &source.snapshot.blocks;
     source
@@ -2441,6 +2473,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         grade_targets,
         target_opening: Vec::new(),
         drill_blast,
+        loader_areas: loader_areas(source, &block_ground),
     };
     let dependencies = dependency_ground(source, &block_ground);
     // ---- the automatic bars' order ------------------------------------------
@@ -2995,6 +3028,12 @@ fn stable_fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
     // fields the solvers read, and every one of them is walked here.
     input.segments_per_interval.hash(&mut hasher);
     serde_json::to_string(&input.drill_blast).unwrap_or_default().hash(&mut hasher);
+    for area in &input.loader_areas {
+        area.loaders.hash(&mut hasher);
+        for ground in &area.ground {
+            ground.0.hash(&mut hasher);
+        }
+    }
     for interval in &input.intervals {
         interval.index.hash(&mut hasher);
         interval.start_h.to_bits().hash(&mut hasher);

@@ -263,7 +263,12 @@ impl EditorState {
         self.is_setup_group(SetupGroup::Schedule)
             && matches!(
                 self.schedule_setup_step,
-                ScheduleStep::Stockpiles | ScheduleStep::Destinations | ScheduleStep::TruckingRules | ScheduleStep::Cashflow | ScheduleStep::Dependencies
+                ScheduleStep::Stockpiles
+                    | ScheduleStep::Destinations
+                    | ScheduleStep::TruckingRules
+                    | ScheduleStep::Cashflow
+                    | ScheduleStep::Dependencies
+                    | ScheduleStep::LoaderLimits
             )
     }
 
@@ -3110,6 +3115,8 @@ pub(crate) struct EditorState {
     pub(crate) schedule_selected_cashflow_rule: Option<crate::model::schedule::CashflowRuleId>,
     /// The dependency the Dependencies step's editor shows.
     pub(crate) schedule_selected_dependency: Option<crate::model::schedule::dependencies::DependencyId>,
+    /// The limit the Loader Limits step's editor shows.
+    pub(crate) schedule_selected_loader_limit: Option<crate::model::schedule::loader_limits::LoaderLimitId>,
     pub(crate) schedule_cashflow_draft: Option<ScheduleCashflowDraft>,
     /// The selected opening-inventory lot on the Stockpiles page, and the cells
     /// being typed into it. One selection, like the destination one: a lot
@@ -3883,6 +3890,7 @@ impl EditorState {
         self.schedule_truck_rule_draft = None;
         self.schedule_selected_cashflow_rule = None;
         self.schedule_selected_dependency = None;
+        self.schedule_selected_loader_limit = None;
         self.schedule_cashflow_draft = None;
         self.schedule_selected_lot = None;
         self.schedule_lot_draft = None;
@@ -4585,6 +4593,7 @@ impl EditorState {
             schedule_truck_rule_draft: None,
             schedule_selected_cashflow_rule: None,
             schedule_selected_dependency: None,
+            schedule_selected_loader_limit: None,
             schedule_cashflow_draft: None,
             schedule_selected_lot: None,
             schedule_lot_draft: None,
@@ -6473,6 +6482,8 @@ impl UiCommand {
                 ScheduleEdit::AddCashflowRule { name } => report(tr!("cashflow-new-rule"), name.clone()),
                 ScheduleEdit::AddDependency => report(tr!("dependency-new"), String::new()),
                 ScheduleEdit::DeleteDependency(_) => report(tr!("dependency-delete"), String::new()),
+                ScheduleEdit::AddLoaderLimit => report(tr!("loader-limit-new"), String::new()),
+                ScheduleEdit::DeleteLoaderLimit(_) => report(tr!("loader-limit-delete"), String::new()),
                 ScheduleEdit::DuplicateCashflowRule(_) => report(tr!("cashflow-duplicate-rule"), String::new()),
                 ScheduleEdit::DeleteCashflowRule(_) => report(tr!("cashflow-delete-rule"), String::new()),
                 ScheduleEdit::AddDelayBar { .. } => report(tr!("delay-add-bar"), String::new()),
@@ -6586,6 +6597,7 @@ impl UiCommand {
                 | ScheduleEdit::SetExperimentSolveLimits { .. }
                 | ScheduleEdit::SetDiscountRate(_)
                 | ScheduleEdit::SetDependency { .. }
+                | ScheduleEdit::SetLoaderLimit(_)
                 | ScheduleEdit::SetExperimentGradeUnit { .. }
                 | ScheduleEdit::SetStockpileRepresentation { .. }
                 | ScheduleEdit::SetStockpileChunkSize { .. }
@@ -8104,6 +8116,8 @@ pub(crate) enum ScheduleStep {
     DrillBlast,
     /// Ground that waits for other ground to be dug.
     Dependencies,
+    /// How many loaders may work in one area at a time.
+    LoaderLimits,
     Stockpiles,
     Dumps,
     Crushers,
@@ -8131,7 +8145,7 @@ impl ScheduleStep {
     /// than the setup does, and a step's change retires every step after it.
     /// Haulage follows it: it checks that each destination and each pit's dig
     /// blocks reach the roads, so it needs both.
-    pub(crate) const ALL: [Self; 16] = [
+    pub(crate) const ALL: [Self; 17] = [
         Self::Configuration,
         Self::Periods,
         Self::LoaderClasses,
@@ -8139,6 +8153,7 @@ impl ScheduleStep {
         Self::Delays,
         Self::DrillBlast,
         Self::Dependencies,
+        Self::LoaderLimits,
         Self::Stockpiles,
         Self::Dumps,
         Self::Crushers,
@@ -8163,6 +8178,7 @@ impl ScheduleStep {
             Self::Delays => tr!("delay-step"),
             Self::DrillBlast => tr!("drill-blast-step"),
             Self::Dependencies => tr!("dependency-step"),
+            Self::LoaderLimits => tr!("loader-limit-step"),
             Self::Haulage => tr!("schedule-step-road-access"),
             Self::Stockpiles => tr!("planning-stockpiles"),
             Self::Dumps => tr!("planning-dumps"),
@@ -8184,6 +8200,7 @@ impl ScheduleStep {
             Self::Delays => "schedule_delays",
             Self::DrillBlast => "schedule_drill_blast",
             Self::Dependencies => "schedule_dependencies",
+            Self::LoaderLimits => "schedule_loader_limits",
             Self::Haulage => "schedule_haulage",
             Self::Stockpiles => "schedule_stockpiles",
             Self::Dumps => "schedule_dumps",
@@ -8724,6 +8741,11 @@ pub(crate) enum ScheduleEdit {
         after: Option<crate::model::schedule::SourceScope>,
     },
     DeleteDependency(crate::model::schedule::dependencies::DependencyId),
+    /// Add a loader limit: one loader on each bench, its scope not chosen.
+    AddLoaderLimit,
+    /// Replace a loader limit's scope, area and count at once.
+    SetLoaderLimit(crate::model::schedule::loader_limits::LoaderLimit),
+    DeleteLoaderLimit(crate::model::schedule::loader_limits::LoaderLimitId),
     /// Add a cashflow rule worth nothing.
     AddCashflowRule {
         name: String,

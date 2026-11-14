@@ -567,6 +567,7 @@ impl crate::app::App<'_> {
             ScheduleStep::Delays => self.evaluate_delays(),
             ScheduleStep::DrillBlast => self.evaluate_drill_blast(),
             ScheduleStep::Dependencies => self.evaluate_dependencies(),
+            ScheduleStep::LoaderLimits => self.evaluate_loader_limits(),
             ScheduleStep::Stockpiles => self.evaluate_destination_kind(crate::model::schedule::DestinationKind::Stockpile),
             ScheduleStep::Dumps => self.evaluate_destination_kind(crate::model::schedule::DestinationKind::Dump),
             ScheduleStep::Crushers => self.evaluate_crushers(),
@@ -969,6 +970,37 @@ impl crate::app::App<'_> {
         StageOutcome::Settled {
             diagnostics,
             entities: dependencies.rules.len(),
+        }
+    }
+
+    /// A limit with no ground chosen does nothing, and one of no loaders
+    /// keeps every loader out of its ground. Neither stops a schedule.
+    fn evaluate_loader_limits(&self) -> StageOutcome {
+        let Some(document) = self.workspace.active_document() else {
+            return StageOutcome::Settled {
+                diagnostics: Vec::new(),
+                entities: 0,
+            };
+        };
+        let limits = document.schedule().loader_limits();
+        let mut diagnostics = Vec::new();
+        for (index, rule) in limits.rules.iter().enumerate() {
+            let message = if rule.scope.is_none() {
+                tr!("loader-limit-stage-unfinished")
+            } else if rule.loaders == 0 {
+                tr!("loader-limit-stage-none")
+            } else {
+                continue;
+            };
+            diagnostics.push(StageDiagnostic {
+                entity: Some(tr!("loader-limit-name", number = (index + 1).to_string())),
+                message,
+                blocking: false,
+            });
+        }
+        StageOutcome::Settled {
+            diagnostics,
+            entities: limits.rules.len(),
         }
     }
 
@@ -1672,6 +1704,12 @@ fn compute_schedule_fingerprints(document: &crate::model::Document, solids: (u8,
         plan.dependencies().hash_content(&mut hasher);
         hasher.finish()
     };
+    let loader_limits_step = {
+        let mut hasher = DefaultHasher::new();
+        dependencies_step.hash(&mut hasher);
+        plan.loader_limits().hash_content(&mut hasher);
+        hasher.finish()
+    };
 
     // Dates and colours name the days; they change nothing a run reads.
     // The horizon they show is the experiment's, which a calculated
@@ -1686,6 +1724,7 @@ fn compute_schedule_fingerprints(document: &crate::model::Document, solids: (u8,
         delays_step,
         drill_blast_step,
         dependencies_step,
+        loader_limits_step,
         stockpiles_step,
         dumps_step,
         crushers_step,

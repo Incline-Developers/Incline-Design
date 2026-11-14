@@ -364,6 +364,12 @@ struct State<'a> {
     /// Each dig bar's current block, by position in its sequence, as the
     /// latest interval opened: ground only goes down, so it only moves on.
     cursor: RefCell<BTreeMap<usize, usize>>,
+    /// The loader areas each block is in, by position in
+    /// [`BlendInput::loader_areas`].
+    areas_of: BTreeMap<GroundId, Vec<usize>>,
+    /// The loaders that dug in each area in the interval before: they keep
+    /// their places as the next one opens.
+    last_in: Vec<BTreeSet<usize>>,
     cancel: &'a AtomicBool,
 }
 
@@ -657,8 +663,48 @@ impl<'a> State<'a> {
             guidance: DailyGuidance::default(),
             warm: RefCell::default(),
             cursor: RefCell::default(),
+            areas_of: {
+                let mut areas_of: BTreeMap<GroundId, Vec<usize>> = BTreeMap::new();
+                for (area, entry) in input.loader_areas.iter().enumerate() {
+                    for ground in &entry.ground {
+                        areas_of.entry(*ground).or_default().push(area);
+                    }
+                }
+                areas_of
+            },
+            last_in: vec![BTreeSet::new(); input.loader_areas.len()],
             cancel,
         }
+    }
+
+    /// Whether `loader` may dig `block` beside the loaders `occupied` holds
+    /// in each area: every area of the block has room for one more.
+    fn area_room(&self, loader: usize, block: GroundId, occupied: &[BTreeSet<usize>]) -> bool {
+        self.areas_of.get(&block).is_none_or(|areas| {
+            areas
+                .iter()
+                .all(|area| occupied[*area].iter().filter(|other| **other != loader).count() < self.input.loader_areas[*area].loaders as usize)
+        })
+    }
+
+    /// The loaders each area holds in `topology`, in any segment.
+    fn occupied_by(&self, topology: &Topology) -> Vec<BTreeSet<usize>> {
+        let mut occupied = vec![BTreeSet::new(); self.input.loader_areas.len()];
+        for bar in topology.segments.iter().flatten() {
+            for block in &bar.blocks {
+                for area in self.areas_of.get(block).into_iter().flatten() {
+                    occupied[*area].insert(bar.loader);
+                }
+            }
+        }
+        occupied
+    }
+
+    /// A dig bar's current block as the interval opens, once [`Self::ready`]
+    /// has moved its cursor past what is gone.
+    fn current_block(&self, task: usize) -> Option<GroundId> {
+        let TaskKind::Dig { sequence } = &self.input.tasks[task].kind else { return None };
+        sequence.get(self.cursor.borrow().get(&task).copied().unwrap_or(0)).copied()
     }
 
     fn cancelled(&self) -> bool {
@@ -682,15 +728,31 @@ impl<'a> State<'a> {
         if let Some(chain) = self.chain.as_mut() {
             chain.advance(interval, |ground| self.ground.get(&ground).is_some_and(|left| *left > FINISHED_T));
         }
-        let first: Vec<Bar> = (0..input.loaders.len())
-            .filter_map(|loader| {
-                let rate = interval_rate(&input.loaders[loader], k)?;
-                let task = authored_tasks(input, loader)
-                    .into_iter()
-                    .find(|&task| self.ready(task, interval, rate.dig_tph, rate.reclaim_tph))?;
-                self.open_bar(loader, task, &BTreeSet::new())
-            })
-            .collect();
+        // Each loader's highest-priority bar with work. Where loader limits
+        // hold, a bar whose block is in an area already holding its limit of
+        // other loaders has none: the loaders that dug in an area last
+        // interval take their places first, then the rest in loader order.
+        let mut order: Vec<usize> = (0..input.loaders.len()).collect();
+        order.sort_by_key(|loader| !self.last_in.iter().any(|held| held.contains(loader)));
+        let mut admitted: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); input.loader_areas.len()];
+        let mut first: Vec<Bar> = Vec::new();
+        for loader in order {
+            let Some(rate) = interval_rate(&input.loaders[loader], k) else { continue };
+            let Some(task) = authored_tasks(input, loader)
+                .into_iter()
+                .find(|&task| self.ready(task, interval, rate.dig_tph, rate.reclaim_tph) && self.current_block(task).is_none_or(|block| self.area_room(loader, block, &admitted)))
+            else {
+                continue;
+            };
+            let Some(bar) = self.open_bar(loader, task, &BTreeSet::new()) else { continue };
+            for block in &bar.blocks {
+                for area in self.areas_of.get(block).into_iter().flatten() {
+                    admitted[*area].insert(loader);
+                }
+            }
+            first.push(bar);
+        }
+        first.sort_by_key(|bar| bar.loader);
         let mut topology = Topology {
             segments: vec![first],
             pins: Vec::new(),
@@ -855,6 +917,7 @@ impl<'a> State<'a> {
             }
             let mut grew = false;
             let duration = plan.durations.get(last).copied().unwrap_or(0.0);
+            let mut occupied = self.occupied_by(topology);
             for bar in &mut topology.segments[last] {
                 let TaskKind::Dig { sequence } = &input.tasks[bar.task].kind else { continue };
                 let Some(&end) = bar.blocks.last() else { continue };
@@ -865,7 +928,14 @@ impl<'a> State<'a> {
                 if !finished || rate * duration - used <= NEGLIGIBLE_T || self.shared.get(&(bar.loader, end)).copied().unwrap_or(false) {
                     continue;
                 }
-                if let Some(next) = self.next_block(bar.task, sequence, Some(end), &done) {
+                // A loader does not move into an area full of others.
+                if let Some(next) = self
+                    .next_block(bar.task, sequence, Some(end), &done)
+                    .filter(|next| self.area_room(bar.loader, *next, &occupied))
+                {
+                    for area in self.areas_of.get(&next).into_iter().flatten() {
+                        occupied[*area].insert(bar.loader);
+                    }
                     bar.blocks.push(next);
                     grew = true;
                 }
@@ -988,6 +1058,10 @@ impl<'a> State<'a> {
                 continue;
             };
             if matches!(input.tasks[task].kind, TaskKind::Dig { .. }) && opened.blocks.is_empty() {
+                continue;
+            }
+            let occupied = self.occupied_by(topology);
+            if opened.blocks.iter().any(|block| !self.area_room(bar.loader, *block, &occupied)) {
                 continue;
             }
             next.segments[last + 1].push(opened);
@@ -1488,6 +1562,18 @@ impl<'a> State<'a> {
     /// extraction.
     fn apply(&mut self, interval: Interval, topology: &Topology, plan: Plan) {
         let input = self.input;
+        if !input.loader_areas.is_empty() {
+            for held in &mut self.last_in {
+                held.clear();
+            }
+            for (&(loader, block, _), tonnes) in &plan.extracted {
+                if *tonnes > NEGLIGIBLE_T {
+                    for area in self.areas_of.get(&block).into_iter().flatten() {
+                        self.last_in[*area].insert(loader);
+                    }
+                }
+            }
+        }
         let k = interval.index;
         let duration = interval.duration_h();
         let filled: f64 = plan.durations.iter().sum();

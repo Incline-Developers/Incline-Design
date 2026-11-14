@@ -523,6 +523,15 @@ impl BlendGradeTarget {
     }
 }
 
+/// Ground no more than `loaders` loaders may dig in the same interval: one
+/// area of an authored loader limit (see
+/// [`crate::model::schedule::loader_limits`]).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LoaderArea {
+    pub(crate) loaders: u32,
+    pub(crate) ground: Vec<GroundId>,
+}
+
 /// Shared scenario input for the blended experiments. Deliberately a separate
 /// contract from the accepted `OptimisationInput`: its stockpile semantics
 /// differ, so reusing the same type would invite comparing objectives that do
@@ -554,6 +563,8 @@ pub(crate) struct BlendInput {
     /// The drill and blast chain, when the project sequences it. Its ground
     /// is dug only once released; see [`super::drill_blast`].
     pub(crate) drill_blast: Option<super::drill_blast::DrillBlastInput>,
+    /// Areas of ground with a limit on the loaders digging there at once.
+    pub(crate) loader_areas: Vec<LoaderArea>,
 }
 
 /// Numerical convention for a grade boundary in the captured numeric scale.

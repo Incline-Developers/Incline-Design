@@ -845,6 +845,55 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         }
         None
     };
+    // Loader limits: the loaders that dug in each area in each interval,
+    // and a loader whose highest-priority open dig bar's next block is in
+    // an area that many others dug in that interval was kept out of it.
+    let mut areas_of: BTreeMap<crate::model::schedule::optimisation::GroundId, Vec<usize>> = BTreeMap::new();
+    for (area, entry) in input.loader_areas.iter().enumerate() {
+        for ground in &entry.ground {
+            areas_of.entry(*ground).or_default().push(area);
+        }
+    }
+    let mut dug_in: BTreeMap<(usize, usize), std::collections::BTreeSet<crate::model::schedule::optimisation::LoaderId>> = BTreeMap::new();
+    if !areas_of.is_empty() {
+        for row in &solution.movements {
+            let Some(candidate) = input.movements.get(row.candidate) else { continue };
+            if let SourceId::Ground(ground) = candidate.source
+                && row.tonnes_t > IDLE_NEGLIGIBLE_T
+            {
+                for area in areas_of.get(&ground).into_iter().flatten() {
+                    dug_in.entry((row.interval, *area)).or_default().insert(candidate.loader);
+                }
+            }
+        }
+    }
+    let kept_out = |agent: LoaderAgentId, position: usize| -> bool {
+        if areas_of.is_empty() {
+            return false;
+        }
+        let Some(&loader) = loaders.get(&agent) else { return false };
+        let start_h = input.intervals[position].start_h;
+        let mut open: Vec<_> = tasks_of
+            .get(&loader)
+            .unwrap_or(&no_tasks)
+            .iter()
+            .copied()
+            .filter(|task| task.window_start_h <= start_h + 1e-9 && task.window_end_h > start_h + 1e-9)
+            .collect();
+        open.sort_by(|left, right| {
+            (left.priority, left.window_start_h, left.id)
+                .partial_cmp(&(right.priority, right.window_start_h, right.id))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let Some(task) = open.first() else { return false };
+        let TaskKind::Dig { sequence } = &task.kind else { return false };
+        let Some(ground) = next_in_sequence(task, sequence, start_h) else { return false };
+        areas_of.get(&ground).is_some_and(|areas| {
+            areas
+                .iter()
+                .any(|area| dug_in.get(&(position, *area)).map_or(0, |held| held.iter().filter(|other| **other != loader).count()) >= input.loader_areas[*area].loaders as usize)
+        })
+    };
     let explain = |schedule: &CalculatedSchedule, agent: LoaderAgentId, position: usize| {
         use std::collections::HashSet;
 
@@ -1123,6 +1172,9 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
                 return (IdleReason::WaitingOnGround, Vec::new(), None);
             }
             return (IdleReason::WaitingOnBlast, Vec::new(), Some(blast));
+        }
+        if kept_out(agent, position) {
+            return (IdleReason::LoaderLimit, Vec::new(), None);
         }
         let (reason, full) = explain(schedule, agent, position);
         (reason, full, None)

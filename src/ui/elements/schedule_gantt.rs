@@ -1662,6 +1662,7 @@ pub(super) fn idle_reason_text(reason: Option<IdleReason>) -> (String, String) {
         Some(IdleReason::NotWorthIt) => (tr!("idle-not-worth-it"), tr!("idle-not-worth-it-note")),
         Some(IdleReason::WaitingOnBlast) => (tr!("idle-waiting-on-blast"), tr!("idle-waiting-on-blast-note")),
         Some(IdleReason::WaitingOnGround) => (tr!("idle-waiting-on-ground"), tr!("idle-waiting-on-ground-note")),
+        Some(IdleReason::LoaderLimit) => (tr!("idle-loader-limit"), tr!("idle-loader-limit-note")),
         None => (tr!("schedule-dispatch-idle"), String::new()),
     }
 }

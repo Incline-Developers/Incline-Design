@@ -1926,6 +1926,14 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
                 super::schedule_dependencies::draw_rule_editor(ui, rect, editor, &plan, session, commands)
             });
         }
+        ScheduleStep::LoaderLimits => {
+            island(ui, layout, "schedule_loader_limit_list_island", 380.0, |ui, rect| {
+                super::schedule_loader_limits::draw_rule_list(ui, rect, editor, &plan, session, commands)
+            });
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_loader_limits::draw_rule_editor(ui, rect, editor, &plan, session, commands)
+            });
+        }
         // The three destination pages share one shape: the list of that kind on
         // the left, the selected row's cells in the middle. They are separate
         // steps rather than one page with a filter because each is a thing that

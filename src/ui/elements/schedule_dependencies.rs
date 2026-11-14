@@ -22,7 +22,7 @@ use crate::{
 
 /// A scope written as the app writes ground: `Pit A`, `Pit A/392`, or for a
 /// flitch `Pit A/392/*/396`.
-fn scope_path(sources: &[SourceScopeView], scope: SourceScope) -> String {
+pub(crate) fn scope_path(sources: &[SourceScopeView], scope: SourceScope) -> String {
     let Some(index) = sources.iter().position(|view| view.scope == scope) else {
         return tr!("destination-source-unplaced");
     };

@@ -1158,10 +1158,75 @@ fn check_bar_priority(
     // Every loader sees the same opening ground. Advance it only after all
     // loaders have checked the cell, retaining the published subtraction order.
     let mut remaining: HashMap<_, f64, foldhash::fast::FixedState> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
+    // Loader limits: each block's areas, and the loaders that dug in each
+    // area by interval.
+    let mut areas_of: BTreeMap<GroundId, Vec<usize>> = BTreeMap::new();
+    for (area, entry) in input.loader_areas.iter().enumerate() {
+        for ground in &entry.ground {
+            areas_of.entry(*ground).or_default().push(area);
+        }
+    }
+    let mut dug_in: BTreeMap<(usize, usize), BTreeSet<LoaderId>> = BTreeMap::new();
+    if !areas_of.is_empty() {
+        for row in &solution.movements {
+            let Some(candidate) = input.movements.get(row.candidate) else { continue };
+            if let SourceId::Ground(ground) = candidate.source
+                && candidate.activity == Activity::Dig
+                && row.tonnes_t > REPLAY_TOLERANCE_T
+            {
+                for area in areas_of.get(&ground).into_iter().flatten() {
+                    dug_in.entry((row.interval, *area)).or_default().insert(candidate.loader);
+                }
+            }
+        }
+        for (&(interval, area), loaders) in &dug_in {
+            let limit = input.loader_areas[area].loaders as usize;
+            if loaders.len() > limit {
+                checker.report.issues.push(format!(
+                    "loader limit broken: {} loaders dug in area {area} in interval {interval}, which allows {limit}",
+                    loaders.len()
+                ));
+            }
+        }
+    }
     for interval in &input.intervals {
         if checker.cancelled() {
             return worked_bars;
         }
+        // Who could hold each area as the interval opens: the loaders that
+        // dug there in it or the interval before, and any whose dig bar's
+        // current block is there. A bar whose block is in an area that many
+        // others could hold may have been kept out of it, so has no work.
+        let mut contest: BTreeMap<usize, BTreeSet<LoaderId>> = BTreeMap::new();
+        if !areas_of.is_empty() {
+            for previous in [interval.index.checked_sub(1), Some(interval.index)].into_iter().flatten() {
+                for (&(_, area), loaders) in dug_in.range((previous, 0)..(previous, usize::MAX)) {
+                    contest.entry(area).or_default().extend(loaders.iter().copied());
+                }
+            }
+            for state in &states {
+                for &bar in &state.bars {
+                    let task = &input.tasks[bar];
+                    let TaskKind::Dig { sequence } = &task.kind else { continue };
+                    if !covers(task, *interval) {
+                        continue;
+                    }
+                    let current = sequence[state.current[bar].min(sequence.len())..]
+                        .iter()
+                        .find(|source| remaining.get(*source).copied().unwrap_or(0.0) > REPLAY_TOLERANCE_T);
+                    for area in current.and_then(|current| areas_of.get(current)).into_iter().flatten() {
+                        contest.entry(*area).or_default().insert(state.loader);
+                    }
+                }
+            }
+        }
+        let crowded = |loader: LoaderId, block: GroundId| {
+            areas_of.get(&block).is_some_and(|areas| {
+                areas
+                    .iter()
+                    .any(|area| contest.get(area).map_or(0, |held| held.iter().filter(|other| **other != loader).count()) >= input.loader_areas[*area].loaders as usize)
+            })
+        };
         for (&(_, segment), rows) in cell_rows.range((interval.index, 0)..(interval.index, segments)) {
             for state in &mut states {
                 let loader = state.loader;
@@ -1215,7 +1280,39 @@ fn check_bar_priority(
                     }
                 };
 
-                let highest = bars.iter().copied().find(|bar| ready(*bar, &state.spent));
+                // The bars the loader may work: its highest-priority ready
+                // one and, while each before is in an area enough other
+                // loaders could hold to keep it out, the next ready one.
+                let mut allowed: Vec<usize> = Vec::new();
+                for bar in bars.iter().copied().filter(|bar| ready(*bar, &state.spent)) {
+                    allowed.push(bar);
+                    let kept_out = match &input.tasks[bar].kind {
+                        TaskKind::Dig { sequence } => sequence.get(state.current[bar]).is_some_and(|block| crowded(loader, *block)),
+                        _ => false,
+                    };
+                    if !kept_out {
+                        break;
+                    }
+                }
+                // The one it worked: the allowed bar its rows here are
+                // worked under, else the first.
+                let worked = rows
+                    .iter()
+                    .filter_map(|index| {
+                        input
+                            .movements
+                            .get(solution.movements[*index].candidate)
+                            .filter(|_| solution.movements[*index].tonnes_t > REPLAY_TOLERANCE_T)
+                    })
+                    .filter(|candidate| candidate.loader == loader)
+                    .find_map(|candidate| {
+                        authority
+                            .of(candidate)
+                            .iter()
+                            .copied()
+                            .find(|bar| allowed.contains(bar) && covers(&input.tasks[*bar], *interval))
+                    });
+                let highest = worked.or_else(|| allowed.first().copied());
                 if let Some(bar) = highest {
                     worked_bars.insert((loader, interval.index, segment), bar);
                 }
@@ -1234,23 +1331,25 @@ fn check_bar_priority(
                         }
                     }
                     let mut first = None;
-                    let mut expected_authorised = false;
+                    let mut chosen = None;
                     for &bar in authority.of(candidate) {
                         if covers(&input.tasks[bar], *interval) {
                             first.get_or_insert(bar);
-                            expected_authorised |= highest == Some(bar);
+                            if chosen.is_none() && allowed.contains(&bar) {
+                                chosen = Some(bar);
+                            }
                         }
                     }
-                    // The bar the row was worked under: the highest-priority
-                    // ready one when it authorises the row, and otherwise the
-                    // first authorising bar - which only a row the checks
-                    // below reject can need.
-                    let attributed = highest.filter(|_| expected_authorised).or(first);
+                    let expected_authorised = chosen.is_some();
+                    // The bar the row was worked under: the allowed one that
+                    // authorises it, and otherwise the first authorising bar
+                    // - which only a row the checks below reject can need.
+                    let attributed = chosen.or(first);
                     checker.report.row_tasks[index] = attributed.map(|bar| input.tasks[bar].id);
                     if row.tonnes_t <= REPLAY_TOLERANCE_T || first.is_none() || !check {
                         continue;
                     }
-                    match highest {
+                    match allowed.first().copied() {
                         None => state.issues.push(format!(
                             "loader {} moved {:.6} t in interval {} segment {segment} with no bar holding available work",
                             loader.0, row.tonnes_t, interval.index

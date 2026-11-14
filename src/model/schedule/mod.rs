@@ -23,6 +23,7 @@ pub(crate) mod drill_blast;
 pub(crate) mod experiment;
 pub(crate) mod grade_targets;
 pub(crate) mod inventory;
+pub(crate) mod loader_limits;
 pub(crate) mod optimisation;
 pub(crate) mod periods;
 pub(crate) mod result;
@@ -602,6 +603,9 @@ pub(crate) enum ScheduleError {
     /// An id that names no dependency in this plan, or a side that is no
     /// band at all.
     UnknownDependency,
+    /// An id that names no loader limit in this plan, or a scope that is no
+    /// band at all.
+    UnknownLoaderLimit,
     InvalidGradeTarget,
     /// A summed coefficient or movement value no finite number can express.
     UnrepresentableValue,
@@ -714,6 +718,7 @@ impl ScheduleError {
             Self::InvalidGradeTarget => tr!("grade-target-invalid"),
             Self::UnknownCashflowRule => tr!("cashflow-error-unknown-rule"),
             Self::UnknownDependency => tr!("dependency-error-unknown"),
+            Self::UnknownLoaderLimit => tr!("loader-limit-error-unknown"),
             Self::UnrepresentableValue => tr!("cashflow-error-unrepresentable"),
             Self::InvalidLotTonnes => tr!("inventory-error-invalid-tonnes"),
             Self::InvalidLotValue => tr!("inventory-error-invalid-value"),
@@ -852,6 +857,9 @@ pub(crate) struct SchedulePlan {
     /// Ground that waits for other ground; see [`dependencies`].
     #[serde(default, skip_serializing_if = "dependencies::Dependencies::is_pristine")]
     dependencies: dependencies::Dependencies,
+    /// How many loaders may work in one area; see [`loader_limits`].
+    #[serde(default, skip_serializing_if = "loader_limits::LoaderLimits::is_pristine")]
+    loader_limits: loader_limits::LoaderLimits,
 }
 
 /// The order the fleet is listed in: machine kinds as groups, and machines
@@ -936,6 +944,7 @@ impl Default for SchedulePlan {
             machine_order: MachineOrder::default(),
             calendar_views: calendar_views::CalendarViews::default(),
             dependencies: dependencies::Dependencies::default(),
+            loader_limits: loader_limits::LoaderLimits::default(),
         }
     }
 }
@@ -988,6 +997,7 @@ impl SchedulePlan {
             && self.machine_order == MachineOrder::default()
             && self.calendar_views.is_empty()
             && self.dependencies.is_empty()
+            && self.loader_limits.is_empty()
     }
 
     /// No visible content or retired identities to preserve in a save/import.
@@ -999,6 +1009,7 @@ impl SchedulePlan {
             && self.trucks.is_pristine()
             && self.cashflow.is_pristine()
             && self.dependencies.is_pristine()
+            && self.loader_limits.is_pristine()
             && self.auto_run == AutoRun::default()
     }
 
@@ -1022,6 +1033,7 @@ impl SchedulePlan {
         self.cashflow.raise_allocator_to(&other.cashflow);
         self.delays.raise_allocator_to(&other.delays);
         self.dependencies.raise_allocator_to(&other.dependencies);
+        self.loader_limits.raise_allocator_to(&other.loader_limits);
     }
 
     pub(crate) fn delays(&self) -> &DelayConfig {
@@ -1239,6 +1251,14 @@ impl SchedulePlan {
 
     pub(crate) fn dependencies_mut(&mut self) -> &mut dependencies::Dependencies {
         &mut self.dependencies
+    }
+
+    pub(crate) fn loader_limits(&self) -> &loader_limits::LoaderLimits {
+        &self.loader_limits
+    }
+
+    pub(crate) fn loader_limits_mut(&mut self) -> &mut loader_limits::LoaderLimits {
+        &mut self.loader_limits
     }
 
     pub(crate) fn classes(&self) -> &[LoaderClass] {
@@ -2391,6 +2411,7 @@ impl SchedulePlan {
         self.trucks.validate_loaded()?;
         self.cashflow.validate_loaded()?;
         self.dependencies.validate_loaded()?;
+        self.loader_limits.validate_loaded()?;
         let highest_class = self.classes.iter().map(|class| class.id.0).max();
         let highest_agent = self.agents.iter().map(|agent| agent.id.0).max();
         let highest_bar = self.bars.iter().map(|bar| bar.id.0).max();
@@ -2465,6 +2486,7 @@ impl SchedulePlan {
         self.calendar_views.hash(hasher);
         self.drill_blast.hash_content(hasher);
         self.dependencies.hash_content(hasher);
+        self.loader_limits.hash_content(hasher);
         for bar in &self.bars {
             bar.id.hash(hasher);
             bar.name.hash(hasher);
@@ -2530,6 +2552,7 @@ impl SchedulePlan {
             + self.trucks.estimated_bytes()
             + self.cashflow.estimated_bytes()
             + self.dependencies.estimated_bytes()
+            + self.loader_limits.estimated_bytes()
             + std::mem::size_of_val(self.crusher_grade_calendars.as_slice())
             + self
                 .crusher_grade_calendars

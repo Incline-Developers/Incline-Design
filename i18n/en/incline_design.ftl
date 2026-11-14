@@ -787,6 +787,8 @@ idle-waiting-on-blast = Waiting on blast
 idle-waiting-on-blast-note = The bar's next block is in a blast that has not fired yet.
 idle-waiting-on-ground = Waiting on other ground
 idle-waiting-on-ground-note = The bar's next block waits until the ground above it, or ground a dependency names, is dug.
+idle-loader-limit = Area full
+idle-loader-limit-note = The bar's next block is in an area already holding as many other loaders as a loader limit allows.
 idle-waiting-on-blast-named = Waiting on blast { $blast }
 blast-hold-never-clears = never clears
 blast-hold-never-clears-note = Ground above this blast, within the clearance buffer, is in no dig bar, so it is never dug and the blast never clears. Add that ground to a dig bar, or set this blast's starting stage in Setup → Drill & Blast.
@@ -2258,6 +2260,40 @@ dependency-error-unknown = That dependency is no longer in this project.
 dependency-stage-unfinished = Choose both sides, or the dependency does nothing.
 dependency-stage-own-ground = Both sides share ground; that ground waits for nothing.
 dependency-stage-ring = Waits on itself through other dependencies, so none of its ground is dug.
+loader-limit-step = Loader Limits
+loader-limit-rule = Limit
+loader-limit-name = Limit { $number }
+loader-limit-new = New Limit
+loader-limit-new-rule = New limit
+loader-limit-delete = Delete Limit
+loader-limit-select = Select a limit.
+loader-limit-help = How many loaders may work in one area at a time, as tactical schedules set by bench or by blast.
+loader-limit-row-whole =
+    { $loaders ->
+        [one] At most { $loaders } loader in { $ground }
+       *[other] At most { $loaders } loaders in { $ground }
+    }
+loader-limit-row-bench =
+    { $loaders ->
+        [one] At most { $loaders } loader on each bench of { $ground }
+       *[other] At most { $loaders } loaders on each bench of { $ground }
+    }
+loader-limit-row-blast =
+    { $loaders ->
+        [one] At most { $loaders } loader in each blast of { $ground }
+       *[other] At most { $loaders } loaders in each blast of { $ground }
+    }
+loader-limit-ground = Ground
+loader-limit-ground-hint = The pit, bench or flitch the limit holds in.
+loader-limit-area = Counted over
+loader-limit-area-whole = All of it
+loader-limit-area-bench = Each bench
+loader-limit-area-blast = Each blast
+loader-limit-loaders = Loaders
+loader-limit-loaders-hint = The most loaders digging in one area in the same hour. Loaders already working there keep their places.
+loader-limit-error-unknown = That loader limit is no longer in this project.
+loader-limit-stage-unfinished = Choose its ground, or the limit does nothing.
+loader-limit-stage-none = Allows no loaders, so none of its ground is dug.
 cashflow-error-unrepresentable = Those values produce a figure no number can express.
 cashflow-activity-all = Any activity
 cashflow-activity-dig = Dig

@@ -500,7 +500,7 @@ fn movements(
 /// reclaiming, delayed, and idle by the reason the schedule gives. A machine
 /// the calculation never reached had no work for the whole period.
 fn loaders(schedule: &CalculatedSchedule, plan: &SchedulePlan, groups: &[Group], loader_name: &dyn Fn(LoaderAgentId) -> String) -> ReportTable {
-    const REASONS: [IdleReason; 10] = [
+    const REASONS: [IdleReason; 11] = [
         IdleReason::Unavailable,
         IdleReason::NoWork,
         IdleReason::WorkFinished,
@@ -511,6 +511,7 @@ fn loaders(schedule: &CalculatedSchedule, plan: &SchedulePlan, groups: &[Group],
         IdleReason::NotWorthIt,
         IdleReason::WaitingOnBlast,
         IdleReason::WaitingOnGround,
+        IdleReason::LoaderLimit,
     ];
     struct Time {
         dug: f64,

@@ -103,6 +103,9 @@ pub(crate) enum IdleReason {
     WaitingOnBlast,
     /// Its automatic bar's next block lies under ground still standing.
     WaitingOnGround,
+    /// Its bar's next block is in an area holding as many other loaders as
+    /// a loader limit allows.
+    LoaderLimit,
 }
 
 /// What drill and blast did in a calculated schedule: every blast with its
