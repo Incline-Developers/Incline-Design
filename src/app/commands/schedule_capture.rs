@@ -915,6 +915,84 @@ fn empty_chain(config: &crate::model::schedule::DrillBlastConfig) -> crate::mode
     }
 }
 
+/// Make each run of an automatic bar's blocks from one group a task of its
+/// own, in order, and list each automatic bar's blocks as they were dealt.
+///
+/// A bar whose next block is not ready has no work, and its loader works its
+/// next bar. So that one block out of reach does not hold the rest of an
+/// automatic bar, the loader takes the first of its runs that is ready. A
+/// bar given nothing has no task at all.
+fn split_auto_runs(input: &mut BlendInput, identities: &mut CaptureIdentities, auto_ids: &[BarId], groups: &BTreeMap<GroundId, u32>, not_before_h: &BTreeMap<GroundId, f64>) {
+    for (task, bar, name) in identities.tasks.clone() {
+        if !auto_ids.contains(&bar) {
+            continue;
+        }
+        let Some(index) = input.tasks.iter().position(|entry| entry.id == task) else { continue };
+        let TaskKind::Dig { sequence } = &input.tasks[index].kind else { continue };
+        let mut runs: Vec<Vec<GroundId>> = Vec::new();
+        let mut last = None;
+        for ground in sequence {
+            let group = groups.get(ground).copied();
+            match runs.last_mut().filter(|_| group.is_some() && group == last) {
+                Some(run) => run.push(*ground),
+                None => runs.push(vec![*ground]),
+            }
+            last = group;
+        }
+        let template = input.tasks[index].clone();
+        // What a dig bar left is worked from when that bar's window closed;
+        // a run that comes free after this bar closes is not.
+        let opens = |run: &[GroundId]| {
+            run.first()
+                .and_then(|ground| not_before_h.get(ground))
+                .map_or(template.window_start_h, |after| after.max(template.window_start_h))
+        };
+        let mut runs = runs.into_iter().filter(|run| opens(run) < template.window_end_h - 1e-9);
+        match runs.next() {
+            Some(first) => {
+                input.tasks[index].window_start_h = opens(&first);
+                input.tasks[index].kind = TaskKind::Dig { sequence: first };
+            }
+            None => input.tasks[index].kind = TaskKind::Dig { sequence: Vec::new() },
+        }
+        for run in runs {
+            let id = TaskId(input.tasks.len() as u32);
+            identities.tasks.push((id, bar, name.clone()));
+            input.tasks.push(Task {
+                id,
+                window_start_h: opens(&run),
+                kind: TaskKind::Dig { sequence: run },
+                ..template.clone()
+            });
+        }
+    }
+    let empty: Vec<TaskId> = input
+        .tasks
+        .iter()
+        .filter(|task| matches!(&task.kind, TaskKind::Dig { sequence } if sequence.is_empty()))
+        .map(|task| task.id)
+        .collect();
+    input.tasks.retain(|task| !empty.contains(&task.id));
+    identities.tasks.retain(|(task, _, _)| !empty.contains(task));
+    for bar in auto_ids {
+        let blocks: Vec<crate::model::DigBlockId> = identities
+            .tasks
+            .iter()
+            .filter(|(_, held, _)| held == bar)
+            .filter_map(|(task, _, _)| input.tasks.iter().find(|entry| entry.id == *task))
+            .filter_map(|task| match &task.kind {
+                TaskKind::Dig { sequence } => Some(sequence),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|ground| identities.ground_blocks.get(ground).copied())
+            .collect();
+        if let Some((_, held)) = identities.bar_blocks.iter_mut().find(|(held, _)| held == bar) {
+            *held = blocks;
+        }
+    }
+}
+
 /// What [`open_auto_ground`] found.
 struct OpenGround {
     /// Each block's position in the run and its tonnes, from the top down.
@@ -2257,6 +2335,10 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     };
     let dependencies = dependency_ground(source, &block_ground);
     // ---- the automatic bars' order ------------------------------------------
+    // Two orders for the automatic bars' ground: the long-term plan's, and
+    // the ground from the top down. The plan sees the loaders, crushers and
+    // trucks but not grade targets, stockpiles or routing, so the dispatch -
+    // which sees everything - schedules both, and the better is kept.
     if !auto_ids.is_empty() {
         use crate::model::schedule::optimisation::longterm;
         let auto_tasks: Vec<TaskId> = identities.tasks.iter().filter(|(_, bar, _)| auto_ids.contains(bar)).map(|(task, _, _)| *task).collect();
@@ -2265,98 +2347,54 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         let scale = plan.period_scale();
         let days = (horizon_h / SCHEDULE_PERIOD_H).ceil().max(1.0) as u32;
         let period_ends_h: Vec<f64> = (0..scale.count(days)).map(|period| scale.start_h(period + 1).min(horizon_h)).collect();
-        let summary = longterm::assign(
-            &mut input,
-            &longterm::PlanRequest {
-                tasks: &auto_tasks,
-                period_ends_h: &period_ends_h,
-                discount_rate: experiment.discount_rate,
-                groups: &groups,
-                not_before_h: &not_before_h,
-                also_above: &left_above,
-                dependencies: &dependencies,
-                budget: Duration::from_secs(20),
-            },
-            &|| cancel.is_cancelled(),
-        );
+        let request = longterm::PlanRequest {
+            tasks: &auto_tasks,
+            period_ends_h: &period_ends_h,
+            discount_rate: experiment.discount_rate,
+            groups: &groups,
+            not_before_h: &not_before_h,
+            also_above: &left_above,
+            dependencies: &dependencies,
+            budget: Duration::from_secs(20),
+        };
+        let mut candidates: Vec<(BlendInput, CaptureIdentities, longterm::PlanSummary)> = Vec::new();
+        for planned in [true, false] {
+            let (mut trial, mut named) = (input.clone(), identities.clone());
+            let summary = longterm::assign(&mut trial, &request, planned, &|| cancel.is_cancelled());
+            if cancel.is_cancelled() {
+                return Err(Vec::new());
+            }
+            // No plan was made: the order is the top-down one already.
+            if planned && summary.rounds == 0 {
+                continue;
+            }
+            split_auto_runs(&mut trial, &mut named, &auto_ids, &groups, &not_before_h);
+            if !dependencies.is_empty() {
+                apply_dependencies(trial.drill_blast.get_or_insert_with(|| empty_chain(plan.drill_blast())), &dependencies);
+            }
+            candidates.push((trial, named, summary));
+        }
+        let worth = |trial: &BlendInput| {
+            let reduced = crate::model::schedule::optimisation::blended::reduce::Reduced::new(trial);
+            match crate::model::schedule::optimisation::blended::greedy::dispatch_cancellable(&reduced.input, &cancel.signal()) {
+                Ok(Some(found)) if found.replay.is_valid() => Some(found.replay.replayed_objective),
+                _ => None,
+            }
+        };
+        let values: Vec<Option<f64>> = if candidates.len() > 1 {
+            candidates.iter().map(|(trial, _, _)| worth(trial)).collect()
+        } else {
+            vec![None]
+        };
         if cancel.is_cancelled() {
             return Err(Vec::new());
         }
-        // A bar whose next block is not ready has no work, and its loader
-        // works its next bar. So that one block out of reach does not hold
-        // the rest of an automatic bar, each run of its blocks from one
-        // group is a task of its own, in order: the loader takes the first
-        // of them that is ready.
-        for (task, bar, name) in identities.tasks.clone() {
-            if !auto_ids.contains(&bar) {
-                continue;
-            }
-            let Some(index) = input.tasks.iter().position(|entry| entry.id == task) else { continue };
-            let TaskKind::Dig { sequence } = &input.tasks[index].kind else { continue };
-            let mut runs: Vec<Vec<GroundId>> = Vec::new();
-            let mut last = None;
-            for ground in sequence {
-                let group = groups.get(ground).copied();
-                match runs.last_mut().filter(|_| group.is_some() && group == last) {
-                    Some(run) => run.push(*ground),
-                    None => runs.push(vec![*ground]),
-                }
-                last = group;
-            }
-            let template = input.tasks[index].clone();
-            // What a dig bar left is worked from when that bar's window
-            // closed; a run that comes free after this bar closes is not.
-            let opens = |run: &[GroundId]| {
-                run.first()
-                    .and_then(|ground| not_before_h.get(ground))
-                    .map_or(template.window_start_h, |after| after.max(template.window_start_h))
-            };
-            let mut runs = runs.into_iter().filter(|run| opens(run) < template.window_end_h - 1e-9);
-            match runs.next() {
-                Some(first) => {
-                    input.tasks[index].window_start_h = opens(&first);
-                    input.tasks[index].kind = TaskKind::Dig { sequence: first };
-                }
-                None => input.tasks[index].kind = TaskKind::Dig { sequence: Vec::new() },
-            }
-            for run in runs {
-                let id = TaskId(input.tasks.len() as u32);
-                identities.tasks.push((id, bar, name.clone()));
-                input.tasks.push(Task {
-                    id,
-                    window_start_h: opens(&run),
-                    kind: TaskKind::Dig { sequence: run },
-                    ..template.clone()
-                });
-            }
-        }
-        // A bar the plan gave nothing has no task at all.
-        let empty: Vec<TaskId> = input
-            .tasks
-            .iter()
-            .filter(|task| matches!(&task.kind, TaskKind::Dig { sequence } if sequence.is_empty()))
-            .map(|task| task.id)
-            .collect();
-        input.tasks.retain(|task| !empty.contains(&task.id));
-        identities.tasks.retain(|(task, _, _)| !empty.contains(task));
-        // Each automatic bar's blocks as the plan dealt them.
-        for bar in &auto_ids {
-            let blocks: Vec<crate::model::DigBlockId> = identities
-                .tasks
-                .iter()
-                .filter(|(_, held, _)| held == bar)
-                .filter_map(|(task, _, _)| input.tasks.iter().find(|entry| entry.id == *task))
-                .filter_map(|task| match &task.kind {
-                    TaskKind::Dig { sequence } => Some(sequence),
-                    _ => None,
-                })
-                .flatten()
-                .filter_map(|ground| identities.ground_blocks.get(ground).copied())
-                .collect();
-            if let Some((_, held)) = identities.bar_blocks.iter_mut().find(|(held, _)| held == bar) {
-                *held = blocks;
-            }
-        }
+        // The plan's order unless the top-down one schedules for more.
+        let chosen = match values.as_slice() {
+            [Some(planned), Some(top_down)] if top_down > planned => 1,
+            _ => 0,
+        };
+        let summary = candidates[0].2;
         if summary.rounds > 0 {
             notes.push(tr!(
                 "schedule-capture-auto-plan",
@@ -2368,11 +2406,22 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 bound = crate::model::schedule::cashflow::money_exact(summary.bound)
             ));
         }
-    }
-    // ---- authored dependencies ----------------------------------------------
-    // Into the chain only now: the plan above reads each rule whole, not as
-    // the per-block waits the chain holds it as.
-    if !dependencies.is_empty() {
+        if let [Some(planned), Some(top_down)] = values.as_slice() {
+            let (planned, top_down) = (
+                crate::model::schedule::cashflow::money_exact(*planned),
+                crate::model::schedule::cashflow::money_exact(*top_down),
+            );
+            notes.push(if chosen == 0 {
+                tr!("schedule-capture-auto-planned", planned = planned, top_down = top_down)
+            } else {
+                tr!("schedule-capture-auto-top-down", planned = planned, top_down = top_down)
+            });
+        }
+        let (trial, named, _) = candidates.swap_remove(chosen);
+        input = trial;
+        identities = named;
+    } else if !dependencies.is_empty() {
+        // Into the chain only now, as for the automatic bars above.
         apply_dependencies(input.drill_blast.get_or_insert_with(|| empty_chain(plan.drill_blast())), &dependencies);
     }
     let stats = CaptureStats {
