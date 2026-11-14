@@ -269,11 +269,16 @@ pub(crate) enum DayByDay {
 
 /// The hourly dispatch schedule (see [`greedy`]), replayed against the
 /// whole horizon.
-pub(crate) fn hourly_dispatch(out: &mut ScheduleCompletion, cancel: &CancelFlag) -> DayByDay {
+pub(crate) fn hourly_dispatch(out: &mut ScheduleCompletion, cancel: &CancelFlag, dispatched: Option<greedy::Dispatched>) -> DayByDay {
     let started = Instant::now();
     // The dispatcher replays what it returns, to choose between its
-    // schedules, so that time is counted as the solver's.
-    let (solution, checked) = match greedy::dispatch_cancellable(&out.input, &cancel.signal()) {
+    // schedules, so that time is counted as the solver's. One capture made
+    // already, of this same input, is not made again.
+    let found = match dispatched {
+        Some(found) => Ok(Some(found)),
+        None => greedy::dispatch_cancellable(&out.input, &cancel.signal()),
+    };
+    let (solution, checked) = match found {
         Ok(Some(found)) => (found.solution, found.replay),
         Ok(None) => return DayByDay::Stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-dispatch")),
         Err(reason) => return DayByDay::Failed(reason),
@@ -782,6 +787,7 @@ pub(crate) fn execute_schedule(
     cancel: &CancelFlag,
     activity: &ScheduleActivity,
     early: &dyn Fn(&ScheduleCompletion),
+    dispatched: Option<greedy::Dispatched>,
 ) -> ScheduleCompletion {
     let mut out = ScheduleCompletion::new(identity, options, input);
     if cancel.is_cancelled() {
@@ -817,7 +823,7 @@ pub(crate) fn execute_schedule(
     let early = |shown: &ScheduleCompletion| early(&mapped_back(shown.clone(), &reduced, &captured));
     activity.set(3);
     activity.stage(ImproveStage::FirstSchedule);
-    let attempt = hourly_dispatch(&mut out, cancel);
+    let attempt = hourly_dispatch(&mut out, cancel, dispatched);
     if !options.first_schedule_only {
         let out = super::scip_blend::improve(out, attempt, budget_started, cancel, activity, &early);
         return mapped_back(out, &reduced, &captured);

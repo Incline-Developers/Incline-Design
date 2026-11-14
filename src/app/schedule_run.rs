@@ -186,6 +186,7 @@ fn solve_reporting(
     cancel: &super::jobs::CancelFlag,
     early: &dyn Fn(&super::schedule_solve::ScheduleCompletion),
     feed: &Arc<ImproveFeed>,
+    dispatched: Option<crate::model::schedule::optimisation::blended::greedy::Dispatched>,
 ) -> super::schedule_solve::ScheduleCompletion {
     use super::schedule_solve::{ScheduleActivity, ScheduleCompletion, SolveTermination, execute_schedule};
     use crate::model::schedule::optimisation::background;
@@ -205,7 +206,7 @@ fn solve_reporting(
         },
         || {
             let solved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                execute_schedule(Arc::clone(&input), identity, options, cancel, &activity, early)
+                execute_schedule(Arc::clone(&input), identity, options, cancel, &activity, early, dispatched)
             }));
             done.store(true, Ordering::Release);
             solved
@@ -660,6 +661,7 @@ impl crate::app::App<'_> {
                     }
                 };
                 let input = Arc::new(capture.input);
+                let dispatched = capture.dispatched;
                 let mut notes = capture.notes;
                 if capture.stats.event_budget_restricted {
                     notes.push(tr!("schedule-note-event-budget", positions = input.segments_per_interval.to_string()));
@@ -720,7 +722,7 @@ impl crate::app::App<'_> {
                         Err(reason) => log::warn!("schedule run {serial}: day-by-day schedule not shown early: {reason}"),
                     }
                 };
-                let completion = solve_reporting(Arc::clone(&input), identity, options, cancel, &early, &worker_feed);
+                let completion = solve_reporting(Arc::clone(&input), identity, options, cancel, &early, &worker_feed, dispatched);
                 if !completion.usable() {
                     return Ok(not_published(&completion));
                 }

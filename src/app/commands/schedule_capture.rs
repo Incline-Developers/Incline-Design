@@ -231,6 +231,10 @@ pub(crate) struct BlendCapture {
     pub(crate) stats: CaptureStats,
     /// Stated approximations this capture applied. Never a silent adaptation.
     pub(crate) notes: Vec<String>,
+    /// The hourly dispatch of the input's reduced form, when capture already
+    /// made it to choose between the automatic bars' orders: the run's first
+    /// schedule, which it need not make again.
+    pub(crate) dispatched: Option<crate::model::schedule::optimisation::blended::greedy::Dispatched>,
 }
 
 /// The owned, immutable configuration one capture reads.
@@ -2489,6 +2493,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         loader_areas: loader_areas(source, &block_ground),
     };
     let dependencies = dependency_ground(source, &block_ground);
+    // The chosen order's dispatch, kept for the run.
+    let mut dispatched = None;
     // ---- the automatic bars' order ------------------------------------------
     // Two orders for the automatic bars' ground: the long-term plan's, and
     // the ground from the top down. The plan sees the loaders, crushers and
@@ -2535,15 +2541,22 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         let worth = |trial: &BlendInput| {
             let reduced = crate::model::schedule::optimisation::blended::reduce::Reduced::new(trial);
             match crate::model::schedule::optimisation::blended::greedy::dispatch_cancellable(&reduced.input, &cancel.signal()) {
-                Ok(Some(found)) if found.replay.is_valid() => Some(longterm::discounted_value(&reduced.input, &found.solution, &found.replay, experiment.discount_rate)),
+                Ok(Some(found)) if found.replay.is_valid() => {
+                    let value = longterm::discounted_value(&reduced.input, &found.solution, &found.replay, experiment.discount_rate);
+                    Some((value, found))
+                }
                 _ => None,
             }
         };
-        let values: Vec<Option<f64>> = if candidates.len() > 1 {
-            candidates.iter().map(|(trial, _, _)| worth(trial)).collect()
-        } else {
-            vec![None]
+        // The two dispatches are independent: side by side.
+        let mut found: Vec<Option<(f64, crate::model::schedule::optimisation::blended::greedy::Dispatched)>> = match candidates.as_slice() {
+            [(planned, _, _), (top_down, _, _)] => {
+                let (planned, top_down) = rayon::join(|| worth(planned), || worth(top_down));
+                vec![planned, top_down]
+            }
+            _ => vec![None],
         };
+        let values: Vec<Option<f64>> = found.iter().map(|entry| entry.as_ref().map(|(value, _)| *value)).collect();
         if cancel.is_cancelled() {
             return Err(Vec::new());
         }
@@ -2580,6 +2593,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         let (trial, named, _) = candidates.swap_remove(chosen);
         input = trial;
         identities = named;
+        dispatched = found.get_mut(chosen).and_then(Option::take).map(|(_, found)| found);
     } else if !dependencies.is_empty() {
         // Into the chain only now, as for the automatic bars above.
         apply_dependencies(input.drill_blast.get_or_insert_with(|| empty_chain(plan.drill_blast())), &dependencies);
@@ -2606,6 +2620,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         stable_fingerprint,
         stats,
         notes,
+        dispatched,
     })
 }
 
