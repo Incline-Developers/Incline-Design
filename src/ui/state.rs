@@ -263,7 +263,7 @@ impl EditorState {
         self.is_setup_group(SetupGroup::Schedule)
             && matches!(
                 self.schedule_setup_step,
-                ScheduleStep::Stockpiles | ScheduleStep::Destinations | ScheduleStep::TruckingRules | ScheduleStep::Cashflow
+                ScheduleStep::Stockpiles | ScheduleStep::Destinations | ScheduleStep::TruckingRules | ScheduleStep::Cashflow | ScheduleStep::Dependencies
             )
     }
 
@@ -3106,6 +3106,8 @@ pub(crate) struct EditorState {
     pub(crate) schedule_truck_rule_draft: Option<ScheduleRuleNameDraft>,
     /// The selected cashflow rule and the cells being typed into its editor.
     pub(crate) schedule_selected_cashflow_rule: Option<crate::model::schedule::CashflowRuleId>,
+    /// The dependency the Dependencies step's editor shows.
+    pub(crate) schedule_selected_dependency: Option<crate::model::schedule::dependencies::DependencyId>,
     pub(crate) schedule_cashflow_draft: Option<ScheduleCashflowDraft>,
     /// The selected opening-inventory lot on the Stockpiles page, and the cells
     /// being typed into it. One selection, like the destination one: a lot
@@ -3878,6 +3880,7 @@ impl EditorState {
         self.schedule_selected_truck_rule = None;
         self.schedule_truck_rule_draft = None;
         self.schedule_selected_cashflow_rule = None;
+        self.schedule_selected_dependency = None;
         self.schedule_cashflow_draft = None;
         self.schedule_selected_lot = None;
         self.schedule_lot_draft = None;
@@ -4578,6 +4581,7 @@ impl EditorState {
             schedule_selected_truck_rule: None,
             schedule_truck_rule_draft: None,
             schedule_selected_cashflow_rule: None,
+            schedule_selected_dependency: None,
             schedule_cashflow_draft: None,
             schedule_selected_lot: None,
             schedule_lot_draft: None,
@@ -6457,6 +6461,8 @@ impl UiCommand {
                 ScheduleEdit::DeleteTruckingRule(_) => report(tr!("truck-delete-rule"), String::new()),
                 ScheduleEdit::SetTruckCells { edits } => report(tr!("schedule-truck-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len())),
                 ScheduleEdit::AddCashflowRule { name } => report(tr!("cashflow-new-rule"), name.clone()),
+                ScheduleEdit::AddDependency => report(tr!("dependency-new"), String::new()),
+                ScheduleEdit::DeleteDependency(_) => report(tr!("dependency-delete"), String::new()),
                 ScheduleEdit::DuplicateCashflowRule(_) => report(tr!("cashflow-duplicate-rule"), String::new()),
                 ScheduleEdit::DeleteCashflowRule(_) => report(tr!("cashflow-delete-rule"), String::new()),
                 ScheduleEdit::AddDelayBar { .. } => report(tr!("delay-add-bar"), String::new()),
@@ -6569,6 +6575,7 @@ impl UiCommand {
                 | ScheduleEdit::SetPeriodUnit(_)
                 | ScheduleEdit::SetExperimentSolveLimits { .. }
                 | ScheduleEdit::SetDiscountRate(_)
+                | ScheduleEdit::SetDependency { .. }
                 | ScheduleEdit::SetExperimentGradeUnit { .. }
                 | ScheduleEdit::SetStockpileRepresentation { .. }
                 | ScheduleEdit::SetStockpileChunkSize { .. }
@@ -8085,6 +8092,8 @@ pub(crate) enum ScheduleStep {
     Delays,
     /// Drill and blast settings and each blast's starting stage.
     DrillBlast,
+    /// Ground that waits for other ground to be dug.
+    Dependencies,
     Stockpiles,
     Dumps,
     Crushers,
@@ -8112,13 +8121,14 @@ impl ScheduleStep {
     /// than the setup does, and a step's change retires every step after it.
     /// Haulage follows it: it checks that each destination and each pit's dig
     /// blocks reach the roads, so it needs both.
-    pub(crate) const ALL: [Self; 15] = [
+    pub(crate) const ALL: [Self; 16] = [
         Self::Configuration,
         Self::Periods,
         Self::LoaderClasses,
         Self::LoaderAgents,
         Self::Delays,
         Self::DrillBlast,
+        Self::Dependencies,
         Self::Stockpiles,
         Self::Dumps,
         Self::Crushers,
@@ -8142,6 +8152,7 @@ impl ScheduleStep {
             Self::LoaderAgents => tr!("schedule-loader-agents"),
             Self::Delays => tr!("delay-step"),
             Self::DrillBlast => tr!("drill-blast-step"),
+            Self::Dependencies => tr!("dependency-step"),
             Self::Haulage => tr!("schedule-step-road-access"),
             Self::Stockpiles => tr!("planning-stockpiles"),
             Self::Dumps => tr!("planning-dumps"),
@@ -8162,6 +8173,7 @@ impl ScheduleStep {
             Self::LoaderAgents => "schedule_loader_agents",
             Self::Delays => "schedule_delays",
             Self::DrillBlast => "schedule_drill_blast",
+            Self::Dependencies => "schedule_dependencies",
             Self::Haulage => "schedule_haulage",
             Self::Stockpiles => "schedule_stockpiles",
             Self::Dumps => "schedule_dumps",
@@ -8693,6 +8705,15 @@ pub(crate) enum ScheduleEdit {
         rule: crate::model::schedule::TruckingRuleId,
         classes: Vec<crate::model::schedule::TruckClassId>,
     },
+    /// Add a dependency with neither side chosen.
+    AddDependency,
+    /// Choose both sides of a dependency at once.
+    SetDependency {
+        id: crate::model::schedule::dependencies::DependencyId,
+        ground: Option<crate::model::schedule::SourceScope>,
+        after: Option<crate::model::schedule::SourceScope>,
+    },
+    DeleteDependency(crate::model::schedule::dependencies::DependencyId),
     /// Add a cashflow rule worth nothing.
     AddCashflowRule {
         name: String,

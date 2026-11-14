@@ -820,6 +820,101 @@ fn ground_gates(
         .collect()
 }
 
+/// Each authored dependency's ground among what the bars dig: the ground
+/// that waits, and the ground it waits for. Ground both sides hold waits for
+/// nothing, and a rule with nothing on either side is left out.
+fn dependency_ground(source: &CaptureSnapshot, block_ground: &BTreeMap<usize, GroundId>) -> Vec<(Vec<GroundId>, Vec<GroundId>)> {
+    let blocks = &source.snapshot.blocks;
+    source
+        .plan
+        .dependencies()
+        .rules
+        .iter()
+        .filter_map(|rule| rule.sides())
+        .filter_map(|(ground, after)| {
+            let holds = |scope: crate::model::schedule::SourceScope, position: usize| {
+                let block = &blocks[position];
+                scope.covers(block.solid, (block.bench.base, block.bench.top), (block.flitch.base, block.flitch.top))
+            };
+            let first: Vec<GroundId> = block_ground.iter().filter(|(position, _)| holds(after, **position)).map(|(_, id)| *id).collect();
+            let waiting: Vec<GroundId> = block_ground
+                .iter()
+                .filter(|(position, _)| holds(ground, **position) && !holds(after, **position))
+                .map(|(_, id)| *id)
+                .collect();
+            (!first.is_empty() && !waiting.is_empty()).then_some((waiting, first))
+        })
+        .collect()
+}
+
+/// Hold each dependency's waiting ground until the ground it waits for is
+/// dug, in the drill and blast chain, where a ground has one job that
+/// releases it.
+///
+/// Ground a job already releases waits through that job: a blast not yet
+/// started waits for the ground before it is cleared, and a dependency on
+/// the ground above adds to what it waits for. A fired blast's ground is
+/// free already, so it moves to the rule's own job with the ground no job
+/// releases. A blast that releases ground the rule waits for cannot also
+/// wait for it, and keeps its own order.
+fn apply_dependencies(chain: &mut crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput, rules: &[(Vec<GroundId>, Vec<GroundId>)]) {
+    use crate::model::schedule::{BlastStage, optimisation::blended::drill_blast::BlastJob};
+    for (waiting, first) in rules {
+        let owner: BTreeMap<GroundId, usize> = chain
+            .blasts
+            .iter()
+            .enumerate()
+            .flat_map(|(index, job)| job.releases.iter().map(move |ground| (*ground, index)))
+            .collect();
+        let waited: BTreeSet<GroundId> = first.iter().copied().collect();
+        let mut loose: Vec<GroundId> = Vec::new();
+        let mut held: BTreeSet<usize> = BTreeSet::new();
+        for ground in waiting {
+            match owner.get(ground) {
+                None => loose.push(*ground),
+                Some(&index) if !chain.blasts[index].gate && chain.blasts[index].stage == BlastStage::Fired => {
+                    chain.blasts[index].releases.retain(|released| released != ground);
+                    loose.push(*ground);
+                }
+                Some(&index) if chain.blasts[index].releases.iter().any(|released| waited.contains(released)) => {}
+                Some(&index) => {
+                    held.insert(index);
+                }
+            }
+        }
+        for index in held {
+            let above = &mut chain.blasts[index].above;
+            above.extend(first.iter().copied());
+            above.sort_unstable();
+            above.dedup();
+        }
+        if !loose.is_empty() {
+            chain.blasts.push(BlastJob {
+                quantity: [0.0; 3],
+                stage: BlastStage::NotStarted,
+                releases: loose,
+                above: first.clone(),
+                never_clear: false,
+                gate: true,
+            });
+        }
+    }
+}
+
+/// A drill and blast chain with no blasts, for dependencies to sit in when
+/// drill and blast is off.
+fn empty_chain(config: &crate::model::schedule::DrillBlastConfig) -> crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput {
+    crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput {
+        blasts: Vec::new(),
+        agents: Vec::new(),
+        tasks: Vec::new(),
+        window_end_h: config.window_end_h,
+        windows: None,
+        fixed: None,
+        resume: None,
+    }
+}
+
 /// What [`open_auto_ground`] found.
 struct OpenGround {
     /// Each block's position in the run and its tonnes, from the top down.
@@ -2103,19 +2198,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         }
         let gates = ground_gates(source, &block_ground, &auto_positions, buffer_m);
         if !gates.is_empty() {
-            let config = plan.drill_blast();
-            drill_blast
-                .get_or_insert_with(|| crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput {
-                    blasts: Vec::new(),
-                    agents: Vec::new(),
-                    tasks: Vec::new(),
-                    window_end_h: config.window_end_h,
-                    windows: None,
-                    fixed: None,
-                    resume: None,
-                })
-                .blasts
-                .extend(gates);
+            drill_blast.get_or_insert_with(|| empty_chain(plan.drill_blast())).blasts.extend(gates);
         }
     }
     if cancel.is_cancelled() {
@@ -2172,6 +2255,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         target_opening: Vec::new(),
         drill_blast,
     };
+    let dependencies = dependency_ground(source, &block_ground);
     // ---- the automatic bars' order ------------------------------------------
     if !auto_ids.is_empty() {
         use crate::model::schedule::optimisation::longterm;
@@ -2190,6 +2274,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 groups: &groups,
                 not_before_h: &not_before_h,
                 also_above: &left_above,
+                dependencies: &dependencies,
                 budget: Duration::from_secs(20),
             },
             &|| cancel.is_cancelled(),
@@ -2283,6 +2368,12 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 bound = crate::model::schedule::cashflow::money_exact(summary.bound)
             ));
         }
+    }
+    // ---- authored dependencies ----------------------------------------------
+    // Into the chain only now: the plan above reads each rule whole, not as
+    // the per-block waits the chain holds it as.
+    if !dependencies.is_empty() {
+        apply_dependencies(input.drill_blast.get_or_insert_with(|| empty_chain(plan.drill_blast())), &dependencies);
     }
     let stats = CaptureStats {
         duration: started.elapsed(),

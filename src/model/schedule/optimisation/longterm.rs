@@ -58,6 +58,9 @@ pub(crate) struct PlanRequest<'a> {
     /// Ground to keep ahead of a block in the order though nothing in the
     /// chain holds the block to it.
     pub(crate) also_above: &'a BTreeMap<GroundId, Vec<GroundId>>,
+    /// Authored dependencies: ground that waits, and the ground it waits
+    /// for. Not yet in the chain, which would hold them block by block.
+    pub(crate) dependencies: &'a [(Vec<GroundId>, Vec<GroundId>)],
     /// How long the pricing may run.
     pub(crate) budget: std::time::Duration,
 }
@@ -203,6 +206,8 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
     // and, because a machine bar works its blasts strictly in order, on the
     // clearance of every blast ahead of it in a bar: a plan that ignored
     // that would send a loader to ground no drill can reach yet.
+    // The clearance each block's blast waits on, and that blast.
+    let mut cleared_by: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
     if let Some(chain) = &input.drill_blast {
         let mut clearance: BTreeMap<usize, usize> = BTreeMap::new();
         for (index, job) in chain.blasts.iter().enumerate() {
@@ -221,6 +226,7 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
             clearance.insert(index, step);
             for block in held {
                 out[block].above.push(step);
+                cleared_by.insert(block, (step, index));
             }
             out.push(Block {
                 ground: None,
@@ -270,6 +276,48 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
                     }
                 }
             }
+        }
+    }
+    // Each dependency is one step that waits on the ground it names, which
+    // the waiting ground waits on - through its blast's clearance where it
+    // has one, as the chain will hold it - rather than an arc from every
+    // block to every other.
+    for (waiting, first) in request.dependencies {
+        let over: Vec<usize> = first.iter().filter_map(|ground| position.get(ground).copied()).collect();
+        if over.is_empty() {
+            continue;
+        }
+        let step = out.len();
+        out.push(Block {
+            ground: None,
+            tonnes: 0.0,
+            value: 0.0,
+            crushed: Vec::new(),
+            above: over,
+            lead_h: 0.0,
+            earliest_h: 0.0,
+        });
+        let waited: BTreeSet<GroundId> = first.iter().copied().collect();
+        let releases_waited = |job: usize| {
+            input
+                .drill_blast
+                .as_ref()
+                .and_then(|chain| chain.blasts.get(job))
+                .is_some_and(|job| job.releases.iter().any(|ground| waited.contains(ground)))
+        };
+        let mut clearances: BTreeSet<usize> = BTreeSet::new();
+        for block in waiting.iter().filter_map(|ground| position.get(ground).copied()) {
+            match cleared_by.get(&block) {
+                Some((clearance, job)) => {
+                    if !releases_waited(*job) {
+                        clearances.insert(*clearance);
+                    }
+                }
+                None => out[block].above.push(step),
+            }
+        }
+        for clearance in clearances {
+            out[clearance].above.push(step);
         }
     }
     for block in &mut out {

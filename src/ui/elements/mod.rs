@@ -29,6 +29,7 @@ pub(crate) mod schedule_calendar;
 pub(crate) mod schedule_cashflow;
 pub(crate) mod schedule_charts;
 pub(crate) mod schedule_delays;
+pub(crate) mod schedule_dependencies;
 pub(crate) mod schedule_destinations;
 pub(crate) mod schedule_drill_blast;
 pub(crate) mod schedule_gantt;

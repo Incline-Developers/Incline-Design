@@ -199,6 +199,18 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetTruckingRuleDestinations { rule, destinations } => self.edit_trucks(|trucks| trucks.set_rule_destinations(rule, destinations)),
             ScheduleEdit::SetTruckingRuleClasses { rule, classes } => self.edit_trucks(|trucks| trucks.set_rule_classes(rule, classes)),
             ScheduleEdit::AddCashflowRule { name } => self.add_cashflow_rule(name),
+            ScheduleEdit::AddDependency => {
+                let mut added = None;
+                self.edit_schedule(|plan| {
+                    added = Some(plan.dependencies_mut().add()?);
+                    Ok(())
+                });
+                if added.is_some() {
+                    self.editor.schedule_selected_dependency = added;
+                }
+            }
+            ScheduleEdit::SetDependency { id, ground, after } => self.edit_schedule(|plan| plan.dependencies_mut().set(id, ground, after)),
+            ScheduleEdit::DeleteDependency(id) => self.edit_schedule(|plan| plan.dependencies_mut().remove(id)),
             ScheduleEdit::DuplicateCashflowRule(rule) => self.duplicate_cashflow_rule(rule),
             ScheduleEdit::DeleteCashflowRule(rule) => self.delete_cashflow_rule(rule),
             ScheduleEdit::RenameCashflowRule { rule, name } => self.edit_cashflow(|cashflow| cashflow.rename_rule(rule, &name)),

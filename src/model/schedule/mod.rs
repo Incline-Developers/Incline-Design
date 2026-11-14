@@ -17,6 +17,7 @@ pub(crate) mod calendar;
 pub(crate) mod calendar_views;
 pub(crate) mod cashflow;
 pub(crate) mod delays;
+pub(crate) mod dependencies;
 pub(crate) mod destinations;
 pub(crate) mod drill_blast;
 pub(crate) mod experiment;
@@ -598,6 +599,9 @@ pub(crate) enum ScheduleError {
     InvalidValue,
     /// An id that names no cashflow rule in this plan.
     UnknownCashflowRule,
+    /// An id that names no dependency in this plan, or a side that is no
+    /// band at all.
+    UnknownDependency,
     InvalidGradeTarget,
     /// A summed coefficient or movement value no finite number can express.
     UnrepresentableValue,
@@ -709,6 +713,7 @@ impl ScheduleError {
             Self::InvalidValue => tr!("cashflow-error-invalid-value"),
             Self::InvalidGradeTarget => tr!("grade-target-invalid"),
             Self::UnknownCashflowRule => tr!("cashflow-error-unknown-rule"),
+            Self::UnknownDependency => tr!("dependency-error-unknown"),
             Self::UnrepresentableValue => tr!("cashflow-error-unrepresentable"),
             Self::InvalidLotTonnes => tr!("inventory-error-invalid-tonnes"),
             Self::InvalidLotValue => tr!("inventory-error-invalid-value"),
@@ -844,6 +849,9 @@ pub(crate) struct SchedulePlan {
     /// The Calendar's saved views; see [`calendar_views`].
     #[serde(default)]
     calendar_views: calendar_views::CalendarViews,
+    /// Ground that waits for other ground; see [`dependencies`].
+    #[serde(default, skip_serializing_if = "dependencies::Dependencies::is_pristine")]
+    dependencies: dependencies::Dependencies,
 }
 
 /// The order the fleet is listed in: machine kinds as groups, and machines
@@ -927,6 +935,7 @@ impl Default for SchedulePlan {
             auto_run: AutoRun::default(),
             machine_order: MachineOrder::default(),
             calendar_views: calendar_views::CalendarViews::default(),
+            dependencies: dependencies::Dependencies::default(),
         }
     }
 }
@@ -978,6 +987,7 @@ impl SchedulePlan {
             && self.periods == periods::SchedulePeriods::default()
             && self.machine_order == MachineOrder::default()
             && self.calendar_views.is_empty()
+            && self.dependencies.is_empty()
     }
 
     /// No visible content or retired identities to preserve in a save/import.
@@ -988,6 +998,7 @@ impl SchedulePlan {
             && self.next_bar_id == 0
             && self.trucks.is_pristine()
             && self.cashflow.is_pristine()
+            && self.dependencies.is_pristine()
             && self.auto_run == AutoRun::default()
     }
 
@@ -1010,6 +1021,7 @@ impl SchedulePlan {
         self.trucks.raise_allocator_to(&other.trucks);
         self.cashflow.raise_allocator_to(&other.cashflow);
         self.delays.raise_allocator_to(&other.delays);
+        self.dependencies.raise_allocator_to(&other.dependencies);
     }
 
     pub(crate) fn delays(&self) -> &DelayConfig {
@@ -1219,6 +1231,14 @@ impl SchedulePlan {
 
     pub(crate) fn cashflow_mut(&mut self) -> &mut CashflowConfig {
         &mut self.cashflow
+    }
+
+    pub(crate) fn dependencies(&self) -> &dependencies::Dependencies {
+        &self.dependencies
+    }
+
+    pub(crate) fn dependencies_mut(&mut self) -> &mut dependencies::Dependencies {
+        &mut self.dependencies
     }
 
     pub(crate) fn classes(&self) -> &[LoaderClass] {
@@ -2371,6 +2391,7 @@ impl SchedulePlan {
         self.routing.validate_loaded()?;
         self.trucks.validate_loaded()?;
         self.cashflow.validate_loaded()?;
+        self.dependencies.validate_loaded()?;
         let highest_class = self.classes.iter().map(|class| class.id.0).max();
         let highest_agent = self.agents.iter().map(|agent| agent.id.0).max();
         let highest_bar = self.bars.iter().map(|bar| bar.id.0).max();
@@ -2444,6 +2465,7 @@ impl SchedulePlan {
         self.machine_order.hash(hasher);
         self.calendar_views.hash(hasher);
         self.drill_blast.hash_content(hasher);
+        self.dependencies.hash_content(hasher);
         for bar in &self.bars {
             bar.id.hash(hasher);
             bar.name.hash(hasher);
@@ -2508,6 +2530,7 @@ impl SchedulePlan {
             + self.routing.estimated_bytes()
             + self.trucks.estimated_bytes()
             + self.cashflow.estimated_bytes()
+            + self.dependencies.estimated_bytes()
             + std::mem::size_of_val(self.crusher_grade_calendars.as_slice())
             + self
                 .crusher_grade_calendars

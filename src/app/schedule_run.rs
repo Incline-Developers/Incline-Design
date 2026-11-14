@@ -456,6 +456,7 @@ impl crate::app::App<'_> {
             rule.hash_content_public(&mut hasher);
         }
         plan.cashflow().hash_content(&mut hasher);
+        plan.dependencies().hash_content(&mut hasher);
         // Ground taken out of mining.
         for solid in document.solids() {
             solid.id.hash(&mut hasher);
