@@ -891,6 +891,9 @@ pub(crate) struct CalculatedSchedule {
     pub(crate) idle: Vec<IdleSpan>,
     /// Each dig bar's resolved blocks, in authored order.
     pub(crate) bar_blocks: Vec<(BarId, Vec<DigBlockId>)>,
+    /// Automatic bars' blocks by name as the run captured them: those bars
+    /// name no ground of their own to read a name from.
+    pub(crate) block_names: BTreeMap<DigBlockId, String>,
     /// Each reclaim bar's cap, as captured.
     pub(crate) reclaim_caps: Vec<(BarId, Option<f64>)>,
     pub(crate) grades: Vec<(ReserveFieldId, GradeUnit)>,
@@ -967,6 +970,7 @@ pub(crate) struct ScheduleParts {
     pub(crate) piles: Vec<PileTrack>,
     pub(crate) agents: Vec<LoaderAgentId>,
     pub(crate) bar_blocks: Vec<(BarId, Vec<DigBlockId>)>,
+    pub(crate) block_names: BTreeMap<DigBlockId, String>,
     pub(crate) reclaim_caps: Vec<(BarId, Option<f64>)>,
     pub(crate) grades: Vec<(ReserveFieldId, GradeUnit)>,
     pub(crate) grade_targets: Vec<GradeTargetResult>,
@@ -1058,6 +1062,7 @@ impl CalculatedSchedule {
             piles: parts.piles,
             idle,
             bar_blocks: parts.bar_blocks,
+            block_names: parts.block_names,
             reclaim_caps: parts.reclaim_caps,
             grades: parts.grades,
             grade_targets: parts.grade_targets,

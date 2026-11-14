@@ -400,6 +400,7 @@ fn movements(
                 .and_then(|position| names.bar_views.iter().find(|view| view.bar == delivery.bar)?.members.get(position));
             member
                 .and_then(|member| member.area.clone().or_else(|| member.name.clone()))
+                .or_else(|| schedule.block_names.get(&block).cloned())
                 .unwrap_or_else(|| tr!("schedule-dispatch-block", block = block.0.to_string()))
         }
     };

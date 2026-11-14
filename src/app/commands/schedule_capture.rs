@@ -1636,6 +1636,13 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             }
         }
     }
+    // Each blast's name, for the ground path a captured block is named by.
+    let blast_names: std::collections::HashMap<crate::ui::state::BlastShapeRef, &String> = source
+        .snapshot
+        .blasts
+        .iter()
+        .map(|record| (crate::ui::state::BlastShapeRef::new(record.solid, record.bench.base, record.anchor), &record.name))
+        .collect();
     for &position in &wanted_blocks {
         if cancel.is_cancelled() {
             return Err(Vec::new());
@@ -1757,7 +1764,13 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         if shares.len() > 1 {
             mixed_blocks += 1;
         }
-        identities.ground.push((id, block.name.clone(), shares.len()));
+        let blast = block
+            .blast
+            .and_then(|reference| blast_names.get(&reference))
+            .map_or_else(|| tr!("schedule-unblasted"), |name| (*name).clone());
+        let rl = crate::ui::elements::solids_view::format_rl;
+        let path = crate::ui::elements::solids_view::ground_path(&[block.solid_name.clone(), rl(block.bench.base), blast, rl(block.flitch.base), block.name.clone()]);
+        identities.ground.push((id, path, shares.len()));
         ground.push(GroundSource {
             id,
             tonnes_t: block_tonnes,

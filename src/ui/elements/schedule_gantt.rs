@@ -1798,6 +1798,7 @@ fn source_label(source: WorkSource, bar: &ScheduleBar, report: Option<&ScheduleB
     match source {
         WorkSource::Block(block) => member_of(schedule, bar, report, block)
             .and_then(|member| member.name.clone())
+            .or_else(|| schedule.block_names.get(&block).cloned())
             .unwrap_or_else(|| tr!("schedule-dispatch-block", block = block.0.to_string())),
         WorkSource::Stockpile(pile) => destination_label(pile, destinations),
     }

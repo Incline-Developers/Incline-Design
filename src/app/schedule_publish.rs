@@ -594,6 +594,15 @@ pub(crate) fn publish(
         piles,
         agents: identities.loaders.iter().map(|(_, agent, _)| *agent).collect(),
         bar_blocks: identities.bar_blocks.clone(),
+        block_names: {
+            let held: std::collections::BTreeSet<_> = identities.bar_blocks.iter().flat_map(|(_, blocks)| blocks.iter().copied()).collect();
+            identities
+                .ground
+                .iter()
+                .filter_map(|(ground, name, _)| Some((*identities.ground_blocks.get(ground)?, name.clone())))
+                .filter(|(block, _)| held.contains(block))
+                .collect()
+        },
         reclaim_caps: identities.reclaim_caps.clone(),
         grades: identities.grades.iter().map(|(field, _, unit)| (*field, *unit)).collect(),
         grade_targets: replay
