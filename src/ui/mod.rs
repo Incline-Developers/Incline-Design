@@ -767,7 +767,8 @@ fn draw_ui(
     let workspace_tabs = workspace_tabs.map(|tabs| tabs.standing_on(chrome::region_rect(viewport_bar_rect).top()));
     // Planning's page tabs, across the window under the bar and over every
     // page, so they are claimed before anything below them too.
-    let planning_tabs = (editor.active_workspace == state::Workspace::Planning).then(|| elements::planning_tabs::draw_planning_tabs(root_ui, editor, commands));
+    let planning_tabs = (editor.active_workspace == state::Workspace::Planning)
+        .then(|| elements::planning_tabs::draw_planning_tabs(root_ui, editor, &project.schedule, project.active_session, commands));
     if planning_tabs.is_none() {
         // `Panel::show` creates one direct child of `root_ui`. Keep the root
         // auto-id sequence identical in the workspaces without this row, or

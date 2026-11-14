@@ -2,8 +2,9 @@
 //! time.
 //!
 //! The step names the dates the schedule runs between - Day 1 is the start
-//! date, the end date sets the horizon - and lists each day, so days can be
-//! marked with colours the Gantt and Animate show them in.
+//! date, the end date sets the horizon - and how long a period is, then lists
+//! each period, so periods can be marked with colours the Gantt and Animate
+//! show them in.
 //!
 //! The schedule's own clock counts hours from Day 1, 00:00. Every page writes
 //! those hours through [`instant_label`] and [`day_label`], which add the date
@@ -19,7 +20,7 @@ use crate::{
     i18n::tr,
     model::schedule::{
         SCHEDULE_PERIOD_H, SchedulePlan,
-        periods::{date_text, date_time_at, date_time_text, last_date},
+        periods::{PeriodScale, PeriodUnit, date_text, date_time_at, date_time_text, last_date},
     },
     ui::{
         EditorState,
@@ -74,6 +75,40 @@ pub(crate) fn day_label(period: u32) -> String {
     }
 }
 
+/// What a period unit is called: "Day", "Week", "Month".
+pub(crate) fn unit_label(unit: PeriodUnit) -> String {
+    match unit {
+        PeriodUnit::Day => tr!("periods-unit-day"),
+        PeriodUnit::Week => tr!("periods-unit-week"),
+        PeriodUnit::Month => tr!("periods-unit-month"),
+    }
+}
+
+/// Period `period` of `scale` by its number: "Day 3", "Week 3", "Month 3".
+pub(crate) fn period_name(scale: PeriodScale, period: u32) -> String {
+    let number = (u64::from(period) + 1).to_string();
+    match scale.unit {
+        PeriodUnit::Day => tr!("gantt-day", day = number),
+        PeriodUnit::Week => tr!("gantt-week", week = number),
+        PeriodUnit::Month => tr!("gantt-month", month = number),
+    }
+}
+
+/// When period `period` of `scale` is, once there is a start date: a day's
+/// or a week's first date, a month's name and year.
+pub(crate) fn period_date(scale: PeriodScale, period: u32) -> Option<String> {
+    use chrono::Datelike;
+    let date = scale.date(period)?;
+    Some(match scale.unit {
+        PeriodUnit::Day | PeriodUnit::Week => date_text(date),
+        PeriodUnit::Month => tr!(
+            "date-picker-month-year",
+            month = crate::ui::widgets::date_picker::month_name(date.month()),
+            year = date.year().to_string()
+        ),
+    })
+}
+
 /// A date's weekday, abbreviated: "Sat".
 pub(crate) fn weekday_text(date: NaiveDate) -> String {
     use chrono::Datelike;
@@ -102,13 +137,14 @@ pub(crate) fn period_color(color: [u8; 3]) -> egui::Color32 {
     egui::Color32::from_rgb(color[0], color[1], color[2])
 }
 
-/// The step: start and end dates and the horizon they make, then every day.
+/// The step: start and end dates, the period unit and the horizon they
+/// make, then every period.
 pub(crate) fn draw_periods(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
     let periods = plan.periods();
     let days = plan.experiment().planning_end_day;
     let start = periods.start_date;
     let mut edits = Vec::new();
-    // The dates, then every day they cover, scrolling as one.
+    // The dates, then every period they cover, scrolling as one.
     crate::ui::widgets::data_grid::table_stack(ui, rect, "schedule_periods", |ui| {
         PropertyTable::new("schedule_periods_dates", crate::ui::widgets::data_grid::stack_slot(ui), &tr!("periods-dates")).show(ui, |rows| {
             rows.header(&tr!("planning-property"), &tr!("planning-value"));
@@ -141,6 +177,19 @@ pub(crate) fn draw_periods(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Edi
                     _ => crate::userspace_warn!("{}", tr!("periods-end-before-start")),
                 }
             }
+            let mut unit = periods.unit;
+            if rows
+                .combo(
+                    "schedule_period_unit",
+                    &tr!("periods-unit"),
+                    &mut unit,
+                    &unit_label(periods.unit),
+                    PeriodUnit::ALL.map(|unit| (unit, unit_label(unit))),
+                )
+                .changed()
+            {
+                edits.push(UiCommand::schedule(session, ScheduleEdit::SetPeriodUnit(unit)));
+            }
             super::schedule_optimisation::horizon_row(rows, editor, plan, session, &mut edits);
             if start.is_none() {
                 rows.note(&tr!("periods-no-start-note"));
@@ -152,19 +201,24 @@ pub(crate) fn draw_periods(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Edi
     commands.append(&mut edits);
 }
 
-/// Every day of the horizon: its number, its date, its colour. Selecting
+/// Every period of the horizon: its number, when it is, its colour. Selecting
 /// several and picking a colour on any of them marks them all.
+///
+/// Colours are held per day, so a week or a month marks each of its days and
+/// shows its first day's colour.
 fn draw_period_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, edits: &mut Vec<UiCommand>) {
     const FRACTIONS: [f32; 3] = [0.3, 0.4, 0.3];
     let periods = plan.periods();
+    let scale = periods.scale();
     let days = plan.experiment().planning_end_day;
+    let count = scale.count(days);
     let columns = [
         (tr!("periods-period"), FRACTIONS[0]),
         (tr!("periods-date"), FRACTIONS[1]),
         (tr!("periods-colour"), FRACTIONS[2]),
     ];
     let selected = &mut editor.schedule_selected_periods;
-    selected.retain(|period| *period < days);
+    selected.retain(|period| *period < count);
     let mut anchor = editor.schedule_period_anchor;
     let detail = if selected.is_empty() {
         String::new()
@@ -176,21 +230,21 @@ fn draw_period_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorStat
         .title_detail(&detail)
         .show(ui, |ui| {
             // Only the rows in view are drawn: a ten-year horizon is 3,650
-            // of them, and the space of the rest stands in for them.
+            // days, and the space of the rest stands in for them.
             let row = grid_columns_row_height(ui);
             let top = ui.cursor().top();
             let clip = ui.clip_rect();
-            let first = (((clip.top() - top) / row).floor().max(0.0) as u32).min(days);
+            let first = (((clip.top() - top) / row).floor().max(0.0) as u32).min(count);
             // Past the clip by a screenful's margin: the clip can lag the pane
             // by a frame as the page is laid out, and a short list then ends
             // early.
-            let last = ((((clip.bottom() - top) / row).ceil().max(0.0)) as u32 + 16).min(days);
+            let last = ((((clip.bottom() - top) / row).ceil().max(0.0)) as u32 + 16).min(count);
             ui.add_space(first as f32 * row);
             for period in first..last {
-                let date = periods.date_of_period(period).map(date_text).unwrap_or_default();
-                let day = tr!("gantt-day", day = (period + 1).to_string());
+                let date = period_date(scale, period).unwrap_or_default();
+                let name = period_name(scale, period);
                 let is_selected = selected.contains(&period);
-                let (response, cells) = grid_columns_row(ui, &FRACTIONS, &[&day, &date, ""], is_selected);
+                let (response, cells) = grid_columns_row(ui, &FRACTIONS, &[&name, &date, ""], is_selected);
                 if response.clicked() {
                     let modifiers = ui.input(|input| input.modifiers);
                     match (modifiers.shift, anchor) {
@@ -212,10 +266,14 @@ fn draw_period_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorStat
                     }
                 }
                 // A colour picked on a selected row marks the whole
-                // selection; on any other row, that row alone.
-                let targets = || if is_selected { selected.iter().copied().collect() } else { vec![period] };
+                // selection; on any other row, that row alone. Either way,
+                // every day of each period, as far as the horizon runs.
+                let targets = || -> Vec<u32> {
+                    let chosen: Vec<u32> = if is_selected { selected.iter().copied().collect() } else { vec![period] };
+                    chosen.into_iter().flat_map(|period| scale.days(period)).filter(|day| *day < days).collect()
+                };
                 let swatch = egui::Rect::from_min_size(cells[2].left_center() - egui::vec2(-4.0, 9.0), egui::vec2(40.0, 18.0));
-                let marked = periods.color(period);
+                let marked = periods.color(scale.first_day(period));
                 // Unmarked reads as an empty box, not the checkerboard of a clear colour.
                 let mut color = marked.map_or(ui.visuals().extreme_bg_color, period_color);
                 let picked = ui
@@ -227,7 +285,7 @@ fn draw_period_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorStat
                     edits.push(UiCommand::schedule(
                         session,
                         ScheduleEdit::SetPeriodColors {
-                            periods: targets(),
+                            days: targets(),
                             color: Some([color.r(), color.g(), color.b()]),
                         },
                     ));
@@ -235,7 +293,7 @@ fn draw_period_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorStat
                 let title = if is_selected && selected.len() > 1 {
                     tr!("periods-selected", count = selected.len().to_string())
                 } else {
-                    day.clone()
+                    name.clone()
                 };
                 context_menu_popup(&response, title, |ui| {
                     if ContextMenuAction::new(tr!("periods-clear-colour"))
@@ -243,12 +301,12 @@ fn draw_period_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorStat
                         .show(ui)
                         .clicked()
                     {
-                        edits.push(UiCommand::schedule(session, ScheduleEdit::SetPeriodColors { periods: targets(), color: None }));
+                        edits.push(UiCommand::schedule(session, ScheduleEdit::SetPeriodColors { days: targets(), color: None }));
                         ui.close();
                     }
                 });
             }
-            ui.add_space(days.saturating_sub(last) as f32 * row);
+            ui.add_space(count.saturating_sub(last) as f32 * row);
         });
     editor.schedule_period_anchor = anchor;
 }

@@ -6563,6 +6563,8 @@ impl UiCommand {
                 | ScheduleEdit::SetExperimentHorizon { .. }
                 | ScheduleEdit::SetStartDate(_)
                 | ScheduleEdit::SetPeriodColors { .. }
+                | ScheduleEdit::SetHorizon(_)
+                | ScheduleEdit::SetPeriodUnit(_)
                 | ScheduleEdit::SetExperimentSolveLimits { .. }
                 | ScheduleEdit::SetExperimentGradeUnit { .. }
                 | ScheduleEdit::SetStockpileRepresentation { .. }
@@ -8360,7 +8362,7 @@ pub(crate) struct ScheduleAgentDraft {
 /// so an edit elsewhere refreshes the fields.
 #[derive(Clone, Debug)]
 pub(crate) struct ScheduleExperimentDraft {
-    pub(crate) source: (u32, u64, u64, u64, Option<usize>),
+    pub(crate) source: (crate::model::schedule::periods::PeriodScale, u32, u64, u64, u64, Option<usize>),
     pub(crate) end_day: String,
     pub(crate) interval_h: String,
     pub(crate) solve_seconds: String,
@@ -8856,11 +8858,15 @@ pub(crate) enum ScheduleEdit {
     /// The date of Day 1, or none. Display only; see
     /// [`crate::model::schedule::periods`].
     SetStartDate(Option<chrono::NaiveDate>),
-    /// Mark periods (Day 1 is 0) with a colour, or clear their marks.
+    /// Mark days (Day 1 is 0) with a colour, or clear their marks.
     SetPeriodColors {
-        periods: Vec<u32>,
+        days: Vec<u32>,
         color: Option<[u8; 3]>,
     },
+    /// Open the short-term or the long-term horizon.
+    SetHorizon(crate::model::schedule::periods::Horizon),
+    /// Read the open horizon in days, weeks or months.
+    SetPeriodUnit(crate::model::schedule::periods::PeriodUnit),
     SetExperimentSolveLimits {
         seconds: f64,
         relative_gap: f64,
@@ -9642,10 +9648,10 @@ impl GanttView {
     /// The span shown while there is no work to frame.
     pub(crate) const DEFAULT_SPAN_SECONDS: f64 = 7.0 * Self::DAY;
     /// Closest it zooms in, and furthest out. An hour is the finest window a
-    /// tonnes-per-hour schedule says anything useful over; a year is past the
-    /// point where a bar is a pixel.
+    /// tonnes-per-hour schedule says anything useful over; ten years is the
+    /// longest horizon a long-term schedule is calculated over.
     pub(crate) const MIN_SPAN_SECONDS: f64 = Self::HOUR;
-    pub(crate) const MAX_SPAN_SECONDS: f64 = 365.0 * Self::DAY;
+    pub(crate) const MAX_SPAN_SECONDS: f64 = 3650.0 * Self::DAY;
 
     /// The minor tick intervals the ruler steps through as it is zoomed,
     /// coarsest last. Hours, then days, then weeks - the scales a mine plan
@@ -9654,7 +9660,7 @@ impl GanttView {
     /// Whole weeks beyond a fortnight, counted from Day 1 like every tick, so
     /// a timeline zoomed out over a year keeps its columns rather than
     /// dropping to a single tick.
-    pub(crate) const TICK_LADDER: [f64; 12] = [
+    pub(crate) const TICK_LADDER: [f64; 14] = [
         Self::HOUR,
         3.0 * Self::HOUR,
         6.0 * Self::HOUR,
@@ -9667,6 +9673,8 @@ impl GanttView {
         56.0 * Self::DAY,
         91.0 * Self::DAY,
         182.0 * Self::DAY,
+        364.0 * Self::DAY,
+        728.0 * Self::DAY,
     ];
 
     /// Frame the timeline on the work it holds: from the start of the project

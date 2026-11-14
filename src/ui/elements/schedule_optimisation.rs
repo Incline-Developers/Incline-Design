@@ -44,7 +44,9 @@ fn percent_text(fraction: f64) -> String {
 /// values change underneath it.
 fn draft<'a>(editor: &'a mut EditorState, plan: &SchedulePlan) -> &'a mut ScheduleExperimentDraft {
     let experiment = plan.experiment();
+    let scale = plan.period_scale();
     let source = (
+        scale,
         experiment.planning_end_day,
         experiment.interval_h.to_bits(),
         experiment.solve_seconds.to_bits(),
@@ -54,7 +56,7 @@ fn draft<'a>(editor: &'a mut EditorState, plan: &SchedulePlan) -> &'a mut Schedu
     if editor.schedule_experiment_draft.as_ref().is_none_or(|draft| draft.source != source) {
         editor.schedule_experiment_draft = Some(ScheduleExperimentDraft {
             source,
-            end_day: experiment.planning_end_day.to_string(),
+            end_day: scale.count(experiment.planning_end_day).to_string(),
             interval_h: experiment.interval_h.to_string(),
             solve_seconds: experiment.solve_seconds.to_string(),
             relative_gap: percent_text(experiment.relative_gap),
@@ -63,16 +65,25 @@ fn draft<'a>(editor: &'a mut EditorState, plan: &SchedulePlan) -> &'a mut Schedu
     editor.schedule_experiment_draft.as_mut().expect("just ensured")
 }
 
-/// How many days the schedule runs, on the General table.
+/// How many periods the schedule runs, on the General table. A horizon
+/// that stops part-way through a period counts it: typing that count back
+/// rounds the horizon up to the period's end.
 pub(crate) fn horizon_row(rows: &mut PropertyRows<'_>, editor: &mut EditorState, plan: &SchedulePlan, session: u32, edits: &mut Vec<UiCommand>) {
+    use crate::model::schedule::periods::PeriodUnit;
     let experiment = plan.experiment();
+    let scale = plan.period_scale();
     let draft = draft(editor, plan);
-    let end_day = draft.end_day.trim().parse::<u32>().ok().filter(|day| *day > 0);
+    let end = draft.end_day.trim().parse::<u32>().ok().filter(|count| *count > 0).map(|count| scale.first_day(count));
     let invalid = crate::model::schedule::ScheduleError::InvalidExperimentSetting.message();
-    let response = rows.field(&tr!("experiment-end-day"), &mut draft.end_day, end_day.is_none().then_some(invalid.as_str()));
+    let label = match scale.unit {
+        PeriodUnit::Day => tr!("experiment-end-day"),
+        PeriodUnit::Week => tr!("experiment-end-week"),
+        PeriodUnit::Month => tr!("experiment-end-month"),
+    };
+    let response = rows.field(&label, &mut draft.end_day, end.is_none().then_some(invalid.as_str()));
     if response.lost_focus()
-        && let Some(end_day) = end_day
-        && end_day != experiment.planning_end_day
+        && let Some(end_day) = end
+        && scale.count(end_day) != scale.count(experiment.planning_end_day)
     {
         edits.push(UiCommand::schedule(
             session,

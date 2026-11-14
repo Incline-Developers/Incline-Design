@@ -274,8 +274,13 @@ impl crate::app::App<'_> {
                 plan.set_start_date(date);
                 Ok(())
             }),
-            ScheduleEdit::SetPeriodColors { periods, color } => self.edit_schedule(|plan| {
-                plan.set_period_colors(&periods, color);
+            ScheduleEdit::SetPeriodColors { days, color } => self.edit_schedule(|plan| {
+                plan.set_period_colors(&days, color);
+                Ok(())
+            }),
+            ScheduleEdit::SetHorizon(horizon) => self.edit_schedule(|plan| plan.set_horizon(horizon)),
+            ScheduleEdit::SetPeriodUnit(unit) => self.edit_schedule(|plan| {
+                plan.set_period_unit(unit);
                 Ok(())
             }),
             ScheduleEdit::SetExperimentSolveLimits { seconds, relative_gap } => self.edit_schedule(|plan| {

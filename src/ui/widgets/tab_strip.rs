@@ -48,6 +48,12 @@ impl<'a, H: Hash + std::fmt::Debug> TileTabs<'a, H> {
         Self { id_salt, labels, selected }
     }
 
+    /// The width `count` tabs take in a row, for a set laid out from the
+    /// right of one.
+    pub(crate) fn width(count: usize) -> f32 {
+        count as f32 * TAB_WIDTH + count.saturating_sub(1) as f32 * TAB_GAP
+    }
+
     /// Lay the tabs out from the left of `row`, the full height of it and
     /// [`TAB_WIDTH`] each, and take their clicks. Returns the index clicked
     /// this frame, and the tabs to paint.

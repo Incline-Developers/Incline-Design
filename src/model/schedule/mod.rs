@@ -1011,14 +1011,41 @@ impl SchedulePlan {
         self.periods.start_date = date;
     }
 
-    /// Mark `periods` with `color`, or clear their marks.
-    pub(crate) fn set_period_colors(&mut self, periods: &[u32], color: Option<[u8; 3]>) {
-        for period in periods {
+    /// Mark `days` (Day 1 is 0) with `color`, or clear their marks.
+    pub(crate) fn set_period_colors(&mut self, days: &[u32], color: Option<[u8; 3]>) {
+        for day in days {
             match color {
-                Some(color) => self.periods.colors.insert(*period, color),
-                None => self.periods.colors.remove(period),
+                Some(color) => self.periods.colors.insert(*day, color),
+                None => self.periods.colors.remove(day),
             };
         }
+    }
+
+    /// Which days each period of the open horizon covers.
+    pub(crate) fn period_scale(&self) -> periods::PeriodScale {
+        self.periods.scale()
+    }
+
+    /// Read the open horizon in days, weeks or months.
+    pub(crate) fn set_period_unit(&mut self, unit: periods::PeriodUnit) {
+        self.periods.unit = unit;
+    }
+
+    /// Open the short-term or the long-term horizon: its end, calculation
+    /// step and period unit replace the open one's, which are kept for the
+    /// way back. Nothing else differs between them.
+    pub(crate) fn set_horizon(&mut self, horizon: periods::Horizon) -> ScheduleResult {
+        if horizon == self.periods.horizon {
+            return Ok(());
+        }
+        let open = periods::HorizonProfile {
+            end_day: self.experiment.planning_end_day,
+            interval_h: self.experiment.interval_h,
+            unit: self.periods.unit,
+        };
+        let next = self.periods.switch_horizon(open);
+        self.experiment.set_planning_end_day(next.end_day)?;
+        self.experiment.set_interval_h(next.interval_h)
     }
 
     pub(crate) fn agent_ids(&self) -> Vec<LoaderAgentId> {
