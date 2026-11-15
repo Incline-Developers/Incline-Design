@@ -1407,11 +1407,25 @@ fn deal(input: &mut BlendInput, request: &PlanRequest<'_>, blocks: &[Block], ord
         }
     }
     let automatic: BTreeSet<LoaderId> = bars.iter().map(|bar| bar.loader).collect();
+    // Ground a loader's own dig bar names stays its to dig whoever is dealt
+    // it: what the dig bar leaves is the automatic bars', but not before.
+    let named: BTreeSet<(LoaderId, GroundId)> = input
+        .tasks
+        .iter()
+        .filter(|task| !request.tasks.contains(&task.id))
+        .filter_map(|task| match &task.kind {
+            TaskKind::Dig { sequence } => Some(sequence.iter().map(move |ground| (task.loader, *ground))),
+            _ => None,
+        })
+        .flatten()
+        .collect();
     let keep: Vec<bool> = input
         .movements
         .iter()
         .map(|movement| match movement.source {
-            SourceId::Ground(ground) if automatic.contains(&movement.loader) => diggers.get(&ground).is_none_or(|loaders| loaders.contains(&movement.loader)),
+            SourceId::Ground(ground) if automatic.contains(&movement.loader) => {
+                named.contains(&(movement.loader, ground)) || diggers.get(&ground).is_none_or(|loaders| loaders.contains(&movement.loader))
+            }
             _ => true,
         })
         .collect();
