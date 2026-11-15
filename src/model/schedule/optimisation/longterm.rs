@@ -424,10 +424,13 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
             }
         }
     }
-    // Automatic machines' blasts: each step still to do on one, shared out
-    // over its ground by tonnes. Their tasks hold one blast each, so they
-    // add no order between blasts, and no machine pace: what limits them is
-    // their machines' hours, priced like the loaders'.
+    // Automatic machines' blasts: each step still to do on one, all of it
+    // on the blast's clearance, which its ground waits on - no block of a
+    // blast is there until the whole blast is prepped, drilled and charged.
+    // Their tasks hold one blast each, so they add no order between blasts,
+    // and no machine pace: what limits them is their machines' hours,
+    // priced like the loaders'. A blast already started has no clearance
+    // step: its work is shared out over its ground by tonnes.
     if let Some(chain) = &input.drill_blast {
         let mut counted: BTreeSet<(usize, usize)> = BTreeSet::new();
         for task in request.machine_tasks.iter().filter_map(|index| chain.tasks.get(*index)) {
@@ -440,6 +443,10 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
                 continue;
             }
             let held: Vec<usize> = job.releases.iter().filter_map(|ground| position.get(ground).copied()).collect();
+            if let Some((step_node, _)) = held.iter().find_map(|block| cleared_by.get(block).filter(|(_, at)| at == blast)) {
+                out[*step_node].worked[step] += job.quantity[step];
+                continue;
+            }
             let tonnes: f64 = held.iter().map(|block| out[*block].tonnes).sum();
             if tonnes <= 0.0 {
                 continue;
