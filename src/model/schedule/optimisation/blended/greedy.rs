@@ -726,10 +726,10 @@ impl<'a> State<'a> {
             }
             *at
         };
-        let mut before = 0.0;
+        let (mut before, mut fed) = (0.0, 0.0);
         let mut out = Vec::new();
         for block in &sequence[start..] {
-            if before > entry.lookahead_t {
+            if before > entry.lookahead_t && fed > entry.lookahead_feed_t {
                 break;
             }
             let left = if done.contains(block) { 0.0 } else { self.ground.get(block).copied().unwrap_or(0.0) };
@@ -738,6 +738,7 @@ impl<'a> State<'a> {
             }
             out.push(*block);
             before += left;
+            fed += left * self.outlets.feed_share(entry.loader, *block);
         }
         Some(out)
     }

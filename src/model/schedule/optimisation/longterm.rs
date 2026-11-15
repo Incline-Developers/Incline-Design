@@ -1733,12 +1733,24 @@ fn deal(input: &mut BlendInput, request: &PlanRequest<'_>, blocks: &[Block], ord
     });
     let mut kept = keep.iter();
     input.movements.retain(|_| kept.next().copied().unwrap_or(true));
+    // A day of the crushers' feed, on average.
+    let feed_day_t: f64 = input
+        .destinations
+        .iter()
+        .filter(|destination| destination.kind == DestinationKind::Crusher)
+        .map(|destination| {
+            let days: Vec<f64> = destination.crusher_daily_t.iter().flatten().copied().collect();
+            if days.is_empty() { 0.0 } else { days.iter().sum::<f64>() / days.len() as f64 }
+        })
+        .sum();
     for bar in bars {
         if let Some(task) = input.tasks.iter_mut().find(|task| task.id == bar.task) {
             task.kind = TaskKind::Dig { sequence: bar.sequence };
-            // A day of its loader's digging: the crushers' grade targets
-            // are priced day by day, so a day's ground is what it blends.
+            // The crushers' grade targets are priced day by day, so the
+            // loader blends among a day of its digging, or a day of the
+            // crushers' feed where that takes more of its ground.
             task.lookahead_t = bar.tph * DAY_H;
+            task.lookahead_feed_t = feed_day_t;
         }
     }
 }

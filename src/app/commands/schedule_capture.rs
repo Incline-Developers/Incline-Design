@@ -2098,6 +2098,7 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<u64>, cancel: &Cance
             window_end_h: bar.end_h,
             kind,
             lookahead_t: 0.0,
+            lookahead_feed_t: 0.0,
         });
     }
 

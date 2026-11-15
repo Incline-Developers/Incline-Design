@@ -907,7 +907,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                         {
                             *at += 1;
                         }
-                        let mut ahead = 0.0;
+                        let (mut ahead, mut fed) = (0.0, 0.0);
                         for earlier in sequence[*at..].iter().take_while(|block| **block != later) {
                             let left = before.get(earlier).or_else(|| remaining.get(earlier)).copied().unwrap_or(0.0);
                             if left > REPLAY_TOLERANCE_T
@@ -915,8 +915,9 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                                 && outlets.diggable(input, task, *earlier, |destination| room.contains(&(destination, interval.index)))
                             {
                                 ahead += left;
+                                fed += left * outlets.feed_share(task.loader, *earlier);
                             }
-                            if ahead > task.lookahead_t * (1.0 + 1e-9) + REPLAY_TOLERANCE_T {
+                            if ahead > task.lookahead_t * (1.0 + 1e-9) + REPLAY_TOLERANCE_T && fed > task.lookahead_feed_t * (1.0 + 1e-9) + REPLAY_TOLERANCE_T {
                                 checker.report.issues.push(format!(
                                     "automatic bar's reach broken: loader {} dug block {} in interval {} segment {segment} with {ahead:.3} t of its released blocks still before it",
                                     task.loader.0, later.0, interval.index

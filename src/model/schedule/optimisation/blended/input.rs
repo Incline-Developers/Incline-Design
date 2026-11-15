@@ -78,7 +78,7 @@
 //! rather than something the solver has to discover, and they tighten the
 //! bilinear relaxation considerably.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::grade::GradeTable;
 use crate::model::schedule::optimisation::{
@@ -764,6 +764,8 @@ pub(crate) struct OutletIndex {
     needs: BTreeMap<(LoaderId, GroundId), Vec<Vec<DestinationId>>>,
     /// Each block's share of each material it holds, the first listed.
     shares: BTreeMap<(GroundId, MaterialId), f64>,
+    /// The share of each block a loader can send to a crusher.
+    feed: BTreeMap<(LoaderId, GroundId), f64>,
 }
 
 impl OutletIndex {
@@ -792,6 +794,13 @@ impl OutletIndex {
         drop(routes);
         let ground: BTreeMap<GroundId, usize> = input.ground.iter().enumerate().map(|(index, source)| (source.id, index)).collect();
         let mut needs = BTreeMap::new();
+        let mut feed = BTreeMap::new();
+        let crushers: BTreeSet<DestinationId> = input
+            .destinations
+            .iter()
+            .filter(|destination| destination.kind == super::super::DestinationKind::Crusher)
+            .map(|destination| destination.id)
+            .collect();
         // Keys are already sorted. Visit each loader/block once, without a
         // second tree containing every material key.
         for group in digs.chunk_by(|left, right| (left.0.0, left.0.1) == (right.0.0, right.0.1)) {
@@ -801,6 +810,21 @@ impl OutletIndex {
             };
             // Most materials have identical outlets. Deduplicate references
             // first so only the distinct readiness lists are copied.
+            let outlets_of = |material: MaterialId| -> &[DestinationId] {
+                group
+                    .binary_search_by_key(&material, |entry| entry.0.2)
+                    .map(|index| &destinations[group[index].1.clone()])
+                    .unwrap_or_default()
+            };
+            let crushed: f64 = source
+                .material
+                .iter()
+                .filter(|share| share.fraction > 0.0 && outlets_of(share.material).iter().any(|destination| crushers.contains(destination)))
+                .map(|share| share.fraction)
+                .sum();
+            if crushed > 0.0 {
+                feed.insert((loader, block), crushed);
+            }
             let mut sets: Vec<&[DestinationId]> = source
                 .material
                 .iter()
@@ -832,7 +856,13 @@ impl OutletIndex {
             ground,
             needs,
             shares,
+            feed,
         }
+    }
+
+    /// The share of the block `ground` the loader can send to a crusher.
+    pub(crate) fn feed_share(&self, loader: LoaderId, ground: GroundId) -> f64 {
+        self.feed.get(&(loader, ground)).copied().unwrap_or(0.0)
     }
 
     fn destinations(&self, loader: LoaderId, ground: GroundId, material: MaterialId) -> Option<&[DestinationId]> {

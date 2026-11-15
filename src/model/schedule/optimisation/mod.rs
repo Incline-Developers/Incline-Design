@@ -266,11 +266,17 @@ pub(crate) struct Task {
     pub(crate) window_start_h: f64,
     pub(crate) window_end_h: f64,
     pub(crate) kind: TaskKind,
-    /// An automatic bar's reach: the tonnes of released blocks in its
-    /// sequence, past those it has finished, its loader may be working
-    /// among at once, any of them as the hour suits - so it can blend
-    /// faces. Zero for an authored dig bar, whose blocks go in order.
+    /// An automatic bar's reach: the released blocks in its sequence, past
+    /// those it has finished, its loader may be working among at once, any
+    /// of them as the hour suits - so it can blend faces: a block is in it
+    /// while those before it come to no more than these tonnes, or no more
+    /// than [`Self::lookahead_feed_t`] of crusher feed. Zero for an
+    /// authored dig bar, whose blocks go in order.
     pub(crate) lookahead_t: f64,
+    /// The crusher feed an automatic bar's reach holds at least: what is
+    /// before a block in its reach may be all the tonnes past
+    /// [`Self::lookahead_t`] while its feed is no more than this.
+    pub(crate) lookahead_feed_t: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
