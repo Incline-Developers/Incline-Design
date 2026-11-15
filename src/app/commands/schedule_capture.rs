@@ -170,6 +170,9 @@ pub(crate) struct CaptureIdentities {
     pub(crate) grades: Vec<(ReserveFieldId, String, GradeUnit)>,
     /// Each scoped dig bar's resolved blocks, in authored order.
     pub(crate) bar_blocks: Vec<(BarId, Vec<crate::model::DigBlockId>)>,
+    /// Automatic bars' ground in a blast no machine works, dug without
+    /// waiting on it - which a dig bar would wait on for ever.
+    pub(crate) unblasted: BTreeSet<crate::model::DigBlockId>,
     /// Each scoped dig bar's blocks of no tonnes: its earliest start, how
     /// many of its `bar_blocks` come before the block, and the block.
     pub(crate) empty_blocks: Vec<(BarId, f64, usize, crate::model::DigBlockId)>,
@@ -2402,6 +2405,11 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<u64>, cancel: &Cance
             .filter_map(|(position, _)| block_ground.get(position).copied())
             .collect();
         for (index, _) in input.unworked() {
+            for ground in input.blasts[index].releases.iter().filter(|ground| auto_ground.contains(*ground)) {
+                if let Some(block) = identities.ground_blocks.get(ground) {
+                    identities.unblasted.insert(*block);
+                }
+            }
             input.blasts[index].releases.retain(|ground| !auto_ground.contains(ground));
         }
     }

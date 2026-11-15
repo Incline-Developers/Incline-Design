@@ -2285,6 +2285,46 @@ impl SchedulePlan {
         Ok(())
     }
 
+    /// Split an automatic bar at `at_h`: up to it, a dig bar holding
+    /// `members`, the blocks the schedule had it start before then; and over
+    /// the bar's whole window, a new automatic bar on the same machine in the
+    /// lane below. The machine digs the fixed sequence first and the
+    /// automatic ground whenever that has no work, as it did before; what
+    /// the dig bar leaves undug when its window closes is the automatic
+    /// bars' again, as any dig bar's is.
+    pub(crate) fn split_auto_bar(&mut self, id: BarId, at_h: f64, members: Vec<DigBlockRef>) -> ScheduleResult<BarId> {
+        let bar = self.bar(id).ok_or(ScheduleError::UnknownBar)?;
+        if !bar.is_auto() {
+            return Err(ScheduleError::WrongActivity);
+        }
+        let window = bar.window;
+        let (agent, priority) = (bar.agent, bar.priority);
+        if !at_h.is_finite() || at_h <= window.start_h + 1e-9 || window.end_h.is_some_and(|end| at_h >= end - 1e-9) {
+            return Err(ScheduleError::InvalidWindow);
+        }
+        let mut order = DigOrder::default();
+        for member in members {
+            order.insert(usize::MAX, member)?;
+        }
+        let rest = self.allocate_bar_id()?;
+        let frozen = self.bar_mut(id)?;
+        frozen.work = BarWork::Dig(order);
+        frozen.window = WorkWindow {
+            start_h: window.start_h,
+            end_h: Some(at_h),
+        };
+        let lane = self.free_lane(None, agent, priority.saturating_add(1), window);
+        self.bars.push(ScheduleBar {
+            id: rest,
+            name: String::new(),
+            work: BarWork::Auto(AutoWork::default()),
+            agent,
+            priority: lane,
+            window,
+        });
+        Ok(rest)
+    }
+
     /// Change which machine a follow bar follows.
     pub(crate) fn set_follow_leader(&mut self, id: BarId, leader: LoaderAgentId) -> ScheduleResult {
         self.agent_kind(leader).ok_or(ScheduleError::UnknownAgent)?;

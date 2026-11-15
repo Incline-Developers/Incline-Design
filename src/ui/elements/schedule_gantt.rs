@@ -2499,6 +2499,20 @@ fn draw_bars(
                             commands.push(UiCommand::schedule(session, ScheduleEdit::ConvertAutoBar(bar.id)));
                             ui.close();
                         }
+                        // Or only up to the time slider, the rest staying
+                        // automatic: the near term fixed, the far term free.
+                        let until = editor.schedule_time_h;
+                        if bar.is_auto()
+                            && until > bar.window.start_h + 1e-9
+                            && bar.window.end_h.is_none_or(|end| until < end - 1e-9)
+                            && ContextMenuAction::new(tr!("auto-bar-convert-until", time = super::schedule_periods::instant_label(until)))
+                                .enabled(schedule.is_some_and(|schedule| schedule.blocks_of(bar.id).is_some_and(|blocks| !blocks.is_empty())))
+                                .show(ui)
+                                .clicked()
+                        {
+                            commands.push(UiCommand::schedule(session, ScheduleEdit::ConvertAutoBarUntil { bar: bar.id, at_h: until }));
+                            ui.close();
+                        }
                         if let Some(work) = bar.reclaim()
                             && ContextMenuAction::new(tr!("reclaim-edit-bar")).show(ui).clicked()
                         {

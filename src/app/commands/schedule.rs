@@ -333,7 +333,8 @@ impl crate::app::App<'_> {
                 window,
                 insert_lane,
             } => self.add_auto_bar(agent, priority, window, insert_lane),
-            ScheduleEdit::ConvertAutoBar(bar) => self.convert_auto_bar(bar),
+            ScheduleEdit::ConvertAutoBar(bar) => self.convert_auto_bar(bar, None),
+            ScheduleEdit::ConvertAutoBarUntil { bar, at_h } => self.convert_auto_bar(bar, Some(at_h)),
             ScheduleEdit::SetFollowLeader { bar, leader } => self.edit_schedule(|plan| plan.set_follow_leader(bar, leader)),
             ScheduleEdit::AddDelayType { name, color } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.add_type(&name, color).map(|_| ()))),
             ScheduleEdit::RenameDelayType { kind, name } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.rename_type(kind, &name))),
@@ -856,8 +857,23 @@ impl crate::app::App<'_> {
 
     /// Make an automatic bar a dig bar of the blocks the current schedule
     /// dealt it, in the order it digs them.
-    fn convert_auto_bar(&mut self, bar: crate::model::schedule::BarId) {
-        let blocks = self.editor.schedule_result.as_ref().and_then(|schedule| schedule.blocks_of(bar).map(<[_]>::to_vec));
+    /// Make an automatic bar a dig bar of the blocks the schedule gave it -
+    /// with `until`, only those it started before that hour, the rest of the
+    /// bar staying automatic.
+    fn convert_auto_bar(&mut self, bar: crate::model::schedule::BarId, until: Option<f64>) {
+        let blocks = self.editor.schedule_result.as_ref().and_then(|schedule| {
+            let blocks = schedule.blocks_of(bar)?;
+            let Some(until) = until else { return Some(blocks.to_vec()) };
+            // When the bar first dug each block.
+            let mut started: std::collections::HashMap<crate::model::DigBlockId, f64> = std::collections::HashMap::new();
+            for execution in schedule.executions.iter().filter(|execution| execution.bar == bar) {
+                if let crate::model::schedule::result::WorkSource::Block(block) = execution.source {
+                    let first = started.entry(block).or_insert(execution.start_h);
+                    *first = first.min(execution.start_h);
+                }
+            }
+            Some(blocks.iter().copied().filter(|block| started.get(block).is_some_and(|at| *at < until)).collect())
+        });
         let Some(blocks) = blocks.filter(|blocks| !blocks.is_empty()) else {
             userspace_warn!("{}", tr!("auto-bar-convert-needs-schedule"));
             return;
@@ -872,15 +888,24 @@ impl crate::app::App<'_> {
         // Every block must be one the current Solids run holds: a schedule
         // from an earlier run names ground that may no longer be cut that way.
         let by_id: std::collections::HashMap<_, _> = snapshot.blocks.iter().map(|block| (block.id, block)).collect();
-        let Some(members) = blocks
-            .iter()
-            .map(|id| by_id.get(id).map(|block| self.dig_block_reference(block)))
-            .collect::<Option<Vec<_>>>()
-        else {
+        if blocks.iter().any(|id| !by_id.contains_key(id)) {
             userspace_warn!("{}", tr!("auto-bar-convert-needs-schedule"));
             return;
-        };
-        self.edit_schedule(|plan| plan.convert_auto_bar(bar, members));
+        }
+        // Ground in a blast no machine works is dug unblasted by automatic
+        // bars, but a dig bar waits on its blast, here for ever, holding up
+        // everything under it: that ground stays the automatic bars'.
+        let unblasted = self.editor.schedule_result.as_ref().map(|schedule| schedule.unblasted.clone()).unwrap_or_default();
+        let kept: Vec<_> = blocks.iter().filter(|id| !unblasted.contains(*id)).filter_map(|id| by_id.get(id)).collect();
+        let left = blocks.len() - kept.len();
+        let members: Vec<_> = kept.into_iter().map(|block| self.dig_block_reference(block)).collect();
+        if left > 0 {
+            crate::userspace_log!("{}", tr!("auto-bar-convert-left-unworked", count = left));
+        }
+        match until {
+            Some(at_h) => self.edit_schedule(|plan| plan.split_auto_bar(bar, at_h, members).map(|_| ())),
+            None => self.edit_schedule(|plan| plan.convert_auto_bar(bar, members)),
+        }
     }
 
     /// Add a delay list, of the first delay type when there is one, and open

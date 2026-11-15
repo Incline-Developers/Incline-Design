@@ -6490,6 +6490,7 @@ impl UiCommand {
                 ScheduleEdit::AddFollowBar { .. } => report(tr!("schedule-add-follow-bar"), String::new()),
                 ScheduleEdit::AddAutoBar { .. } => report(tr!("schedule-add-auto-bar"), String::new()),
                 ScheduleEdit::ConvertAutoBar(_) => report(tr!("auto-bar-convert"), String::new()),
+                ScheduleEdit::ConvertAutoBarUntil { .. } => report(tr!("auto-bar-convert-until-report"), String::new()),
                 ScheduleEdit::AddBlastBar { .. } => report(tr!("blast-add-bar"), String::new()),
                 ScheduleEdit::SetClassKind { .. }
                 | ScheduleEdit::SetClassLoaderType { .. }
@@ -8979,6 +8980,12 @@ pub(crate) enum ScheduleEdit {
     /// Make an automatic bar a dig bar holding the order the current
     /// schedule worked out for it.
     ConvertAutoBar(crate::model::schedule::BarId),
+    /// Convert an automatic bar's work before an hour, leaving the rest of
+    /// the bar automatic.
+    ConvertAutoBarUntil {
+        bar: crate::model::schedule::BarId,
+        at_h: f64,
+    },
     /// Change which machine a follow bar follows.
     SetFollowLeader {
         bar: crate::model::schedule::BarId,
