@@ -609,10 +609,13 @@ impl crate::app::App<'_> {
             }
         };
         self.cancel_schedule_run_calculation_quietly();
-        let saved_fingerprint = saved
+        let saved_hint = saved
             .as_ref()
             .filter(|saved| (saved.requested_end_h - requested_end_h).abs() <= 1e-9)
-            .map(|saved| saved.fingerprint);
+            .map(|saved| schedule_capture::SavedHint {
+                fingerprint: saved.fingerprint,
+                auto_order: saved.auto_order.clone(),
+            });
         let semantic = self.schedule_semantic_key();
         self.schedule_run_serial += 1;
         let serial = self.schedule_run_serial;
@@ -649,7 +652,7 @@ impl crate::app::App<'_> {
             tr!("schedule-run-job"),
             vec![JobKey::ScheduleRun { runtime, serial }],
             move |cancel| {
-                let capture = match schedule_capture::build(&snapshot, saved_fingerprint, cancel) {
+                let capture = match schedule_capture::build(&snapshot, saved_hint.as_ref(), cancel) {
                     Ok(capture) => capture,
                     Err(problems) => {
                         return Ok(if cancel.is_cancelled() {
@@ -669,6 +672,7 @@ impl crate::app::App<'_> {
                 };
                 let input = Arc::new(capture.input);
                 let dispatched = capture.dispatched;
+                let auto_order = capture.auto_order;
                 let mut notes = capture.notes;
                 if capture.stats.event_budget_restricted {
                     notes.push(tr!("schedule-note-event-budget", positions = input.segments_per_interval.to_string()));
@@ -697,6 +701,7 @@ impl crate::app::App<'_> {
                             fingerprint: stable_fingerprint,
                             requested_end_h,
                             solution: Arc::clone(solution),
+                            auto_order: auto_order.clone(),
                         }));
                         schedule
                     })

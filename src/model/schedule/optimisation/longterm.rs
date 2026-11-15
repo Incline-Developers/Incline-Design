@@ -148,11 +148,13 @@ impl Block {
 /// Give every automatic bar its blocks and their order: the plan's when
 /// there is value to plan for, the order they came in otherwise. Candidates
 /// for a block on a loader that was not given it are dropped.
-pub(crate) fn assign(input: &mut BlendInput, request: &PlanRequest<'_>, planned: bool, cancelled: &dyn Fn() -> bool) -> PlanSummary {
+pub(crate) fn assign(input: &mut BlendInput, request: &PlanRequest<'_>, planned: bool, cancelled: &dyn Fn() -> bool) -> (PlanSummary, Vec<u32>) {
     let Some(first) = input.tasks.iter().find(|task| request.tasks.contains(&task.id)) else {
-        return PlanSummary::default();
+        return (PlanSummary::default(), Vec::new());
     };
-    let TaskKind::Dig { sequence } = &first.kind else { return PlanSummary::default() };
+    let TaskKind::Dig { sequence } = &first.kind else {
+        return (PlanSummary::default(), Vec::new());
+    };
     let grounds: Vec<GroundId> = sequence.clone();
     let blocks = blocks(input, request, &grounds);
     let (order, summary) = match if planned { planned_order(input, request, &blocks, cancelled) } else { None } {
@@ -166,7 +168,26 @@ pub(crate) fn assign(input: &mut BlendInput, request: &PlanRequest<'_>, planned:
         ),
     };
     deal(input, request, &blocks, &order);
-    summary
+    (summary, order.iter().map(|at| *at as u32).collect())
+}
+
+/// Deal the automatic bars' ground in `order`, the plan's blocks by
+/// position as [`assign`] returned them for this same model, without
+/// planning: false, and nothing dealt, when it does not fit the blocks.
+pub(crate) fn assign_order(input: &mut BlendInput, request: &PlanRequest<'_>, order: &[u32]) -> bool {
+    let Some(first) = input.tasks.iter().find(|task| request.tasks.contains(&task.id)) else {
+        return false;
+    };
+    let TaskKind::Dig { sequence } = &first.kind else { return false };
+    let grounds: Vec<GroundId> = sequence.clone();
+    let blocks = blocks(input, request, &grounds);
+    let mut seen = vec![false; blocks.len()];
+    let order: Vec<usize> = order.iter().map(|at| *at as usize).collect();
+    if order.len() != blocks.len() || order.iter().any(|at| *at >= blocks.len() || std::mem::replace(&mut seen[*at], true)) {
+        return false;
+    }
+    deal(input, request, &blocks, &order);
+    true
 }
 
 /// The blocks, in the order the first automatic bar lists them, with what
