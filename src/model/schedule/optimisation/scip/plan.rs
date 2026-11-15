@@ -1305,6 +1305,7 @@ fn solve_periods(
     for (&(loader_index, p), terms) in &by_loader_day {
         builder.row(terms, f64::NEG_INFINITY, capacity[loader_index][p], &format!("cap_{loader_index}_{p}"));
     }
+    loader_limit_rows(&mut builder, &prepared, &dig);
     // Each block's digs by day, and running totals, carried day to day so
     // every row stays a few terms long: dug so far by each loader of each
     // block, by all its loaders, and by each loader of its whole chain.
@@ -2382,4 +2383,63 @@ fn solve_periods(
         dug: by_loader_block,
         status: answer.status,
     })
+}
+
+/// Loader limits, read over a period: the hours loaders spend in an area
+/// are within its limit times the period's hours. The hourly limit allows
+/// no more, and loaders sharing an area hour by hour within a day need no
+/// binary for it. A loader's hours are taken as its tonnes there over its
+/// fastest rate in the period, which no schedule digs them in less time
+/// than: over its average one, a schedule digging there in its faster hours
+/// broke the row.
+fn loader_limit_rows(builder: &mut Builder, prepared: &Prepared, dig: &BTreeMap<(usize, GroundId, usize), usize>) {
+    let input = prepared.input;
+    if input.loader_areas.is_empty() {
+        return;
+    }
+    let mut areas_of: BTreeMap<GroundId, Vec<usize>> = BTreeMap::new();
+    for (area, entry) in input.loader_areas.iter().enumerate() {
+        for ground in &entry.ground {
+            areas_of.entry(*ground).or_default().push(area);
+        }
+    }
+    // Each loader's fastest dig rate in a period, in plan units an hour.
+    let fastest = |loader_index: usize, p: usize| -> f64 {
+        let loader = &input.loaders[loader_index];
+        prepared.day_intervals[&prepared.days[p]]
+            .iter()
+            .filter(|interval| {
+                input
+                    .tasks
+                    .iter()
+                    .any(|task| task.loader == loader.id && matches!(task.kind, TaskKind::Dig { .. }) && task_active(task, **interval))
+            })
+            .filter_map(|interval| interval_rate(loader, interval.index).map(|rate| rate.dig_tph / UNIT))
+            .fold(0.0, f64::max)
+    };
+    // Each area's dig columns by period, with the hours each unit takes.
+    type Terms = (BTreeSet<usize>, Vec<(usize, f64)>);
+    let mut by_area: BTreeMap<(usize, usize), Terms> = BTreeMap::new();
+    let mut rates: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+    for (&(loader_index, ground, p), &column) in dig {
+        let Some(areas) = areas_of.get(&ground) else { continue };
+        let rate = *rates.entry((loader_index, p)).or_insert_with(|| fastest(loader_index, p));
+        if rate <= 0.0 {
+            continue;
+        }
+        let unit_h = 1.0 / rate;
+        for &area in areas {
+            let (loaders, terms) = by_area.entry((area, p)).or_default();
+            loaders.insert(loader_index);
+            terms.push((column, unit_h));
+        }
+    }
+    for ((area, p), (loaders, terms)) in by_area {
+        let limit = input.loader_areas[area].loaders;
+        if loaders.len() <= limit as usize {
+            continue;
+        }
+        let period_h: f64 = prepared.day_intervals[&prepared.days[p]].iter().map(|interval| interval.duration_h()).sum();
+        builder.row(&terms, f64::NEG_INFINITY, f64::from(limit) * period_h, &format!("arealimit_{area}_{p}"));
+    }
 }
