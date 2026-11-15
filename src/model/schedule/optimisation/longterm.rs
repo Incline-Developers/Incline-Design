@@ -100,6 +100,11 @@ struct Block {
     value: f64,
     /// Tonnes of it whose best destination is each crusher.
     crushed: Vec<(usize, f64)>,
+    /// Tonnes of it that can go only to stockpiles and dumps of limited
+    /// room, by the one it goes to, its position in the input's
+    /// destinations: a block with such material is not dug once that room
+    /// is gone.
+    piled: Vec<(usize, f64)>,
     /// Truck hours its haul to those destinations takes, by truck class.
     hauled: Vec<(usize, f64)>,
     /// Its share of its blast's prep, drilling and charging, where machines
@@ -195,6 +200,23 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
             })
             .or_insert(candidate);
     }
+    // Material some route takes to a destination of unlimited room.
+    let limited = |destination: super::DestinationId| {
+        input
+            .destinations
+            .iter()
+            .find(|entry| entry.id == destination)
+            .is_some_and(|entry| matches!(entry.kind, DestinationKind::Stockpile(_) | DestinationKind::Dump) && entry.capacity_t.is_some_and(f64::is_finite))
+    };
+    let free: BTreeSet<(GroundId, super::MaterialId)> = input
+        .movements
+        .iter()
+        .filter(|movement| loaders.contains(&movement.loader) && !limited(movement.destination))
+        .filter_map(|movement| match movement.source {
+            SourceId::Ground(ground) => Some((ground, movement.material)),
+            SourceId::Stockpile(_) => None,
+        })
+        .collect();
     let sources: BTreeMap<GroundId, &super::GroundSource> = input.ground.iter().map(|source| (source.id, source)).collect();
     // Ground no machine will ever release - a step of its blast that no
     // bar works - is never there to dig, and nor is anything under it.
@@ -238,6 +260,7 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
             let tonnes = source.map_or(0.0, |source| source.tonnes_t);
             let mut value = 0.0;
             let mut crushed: Vec<(usize, f64)> = Vec::new();
+            let mut piled: Vec<(usize, f64)> = Vec::new();
             let mut hauled: Vec<(usize, f64)> = Vec::new();
             for share in source.into_iter().flat_map(|source| source.material.iter()) {
                 let Some((per_tonne, destination, truck, hours)) = best.get(&(*ground, share.material)) else {
@@ -249,6 +272,14 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
                     match hauled.iter_mut().find(|(held, _)| held == truck) {
                         Some((_, held)) => *held += hours * share_t,
                         None => hauled.push((*truck, hours * share_t)),
+                    }
+                }
+                if !free.contains(&(*ground, share.material))
+                    && let Some(at) = input.destinations.iter().position(|entry| entry.id == *destination)
+                {
+                    match piled.iter_mut().find(|(held, _)| *held == at) {
+                        Some((_, held)) => *held += share_t,
+                        None => piled.push((at, share_t)),
                     }
                 }
                 if let Some(crusher) = crushers.iter().position(|id| id == destination) {
@@ -264,6 +295,7 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
                 tonnes: if authored_h.is_some() { 0.0 } else { tonnes },
                 value: if authored_h.is_some() { 0.0 } else { value },
                 crushed,
+                piled,
                 hauled,
                 worked: [0.0; 3],
                 above: Vec::new(),
@@ -315,6 +347,7 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
                 tonnes: 0.0,
                 value: 0.0,
                 crushed: Vec::new(),
+                piled: Vec::new(),
                 hauled: Vec::new(),
                 worked: [0.0; 3],
                 above: over,
@@ -408,6 +441,7 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
             tonnes: 0.0,
             value: 0.0,
             crushed: Vec::new(),
+            piled: Vec::new(),
             hauled: Vec::new(),
             worked: [0.0; 3],
             above: over,
@@ -689,6 +723,24 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             limits.push(capacities[..allowed].iter().sum());
         }
     }
+    // Each stockpile and dump of limited room that material with nowhere
+    // else to go is sent to: by the end of each period no more can have
+    // gone there than the room it opened with. What reclaim bars take out
+    // of a pile is not counted on.
+    let mut pile_row: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    let piles_used: BTreeSet<usize> = blocks.iter().flat_map(|block| block.piled.iter().map(|(at, _)| *at)).collect();
+    for at in piles_used {
+        let entry = &input.destinations[at];
+        let Some(capacity) = entry.capacity_t else { continue };
+        let opening = match entry.kind {
+            DestinationKind::Stockpile(pile) => input.piles.iter().find(|held| held.id == pile).map_or(0.0, |held| held.opening_t),
+            _ => 0.0,
+        };
+        for period in 0..spans {
+            pile_row.insert((at, period), limits.len());
+            limits.push((capacity - opening).max(0.0));
+        }
+    }
     // What the dig bars' own ground takes of the crushers and trucks, in
     // the period they should dig it.
     for block in blocks {
@@ -706,6 +758,13 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                 limits[*row] = (limits[*row] - hours).max(0.0);
             }
         }
+        for (at, tonnes) in &block.piled {
+            for later in period..spans {
+                if let Some(row) = pile_row.get(&(*at, later)) {
+                    limits[*row] = (limits[*row] - tonnes).max(0.0);
+                }
+            }
+        }
     }
     let usage = |column: &Column| {
         let mut used = vec![0.0; limits.len()];
@@ -717,6 +776,15 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             used[period] += block.tonnes;
             for area in &block_areas[index] {
                 used[area_row[&(*area, period)]] += block.tonnes;
+            }
+            if block.authored_h.is_none() {
+                for (at, tonnes) in &block.piled {
+                    for later in period..spans {
+                        if let Some(row) = pile_row.get(&(*at, later)) {
+                            used[*row] += tonnes;
+                        }
+                    }
+                }
             }
             // A dig bar's ground: its feed and hauls are off the limits.
             let (crushed, hauled) = block.on_limits();
@@ -796,6 +864,11 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         let mut out = vec![(period, block.tonnes)];
         for area in &block_areas[index] {
             out.push((area_row[&(*area, period)], block.tonnes));
+        }
+        if block.authored_h.is_none() {
+            for (at, tonnes) in &block.piled {
+                out.extend((period..spans).filter_map(|later| pile_row.get(&(*at, later)).map(|row| (*row, *tonnes))));
+            }
         }
         let (crushed, hauled) = block.on_limits();
         for (crusher, tonnes) in crushed {
