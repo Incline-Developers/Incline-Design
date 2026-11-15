@@ -348,7 +348,8 @@ impl crate::app::App<'_> {
             return Err(vec![CaptureDiagnostic::global(tr!("planning-snapshot-no-project"))]);
         };
         let document: &Document = &project.project.document;
-        let plan = document.schedule().clone();
+        // The open scenario's, with the bars it starts from.
+        let plan = document.schedule().for_calculation();
         let Some(tonnage_field) = plan.tonnage_field() else {
             return Err(vec![CaptureDiagnostic::global(tr!("schedule-stage-no-tonnage-field"))]);
         };
@@ -1964,6 +1965,15 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<u64>, cancel: &Cance
             }
             rate_changes.push(at);
             period = next;
+        }
+    }
+    // Over the horizons of the scenarios this one starts from, their own
+    // finer steps.
+    for (end_h, step_h) in plan.inherited_steps() {
+        let mut at = step_h;
+        while at < end_h.min(horizon_h) {
+            rate_changes.push(at);
+            at += step_h;
         }
     }
     let spec = HorizonSpec {

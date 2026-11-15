@@ -519,6 +519,13 @@ pub(crate) struct App<'a> {
     /// can always say what was true when it was last run. Its indexes are
     /// built once, when it is published. See [`crate::app::schedule_run`].
     pub(crate) schedule_calculation: Option<std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>>,
+    /// The last result of each scenario that was left, by project runtime,
+    /// so opening it again shows it at once while it is still current.
+    pub(crate) schedule_scenario_results: Vec<(
+        u32,
+        crate::model::schedule::scenarios::ScenarioId,
+        std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>,
+    )>,
     /// Whether the held result reached the planning end when it was
     /// published. Such a schedule follows the end when it moves later; one
     /// run a period at a time stops where it was taken to.
@@ -761,6 +768,7 @@ impl<'a> Default for App<'a> {
             planning_entry_pending: false,
             planning_entry_step: None,
             schedule_calculation: None,
+            schedule_scenario_results: Vec::new(),
             schedule_reached_end: false,
             dig_block_count: None,
             pending_schedule_run: None,

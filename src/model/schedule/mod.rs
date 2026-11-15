@@ -27,6 +27,7 @@ pub(crate) mod loader_limits;
 pub(crate) mod optimisation;
 pub(crate) mod periods;
 pub(crate) mod result;
+pub(crate) mod scenarios;
 pub(crate) mod sequence;
 pub(crate) mod stockpile_operation;
 pub(crate) mod trucking;
@@ -667,6 +668,12 @@ pub(crate) enum ScheduleError {
     /// A class whose kind cannot change while machines of it hold bars of
     /// the old kind's work.
     KindInUse(Vec<String>),
+    /// An id that names no scenario in this plan.
+    UnknownScenario,
+    /// The only scenario: a project always has one.
+    LastScenario,
+    /// A scenario set to start from itself, or from one that starts from it.
+    ScenarioRing,
 }
 
 impl ScheduleError {
@@ -688,6 +695,9 @@ impl ScheduleError {
             Self::IdsExhausted => tr!("schedule-error-ids-exhausted"),
             Self::DuplicateId => tr!("schedule-error-duplicate-id"),
             Self::UnknownBar => tr!("schedule-error-unknown-bar"),
+            Self::UnknownScenario => tr!("schedule-error-unknown-scenario"),
+            Self::LastScenario => tr!("schedule-error-last-scenario"),
+            Self::ScenarioRing => tr!("schedule-error-scenario-ring"),
             Self::UnknownMember => tr!("schedule-error-unknown-member"),
             Self::DuplicateMember => tr!("schedule-error-duplicate-member"),
             Self::MalformedReference => tr!("schedule-error-malformed-reference"),
@@ -860,6 +870,9 @@ pub(crate) struct SchedulePlan {
     /// How many loaders may work in one area; see [`loader_limits`].
     #[serde(default, skip_serializing_if = "loader_limits::LoaderLimits::is_pristine")]
     loader_limits: loader_limits::LoaderLimits,
+    /// The project's other schedules, and which is open; see [`scenarios`].
+    #[serde(default, skip_serializing_if = "scenarios::Scenarios::is_empty")]
+    scenarios: scenarios::Scenarios,
 }
 
 /// The order the fleet is listed in: machine kinds as groups, and machines
@@ -945,6 +958,7 @@ impl Default for SchedulePlan {
             calendar_views: calendar_views::CalendarViews::default(),
             dependencies: dependencies::Dependencies::default(),
             loader_limits: loader_limits::LoaderLimits::default(),
+            scenarios: scenarios::Scenarios::default(),
         }
     }
 }
@@ -957,6 +971,55 @@ impl Default for SchedulePlan {
 /// exactly what this refuses. Two names differing only outside ASCII -
 /// `Löffel` and `LÖFFEL` - are therefore two names. Widening that is a single
 /// change here plus the two UI comparisons that mirror it.
+/// Fold bars into a plan's saved-content fingerprint.
+fn hash_bars<H: std::hash::Hasher>(bars: &[ScheduleBar], hasher: &mut H) {
+    use std::hash::Hash;
+    for bar in bars {
+        bar.id.hash(hasher);
+        bar.name.hash(hasher);
+        match &bar.work {
+            BarWork::Dig(_) => 0u8.hash(hasher),
+            BarWork::Auto(_) => 5u8.hash(hasher),
+            BarWork::Reclaim(work) => {
+                1u8.hash(hasher);
+                work.sources.hash(hasher);
+                work.maximum_t.map(f64::to_bits).hash(hasher);
+            }
+            BarWork::Delay(work) => {
+                2u8.hash(hasher);
+                work.kind.hash(hasher);
+            }
+            BarWork::Blast(order) => {
+                3u8.hash(hasher);
+                for member in &order.members {
+                    member.solid.hash(hasher);
+                    member.bench.to_bits().hash(hasher);
+                    member.anchor.map(f64::to_bits).hash(hasher);
+                }
+            }
+            BarWork::Follow(work) => {
+                4u8.hash(hasher);
+                work.leader.hash(hasher);
+            }
+        }
+        bar.agent.hash(hasher);
+        bar.priority.hash(hasher);
+        bar.window.start_h.to_bits().hash(hasher);
+        bar.window.end_h.map(f64::to_bits).hash(hasher);
+        for member in bar.members() {
+            member.solid.hash(hasher);
+            member.source.hash(hasher);
+            member.flitch_base.to_bits().hash(hasher);
+            member.flitch_top.to_bits().hash(hasher);
+            member.anchor[0].to_bits().hash(hasher);
+            member.anchor[1].to_bits().hash(hasher);
+            member.plan_area.to_bits().hash(hasher);
+            member.footprint.hash(hasher);
+            member.volume.map(f64::to_bits).hash(hasher);
+        }
+    }
+}
+
 fn same_name(left: &str, right: &str) -> bool {
     left.trim().eq_ignore_ascii_case(right.trim())
 }
@@ -1034,6 +1097,7 @@ impl SchedulePlan {
         self.delays.raise_allocator_to(&other.delays);
         self.dependencies.raise_allocator_to(&other.dependencies);
         self.loader_limits.raise_allocator_to(&other.loader_limits);
+        self.scenarios.raise_allocator_to(&other.scenarios);
     }
 
     pub(crate) fn delays(&self) -> &DelayConfig {
@@ -1070,32 +1134,23 @@ impl SchedulePlan {
         self.periods.unit = unit;
     }
 
-    /// Open the short-term or the long-term horizon: its end, calculation
-    /// step and period unit replace the open one's, which are kept for the
-    /// way back. Nothing else differs between them.
-    pub(crate) fn set_horizon(&mut self, horizon: periods::Horizon) -> ScheduleResult {
-        if horizon == self.periods.horizon {
-            return Ok(());
-        }
-        let open = periods::HorizonProfile {
-            end_day: self.experiment.planning_end_day,
-            interval_h: self.experiment.interval_h,
-            unit: self.periods.unit,
-        };
-        let next = self.periods.switch_horizon(open);
-        self.experiment.set_planning_end_day(next.end_day)?;
-        self.experiment.set_interval_h(next.interval_h)
-    }
-
     pub(crate) fn agent_ids(&self) -> Vec<LoaderAgentId> {
         self.agents.iter().map(|agent| agent.id).collect()
     }
 
     /// Delete a delay type, refused while any bar, list or roster is of it.
     pub(crate) fn remove_delay_type(&mut self, id: DelayTypeId) -> ScheduleResult {
+        // Bars of every scenario, whichever is open.
+        let stashed = self
+            .scenarios
+            .list
+            .iter()
+            .filter_map(|scenario| scenario.stash.as_ref())
+            .flat_map(|stash| stash.bars.iter());
         let mut users: Vec<String> = self
             .bars
             .iter()
+            .chain(stashed)
             .filter(|bar| bar.delay().is_some_and(|work| work.kind == Some(id)))
             .map(|bar| if bar.has_custom_name() { bar.name.clone() } else { tr!("delay-bar-unnamed") })
             .collect();
@@ -1452,18 +1507,22 @@ impl SchedulePlan {
         self.agents.retain(|agent| agent.id != id);
         self.machine_order.machines.retain(|machine| *machine != id);
         self.delays.forget_agent(id);
-        for bar in &mut self.bars {
-            if bar.agent == Some(id) {
-                bar.agent = None;
+        // In every scenario, whichever is open.
+        self.each_scenario(|plan| {
+            for bar in &mut plan.bars {
+                if bar.agent == Some(id) {
+                    bar.agent = None;
+                }
+                if let BarWork::Follow(work) = &mut bar.work
+                    && work.leader == Some(id)
+                {
+                    work.leader = None;
+                }
             }
-            if let BarWork::Follow(work) = &mut bar.work
-                && work.leader == Some(id)
-            {
-                work.leader = None;
-            }
-        }
-        // Its bars join Unassigned, where they may overlap bars already there.
-        self.separate_lanes();
+            // Its bars join Unassigned, where they may overlap bars already there.
+            plan.separate_lanes();
+            Ok(())
+        })?;
         Ok(())
     }
 
@@ -2365,8 +2424,12 @@ impl SchedulePlan {
         if !self.bar_height.is_finite() || !(MIN_BAR_HEIGHT..=MAX_BAR_HEIGHT).contains(&self.bar_height) {
             return Err(ScheduleError::InvalidBarHeight);
         }
+        self.migrate_horizons();
         // Files from before bars in one lane were kept apart.
-        self.separate_lanes();
+        self.each_scenario(|plan| {
+            plan.separate_lanes();
+            Ok(())
+        })?;
         for agent in &mut self.agents {
             agent.calendar.canonicalize_percentages();
         }
@@ -2396,6 +2459,63 @@ impl SchedulePlan {
             agent.calendar.compile(class.default_dig_rate_tph)?;
             agent.calendar.compile_rate(RateKind::Reclaim, class.default_reclaim_rate_tph)?;
         }
+        self.each_scenario(|plan| plan.validate_loaded_bars())?;
+        self.validate_scenarios()?;
+        let agents = self.agent_ids();
+        self.delays.validate_loaded(&agents)?;
+        self.validate_loaded_rest()
+    }
+
+    /// The scenarios' own invariants once each has passed on its bars: one
+    /// open and the rest stashed, ids unique across every scenario's bars,
+    /// no ring of starting points.
+    fn validate_scenarios(&mut self) -> ScheduleResult {
+        if self.scenarios.is_empty() {
+            return Ok(());
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for (index, scenario) in self.scenarios.list.iter().enumerate() {
+            if self.scenarios.list[..index].iter().any(|earlier| earlier.id == scenario.id) {
+                return Err(ScheduleError::DuplicateId);
+            }
+            checked_name(&scenario.name)?;
+            if (scenario.id == self.scenarios.open) == scenario.stash.is_some() {
+                return Err(ScheduleError::UnknownScenario);
+            }
+            if scenario
+                .base
+                .is_some_and(|base| self.scenarios.get(base).is_none() || self.scenarios.bases(scenario.id).contains(&scenario.id))
+            {
+                return Err(ScheduleError::ScenarioRing);
+            }
+        }
+        if self.scenarios.open_scenario().is_none() {
+            return Err(ScheduleError::UnknownScenario);
+        }
+        let stashed = self
+            .scenarios
+            .list
+            .iter()
+            .filter_map(|scenario| scenario.stash.as_ref())
+            .flat_map(|stash| stash.bars.iter());
+        for bar in self.bars.iter().chain(stashed) {
+            if !ids.insert(bar.id) {
+                return Err(ScheduleError::DuplicateId);
+            }
+        }
+        let highest_bar = ids.last().map(|id| id.0);
+        let highest_scenario = self.scenarios.list.iter().map(|scenario| scenario.id.0).max();
+        if let Some(highest) = highest_bar {
+            self.next_bar_id = self.next_bar_id.max(highest.checked_add(1).ok_or(ScheduleError::IdsExhausted)?);
+        }
+        if let Some(highest) = highest_scenario {
+            self.scenarios.next_id = self.scenarios.next_id.max(highest.checked_add(1).ok_or(ScheduleError::IdsExhausted)?);
+        }
+        Ok(())
+    }
+
+    /// One scenario's bars, as [`Self::validate_loaded`] checks them.
+    fn validate_loaded_bars(&mut self) -> ScheduleResult {
         for (index, bar) in self.bars.iter().enumerate() {
             if self.bars[..index].iter().any(|earlier| earlier.id == bar.id) {
                 return Err(ScheduleError::DuplicateId);
@@ -2429,8 +2549,11 @@ impl SchedulePlan {
                 BarWork::Follow(_) => return Err(ScheduleError::UnknownAgent),
             }
         }
-        let agents = self.agent_ids();
-        self.delays.validate_loaded(&agents)?;
+        Ok(())
+    }
+
+    /// The rest of [`Self::validate_loaded`], after the bars.
+    fn validate_loaded_rest(&mut self) -> ScheduleResult {
         for (index, calendar) in self.crusher_grade_calendars.iter().enumerate() {
             calendar.validate()?;
             if self.crusher_grade_calendars[..index]
@@ -2527,50 +2650,17 @@ impl SchedulePlan {
         self.drill_blast.hash_content(hasher);
         self.dependencies.hash_content(hasher);
         self.loader_limits.hash_content(hasher);
-        for bar in &self.bars {
-            bar.id.hash(hasher);
-            bar.name.hash(hasher);
-            match &bar.work {
-                BarWork::Dig(_) => 0u8.hash(hasher),
-                BarWork::Auto(_) => 5u8.hash(hasher),
-                BarWork::Reclaim(work) => {
-                    1u8.hash(hasher);
-                    work.sources.hash(hasher);
-                    work.maximum_t.map(f64::to_bits).hash(hasher);
-                }
-                BarWork::Delay(work) => {
-                    2u8.hash(hasher);
-                    work.kind.hash(hasher);
-                }
-                BarWork::Blast(order) => {
-                    3u8.hash(hasher);
-                    for member in &order.members {
-                        member.solid.hash(hasher);
-                        member.bench.to_bits().hash(hasher);
-                        member.anchor.map(f64::to_bits).hash(hasher);
-                    }
-                }
-                BarWork::Follow(work) => {
-                    4u8.hash(hasher);
-                    work.leader.hash(hasher);
-                }
-            }
-            bar.agent.hash(hasher);
-            bar.priority.hash(hasher);
-            bar.window.start_h.to_bits().hash(hasher);
-            bar.window.end_h.map(f64::to_bits).hash(hasher);
-            for member in bar.members() {
-                member.solid.hash(hasher);
-                member.source.hash(hasher);
-                member.flitch_base.to_bits().hash(hasher);
-                member.flitch_top.to_bits().hash(hasher);
-                member.anchor[0].to_bits().hash(hasher);
-                member.anchor[1].to_bits().hash(hasher);
-                member.plan_area.to_bits().hash(hasher);
-                member.footprint.hash(hasher);
-                member.volume.map(f64::to_bits).hash(hasher);
+        hash_bars(&self.bars, hasher);
+        for scenario in &self.scenarios.list {
+            scenario.id.hash(hasher);
+            scenario.name.hash(hasher);
+            scenario.base.hash(hasher);
+            if let Some(stash) = &scenario.stash {
+                stash.horizon.hash(hasher);
+                hash_bars(&stash.bars, hasher);
             }
         }
+        self.scenarios.open.hash(hasher);
     }
 
     /// An estimate of what one snapshot of this plan costs the undo history.

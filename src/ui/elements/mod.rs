@@ -40,6 +40,7 @@ pub(crate) mod schedule_loader_limits;
 pub(crate) mod schedule_optimisation;
 pub(crate) mod schedule_periods;
 pub(crate) mod schedule_report;
+pub(crate) mod schedule_scenarios;
 pub(crate) mod schedule_setup;
 pub(crate) mod schedule_trucking;
 pub(crate) mod solids_view;

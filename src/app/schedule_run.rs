@@ -294,7 +294,10 @@ impl crate::app::App<'_> {
             return key;
         }
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for bar in document.schedule().bars() {
+        // The bars a calculation works: the open scenario's, and those it
+        // starts from.
+        let calculated = document.schedule().for_calculation();
+        for bar in calculated.bars() {
             bar.id.0.hash(&mut hasher);
             bar.agent.map(|agent| agent.0).hash(&mut hasher);
             bar.priority.hash(&mut hasher);
@@ -494,7 +497,7 @@ impl crate::app::App<'_> {
 
     /// Hold `schedule` as the calculated result, noting whether it reaches
     /// the planning end.
-    fn hold_schedule(&mut self, schedule: Arc<CalculatedSchedule>) {
+    pub(crate) fn hold_schedule(&mut self, schedule: Arc<CalculatedSchedule>) {
         self.schedule_reached_end = schedule.requested_end_h >= self.planning_end_h() - 1e-9;
         // A long schedule is a great many small allocations: freeing a year
         // of hourly dispatch held up the frame that showed its successor by

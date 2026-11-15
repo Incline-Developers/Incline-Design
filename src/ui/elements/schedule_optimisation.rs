@@ -96,6 +96,28 @@ pub(crate) fn horizon_row(rows: &mut PropertyRows<'_>, editor: &mut EditorState,
     response.hint(tr!("experiment-end-day-help"));
 }
 
+/// The calculation step, in hours, as a row of `rows`.
+pub(crate) fn step_row(rows: &mut PropertyRows<'_>, editor: &mut EditorState, plan: &SchedulePlan, session: u32, edits: &mut Vec<UiCommand>) {
+    let experiment = plan.experiment();
+    let draft = draft(editor, plan);
+    let interval_h = parse_positive(&draft.interval_h).filter(|hours| *hours >= MIN_INTERVAL_H);
+    let invalid = crate::model::schedule::ScheduleError::InvalidExperimentSetting.message();
+    let response = rows.field(&tr!("experiment-interval"), &mut draft.interval_h, interval_h.is_none().then_some(invalid.as_str()));
+    if response.lost_focus()
+        && let Some(interval_h) = interval_h
+        && interval_h != experiment.interval_h
+    {
+        edits.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::SetExperimentHorizon {
+                end_day: experiment.planning_end_day,
+                interval_h,
+            },
+        ));
+    }
+    response.hint(tr!("experiment-interval-help"));
+}
+
 /// Which grades the schedule carries: a summary that opens a checklist of
 /// every field that could be one.
 ///

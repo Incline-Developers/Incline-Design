@@ -12,9 +12,10 @@
 //! so a week or a month reads and writes the days it covers ([`PeriodScale`])
 //! and a schedule means the same thing under either.
 //!
-//! The schedule has two horizons, short term and long term, each with its own
-//! end, calculation step and period unit. One is open at a time; the other's
-//! settings wait here ([`SchedulePeriods::other`]) until it is switched to.
+//! Each scenario has its own horizon - end, calculation step and period unit;
+//! see [`super::scenarios`]. Projects from before scenarios kept two here, a
+//! short term and a long term ([`SchedulePeriods::other`]), which become two
+//! scenarios when they are opened.
 
 use std::collections::BTreeMap;
 
@@ -114,7 +115,7 @@ impl PeriodScale {
     }
 }
 
-/// The schedule's two horizons.
+/// The two horizons of a project from before scenarios.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub(crate) enum Horizon {
@@ -126,35 +127,8 @@ pub(crate) enum Horizon {
 }
 
 impl Horizon {
-    pub(crate) const ALL: [Self; 2] = [Self::Short, Self::Long];
-
     fn is_short(&self) -> bool {
         *self == Self::Short
-    }
-
-    fn other(self) -> Self {
-        match self {
-            Self::Short => Self::Long,
-            Self::Long => Self::Short,
-        }
-    }
-
-    /// What a horizon is until it is set: a week of hours in days, or two
-    /// years of days in months (twenty-six of the four-week months an
-    /// undated schedule counts in).
-    fn defaults(self) -> HorizonProfile {
-        match self {
-            Self::Short => HorizonProfile {
-                end_day: super::experiment::DEFAULT_END_DAY,
-                interval_h: super::experiment::DEFAULT_INTERVAL_H,
-                unit: PeriodUnit::Day,
-            },
-            Self::Long => HorizonProfile {
-                end_day: 728,
-                interval_h: SCHEDULE_PERIOD_H,
-                unit: PeriodUnit::Month,
-            },
-        }
     }
 }
 
@@ -178,7 +152,8 @@ impl std::hash::Hash for HorizonProfile {
     }
 }
 
-/// The start date, the colours days are marked with, and the horizons.
+/// The start date, the colours days are marked with, and the open scenario's
+/// period unit.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct SchedulePeriods {
@@ -190,15 +165,15 @@ pub(crate) struct SchedulePeriods {
     /// the Gantt and Animate draw an unmarked day.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) colors: BTreeMap<u32, [u8; 3]>,
-    /// The horizon that is open. Its end and step are the plan's
-    /// [`super::experiment::ExperimentConfig`] ones, which every calculation
-    /// reads, and its period unit is `unit`.
+    /// Which of a project from before scenarios' two horizons was open.
+    /// Read, turned into scenarios, and back to short when written.
     #[serde(skip_serializing_if = "Horizon::is_short")]
     pub(crate) horizon: Horizon,
-    /// The open horizon's period unit.
+    /// The open scenario's period unit.
     #[serde(skip_serializing_if = "PeriodUnit::is_day")]
     pub(crate) unit: PeriodUnit,
-    /// The other horizon's settings, once it has been opened or changed.
+    /// The other horizon of a project from before scenarios. Read, turned
+    /// into a scenario of its own, and never written.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) other: Option<HorizonProfile>,
 }
@@ -215,16 +190,6 @@ impl SchedulePeriods {
             unit: self.unit,
             start: self.start_date,
         }
-    }
-
-    /// Open the other horizon: `open` is the settings being left, which wait
-    /// here, and the returned ones are those to take up.
-    pub(crate) fn switch_horizon(&mut self, open: HorizonProfile) -> HorizonProfile {
-        let next = self.other.unwrap_or_else(|| self.horizon.other().defaults());
-        self.horizon = self.horizon.other();
-        self.unit = next.unit;
-        self.other = Some(open);
-        next
     }
 }
 

@@ -2143,6 +2143,8 @@ pub(crate) struct EditorState {
     /// Show the Inspector down the right of the Gantt and Charts pages, rather
     /// than the strip it collapses to. Per-session: open at every launch.
     pub(crate) show_schedule_inspector: bool,
+    /// Whether the Scenarios island is open on the Gantt, Charts and Calendar.
+    pub(crate) show_schedule_scenarios: bool,
     /// Which tab of the Borehole Inspector panel is showing. Transient: not
     /// persisted, always starts back on [`BoreholeInspectorTab::Data`].
     pub(crate) borehole_inspector_tab: BoreholeInspectorTab,
@@ -4106,6 +4108,7 @@ impl EditorState {
             show_console: crate::app::io::default_show_console(),
             show_borehole_inspector: false,
             show_schedule_inspector: true,
+            show_schedule_scenarios: true,
             borehole_inspector_tab: BoreholeInspectorTab::default(),
             borehole_log_strat_field: None,
             well_log_style: Default::default(),
@@ -6593,7 +6596,11 @@ impl UiCommand {
                 | ScheduleEdit::SetExperimentHorizon { .. }
                 | ScheduleEdit::SetStartDate(_)
                 | ScheduleEdit::SetPeriodColors { .. }
-                | ScheduleEdit::SetHorizon(_)
+                | ScheduleEdit::OpenScenario(_)
+                | ScheduleEdit::AddScenario { .. }
+                | ScheduleEdit::RenameScenario { .. }
+                | ScheduleEdit::DeleteScenario(_)
+                | ScheduleEdit::SetScenarioBase { .. }
                 | ScheduleEdit::SetPeriodUnit(_)
                 | ScheduleEdit::SetExperimentSolveLimits { .. }
                 | ScheduleEdit::SetDiscountRate(_)
@@ -8922,8 +8929,24 @@ pub(crate) enum ScheduleEdit {
         days: Vec<u32>,
         color: Option<[u8; 3]>,
     },
-    /// Open the short-term or the long-term horizon.
-    SetHorizon(crate::model::schedule::periods::Horizon),
+    /// Open a scenario: its bars and horizon in place of the open one's.
+    OpenScenario(crate::model::schedule::scenarios::ScenarioId),
+    /// Add a scenario and open it: a copy of the open one, or one with no
+    /// bars of its own that starts from it.
+    AddScenario {
+        copy: bool,
+    },
+    RenameScenario {
+        id: crate::model::schedule::scenarios::ScenarioId,
+        name: String,
+    },
+    DeleteScenario(crate::model::schedule::scenarios::ScenarioId),
+    /// What a scenario starts from: the scenario whose bars it works as
+    /// they are, or none.
+    SetScenarioBase {
+        id: crate::model::schedule::scenarios::ScenarioId,
+        base: Option<crate::model::schedule::scenarios::ScenarioId>,
+    },
     /// Read the open horizon in days, weeks or months.
     SetPeriodUnit(crate::model::schedule::periods::PeriodUnit),
     /// The yearly rate, as a fraction, the long-term plan discounts at.

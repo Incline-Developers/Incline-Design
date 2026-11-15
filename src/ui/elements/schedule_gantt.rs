@@ -805,6 +805,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // ruler, which paints its own surface.
     draw_period_colors(ui, egui::Rect::from_min_size(ruler.min, egui::vec2(ruler.width(), 3.0)), editor.gantt, plan);
     draw_rows(ui, header, body, stripe, editor, &layout.rows);
+    draw_inherited(ui, body, editor, plan, &layout.rows);
     draw_row_resize(ui, header, editor, plan, &layout.rows, session, commands);
     draw_grid(ui, body, editor.gantt);
     draw_calendar_delays(ui, body, editor.gantt, editor.gantt.row_scroll, plan, &layout.rows);
@@ -1302,6 +1303,52 @@ pub(super) fn top_corners(left: bool, right: bool) -> egui::CornerRadius {
 /// rows, so the timeline's heading reads as one strip above them.
 pub(super) fn ruler_fill(visuals: &egui::Visuals) -> egui::Color32 {
     crate::ui::widgets::shifted(visuals.panel_fill, if visuals.dark_mode { 7 } else { -9 })
+}
+
+/// The bars the open scenario starts from, behind its own in their
+/// machines' rows: faded spans the height of the row, named on hover, worked
+/// as they are and edited only in the scenario they belong to.
+fn draw_inherited(ui: &mut egui::Ui, body: egui::Rect, editor: &EditorState, plan: &SchedulePlan, rows: &[Row]) {
+    let inherited = plan.inherited_bars();
+    if inherited.is_empty() || !body.is_positive() {
+        return;
+    }
+    let scroll = editor.gantt.row_scroll;
+    let fill = ui.visuals().weak_text_color().gamma_multiply(0.16);
+    let edge = egui::Stroke::new(1.0, ui.visuals().weak_text_color().gamma_multiply(0.45));
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let text = ui.visuals().weak_text_color();
+    let painter = ui.painter_at(body);
+    for row in rows.iter().filter(|row| row.agent.is_some() && !row.blasting) {
+        let top = body.top() + row.top - scroll;
+        if top + row.height < body.top() || top > body.bottom() {
+            continue;
+        }
+        // Each of its lanes a band of the row, in lane order, as the
+        // scenario it belongs to lays them out.
+        let mut lanes: Vec<u32> = inherited.iter().filter(|(_, bar)| bar.agent == row.agent).map(|(_, bar)| bar.priority).collect();
+        lanes.sort_unstable();
+        lanes.dedup();
+        let band = row.height / lanes.len().max(1) as f32;
+        for (scenario, bar) in inherited.iter().filter(|(_, bar)| bar.agent == row.agent) {
+            let (left, right) = BarExtent::of(editor.gantt, bar.window, body).drawn(body);
+            if right < body.left() || left > body.right() {
+                continue;
+            }
+            let lane = lanes.binary_search(&bar.priority).unwrap_or(0) as f32;
+            let span = egui::Rect::from_min_max(egui::pos2(left, top + lane * band + 1.0), egui::pos2(right, top + (lane + 1.0) * band - 1.0));
+            painter.rect(span, GROUP_CORNER_RADIUS, fill, edge, egui::StrokeKind::Inside);
+            let report = editor.schedule_bar_reports.iter().find(|report| report.bar == bar.id);
+            let label = bar_label(bar, report, Some(plan));
+            let galley = painter.layout_no_wrap(label.clone(), font.clone(), text);
+            if galley.size().x + 8.0 < span.width() {
+                painter.galley(egui::pos2(span.left() + 4.0, span.bottom() - galley.size().y - 2.0), galley, text);
+            }
+            let id = ui.scope_id().with(("gantt_inherited", bar.id.0));
+            ui.interact(span.intersect(body), id, egui::Sense::hover())
+                .hint(tr!("gantt-inherited-bar", bar = label, scenario = (*scenario).to_owned()));
+        }
+    }
 }
 
 /// The agent column and the row bands beside it, drawn together so a row's

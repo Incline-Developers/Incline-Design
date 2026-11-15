@@ -5679,3 +5679,27 @@ err-file-desc-project = project
 err-file-desc-opt-scenarios = optimisation scenarios
 err-file-desc-opt-report = optimisation report
 err-file-desc-sched-report = schedule report
+
+## Scenarios
+scenario-first-name = Scenario 1
+scenario-numbered-name = Scenario { $number }
+schedule-error-unknown-scenario = That scenario no longer exists.
+schedule-error-last-scenario = A project always has one scenario; add another before deleting this one.
+schedule-error-scenario-ring = A scenario cannot start from itself, or from a scenario that starts from it.
+scenario-list = Scenarios
+scenario-new = New scenario starting from this one
+scenario-copy = Copy of this scenario
+scenario-delete = Delete scenario
+scenario-name = Name
+scenario-name-help = What this scenario is called in the list.
+scenario-base = Starts from
+scenario-base-none = Nothing
+scenario-base-help = A scenario that starts from another works that scenario's bars as they are, and its own besides: a long-term scenario that starts from the short-term one plans the years after around the planner's next weeks. Those bars are edited in the scenario they belong to.
+scenario-bars = Bars of its own
+scenario-inherited-bars = Bars it starts from
+scenario-inherited-bars-help = Bars of the scenarios this one starts from, shown faded on the Gantt and worked as they are.
+scenario-horizon-days = { $count } days
+scenario-horizon-weeks = { $count } weeks
+scenario-horizon-months = { $count } months
+scenario-summary-from = { $horizon }, from { $base }
+gantt-inherited-bar = { $bar }, from { $scenario }: worked as it is in this scenario, and edited there.

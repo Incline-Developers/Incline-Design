@@ -302,7 +302,14 @@ impl crate::app::App<'_> {
                 plan.set_period_colors(&days, color);
                 Ok(())
             }),
-            ScheduleEdit::SetHorizon(horizon) => self.edit_schedule(|plan| plan.set_horizon(horizon)),
+            ScheduleEdit::OpenScenario(id) => self.open_scenario(id),
+            ScheduleEdit::AddScenario { copy } => self.edit_schedule(|plan| {
+                let name = plan.next_scenario_name();
+                plan.add_scenario(&name, copy).map(|_| ())
+            }),
+            ScheduleEdit::RenameScenario { id, name } => self.edit_schedule(|plan| plan.rename_scenario(id, &name)),
+            ScheduleEdit::DeleteScenario(id) => self.edit_schedule(|plan| plan.delete_scenario(id)),
+            ScheduleEdit::SetScenarioBase { id, base } => self.edit_schedule(|plan| plan.set_scenario_base(id, base)),
             ScheduleEdit::SetPeriodUnit(unit) => self.edit_schedule(|plan| {
                 plan.set_period_unit(unit);
                 Ok(())
@@ -665,6 +672,38 @@ impl crate::app::App<'_> {
             before: Box::new(before),
             after: Box::new(after),
         });
+    }
+
+    /// Open a scenario, keeping the one left's result to show again when it
+    /// is opened, and showing the opened one's if one was kept: currentness
+    /// decides, as for any held result, whether it still stands.
+    fn open_scenario(&mut self, id: crate::model::schedule::scenarios::ScenarioId) {
+        /// Results kept for scenarios not open, at most.
+        const KEPT: usize = 4;
+        let Some((runtime, leaving)) = self
+            .workspace
+            .active_project()
+            .map(|project| (project.runtime_id, project.project.document.schedule().scenarios().open))
+        else {
+            return;
+        };
+        let held = self.schedule_calculation.clone();
+        self.edit_schedule(|plan| plan.open_scenario(id));
+        let opened = self.workspace.active_document().map(|document| document.schedule().scenarios().open);
+        if opened != Some(id) || leaving == id {
+            return;
+        }
+        self.schedule_scenario_results.retain(|(at, scenario, _)| !(*at == runtime && *scenario == leaving));
+        if let Some(held) = held {
+            self.schedule_scenario_results.push((runtime, leaving, held));
+            if self.schedule_scenario_results.len() > KEPT {
+                self.schedule_scenario_results.remove(0);
+            }
+        }
+        if let Some(position) = self.schedule_scenario_results.iter().position(|(at, scenario, _)| *at == runtime && *scenario == id) {
+            let (_, _, kept) = self.schedule_scenario_results.remove(position);
+            self.hold_schedule(kept);
+        }
     }
 
     fn set_schedule_name(&mut self, name: String) {
