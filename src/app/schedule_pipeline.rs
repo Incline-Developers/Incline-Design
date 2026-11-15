@@ -685,7 +685,7 @@ impl crate::app::App<'_> {
                     blocking: false,
                 });
             }
-            document.schedule().bars().iter().filter(|bar| bar.blast_order().is_some()).count()
+            document.schedule().bars_with_inherited().filter(|bar| bar.blast_order().is_some()).count()
         });
         StageOutcome::Settled { diagnostics, entities }
     }
@@ -807,7 +807,9 @@ impl crate::app::App<'_> {
                 // only on a pile something delivers to or reclaims from: one
                 // nothing uses stops no run.
                 let used = routing.rules.iter().any(|rule| rule.enabled && rule.destinations.contains(&entry.id))
-                    || plan.bars().iter().any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id)));
+                    || plan
+                        .bars_with_inherited()
+                        .any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id)));
                 for message in stockpile_problems(plan, document, entry) {
                     diagnostics.push(StageDiagnostic {
                         entity: Some(entry.name.clone()),
@@ -1564,7 +1566,9 @@ fn compute_schedule_fingerprints(document: &crate::model::Document, solids: (u8,
                 format!("{:?}", entry.id),
                 format!("{:?}", plan.experiment().representation(entry.id)),
                 routing.rules.iter().any(|rule| rule.enabled && rule.destinations.contains(&entry.id))
-                    || plan.bars().iter().any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id))),
+                    || plan
+                        .bars_with_inherited()
+                        .any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id))),
                 plan.experiment().chunk_t(entry.id).map(f64::to_bits),
                 routing.inventory(entry.id).map(|inventory| {
                     let mut hasher = DefaultHasher::new();

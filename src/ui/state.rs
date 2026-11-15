@@ -2145,6 +2145,9 @@ pub(crate) struct EditorState {
     pub(crate) show_schedule_inspector: bool,
     /// Whether the Scenarios island is open on the Gantt, Charts and Calendar.
     pub(crate) show_schedule_scenarios: bool,
+    /// Each scenario's last calculated value, where there is one: the open
+    /// one's current result and those kept for the others.
+    pub(crate) schedule_scenario_values: Vec<(crate::model::schedule::scenarios::ScenarioId, f64)>,
     /// Which tab of the Borehole Inspector panel is showing. Transient: not
     /// persisted, always starts back on [`BoreholeInspectorTab::Data`].
     pub(crate) borehole_inspector_tab: BoreholeInspectorTab,
@@ -4109,6 +4112,7 @@ impl EditorState {
             show_borehole_inspector: false,
             show_schedule_inspector: true,
             show_schedule_scenarios: true,
+            schedule_scenario_values: Vec::new(),
             borehole_inspector_tab: BoreholeInspectorTab::default(),
             borehole_log_strat_field: None,
             well_log_style: Default::default(),

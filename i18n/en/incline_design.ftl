@@ -5705,3 +5705,5 @@ scenario-summary-from = { $horizon }, from { $base }
 gantt-inherited-bar = { $bar }, from { $scenario }: worked as it is in this scenario, and edited there.
 auto-bar-fix-in = Fix in { $scenario } up to { $time }
 auto-bar-fix-in-report = Fix automatic bar's ground in a scenario
+scenario-value = Value
+scenario-value-hint = { $summary }. Its value is from its last calculation, kept while other scenarios are open: open it to see whether it still stands.

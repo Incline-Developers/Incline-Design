@@ -1133,12 +1133,35 @@ impl crate::app::App<'_> {
     /// A stale result is kept and named, and its calculated figures are taken
     /// off the pages: drawing them beside bars that have since moved would put
     /// a figure next to ground it was not calculated from.
+    /// What each scenario's last result was worth, for the scenario list:
+    /// the open one's while it is current, and those kept for the others.
+    fn mirror_scenario_values(&mut self, open_result: Option<&CalculatedSchedule>) {
+        let Some(project) = self.workspace.active_project() else { return };
+        let runtime = project.runtime_id;
+        let open = project.project.document.schedule().scenarios().open;
+        let values: Vec<(crate::model::schedule::scenarios::ScenarioId, f64)> = open_result
+            .map(|result| (open, result.report.objective))
+            .into_iter()
+            .chain(
+                self.schedule_scenario_results
+                    .iter()
+                    .filter(|(at, scenario, _)| *at == runtime && *scenario != open)
+                    .map(|(_, scenario, kept)| (*scenario, kept.report.objective)),
+            )
+            .collect();
+        if self.editor.schedule_scenario_values != values {
+            self.editor.schedule_scenario_values = values;
+            self.redraw_requested = true;
+        }
+    }
+
     pub(crate) fn mirror_schedule_calculation(&mut self) {
         let current = self.schedule_calculation_is_current();
         let running = self.pending_schedule_run.as_ref().map(|pending| pending.requested_end_h);
         let improving = self.pending_schedule_run.as_ref().is_some_and(|pending| pending.showing_early) && current;
         let improve = self.pending_schedule_run.as_ref().is_some_and(|pending| pending.improve);
         let result = self.schedule_calculation.clone().filter(|_| current);
+        self.mirror_scenario_values(result.as_deref());
         let semantic = self.schedule_semantic_key();
         let attempt = self.schedule_run_diagnostics.as_ref().filter(|attempt| attempt.semantic == semantic);
         let held_status = self.schedule_calculation.as_ref().map(|calculation| {
@@ -1153,7 +1176,12 @@ impl crate::app::App<'_> {
         let recalculating = self.schedule_recalculating();
         // A Gantt nobody has put work on yet is a starting point, not a
         // failure: say what to do rather than why there is nothing to run.
-        let bars = self.workspace.active_document().map_or(&[][..], |document| document.schedule().bars());
+        // The open scenario's and those it starts from: a scenario of
+        // inherited bars alone has work to run.
+        let bars: Vec<&crate::model::schedule::ScheduleBar> = self
+            .workspace
+            .active_document()
+            .map_or_else(Vec::new, |document| document.schedule().bars_with_inherited().collect());
         let no_assigned_bars = bars.iter().all(|bar| bar.agent.is_none());
         // Dropped from the palette but not yet given its blocks.
         let empty_dig_bars = !no_assigned_bars

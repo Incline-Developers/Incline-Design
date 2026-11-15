@@ -15,7 +15,7 @@ use crate::{
         state::{ScheduleEdit, UiCommand},
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
-            data_grid::{DataGrid, GridRow, PropertyTable, grid_add_action_row, grid_row, stack_slot, table_stack},
+            data_grid::{DataGrid, PropertyTable, grid_add_action_row, grid_columns_row, stack_slot, table_stack},
             hint::Hint,
             island::{Island, Side},
         },
@@ -67,12 +67,20 @@ fn draw_panel(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pla
     let mut edits = Vec::new();
     table_stack(ui, rect, "schedule_scenarios", |ui| {
         let mut close = false;
+        let columns = [(tr!("scenario-name"), 0.6), (tr!("scenario-value"), 0.4)];
         DataGrid::new("schedule_scenario_list", stack_slot(ui), &tr!("scenario-list"))
             .title_close(&mut close)
+            .columns(&columns)
             .show(ui, |ui| {
                 for row in &rows {
                     let detail = summary(row, &rows);
-                    let response = grid_row(ui, GridRow::new(&row.name).selected(row.open).hint(detail.as_str()));
+                    let value = editor
+                        .schedule_scenario_values
+                        .iter()
+                        .find(|(id, _)| *id == row.id)
+                        .map_or_else(String::new, |(_, value)| crate::model::schedule::cashflow::money_text(*value));
+                    let (response, _) = grid_columns_row(ui, &[0.6, 0.4], &[&row.name, &value], row.open);
+                    let response = response.hint(if value.is_empty() { detail } else { tr!("scenario-value-hint", summary = detail) });
                     if response.clicked() && !row.open {
                         edits.push(UiCommand::schedule(session, ScheduleEdit::OpenScenario(row.id)));
                     }
