@@ -1424,6 +1424,10 @@ pub(crate) struct Document {
     /// and the one run that should says so itself.
     #[serde(skip)]
     saved_schedule: Option<std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>>,
+    /// The latest calculated schedule of each scenario that is not open,
+    /// kept with the project as the open one's is: opening one restores it.
+    #[serde(skip)]
+    scenario_saved_schedules: Vec<(schedule::scenarios::ScenarioId, std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>)>,
     #[serde(skip)]
     revision: u64,
     /// Document revision at which each object was last mutated. Lets the
@@ -2041,6 +2045,28 @@ impl Document {
         self.saved_schedule = saved;
     }
 
+    /// The saved schedules of the scenarios that are not open, for the file.
+    pub(crate) fn scenario_saved_schedules(&self) -> &[(schedule::scenarios::ScenarioId, std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>)] {
+        &self.scenario_saved_schedules
+    }
+
+    pub(crate) fn set_scenario_saved_schedules(&mut self, saved: Vec<(schedule::scenarios::ScenarioId, std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>)>) {
+        self.scenario_saved_schedules = saved;
+    }
+
+    /// `leaving` is no longer open and `entering` is: the open scenario's
+    /// saved schedule waits with the others, and `entering`'s, if it has
+    /// one, becomes the open one's.
+    pub(crate) fn swap_saved_schedule(&mut self, leaving: schedule::scenarios::ScenarioId, entering: schedule::scenarios::ScenarioId) {
+        self.scenario_saved_schedules.retain(|(scenario, _)| *scenario != leaving);
+        if let Some(saved) = self.saved_schedule.take() {
+            self.scenario_saved_schedules.push((leaving, saved));
+        }
+        if let Some(position) = self.scenario_saved_schedules.iter().position(|(scenario, _)| *scenario == entering) {
+            self.saved_schedule = Some(self.scenario_saved_schedules.remove(position).1);
+        }
+    }
+
     /// Swap in a whole schedule plan, as one undoable edit.
     ///
     /// The plan is small and edited a cell at a time, so a snapshot either
@@ -2077,6 +2103,9 @@ impl Document {
         }
         if self.saved_schedule.is_none() {
             self.saved_schedule.clone_from(&source.saved_schedule);
+        }
+        if self.scenario_saved_schedules.is_empty() {
+            self.scenario_saved_schedules.clone_from(&source.scenario_saved_schedules);
         }
     }
 

@@ -694,6 +694,10 @@ impl crate::app::App<'_> {
         if opened != Some(id) || leaving == id {
             return;
         }
+        // What each was saved with goes with it, as the file keeps it.
+        if let Some(document) = self.workspace.active_document_mut() {
+            document.swap_saved_schedule(leaving, id);
+        }
         self.schedule_scenario_results.retain(|(at, scenario, _)| !(*at == runtime && *scenario == leaving));
         if let Some(held) = held {
             self.schedule_scenario_results.push((runtime, leaving, held));
