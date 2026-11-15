@@ -583,6 +583,25 @@ pub(crate) fn publish(
         omitted_tonnes_t: omitted_tonnes_t + solution.adjustments.movement_total_t,
         notes: meta.notes,
     };
+    // Each automatic bar's blocks in the order they were finished, what it
+    // did not finish after in the order it was dealt: its loader works
+    // among the blocks within its reach as the hours suit, so this is the
+    // order it dug them in, and what Convert to Dig Sequence keeps.
+    let bar_blocks: Vec<(BarId, Vec<crate::model::DigBlockId>)> = {
+        let emptied: BTreeMap<crate::model::DigBlockId, f64> = ground.iter().filter_map(|balance| Some((balance.block, balance.emptied_h?))).collect();
+        identities
+            .bar_blocks
+            .iter()
+            .map(|(bar, blocks)| {
+                let mut blocks = blocks.clone();
+                blocks.sort_by(|a, b| {
+                    let at = |block| emptied.get(block).copied().unwrap_or(f64::INFINITY);
+                    at(a).total_cmp(&at(b))
+                });
+                (*bar, blocks)
+            })
+            .collect()
+    };
     let mut schedule = CalculatedSchedule::new(ScheduleParts {
         run: meta.run,
         semantic: meta.semantic,
@@ -593,7 +612,7 @@ pub(crate) fn publish(
         ground,
         piles,
         agents: identities.loaders.iter().map(|(_, agent, _)| *agent).collect(),
-        bar_blocks: identities.bar_blocks.clone(),
+        bar_blocks,
         block_names: {
             let held: std::collections::BTreeSet<_> = identities.bar_blocks.iter().flat_map(|(_, blocks)| blocks.iter().copied()).collect();
             identities

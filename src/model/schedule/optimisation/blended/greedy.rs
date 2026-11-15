@@ -707,6 +707,41 @@ impl<'a> State<'a> {
         sequence.get(self.cursor.borrow().get(&task).copied().unwrap_or(0)).copied()
     }
 
+    /// An automatic bar's blocks within its reach as a segment opens, the
+    /// blocks in `done` gone: the blocks of its sequence it could start, in
+    /// order - released, and with somewhere to send all of it - while those
+    /// before each come to no more than its lookahead. `None` for a bar that
+    /// digs its blocks in order.
+    fn reach(&self, task: usize, done: &BTreeSet<GroundId>, interval: Interval) -> Option<Vec<GroundId>> {
+        let entry = &self.input.tasks[task];
+        let TaskKind::Dig { sequence } = &entry.kind else { return None };
+        if entry.lookahead_t <= 0.0 {
+            return None;
+        }
+        let start = {
+            let mut cursor = self.cursor.borrow_mut();
+            let at = cursor.entry(task).or_default();
+            while sequence.get(*at).is_some_and(|block| !self.ground.get(block).is_some_and(|left| *left > FINISHED_T)) {
+                *at += 1;
+            }
+            *at
+        };
+        let mut before = 0.0;
+        let mut out = Vec::new();
+        for block in &sequence[start..] {
+            if before > entry.lookahead_t {
+                break;
+            }
+            let left = if done.contains(block) { 0.0 } else { self.ground.get(block).copied().unwrap_or(0.0) };
+            if left <= FINISHED_T || !self.blasted(*block) || !self.diggable(entry, *block, interval) {
+                continue;
+            }
+            out.push(*block);
+            before += left;
+        }
+        Some(out)
+    }
+
     fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }
@@ -744,7 +779,7 @@ impl<'a> State<'a> {
             else {
                 continue;
             };
-            let Some(bar) = self.open_bar(loader, task, &BTreeSet::new()) else { continue };
+            let Some(bar) = self.open_bar(loader, task, &BTreeSet::new(), interval) else { continue };
             for block in &bar.blocks {
                 for area in self.areas_of.get(block).into_iter().flatten() {
                     admitted[*area].insert(loader);
@@ -853,12 +888,14 @@ impl<'a> State<'a> {
 
     /// A loader's bar as it opens in a segment, or `None` when it has no
     /// work there: a delay.
-    fn open_bar(&self, loader: usize, task: usize, done: &BTreeSet<GroundId>) -> Option<Bar> {
+    fn open_bar(&self, loader: usize, task: usize, done: &BTreeSet<GroundId>, interval: Interval) -> Option<Bar> {
         match &self.input.tasks[task].kind {
             TaskKind::Dig { sequence } => Some(Bar {
                 loader,
                 task,
-                blocks: self.next_block(task, sequence, None, done).into_iter().collect(),
+                blocks: self
+                    .reach(task, done, interval)
+                    .unwrap_or_else(|| self.next_block(task, sequence, None, done).into_iter().collect()),
                 pile: None,
                 emptied: Vec::new(),
             }),
@@ -920,6 +957,10 @@ impl<'a> State<'a> {
             let mut occupied = self.occupied_by(topology);
             for bar in &mut topology.segments[last] {
                 let TaskKind::Dig { sequence } = &input.tasks[bar.task].kind else { continue };
+                // An automatic bar opened with all it may reach.
+                if input.tasks[bar.task].lookahead_t > 0.0 {
+                    continue;
+                }
                 let Some(&end) = bar.blocks.last() else { continue };
                 let left = self.ground.get(&end).copied().unwrap_or(0.0);
                 let rate = interval_rate(&input.loaders[bar.loader], interval.index).map_or(0.0, |rate| rate.dig_tph);
@@ -977,7 +1018,13 @@ impl<'a> State<'a> {
                     .iter()
                     .filter(|other| other.loader != bar.loader)
                     .map(|other| Bar {
-                        blocks: other.blocks.last().copied().into_iter().collect(),
+                        // An automatic bar keeps all it reaches; one in
+                        // order, the block it ends on.
+                        blocks: if input.tasks[other.task].lookahead_t > 0.0 {
+                            other.blocks.clone()
+                        } else {
+                            other.blocks.last().copied().into_iter().collect()
+                        },
                         ..other.clone()
                     })
                     .collect(),
@@ -1054,7 +1101,7 @@ impl<'a> State<'a> {
                 }
             }
             let Some(task) = following else { continue };
-            let Some(opened) = self.open_bar(bar.loader, task, &gone) else {
+            let Some(opened) = self.open_bar(bar.loader, task, &gone, interval) else {
                 continue;
             };
             if matches!(input.tasks[task].kind, TaskKind::Dig { .. }) && opened.blocks.is_empty() {
@@ -1082,6 +1129,15 @@ impl<'a> State<'a> {
             TaskKind::Dig { sequence } => {
                 if dig_tph <= 0.0 {
                     return Some(false);
+                }
+                if let Some(open) = self.reach(task, gone, interval) {
+                    return if open.is_empty() {
+                        Some(false)
+                    } else if open.iter().any(|block| !worked.contains(block) && self.ground[block] > SURELY_HELD_T) {
+                        Some(true)
+                    } else {
+                        None
+                    };
                 }
                 // Blocks before the bar's current one as the interval opened
                 // are gone already.
@@ -1236,7 +1292,7 @@ impl<'a> State<'a> {
                             let Some(source) = self.outlets.source(input, block) else {
                                 continue;
                             };
-                            if position + 1 < bar.blocks.len() {
+                            if position + 1 < bar.blocks.len() && task.lookahead_t <= 0.0 {
                                 pins.push((block, segment));
                             }
                             let extract = problem.add_keyed_column(("extract", bar.loader, block, segment), 0.0, 0.0..=left);
@@ -1593,7 +1649,9 @@ impl<'a> State<'a> {
         let mut pins = topology.pins.clone();
         for (segment, bars) in topology.segments.iter().enumerate() {
             for bar in bars {
-                pins.extend(bar.blocks.iter().rev().skip(1).map(|block| (*block, segment)));
+                if input.tasks[bar.task].lookahead_t <= 0.0 {
+                    pins.extend(bar.blocks.iter().rev().skip(1).map(|block| (*block, segment)));
+                }
             }
         }
         let mut extracted = plan.extracted;
@@ -1889,6 +1947,9 @@ impl<'a> State<'a> {
                 }
                 let current = sequence.get(*at).copied();
                 drop(cursor);
+                if let Some(reach) = self.reach(bar, &BTreeSet::new(), interval) {
+                    return !reach.is_empty();
+                }
                 current.is_some_and(|current| self.blasted(current) && self.diggable(task, current, interval))
             }
             TaskKind::Reclaim { approved_sources, maximum_t } => {

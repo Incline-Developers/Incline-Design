@@ -266,6 +266,11 @@ pub(crate) struct Task {
     pub(crate) window_start_h: f64,
     pub(crate) window_end_h: f64,
     pub(crate) kind: TaskKind,
+    /// An automatic bar's reach: the tonnes of released blocks in its
+    /// sequence, past those it has finished, its loader may be working
+    /// among at once, any of them as the hour suits - so it can blend
+    /// faces. Zero for an authored dig bar, whose blocks go in order.
+    pub(crate) lookahead_t: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]

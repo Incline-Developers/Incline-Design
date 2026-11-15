@@ -845,6 +845,9 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     {
         let mut remaining: HashMap<_, f64, foldhash::fast::FixedState> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
         let ordered: BTreeMap<_, Vec<usize>> = input.loaders.iter().enumerate().map(|(index, loader)| (loader.id, authored_tasks(input, index))).collect();
+        let outlets = super::input::OutletIndex::new(input);
+        // Each automatic bar's first block still to dig.
+        let mut reach_cursor: HashMap<usize, usize, foldhash::fast::FixedState> = HashMap::default();
         let tolerance = |ground| {
             input
                 .ground
@@ -888,6 +891,41 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                         continue;
                     };
                     let TaskKind::Dig { sequence } = &task.kind else { continue };
+                    if task.lookahead_t > 0.0 {
+                        // An automatic bar works any block within its reach:
+                        // what of the blocks before this one it could have
+                        // started - released, with somewhere to go - is still
+                        // to dig as the cell opened is no more than its
+                        // lookahead.
+                        let Some(task_index) = worked.or_else(|| dig_authority(input, ordered, later, *interval)) else {
+                            continue;
+                        };
+                        let at = reach_cursor.entry(task_index).or_default();
+                        while sequence
+                            .get(*at)
+                            .is_some_and(|block| before.get(block).or_else(|| remaining.get(block)).copied().unwrap_or(0.0) <= REPLAY_TOLERANCE_T)
+                        {
+                            *at += 1;
+                        }
+                        let mut ahead = 0.0;
+                        for earlier in sequence[*at..].iter().take_while(|block| **block != later) {
+                            let left = before.get(earlier).or_else(|| remaining.get(earlier)).copied().unwrap_or(0.0);
+                            if left > REPLAY_TOLERANCE_T
+                                && releases.get(earlier).is_none_or(|released| *released <= interval.start_h + 1e-9)
+                                && outlets.diggable(input, task, *earlier, |destination| room.contains(&(destination, interval.index)))
+                            {
+                                ahead += left;
+                            }
+                            if ahead > task.lookahead_t * (1.0 + 1e-9) + REPLAY_TOLERANCE_T {
+                                checker.report.issues.push(format!(
+                                    "automatic bar's reach broken: loader {} dug block {} in interval {} segment {segment} with {ahead:.3} t of its released blocks still before it",
+                                    task.loader.0, later.0, interval.index
+                                ));
+                                break;
+                            }
+                        }
+                        continue;
+                    }
                     for pair in sequence.windows(2).filter(|pair| pair[1] == later) {
                         let [earlier, later] = pair else { continue };
                         let Some(&left) = remaining.get(earlier) else { continue };
@@ -1255,6 +1293,22 @@ fn check_bar_priority(
                         // Its current block, released by its blast, and
                         // somewhere with room for all of it as the interval
                         // opened.
+                        TaskKind::Dig { sequence } if task.lookahead_t > 0.0 => {
+                            // Any released block within its reach.
+                            if rate.dig_tph <= 0.0 {
+                                return false;
+                            }
+                            for block in &sequence[state.current[bar].min(sequence.len())..] {
+                                let left = remaining.get(block).copied().unwrap_or(0.0);
+                                if left > REPLAY_TOLERANCE_T
+                                    && releases.get(block).is_none_or(|released| *released <= interval.start_h + 1e-9)
+                                    && outlets.diggable(input, task, *block, |destination| room.contains(&(destination, interval.index)))
+                                {
+                                    return true;
+                                }
+                            }
+                            false
+                        }
                         TaskKind::Dig { sequence } => {
                             rate.dig_tph > 0.0
                                 && sequence.get(state.current[bar]).is_some_and(|current| {

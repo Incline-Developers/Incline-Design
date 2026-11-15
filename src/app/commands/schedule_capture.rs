@@ -1006,38 +1006,34 @@ fn empty_chain(config: &crate::model::schedule::DrillBlastConfig) -> crate::mode
     }
 }
 
-/// Make each run of an automatic bar's blocks from one group a task of its
-/// own, in order, and list each automatic bar's blocks as they were dealt.
+/// Make each run of an automatic bar's blocks that comes free at one time a
+/// task of its own, in order, and list each automatic bar's blocks as they
+/// were dealt.
 ///
-/// A bar whose next block is not ready has no work, and its loader works its
-/// next bar. So that one block out of reach does not hold the rest of an
-/// automatic bar, the loader takes the first of its runs that is ready. A
-/// bar given nothing has no task at all.
-fn split_auto_runs(input: &mut BlendInput, identities: &mut CaptureIdentities, auto_ids: &[BarId], groups: &BTreeMap<GroundId, u32>, not_before_h: &BTreeMap<GroundId, f64>) {
+/// An automatic bar's loader works whichever of the next released blocks
+/// of its task suits the hour (`Task::lookahead_t`), so a block out of
+/// reach does not hold the rest of it. What a dig bar leaves is worked
+/// only from when that bar's window closes: such a run is a task opening
+/// then. A bar given nothing has no task at all.
+fn split_auto_runs(input: &mut BlendInput, identities: &mut CaptureIdentities, auto_ids: &[BarId], not_before_h: &BTreeMap<GroundId, f64>) {
     for (task, bar, name) in identities.tasks.clone() {
         if !auto_ids.contains(&bar) {
             continue;
         }
         let Some(index) = input.tasks.iter().position(|entry| entry.id == task) else { continue };
         let TaskKind::Dig { sequence } = &input.tasks[index].kind else { continue };
-        let mut runs: Vec<Vec<GroundId>> = Vec::new();
-        let mut last = None;
-        for ground in sequence {
-            let group = groups.get(ground).copied();
-            match runs.last_mut().filter(|_| group.is_some() && group == last) {
-                Some(run) => run.push(*ground),
-                None => runs.push(vec![*ground]),
-            }
-            last = group;
-        }
         let template = input.tasks[index].clone();
         // What a dig bar left is worked from when that bar's window closed;
         // a run that comes free after this bar closes is not.
-        let opens = |run: &[GroundId]| {
-            run.first()
-                .and_then(|ground| not_before_h.get(ground))
-                .map_or(template.window_start_h, |after| after.max(template.window_start_h))
-        };
+        let free = |ground: &GroundId| not_before_h.get(ground).map_or(template.window_start_h, |after| after.max(template.window_start_h));
+        let mut runs: Vec<Vec<GroundId>> = Vec::new();
+        for ground in sequence {
+            match runs.last_mut().filter(|run| run.first().is_some_and(|first| free(first) == free(ground))) {
+                Some(run) => run.push(*ground),
+                None => runs.push(vec![*ground]),
+            }
+        }
+        let opens = |run: &[GroundId]| run.first().map_or(template.window_start_h, free);
         let mut runs = runs.into_iter().filter(|run| opens(run) < template.window_end_h - 1e-9);
         match runs.next() {
             Some(first) => {
@@ -2101,6 +2097,7 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<u64>, cancel: &Cance
             window_start_h: bar.start_h,
             window_end_h: bar.end_h,
             kind,
+            lookahead_t: 0.0,
         });
     }
 
@@ -2542,7 +2539,7 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<u64>, cancel: &Cance
             if planned && summary.rounds == 0 {
                 continue;
             }
-            split_auto_runs(&mut trial, &mut named, &auto_ids, &groups, &not_before_h);
+            split_auto_runs(&mut trial, &mut named, &auto_ids, &not_before_h);
             order_auto_blasts(&mut trial, &named, &auto_ids);
             if !dependencies.is_empty() {
                 apply_dependencies(trial.drill_blast.get_or_insert_with(|| empty_chain(plan.drill_blast())), &dependencies);

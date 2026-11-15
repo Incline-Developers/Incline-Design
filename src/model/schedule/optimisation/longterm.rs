@@ -40,6 +40,8 @@ const IMPROVEMENT: f64 = 1e-6;
 /// The weight of a node no closure may hold: far past anything the scaled
 /// values sum to, and far inside what the closure solver adds up exactly.
 const FORBIDDEN: i64 = -(1 << 56);
+/// Hours in a day, over which an automatic bar's loader blends its ground.
+const DAY_H: f64 = 24.0;
 /// Hours in a year, for discounting.
 const YEAR_H: f64 = 8760.0;
 
@@ -1727,6 +1729,9 @@ fn deal(input: &mut BlendInput, request: &PlanRequest<'_>, blocks: &[Block], ord
     for bar in bars {
         if let Some(task) = input.tasks.iter_mut().find(|task| task.id == bar.task) {
             task.kind = TaskKind::Dig { sequence: bar.sequence };
+            // A day of its loader's digging: the crushers' grade targets
+            // are priced day by day, so a day's ground is what it blends.
+            task.lookahead_t = bar.tph * DAY_H;
         }
     }
 }

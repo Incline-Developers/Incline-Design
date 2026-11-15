@@ -635,6 +635,11 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             return Err(FormulationCancelled);
         }
         let TaskKind::Dig { sequence } = &task.kind else { continue };
+        // An automatic bar's blocks have no order of their own: what it may
+        // reach at once is the replay's to check.
+        if task.lookahead_t > 0.0 {
+            continue;
+        }
         let Some(loader_index) = input.loaders.iter().position(|entry| entry.id == task.loader) else {
             continue;
         };
@@ -2005,7 +2010,10 @@ impl DigReach {
             let TaskKind::Dig { sequence } = &task.kind else { continue };
             for (position, &ground) in sequence.iter().enumerate() {
                 // A predecessor the capture did not include has no order row.
-                let ahead = position.checked_sub(1).map(|before| sequence[before]).filter(|before| held.contains(before));
+                let ahead = position
+                    .checked_sub(1)
+                    .map(|before| sequence[before])
+                    .filter(|before| task.lookahead_t <= 0.0 && held.contains(before));
                 ways.entry((task.loader, ground)).or_default().push((task.window_start_h, ahead));
             }
         }
