@@ -4,7 +4,8 @@
 //! horizon at once, in periods: which period each block is best dug in, given
 //! that a block cannot go before the ground above it, that the loaders move
 //! only so many tonnes a period and that a crusher takes only so many. What
-//! is wanted is the discounted value of the material moved.
+//! is wanted is the discounted value of the material moved, less what each
+//! period's crusher feed costs off its grade targets.
 //!
 //! The capacities are not rows a solver has to satisfy block by block. Each
 //! is given a price, and a block dug in a period pays for the capacity it
@@ -100,6 +101,9 @@ struct Block {
     value: f64,
     /// Tonnes of it whose best destination is each crusher.
     crushed: Vec<(usize, f64)>,
+    /// What that crusher feed contains of each grade a crusher target
+    /// prices: `(crusher, grade, contained)`.
+    assay: Vec<(usize, usize, f64)>,
     /// Tonnes of it that can go only to stockpiles and dumps of limited
     /// room, by the one it goes to, its position in the input's
     /// destinations: a block with such material is not dug once that room
@@ -200,6 +204,12 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
             })
             .or_insert(candidate);
     }
+    // The grades each crusher's targets price, by crusher.
+    let targeted: BTreeSet<(usize, usize)> = input
+        .grade_targets
+        .iter()
+        .filter_map(|target| Some((crushers.iter().position(|id| *id == target.destination)?, target.grade)))
+        .collect();
     // Material some route takes to a destination of unlimited room.
     let limited = |destination: super::DestinationId| {
         input
@@ -260,6 +270,7 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
             let tonnes = source.map_or(0.0, |source| source.tonnes_t);
             let mut value = 0.0;
             let mut crushed: Vec<(usize, f64)> = Vec::new();
+            let mut assay: Vec<(usize, usize, f64)> = Vec::new();
             let mut piled: Vec<(usize, f64)> = Vec::new();
             let mut hauled: Vec<(usize, f64)> = Vec::new();
             for share in source.into_iter().flat_map(|source| source.material.iter()) {
@@ -287,6 +298,14 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
                         Some((_, held)) => *held += share_t,
                         None => crushed.push((crusher, share_t)),
                     }
+                    let fractions = input.grades.fractions(share.material).unwrap_or_default();
+                    for grade in targeted.iter().filter(|(at, _)| *at == crusher).map(|(_, grade)| *grade) {
+                        let contained = share_t * fractions.get(grade).copied().unwrap_or(0.0);
+                        match assay.iter_mut().find(|(at, held, _)| *at == crusher && *held == grade) {
+                            Some((_, _, held)) => *held += contained,
+                            None => assay.push((crusher, grade, contained)),
+                        }
+                    }
                 }
             }
             let authored_h = authored.get(ground).copied();
@@ -295,6 +314,7 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
                 tonnes: if authored_h.is_some() { 0.0 } else { tonnes },
                 value: if authored_h.is_some() { 0.0 } else { value },
                 crushed,
+                assay,
                 piled,
                 hauled,
                 worked: [0.0; 3],
@@ -347,6 +367,7 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
                 tonnes: 0.0,
                 value: 0.0,
                 crushed: Vec::new(),
+                assay: Vec::new(),
                 piled: Vec::new(),
                 hauled: Vec::new(),
                 worked: [0.0; 3],
@@ -441,6 +462,7 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
             tonnes: 0.0,
             value: 0.0,
             crushed: Vec::new(),
+            assay: Vec::new(),
             piled: Vec::new(),
             hauled: Vec::new(),
             worked: [0.0; 3],
@@ -741,6 +763,67 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             limits.push((capacity - opening).max(0.0));
         }
     }
+    // Each crusher grade target, period by period: what the period's feed
+    // contains against its tonnes, past each of the target's hinges, costs
+    // what the daily target charges for it. A period that keeps its average
+    // in the band can still have days outside it, so this is the least the
+    // days will pay, but it is what a plan chasing the richest ore never
+    // sees: its feed drifts out of the band for months.
+    struct Hinge {
+        row: usize,
+        boundary: f64,
+        direction: f64,
+        cost: f64,
+    }
+    let crusher_ids: Vec<DestinationId> = input
+        .destinations
+        .iter()
+        .filter(|entry| entry.kind == DestinationKind::Crusher)
+        .map(|entry| entry.id)
+        .collect();
+    let mut hinges: Vec<Hinge> = Vec::new();
+    let mut hinge_rows: BTreeMap<(usize, usize, usize), Vec<usize>> = BTreeMap::new();
+    {
+        let mut by_period: BTreeMap<(usize, usize, usize), Vec<&crate::model::schedule::grade_targets::GradeTarget>> = BTreeMap::new();
+        for target in &input.grade_targets {
+            let Some(crusher) = crusher_ids.iter().position(|id| *id == target.destination) else {
+                continue;
+            };
+            let hour = (f64::from(target.day) + 0.5) * crate::model::schedule::grade_targets::TARGET_PERIOD_H;
+            let Some(period) = periods.iter().position(|(start, end)| *start <= hour && hour < *end) else {
+                continue;
+            };
+            by_period.entry((crusher, target.grade, period)).or_default().push(&target.specification);
+        }
+        for (key, specifications) in by_period {
+            // The specification most of the period's days have.
+            let Some(specification) = specifications.iter().max_by_key(|held| specifications.iter().filter(|other| other == held).count()) else {
+                continue;
+            };
+            for (boundary, direction, slope) in specification.hinges() {
+                if slope <= 0.0 {
+                    continue;
+                }
+                hinge_rows.entry(key).or_default().push(hinges.len());
+                hinges.push(Hinge {
+                    row: limits.len(),
+                    boundary,
+                    direction,
+                    cost: slope * discount[key.2],
+                });
+                limits.push(0.0);
+            }
+        }
+    }
+    let hinge_use = |block: &Block, period: usize, out: &mut Vec<(usize, f64)>| {
+        for (crusher, grade, contained) in &block.assay {
+            let Some(rows) = hinge_rows.get(&(*crusher, *grade, period)) else { continue };
+            let tonnes: f64 = block.crushed.iter().filter(|(at, _)| at == crusher).map(|(_, tonnes)| tonnes).sum();
+            for hinge in rows.iter().map(|at| &hinges[*at]) {
+                out.push((hinge.row, hinge.direction * (contained - hinge.boundary * tonnes)));
+            }
+        }
+    };
     // What the dig bars' own ground takes of the crushers and trucks, in
     // the period they should dig it.
     for block in blocks {
@@ -765,47 +848,13 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                 }
             }
         }
-    }
-    let usage = |column: &Column| {
-        let mut used = vec![0.0; limits.len()];
-        for (index, (block, period)) in blocks.iter().zip(column).enumerate() {
-            let period = usize::from(*period);
-            if period >= spans {
-                continue;
-            }
-            used[period] += block.tonnes;
-            for area in &block_areas[index] {
-                used[area_row[&(*area, period)]] += block.tonnes;
-            }
-            if block.authored_h.is_none() {
-                for (at, tonnes) in &block.piled {
-                    for later in period..spans {
-                        if let Some(row) = pile_row.get(&(*at, later)) {
-                            used[*row] += tonnes;
-                        }
-                    }
-                }
-            }
-            // A dig bar's ground: its feed and hauls are off the limits.
-            let (crushed, hauled) = block.on_limits();
-            for (crusher, tonnes) in crushed {
-                if let Some(row) = crush_row.get(&(*crusher, period)) {
-                    used[*row] += tonnes;
-                }
-            }
-            for (truck, hours) in hauled {
-                if let Some(row) = haul_row.get(&(*truck, period)) {
-                    used[*row] += hours;
-                }
-            }
-            for (step, amount) in block.worked.iter().enumerate() {
-                if let Some(row) = machine_row.get(&(step, period)).filter(|_| *amount > 0.0) {
-                    used[*row] += amount;
-                }
-            }
+        // Its feed is in the crusher's blend all the same.
+        let mut fed = Vec::new();
+        hinge_use(block, period, &mut fed);
+        for (row, used) in fed {
+            limits[row] -= used;
         }
-        used
-    };
+    }
     let worth = |column: &Column| -> f64 {
         blocks
             .iter()
@@ -876,6 +925,9 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                 out.push((*row, *tonnes));
             }
         }
+        if block.authored_h.is_none() {
+            hinge_use(block, period, &mut out);
+        }
         for (truck, hours) in hauled {
             if let Some(row) = haul_row.get(&(*truck, period)) {
                 out.push((*row, *hours));
@@ -887,6 +939,19 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             }
         }
         out
+    };
+    // What a closure, as the period each block is dug in, takes of each row.
+    let usage = |column: &Column| {
+        let mut used = vec![0.0; limits.len()];
+        for (index, period) in column.iter().enumerate() {
+            let period = usize::from(*period);
+            if period < spans {
+                for (row, amount) in uses_in(index, period) {
+                    used[row] += amount;
+                }
+            }
+        }
+        used
     };
     // The plan is a partition of the "dug by" nodes into groups, each node
     // dug by its period to its group's share (Bienstock and Zuckerberg): the
@@ -900,56 +965,107 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
     let mut share: Vec<f64> = vec![0.0];
     let mut prices = vec![0.0; limits.len()];
     let started = std::time::Instant::now();
+    // The first split is a plan that can be dug: every block, in the order
+    // the blocks came, in the first period what it waits on and the limits
+    // leave room in - the grade targets are not limits, a period's feed may
+    // be off them at their cost. With nothing to start from, the first
+    // closures, priced at nothing, dig everything at once, and each round
+    // after them settles little more than a period, so most of the budget
+    // went on reaching a plan as good as the plainest one.
+    let hard: Vec<bool> = {
+        let mut hard = vec![true; limits.len()];
+        for hinge in &hinges {
+            hard[hinge.row] = false;
+        }
+        hard
+    };
+    let mut by_rank: Vec<usize> = (0..count).collect();
+    by_rank.sort_by_key(|index| rank[*index]);
+    let mut seeded = {
+        let mut left = limits.clone();
+        let mut column: Column = vec![never; count];
+        for &index in &by_rank {
+            let after = blocks[index].above.iter().map(|over| usize::from(column[*over]) + lag[index]).max().unwrap_or(0);
+            let first = after.max(opens[index]);
+            let fits = |period: usize, left: &[f64]| {
+                uses_in(index, period)
+                    .iter()
+                    .all(|(row, amount)| !hard[*row] || *amount <= 0.0 || left[*row] >= *amount - 1e-6)
+            };
+            if let Some(period) = (first..spans).find(|period| fits(*period, &left)) {
+                for (row, amount) in uses_in(index, period) {
+                    left[row] -= amount;
+                }
+                column[index] = period as u16;
+            }
+        }
+        Some(column)
+    };
     let (mut value, mut bound, mut rounds) = (0.0, f64::INFINITY, 0);
     while rounds < MAX_ROUNDS && started.elapsed() < request.budget {
         if cancelled() {
             return None;
         }
         let at = &prices;
-        // The best closure at these prices. A block dug in a period earns
-        // its discounted value less the capacity it pays for; as "dug by"
-        // nodes that is the difference between one period and the next.
-        let gain = |index: usize, period: usize| blocks[index].value * discount[period] - uses_in(index, period).iter().map(|(row, used)| at[*row] * used).sum::<f64>();
-        for (index, block) in blocks.iter().enumerate() {
-            for period in 0..spans {
-                let here = gain(index, period);
-                let next = if period + 1 < spans { gain(index, period + 1) } else { 0.0 };
-                // Before its blast could be ready the block is not to be had
-                // at any price.
-                // A dig bar's ground is gone from when it should be dug: no
-                // closure is left free to take it or not at no cost, which
-                // would split the groups for nothing.
-                weights[index * spans + period] = if period < opens[index] {
-                    FORBIDDEN
-                } else if block.authored_h.is_some() {
-                    1
-                } else {
-                    ((here - next) * scale).round() as i64
-                };
+        // Each node's side of the split: whether the closure holds it, or for
+        // the first plan, the period it digs the block in and the node's -
+        // a group for each period's blocks by each period, so the master
+        // can move any period's ground sooner or later from the start.
+        let (chosen, sides): (Vec<usize>, usize) = if let Some(column) = seeded.take() {
+            (
+                (0..nodes).map(|node| usize::from(column[node / spans]) * spans + node % spans).collect(),
+                (spans + 1) * spans,
+            )
+        } else {
+            // The best closure at these prices. A block dug in a period earns
+            // its discounted value less the capacity it pays for; as "dug by"
+            // nodes that is the difference between one period and the next.
+            let gain = |index: usize, period: usize| blocks[index].value * discount[period] - uses_in(index, period).iter().map(|(row, used)| at[*row] * used).sum::<f64>();
+            for (index, block) in blocks.iter().enumerate() {
+                for period in 0..spans {
+                    let here = gain(index, period);
+                    let next = if period + 1 < spans { gain(index, period + 1) } else { 0.0 };
+                    // Before its blast could be ready the block is not to be had
+                    // at any price.
+                    // A dig bar's ground is gone from when it should be dug: no
+                    // closure is left free to take it or not at no cost, which
+                    // would split the groups for nothing.
+                    weights[index * spans + period] = if period < opens[index] {
+                        FORBIDDEN
+                    } else if block.authored_h.is_some() {
+                        1
+                    } else {
+                        ((here - next) * scale).round() as i64
+                    };
+                }
             }
-        }
-        solver.update_values(&weights).ok()?;
-        solver.solve_with_cancel(cancelled).ok()?;
-        let pit = solver.pit().ok()?;
-        let chosen = pit.as_slice();
-        let column: Column = (0..count)
-            .map(|index| (0..spans).find(|period| chosen[index * spans + period]).map_or(never, |period| period as u16))
-            .collect();
-        rounds += 1;
-        // What this closure is worth at the prices, against what the plan
-        // is: no closure beating it means the prices are right.
-        let used = usage(&column);
-        let priced = worth(&column) - used.iter().zip(at).map(|(used, price)| used * price).sum::<f64>();
-        let allowance: f64 = limits.iter().zip(at).map(|(limit, price)| limit * price).sum();
-        bound = bound.min(priced + allowance);
-        if bound - value <= IMPROVEMENT * value.abs().max(1.0) {
-            break;
-        }
-        // Split each group by the closure.
-        let mut relabel: Vec<u32> = vec![u32::MAX; groups * 2];
+            solver.update_values(&weights).ok()?;
+            solver.solve_with_cancel(cancelled).ok()?;
+            let pit = solver.pit().ok()?;
+            let chosen = pit.as_slice();
+            let column: Column = (0..count)
+                .map(|index| (0..spans).find(|period| chosen[index * spans + period]).map_or(never, |period| period as u16))
+                .collect();
+            rounds += 1;
+            // What this closure is worth at the prices, against what the plan
+            // is: no closure beating it means the prices are right.
+            let used = usage(&column);
+            let priced = worth(&column) - used.iter().zip(at).map(|(used, price)| used * price).sum::<f64>();
+            let allowance: f64 = limits.iter().zip(at).map(|(limit, price)| limit * price).sum();
+            bound = bound.min(priced + allowance);
+            if bound - value <= IMPROVEMENT * value.abs().max(1.0) {
+                break;
+            }
+            (chosen.iter().map(|held| usize::from(*held)).collect(), 2)
+        };
+        // Split each group by the closure; the last solved split stays if
+        // the master cannot be solved on this one, as that is what the
+        // shares are of.
+        let solved = group.clone();
+        let mut relabel: Vec<u32> = vec![u32::MAX; groups * sides];
         let mut next = 0_u32;
         for (node, held) in group.iter_mut().enumerate() {
-            let key = *held as usize * 2 + usize::from(chosen[node]);
+            let key = *held as usize * sides + chosen[node];
             if relabel[key] == u32::MAX {
                 relabel[key] = next;
                 next += 1;
@@ -995,6 +1111,11 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         needs.dedup();
         let mut master = solver::Problem::new(solver::Sense::Maximise);
         let cols: Vec<usize> = (0..groups).map(|held| master.add_col(objective[held], 0.0, if closed[held] { 0.0 } else { 1.0 })).collect();
+        // How far each period's feed is past each hinge, at its cost.
+        let mut excess: BTreeMap<usize, usize> = BTreeMap::new();
+        for hinge in &hinges {
+            excess.insert(hinge.row, master.add_col(-hinge.cost, 0.0, f64::INFINITY));
+        }
         for (row, limit) in limits.iter().enumerate() {
             master.add_row(
                 f64::NEG_INFINITY,
@@ -1003,7 +1124,8 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                     .iter()
                     .enumerate()
                     .filter(|(_, used)| used.abs() > 1e-12)
-                    .map(|(held, used)| (cols[held], *used)),
+                    .map(|(held, used)| (cols[held], *used))
+                    .chain(excess.get(&row).map(|col| (*col, -1.0))),
             );
         }
         for (from, to) in &needs {
@@ -1016,6 +1138,7 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         };
         let solution = solver::solve(&master, &options);
         if solution.status != solver::Status::Optimal {
+            group = solved;
             break;
         }
         value = solution.objective;
@@ -1023,6 +1146,10 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         // A limit's price is what one more tonne of it would add.
         for (price, dual) in prices.iter_mut().zip(&solution.row_dual) {
             *price = dual.abs();
+        }
+        // Never more than the hinge costs: past that the excess pays it.
+        for hinge in &hinges {
+            prices[hinge.row] = prices[hinge.row].min(hinge.cost);
         }
     }
     // How much of each block the plan has dug by the end of each period.
@@ -1033,6 +1160,49 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                 .collect()
         })
         .collect();
+    let crushed_of = |block: &Block| block.crushed.iter().map(|(_, tonnes)| tonnes).sum::<f64>();
+    // Each block's lean off the crushers' grade targets, for the order
+    // within each period.
+    let blend = {
+        let mut aims: Vec<(usize, usize, f64, f64)> = Vec::new();
+        for target in &input.grade_targets {
+            let Some(crusher) = crusher_ids.iter().position(|id| *id == target.destination) else {
+                continue;
+            };
+            if aims.iter().any(|(at, grade, _, _)| *at == crusher && *grade == target.grade) {
+                continue;
+            }
+            let slope = target.specification.hinges().first().map_or(0.0, |(_, _, slope)| *slope);
+            aims.push((crusher, target.grade, target.specification.target, slope));
+        }
+        let crushers: Vec<&super::Destination> = input.destinations.iter().filter(|entry| entry.kind == DestinationKind::Crusher).collect();
+        let daily: Vec<f64> = crushers.iter().flat_map(|entry| entry.crusher_daily_t.iter().flatten().copied()).collect();
+        let day_t = if daily.is_empty() {
+            0.0
+        } else {
+            daily.iter().sum::<f64>() / daily.len() as f64 * crushers.len() as f64
+        };
+        (!aims.is_empty() && day_t > 0.0).then(|| Blend {
+            lean: blocks
+                .iter()
+                .map(|block| {
+                    aims.iter()
+                        .map(|(crusher, grade, aim, slope)| {
+                            let tonnes: f64 = block.crushed.iter().filter(|(at, _)| at == crusher).map(|(_, tonnes)| tonnes).sum();
+                            let contained: f64 = block
+                                .assay
+                                .iter()
+                                .filter(|(at, held, _)| at == crusher && held == grade)
+                                .map(|(_, _, contained)| contained)
+                                .sum();
+                            (contained - aim * tonnes) * slope
+                        })
+                        .collect()
+                })
+                .collect(),
+            day_t,
+        })
+    };
     // The plan is a mix of closures, each block dug in some of them, so no
     // one closure is the order. Each period is filled instead, to what the
     // loaders and crushers can take in it: first with the crusher feed the
@@ -1052,7 +1222,6 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
     // ground is split between the two as the plan splits it, or the ground
     // the plan is surest of - the stripping every closure digs early - takes
     // all of a period and leaves the crusher idle.
-    let crushed_of = |block: &Block| block.crushed.iter().map(|(_, tonnes)| tonnes).sum::<f64>();
     let mut other_room = vec![0.0; spans];
     for (index, block) in blocks.iter().enumerate() {
         let other = (block.tonnes - crushed_of(block)).max(0.0);
@@ -1171,7 +1340,7 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             }
         }
         fill.freed = held;
-        interleave(&mut fill.order[first..], blocks, &rank, &crushed_of);
+        interleave(&mut fill.order[first..], blocks, &rank, &crushed_of, blend.as_ref());
     }
     let Fill { placed, mut order, .. } = fill;
     // What no period took follows, by when the plan digs it on average and
@@ -1185,8 +1354,6 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             if dug[index] > 1e-12 { total / dug[index] } else { f64::from(never) }
         })
         .collect();
-    let mut by_rank: Vec<usize> = (0..count).collect();
-    by_rank.sort_by_key(|index| rank[*index]);
     let mut expected = when;
     for index in by_rank {
         let floor = blocks[index].above.iter().map(|over| expected[*over]).fold(f64::NEG_INFINITY, f64::max);
@@ -1261,12 +1428,24 @@ fn started_first(order: &[usize], blocks: &[Block], rank: &[usize], started: &[b
     out
 }
 
+/// How each block's crusher feed leans off the crushers' grade targets,
+/// and how much feed the crushers take in a day: what the order keeps in
+/// step so each day's blend is near its target.
+struct Blend {
+    /// By block: for each crusher and grade a target prices, what its feed
+    /// contains past the target's grade, at what the target charges for it.
+    lean: Vec<Vec<f64>>,
+    day_t: f64,
+}
+
 /// A period's blocks put in the order they are dug in: crusher feed and the
 /// rest in step, each as far through its own tonnes as the other, so the
 /// crusher is fed through the period rather than all at its start - it
-/// takes only so much a day - and nothing before what it waits on.
-fn interleave(slice: &mut [usize], blocks: &[Block], rank: &[usize], crushed_of: &dyn Fn(&Block) -> f64) {
-    use std::{cmp::Reverse, collections::BinaryHeap};
+/// takes only so much a day - and nothing before what it waits on. Of the
+/// feed free to come next, the one that brings the last day or so of feed
+/// nearest its grade targets: the targets are priced day by day, and what
+/// a period averages does not stop its days from swinging.
+fn interleave(slice: &mut [usize], blocks: &[Block], rank: &[usize], crushed_of: &dyn Fn(&Block) -> f64, blend: Option<&Blend>) {
     if slice.len() < 2 {
         return;
     }
@@ -1297,32 +1476,59 @@ fn interleave(slice: &mut [usize], blocks: &[Block], rank: &[usize], crushed_of:
             .max(1e-9)
     };
     let (feed_total, other_total) = (total(true), total(false));
-    let mut queues: [BinaryHeap<Reverse<(usize, usize)>>; 2] = [BinaryHeap::new(), BinaryHeap::new()];
+    // What is free to come next, feed and the rest.
+    let mut ready: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
     for (at, count) in waiting.iter().enumerate() {
         if *count == 0 {
-            queues[usize::from(feed(at))].push(Reverse((rank[slice[at]], at)));
+            ready[usize::from(feed(at))].push(at);
         }
     }
+    let width = blend.map_or(0, |blend| blend.lean.first().map_or(0, Vec::len));
+    let mut running = vec![0.0; width];
     let (mut fed, mut other) = (0.0, 0.0);
     let mut out = Vec::with_capacity(slice.len());
     while out.len() < slice.len() {
         let want_feed = fed / feed_total <= other / other_total;
-        let pick = if queues[usize::from(want_feed)].is_empty() {
+        let pick = if ready[usize::from(want_feed)].is_empty() {
             usize::from(!want_feed)
         } else {
             usize::from(want_feed)
         };
-        let Some(Reverse((_, at))) = queues[pick].pop() else { break };
+        let first_listed = |list: &[usize]| list.iter().enumerate().min_by_key(|(_, at)| rank[slice[**at]]).map(|(position, _)| position);
+        let chosen = match blend.filter(|_| pick == 1 && width > 0) {
+            Some(blend) => {
+                let off = |at: usize| {
+                    let lean = &blend.lean[slice[at]];
+                    running.iter().zip(lean).map(|(run, lean)| (run + lean).abs()).sum::<f64>()
+                };
+                ready[1]
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, a), (_, b)| off(**a).total_cmp(&off(**b)).then(rank[slice[**a]].cmp(&rank[slice[**b]])))
+                    .map(|(position, _)| position)
+            }
+            None => first_listed(&ready[pick]),
+        };
+        let Some(position) = chosen else { break };
+        let at = ready[pick].swap_remove(position);
+        let tonnes = blocks[slice[at]].tonnes;
         if pick == 1 {
-            fed += blocks[slice[at]].tonnes;
+            fed += tonnes;
+            if let Some(blend) = blend.filter(|_| width > 0) {
+                // The blend so far, older feed fading over about a day.
+                let keep = (-tonnes / blend.day_t.max(1.0)).exp();
+                for (run, lean) in running.iter_mut().zip(&blend.lean[slice[at]]) {
+                    *run = *run * keep + lean;
+                }
+            }
         } else {
-            other += blocks[slice[at]].tonnes;
+            other += tonnes;
         }
         out.push(slice[at]);
         for under in &below[at] {
             waiting[*under] -= 1;
             if waiting[*under] == 0 {
-                queues[usize::from(feed(*under))].push(Reverse((rank[slice[*under]], *under)));
+                ready[usize::from(feed(*under))].push(*under);
             }
         }
     }

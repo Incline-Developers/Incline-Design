@@ -2508,10 +2508,10 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<u64>, cancel: &Cance
     let mut dispatched = None;
     // ---- the automatic bars' order ------------------------------------------
     // Two orders for the automatic bars' ground: the long-term plan's, and
-    // the ground from the top down. The plan sees the loaders, crushers and
-    // trucks but not grade targets, stockpiles or routing, so the dispatch -
-    // which sees everything - schedules both, and the one worth more
-    // discounted is kept.
+    // the ground from the top down. The plan sees the loaders, crushers,
+    // trucks and each period's grade, but not each day's blend, stockpiles
+    // or routing, so the dispatch - which sees everything - schedules both,
+    // and the one worth more discounted is kept.
     if !auto_ids.is_empty() {
         use crate::model::schedule::optimisation::longterm;
         let auto_tasks: Vec<TaskId> = identities.tasks.iter().filter(|(_, bar, _)| auto_ids.contains(bar)).map(|(task, _, _)| *task).collect();
