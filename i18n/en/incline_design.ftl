@@ -5429,6 +5429,7 @@ err-sched-no-destination-left = No destination is left for dig group { $group } 
 
 # src/model/schedule/optimisation/scip/plan.rs
 err-sched-no-plan = No plan was found (solver status { $status })
+err-sched-plan-too-large = The plan is too large to build ({ $columns } columns)
 
 # src/app/commands/solids.rs
 err-solids-no-preview = No solid is being previewed

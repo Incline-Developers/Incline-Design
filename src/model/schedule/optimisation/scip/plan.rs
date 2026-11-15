@@ -1228,6 +1228,13 @@ pub(crate) fn relaxation_bound(input: &BlendInput, period_days: u32, time_limit:
     solve_periods(input, None, None, settings, period_days, true, stop)
 }
 
+/// The most dig columns, a loader digging a block in a period, a plan over
+/// periods is built with. Each takes about a hundred kilobytes with its rows
+/// and splits: two years of small blast panels, nearly every block a parcel
+/// of its own, made 420,000 of them over weeks and took more than 40 GB;
+/// Centralia's long-term plan makes under 30,000.
+const PERIOD_PLAN_COLUMNS: usize = 100_000;
+
 fn solve_periods(
     input: &BlendInput,
     seed: Option<&BlendSolution>,
@@ -1239,6 +1246,12 @@ fn solve_periods(
 ) -> Result<PlanSolve, String> {
     let started = Instant::now();
     let prepared = Prepared::new(input, window, period_days, bounding);
+    // A model past this is not built: it would not be solved in a budget,
+    // and building it can take more memory than the machine has.
+    let columns: usize = prepared.allowed.values().map(Vec::len).sum();
+    if columns > PERIOD_PLAN_COLUMNS {
+        return Err(crate::i18n::tr!("err-sched-plan-too-large", columns = columns.to_string()));
+    }
     // Nothing seeds a relaxation: its blast columns have no values in a
     // schedule, and joined days none per period.
     let seed = seed.filter(|_| !settings.relax);
