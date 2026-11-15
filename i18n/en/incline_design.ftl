@@ -5703,3 +5703,5 @@ scenario-horizon-weeks = { $count } weeks
 scenario-horizon-months = { $count } months
 scenario-summary-from = { $horizon }, from { $base }
 gantt-inherited-bar = { $bar }, from { $scenario }: worked as it is in this scenario, and edited there.
+auto-bar-fix-in = Fix in { $scenario } up to { $time }
+auto-bar-fix-in-report = Fix automatic bar's ground in a scenario

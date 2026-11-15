@@ -2560,6 +2560,31 @@ fn draw_bars(
                             commands.push(UiCommand::schedule(session, ScheduleEdit::ConvertAutoBarUntil { bar: bar.id, at_h: until }));
                             ui.close();
                         }
+                        // Or fixed in the scenario this one starts from, the
+                        // planner's, where it is worked first and this
+                        // scenario's automatic bars plan around it.
+                        if bar.is_auto()
+                            && until > bar.window.start_h + 1e-9
+                            && let Some((base, name)) = plan
+                                .scenarios()
+                                .open_scenario()
+                                .and_then(|open| open.base)
+                                .and_then(|base| Some((base, plan.scenarios().get(base)?.name.clone())))
+                            && ContextMenuAction::new(tr!("auto-bar-fix-in", scenario = name, time = super::schedule_periods::instant_label(until)))
+                                .enabled(schedule.is_some_and(|schedule| schedule.blocks_of(bar.id).is_some_and(|blocks| !blocks.is_empty())))
+                                .show(ui)
+                                .clicked()
+                        {
+                            commands.push(UiCommand::schedule(
+                                session,
+                                ScheduleEdit::FixAutoBarInScenario {
+                                    bar: bar.id,
+                                    at_h: until,
+                                    scenario: base,
+                                },
+                            ));
+                            ui.close();
+                        }
                         if let Some(work) = bar.reclaim()
                             && ContextMenuAction::new(tr!("reclaim-edit-bar")).show(ui).clicked()
                         {

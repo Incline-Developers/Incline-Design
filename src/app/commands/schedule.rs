@@ -340,8 +340,9 @@ impl crate::app::App<'_> {
                 window,
                 insert_lane,
             } => self.add_auto_bar(agent, priority, window, insert_lane),
-            ScheduleEdit::ConvertAutoBar(bar) => self.convert_auto_bar(bar, None),
-            ScheduleEdit::ConvertAutoBarUntil { bar, at_h } => self.convert_auto_bar(bar, Some(at_h)),
+            ScheduleEdit::ConvertAutoBar(bar) => self.convert_auto_bar(bar, None, None),
+            ScheduleEdit::ConvertAutoBarUntil { bar, at_h } => self.convert_auto_bar(bar, Some(at_h), None),
+            ScheduleEdit::FixAutoBarInScenario { bar, at_h, scenario } => self.convert_auto_bar(bar, Some(at_h), Some(scenario)),
             ScheduleEdit::SetFollowLeader { bar, leader } => self.edit_schedule(|plan| plan.set_follow_leader(bar, leader)),
             ScheduleEdit::AddDelayType { name, color } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.add_type(&name, color).map(|_| ()))),
             ScheduleEdit::RenameDelayType { kind, name } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.rename_type(kind, &name))),
@@ -899,7 +900,11 @@ impl crate::app::App<'_> {
     /// Make an automatic bar a dig bar of the blocks the schedule gave it -
     /// with `until`, only those it started before that hour, the rest of the
     /// bar staying automatic.
-    fn convert_auto_bar(&mut self, bar: crate::model::schedule::BarId, until: Option<f64>) {
+    /// Convert an automatic bar's ground into a dig sequence: all of it, or
+    /// what it started before `until`, in this scenario, or - with `into` -
+    /// as a dig bar of that scenario, one this starts from, leaving the
+    /// automatic bar to plan around it.
+    fn convert_auto_bar(&mut self, bar: crate::model::schedule::BarId, until: Option<f64>, into: Option<crate::model::schedule::scenarios::ScenarioId>) {
         let blocks = self.editor.schedule_result.as_ref().and_then(|schedule| {
             let blocks = schedule.blocks_of(bar)?;
             let Some(until) = until else { return Some(blocks.to_vec()) };
@@ -941,9 +946,17 @@ impl crate::app::App<'_> {
         if left > 0 {
             crate::userspace_log!("{}", tr!("auto-bar-convert-left-unworked", count = left));
         }
-        match until {
-            Some(at_h) => self.edit_schedule(|plan| plan.split_auto_bar(bar, at_h, members).map(|_| ())),
-            None => self.edit_schedule(|plan| plan.convert_auto_bar(bar, members)),
+        match (until, into) {
+            (Some(at_h), Some(scenario)) => self.edit_schedule(|plan| {
+                let held = plan.bar(bar).ok_or(crate::model::schedule::ScheduleError::UnknownBar)?;
+                let window = crate::model::schedule::WorkWindow {
+                    start_h: held.window.start_h,
+                    end_h: Some(at_h),
+                };
+                plan.fix_in_scenario(scenario, held.agent, window, members).map(|_| ())
+            }),
+            (Some(at_h), None) => self.edit_schedule(|plan| plan.split_auto_bar(bar, at_h, members).map(|_| ())),
+            (None, _) => self.edit_schedule(|plan| plan.convert_auto_bar(bar, members)),
         }
     }
 

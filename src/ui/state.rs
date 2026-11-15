@@ -6494,6 +6494,7 @@ impl UiCommand {
                 ScheduleEdit::AddAutoBar { .. } => report(tr!("schedule-add-auto-bar"), String::new()),
                 ScheduleEdit::ConvertAutoBar(_) => report(tr!("auto-bar-convert"), String::new()),
                 ScheduleEdit::ConvertAutoBarUntil { .. } => report(tr!("auto-bar-convert-until-report"), String::new()),
+                ScheduleEdit::FixAutoBarInScenario { .. } => report(tr!("auto-bar-fix-in-report"), String::new()),
                 ScheduleEdit::AddBlastBar { .. } => report(tr!("blast-add-bar"), String::new()),
                 ScheduleEdit::SetClassKind { .. }
                 | ScheduleEdit::SetClassLoaderType { .. }
@@ -9008,6 +9009,13 @@ pub(crate) enum ScheduleEdit {
     ConvertAutoBarUntil {
         bar: crate::model::schedule::BarId,
         at_h: f64,
+    },
+    /// Fix what an automatic bar started before `at_h` as a dig bar of
+    /// `scenario`, one the open scenario starts from.
+    FixAutoBarInScenario {
+        bar: crate::model::schedule::BarId,
+        at_h: f64,
+        scenario: crate::model::schedule::scenarios::ScenarioId,
     },
     /// Change which machine a follow bar follows.
     SetFollowLeader {

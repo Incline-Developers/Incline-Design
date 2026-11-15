@@ -400,6 +400,44 @@ impl SchedulePlan {
         Ok(out)
     }
 
+    /// Fix ground in `scenario`, one the open scenario starts from: a dig
+    /// bar of `members` there, on `agent` over `window`, in the first lane
+    /// that is free there. The open scenario then starts from it, as from
+    /// the rest of that scenario's bars, and its automatic bars plan around
+    /// it.
+    pub(crate) fn fix_in_scenario(
+        &mut self,
+        scenario: ScenarioId,
+        agent: Option<super::LoaderAgentId>,
+        window: super::WorkWindow,
+        members: Vec<super::DigBlockRef>,
+    ) -> ScheduleResult<super::BarId> {
+        if !self.scenarios.bases(self.scenarios.open).contains(&scenario) {
+            return Err(ScheduleError::UnknownScenario);
+        }
+        let mut order = super::DigOrder::default();
+        for member in members {
+            order.insert(usize::MAX, member)?;
+        }
+        let id = self.allocate_bar_id()?;
+        let index = self.scenarios.list.iter().position(|entry| entry.id == scenario).ok_or(ScheduleError::UnknownScenario)?;
+        let mut stash = self.scenarios.list[index].stash.take().ok_or(ScheduleError::UnknownScenario)?;
+        // Its bars as the plan's while the lane is found among them.
+        std::mem::swap(&mut self.bars, &mut stash.bars);
+        let lane = self.free_lane(None, agent, 0, window);
+        self.bars.push(ScheduleBar {
+            id,
+            name: String::new(),
+            work: super::BarWork::Dig(order),
+            agent,
+            priority: lane,
+            window,
+        });
+        std::mem::swap(&mut self.bars, &mut stash.bars);
+        self.scenarios.list[index].stash = Some(stash);
+        Ok(id)
+    }
+
     /// Projects from before scenarios kept a short-term and a long-term
     /// horizon over the one set of bars: those become two scenarios, each
     /// with a copy of the bars.
