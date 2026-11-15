@@ -1207,7 +1207,10 @@ fn open_auto_ground(source: &CaptureSnapshot, horizon_h: f64) -> OpenGround {
 /// cannot be.
 ///
 /// Runs on a worker. Cancellation is polled in each substantial loop.
-pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<BlendCapture, Vec<CaptureDiagnostic>> {
+/// `saved` is the fingerprint of a schedule saved with the project that the
+/// run will restore if the capture matches it: an automatic bars' order that
+/// matches it is taken without dispatching either.
+pub(crate) fn build(source: &CaptureSnapshot, saved: Option<u64>, cancel: &CancelFlag) -> Result<BlendCapture, Vec<CaptureDiagnostic>> {
     let started = Instant::now();
     let mut problems = Diagnostics::default();
     let mut notes: Vec<String> = Vec::new();
@@ -2548,9 +2551,12 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 _ => None,
             }
         };
+        // An order the saved schedule answers is that schedule's, which the
+        // run restores: neither needs dispatching to choose it.
+        let restorable = saved.and_then(|wanted| candidates.iter().position(|(trial, _, _)| stable_fingerprint(source, trial) == wanted));
         // The two dispatches are independent: side by side.
-        let mut found: Vec<Option<(f64, crate::model::schedule::optimisation::blended::greedy::Dispatched)>> = match candidates.as_slice() {
-            [(planned, _, _), (top_down, _, _)] => {
+        let mut found: Vec<Option<(f64, crate::model::schedule::optimisation::blended::greedy::Dispatched)>> = match (restorable, candidates.as_slice()) {
+            (None, [(planned, _, _), (top_down, _, _)]) => {
                 let (planned, top_down) = rayon::join(|| worth(planned), || worth(top_down));
                 vec![planned, top_down]
             }
@@ -2562,8 +2568,9 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         }
         // The plan's order unless the top-down one schedules for more, both
         // discounted as the plan values ground.
-        let chosen = match values.as_slice() {
-            [Some(planned), Some(top_down)] if top_down > planned => 1,
+        let chosen = match (restorable, values.as_slice()) {
+            (Some(position), _) => position,
+            (None, [Some(planned), Some(top_down)]) if top_down > planned => 1,
             _ => 0,
         };
         let summary = candidates[0].2;

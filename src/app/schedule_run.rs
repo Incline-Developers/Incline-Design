@@ -606,6 +606,10 @@ impl crate::app::App<'_> {
             }
         };
         self.cancel_schedule_run_calculation_quietly();
+        let saved_fingerprint = saved
+            .as_ref()
+            .filter(|saved| (saved.requested_end_h - requested_end_h).abs() <= 1e-9)
+            .map(|saved| saved.fingerprint);
         let semantic = self.schedule_semantic_key();
         self.schedule_run_serial += 1;
         let serial = self.schedule_run_serial;
@@ -642,7 +646,7 @@ impl crate::app::App<'_> {
             tr!("schedule-run-job"),
             vec![JobKey::ScheduleRun { runtime, serial }],
             move |cancel| {
-                let capture = match schedule_capture::build(&snapshot, cancel) {
+                let capture = match schedule_capture::build(&snapshot, saved_fingerprint, cancel) {
                     Ok(capture) => capture,
                     Err(problems) => {
                         return Ok(if cancel.is_cancelled() {
