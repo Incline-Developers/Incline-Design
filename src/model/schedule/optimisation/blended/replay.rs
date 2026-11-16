@@ -895,8 +895,8 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                         // An automatic bar works any block within its reach:
                         // what of the blocks before this one it could have
                         // started - released, with somewhere to go - is still
-                        // to dig as the cell opened is no more than its
-                        // lookahead.
+                        // to dig as the cell opened is no more than the
+                        // lookahead's days of it.
                         let Some(task_index) = worked.or_else(|| dig_authority(input, ordered, later, *interval)) else {
                             continue;
                         };
@@ -917,7 +917,8 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                                 ahead += left;
                                 fed += left * outlets.feed_share(task.loader, *earlier);
                             }
-                            if ahead > task.lookahead_t * (1.0 + 1e-9) + REPLAY_TOLERANCE_T && fed > task.lookahead_feed_t * (1.0 + 1e-9) + REPLAY_TOLERANCE_T {
+                            let days = super::input::LOOKAHEAD_DAYS as f64;
+                            if ahead > days * task.lookahead_t * (1.0 + 1e-9) + REPLAY_TOLERANCE_T && fed > days * task.lookahead_feed_t * (1.0 + 1e-9) + REPLAY_TOLERANCE_T {
                                 checker.report.issues.push(format!(
                                     "automatic bar's reach broken: loader {} dug block {} in interval {} segment {segment} with {ahead:.3} t of its released blocks still before it",
                                     task.loader.0, later.0, interval.index

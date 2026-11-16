@@ -98,8 +98,8 @@ use std::{
 use super::{
     drill_blast::Chain,
     input::{
-        BlendGradeTarget, BlendInput, BlendPile, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, OutletIndex, REST_RECEIPT_T, attribute_reclaim, authored_tasks,
-        interval_rate, task_active, task_authorises,
+        BlendGradeTarget, BlendInput, BlendPile, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, LOOKAHEAD_DAYS, OutletIndex, REST_RECEIPT_T, attribute_reclaim,
+        authored_tasks, interval_rate, task_active, task_authorises,
     },
     lp::{Col, LinearProgram, WarmStarts},
     plan::PlanTargets,
@@ -109,6 +109,17 @@ use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationK
 
 /// Remaining tonnes at or below which a block counts as finished.
 const FINISHED_T: f64 = 1e-9;
+/// What the lookahead counts as chosen for today: more than nothing.
+const POOL_T: f64 = 1e-3;
+/// The blocks of one automatic bar the lookahead considers, at most.
+const LOOKAHEAD_BLOCKS: usize = 400;
+/// What the lookahead takes off a day's worth for each day later: digging
+/// sooner is worth a little more, so each day is filled before the next.
+const DAY_DISCOUNT: f64 = 0.01;
+/// The lookahead's cost per tonne, as a share of the largest value per
+/// tonne, of each day of digging a block stands behind in its bar's order:
+/// the plan's order where nothing else decides.
+const ORDER_COST: f64 = 0.01;
 
 /// Below this a dig or a reclaim is not worth a movement row, and loader
 /// capacity left over does not open the next block.
@@ -364,6 +375,11 @@ struct State<'a> {
     /// Each dig bar's current block, by position in its sequence, as the
     /// latest interval opened: ground only goes down, so it only moves on.
     cursor: RefCell<BTreeMap<usize, usize>>,
+    /// Each automatic bar's ground for a day, as the lookahead chose it:
+    /// the day, the interval it was chosen in, and the blocks.
+    pools: RefCell<BTreeMap<usize, Pool>>,
+    /// Where the lookahead's programs start from.
+    lookahead_warm: RefCell<WarmStarts>,
     /// The loader areas each block is in, by position in
     /// [`BlendInput::loader_areas`].
     areas_of: BTreeMap<GroundId, Vec<usize>>,
@@ -372,6 +388,12 @@ struct State<'a> {
     last_in: Vec<BTreeSet<usize>>,
     cancel: &'a AtomicBool,
 }
+
+/// An automatic bar's ground for a day: the day, the interval it was
+/// chosen in, and the blocks.
+type Pool = (u32, usize, Vec<GroundId>);
+/// A row's columns and their coefficients.
+type Terms = Vec<(Col, f64)>;
 
 // Days arrive in order. A route's latest delivery is today's total; its
 // completed days retain the original summation order without another tree.
@@ -663,6 +685,8 @@ impl<'a> State<'a> {
             guidance: DailyGuidance::default(),
             warm: RefCell::default(),
             cursor: RefCell::default(),
+            pools: RefCell::default(),
+            lookahead_warm: RefCell::default(),
             areas_of: {
                 let mut areas_of: BTreeMap<GroundId, Vec<usize>> = BTreeMap::new();
                 for (area, entry) in input.loader_areas.iter().enumerate() {
@@ -740,7 +764,246 @@ impl<'a> State<'a> {
             before += left;
             fed += left * self.outlets.feed_share(entry.loader, *block);
         }
-        Some(out)
+        Some(self.day_pool(task, done, interval).unwrap_or(out))
+    }
+
+    /// An automatic bar's ground for the rest of the day, as the lookahead
+    /// chose it, less what is gone: chosen afresh as each day opens, and
+    /// once more when the day's choice is mostly dug. `None` when the
+    /// lookahead chose it nothing, or could not choose: the bar then works
+    /// its sequence's next day of ground.
+    fn day_pool(&self, task: usize, done: &BTreeSet<GroundId>, interval: Interval) -> Option<Vec<GroundId>> {
+        let entry = &self.input.tasks[task];
+        let TaskKind::Dig { sequence } = &entry.kind else { return None };
+        let day = interval.day();
+        // The blocks it may dig now: those with no more than the lookahead's
+        // days of released ground before them, as the replay checks.
+        let mut window = BTreeSet::new();
+        {
+            let start = self.cursor.borrow().get(&task).copied().unwrap_or(0);
+            let days = LOOKAHEAD_DAYS as f64;
+            let (mut before, mut fed) = (0.0, 0.0);
+            for &block in &sequence[start.min(sequence.len())..] {
+                if before > days * entry.lookahead_t && fed > days * entry.lookahead_feed_t {
+                    break;
+                }
+                let left = if done.contains(&block) { 0.0 } else { self.ground.get(&block).copied().unwrap_or(0.0) };
+                if left <= FINISHED_T || !self.blasted(block) || !self.diggable(entry, block, interval) {
+                    continue;
+                }
+                window.insert(block);
+                before += left;
+                fed += left * self.outlets.feed_share(entry.loader, block);
+            }
+        }
+        let live = |pool: &[GroundId]| -> (Vec<GroundId>, f64) {
+            let mut left_t = 0.0;
+            let blocks = pool
+                .iter()
+                .copied()
+                .filter(|block| {
+                    let left = self.ground.get(block).copied().unwrap_or(0.0);
+                    let keep = window.contains(block);
+                    if keep {
+                        left_t += left;
+                    }
+                    keep
+                })
+                .collect();
+            (blocks, left_t)
+        };
+        let day_left = ((f64::from(day) + 1.0) * 24.0 - interval.start_h).clamp(0.0, 24.0) / 24.0;
+        let held = self.pools.borrow().get(&task).filter(|(at, _, _)| *at == day).cloned();
+        if let Some((_, chosen_in, pool)) = held {
+            let (blocks, left_t) = live(&pool);
+            // Enough for half what the loader digs in the rest of the day,
+            // or chosen this interval already.
+            if chosen_in == interval.index || left_t >= 0.5 * entry.lookahead_t * day_left {
+                return (!blocks.is_empty()).then_some(blocks);
+            }
+        }
+        let chosen = match self.look_ahead(interval, day_left) {
+            Ok(chosen) => chosen,
+            Err(reason) => {
+                log::debug!("lookahead in interval {}: {reason}", interval.index);
+                BTreeMap::new()
+            }
+        };
+        let mut pools = self.pools.borrow_mut();
+        for (index, other) in self.input.tasks.iter().enumerate() {
+            if other.lookahead_t > 0.0 {
+                pools.insert(index, (day, interval.index, chosen.get(&index).cloned().unwrap_or_default()));
+            }
+        }
+        let (blocks, _) = live(chosen.get(&task)?);
+        (!blocks.is_empty()).then_some(blocks)
+    }
+
+    /// Which ground each automatic bar digs today, chosen looking
+    /// [`LOOKAHEAD_DAYS`] days ahead: the released blocks of each bar's
+    /// sequence within that many days of its digging are shared out over
+    /// the days by one program, each day's crusher receipts priced against
+    /// the day's grade targets as the hourly program prices them, within
+    /// each loader's day and each crusher's daily budget, and the plan's
+    /// order a tie-break. A day's blend then has the week's faces to come
+    /// from, and today does not take what the days after need.
+    fn look_ahead(&self, interval: Interval, day_left: f64) -> Result<BTreeMap<usize, Vec<GroundId>>, String> {
+        let input = self.input;
+        let day = interval.day();
+        let days = LOOKAHEAD_DAYS;
+        // Money per tonne, the production credit that has every loader dig
+        // its day, and a tie-break per day of the plan's order.
+        let credit = self.credit.iter().copied().fold(0.0_f64, f64::max);
+        let money: Vec<f64> = self.weight.iter().zip(&self.credit).map(|(weight, credit)| weight - credit).collect();
+        let largest = money.iter().map(|value| value.abs()).fold(1.0_f64, f64::max);
+        let order_cost = ORDER_COST * largest;
+        let later = |d: usize| (1.0 - DAY_DISCOUNT).powi(d as i32);
+        let crushers: Vec<usize> = input
+            .destinations
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.kind == DestinationKind::Crusher)
+            .map(|(i, _)| i)
+            .collect();
+        let mut problem = LinearProgram::default();
+        let mut taken: BTreeMap<GroundId, (f64, Vec<(Col, f64)>)> = BTreeMap::new();
+        let mut loader_days: BTreeMap<(usize, usize), (f64, Terms)> = BTreeMap::new();
+        let mut crusher_days: BTreeMap<(usize, usize), Vec<(Col, f64)>> = BTreeMap::new();
+        // (target, terms of fed tonnes and the grade they carry)
+        let mut receipts: BTreeMap<usize, Vec<(Col, f64, f64)>> = BTreeMap::new();
+        let mut today: Vec<(usize, GroundId, Col)> = Vec::new();
+        let ends_h = interval.start_h + days as f64 * 24.0;
+        for (task_index, task) in input.tasks.iter().enumerate() {
+            let TaskKind::Dig { sequence } = &task.kind else { continue };
+            if task.lookahead_t <= 0.0 || task.window_start_h > ends_h || task.window_end_h <= interval.start_h {
+                continue;
+            }
+            let Some(loader) = input.loaders.iter().position(|loader| loader.id == task.loader) else {
+                continue;
+            };
+            for d in 0..days {
+                let cap = task.lookahead_t * if d == 0 { day_left } else { 1.0 };
+                let entry = loader_days.entry((loader, d)).or_default();
+                entry.0 = entry.0.max(cap);
+            }
+            let start = self.cursor.borrow().get(&task_index).copied().unwrap_or(0);
+            let (mut before, mut fed, mut count) = (0.0, 0.0, 0);
+            for &block in &sequence[start.min(sequence.len())..] {
+                if (before > days as f64 * task.lookahead_t && fed > days as f64 * task.lookahead_feed_t) || count >= LOOKAHEAD_BLOCKS {
+                    break;
+                }
+                let left = self.ground.get(&block).copied().unwrap_or(0.0);
+                if left <= FINISHED_T || !self.blasted(block) || !self.diggable(task, block, interval) {
+                    continue;
+                }
+                let Some(source) = self.outlets.source(input, block) else { continue };
+                // What the block is worth sent anywhere but a crusher, and
+                // what each crusher gains on that, per tonne of the block,
+                // with the share of it the crusher can take and its grades.
+                let mut rest = 0.0;
+                let mut feeds: Vec<(usize, f64, f64, Vec<f64>)> = crushers.iter().map(|&k| (k, 0.0, 0.0, vec![0.0; input.grades.count()])).collect();
+                for share in source.material.iter().filter(|share| share.fraction > 0.0) {
+                    let routes = self.digs.get(&(loader, block, share.material.0)).map(Vec::as_slice).unwrap_or_default();
+                    let best = |keep: &dyn Fn(DestinationId) -> bool| {
+                        routes
+                            .iter()
+                            .filter(|&&index| keep(input.movements[index].destination))
+                            .map(|&index| money[index])
+                            .fold(None, |best: Option<f64>, value| Some(best.map_or(value, |best| best.max(value))))
+                    };
+                    let crushed = |destination: DestinationId| crushers.iter().any(|&k| input.destinations[k].id == destination);
+                    let Some(base) = best(&|destination| !crushed(destination)).or_else(|| best(&|_| true)) else {
+                        continue;
+                    };
+                    rest += share.fraction * base;
+                    for (k, fraction, gain, contained) in &mut feeds {
+                        let id = input.destinations[*k].id;
+                        if let Some(value) = best(&|destination| destination == id) {
+                            *fraction += share.fraction;
+                            *gain += share.fraction * (value - base);
+                            for (grade, held) in contained.iter_mut().enumerate() {
+                                *held += share.fraction * input.grades.fraction(share.material, grade).unwrap_or(0.0);
+                            }
+                        }
+                    }
+                }
+                let position = before / task.lookahead_t;
+                for d in 0..days {
+                    let x = problem.add_column((credit + rest) * later(d) - order_cost * position, 0.0..);
+                    if d == 0 {
+                        today.push((task_index, block, x));
+                    }
+                    let held = taken.entry(block).or_insert((left, Vec::new()));
+                    held.1.push((x, 1.0));
+                    loader_days.entry((loader, d)).or_default().1.push((x, 1.0));
+                    let mut split = vec![(x, -1.0)];
+                    for (k, fraction, gain, contained) in feeds.iter().filter(|feed| feed.1 > 0.0) {
+                        let y = problem.add_column(gain * later(d), 0.0..);
+                        split.push((y, 1.0));
+                        crusher_days.entry((*k, d)).or_default().push((y, *fraction));
+                        let id = input.destinations[*k].id;
+                        for (target, spec) in input.grade_targets.iter().enumerate().filter(|(_, t)| t.destination == id && t.day == day + d as u32) {
+                            receipts.entry(target).or_default().push((y, *fraction, contained[spec.grade]));
+                        }
+                    }
+                    if split.len() > 1 {
+                        problem.add_row(..=0.0, split);
+                    }
+                }
+                before += left;
+                fed += left * self.outlets.feed_share(task.loader, block);
+                count += 1;
+            }
+        }
+        if today.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        for (left, terms) in taken.into_values() {
+            problem.add_row(..=left, terms);
+        }
+        for ((_, _), (cap, terms)) in loader_days {
+            if !terms.is_empty() {
+                problem.add_row(..=cap, terms);
+            }
+        }
+        for ((k, d), terms) in crusher_days {
+            let destination = &input.destinations[k];
+            let Some(budget) = destination.crusher_daily_t.get((day as usize) + d).copied().flatten() else {
+                continue;
+            };
+            let used = if d == 0 {
+                self.crushed.get(&(destination.id, day)).copied().unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            problem.add_row(..=(budget - used).max(0.0), terms);
+        }
+        for (target, terms) in receipts {
+            let spec = &input.grade_targets[target];
+            let d = spec.day.saturating_sub(day) as usize;
+            let (opening_t, opening_q) = if d == 0 {
+                self.target_totals.get(&(target, day)).copied().unwrap_or_default()
+            } else {
+                (0.0, 0.0)
+            };
+            for (boundary, direction, slope) in spec.specification.hinges() {
+                if slope == 0.0 {
+                    continue;
+                }
+                let slack = problem.add_column(-slope * later(d), 0.0..);
+                let mut row = vec![(slack, -1.0)];
+                row.extend(terms.iter().map(|&(y, fraction, contained)| (y, direction * (contained - boundary * fraction))));
+                problem.add_row(..=-direction * (opening_q - boundary * opening_t), row);
+            }
+        }
+        let solution = problem.maximise_from(&mut self.lookahead_warm.borrow_mut())?;
+        let mut chosen: BTreeMap<usize, Vec<GroundId>> = BTreeMap::new();
+        for (task, block, x) in today {
+            if solution[x.index()] > POOL_T {
+                chosen.entry(task).or_default().push(block);
+            }
+        }
+        Ok(chosen)
     }
 
     fn cancelled(&self) -> bool {

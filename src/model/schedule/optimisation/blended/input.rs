@@ -607,6 +607,13 @@ pub(crate) struct BlendInput {
 /// At `m = 1e-6` in mass fraction the band is 0.0001 percentage points of a
 /// percent-unit grade - far below assay precision, but stated because it is
 /// not zero.
+/// How many days ahead an automatic bar's ground is chosen from: each day
+/// the hourly dispatch works the blocks a lookahead over this many days of
+/// each bar's digging chose for it, so an automatic bar may dig a block
+/// while those before it in its sequence come to no more than this many
+/// times its reach.
+pub(crate) const LOOKAHEAD_DAYS: usize = 3;
+
 pub(crate) const GRADE_MARGIN: f64 = 1e-6;
 
 /// The same convention in contained quantity: every model row testing a
