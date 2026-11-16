@@ -19,6 +19,7 @@ use crate::{
         state::Workspace,
         widgets::{
             menu,
+            playback::tile_frame,
             toolbar::GROUP_CORNER_RADIUS,
             transport::{Transport, transport_button},
             viewport::ViewportDockPanel,
@@ -75,14 +76,6 @@ const MARK_MAX_POINTS: f32 = 14.0;
 
 fn color32(color: [f32; 3]) -> egui::Color32 {
     egui::Color32::from_rgb((color[0] * 255.0) as u8, (color[1] * 255.0) as u8, (color[2] * 255.0) as u8)
-}
-
-fn tile_frame(visuals: &egui::Visuals) -> egui::Frame {
-    egui::Frame::new()
-        .fill(menu::menu_surface(visuals))
-        .stroke(menu::menu_border(visuals))
-        .corner_radius(egui::CornerRadius::same(GROUP_CORNER_RADIUS))
-        .inner_margin(egui::Margin::symmetric(10, 8))
 }
 
 /// Draw every blast review that is showing over the canvas.

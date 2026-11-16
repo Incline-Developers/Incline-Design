@@ -23,6 +23,8 @@ pub(crate) mod haulage;
 pub(crate) mod input;
 pub(crate) mod kernel;
 pub(crate) mod kriging;
+pub(crate) mod npv_schedule;
+pub(crate) mod npv_schedule_run;
 pub(crate) mod numbers;
 pub(crate) mod object_edit;
 pub(crate) mod optimization;

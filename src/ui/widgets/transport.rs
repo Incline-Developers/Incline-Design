@@ -1,7 +1,8 @@
-//! Play, Pause, Rewind and single steps: small square buttons with their
-//! glyphs painted, shared by the blast review's timeline, Animate's playback,
-//! a rain simulation's and the Gantt's Inspector; and the keys every one of
-//! those timelines takes ([`timeline_keys`]).
+//! Play, Pause, Rewind, single steps and Close: small square buttons with
+//! their glyphs painted, shared by the blast review's timeline, Animate's
+//! playback, a rain simulation's, the Gantt's Inspector and the field
+//! animation deck; and the keys every one of those timelines takes
+//! ([`timeline_keys`]).
 
 use super::hint::Hint;
 use crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS;
@@ -11,6 +12,8 @@ pub(crate) enum Transport {
     Play,
     Pause,
     Rewind,
+    /// Close the deck it sits on.
+    Close,
     /// One step back or forward: a chevron.
     StepBack,
     StepForward,
@@ -60,6 +63,12 @@ pub(crate) fn transport_button(ui: &mut egui::Ui, kind: Transport, hint: Option<
                 .rect_filled(egui::Rect::from_center_size(egui::pos2(c.x - r * 0.9, c.y), egui::vec2(r * 0.35, r * 2.0)), 0.5, color);
             let points = vec![egui::pos2(c.x + r, c.y - r), egui::pos2(c.x - r * 0.55, c.y), egui::pos2(c.x + r, c.y + r)];
             ui.painter().add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
+        }
+        Transport::Close => {
+            let stroke = egui::Stroke::new(1.6, color);
+            let d = r * 0.85;
+            ui.painter().line_segment([egui::pos2(c.x - d, c.y - d), egui::pos2(c.x + d, c.y + d)], stroke);
+            ui.painter().line_segment([egui::pos2(c.x - d, c.y + d), egui::pos2(c.x + d, c.y - d)], stroke);
         }
         Transport::StepBack | Transport::StepForward => {
             let dx = if matches!(kind, Transport::StepBack) { -r * 0.5 } else { r * 0.5 };

@@ -15,6 +15,7 @@ pub(crate) mod console;
 pub(crate) mod cursors;
 pub(crate) mod dig_strips;
 pub(crate) mod explorer;
+pub(crate) mod field_animation;
 pub(crate) mod haulage;
 /// The Improve run's floating progress card.
 pub(crate) mod improve_progress;

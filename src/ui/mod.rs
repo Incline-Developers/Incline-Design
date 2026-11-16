@@ -822,7 +822,17 @@ fn draw_ui(
             dialogs::editing::draw_select_project_dialog(root_ui, project, main_menu_rect.bottom(), commands);
         }
         *canvas_rect_out = egui::Rect::ZERO;
-        geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, frame_context.console_snapshot, commands);
+        geometry_dirty |= draw_global_dialogs(
+            root_ui,
+            editor,
+            document,
+            project,
+            block_models,
+            drill_holes,
+            egui::Rect::ZERO,
+            frame_context.console_snapshot,
+            commands,
+        );
         let ctx = root_ui.ctx();
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
         chrome::paint_regions(ctx, [viewport_bar_rect, console].into_iter().chain(explorer.regions).chain(planning_layout.regions));
@@ -981,6 +991,7 @@ fn draw_ui(
     // points the whole round is read from - stay on top of them.
     elements::blast::draw_blast_overlays(root_ui, editor, drill_holes, canvas_rect);
     draw_initiation_cards(root_ui, editor, canvas_rect);
+    elements::field_animation::draw_field_animation(root_ui, editor, canvas_rect, commands);
 
     if let (Some(start), Some(end)) = (editor.selection_box_start_px, editor.selection_box_current_px) {
         // Box selection: left-to-right = cross select (dashed green), right-to-left = window select
@@ -1505,7 +1516,17 @@ fn draw_ui(
         scale_bar.show(root_ui.ctx());
     }
 
-    geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, frame_context.console_snapshot, commands);
+    geometry_dirty |= draw_global_dialogs(
+        root_ui,
+        editor,
+        document,
+        project,
+        block_models,
+        drill_holes,
+        canvas_rect,
+        frame_context.console_snapshot,
+        commands,
+    );
 
     // --- Window chrome ---
     // Last, so the corner masks cut back everything the regions drew into
@@ -1620,7 +1641,7 @@ fn draw_initiation_cards(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui:
 /// Draw dialogs after the workspace so modal lifecycle state is never hidden.
 /// These dialogs are global application state even when their contents refer
 /// to workspace data.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "the dialogs' shared inputs, as draw_ui's; the canvas is what a Results window covers")]
 fn draw_global_dialogs(
     root_ui: &mut egui::Ui,
     editor: &mut EditorState,
@@ -1628,6 +1649,7 @@ fn draw_global_dialogs(
     project: &UiProjectView,
     block_models: &[OpenBlockModel],
     drill_holes: &[crate::model::drill_hole::OpenDrillHoleDataset],
+    canvas_rect: egui::Rect,
     console_snapshot: &crate::logging::ConsoleSnapshot,
     commands: &mut Vec<UiCommand>,
 ) -> bool {
@@ -1764,7 +1786,7 @@ fn draw_global_dialogs(
     if editor.block_model_create_open {
         elements::block_model::draw_create_block_model_dialog(root_ui, editor, drill_holes, commands);
     }
-    dialogs::optimization::draw_optimization_dialogs(root_ui, editor, block_models, project, commands);
+    dialogs::optimization::draw_optimization_dialogs(root_ui, editor, block_models, project, canvas_rect, commands);
     widgets::toast::draw_toasts(root_ui.ctx(), &mut editor.toasts);
     if editor.ore_triangulation_open {
         elements::block_model::draw_ore_triangulation_dialog(root_ui, editor, block_models, commands);

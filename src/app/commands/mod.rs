@@ -3,10 +3,12 @@ pub(crate) mod block_model;
 pub(crate) mod dig_strips;
 pub(crate) mod drawing; // Handles finishing polylines, creating points, etc commands
 pub(crate) mod drill_hole;
+pub(crate) mod field_animation; // The playback deck: a block model played through in the order of a field.
 pub(crate) mod file; // Handles importing, exportings, etc. commands
 pub(crate) mod folder; // Handles explorer folder create/delete/rename/move commands, for every section
 pub(crate) mod haulage;
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
+pub(crate) mod npv_schedule; // Handles the schedules under optimization scenarios.
 pub(crate) mod object_edit;
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod optimization; // Handles pit optimization's scenario list, editor and scenarios file.
@@ -948,6 +950,11 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SaveOptimizationScenario { scenario, then_close } => self.save_optimization_scenario(*scenario, then_close),
+            UiCommand::OpenOptimizationConstants => {
+                self.open_optimization_constants();
+                Ok(())
+            }
+            UiCommand::SaveOptimizationConstants { rows, then_close } => self.save_optimization_constants(rows, then_close),
             UiCommand::ExportOptimizationScenarios => {
                 self.export_optimization_scenarios();
                 Ok(())
@@ -987,6 +994,60 @@ impl<'a> App<'a> {
             }
             UiCommand::CancelOptimizationScenario(id) => {
                 self.cancel_optimization_scenario(id);
+                Ok(())
+            }
+            UiCommand::AddNpvSchedule(parent) => {
+                self.add_npv_schedule(parent);
+                Ok(())
+            }
+            UiCommand::EditNpvSchedule { parent, id } => {
+                self.edit_npv_schedule(parent, id);
+                Ok(())
+            }
+            UiCommand::SaveNpvSchedule { parent, schedule, then_close } => self.save_npv_schedule(parent, *schedule, then_close),
+            UiCommand::DeleteNpvSchedule { parent, id } => self.delete_npv_schedule(parent, id),
+            UiCommand::DuplicateNpvSchedule { parent, id } => self.duplicate_npv_schedule(parent, id),
+            UiCommand::RenameNpvSchedule { parent, id, name } => self.rename_npv_schedule(parent, id, name),
+            UiCommand::MoveNpvSchedule { id, from, to } => self.move_npv_schedule(id, from, to, false),
+            UiCommand::CopyNpvScheduleTo { id, from, to } => self.move_npv_schedule(id, from, to, true),
+            UiCommand::RunNpvSchedule { parent, id } => {
+                // A run of its own writes its period field, even if Run all
+                // queued it before.
+                self.editor.optimization.no_period_field.remove(&id);
+                self.run_npv_schedule(parent, id);
+                Ok(())
+            }
+            UiCommand::RunAllNpvSchedules(parent) => {
+                self.run_all_npv_schedules(parent);
+                Ok(())
+            }
+            UiCommand::PlayNpvScheduleAnimation { parent, id } => {
+                self.play_npv_schedule_animation(parent, id);
+                Ok(())
+            }
+            UiCommand::OpenNpvScheduleResults { parent, id } => {
+                self.open_npv_schedule_results(parent, id);
+                Ok(())
+            }
+            UiCommand::ExportNpvScheduleReport => {
+                self.export_npv_schedule_report();
+                Ok(())
+            }
+            UiCommand::OpenNpvScheduleReport => {
+                self.open_npv_schedule_report();
+                Ok(())
+            }
+            UiCommand::SaveNpvScheduleColumns => {
+                self.ensure_optimization_scenarios_loaded();
+                self.write_optimization_scenarios()
+            }
+            UiCommand::NpvScheduleFromPushbacks { parent, id, factors } => self.npv_schedule_from_pushbacks(parent, id, factors),
+            UiCommand::ApplyFieldAnimation => {
+                self.apply_field_animation();
+                Ok(())
+            }
+            UiCommand::CloseFieldAnimation => {
+                self.close_field_animation();
                 Ok(())
             }
             UiCommand::OpenCreateBlockModel => {
