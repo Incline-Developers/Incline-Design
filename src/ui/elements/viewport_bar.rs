@@ -474,6 +474,11 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProj
     draw_scene_modes(ui, editor, commands, side);
     draw_camera_tools(ui, editor, commands, side);
 
+    // A rain simulation's tab shows the run's own surface and water, not
+    // the workspace's data.
+    if editor.is_water_run() {
+        return;
+    }
     match editor.active_workspace {
         Workspace::DrillAndBlast => {
             divider(ui, side);
@@ -535,25 +540,29 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     }
 
     // Fixed centre of rotation: one click arms a pick, the next click on the
-    // button releases the centre; lit while armed or set.
+    // button releases the centre; lit while armed or set. A rain simulation's
+    // tab takes no clicks in its viewport, so there it is only the way to
+    // release a centre fixed before the tab was opened.
     let armed = editor.active_tool == ActiveTool::PickRotationCentre;
-    let centre = ui.add(
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("rotation_centre.svg")),
-            if editor.rotation_centre.is_some() {
-                format!("{} (C)", tr!("viewport-bar-release-centre-rotation"))
-            } else if armed {
-                tr!("common-click-point-fix-centre-rotation")
-            } else {
-                format!("{} (C)", tr!("viewport-bar-fix-centre-rotation"))
-            },
-        )
-        .id_salt("rotation_centre")
-        .button_side(side)
-        .selected(armed || editor.rotation_centre.is_some()),
-    );
-    if centre.clicked() {
-        commands.push(UiCommand::ToggleRotationCentre);
+    if !editor.is_water_run() || armed || editor.rotation_centre.is_some() {
+        let centre = ui.add(
+            ToolbarButton::new(
+                egui::Image::new(unthemed_icon!("rotation_centre.svg")),
+                if editor.rotation_centre.is_some() {
+                    format!("{} (C)", tr!("viewport-bar-release-centre-rotation"))
+                } else if armed {
+                    tr!("common-click-point-fix-centre-rotation")
+                } else {
+                    format!("{} (C)", tr!("viewport-bar-fix-centre-rotation"))
+                },
+            )
+            .id_salt("rotation_centre")
+            .button_side(side)
+            .selected(armed || editor.rotation_centre.is_some()),
+        );
+        if centre.clicked() {
+            commands.push(UiCommand::ToggleRotationCentre);
+        }
     }
 
     let zoom = ui.add(
@@ -695,6 +704,10 @@ fn draw_display_switches(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
         commands.push(UiCommand::SetTopologyWireframes(!editor.topology_wireframes_enabled));
     }
 
+    // A rain simulation's tab has no design points to show.
+    if editor.is_water_run() {
+        return;
+    }
     let points = ui.add(
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("toggle_points.svg")),
@@ -744,29 +757,36 @@ fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut 
     }
 
     // Vertical slice view: arm the two-click line placement, or exit the mode
-    // if it is already active.
+    // if it is already active. A rain simulation's tab takes no clicks in its
+    // viewport, so there it is only the way out of a section it was opened in.
     let slice_engaged = editor.slice_mode_enabled || editor.active_tool == ActiveTool::VerticalSlice;
-    let slice = ui.add(
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("slice_view.svg")),
+    if !editor.is_water_run() || slice_engaged {
+        let slice = ui.add(
+            ToolbarButton::new(
+                egui::Image::new(unthemed_icon!("slice_view.svg")),
+                if editor.slice_mode_enabled {
+                    tr!("viewport-bar-exit-slice-view")
+                } else {
+                    tr!("viewport-bar-vertical-slice-view")
+                },
+            )
+            .id_salt("vertical_slice")
+            .button_side(side)
+            .selected(slice_engaged),
+        );
+        if slice.clicked() {
             if editor.slice_mode_enabled {
-                tr!("viewport-bar-exit-slice-view")
+                commands.push(UiCommand::SetSliceModeEnabled(false));
             } else {
-                tr!("viewport-bar-vertical-slice-view")
-            },
-        )
-        .id_salt("vertical_slice")
-        .button_side(side)
-        .selected(slice_engaged),
-    );
-    if slice.clicked() {
-        if editor.slice_mode_enabled {
-            commands.push(UiCommand::SetSliceModeEnabled(false));
-        } else {
-            commands.push(UiCommand::SetActiveTool(ActiveTool::VerticalSlice));
+                commands.push(UiCommand::SetActiveTool(ActiveTool::VerticalSlice));
+            }
         }
     }
 
+    // X-ray is for lines behind surfaces, and a rain simulation's tab has none.
+    if editor.is_water_run() {
+        return;
+    }
     let xray = ui.add(
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("toggle_xray.svg")),

@@ -439,6 +439,21 @@ impl<'a> Graphics<'a> {
             machines.place(&self.device, &self.queue, &near, self.scene_origin);
         }
 
+        // A rain simulation's water: uploaded when the instants it lies
+        // between change. It ripples and runs only while its timeline plays,
+        // and stands still with it.
+        self.water.show(&self.device, &self.queue, editor.water.mesh.as_deref().filter(|_| editor.is_water_run()));
+        let water_running = !self.water.is_empty() && editor.water.playing;
+        if water_running {
+            self.water_clock_s += (time_s - self.water_clock_last_s.unwrap_or(time_s)).clamp(0.0, 0.1);
+            self.window.request_redraw();
+        }
+        self.water_clock_last_s = water_running.then_some(time_s);
+        if !self.water.is_empty() {
+            self.water
+                .set_frame(&self.queue, self.scene_origin, self.water_clock_s, editor.water.blend, editor.water.raining);
+        }
+
         let measurement_state = (
             matches!(
                 editor.active_tool,

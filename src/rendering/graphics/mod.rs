@@ -484,6 +484,13 @@ pub(crate) struct Graphics<'a> {
     /// Animate's machine models, loaded the first time one is shown; `Err`
     /// once loading them has failed, so it is not retried every frame.
     pub(super) machines: Option<Result<crate::rendering::machines::MachineGpu, ()>>,
+    /// The open rain simulation's water, drawn by the editor overlay pass.
+    pub(super) water: crate::rendering::water::WaterGpu,
+    /// The clock the water's ripples move by, which runs only while a rain
+    /// simulation's timeline plays; and the flow clock at the last frame it
+    /// ran.
+    pub(super) water_clock_s: f64,
+    pub(super) water_clock_last_s: Option<f64>,
     pub(super) text_vertex_buf: Vec<Vertex>,
     pub(super) text_index_buf: Vec<u32>,
     pub(super) text_vertex_capacity: usize,

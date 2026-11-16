@@ -1895,7 +1895,11 @@ impl<'a> App<'a> {
         // workspace contents actually changed.
         let composite_key = self.workspace.composite_key();
         if Some(composite_key) != self.scene_document_key {
-            self.scene_document = if self.editor.is_planning_cut_step() {
+            self.scene_document = if self.editor.is_water_run() {
+                // A rain simulation's tab shows its ground and its water,
+                // and nothing of the project's.
+                Document::new()
+            } else if self.editor.is_planning_cut_step() {
                 let mut scene = Document::new();
                 if let Some(document) = self.workspace.active_document() {
                     scene.clone_reserve_fields_from(document);

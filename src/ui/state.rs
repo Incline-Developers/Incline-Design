@@ -5761,8 +5761,6 @@ pub(crate) enum UiCommand {
     },
     /// Close a water run's tab, which discards the run.
     CloseWaterRun(u64),
-    /// Add the water a run's tab is showing to the project as a surface.
-    SaveWaterSurface(u64),
     /// Hide a tool's dialog and select its input in the viewport.
     BeginSelectionPick(SelectionPickTool),
     /// Hand the picked selection to the tool.
@@ -6681,7 +6679,6 @@ impl UiCommand {
                 tr!("water-simulate"),
                 tr!("water-run-summary", rain = settings.rain_mm.to_string(), hours = settings.rain_hours.to_string()),
             ),
-            Self::SaveWaterSurface(_) => report(tr!("water-simulate"), tr!("water-save-surface")),
             Self::SimplifyTriangulation { name, .. } => report(tr!("simplify-title"), name.clone()),
             Self::Undo => report(tr!("common-undo"), tr!("state-previous-edit")),
             Self::Redo => report(tr!("common-redo"), tr!("state-next-edit")),
@@ -7497,11 +7494,13 @@ pub(crate) enum WaterRunStatus {
 /// The open water run, as its tab shows it. Mirrored from the app.
 #[derive(Clone, Debug)]
 pub(crate) struct WaterShown {
-    pub(crate) id: u64,
     pub(crate) settings: crate::model::water::WaterSettings,
     pub(crate) status: WaterRunStatus,
-    /// The kept instant of the run the viewport is showing, seconds in.
+    /// The instant of the run the viewport is showing, seconds in.
     pub(crate) instant_s: Option<f64>,
+    /// How far into the run has been worked out so far, seconds: as far as
+    /// the timeline can be taken while the rest is still running.
+    pub(crate) loaded_s: f64,
 }
 
 /// The water runs' tabs and what the open one shows. Session-only: a run is
@@ -7519,9 +7518,15 @@ pub(crate) struct WaterView {
     pub(crate) playing: bool,
     /// The UI clock at the last frame playback moved the cursor.
     pub(crate) play_clock: Option<f64>,
-    /// Show the deepest each point was over the whole run, not an instant.
-    pub(crate) show_deepest: bool,
     pub(crate) shown: Option<WaterShown>,
+    /// The water the viewport draws: the open run's between the two kept
+    /// instants either side of the cursor. Built by the app when those
+    /// change.
+    pub(crate) mesh: Option<std::sync::Arc<crate::rendering::water::WaterMesh>>,
+    /// How far the cursor is from the earlier of the two to the later.
+    pub(crate) blend: f32,
+    /// Whether rain is falling at the cursor.
+    pub(crate) raining: bool,
 }
 
 /// The groups of Setup's one step list, in the order they run: each is a

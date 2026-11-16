@@ -843,7 +843,16 @@ fn draw_ui(
         return geometry_dirty;
     }
 
-    let explorer = elements::explorer::draw_explorer(root_ui, editor, project, document, commands);
+    // A rain simulation's tab shows nothing of the project's, so it has no
+    // explorer to choose from.
+    let explorer = if editor.is_water_run() {
+        // As for the optional panels below: keep the root auto-id sequence
+        // the same whether or not this one is drawn.
+        root_ui.skip_ahead_auto_ids(1);
+        elements::explorer::ExplorerLayout::empty()
+    } else {
+        elements::explorer::draw_explorer(root_ui, editor, project, document, commands)
+    };
 
     // The console belongs below the bottom toolbar. Reserve the toolbar's height
     // before showing the console so dragging it to its maximum cannot starve the
@@ -876,7 +885,7 @@ fn draw_ui(
         elements::schedule_animation::draw_timeline(root_ui, editor, document, &project.schedule, commands)
     } else if editor.is_water_run() {
         // A water run's timeline takes the same place under the viewport.
-        elements::water::draw_timeline(root_ui, editor, commands)
+        elements::water::draw_timeline(root_ui, editor)
     } else {
         // As above: keep the root auto-id sequence the same whether or not
         // this optional panel is drawn, so leaving Animate does not renumber

@@ -3,11 +3,13 @@
 //! Rain Simulation starts a run as a background job and opens its tab, in a
 //! row under the viewport bar of the workspace it was started from. The
 //! tab's viewport draws the run's own copy of the surface with the water on
-//! it at the instant its timeline is at, in bands of depth. A run belongs to
-//! its tab: closing the tab stops it and discards it, and nothing of it is
-//! saved with the project but the surfaces Save Water Surface adds.
+//! it at the instant its timeline is at (`rendering/water.rs`), eased from
+//! each kept instant to the next. The job hands over each instant as it is
+//! worked out, so the tab plays what there is while the rest runs. A run
+//! belongs to its tab: closing the tab stops it and discards it, and nothing
+//! of it is saved with the project.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use anyhow::Result;
 
@@ -21,26 +23,41 @@ use crate::{
         formats::mesh_data,
         progress::Progress,
         triangulation::{OpenTriangulation, TriangulationId},
-        water::{BAND_DEPTHS, Ground, WaterError, WaterRun, WaterSettings},
+        water::{Ground, WaterError, WaterFrame, WaterSettings},
     },
+    rendering::water::WaterMesh,
     ui::state::{WaterRunStatus, WaterShown, WaterTab, Workspace},
 };
 
-/// The run's ground, and one id below it for each band of water.
+/// The run's ground.
 const WATER_SURFACE_ID: u64 = u64::MAX - 2_000_000;
-/// The bands' colours, shallowest first.
-const BAND_COLORS: [[f32; 4]; BAND_DEPTHS.len()] = [
-    [0.55, 0.80, 0.95, 0.55],
-    [0.30, 0.65, 0.92, 0.70],
-    [0.14, 0.47, 0.84, 0.80],
-    [0.07, 0.30, 0.68, 0.88],
-    [0.03, 0.16, 0.45, 0.94],
-];
 
 enum RunState {
     Running,
     Failed(String),
-    Ready(Arc<WaterRun>),
+    Ready,
+}
+
+/// The ground a run flows over, and the same as the mesh the viewport draws.
+struct LiveGround {
+    ground: Ground,
+    mesh: Arc<mesh_data::Triangulation>,
+    face_order: Arc<Vec<u32>>,
+}
+
+/// What a run's job has worked out so far, read by its tab while the job
+/// carries on: the ground once it is welded and split, then each kept
+/// instant as the storm reaches it.
+#[derive(Default)]
+struct LiveRun {
+    ground: OnceLock<LiveGround>,
+    frames: Mutex<Vec<Arc<WaterFrame>>>,
+}
+
+impl LiveRun {
+    fn frames(&self) -> std::sync::MutexGuard<'_, Vec<Arc<WaterFrame>>> {
+        self.frames.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 struct RunEntry {
@@ -52,23 +69,31 @@ struct RunEntry {
     settings: WaterSettings,
     progress: Option<Progress>,
     state: RunState,
+    live: Arc<LiveRun>,
     /// The surface as drawn under the water: the source's own mesh until the
-    /// run lands, then the mesh it flowed over.
+    /// run's ground is ready, then that.
     ground: OpenTriangulation,
+    ground_landed: bool,
 }
 
-/// What the viewport is drawing for the open run: which run, which of its
-/// kept instants (`None` for the deepest water of the whole run), and
-/// whether the run had landed.
-type SceneKey = (u64, Option<usize>, bool);
+/// What the viewport is drawing for the open run: which run, and whether
+/// its own ground had landed.
+type SceneKey = (u64, bool);
+
+/// What the water mesh was built from: which run, the kept instant at or
+/// before the cursor, and whether the one after it had been worked out.
+type MeshKey = (u64, usize, bool);
 
 #[derive(Default)]
 pub(crate) struct WaterRuns {
     runs: Vec<RunEntry>,
     next_id: u64,
-    /// The open run's ground and water, as the viewport draws them.
+    /// The open run's ground, as the viewport draws it.
     scene: Vec<OpenTriangulation>,
     scene_key: Option<SceneKey>,
+    /// What the editor's water mesh was built from.
+    mesh_key: Option<MeshKey>,
+    meshes_built: u64,
 }
 
 impl WaterRuns {
@@ -79,12 +104,6 @@ impl WaterRuns {
     pub(crate) fn has(&self, id: u64) -> bool {
         self.runs.iter().any(|run| run.id == id)
     }
-}
-
-struct Finished {
-    run: WaterRun,
-    mesh: Arc<mesh_data::Triangulation>,
-    face_order: Arc<Vec<u32>>,
 }
 
 fn water_error(error: WaterError) -> anyhow::Error {
@@ -99,6 +118,13 @@ fn scene_surface(id: u64, name: &str, mesh: Arc<mesh_data::Triangulation>, face_
     let spatial = Arc::new(crate::model::spatial::TriangleBvh::deferred(mesh.clone()));
     let mut surface = crate::app::commands::solids::preview_triangulation(name.to_owned(), mesh, spatial, Vec::new(), face_order, color, line_color);
     surface.id = TriangulationId(id);
+    surface
+}
+
+/// `surface` with the image `like` has draped over it.
+fn draped_like(mut surface: OpenTriangulation, like: &OpenTriangulation) -> OpenTriangulation {
+    surface.raster_texture = like.raster_texture;
+    surface.raster_opacity = like.raster_opacity;
     surface
 }
 
@@ -119,7 +145,10 @@ impl App<'_> {
         self.water.next_id += 1;
         let name = source.name.clone();
         let mesh = source.mesh.clone();
-        let ground = scene_surface(WATER_SURFACE_ID, &name, mesh.clone(), source.surface_face_order.clone(), source.color, source.line_color);
+        let ground = draped_like(
+            scene_surface(WATER_SURFACE_ID, &name, mesh.clone(), source.surface_face_order.clone(), source.color, source.line_color),
+            source,
+        );
         let title = tr!(
             "water-tab-title",
             surface = name.clone(),
@@ -127,47 +156,40 @@ impl App<'_> {
             hours = plain_number(settings.rain_hours)
         );
 
-        let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &Progress| -> Result<Finished> {
+        let live = Arc::new(LiveRun::default());
+        let shared = live.clone();
+        let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &Progress| -> Result<()> {
             let signal = cancel.signal();
             let mut ground = Ground::from_mesh(&mesh);
             if let Some(longest) = settings.subdivide_m {
                 ground = ground.subdivided(longest, &signal).map_err(water_error)?;
             }
-            let run = crate::model::water::simulate(ground, &settings, &signal, progress).map_err(water_error)?;
-            let mesh = Arc::new(run.ground.to_mesh().ok_or_else(|| water_error(WaterError::Empty))?);
+            let mesh = Arc::new(ground.to_mesh().ok_or_else(|| water_error(WaterError::Empty))?);
             let face_order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
-            Ok(Finished { run, mesh, face_order })
+            let landed = shared.ground.get_or_init(|| LiveGround { ground, mesh, face_order });
+            crate::model::water::simulate(&landed.ground, &settings, &signal, progress, &mut |frame| shared.frames().push(Arc::new(frame))).map_err(water_error)
         };
         let progress = self.spawn_job_sharing_progress(
             tr!("water-job", surface = name.clone()),
             vec![JobKey::WaterRun(id)],
             compute,
-            move |app, result: Result<Finished>| {
+            move |app, result: Result<()>| {
                 let Some(entry) = app.water.runs.iter_mut().find(|entry| entry.id == id) else {
                     return;
                 };
                 entry.progress = None;
                 match result {
-                    Ok(finished) => {
-                        entry.ground = scene_surface(
-                            WATER_SURFACE_ID,
-                            &entry.surface,
-                            finished.mesh,
-                            finished.face_order,
-                            entry.ground.color,
-                            entry.ground.line_color,
-                        );
-                        let last = finished.run.frames.last();
+                    Ok(()) => {
                         crate::userspace_log!(
                             "{}",
                             tr!(
                                 "water-run-done",
                                 title = entry.title.clone(),
-                                vertices = finished.run.ground.vertices.len().to_string(),
-                                volume = format!("{:.0}", last.map_or(0.0, |frame| frame.on_surface))
+                                vertices = entry.live.ground.get().map_or(0, |landed| landed.ground.vertices.len()).to_string(),
+                                volume = format!("{:.0}", entry.live.frames().last().map_or(0.0, |frame| frame.on_surface))
                             )
                         );
-                        entry.state = RunState::Ready(Arc::new(finished.run));
+                        entry.state = RunState::Ready;
                     }
                     Err(error) if crate::app::jobs::is_cancelled(&error) => {}
                     Err(error) => {
@@ -186,7 +208,9 @@ impl App<'_> {
             settings,
             progress: Some(progress),
             state: RunState::Running,
+            live,
             ground,
+            ground_landed: false,
         });
         self.editor.water_dialog.open = false;
         self.open_water_run(id);
@@ -247,120 +271,108 @@ impl App<'_> {
             .editor
             .water
             .open
-            .and_then(|id| self.water.runs.iter().find(|run| run.id == id && run.workspace == workspace))
+            .and_then(|id| self.water.runs.iter_mut().find(|run| run.id == id && run.workspace == workspace))
         else {
             self.editor.water.shown = None;
             self.editor.water.playing = false;
+            self.editor.water.mesh = None;
+            self.water.mesh_key = None;
             if self.water.scene_key.take().is_some() {
                 self.water.scene = Vec::new();
+                // The project's designs come back into the scene.
+                self.scene_document_key = None;
                 self.invalidate_geometry();
             }
             return;
         };
 
-        let run = match &entry.state {
-            RunState::Ready(run) => Some(run.clone()),
-            _ => None,
-        };
-        let duration = run.as_ref().and_then(|run| run.frames.last()).map_or(0.0, |frame| frame.time_s);
-        self.editor.water.time_s = self.editor.water.time_s.clamp(0.0, duration);
-        let frame = run
-            .as_ref()
-            .map(|run| run.frames.partition_point(|frame| frame.time_s <= self.editor.water.time_s).saturating_sub(1));
-        let key: SceneKey = (entry.id, frame.filter(|_| !self.editor.water.show_deepest), run.is_some());
+        // The ground the run flows over, once the job has made it.
+        let live = entry.live.clone();
+        if !entry.ground_landed
+            && let Some(landed) = live.ground.get()
+        {
+            entry.ground = draped_like(
+                scene_surface(
+                    WATER_SURFACE_ID,
+                    &entry.surface,
+                    landed.mesh.clone(),
+                    landed.face_order.clone(),
+                    entry.ground.color,
+                    entry.ground.line_color,
+                ),
+                &entry.ground,
+            );
+            entry.ground_landed = true;
+        }
+        let (id, settings) = (entry.id, entry.settings);
+        let key: SceneKey = (id, entry.ground_landed);
+        let running = matches!(entry.state, RunState::Running);
         let status = match &entry.state {
             RunState::Running => WaterRunStatus::Running(entry.progress.as_ref().and_then(|progress| progress.snapshot()).map(|snapshot| snapshot.fraction)),
             RunState::Failed(error) => WaterRunStatus::Failed(error.clone()),
-            RunState::Ready(_) => WaterRunStatus::Ready,
+            RunState::Ready => WaterRunStatus::Ready,
         };
-
-        let moved = self.water.scene_key != Some(key);
-        if moved || self.editor.water.shown.as_ref().is_none_or(|shown| shown.id != entry.id) {
-            self.editor.water.shown = Some(WaterShown {
-                id: entry.id,
-                settings: entry.settings,
-                status: status.clone(),
-                instant_s: run.as_ref().zip(frame).and_then(|(run, frame)| run.frames.get(frame)).map(|frame| frame.time_s),
-            });
-        } else if let Some(shown) = self.editor.water.shown.as_mut() {
-            shown.status = status;
-        }
-        if !moved {
-            return;
-        }
-
-        let mut scene = vec![entry.ground.clone()];
-        if let Some(run) = &run {
-            let depth = match key.1 {
-                Some(frame) => &run.frames[frame].depth,
-                None => &run.max_depth,
-            };
-            scene.extend(water_bands(run, depth));
-        }
-        self.water.scene = scene;
-        self.water.scene_key = Some(key);
-        self.invalidate_geometry();
-    }
-
-    /// Add the water run `id`'s tab is showing to the project, as a surface
-    /// at the water's own level.
-    pub(crate) fn save_water_surface(&mut self, id: u64) -> Result<()> {
-        let Some(entry) = self.water.runs.iter().find(|run| run.id == id) else {
-            return Ok(());
-        };
-        let RunState::Ready(run) = &entry.state else {
-            anyhow::bail!(tr!("water-error-not-ready"));
-        };
-        let frame = run.frames.partition_point(|frame| frame.time_s <= self.editor.water.time_s).saturating_sub(1);
-        let (depth, when) = if self.editor.water.show_deepest {
-            (&run.max_depth, tr!("water-deepest"))
-        } else {
-            (&run.frames[frame].depth, crate::ui::elements::water::clock(run.frames[frame].time_s))
-        };
-        // One surface, with the corners the loose triangles share made one.
-        let mut welded = std::collections::HashMap::new();
-        let mut vertices = Vec::new();
-        let mut faces = Vec::new();
-        for band in crate::model::water::water_surface(&run.ground, depth, 0.0) {
-            for triangle in band.as_chunks::<3>().0 {
-                faces.push(triangle.map(|point| {
-                    *welded.entry(point.map(f64::to_bits)).or_insert_with(|| {
-                        vertices.push(mesh_data::Vertex::new(point[0], point[1], point[2]));
-                        (vertices.len() - 1) as u32
-                    })
-                }));
+        if self.water.scene_key != Some(key) {
+            // The project's designs leave the scene when the tab opens.
+            if self.water.scene_key.is_none() {
+                self.scene_document_key = None;
             }
+            self.water.scene = vec![entry.ground.clone()];
+            self.water.scene_key = Some(key);
+            self.invalidate_geometry();
         }
-        anyhow::ensure!(!faces.is_empty(), tr!("water-error-no-water"));
-        let name = tr!("water-surface-name", surface = entry.surface.clone(), when = when);
-        let built =
-            crate::app::commands::triangulation::session::build_generated_triangulation(name.clone(), vertices, faces, crate::ui::state::TriSurfaceType::Surface, |_| Vec::new())?;
-        self.insert_generated_triangulation(built);
-        self.editor.toasts.push(tr!("water-surface-saved", name = name));
-        Ok(())
-    }
-}
 
-/// The water over `run`'s ground at `depth`, one surface per band that has
-/// any.
-fn water_bands(run: &WaterRun, depth: &[f32]) -> Vec<OpenTriangulation> {
-    crate::model::water::water_surface(&run.ground, depth, crate::model::water::DRAWN_LIFT)
-        .into_iter()
-        .enumerate()
-        .filter(|(_, triangles)| !triangles.is_empty())
-        .filter_map(|(band, triangles)| {
-            let faces: Vec<[u32; 3]> = (0..triangles.len() as u32 / 3).map(|face| [face * 3, face * 3 + 1, face * 3 + 2]).collect();
-            let order: Vec<u32> = (0..faces.len() as u32).collect();
-            let vertices = triangles.into_iter().map(|[x, y, z]| mesh_data::Vertex::new(x, y, z)).collect();
-            let mesh = mesh_data::Triangulation::from_vertices_and_faces(vertices, faces).ok()?;
-            Some(scene_surface(
-                WATER_SURFACE_ID - 1 - band as u64,
-                "",
-                Arc::new(mesh),
-                Arc::new(order),
-                BAND_COLORS[band],
-                BAND_COLORS[band],
-            ))
-        })
-        .collect()
+        // The kept instants either side of the cursor, of those worked out
+        // so far: the cursor goes no further than the last of them.
+        let (loaded_s, around) = {
+            let frames = live.frames();
+            let loaded_s = frames.last().map_or(0.0, |frame| frame.time_s);
+            self.editor.water.time_s = self.editor.water.time_s.clamp(0.0, loaded_s);
+            let time_s = self.editor.water.time_s;
+            let around = frames.partition_point(|frame| frame.time_s <= time_s).checked_sub(1).map(|before| {
+                let from = frames[before].clone();
+                let next = frames.get(before + 1).cloned();
+                (before, from, next)
+            });
+            (loaded_s, around)
+        };
+        let time_s = self.editor.water.time_s;
+        self.editor.water.shown = Some(WaterShown {
+            settings,
+            status,
+            instant_s: around.is_some().then_some(time_s),
+            loaded_s,
+        });
+        // The tab is how the run's progress is seen.
+        if running {
+            self.redraw_requested = true;
+        }
+
+        let (Some(landed), Some((before, from, next))) = (live.ground.get(), around) else {
+            self.editor.water.mesh = None;
+            self.water.mesh_key = None;
+            return;
+        };
+        let to = next.as_ref().unwrap_or(&from);
+        self.editor.water.blend = if to.time_s > from.time_s {
+            ((time_s - from.time_s) / (to.time_s - from.time_s)) as f32
+        } else {
+            0.0
+        };
+        self.editor.water.raining = time_s < settings.rain_hours * 3600.0;
+        let mesh_key: MeshKey = (id, before, next.is_some());
+        if self.water.mesh_key != Some(mesh_key) {
+            self.water.meshes_built += 1;
+            self.editor.water.mesh = Some(Arc::new(WaterMesh::build(
+                self.water.meshes_built,
+                &landed.ground,
+                Some(&from.depth),
+                &to.depth,
+                next.as_ref().map_or(&[][..], |next| &next.arrival),
+                settings.roughness,
+            )));
+            self.water.mesh_key = Some(mesh_key);
+            self.redraw_requested = true;
+        }
+    }
 }

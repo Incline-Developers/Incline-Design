@@ -333,14 +333,17 @@ impl<'a> App<'a> {
                             &self.water,
                             self.solid_preview.as_ref(),
                         );
+                        // A rain simulation's tab shows its ground and its
+                        // water, and nothing else of the project's.
+                        let project_shown = !self.editor.is_water_run();
                         match graphics.render(crate::rendering::graphics::frame::RenderInput {
                             editor: &mut self.editor,
                             document: &mut self.scene_document,
                             triangulations: drawn.0,
-                            block_models: &self.block_models,
-                            drill_holes: &self.drill_holes,
+                            block_models: if project_shown { &self.block_models } else { &[] },
+                            drill_holes: if project_shown { &self.drill_holes } else { &[] },
                             well_logs: &self.well_logs,
-                            point_clouds: &self.point_clouds,
+                            point_clouds: if project_shown { &self.point_clouds } else { &[] },
                             rasters: &self.raster_textures,
                             solid_preview: drawn.1,
                             retained_surfaces: &self.solid_view_retained,

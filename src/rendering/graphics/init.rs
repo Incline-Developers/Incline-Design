@@ -606,6 +606,7 @@ impl<'a> Graphics<'a> {
         // Built now because the drill pipeline layout borrows its own.
         let drill_hole_gpu = DrillHoleGpuCache::new(&device);
         let document_style = DocumentStyleGpu::new(&device);
+        let water = crate::rendering::water::WaterGpu::new(&device);
         // wgpu handles are not Send or Sync on wasm, where nothing crosses threads.
         let scene_pipelines = Shared::new(scene_pipelines::create_scene_pipelines(
             &device,
@@ -622,6 +623,7 @@ impl<'a> Graphics<'a> {
                 block_model_transparency_composite: &block_model_transparency_composite_bind_group_layout,
                 block_model_volume_upscale: &block_model_volume_upscale_bind_group_layout,
                 drill_selection: drill_hole_gpu.selection_layout(),
+                water: &water.layout,
             },
             scene_format,
             sample_count,
@@ -867,6 +869,9 @@ impl<'a> Graphics<'a> {
             flow_underlay: 0,
             flow_clock: web_time::Instant::now(),
             machines: None,
+            water,
+            water_clock_s: 0.0,
+            water_clock_last_s: None,
             text_vertex_buf: Vec::new(),
             text_index_buf: Vec::new(),
             text_vertex_capacity: 1,

@@ -53,13 +53,6 @@ const EDGE_SLOPE: (f64, f64) = (0.001, 0.05);
 /// Memory the kept frames may take, and the most of them.
 const FRAME_BYTES: usize = 384 << 20;
 const FRAMES: (usize, usize) = (24, 240);
-/// Water at least this deep is drawn: the film of a rained-on slope is not,
-/// only where it has gathered. The viewport lifts it [`DRAWN_LIFT`] clear of
-/// the ground, so a shallow sheet does not flicker against it.
-pub(crate) const DRAWN_DEPTH: f32 = 0.02;
-pub(crate) const DRAWN_LIFT: f64 = 0.03;
-/// The depths, in metres, the drawn water's bands start at.
-pub(crate) const BAND_DEPTHS: [f32; 5] = [DRAWN_DEPTH, 0.1, 0.5, 1.5, 4.0];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct WaterSettings {
@@ -82,12 +75,12 @@ pub(crate) struct WaterSettings {
 impl Default for WaterSettings {
     fn default() -> Self {
         Self {
-            rain_mm: 100.0,
-            rain_hours: 6.0,
-            run_on_hours: 6.0,
+            rain_mm: 20.0,
+            rain_hours: 4.0,
+            run_on_hours: 4.0,
             roughness: 0.035,
             infiltration_mm_h: 2.0,
-            step_s: 30.0,
+            step_s: 10.0,
             subdivide_m: None,
         }
     }
@@ -358,16 +351,18 @@ pub(crate) struct WaterFrame {
     pub(crate) time_s: f64,
     /// Metres of water at each vertex.
     pub(crate) depth: Vec<f32>,
+    /// How far from the kept instant before this one to this one the water
+    /// last reached each vertex, in 255ths: 0 where it was there all along,
+    /// or never came. What lets the drawn water advance between two kept
+    /// instants as it did, not appear everywhere it got to at once.
+    pub(crate) arrival: Vec<u8>,
     /// Cubic metres lying on the surface.
     pub(crate) on_surface: f64,
 }
 
-pub(crate) struct WaterRun {
-    pub(crate) ground: Ground,
-    pub(crate) frames: Vec<WaterFrame>,
-    /// The deepest each vertex was at any step.
-    pub(crate) max_depth: Vec<f32>,
-}
+/// Water at least this deep counts as having reached a vertex, in metres:
+/// the shallowest that is drawn.
+pub(crate) const ARRIVED_DEPTH: f64 = 0.003;
 
 /// Sum of the products of two vectors, added up in the same order whatever
 /// the thread count.
@@ -661,9 +656,9 @@ fn drained_root(volume: f64, area: f64, rate: f64, step: f64, guess: f64) -> f64
 ///
 /// Both halves run on every thread (see [`hand_down`]), and the answer is the
 /// same on any number of them.
-pub(crate) fn simulate(ground: Ground, settings: &WaterSettings, cancel: &AtomicBool, progress: &Progress) -> Result<WaterRun, WaterError> {
+pub(crate) fn simulate(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBool, progress: &Progress, keep: &mut dyn FnMut(WaterFrame)) -> Result<(), WaterError> {
     let count = ground.vertices.len();
-    let operators = Operators::new(&ground);
+    let operators = Operators::new(ground);
     let total_area: f64 = operators.catchment.iter().sum();
     if ground.faces.is_empty() || total_area <= 1e-3 {
         return Err(WaterError::Empty);
@@ -698,8 +693,10 @@ pub(crate) fn simulate(ground: Ground, settings: &WaterSettings, cancel: &Atomic
         .collect();
 
     let mut depth = vec![0.0f64; count];
-    let mut max_depth = vec![0.0f32; count];
-    let mut frames = vec![frame(&operators, &depth, 0.0)];
+    let mut arrival = vec![0u8; count];
+    let mut reached = vec![false; count];
+    keep(frame(&operators, &depth, std::mem::take(&mut arrival), 0.0));
+    arrival = vec![0u8; count];
 
     let mut level = vec![0.0; count];
     let waiting: Vec<AtomicU32> = (0..count).map(|_| AtomicU32::new(0)).collect();
@@ -850,101 +847,104 @@ pub(crate) fn simulate(ground: Ground, settings: &WaterSettings, cancel: &Atomic
             }
         }
 
-        max_depth.par_iter_mut().zip(&depth).for_each(|(max, depth)| *max = max.max(*depth as f32));
+        // When, between the last kept instant and the next, water came.
+        let since = index % frame_every;
+        let part = ((since * 255) / frame_every).max(1) as u8;
+        arrival.par_iter_mut().zip(reached.par_iter_mut()).zip(&depth).for_each(|((arrival, reached), depth)| {
+            let wet = *depth >= ARRIVED_DEPTH;
+            if wet && !*reached && since > 0 {
+                *arrival = part;
+            }
+            *reached = wet;
+        });
         if (index + 1) % frame_every == 0 || index + 1 == steps {
-            frames.push(frame(&operators, &depth, (index + 1) as f64 * step));
+            keep(frame(&operators, &depth, std::mem::replace(&mut arrival, vec![0u8; count]), (index + 1) as f64 * step));
         }
         progress.set_items(index as u64 + 1, steps as u64);
     }
 
-    Ok(WaterRun { ground, frames, max_depth })
+    Ok(())
 }
 
-fn frame(operators: &Operators, depth: &[f64], time_s: f64) -> WaterFrame {
+fn frame(operators: &Operators, depth: &[f64], arrival: Vec<u8>, time_s: f64) -> WaterFrame {
     WaterFrame {
         time_s,
+        arrival,
         depth: depth.iter().map(|depth| *depth as f32).collect(),
         on_surface: depth.iter().zip(&operators.area).map(|(depth, area)| depth * area).sum(),
     }
 }
 
-/// The water's surface as loose triangles, one list per band of
-/// [`BAND_DEPTHS`], for `depth` at each of the ground's vertices.
+/// The shallowest water that is taken to run at all, in metres.
+const FLOW_DEPTH: f32 = 1e-3;
+/// The fastest the drawn water is taken to run, in metres a second: a film
+/// down a batter face is all slope and no depth, and Manning's formula was
+/// never meant for it.
+const FLOW_LIMIT: f64 = 8.0;
+
+/// How fast the water at each of the ground's vertices is running in plan,
+/// in metres a second, for `depth` at each: Manning's speed for the sheet on
+/// each triangle down the fall of its water level, averaged at each vertex
+/// over the triangles round it by their plan area.
 ///
-/// A triangle wholly under water is lifted to the water's level at each
-/// corner. One the waterline crosses is cut along it: its dry corners are
-/// taken to be at the level of its wet ones, and the water stops where the
-/// ground comes up through that. Every level is raised by `lift`.
-pub(crate) fn water_surface(ground: &Ground, depth: &[f32], lift: f64) -> [Vec<[f64; 3]>; BAND_DEPTHS.len()] {
-    const CHUNK: usize = 8192;
-    let parts: Vec<[Vec<[f64; 3]>; BAND_DEPTHS.len()]> = ground
+/// For drawing only. The run itself moves water along the triangles' sides
+/// and keeps no velocities.
+pub(crate) fn flow_velocity(ground: &Ground, depth: &[f32], roughness: f64) -> Vec<[f32; 2]> {
+    // Each triangle's velocity times its plan area, and that area.
+    let per_face: Vec<[f32; 3]> = ground
         .faces
-        .par_chunks(CHUNK)
-        .map(|faces| {
-            let mut bands: [Vec<[f64; 3]>; BAND_DEPTHS.len()] = Default::default();
-            for face in faces {
-                let corners = face.map(|index| ground.vertices[index as usize]);
-                let deep = face.map(|index| depth[index as usize]);
-                let wet = deep.map(|deep| deep >= DRAWN_DEPTH);
-                let wet_count = wet.iter().filter(|wet| **wet).count();
-                if wet_count == 0 {
-                    continue;
-                }
-                let mean_depth = (0..3).filter(|&corner| wet[corner]).map(|corner| deep[corner]).sum::<f32>() / wet_count as f32;
-                let mean_level = (0..3).filter(|&corner| wet[corner]).map(|corner| corners[corner][2] + f64::from(deep[corner])).sum::<f64>() / wet_count as f64;
-                // Each corner's water level, and how far that stands over its
-                // ground: negative where the ground is above the water.
-                let level: [f64; 3] = std::array::from_fn(|corner| {
-                    if wet[corner] {
-                        corners[corner][2] + f64::from(deep[corner])
-                    } else {
-                        mean_level.max(corners[corner][2])
-                    }
-                });
-                let over: [f64; 3] = std::array::from_fn(|corner| {
-                    if wet[corner] {
-                        f64::from(deep[corner])
-                    } else {
-                        (mean_level - corners[corner][2]).min(0.0)
-                    }
-                });
-                let mut outline: [[f64; 3]; 4] = [[0.0; 3]; 4];
-                let mut points = 0;
-                for corner in 0..3 {
-                    let next = (corner + 1) % 3;
-                    if over[corner] >= 0.0 {
-                        outline[points] = [corners[corner][0], corners[corner][1], level[corner] + lift];
-                        points += 1;
-                    }
-                    if (over[corner] < 0.0) != (over[next] < 0.0) {
-                        let along = over[corner] / (over[corner] - over[next]);
-                        let mix = |from: f64, to: f64| from + (to - from) * along;
-                        // The dry end's level is the water's, carried across.
-                        let (from, to) = (
-                            if over[corner] < 0.0 { mean_level } else { level[corner] },
-                            if over[next] < 0.0 { mean_level } else { level[next] },
-                        );
-                        outline[points] = [mix(corners[corner][0], corners[next][0]), mix(corners[corner][1], corners[next][1]), mix(from, to) + lift];
-                        points += 1;
-                    }
-                }
-                if points < 3 {
-                    continue;
-                }
-                let band = BAND_DEPTHS.iter().rposition(|start| mean_depth >= *start).unwrap_or(0);
-                bands[band].extend([outline[0], outline[1], outline[2]]);
-                if points == 4 {
-                    bands[band].extend([outline[0], outline[2], outline[3]]);
-                }
+        .par_iter()
+        .map(|face| {
+            let corners = face.map(|index| ground.vertices[index as usize]);
+            let deep = face.map(|index| depth[index as usize]);
+            let wet = deep.map(|deep| deep >= FLOW_DEPTH);
+            let wet_count = wet.iter().filter(|wet| **wet).count();
+            if wet_count == 0 {
+                return [0.0; 3];
             }
-            bands
+            let mean_depth = (0..3).filter(|&corner| wet[corner]).map(|corner| f64::from(deep[corner])).sum::<f64>() / wet_count as f64;
+            let mean_level = (0..3).filter(|&corner| wet[corner]).map(|corner| corners[corner][2] + f64::from(deep[corner])).sum::<f64>() / wet_count as f64;
+            // Dry ground standing over the water gives it nothing to run
+            // down from; dry ground under it is where it is running to.
+            let level: [f64; 3] = std::array::from_fn(|corner| {
+                if wet[corner] {
+                    corners[corner][2] + f64::from(deep[corner])
+                } else {
+                    corners[corner][2].min(mean_level)
+                }
+            });
+            let (ux, uy) = (corners[1][0] - corners[0][0], corners[1][1] - corners[0][1]);
+            let (vx, vy) = (corners[2][0] - corners[0][0], corners[2][1] - corners[0][1]);
+            let cross = ux * vy - uy * vx;
+            if cross.abs() < 1e-9 {
+                return [0.0; 3];
+            }
+            let (rise_u, rise_v) = (level[1] - level[0], level[2] - level[0]);
+            let fall_x = -(rise_u * vy - rise_v * uy) / cross;
+            let fall_y = -(rise_v * ux - rise_u * vx) / cross;
+            let fall = fall_x.hypot(fall_y);
+            if fall < 1e-9 {
+                return [0.0, 0.0, (cross.abs() / 2.0) as f32];
+            }
+            let speed = (mean_depth.powf(2.0 / 3.0) * fall.sqrt() / roughness).min(FLOW_LIMIT);
+            let area = cross.abs() / 2.0;
+            [(fall_x / fall * speed * area) as f32, (fall_y / fall * speed * area) as f32, area as f32]
         })
         .collect();
-    let mut bands: [Vec<[f64; 3]>; BAND_DEPTHS.len()] = Default::default();
-    for part in parts {
-        for (band, triangles) in bands.iter_mut().zip(part) {
-            band.extend(triangles);
+    let mut summed = vec![[0.0f32; 3]; ground.vertices.len()];
+    for (face, share) in ground.faces.iter().zip(&per_face) {
+        if share[2] > 0.0 {
+            for &corner in face {
+                let sum = &mut summed[corner as usize];
+                sum[0] += share[0];
+                sum[1] += share[1];
+                sum[2] += share[2];
+            }
         }
     }
-    bands
+    summed
+        .into_iter()
+        .zip(depth)
+        .map(|([x, y, area], deep)| if area > 0.0 && *deep >= FLOW_DEPTH { [x / area, y / area] } else { [0.0; 2] })
+        .collect()
 }
