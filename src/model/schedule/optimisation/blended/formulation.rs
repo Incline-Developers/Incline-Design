@@ -355,23 +355,28 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             }
             for segment in 0..segments {
                 let duration = rows.columns().duration[&(interval.index, segment)].clone();
-                for activity in [Activity::Dig, Activity::Reclaim] {
-                    let rate = match activity {
-                        Activity::Dig => interval_rate(loader, interval.index).map(|r| r.dig_tph),
-                        Activity::Reclaim => interval_rate(loader, interval.index).map(|r| r.reclaim_tph),
-                    };
-                    let Some(rate) = rate.filter(|value| *value > 0.0) else { continue };
-                    let mut terms = vec![(duration.clone(), -rate)];
+                // Digging and reclaiming share the loader's hours, in
+                // tonnes at its faster rate so the row scales as before.
+                if let Some(rate) = interval_rate(loader, interval.index).filter(|rate| rate.dig_tph > 0.0 || rate.reclaim_tph > 0.0) {
+                    let fastest = rate.dig_tph.max(rate.reclaim_tph);
+                    let mut terms = vec![(duration.clone(), -fastest)];
                     for (index, candidate) in input.movements.iter().enumerate() {
-                        if candidate.loader != loader.id || candidate.activity != activity {
+                        if candidate.loader != loader.id {
+                            continue;
+                        }
+                        let tph = match candidate.activity {
+                            Activity::Dig => rate.dig_tph,
+                            Activity::Reclaim => rate.reclaim_tph,
+                        };
+                        if tph <= 0.0 {
                             continue;
                         }
                         if let Some(column) = rows.columns().movement.get(&(index, interval.index, segment)) {
-                            terms.push((column.clone(), 1.0));
+                            terms.push((column.clone(), fastest / tph));
                         }
                     }
                     if terms.len() > 1 {
-                        rows.leq(terms, 0.0, &format!("rate_{loader_index}_{activity:?}_{}_{segment}", interval.index));
+                        rows.leq(terms, 0.0, &format!("rate_{loader_index}_{}_{segment}", interval.index));
                     }
                 }
 

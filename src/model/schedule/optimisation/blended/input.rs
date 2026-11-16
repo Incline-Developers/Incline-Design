@@ -945,6 +945,7 @@ pub(crate) fn task_authorises(task: &Task, candidate: &MovementCandidate) -> boo
     }
     match (&task.kind, candidate.source) {
         (TaskKind::Dig { sequence }, SourceId::Ground(ground)) => candidate.activity == Activity::Dig && sequence.contains(&ground),
+        (TaskKind::Dig { .. }, SourceId::Stockpile(pile)) => candidate.activity == Activity::Reclaim && task.reclaims.contains(&pile),
         (TaskKind::Reclaim { approved_sources, .. }, SourceId::Stockpile(pile)) => candidate.activity == Activity::Reclaim && approved_sources.contains(&pile),
         _ => false,
     }

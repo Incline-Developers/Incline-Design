@@ -476,6 +476,9 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                 let Some(rate) = super::input::interval_rate(loader, interval.index) else {
                     continue;
                 };
+                // Digging and reclaiming share the loader's hours.
+                let mut hours = 0.0;
+                let mut impossible = 0.0;
                 for activity in [Activity::Dig, Activity::Reclaim] {
                     let tph = match activity {
                         Activity::Dig => rate.dig_tph,
@@ -491,12 +494,20 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                         })
                         .map(|row| row.tonnes_t)
                         .sum();
-                    checker.breach(
-                        || format!("loader {} {activity:?} rate in interval {} segment {segment}", loader.id.0, interval.index),
-                        moved,
-                        tph * duration,
-                    );
+                    if tph > 0.0 {
+                        hours += moved / tph;
+                    } else {
+                        impossible += moved;
+                    }
                 }
+                checker.breach(|| format!("loader {} rate in interval {} segment {segment}", loader.id.0, interval.index), impossible, 0.0);
+                // In tonnes at the faster rate, so the tolerance reads as before.
+                let fastest = rate.dig_tph.max(rate.reclaim_tph);
+                checker.breach(
+                    || format!("loader {} hours in interval {} segment {segment}", loader.id.0, interval.index),
+                    hours * fastest,
+                    duration * fastest,
+                );
                 // One pile at a time: a loader switches piles only at a
                 // segment boundary, as the formulation's `onesrc` rows say.
                 let mut drawn: BTreeSet<StockpileId> = BTreeSet::new();
@@ -1103,6 +1114,9 @@ impl BarSources {
                 TaskKind::Dig { sequence } => {
                     for &ground in sequence {
                         add(SourceId::Ground(ground));
+                    }
+                    for &pile in &task.reclaims {
+                        add(SourceId::Stockpile(pile));
                     }
                 }
                 TaskKind::Reclaim { approved_sources, .. } => {

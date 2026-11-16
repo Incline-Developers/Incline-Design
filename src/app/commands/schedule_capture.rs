@@ -2181,7 +2181,37 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
             kind,
             lookahead_t: 0.0,
             lookahead_feed_t: 0.0,
+            reclaims: Vec::new(),
         });
+    }
+    // An automatic bar's digging may reclaim its stockpiles in the same
+    // hours, so its loader blends between them as the hour suits; its own
+    // reclaim bar, behind, works them while it has nothing to dig.
+    for index in 0..tasks.len() {
+        if !matches!(tasks[index].kind, TaskKind::Dig { .. }) {
+            continue;
+        }
+        let Some(bar) = identities
+            .tasks
+            .iter()
+            .find(|(id, _, _)| *id == tasks[index].id)
+            .map(|(_, bar, _)| *bar)
+            .filter(|bar| auto_ids.contains(bar))
+        else {
+            continue;
+        };
+        let piles: Vec<StockpileId> = identities
+            .tasks
+            .iter()
+            .filter(|(_, held, _)| *held == bar)
+            .filter_map(|(id, _, _)| tasks.iter().find(|task| task.id == *id))
+            .filter_map(|task| match &task.kind {
+                TaskKind::Reclaim { approved_sources, .. } => Some(approved_sources.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        tasks[index].reclaims = piles;
     }
 
     // ---- movement candidates ------------------------------------------------

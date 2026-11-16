@@ -277,6 +277,11 @@ pub(crate) struct Task {
     /// before a block in its reach may be all the tonnes past
     /// [`Self::lookahead_t`] while its feed is no more than this.
     pub(crate) lookahead_feed_t: f64,
+    /// Piles a dig bar's loader may also reclaim from in the hours it holds
+    /// the bar, as its time allows: an automatic bar's stockpiles, so one
+    /// loader blends between its faces and the piles hour by hour. Empty
+    /// for every other bar.
+    pub(crate) reclaims: Vec<StockpileId>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

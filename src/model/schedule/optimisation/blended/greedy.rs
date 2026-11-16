@@ -525,10 +525,12 @@ struct Bar {
     /// Dig bars only: the blocks it works in the segment, in authored order.
     /// Every block before the last is finished by the segment's end.
     blocks: Vec<GroundId>,
-    /// Reclaim bars only: the one pile it draws in the segment, once the
-    /// program has picked it from those the bar approves.
+    /// Reclaim bars, and dig bars that may also reclaim: the one pile it
+    /// draws in the segment, once the program has picked it from those the
+    /// bar approves.
     pile: Option<StockpileId>,
-    /// Reclaim bars only: piles the bar emptied in an earlier segment.
+    /// Reclaim bars only: piles the bar emptied in an earlier segment. A dig
+    /// bar that also reclaims keeps none: it has its digging to go on with.
     emptied: Vec<StockpileId>,
 }
 
@@ -1175,6 +1177,27 @@ impl<'a> State<'a> {
         }
     }
 
+    /// The piles a dig bar may reclaim in the same hours, with what each
+    /// releases this interval: those it reclaims as the interval opens, not
+    /// emptied or left to building, narrowed to one once it drew several. A
+    /// pile that may not build and reclaim at once only while a reclaim bar
+    /// holds it this hour: digging leaves such a pile to building.
+    fn companion_piles(&self, bar: &Bar, interval: Interval) -> Vec<(StockpileId, &Released)> {
+        let input = self.input;
+        input.tasks[bar.task]
+            .reclaims
+            .iter()
+            .filter(|pile| bar.pile.is_none_or(|only| only == **pile) && !bar.emptied.contains(pile) && !self.building.contains(pile))
+            .filter(|pile| self.blocked.contains(pile) || !input.piles.iter().any(|entry| entry.id == **pile && entry.exclusive))
+            .filter_map(|pile| {
+                Some((
+                    *pile,
+                    self.released.get(pile).filter(|found| self.reclaims(*pile, interval) && found.tonnes > NEGLIGIBLE_T)?,
+                ))
+            })
+            .collect()
+    }
+
     /// Exclusive piles the reclaim bars of `topology` draw this interval.
     fn exclusive_draws(&self, topology: &Topology, interval: Interval) -> BTreeSet<StockpileId> {
         let input = self.input;
@@ -1574,6 +1597,26 @@ impl<'a> State<'a> {
                                     portion.push((col, 1.0));
                                 }
                                 problem.add_keyed_row(("portion", bar.loader, block, segment, share.material.0), 0.0..=0.0, portion);
+                            }
+                        }
+                        // Piles it may reclaim in the same hours, each tonne
+                        // taking the loader's time at its reclaim rate. The
+                        // production credit stays with the digging: what a
+                        // loader's digging is worth later the hour cannot
+                        // see, so it reclaims with the hours its digging
+                        // leaves - held by its reach, trucks or room - and
+                        // where the reclaim's money outweighs the credit.
+                        if rate.dig_tph > 0.0 && rate.reclaim_tph > 0.0 {
+                            let hours = rate.dig_tph / rate.reclaim_tph;
+                            for (pile, released) in self.companion_piles(bar, interval) {
+                                for index in self.reclaim_candidates(bar.loader, pile, bar.task, interval) {
+                                    let value = conditional_value(input, index, &released.blend, released.tonnes);
+                                    let weight = self.weight[index] - self.credit[index];
+                                    let col = problem.add_keyed_column(("movement", index, segment), weight + value, 0.0..);
+                                    columns.push((index, segment, col));
+                                    loader_total.push((col, hours));
+                                    pile_draw.entry(pile).or_default().push((col, 1.0));
+                                }
                             }
                         }
                         rate.dig_tph
@@ -2394,7 +2437,10 @@ impl<'a> State<'a> {
 fn narrow(input: &BlendInput, topology: &mut Topology, plan: &Plan) -> bool {
     let mut narrowed = false;
     for (segment, bars) in topology.segments.iter_mut().enumerate() {
-        for bar in bars.iter_mut().filter(|bar| matches!(input.tasks[bar.task].kind, TaskKind::Reclaim { .. })) {
+        for bar in bars
+            .iter_mut()
+            .filter(|bar| matches!(input.tasks[bar.task].kind, TaskKind::Reclaim { .. }) || !input.tasks[bar.task].reclaims.is_empty())
+        {
             let mut drawn: BTreeMap<StockpileId, f64> = BTreeMap::new();
             for &(index, at, tonnes) in &plan.rows {
                 let candidate = &input.movements[index];

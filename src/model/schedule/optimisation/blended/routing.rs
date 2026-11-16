@@ -857,7 +857,17 @@ pub(crate) fn reroute(
                     .map(|&index| &fixed[index])
                     .filter_map(|row| by_loader(row).map(|_| row.tonnes_t))
                     .sum();
-                problem.add_row(..=(rate.reclaim_tph * duration + SLACK_T).max(held) - constant, terms);
+                // The hours its digging there takes, which the reroute
+                // leaves where they are, are not the reclaim's.
+                let dug: f64 = fixed_by_interval[at]
+                    .iter()
+                    .map(|&index| &fixed[index])
+                    .filter(|row| row.segment == cell && input.movements[row.candidate].loader == id && input.movements[row.candidate].activity == Activity::Dig)
+                    .map(|row| row.tonnes_t)
+                    .sum();
+                let digging_h = if rate.dig_tph > 0.0 { dug / rate.dig_tph } else { 0.0 };
+                let room = rate.reclaim_tph * (duration - digging_h).max(0.0);
+                problem.add_row(..=(room + SLACK_T).max(held) - constant, terms);
             }
         }
     }
