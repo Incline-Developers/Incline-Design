@@ -74,6 +74,24 @@ pub(crate) struct PlanRequest<'a> {
     pub(crate) machine_tasks: &'a [usize],
     /// How long the pricing may run.
     pub(crate) budget: std::time::Duration,
+    /// Each block's identity across edits, which its `GroundId` is not.
+    pub(crate) stable: &'a BTreeMap<GroundId, u64>,
+    /// What the last plan over this mine left: see [`PlanMemory`].
+    pub(crate) memory: Option<&'a PlanMemory>,
+}
+
+/// What a plan leaves for the next one, so an edit is planned from where
+/// the last plan ended rather than from nothing: the key of the problem it
+/// solved, which a plan over the same problem answers with its order
+/// without pricing anything, and how much of each block it had dug by each
+/// period, which a plan over a changed one starts its groups from.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PlanMemory {
+    key: u64,
+    order: Vec<usize>,
+    summary: PlanSummary,
+    /// By the block's identity across edits.
+    dug_by: BTreeMap<u64, Vec<f32>>,
 }
 
 /// What the plan did, for the run's report.
@@ -88,6 +106,8 @@ pub(crate) struct PlanSummary {
     /// the last prices.
     pub(crate) value: f64,
     pub(crate) bound: f64,
+    /// The order is the last plan's, over the same problem.
+    pub(crate) reused: bool,
 }
 
 /// One block as the plan sees it, or a blast's clearance: a step with no
@@ -148,27 +168,28 @@ impl Block {
 /// Give every automatic bar its blocks and their order: the plan's when
 /// there is value to plan for, the order they came in otherwise. Candidates
 /// for a block on a loader that was not given it are dropped.
-pub(crate) fn assign(input: &mut BlendInput, request: &PlanRequest<'_>, planned: bool, cancelled: &dyn Fn() -> bool) -> (PlanSummary, Vec<u32>) {
+pub(crate) fn assign(input: &mut BlendInput, request: &PlanRequest<'_>, planned: bool, cancelled: &dyn Fn() -> bool) -> (PlanSummary, Vec<u32>, Option<PlanMemory>) {
     let Some(first) = input.tasks.iter().find(|task| request.tasks.contains(&task.id)) else {
-        return (PlanSummary::default(), Vec::new());
+        return (PlanSummary::default(), Vec::new(), None);
     };
     let TaskKind::Dig { sequence } = &first.kind else {
-        return (PlanSummary::default(), Vec::new());
+        return (PlanSummary::default(), Vec::new(), None);
     };
     let grounds: Vec<GroundId> = sequence.clone();
     let blocks = blocks(input, request, &grounds);
-    let (order, summary) = match if planned { planned_order(input, request, &blocks, cancelled) } else { None } {
-        Some((order, summary)) => (order, summary),
+    let (order, summary, memory) = match if planned { planned_order(input, request, &blocks, cancelled) } else { None } {
+        Some((order, summary, memory)) => (order, summary, Some(memory)),
         None => (
             (0..blocks.len()).collect(),
             PlanSummary {
                 blocks: blocks.len(),
                 ..PlanSummary::default()
             },
+            None,
         ),
     };
     deal(input, request, &blocks, &order);
-    (summary, order.iter().map(|at| *at as u32).collect())
+    (summary, order.iter().map(|at| *at as u32).collect(), memory)
 }
 
 /// Deal the automatic bars' ground in `order`, the plan's blocks by
@@ -702,7 +723,7 @@ type Column = Vec<u16>;
 /// The blocks in the order the plan would dig them, or `None` when there is
 /// nothing to plan: no value on any block, a single period, or a solver
 /// that could not be run.
-fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block], cancelled: &dyn Fn() -> bool) -> Option<(Vec<usize>, PlanSummary)> {
+fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block], cancelled: &dyn Fn() -> bool) -> Option<(Vec<usize>, PlanSummary, PlanMemory)> {
     // A place for each block after everything it waits on.
     let rank = topological_rank(blocks);
     let periods = periods(request);
@@ -925,6 +946,56 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             }
         }
     }
+    // Everything the plan and its rounding read, blocks by their identity
+    // across edits: the same key is the same problem, and the last plan's
+    // order its answer.
+    let stable = |block: &Block| block.ground.and_then(|ground| request.stable.get(&ground).copied());
+    let problem = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for (index, block) in blocks.iter().enumerate() {
+            stable(block).hash(&mut hasher);
+            block.ground.is_some_and(|ground| request.not_before_h.contains_key(&ground)).hash(&mut hasher);
+            format!(
+                "{:?}",
+                (
+                    block.tonnes,
+                    block.value,
+                    &block.crushed,
+                    &block.assay,
+                    &block.piled,
+                    &block.hauled,
+                    block.worked,
+                    &block.above,
+                    block.lead_h,
+                    block.earliest_h,
+                    block.authored_h,
+                    (&block_areas[index], rank[index]),
+                )
+            )
+            .hash(&mut hasher);
+        }
+        format!("{periods:?}{discount:?}{limits:?}{opens:?}{lag:?}{:?}", input.grade_targets).hash(&mut hasher);
+        for hinge in &hinges {
+            format!("{:?}", (hinge.row, hinge.boundary, hinge.direction, hinge.cost)).hash(&mut hasher);
+        }
+        for entry in input.destinations.iter().filter(|entry| entry.kind == DestinationKind::Crusher) {
+            format!("{:?}", entry.crusher_daily_t).hash(&mut hasher);
+        }
+        hasher.finish()
+    };
+    if let Some(memory) = request.memory.filter(|memory| memory.key == problem && memory.order.len() == count) {
+        return Some((
+            memory.order.clone(),
+            PlanSummary {
+                reused: true,
+                rounds: 0,
+                seconds: 0.0,
+                ..memory.summary
+            },
+            memory.clone(),
+        ));
+    }
     let precedence = mineflow::Precedence::explicit((count * spans) as i64, &edges).ok()?;
     // Values go to the closure solver as integers: scaled so the largest is
     // well inside what it sums exactly.
@@ -992,6 +1063,23 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
     // closures, so far fewer rounds to the best.
     let mut group: Vec<u32> = vec![0; nodes];
     let mut groups = 1_usize;
+    // From where the last plan ended: its nodes dug to the same share are
+    // one group, so the first master can give them that share again and the
+    // closures need only find what the edit changed. A block it did not
+    // plan is a group of its own until they split it.
+    if let Some(memory) = request.memory {
+        let mut labels: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        for (index, block) in blocks.iter().enumerate() {
+            let prior = stable(block).and_then(|at| memory.dug_by.get(&at)).filter(|shares| shares.len() == spans);
+            for period in 0..spans {
+                // No share's bits are all ones: that is a NaN.
+                let side = prior.map_or(u32::MAX, |shares| shares[period].to_bits());
+                let next = labels.len() as u32;
+                group[index * spans + period] = *labels.entry(side).or_insert(next);
+            }
+        }
+        groups = labels.len().max(1);
+    }
     let mut share: Vec<f64> = vec![0.0];
     let mut prices = vec![0.0; limits.len()];
     let started = std::time::Instant::now();
@@ -1406,17 +1494,26 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         }
     }
     let order = started_first(&order, blocks, &rank, &named);
-    Some((
-        order,
-        PlanSummary {
-            blocks: count,
-            periods: spans,
-            rounds,
-            seconds: started.elapsed().as_secs_f64(),
-            value,
-            bound,
-        },
-    ))
+    let summary = PlanSummary {
+        blocks: count,
+        periods: spans,
+        rounds,
+        seconds: started.elapsed().as_secs_f64(),
+        value,
+        bound,
+        reused: false,
+    };
+    let memory = PlanMemory {
+        key: problem,
+        order: order.clone(),
+        summary,
+        dug_by: blocks
+            .iter()
+            .zip(&by)
+            .filter_map(|(block, shares)| Some((stable(block)?, shares.iter().map(|share| *share as f32).collect())))
+            .collect(),
+    };
+    Some((order, summary, memory))
 }
 
 /// The order with the ground dig bars name and leave first, from the top

@@ -224,9 +224,13 @@ pub(crate) struct CaptureStats {
 /// What a schedule saved with the project says of the model it answers.
 #[derive(Clone, Debug)]
 pub(crate) struct SavedHint {
-    /// The model's stable fingerprint.
-    pub(crate) fingerprint: u64,
+    /// The model's stable fingerprint, where a saved schedule may answer
+    /// this run.
+    pub(crate) fingerprint: Option<u64>,
     pub(crate) auto_order: Option<crate::model::schedule::optimisation::blended::saved::AutoOrder>,
+    /// What the last plan over this scenario left, saved or not: the plan
+    /// starts from it.
+    pub(crate) memory: Option<Arc<crate::model::schedule::optimisation::longterm::PlanMemory>>,
 }
 
 /// A finished capture: the model, what its ids mean, and one semantic key.
@@ -2537,6 +2541,7 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
         let auto_tasks: Vec<TaskId> = identities.tasks.iter().filter(|(_, bar, _)| auto_ids.contains(bar)).map(|(task, _, _)| *task).collect();
         let groups: BTreeMap<GroundId, u32> = auto_groups.iter().filter_map(|(position, group)| Some((*block_ground.get(position)?, *group))).collect();
         let not_before_h: BTreeMap<GroundId, f64> = auto_after.iter().filter_map(|(position, after)| Some((*block_ground.get(position)?, *after))).collect();
+        let stable: BTreeMap<GroundId, u64> = identities.ground_blocks.iter().map(|(ground, block)| (*ground, block.0)).collect();
         let scale = plan.period_scale();
         let days = (horizon_h / SCHEDULE_PERIOD_H).ceil().max(1.0) as u32;
         let period_ends_h: Vec<f64> = (0..scale.count(days)).map(|period| scale.start_h(period + 1).min(horizon_h)).collect();
@@ -2550,6 +2555,8 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
             dependencies: &dependencies,
             machine_tasks: &identities.auto_blast_tasks,
             budget: Duration::from_secs(20),
+            stable: &stable,
+            memory: saved.and_then(|hint| hint.memory.as_deref()),
         };
         // The model the order is dealt over, and what the plan reads beside
         // it: a schedule saved over the same deals its own order again
@@ -2572,22 +2579,32 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
                 apply_dependencies(trial.drill_blast.get_or_insert_with(|| empty_chain(plan.drill_blast())), &dependencies);
             }
         };
-        if let Some(order) = saved.and_then(|hint| hint.auto_order.as_ref()).filter(|order| order.before == before) {
+        // What the plan leaves for the next run, kept whichever order wins.
+        let mut memory = None;
+        if let Some(order) = saved
+            .filter(|hint| hint.fingerprint.is_some())
+            .and_then(|hint| hint.auto_order.as_ref())
+            .filter(|order| order.before == before)
+        {
             let (mut trial, mut named) = (input.clone(), identities.clone());
             if longterm::assign_order(&mut trial, &request, &order.order) {
                 finish(&mut trial, &mut named);
                 candidates.push((trial, named, longterm::PlanSummary::default(), order.order.clone()));
+                memory = order.memory.clone();
             }
         }
         if candidates.is_empty() {
             for planned in [true, false] {
                 let (mut trial, mut named) = (input.clone(), identities.clone());
-                let (summary, order) = longterm::assign(&mut trial, &request, planned, &|| cancel.is_cancelled());
+                let (summary, order, left) = longterm::assign(&mut trial, &request, planned, &|| cancel.is_cancelled());
                 if cancel.is_cancelled() {
                     return Err(Vec::new());
                 }
+                if let Some(left) = left {
+                    memory = Some(Arc::new(left));
+                }
                 // No plan was made: the order is the top-down one already.
-                if planned && summary.rounds == 0 {
+                if planned && summary.rounds == 0 && !summary.reused {
                     continue;
                 }
                 finish(&mut trial, &mut named);
@@ -2606,7 +2623,9 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
         };
         // An order the saved schedule answers is that schedule's, which the
         // run restores: neither needs dispatching to choose it.
-        let restorable = saved.and_then(|hint| candidates.iter().position(|(trial, _, _, _)| stable_fingerprint(source, trial) == hint.fingerprint));
+        let restorable = saved
+            .and_then(|hint| hint.fingerprint)
+            .and_then(|fingerprint| candidates.iter().position(|(trial, _, _, _)| stable_fingerprint(source, trial) == fingerprint));
         // The two dispatches are independent: side by side.
         let mut found: Vec<Option<(f64, crate::model::schedule::optimisation::blended::greedy::Dispatched)>> = match (restorable, candidates.as_slice()) {
             (None, [(planned, _, _, _), (top_down, _, _, _)]) => {
@@ -2653,7 +2672,7 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
         let (trial, named, _, order) = candidates.swap_remove(chosen);
         input = trial;
         identities = named;
-        auto_order = Some(crate::model::schedule::optimisation::blended::saved::AutoOrder { before, order });
+        auto_order = Some(crate::model::schedule::optimisation::blended::saved::AutoOrder { before, order, memory });
         dispatched = found.get_mut(chosen).and_then(Option::take).map(|(_, found)| found);
     } else if !dependencies.is_empty() {
         // Into the chain only now, as for the automatic bars above.

@@ -46,6 +46,9 @@ pub(crate) struct AutoOrder {
     pub(crate) before: u64,
     /// The plan's blocks by position, in the order dealt.
     pub(crate) order: Vec<u32>,
+    /// What the plan left for the next one, in this session only.
+    #[serde(skip)]
+    pub(crate) memory: Option<std::sync::Arc<crate::model::schedule::optimisation::longterm::PlanMemory>>,
 }
 
 /// The rows column by column: a schedule holds hundreds of thousands, and

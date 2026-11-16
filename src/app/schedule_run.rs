@@ -609,13 +609,26 @@ impl crate::app::App<'_> {
             }
         };
         self.cancel_schedule_run_calculation_quietly();
-        let saved_hint = saved
+        // The last plan over the open scenario, on screen or saved, current
+        // or not: the plan starts from where it ended.
+        let memory = self
+            .schedule_calculation
             .as_ref()
-            .filter(|saved| (saved.requested_end_h - requested_end_h).abs() <= 1e-9)
-            .map(|saved| schedule_capture::SavedHint {
-                fingerprint: saved.fingerprint,
+            .and_then(|held| held.saved.clone())
+            .or_else(|| self.workspace.active_document().and_then(|document| document.saved_schedule().cloned()))
+            .and_then(|held| held.auto_order.as_ref().and_then(|order| order.memory.clone()));
+        let saved_hint = match saved.as_ref().filter(|saved| (saved.requested_end_h - requested_end_h).abs() <= 1e-9) {
+            Some(saved) => Some(schedule_capture::SavedHint {
+                fingerprint: Some(saved.fingerprint),
                 auto_order: saved.auto_order.clone(),
-            });
+                memory,
+            }),
+            None => memory.map(|memory| schedule_capture::SavedHint {
+                fingerprint: None,
+                auto_order: None,
+                memory: Some(memory),
+            }),
+        };
         let semantic = self.schedule_semantic_key();
         self.schedule_run_serial += 1;
         let serial = self.schedule_run_serial;
