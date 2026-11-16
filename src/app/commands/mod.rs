@@ -1238,6 +1238,23 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::RunWaterSimulation { surface, settings } => self.run_water_simulation(surface, settings),
+            UiCommand::OpenSimplifyTriangulation => {
+                self.open_simplify_surface();
+                Ok(())
+            }
+            UiCommand::SimplifyTriangulation {
+                surface,
+                keep,
+                max_deviation,
+                name,
+                unload_source,
+            } => {
+                let result = self.simplify_triangulation(surface, keep, max_deviation, name, unload_source);
+                if result.is_ok() {
+                    self.editor.simplify_dialog.open = false;
+                }
+                result
+            }
             UiCommand::CloseWaterRun(id) => {
                 self.close_water_run(id);
                 Ok(())

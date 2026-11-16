@@ -436,6 +436,7 @@ impl EditorState {
             || self.tri_cut_z_open
             || self.tri_contour_open
             || self.water_dialog.open
+            || self.simplify_dialog.open
             || self.is_water_run()
             || self.point_cloud_tin_open
             || self.point_cloud_join_open
@@ -1185,6 +1186,8 @@ pub(crate) enum TriangulationPickTarget {
     ContourSurface,
     /// The surface Simulate Water rains on.
     WaterSurface,
+    /// The surface Simplify thins.
+    SimplifySurface,
 }
 
 /// What a tool works on, chosen in its dialog. The app derives what follows
@@ -1196,6 +1199,7 @@ pub(crate) enum ToolSubject {
     SliceSurface(TriangulationId),
     ContourSurface(TriangulationId),
     WaterSurface(TriangulationId),
+    SimplifySurface(TriangulationId),
     OreBlockModel(BlockModelId),
     /// The whole collection: a subset of its holes comes only from holes
     /// picked in the viewport before the dialog opened.
@@ -1212,7 +1216,7 @@ impl TriangulationPickTarget {
             Self::IncludeShape => tr!("state-click-pit-stockpile-solid-viewport"),
             Self::SolidDesign => tr!("state-click-design-surface-viewport"),
             Self::SolidTopography => tr!("state-click-topography-viewport"),
-            Self::TrimSurface | Self::ClipSurface | Self::SliceSurface | Self::ContourSurface | Self::WaterSurface => tr!("state-click-surface-viewport"),
+            Self::TrimSurface | Self::ClipSurface | Self::SliceSurface | Self::ContourSurface | Self::WaterSurface | Self::SimplifySurface => tr!("state-click-surface-viewport"),
             Self::ClipBoundary => tr!("state-click-closed-polyline-viewport"),
         }
     }
@@ -3017,6 +3021,7 @@ pub(crate) struct EditorState {
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
     pub(crate) water_dialog: WaterDialog,
+    pub(crate) simplify_dialog: SimplifyDialog,
     pub(crate) water: WaterView,
     /// The Planning tab showing.
     pub(crate) planning_view: PlanningView,
@@ -4540,6 +4545,7 @@ impl EditorState {
             active_property_tab: PropertyTab::Interface,
             active_workspace: Workspace::Production,
             water_dialog: Default::default(),
+            simplify_dialog: Default::default(),
             water: Default::default(),
             planning_view: PlanningView::Setup,
             setup_group: SetupGroup::Solids,
@@ -5742,6 +5748,17 @@ pub(crate) enum UiCommand {
         surface: TriangulationId,
         settings: crate::model::water::WaterSettings,
     },
+    /// Open the Simplify dialog.
+    OpenSimplifyTriangulation,
+    /// Thin a surface to fewer triangles, as a new surface.
+    SimplifyTriangulation {
+        surface: TriangulationId,
+        /// The share of the triangles to stop at, 0 to 1.
+        keep: f64,
+        max_deviation: Option<f64>,
+        name: String,
+        unload_source: bool,
+    },
     /// Close a water run's tab, which discards the run.
     CloseWaterRun(u64),
     /// Add the water a run's tab is showing to the project as a surface.
@@ -6179,6 +6196,7 @@ impl UiCommand {
             | Self::NoteRecentFunction(_)
             | Self::SetToolSubject(_)
             | Self::OpenWaterSimulation
+            | Self::OpenSimplifyTriangulation
             | Self::CloseWaterRun(_)
             | Self::BeginSelectionPick(_)
             | Self::FinishSelectionPick
@@ -6664,6 +6682,7 @@ impl UiCommand {
                 tr!("water-run-summary", rain = settings.rain_mm.to_string(), hours = settings.rain_hours.to_string()),
             ),
             Self::SaveWaterSurface(_) => report(tr!("water-simulate"), tr!("water-save-surface")),
+            Self::SimplifyTriangulation { name, .. } => report(tr!("simplify-title"), name.clone()),
             Self::Undo => report(tr!("common-undo"), tr!("state-previous-edit")),
             Self::Redo => report(tr!("common-redo"), tr!("state-next-edit")),
             Self::ExecuteContourTriangulation {
@@ -7401,6 +7420,36 @@ impl Workspace {
     /// drawn, and the editors of its own discipline.
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
+    }
+}
+
+/// Simplify's dialog: the surface to thin and how far.
+#[derive(Clone, Debug)]
+pub(crate) struct SimplifyDialog {
+    pub(crate) open: bool,
+    pub(crate) surface: Option<TriangulationId>,
+    /// The chosen surface's triangles, for the dialog's note.
+    pub(crate) faces: usize,
+    pub(crate) keep_percent: f64,
+    /// Whether the surface may only be moved so far, and how far.
+    pub(crate) limit_deviation: bool,
+    pub(crate) max_deviation: f64,
+    pub(crate) name: String,
+    pub(crate) unload_source: bool,
+}
+
+impl Default for SimplifyDialog {
+    fn default() -> Self {
+        Self {
+            open: false,
+            surface: None,
+            faces: 0,
+            keep_percent: 10.0,
+            limit_deviation: true,
+            max_deviation: 0.25,
+            name: String::new(),
+            unload_source: true,
+        }
     }
 }
 

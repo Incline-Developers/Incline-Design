@@ -451,6 +451,7 @@ pub(crate) enum MenuRow {
     MergeShellIntoTopology,
     BuildSolidFromSurfaces,
     GenerateContours,
+    Simplify,
     SimulateWater,
     PitOptimization,
     UndrapeAllRasters,
@@ -530,6 +531,7 @@ const PRODUCTION_MENUS: &[WorkspaceMenu] = &[
         groups: &[
             rows(&[MenuRow::ClipSurfaceByPolyline, MenuRow::SliceSurfaceByZ, MenuRow::TrimTopology]),
             rows(&[MenuRow::CutTopologyByPitShell, MenuRow::MergeShellIntoTopology, MenuRow::BuildSolidFromSurfaces]),
+            rows(&[MenuRow::Simplify]),
             rows(&[MenuRow::GenerateContours]),
             rows(&[MenuRow::SimulateWater]),
         ],
@@ -628,6 +630,7 @@ impl MenuRow {
             Self::MergeShellIntoTopology => tr!("common-merge-shell-into-topology-ellipsis"),
             Self::BuildSolidFromSurfaces => tr!("menu-build-solid-surfaces"),
             Self::GenerateContours => tr!("common-generate-contour-lines"),
+            Self::Simplify => tr!("simplify-menu"),
             Self::SimulateWater => tr!("water-simulate-ellipsis"),
             Self::PitOptimization => tr!("menu-pit-optimization"),
             Self::UndrapeAllRasters => tr!("common-undrape-all"),
@@ -656,6 +659,7 @@ impl MenuRow {
             Self::MergeShellIntoTopology => UiCommand::OpenIncludeSolidInTopology,
             Self::BuildSolidFromSurfaces => UiCommand::OpenBuildSolidFromSurfaces,
             Self::GenerateContours => UiCommand::OpenContourTriangulation,
+            Self::Simplify => UiCommand::OpenSimplifyTriangulation,
             Self::SimulateWater => UiCommand::OpenWaterSimulation,
             Self::PitOptimization => UiCommand::OpenOptimizationScenarios,
             Self::UndrapeAllRasters => UiCommand::UndrapeAllRasters,
@@ -691,6 +695,7 @@ impl MenuRow {
             Self::ClipSurfaceByPolyline
             | Self::SliceSurfaceByZ
             | Self::GenerateContours
+            | Self::Simplify
             | Self::SimulateWater
             | Self::PointCloudTin
             | Self::PointCloudJoin
@@ -717,6 +722,7 @@ impl MenuRow {
             Self::MergeShellIntoTopology => "ws-menubar-triangulation-merge-shell",
             Self::BuildSolidFromSurfaces => "ws-menubar-triangulation-build-solid",
             Self::GenerateContours => "ws-menubar-triangulation-contours",
+            Self::Simplify => "ws-menubar-triangulation-simplify",
             Self::SimulateWater => "ws-menubar-triangulation-simulate-water",
             Self::PitOptimization => "ws-menubar-block-model-pit-optimization",
             Self::UndrapeAllRasters => "ws-menubar-raster-undrape-all",

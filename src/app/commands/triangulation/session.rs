@@ -297,6 +297,9 @@ impl<'a> App<'a> {
         if self.editor.water_dialog.surface == Some(id) {
             self.editor.water_dialog.surface = None;
         }
+        if self.editor.simplify_dialog.surface == Some(id) {
+            self.editor.simplify_dialog.surface = None;
+        }
     }
 
     pub(crate) fn set_triangulation_color(&mut self, tri_id: TriangulationId, new_color: [f32; 4]) {

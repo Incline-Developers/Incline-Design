@@ -5330,6 +5330,24 @@ err-file-desc-project = project
 err-file-desc-opt-scenarios = optimisation scenarios
 err-file-desc-opt-report = optimisation report
 
+## Simplify
+simplify-title = Simplify Triangulation
+simplify-menu = Simplify Triangulation...
+simplify-surface-help = The surface to thin. Choose it from the list, or press Pick and click it in the viewport. The result is a new surface.
+simplify-keep = Triangles to keep
+simplify-keep-help = Flat ground gives up its triangles first; crests, toes and breaks in slope keep theirs longest. The open edge keeps its outline.
+simplify-limit = Limit deviation
+simplify-limit-help = Stop early rather than move the surface further than this from the original, even if that leaves more triangles than asked for.
+simplify-max-deviation = Maximum deviation
+simplify-note = { $from } triangles down to about { $to }
+simplify-note-limited = { $from } triangles down to about { $to }, or more if the deviation limit is reached first
+simplify-run = Simplify
+simplify-name-suffix = Simplified
+simplify-name-hint = e.g. mysurf_simplified
+simplify-working = Simplifying triangulation…
+simplify-done = Simplified '{ $name }' from { $from } to { $to } triangles, within about { $deviation } m of the original
+err-simplify-nothing-to-do = The surface is already at or below that many triangles
+
 ## Simulate Water
 water-simulate = Simulate Water
 water-simulate-ellipsis = Simulate Water...

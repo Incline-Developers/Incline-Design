@@ -1285,6 +1285,98 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
 }
 
 /// Simulate Water: a storm over one surface, run in a tab of its own.
+pub(crate) fn draw_simplify_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.simplify_dialog.open || editor.triangulation_pick_target.is_some() {
+        return;
+    }
+    let mut open = true;
+    DragableMenu::new("simplify_triangulation_dialog", tr!("simplify-title"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let width = picker_control_width(ui);
+            let (chosen, pick) = subject_surface_field(ui, "simplify_surface", editor.simplify_dialog.surface, tr!("simplify-surface-help"), project, width);
+            if let Some(id) = chosen {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::SimplifySurface(id)));
+            }
+            if pick {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::SimplifySurface);
+            }
+
+            ui.add_space(4.0);
+
+            let dialog = &mut editor.simplify_dialog;
+            MenuFieldF64::new(tr!("simplify-keep"), &mut dialog.keep_percent, 0.1..=99.0)
+                .width(width)
+                .speed(0.5)
+                .max_decimals(1)
+                .suffix(" %")
+                .help_text(tr!("simplify-keep-help"))
+                .show(ui);
+            MenuFieldBool::new(tr!("simplify-limit"), &mut dialog.limit_deviation)
+                .help_text(tr!("simplify-limit-help"))
+                .show(ui);
+            if dialog.limit_deviation {
+                MenuFieldF64::new(tr!("simplify-max-deviation"), &mut dialog.max_deviation, 0.001..=1000.0)
+                    .width(width)
+                    .speed(0.01)
+                    .max_decimals(3)
+                    .suffix(format!(" {}", tr!("common-m")))
+                    .show(ui);
+            }
+
+            ui.add_space(4.0);
+
+            MenuFieldText::new(tr!("tri-create-output-name"), &mut dialog.name)
+                .width(width)
+                .hint_text(tr!("simplify-name-hint"))
+                .show(ui);
+            MenuFieldBool::new(tr!("tri-unload-source-surface"), &mut dialog.unload_source).show(ui);
+
+            let surface = dialog.surface.filter(|id| project.triangulations.iter().any(|entry| entry.id == *id && entry.is_loaded));
+            let keep = dialog.keep_percent / 100.0;
+            if surface.is_some() {
+                let from = crate::model::numbers::format_quantity(dialog.faces as f64, 0);
+                let to = crate::model::numbers::format_quantity((dialog.faces as f64 * keep).round().max(1.0), 0);
+                tool_help_panel(
+                    ui,
+                    if dialog.limit_deviation {
+                        tr!("simplify-note-limited", from = from, to = to)
+                    } else {
+                        tr!("simplify-note", from = from, to = to)
+                    },
+                );
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let valid = keep.is_finite() && keep > 0.0 && keep < 1.0 && (!dialog.limit_deviation || (dialog.max_deviation.is_finite() && dialog.max_deviation > 0.0));
+            let can_run = surface.is_some() && valid && !dialog.name.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("simplify-run")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let Some(surface) = surface
+                {
+                    commands.push(UiCommand::SimplifyTriangulation {
+                        surface,
+                        keep,
+                        max_deviation: dialog.limit_deviation.then_some(dialog.max_deviation),
+                        name: dialog.name.trim().to_owned(),
+                        unload_source: dialog.unload_source,
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    dialog.open = false;
+                }
+            });
+        });
+    if !open {
+        editor.simplify_dialog.open = false;
+    }
+}
+
 pub(crate) fn draw_water_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     if !editor.water_dialog.open || editor.triangulation_pick_target.is_some() {
         return;

@@ -1720,6 +1720,10 @@ fn draw_global_dialogs(
     if editor.tri_contour_open {
         dialogs::triangulation::draw_contour_dialog(root_ui, editor, project, commands);
     }
+    if editor.simplify_dialog.open {
+        dialogs::triangulation::draw_simplify_dialog(root_ui, editor, project, commands);
+    }
+
     if editor.water_dialog.open {
         dialogs::triangulation::draw_water_dialog(root_ui, editor, project, commands);
     }
