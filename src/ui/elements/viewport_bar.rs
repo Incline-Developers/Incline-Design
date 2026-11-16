@@ -283,6 +283,10 @@ fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
         draw_cut_step_settings(ui, editor);
         return;
     }
+    // Animate has no Scenarios island: which one it plays is chosen here.
+    if editor.is_schedule_animation() {
+        draw_scenario_choice(ui, project, commands);
+    }
     match editor.active_workspace {
         Workspace::Production => draw_drawing_settings(ui, editor, project),
         Workspace::DrillAndBlast => {
@@ -295,6 +299,28 @@ fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
             draw_z_setting(ui, editor);
         }
     }
+}
+
+/// The open scenario, and the others to open instead, when there are others.
+fn draw_scenario_choice(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    let rows = project.schedule.scenario_rows();
+    if rows.len() < 2 {
+        return;
+    }
+    ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
+    ui.label(tr!("animate-scenario"));
+    let open = rows.iter().find(|row| row.open).map(|row| row.name.clone()).unwrap_or_default();
+    egui::ComboBox::from_id_salt("animate_scenario_combo")
+        .selected_text(elide(ui, &open))
+        .width(SELECTOR_COMBO_WIDTH)
+        .show_ui(ui, |ui| {
+            for row in &rows {
+                if ui.selectable_label(row.open, &row.name).clicked() && !row.open {
+                    commands.push(UiCommand::schedule(project.active_session, crate::ui::state::ScheduleEdit::OpenScenario(row.id)));
+                }
+            }
+        });
+    centre_part(ui);
 }
 
 fn centre_part(ui: &mut egui::Ui) {

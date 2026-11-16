@@ -2563,13 +2563,15 @@ fn draw_bars(
                         // Or fixed in the scenario this one starts from, the
                         // planner's, where it is worked first and this
                         // scenario's automatic bars plan around it.
+                        // No further than that scenario reaches: it is not
+                        // calculated past its own horizon.
+                        let fix = plan.scenarios().open_scenario().and_then(|open| open.base).and_then(|base| {
+                            let row = plan.scenario_rows().into_iter().find(|row| row.id == base)?;
+                            Some((base, row.name, until.min(f64::from(row.horizon.end_day) * crate::model::schedule::SCHEDULE_PERIOD_H)))
+                        });
                         if bar.is_auto()
+                            && let Some((base, name, until)) = fix
                             && until > bar.window.start_h + 1e-9
-                            && let Some((base, name)) = plan
-                                .scenarios()
-                                .open_scenario()
-                                .and_then(|open| open.base)
-                                .and_then(|base| Some((base, plan.scenarios().get(base)?.name.clone())))
                             && ContextMenuAction::new(tr!("auto-bar-fix-in", scenario = name, time = super::schedule_periods::instant_label(until)))
                                 .enabled(schedule.is_some_and(|schedule| schedule.blocks_of(bar.id).is_some_and(|blocks| !blocks.is_empty())))
                                 .show(ui)

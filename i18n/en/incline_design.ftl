@@ -5719,3 +5719,4 @@ scenario-cells-clear = Use the shared calendar
 calendar-cell-own = Set in this scenario.
 calendar-cell-inherited = Set in { $scenario }, which this scenario starts from.
 calendar-use-shared = Use the shared value
+animate-scenario = Scenario:

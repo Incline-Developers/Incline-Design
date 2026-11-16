@@ -426,7 +426,7 @@ impl SchedulePlan {
         &mut self,
         scenario: ScenarioId,
         agent: Option<super::LoaderAgentId>,
-        window: super::WorkWindow,
+        mut window: super::WorkWindow,
         members: Vec<super::DigBlockRef>,
     ) -> ScheduleResult<super::BarId> {
         if !self.scenarios.bases(self.scenarios.open).contains(&scenario) {
@@ -438,6 +438,16 @@ impl SchedulePlan {
         }
         let id = self.allocate_bar_id()?;
         let index = self.scenarios.list.iter().position(|entry| entry.id == scenario).ok_or(ScheduleError::UnknownScenario)?;
+        // No further than that scenario is calculated.
+        let reach_h = self.scenarios.list[index]
+            .stash
+            .as_ref()
+            .map_or(0.0, |stash| f64::from(stash.horizon.end_day) * super::SCHEDULE_PERIOD_H);
+        let end_h = window.end_h.map_or(reach_h, |end_h| end_h.min(reach_h));
+        if end_h <= window.start_h {
+            return Err(ScheduleError::InvalidWindow);
+        }
+        window.end_h = Some(end_h);
         let mut stash = self.scenarios.list[index].stash.take().ok_or(ScheduleError::UnknownScenario)?;
         // Its bars as the plan's while the lane is found among them.
         std::mem::swap(&mut self.bars, &mut stash.bars);
