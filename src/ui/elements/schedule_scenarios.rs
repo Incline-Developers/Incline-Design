@@ -158,6 +158,31 @@ fn draw_panel(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pla
                     .readonly(&tr!("scenario-inherited-bars"), &inherited.to_string(), None, None)
                     .hint(tr!("scenario-inherited-bars-help"));
             }
+            if rows.len() > 1 {
+                let mut scenario_only = editor.schedule_cells_scenario_only;
+                let scope = |only: bool| if only { tr!("scenario-cells-scope-open") } else { tr!("scenario-cells-scope-all") };
+                let current = scope(scenario_only);
+                table
+                    .combo(
+                        ("schedule_scenario_cells_scope", open.id.0),
+                        &tr!("scenario-cells-scope"),
+                        &mut scenario_only,
+                        &current,
+                        [false, true].map(|only| (only, scope(only))),
+                    )
+                    .hint(tr!("scenario-cells-scope-help"));
+                editor.schedule_cells_scenario_only = scenario_only;
+                let own = plan.scenarios().open_scenario().map_or(&[][..], |scenario| scenario.cells.as_slice());
+                if !own.is_empty() {
+                    table.readonly(&tr!("scenario-cells"), &own.len().to_string(), None, None).hint(tr!("scenario-cells-help"));
+                    if table.action_row(&tr!("scenario-cells-clear")).clicked() {
+                        edits.push(UiCommand::schedule(
+                            session,
+                            ScheduleEdit::ResetScenarioCells(own.iter().map(|cell| cell.address()).collect()),
+                        ));
+                    }
+                }
+            }
         });
     });
     commands.append(&mut edits);

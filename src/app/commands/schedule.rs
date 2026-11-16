@@ -15,7 +15,7 @@ use crate::{
     i18n::tr,
     model::{
         Command, ReserveFieldId,
-        schedule::{BarId, LoaderAgentId, LoaderClassId, SchedulePlan, ScheduleResult},
+        schedule::{BarId, LoaderAgentId, LoaderClassId, SchedulePlan, ScheduleResult, scenario_cells::CellOverride},
     },
     ui::state::ScheduleEdit,
     userspace_warn,
@@ -112,7 +112,7 @@ impl crate::app::App<'_> {
                 Ok(())
             }),
             ScheduleEdit::MoveMachine { agent, before } => self.edit_schedule(|plan| plan.move_machine(agent, before)),
-            ScheduleEdit::SetCalendarCells { edits } => self.set_calendar_cells(edits),
+            ScheduleEdit::SetCalendarCells { edits } => self.set_mine_cells(edits.into_iter().map(CellOverride::Loader).collect()),
             ScheduleEdit::SetTonnageField(field) => self.set_tonnage_field(field),
             ScheduleEdit::SetUnmeasuredAsZero(zero) => self.edit_schedule(|plan| {
                 plan.set_unmeasured_as_zero(zero);
@@ -150,10 +150,12 @@ impl crate::app::App<'_> {
             ScheduleEdit::AddDestination { name, kind } => self.add_destination(name, kind),
             ScheduleEdit::RenameDestination { destination, name } => self.edit_routing(|routing| routing.rename_standalone(destination, &name)),
             ScheduleEdit::DeleteDestination(destination) => self.delete_destination(destination),
-            ScheduleEdit::SetGradeTargetCells { edits } => self.edit_schedule(|plan| plan.set_grade_target_cells(&edits)),
+            ScheduleEdit::SetGradeTargetCells { edits } => self.set_mine_cells(edits.into_iter().map(CellOverride::Grade).collect()),
             ScheduleEdit::SetDestinationCapacity { destination, capacity_t } => self.set_destination_capacity(destination, capacity_t),
-            ScheduleEdit::SetCrusherCells { edits } => self.edit_routing(|routing| routing.set_crusher_cells(&edits)),
-            ScheduleEdit::SetPileModeCells { edits } => self.edit_schedule(|plan| plan.set_pile_mode_cells(&edits)),
+            ScheduleEdit::SetCrusherCells { edits } => self.set_mine_cells(edits.into_iter().map(CellOverride::Crusher).collect()),
+            ScheduleEdit::SetPileModeCells { edits } => self.set_mine_cells(edits.into_iter().map(CellOverride::PileMode).collect()),
+            ScheduleEdit::SetScenarioCells(cells) => self.edit_schedule(|plan| plan.set_scenario_cells(&cells)),
+            ScheduleEdit::ResetScenarioCells(addresses) => self.edit_schedule(|plan| plan.reset_scenario_cells(&addresses)),
             ScheduleEdit::SetStockpileOperating {
                 destination,
                 simultaneous,
@@ -188,7 +190,7 @@ impl crate::app::App<'_> {
             } => self.edit_trucks(|trucks| trucks.set_class_haulage(class, speeds, maximum_speed_kph, maximum_grade, dump_time_s)),
             ScheduleEdit::SetDestinationDumpTime { destination, seconds } => self.edit_routing(|routing| routing.set_dump_time_s(destination, seconds)),
             ScheduleEdit::SetClassSpotTime { class, seconds } => self.edit_schedule(|plan| plan.set_class_spot_time(class, seconds)),
-            ScheduleEdit::SetTruckCells { edits } => self.edit_trucks(|trucks| trucks.set_truck_cells(&edits)),
+            ScheduleEdit::SetTruckCells { edits } => self.set_mine_cells(edits.into_iter().map(CellOverride::Truck).collect()),
             ScheduleEdit::AddTruckingRule { name, classes } => self.add_trucking_rule(name, classes),
             ScheduleEdit::DuplicateTruckingRule(rule) => self.duplicate_trucking_rule(rule),
             ScheduleEdit::DeleteTruckingRule(rule) => self.delete_trucking_rule(rule),
@@ -662,7 +664,7 @@ impl crate::app::App<'_> {
         };
         let before = document.schedule().clone();
         let mut after = before.clone();
-        if let Err(error) = edit(&mut after) {
+        if let Err(error) = after.on_mine(edit) {
             userspace_warn!("{}", error.message());
             return;
         }
@@ -688,7 +690,9 @@ impl crate::app::App<'_> {
         else {
             return;
         };
-        let held = self.schedule_calculation.clone();
+        // Kept only while it is the leaving scenario's own: one shown since
+        // another was opened, or since an edit, describes something else.
+        let held = self.schedule_calculation.clone().filter(|_| self.schedule_calculation_is_current());
         self.edit_schedule(|plan| plan.open_scenario(id));
         let opened = self.workspace.active_document().map(|document| document.schedule().scenarios().open);
         if opened != Some(id) || leaving == id {
@@ -708,6 +712,9 @@ impl crate::app::App<'_> {
         if let Some(position) = self.schedule_scenario_results.iter().position(|(at, scenario, _)| *at == runtime && *scenario == id) {
             let (_, _, kept) = self.schedule_scenario_results.remove(position);
             self.hold_schedule(kept);
+        } else if let Some(left) = self.schedule_calculation.take() {
+            // The scenario left's schedule is not this one's, however stale.
+            rayon::spawn(move || drop(left));
         }
     }
 
@@ -776,8 +783,9 @@ impl crate::app::App<'_> {
         }
     }
 
-    fn set_calendar_cells(&mut self, edits: Vec<crate::model::schedule::CalendarCellEdit>) {
-        self.edit_schedule(|plan| plan.set_calendar_cells(&edits));
+    /// Calendar cells set for every scenario.
+    fn set_mine_cells(&mut self, cells: Vec<CellOverride>) {
+        self.edit_schedule(|plan| plan.set_mine_cells(&cells));
     }
 
     /// Nominate the field read as tonnes.

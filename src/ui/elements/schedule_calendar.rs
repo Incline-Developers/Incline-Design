@@ -24,13 +24,17 @@ use crate::{
             grade_targets::{GradeTargetCellEdit, GradeTargetInput, GradeTargetValue},
             periods::{PeriodScale, PeriodUnit},
             result::CalculatedSchedule,
+            scenario_cells::{CellAddress, CellOwner, CellRow},
             stockpile_operation::{PileMode, PileModeCellEdit},
         },
     },
     ui::{
         EditorState, UiProjectView, chrome,
         state::{CalendarCellAddress, CalendarCellDraft, CalendarOwner, CalendarRow, CalendarSelection, ScheduleEdit, ScheduleStep, UiCommand},
-        widgets::hint::Hint,
+        widgets::{
+            context_menu::{ContextMenuAction, context_menu_popup},
+            hint::Hint,
+        },
     },
 };
 
@@ -90,6 +94,10 @@ struct Figures<'a> {
     field_names: Vec<(crate::model::ReserveFieldId, String)>,
     /// Which days each period column covers.
     scale: PeriodScale,
+    /// The cells the open scenario sets differently from the shared calendar.
+    scenario_cells: std::collections::HashMap<CellAddress, CellOwner>,
+    /// Whether any of those is the open scenario's own.
+    any_own_cell: bool,
 }
 
 impl Figures<'_> {
@@ -319,6 +327,12 @@ pub(crate) fn draw_details(
         currency: crate::model::schedule::cashflow::currency_symbol(),
         field_names: document.reserve_fields().iter().map(|f| (f.id, f.name.clone())).collect(),
         scale: plan.period_scale(),
+        scenario_cells: plan.scenario_cells(),
+        any_own_cell: false,
+    };
+    let figures = Figures {
+        any_own_cell: figures.scenario_cells.values().any(|owner| *owner == CellOwner::Open),
+        ..figures
     };
     let destinations = destination_rows(plan, document);
     editor.schedule_calendar.visible_days = editor.schedule_calendar.visible_days.max(required_columns(plan, figures.result));
@@ -343,6 +357,7 @@ pub(crate) fn draw_details(
             editor.schedule_calendar.show_rows = true;
         }
     }
+    let first_command = commands.len();
     let rect = egui::CentralPanel::default()
         .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
@@ -356,6 +371,15 @@ pub(crate) fn draw_details(
         })
         .response
         .rect;
+    // While the Calendar edits the open scenario alone, what the grid typed,
+    // cleared or pasted is set there rather than for every scenario.
+    if editor.schedule_cells_scenario_only && plan.scenarios().list.len() > 1 {
+        for command in &mut commands[first_command..] {
+            if let UiCommand::Schedule { edit, .. } = command {
+                *edit = std::mem::replace(edit, ScheduleEdit::SetScenarioCells(Vec::new())).for_open_scenario();
+            }
+        }
+    }
     layout.regions.push(rect);
     layout.rect = rect;
     layout
@@ -1543,10 +1567,104 @@ fn draw_cell(
             color,
         );
     }
+    let set_here = scenario_cells_at(plan, figures, address);
+    if let Some((_, owner)) = set_here.iter().find(|(_, owner)| *owner == CellOwner::Open).or(set_here.first()) {
+        // A corner mark, as a spreadsheet marks a note: full for the open
+        // scenario's own cells, faint for those of one it starts from.
+        let color = match owner {
+            CellOwner::Open => ui.visuals().selection.stroke.color,
+            CellOwner::Base(_) => ui.visuals().weak_text_color(),
+        };
+        let corner = rect.right_top();
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![corner, corner + egui::vec2(0.0, SCENARIO_MARK), corner - egui::vec2(SCENARIO_MARK, 0.0)],
+            color,
+            egui::Stroke::NONE,
+        ));
+    }
     if editor.schedule_calendar.mode_menu == Some(address) {
         draw_mode_menu(ui, rect, address, editor, plan, session, commands);
-    } else if let Some(hover) = hover_text(plan, destinations, agent, figures, address) {
-        response.hint(hover);
+    } else {
+        let note = set_here
+            .iter()
+            .find(|(_, owner)| *owner == CellOwner::Open)
+            .or(set_here.first())
+            .map(|(_, owner)| match owner {
+                CellOwner::Open => tr!("calendar-cell-own"),
+                CellOwner::Base(base) => tr!(
+                    "calendar-cell-inherited",
+                    scenario = plan.scenarios().get(*base).map(|scenario| scenario.name.clone()).unwrap_or_default()
+                ),
+            });
+        match (hover_text(plan, destinations, agent, figures, address), note) {
+            (Some(hover), Some(note)) => {
+                response.clone().hint(format!("{hover}\n{note}"));
+            }
+            (Some(text), None) | (None, Some(text)) => {
+                response.clone().hint(text);
+            }
+            (None, None) => {}
+        }
+    }
+    // The open scenario's own cells, under the pointer or across the
+    // selection it is part of, can be given back to the shared calendar.
+    let own = |address| {
+        scenario_cells_at(plan, figures, address)
+            .into_iter()
+            .filter(|(_, owner)| *owner == CellOwner::Open)
+            .map(|(cell, _)| cell)
+    };
+    if figures.any_own_cell && (selected || own(address).next().is_some()) {
+        let editor: &EditorState = editor;
+        context_menu_popup(&response, tr!("scenario-cells"), |ui| {
+            // Gathered only while the menu is open.
+            let mut reset: Vec<CellAddress> = Vec::new();
+            match selection_bounds(editor, plan, destinations).filter(|_| selected) {
+                Some((r0, r1, c0, c1)) => {
+                    for row in r0..=r1 {
+                        for column in c0..=c1 {
+                            if let Some(address) = address_at(editor, plan, destinations, row, column) {
+                                reset.extend(own(address));
+                            }
+                        }
+                    }
+                }
+                None => reset.extend(own(address)),
+            }
+            if ContextMenuAction::new(tr!("calendar-use-shared")).enabled(!reset.is_empty()).show(ui).clicked() {
+                commands.push(UiCommand::schedule(session, ScheduleEdit::ResetScenarioCells(reset)));
+                ui.close();
+            }
+        });
+    }
+}
+
+/// How far along each edge a cell's scenario mark runs.
+const SCENARIO_MARK: f32 = 6.0;
+
+/// The shared calendar's row a Calendar row writes, when it is one a
+/// scenario can set.
+fn scenario_row(address: CalendarCellAddress) -> Option<CellRow> {
+    match (address.owner, address.row) {
+        (CalendarOwner::Loader(agent), CalendarRow::Input(field)) => Some(CellRow::Loader(agent, field)),
+        (CalendarOwner::Truck(class), CalendarRow::Truck(field)) => Some(CellRow::Truck(class, field)),
+        (CalendarOwner::Destination(DestinationId::Standalone(id)), CalendarRow::CrusherLimit) => Some(CellRow::Crusher(id)),
+        (CalendarOwner::Destination(destination), CalendarRow::GradeInput(field, input)) => Some(CellRow::Grade(destination, field, input)),
+        (CalendarOwner::Destination(destination), CalendarRow::PileMode) => Some(CellRow::PileMode(destination)),
+        _ => None,
+    }
+}
+
+/// The cells the open scenario sets of the days `address` covers, and whose each is.
+fn scenario_cells_at(plan: &SchedulePlan, figures: &Figures<'_>, address: CalendarCellAddress) -> Vec<(CellAddress, CellOwner)> {
+    if figures.scenario_cells.is_empty() {
+        return Vec::new();
+    }
+    let Some(row) = scenario_row(address) else { return Vec::new() };
+    let found = |cell: CalendarCell| figures.scenario_cells.get(&(row, cell)).map(|owner| ((row, cell), *owner));
+    match cell_days(plan, address.cell) {
+        None => found(CalendarCell::Default).into_iter().collect(),
+        Some(days) => days.filter_map(|day| found(CalendarCell::Period(CalendarPeriod(day)))).collect(),
     }
 }
 
@@ -2097,7 +2215,7 @@ fn daily_grades(plan: &SchedulePlan, edits: Vec<GradeTargetCellEdit>) -> Vec<Gra
         match cell_days(plan, edit.cell) {
             Some(days) => out.extend(days.map(|day| GradeTargetCellEdit {
                 cell: CalendarCell::Period(CalendarPeriod(day)),
-                ..edit.clone()
+                ..edit
             })),
             None => out.push(edit),
         }

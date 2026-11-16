@@ -150,7 +150,8 @@ pub(crate) fn checked_rest(hours: f64) -> ScheduleResult<f64> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PileModeCellEdit {
     pub(crate) destination: DestinationId,
     pub(crate) cell: CalendarCell,

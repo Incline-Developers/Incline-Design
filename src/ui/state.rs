@@ -2148,6 +2148,9 @@ pub(crate) struct EditorState {
     /// Each scenario's last calculated value, where there is one: the open
     /// one's current result and those kept for the others.
     pub(crate) schedule_scenario_values: Vec<(crate::model::schedule::scenarios::ScenarioId, f64)>,
+    /// Whether the Calendar's edits set cells in the open scenario alone
+    /// rather than for every scenario. Off at every launch.
+    pub(crate) schedule_cells_scenario_only: bool,
     /// Which tab of the Borehole Inspector panel is showing. Transient: not
     /// persisted, always starts back on [`BoreholeInspectorTab::Data`].
     pub(crate) borehole_inspector_tab: BoreholeInspectorTab,
@@ -4112,6 +4115,7 @@ impl EditorState {
             show_borehole_inspector: false,
             show_schedule_inspector: true,
             show_schedule_scenarios: true,
+            schedule_cells_scenario_only: false,
             schedule_scenario_values: Vec::new(),
             borehole_inspector_tab: BoreholeInspectorTab::default(),
             borehole_log_strat_field: None,
@@ -6479,6 +6483,8 @@ impl UiCommand {
                 ScheduleEdit::SetCrusherCells { edits } => report(tr!("destination-crusher-edit"), tr!("schedule-calendar-cells-updated", count = edits.len())),
                 ScheduleEdit::SetStockpileOperating { .. } => report(tr!("pile-operating-edit"), String::new()),
                 ScheduleEdit::SetPileModeCells { edits } => report(tr!("pile-mode-edit"), tr!("schedule-calendar-cells-updated", count = edits.len())),
+                ScheduleEdit::SetScenarioCells(cells) => report(tr!("scenario-cells-edit"), tr!("schedule-calendar-cells-updated", count = cells.len())),
+                ScheduleEdit::ResetScenarioCells(addresses) => report(tr!("scenario-cells-reset"), tr!("schedule-calendar-cells-updated", count = addresses.len())),
                 ScheduleEdit::AddTruckClass { name } => report(tr!("truck-new-class"), name.clone()),
                 ScheduleEdit::DuplicateTruckClass(_) => report(tr!("truck-duplicate-class"), String::new()),
                 ScheduleEdit::DeleteTruckClass(_) => report(tr!("truck-delete-class"), String::new()),
@@ -8426,6 +8432,23 @@ pub(crate) struct ScheduleExperimentDraft {
     pub(crate) relative_gap: String,
 }
 
+impl ScheduleEdit {
+    /// A Calendar cell edit as one of the open scenario's own cells; any
+    /// other edit as it is.
+    pub(crate) fn for_open_scenario(self) -> Self {
+        use crate::model::schedule::scenario_cells::CellOverride;
+        let cells: Vec<CellOverride> = match self {
+            Self::SetCalendarCells { edits } => edits.into_iter().map(CellOverride::Loader).collect(),
+            Self::SetGradeTargetCells { edits } => edits.into_iter().map(CellOverride::Grade).collect(),
+            Self::SetCrusherCells { edits } => edits.into_iter().map(CellOverride::Crusher).collect(),
+            Self::SetPileModeCells { edits } => edits.into_iter().map(CellOverride::PileMode).collect(),
+            Self::SetTruckCells { edits } => edits.into_iter().map(CellOverride::Truck).collect(),
+            other => return other,
+        };
+        Self::SetScenarioCells(cells)
+    }
+}
+
 /// What one [`UiCommand::Schedule`] does to the fleet.
 ///
 /// Split out from the command so every fleet edit carries the project it was
@@ -8626,6 +8649,10 @@ pub(crate) enum ScheduleEdit {
     SetPileModeCells {
         edits: Vec<crate::model::schedule::stockpile_operation::PileModeCellEdit>,
     },
+    /// Set Calendar cells in the open scenario alone, as one undo step.
+    SetScenarioCells(Vec<crate::model::schedule::scenario_cells::CellOverride>),
+    /// Stop the open scenario setting these cells: it reads the mine's again.
+    ResetScenarioCells(Vec<crate::model::schedule::scenario_cells::CellAddress>),
     /// Set whether a stockpile may build and reclaim at once, and how long
     /// new material rests before reclaim.
     SetStockpileOperating {

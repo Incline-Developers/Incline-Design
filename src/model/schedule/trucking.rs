@@ -58,7 +58,8 @@ pub(crate) struct TruckClassId(pub(crate) u64);
 pub(crate) struct TruckingRuleId(pub(crate) u64);
 
 /// Which of a truck class's calendar settings a cell holds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum TruckField {
     Units,
     Availability,
@@ -66,7 +67,8 @@ pub(crate) enum TruckField {
 }
 
 /// One atomic truck-calendar edit, addressed the way the loader calendar's are.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TruckCellEdit {
     pub(crate) class: TruckClassId,
     pub(crate) cell: CalendarCell,

@@ -27,6 +27,7 @@ pub(crate) mod loader_limits;
 pub(crate) mod optimisation;
 pub(crate) mod periods;
 pub(crate) mod result;
+pub(crate) mod scenario_cells;
 pub(crate) mod scenarios;
 pub(crate) mod sequence;
 pub(crate) mod stockpile_operation;

@@ -5,7 +5,8 @@
 //! blast - is shared by every scenario, as Setup describes it once. What a
 //! scenario holds of its own is what a schedule is: its bars, and the
 //! horizon it is read and calculated over - where it ends, the step it is
-//! calculated at and the periods it is read in. A short-term scenario of
+//! calculated at and the periods it is read in - and any Calendar cells it
+//! sets differently from the mine ([`super::scenario_cells`]). A short-term scenario of
 //! days, worked bar by bar, and a long-term one of months, mostly automatic
 //! bars, are two scenarios of one project.
 //!
@@ -24,7 +25,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ScheduleBar, periods::HorizonProfile};
+use super::{ScheduleBar, periods::HorizonProfile, scenario_cells::CellOverride};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -51,6 +52,10 @@ pub(crate) struct Scenario {
     /// whose are the plan's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) stash: Option<ScenarioStash>,
+    /// The Calendar cells it sets differently from the mine, and from the
+    /// scenario it starts from; see [`super::scenario_cells`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) cells: Vec<CellOverride>,
 }
 
 /// The project's scenarios. Empty for a project of one scenario.
@@ -60,6 +65,10 @@ pub(crate) struct Scenarios {
     pub(crate) open: ScenarioId,
     pub(crate) list: Vec<Scenario>,
     pub(crate) next_id: u64,
+    /// What the open scenario's cells cover of the mine's calendars, as the
+    /// edits that put it back.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) beneath: Vec<CellOverride>,
 }
 
 impl Scenarios {
@@ -194,6 +203,7 @@ impl SchedulePlan {
                 name: tr!("scenario-first-name"),
                 base: None,
                 stash: None,
+                cells: Vec::new(),
             });
             self.scenarios.open = id;
         }
@@ -217,7 +227,8 @@ impl SchedulePlan {
     }
 
     /// Add a scenario and open it: a copy of the open one - its bars, as
-    /// bars of its own, its horizon and what it starts from - or, with
+    /// bars of its own, its calendar cells, its horizon and what it starts
+    /// from - or, with
     /// `copy` off, one with no bars, starting from the open one, over the
     /// same horizon.
     pub(crate) fn add_scenario(&mut self, name: &str, copy: bool) -> ScheduleResult<ScenarioId> {
@@ -239,6 +250,11 @@ impl SchedulePlan {
         } else {
             Some(open)
         };
+        let cells = if copy {
+            self.scenarios.get(open).map(|scenario| scenario.cells.clone()).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let id = self.scenarios.allocate();
         self.scenarios.list.push(Scenario {
             id,
@@ -248,6 +264,7 @@ impl SchedulePlan {
                 bars,
                 horizon: self.open_horizon(),
             }),
+            cells,
         });
         self.open_scenario(id)?;
         Ok(id)
@@ -475,12 +492,14 @@ impl SchedulePlan {
                 name: label(open),
                 base: None,
                 stash: None,
+                cells: Vec::new(),
             },
             Scenario {
                 id: other_id,
                 name: label(waiting),
                 base: None,
                 stash: Some(ScenarioStash { bars: copies, horizon: other }),
+                cells: Vec::new(),
             },
         ];
         // Listed short term first, whichever was open.

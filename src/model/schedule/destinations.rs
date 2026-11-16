@@ -198,7 +198,8 @@ impl CrusherCalendar {
 }
 
 /// Which cell of a crusher's calendar an edit addresses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum CrusherCell {
     Default,
     Period(CalendarPeriod),
@@ -211,7 +212,8 @@ pub(crate) enum CrusherCell {
 /// has no limit even though the default has one, and `Some(Limit)` is a
 /// figure. On the default cell there is nothing to inherit, so `None` and
 /// `Some(Unlimited)` both mean unlimited.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CrusherCellEdit {
     pub(crate) destination: StandaloneDestinationId,
     pub(crate) cell: CrusherCell,
