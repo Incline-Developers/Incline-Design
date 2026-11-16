@@ -187,6 +187,7 @@ impl<'a> App<'a> {
                 | UiCommand::ExportHaulRoads
                 | UiCommand::Schedule { .. }
                 | UiCommand::RunOptimizationScenario(_)
+                | UiCommand::SaveWaterSurface(_)
         );
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!(crate::i18n::tr!("err-surf-project-required"));
@@ -1232,6 +1233,16 @@ impl<'a> App<'a> {
                 self.set_tool_subject(subject);
                 Ok(())
             }
+            UiCommand::OpenWaterSimulation => {
+                self.open_water_surface();
+                Ok(())
+            }
+            UiCommand::RunWaterSimulation { surface, settings } => self.run_water_simulation(surface, settings),
+            UiCommand::CloseWaterRun(id) => {
+                self.close_water_run(id);
+                Ok(())
+            }
+            UiCommand::SaveWaterSurface(id) => self.save_water_surface(id),
             UiCommand::ZoomToExtents => {
                 // Sliced, the fit happens within the section, which therefore stays up.
                 self.zoom_to_extents();

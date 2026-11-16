@@ -20,6 +20,7 @@ pub(crate) mod scip_blend; // Improve: the SCIP solve of one owned blended model
 pub(crate) mod step_pipeline; // The run/invalidation core shared by the Schedule and Haulage Setup pipelines
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 pub(crate) mod video_export; // Animate played through the viewport into a video file
+pub(crate) mod water; // Water runs: a storm over a surface, each in a tab of its own
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
 #[cfg(target_arch = "wasm32")]
@@ -596,6 +597,8 @@ pub(crate) struct App<'a> {
     /// longer than the scan that needs it.
     pub(crate) scanned_model_kept_until: Option<Instant>,
     pub(crate) schedule_animation: crate::app::schedule_animation::ScheduleAnimation,
+    /// The water runs whose tabs are open. Session-only.
+    pub(crate) water: crate::app::water::WaterRuns,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
     slice_preview_cursor_px: Option<(f64, f64)>,
     slice_preview_middle_down: bool,
@@ -791,6 +794,7 @@ impl<'a> Default for App<'a> {
             residency_held_by_pipeline: false,
             scanned_model_kept_until: None,
             schedule_animation: Default::default(),
+            water: Default::default(),
             solid_preview_restore_requested: None,
             slice_preview_cursor_px: None,
             slice_preview_middle_down: false,

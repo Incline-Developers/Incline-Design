@@ -279,6 +279,10 @@ fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     if editor.is_planning_setup() {
         return;
     }
+    // Nothing is drawn or placed while a water run is up.
+    if editor.is_water_run() {
+        return;
+    }
     if editor.is_planning_cut_step() {
         draw_cut_step_settings(ui, editor);
         return;

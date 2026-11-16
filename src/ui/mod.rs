@@ -767,7 +767,14 @@ fn draw_ui(
     let workspace_tabs = workspace_tabs.map(|tabs| tabs.standing_on(chrome::region_rect(viewport_bar_rect).top()));
     // Planning's page tabs, across the window under the bar and over every
     // page, so they are claimed before anything below them too.
-    let planning_tabs = (editor.active_workspace == state::Workspace::Planning).then(|| elements::planning_tabs::draw_planning_tabs(root_ui, editor, commands));
+    let planning_tabs = if editor.active_workspace == state::Workspace::Planning {
+        Some(elements::planning_tabs::draw_planning_tabs(root_ui, editor, commands))
+    } else if editor.has_water_tabs() {
+        // A workspace with water runs open has the same row, for their tabs.
+        Some(elements::planning_tabs::draw_water_tabs(root_ui, editor, commands))
+    } else {
+        None
+    };
     if planning_tabs.is_none() {
         // `Panel::show` creates one direct child of `root_ui`. Keep the root
         // auto-id sequence identical in the workspaces without this row, or
@@ -857,6 +864,9 @@ fn draw_ui(
     let (bottom_toolbar_rect, cursor_modes_centre) = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
     let animation_timeline_rect = if editor.is_schedule_animation() {
         elements::schedule_animation::draw_timeline(root_ui, editor, document, &project.schedule, commands)
+    } else if editor.is_water_run() {
+        // A water run's timeline takes the same place under the viewport.
+        elements::water::draw_timeline(root_ui, editor)
     } else {
         // As above: keep the root auto-id sequence the same whether or not
         // this optional panel is drawn, so leaving Animate does not renumber
@@ -885,6 +895,9 @@ fn draw_ui(
     } else if editor.is_solids_view() {
         let column = elements::solids_view::draw_panel(root_ui, editor, project, document);
         Some((column.regions, column.grips))
+    } else if editor.is_water_run() {
+        let island = elements::water::draw_panel(root_ui, editor, commands);
+        Some((island.regions, vec![island.grip]))
     } else {
         None
     };
@@ -1706,6 +1719,9 @@ fn draw_global_dialogs(
 
     if editor.tri_contour_open {
         dialogs::triangulation::draw_contour_dialog(root_ui, editor, project, commands);
+    }
+    if editor.water_dialog.open {
+        dialogs::triangulation::draw_water_dialog(root_ui, editor, project, commands);
     }
     if editor.point_cloud_tin_open {
         dialogs::triangulation::draw_point_cloud_tin_dialog(root_ui, editor, project, commands);

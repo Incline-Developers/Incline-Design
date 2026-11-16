@@ -1284,6 +1284,122 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
     }
 }
 
+/// Simulate Water: a storm over one surface, run in a tab of its own.
+pub(crate) fn draw_water_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.water_dialog.open || editor.triangulation_pick_target.is_some() {
+        return;
+    }
+    let mut open = true;
+    DragableMenu::new("simulate_water_dialog", tr!("water-simulate"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let width = picker_control_width(ui);
+            let (chosen, pick) = subject_surface_field(ui, "water_surface", editor.water_dialog.surface, tr!("water-surface-help"), project, width);
+            if let Some(id) = chosen {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::WaterSurface(id)));
+            }
+            if pick {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::WaterSurface);
+            }
+
+            let dialog = &mut editor.water_dialog;
+            let unit = |id: String| format!(" {id}");
+            menu::menu_section(ui, tr!("water-section-rain"));
+            MenuFieldF64::new(tr!("water-rain"), &mut dialog.settings.rain_mm, 0.1..=5000.0)
+                .width(width)
+                .speed(1.0)
+                .max_decimals(1)
+                .suffix(unit(tr!("water-unit-mm")))
+                .help_text(tr!("water-rain-help"))
+                .show(ui);
+            MenuFieldF64::new(tr!("water-rain-duration"), &mut dialog.settings.rain_hours, 0.05..=240.0)
+                .width(width)
+                .speed(0.25)
+                .max_decimals(2)
+                .suffix(unit(tr!("water-unit-hours")))
+                .show(ui);
+            MenuFieldF64::new(tr!("water-run-on"), &mut dialog.settings.run_on_hours, 0.0..=240.0)
+                .width(width)
+                .speed(0.25)
+                .max_decimals(2)
+                .suffix(unit(tr!("water-unit-hours")))
+                .help_text(tr!("water-run-on-help"))
+                .show(ui);
+
+            menu::menu_section(ui, tr!("water-section-ground"));
+            MenuFieldF64::new(tr!("water-roughness"), &mut dialog.settings.roughness, 0.005..=0.5)
+                .width(width)
+                .speed(0.001)
+                .max_decimals(3)
+                .help_text(tr!("water-roughness-help"))
+                .show(ui);
+            MenuFieldF64::new(tr!("water-infiltration"), &mut dialog.settings.infiltration_mm_h, 0.0..=500.0)
+                .width(width)
+                .speed(0.1)
+                .max_decimals(1)
+                .suffix(unit(tr!("water-unit-mm-per-hour")))
+                .help_text(tr!("water-infiltration-help"))
+                .show(ui);
+
+            menu::menu_section(ui, tr!("water-section-solver"));
+            MenuFieldF64::new(tr!("water-step"), &mut dialog.settings.step_s, 1.0..=3600.0)
+                .width(width)
+                .speed(1.0)
+                .max_decimals(0)
+                .suffix(unit(tr!("water-unit-seconds")))
+                .help_text(tr!("water-step-help"))
+                .show(ui);
+            MenuFieldBool::new(tr!("water-subdivide"), &mut dialog.subdivide)
+                .help_text(tr!("water-subdivide-help"))
+                .show(ui);
+            if dialog.subdivide {
+                MenuFieldF64::new(tr!("water-subdivide-length"), &mut dialog.subdivide_m, 0.5..=1000.0)
+                    .width(width)
+                    .speed(0.5)
+                    .max_decimals(1)
+                    .suffix(unit(tr!("common-m")))
+                    .show(ui);
+            }
+
+            let mut settings = dialog.settings;
+            settings.subdivide_m = dialog.subdivide.then_some(dialog.subdivide_m);
+            if settings.is_valid() {
+                tool_help_panel(
+                    ui,
+                    tr!(
+                        "water-run-note",
+                        rate = format!("{:.1}", settings.rain_mm / settings.rain_hours),
+                        steps = format!("{:.0}", (settings.duration_s() / settings.step_s).ceil())
+                    ),
+                );
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+            let surface = editor
+                .water_dialog
+                .surface
+                .filter(|id| project.triangulations.iter().any(|entry| entry.id == *id && entry.is_loaded));
+            let can_run = surface.is_some() && settings.is_valid();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("water-run")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let Some(surface) = surface
+                {
+                    commands.push(UiCommand::RunWaterSimulation { surface, settings });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.water_dialog.open = false;
+                }
+            });
+        });
+    if !open {
+        editor.water_dialog.open = false;
+    }
+}
+
 /// Survey point-cloud reconstruction: build an open terrain TIN from XY/Z
 /// samples.
 pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {

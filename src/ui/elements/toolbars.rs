@@ -333,6 +333,8 @@ pub(crate) fn draw_left_toolbar(
         // Planning's Blasting step draws design geometry and its Haulage
         // Layout draws roads, so their runs are asked for before the
         // workspace is: everywhere else in Planning the column stands empty.
+        // A water run shows its own copy of a surface: nothing to draw on.
+        _ if editor.is_water_run() => Vec::new(),
         _ if editor.is_planning_cut_step() => blasting_tools(ui, editor, editing_enabled),
         _ if editor.is_haulage_page() => haulage_tools(ui, project, editor, project_active),
         _ if editor.is_schedule_animation() => animate_tools(ui, editor),

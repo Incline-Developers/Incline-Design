@@ -435,6 +435,8 @@ impl EditorState {
             || self.tri_cut_poly_open
             || self.tri_cut_z_open
             || self.tri_contour_open
+            || self.water_dialog.open
+            || self.is_water_run()
             || self.point_cloud_tin_open
             || self.point_cloud_join_open
             || self.point_cloud_classify_open
@@ -1181,6 +1183,8 @@ pub(crate) enum TriangulationPickTarget {
     SliceSurface,
     /// The surface contour lines are generated from.
     ContourSurface,
+    /// The surface Simulate Water rains on.
+    WaterSurface,
 }
 
 /// What a tool works on, chosen in its dialog. The app derives what follows
@@ -1191,6 +1195,7 @@ pub(crate) enum ToolSubject {
     ClipSurface(TriangulationId),
     SliceSurface(TriangulationId),
     ContourSurface(TriangulationId),
+    WaterSurface(TriangulationId),
     OreBlockModel(BlockModelId),
     /// The whole collection: a subset of its holes comes only from holes
     /// picked in the viewport before the dialog opened.
@@ -1207,7 +1212,7 @@ impl TriangulationPickTarget {
             Self::IncludeShape => tr!("state-click-pit-stockpile-solid-viewport"),
             Self::SolidDesign => tr!("state-click-design-surface-viewport"),
             Self::SolidTopography => tr!("state-click-topography-viewport"),
-            Self::TrimSurface | Self::ClipSurface | Self::SliceSurface | Self::ContourSurface => tr!("state-click-surface-viewport"),
+            Self::TrimSurface | Self::ClipSurface | Self::SliceSurface | Self::ContourSurface | Self::WaterSurface => tr!("state-click-surface-viewport"),
             Self::ClipBoundary => tr!("state-click-closed-polyline-viewport"),
         }
     }
@@ -3011,6 +3016,8 @@ pub(crate) struct EditorState {
     pub(crate) active_property_tab: PropertyTab,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
+    pub(crate) water_dialog: WaterDialog,
+    pub(crate) water: WaterView,
     /// The Planning tab showing.
     pub(crate) planning_view: PlanningView,
     /// Which group's step Setup has open. Each group remembers its own step.
@@ -4532,6 +4539,8 @@ impl EditorState {
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Interface,
             active_workspace: Workspace::Production,
+            water_dialog: Default::default(),
+            water: Default::default(),
             planning_view: PlanningView::Setup,
             setup_group: SetupGroup::Solids,
             haulage_setup_step: HaulageStep::Network,
@@ -5726,6 +5735,17 @@ pub(crate) enum UiCommand {
     NoteRecentFunction(MenuRow),
     /// Point an open tool at the item chosen in its dialog.
     SetToolSubject(ToolSubject),
+    /// Open the Simulate Water dialog.
+    OpenWaterSimulation,
+    /// Run a storm over a surface, in a tab of its own.
+    RunWaterSimulation {
+        surface: TriangulationId,
+        settings: crate::model::water::WaterSettings,
+    },
+    /// Close a water run's tab, which discards the run.
+    CloseWaterRun(u64),
+    /// Add the water a run's tab is showing to the project as a surface.
+    SaveWaterSurface(u64),
     /// Hide a tool's dialog and select its input in the viewport.
     BeginSelectionPick(SelectionPickTool),
     /// Hand the picked selection to the tool.
@@ -6158,6 +6178,8 @@ impl UiCommand {
             | Self::CloseCanvasContextMenu
             | Self::NoteRecentFunction(_)
             | Self::SetToolSubject(_)
+            | Self::OpenWaterSimulation
+            | Self::CloseWaterRun(_)
             | Self::BeginSelectionPick(_)
             | Self::FinishSelectionPick
             | Self::CancelSelectionPick
@@ -6637,6 +6659,11 @@ impl UiCommand {
             Self::ExecuteBuildSolidFromSurfaces { name, .. } => report(tr!("tri-build-solid-surfaces"), name.clone()),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),
             Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!("common-merge-shell-into-topology"), name.clone()),
+            Self::RunWaterSimulation { settings, .. } => report(
+                tr!("water-simulate"),
+                tr!("water-run-summary", rain = settings.rain_mm.to_string(), hours = settings.rain_hours.to_string()),
+            ),
+            Self::SaveWaterSurface(_) => report(tr!("water-simulate"), tr!("water-save-surface")),
             Self::Undo => report(tr!("common-undo"), tr!("state-previous-edit")),
             Self::Redo => report(tr!("common-redo"), tr!("state-next-edit")),
             Self::ExecuteContourTriangulation {
@@ -7003,6 +7030,19 @@ impl EditorState {
 }
 
 impl EditorState {
+    /// Whether a water run's tab is the open one: the viewport then shows
+    /// the run, not the project.
+    pub(crate) fn is_water_run(&self) -> bool {
+        self.water
+            .open
+            .is_some_and(|id| self.water.tabs.iter().any(|tab| tab.id == id && tab.workspace == self.active_workspace))
+    }
+
+    /// Whether the open workspace has water runs, and so their tab row.
+    pub(crate) fn has_water_tabs(&self) -> bool {
+        self.active_workspace != Workspace::Planning && self.water.tabs.iter().any(|tab| tab.workspace == self.active_workspace)
+    }
+
     /// A workspace with menus keeps a recent functions list of their rows.
     pub(crate) fn keeps_recent_functions(&self) -> bool {
         !workspace_menus(self.active_workspace).is_empty()
@@ -7362,6 +7402,97 @@ impl Workspace {
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
     }
+}
+
+/// Simulate Water's dialog: the surface and the storm to run over it.
+#[derive(Clone, Debug)]
+pub(crate) struct WaterDialog {
+    pub(crate) open: bool,
+    pub(crate) surface: Option<TriangulationId>,
+    pub(crate) settings: crate::model::water::WaterSettings,
+    /// Whether long triangle sides are split, and the length they are split
+    /// down to.
+    pub(crate) subdivide: bool,
+    pub(crate) subdivide_m: f64,
+}
+
+impl Default for WaterDialog {
+    fn default() -> Self {
+        Self {
+            open: false,
+            surface: None,
+            settings: Default::default(),
+            subdivide: false,
+            subdivide_m: 10.0,
+        }
+    }
+}
+
+/// One open water run's tab, in the row under the viewport bar of the
+/// workspace the run was started from.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct WaterTab {
+    pub(crate) id: u64,
+    pub(crate) title: String,
+    pub(crate) workspace: Workspace,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum WaterRunStatus {
+    /// Still running, with how far it has got once it knows.
+    Running(Option<f32>),
+    Failed(String),
+    Ready,
+}
+
+/// The open water run, as its tab shows it. Mirrored from the app.
+#[derive(Clone, Debug)]
+pub(crate) struct WaterShown {
+    pub(crate) id: u64,
+    pub(crate) surface: String,
+    pub(crate) settings: crate::model::water::WaterSettings,
+    pub(crate) status: WaterRunStatus,
+    /// Of the surface as the run flowed over it, after any subdivision, and
+    /// its plan area in square metres.
+    pub(crate) vertices: usize,
+    pub(crate) faces: usize,
+    pub(crate) area: f64,
+    /// The deepest the water stood anywhere at any step, metres.
+    pub(crate) deepest: f32,
+    pub(crate) instant: Option<WaterInstant>,
+}
+
+/// The kept instant of a run the viewport is showing.
+#[derive(Clone, Debug)]
+pub(crate) struct WaterInstant {
+    pub(crate) time_s: f64,
+    /// Cubic metres: on the surface now, and since the start fallen as rain,
+    /// soaked in and gone over the open edge.
+    pub(crate) on_surface: f64,
+    pub(crate) rained: f64,
+    pub(crate) infiltrated: f64,
+    pub(crate) left: f64,
+    pub(crate) ponds: Vec<crate::model::water::Pond>,
+}
+
+/// The water runs' tabs and what the open one shows. Session-only: a run is
+/// gone once its tab is closed.
+#[derive(Default)]
+pub(crate) struct WaterView {
+    /// Mirrored from the app, in the order the runs were started.
+    pub(crate) tabs: Vec<WaterTab>,
+    /// The run whose tab is open in its workspace's row, or `None` while the
+    /// workspace's own tab is. Kept while another workspace is up, so coming
+    /// back finds the run still open.
+    pub(crate) open: Option<u64>,
+    /// The instant shown, seconds into the run.
+    pub(crate) time_s: f64,
+    pub(crate) playing: bool,
+    /// The UI clock at the last frame playback moved the cursor.
+    pub(crate) play_clock: Option<f64>,
+    /// Show the deepest each point was over the whole run, not an instant.
+    pub(crate) show_deepest: bool,
+    pub(crate) shown: Option<WaterShown>,
 }
 
 /// The groups of Setup's one step list, in the order they run: each is a

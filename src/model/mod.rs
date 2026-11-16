@@ -37,6 +37,7 @@ pub(crate) mod solid_reserves;
 pub(crate) mod spatial;
 pub(crate) mod survey;
 pub(crate) mod triangulation;
+pub(crate) mod water;
 
 use std::{borrow::Cow, collections::HashMap};
 
