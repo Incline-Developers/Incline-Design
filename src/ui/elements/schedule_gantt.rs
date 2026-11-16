@@ -2556,7 +2556,15 @@ fn draw_bars(
                             open_auto = Some(auto_bar_dialog(bar, work));
                             ui.close();
                         }
+                        // One that only reclaims becomes a reclaim bar of its
+                        // stockpiles, with no schedule needed.
+                        let only_reclaims = bar.auto().is_some_and(|work| work.sources.ground().is_some_and(|scopes| scopes.is_empty()));
+                        if only_reclaims && ContextMenuAction::new(tr!("auto-bar-convert-reclaim")).show(ui).clicked() {
+                            commands.push(UiCommand::schedule(session, ScheduleEdit::ConvertAutoBar(bar.id)));
+                            ui.close();
+                        }
                         if bar.is_auto()
+                            && !only_reclaims
                             && ContextMenuAction::new(tr!("auto-bar-convert"))
                                 .enabled(schedule.is_some_and(|schedule| schedule.blocks_of(bar.id).is_some_and(|blocks| !blocks.is_empty())))
                                 .show(ui)
@@ -2569,6 +2577,7 @@ fn draw_bars(
                         // automatic: the near term fixed, the far term free.
                         let until = editor.schedule_time_h;
                         if bar.is_auto()
+                            && !only_reclaims
                             && until > bar.window.start_h + 1e-9
                             && bar.window.end_h.is_none_or(|end| until < end - 1e-9)
                             && ContextMenuAction::new(tr!("auto-bar-convert-until", time = super::schedule_periods::instant_label(until)))

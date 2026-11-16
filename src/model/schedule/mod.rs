@@ -2371,15 +2371,44 @@ impl SchedulePlan {
     /// Make an automatic bar a dig bar holding `members`, the order a
     /// schedule worked out for it: from here on the ground is the planner's
     /// to arrange, and no longer follows what the other bars leave.
-    pub(crate) fn convert_auto_bar(&mut self, id: BarId, members: Vec<DigBlockRef>) -> ScheduleResult {
-        if !self.bar(id).ok_or(ScheduleError::UnknownBar)?.is_auto() {
+    pub(crate) fn convert_auto_bar(&mut self, id: BarId, members: Vec<DigBlockRef>, stockpiles: Vec<DestinationId>) -> ScheduleResult {
+        let bar = self.bar(id).ok_or(ScheduleError::UnknownBar)?;
+        if !bar.is_auto() {
             return Err(ScheduleError::WrongActivity);
+        }
+        let (agent, priority, window) = (bar.agent, bar.priority, bar.window);
+        // What it reclaims becomes a reclaim bar of those stockpiles, over
+        // the same window: the bar itself when it dug nothing, else one in
+        // the lane below, behind its digging as its reclaim was.
+        let reclaim = if stockpiles.is_empty() {
+            None
+        } else {
+            Some(BarWork::Reclaim(ReclaimWork {
+                sources: self.checked_reclaim_sources(stockpiles)?,
+                maximum_t: None,
+            }))
+        };
+        if members.is_empty() {
+            self.bar_mut(id)?.work = reclaim.ok_or(ScheduleError::EmptyRuleSelection)?;
+            return Ok(());
         }
         let mut order = DigOrder::default();
         for member in members {
             order.insert(usize::MAX, member)?;
         }
         self.bar_mut(id)?.work = BarWork::Dig(order);
+        if let Some(work) = reclaim {
+            let lane = self.free_lane(None, agent, priority.saturating_add(1), window);
+            let reclaim_id = self.allocate_bar_id()?;
+            self.bars.push(ScheduleBar {
+                id: reclaim_id,
+                name: String::new(),
+                work,
+                agent,
+                priority: lane,
+                window,
+            });
+        }
         Ok(())
     }
 

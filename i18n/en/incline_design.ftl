@@ -2565,6 +2565,7 @@ auto-bar-works-note = Digs the ground ticked, and reclaims the stockpiles ticked
 auto-sources-pits = Pits
 auto-sources-stockpiles = Stockpiles
 auto-bar-convert = Convert to Dig Sequence
+auto-bar-convert-reclaim = Convert to Reclaim Bar
 auto-bar-convert-until = Convert to Dig Sequence up to { $time }
 auto-bar-convert-until-report = Convert to Dig Sequence up to the time
 auto-bar-convert-left-unworked =

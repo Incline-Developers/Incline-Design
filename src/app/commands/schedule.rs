@@ -931,6 +931,34 @@ impl crate::app::App<'_> {
             }
             Some(blocks.iter().copied().filter(|block| started.get(block).is_some_and(|at| *at < until)).collect())
         });
+        // The stockpiles it reclaims, which a full conversion keeps as a
+        // reclaim bar; a split leaves them to the automatic bar it keeps.
+        let stockpiles: Vec<_> = match (until, self.workspace.active_project()) {
+            (None, Some(project)) => {
+                let document = &project.project.document;
+                let plan = document.schedule();
+                match plan.bar(bar).and_then(|held| held.auto()).map(|auto| auto.sources.stockpiles()) {
+                    Some(Some(chosen)) => chosen,
+                    Some(None) => crate::model::schedule::destinations::available(document.solids(), plan.routing())
+                        .into_iter()
+                        .filter(|view| view.kind == crate::model::schedule::destinations::DestinationKind::Stockpile)
+                        .map(|view| view.id)
+                        .collect(),
+                    None => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        };
+        let digs = self
+            .workspace
+            .active_project()
+            .and_then(|project| project.project.document.schedule().bar(bar).and_then(|held| held.auto()).map(|auto| auto.sources.ground()))
+            .is_none_or(|ground| ground.is_none_or(|scopes| !scopes.is_empty()));
+        // A bar that only reclaims is a reclaim bar of its stockpiles.
+        if !digs && until.is_none() && !stockpiles.is_empty() {
+            self.edit_schedule(|plan| plan.convert_auto_bar(bar, Vec::new(), stockpiles));
+            return;
+        }
         let Some(blocks) = blocks.filter(|blocks| !blocks.is_empty()) else {
             userspace_warn!("{}", tr!("auto-bar-convert-needs-schedule"));
             return;
@@ -969,7 +997,7 @@ impl crate::app::App<'_> {
                 plan.fix_in_scenario(scenario, held.agent, window, members).map(|_| ())
             }),
             (Some(at_h), None) => self.edit_schedule(|plan| plan.split_auto_bar(bar, at_h, members).map(|_| ())),
-            (None, _) => self.edit_schedule(|plan| plan.convert_auto_bar(bar, members)),
+            (None, _) => self.edit_schedule(|plan| plan.convert_auto_bar(bar, members, stockpiles)),
         }
     }
 
