@@ -299,8 +299,6 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
         };
         let mut hover: Option<String> = None;
         if let Some(execution) = schedule.executions_at(hour).find(|execution| execution.agent == agent.id) {
-            let bar = plan.bar(execution.bar);
-            let report = editor.schedule_bar_reports.iter().find(|report| report.bar == execution.bar);
             entry.dot = Some(match execution.activity {
                 Activity::Dig => WORKING_COLOR,
                 Activity::Reclaim => RECLAIM_COLOR,
@@ -309,18 +307,34 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
                 "inspector-rate",
                 rate = format_tonnes(schedule.deliveries_at(hour).filter(|d| d.agent == agent.id).map(rate).sum::<f64>().round())
             );
-            let source = match bar {
-                Some(bar) => qualified_source_label(execution.source, bar, report, schedule, destinations),
-                None => String::new(),
-            };
-            let mut targets: Vec<String> = Vec::new();
-            for delivery in schedule.deliveries_at(hour).filter(|delivery| delivery.agent == agent.id) {
-                let name = destination_label(delivery.destination, destinations);
-                if !targets.contains(&name) {
-                    targets.push(name);
+            // Each piece of work this hour, where it went: one, or a block
+            // dug and a stockpile reclaimed between the same hours.
+            let mut lines: Vec<String> = Vec::new();
+            let mut seen: Vec<WorkSource> = Vec::new();
+            for execution in schedule.executions_at(hour).filter(|execution| execution.agent == agent.id) {
+                if seen.contains(&execution.source) {
+                    continue;
                 }
+                seen.push(execution.source);
+                let bar = plan.bar(execution.bar);
+                let report = editor.schedule_bar_reports.iter().find(|report| report.bar == execution.bar);
+                let source = match bar {
+                    Some(bar) => qualified_source_label(execution.source, bar, report, schedule, destinations),
+                    None => String::new(),
+                };
+                let mut targets: Vec<String> = Vec::new();
+                for delivery in schedule
+                    .deliveries_at(hour)
+                    .filter(|delivery| delivery.agent == agent.id && delivery.source == execution.source)
+                {
+                    let name = destination_label(delivery.destination, destinations);
+                    if !targets.contains(&name) {
+                        targets.push(name);
+                    }
+                }
+                lines.push(if targets.is_empty() { source } else { format!("{source} → {}", targets.join(", ")) });
             }
-            entry.detail = Some(if targets.is_empty() { source } else { format!("{source} → {}", targets.join(", ")) });
+            entry.detail = Some(lines.join("\n"));
         } else if let Some(span) = schedule.idle_at(agent.id, hour) {
             if span.reason == Some(IdleReason::Delayed) {
                 let (color, kind) = delay_at(plan, agent.id, hour).unwrap_or((IDLE_COLOR, None));
