@@ -44,7 +44,7 @@ pub(crate) mod status_bar;
 pub(crate) mod title_bar;
 pub(crate) mod toolbars;
 pub(crate) mod viewport_bar;
-/// A water run's tab: its timeline and read-out.
+/// A rain simulation's tab: its timeline.
 pub(crate) mod water;
 
 /// Lay a bar's contents out on a strip that never narrows past what they need,

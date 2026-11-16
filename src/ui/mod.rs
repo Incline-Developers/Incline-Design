@@ -861,12 +861,22 @@ fn draw_ui(
         root_ui.skip_ahead_auto_ids(1);
     }
 
-    let (bottom_toolbar_rect, cursor_modes_centre) = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
+    // A rain simulation shows its own copy of a surface, with nothing to
+    // measure, snap to or draw on: its tab has neither toolbar, only its
+    // timeline.
+    let (bottom_toolbar_rect, cursor_modes_centre) = if editor.is_water_run() {
+        // As for the optional panels around it: keep the root auto-id
+        // sequence the same whether or not this one is drawn.
+        root_ui.skip_ahead_auto_ids(1);
+        (egui::Rect::NOTHING, root_ui.ctx().content_rect().center().x)
+    } else {
+        elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands)
+    };
     let animation_timeline_rect = if editor.is_schedule_animation() {
         elements::schedule_animation::draw_timeline(root_ui, editor, document, &project.schedule, commands)
     } else if editor.is_water_run() {
         // A water run's timeline takes the same place under the viewport.
-        elements::water::draw_timeline(root_ui, editor)
+        elements::water::draw_timeline(root_ui, editor, commands)
     } else {
         // As above: keep the root auto-id sequence the same whether or not
         // this optional panel is drawn, so leaving Animate does not renumber
@@ -895,9 +905,6 @@ fn draw_ui(
     } else if editor.is_solids_view() {
         let column = elements::solids_view::draw_panel(root_ui, editor, project, document);
         Some((column.regions, column.grips))
-    } else if editor.is_water_run() {
-        let island = elements::water::draw_panel(root_ui, editor, commands);
-        Some((island.regions, vec![island.grip]))
     } else {
         None
     };
@@ -925,7 +932,12 @@ fn draw_ui(
     // scene, so they are claimed before the scene's rect is worked out: what
     // they leave is where it starts. The column is one region the full height
     // of the workspace, like the explorer beside it.
-    let left_toolbar_rect = elements::toolbars::draw_left_toolbar(root_ui, editor, project, editing_enabled, project_active, commands);
+    let left_toolbar_rect = if editor.is_water_run() {
+        root_ui.skip_ahead_auto_ids(1);
+        egui::Rect::NOTHING
+    } else {
+        elements::toolbars::draw_left_toolbar(root_ui, editor, project, editing_enabled, project_active, commands)
+    };
 
     // --- Compute canvas rect (area not occupied by panels) ---
     let canvas_bottom = console_rect.map_or_else(

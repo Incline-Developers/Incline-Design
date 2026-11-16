@@ -1,6 +1,6 @@
 //! Bottom status bar: app identity, selected count, cursor coords and, at the
-//! far right, the frame rate, memory in use and the language picker. Task progress belongs to the
-//! bottom toolbar - see `widgets::progress`.
+//! far right, the background task's progress (`widgets::progress`), the CPU
+//! and memory in use, the frame rate and the language picker.
 
 use thousands::Separable;
 
@@ -242,6 +242,12 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                     if !editor.cpu_usage.is_empty() {
                         separator(ui);
                         draw_cpu_usage(ui, editor);
+                    }
+                    // The background task, left of the machine's readouts: it
+                    // takes what room the bar has left, its label first to go.
+                    if progress::has_task(editor) {
+                        separator(ui);
+                        progress::draw_task_progress(ui, editor);
                     }
                 });
             });

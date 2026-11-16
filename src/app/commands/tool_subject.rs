@@ -100,7 +100,7 @@ impl App<'_> {
         self.editor.tri_cut_z_limits = (bounds.min.z, bounds.max.z);
     }
 
-    /// Open Simulate Water. The storm it last ran stays as it was set.
+    /// Open Rain Simulation. The storm it last ran stays as it was set.
     pub(crate) fn open_water_surface(&mut self) {
         self.editor.water_dialog.open = true;
         self.editor.water_dialog.surface = None;

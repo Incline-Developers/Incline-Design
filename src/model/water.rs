@@ -19,7 +19,7 @@
 //! surface. Water leaves over the surface's open edge, at the rate the same
 //! sheet would carry on down the ground behind it.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use rayon::prelude::*;
 
@@ -45,7 +45,7 @@ const POOL_EXCHANGE: f64 = 200.0;
 /// The least area a vertex holds water over, as a share of the mean.
 const MIN_AREA_SHARE: f64 = 0.05;
 /// Rows below which a pool solve stays on one thread.
-const SHARED_ROWS: usize = 100_000;
+const SHARED_ROWS: usize = 16_384;
 /// Depths below this do not flow.
 const FILM: f64 = 1e-6;
 /// The fall the ground is taken to have beyond the open edge, least and most.
@@ -53,10 +53,6 @@ const EDGE_SLOPE: (f64, f64) = (0.001, 0.05);
 /// Memory the kept frames may take, and the most of them.
 const FRAME_BYTES: usize = 384 << 20;
 const FRAMES: (usize, usize) = (24, 240);
-/// Water at least this deep is part of a pond, and the least volume listed.
-const POND_DEPTH: f64 = 0.05;
-const POND_VOLUME: f64 = 1.0;
-const MAX_PONDS: usize = 40;
 /// Water at least this deep is drawn: the film of a rained-on slope is not,
 /// only where it has gathered. The viewport lifts it [`DRAWN_LIFT`] clear of
 /// the ground, so a shallow sheet does not flicker against it.
@@ -357,32 +353,13 @@ impl Operators {
     }
 }
 
-/// A body of standing water at one instant.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Pond {
-    /// Cubic metres.
-    pub(crate) volume: f64,
-    /// Square metres, in plan.
-    pub(crate) area: f64,
-    pub(crate) max_depth: f64,
-    /// The water's level at its deepest point, and where that is.
-    pub(crate) level: f64,
-    pub(crate) deepest: [f64; 3],
-}
-
 /// The water at one kept instant of a run.
 pub(crate) struct WaterFrame {
     pub(crate) time_s: f64,
     /// Metres of water at each vertex.
     pub(crate) depth: Vec<f32>,
-    /// Cubic metres lying on the surface, and since the start: fallen as
-    /// rain, soaked in, and gone over the open edge.
+    /// Cubic metres lying on the surface.
     pub(crate) on_surface: f64,
-    pub(crate) rained: f64,
-    pub(crate) infiltrated: f64,
-    pub(crate) left: f64,
-    /// The largest ponds, largest first.
-    pub(crate) ponds: Vec<Pond>,
 }
 
 pub(crate) struct WaterRun {
@@ -390,8 +367,6 @@ pub(crate) struct WaterRun {
     pub(crate) frames: Vec<WaterFrame>,
     /// The deepest each vertex was at any step.
     pub(crate) max_depth: Vec<f32>,
-    /// Plan area rained on, square metres.
-    pub(crate) area: f64,
 }
 
 /// Sum of the products of two vectors, added up in the same order whatever
@@ -411,6 +386,87 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
     parts.iter().sum()
 }
 
+/// One number per vertex that the threads of a hand-down write as they reach
+/// each vertex, and read once it has been written.
+struct Cells(Vec<AtomicU64>);
+
+impl Cells {
+    fn new(count: usize) -> Self {
+        Self((0..count).map(|_| AtomicU64::new(0)).collect())
+    }
+
+    fn get(&self, index: usize) -> f64 {
+        f64::from_bits(self.0[index].load(Ordering::Relaxed))
+    }
+
+    fn set(&self, index: usize, value: f64) {
+        self.0[index].store(value.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// Fronts shorter than this are visited on one thread: a valley floor's long
+/// tail of a few vertices each is not worth waking the pool for.
+const SHARED_FRONT: usize = 256;
+/// How many of the vertices it sets free a thread goes straight on to, for
+/// each vertex of the front it was handed. Following the water down keeps
+/// the fronts few; past this the rest wait for the next front, so one thread
+/// is not left with a whole hillside.
+const CHASE: usize = 4;
+
+/// Hand water down from the highest level to the lowest, on every thread.
+///
+/// `waiting[v]` is how many of `v`'s neighbours give to it, and `visit` is
+/// called on a vertex once all of them have been visited: with the vertices
+/// none give to first, then those the first set free, and so on, each front
+/// shared among the threads, and each thread going a little way on down from
+/// the vertices it visits. `visit` sets a vertex's takers free with
+/// [`release`]. What it works out for a vertex must depend only on the
+/// vertices that give to it, so the answer is the same in any order and on any
+/// number of threads.
+fn hand_down(waiting: &[AtomicU32], visit: impl Fn(u32, &mut Vec<u32>) + Sync) {
+    let mut front: Vec<u32> = (0..waiting.len() as u32)
+        .into_par_iter()
+        .with_min_len(SHARED_FRONT)
+        .filter(|vertex| waiting[*vertex as usize].load(Ordering::Relaxed) == 0)
+        .collect();
+    // Visit a share of a front, and add what it leaves free to `next`.
+    let run = |chunk: &[u32], mut next: Vec<u32>, mut budget: usize| {
+        let mut freed = Vec::new();
+        for &vertex in chunk {
+            visit(vertex, &mut freed);
+            while budget > 0
+                && let Some(vertex) = freed.pop()
+            {
+                visit(vertex, &mut freed);
+                budget -= 1;
+            }
+        }
+        next.append(&mut freed);
+        next
+    };
+    while !front.is_empty() {
+        front = if front.len() < SHARED_FRONT {
+            run(&front, Vec::new(), SHARED_FRONT * CHASE)
+        } else {
+            front
+                .par_chunks(SHARED_FRONT / 8)
+                .fold(Vec::new, |next, chunk| run(chunk, next, chunk.len() * CHASE))
+                .reduce(Vec::new, |mut all, mut more| {
+                    all.append(&mut more);
+                    all
+                })
+        };
+    }
+}
+
+/// One of `taker`'s givers has been visited: it joins the next front once
+/// the last has.
+fn release(waiting: &[AtomicU32], taker: u32, next: &mut Vec<u32>) {
+    if waiting[taker as usize].fetch_sub(1, Ordering::AcqRel) == 1 {
+        next.push(taker);
+    }
+}
+
 /// The backed-up water of one step: the vertices joined by a side whose
 /// water stands over the ground at both ends, and the linear system that
 /// levels them.
@@ -423,49 +479,54 @@ struct Pools {
     /// Each row's sides: `entries[starts[row]..starts[row + 1]]`, as the row
     /// at the other end and the side's conductance.
     starts: Vec<u32>,
-    entries: Vec<(u32, f64)>,
+    entries: Vec<(u32, f32)>,
     diagonal: Vec<f64>,
 }
 
 impl Pools {
     /// Gather the sides with any `conductance` and the vertices on them.
-    fn gather(&mut self, operators: &Operators, conductance: &[f64], storage: &[f64]) {
-        self.row_of.clear();
-        self.row_of.resize(operators.area.len(), u32::MAX);
-        self.vertices.clear();
-        for (edge, _) in conductance.iter().enumerate().filter(|(_, conductance)| **conductance > 0.0) {
-            for vertex in operators.edges[edge] {
-                if self.row_of[vertex as usize] == u32::MAX {
-                    self.row_of[vertex as usize] = self.vertices.len() as u32;
-                    self.vertices.push(vertex);
-                }
-            }
-        }
-        self.starts.clear();
-        self.entries.clear();
-        self.diagonal.clear();
-        self.starts.push(0);
+    fn gather(&mut self, operators: &Operators, conductance: &[f32], storage: &[f64]) {
+        let count = operators.area.len();
+        self.row_of.resize(count, u32::MAX);
         for &vertex in &self.vertices {
-            let mut sum = storage[vertex as usize];
-            for &(other, edge) in operators.sides_of(vertex as usize) {
-                let conductance = conductance[edge as usize];
-                if conductance > 0.0 {
-                    self.entries.push((self.row_of[other as usize], conductance));
-                    sum += conductance;
-                }
-            }
-            self.starts.push(self.entries.len() as u32);
-            self.diagonal.push(sum);
+            self.row_of[vertex as usize] = u32::MAX;
+        }
+        let wet = |vertex: usize| operators.sides_of(vertex).iter().filter(move |(_, edge)| conductance[*edge as usize] > 0.0);
+        self.vertices.clear();
+        self.vertices
+            .par_extend((0..count as u32).into_par_iter().with_min_len(4096).filter(|vertex| wet(*vertex as usize).next().is_some()));
+        for (row, &vertex) in self.vertices.iter().enumerate() {
+            self.row_of[vertex as usize] = row as u32;
+        }
+        let row_of = &self.row_of;
+        self.entries.clear();
+        self.entries.par_extend(
+            self.vertices
+                .par_iter()
+                .with_min_len(4096)
+                .flat_map_iter(|vertex| wet(*vertex as usize).map(|&(other, edge)| (row_of[other as usize], conductance[edge as usize]))),
+        );
+        self.vertices
+            .par_iter()
+            .with_min_len(4096)
+            .map(|vertex| wet(*vertex as usize).fold(storage[*vertex as usize], |sum, (_, edge)| sum + f64::from(conductance[*edge as usize])))
+            .collect_into_vec(&mut self.diagonal);
+        self.starts.clear();
+        self.starts.push(0);
+        let mut end = 0;
+        for &vertex in &self.vertices {
+            end += wet(vertex as usize).count() as u32;
+            self.starts.push(end);
         }
     }
 
-    fn row(&self, row: usize) -> &[(u32, f64)] {
+    fn row(&self, row: usize) -> &[(u32, f32)] {
         &self.entries[self.starts[row] as usize..self.starts[row + 1] as usize]
     }
 
     fn apply(&self, x: &[f64], out: &mut Vec<f64>) {
         let row = |row: usize| {
-            let across: f64 = self.row(row).iter().map(|&(other, conductance)| conductance * x[other as usize]).sum();
+            let across: f64 = self.row(row).iter().map(|&(other, conductance)| f64::from(conductance) * x[other as usize]).sum();
             self.diagonal[row] * x[row] - across
         };
         if x.len() < SHARED_ROWS {
@@ -486,39 +547,70 @@ impl Pools {
         }
         let mut residual = Vec::with_capacity(count);
         self.apply(&x, &mut residual);
-        for (residual, rhs) in residual.iter_mut().zip(rhs) {
-            *residual = rhs - *residual;
-        }
+        residual
+            .par_iter_mut()
+            .zip(rhs)
+            .with_min_len(SHARED_ROWS)
+            .for_each(|(residual, rhs)| *residual = rhs - *residual);
         if dot(&residual, &residual) <= target {
             return x;
         }
-        let mut scaled: Vec<f64> = residual.iter().zip(&self.diagonal).map(|(r, d)| r / d).collect();
+        let mut scaled: Vec<f64> = residual.par_iter().zip(&self.diagonal).with_min_len(SHARED_ROWS).map(|(r, d)| r / d).collect();
         let mut direction = scaled.clone();
         let mut along = Vec::with_capacity(count);
         let mut rz = dot(&residual, &scaled);
+        // Each sum is taken in the pass that makes its vectors, in chunks
+        // added up in the same order whatever the thread count.
+        const CHUNK: usize = 8192;
+        along.resize(count, 0.0);
         for _ in 0..CG_ITERATIONS {
-            self.apply(&direction, &mut along);
-            let curvature = dot(&direction, &along);
+            let parts: Vec<f64> = along
+                .par_chunks_mut(CHUNK)
+                .enumerate()
+                .map(|(chunk, along)| {
+                    let first = chunk * CHUNK;
+                    let mut sum = 0.0;
+                    for (row, along) in (first..).zip(along) {
+                        let across: f64 = self.row(row).iter().map(|&(other, conductance)| f64::from(conductance) * direction[other as usize]).sum();
+                        *along = self.diagonal[row] * direction[row] - across;
+                        sum += direction[row] * *along;
+                    }
+                    sum
+                })
+                .collect();
+            let curvature: f64 = parts.iter().sum();
             if curvature.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
                 break;
             }
             let alpha = rz / curvature;
-            for ((x, r), (p, q)) in x.iter_mut().zip(&mut residual).zip(direction.iter().zip(&along)) {
-                *x += alpha * p;
-                *r -= alpha * q;
-            }
-            if dot(&residual, &residual) <= target {
+            let parts: Vec<(f64, f64)> = (
+                x.par_chunks_mut(CHUNK),
+                residual.par_chunks_mut(CHUNK),
+                scaled.par_chunks_mut(CHUNK),
+                direction.par_chunks(CHUNK),
+                along.par_chunks(CHUNK),
+                self.diagonal.par_chunks(CHUNK),
+            )
+                .into_par_iter()
+                .map(|(x, residual, scaled, direction, along, diagonal)| {
+                    let (mut rr, mut rz) = (0.0, 0.0);
+                    for (((x, r), z), ((p, q), d)) in x.iter_mut().zip(residual).zip(scaled).zip(direction.iter().zip(along).zip(diagonal)) {
+                        *x += alpha * p;
+                        *r -= alpha * q;
+                        *z = *r / d;
+                        rr += *r * *r;
+                        rz += *r * *z;
+                    }
+                    (rr, rz)
+                })
+                .collect();
+            if parts.iter().map(|(rr, _)| rr).sum::<f64>() <= target {
                 break;
             }
-            for (z, (r, d)) in scaled.iter_mut().zip(residual.iter().zip(&self.diagonal)) {
-                *z = r / d;
-            }
-            let next = dot(&residual, &scaled);
+            let next: f64 = parts.iter().map(|(_, rz)| rz).sum();
             let beta = next / rz;
             rz = next;
-            for (p, z) in direction.iter_mut().zip(&scaled) {
-                *p = z + beta * *p;
-            }
+            direction.par_iter_mut().zip(&scaled).with_min_len(CHUNK).for_each(|(p, z)| *p = z + beta * *p);
         }
         x
     }
@@ -566,6 +658,9 @@ fn drained_root(volume: f64, area: f64, rate: f64, step: f64, guess: f64) -> f64
 /// triangles in a step and still settle at the depth its flow needs. Water
 /// that is backed up - standing over the ground at both ends of a side - has
 /// its levels solved together, which is what flattens a pond.
+///
+/// Both halves run on every thread (see [`hand_down`]), and the answer is the
+/// same on any number of them.
 pub(crate) fn simulate(ground: Ground, settings: &WaterSettings, cancel: &AtomicBool, progress: &Progress) -> Result<WaterRun, WaterError> {
     let count = ground.vertices.len();
     let operators = Operators::new(&ground);
@@ -604,17 +699,18 @@ pub(crate) fn simulate(ground: Ground, settings: &WaterSettings, cancel: &Atomic
 
     let mut depth = vec![0.0f64; count];
     let mut max_depth = vec![0.0f32; count];
-    let (mut rained, mut infiltrated, mut left) = (0.0, 0.0, 0.0);
-    let mut frames = vec![frame(&ground, &operators, &depth, 0.0, [rained, infiltrated, left])];
+    let mut frames = vec![frame(&operators, &depth, 0.0)];
 
     let mut level = vec![0.0; count];
-    let mut order: Vec<u32> = (0..count as u32).collect();
-    let mut inflow = vec![0.0; count];
-    let mut rates: Vec<f64> = Vec::new();
-    let mut conductance = vec![0.0; operators.edges.len()];
+    let waiting: Vec<AtomicU32> = (0..count).map(|_| AtomicU32::new(0)).collect();
+    // What each vertex is left with by the hand-down, and what it passed on
+    // for each unit of its sides' rates.
+    let kept = Cells::new(count);
+    let passed = Cells::new(count);
+    let mut conductance = vec![0.0f32; operators.edges.len()];
     let mut pools = Pools::default();
     // The cube root of the depth each vertex last drained to.
-    let mut roots = vec![0.0; count];
+    let roots = Cells::new(count);
     // Each vertex's change of level in the last pool solve it was part of.
     let mut carried = vec![0.0; count];
 
@@ -626,55 +722,58 @@ pub(crate) fn simulate(ground: Ground, settings: &WaterSettings, cancel: &Atomic
 
         // Rain on, then what the ground takes in.
         let falling = rain_rate * (rain_end - time).clamp(0.0, step);
-        for (vertex, depth) in depth.iter_mut().enumerate() {
-            *depth += falling * operators.catchment[vertex] / operators.area[vertex];
-            let soaked = depth.min(soak);
-            *depth -= soaked;
-            rained += falling * operators.catchment[vertex];
-            infiltrated += soaked * operators.area[vertex];
-        }
+        depth.par_iter_mut().enumerate().with_min_len(4096).for_each(|(vertex, depth)| {
+            *depth = (*depth + falling * operators.catchment[vertex] / operators.area[vertex] - soak).max(0.0);
+        });
 
-        // Free-draining water, handed down in order of level: everything a
-        // vertex is given has arrived by the time its own turn comes.
+        // Free-draining water, handed down from the highest level to the
+        // lowest: everything a vertex is given has arrived by the time its
+        // own turn comes. A vertex takes from the neighbours whose ground is
+        // above its water, so it waits on those and no others.
         level.par_iter_mut().zip(bed.par_iter().zip(&depth)).for_each(|(level, (bed, depth))| *level = bed + depth);
-        order.par_sort_unstable_by(|a, b| level[*b as usize].total_cmp(&level[*a as usize]).then(a.cmp(b)));
-        inflow.fill(0.0);
-        for &vertex in &order {
+        waiting.par_iter().enumerate().with_min_len(4096).for_each(|(vertex, waiting)| {
+            let givers = operators.sides_of(vertex).iter().filter(|(other, _)| level[vertex] < bed[*other as usize]).count();
+            waiting.store(givers as u32, Ordering::Relaxed);
+        });
+        hand_down(&waiting, |vertex, next| {
             let vertex = vertex as usize;
-            let held = operators.area[vertex] * depth[vertex] + inflow[vertex];
-            if held <= operators.area[vertex] * FILM {
-                depth[vertex] = held / operators.area[vertex];
-                continue;
-            }
-            // Each side's rate: Manning's, for a metre of depth to the
-            // five-thirds, down the fall to the water below.
-            rates.clear();
-            let mut rate = outlet[vertex];
             let sides = operators.starts[vertex] as usize..operators.starts[vertex + 1] as usize;
-            for (&(other, _), &(carry, per_metre)) in operators.adjacent[sides.clone()].iter().zip(&reach[sides]) {
-                let clear = level[other as usize] < bed[vertex];
-                let side = if clear {
-                    let fall = ((level[vertex] - level[other as usize]) * per_metre).max(MIN_SLOPE);
-                    carry * fall.sqrt()
-                } else {
-                    0.0
-                };
-                rates.push(side);
-                rate += side;
-            }
-            let root = drained_root(held, operators.area[vertex], rate, step, roots[vertex]);
-            roots[vertex] = root;
-            // No more than it held: the rest is what it passes on.
-            let kept = (root * root * root).min(held / operators.area[vertex]);
-            depth[vertex] = kept;
-            if rate > 0.0 {
-                let passed = (held - operators.area[vertex] * kept).max(0.0) / rate;
-                for (&(other, _), side) in operators.sides_of(vertex).iter().zip(&rates) {
-                    inflow[other as usize] += passed * side;
+            let area = operators.area[vertex];
+            // Each side's rate: Manning's, for a metre of depth to the
+            // five-thirds, down the fall to the water below. A side that
+            // gives carries what its upper end passed on at the same rate.
+            let mut given = 0.0;
+            let mut rate = outlet[vertex];
+            for (&(other, _), &(carry, per_metre)) in operators.adjacent[sides.clone()].iter().zip(&reach[sides.clone()]) {
+                let other = other as usize;
+                if level[vertex] < bed[other] {
+                    let passed = passed.get(other);
+                    if passed > 0.0 {
+                        given += passed * (carry * ((level[other] - level[vertex]) * per_metre).max(MIN_SLOPE).sqrt());
+                    }
+                } else if level[other] < bed[vertex] {
+                    rate += carry * ((level[vertex] - level[other]) * per_metre).max(MIN_SLOPE).sqrt();
                 }
-                left += passed * outlet[vertex];
             }
-        }
+            let held = area * depth[vertex] + given;
+            if held <= area * FILM {
+                kept.set(vertex, held / area);
+                passed.set(vertex, 0.0);
+            } else {
+                let root = drained_root(held, area, rate, step, roots.get(vertex));
+                roots.set(vertex, root);
+                // No more than it held: the rest is what it passes on.
+                let left_here = (root * root * root).min(held / area);
+                kept.set(vertex, left_here);
+                passed.set(vertex, if rate > 0.0 { (held - area * left_here).max(0.0) / rate } else { 0.0 });
+            }
+            for &(other, _) in &operators.adjacent[sides] {
+                if level[other as usize] < bed[vertex] {
+                    release(&waiting, other, next);
+                }
+            }
+        });
+        depth.par_iter_mut().enumerate().with_min_len(4096).for_each(|(vertex, depth)| *depth = kept.get(vertex));
 
         // Backed-up water: sides whose lower water stands over the higher
         // ground. Their levels are solved together.
@@ -685,7 +784,7 @@ pub(crate) fn simulate(ground: Ground, settings: &WaterSettings, cancel: &Atomic
             let deep = level[high] - bed[a].max(bed[b]);
             *conductance = if level[low] >= bed[high] && deep > FILM {
                 let fall = ((level[high] - level[low]) / operators.length[edge]).max(MIN_SLOPE);
-                (operators.weight[edge] * deep.powf(5.0 / 3.0) / (roughness * fall.sqrt())).min(POOL_EXCHANGE * storage[a].min(storage[b]))
+                (operators.weight[edge] * deep.powf(5.0 / 3.0) / (roughness * fall.sqrt())).min(POOL_EXCHANGE * storage[a].min(storage[b])) as f32
             } else {
                 0.0
             };
@@ -694,13 +793,16 @@ pub(crate) fn simulate(ground: Ground, settings: &WaterSettings, cancel: &Atomic
         if !pools.vertices.is_empty() {
             // Solved for the change in level, whose right-hand side is the
             // flow the levels as they stand would drive.
-            let rhs: Vec<f64> = (0..pools.vertices.len())
+            let rows = pools.vertices.len();
+            let rhs: Vec<f64> = (0..rows)
+                .into_par_iter()
+                .with_min_len(4096)
                 .map(|row| {
                     let here = level[pools.vertices[row] as usize];
                     pools
                         .row(row)
                         .iter()
-                        .map(|&(other, conductance)| conductance * (level[pools.vertices[other as usize] as usize] - here))
+                        .map(|&(other, conductance)| f64::from(conductance) * (level[pools.vertices[other as usize] as usize] - here))
                         .sum()
                 })
                 .collect();
@@ -712,103 +814,58 @@ pub(crate) fn simulate(ground: Ground, settings: &WaterSettings, cancel: &Atomic
             }
             let solved: Vec<f64> = change.iter().zip(&pools.vertices).map(|(change, vertex)| level[*vertex as usize] + change).collect();
             // Handed down in order of the solved levels, a vertex never
-            // passing on more than it holds and was given.
-            let mut rows: Vec<u32> = (0..pools.vertices.len() as u32).collect();
-            rows.par_sort_unstable_by(|a, b| solved[*b as usize].total_cmp(&solved[*a as usize]).then(a.cmp(b)));
-            let mut given = vec![0.0; rows.len()];
-            for &row in &rows {
+            // passing on more than it holds and was given: `share` is how
+            // much of what the solved levels ask of it a row could pass on.
+            let waiting: Vec<AtomicU32> = (0..rows)
+                .into_par_iter()
+                .with_min_len(4096)
+                .map(|row| AtomicU32::new(pools.row(row).iter().filter(|(other, _)| solved[*other as usize] > solved[row]).count() as u32))
+                .collect();
+            let share = Cells::new(rows);
+            let settled = Cells::new(rows);
+            hand_down(&waiting, |row, next| {
                 let row = row as usize;
                 let vertex = pools.vertices[row] as usize;
-                let held = operators.area[vertex] * depth[vertex] + given[row];
-                let out: f64 = pools
-                    .row(row)
-                    .iter()
-                    .map(|&(other, conductance)| conductance * (solved[row] - solved[other as usize]).max(0.0) * step)
-                    .sum();
-                let share = if out > held { held / out } else { 1.0 };
+                let (mut given, mut out) = (0.0, 0.0);
                 for &(other, conductance) in pools.row(row) {
-                    given[other as usize] += share * conductance * (solved[row] - solved[other as usize]).max(0.0) * step;
+                    let (other, conductance) = (other as usize, f64::from(conductance));
+                    if solved[other] > solved[row] {
+                        given += share.get(other) * conductance * (solved[other] - solved[row]) * step;
+                    } else {
+                        out += conductance * (solved[row] - solved[other]).max(0.0) * step;
+                    }
                 }
-                depth[vertex] = ((held - share * out) / operators.area[vertex]).max(0.0);
+                let held = operators.area[vertex] * depth[vertex] + given;
+                let passed = if out > held { held / out } else { 1.0 };
+                share.set(row, passed);
+                settled.set(row, ((held - passed * out) / operators.area[vertex]).max(0.0));
+                for &(other, _) in pools.row(row) {
+                    if solved[row] > solved[other as usize] {
+                        release(&waiting, other, next);
+                    }
+                }
+            });
+            for (row, vertex) in pools.vertices.iter().enumerate() {
+                depth[*vertex as usize] = settled.get(row);
             }
         }
 
         max_depth.par_iter_mut().zip(&depth).for_each(|(max, depth)| *max = max.max(*depth as f32));
         if (index + 1) % frame_every == 0 || index + 1 == steps {
-            frames.push(frame(&ground, &operators, &depth, (index + 1) as f64 * step, [rained, infiltrated, left]));
+            frames.push(frame(&operators, &depth, (index + 1) as f64 * step));
         }
         progress.set_items(index as u64 + 1, steps as u64);
     }
 
-    Ok(WaterRun {
-        ground,
-        frames,
-        max_depth,
-        area: total_area,
-    })
+    Ok(WaterRun { ground, frames, max_depth })
 }
 
-fn frame(ground: &Ground, operators: &Operators, depth: &[f64], time_s: f64, [rained, infiltrated, left]: [f64; 3]) -> WaterFrame {
+fn frame(operators: &Operators, depth: &[f64], time_s: f64) -> WaterFrame {
     WaterFrame {
         time_s,
         depth: depth.iter().map(|depth| *depth as f32).collect(),
         on_surface: depth.iter().zip(&operators.area).map(|(depth, area)| depth * area).sum(),
-        rained,
-        infiltrated,
-        left,
-        ponds: ponds(ground, operators, depth),
     }
-}
-
-/// The bodies of water at least [`POND_DEPTH`] deep, joined along the
-/// triangles' sides.
-fn ponds(ground: &Ground, operators: &Operators, depth: &[f64]) -> Vec<Pond> {
-    let mut parent: Vec<u32> = (0..depth.len() as u32).collect();
-    fn root(parent: &mut [u32], mut vertex: u32) -> u32 {
-        while parent[vertex as usize] != vertex {
-            parent[vertex as usize] = parent[parent[vertex as usize] as usize];
-            vertex = parent[vertex as usize];
-        }
-        vertex
-    }
-    for &[a, b] in &operators.edges {
-        if depth[a as usize] >= POND_DEPTH && depth[b as usize] >= POND_DEPTH {
-            let (a, b) = (root(&mut parent, a), root(&mut parent, b));
-            if a != b {
-                parent[a.max(b) as usize] = a.min(b);
-            }
-        }
-    }
-    let mut found: std::collections::HashMap<u32, Pond> = std::collections::HashMap::new();
-    for vertex in 0..depth.len() {
-        let deep = depth[vertex];
-        if deep < POND_DEPTH {
-            continue;
-        }
-        let pond = found.entry(root(&mut parent, vertex as u32)).or_insert(Pond {
-            volume: 0.0,
-            area: 0.0,
-            max_depth: 0.0,
-            level: 0.0,
-            deepest: ground.vertices[vertex],
-        });
-        pond.volume += deep * operators.area[vertex];
-        pond.area += operators.area[vertex];
-        if deep > pond.max_depth {
-            pond.max_depth = deep;
-            pond.level = ground.vertices[vertex][2] + deep;
-            pond.deepest = ground.vertices[vertex];
-        }
-    }
-    let mut ponds: Vec<Pond> = found.into_values().filter(|pond| pond.volume >= POND_VOLUME).collect();
-    ponds.sort_unstable_by(|a, b| {
-        b.volume
-            .total_cmp(&a.volume)
-            .then(a.deepest[0].total_cmp(&b.deepest[0]))
-            .then(a.deepest[1].total_cmp(&b.deepest[1]))
-    });
-    ponds.truncate(MAX_PONDS);
-    ponds
 }
 
 /// The water's surface as loose triangles, one list per band of

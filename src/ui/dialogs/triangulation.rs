@@ -1284,7 +1284,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
     }
 }
 
-/// Simulate Water: a storm over one surface, run in a tab of its own.
+/// Rain Simulation: a storm over one surface, run in a tab of its own.
 pub(crate) fn draw_simplify_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     if !editor.simplify_dialog.open || editor.triangulation_pick_target.is_some() {
         return;

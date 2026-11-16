@@ -1184,7 +1184,7 @@ pub(crate) enum TriangulationPickTarget {
     SliceSurface,
     /// The surface contour lines are generated from.
     ContourSurface,
-    /// The surface Simulate Water rains on.
+    /// The surface Rain Simulation rains on.
     WaterSurface,
     /// The surface Simplify thins.
     SimplifySurface,
@@ -5741,7 +5741,7 @@ pub(crate) enum UiCommand {
     NoteRecentFunction(MenuRow),
     /// Point an open tool at the item chosen in its dialog.
     SetToolSubject(ToolSubject),
-    /// Open the Simulate Water dialog.
+    /// Open the Rain Simulation dialog.
     OpenWaterSimulation,
     /// Run a storm over a surface, in a tab of its own.
     RunWaterSimulation {
@@ -7453,7 +7453,7 @@ impl Default for SimplifyDialog {
     }
 }
 
-/// Simulate Water's dialog: the surface and the storm to run over it.
+/// Rain Simulation's dialog: the surface and the storm to run over it.
 #[derive(Clone, Debug)]
 pub(crate) struct WaterDialog {
     pub(crate) open: bool,
@@ -7498,30 +7498,10 @@ pub(crate) enum WaterRunStatus {
 #[derive(Clone, Debug)]
 pub(crate) struct WaterShown {
     pub(crate) id: u64,
-    pub(crate) surface: String,
     pub(crate) settings: crate::model::water::WaterSettings,
     pub(crate) status: WaterRunStatus,
-    /// Of the surface as the run flowed over it, after any subdivision, and
-    /// its plan area in square metres.
-    pub(crate) vertices: usize,
-    pub(crate) faces: usize,
-    pub(crate) area: f64,
-    /// The deepest the water stood anywhere at any step, metres.
-    pub(crate) deepest: f32,
-    pub(crate) instant: Option<WaterInstant>,
-}
-
-/// The kept instant of a run the viewport is showing.
-#[derive(Clone, Debug)]
-pub(crate) struct WaterInstant {
-    pub(crate) time_s: f64,
-    /// Cubic metres: on the surface now, and since the start fallen as rain,
-    /// soaked in and gone over the open edge.
-    pub(crate) on_surface: f64,
-    pub(crate) rained: f64,
-    pub(crate) infiltrated: f64,
-    pub(crate) left: f64,
-    pub(crate) ponds: Vec<crate::model::water::Pond>,
+    /// The kept instant of the run the viewport is showing, seconds in.
+    pub(crate) instant_s: Option<f64>,
 }
 
 /// The water runs' tabs and what the open one shows. Session-only: a run is

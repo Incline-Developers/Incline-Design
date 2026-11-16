@@ -1,6 +1,6 @@
 //! Water runs: a storm over a surface, each in a tab of its own.
 //!
-//! Simulate Water starts a run as a background job and opens its tab, in a
+//! Rain Simulation starts a run as a background job and opens its tab, in a
 //! row under the viewport bar of the workspace it was started from. The
 //! tab's viewport draws the run's own copy of the surface with the water on
 //! it at the instant its timeline is at, in bands of depth. A run belongs to
@@ -23,7 +23,7 @@ use crate::{
         triangulation::{OpenTriangulation, TriangulationId},
         water::{BAND_DEPTHS, Ground, WaterError, WaterRun, WaterSettings},
     },
-    ui::state::{WaterInstant, WaterRunStatus, WaterShown, WaterTab, Workspace},
+    ui::state::{WaterRunStatus, WaterShown, WaterTab, Workspace},
 };
 
 /// The run's ground, and one id below it for each band of water.
@@ -36,11 +36,6 @@ const BAND_COLORS: [[f32; 4]; BAND_DEPTHS.len()] = [
     [0.07, 0.30, 0.68, 0.88],
     [0.03, 0.16, 0.45, 0.94],
 ];
-
-/// The band of [`BAND_DEPTHS`] `index`'s colour, for the panel's legend.
-pub(crate) fn band_color(index: usize) -> [f32; 4] {
-    BAND_COLORS[index.min(BAND_COLORS.len() - 1)]
-}
 
 enum RunState {
     Running,
@@ -283,21 +278,9 @@ impl App<'_> {
         if moved || self.editor.water.shown.as_ref().is_none_or(|shown| shown.id != entry.id) {
             self.editor.water.shown = Some(WaterShown {
                 id: entry.id,
-                surface: entry.surface.clone(),
                 settings: entry.settings,
                 status: status.clone(),
-                vertices: run.as_ref().map_or(entry.ground.mesh.vertex_count(), |run| run.ground.vertices.len()),
-                faces: run.as_ref().map_or(entry.ground.mesh.face_count(), |run| run.ground.faces.len()),
-                area: run.as_ref().map_or(0.0, |run| run.area),
-                deepest: run.as_ref().map_or(0.0, |run| run.max_depth.iter().copied().fold(0.0, f32::max)),
-                instant: run.as_ref().zip(frame).and_then(|(run, frame)| run.frames.get(frame)).map(|frame| WaterInstant {
-                    time_s: frame.time_s,
-                    on_surface: frame.on_surface,
-                    rained: frame.rained,
-                    infiltrated: frame.infiltrated,
-                    left: frame.left,
-                    ponds: frame.ponds.clone(),
-                }),
+                instant_s: run.as_ref().zip(frame).and_then(|(run, frame)| run.frames.get(frame)).map(|frame| frame.time_s),
             });
         } else if let Some(shown) = self.editor.water.shown.as_mut() {
             shown.status = status;

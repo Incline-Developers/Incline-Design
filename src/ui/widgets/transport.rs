@@ -1,6 +1,7 @@
 //! Play, Pause, Rewind and single steps: small square buttons with their
-//! glyphs painted, shared by the blast review's timeline, Animate's playback
-//! and the Gantt's Inspector.
+//! glyphs painted, shared by the blast review's timeline, Animate's playback,
+//! a rain simulation's and the Gantt's Inspector; and the keys every one of
+//! those timelines takes ([`timeline_keys`]).
 
 use super::hint::Hint;
 use crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS;
@@ -69,5 +70,93 @@ pub(crate) fn transport_button(ui: &mut egui::Ui, kind: Transport, hint: Option<
     match hint {
         Some(hint) => response.hint(hint),
         None => response,
+    }
+}
+
+/// How long an arrow is held before the cursor stops stepping and runs.
+const SCRUB_HOLD_S: f64 = 0.35;
+
+/// What a timeline's keys ask of it this frame.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct TimelineKeys {
+    /// Space: play, or pause.
+    pub(crate) toggle: bool,
+    /// An arrow is down or was pressed, which takes the cursor off playback.
+    pub(crate) scrubbing: bool,
+    /// Steps to move the cursor by, back negative: one for each arrow press,
+    /// `shift_steps` for each made with Shift.
+    pub(crate) steps: f64,
+    /// Real seconds to run the cursor on by, back negative, once an arrow
+    /// has been held: the timeline moves it at its playback speed.
+    pub(crate) run_s: f64,
+}
+
+/// The keys a timeline takes while it is on screen: Space plays and pauses,
+/// and the arrows step the cursor, running it once held. Nothing while
+/// `enabled` is off or a field is being typed in, which keeps its keys.
+///
+/// `salt` names the timeline, for how long its arrow has been held.
+pub(crate) fn timeline_keys(ctx: &egui::Context, salt: &'static str, enabled: bool, shift_steps: f64) -> TimelineKeys {
+    let hold_id = egui::Id::unique(salt);
+    if !enabled || ctx.egui_wants_keyboard_input() {
+        ctx.data_mut(|data| data.remove::<f64>(hold_id));
+        return TimelineKeys::default();
+    }
+    // Consumed, so a transport button left with focus is not clicked by the
+    // same Space press. Every arrow press counts, each with its own Shift.
+    let (toggle, steps, back_down, forward_down, dt) = ctx.input_mut(|input| {
+        let toggle = input.consume_key(egui::Modifiers::NONE, egui::Key::Space);
+        let mut steps = 0.0;
+        for modifiers in [egui::Modifiers::NONE, egui::Modifiers::SHIFT] {
+            let unit = if modifiers.shift { shift_steps } else { 1.0 };
+            while input.consume_key(modifiers, egui::Key::ArrowLeft) {
+                steps -= unit;
+            }
+            while input.consume_key(modifiers, egui::Key::ArrowRight) {
+                steps += unit;
+            }
+        }
+        (
+            toggle,
+            steps,
+            input.key_down(egui::Key::ArrowLeft),
+            input.key_down(egui::Key::ArrowRight),
+            f64::from(input.stable_dt.min(0.1)),
+        )
+    });
+    let direction = match (back_down, forward_down) {
+        (true, false) => -1.0,
+        (false, true) => 1.0,
+        _ => 0.0,
+    };
+    if direction == 0.0 && steps == 0.0 {
+        ctx.data_mut(|data| data.remove::<f64>(hold_id));
+        return TimelineKeys {
+            toggle,
+            ..TimelineKeys::default()
+        };
+    }
+    let held = ctx.data_mut(|data| {
+        let held = data.get_temp_mut_or_default::<f64>(hold_id);
+        *held += dt;
+        *held
+    });
+    ctx.request_repaint();
+    // Repeats from the OS are swallowed by the run, so a held key moves
+    // smoothly.
+    if direction != 0.0 && held >= SCRUB_HOLD_S {
+        TimelineKeys {
+            toggle,
+            scrubbing: true,
+            steps: 0.0,
+            run_s: direction * dt,
+        }
+    } else {
+        TimelineKeys {
+            toggle,
+            scrubbing: true,
+            steps,
+            run_s: 0.0,
+        }
     }
 }
