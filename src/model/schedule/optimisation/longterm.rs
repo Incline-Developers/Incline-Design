@@ -78,6 +78,9 @@ pub(crate) struct PlanRequest<'a> {
     pub(crate) stable: &'a BTreeMap<GroundId, u64>,
     /// What the last plan over this mine left: see [`PlanMemory`].
     pub(crate) memory: Option<&'a PlanMemory>,
+    /// The ground a bar limited to some pits, benches or flitches may take,
+    /// by its task; a task not named takes any.
+    pub(crate) allowed: &'a BTreeMap<TaskId, BTreeSet<GroundId>>,
 }
 
 /// What a plan leaves for the next one, so an edit is planned from where
@@ -1791,11 +1794,17 @@ fn deal(input: &mut BlendInput, request: &PlanRequest<'_>, blocks: &[Block], ord
             continue;
         };
         let start = |bar: usize| bars[bar].clock_h.max(ready);
-        let soonest = (0..bars.len()).min_by(|a, b| start(*a).total_cmp(&start(*b))).unwrap_or(0);
+        // Only bars that may take it: one limited to other pits, benches or
+        // flitches is never dealt it.
+        let may = |bar: usize| request.allowed.get(&bars[bar].task).is_none_or(|allowed| allowed.contains(&ground));
+        let Some(soonest) = (0..bars.len()).filter(|bar| may(*bar)).min_by(|a, b| start(*a).total_cmp(&start(*b))) else {
+            finished[*index] = ready;
+            continue;
+        };
         let group = request.groups.get(&ground).copied();
         let bar = group
             .and_then(|group| holder.get(&group).copied())
-            .filter(|held| start(*held) <= start(soonest) + block.tonnes / bars[*held].tph)
+            .filter(|held| may(*held) && start(*held) <= start(soonest) + block.tonnes / bars[*held].tph)
             .unwrap_or(soonest);
         if let Some(group) = group {
             holder.insert(group, bar);

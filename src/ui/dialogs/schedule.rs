@@ -24,6 +24,65 @@ use crate::{
 /// Add a reclaim bar, or edit the stockpile and cumulative cap of an existing
 /// one. Creation asks for the loader and complete work window here because it
 /// never enters the viewport's dig-block picking mode.
+/// What an automatic bar works: the pits, benches and flitches it digs and
+/// the stockpiles it reclaims while it has nothing to dig, Pits and
+/// Stockpiles each taken or dropped whole with one tick.
+pub(crate) fn draw_auto_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, session: u32, commands: &mut Vec<UiCommand>) {
+    let Some(target) = editor.auto_bar_dialog.as_ref().map(|draft| draft.target) else {
+        return;
+    };
+    if plan.bar(target).is_none_or(|bar| !bar.is_auto()) {
+        editor.auto_bar_dialog = None;
+        return;
+    }
+    let stockpiles: Vec<_> = destinations::available(document.solids(), plan.routing())
+        .into_iter()
+        .filter(|entry| entry.kind == DestinationKind::Stockpile)
+        .collect();
+    let sources = editor.schedule_routing_sources.clone();
+    let mut open = true;
+    let mut close = false;
+    let draft = editor.auto_bar_dialog.as_mut().expect("checked above");
+    DragableMenu::new("auto_bar_dialog", tr!("auto-bar-dialog-title"))
+        .open(&mut open)
+        .min_width(360.0)
+        .show(ui.ctx(), |ui| {
+            if let Some(next) = crate::ui::elements::schedule_destinations::movement_sources_row(
+                ui,
+                ("auto_bar_sources", target.0),
+                &tr!("auto-bar-works"),
+                &draft.sources,
+                &sources,
+                &stockpiles,
+                false,
+                true,
+                &mut draft.expanded,
+            ) {
+                draft.sources = next;
+            }
+            menu::menu_note(ui, tr!("auto-bar-works-note"));
+            menu::menu_actions(ui, |ui| {
+                let submitted = menu::dialog_confirmed(ui.ctx());
+                if submitted || ui.add(MenuButton::new(tr!("common-apply")).primary()).clicked() {
+                    commands.push(UiCommand::schedule(
+                        session,
+                        ScheduleEdit::SetAutoSources {
+                            bar: target,
+                            sources: draft.sources.clone(),
+                        },
+                    ));
+                    close = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    close = true;
+                }
+            });
+        });
+    if close || !open {
+        editor.auto_bar_dialog = None;
+    }
+}
+
 pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, session: u32, commands: &mut Vec<UiCommand>) {
     let Some(target) = editor.reclaim_bar_dialog.as_ref().map(|dialog| dialog.target) else {
         return;

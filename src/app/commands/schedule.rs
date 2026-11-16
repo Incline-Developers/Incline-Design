@@ -290,6 +290,7 @@ impl crate::app::App<'_> {
                 insert_lane,
             } => self.add_reclaim_bar(name, agent, priority, window, sources, maximum_t, insert_lane),
             ScheduleEdit::SetReclaim { bar, sources, maximum_t } => self.set_reclaim(bar, sources, maximum_t),
+            ScheduleEdit::SetAutoSources { bar, sources } => self.edit_schedule(|plan| plan.set_auto_sources(bar, sources).map(|_| ())),
             ScheduleEdit::SetExperimentHorizon { end_day, interval_h } => self.edit_schedule(|plan| {
                 // One edit, both fields: a horizon and the resolution it is
                 // split at are typed together and are one undo step.

@@ -320,8 +320,9 @@ impl crate::app::App<'_> {
             } else if let Some(work) = bar.follow() {
                 4u8.hash(&mut hasher);
                 work.leader.map(|leader| leader.0).hash(&mut hasher);
-            } else if bar.is_auto() {
+            } else if let Some(work) = bar.auto() {
                 5u8.hash(&mut hasher);
+                crate::model::schedule::destinations::hash_selection(&work.sources, &mut hasher);
             } else {
                 0u8.hash(&mut hasher);
             }

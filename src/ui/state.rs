@@ -260,6 +260,10 @@ impl EditorState {
     /// Whether the page on screen offers the ground and category values rules
     /// and opening chunks choose from.
     pub(crate) fn shows_routing_choices(&self) -> bool {
+        // An automatic bar's dialog lists the same ground, wherever it is open.
+        if self.auto_bar_dialog.is_some() {
+            return true;
+        }
         self.is_setup_group(SetupGroup::Schedule)
             && matches!(
                 self.schedule_setup_step,
@@ -3169,6 +3173,8 @@ pub(crate) struct EditorState {
     /// Add or edit a reclaim bar. The draft stays outside the project until
     /// Apply, so a half-typed limit or cancelled dialog changes nothing.
     pub(crate) reclaim_bar_dialog: Option<ReclaimBarDialog>,
+    /// What an automatic bar works, while its dialog is open.
+    pub(crate) auto_bar_dialog: Option<AutoBarDialog>,
     /// The Add / Edit blast bar dialog, while open.
     pub(crate) blast_bar_dialog: Option<BlastBarDialog>,
     pub(crate) blast_window_dialog: Option<BlastWindowDialog>,
@@ -4622,6 +4628,7 @@ impl EditorState {
             schedule_selected_member: None,
             bar_name_dialog: None,
             reclaim_bar_dialog: None,
+            auto_bar_dialog: None,
             blast_bar_dialog: None,
             blast_window_dialog: None,
             blast_sequence_generation: None,
@@ -6601,6 +6608,7 @@ impl UiCommand {
                 | ScheduleEdit::SetOpeningPortionTonnes { .. }
                 | ScheduleEdit::SetOpeningPortionValue { .. }
                 | ScheduleEdit::SetReclaim { .. }
+                | ScheduleEdit::SetAutoSources { .. }
                 // Experimental optimiser settings: the Optimisation section
                 // and the stockpile's own page show the result where it was
                 // typed.
@@ -8911,6 +8919,12 @@ pub(crate) enum ScheduleEdit {
         sources: Vec<crate::model::schedule::DestinationId>,
         maximum_t: Option<f64>,
     },
+    /// Set what an automatic bar works: which pits, benches and flitches it
+    /// digs and which stockpiles it reclaims.
+    SetAutoSources {
+        bar: crate::model::schedule::BarId,
+        sources: crate::model::schedule::destinations::MovementSourceSelection,
+    },
     /// Set what a machine class does: load, doze, drill or charge.
     SetClassKind {
         class: crate::model::schedule::LoaderClassId,
@@ -9203,6 +9217,14 @@ pub(crate) struct BlastPatternDraft {
     pub(crate) source: crate::model::schedule::DrillPattern,
     /// Burden, spacing, subdrill.
     pub(crate) fields: [String; 3],
+}
+
+/// An automatic bar's sources as the dialog holds them until Apply.
+pub(crate) struct AutoBarDialog {
+    pub(crate) target: crate::model::schedule::BarId,
+    pub(crate) sources: crate::model::schedule::destinations::MovementSourceSelection,
+    /// The pits and benches unfolded in its list.
+    pub(crate) expanded: Vec<(u64, u64, u64)>,
 }
 
 pub(crate) struct ReclaimBarDialog {

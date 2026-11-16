@@ -366,6 +366,57 @@ pub(crate) enum DestinationSelection {
     Only(Vec<DestinationId>),
 }
 
+/// Fold a source selection into a fingerprint: the trucking rules' and an
+/// automatic bar's.
+pub(crate) fn hash_selection<H: std::hash::Hasher>(selection: &MovementSourceSelection, hasher: &mut H) {
+    use std::hash::Hash;
+    match selection {
+        MovementSourceSelection::All => 0u8.hash(hasher),
+        MovementSourceSelection::Only(scopes) => {
+            1u8.hash(hasher);
+            for scope in scopes {
+                match scope {
+                    MovementSourceScope::Ground(ground) => {
+                        0u8.hash(hasher);
+                        hash_scope(*ground, hasher);
+                    }
+                    MovementSourceScope::Stockpile(id) => (1u8, id).hash(hasher),
+                }
+            }
+        }
+    }
+}
+
+impl MovementSourceSelection {
+    pub(crate) fn is_all(&self) -> bool {
+        matches!(self, Self::All)
+    }
+
+    /// Whether it takes any ground, and which: `None` for every piece.
+    pub(crate) fn ground(&self) -> Option<Vec<SourceScope>> {
+        match self {
+            Self::All => None,
+            Self::Only(scopes) => Some(scopes.iter().filter_map(|scope| scope.ground()).collect()),
+        }
+    }
+
+    /// Which stockpiles it takes: `None` for every one.
+    pub(crate) fn stockpiles(&self) -> Option<Vec<DestinationId>> {
+        match self {
+            Self::All => None,
+            Self::Only(scopes) => Some(
+                scopes
+                    .iter()
+                    .filter_map(|scope| match scope {
+                        MovementSourceScope::Stockpile(id) => Some(*id),
+                        MovementSourceScope::Ground(_) => None,
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}
+
 /// Fold one scope into a fingerprint. Shared with the trucking rules, which
 /// name the same ground by the same identities.
 pub(crate) fn hash_scope<H: std::hash::Hasher>(scope: SourceScope, hasher: &mut H) {

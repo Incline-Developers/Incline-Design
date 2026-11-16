@@ -1259,6 +1259,13 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
     let mut scoped: Vec<ScopedBar> = Vec::new();
     // Where in `scoped` each automatic bar is.
     let mut auto_bars: Vec<usize> = Vec::new();
+    // Each automatic bar's ground: `None` for any, else the pits, benches and
+    // flitches it may dig; and, once the open ground is known, the blocks of
+    // it a limited bar may take.
+    let mut auto_scopes: BTreeMap<BarId, Option<Vec<crate::model::schedule::destinations::SourceScope>>> = BTreeMap::new();
+    let mut auto_allowed: BTreeMap<BarId, BTreeSet<usize>> = BTreeMap::new();
+    // Automatic bars' reclaim, behind every bar of their own priority.
+    let mut reclaims: Vec<ScopedBar> = Vec::new();
     for (bar, report) in plan.bars().iter().zip(source.reports.iter()) {
         if cancel.is_cancelled() {
             return Err(Vec::new());
@@ -1289,9 +1296,38 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
         }
         let work = if bar.delay().is_some() {
             ScopedWork::Delay
-        } else if bar.is_auto() {
+        } else if let Some(auto) = bar.auto() {
+            // What it reclaims, while it has nothing to dig: a reclaim bar of
+            // its own behind its digging, from the stockpiles it may take.
+            let stockpiles: Vec<ProjectDestinationId> = match auto.sources.stockpiles() {
+                None => source
+                    .destinations
+                    .iter()
+                    .filter(|view| view.kind == crate::model::schedule::destinations::DestinationKind::Stockpile)
+                    .map(|view| view.id)
+                    .collect(),
+                Some(chosen) => chosen,
+            };
+            if !stockpiles.is_empty() {
+                reclaims.push(ScopedBar {
+                    bar: bar.id,
+                    name: bar.name().to_owned(),
+                    agent,
+                    priority: bar.priority.saturating_add(1),
+                    start_h,
+                    end_h,
+                    work: ScopedWork::Reclaim {
+                        sources: stockpiles,
+                        maximum_t: None,
+                    },
+                });
+            }
             // Its ground is dealt out once every dig bar's is known; see
-            // `deal_auto_ground`.
+            // `deal_auto_ground`. A bar taking no ground only reclaims.
+            if auto.sources.ground().is_some_and(|scopes| scopes.is_empty()) {
+                continue;
+            }
+            auto_scopes.insert(bar.id, auto.sources.ground());
             auto_bars.push(scoped.len());
             ScopedWork::Dig {
                 members: Vec::new(),
@@ -1360,6 +1396,9 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
             work,
         });
     }
+    // After every bar of the loader's own: what ids order, the reclaim
+    // follows the automatic bar's digging among bars of one priority.
+    scoped.extend(reclaims);
     let auto_ids: Vec<BarId> = auto_bars.iter().map(|index| scoped[*index].bar).collect();
     // Which blast's ground on which level each automatic block is, so the
     // plan hands such ground to one bar together.
@@ -1370,6 +1409,24 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
         let OpenGround { open, groups, after, unmeasured } = open_auto_ground(source, horizon_h);
         auto_groups = groups;
         auto_after = after;
+        // Only ground some automatic bar may take, and which bar may take
+        // which: a bar limited to some pits, benches or flitches is dealt
+        // nothing else.
+        let covered = |position: usize, scopes: &[crate::model::schedule::destinations::SourceScope]| {
+            let block = &source.snapshot.blocks[position];
+            scopes
+                .iter()
+                .any(|scope| scope.covers(block.solid, (block.bench.base, block.bench.top), (block.flitch.base, block.flitch.top)))
+        };
+        let open: Vec<(usize, f64)> = open
+            .into_iter()
+            .filter(|(position, _)| auto_scopes.values().any(|scopes| scopes.as_deref().is_none_or(|scopes| covered(*position, scopes))))
+            .collect();
+        for (bar, scopes) in &auto_scopes {
+            if let Some(scopes) = scopes {
+                auto_allowed.insert(*bar, open.iter().map(|(position, _)| *position).filter(|position| covered(*position, scopes)).collect());
+            }
+        }
         // Every automatic bar is offered all of it; the long-term plan then
         // gives each block to one of them (`longterm::assign`).
         for index in &auto_bars {
@@ -2538,7 +2595,23 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
     // and the one worth more discounted is kept.
     if !auto_ids.is_empty() {
         use crate::model::schedule::optimisation::longterm;
-        let auto_tasks: Vec<TaskId> = identities.tasks.iter().filter(|(_, bar, _)| auto_ids.contains(bar)).map(|(task, _, _)| *task).collect();
+        // Their digging: an automatic bar's reclaim is a bar like any other.
+        let auto_tasks: Vec<TaskId> = identities
+            .tasks
+            .iter()
+            .filter(|(task, bar, _)| auto_ids.contains(bar) && input.tasks.iter().any(|entry| entry.id == *task && matches!(entry.kind, TaskKind::Dig { .. })))
+            .map(|(task, _, _)| *task)
+            .collect();
+        // The ground each limited bar may take.
+        let allowed: BTreeMap<TaskId, BTreeSet<GroundId>> = identities
+            .tasks
+            .iter()
+            .filter(|(task, _, _)| auto_tasks.contains(task))
+            .filter_map(|(task, bar, _)| {
+                let positions = auto_allowed.get(bar)?;
+                Some((*task, positions.iter().filter_map(|position| block_ground.get(position).copied()).collect()))
+            })
+            .collect();
         let groups: BTreeMap<GroundId, u32> = auto_groups.iter().filter_map(|(position, group)| Some((*block_ground.get(position)?, *group))).collect();
         let not_before_h: BTreeMap<GroundId, f64> = auto_after.iter().filter_map(|(position, after)| Some((*block_ground.get(position)?, *after))).collect();
         let stable: BTreeMap<GroundId, u64> = identities.ground_blocks.iter().map(|(ground, block)| (*ground, block.0)).collect();
@@ -2557,6 +2630,7 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
             budget: Duration::from_secs(20),
             stable: &stable,
             memory: saved.and_then(|hint| hint.memory.as_deref()),
+            allowed: &allowed,
         };
         // The model the order is dealt over, and what the plan reads beside
         // it: a schedule saved over the same deals its own order again

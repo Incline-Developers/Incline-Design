@@ -431,21 +431,7 @@ impl TruckingRule {
                 agents.hash(hasher);
             }
         }
-        match &self.sources {
-            MovementSourceSelection::All => 0u8.hash(hasher),
-            MovementSourceSelection::Only(scopes) => {
-                1u8.hash(hasher);
-                for scope in scopes {
-                    match scope {
-                        MovementSourceScope::Ground(ground) => {
-                            0u8.hash(hasher);
-                            super::destinations::hash_scope(*ground, hasher);
-                        }
-                        MovementSourceScope::Stockpile(id) => (1u8, id).hash(hasher),
-                    }
-                }
-            }
-        }
+        super::destinations::hash_selection(&self.sources, hasher);
         match &self.destinations {
             DestinationSelection::All => 0u8.hash(hasher),
             DestinationSelection::Only(ids) => {

@@ -147,11 +147,17 @@ pub(crate) enum BarWork {
     Auto(AutoWork),
 }
 
-/// An automatic bar's own settings: none yet. A struct so one can be added
-/// without changing how the bar is saved.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// An automatic bar's own settings.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct AutoWork {}
+pub(crate) struct AutoWork {
+    /// What it works: the ground of these pits, benches and flitches, and
+    /// these stockpiles, reclaimed while it has nothing to dig. Everything
+    /// by default, so a bar digs and reclaims; Pits alone only digs, and
+    /// Stockpiles alone only reclaims.
+    #[serde(default, skip_serializing_if = "destinations::MovementSourceSelection::is_all")]
+    pub(crate) sources: destinations::MovementSourceSelection,
+}
 
 /// A follow bar's own settings: the machine it follows, `None` once that
 /// machine is removed.
@@ -393,6 +399,14 @@ impl ScheduleBar {
     /// Whether the schedule works out what this bar digs.
     pub(crate) fn is_auto(&self) -> bool {
         matches!(self.work, BarWork::Auto(_))
+    }
+
+    /// An automatic bar's settings, if this is one.
+    pub(crate) fn auto(&self) -> Option<&AutoWork> {
+        match &self.work {
+            BarWork::Auto(work) => Some(work),
+            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => None,
+        }
     }
 
     /// The machine a follow bar follows, if this is one.
@@ -980,7 +994,10 @@ fn hash_bars<H: std::hash::Hasher>(bars: &[ScheduleBar], hasher: &mut H) {
         bar.name.hash(hasher);
         match &bar.work {
             BarWork::Dig(_) => 0u8.hash(hasher),
-            BarWork::Auto(_) => 5u8.hash(hasher),
+            BarWork::Auto(work) => {
+                5u8.hash(hasher);
+                destinations::hash_selection(&work.sources, hasher);
+            }
             BarWork::Reclaim(work) => {
                 1u8.hash(hasher);
                 work.sources.hash(hasher);
@@ -1804,6 +1821,27 @@ impl SchedulePlan {
         Ok(())
     }
 
+    /// Set what an automatic bar works: never an empty list, which would
+    /// leave it nothing to do and is not what All means.
+    pub(crate) fn set_auto_sources(&mut self, id: BarId, sources: destinations::MovementSourceSelection) -> ScheduleResult<bool> {
+        if let destinations::MovementSourceSelection::Only(scopes) = &sources
+            && (scopes.is_empty() || scopes.iter().any(|scope| !scope.is_valid()))
+        {
+            return Err(ScheduleError::EmptyRuleSelection);
+        }
+        let bar = self.bar_mut(id)?;
+        match &mut bar.work {
+            BarWork::Auto(work) => {
+                if work.sources == sources {
+                    return Ok(false);
+                }
+                work.sources = sources;
+                Ok(true)
+            }
+            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => Err(ScheduleError::WrongActivity),
+        }
+    }
+
     pub(crate) fn rename_bar(&mut self, id: BarId, name: &str) -> ScheduleResult {
         let name = name.trim().to_owned();
         if !self.bars.iter().any(|bar| bar.id == id) {
@@ -2359,6 +2397,8 @@ impl SchedulePlan {
         }
         let window = bar.window;
         let (agent, priority) = (bar.agent, bar.priority);
+        // The rest works what the bar did.
+        let kept = bar.auto().cloned().unwrap_or_default();
         if !at_h.is_finite() || at_h <= window.start_h + 1e-9 || window.end_h.is_some_and(|end| at_h >= end - 1e-9) {
             return Err(ScheduleError::InvalidWindow);
         }
@@ -2377,7 +2417,7 @@ impl SchedulePlan {
         self.bars.push(ScheduleBar {
             id: rest,
             name: String::new(),
-            work: BarWork::Auto(AutoWork::default()),
+            work: BarWork::Auto(kept),
             agent,
             priority: lane,
             window,

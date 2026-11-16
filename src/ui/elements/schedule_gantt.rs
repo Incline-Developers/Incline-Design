@@ -163,6 +163,7 @@ pub(crate) fn draw_details(
     crate::ui::dialogs::schedule::draw_bar_name_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_bar_window_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_reclaim_bar_dialog(ui, editor, &plan, document, session, commands);
+    crate::ui::dialogs::schedule::draw_auto_bar_dialog(ui, editor, &plan, document, session, commands);
     crate::ui::dialogs::schedule::draw_blast_bar_dialog(ui, editor, project, document, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_blast_window_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::sequence_editor::draw_sequence_editor(ui, editor, project, document, &plan, session, commands);
@@ -1497,6 +1498,15 @@ fn blast_bar_dialog(session: u32, bar: &ScheduleBar, order: &crate::model::sched
     }
 }
 
+/// The automatic bar dialog opened on a bar.
+fn auto_bar_dialog(bar: &ScheduleBar, work: &crate::model::schedule::AutoWork) -> crate::ui::state::AutoBarDialog {
+    crate::ui::state::AutoBarDialog {
+        target: bar.id,
+        sources: work.sources.clone(),
+        expanded: Vec::new(),
+    }
+}
+
 /// The reclaim editor opened on an existing reclaim bar.
 fn reclaim_bar_dialog(bar: &ScheduleBar, work: &crate::model::schedule::ReclaimWork) -> ReclaimBarDialog {
     ReclaimBarDialog {
@@ -2192,6 +2202,7 @@ fn draw_bars(
     let mut open_window: Option<BarWindowDialog> = None;
     let mut open_editor: Option<crate::ui::state::SequenceDraft> = None;
     let mut open_reclaim: Option<ReclaimBarDialog> = None;
+    let mut open_auto: Option<crate::ui::state::AutoBarDialog> = None;
     let mut open_blast: Option<BlastBarDialog> = None;
 
     // A bar deleted - by an edit, by undo, or with the project it belonged
@@ -2459,6 +2470,8 @@ fn draw_bars(
                             open_blast = Some(blast_bar_dialog(session, bar, order));
                         } else if let Some(work) = bar.reclaim() {
                             open_reclaim = Some(reclaim_bar_dialog(bar, work));
+                        } else if let Some(work) = bar.auto() {
+                            open_auto = Some(auto_bar_dialog(bar, work));
                         }
                     }
                     // Primary only: the middle button pans the timeline and the
@@ -2537,6 +2550,12 @@ fn draw_bars(
                         }
                         // Freezes the order the schedule worked out, so it can
                         // be arranged by hand like any dig bar.
+                        if let Some(work) = bar.auto()
+                            && ContextMenuAction::new(tr!("auto-bar-sources-edit")).show(ui).clicked()
+                        {
+                            open_auto = Some(auto_bar_dialog(bar, work));
+                            ui.close();
+                        }
                         if bar.is_auto()
                             && ContextMenuAction::new(tr!("auto-bar-convert"))
                                 .enabled(schedule.is_some_and(|schedule| schedule.blocks_of(bar.id).is_some_and(|blocks| !blocks.is_empty())))
@@ -2746,6 +2765,9 @@ fn draw_bars(
     }
     if let Some(draft) = open_editor {
         editor.sequence_editor = Some(draft);
+    }
+    if let Some(dialog) = open_auto {
+        editor.auto_bar_dialog = Some(dialog);
     }
     if let Some(dialog) = open_reclaim {
         editor.reclaim_bar_dialog = Some(dialog);
