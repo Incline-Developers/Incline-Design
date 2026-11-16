@@ -9,11 +9,15 @@
 //! drives the flow and friction holds it back, with no momentum carried from
 //! one step to the next).
 //!
-//! A step is stable at any length: slivers and near-vertical batter faces
-//! cost accuracy in time, never a blow-up. What a long step blurs is when
-//! water arrives, not where it ends up or how much of it. See [`simulate`]
-//! for how a step is taken. No depth goes below zero and the water balance
-//! is exact.
+//! A step is taken implicitly, the flows being those of the levels it ends
+//! at, so it is stable at any length: slivers and near-vertical batter faces
+//! cost accuracy in time, never a blow-up, and a channel in flood runs
+//! steadily however much deeper than the fall from one vertex to the next.
+//! What a long step blurs is when water arrives, not where it ends up or how
+//! much of it. See [`simulate`] for how a step is taken. No depth goes below
+//! zero, and the water on the whole surface is kept exactly: what the solved
+//! levels leave it out by, a few parts in ten thousand in a step, is shared
+//! over all of it.
 //!
 //! The ground is one roughness and one infiltration rate for the whole
 //! surface. Water leaves over the surface's open edge, at the rate the same
@@ -34,18 +38,32 @@ const COT_LIMIT: f64 = 100.0;
 /// The least conductance weight a side keeps, so no vertex is cut off by the
 /// obtuse triangles round it.
 const MIN_WEIGHT: f64 = 0.01;
-const CG_TOLERANCE: f64 = 1e-4;
-const CG_ITERATIONS: usize = 200;
-/// The most a backed-up side conducts in a step, as a multiple of the
+const SOLVE_TOLERANCE: f64 = 1e-3;
+const SOLVE_ITERATIONS: usize = 200;
+/// The most a side as flat as a pond conducts in a step, as a multiple of the
 /// volume a metre of depth is at its smaller end. Manning's conductance has
 /// no limit as a pond's surface flattens, and what it would add past this is
 /// only how many steps a wide pond takes to come level, at many times the
 /// work.
 const POOL_EXCHANGE: f64 = 200.0;
+/// The most turns of Newton's method a step is given.
+const NEWTON_TURNS: usize = 6;
+/// What a vertex may be left short of its balance over a step, as a depth
+/// in metres and as a share of the depth it stands at.
+const SETTLED_DEPTH: f64 = 1e-4;
+const SETTLED_SHARE: f64 = 1e-3;
+/// The fall of a pond's surface. The limit on what a side conducts is for
+/// water lying that flat: it rises in step with any fall steeper, so it
+/// never holds back water that is on its way somewhere.
+const POND_FALL: f64 = 1e-3;
 /// The least area a vertex holds water over, as a share of the mean.
 const MIN_AREA_SHARE: f64 = 0.05;
-/// Rows below which a pool solve stays on one thread.
+/// Rows below which a solve stays on one thread.
 const SHARED_ROWS: usize = 16_384;
+/// The sides a vertex hands water down by that there is room for without
+/// asking for memory: a vertex of a triangulated surface has six sides or so
+/// round it.
+const OUT_SIDES: usize = 16;
 /// Depths below this do not flow.
 const FILM: f64 = 1e-6;
 /// The fall the ground is taken to have beyond the open edge, least and most.
@@ -381,6 +399,17 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
     parts.iter().sum()
 }
 
+/// The sum of `value` over `0..count`, added up in the same order whatever
+/// the thread count.
+fn total(count: usize, value: impl Fn(usize) -> f64 + Sync) -> f64 {
+    const CHUNK: usize = 8192;
+    let parts: Vec<f64> = (0..count.div_ceil(CHUNK))
+        .into_par_iter()
+        .map(|chunk| (chunk * CHUNK..((chunk + 1) * CHUNK).min(count)).map(&value).sum())
+        .collect();
+    parts.iter().sum()
+}
+
 /// One number per vertex that the threads of a hand-down write as they reach
 /// each vertex, and read once it has been written.
 struct Cells(Vec<AtomicU64>);
@@ -462,9 +491,8 @@ fn release(waiting: &[AtomicU32], taker: u32, next: &mut Vec<u32>) {
     }
 }
 
-/// The backed-up water of one step: the vertices joined by a side whose
-/// water stands over the ground at both ends, and the linear system that
-/// levels them.
+/// One turn of a step's solve: the vertices whose levels it moves, and the
+/// linear system for how far.
 #[derive(Default)]
 struct Pools {
     /// Each vertex's row here, or `u32::MAX`.
@@ -472,28 +500,60 @@ struct Pools {
     /// The vertex of each row.
     vertices: Vec<u32>,
     /// Each row's sides: `entries[starts[row]..starts[row + 1]]`, as the row
-    /// at the other end and the side's conductance.
+    /// at the other end, or `u32::MAX` for a vertex that has none and whose
+    /// level stays as it is, and the side's conductance.
     starts: Vec<u32>,
     entries: Vec<(u32, f32)>,
+    /// Beside each entry, the side's deepening: what more it carries for
+    /// each metre its upper end's level rises, by the depth it then runs at.
+    /// Positive in the upper end's row, negative in the lower end's.
+    deepening: Vec<f32>,
     diagonal: Vec<f64>,
 }
 
 impl Pools {
-    /// Gather the sides with any `conductance` and the vertices on them.
-    fn gather(&mut self, operators: &Operators, conductance: &[f32], storage: &[f64]) {
+    /// Gather the `active` vertices and their sides with any `conductance`.
+    /// `deepening` is each side's, positive where its first end is the upper.
+    ///
+    /// The system is the step taken implicitly with every side's flow made
+    /// linear about the levels as they stand, in the fall along it and in
+    /// the depth it runs at, which is its upper end's: the upwind scheme of
+    /// the implicit diffusive-wave models. The depth's part is what the
+    /// lower end's row has and the upper end's has not, so the system is not
+    /// symmetric; each column's diagonal outweighs the rest of it by the
+    /// vertex's storage.
+    fn gather(&mut self, operators: &Operators, conductance: &[f32], deepening: &[f32], active: &[bool], storage: &[f64]) {
         let count = operators.area.len();
         self.row_of.resize(count, u32::MAX);
         for &vertex in &self.vertices {
             self.row_of[vertex as usize] = u32::MAX;
         }
-        let wet = |vertex: usize| operators.sides_of(vertex).iter().filter(move |(_, edge)| conductance[*edge as usize] > 0.0);
+        let wet = |vertex: usize| {
+            operators
+                .sides_of(vertex)
+                .iter()
+                .filter(move |(_, edge)| conductance[*edge as usize] > 0.0 || deepening[*edge as usize] != 0.0)
+        };
         self.vertices.clear();
-        self.vertices
-            .par_extend((0..count as u32).into_par_iter().with_min_len(4096).filter(|vertex| wet(*vertex as usize).next().is_some()));
+        self.vertices.par_extend(
+            (0..count as u32)
+                .into_par_iter()
+                .with_min_len(4096)
+                .filter(|vertex| active[*vertex as usize] && wet(*vertex as usize).next().is_some()),
+        );
         for (row, &vertex) in self.vertices.iter().enumerate() {
             self.row_of[vertex as usize] = row as u32;
         }
         let row_of = &self.row_of;
+        // The side's deepening as `vertex`'s row holds it.
+        let signed = |vertex: u32, edge: u32| {
+            let value = deepening[edge as usize];
+            if (value > 0.0) == (operators.edges[edge as usize][0] == vertex) {
+                value.abs()
+            } else {
+                -value.abs()
+            }
+        };
         self.entries.clear();
         self.entries.par_extend(
             self.vertices
@@ -501,10 +561,21 @@ impl Pools {
                 .with_min_len(4096)
                 .flat_map_iter(|vertex| wet(*vertex as usize).map(|&(other, edge)| (row_of[other as usize], conductance[edge as usize]))),
         );
+        self.deepening.clear();
+        self.deepening.par_extend(
+            self.vertices
+                .par_iter()
+                .with_min_len(4096)
+                .flat_map_iter(|vertex| wet(*vertex as usize).map(|&(_, edge)| signed(*vertex, edge))),
+        );
         self.vertices
             .par_iter()
             .with_min_len(4096)
-            .map(|vertex| wet(*vertex as usize).fold(storage[*vertex as usize], |sum, (_, edge)| sum + f64::from(conductance[*edge as usize])))
+            .map(|vertex| {
+                wet(*vertex as usize).fold(storage[*vertex as usize], |sum, (_, edge)| {
+                    sum + f64::from(conductance[*edge as usize]) + f64::from(signed(*vertex, *edge).max(0.0))
+                })
+            })
             .collect_into_vec(&mut self.diagonal);
         self.starts.clear();
         self.starts.push(0);
@@ -519,9 +590,21 @@ impl Pools {
         &self.entries[self.starts[row] as usize..self.starts[row + 1] as usize]
     }
 
+    fn row_deepening(&self, row: usize) -> &[f32] {
+        &self.deepening[self.starts[row] as usize..self.starts[row + 1] as usize]
+    }
+
     fn apply(&self, x: &[f64], out: &mut Vec<f64>) {
+        // A metre's rise at the other end sends its conductance this way,
+        // and where the other end is the upper, its deepening too.
         let row = |row: usize| {
-            let across: f64 = self.row(row).iter().map(|&(other, conductance)| f64::from(conductance) * x[other as usize]).sum();
+            let across: f64 = self
+                .row(row)
+                .iter()
+                .zip(self.row_deepening(row))
+                .filter(|((other, _), _)| *other != u32::MAX)
+                .map(|(&(other, conductance), &deepening)| f64::from(conductance + (-deepening).max(0.0)) * x[other as usize])
+                .sum();
             self.diagonal[row] * x[row] - across
         };
         if x.len() < SHARED_ROWS {
@@ -532,14 +615,34 @@ impl Pools {
         }
     }
 
-    /// Conjugate gradients, preconditioned by the diagonal, from `start`.
+    /// `x` over the diagonal.
+    fn scaled(&self, x: &[f64], out: &mut Vec<f64>) {
+        x.par_iter()
+            .zip(&self.diagonal)
+            .with_min_len(SHARED_ROWS)
+            .map(|(x, diagonal)| x / diagonal)
+            .collect_into_vec(out);
+    }
+
+    /// The stabilised biconjugate gradient method, preconditioned by the
+    /// diagonal, from `start`. Every sum is added up in the same order
+    /// whatever the thread count. The method's residual does not fall at
+    /// every turn: the answer is the best it reached, and no change at all
+    /// if it never bettered that.
     fn solve(&self, rhs: &[f64], start: Vec<f64>) -> Vec<f64> {
         let count = rhs.len();
-        let mut x = start;
-        let target = CG_TOLERANCE * CG_TOLERANCE * dot(rhs, rhs);
-        if target <= 0.0 {
+        let size = dot(rhs, rhs);
+        let target = SOLVE_TOLERANCE * SOLVE_TOLERANCE * size;
+        if target <= 0.0 || !size.is_finite() {
             return vec![0.0; count];
         }
+        let combine = |into: &mut [f64], scale: f64, with: &[f64], by: f64| {
+            into.par_iter_mut()
+                .zip(with)
+                .with_min_len(SHARED_ROWS)
+                .for_each(|(into, with)| *into = scale * *into + by * with);
+        };
+        let mut x = start;
         let mut residual = Vec::with_capacity(count);
         self.apply(&x, &mut residual);
         residual
@@ -547,114 +650,176 @@ impl Pools {
             .zip(rhs)
             .with_min_len(SHARED_ROWS)
             .for_each(|(residual, rhs)| *residual = rhs - *residual);
-        if dot(&residual, &residual) <= target {
-            return x;
+        let mut left = dot(&residual, &residual);
+        // A start worse than none is not one.
+        if left.partial_cmp(&size).is_none_or(std::cmp::Ordering::is_gt) {
+            x = vec![0.0; count];
+            residual.copy_from_slice(rhs);
+            left = size;
         }
-        let mut scaled: Vec<f64> = residual.par_iter().zip(&self.diagonal).with_min_len(SHARED_ROWS).map(|(r, d)| r / d).collect();
-        let mut direction = scaled.clone();
-        let mut along = Vec::with_capacity(count);
-        let mut rz = dot(&residual, &scaled);
-        // Each sum is taken in the pass that makes its vectors, in chunks
-        // added up in the same order whatever the thread count.
-        const CHUNK: usize = 8192;
-        along.resize(count, 0.0);
-        for _ in 0..CG_ITERATIONS {
-            let parts: Vec<f64> = along
-                .par_chunks_mut(CHUNK)
-                .enumerate()
-                .map(|(chunk, along)| {
-                    let first = chunk * CHUNK;
-                    let mut sum = 0.0;
-                    for (row, along) in (first..).zip(along) {
-                        let across: f64 = self.row(row).iter().map(|&(other, conductance)| f64::from(conductance) * direction[other as usize]).sum();
-                        *along = self.diagonal[row] * direction[row] - across;
-                        sum += direction[row] * *along;
-                    }
-                    sum
-                })
-                .collect();
-            let curvature: f64 = parts.iter().sum();
-            if curvature.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
+        let mut best = (left, x.clone());
+        let shadow = residual.clone();
+        let mut direction = residual.clone();
+        let (mut scaled, mut along, mut half, mut across) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut rho = dot(&shadow, &residual);
+        for _ in 0..SOLVE_ITERATIONS {
+            if best.0 <= target {
                 break;
             }
-            let alpha = rz / curvature;
-            let parts: Vec<(f64, f64)> = (
-                x.par_chunks_mut(CHUNK),
-                residual.par_chunks_mut(CHUNK),
-                scaled.par_chunks_mut(CHUNK),
-                direction.par_chunks(CHUNK),
-                along.par_chunks(CHUNK),
-                self.diagonal.par_chunks(CHUNK),
-            )
-                .into_par_iter()
-                .map(|(x, residual, scaled, direction, along, diagonal)| {
-                    let (mut rr, mut rz) = (0.0, 0.0);
-                    for (((x, r), z), ((p, q), d)) in x.iter_mut().zip(residual).zip(scaled).zip(direction.iter().zip(along).zip(diagonal)) {
-                        *x += alpha * p;
-                        *r -= alpha * q;
-                        *z = *r / d;
-                        rr += *r * *r;
-                        rz += *r * *z;
-                    }
-                    (rr, rz)
-                })
-                .collect();
-            if parts.iter().map(|(rr, _)| rr).sum::<f64>() <= target {
+            self.scaled(&direction, &mut scaled);
+            self.apply(&scaled, &mut along);
+            let curvature = dot(&shadow, &along);
+            if curvature == 0.0 || !curvature.is_finite() {
                 break;
             }
-            let next: f64 = parts.iter().map(|(_, rz)| rz).sum();
-            let beta = next / rz;
-            rz = next;
-            direction.par_iter_mut().zip(&scaled).with_min_len(CHUNK).for_each(|(p, z)| *p = z + beta * *p);
+            let alpha = rho / curvature;
+            combine(&mut x, 1.0, &scaled, alpha);
+            combine(&mut residual, 1.0, &along, -alpha);
+            self.scaled(&residual, &mut half);
+            self.apply(&half, &mut across);
+            let span = dot(&across, &across);
+            if span == 0.0 || !span.is_finite() {
+                break;
+            }
+            let omega = dot(&across, &residual) / span;
+            combine(&mut x, 1.0, &half, omega);
+            combine(&mut residual, 1.0, &across, -omega);
+            left = dot(&residual, &residual);
+            if !left.is_finite() {
+                break;
+            }
+            if left < best.0 {
+                best.0 = left;
+                best.1.copy_from_slice(&x);
+            }
+            let next = dot(&shadow, &residual);
+            if next == 0.0 || omega == 0.0 || !next.is_finite() {
+                break;
+            }
+            let beta = next / rho * alpha / omega;
+            rho = next;
+            // direction = residual + beta (direction - omega along)
+            combine(&mut direction, 1.0, &along, -omega);
+            combine(&mut direction, beta, &residual, 1.0);
         }
-        x
+        best.1
     }
 }
 
-/// The cube root of the depth a vertex is left with after a step of
-/// draining freely: it held `volume` over `area`, and loses
-/// `rate * depth^(5/3)` a second for `step` seconds, at the depth it ends the
-/// step with. `guess` is the answer it had last step, or zero.
+/// What a side hands down in cubic metres a second, and how much more for
+/// each metre deeper its upper end stands: Manning's, for water `deep` over
+/// the upper end's ground, which has to stand over `sill` to get out, down
+/// the fall to `below`, the level at the lower end. `carry` is what the side
+/// carries for a metre of depth to the five-thirds down a fall of one in
+/// one, and `per_metre` one over its length.
 ///
-/// In the cube root the balance is a polynomial, `area t^3 + step rate t^5 =
-/// volume`, so a flowing sheet's depth is found without a root or a power
-/// taken: Newton's steps from the last answer, which is nearly this one.
-fn drained_root(volume: f64, area: f64, rate: f64, step: f64, guess: f64) -> f64 {
-    let run = step * rate;
-    if run <= 0.0 {
-        return (volume / area).cbrt();
+/// The fall is the water's own, so a vertex that is given more than it can
+/// pass on stands higher and passes on more: nothing piles up behind a fall
+/// that was shallow when the step began.
+fn handed_flow(deep: f64, upper_bed: f64, sill: f64, below: f64, carry: f64, per_metre: f64) -> (f64, f64) {
+    let (over, fall) = (deep - sill, deep + upper_bed - below);
+    if over <= 0.0 || fall <= 0.0 {
+        return (0.0, 0.0);
     }
-    let newton = |mut root: f64, steps: usize| {
-        for _ in 0..steps {
-            let square = root * root;
-            let next = root - (square * root * (area + run * square) - volume) / (square * (3.0 * area + 5.0 * run * square));
-            if (root - next).abs() <= 1e-7 * root {
-                return Ok(next);
-            }
-            root = next;
-        }
-        Err(root)
+    flow_over(over, over.cbrt(), fall, carry, per_metre)
+}
+
+/// [`handed_flow`] for water standing `over` the sill, whose cube root is
+/// `root`, and falling `fall` to the level below: both above zero.
+fn flow_over(over: f64, root: f64, fall: f64, carry: f64, per_metre: f64) -> (f64, f64) {
+    let depth = over * root * root;
+    let slope = fall * per_metre;
+    // Below the least fall Manning's formula is asked about, in proportion
+    // to the fall, so the flow comes to nothing as the fall does.
+    let (run, more) = if slope > MIN_SLOPE {
+        (slope.sqrt(), 0.5 * per_metre / slope.sqrt())
+    } else {
+        (slope / MIN_SLOPE.sqrt(), per_metre / MIN_SLOPE.sqrt())
     };
-    // The balance rises and curves upward, so a step from below the answer
-    // lands above it and every one after comes down towards it. From a poor
-    // guess that descent is slow; start again from above, where the two terms
-    // each bound the answer.
-    let near = if guess > 0.0 { newton(guess, 6) } else { Err(0.0) };
-    let root = near.or_else(|_| newton((volume / area).cbrt().min((volume / run).powf(0.2)), 40));
-    root.unwrap_or_else(|root| root).max(0.0)
+    (carry * depth * run, carry * (5.0 / 3.0 * root * root * run + depth * more))
+}
+
+/// The depth a vertex is left with after a step of handing water down: it
+/// held `volume` over `area`, and `out` is what leaves it over the step at a
+/// depth and how much more for each metre deeper. The balance rises with the
+/// depth, so it has one answer, between nothing and all of the water
+/// staying: Newton's steps from `guess`, the answer it had last step, held
+/// between the two depths the answer is known to lie between.
+fn settled_depth(volume: f64, area: f64, guess: f64, out: impl Fn(f64) -> (f64, f64)) -> f64 {
+    let (mut low, mut high) = (0.0, volume / area);
+    let mut depth = if guess > 0.0 && guess < high { guess } else { high };
+    for _ in 0..48 {
+        let (leaves, more) = out(depth);
+        let over = area * depth + leaves - volume;
+        if over.abs() <= 1e-7 * volume {
+            break;
+        }
+        if over > 0.0 {
+            high = depth;
+        } else {
+            low = depth;
+        }
+        let next = depth - over / (area + more);
+        depth = if next > low && next < high { next } else { 0.5 * (low + high) };
+        if high - low <= 1e-8 * high {
+            break;
+        }
+    }
+    depth
+}
+
+/// A side's flow at the levels `level` at its two ends, whose grounds are
+/// `bed`: what it carries from its first end to its second in cubic metres a
+/// second, how that answers to the fall along it, and what it would carry
+/// for a metre of depth to the five-thirds, signed as the flow is and
+/// nothing where the pond limit holds the side.
+///
+/// Manning's, at the depth of the upper end's water over the higher of the
+/// two grounds. `pond_limit` is the most a side as flat as a pond conducts.
+fn side_flow(level: [f64; 2], bed: [f64; 2], weight: f64, length: f64, roughness: f64, pond_limit: f64) -> (f64, f64, f64) {
+    let (upper, lower, sign) = if level[0] >= level[1] { (level[0], level[1], 1.0) } else { (level[1], level[0], -1.0) };
+    let drop = upper - lower;
+    let fall = drop / length;
+    let per_depth = weight / (roughness * fall.max(MIN_SLOPE).sqrt());
+    let deep = upper - bed[0].max(bed[1]);
+    let manning = if deep > FILM { per_depth * deep.cbrt().powi(2) * deep } else { 0.0 };
+    // The limit is for ponds: it rises with the fall, so it never holds back
+    // water that is running.
+    let limit = pond_limit * (fall / POND_FALL).max(1.0);
+    // How the flow answers to the fall is taken as in proportion, which past
+    // the least fall Manning's formula is asked about is twice what it is:
+    // each turn then goes half as far as it might, and none goes too far
+    // where the water runs deeper than the ground falls from one vertex to
+    // the next and a level a little out turns a flow about.
+    (
+        sign * manning.min(limit) * drop,
+        manning.min(limit),
+        if manning < limit { sign * per_depth * drop } else { 0.0 },
+    )
 }
 
 /// Run the storm in `settings` over `ground`.
 ///
-/// A step has two halves. Water whose way down is clear - the water below
-/// stands lower than the ground it is on - is handed downhill from the highest
-/// level to the lowest, each vertex passing on what a sheet of the depth it
-/// ends the step with would carry, so a thin film can cross any number of
-/// triangles in a step and still settle at the depth its flow needs. Water
-/// that is backed up - standing over the ground at both ends of a side - has
-/// its levels solved together, which is what flattens a pond.
+/// A step ends at the levels at which every side's flow, at those levels,
+/// leaves every vertex with the water it had and what the flows brought it:
+/// the implicit upwind scheme of the diffusive-wave models, which is stable
+/// at any step. Those levels are found in two parts.
 ///
-/// Both halves run on every thread (see [`hand_down`]), and the answer is the
+/// Water whose way down is clear - the water below stands lower than the
+/// ground it is on - is handed downhill from the highest level to the lowest,
+/// each vertex passing on what a sheet of the depth it ends the step with
+/// carries, so a thin film can cross any number of triangles in a step and
+/// still settle at the depth its flow needs. Where water only runs downhill
+/// that is the answer.
+///
+/// Where it is backed up - standing over the ground at both ends of a side,
+/// as in a pond, on a level bench, or in a channel running deeper than its
+/// floor falls from one vertex to the next - the level below matters, and
+/// the hand-down took it as it was. There the levels are solved together by
+/// Newton's method, a turn at a time, each turn over only the vertices still
+/// short of their balance and the ones round them.
+///
+/// Both parts run on every thread (see [`hand_down`]), and the answer is the
 /// same on any number of them.
 pub(crate) fn simulate(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBool, progress: &Progress, keep: &mut dyn FnMut(WaterFrame)) -> Result<(), WaterError> {
     let count = ground.vertices.len();
@@ -678,7 +843,7 @@ pub(crate) fn simulate(ground: &Ground, settings: &WaterSettings, cancel: &Atomi
         .map(|vertex| operators.outlet_width[vertex] * operators.outlet_slope[vertex].sqrt() / roughness)
         .collect();
 
-    // Beside each vertex's sides, in the same order, so the cascade reads
+    // Beside each vertex's sides, in the same order, so the hand-down reads
     // them in one run of memory: what the side carries for a metre of depth
     // to the five-thirds down a fall of one in one, and one over its length.
     let reach: Vec<(f64, f64)> = operators
@@ -699,17 +864,38 @@ pub(crate) fn simulate(ground: &Ground, settings: &WaterSettings, cancel: &Atomi
     arrival = vec![0u8; count];
 
     let mut level = vec![0.0; count];
+    let mut conductance = vec![0.0f32; operators.edges.len()];
+    let mut deepening = vec![0.0f32; operators.edges.len()];
+    let mut flowing = vec![0.0f32; operators.edges.len()];
+    let mut unit = vec![0.0f32; operators.edges.len()];
+    let mut target = vec![0.0f64; count];
+    // The levels the step started from.
+    let mut started = vec![0.0f64; count];
+    // What leaves over the open edge at the levels as they are taken to be,
+    // and how much more for each metre deeper.
+    let mut drain = vec![0.0f64; count];
+    let mut draining = vec![0.0f64; count];
+    // Each row's diagonal before its sides: its storage and its draining.
+    let mut holding = vec![0.0f64; count];
+    let mut pools = Pools::default();
+    // The hand-down: how many givers each vertex still waits on, what it is
+    // left with, the share of its sides' flows it passed on, and the depth
+    // it last settled at.
     let waiting: Vec<AtomicU32> = (0..count).map(|_| AtomicU32::new(0)).collect();
-    // What each vertex is left with by the hand-down, and what it passed on
-    // for each unit of its sides' rates.
     let kept = Cells::new(count);
     let passed = Cells::new(count);
-    let mut conductance = vec![0.0f32; operators.edges.len()];
-    let mut pools = Pools::default();
-    // The cube root of the depth each vertex last drained to.
     let roots = Cells::new(count);
-    // Each vertex's change of level in the last pool solve it was part of.
-    let mut carried = vec![0.0; count];
+    // What the levels as they are taken to be leave each vertex short of
+    // its balance, in cubic metres a second, and which vertices that is too
+    // much for.
+    let mut short = vec![0.0f64; count];
+    let mut unsettled = vec![false; count];
+    let mut active = vec![false; count];
+    // The vertices whose levels the last turn moved, those and the ones
+    // round them, and a list of both to clear them by.
+    let mut moved = vec![false; count];
+    let mut near = vec![false; count];
+    let mut marked: Vec<u32> = Vec::new();
 
     for index in 0..steps {
         if cancel.load(Ordering::Relaxed) {
@@ -723,33 +909,41 @@ pub(crate) fn simulate(ground: &Ground, settings: &WaterSettings, cancel: &Atomi
             *depth = (*depth + falling * operators.catchment[vertex] / operators.area[vertex] - soak).max(0.0);
         });
 
-        // Free-draining water, handed down from the highest level to the
-        // lowest: everything a vertex is given has arrived by the time its
-        // own turn comes. A vertex takes from the neighbours whose ground is
-        // above its water, so it waits on those and no others.
+        // A step is taken implicitly: the levels at its end are those at
+        // which every side's flow, at those levels, leaves every vertex with
+        // the water it had and what the flows brought it. It is found in two
+        // parts. The first hands the water down the surface once, which is
+        // all there is to it wherever water only runs downhill. The second
+        // puts right what that leaves: see below.
+        //
+        // Water with somewhere to run to is handed down from the highest level
+        // to the lowest: everything a vertex is given has arrived by the time
+        // its own turn comes. See [`hands`] for which sides hand down.
         level.par_iter_mut().zip(bed.par_iter().zip(&depth)).for_each(|(level, (bed, depth))| *level = bed + depth);
+        started.copy_from_slice(&level);
+        // A side hands down from `from` to `to` when the way is clear: the
+        // water at `to` stands lower than the ground at `from`, so nothing
+        // below can hold back what comes down.
+        let gives = |from: usize, to: usize| level[to] < bed[from];
         waiting.par_iter().enumerate().with_min_len(4096).for_each(|(vertex, waiting)| {
-            let givers = operators.sides_of(vertex).iter().filter(|(other, _)| level[vertex] < bed[*other as usize]).count();
+            let givers = operators.sides_of(vertex).iter().filter(|(other, _)| gives(*other as usize, vertex)).count();
             waiting.store(givers as u32, Ordering::Relaxed);
         });
         hand_down(&waiting, |vertex, next| {
             let vertex = vertex as usize;
             let sides = operators.starts[vertex] as usize..operators.starts[vertex + 1] as usize;
             let area = operators.area[vertex];
-            // Each side's rate: Manning's, for a metre of depth to the
-            // five-thirds, down the fall to the water below. A side that
-            // gives carries what its upper end passed on at the same rate.
+            // What its givers passed on: each one's flow at the depth it
+            // settled at, down to this vertex's level as the step began.
             let mut given = 0.0;
-            let mut rate = outlet[vertex];
             for (&(other, _), &(carry, per_metre)) in operators.adjacent[sides.clone()].iter().zip(&reach[sides.clone()]) {
                 let other = other as usize;
-                if level[vertex] < bed[other] {
+                if gives(other, vertex) {
                     let passed = passed.get(other);
                     if passed > 0.0 {
-                        given += passed * (carry * ((level[other] - level[vertex]) * per_metre).max(MIN_SLOPE).sqrt());
+                        let sill = (bed[vertex] - bed[other]).max(0.0);
+                        given += passed * step * handed_flow(kept.get(other), bed[other], sill, level[vertex], carry, per_metre).0;
                     }
-                } else if level[other] < bed[vertex] {
-                    rate += carry * ((level[vertex] - level[other]) * per_metre).max(MIN_SLOPE).sqrt();
                 }
             }
             let held = area * depth[vertex] + given;
@@ -757,94 +951,254 @@ pub(crate) fn simulate(ground: &Ground, settings: &WaterSettings, cancel: &Atomi
                 kept.set(vertex, held / area);
                 passed.set(vertex, 0.0);
             } else {
-                let root = drained_root(held, area, rate, step, roots.get(vertex));
-                roots.set(vertex, root);
-                // No more than it held: the rest is what it passes on.
-                let left_here = (root * root * root).min(held / area);
+                // The sides it gives by, gathered once: each one's sill, the
+                // fall to it from this vertex's ground, and what it carries.
+                let mut outs = [(0.0f64, 0.0f64, 0.0f64, 0.0f64); OUT_SIDES];
+                let mut gathered = 0;
+                // More than the room made for them go on the heap.
+                let mut spilled = Vec::new();
+                for (&(other, _), &(carry, per_metre)) in operators.adjacent[sides.clone()].iter().zip(&reach[sides.clone()]) {
+                    let other = other as usize;
+                    if gives(vertex, other) {
+                        let side = ((bed[other] - bed[vertex]).max(0.0), bed[vertex] - level[other], carry, per_metre);
+                        if gathered < OUT_SIDES {
+                            outs[gathered] = side;
+                            gathered += 1;
+                        } else {
+                            if spilled.is_empty() {
+                                spilled.extend_from_slice(&outs);
+                            }
+                            spilled.push(side);
+                        }
+                    }
+                }
+                let outs = if spilled.is_empty() { &outs[..gathered] } else { &spilled[..] };
+                // What leaves over the step at a depth: over the open edge,
+                // and down each of those.
+                let leaves = |deep: f64| {
+                    let root = deep.cbrt();
+                    let (mut flow, mut more) = (outlet[vertex] * deep * root * root, 5.0 / 3.0 * outlet[vertex] * root * root);
+                    for &(sill, drop, carry, per_metre) in outs {
+                        let (over, fall) = (deep - sill, deep + drop);
+                        if over > 0.0 && fall > 0.0 {
+                            let side = flow_over(over, if sill == 0.0 { root } else { over.cbrt() }, fall, carry, per_metre);
+                            flow += side.0;
+                            more += side.1;
+                        }
+                    }
+                    (flow * step, more * step)
+                };
+                let left_here = settled_depth(held, area, roots.get(vertex), leaves);
+                roots.set(vertex, left_here);
                 kept.set(vertex, left_here);
-                passed.set(vertex, if rate > 0.0 { (held - area * left_here).max(0.0) / rate } else { 0.0 });
+                // What it passes on is what it no longer holds, whatever the
+                // last place of the depth it settled at: the share of each
+                // side's flow that makes them add up to that.
+                let leaving = leaves(left_here).0;
+                passed.set(vertex, if leaving > 0.0 { (held - area * left_here).max(0.0) / leaving } else { 0.0 });
             }
             for &(other, _) in &operators.adjacent[sides] {
-                if level[other as usize] < bed[vertex] {
+                if gives(vertex, other as usize) {
                     release(&waiting, other, next);
                 }
             }
         });
         depth.par_iter_mut().enumerate().with_min_len(4096).for_each(|(vertex, depth)| *depth = kept.get(vertex));
 
-        // Backed-up water: sides whose lower water stands over the higher
-        // ground. Their levels are solved together.
-        level.par_iter_mut().zip(bed.par_iter().zip(&depth)).for_each(|(level, (bed, depth))| *level = bed + depth);
-        conductance.par_iter_mut().enumerate().for_each(|(edge, conductance)| {
-            let [a, b] = operators.edges[edge].map(|vertex| vertex as usize);
-            let (high, low) = if level[a] >= level[b] { (a, b) } else { (b, a) };
-            let deep = level[high] - bed[a].max(bed[b]);
-            *conductance = if level[low] >= bed[high] && deep > FILM {
-                let fall = ((level[high] - level[low]) / operators.length[edge]).max(MIN_SLOPE);
-                (operators.weight[edge] * deep.powf(5.0 / 3.0) / (roughness * fall.sqrt())).min(POOL_EXCHANGE * storage[a].min(storage[b])) as f32
-            } else {
-                0.0
-            };
-        });
-        pools.gather(&operators, &conductance, &storage);
-        if !pools.vertices.is_empty() {
-            // Solved for the change in level, whose right-hand side is the
-            // flow the levels as they stand would drive.
-            let rows = pools.vertices.len();
-            let rhs: Vec<f64> = (0..rows)
-                .into_par_iter()
-                .with_min_len(4096)
-                .map(|row| {
-                    let here = level[pools.vertices[row] as usize];
-                    pools
-                        .row(row)
-                        .iter()
-                        .map(|&(other, conductance)| f64::from(conductance) * (level[pools.vertices[other as usize] as usize] - here))
-                        .sum()
-                })
-                .collect();
-            // From the change each vertex made last step: a pond filling
-            // steadily rises much as it just did.
-            let change = pools.solve(&rhs, pools.vertices.iter().map(|vertex| carried[*vertex as usize]).collect());
-            for (change, vertex) in change.iter().zip(&pools.vertices) {
-                carried[*vertex as usize] = *change;
-            }
-            let solved: Vec<f64> = change.iter().zip(&pools.vertices).map(|(change, vertex)| level[*vertex as usize] + change).collect();
-            // Handed down in order of the solved levels, a vertex never
-            // passing on more than it holds and was given: `share` is how
-            // much of what the solved levels ask of it a row could pass on.
-            let waiting: Vec<AtomicU32> = (0..rows)
-                .into_par_iter()
-                .with_min_len(4096)
-                .map(|row| AtomicU32::new(pools.row(row).iter().filter(|(other, _)| solved[*other as usize] > solved[row]).count() as u32))
-                .collect();
-            let share = Cells::new(rows);
-            let settled = Cells::new(rows);
-            hand_down(&waiting, |row, next| {
-                let row = row as usize;
-                let vertex = pools.vertices[row] as usize;
-                let (mut given, mut out) = (0.0, 0.0);
-                for &(other, conductance) in pools.row(row) {
-                    let (other, conductance) = (other as usize, f64::from(conductance));
-                    if solved[other] > solved[row] {
-                        given += share.get(other) * conductance * (solved[other] - solved[row]) * step;
-                    } else {
-                        out += conductance * (solved[row] - solved[other]).max(0.0) * step;
-                    }
-                }
-                let held = operators.area[vertex] * depth[vertex] + given;
-                let passed = if out > held { held / out } else { 1.0 };
-                share.set(row, passed);
-                settled.set(row, ((held - passed * out) / operators.area[vertex]).max(0.0));
-                for &(other, _) in pools.row(row) {
-                    if solved[row] > solved[other as usize] {
-                        release(&waiting, other, next);
-                    }
-                }
+        // The hand-down takes each vertex's level below it to be as it was
+        // when the step began. Where the water backs up that is not so: a
+        // pond rises under what runs into it, and a channel in flood stands
+        // on the water ahead of it. So the levels are now solved together,
+        // from the hand-down's: Newton's method, the flows made linear about
+        // the levels as they are taken to be, solved, and made linear again
+        // about the answer, until the levels stop moving.
+        // A vertex on a side that is backed up starts from its level as the
+        // step began: what the hand-down brought it stands on it as a pile no
+        // level was ever at, and the solve has what comes down to it from
+        // the levels above.
+        level.par_iter_mut().enumerate().with_min_len(4096).for_each(|(vertex, level)| {
+            let backed_up = operators.sides_of(vertex).iter().any(|&(other, _)| {
+                let other = other as usize;
+                let (upper, lower) = if started[vertex] >= started[other] { (vertex, other) } else { (other, vertex) };
+                started[lower] >= bed[upper] && started[upper] - bed[upper] > FILM
             });
-            for (row, vertex) in pools.vertices.iter().enumerate() {
-                depth[*vertex as usize] = settled.get(row);
+            *level = if backed_up { started[vertex] } else { bed[vertex] + depth[vertex] };
+        });
+        let held_before = total(count, |vertex| operators.area[vertex] * (started[vertex] - bed[vertex]));
+        for turn in 0..NEWTON_TURNS {
+            // After the first turn only the vertices whose levels the last
+            // one moved, and the ones round them, have anything to work out
+            // again.
+            let whole = turn == 0;
+            // Each side at the levels as they are taken to be: what it
+            // carries, how that answers to the fall along it, and what it
+            // would carry for a metre of depth to the five-thirds (`unit`,
+            // signed as `flowing` is, and nothing where the pond limit holds
+            // the side).
+            (conductance.par_iter_mut(), flowing.par_iter_mut(), unit.par_iter_mut())
+                .into_par_iter()
+                .enumerate()
+                .for_each(|(edge, (conductance, flowing, unit))| {
+                    let [a, b] = operators.edges[edge].map(|vertex| vertex as usize);
+                    if !(whole || moved[a] || moved[b]) {
+                        return;
+                    }
+                    let side = side_flow(
+                        [level[a], level[b]],
+                        [bed[a], bed[b]],
+                        operators.weight[edge],
+                        operators.length[edge],
+                        roughness,
+                        POOL_EXCHANGE * storage[a].min(storage[b]),
+                    );
+                    (*flowing, *conductance, *unit) = (side.0 as f32, side.1 as f32, side.2 as f32);
+                });
+            // The depth at which each vertex would pass on all that is coming
+            // to it: what its sides bring, and what it has let go of since
+            // the step started.
+            target.par_iter_mut().enumerate().with_min_len(4096).for_each(|(vertex, target)| {
+                if !(whole || near[vertex]) {
+                    return;
+                }
+                let (mut coming, mut carries) = ((storage[vertex] * (started[vertex] - level[vertex])).max(0.0), outlet[vertex]);
+                for &(_, edge) in operators.sides_of(vertex) {
+                    let first = operators.edges[edge as usize][0] as usize == vertex;
+                    let toward = if first { -flowing[edge as usize] } else { flowing[edge as usize] };
+                    coming += f64::from(toward.max(0.0));
+                    let unit = unit[edge as usize];
+                    if unit != 0.0 && (unit > 0.0) == first {
+                        carries += f64::from(unit.abs());
+                    }
+                }
+                // No deeper than all of it staying here would make it.
+                let most = (level[vertex] - bed[vertex]).max(0.0) + coming / storage[vertex];
+                *target = if carries > 0.0 && coming > 0.0 { (coming / carries).powf(0.6).min(most) } else { 0.0 };
+            });
+            // How much more a flow of `carries` a metre to the five-thirds
+            // runs for each metre deeper than `deep`: the slope of that curve
+            // there, or of the chord to `aim` where that is deeper. A vertex
+            // given far more than it is passing on has a long way up the
+            // curve to go, and by its slope where it stands it would be
+            // taken to rise many times too far.
+            let steepening = |carries: f64, deep: f64, aim: f64| {
+                if aim > deep * 1.01 + 1e-9 {
+                    carries * (aim.powf(5.0 / 3.0) - deep.powf(5.0 / 3.0)) / (aim - deep)
+                } else {
+                    5.0 / 3.0 * carries * deep.cbrt().powi(2)
+                }
+            };
+            deepening.par_iter_mut().enumerate().for_each(|(edge, deepening)| {
+                if !(whole || near[operators.edges[edge][0] as usize] || near[operators.edges[edge][1] as usize]) {
+                    return;
+                }
+                let unit = unit[edge];
+                *deepening = if unit == 0.0 {
+                    0.0
+                } else {
+                    let [a, b] = operators.edges[edge].map(|vertex| vertex as usize);
+                    let high = if unit > 0.0 { a } else { b };
+                    // The sill the side's water has to stand over.
+                    let sill = bed[a].max(bed[b]) - bed[high];
+                    let deep = (level[high] - bed[high] - sill).max(0.0);
+                    let slope = steepening(f64::from(unit.abs()), deep, target[high] - sill) as f32;
+                    if unit > 0.0 { slope } else { -slope }
+                };
+            });
+            (drain.par_iter_mut(), draining.par_iter_mut(), holding.par_iter_mut())
+                .into_par_iter()
+                .enumerate()
+                .with_min_len(4096)
+                .for_each(|(vertex, (drain, draining, holding))| {
+                    if !(whole || near[vertex]) {
+                        return;
+                    }
+                    let deep = (level[vertex] - bed[vertex]).max(0.0);
+                    let root = deep.cbrt();
+                    *drain = outlet[vertex] * deep * root * root;
+                    *draining = if outlet[vertex] > 0.0 { steepening(outlet[vertex], deep, target[vertex]) } else { 0.0 };
+                    *holding = storage[vertex] + *draining;
+                });
+            // What each vertex is short of its balance over the step, and
+            // whether that is more than it can be left at: a depth's worth
+            // of it over the step. The system is of those vertices and the
+            // ones round them; the rest have their levels, and stay there.
+            short.par_iter_mut().enumerate().with_min_len(4096).for_each(|(vertex, short)| {
+                if !(whole || near[vertex]) {
+                    return;
+                }
+                let toward: f64 = operators
+                    .sides_of(vertex)
+                    .iter()
+                    .map(|&(_, edge)| {
+                        let flowing = f64::from(flowing[edge as usize]);
+                        if operators.edges[edge as usize][0] as usize == vertex { -flowing } else { flowing }
+                    })
+                    .sum();
+                *short = toward - drain[vertex] + storage[vertex] * (started[vertex] - level[vertex]);
+            });
+            unsettled.par_iter_mut().enumerate().with_min_len(4096).for_each(|(vertex, unsettled)| {
+                if !(whole || near[vertex]) {
+                    return;
+                }
+                *unsettled = short[vertex].abs() > storage[vertex] * (SETTLED_DEPTH + SETTLED_SHARE * (level[vertex] - bed[vertex]));
+            });
+            active.par_iter_mut().enumerate().with_min_len(4096).for_each(|(vertex, active)| {
+                *active = unsettled[vertex] || operators.sides_of(vertex).iter().any(|(other, _)| unsettled[*other as usize]);
+            });
+            pools.gather(&operators, &conductance, &deepening, &active, &holding);
+            if pools.vertices.is_empty() {
+                break;
             }
+            let rows = pools.vertices.len();
+            let rhs: Vec<f64> = pools.vertices.par_iter().with_min_len(4096).map(|vertex| short[*vertex as usize]).collect();
+            let mut change = pools.solve(&rhs, vec![0.0; rows]);
+            // Water runs down the levels, so no vertex ends a step higher
+            // than both where it started and every vertex round it, nor under
+            // its own ground. Newton's method does not know that, and from a
+            // poor start will go anywhere: each turn is held to it, taking
+            // the levels round a vertex as they stand.
+            change.par_iter_mut().enumerate().with_min_len(4096).for_each(|(row, change)| {
+                let vertex = pools.vertices[row] as usize;
+                let highest = operators
+                    .sides_of(vertex)
+                    .iter()
+                    .fold(started[vertex], |highest, (other, _)| highest.max(level[*other as usize]));
+                let asked = level[vertex] + *change;
+                // The comparison is false for a change that is no number.
+                *change = if asked <= highest { asked.max(bed[vertex]) } else { highest.max(bed[vertex]) };
+            });
+            for vertex in marked.drain(..) {
+                moved[vertex as usize] = false;
+                near[vertex as usize] = false;
+            }
+            for (solved, vertex) in change.iter().zip(&pools.vertices) {
+                level[*vertex as usize] = *solved;
+                moved[*vertex as usize] = true;
+                near[*vertex as usize] = true;
+                marked.push(*vertex);
+                for &(other, _) in operators.sides_of(*vertex as usize) {
+                    near[other as usize] = true;
+                    marked.push(other);
+                }
+            }
+        }
+        // The depths are the solved levels', so nothing stands where no level
+        // put it. That leaves the water balance out by what the levels were
+        // left short of, which is put right over the whole surface at once:
+        // what there was, less what went over the open edge.
+        depth
+            .par_iter_mut()
+            .zip(level.par_iter().zip(&bed))
+            .with_min_len(4096)
+            .for_each(|(depth, (level, bed))| *depth = (level - bed).max(0.0));
+        let held = total(count, |vertex| operators.area[vertex] * depth[vertex]);
+        let shed = total(count, |vertex| {
+            let root = depth[vertex].cbrt();
+            step * outlet[vertex] * depth[vertex] * root * root
+        });
+        if held > 0.0 {
+            let kept_share = ((held_before - shed.min(held_before)) / held).clamp(0.5, 2.0);
+            depth.par_iter_mut().with_min_len(4096).for_each(|depth| *depth *= kept_share);
         }
 
         // When, between the last kept instant and the next, water came.
