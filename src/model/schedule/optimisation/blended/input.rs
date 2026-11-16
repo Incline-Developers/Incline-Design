@@ -565,6 +565,20 @@ pub(crate) struct BlendInput {
     pub(crate) drill_blast: Option<super::drill_blast::DrillBlastInput>,
     /// Areas of ground with a limit on the loaders digging there at once.
     pub(crate) loader_areas: Vec<LoaderArea>,
+    /// What a tonne of the automatic loaders' digging is worth in each
+    /// period of the long-term plan, in that period's money: its loader
+    /// rows' prices, by when each period ends in hours, ascending. Empty
+    /// without a plan. Not part of the model: the hourly dispatch reads it
+    /// as the worth of the digging an hour of reclaim gives up.
+    pub(crate) dig_prices: Vec<(f64, f64)>,
+}
+
+impl BlendInput {
+    /// [`Self::dig_prices`] in the period holding hour `at_h`; zero past
+    /// the plan's end or without one.
+    pub(crate) fn dig_price(&self, at_h: f64) -> f64 {
+        self.dig_prices.iter().find(|(end_h, _)| at_h < *end_h).map_or(0.0, |(_, price)| *price)
+    }
 }
 
 /// Numerical convention for a grade boundary in the captured numeric scale.

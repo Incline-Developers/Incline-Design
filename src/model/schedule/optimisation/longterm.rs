@@ -95,6 +95,10 @@ pub(crate) struct PlanMemory {
     summary: PlanSummary,
     /// By the block's identity across edits.
     dug_by: BTreeMap<u64, Vec<f32>>,
+    /// What a tonne of the automatic loaders' digging was worth in each
+    /// period at the last prices, in that period's money, by when the
+    /// period ends: [`BlendInput::dig_prices`].
+    pub(crate) dig_prices: Vec<(f64, f64)>,
 }
 
 /// What the plan did, for the run's report.
@@ -1515,8 +1519,45 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             .zip(&by)
             .filter_map(|(block, shares)| Some((stable(block)?, shares.iter().map(|share| *share as f32).collect())))
             .collect(),
+        // The first rows are the loaders' tonnes, one a period.
+        dig_prices: dig_prices(blocks, &by, &periods, &discount, &prices[..spans], &dig, request.discount_rate),
     };
     Some((order, summary, memory))
+}
+
+/// What a tonne of the automatic loaders' digging is worth in each period,
+/// in that period's money, by when the period ends: the more of what the
+/// plan's last prices make one more tonne of their capacity worth, and what
+/// the hour a tonne takes is worth to digging in an order. The plan may put
+/// off whichever block is worth least, so the first can be next to nothing
+/// while the loaders are busy; an order cannot, and an hour taken from its
+/// digging puts everything after it an hour later - all the plan digs from
+/// then on discounted an hour more, and the last hour's digging past the
+/// horizon.
+fn dig_prices(blocks: &[Block], by: &[Vec<f64>], periods: &[(f64, f64)], discount: &[f64], prices: &[f64], capacity: &[f64], rate: f64) -> Vec<(f64, f64)> {
+    let spans = periods.len();
+    // The plan's discounted value dug in each period.
+    let mut earned = vec![0.0; spans];
+    for (block, shares) in blocks.iter().zip(by) {
+        for period in 0..spans {
+            let before = if period > 0 { shares[period - 1] } else { 0.0 };
+            earned[period] += block.value * discount[period] * (shares[period] - before);
+        }
+    }
+    let per_hour = (1.0 + rate.max(0.0)).ln() / YEAR_H;
+    let last = spans - 1;
+    let last_hour = earned[last].max(0.0) / (periods[last].1 - periods[last].0).max(1.0);
+    let mut after = 0.0;
+    let mut out = vec![(0.0, 0.0); spans];
+    for period in (0..spans).rev() {
+        after += earned[period];
+        let (start_h, end_h) = periods[period];
+        let tonnes_h = capacity[period] / (end_h - start_h).max(1.0);
+        let delay = if tonnes_h > 0.0 { (per_hour * after.max(0.0) + last_hour) / tonnes_h } else { 0.0 };
+        let marginal = prices.get(period).copied().unwrap_or(0.0);
+        out[period] = (end_h, if discount[period] > 0.0 { marginal.max(delay) / discount[period] } else { 0.0 });
+    }
+    out
 }
 
 /// The order with the ground dig bars name and leave first, from the top

@@ -2612,6 +2612,7 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
         target_opening: Vec::new(),
         drill_blast,
         loader_areas: loader_areas(source, &block_ground),
+        dig_prices: Vec::new(),
     };
     let dependencies = dependency_ground(source, &block_ground);
     // The chosen order's dispatch, kept for the run, and the order.
@@ -2713,6 +2714,13 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
                 }
                 finish(&mut trial, &mut named);
                 candidates.push((trial, named, summary, order));
+            }
+        }
+        // Both orders dispatch with the plan's price on the automatic
+        // loaders' digging, which an hour they reclaim gives up.
+        if let Some(memory) = &memory {
+            for (trial, _, _, _) in &mut candidates {
+                trial.dig_prices = memory.dig_prices.clone();
             }
         }
         let worth = |trial: &BlendInput| {

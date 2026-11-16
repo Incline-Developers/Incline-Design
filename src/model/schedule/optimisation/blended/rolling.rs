@@ -352,6 +352,7 @@ impl Carry {
                 chain
             }),
             loader_areas: full.loader_areas.clone(),
+            dig_prices: full.dig_prices.clone(),
         }
     }
 

@@ -1560,6 +1560,9 @@ impl<'a> State<'a> {
         problem.add_keyed_row("lengths", duration..=duration, lengths.iter().map(|col| (*col, 1.0)).collect());
         // (candidate, segment) and its column.
         let mut columns: Vec<(usize, usize, Col)> = Vec::new();
+        // Columns whose weight carries other than their candidate's
+        // production credit, by column: what it carries instead.
+        let mut credited: BTreeMap<usize, f64> = BTreeMap::new();
         let mut extractions: Vec<((usize, GroundId, usize), Col)> = Vec::new();
         let mut block_total: BTreeMap<GroundId, Vec<(Col, f64)>> = BTreeMap::new();
         let mut pile_draw: BTreeMap<StockpileId, Vec<(Col, f64)>> = BTreeMap::new();
@@ -1600,19 +1603,26 @@ impl<'a> State<'a> {
                             }
                         }
                         // Piles it may reclaim in the same hours, each tonne
-                        // taking the loader's time at its reclaim rate. The
-                        // production credit stays with the digging: what a
-                        // loader's digging is worth later the hour cannot
-                        // see, so it reclaims with the hours its digging
-                        // leaves - held by its reach, trucks or room - and
-                        // where the reclaim's money outweighs the credit.
+                        // taking the loader's time at its reclaim rate. What
+                        // the digging it gives up is worth later the hour
+                        // cannot see; the long-term plan prices it, as a
+                        // tonne of the automatic loaders' digging in this
+                        // period. A reclaimed tonne earns the production
+                        // credit of the digging time it takes, less that
+                        // price: so the loader reclaims where the plan has
+                        // its digging worth less than the reclaim. Without a
+                        // plan the credit stays with the digging, and the
+                        // loader reclaims with the hours its digging leaves.
                         if rate.dig_tph > 0.0 && rate.reclaim_tph > 0.0 {
                             let hours = rate.dig_tph / rate.reclaim_tph;
+                            let price = (!input.dig_prices.is_empty()).then(|| input.dig_price(interval.start_h));
                             for (pile, released) in self.companion_piles(bar, interval) {
                                 for index in self.reclaim_candidates(bar.loader, pile, bar.task, interval) {
                                     let value = conditional_value(input, index, &released.blend, released.tonnes);
-                                    let weight = self.weight[index] - self.credit[index];
+                                    let credit = price.map_or(0.0, |price| hours * (self.credit[index] - price).max(0.0));
+                                    let weight = self.weight[index] - self.credit[index] + credit;
                                     let col = problem.add_keyed_column(("movement", index, segment), weight + value, 0.0..);
+                                    credited.insert(col.index(), credit);
                                     columns.push((index, segment, col));
                                     loader_total.push((col, hours));
                                     pile_draw.entry(pile).or_default().push((col, 1.0));
@@ -1906,11 +1916,15 @@ impl<'a> State<'a> {
         let solution = problem
             .maximise_from(&mut self.warm.borrow_mut())
             .map_err(|reason| crate::i18n::tr!("err-sched-interval-failed", interval = interval.index.to_string(), reason = reason.to_string()))?;
-        let rows: Vec<(usize, usize, f64)> = columns.into_iter().map(|(index, segment, col)| (index, segment, solution[col.index()].max(0.0))).collect();
         let objective = problem.value(&solution);
         let steered: f64 = incentive.iter().map(|(col, per_hour)| per_hour * solution[col.index()].max(0.0)).sum();
+        let credits: f64 = columns
+            .iter()
+            .map(|(index, _, col)| credited.get(&col.index()).copied().unwrap_or(self.credit[*index]) * solution[col.index()].max(0.0))
+            .sum();
+        let rows: Vec<(usize, usize, f64)> = columns.into_iter().map(|(index, segment, col)| (index, segment, solution[col.index()].max(0.0))).collect();
         Ok(Plan {
-            money: objective - steered - rows.iter().map(|(index, _, tonnes)| self.credit[*index] * tonnes).sum::<f64>(),
+            money: objective - steered - credits,
             rows,
             extracted: extractions.into_iter().map(|(key, col)| (key, solution[col.index()].max(0.0))).collect(),
             durations: lengths.iter().map(|col| solution[col.index()].max(0.0)).collect(),
