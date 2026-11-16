@@ -38,7 +38,7 @@ const COT_LIMIT: f64 = 100.0;
 /// The least conductance weight a side keeps, so no vertex is cut off by the
 /// obtuse triangles round it.
 const MIN_WEIGHT: f64 = 0.01;
-const SOLVE_TOLERANCE: f64 = 1e-3;
+const SOLVE_TOLERANCE: f64 = 1e-2;
 const SOLVE_ITERATIONS: usize = 200;
 /// The most a side as flat as a pond conducts in a step, as a multiple of the
 /// volume a metre of depth is at its smaller end. Manning's conductance has
