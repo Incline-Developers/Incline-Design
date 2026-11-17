@@ -1644,6 +1644,13 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
     // How far the feed placed so far is past its grade targets, at their
     // cost, carried from one period to the next.
     let mut running: Vec<f64> = blend.as_ref().and_then(|blend| blend.lean.first()).map_or_else(Vec::new, |first| vec![0.0; first.len()]);
+    // How far off its targets the feed would be with a block's added.
+    let score = |drift: &[f64], lean: Option<&Vec<f64>>| -> f64 { lean.map_or(0.0, |lean| drift.iter().zip(lean).map(|(drift, lean)| (drift + lean).abs()).sum()) };
+    let add_lean = |drift: &mut [f64], lean: Option<&Vec<f64>>| {
+        for (drift, lean) in drift.iter_mut().zip(lean.into_iter().flatten()) {
+            *drift += lean;
+        }
+    };
     for period in 0..spans {
         let first = fill.order.len();
         let mut drift = running.clone();
@@ -1683,7 +1690,7 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             // left the feed off them for quarters at a time.
             let pick = match blend.as_ref() {
                 Some(blend) => {
-                    let score = |at: &usize| -> f64 { drift.iter().zip(&blend.lean[candidates[*at]]).map(|(drift, lean)| (drift + lean).abs()).sum() };
+                    let score = |at: &usize| score(&drift, Some(&blend.lean[candidates[*at]]));
                     (next..candidates.len())
                         .filter(|at| !tried[*at] && !fill.placed[candidates[*at]])
                         .take(BLEND_CHOICES)
@@ -1724,18 +1731,15 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             for at in needed {
                 take(&blocks[at], &mut room, &mut other_left, &mut crushing);
                 fill.place(at, &below);
-                if let Some(blend) = blend.as_ref() {
-                    for (drift, lean) in drift.iter_mut().zip(&blend.lean[at]) {
-                        *drift += lean;
-                    }
-                }
+                add_lean(&mut drift, blend.as_ref().map(|blend| &blend.lean[at]));
             }
         }
         // Then the rest of the period, by how sure the plan is of each.
         let mut heap: std::collections::BinaryHeap<(u64, std::cmp::Reverse<usize>, usize)> =
             fill.freed.drain(..).filter(|index| !fill.placed[*index]).map(|index| key(index, period)).collect();
         let mut held: Vec<usize> = Vec::new();
-        while let Some((_, _, index)) = heap.pop() {
+        let lean_of = |index: usize| blend.as_ref().map(|blend| &blend.lean[index]);
+        while let Some(index) = next_feed_for_grade(&mut heap, &fill.placed, &|index| crushed_of(&blocks[index]) > 0.0, &|index| score(&drift, lean_of(index))) {
             if fill.placed[index] {
                 continue;
             }
@@ -1750,6 +1754,7 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             }
             take(block, &mut room, &mut other_left, &mut crushing);
             fill.place(index, &below);
+            add_lean(&mut drift, lean_of(index));
             heap.extend(fill.freed.drain(..).map(|index| key(index, period)));
         }
         // Loaders the budgets left idle take what was held for them, the
@@ -1760,7 +1765,7 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         if room > 0.0 {
             let mut heap: std::collections::BinaryHeap<(u64, std::cmp::Reverse<usize>, usize)> =
                 held.drain(..).filter(|index| !fill.placed[*index]).map(|index| key(index, period)).collect();
-            while let Some((_, _, index)) = heap.pop() {
+            while let Some(index) = next_feed_for_grade(&mut heap, &fill.placed, &|index| crushed_of(&blocks[index]) > 0.0, &|index| score(&drift, lean_of(index))) {
                 if fill.placed[index] {
                     continue;
                 }
@@ -1770,17 +1775,12 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                 }
                 take(&blocks[index], &mut room, &mut other_left, &mut crushing);
                 fill.place(index, &below);
+                add_lean(&mut drift, lean_of(index));
                 heap.extend(fill.freed.drain(..).map(|index| key(index, period)));
             }
         }
         fill.freed = held;
-        if let Some(blend) = blend.as_ref() {
-            for at in &fill.order[first..] {
-                for (running, lean) in running.iter_mut().zip(&blend.lean[*at]) {
-                    *running += lean;
-                }
-            }
-        }
+        running = drift;
         interleave(&mut fill.order[first..], blocks, &rank, &crushed_of, blend.as_ref());
     }
     let Fill { placed, mut order, .. } = fill;
@@ -1923,6 +1923,39 @@ struct Blend {
     /// contains past the target's grade, at what the target charges for it.
     lean: Vec<Vec<f64>>,
     day_t: f64,
+}
+
+/// The next block off `heap`, but of crusher feed, whichever of the next
+/// few feed blocks on it brings the feed nearest its grade targets; the
+/// rest go back.
+fn next_feed_for_grade(
+    heap: &mut std::collections::BinaryHeap<(u64, std::cmp::Reverse<usize>, usize)>,
+    placed: &[bool],
+    feed: &dyn Fn(usize) -> bool,
+    score: &dyn Fn(usize) -> f64,
+) -> Option<usize> {
+    let top = heap.pop()?;
+    if placed[top.2] || !feed(top.2) {
+        return Some(top.2);
+    }
+    let mut popped = vec![top];
+    let mut feeds = 1;
+    while feeds < BLEND_CHOICES {
+        let Some(entry) = heap.pop() else { break };
+        if !placed[entry.2] && feed(entry.2) {
+            feeds += 1;
+        }
+        popped.push(entry);
+    }
+    let chosen = popped
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| !placed[entry.2] && feed(entry.2))
+        .min_by(|(_, a), (_, b)| score(a.2).total_cmp(&score(b.2)))
+        .map_or(0, |(at, _)| at);
+    let picked = popped.swap_remove(chosen);
+    heap.extend(popped.into_iter().filter(|entry| !placed[entry.2]));
+    Some(picked.2)
 }
 
 /// A period's blocks put in the order they are dug in: crusher feed and the
