@@ -217,6 +217,7 @@ struct ReportedTask {
     ticket: BackgroundTaskTicket,
     label: String,
     progress: crate::model::progress::Progress,
+    started: Instant,
 }
 
 #[derive(Default)]
@@ -228,6 +229,9 @@ struct BackgroundTaskState {
     /// Tickets that carry a status-bar label, oldest first: the bar reports
     /// the longest-running task rather than flickering between concurrent ones.
     reported: Vec<ReportedTask>,
+    /// Reported tasks that ran to completion since the editor last collected
+    /// them, oldest first. Cancelled ones are not listed: they did not finish.
+    completed: Vec<crate::ui::state::FinishedTask>,
     /// Tickets that asked not to announce themselves: no status-bar row and no
     /// busy pointer. Work that reruns on every drag of a slider is reported
     /// where the user is already looking, not by a readout and a cursor
@@ -247,26 +251,43 @@ impl BackgroundTaskState {
     }
 
     fn report(&mut self, ticket: BackgroundTaskTicket, label: String, progress: crate::model::progress::Progress) {
-        self.reported.push(ReportedTask { ticket, label, progress });
+        self.reported.push(ReportedTask {
+            ticket,
+            label,
+            progress,
+            started: Instant::now(),
+        });
     }
 
-    fn stop_reporting(&mut self, ticket: BackgroundTaskTicket) {
-        self.reported.retain(|task| task.ticket != ticket);
+    fn stop_reporting(&mut self, ticket: BackgroundTaskTicket) -> Option<ReportedTask> {
+        let index = self.reported.iter().position(|task| task.ticket == ticket)?;
+        Some(self.reported.remove(index))
     }
 
-    /// The task the status bar should show, if any.
-    fn status_message(&self) -> Option<crate::ui::state::StatusBarMessage> {
-        let task = self.reported.first()?;
-        let snapshot = task.progress.snapshot();
-        Some(crate::ui::state::StatusBarMessage {
-            text: task.label.clone(),
-            progress: snapshot.map(|snapshot| snapshot.fraction),
-            units: snapshot.and_then(|snapshot| snapshot.units),
-        })
+    /// Every reported task still running, oldest first: the status bar gives
+    /// each a ring and reads out the oldest.
+    fn status_tasks(&self) -> Vec<crate::ui::state::StatusBarMessage> {
+        self.reported
+            .iter()
+            .map(|task| {
+                let snapshot = task.progress.snapshot();
+                crate::ui::state::StatusBarMessage {
+                    ticket: task.ticket.0,
+                    text: task.label.clone(),
+                    progress: snapshot.map(|snapshot| snapshot.fraction),
+                    units: snapshot.and_then(|snapshot| snapshot.units),
+                    started: task.started,
+                }
+            })
+            .collect()
     }
 
     fn settle_cpu(&mut self, ticket: BackgroundTaskTicket, needs_gpu: bool) {
-        self.stop_reporting(ticket);
+        if let Some(task) = self.stop_reporting(ticket) {
+            let units = task.progress.snapshot().and_then(|snapshot| snapshot.units);
+            self.completed
+                .push(crate::ui::state::FinishedTask::new(ticket.0, &task.label, units, task.started.elapsed()));
+        }
         if !self.cpu_pending.remove(&ticket) {
             debug_assert!(false, "unknown or double-completed background ticket {ticket:?}");
             return;
@@ -2055,15 +2076,19 @@ impl<'a> App<'a> {
         (ticket, crate::model::progress::Progress::new())
     }
 
-    /// Point the status bar at the longest-running reported task (or clear it
-    /// once none are left). Called once per frame after the `poll_*` drains.
+    /// Hand the status bar the reported tasks still running and those that
+    /// finished since last frame. Called once per frame after the `poll_*`
+    /// drains.
     pub(crate) fn refresh_status_message(&mut self) {
-        let message = self.background_tasks.status_message();
+        let tasks = self.background_tasks.status_tasks();
         // Workers only wake the loop when they finish, so keep redrawing while
-        // one is running: otherwise a determinate bar would freeze part-way
+        // one is running: otherwise a determinate ring would freeze part-way
         // and only jump to its final value at the end.
-        self.redraw_requested |= message.is_some();
-        self.editor.set_status_message(message);
+        self.redraw_requested |= !tasks.is_empty();
+        for finished in std::mem::take(&mut self.background_tasks.completed) {
+            self.editor.record_finished_task(finished);
+        }
+        self.editor.status_tasks = tasks;
     }
 
     /// Move one CPU ticket through the UI-apply phase and either settle it or

@@ -3384,6 +3384,11 @@ products-update = Update
 
 progress-percent-done-total = { $percent } ({ $done } of { $total })
 progress-task-finished = { $task }: Finished
+progress-recent-tasks = Recent tasks
+progress-duration-under-second = under 1 s
+progress-duration-seconds = { $seconds } s
+progress-duration-minutes = { $minutes } min { $seconds } s
+progress-duration-hours = { $hours } h { $minutes } min
 
 ## Project strings
 

@@ -247,6 +247,9 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                     // takes what room the bar has left, its label first to go.
                     if progress::has_task(editor) {
                         separator(ui);
+                        // Its padding is part of its hover fill, given back as
+                        // the language picker's is.
+                        ui.add_space(-progress::READOUT_PADDING);
                         progress::draw_task_progress(ui, editor);
                     }
                 });

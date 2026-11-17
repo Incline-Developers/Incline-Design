@@ -373,24 +373,11 @@ impl EditorState {
         self.is_planning_view(PlanningView::Reserves)
     }
 
-    /// Set (or clear) the status-bar message. Whenever the displayed task
-    /// changes, the outgoing one is remembered as `last_finished_task` so the
-    /// idle bar keeps reading "<task>: Finished" at 100%.
-    pub(crate) fn set_status_message(&mut self, message: Option<StatusBarMessage>) {
-        if let Some(previous) = &self.status_message
-            && message.as_ref().is_none_or(|next| next.text != previous.text)
-        {
-            self.last_finished_task = Some(FinishedTask {
-                // Labels are written as "Generating contours…"; drop the trailing
-                // ellipsis so the idle text isn't "Generating contours…: Finished".
-                text: previous.text.trim_end_matches(['.', '…', ' ']).to_owned(),
-                // Progress reports are throttled, so the last one received can
-                // be short of the total even though the task ran to completion.
-                // Only the total is kept; the idle bar shows it as "y of y".
-                total_units: previous.units.map(|(_done, total)| total),
-            });
-        }
-        self.status_message = message;
+    /// Remember a reported task that ran to completion, newest first, keeping
+    /// the last [`TASK_HISTORY_LEN`] for the status bar's list.
+    pub(crate) fn record_finished_task(&mut self, task: FinishedTask) {
+        self.task_history.push_front(task);
+        self.task_history.truncate(TASK_HISTORY_LEN);
     }
 
     /// Drop everything selected, in every workspace's terms: whole scene
@@ -1494,6 +1481,8 @@ pub(crate) struct FuseSegment {
 /// without per-task plumbing.
 #[derive(Clone, Debug)]
 pub(crate) struct StatusBarMessage {
+    /// The task's ticket, which is what follows it from frame to frame.
+    pub(crate) ticket: u64,
     pub(crate) text: String,
     /// `Some(f)` in `0.0..=1.0` fills the bar to that fraction and labels it
     /// with the percentage; `None` is indeterminate (marquee, no percentage).
@@ -1501,16 +1490,41 @@ pub(crate) struct StatusBarMessage {
     /// `Some((done, total))` when the task counts discrete items (mesh
     /// vertices/faces), appending "(x of y)" to the percentage.
     pub(crate) units: Option<(u64, u64)>,
+    /// When the task began, for the time it has been running.
+    pub(crate) started: web_time::Instant,
 }
 
-/// The most recent task to leave the status bar. Retained so the bar stays
-/// visible at 100% once a task ends, instead of blanking out.
+/// How many finished tasks the status bar's list keeps.
+pub(crate) const TASK_HISTORY_LEN: usize = 10;
+
+/// A reported task that ran to completion. The newest is what the idle bar
+/// shows at 100%; the last few are listed when the readout is clicked.
 #[derive(Clone, Debug)]
 pub(crate) struct FinishedTask {
+    /// The ticket it ran under, matching its [`StatusBarMessage::ticket`].
+    pub(crate) ticket: u64,
     /// Task label without its trailing ellipsis, e.g. "Generating contours".
     pub(crate) text: String,
     /// Item count the task worked through, shown as "(y of y)" when known.
     pub(crate) total_units: Option<u64>,
+    /// How long it ran.
+    pub(crate) duration: std::time::Duration,
+}
+
+impl FinishedTask {
+    pub(crate) fn new(ticket: u64, label: &str, units: Option<(u64, u64)>, duration: std::time::Duration) -> Self {
+        Self {
+            ticket,
+            // Labels are written as "Generating contours…"; drop the trailing
+            // ellipsis so the idle text isn't "Generating contours…: Finished".
+            text: label.trim_end_matches(['.', '…', ' ']).to_owned(),
+            // Progress reports are throttled, so the last one received can be
+            // short of the total even though the task ran to completion. Only
+            // the total is kept; the idle bar shows it as "y of y".
+            total_units: units.map(|(_done, total)| total),
+            duration,
+        }
+    }
 }
 
 /// The plane through the three picked points, as the Strike and Dip tool
@@ -2236,15 +2250,15 @@ pub(crate) struct EditorState {
     /// egui-winit's icon cache and strand whatever the pointer is showing -
     /// including the hidden cursor the viewport draws its own crosshair over.
     pub(crate) background_busy: bool,
-    /// Transient status-bar message from a background task (e.g. "Saving to …").
-    /// `None` means idle; the field is updated from `poll_saves` / `poll_jobs`
-    /// each frame. Set it through [`EditorState::set_status_message`] so the
-    /// idle bar can name the task that just ended.
-    pub(crate) status_message: Option<StatusBarMessage>,
-    /// The most recent task to leave the status bar, shown as "…: Finished" at
-    /// 100% while idle. `None` until the first task completes - the progress bar
-    /// is hidden entirely until then.
-    pub(crate) last_finished_task: Option<FinishedTask>,
+    /// Reported background tasks still running (e.g. "Saving to …"), oldest
+    /// first, refreshed each frame by `App::refresh_status_message`. Empty
+    /// means idle.
+    pub(crate) status_tasks: Vec<StatusBarMessage>,
+    /// The last few reported tasks to finish, newest first (see
+    /// [`EditorState::record_finished_task`]). The newest is shown as
+    /// "…: Finished" at 100% while idle; until one finishes, and with nothing
+    /// running, the readout is not drawn at all.
+    pub(crate) task_history: std::collections::VecDeque<FinishedTask>,
     pub(crate) active_tool: ActiveTool,
     /// Shared cursor mode, selected from the Production workspace's toolbar
     /// and used in every workspace.
@@ -4143,8 +4157,8 @@ impl EditorState {
             fly_near_clip_limit: crate::app::io::default_fly_near_clip_limit(),
             fly_max_clip_span: crate::app::io::default_fly_max_clip_span(),
             background_busy: false,
-            status_message: None,
-            last_finished_task: None,
+            status_tasks: Vec::new(),
+            task_history: std::collections::VecDeque::new(),
             active_tool: ActiveTool::None,
             cursor_mode: CursorMode::Select,
             tool_line_color: [1.0, 1.0, 1.0, 1.0],
