@@ -45,6 +45,9 @@ const IDLE_ROUNDS: u32 = 3;
 /// How far each master's closures are priced toward the prices that gave
 /// its lowest bound.
 const SMOOTHING: f64 = 0.7;
+/// How many of the crusher feed blocks the plan is surest of, in turn, a
+/// period's next is chosen from for its grade.
+const BLEND_CHOICES: usize = 50;
 /// The weight of a node no closure may hold: far past anything the scaled
 /// values sum to, and far inside what the closure solver adds up exactly.
 const FORBIDDEN: i64 = -(1 << 56);
@@ -1638,8 +1641,12 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         .filter(|index| blocks[*index].tonnes > 0.0 && crushed_of(&blocks[*index]) >= 0.5 * blocks[*index].tonnes)
         .collect();
     let mut stamp = vec![usize::MAX; count];
+    // How far the feed placed so far is past its grade targets, at their
+    // cost, carried from one period to the next.
+    let mut running: Vec<f64> = blend.as_ref().and_then(|blend| blend.lean.first()).map_or_else(Vec::new, |first| vec![0.0; first.len()]);
     for period in 0..spans {
         let first = fill.order.len();
+        let mut drift = running.clone();
         let mut room = dig[period];
         let mut other_left = other_room[period];
         let mut crushing: BTreeMap<usize, f64> = crush_row.iter().filter(|((_, at), _)| *at == period).map(|(_, row)| (*row, limits[*row])).collect();
@@ -1657,10 +1664,36 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         // whatever is still over it, while the loaders have room for both.
         let mut candidates: Vec<usize> = ore.iter().copied().filter(|index| !fill.placed[*index] && by[*index][period] >= 1e-6).collect();
         candidates.sort_by(|a, b| by[*b][period].total_cmp(&by[*a][period]).then(rank[*a].cmp(&rank[*b])));
-        for index in candidates {
+        let mut tried = vec![false; candidates.len()];
+        let mut next = 0;
+        loop {
             if room <= 0.0 {
                 break;
             }
+            while next < candidates.len() && (tried[next] || fill.placed[candidates[next]]) {
+                next += 1;
+            }
+            if next >= candidates.len() {
+                break;
+            }
+            // Of the next few the plan is surest of, the one that brings the
+            // feed nearest its grade targets: the plan holds each period's
+            // average on them with a share of many blocks, rich and lean,
+            // and whole blocks taken by how sure the plan is of each alone
+            // left the feed off them for quarters at a time.
+            let pick = match blend.as_ref() {
+                Some(blend) => {
+                    let score = |at: &usize| -> f64 { drift.iter().zip(&blend.lean[candidates[*at]]).map(|(drift, lean)| (drift + lean).abs()).sum() };
+                    (next..candidates.len())
+                        .filter(|at| !tried[*at] && !fill.placed[candidates[*at]])
+                        .take(BLEND_CHOICES)
+                        .min_by(|a, b| score(a).total_cmp(&score(b)))
+                        .unwrap_or(next)
+                }
+                None => next,
+            };
+            tried[pick] = true;
+            let index = candidates[pick];
             let crusher_full = |crushing: &BTreeMap<usize, f64>| rows_of(&blocks[index]).iter().any(|row| crushing.get(row).is_some_and(|left| *left <= 0.0));
             if fill.placed[index] || crusher_full(&crushing) {
                 continue;
@@ -1691,6 +1724,11 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             for at in needed {
                 take(&blocks[at], &mut room, &mut other_left, &mut crushing);
                 fill.place(at, &below);
+                if let Some(blend) = blend.as_ref() {
+                    for (drift, lean) in drift.iter_mut().zip(&blend.lean[at]) {
+                        *drift += lean;
+                    }
+                }
             }
         }
         // Then the rest of the period, by how sure the plan is of each.
@@ -1736,6 +1774,13 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             }
         }
         fill.freed = held;
+        if let Some(blend) = blend.as_ref() {
+            for at in &fill.order[first..] {
+                for (running, lean) in running.iter_mut().zip(&blend.lean[*at]) {
+                    *running += lean;
+                }
+            }
+        }
         interleave(&mut fill.order[first..], blocks, &rank, &crushed_of, blend.as_ref());
     }
     let Fill { placed, mut order, .. } = fill;
