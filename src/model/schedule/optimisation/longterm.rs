@@ -37,6 +37,14 @@ const MAX_ROUNDS: usize = 200;
 /// A closure must beat the combination by this share of its value to be
 /// worth another round.
 const IMPROVEMENT: f64 = 1e-6;
+/// How near the best on its groups each master is solved, as a share of
+/// the plan's gap.
+const INNER: f64 = 0.1;
+/// Rounds a plan stays in the master unused.
+const IDLE_ROUNDS: u32 = 3;
+/// How far each master's closures are priced toward the prices that gave
+/// its lowest bound.
+const SMOOTHING: f64 = 0.7;
 /// The weight of a node no closure may hold: far past anything the scaled
 /// values sum to, and far inside what the closure solver adds up exactly.
 const FORBIDDEN: i64 = -(1 << 56);
@@ -1184,6 +1192,17 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         Some(column)
     };
     let (mut value, mut bound, mut rounds) = (0.0, f64::INFINITY, 0);
+    // The master's plans, as the groups each digs: what one digs, and so
+    // what it is worth and takes of each row, stays the same as the groups
+    // split.
+    struct Plan {
+        held: Vec<bool>,
+        worth: f64,
+        uses: Vec<f64>,
+        /// Rounds since the mix last used it.
+        idle: u32,
+    }
+    let mut plans: Vec<Plan> = Vec::new();
     while rounds < MAX_ROUNDS && started.elapsed() < request.budget {
         if cancelled() {
             return None;
@@ -1240,49 +1259,58 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             }
             (chosen.iter().map(|held| usize::from(*held)).collect(), 2)
         };
-        // Split each group by the closure; the last solved split stays if
-        // the master cannot be solved on this one, as that is what the
-        // shares are of.
-        let solved = group.clone();
+        // Split each group by the closure. Each new group remembers the
+        // group it came from and its side of the split.
         let mut relabel: Vec<u32> = vec![u32::MAX; groups * sides];
-        let mut next = 0_u32;
+        let mut parent: Vec<u32> = Vec::new();
+        let mut side: Vec<usize> = Vec::new();
         for (node, held) in group.iter_mut().enumerate() {
             let key = *held as usize * sides + chosen[node];
             if relabel[key] == u32::MAX {
-                relabel[key] = next;
-                next += 1;
+                relabel[key] = parent.len() as u32;
+                parent.push(*held);
+                side.push(chosen[node]);
             }
             *held = relabel[key];
         }
-        if next as usize == groups {
+        if parent.len() == groups {
             // The closure is a plan the master could already make: at its
             // own prices nothing better exists.
             break;
         }
-        groups = next as usize;
+        groups = parent.len();
+        // The last shares, in the new groups, until the master gives new ones.
+        share = parent.iter().map(|old| share.get(*old as usize).copied().unwrap_or(0.0)).collect();
         // The master: each group's worth and what it takes of each side row,
         // summed over its nodes, and what it needs of other groups.
         let mut objective = vec![0.0; groups];
-        let mut coefficients: Vec<Vec<f64>> = vec![vec![0.0; groups]; limits.len()];
+        let mut takes: Vec<Vec<(usize, f64)>> = vec![Vec::new(); groups];
         let mut closed = vec![false; groups];
         for (index, block) in blocks.iter().enumerate() {
             for period in 0..spans {
                 let node = index * spans + period;
-                let held = group[node];
+                let held = group[node] as usize;
                 if forbidden(node) {
-                    closed[held as usize] = true;
+                    closed[held] = true;
                 }
                 let later = if period + 1 < spans { block.value * discount[period + 1] } else { 0.0 };
-                objective[held as usize] += block.value * discount[period] - later;
-                for (row, used) in uses_in(index, period) {
-                    coefficients[row][held as usize] += used;
-                }
+                objective[held] += block.value * discount[period] - later;
+                takes[held].extend(uses_in(index, period));
                 if period + 1 < spans {
-                    for (row, used) in uses_in(index, period + 1) {
-                        coefficients[row][held as usize] -= used;
-                    }
+                    takes[held].extend(uses_in(index, period + 1).into_iter().map(|(row, used)| (row, -used)));
                 }
             }
+        }
+        for entries in &mut takes {
+            entries.sort_unstable_by_key(|(row, _)| *row);
+            entries.dedup_by(|(row, used), (kept, sum)| {
+                let same = row == kept;
+                if same {
+                    *sum += *used;
+                }
+                same
+            });
+            entries.retain(|(_, used)| used.abs() > 1e-12);
         }
         let mut needs: Vec<(u32, u32)> = edges
             .iter()
@@ -1291,52 +1319,213 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             .collect();
         needs.sort_unstable();
         needs.dedup();
-        // Only the pairs no others imply: the same plan on a third of the
-        // rows or fewer, as each closure's split leaves chains of groups.
+        // Only the pairs no others imply, as each closure's split leaves
+        // chains of groups.
         if let Some(reduced) = reduce_needs(groups, &needs) {
             needs = reduced;
         }
-        let mut master = solver::Problem::new(solver::Sense::Maximise);
-        let cols: Vec<usize> = (0..groups).map(|held| master.add_col(objective[held], 0.0, if closed[held] { 0.0 } else { 1.0 })).collect();
-        // How far each period's feed is past each hinge, at its cost.
-        let mut excess: BTreeMap<usize, usize> = BTreeMap::new();
-        for hinge in &hinges {
-            excess.insert(hinge.row, master.add_col(-hinge.cost, 0.0, f64::INFINITY));
+        // The master is solved as a mix of plans, each a closure of the
+        // group graph: a small program over the side rows, and a closure of
+        // the groups at its prices for the next plan, until none is worth
+        // more than the mix. Every mix can be dug, so the budget running out
+        // part way keeps the best so far. The plans already found are the
+        // same ground dug by the same periods in the new groups, and this
+        // round's closure is one more.
+        for plan in &mut plans {
+            plan.held = parent.iter().map(|old| plan.held[*old as usize]).collect();
         }
-        for (row, limit) in limits.iter().enumerate() {
-            master.add_row(
-                f64::NEG_INFINITY,
-                *limit,
-                coefficients[row]
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, used)| used.abs() > 1e-12)
-                    .map(|(held, used)| (cols[held], *used))
-                    .chain(excess.get(&row).map(|col| (*col, -1.0))),
-            );
-        }
-        for (from, to) in &needs {
-            master.add_row(f64::NEG_INFINITY, 0.0, [(cols[*from as usize], 1.0), (cols[*to as usize], -1.0)]);
-        }
-        // Never past the budget, however hard the master gets.
-        let options = solver::Options {
-            time_limit: request.budget.saturating_sub(started.elapsed()).as_secs_f64().max(0.1),
-            ..solver::Options::default()
+        let digs = |held: &[bool]| -> Plan {
+            let mut uses = vec![0.0; limits.len()];
+            let mut size = vec![0.0_f64; limits.len()];
+            let mut worth = 0.0;
+            for (at, _) in held.iter().enumerate().filter(|(_, held)| **held) {
+                worth += objective[at];
+                for (row, used) in &takes[at] {
+                    uses[*row] += used;
+                    size[*row] += used.abs();
+                }
+            }
+            // A group's period and the next cancel in a closure holding both:
+            // what rounding leaves of that is nothing, and the master cannot
+            // be solved with it.
+            for (used, size) in uses.iter_mut().zip(&size) {
+                if used.abs() <= 1e-9 * size {
+                    *used = 0.0;
+                }
+            }
+            Plan {
+                held: held.to_vec(),
+                worth,
+                uses,
+                idle: 0,
+            }
         };
-        let solution = solver::solve(&master, &options);
-        if solution.status != solver::Status::Optimal {
-            group = solved;
+        // The seed's side is its period and the node's: dug by the node's
+        // period when the first is no later.
+        let found: Vec<bool> = if sides == 2 {
+            side.iter().map(|side| *side == 1).collect()
+        } else {
+            side.iter().map(|side| side / spans <= side % spans).collect()
+        };
+        if !plans.iter().any(|plan| plan.held == found) {
+            plans.push(digs(&found));
+        }
+        let graph = mineflow::Precedence::explicit(groups as i64, &needs.iter().map(|(from, to)| (i64::from(*from), i64::from(*to))).collect::<Vec<_>>()).ok()?;
+        let mut inner = mineflow::Solver::new(&graph, &vec![0; groups]).ok()?;
+        let mut basis: Option<solver::Basis> = None;
+        let mut mixed: Option<Vec<f64>> = None;
+        let mut stop = false;
+        // The prices that gave the lowest bound on these groups, and it.
+        let mut centre: Option<(Vec<f64>, f64)> = None;
+        // Near enough the best on these groups: a fraction of how far the
+        // plan is from the bound, as the next split moves the best anyway.
+        let enough = if bound.is_finite() { INNER * (bound - value).max(0.0) } else { 1e-3 * value.abs() }.max(IMPROVEMENT * value.abs().max(1.0));
+        loop {
+            // In units the solver's tolerances suit: the plans' worth and
+            // each row's largest amount as one.
+            let unit = plans.iter().map(|plan| plan.worth.abs()).chain(hinges.iter().map(|hinge| hinge.cost)).fold(1e-9, f64::max);
+            let row_unit: Vec<f64> = (0..limits.len())
+                .map(|row| plans.iter().map(|plan| plan.uses[row].abs()).fold(limits[row].abs(), f64::max))
+                .map(|largest| if largest > 1e-9 { 1.0 / largest } else { 1.0 })
+                .collect();
+            let mut master = solver::Problem::new(solver::Sense::Maximise);
+            // How far each period's feed is past each hinge, at its cost.
+            let mut excess: BTreeMap<usize, usize> = BTreeMap::new();
+            for hinge in &hinges {
+                excess.insert(hinge.row, master.add_col(-hinge.cost / unit, 0.0, f64::INFINITY));
+            }
+            let first = master.num_cols();
+            for plan in &plans {
+                master.add_col(plan.worth / unit, 0.0, f64::INFINITY);
+            }
+            for (row, limit) in limits.iter().enumerate() {
+                let scale = row_unit[row];
+                master.add_row(
+                    f64::NEG_INFINITY,
+                    limit * scale,
+                    plans
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, plan)| plan.uses[row] != 0.0)
+                        .map(|(at, plan)| (first + at, plan.uses[row] * scale))
+                        .chain(excess.get(&row).map(|col| (*col, -scale))),
+                );
+            }
+            master.add_row(f64::NEG_INFINITY, 1.0, (0..plans.len()).map(|at| (first + at, 1.0)));
+            // From the last basis, the new plan out of it.
+            if let Some(basis) = basis.as_mut() {
+                basis.col_status.resize(master.num_cols(), solver::BasisStatus::Lower);
+            }
+            // A new plan leaves the last mix as it was, so the primal method
+            // goes on from it. Presolve gains nothing on a program this
+            // small and has failed to give one back solved.
+            let options = solver::Options {
+                time_limit: request.budget.saturating_sub(started.elapsed()).as_secs_f64().max(0.1),
+                presolve: false,
+                simplex_strategy: solver::SimplexStrategy::Primal,
+                ..solver::Options::default()
+            };
+            let mut solution = solver::solve_from(&master, &options, basis.as_ref(), None);
+            if solution.status != solver::Status::Optimal && basis.is_some() {
+                solution = solver::solve(&master, &options);
+            }
+            if solution.status != solver::Status::Optimal {
+                solution = solver::solve(
+                    &master,
+                    &solver::Options {
+                        simplex_strategy: solver::SimplexStrategy::Dual,
+                        ..options.clone()
+                    },
+                );
+            }
+            if solution.status != solver::Status::Optimal {
+                // The last mix stands; the budget ends the plan.
+                stop = started.elapsed() >= request.budget;
+                break;
+            }
+            basis = solution.basis.clone();
+            value = solution.objective * unit;
+            mixed = Some(solution.col_value[first..].to_vec());
+            // A limit's price is what one more tonne of it would add.
+            for ((price, dual), scale) in prices.iter_mut().zip(&solution.row_dual).zip(&row_unit) {
+                *price = dual.abs() * unit * scale;
+            }
+            // Never more than the hinge costs: past that the excess pays it.
+            for hinge in &hinges {
+                prices[hinge.row] = prices[hinge.row].min(hinge.cost);
+            }
+            if started.elapsed() >= request.budget || cancelled() {
+                stop = true;
+                break;
+            }
+            // The best plan at prices between the program's and those that
+            // gave the lowest bound yet (Wentges): the program's swing from
+            // one extreme to another as plans come in, and a closure at them
+            // overshoots. When that plan is worth nothing at the program's
+            // own prices, the closure at those is the next.
+            let allowance = |at: &[f64]| limits.iter().zip(at).map(|(limit, price)| limit * price).sum::<f64>();
+            let mut weight = SMOOTHING;
+            let mut found: Option<Plan> = None;
+            loop {
+                let at: Vec<f64> = match &centre {
+                    Some((centre, _)) if weight > 0.0 => centre.iter().zip(&prices).map(|(centre, price)| weight * centre + (1.0 - weight) * price).collect(),
+                    _ => prices.clone(),
+                };
+                let gains: Vec<f64> = (0..groups)
+                    .map(|group| objective[group] - takes[group].iter().map(|(row, used)| at[*row] * used).sum::<f64>())
+                    .collect();
+                // As integers well inside what the closure solver sums exactly,
+                // and none as far down as a closed group.
+                let total: f64 = gains.iter().map(|gain| gain.abs()).sum::<f64>().max(1e-9);
+                let scale = 1e16 / total;
+                let values: Vec<i64> = gains
+                    .iter()
+                    .zip(&closed)
+                    .map(|(gain, closed)| if *closed { FORBIDDEN } else { (gain * scale).round() as i64 })
+                    .collect();
+                inner.update_values(&values).ok()?;
+                inner.solve_with_cancel(cancelled).ok()?;
+                let held = inner.pit().ok()?.as_slice().to_vec();
+                let gain: f64 = gains.iter().zip(&held).filter(|(_, held)| **held).map(|(gain, _)| gain).sum();
+                let low = allowance(&at) + gain.max(0.0);
+                if centre.as_ref().is_none_or(|(_, lowest)| low < *lowest) {
+                    centre = Some((at, low));
+                }
+                let plan = digs(&held);
+                let reduced = plan.worth - plan.uses.iter().zip(&prices).map(|(used, price)| used * price).sum::<f64>() - (value - allowance(&prices));
+                if reduced > IMPROVEMENT * value.abs().max(1.0) && !plans.iter().any(|kept| kept.held == plan.held) {
+                    found = Some(plan);
+                    break;
+                }
+                if weight == 0.0 || centre.is_none() {
+                    break;
+                }
+                weight = 0.0;
+            }
+            let lowest = centre.as_ref().map_or(f64::INFINITY, |(_, lowest)| *lowest);
+            let Some(plan) = found.filter(|_| lowest - value > enough) else {
+                break;
+            };
+            plans.push(plan);
+        }
+        // Without a master solved on this split, the last shares stand in it.
+        let Some(mixed) = mixed else {
+            if stop {
+                break;
+            }
+            continue;
+        };
+        share = vec![0.0; groups];
+        for (plan, amount) in plans.iter_mut().zip(&mixed) {
+            for (at, _) in plan.held.iter().enumerate().filter(|(_, held)| **held) {
+                share[at] += amount;
+            }
+            plan.idle = if *amount > 1e-12 { 0 } else { plan.idle + 1 };
+        }
+        // Plans the mix has long gone without only slow its program.
+        plans.retain(|plan| plan.idle < IDLE_ROUNDS);
+        if stop {
             break;
-        }
-        value = solution.objective;
-        share = solution.col_value;
-        // A limit's price is what one more tonne of it would add.
-        for (price, dual) in prices.iter_mut().zip(&solution.row_dual) {
-            *price = dual.abs();
-        }
-        // Never more than the hinge costs: past that the excess pays it.
-        for hinge in &hinges {
-            prices[hinge.row] = prices[hinge.row].min(hinge.cost);
         }
     }
     // How much of each block the plan has dug by the end of each period.
