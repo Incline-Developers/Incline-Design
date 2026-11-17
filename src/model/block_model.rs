@@ -1161,7 +1161,41 @@ impl ReserveMappingSource {
 /// Whether a column's name says it is per cubic metre: a density.
 pub(crate) fn looks_like_density(column: &str) -> bool {
     let name = column.to_lowercase();
-    ["dens", "sg", "t_m3", "t/m3", "kg_m3"].iter().any(|hint| name.contains(hint))
+    ["dens", "sg", "t_m3", "t/m3", "kg_m3"].iter().any(|hint| name.contains(hint)) || reserve_name_key(column) == "density"
+}
+
+/// What a field or column name stands for, whatever the units or spelling
+/// it carries: "Cu %", `CU_PCT`, `cu_pct` and `CU` are all `cu`; `SG`, `BD`
+/// and `density` are all `density`. Block models from different sources
+/// name the same quantity differently, and the Field List maps onto each
+/// by this.
+pub(crate) fn reserve_name_key(name: &str) -> String {
+    const UNITS: [&str; 14] = ["pct", "percent", "ppm", "ppb", "gpt", "gt", "g", "t", "opt", "oz", "kg", "m3", "tm3", "kgm3"];
+    let lower = name.to_lowercase().replace('%', " pct ");
+    let tokens: Vec<&str> = lower.split(|ch: char| !ch.is_ascii_alphanumeric()).filter(|token| !token.is_empty()).collect();
+    // A unit alone is the name, not a unit of it: `t` for tonnes.
+    let kept: Vec<&str> = tokens.iter().copied().filter(|token| !UNITS.contains(token)).collect();
+    let key = if kept.is_empty() { tokens.concat() } else { kept.concat() };
+    match key.as_str() {
+        "copper" => "cu",
+        "gold" => "au",
+        "silver" => "ag",
+        "iron" => "fe",
+        "zinc" => "zn",
+        "lead" => "pb",
+        "nickel" => "ni",
+        "sulphur" | "sulfur" => "s",
+        "arsenic" => "as",
+        "silica" => "sio2",
+        "alumina" => "al2o3",
+        "phosphorus" => "p",
+        "sg" | "bd" | "dens" | "sd" | "bulkdensity" | "drybulkdensity" | "insitudensity" => "density",
+        "rocktype" | "lith" | "lithology" | "geology" | "geol" | "unit" | "rtype" => "rock",
+        "oxide" | "ox" | "oxidation" | "weath" | "redox" | "oxidationstate" => "weathering",
+        "tons" | "tonnage" | "t" | "mass" => "tonnes",
+        other => other,
+    }
+    .to_owned()
 }
 
 /// Each block's volume in cubic metres, which a volume-averaged field is

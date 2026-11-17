@@ -22,32 +22,42 @@ impl crate::app::App<'_> {
     }
 
     /// Map each field that a block model has not mapped onto that model's
-    /// column of the same name, when the column is the field's kind: a
-    /// category for a Category field, a number otherwise. A field already
-    /// mapped, to anything, is left alone. `only` limits it to one model.
+    /// column of the same name, or failing that of the same meaning (see
+    /// [`crate::model::block_model::reserve_name_key`]), when the column is
+    /// the field's kind: a category for a Category field, a number
+    /// otherwise. A summed tonnes field a model has no column for is its
+    /// density times each block's volume. A field already mapped, to
+    /// anything, is left alone. `only` limits it to one model.
     pub(crate) fn auto_map_reserve_columns(&mut self, only: Option<BlockModelId>) {
-        use crate::model::block_model::{ReserveFieldMapping, ReserveMappingSource};
+        use crate::model::block_model::{ReserveFieldMapping, ReserveMappingSource, reserve_name_key};
         let Some(document) = self.workspace.active_document() else {
             return;
         };
-        let fields: Vec<_> = document
-            .reserve_fields()
-            .iter()
-            .map(|field| (field.id, field.name.clone(), field.aggregation == ReserveAggregation::Category))
-            .collect();
+        let fields: Vec<_> = document.reserve_fields().iter().map(|field| (field.id, field.name.clone(), field.aggregation)).collect();
         for model in self.block_models.iter_mut().filter(|model| only.is_none_or(|id| model.id == id)) {
             let numeric: Vec<_> = model.model.numeric_variables().into_iter().map(|variable| variable.name.clone()).collect();
             let categorical: Vec<_> = model.model.categorical_variables().into_iter().map(|variable| variable.name.clone()).collect();
             let mut mapped = false;
-            for (field, name, is_category) in &fields {
-                let columns = if *is_category { &categorical } else { &numeric };
-                if model.reserve_mapping.iter().any(|mapping| mapping.field == *field) || !columns.contains(name) {
+            for (field, name, aggregation) in &fields {
+                let is_category = *aggregation == ReserveAggregation::Category;
+                let columns = if is_category { &categorical } else { &numeric };
+                if model.reserve_mapping.iter().any(|mapping| mapping.field == *field) {
                     continue;
                 }
-                model.reserve_mapping.push(ReserveFieldMapping {
-                    field: *field,
-                    source: ReserveMappingSource::Column(name.clone()),
-                });
+                let key = reserve_name_key(name);
+                let source = if columns.contains(name) {
+                    ReserveMappingSource::Column(name.clone())
+                } else if let Some(column) = columns.iter().find(|column| reserve_name_key(column) == key) {
+                    ReserveMappingSource::Column(column.clone())
+                } else if key == "tonnes"
+                    && *aggregation == ReserveAggregation::Sum
+                    && let Some(density) = numeric.iter().find(|column| reserve_name_key(column) == "density")
+                {
+                    ReserveMappingSource::PerVolume(density.clone())
+                } else {
+                    continue;
+                };
+                model.reserve_mapping.push(ReserveFieldMapping { field: *field, source });
                 mapped = true;
             }
             if mapped {
