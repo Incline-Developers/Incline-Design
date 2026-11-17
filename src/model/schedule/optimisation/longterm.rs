@@ -161,6 +161,63 @@ struct Block {
     authored_h: Option<f64>,
 }
 
+/// The precedence pairs `(from, to)` between `groups` nodes less those
+/// that others imply: `from` reaching `to` some other way. `None` when the
+/// pairs hold a cycle.
+fn reduce_needs(groups: usize, needs: &[(u32, u32)]) -> Option<Vec<(u32, u32)>> {
+    let mut out: Vec<Vec<u32>> = vec![Vec::new(); groups];
+    let mut indegree = vec![0_usize; groups];
+    for (from, to) in needs {
+        out[*from as usize].push(*to);
+        indegree[*to as usize] += 1;
+    }
+    // Kahn's order: every pair goes forward in it.
+    let mut order: Vec<usize> = (0..groups).filter(|node| indegree[*node] == 0).collect();
+    let mut at = 0;
+    while at < order.len() {
+        let node = order[at];
+        at += 1;
+        for next in &out[node] {
+            indegree[*next as usize] -= 1;
+            if indegree[*next as usize] == 0 {
+                order.push(*next as usize);
+            }
+        }
+    }
+    if order.len() < groups {
+        return None;
+    }
+    let mut position = vec![0_usize; groups];
+    for (index, node) in order.iter().enumerate() {
+        position[*node] = index;
+    }
+    // What each node reaches, a bit a node, filled from the last in the
+    // order back: a pair is kept unless a nearer one already reaches its end.
+    let words = groups.div_ceil(64);
+    let mut reach = vec![0_u64; groups * words];
+    let mut kept: Vec<(u32, u32)> = Vec::with_capacity(needs.len());
+    let mut seen = vec![0_u64; words];
+    for &node in order.iter().rev() {
+        let mut next: Vec<u32> = out[node].clone();
+        next.sort_by_key(|at| position[*at as usize]);
+        next.dedup();
+        seen.fill(0);
+        for to in next {
+            let to = to as usize;
+            if seen[to / 64] >> (to % 64) & 1 == 1 {
+                continue;
+            }
+            kept.push((node as u32, to as u32));
+            seen[to / 64] |= 1 << (to % 64);
+            for (word, reached) in seen.iter_mut().zip(&reach[to * words..(to + 1) * words]) {
+                *word |= reached;
+            }
+        }
+        reach[node * words..(node + 1) * words].copy_from_slice(&seen);
+    }
+    Some(kept)
+}
+
 /// Amounts by crusher or truck class.
 type Shares = [(usize, f64)];
 
@@ -1234,6 +1291,11 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             .collect();
         needs.sort_unstable();
         needs.dedup();
+        // Only the pairs no others imply: the same plan on a third of the
+        // rows or fewer, as each closure's split leaves chains of groups.
+        if let Some(reduced) = reduce_needs(groups, &needs) {
+            needs = reduced;
+        }
         let mut master = solver::Problem::new(solver::Sense::Maximise);
         let cols: Vec<usize> = (0..groups).map(|held| master.add_col(objective[held], 0.0, if closed[held] { 0.0 } else { 1.0 })).collect();
         // How far each period's feed is past each hinge, at its cost.
