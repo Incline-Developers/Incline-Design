@@ -45,6 +45,10 @@ const IDLE_ROUNDS: u32 = 3;
 /// How far each master's closures are priced toward the prices that gave
 /// its lowest bound.
 const SMOOTHING: f64 = 0.7;
+/// The most closures the last plan is restarted from.
+const PRIOR_LEVELS: usize = 200;
+/// Rounds a plan restarted from the last one goes on without bettering it.
+const RESTART_FLAT_ROUNDS: usize = 3;
 /// How many of the crusher feed blocks the plan is surest of, in turn, a
 /// period's next is chosen from for its grade.
 const BLEND_CHOICES: usize = 50;
@@ -1157,21 +1161,47 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
     let mut group: Vec<u32> = vec![0; nodes];
     let mut groups = 1_usize;
     // From where the last plan ended: its nodes dug to the same share are
-    // one group, so the first master can give them that share again and the
-    // closures need only find what the edit changed. A block it did not
-    // plan is a group of its own until they split it.
+    // one group, and the first master is given the closures those shares
+    // stack up from, so it starts with the last plan and the closures need
+    // only find what the edit changed.
+    let mut prior_share: Option<Vec<f64>> = None;
     if let Some(memory) = request.memory {
-        let mut labels: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        let mut shares = vec![0.0; nodes];
         for (index, block) in blocks.iter().enumerate() {
-            let prior = stable(block).and_then(|at| memory.dug_by.get(&at)).filter(|shares| shares.len() == spans);
-            for period in 0..spans {
-                // No share's bits are all ones: that is a NaN.
-                let side = prior.map_or(u32::MAX, |shares| shares[period].to_bits());
-                let next = labels.len() as u32;
-                group[index * spans + period] = *labels.entry(side).or_insert(next);
+            if let Some(prior) = stable(block).and_then(|at| memory.dug_by.get(&at)).filter(|shares| shares.len() == spans) {
+                for period in 0..spans {
+                    shares[index * spans + period] = f64::from(prior[period]).clamp(0.0, 1.0);
+                }
             }
         }
+        // A block the last plan cannot be matched to was dug at least as
+        // far as anything waiting on it.
+        {
+            let known: Vec<bool> = blocks
+                .iter()
+                .map(|block| stable(block).and_then(|at| memory.dug_by.get(&at)).is_some_and(|shares| shares.len() == spans))
+                .collect();
+            let mut needed: Vec<Vec<usize>> = vec![Vec::new(); nodes];
+            for (from, to) in &edges {
+                needed[*from as usize].push(*to as usize);
+            }
+            let mut stack: Vec<usize> = (0..nodes).filter(|node| shares[*node] > 0.0).collect();
+            while let Some(node) = stack.pop() {
+                for to in &needed[node] {
+                    if !known[*to / spans] && shares[*to] < shares[node] {
+                        shares[*to] = shares[node];
+                        stack.push(*to);
+                    }
+                }
+            }
+        }
+        let mut labels: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
+        for (node, share) in shares.iter().enumerate() {
+            let next = labels.len() as u32;
+            group[node] = *labels.entry(share.to_bits()).or_insert(next);
+        }
         groups = labels.len().max(1);
+        prior_share = Some(shares);
     }
     let mut share: Vec<f64> = vec![0.0];
     let mut prices = vec![0.0; limits.len()];
@@ -1213,6 +1243,8 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         Some(column)
     };
     let (mut value, mut bound, mut rounds) = (0.0, f64::INFINITY, 0);
+    let restarted = prior_share.is_some();
+    let (mut best_value, mut flat) = (f64::NEG_INFINITY, 0);
     // The master's plans, as the groups each digs: what one digs, and so
     // what it is worth and takes of each row, stays the same as the groups
     // split.
@@ -1279,6 +1311,18 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             bound = bound.min(priced + allowance);
             if bound - value <= IMPROVEMENT * value.abs().max(1.0) {
                 break;
+            }
+            // Restarted from the last plan, which was the best there was
+            // before the edit: rounds that add nothing to it only prove it.
+            if restarted {
+                if value > best_value + IMPROVEMENT * value.abs().max(1.0) {
+                    (best_value, flat) = (value, 0);
+                } else {
+                    flat += 1;
+                    if flat >= RESTART_FLAT_ROUNDS {
+                        break;
+                    }
+                }
             }
             (chosen.iter().map(|held| usize::from(*held)).collect(), 2)
         };
@@ -1392,6 +1436,40 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         };
         if !plans.iter().any(|plan| plan.held == found) {
             plans.push(digs(&found));
+        }
+        // The last plan, as the closures its shares stack up from: the
+        // nodes dug to at least each share it gives. Ground the edit closed
+        // and what waits on it are left out of each.
+        if let Some(prior) = prior_share.take() {
+            let mut of_group = vec![0.0; groups];
+            for (node, at) in group.iter().enumerate() {
+                of_group[*at as usize] = prior[node];
+            }
+            let mut levels: Vec<f64> = of_group.iter().copied().filter(|share| *share > 1e-6).collect();
+            levels.sort_by(f64::total_cmp);
+            levels.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+            if levels.len() > PRIOR_LEVELS {
+                levels = (0..PRIOR_LEVELS).map(|at| levels[at * levels.len() / PRIOR_LEVELS]).collect();
+            }
+            let mut needed_by: Vec<Vec<u32>> = vec![Vec::new(); groups];
+            for (from, to) in &needs {
+                needed_by[*to as usize].push(*from);
+            }
+            for level in levels {
+                let mut held: Vec<bool> = of_group.iter().zip(&closed).map(|(share, closed)| *share >= level - 1e-9 && !closed).collect();
+                // Whatever needs a group left out is left out too.
+                let mut stack: Vec<usize> = (0..groups).filter(|at| !held[*at]).collect();
+                while let Some(at) = stack.pop() {
+                    for from in &needed_by[at] {
+                        if std::mem::replace(&mut held[*from as usize], false) {
+                            stack.push(*from as usize);
+                        }
+                    }
+                }
+                if held.iter().any(|held| *held) && !plans.iter().any(|plan| plan.held == held) {
+                    plans.push(digs(&held));
+                }
+            }
         }
         let graph = mineflow::Precedence::explicit(groups as i64, &needs.iter().map(|(from, to)| (i64::from(*from), i64::from(*to))).collect::<Vec<_>>()).ok()?;
         let mut inner = mineflow::Solver::new(&graph, &vec![0; groups]).ok()?;
