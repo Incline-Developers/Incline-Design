@@ -1616,7 +1616,19 @@ impl Document {
     }
 
     fn object_position(&self, id: ObjectId) -> Option<usize> {
-        self.indexed_object_position(id).or_else(|| self.objects.iter().position(|object| object.id() == id))
+        self.indexed_object_position(id)
+            .or_else(|| self.scan_unindexed(id).then(|| self.objects.iter().position(|object| object.id() == id)).flatten())
+    }
+
+    /// Whether an object the index misses could still be in the list: only
+    /// when the index holds fewer entries than there are objects. Every
+    /// object is indexed as it is added, so scanning on every miss - each
+    /// object of an import is one, being new - made adding N objects to a
+    /// document of M cost N x M: minutes for a surveyed topography.
+    fn scan_unindexed(&self, id: ObjectId) -> bool {
+        let unindexed = self.object_index.len() < self.objects.len();
+        debug_assert!(!unindexed, "object_index out of sync for {id:?}");
+        unindexed
     }
 
     /// The design object's position by its index alone. Every design object
@@ -2478,10 +2490,10 @@ impl Document {
         if let Some(cut) = self.planning_benches().flat_map(|bench| &bench.cuts).find(|object| object.id() == id) {
             return Some(cut);
         }
-        let slow = self.objects.iter().find(|object| object.id() == id);
         // The linear scan finding an object the index missed means the index
         // is corrupt; surface that in debug builds instead of hiding it
         // behind O(N) lookups.
+        let slow = self.scan_unindexed(id).then(|| self.objects.iter().find(|object| object.id() == id)).flatten();
         debug_assert!(slow.is_none(), "object_index out of sync for {id:?}");
         slow
     }
