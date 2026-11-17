@@ -300,6 +300,7 @@ fn chain_at(input: &BlendInput, best: &Best, first: usize) -> Option<ChainState>
         for (ground, tonnes) in rows {
             if let Some(slot) = left.get_mut(ground) {
                 *slot -= tonnes;
+                chain.dug(*ground);
             }
         }
     }

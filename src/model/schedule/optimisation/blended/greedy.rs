@@ -378,6 +378,9 @@ struct State<'a> {
     /// Each automatic bar's ground for a day, as the lookahead chose it:
     /// the day, the interval it was chosen in, and the blocks.
     pools: RefCell<BTreeMap<usize, Pool>>,
+    /// Each automatic bar's blocks it could start as the latest interval
+    /// opened, read along its sequence as far as asked; see [`Self::walk_open`].
+    open: RefCell<BTreeMap<usize, OpenBlocks>>,
     /// Where the lookahead's programs start from.
     lookahead_warm: RefCell<WarmStarts>,
     /// The loader areas each block is in, by position in
@@ -392,6 +395,18 @@ struct State<'a> {
 /// An automatic bar's ground for a day: the day, the interval it was
 /// chosen in, and the blocks.
 type Pool = (u32, usize, Vec<GroundId>);
+
+/// An automatic bar's blocks it could start as an interval opens, from its
+/// cursor on, each with its tonnes and those the crushers would take: what
+/// [`State::walk_open`] has read of its sequence so far.
+#[derive(Default)]
+struct OpenBlocks {
+    /// The interval and the cursor they were read at.
+    at: (usize, usize),
+    blocks: Vec<(GroundId, f64, f64)>,
+    /// Where in the sequence reading goes on.
+    next: usize,
+}
 /// A row's columns and their coefficients.
 type Terms = Vec<(Col, f64)>;
 
@@ -688,6 +703,7 @@ impl<'a> State<'a> {
             warm: RefCell::default(),
             cursor: RefCell::default(),
             pools: RefCell::default(),
+            open: RefCell::default(),
             lookahead_warm: RefCell::default(),
             areas_of: {
                 let mut areas_of: BTreeMap<GroundId, Vec<usize>> = BTreeMap::new();
@@ -752,21 +768,59 @@ impl<'a> State<'a> {
             }
             *at
         };
+        if let Some(pool) = self.day_pool(task, done, interval) {
+            return Some(pool);
+        }
         let (mut before, mut fed) = (0.0, 0.0);
         let mut out = Vec::new();
-        for block in &sequence[start..] {
+        self.walk_open(task, start, interval, |block, left, feed| {
             if before > entry.lookahead_t && fed > entry.lookahead_feed_t {
-                break;
+                return false;
             }
-            let left = if done.contains(block) { 0.0 } else { self.ground.get(block).copied().unwrap_or(0.0) };
-            if left <= FINISHED_T || !self.blasted(*block) || !self.diggable(entry, *block, interval) {
-                continue;
+            if !done.contains(&block) {
+                out.push(block);
+                before += left;
+                fed += feed;
             }
-            out.push(*block);
-            before += left;
-            fed += left * self.outlets.feed_share(entry.loader, *block);
+            true
+        });
+        Some(out)
+    }
+
+    /// Hand `visit` the blocks of `task`'s sequence from `start` that it
+    /// could start as `interval` opens - standing, released, and with
+    /// somewhere to send all of it - in order, each with its tonnes and
+    /// those the crushers would take, until it returns false. None of that
+    /// changes within an interval, so what is read is kept for the next.
+    fn walk_open(&self, task: usize, start: usize, interval: Interval, mut visit: impl FnMut(GroundId, f64, f64) -> bool) {
+        let entry = &self.input.tasks[task];
+        let TaskKind::Dig { sequence } = &entry.kind else { return };
+        let start = start.min(sequence.len());
+        let mut open = self.open.borrow_mut();
+        let found = open.entry(task).or_default();
+        if found.at != (interval.index, start) || found.next < start {
+            *found = OpenBlocks {
+                at: (interval.index, start),
+                blocks: Vec::new(),
+                next: start,
+            };
         }
-        Some(self.day_pool(task, done, interval).unwrap_or(out))
+        let mut index = 0;
+        loop {
+            while index == found.blocks.len() && found.next < sequence.len() {
+                let block = sequence[found.next];
+                found.next += 1;
+                let left = self.ground.get(&block).copied().unwrap_or(0.0);
+                if left > FINISHED_T && self.blasted(block) && self.diggable(entry, block, interval) {
+                    found.blocks.push((block, left, left * self.outlets.feed_share(entry.loader, block)));
+                }
+            }
+            let Some(&(block, left, feed)) = found.blocks.get(index) else { return };
+            if !visit(block, left, feed) {
+                return;
+            }
+            index += 1;
+        }
     }
 
     /// An automatic bar's ground for the rest of the day, as the lookahead
@@ -776,7 +830,9 @@ impl<'a> State<'a> {
     /// its sequence's next day of ground.
     fn day_pool(&self, task: usize, done: &BTreeSet<GroundId>, interval: Interval) -> Option<Vec<GroundId>> {
         let entry = &self.input.tasks[task];
-        let TaskKind::Dig { sequence } = &entry.kind else { return None };
+        if !matches!(entry.kind, TaskKind::Dig { .. }) {
+            return None;
+        }
         let day = interval.day();
         // The blocks it may dig now: those with no more than the lookahead's
         // days of released ground before them, as the replay checks.
@@ -785,18 +841,17 @@ impl<'a> State<'a> {
             let start = self.cursor.borrow().get(&task).copied().unwrap_or(0);
             let days = LOOKAHEAD_DAYS as f64;
             let (mut before, mut fed) = (0.0, 0.0);
-            for &block in &sequence[start.min(sequence.len())..] {
+            self.walk_open(task, start, interval, |block, left, feed| {
                 if before > days * entry.lookahead_t && fed > days * entry.lookahead_feed_t {
-                    break;
+                    return false;
                 }
-                let left = if done.contains(&block) { 0.0 } else { self.ground.get(&block).copied().unwrap_or(0.0) };
-                if left <= FINISHED_T || !self.blasted(block) || !self.diggable(entry, block, interval) {
-                    continue;
+                if !done.contains(&block) {
+                    window.insert(block);
+                    before += left;
+                    fed += feed;
                 }
-                window.insert(block);
-                before += left;
-                fed += left * self.outlets.feed_share(entry.loader, block);
-            }
+                true
+            });
         }
         let live = |pool: &[GroundId]| -> (Vec<GroundId>, f64) {
             let mut left_t = 0.0;
@@ -1320,15 +1375,14 @@ impl<'a> State<'a> {
                 TaskKind::Dig { sequence } => {
                     // Every block of the sequence gone, by any loader.
                     let start = self.cursor.borrow().get(&bar.task).copied().unwrap_or(0).min(sequence.len());
-                    let remaining: Vec<GroundId> = sequence[start..]
+                    let remaining = sequence[start..]
                         .iter()
                         .copied()
-                        .filter(|block| !done.contains(block) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T))
-                        .collect();
-                    if remaining.iter().any(|block| plan.dug_by_all(*block) < self.ground[block] - SNAP_T) {
+                        .filter(|block| !done.contains(block) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T));
+                    if remaining.clone().any(|block| plan.dug_by_all(block) < self.ground[&block] - SNAP_T) {
                         continue;
                     }
-                    next.pins.extend(remaining.iter().map(|block| (*block, last)));
+                    next.pins.extend(remaining.map(|block| (block, last)));
                 }
                 TaskKind::Reclaim { maximum_t, approved_sources } => {
                     let drawn: f64 = plan
@@ -1429,14 +1483,14 @@ impl<'a> State<'a> {
                 // Blocks before the bar's current one as the interval opened
                 // are gone already.
                 let start = self.cursor.borrow().get(&task).copied().unwrap_or(0).min(sequence.len());
-                let left: Vec<GroundId> = sequence[start..]
+                let mut left = sequence[start..]
                     .iter()
                     .copied()
                     .filter(|block| !gone.contains(block) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T))
-                    .collect();
-                if left.is_empty() || !self.blasted(left[0]) || !self.diggable(entry, left[0], interval) {
+                    .peekable();
+                if left.peek().is_none_or(|&first| !self.blasted(first) || !self.diggable(entry, first, interval)) {
                     Some(false)
-                } else if left.iter().any(|block| !worked.contains(block) && self.ground[block] > SURELY_HELD_T) {
+                } else if left.any(|block| !worked.contains(&block) && self.ground[&block] > SURELY_HELD_T) {
                     Some(true)
                 } else {
                     None
@@ -2028,6 +2082,11 @@ impl<'a> State<'a> {
         for ((_, block, _), tonnes) in extracted {
             if let Some(left) = self.ground.get_mut(&block) {
                 *left = (*left - tonnes).max(0.0);
+                if *left <= FINISHED_T
+                    && let Some(chain) = self.chain.as_mut()
+                {
+                    chain.dug(block);
+                }
             }
         }
         // Earlier segments first, so reclaim is charged to bars in the order
