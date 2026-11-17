@@ -1113,13 +1113,31 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         }
         out
     };
+    // Every node's use of the side rows, worked out once: each round reads
+    // all of them twice over.
+    let (use_start, use_rows): (Vec<usize>, Vec<(usize, f64)>) = {
+        let mut start = Vec::with_capacity(nodes + 1);
+        let mut rows = Vec::new();
+        start.push(0);
+        for index in 0..count {
+            for period in 0..spans {
+                rows.extend(uses_in(index, period));
+                start.push(rows.len());
+            }
+        }
+        (start, rows)
+    };
+    let uses_of = |index: usize, period: usize| {
+        let node = index * spans + period;
+        &use_rows[use_start[node]..use_start[node + 1]]
+    };
     // What a closure, as the period each block is dug in, takes of each row.
     let usage = |column: &Column| {
         let mut used = vec![0.0; limits.len()];
         for (index, period) in column.iter().enumerate() {
             let period = usize::from(*period);
             if period < spans {
-                for (row, amount) in uses_in(index, period) {
+                for &(row, amount) in uses_of(index, period) {
                     used[row] += amount;
                 }
             }
@@ -1178,12 +1196,12 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             let after = blocks[index].above.iter().map(|over| usize::from(column[*over]) + lag[index]).max().unwrap_or(0);
             let first = after.max(opens[index]);
             let fits = |period: usize, left: &[f64]| {
-                uses_in(index, period)
+                uses_of(index, period)
                     .iter()
                     .all(|(row, amount)| !hard[*row] || *amount <= 0.0 || left[*row] >= *amount - 1e-6)
             };
             if let Some(period) = (first..spans).find(|period| fits(*period, &left)) {
-                for (row, amount) in uses_in(index, period) {
+                for &(row, amount) in uses_of(index, period) {
                     left[row] -= amount;
                 }
                 column[index] = period as u16;
@@ -1221,11 +1239,13 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             // The best closure at these prices. A block dug in a period earns
             // its discounted value less the capacity it pays for; as "dug by"
             // nodes that is the difference between one period and the next.
-            let gain = |index: usize, period: usize| blocks[index].value * discount[period] - uses_in(index, period).iter().map(|(row, used)| at[*row] * used).sum::<f64>();
+            let mut gains = vec![0.0; spans + 1];
             for (index, block) in blocks.iter().enumerate() {
+                for (period, gain) in gains.iter_mut().take(spans).enumerate() {
+                    *gain = block.value * discount[period] - uses_of(index, period).iter().map(|(row, used)| at[*row] * used).sum::<f64>();
+                }
                 for period in 0..spans {
-                    let here = gain(index, period);
-                    let next = if period + 1 < spans { gain(index, period + 1) } else { 0.0 };
+                    let (here, next) = (gains[period], gains[period + 1]);
                     // Before its blast could be ready the block is not to be had
                     // at any price.
                     // A dig bar's ground is gone from when it should be dug: no
@@ -1295,9 +1315,9 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                 }
                 let later = if period + 1 < spans { block.value * discount[period + 1] } else { 0.0 };
                 objective[held] += block.value * discount[period] - later;
-                takes[held].extend(uses_in(index, period));
+                takes[held].extend_from_slice(uses_of(index, period));
                 if period + 1 < spans {
-                    takes[held].extend(uses_in(index, period + 1).into_iter().map(|(row, used)| (row, -used)));
+                    takes[held].extend(uses_of(index, period + 1).iter().map(|&(row, used)| (row, -used)));
                 }
             }
         }
