@@ -298,7 +298,21 @@ impl crate::app::App<'_> {
                 plan.experiment_mut().set_interval_h(interval_h)
             }),
             ScheduleEdit::SetStartDate(date) => self.edit_schedule(|plan| {
+                // A horizon of whole periods stays that many periods: months
+                // without a date are 28 days, and 120 of them read as 111
+                // calendar months once a date says where months start.
+                let before = plan.period_scale();
+                let end_day = plan.experiment().planning_end_day;
+                let periods = before.count(end_day);
+                let whole = before.first_day(periods) == end_day;
                 plan.set_start_date(date);
+                let after = plan.period_scale();
+                if whole && after != before {
+                    let day = after.first_day(periods);
+                    if day != end_day && day != u32::MAX {
+                        plan.experiment_mut().set_planning_end_day(day)?;
+                    }
+                }
                 Ok(())
             }),
             ScheduleEdit::SetPeriodColors { days, color } => self.edit_schedule(|plan| {
