@@ -197,14 +197,16 @@ pub(crate) fn auto_mapping(headers: &[String]) -> CsvColumnMapping {
     let roles = headers
         .iter()
         .map(|header| {
+            // The names block models from the common packages and exports
+            // give centroids, sizes and ids.
             let role = match header.trim().to_ascii_lowercase().as_str() {
-                "x" => CsvColumnRole::X,
-                "y" => CsvColumnRole::Y,
-                "z" => CsvColumnRole::Z,
-                "dx" => CsvColumnRole::Dx,
-                "dy" => CsvColumnRole::Dy,
-                "dz" => CsvColumnRole::Dz,
-                "id" => CsvColumnRole::Id,
+                "x" | "xc" | "xcen" | "xcentre" | "xcenter" | "x_centre" | "x_center" | "centre_x" | "center_x" | "centroid_x" | "east" | "easting" => CsvColumnRole::X,
+                "y" | "yc" | "ycen" | "ycentre" | "ycenter" | "y_centre" | "y_center" | "centre_y" | "center_y" | "centroid_y" | "north" | "northing" => CsvColumnRole::Y,
+                "z" | "zc" | "zcen" | "zcentre" | "zcenter" | "z_centre" | "z_center" | "centre_z" | "center_z" | "centroid_z" | "rl" | "elevation" | "elev" => CsvColumnRole::Z,
+                "dx" | "xinc" | "xsize" | "x_size" | "size_x" | "xdim" | "dim_x" => CsvColumnRole::Dx,
+                "dy" | "yinc" | "ysize" | "y_size" | "size_y" | "ydim" | "dim_y" => CsvColumnRole::Dy,
+                "dz" | "zinc" | "zsize" | "z_size" | "size_z" | "zdim" | "dim_z" => CsvColumnRole::Dz,
+                "id" | "ijk" | "block_id" | "blockid" => CsvColumnRole::Id,
                 _ => CsvColumnRole::Value,
             };
             if matches!(role, CsvColumnRole::Value | CsvColumnRole::Category | CsvColumnRole::Ignore) || claimed.insert(role) {
