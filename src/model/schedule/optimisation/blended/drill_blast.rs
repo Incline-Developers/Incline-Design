@@ -471,6 +471,8 @@ pub(crate) struct Chain<'a> {
     dug: Option<Vec<GroundId>>,
     /// The blasts cleared with a step not yet done.
     unfinished: Vec<usize>,
+    /// The blasts given a firing time since [`Self::take_fired`] last asked.
+    fired: Vec<usize>,
 }
 
 impl<'a> Chain<'a> {
@@ -517,6 +519,7 @@ impl<'a> Chain<'a> {
         let unfinished = (0..input.blasts.len())
             .filter(|&blast| events[blast].cleared_h.is_some() && events[blast].done_h.iter().any(Option::is_none))
             .collect();
+        let fired = (0..input.blasts.len()).filter(|&blast| events[blast].fired_h.is_some()).collect();
         Self {
             input,
             left,
@@ -527,6 +530,7 @@ impl<'a> Chain<'a> {
             waiting: BTreeMap::new(),
             dug: None,
             unfinished,
+            fired,
         }
     }
 
@@ -545,6 +549,21 @@ impl<'a> Chain<'a> {
         self.owner
             .get(&ground)
             .is_none_or(|&blast| self.events[blast].fired_h.is_some_and(|fired| fired <= at_h + 1e-9))
+    }
+
+    /// The blasts given a firing time since this was last asked, from the
+    /// first, with those times and the ground each releases.
+    pub(crate) fn take_fired(&mut self) -> Vec<(usize, f64, &'a [GroundId])> {
+        let input = self.input;
+        std::mem::take(&mut self.fired)
+            .into_iter()
+            .filter_map(|blast| Some((blast, self.events[blast].fired_h?, input.blasts[blast].releases.as_slice())))
+            .collect()
+    }
+
+    /// Whether `ground` belongs to a blast.
+    pub(crate) fn in_blast(&self, ground: GroundId) -> bool {
+        self.owner.contains_key(&ground)
     }
 
     /// Whether a blast is ready for `activity` at `at_h`: clear for prep,
@@ -644,6 +663,9 @@ impl<'a> Chain<'a> {
                     self.events[blast].done_h[step] = Some(until);
                     if step == BlastActivity::Charge as usize {
                         self.events[blast].fired_h = input.firing(until);
+                        if self.events[blast].fired_h.is_some() {
+                            self.fired.push(blast);
+                        }
                     }
                 }
             }
@@ -703,6 +725,9 @@ impl<'a> Chain<'a> {
                     if activity == BlastActivity::Charge {
                         let released = self.input.released_after(&self.input.blasts[blast], at);
                         self.events[blast].fired_h = (released < NEVER).then_some(released);
+                        if released < NEVER {
+                            self.fired.push(blast);
+                        }
                     }
                 }
             }

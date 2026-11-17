@@ -381,6 +381,15 @@ struct State<'a> {
     /// Each automatic bar's blocks it could start as the latest interval
     /// opened, read along its sequence as far as asked; see [`Self::walk_open`].
     open: RefCell<BTreeMap<usize, OpenBlocks>>,
+    /// While the chain runs, each automatic bar's places in its sequence
+    /// holding standing ground the chain has released, so reading what it
+    /// could start passes over none of what waits on a blast; filled as
+    /// the first interval opens.
+    released_at: Option<BTreeMap<usize, BTreeSet<usize>>>,
+    /// Where in each automatic bar's sequence each block is.
+    places: BTreeMap<GroundId, Vec<(usize, usize)>>,
+    /// The ground of blasts fired but not yet released, by when it is.
+    firing: BTreeMap<u64, Vec<&'a [GroundId]>>,
     /// Where the lookahead's programs start from.
     lookahead_warm: RefCell<WarmStarts>,
     /// The loader areas each block is in, by position in
@@ -704,6 +713,9 @@ impl<'a> State<'a> {
             cursor: RefCell::default(),
             pools: RefCell::default(),
             open: RefCell::default(),
+            released_at: None,
+            places: BTreeMap::new(),
+            firing: BTreeMap::new(),
             lookahead_warm: RefCell::default(),
             areas_of: {
                 let mut areas_of: BTreeMap<GroundId, Vec<usize>> = BTreeMap::new();
@@ -787,6 +799,42 @@ impl<'a> State<'a> {
         Some(out)
     }
 
+    /// Bring [`Self::released_at`] to the interval opening at `now_h`: the
+    /// ground of every blast fired by then joins it.
+    fn release_places(&mut self) {
+        let Some(chain) = self.chain.as_mut() else { return };
+        let input = self.input;
+        let released = self.released_at.get_or_insert_with(|| {
+            let mut released: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+            for (task, entry) in input.tasks.iter().enumerate().filter(|(_, entry)| entry.lookahead_t > 0.0) {
+                let TaskKind::Dig { sequence } = &entry.kind else { continue };
+                let open = released.entry(task).or_default();
+                for (place, block) in sequence.iter().enumerate() {
+                    self.places.entry(*block).or_default().push((task, place));
+                    if !chain.in_blast(*block) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T) {
+                        open.insert(place);
+                    }
+                }
+            }
+            released
+        });
+        for (_, at, ground) in chain.take_fired() {
+            self.firing.entry(at.to_bits()).or_default().push(ground);
+        }
+        while let Some(entry) = self.firing.first_entry() {
+            if f64::from_bits(*entry.key()) > self.now_h + 1e-9 {
+                break;
+            }
+            for block in entry.remove().into_iter().flatten() {
+                if chain.available(*block, self.now_h) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T) {
+                    for (task, place) in self.places.get(block).into_iter().flatten() {
+                        released.entry(*task).or_default().insert(*place);
+                    }
+                }
+            }
+        }
+    }
+
     /// Hand `visit` the blocks of `task`'s sequence from `start` that it
     /// could start as `interval` opens - standing, released, and with
     /// somewhere to send all of it - in order, each with its tonnes and
@@ -805,11 +853,17 @@ impl<'a> State<'a> {
                 next: start,
             };
         }
+        let released = self.released_at.as_ref().map(|released| released.get(&task));
         let mut index = 0;
         loop {
-            while index == found.blocks.len() && found.next < sequence.len() {
-                let block = sequence[found.next];
-                found.next += 1;
+            while index == found.blocks.len() {
+                let place = match released {
+                    Some(places) => places.and_then(|places| places.range(found.next..).next().copied()),
+                    None => (found.next < sequence.len()).then_some(found.next),
+                };
+                let Some(place) = place else { break };
+                let block = sequence[place];
+                found.next = place + 1;
                 let left = self.ground.get(&block).copied().unwrap_or(0.0);
                 if left > FINISHED_T && self.blasted(block) && self.diggable(entry, block, interval) {
                     found.blocks.push((block, left, left * self.outlets.feed_share(entry.loader, block)));
@@ -1084,6 +1138,7 @@ impl<'a> State<'a> {
         if let Some(chain) = self.chain.as_mut() {
             chain.advance(interval, |ground| self.ground.get(&ground).is_some_and(|left| *left > FINISHED_T));
         }
+        self.release_places();
         // Each loader's highest-priority bar with work. Where loader limits
         // hold, a bar whose block is in an area already holding its limit of
         // other loaders has none: the loaders that dug in an area last
@@ -2086,6 +2141,11 @@ impl<'a> State<'a> {
                     && let Some(chain) = self.chain.as_mut()
                 {
                     chain.dug(block);
+                    if let Some(released) = self.released_at.as_mut() {
+                        for (task, place) in self.places.get(&block).into_iter().flatten() {
+                            released.entry(*task).or_default().remove(place);
+                        }
+                    }
                 }
             }
         }
