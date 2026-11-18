@@ -62,6 +62,10 @@ const RING_GAP: f32 = 4.0;
 /// button rather than as a box drawn tight around the rings. The status bar
 /// gives it back beside the rule before it, as it does the language picker's.
 pub(crate) const READOUT_PADDING: f32 = 6.0;
+/// How far a status bar button's hover fill reaches above and below its row,
+/// so it reads as a button rather than a box drawn tight around the text. The
+/// status bar grows its margins by as much, keeping the fill inside the bar.
+pub(crate) const HOVER_FILL_PAD: f32 = 2.0;
 
 /// How long a finished task's ring stays full before it goes, then how long it
 /// takes to fade, then how long the rings to its left take to slide over into
@@ -328,7 +332,7 @@ fn draw_readout(ui: &mut egui::Ui, deck: &Deck, now: f64, status: &str, task: &s
     };
     if response.hovered() {
         painter.rect_filled(
-            rect.shrink2(egui::vec2(0.0, RING_VERTICAL_MARGIN / 2.0)),
+            rect.expand2(egui::vec2(0.0, HOVER_FILL_PAD)),
             GROUP_CORNER_RADIUS,
             ui.visuals().widgets.hovered.bg_fill,
         );
@@ -358,8 +362,8 @@ fn draw_readout(ui: &mut egui::Ui, deck: &Deck, now: f64, status: &str, task: &s
     Some(response)
 }
 
-/// The list the readout opens: the tasks running, newest first, then the last
-/// to finish, up to [`TASK_HISTORY_LEN`] in all. Each row names the task, says
+/// The list the readout opens: the last tasks to finish, then the ones still
+/// running, newest at the bottom, up to [`TASK_HISTORY_LEN`] in all. Each row names the task, says
 /// how long it has run or ran, and ends in its ring.
 fn draw_task_list(ui: &mut egui::Ui, editor: &EditorState) {
     let running = editor
@@ -368,7 +372,9 @@ fn draw_task_list(ui: &mut egui::Ui, editor: &EditorState) {
         .rev()
         .map(|task| (task.text.as_str(), task.started.elapsed(), RingFill::of(task.progress)));
     let finished = editor.task_history.iter().map(|task| (task.text.as_str(), task.duration, RingFill::Fraction(1.0)));
-    for (name, duration, fill) in running.chain(finished).take(TASK_HISTORY_LEN) {
+    // Newest first, so the cap drops the oldest, then drawn the other way up.
+    let rows: Vec<_> = running.chain(finished).take(TASK_HISTORY_LEN).collect();
+    for (name, duration, fill) in rows.into_iter().rev() {
         draw_task_row(ui, name, &duration_label(duration), fill);
     }
 }
