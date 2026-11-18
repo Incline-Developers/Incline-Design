@@ -876,14 +876,26 @@ fn ground_gates(
             // block's east edge plus the reach, it could not either.
             let first = dug.partition_point(|(_, _, (other_lo, _))| other_lo.x < lo.x - reach - widest);
             let last = dug.partition_point(|(_, _, (other_lo, _))| other_lo.x <= hi.x + reach);
-            let mut over: Vec<(usize, f64, GroundId)> = Vec::new();
-            for (other_position, other_ground, (other_lo, other_hi)) in &dug[first..last.max(first)] {
-                let other = &blocks[*other_position];
-                if other.flitch.base < block.flitch.top - 1e-6 {
-                    continue;
+            // Ground above whose extent comes within reach, nearest level
+            // first: only the nearest level that holds the block counts, so
+            // the costly test of whether the plans touch stops after it.
+            let mut near: Vec<(f64, usize, GroundId)> = dug[first..last.max(first)]
+                .iter()
+                .filter(|(other_position, _, (other_lo, other_hi))| {
+                    let gap = (lo - *other_hi).max(*other_lo - hi).max(glam::DVec2::ZERO);
+                    blocks[*other_position].flitch.base >= block.flitch.top - 1e-6 && gap.x <= reach && gap.y <= reach
+                })
+                .map(|(other_position, other_ground, _)| (blocks[*other_position].flitch.base, *other_position, *other_ground))
+                .collect();
+            near.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut nearest: Option<f64> = None;
+            let mut over: Vec<(usize, GroundId)> = Vec::new();
+            for (base, other_position, other_ground) in near {
+                if nearest.is_some_and(|nearest| base > nearest + 1e-6) {
+                    break;
                 }
-                let gap = (lo - *other_hi).max(*other_lo - hi).max(glam::DVec2::ZERO);
-                if gap.x > reach || gap.y > reach || !plan_within(&other.ground, &block.ground, reach) {
+                let other = &blocks[other_position];
+                if !plan_within(&other.ground, &block.ground, reach) {
                     continue;
                 }
                 // With no buffer, only ground over the block itself holds it:
@@ -891,13 +903,12 @@ fn ground_gates(
                 if buffer_m <= 0.0 && crate::model::arrangement::overlap_area(&other.ground, &block.ground) <= SHARED_GROUND_M2 {
                     continue;
                 }
-                over.push((*other_position, other.flitch.base, *other_ground));
+                nearest.get_or_insert(base);
+                over.push((other_position, other_ground));
             }
             // In the blocks' own order, as the full scan found them.
-            over.sort_unstable_by_key(|(position, ..)| *position);
-            let over: Vec<(f64, GroundId)> = over.into_iter().map(|(_, base, ground)| (base, ground)).collect();
-            let nearest = over.iter().map(|(base, _)| *base).fold(f64::INFINITY, f64::min);
-            let above: Vec<GroundId> = over.into_iter().filter(|(base, _)| *base <= nearest + 1e-6).map(|(_, ground)| ground).collect();
+            over.sort_unstable_by_key(|(position, _)| *position);
+            let above: Vec<GroundId> = over.into_iter().map(|(_, ground)| ground).collect();
             (!above.is_empty()).then(|| BlastJob {
                 quantity: [0.0; 3],
                 stage: crate::model::schedule::BlastStage::NotStarted,
@@ -3389,10 +3400,16 @@ fn stable_fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
             hours.to_bits().hash(&mut hasher);
         }
     }
+    // Each activity's and source's text once: candidates share a few
+    // thousand sources between millions of them.
+    let mut labels: std::collections::HashMap<(Activity, SourceId), (String, String), foldhash::fast::FixedState> = std::collections::HashMap::default();
     for candidate in &input.movements {
         candidate.loader.0.hash(&mut hasher);
-        format!("{:?}", candidate.activity).hash(&mut hasher);
-        format!("{:?}", candidate.source).hash(&mut hasher);
+        let (activity, source) = labels
+            .entry((candidate.activity, candidate.source))
+            .or_insert_with(|| (format!("{:?}", candidate.activity), format!("{:?}", candidate.source)));
+        activity.hash(&mut hasher);
+        source.hash(&mut hasher);
         candidate.material.0.hash(&mut hasher);
         candidate.destination.0.hash(&mut hasher);
         candidate.truck.0.hash(&mut hasher);
