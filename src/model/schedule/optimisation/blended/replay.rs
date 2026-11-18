@@ -1243,6 +1243,17 @@ fn check_bar_priority(
             }
         }
     }
+    // When each block of an automatic bar's list is released, in the list's
+    // order: its readiness looks along the list every interval, and most of
+    // what it passes is not yet released.
+    let released_along: Vec<Vec<f64>> = input
+        .tasks
+        .iter()
+        .map(|task| match &task.kind {
+            TaskKind::Dig { sequence } if task.lookahead_t > 0.0 => sequence.iter().map(|block| releases.get(block).copied().unwrap_or(f64::NEG_INFINITY)).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
     for interval in &input.intervals {
         if checker.cancelled() {
             return worked_bars;
@@ -1314,10 +1325,10 @@ fn check_bar_priority(
                             if rate.dig_tph <= 0.0 {
                                 return false;
                             }
-                            for block in &sequence[state.current[bar].min(sequence.len())..] {
-                                let left = remaining.get(block).copied().unwrap_or(0.0);
-                                if left > REPLAY_TOLERANCE_T
-                                    && releases.get(block).is_none_or(|released| *released <= interval.start_h + 1e-9)
+                            let from = state.current[bar].min(sequence.len());
+                            for (block, released) in sequence[from..].iter().zip(&released_along[bar][from..]) {
+                                if *released <= interval.start_h + 1e-9
+                                    && remaining.get(block).copied().unwrap_or(0.0) > REPLAY_TOLERANCE_T
                                     && outlets.diggable(input, task, *block, |destination| room.contains(&(destination, interval.index)))
                                 {
                                     return true;
