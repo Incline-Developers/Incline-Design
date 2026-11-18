@@ -4,7 +4,6 @@
 //! window's dialog starts, and returns once it is under way; `get_tasks`
 //! follows it, and can wait for it to finish.
 
-use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -14,7 +13,6 @@ use crate::{
         App,
         commands::triangulation::{TerrainBudget, TerrainTinParams},
     },
-    mcp::Call,
     model::{LayerId, ObjectId, drill_hole::DrillFieldKind, ground_filter::ClothTerrain, point_cloud::PointCloudId, triangulation::TriangulationId},
     ui::state::{ContourOutputLayer, OreFilterMode, SolidRegion, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, UiCommand},
 };
@@ -253,12 +251,6 @@ pub(super) fn definitions() -> Vec<Value> {
     ]
 }
 
-/// A `get_tasks` call waiting for the running tasks to finish.
-pub(crate) struct PendingWait {
-    call: Call,
-    until: Instant,
-}
-
 impl App<'_> {
     /// Run `name` if it is one of these tools.
     pub(super) fn call_mcp_job_tool(&mut self, name: &str, arguments: &Value) -> Option<Value> {
@@ -305,7 +297,7 @@ impl App<'_> {
     }
 
     /// What is running, and what finished last.
-    fn mcp_tasks(&self) -> Value {
+    pub(super) fn mcp_tasks(&self) -> Value {
         let running: Vec<Value> = self
             .background_tasks
             .reported
@@ -328,35 +320,6 @@ impl App<'_> {
             .map(|task| json!({ "task": task.text, "seconds": task.duration.as_secs_f64() }))
             .collect();
         json!({ "running": running, "finished_newest_first": finished })
-    }
-
-    /// Take a `get_tasks` call that asked to wait, to be answered once
-    /// nothing runs or its time is up (`poll_mcp_waits`).
-    pub(crate) fn begin_mcp_wait(&mut self, call: Call) {
-        let seconds = call.request["params"]["arguments"]["wait_seconds"].as_f64().unwrap_or(0.0);
-        let until = Instant::now() + Duration::try_from_secs_f64(seconds).unwrap_or(Duration::MAX / 2);
-        self.mcp_waits.push(PendingWait { call, until });
-        self.poll_mcp_waits();
-    }
-
-    /// Answer the waits that are over. Returns whether any are still
-    /// waiting, to keep the event loop coming back.
-    pub(crate) fn poll_mcp_waits(&mut self) -> bool {
-        if self.mcp_waits.is_empty() {
-            return false;
-        }
-        let idle = self.background_tasks.reported.is_empty();
-        let now = Instant::now();
-        let (done, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.mcp_waits).into_iter().partition(|wait| idle || now >= wait.until);
-        self.mcp_waits = waiting;
-        if !done.is_empty() {
-            let result = ok(&self.mcp_tasks());
-            for wait in done {
-                let id = wait.call.request["id"].clone();
-                wait.call.reply(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
-            }
-        }
-        !self.mcp_waits.is_empty()
     }
 
     /// The id of a surface that is in the project.

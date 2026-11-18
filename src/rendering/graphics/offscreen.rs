@@ -143,6 +143,7 @@ pub(crate) struct ViewRequest {
 }
 
 /// Where a requested view looks from.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ViewAim {
     /// Along `forward`, with `up` as near as it can be to up in the picture,
@@ -238,6 +239,7 @@ impl Graphics<'_> {
 
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Graphics<'_> {
     /// Put the camera where `aim` says, its depth range fitted to what it
     /// sees; `Window` leaves the camera as it is. A section is put in place

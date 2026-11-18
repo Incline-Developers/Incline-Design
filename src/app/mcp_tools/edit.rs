@@ -1,5 +1,5 @@
-//! The tools that change the project: undo and redo, layers, and design
-//! objects. Each change is one undo step, made the way the window's own
+//! The tools that change the project: undo and redo, checkpoints, layers,
+//! and design objects. Each change is one undo step, made the way the window's own
 //! tools make theirs, and reported in the activity log.
 
 use serde_json::{Value, json};
@@ -9,7 +9,7 @@ use crate::{
     app::App,
     i18n::tr,
     logging::CommandReportSpec,
-    model::{Command, FillStyle, LayerId, Object, ObjectColor, ObjectId, PolyVertex, SceneEntityId},
+    model::{Command, FillStyle, HistoryRoute, LayerId, Object, ObjectColor, ObjectId, PolyVertex, SceneEntityId},
     ui::state::UiCommand,
 };
 
@@ -30,6 +30,30 @@ pub(super) fn definitions() -> Vec<Value> {
             "description": "Redo the last change undone in Incline Design, as Edit > Redo does.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
+        }),
+        json!({
+            "name": "checkpoint",
+            "title": "Set a checkpoint",
+            "description": "Name the point the project's undo history stands at now, to come back to with rollback: before trying a design, say, so it can be backed out whole however many steps it took. Answers with every checkpoint and whether it can still be reached. Saving the project clears the undo history, and so every checkpoint before it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "name": { "type": "string", "minLength": 1, "description": "A name of your own. Reusing one moves it here." } },
+                "required": ["name"],
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true },
+        }),
+        json!({
+            "name": "rollback",
+            "title": "Roll back to a checkpoint",
+            "description": "Undo every change made since a checkpoint, whoever made it, or redo back to it if it was undone past. The steps undone can be redone until the next change. Steps that need items loaded first finish in the background; get_tasks follows them.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "name": { "type": "string", "description": "A checkpoint's name." } },
+                "required": ["name"],
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true },
         }),
         json!({
             "name": "create_layer",
@@ -103,6 +127,8 @@ impl App<'_> {
         Some(match name {
             "undo" => self.mcp_history_step(true),
             "redo" => self.mcp_history_step(false),
+            "checkpoint" => self.mcp_checkpoint(arguments),
+            "rollback" => self.mcp_rollback(arguments),
             "create_layer" => self.mcp_create_layer(arguments),
             "add_objects" => self.mcp_add_objects(arguments),
             "delete_objects" => self.mcp_delete_objects(arguments),
@@ -120,6 +146,54 @@ impl App<'_> {
             "done": if undo { "undo" } else { "redo" },
             "can_undo": self.history.can_undo(),
             "can_redo": self.history.can_redo(),
+        }))
+    }
+
+    fn mcp_checkpoint(&mut self, arguments: &Value) -> Value {
+        let Some(name) = arguments["name"].as_str().map(str::trim).filter(|name| !name.is_empty()) else {
+            return failed("checkpoint needs a name.");
+        };
+        let mark = self.history.mark();
+        self.mcp_checkpoints.retain(|(existing, _)| existing != name);
+        self.mcp_checkpoints.push((name.to_owned(), mark));
+        ok(&json!({ "checkpoint": name, "checkpoints": self.mcp_checkpoint_list() }))
+    }
+
+    /// Every checkpoint, oldest first, with how far back each lies.
+    fn mcp_checkpoint_list(&self) -> Vec<Value> {
+        self.mcp_checkpoints
+            .iter()
+            .map(|(name, mark)| {
+                let (reachable, steps) = match self.history.route_to(*mark) {
+                    Some(HistoryRoute::Here) => (true, 0),
+                    Some(HistoryRoute::Undo(steps)) => (true, -(steps as i64)),
+                    Some(HistoryRoute::Redo(steps)) => (true, steps as i64),
+                    None => (false, 0),
+                };
+                json!({ "name": name, "reachable": reachable, "steps": steps })
+            })
+            .collect()
+    }
+
+    fn mcp_rollback(&mut self, arguments: &Value) -> Value {
+        let name = arguments["name"].as_str().unwrap_or_default();
+        let Some(mark) = self.mcp_checkpoints.iter().find(|(existing, _)| existing == name).map(|(_, mark)| *mark) else {
+            let names: Vec<&str> = self.mcp_checkpoints.iter().map(|(name, _)| name.as_str()).collect();
+            return failed(format!("There is no checkpoint called {name}. There are: {}.", if names.is_empty() { "none".to_owned() } else { names.join(", ") }));
+        };
+        let steps = match self.history.route_to(mark) {
+            None => return failed(format!("The undo history no longer reaches checkpoint {name}: the project was saved since, or the history dropped its oldest steps to stay within its memory budget.")),
+            Some(HistoryRoute::Here) => return ok(&json!({ "rolled_back_to": name, "steps": 0 })),
+            Some(HistoryRoute::Undo(steps) | HistoryRoute::Redo(steps)) => steps,
+        };
+        self.history_walk = Some(mark);
+        self.continue_history_walk();
+        let arrived = self.history.route_to(mark) == Some(HistoryRoute::Here);
+        ok(&json!({
+            "rolled_back_to": name,
+            "steps": steps,
+            "finished": arrived,
+            "note": if arrived { "" } else { "Some steps are waiting for items to load; they finish in the background." },
         }))
     }
 

@@ -7,7 +7,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, Sender, SyncSender, channel, sync_channel},
+        mpsc::{Receiver, Sender, channel},
     },
     thread::JoinHandle,
     time::Duration,
@@ -21,13 +21,31 @@ const ACCEPT_POLL: Duration = Duration::from_millis(100);
 /// One JSON-RPC request, waiting for the main thread's answer.
 pub(crate) struct Call {
     pub(crate) request: Value,
-    reply: SyncSender<Value>,
+    reply: Sender<Outgoing>,
+}
+
+/// What the main thread sends back for a call: notifications while it works
+/// on it (progress, a changed tool list), then the one response.
+pub(crate) enum Outgoing {
+    Notification(Value),
+    Response(Value),
 }
 
 impl Call {
     /// Answer the request. A client that gave up waiting is not an error.
     pub(crate) fn reply(self, response: Value) {
-        let _ = self.reply.send(response);
+        let _ = self.reply.send(Outgoing::Response(response));
+    }
+
+    /// Tell the client something before the answer: the transport carries it
+    /// on the request's own stream.
+    pub(crate) fn notify(&self, notification: Value) {
+        let _ = self.reply.send(Outgoing::Notification(notification));
+    }
+
+    /// The token the client gave for progress on this request, if any.
+    pub(crate) fn progress_token(&self) -> Option<&Value> {
+        self.request["params"]["_meta"].get("progressToken").filter(|token| token.is_string() || token.is_number())
     }
 }
 
@@ -125,7 +143,7 @@ fn listen(listener: &TcpListener, stop: &AtomicBool, token: &Arc<String>, sender
                 let wake = Arc::clone(wake);
                 let spawned = std::thread::Builder::new()
                     .name("mcp-connection".to_owned())
-                    .spawn(move || super::http::serve(stream, &token, &|request| ask(&sender, &wake, request)));
+                    .spawn(move || super::http::serve(stream, &token, &|request, notify| ask(&sender, &wake, request, notify)));
                 if let Err(error) = spawned {
                     log::warn!("An MCP connection could not be served: {error}");
                 }
@@ -150,16 +168,29 @@ fn serve_standard_io(sender: &Sender<Call>, wake: &Arc<dyn Fn() + Send + Sync>) 
         if line.trim().is_empty() {
             continue;
         }
-        let answer = |request| ask(sender, wake, request);
+        // Notifications go out as lines of their own as they come, before
+        // the answer.
+        let answer = |request, notify: &mut dyn FnMut(Value)| ask(sender, wake, request, notify);
+        let mut failed = None;
+        let mut notify = |notification: Value| {
+            if failed.is_none()
+                && let Err(error) = writeln!(stdout, "{notification}").and_then(|()| stdout.flush())
+            {
+                failed = Some(error);
+            }
+        };
         let response = match serde_json::from_str::<Value>(&line) {
             Err(_) => Some(serde_json::json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "Parse error" } })),
             // A batch, from an older client: each answered in turn.
             Ok(Value::Array(messages)) => {
-                let responses: Vec<Value> = messages.iter().filter_map(|message| super::http::one(message, &answer)).collect();
+                let responses: Vec<Value> = messages.iter().filter_map(|message| super::http::one(message, &answer, &mut notify)).collect();
                 (!responses.is_empty()).then_some(Value::Array(responses))
             }
-            Ok(message) => super::http::one(&message, &answer),
+            Ok(message) => super::http::one(&message, &answer, &mut notify),
         };
+        if let Some(error) = failed {
+            return Err(error);
+        }
         if let Some(response) = response {
             writeln!(stdout, "{response}")?;
             stdout.flush()?;
@@ -170,9 +201,14 @@ fn serve_standard_io(sender: &Sender<Call>, wake: &Arc<dyn Fn() + Send + Sync>) 
 
 /// Hand `request` to the main thread and wait for its answer. `None` if the
 /// window has gone.
-fn ask(sender: &Sender<Call>, wake: &Arc<dyn Fn() + Send + Sync>, request: Value) -> Option<Value> {
-    let (reply, answer) = sync_channel(1);
+fn ask(sender: &Sender<Call>, wake: &Arc<dyn Fn() + Send + Sync>, request: Value, notify: &mut dyn FnMut(Value)) -> Option<Value> {
+    let (reply, answer) = channel();
     sender.send(Call { request, reply }).ok()?;
     wake();
-    answer.recv().ok()
+    loop {
+        match answer.recv().ok()? {
+            Outgoing::Notification(notification) => notify(notification),
+            Outgoing::Response(response) => return Some(response),
+        }
+    }
 }

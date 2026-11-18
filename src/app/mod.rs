@@ -353,6 +353,12 @@ pub(crate) struct App<'a> {
     /// Keeping it in the application event loop prevents timed repaints from
     /// being discarded when there is otherwise no window activity.
     next_ui_repaint_deadline: Option<Instant>,
+    /// The point in the history a rollback is stepping back to, until it is
+    /// there (`continue_history_walk`).
+    history_walk: Option<crate::model::HistoryMark>,
+    /// Whether the walk is stepping now, so a step it takes does not start
+    /// another.
+    walking_history: bool,
     /// The MCP server, while it runs. See `mcp`.
     #[cfg(not(target_arch = "wasm32"))]
     mcp_server: Option<crate::mcp::Server>,
@@ -367,6 +373,16 @@ pub(crate) struct App<'a> {
     /// `get_tasks` calls waiting for the background work to finish.
     #[cfg(not(target_arch = "wasm32"))]
     mcp_waits: Vec<mcp_tools::PendingWait>,
+    /// Notifications a call raised while it was being answered, sent ahead
+    /// of its answer.
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_outbox: Vec<serde_json::Value>,
+    /// Named points in the undo history an MCP client can roll back to.
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_checkpoints: Vec<(String, crate::model::HistoryMark)>,
+    /// The groups of tools an MCP client has loaded (`mcp_tools::groups`).
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_loaded_groups: std::collections::BTreeSet<&'static str>,
     /// Wakes the event loop from another thread: the MCP server's, when a
     /// request comes in.
     #[cfg(not(target_arch = "wasm32"))]
@@ -720,6 +736,14 @@ impl<'a> Default for App<'a> {
             mcp_seen_warnings: None,
             #[cfg(not(target_arch = "wasm32"))]
             mcp_waits: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_outbox: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_checkpoints: Vec::new(),
+            history_walk: None,
+            walking_history: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_loaded_groups: std::collections::BTreeSet::new(),
             #[cfg(not(target_arch = "wasm32"))]
             event_loop_proxy: None,
             #[cfg(not(target_arch = "wasm32"))]

@@ -27,8 +27,12 @@ Its tools read what the project holds (surfaces, block models, drillholes, point
 objects, the Planning setup, optimisation and schedules), show and look at it in the viewport, and change it the way the \
 window's own controls do: drawing and editing designs, building and cutting surfaces, estimating block models, reserving, \
 optimising, scheduling, drill and blast, and importing and exporting files. Ids are the numbers get_project and the other \
-get_ tools report. Long work runs in the background and returns once started: get_tasks follows it and can wait for it, and \
-get_activity says if it failed. Setups kept as JSON (solids' plans, scenarios, the schedule) are read whole and changed with \
+get_ tools report. The tools listed cover reading, looking, editing, files and items; load_tools adds the groups for \
+design, surfaces, display, planning, schedule, blasting and survey work when they are needed. Long work runs in the \
+background and returns once started: get_tasks follows it and can wait for it, and get_activity says if it failed. \
+A call made with a progress token is answered only once the work it started is done instead, with progress notifications \
+meanwhile. checkpoint names a point in the undo history and rollback goes back to it, to try something and back it out \
+whole. Setups kept as JSON (solids' plans, scenarios, the schedule) are read whole and changed with \
 JSON merge patches. Changes are made in the open window and can be undone there; render_view draws a picture of the result.\n\n\
 Looking and showing: render_view takes the whole view as arguments and draws it on its own, so looking never moves the \
 user's camera or selection. The window is the user's: get_selection reads what they have selected, to work on it, and \
@@ -158,8 +162,14 @@ impl App<'_> {
                 self.begin_mcp_wait(call);
                 continue;
             }
+            let before = self.running_task_tickets();
             let response = self.answer_mcp(&call.request);
-            call.reply(response);
+            // What the call had to say before its answer (a changed tool
+            // list, say) goes out on its own stream.
+            for notification in std::mem::take(&mut self.mcp_outbox) {
+                call.notify(notification);
+            }
+            self.reply_or_hold(call, response, before);
         }
         self.redraw_requested = true;
     }
@@ -170,9 +180,12 @@ impl App<'_> {
         let id = request["id"].clone();
         let params = &request["params"];
         let result = match request["method"].as_str().unwrap_or_default() {
-            "initialize" => Ok(initialize(params)),
+            "initialize" => {
+                self.reset_mcp_tool_groups();
+                Ok(initialize(params))
+            }
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": super::mcp_tools::definitions() })),
+            "tools/list" => Ok(json!({ "tools": self.mcp_listed_tools() })),
             "tools/call" => Ok(self.call_mcp_tool(params)),
             "resources/list" => Ok(json!({ "resources": [] })),
             "resources/templates/list" => Ok(json!({ "resourceTemplates": [] })),
@@ -194,7 +207,7 @@ fn initialize(params: &Value) -> Value {
     let version = PROTOCOL_VERSIONS.iter().find(|version| **version == asked).copied().unwrap_or(PROTOCOL_VERSIONS[0]);
     json!({
         "protocolVersion": version,
-        "capabilities": { "tools": { "listChanged": false } },
+        "capabilities": { "tools": { "listChanged": true } },
         "serverInfo": { "name": "incline-design", "title": crate::APP_NAME, "version": crate::APP_RELEASE },
         "instructions": INSTRUCTIONS,
     })

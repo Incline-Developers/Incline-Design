@@ -4261,6 +4261,28 @@ pub(crate) struct History {
     /// gesture ends, which is what stops two separate drags of the same
     /// colour picker collapsing into one undo step.
     open_run: bool,
+    /// How many times steps have been dropped from the bottom of the undo
+    /// history, by a clear or to keep it within its memory budget. A mark
+    /// taken on an empty history is reachable only while this is unchanged.
+    dropped: u64,
+}
+
+/// A point in the undo history to come back to: see [`History::route_to`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HistoryMark {
+    /// The newest undo step when it was taken, by sequence.
+    newest: Option<u64>,
+    dropped: u64,
+}
+
+/// How to get back to a [`HistoryMark`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HistoryRoute {
+    Here,
+    /// This many undos.
+    Undo(usize),
+    /// This many redos, for a mark already undone past.
+    Redo(usize),
 }
 
 impl Default for History {
@@ -4274,6 +4296,7 @@ impl Default for History {
             // long session cannot retain unbounded cloned meshes forever.
             max_retained_bytes: 1024 * 1024 * 1024,
             open_run: false,
+            dropped: 0,
         }
     }
 }
@@ -4307,7 +4330,37 @@ impl History {
         self.clear();
     }
 
+    /// Where the history stands now, to come back to.
+    pub(crate) fn mark(&self) -> HistoryMark {
+        HistoryMark {
+            newest: self.project.undo.last().map(|entry| entry.sequence),
+            dropped: self.dropped,
+        }
+    }
+
+    /// How to get from here back to `mark`, or `None` if the history no
+    /// longer reaches it: it was cleared (a save clears it), the step was
+    /// dropped to keep within the memory budget, or a new edit replaced the
+    /// steps undone past it.
+    pub(crate) fn route_to(&self, mark: HistoryMark) -> Option<HistoryRoute> {
+        let undo = &self.project.undo;
+        let redo = &self.project.redo;
+        let Some(sequence) = mark.newest else {
+            // The mark is the bottom of the history, reachable while nothing
+            // has been dropped from it since.
+            return (self.dropped == mark.dropped).then_some(if undo.is_empty() { HistoryRoute::Here } else { HistoryRoute::Undo(undo.len()) });
+        };
+        if let Some(index) = undo.iter().rposition(|entry| entry.sequence == sequence) {
+            let steps = undo.len() - 1 - index;
+            return Some(if steps == 0 { HistoryRoute::Here } else { HistoryRoute::Undo(steps) });
+        }
+        // Undone past: redo until it is the newest undo step again. The next
+        // redo is the last entry.
+        redo.iter().rposition(|entry| entry.sequence == sequence).map(|index| HistoryRoute::Redo(redo.len() - index))
+    }
+
     pub(crate) fn clear(&mut self) {
+        self.dropped = self.dropped.wrapping_add(1);
         self.archive_revision = self.archive_revision.wrapping_add(1);
         self.retained_bytes = 0;
         self.open_run = false;
@@ -4511,6 +4564,7 @@ impl History {
                 break;
             };
             if from_undo {
+                self.dropped = self.dropped.wrapping_add(1);
                 let entry = self.project.undo.remove(index);
                 self.retained_bytes = self.retained_bytes.saturating_sub(entry.estimated_bytes);
             } else {

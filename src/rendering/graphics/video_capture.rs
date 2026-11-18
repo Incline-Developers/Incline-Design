@@ -20,11 +20,9 @@ use std::{
     },
 };
 
-use super::{
-    offscreen::{OffscreenTarget, ViewAim},
-    readback::RgbaReadback,
-    *,
-};
+#[cfg(not(target_arch = "wasm32"))]
+use super::offscreen::ViewAim;
+use super::{offscreen::OffscreenTarget, readback::RgbaReadback, *};
 
 /// Frames copied back but not yet collected before the export stops
 /// drawing new ones; see [`Graphics::video_readback_full`].
@@ -57,7 +55,9 @@ pub(crate) struct VideoFrameInput<'frame> {
     /// travelled, so they move at the video's pace rather than the window's.
     pub(crate) clock_s: f64,
     pub(crate) labels: VideoLabels,
-    /// The view to record from; the window's camera when `None`.
+    /// The view to record from; the window's camera when `None`. Set by
+    /// the MCP server only, which the browser has none of.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) view: Option<VideoView>,
     /// Bring the GPU's copy of the scene up to date first, as there is no
     /// window frame doing it.
@@ -65,6 +65,7 @@ pub(crate) struct VideoFrameInput<'frame> {
 }
 
 /// A video's own view of the scene, in place of the window's.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VideoView {
     pub(crate) aim: ViewAim,
@@ -82,6 +83,7 @@ pub(crate) struct VideoTarget {
     in_flight: VecDeque<InFlight>,
     /// A video's own view as placed on its first frame and held after, so
     /// the shot stays put while the ground is cut under it.
+    #[cfg(not(target_arch = "wasm32"))]
     held: Option<ViewAim>,
 }
 
@@ -93,6 +95,7 @@ impl VideoTarget {
             target,
             overlay,
             in_flight: VecDeque::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             held: None,
         }
     }
@@ -120,6 +123,7 @@ impl Graphics<'_> {
             size: (width, height),
             clock_s,
             labels: shown_labels,
+            #[cfg(not(target_arch = "wasm32"))]
             view,
             sync,
         } = input;
@@ -129,15 +133,14 @@ impl Graphics<'_> {
         };
         // The window's projection this frame - its clip planes fitted to the
         // scene - reshaped to the video.
-        target.target.projection = match view {
-            None => self.projection.cropped_to(width, height),
-            Some(view) => {
-                let mut projection = self.projection.clone();
-                projection.resize(width, height);
-                projection.set_perspective(view.perspective);
-                projection
-            }
-        };
+        target.target.projection = self.projection.cropped_to(width, height);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(view) = view {
+            let mut projection = self.projection.clone();
+            projection.resize(width, height);
+            projection.set_perspective(view.perspective);
+            target.target.projection = projection;
+        }
         // Labels and icons as large against the frame as they are against the
         // viewport: the video is as many points tall as the viewport is.
         let window_ppp = self.ui_pixels_per_point().max(0.1);
@@ -154,9 +157,10 @@ impl Graphics<'_> {
 
         // A video's own view takes the camera, and leaves out the window's
         // section, for the frame; both are put back after.
-        let window_camera = view.map(|_| self.camera.clone());
-        let window_section = if view.is_some() { self.slice_view.take() } else { None };
+        #[cfg(not(target_arch = "wasm32"))]
+        let window_view = view.map(|_| (self.camera.clone(), self.slice_view.take()));
         target.target.swap_into(self);
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(view) = view {
             let held = match target.held {
                 Some(held) => held,
@@ -262,9 +266,10 @@ impl Graphics<'_> {
         let readback = RgbaReadback::record(&self.device, &mut encoder, &target.target.texture, "Video frame readback");
         self.queue.submit(std::iter::once(encoder.finish()));
         target.target.swap_into(self);
-        if let Some(camera) = window_camera {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((camera, section)) = window_view {
             self.camera = camera;
-            self.slice_view = window_section;
+            self.slice_view = section;
             self.scene_cache_key = None;
         }
 

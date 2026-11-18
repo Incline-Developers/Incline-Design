@@ -35,11 +35,13 @@
 mod blast;
 mod edit;
 mod files;
+mod groups;
 mod items;
 mod jobs;
 mod objects;
 mod planning;
 mod production;
+mod progress;
 mod read;
 mod solids;
 mod style;
@@ -47,7 +49,7 @@ mod survey;
 mod view;
 
 use glam::DVec3;
-pub(super) use jobs::PendingWait;
+pub(super) use progress::PendingWait;
 use serde_json::{Value, json};
 
 use crate::{
@@ -58,23 +60,6 @@ use crate::{
     },
 };
 
-/// The tools, as `tools/list` describes them.
-pub(super) fn definitions() -> Vec<Value> {
-    let mut tools = read::definitions();
-    tools.extend(view::definitions());
-    tools.extend(edit::definitions());
-    tools.extend(objects::definitions());
-    tools.extend(items::definitions());
-    tools.extend(style::definitions());
-    tools.extend(files::definitions());
-    tools.extend(jobs::definitions());
-    tools.extend(planning::definitions());
-    tools.extend(solids::definitions());
-    tools.extend(production::definitions());
-    tools.extend(blast::definitions());
-    tools.extend(survey::definitions());
-    tools
-}
 
 /// The kinds of thing a tool can be pointed at, as `get_project` and
 /// `get_selection` name them.
@@ -255,6 +240,9 @@ impl App<'_> {
     fn dispatch_mcp_tool(&mut self, params: &Value) -> Value {
         let arguments = &params["arguments"];
         let name = params["name"].as_str().unwrap_or_default();
+        if name == "load_tools" {
+            return self.mcp_load_tools(arguments);
+        }
         if let Some(result) = self.call_mcp_read_tool(name, arguments) {
             return result;
         }

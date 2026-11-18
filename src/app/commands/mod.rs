@@ -82,6 +82,38 @@ impl<'a> App<'a> {
         self.drop_editor_references_to_missing_items();
         self.apply_step_effects(effects);
         self.invalidate_geometry();
+        // A rollback to a checkpoint takes its next step once this one has
+        // landed, which may be after items it needed were loaded.
+        self.continue_history_walk();
+    }
+
+    /// Step the history towards the mark a rollback is walking to, until it
+    /// is there or a step has to wait for items to load; that step's landing
+    /// carries the walk on.
+    pub(crate) fn continue_history_walk(&mut self) {
+        if self.walking_history {
+            return;
+        }
+        let Some(mark) = self.history_walk else {
+            return;
+        };
+        self.walking_history = true;
+        loop {
+            let undo = match self.history.route_to(mark) {
+                Some(crate::model::HistoryRoute::Undo(_)) => true,
+                Some(crate::model::HistoryRoute::Redo(_)) => false,
+                Some(crate::model::HistoryRoute::Here) | None => {
+                    self.history_walk = None;
+                    break;
+                }
+            };
+            let before = self.history.mark();
+            self.apply_history_step(undo);
+            if self.history.mark() == before {
+                break;
+            }
+        }
+        self.walking_history = false;
     }
 
     pub(crate) fn handle_ui_commands(&mut self, commands: Vec<UiCommand>) {

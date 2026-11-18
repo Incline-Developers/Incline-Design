@@ -322,6 +322,7 @@ impl<'a> App<'a> {
                                         size: frame.size,
                                         clock_s: frame.clock_s,
                                         labels: frame.labels,
+                                        #[cfg(not(target_arch = "wasm32"))]
                                         view: frame.view,
                                         sync: false,
                                     });

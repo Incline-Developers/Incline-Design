@@ -34,6 +34,7 @@ pub(crate) struct VideoFrameRequest {
     /// Seconds into the video.
     pub(crate) clock_s: f64,
     pub(crate) labels: crate::rendering::graphics::video_capture::VideoLabels,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) view: Option<crate::rendering::graphics::video_capture::VideoView>,
 }
 
@@ -59,6 +60,7 @@ pub(crate) struct Recording {
     /// Where the slider was, to put it back afterwards.
     restore_time_h: f64,
     /// The view the video is recorded from; the window's when `None`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) view: Option<crate::rendering::graphics::video_capture::VideoView>,
 }
 
@@ -80,6 +82,7 @@ impl Recording {
                 size: (self.width, self.height),
                 clock_s,
                 labels: self.labels,
+                #[cfg(not(target_arch = "wasm32"))]
                 view: self.view,
             }
         })
@@ -209,6 +212,7 @@ impl<'a> App<'a> {
             frames: sender,
             waiting: VecDeque::new(),
             render_requested: false,
+            #[cfg(not(target_arch = "wasm32"))]
             view: None,
             restore_time_h: self.editor.schedule_time_h,
         });
