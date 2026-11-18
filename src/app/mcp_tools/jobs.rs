@@ -4,7 +4,6 @@
 //! window's dialog starts, and returns once it is under way; `get_tasks`
 //! follows it, and can wait for it to finish.
 
-
 use serde_json::{Value, json};
 
 use super::{failed, ok, parse_hex, parse_point};

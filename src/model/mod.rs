@@ -4356,7 +4356,9 @@ impl History {
         }
         // Undone past: redo until it is the newest undo step again. The next
         // redo is the last entry.
-        redo.iter().rposition(|entry| entry.sequence == sequence).map(|index| HistoryRoute::Redo(redo.len() - index))
+        redo.iter()
+            .rposition(|entry| entry.sequence == sequence)
+            .map(|index| HistoryRoute::Redo(redo.len() - index))
     }
 
     pub(crate) fn clear(&mut self) {

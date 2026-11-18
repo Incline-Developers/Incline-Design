@@ -275,7 +275,11 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
                 .show(ui)
                 .clicked()
             {
-                commands.extend(pattern_holes.clone().map(|(dataset, holes)| UiCommand::ChargeHoles { dataset, holes, rule: Some(rule.name.clone()) }));
+                commands.extend(pattern_holes.clone().map(|(dataset, holes)| UiCommand::ChargeHoles {
+                    dataset,
+                    holes,
+                    rule: Some(rule.name.clone()),
+                }));
                 ui.close();
             }
             if ContextMenuAction::new(tr!("products-unload-selected-holes-count", count = selected_holes.to_string()))

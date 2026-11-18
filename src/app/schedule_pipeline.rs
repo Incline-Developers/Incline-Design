@@ -389,7 +389,7 @@ impl crate::app::App<'_> {
     }
 
     /// Copy the pipeline's status into the editor state the panels read.
-    fn mirror_schedule_stages(&mut self) {
+    pub(crate) fn mirror_schedule_stages(&mut self) {
         use crate::ui::state::ScheduleStageView;
 
         self.editor.schedule_no_fields = self.workspace.active_document().is_some_and(|document| document.reserve_fields().is_empty());

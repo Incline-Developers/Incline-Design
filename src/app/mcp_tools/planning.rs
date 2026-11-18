@@ -7,7 +7,8 @@ use super::{failed, merge_patch, ok};
 use crate::{
     app::App,
     model::{
-        npv_schedule::NpvSchedule,
+        npv_schedule::{NpvSchedule, PeriodCase},
+        npv_schedule_run::{NpvScheduleResult, simulate::NpvPitSchedule},
         optimization::{ConstantsRow, OptimizationScenario},
         optimization_run::report::{Basis, OptimizationReport},
     },
@@ -19,12 +20,13 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "get_optimization",
             "title": "Get pit optimisation",
-            "description": "List the project's pit optimisation scenarios and the NPV schedules under each: ids, names, the block model each scenario runs on, and each one's status (never run, up to date, stale since a change, queued, or running with how far along; a schedule is blocked until its scenario has an up-to-date run). An up-to-date schedule carries its NPVs: best case, worst case and fixed lead, and the periods it takes. Give scenario to have that one's last result shell by shell (revenue factor, ore and waste tonnes, revenue, cost and cash flow, cumulative from the first shell); give schedule too to have that schedule's pushbacks.",
+            "description": "List the project's pit optimisation scenarios and the NPV schedules under each: ids, names, the block model each scenario runs on, and each one's status (never run, up to date, stale since a change, queued, or running with how far along; a schedule is blocked until its scenario has an up-to-date run). An up-to-date schedule carries its NPVs: best case, worst case and fixed lead, and the periods it takes. Give scenario to have that one's last result shell by shell (revenue factor, ore and waste tonnes, revenue, cost and cash flow, cumulative from the first shell); give schedule too to have that schedule's pushbacks and, period by period, what it mines, processes, stockpiles and earns under one case (fixed lead unless case says otherwise).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "scenario": { "type": "integer", "minimum": 0 },
                     "schedule": { "type": "integer", "minimum": 0, "description": "A schedule of scenario." },
+                    "case": { "type": "string", "enum": ["fixed_lead", "best", "worst"], "description": "With schedule: the case its periods are given for. fixed_lead if left out." },
                 },
                 "additionalProperties": false,
             },
@@ -48,7 +50,7 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "get_scenario",
             "title": "Get a scenario's settings",
-            "description": "Read one pit optimisation scenario's settings whole, as the project keeps them (block model fields, prices, costs, recoveries, slopes, shells and output), and the project's constants they may refer to. Give schedule to read that NPV schedule's settings instead. set_scenario takes these back.",
+            "description": "Read one pit optimisation scenario's settings whole, as the project keeps them (block model fields, prices, costs, recoveries, slopes, shells and output), and the project's constants they may refer to. Give schedule to read that NPV schedule's settings instead. choices lists the values each enumerated setting may take, by its JSON pointer. set_scenario takes these back.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "scenario": { "type": "integer", "minimum": 0 }, "schedule": { "type": "integer", "minimum": 0 } },
@@ -76,7 +78,7 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "manage_scenario",
             "title": "Delete, duplicate or derive scenarios and schedules",
-            "description": "delete or duplicate a pit optimisation scenario, or (with schedule) one of its NPV schedules; move or copy a schedule to another scenario (to); make a new scenario from a run's shells at revenue factors (shells_at, scenario only); or make a schedule's pushbacks from shells at revenue factors (pushbacks_at, with schedule). Returns any new id.",
+            "description": "delete or duplicate a pit optimisation scenario, or (with schedule) one of its NPV schedules; move or copy a schedule to another scenario (to); make a new scenario from a run's shells at revenue factors (shells_at, scenario only); or or set a schedule's pushbacks to its scenario's shells at revenue factors (pushbacks_at, with schedule: that schedule is changed, no copy is made). Returns any new id.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -147,16 +149,22 @@ impl App<'_> {
     fn mcp_get_scenario(&self, arguments: &Value) -> Result<Value, String> {
         let id = arguments["scenario"].as_u64().ok_or("Give the scenario's id.")?;
         if let Some(schedule) = arguments["schedule"].as_u64() {
-            let schedule = self.mcp_schedule(id, schedule)?;
-            return Ok(json!({ "schedule": serde_json::to_value(schedule).unwrap_or_default() }));
+            let schedule = serde_json::to_value(self.mcp_schedule(id, schedule)?).unwrap_or_default();
+            let choices = super::enum_choices::<NpvSchedule>(&schedule);
+            return Ok(json!({ "schedule": schedule, "choices": choices }));
         }
         let mut settings = serde_json::to_value(self.mcp_scenario(id)?).unwrap_or_default();
+        let mut choices = super::enum_choices::<OptimizationScenario>(&settings);
+        // Schedules are read on their own, with their own choices.
+        if let Value::Object(choices) = &mut choices {
+            choices.retain(|pointer, _| !pointer.starts_with("/schedules/"));
+        }
         // Schedules and the constants' copy are read and set on their own.
         if let Value::Object(settings) = &mut settings {
             settings.remove("schedules");
             settings.remove("constants");
         }
-        Ok(json!({ "scenario": settings, "constants": serde_json::to_value(&self.editor.optimization.constants).unwrap_or_default() }))
+        Ok(json!({ "scenario": settings, "choices": choices, "constants": serde_json::to_value(&self.editor.optimization.constants).unwrap_or_default() }))
     }
 
     fn mcp_set_scenario(&mut self, arguments: &Value) -> Result<Value, String> {
@@ -246,7 +254,21 @@ impl App<'_> {
             (Some("shells_at"), None) => UiCommand::CopyScenarioWithShells { id: parent, factors: factors()? },
             (Some("delete"), Some(id)) => UiCommand::DeleteNpvSchedule { parent, id },
             (Some("duplicate"), Some(id)) => UiCommand::DuplicateNpvSchedule { parent, id },
-            (Some("pushbacks_at"), Some(id)) => UiCommand::NpvScheduleFromPushbacks { parent, id, factors: factors()? },
+            (Some("pushbacks_at"), Some(id)) => {
+                // The window's own command makes a copy and opens it in the
+                // editor; asked here, the schedule named is the one changed.
+                let mut factors = factors()?;
+                factors.sort_by(f64::total_cmp);
+                factors.dedup();
+                let mut edited = self.mcp_schedule(parent, id)?.clone();
+                edited.pushbacks = crate::model::npv_schedule::PushbackChoice::Factors;
+                edited.pushback_factors = factors;
+                UiCommand::SaveNpvSchedule {
+                    parent,
+                    schedule: Box::new(edited),
+                    then_close: false,
+                }
+            }
             (Some(action @ ("move" | "copy")), Some(id)) => {
                 let to = arguments["to"].as_u64().ok_or("Give the scenario it goes to.")?;
                 self.mcp_scenario(to)?;
@@ -327,11 +349,18 @@ impl App<'_> {
                         .enumerate()
                         .map(|(index, pit)| json!({ "pushback": index + 1, "outer_shell": pit.shell + 1, "ore_tonnes": pit.ore, "waste_tonnes": pit.waste }))
                         .collect();
+                    let case = match arguments["case"].as_str() {
+                        Some("best") => PeriodCase::Best,
+                        Some("worst") => PeriodCase::Worst,
+                        _ => PeriodCase::FixedLead,
+                    };
                     json!({
                         "discount_rate": run.rate,
                         "initial_capex": run.capex_initial,
                         "lead_benches": run.lead,
                         "pushbacks_cumulative": pushbacks,
+                        "case": case_name(case),
+                        "periods": run.schedule().map_or(Value::Null, |pit| periods(run, pit.case(case))),
                     })
                 });
             }
@@ -366,8 +395,25 @@ impl App<'_> {
             }
         };
         let schedule_id = arguments["schedule"].as_u64();
+        self.editor.optimization.run_failures.remove(&id);
         if let Err(error) = self.handle_reported_ui_command(command) {
             return failed(format!("{error:#}"));
+        }
+        // A scenario that cannot run is refused as it starts, which the
+        // activity log tells the user; the caller is told the same here.
+        if let Some(issues) = self.editor.optimization.run_failures.get(&id) {
+            let name = self
+                .editor
+                .optimization
+                .scenarios
+                .iter()
+                .find(|scenario| scenario.id == id)
+                .map(|scenario| scenario.name.clone())
+                .unwrap_or_default();
+            return failed(format!(
+                "Scenario {name} cannot run: {}",
+                issues.iter().map(|issue| super::plain(issue)).collect::<Vec<_>>().join("; ")
+            ));
         }
         let state = &self.editor.optimization;
         let Some(scenario) = state.scenarios.iter().find(|scenario| scenario.id == id) else {
@@ -378,9 +424,10 @@ impl App<'_> {
             None => scenario_status(state.status(scenario)).0,
         };
         let status = match status {
-            "running" | "queued" => status,
+            "running" | "queued" | "up_to_date" => status,
             // Nothing started: the window is asking the user to load inputs.
-            _ => "waiting for the user to agree, in the window, to load the inputs",
+            _ if state.load_prompt.is_some() => "waiting for the user to agree, in the window, to load the inputs",
+            _ => "not started: get_activity says why",
         };
         ok(&json!({ "scenario": id, "schedule": schedule_id, "status": status }))
     }
@@ -434,4 +481,57 @@ fn shells(report: &OptimizationReport) -> Value {
         "elements": report.elements.iter().map(|element| element.name.clone()).collect::<Vec<_>>(),
         "shells": rows,
     })
+}
+
+fn case_name(case: PeriodCase) -> &'static str {
+    match case {
+        PeriodCase::FixedLead => "fixed_lead",
+        PeriodCase::Best => "best",
+        PeriodCase::Worst => "worst",
+    }
+}
+
+/// One case of a schedule, period by period: tonnes by destination and
+/// stockpile, feed grades, and the money.
+fn periods(run: &NpvScheduleResult, schedule: &NpvPitSchedule) -> Value {
+    let by = |names: &[String], values: &[f64]| -> Value {
+        names
+            .iter()
+            .zip(values)
+            .map(|(name, value)| (name.clone(), json!(value)))
+            .collect::<serde_json::Map<_, _>>()
+            .into()
+    };
+    let elements: Vec<String> = run.elements.iter().map(|element| element.name.clone()).collect();
+    let rows: Vec<Value> = schedule
+        .periods
+        .iter()
+        .enumerate()
+        .map(|(index, period)| {
+            let processed: f64 = period.processed.iter().sum();
+            let feed_grades: Vec<f64> = period
+                .feed_grade_tonnes
+                .iter()
+                .map(|grade_tonnes| if processed > 0.0 { grade_tonnes / processed } else { 0.0 })
+                .collect();
+            json!({
+                "period": index + 1,
+                "mined_tonnes": period.mined,
+                "waste_tonnes": period.waste,
+                "mined_to": by(&run.destinations, &period.mined_direct),
+                "processed": by(&run.destinations, &period.processed),
+                "feed_grade": by(&elements, &feed_grades),
+                "recovered": by(&elements, &period.recovered),
+                "stocked_tonnes": period.stocked,
+                "reclaimed_tonnes": period.reclaimed,
+                "stockpile_balance": by(&run.stockpiles, &period.stockpile_balance),
+                "revenue": period.revenue,
+                "cost": period.cost,
+                "cash_flow": period.cash_flow,
+                "discounted_cash_flow": period.discounted_cash_flow,
+                "held_back": period.held.is_some(),
+            })
+        })
+        .collect();
+    json!({ "npv": schedule.npv, "unfinished": schedule.unfinished, "rows": rows })
 }

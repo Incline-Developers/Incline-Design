@@ -90,7 +90,11 @@ pub(crate) struct VideoTarget {
 impl VideoTarget {
     fn new(graphics: &Graphics<'_>, width: u32, height: u32) -> Self {
         let target = OffscreenTarget::new(graphics, width, height, "Video frame");
-        let overlay = crate::ui::VideoOverlay::new(&graphics.device, target.config.format.remove_srgb_suffix(), graphics.gui.as_ref().map_or_else(crate::ui::default_visuals, Gui::visuals));
+        let overlay = crate::ui::VideoOverlay::new(
+            &graphics.device,
+            target.config.format.remove_srgb_suffix(),
+            graphics.gui.as_ref().map_or_else(crate::ui::default_visuals, Gui::visuals),
+        );
         Self {
             target,
             overlay,

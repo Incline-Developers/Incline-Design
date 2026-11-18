@@ -230,9 +230,7 @@ impl App<'_> {
             "export" => self.mcp_export(arguments),
             "save_project" => self.mcp_save_project(arguments),
             "open_project" => self.mcp_open_project(arguments),
-            "new_project" => self
-                .mcp_replace_project(FileDialogAction::NewProject, arguments)
-                .map(|()| json!({ "new_project": true })),
+            "new_project" => self.mcp_replace_project(FileDialogAction::NewProject, arguments).map(|()| json!({ "new_project": true })),
             _ => return None,
         };
         Some(result.map_or_else(failed, |value| ok(&value)))

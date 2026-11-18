@@ -46,7 +46,9 @@ impl<'a> Graphics<'a> {
     }
 
     async fn create(window: Option<Arc<Window>>) -> Result<Graphics<'a>> {
-        let window_size = window.as_ref().map_or(winit::dpi::PhysicalSize::new(HEADLESS_SIZE.0, HEADLESS_SIZE.1), |window| window.inner_size());
+        let window_size = window
+            .as_ref()
+            .map_or(winit::dpi::PhysicalSize::new(HEADLESS_SIZE.0, HEADLESS_SIZE.1), |window| window.inner_size());
         // The web backend's ResizeObserver may not have delivered its first
         // event when asynchronous WebGPU initialization begins. Read the
         // attached canvas directly so the first surface is not permanently
@@ -986,8 +988,8 @@ impl<'a> Graphics<'a> {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             if let Some(surface) = &self.surface {
-            surface.configure(&self.device, &self.config);
-        }
+                surface.configure(&self.device, &self.config);
+            }
             let (msaa_color, msaa_view) = Self::create_msaa_target(&self.device, &self.config, self.sample_count);
             self.msaa_view = msaa_view;
             let (depth_texture, depth_view) = Self::create_depth_target(&self.device, &self.config, self.sample_count);

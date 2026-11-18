@@ -161,10 +161,7 @@ fn read_event_stream(reader: &mut BufReader<TcpStream>, forward: &mut dyn FnMut(
 /// Whether `error` means the connection was closed under the message before
 /// the window read it.
 fn stale(error: &io::Error) -> bool {
-    matches!(
-        error.kind(),
-        io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
-    )
+    matches!(error.kind(), io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe)
 }
 
 /// What to answer when the window could not be reached: an error for a

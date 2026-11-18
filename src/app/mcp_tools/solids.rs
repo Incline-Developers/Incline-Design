@@ -159,7 +159,7 @@ pub(super) fn definitions() -> Vec<Value> {
         tool(
             "get_reserves",
             "Get reserves",
-            "Read the reserves the planning steps measured: each reserve field's figure, the volume and the dig block count, totalled by solid, by bench, or listed block by block. Category fields are broken down by category. Says what to run first if the reserves are not measured or out of date.",
+            "Read the reserves the planning steps measured: each reserve field's figure, the volume and the dig block count, totalled by solid, by bench, or listed block by block (each with the id set_bar_dig_blocks takes, good until the planning steps run again). Category fields are broken down by category. Says what to run first if the reserves are not measured or out of date.",
             json!({ "by": { "type": "string", "enum": ["solid", "bench", "block"], "description": "solid if left out." } }),
             &[],
             true,
@@ -232,6 +232,7 @@ impl App<'_> {
             })
             .collect();
         let reserves = match self.planning_snapshot() {
+            Ok(_) if document.solids().is_empty() => "nothing to measure: add_solid adds a solid".to_owned(),
             Ok(_) => "measured and current".to_owned(),
             Err(not_ready) => super::plain(&not_ready.describe()),
         };
@@ -442,7 +443,7 @@ impl App<'_> {
         Ok(json!({ "block_model": model.0 }))
     }
 
-    fn mcp_run_planning(&mut self, arguments: &Value) -> Result<Value, String> {
+    pub(super) fn mcp_run_planning(&mut self, arguments: &Value) -> Result<Value, String> {
         let command = match arguments["step"].as_str() {
             None => UiCommand::RunAllPlanningStages,
             Some(name) => UiCommand::RunPlanningStage(
@@ -473,6 +474,7 @@ impl App<'_> {
             match by {
                 "block" => {
                     let mut row = json!({
+                        "id": block.id.0,
                         "solid": block.solid_name,
                         "bench": block.bench.base,
                         "flitch": block.flitch.base,

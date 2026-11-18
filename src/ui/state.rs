@@ -6919,10 +6919,7 @@ impl UiCommand {
             Self::CommitBatterBerm => report(tr!("common-create-batter-berm"), tr!("state-apply-generated-rings")),
             Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::InsertPointsAtCrossings { object_ids } => report(
-                tr!("state-insert-intersection-points"),
-                tr!("common-count-object-s", count = object_ids.len().to_string()),
-            ),
+            Self::InsertPointsAtCrossings { object_ids } => report(tr!("state-insert-intersection-points"), tr!("common-count-object-s", count = object_ids.len().to_string())),
             Self::ApplyObjectEdit { object, .. } => report(tr!("common-edit-object"), object.kind_name()),
             Self::InsertPointsAtElevation { object_ids, elevation } => report(
                 tr!("state-insert-points-elevation"),
@@ -7679,6 +7676,10 @@ pub(crate) struct OptimizationState {
     pub(crate) schedules_after_run: HashMap<u64, Vec<u64>>,
     /// Each schedule's last run in full, for the session (stage 3 reads it).
     pub(crate) schedule_results: HashMap<u64, std::sync::Arc<crate::model::npv_schedule_run::NpvScheduleResult>>,
+    /// Why each scenario's last run could not start, by scenario id, until it
+    /// is asked to run again: the activity log says it to the user, and this
+    /// lets whoever asked for the run be told the same.
+    pub(crate) run_failures: HashMap<u64, Vec<String>>,
 }
 
 /// Inputs of an optimization that are unloaded, and what to do once they are

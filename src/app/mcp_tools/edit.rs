@@ -179,10 +179,17 @@ impl App<'_> {
         let name = arguments["name"].as_str().unwrap_or_default();
         let Some(mark) = self.mcp_checkpoints.iter().find(|(existing, _)| existing == name).map(|(_, mark)| *mark) else {
             let names: Vec<&str> = self.mcp_checkpoints.iter().map(|(name, _)| name.as_str()).collect();
-            return failed(format!("There is no checkpoint called {name}. There are: {}.", if names.is_empty() { "none".to_owned() } else { names.join(", ") }));
+            return failed(format!(
+                "There is no checkpoint called {name}. There are: {}.",
+                if names.is_empty() { "none".to_owned() } else { names.join(", ") }
+            ));
         };
         let steps = match self.history.route_to(mark) {
-            None => return failed(format!("The undo history no longer reaches checkpoint {name}: the project was saved since, or the history dropped its oldest steps to stay within its memory budget.")),
+            None => {
+                return failed(format!(
+                    "The undo history no longer reaches checkpoint {name}: the project was saved since, or the history dropped its oldest steps to stay within its memory budget."
+                ));
+            }
             Some(HistoryRoute::Here) => return ok(&json!({ "rolled_back_to": name, "steps": 0 })),
             Some(HistoryRoute::Undo(steps) | HistoryRoute::Redo(steps)) => steps,
         };

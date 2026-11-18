@@ -592,7 +592,6 @@ impl App<'_> {
         self.redraw_requested = true;
         Ok(json!({ "workspace": format!("{:?}", self.editor.active_workspace), "schedule_hours": self.editor.schedule_time_h }))
     }
-
 }
 
 /// render_view's schema for one of the arguments that place its view, for

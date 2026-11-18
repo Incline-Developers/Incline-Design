@@ -60,7 +60,6 @@ use crate::{
     },
 };
 
-
 /// The kinds of thing a tool can be pointed at, as `get_project` and
 /// `get_selection` name them.
 const KINDS: [&str; 7] = ["surface", "block_model", "drillholes", "point_cloud", "raster", "design_layer", "design_object"];
@@ -169,6 +168,71 @@ fn merge_patch(target: &mut Value, patch: &Value) {
 }
 
 /// A box as `{min, max}`.
+/// The values each enumerated setting in `value` may take, by where it sits
+/// (a JSON pointer, array indices written as `*`), found by asking the type
+/// itself: each text value in turn is swapped for one no setting takes, and
+/// where that is refused as an unknown variant, the refusal lists the ones
+/// that are known. So the list is always the type's own, and free text
+/// (names, fields) is left out because it takes anything.
+fn enum_choices<T: serde::de::DeserializeOwned>(value: &Value) -> Value {
+    fn leaves(value: &Value, path: &mut Vec<String>, found: &mut Vec<Vec<String>>) {
+        match value {
+            Value::String(_) => found.push(path.clone()),
+            Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    path.push(index.to_string());
+                    leaves(item, path, found);
+                    path.pop();
+                }
+            }
+            Value::Object(entries) => {
+                for (key, item) in entries {
+                    path.push(key.clone());
+                    leaves(item, path, found);
+                    path.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut paths = Vec::new();
+    leaves(value, &mut Vec::new(), &mut paths);
+    let mut choices = serde_json::Map::new();
+    for path in paths {
+        let generic = path
+            .iter()
+            .map(|segment| {
+                if segment.parse::<usize>().is_ok() {
+                    "*".to_owned()
+                } else {
+                    segment.replace('~', "~0").replace('/', "~1")
+                }
+            })
+            .collect::<Vec<_>>();
+        let key = format!("/{}", generic.join("/"));
+        if choices.contains_key(&key) {
+            continue;
+        }
+        let pointer = format!(
+            "/{}",
+            path.iter().map(|segment| segment.replace('~', "~0").replace('/', "~1")).collect::<Vec<_>>().join("/")
+        );
+        let mut probe = value.clone();
+        let Some(leaf) = probe.pointer_mut(&pointer) else { continue };
+        *leaf = Value::String("\u{1}".to_owned());
+        let Err(error) = serde_json::from_value::<T>(probe) else { continue };
+        let message = error.to_string();
+        let Some(expected) = message.strip_prefix("unknown variant `\u{1}`, expected ") else {
+            continue;
+        };
+        let names: Vec<Value> = expected.split('`').skip(1).step_by(2).map(|name| Value::String(name.to_owned())).collect();
+        if !names.is_empty() {
+            choices.insert(key, Value::Array(names));
+        }
+    }
+    Value::Object(choices)
+}
+
 fn extent(min: DVec3, max: DVec3) -> Value {
     json!({ "min": point(min), "max": point(max) })
 }

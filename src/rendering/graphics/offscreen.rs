@@ -123,7 +123,6 @@ impl OffscreenTarget {
     }
 }
 
-
 /// A requested view as it was drawn, top row first, four bytes a pixel.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct ViewportPixels {
@@ -224,19 +223,22 @@ impl Graphics<'_> {
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&self.camera_uniform));
         self.write_grid_uniforms(editor);
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Requested view encoder") });
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Requested view encoder"),
+        });
         let scale_factor = self.scale_factor() as f32;
         self.sync_scene_content(&mut encoder, content, scale_factor);
         let full = ViewportRect::full(width, height);
         self.render_scene_pass(&mut encoder, view, full, editor, triangulations, block_models, drill_holes, point_clouds, rasters, true);
         let readback = RgbaReadback::record(&self.device, &mut encoder, texture, "Requested view readback");
         self.queue.submit(std::iter::once(encoder.finish()));
-        readback.map_blocking(&self.device).map_err(|error| format!("The picture could not be read back: {error:#}"))?;
+        readback
+            .map_blocking(&self.device)
+            .map_err(|error| format!("The picture could not be read back: {error:#}"))?;
         let rgba = readback.unpack().map_err(|error| format!("The picture could not be read back: {error:#}"));
         readback.buffer.unmap();
         rgba
     }
-
 }
 
 #[cfg(not(target_arch = "wasm32"))]

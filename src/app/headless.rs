@@ -164,11 +164,19 @@ impl App<'_> {
     /// When the next turn is due unless a request comes first.
     fn headless_deadline(&self, now: Instant) -> Instant {
         let busy = self.video_recording.is_some()
-            || !self.pending_jobs.is_empty() || !self.pending_saves.is_empty() || !self.pending_file_dialogs.is_empty() || !self.mcp_waits.is_empty();
+            || !self.pending_jobs.is_empty()
+            || !self.pending_saves.is_empty()
+            || !self.pending_file_dialogs.is_empty()
+            || !self.mcp_waits.is_empty();
         let turn = now + if busy { BUSY_TURN } else { IDLE_TURN };
-        [self.schedule_auto_deadline, self.planning_auto_deadline, self.haulage_auto_deadline, self.scanned_model_kept_until]
-            .into_iter()
-            .flatten()
-            .fold(turn, Instant::min)
+        [
+            self.schedule_auto_deadline,
+            self.planning_auto_deadline,
+            self.haulage_auto_deadline,
+            self.scanned_model_kept_until,
+        ]
+        .into_iter()
+        .flatten()
+        .fold(turn, Instant::min)
     }
 }

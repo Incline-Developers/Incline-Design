@@ -108,10 +108,19 @@ fn load_tools_definition() -> Value {
 }
 
 /// The tools `tools/list` gives with `loaded` loaded.
+///
+/// Each is marked to be loaded as it is listed. A client may hold back an
+/// MCP server's tools until the model searches for them (Claude Code's tool
+/// search does), which would cost a round trip for every tool and undo what
+/// `load_tools` is for: the groups already keep the list short, so what is
+/// listed is meant to be callable at once.
 pub(super) fn listed(loaded: &BTreeSet<&'static str>) -> Vec<Value> {
     let mut tools = core();
     for group in GROUPS.iter().filter(|group| loaded.contains(group.name)) {
         tools.extend((group.tools)());
+    }
+    for tool in &mut tools {
+        tool["_meta"] = json!({ "anthropic/alwaysLoad": true });
     }
     tools
 }

@@ -46,7 +46,7 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "get_project",
             "title": "Get project",
-            "description": "Describe the project open in Incline Design: its name and file, whether it has unsaved changes, how much of the computer's memory is in use, and every item in it with its id: surfaces (triangulations), block models (block and variable counts, extents), drillhole collections (hole and field counts), point clouds, rasters, and design layers. Whether each is loaded and whether it is hidden, and the explorer folder it is filed in (folders lists them by section). Coordinates are in the project's own units, usually metres, with Z up.",
+            "description": "Describe the project open in Incline Design: its name and file, whether it has unsaved changes, how much of the computer's memory is in use, and every item in it with its id: surfaces (triangulations, with their triangle counts when loaded), block models (block and variable counts, extents), drillhole collections (hole and field counts), point clouds, rasters, and design layers. Whether each is loaded and whether it is hidden, and the explorer folder it is filed in (folders lists them by section). Coordinates are in the project's own units, usually metres, with Z up.",
             "inputSchema": no_arguments(),
             "annotations": { "readOnlyHint": true },
         }),
@@ -208,9 +208,19 @@ impl App<'_> {
             "memory": self.editor.memory_usage.map(|usage| json!({
                 "used_gb": super::gigabytes(usage.used), "total_gb": super::gigabytes(usage.total),
             })),
-            "surfaces": view.triangulations.iter().map(|item| json!({
-                "id": item.id.0, "name": item.name, "loaded": item.is_loaded, "hidden": item.is_hidden, "folder": item.folder.map(|folder| folder.0),
-            })).collect::<Vec<_>>(),
+            "surfaces": view.triangulations.iter().map(|item| {
+                // Counted only where the surface is in memory: an unloaded
+                // one's mesh is not to hand, and it is not read in to count it.
+                let triangles = self
+                    .triangulations
+                    .iter()
+                    .find(|surface| surface.id == item.id && surface.state.loaded && surface.state.deferred.is_none())
+                    .map(|surface| surface.mesh.face_count());
+                json!({
+                    "id": item.id.0, "name": item.name, "loaded": item.is_loaded, "hidden": item.is_hidden, "folder": item.folder.map(|folder| folder.0),
+                    "triangles": triangles,
+                })
+            }).collect::<Vec<_>>(),
             "block_models": view.block_models.iter().map(|item| json!({
                 "id": item.id.0, "name": item.name, "loaded": item.is_loaded, "hidden": item.is_hidden, "folder": item.folder.map(|folder| folder.0),
                 "blocks": item.block_count, "variables": item.variable_count,

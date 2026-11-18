@@ -636,6 +636,7 @@ impl<'a> App<'a> {
         for issue in issues {
             userspace_error!("{}", tr!("opt-run-issue", issue = issue.clone()));
         }
+        self.editor.optimization.run_failures.insert(id, issues.to_vec());
         self.editor.optimization.runs.remove(&id);
         self.editor.optimization.awaiting_restore.remove(&id);
         self.after_scenario_run(id, false);

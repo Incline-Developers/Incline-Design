@@ -48,9 +48,9 @@ pub(crate) mod cinematic;
 pub(crate) mod frame;
 pub(crate) mod frustum;
 pub(crate) mod init;
+pub(crate) mod offscreen;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod panel_window;
-pub(crate) mod offscreen;
 pub(crate) mod passes;
 pub(crate) mod projections;
 mod readback;
@@ -1426,7 +1426,9 @@ impl<'a> Graphics<'a> {
         {
             use winit::platform::web::WindowExtWebSys;
 
-            let Some(canvas) = self.window.as_ref().and_then(|window| window.canvas()) else { return };
+            let Some(canvas) = self.window.as_ref().and_then(|window| window.canvas()) else {
+                return;
+            };
             let Some(document) = canvas.owner_document() else { return };
             let has_method = |object: &wasm_bindgen::JsValue, name: &str| js_sys::Reflect::get(object, &name.into()).is_ok_and(|value| value.is_function());
             // winit 0.30 calls these APIs without feature detection or exception
