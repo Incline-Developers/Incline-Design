@@ -3384,6 +3384,11 @@ products-update = Update
 
 progress-percent-done-total = { $percent } ({ $done } of { $total })
 progress-task-finished = { $task }: Finished
+progress-recent-tasks = Recent tasks
+progress-duration-under-second = under 1 s
+progress-duration-seconds = { $seconds } s
+progress-duration-minutes = { $minutes } min { $seconds } s
+progress-duration-hours = { $hours } h { $minutes } min
 
 ## Project strings
 
@@ -5588,3 +5593,58 @@ err-file-desc-project = project
 err-file-desc-opt-scenarios = optimisation scenarios
 err-file-desc-opt-report = optimisation report
 err-file-desc-sched-report = schedule report
+
+## Simplify
+simplify-title = Simplify Triangulation
+simplify-menu = Simplify Triangulation...
+simplify-surface-help = The surface to thin. Choose it from the list, or press Pick and click it in the viewport. The result is a new surface.
+simplify-keep = Triangles to keep
+simplify-keep-help = Flat ground gives up its triangles first; crests, toes and breaks in slope keep theirs longest. The open edge keeps its outline.
+simplify-limit = Limit deviation
+simplify-limit-help = Stop early rather than move the surface further than this from the original, even if that leaves more triangles than asked for.
+simplify-max-deviation = Maximum deviation
+simplify-note = { $from } triangles down to about { $to }
+simplify-note-limited = { $from } triangles down to about { $to }, or more if the deviation limit is reached first
+simplify-run = Simplify
+simplify-name-suffix = Simplified
+simplify-name-hint = e.g. mysurf_simplified
+simplify-working = Simplifying triangulation…
+simplify-done = Simplified '{ $name }' from { $from } to { $to } triangles, within about { $deviation } m of the original
+err-simplify-nothing-to-do = The surface is already at or below that many triangles
+
+## Rain Simulation
+water-simulate = Rain Simulation
+water-simulate-ellipsis = Rain Simulation...
+water-surface-help = The surface the rain falls on and runs over. The run works on its own copy, so later edits to the surface do not change it.
+water-section-rain = Rain
+water-section-ground = Ground
+water-section-solver = Calculation
+water-rain = Rainfall
+water-rain-help = The whole storm's rain, falling evenly over its duration.
+water-rain-duration = Rain duration
+water-run-on = Run on after rain
+water-run-on-help = How long the run carries on once the rain has stopped, for the water still on the surface to drain and settle.
+water-roughness = Roughness (Manning's n)
+water-roughness-help = One value for the whole surface. Around 0.02 for smooth compacted ground, 0.03 to 0.04 for blasted rock and haul roads, 0.05 and up for rough or vegetated ground.
+water-infiltration = Infiltration
+water-infiltration-help = What the ground takes in wherever water lies on it. One value for the whole surface.
+water-step = Time step
+water-step-help = The run is stable at any step. A longer step is faster and blurs when water arrives, not where it ends up.
+water-subdivide = Subdivide long triangles
+water-subdivide-help = Water is tracked at the surface's points, so a floor made of a few large triangles gives one flat answer. This splits the run's copy of the surface, not the surface itself.
+water-subdivide-length = Longest side
+water-unit-mm = mm
+water-unit-hours = h
+water-unit-mm-per-hour = mm/h
+water-unit-seconds = s
+water-run-note = { $rate } mm/h, { $steps } steps
+water-run = Run
+water-run-summary = { $rain } mm over { $hours } h
+water-tab-title = Rain Simulation: { $surface } { $rain } mm { $hours } h
+water-job = Simulating rain on { $surface }
+water-run-done = { $title }: finished on { $vertices } points, { $volume } m³ left on the surface
+water-run-failed = { $title }: { $error }
+water-error-settings = The storm's settings are not all valid numbers.
+water-error-no-surface = Choose a loaded surface to rain on.
+water-error-empty = The surface has no area in plan to rain on.
+water-clock = { $time } / { $end }

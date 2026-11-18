@@ -59,6 +59,8 @@ pub(crate) struct ScenePipelineLayouts<'a> {
     pub(crate) block_model_volume_upscale: &'a wgpu::BindGroupLayout,
     /// The drill selection bitset, group 1 of both drill pipelines.
     pub(crate) drill_selection: &'a wgpu::BindGroupLayout,
+    /// Group 1 of the water pipeline.
+    pub(crate) water: &'a wgpu::BindGroupLayout,
 }
 
 /// How the scene pass shades what it draws.
@@ -205,6 +207,9 @@ pub(crate) struct ScenePipelines {
     /// Animate's machines, depth-tested against the scene and drawn by the
     /// editor overlay pass.
     pub(crate) machine_render_pipeline: wgpu::RenderPipeline,
+    /// A rain simulation's water, blended over the scene by the editor
+    /// overlay pass: tested against the scene's depth, writing none.
+    pub(crate) water_render_pipeline: wgpu::RenderPipeline,
 }
 
 pub(crate) fn create_scene_pipelines(
@@ -728,6 +733,52 @@ pub(crate) fn create_scene_pipelines(
         cache: None,
     });
 
+    // Drawn by the overlay pass, which is the ordinary view's in both sets,
+    // so it is lit and graded as the ordinary view is in both.
+    let water_shader = SceneShading::Standard.lit_shader(device, "../shaders/water.wgsl", include_str!("../shaders/water.wgsl"));
+    let water_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Water Pipeline Layout"),
+        bind_group_layouts: &[Some(layouts.camera), Some(layouts.water)],
+        immediate_size: 0,
+    });
+    let water_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Water Pipeline"),
+        layout: Some(&water_pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &water_shader,
+            entry_point: Some("vs_main"),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<crate::rendering::water::WaterVertex>() as wgpu::BufferAddress,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &crate::rendering::water::WATER_VERTEX_ATTRIBUTES,
+            })],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &water_shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(Graphics::depth_state(false, -1)),
+        multisample: wgpu::MultisampleState {
+            count: sample_count,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+        multiview_mask: None,
+        cache: None,
+    });
+
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render Pipeline"),
         layout: Some(&document_pipeline_layout),
@@ -1172,5 +1223,6 @@ pub(crate) fn create_scene_pipelines(
         design_point_render_pipeline,
         overlay_render_pipeline,
         machine_render_pipeline,
+        water_render_pipeline,
     }
 }

@@ -45,6 +45,8 @@ pub(crate) mod status_bar;
 pub(crate) mod title_bar;
 pub(crate) mod toolbars;
 pub(crate) mod viewport_bar;
+/// A rain simulation's tab: its timeline.
+pub(crate) mod water;
 
 /// Lay a bar's contents out on a strip that never narrows past what they need,
 /// and scroll it under the wheel once the window is narrower than that.

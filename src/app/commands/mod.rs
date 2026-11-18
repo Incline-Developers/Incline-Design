@@ -1293,6 +1293,32 @@ impl<'a> App<'a> {
                 self.set_tool_subject(subject);
                 Ok(())
             }
+            UiCommand::OpenWaterSimulation => {
+                self.open_water_surface();
+                Ok(())
+            }
+            UiCommand::RunWaterSimulation { surface, settings } => self.run_water_simulation(surface, settings),
+            UiCommand::OpenSimplifyTriangulation => {
+                self.open_simplify_surface();
+                Ok(())
+            }
+            UiCommand::SimplifyTriangulation {
+                surface,
+                keep,
+                max_deviation,
+                name,
+                unload_source,
+            } => {
+                let result = self.simplify_triangulation(surface, keep, max_deviation, name, unload_source);
+                if result.is_ok() {
+                    self.editor.simplify_dialog.open = false;
+                }
+                result
+            }
+            UiCommand::CloseWaterRun(id) => {
+                self.close_water_run(id);
+                Ok(())
+            }
             UiCommand::ZoomToExtents => {
                 // Sliced, the fit happens within the section, which therefore stays up.
                 self.zoom_to_extents();
