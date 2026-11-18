@@ -10,7 +10,7 @@ use crate::{
     model::{
         Command,
         haulage::HaulNetwork,
-        schedule::{AutoRun, SchedulePlan},
+        schedule::{AutoRun, SchedulePlan, ScheduleResult},
     },
     ui::{
         elements::schedule_report::ReportGrouping,
@@ -35,6 +35,72 @@ const SCHEDULE_STEPS: [(&str, ScheduleStep); 15] = [
     ("solids", ScheduleStep::Solids),
     ("haulage", ScheduleStep::Haulage),
     ("readiness", ScheduleStep::Readiness),
+];
+
+/// One list of the schedule setup an item at a time: where its items and its
+/// next id sit in the setup's JSON, and how one is deleted, through the plan's
+/// own removal so what refers to it is dealt with as the window deals with it.
+struct ScheduleList {
+    name: &'static str,
+    items: &'static str,
+    next_id: &'static str,
+    delete: fn(&mut SchedulePlan, u64) -> ScheduleResult,
+}
+
+const SCHEDULE_LISTS: [ScheduleList; 8] = [
+    ScheduleList {
+        name: "loader_class",
+        items: "/classes",
+        next_id: "/next_class_id",
+        delete: |plan, id| plan.remove_class(crate::model::schedule::LoaderClassId(id)),
+    },
+    ScheduleList {
+        name: "loader_agent",
+        items: "/agents",
+        next_id: "/next_agent_id",
+        delete: |plan, id| plan.remove_agent(crate::model::schedule::LoaderAgentId(id)),
+    },
+    ScheduleList {
+        name: "bar",
+        items: "/bars",
+        next_id: "/next_bar_id",
+        delete: |plan, id| plan.remove_bar(crate::model::schedule::BarId(id)),
+    },
+    ScheduleList {
+        name: "destination",
+        items: "/routing/standalone",
+        next_id: "/routing/next_standalone_id",
+        delete: |plan, id| {
+            let id = crate::model::schedule::StandaloneDestinationId(id);
+            plan.routing_mut().remove_standalone(id)?;
+            plan.remove_destination_grade_targets(crate::model::schedule::DestinationId::Standalone(id));
+            Ok(())
+        },
+    },
+    ScheduleList {
+        name: "routing_rule",
+        items: "/routing/rules",
+        next_id: "/routing/next_rule_id",
+        delete: |plan, id| plan.routing_mut().remove_rule(crate::model::schedule::RuleId(id)),
+    },
+    ScheduleList {
+        name: "truck_class",
+        items: "/trucks/classes",
+        next_id: "/trucks/next_class_id",
+        delete: |plan, id| plan.trucks_mut().remove_class(crate::model::schedule::TruckClassId(id)),
+    },
+    ScheduleList {
+        name: "trucking_rule",
+        items: "/trucks/rules",
+        next_id: "/trucks/next_rule_id",
+        delete: |plan, id| plan.trucks_mut().remove_rule(crate::model::schedule::TruckingRuleId(id)),
+    },
+    ScheduleList {
+        name: "cashflow_rule",
+        items: "/cashflow/rules",
+        next_id: "/cashflow/next_rule_id",
+        delete: |plan, id| plan.cashflow_mut().remove_rule(crate::model::schedule::CashflowRuleId(id)),
+    },
 ];
 
 fn tool(name: &str, title: &str, description: &str, properties: Value, required: &[&str], read_only: bool) -> Value {
@@ -101,6 +167,20 @@ pub(super) fn definitions() -> Vec<Value> {
             false,
         ),
         tool(
+            "edit_schedule_item",
+            "Add, change or delete one schedule setup item",
+            "Add, change or delete one item of a production schedule list without sending the list whole: a loader class or agent, a bar, a destination (crusher, stockpile or dump), a routing rule, a truck class, a trucking rule or a cash flow rule. add starts from the matching item of get_schedule_setup's examples, puts each of item's fields in place of the example's (so give only what differs, such as a name and kind) and allocates the id; position puts a rule that far up its list (rules are tried in order), the end if left out. update merges item into the item with that id. delete removes it as the window does: an agent's bars become unassigned, and a destination a routing rule still delivers to is refused. Checked as a project file's would be, and one undo step. Returns the item as it now stands. Dig bars' blocks are set with set_bar_dig_blocks.",
+            json!({
+                "list": { "type": "string", "enum": SCHEDULE_LISTS.iter().map(|list| list.name).collect::<Vec<_>>() },
+                "action": { "type": "string", "enum": ["add", "update", "delete"] },
+                "id": { "type": "integer", "minimum": 0, "description": "update and delete: the item's id." },
+                "item": { "type": "object", "description": "add: the new item's fields; update: a JSON merge patch over the item." },
+                "position": { "type": "integer", "minimum": 0, "description": "add: where in the list it goes, 0 first. The end if left out." },
+            }),
+            &["list", "action"],
+            false,
+        ),
+        tool(
             "get_schedule_status",
             "Get the schedule's readiness",
             "Read where the production schedule stands: each Setup step's state (not_run, stale, blocked, queued, running, complete, failed, cancelled) with its message and problems, each bar's tonnes and problems, and what stops the schedule being calculated, if anything. run_schedule check runs the steps first.",
@@ -154,6 +234,7 @@ impl App<'_> {
         let result = match name {
             "get_schedule_setup" => self.mcp_schedule_setup(arguments),
             "set_bar_dig_blocks" => self.mcp_set_bar_dig_blocks(arguments),
+            "edit_schedule_item" => self.mcp_edit_schedule_item(arguments),
             "get_schedule_status" => self.mcp_schedule_status(),
             "set_schedule_setup" => self.mcp_set_schedule_setup(arguments),
             "run_schedule" => self.mcp_run_schedule(arguments),
@@ -355,6 +436,80 @@ impl App<'_> {
         Ok(json!({ "bar": bar.0, "dig_blocks": members, "tonnes": tonnes }))
     }
 
+    fn mcp_edit_schedule_item(&mut self, arguments: &Value) -> Result<Value, String> {
+        let name = arguments["list"].as_str().ok_or("Give the list.")?;
+        let list = SCHEDULE_LISTS
+            .iter()
+            .find(|list| list.name == name)
+            .ok_or_else(|| format!("list is one of {}.", SCHEDULE_LISTS.iter().map(|list| list.name).collect::<Vec<_>>().join(", ")))?;
+        let document = self.workspace.active_document().ok_or("No project is open.")?;
+        let before = document.schedule().clone();
+        let id = arguments["id"].as_u64();
+        let (after, id) = match arguments["action"].as_str() {
+            Some("delete") => {
+                let id = id.ok_or("Give the id of the item to delete.")?;
+                let mut after = before.clone();
+                (list.delete)(&mut after, id).map_err(|error| super::plain(&error.message()))?;
+                (after, id)
+            }
+            Some(action @ ("add" | "update")) => {
+                let mut value = serde_json::to_value(&before).map_err(|error| error.to_string())?;
+                let item = arguments.get("item").cloned().unwrap_or_else(|| json!({}));
+                let id = if action == "add" {
+                    let example = serde_json::to_value(example_plan(document).map_err(|error| super::plain(&error.message()))?).map_err(|error| error.to_string())?;
+                    let mut new = example.pointer(list.items).and_then(|items| items.get(0)).cloned().unwrap_or_else(|| json!({}));
+                    // Each field given replaces the example's whole, rather
+                    // than merging into it: a bar's work or a rule's sources
+                    // is one choice of several, and merging two choices
+                    // would make a value that is neither.
+                    let fields = item.as_object().ok_or("item is an object of the new item's fields.")?;
+                    for (key, field) in fields {
+                        new[key] = field.clone();
+                    }
+                    let id = value.pointer(list.next_id).and_then(Value::as_u64).unwrap_or(0);
+                    new["id"] = json!(id);
+                    if let Some(next) = value.pointer_mut(list.next_id) {
+                        *next = json!(id + 1);
+                    }
+                    let items = value.pointer_mut(list.items).and_then(Value::as_array_mut).ok_or("The list is not in the setup.")?;
+                    let position = arguments["position"]
+                        .as_u64()
+                        .map_or(items.len(), |position| usize::try_from(position).unwrap_or(usize::MAX).min(items.len()));
+                    items.insert(position, new);
+                    id
+                } else {
+                    let id = id.ok_or("Give the id of the item to change.")?;
+                    let items = value.pointer_mut(list.items).and_then(Value::as_array_mut).ok_or("The list is not in the setup.")?;
+                    let existing = items
+                        .iter_mut()
+                        .find(|existing| existing["id"].as_u64() == Some(id))
+                        .ok_or_else(|| format!("There is no {} with id {id}: get_schedule_setup lists them.", list.name))?;
+                    merge_patch(existing, &item);
+                    existing["id"] = json!(id);
+                    id
+                };
+                let mut after: SchedulePlan = serde_json::from_value(value).map_err(|error| format!("The {} does not fit: {error}", list.name))?;
+                after.validate_loaded().map_err(|error| super::plain(&error.message()))?;
+                (after, id)
+            }
+            _ => return Err("action is add, update or delete.".to_owned()),
+        };
+        let item = serde_json::to_value(&after).ok().and_then(|value| {
+            value
+                .pointer(list.items)
+                .and_then(Value::as_array)
+                .and_then(|items| items.iter().find(|item| item["id"].as_u64() == Some(id)).cloned())
+        });
+        if after != before {
+            self.execute_job_edit(Command::SetSchedulePlan {
+                before: Box::new(before),
+                after: Box::new(after),
+            });
+            self.invalidate_geometry();
+        }
+        Ok(json!({ "list": list.name, "id": id, "item": item }))
+    }
+
     fn mcp_schedule_status(&mut self) -> Result<Value, String> {
         use crate::app::planning_pipeline::StageState;
 
@@ -458,6 +613,7 @@ impl App<'_> {
                     "all" => ScheduleRunMode::All,
                     _ => ScheduleRunMode::Improve,
                 };
+                self.mcp_schedule_serial_asked = self.schedule_run_serial;
                 // The Setup steps are checked first, as the Gantt's buttons
                 // do. Where they are still running (the Solids run a project
                 // starts as it opens, say), the button would be refused; here

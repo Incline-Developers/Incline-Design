@@ -49,6 +49,9 @@ pub(crate) struct PendingWait {
     /// How many times a planning run it asked for has been started again
     /// after an edit stopped it partway.
     reruns: u32,
+    /// For a calculation asked for: the run serial before it, so an attempt
+    /// that published nothing after it is known to be this call's.
+    calculation_since: Option<u64>,
 }
 
 /// How many times a planning run stopped by an edit is started again before
@@ -87,6 +90,9 @@ impl App<'_> {
     /// `before` is what was running when it came in.
     pub(crate) fn reply_or_hold(&mut self, call: Call, result: Value, before: HashSet<BackgroundTaskTicket>) {
         let pipelines = call.request["params"]["name"].as_str().is_some_and(|name| PIPELINE_TOOLS.contains(&name));
+        let calculation_since = (call.request["params"]["name"] == "run_schedule"
+            && matches!(call.request["params"]["arguments"]["what"].as_str(), Some("period" | "all" | "improve")))
+        .then_some(self.mcp_schedule_serial_asked);
         let started = self.running_task_tickets().difference(&before).next().is_some() || (pipelines && self.pipelines_busy());
         let held = call.request["method"] == "tools/call" && call.progress_token().is_some() && started && result["result"]["isError"] != true;
         if !held {
@@ -101,6 +107,7 @@ impl App<'_> {
             told: None,
             pipelines,
             reruns: 0,
+            calculation_since,
         });
         self.poll_mcp_waits();
     }
@@ -118,6 +125,7 @@ impl App<'_> {
             told: None,
             pipelines: false,
             reruns: 0,
+            calculation_since: None,
         });
         self.poll_mcp_waits();
     }
@@ -154,6 +162,10 @@ impl App<'_> {
                         continue;
                     }
                 }
+            }
+            if settled && let Some(problem) = self.calculation_failed(&wait) {
+                self.answer_wait(wait, Some(problem));
+                continue;
             }
             if settled || wait.until.is_some_and(|until| now >= until) {
                 self.answer_wait(wait, None);
@@ -223,6 +235,22 @@ impl App<'_> {
             }
             Err(not_ready) => Some(Some(format!("The planning steps did not finish: {}", super::plain(&not_ready.describe())))),
         }
+    }
+
+    /// Why the calculation a held `run_schedule` asked for published nothing,
+    /// if it did not: refused as it was captured, found no schedule, or
+    /// failed. The window shows this as a warning; the caller is told it as
+    /// an error rather than a note beside a result that reads as success.
+    fn calculation_failed(&self, wait: &PendingWait) -> Option<String> {
+        let since = wait.calculation_since?;
+        let attempt = self.schedule_run_diagnostics.as_ref().filter(|attempt| attempt.serial > since)?;
+        let headline = crate::app::schedule_run::attempt_headline(attempt);
+        let mut text = super::plain(&headline);
+        for message in attempt.messages.iter().filter(|message| !headline.contains(message.as_str())) {
+            text.push('\n');
+            text.push_str(&super::plain(message));
+        }
+        Some(text)
     }
 
     /// Answer a held call: the tool's result with what was logged while it

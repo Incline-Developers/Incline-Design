@@ -377,6 +377,9 @@ pub(crate) struct App<'a> {
     /// it needs were still running: started once they settle, rather than
     /// refused as the Gantt's button refuses it.
     pub(crate) mcp_pending_schedule_run: Option<crate::app::schedule_run::ScheduleRunMode>,
+    /// The schedule run serial when an MCP client last asked for a
+    /// calculation: an attempt recorded after it is that calculation's.
+    pub(crate) mcp_schedule_serial_asked: u64,
     /// Notifications a call raised while it was being answered, sent ahead
     /// of its answer.
     #[cfg(not(target_arch = "wasm32"))]
@@ -741,6 +744,7 @@ impl<'a> Default for App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             mcp_waits: Vec::new(),
             mcp_pending_schedule_run: None,
+            mcp_schedule_serial_asked: 0,
             #[cfg(not(target_arch = "wasm32"))]
             mcp_outbox: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
