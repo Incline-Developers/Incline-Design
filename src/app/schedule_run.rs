@@ -727,15 +727,23 @@ impl crate::app::App<'_> {
                 let input = Arc::new(capture.input);
                 let dispatched = capture.dispatched;
                 let auto_order = capture.auto_order;
-                let mut notes = capture.notes;
-                if capture.stats.event_budget_restricted {
-                    notes.push(tr!("schedule-note-event-budget", positions = input.segments_per_interval.to_string()));
-                }
+                let notes = capture.notes;
                 let stable_fingerprint = capture.stable_fingerprint;
                 let publish_completion = |completion: &super::schedule_solve::ScheduleCompletion| {
                     let (Some(solution), Some(replay)) = (completion.solution.as_ref(), completion.replay.as_ref()) else {
                         return Err(tr!("err-sched-no-replayed-schedule"));
                     };
+                    // The cap on switches within an interval held something
+                    // back only where the schedule used every one it allowed.
+                    let restricted = capture.stats.event_budget_restricted
+                        && solution
+                            .durations
+                            .iter()
+                            .any(|(&(_, segment), &duration)| duration > 0.0 && segment + 1 >= input.segments_per_interval);
+                    let mut notes = notes.clone();
+                    if restricted {
+                        notes.push(tr!("schedule-note-event-budget", positions = input.segments_per_interval.to_string()));
+                    }
                     let meta = PublishMeta {
                         run: serial,
                         semantic,
@@ -746,9 +754,9 @@ impl crate::app::App<'_> {
                         model_identity: capture.fingerprint,
                         candidates: capture.stats.candidates,
                         ground_sources: capture.stats.ground_sources,
-                        event_budget_restricted: capture.stats.event_budget_restricted,
+                        event_budget_restricted: restricted,
                         unworked_blasts: capture.identities.unworked_blasts.clone(),
-                        notes: notes.clone(),
+                        notes,
                     };
                     publish(&input, solution, replay, &capture.identities, meta, cancel).map(|mut schedule| {
                         schedule.saved = Some(Arc::new(SavedSchedule {

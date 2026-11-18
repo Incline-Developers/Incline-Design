@@ -107,6 +107,18 @@ pub(crate) fn improve(
     let mut seed = None;
     let mut relaxation = None;
     let mut windows = None;
+    // Everything from here is sized by the switches within an interval the
+    // first schedule needed, and one more, not by the cap the dispatch
+    // worked under: on a ten-year mine the dispatch used three of 24, and
+    // every whole-horizon program carried all 24.
+    if let DayByDay::Seed(found) = &attempt {
+        let needed = segments_in_use(&found.solution) + 1;
+        if needed < out.input.segments_per_interval {
+            let mut input = (*out.input).clone();
+            input.segments_per_interval = needed;
+            out.input = Arc::new(input);
+        }
+    }
     // Whether the whole-horizon model is small enough to build: past that,
     // neither SCIP nor its relaxation is attempted and the search has the
     // whole budget.
@@ -972,6 +984,17 @@ fn solve_day_by_day(
         replay: checked,
         summary,
     }))
+}
+
+/// How many segments of an interval `solution` works in at most.
+fn segments_in_use(solution: &crate::model::schedule::optimisation::blended::replay::BlendSolution) -> usize {
+    solution
+        .durations
+        .iter()
+        .filter(|(_, duration)| **duration > 0.0)
+        .map(|(&(_, segment), _)| segment + 1)
+        .max()
+        .unwrap_or(1)
 }
 
 /// The whole-horizon model's movement columns, as its formulation would
