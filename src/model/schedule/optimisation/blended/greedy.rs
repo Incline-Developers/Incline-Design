@@ -1155,7 +1155,11 @@ impl<'a> State<'a> {
             else {
                 continue;
             };
-            let Some(bar) = self.open_bar(loader, task, &BTreeSet::new(), interval) else { continue };
+            let Some(mut bar) = self.open_bar(loader, task, &BTreeSet::new(), interval) else { continue };
+            // An automatic bar's reach may run into another area: blocks in
+            // one that is full are out of its reach this interval, as its
+            // current block was checked to be in one with room.
+            bar.blocks.retain(|block| self.area_room(loader, *block, &admitted));
             for block in &bar.blocks {
                 for area in self.areas_of.get(block).into_iter().flatten() {
                     admitted[*area].insert(loader);
