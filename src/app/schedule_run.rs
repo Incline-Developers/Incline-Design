@@ -824,10 +824,7 @@ impl crate::app::App<'_> {
                             crate::userspace_log!("{finished}");
                         }
                         app.schedule_run_diagnostics = None;
-                        // A result Improve worked for is the project's to lose,
-                        // so closing asks first. A recalculation gives the same
-                        // answer again, and asks nothing.
-                        app.keep_schedule_for_saving(&schedule, pending.improve);
+                        app.keep_schedule_for_saving(&schedule);
                         app.hold_schedule(schedule);
                     }
                     Ok(RunOutcome::SavedOutOfDate) => {
@@ -1080,13 +1077,16 @@ impl crate::app::App<'_> {
         }
     }
 
-    /// Have the project file keep this schedule the next time it is saved.
-    fn keep_schedule_for_saving(&mut self, schedule: &CalculatedSchedule, unsaved_work: bool) {
+    /// Have the project file keep this schedule the next time it is saved,
+    /// and say the project has changed: the file holds the result, which a
+    /// long run would otherwise be lost with. One restored from the file is
+    /// already in it.
+    fn keep_schedule_for_saving(&mut self, schedule: &CalculatedSchedule) {
         let saved = schedule.saved.clone();
         if let Some(document) = self.workspace.active_document_mut() {
             document.set_saved_schedule(saved);
         }
-        if unsaved_work {
+        if !schedule.report.restored {
             self.touch_active_project_content();
         }
     }
@@ -1141,7 +1141,7 @@ impl crate::app::App<'_> {
                 tr!("schedule-run-early", run = serial.to_string(), day = day_of(schedule.requested_end_h).to_string())
             );
             self.schedule_run_diagnostics = None;
-            self.keep_schedule_for_saving(&schedule, false);
+            self.keep_schedule_for_saving(&schedule);
             self.hold_schedule(schedule);
             if let Some(pending) = self.pending_schedule_run.as_mut() {
                 pending.showing_early = true;
