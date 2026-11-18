@@ -536,19 +536,33 @@ impl crate::app::App<'_> {
         let inputs = match self.schedule_run_inputs() {
             Ok(inputs) => inputs,
             Err(reason) => {
+                // A Setup step still running is no reason to give up: the run
+                // waits for it, and starts once it finishes. A run someone
+                // asked for is not displaced by a recalculation.
+                if let ScheduleNotReady::Running(_) = reason
+                    && let Some(project) = self.workspace.active_project()
+                {
+                    let runtime = project.runtime_id;
+                    let waiting = self.schedule_run_waiting.filter(|(at, _)| *at == runtime).map(|(_, mode)| mode);
+                    if !auto || waiting.is_none_or(|mode| mode == ScheduleRunMode::Auto) {
+                        if !auto && waiting != Some(mode) {
+                            crate::userspace_log!("{}", tr!("schedule-run-queued", reason = reason.describe()));
+                        }
+                        self.schedule_run_waiting = Some((runtime, mode));
+                    }
+                    return;
+                }
                 // The status line already says why; a recalculation nobody
                 // asked for does not repeat it in the console.
                 if auto {
                     log::info!("schedule recalculation blocked: {}", reason.describe());
-                } else if matches!(reason, ScheduleNotReady::Running(_)) {
-                    // Nothing is wrong: pressing Run again in a moment works.
-                    crate::userspace_log!("{}", tr!("schedule-run-blocked", reason = reason.describe()));
                 } else {
                     crate::userspace_warn!("{}", tr!("schedule-run-blocked", reason = reason.describe()));
                 }
                 return;
             }
         };
+        self.schedule_run_waiting = None;
         let end_h = self.planning_end_h();
         let held_end_h = self.schedule_calculation.as_ref().map(|held| held.requested_end_h.min(end_h));
         // With nothing on screen, what the project was saved with may still
@@ -890,6 +904,18 @@ impl crate::app::App<'_> {
     /// something changes.
     pub(crate) fn auto_recalculate_schedule(&mut self) {
         self.schedule_auto_deadline = None;
+        // A run that waited on a Setup step starts once none is running.
+        if let Some((runtime, mode)) = self.schedule_run_waiting
+            && self.pending_schedule_run.is_none()
+        {
+            if self.workspace.active_project().is_none_or(|project| project.runtime_id != runtime) {
+                self.schedule_run_waiting = None;
+            } else if !matches!(self.schedule_run_inputs(), Err(ScheduleNotReady::Running(_))) {
+                self.schedule_run_waiting = None;
+                self.start_schedule_run(mode);
+                return;
+            }
+        }
         // Auto off still shows what the project was saved with, once the steps
         // it was calculated from have run; the run stops there if that no
         // longer answers the project, since Auto off never calculates.
@@ -1218,7 +1244,12 @@ impl crate::app::App<'_> {
         // What is still shown, when the status line leads with a failed
         // attempt instead: it goes beneath, in the hover.
         let mut held_detail = None;
+        let waiting = self
+            .schedule_run_waiting
+            .filter(|(runtime, mode)| *mode != ScheduleRunMode::Auto && self.workspace.active_project().is_some_and(|project| project.runtime_id == *runtime))
+            .and_then(|_| self.schedule_run_blocker().filter(|reason| matches!(reason, ScheduleNotReady::Running(_))));
         let status = match (running, attempt, held_status) {
+            _ if let Some(reason) = &waiting => tr!("schedule-run-queued", reason = reason.describe()),
             _ if recalculating => tr!("schedule-run-updating"),
             (None, _, None) if no_assigned_bars && starting => tr!("schedule-run-no-bars"),
             (None, _, None) if empty_dig_bars && starting => tr!("schedule-run-empty-bars"),

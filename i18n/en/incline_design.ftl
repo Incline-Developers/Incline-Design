@@ -1705,6 +1705,7 @@ schedule-run-improving = Showing a first schedule through day { $day }. Looking 
 schedule-run-early = Run { $run }: a first schedule through day { $day } is ready and shown. The whole-horizon solve continues; stop it to keep this schedule.
 schedule-run-stopped-early = Run { $run } stopped. Its first schedule is kept.
 schedule-run-blocked = Cannot run: { $reason }
+schedule-run-queued = { $reason }. The run starts once it finishes.
 schedule-run-updating = Updating the schedule…
 idle-title = Idle · { $reason }
 idle-delayed = delayed

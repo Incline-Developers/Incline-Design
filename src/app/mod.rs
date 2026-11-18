@@ -526,6 +526,9 @@ pub(crate) struct App<'a> {
         crate::model::schedule::scenarios::ScenarioId,
         std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>,
     )>,
+    /// A run asked for while a Setup step was still running, by project
+    /// runtime: started once none is.
+    pub(crate) schedule_run_waiting: Option<(u32, crate::app::schedule_run::ScheduleRunMode)>,
     /// The project and scenario [`App::follow_open_scenario`] last saw open.
     pub(crate) followed_scenario: Option<(u32, crate::model::schedule::scenarios::ScenarioId)>,
     /// Whether the held result reached the planning end when it was
@@ -772,6 +775,7 @@ impl<'a> Default for App<'a> {
             schedule_calculation: None,
             schedule_scenario_results: Vec::new(),
             followed_scenario: None,
+            schedule_run_waiting: None,
             schedule_reached_end: false,
             dig_block_count: None,
             pending_schedule_run: None,
