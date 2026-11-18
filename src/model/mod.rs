@@ -2067,11 +2067,13 @@ impl Document {
     }
 
     /// `leaving` is no longer open and `entering` is: the open scenario's
-    /// saved schedule waits with the others, and `entering`'s, if it has
-    /// one, becomes the open one's.
+    /// saved schedule waits with the others - or goes, when `leaving` was
+    /// deleted - and `entering`'s, if it has one, becomes the open one's.
     pub(crate) fn swap_saved_schedule(&mut self, leaving: schedule::scenarios::ScenarioId, entering: schedule::scenarios::ScenarioId) {
         self.scenario_saved_schedules.retain(|(scenario, _)| *scenario != leaving);
-        if let Some(saved) = self.saved_schedule.take() {
+        if let Some(saved) = self.saved_schedule.take()
+            && self.schedule.scenarios().get(leaving).is_some()
+        {
             self.scenario_saved_schedules.push((leaving, saved));
         }
         if let Some(position) = self.scenario_saved_schedules.iter().position(|(scenario, _)| *scenario == entering) {

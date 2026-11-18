@@ -692,45 +692,60 @@ impl crate::app::App<'_> {
         });
     }
 
-    /// Open a scenario, keeping the one left's result to show again when it
-    /// is opened, and showing the opened one's if one was kept: currentness
-    /// decides, as for any held result, whether it still stands.
     fn open_scenario(&mut self, id: crate::model::schedule::scenarios::ScenarioId) {
-        /// Results kept for scenarios not open, at most.
-        const KEPT: usize = 4;
-        let Some((runtime, leaving)) = self
-            .workspace
+        self.edit_schedule(|plan| plan.open_scenario(id));
+    }
+
+    /// The active project and the scenario open in it.
+    pub(crate) fn open_scenario_marker(&self) -> Option<(u32, crate::model::schedule::scenarios::ScenarioId)> {
+        self.workspace
             .active_project()
             .map(|project| (project.runtime_id, project.project.document.schedule().scenarios().open))
-        else {
+    }
+
+    /// Follow the open scenario from where it was last followed, however it
+    /// changed - opened,
+    /// added, deleted, or an undo of any of those: the one left keeps its
+    /// result, to show again when it is opened, unless it was deleted, and
+    /// the opened one shows its own if one was kept, currentness deciding,
+    /// as for any held result, whether it still stands. What each was saved
+    /// with goes with it, as the file keeps it.
+    pub(crate) fn follow_open_scenario(&mut self) {
+        /// Results kept for scenarios not open, at most.
+        const KEPT: usize = 4;
+        let now = self.open_scenario_marker();
+        let before = std::mem::replace(&mut self.followed_scenario, now);
+        let (Some((runtime, leaving)), Some((now, opened))) = (before, now) else {
             return;
         };
-        // Kept only while it is the leaving scenario's own: one shown since
-        // another was opened, or since an edit, describes something else.
-        let held = self.schedule_calculation.clone().filter(|_| self.schedule_calculation_is_current());
-        self.edit_schedule(|plan| plan.open_scenario(id));
-        let opened = self.workspace.active_document().map(|document| document.schedule().scenarios().open);
-        if opened != Some(id) || leaving == id {
+        if runtime != now || leaving == opened {
             return;
         }
-        // What each was saved with goes with it, as the file keeps it.
+        let deleted = self
+            .workspace
+            .active_document()
+            .is_some_and(|document| document.schedule().scenarios().get(leaving).is_none());
         if let Some(document) = self.workspace.active_document_mut() {
-            document.swap_saved_schedule(leaving, id);
+            document.swap_saved_schedule(leaving, opened);
         }
         self.schedule_scenario_results.retain(|(at, scenario, _)| !(*at == runtime && *scenario == leaving));
-        if let Some(held) = held {
-            self.schedule_scenario_results.push((runtime, leaving, held));
-            if self.schedule_scenario_results.len() > KEPT {
-                self.schedule_scenario_results.remove(0);
+        let held = self.schedule_calculation.take();
+        match held {
+            Some(held) if !deleted => {
+                self.schedule_scenario_results.push((runtime, leaving, held));
+                if self.schedule_scenario_results.len() > KEPT {
+                    self.schedule_scenario_results.remove(0);
+                }
             }
+            // A long schedule is too slow to free in a frame.
+            Some(held) => rayon::spawn(move || drop(held)),
+            None => {}
         }
-        if let Some(position) = self.schedule_scenario_results.iter().position(|(at, scenario, _)| *at == runtime && *scenario == id) {
+        if let Some(position) = self.schedule_scenario_results.iter().position(|(at, scenario, _)| *at == runtime && *scenario == opened) {
             let (_, _, kept) = self.schedule_scenario_results.remove(position);
             self.hold_schedule(kept);
-        } else if let Some(left) = self.schedule_calculation.take() {
-            // The scenario left's schedule is not this one's, however stale.
-            rayon::spawn(move || drop(left));
         }
+        self.redraw_requested = true;
     }
 
     fn set_schedule_name(&mut self, name: String) {

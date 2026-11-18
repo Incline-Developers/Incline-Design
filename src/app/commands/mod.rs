@@ -67,6 +67,7 @@ impl<'a> App<'a> {
         let Some((true, effects)) = stepped else {
             return;
         };
+        self.follow_open_scenario();
 
         if self.editor.active_layer.is_some_and(|layer_id| self.active_layer() != Some(layer_id)) {
             self.editor.active_layer = None;
@@ -86,6 +87,9 @@ impl<'a> App<'a> {
 
     pub(crate) fn handle_ui_commands(&mut self, commands: Vec<UiCommand>) {
         let had_commands = !commands.is_empty();
+        // What is open before any command, the first after a project opens
+        // included, so a command that changes it is followed from there.
+        self.follow_open_scenario();
         if had_commands {
             self.last_ui_command_at = Some(web_time::Instant::now());
         }
@@ -120,6 +124,7 @@ impl<'a> App<'a> {
                     }
                 }
             }
+            self.follow_open_scenario();
         }
         if had_commands {
             self.redraw_requested = true;

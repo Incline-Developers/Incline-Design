@@ -526,6 +526,8 @@ pub(crate) struct App<'a> {
         crate::model::schedule::scenarios::ScenarioId,
         std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>,
     )>,
+    /// The project and scenario [`App::follow_open_scenario`] last saw open.
+    pub(crate) followed_scenario: Option<(u32, crate::model::schedule::scenarios::ScenarioId)>,
     /// Whether the held result reached the planning end when it was
     /// published. Such a schedule follows the end when it moves later; one
     /// run a period at a time stops where it was taken to.
@@ -769,6 +771,7 @@ impl<'a> Default for App<'a> {
             planning_entry_step: None,
             schedule_calculation: None,
             schedule_scenario_results: Vec::new(),
+            followed_scenario: None,
             schedule_reached_end: false,
             dig_block_count: None,
             pending_schedule_run: None,
