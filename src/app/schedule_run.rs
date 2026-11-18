@@ -640,11 +640,13 @@ impl crate::app::App<'_> {
                 fingerprint: Some(saved.fingerprint),
                 auto_order: saved.auto_order.clone(),
                 memory,
+                restore_only,
             }),
             None => memory.map(|memory| schedule_capture::SavedHint {
                 fingerprint: None,
                 auto_order: None,
                 memory: Some(memory),
+                restore_only,
             }),
         };
         let semantic = self.schedule_semantic_key();
@@ -684,8 +686,13 @@ impl crate::app::App<'_> {
             tr!("schedule-run-job"),
             vec![JobKey::ScheduleRun { runtime, serial }],
             move |cancel| {
+                // Nothing saved over this horizon: nothing to show.
+                if restore_only && saved_hint.as_ref().is_none_or(|hint| hint.fingerprint.is_none()) {
+                    return Ok(RunOutcome::SavedOutOfDate);
+                }
                 let capture = match schedule_capture::build(&snapshot, saved_hint.as_ref(), cancel) {
                     Ok(capture) => capture,
+                    Err(problems) if restore_only && problems.is_empty() && !cancel.is_cancelled() => return Ok(RunOutcome::SavedOutOfDate),
                     Err(problems) => {
                         return Ok(if cancel.is_cancelled() {
                             RunOutcome::NotPublished {
@@ -1109,10 +1116,20 @@ impl crate::app::App<'_> {
     /// already in it.
     fn keep_schedule_for_saving(&mut self, schedule: &CalculatedSchedule) {
         let saved = schedule.saved.clone();
+        // A restored schedule is already in the file, unless its order had
+        // to be planned again to reach it: the file then keeps an order no
+        // later run can reuse, and every opening would plan it again.
+        let unchanged = schedule.report.restored
+            && self
+                .workspace
+                .active_document()
+                .and_then(|document| document.saved_schedule())
+                .map(|held| held.auto_order.as_ref().map(|order| order.before))
+                == saved.as_ref().map(|held| held.auto_order.as_ref().map(|order| order.before));
         if let Some(document) = self.workspace.active_document_mut() {
             document.set_saved_schedule(saved);
         }
-        if !schedule.report.restored {
+        if !unchanged {
             self.touch_active_project_content();
         }
     }

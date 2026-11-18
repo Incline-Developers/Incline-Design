@@ -231,6 +231,9 @@ pub(crate) struct SavedHint {
     /// What the last plan over this scenario left, saved or not: the plan
     /// starts from it.
     pub(crate) memory: Option<Arc<crate::model::schedule::optimisation::longterm::PlanMemory>>,
+    /// The run only shows the saved schedule, never calculates: once its
+    /// order is not the one saved, the capture stops there.
+    pub(crate) restore_only: bool,
 }
 
 /// A finished capture: the model, what its ids mean, and one semantic key.
@@ -2674,7 +2677,23 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
             for end in &period_ends_h {
                 end.to_bits().hash(&mut hasher);
             }
-            format!("{groups:?}{not_before_h:?}{left_above:?}{dependencies:?}{:?}", identities.auto_blast_tasks).hash(&mut hasher);
+            // Walked, not formatted: the ground over ground runs to millions
+            // of entries on a large mine, and printing them took seconds.
+            for (ground, group) in &groups {
+                (ground.0, group).hash(&mut hasher);
+            }
+            for (ground, after) in &not_before_h {
+                (ground.0, after.to_bits()).hash(&mut hasher);
+            }
+            for (ground, above) in &left_above {
+                ground.0.hash(&mut hasher);
+                above.iter().map(|ground| ground.0).collect::<Vec<_>>().hash(&mut hasher);
+            }
+            for (waiting, first) in &dependencies {
+                waiting.iter().map(|ground| ground.0).collect::<Vec<_>>().hash(&mut hasher);
+                first.iter().map(|ground| ground.0).collect::<Vec<_>>().hash(&mut hasher);
+            }
+            identities.auto_blast_tasks.hash(&mut hasher);
             hasher.finish()
         };
         let mut candidates: Vec<(BlendInput, CaptureIdentities, longterm::PlanSummary, Vec<u32>)> = Vec::new();
@@ -2698,6 +2717,12 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
                 candidates.push((trial, named, longterm::PlanSummary::default(), order.order.clone()));
                 memory = order.memory.clone();
             }
+        }
+        // A model the saved order was not dealt over has no
+        // saved schedule to show, and planning one is what this run is not
+        // to do: with no diagnostics, the run reads it as out of date.
+        if candidates.is_empty() && saved.is_some_and(|hint| hint.restore_only) {
+            return Err(Vec::new());
         }
         if candidates.is_empty() {
             for planned in [true, false] {
