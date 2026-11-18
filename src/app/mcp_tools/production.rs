@@ -181,6 +181,30 @@ pub(super) fn definitions() -> Vec<Value> {
             false,
         ),
         tool(
+            "add_haul_road",
+            "Add a haul road",
+            "Add one road to the haul network through points, as drawing it in Setup's Road Network step does. Each end joins the node already within the network's join tolerance of it (and stays on it, draped or not), or becomes a new node; the points between are the road's shape. drape lays it on a surface (a design or the topography) instead of the RLs given, with a point every drape_spacing metres. at_end makes its last end where trucks dump at or reclaim from a destination. One undo step. Returns the roads' ids (one, or one per piece with node_every_m), its nodes, its length and its steepest grade (rise over run), to hold against the trucks' maximum_grade. get_schedule_status's haulage step says which dig blocks still reach no road.",
+            json!({
+                "points": { "type": "array", "minItems": 2, "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }, "description": "[x, y, z] along the road, first end to last." },
+                "name": { "type": "string" },
+                "drape": { "type": "integer", "minimum": 0, "description": "A surface to lay the road on. It must be loaded." },
+                "drape_spacing": { "type": "number", "exclusiveMinimum": 0, "description": "With drape: the most metres between points. 10 if left out." },
+                "speed_limit_kph": { "type": "number", "exclusiveMinimum": 0 },
+                "node_every_m": { "type": "number", "exclusiveMinimum": 0, "description": "Split the road into pieces about this long, with a node at each join. Dig blocks join the network at nodes, so a ramp past several benches needs them along it. Nodes at its ends only if left out." },
+                "at_end": {
+                    "type": "object",
+                    "properties": {
+                        "destination": { "type": "integer", "minimum": 0, "description": "A destination's id (get_schedule_setup's routing standalone)." },
+                        "role": { "type": "string", "enum": ["dump", "reclaim", "dump_and_reclaim"], "description": "dump if left out." },
+                    },
+                    "required": ["destination"],
+                    "additionalProperties": false,
+                },
+            }),
+            &["points"],
+            false,
+        ),
+        tool(
             "get_schedule_status",
             "Get the schedule's readiness",
             "Read where the production schedule stands: each Setup step's state (not_run, stale, blocked, queued, running, complete, failed, cancelled) with its message and problems, each bar's tonnes and problems, and what stops the schedule being calculated, if anything. run_schedule check runs the steps first.",
@@ -220,8 +244,12 @@ pub(super) fn definitions() -> Vec<Value> {
         tool(
             "get_schedule_report",
             "Get the schedule report",
-            "Read the calculated production schedule as the report export writes it: tables of tonnes dug and reclaimed per loader, delivered and stockpiled per destination with grades, truck hours and cash flow, by day, by week, or over the whole schedule, as CSV. Also how well the solver did.",
-            json!({ "by": { "type": "string", "enum": ["day", "week", "whole"], "description": "day if left out." } }),
+            "Read the calculated production schedule as the report export writes it: tables of tonnes dug and reclaimed per loader, delivered and stockpiled per destination with grades, haulage, loader time and trucks, by day, by week, or over the whole schedule. Each table comes as its columns and rows (numbers as numbers, a blank as null), or the whole report as the export's CSV text. Also how well the solver did.",
+            json!({
+                "by": { "type": "string", "enum": ["day", "week", "whole"], "description": "day if left out." },
+                "sections": { "type": "array", "items": { "type": "string" }, "description": "Only these tables, by title (Movements, Haulage, Loader time, Stockpiles, Crushers, Dumps, Trucks and any others the report has). All if left out." },
+                "format": { "type": "string", "enum": ["tables", "csv"], "description": "tables if left out." },
+            }),
             &[],
             true,
         ),
@@ -235,6 +263,7 @@ impl App<'_> {
             "get_schedule_setup" => self.mcp_schedule_setup(arguments),
             "set_bar_dig_blocks" => self.mcp_set_bar_dig_blocks(arguments),
             "edit_schedule_item" => self.mcp_edit_schedule_item(arguments),
+            "add_haul_road" => self.mcp_add_haul_road(arguments),
             "get_schedule_status" => self.mcp_schedule_status(),
             "set_schedule_setup" => self.mcp_set_schedule_setup(arguments),
             "run_schedule" => self.mcp_run_schedule(arguments),
@@ -261,7 +290,7 @@ impl App<'_> {
             result["choices"] = super::enum_choices::<SchedulePlan>(&example);
             let network = serde_json::to_value(example_network().map_err(|error| format!("{error:#}"))?).map_err(|error| error.to_string())?;
             result["examples"] = json!({
-                "note": "An example only, not this project's: a setup in this shape is set with set_schedule_setup. Ids are numbers each list allocates from its next_*_id, which goes up with every one added. A dig bar's members are filled with set_bar_dig_blocks, never by hand. A field condition names a reserve field by its id (get_solids lists them). Every haul needs a truck class a trucking rule allows, and a road route: roads join nodes, a node with a role is where trucks dump at (or reclaim from) a destination, and dig blocks within the settings' auto_join_m of a road join it by themselves. A road runs from its from node to its to node through its verts, the points between them (none for a straight road), and its grade must suit the trucks' maximum_grade.",
+                "note": "An example only, not this project's: a setup in this shape is set with set_schedule_setup. Ids are numbers each list allocates from its next_*_id, which goes up with every one added. A dig bar's members are filled with set_bar_dig_blocks, never by hand. A field condition names a reserve field by its id (get_solids lists them). Grades are carried through stockpiles only when listed in experiment.grades, so a rule that tests a grade on reclaimed material needs it there. Every haul needs a truck class a trucking rule allows, and a road route: roads join nodes, a node with a role is where trucks dump at (or reclaim from) a destination, and dig blocks within the settings' auto_join_m of a road join it by themselves. A road runs from its from node to its to node through its verts, the points between them (none for a straight road), and its grade must suit the trucks' maximum_grade.",
                 "schedule": example,
                 "network": network,
             });
@@ -510,6 +539,212 @@ impl App<'_> {
         Ok(json!({ "list": list.name, "id": id, "item": item }))
     }
 
+    fn mcp_add_haul_road(&mut self, arguments: &Value) -> Result<Value, String> {
+        use glam::DVec3;
+
+        use crate::model::{
+            haulage::network::NodeRole,
+            schedule::destinations::{DestinationId, StandaloneDestinationId},
+        };
+
+        let mut points: Vec<DVec3> = arguments["points"]
+            .as_array()
+            .ok_or("Give the road's points.")?
+            .iter()
+            .map(|point| super::parse_point(point).ok_or_else(|| "Each point is [x, y, z].".to_owned()))
+            .collect::<Result<_, _>>()?;
+        if points.len() < 2 {
+            return Err("A road needs at least two points.".to_owned());
+        }
+        // An end given on an existing node joins it there, wherever draping
+        // would put it: the road meets the network where it was drawn to.
+        let (joined_first, joined_last) = {
+            let document = self.workspace.active_document().ok_or("No project is open.")?;
+            let network = document.haulage();
+            let tolerance = network.settings.join_tolerance_m;
+            let joined = |at: DVec3| {
+                network
+                    .nodes
+                    .iter()
+                    .filter(|node| node.pos.distance(at) <= tolerance)
+                    .min_by(|a, b| a.pos.distance(at).total_cmp(&b.pos.distance(at)))
+                    .map(|node| node.pos)
+            };
+            (joined(points[0]), joined(points[points.len() - 1]))
+        };
+        if let Some(surface) = arguments["drape"].as_u64() {
+            let surface = self
+                .triangulations
+                .iter()
+                .find(|candidate| candidate.id.0 == surface)
+                .ok_or_else(|| format!("There is no surface with id {surface}. get_project lists them."))?;
+            if !surface.state.loaded || surface.state.deferred.is_some() {
+                return Err(format!("The surface {} is not loaded: set_loaded loads it.", surface.name));
+            }
+            let spacing = arguments["drape_spacing"].as_f64().filter(|spacing| *spacing > 0.0).unwrap_or(10.0);
+            let mut draped = Vec::new();
+            for pair in points.windows(2) {
+                let (from, to) = (pair[0], pair[1]);
+                let run = from.truncate().distance(to.truncate());
+                let steps = ((run / spacing).ceil() as usize).max(1);
+                for step in 0..steps {
+                    draped.push(from.lerp(to, step as f64 / steps as f64));
+                }
+            }
+            draped.push(points[points.len() - 1]);
+            for point in &mut draped {
+                point.z = crate::app::commands::drawing::drape::uppermost_topology_z(*point, &[surface])
+                    .ok_or_else(|| format!("The road leaves the surface {} at ({:.1}, {:.1}).", surface.name, point.x, point.y))?;
+            }
+            points = draped;
+        }
+        if let Some(node) = joined_first {
+            points[0] = node;
+        }
+        if let Some(node) = joined_last {
+            let end = points.len() - 1;
+            points[end] = node;
+        }
+        let role = match arguments.get("at_end") {
+            None | Some(Value::Null) => None,
+            Some(end) => {
+                let destination = DestinationId::Standalone(StandaloneDestinationId(end["destination"].as_u64().ok_or("at_end needs the destination's id.")?));
+                let document = self.workspace.active_document().ok_or("No project is open.")?;
+                if !document
+                    .schedule()
+                    .routing()
+                    .standalone
+                    .iter()
+                    .any(|existing| DestinationId::Standalone(existing.id) == destination)
+                {
+                    return Err("There is no destination with that id: get_schedule_setup lists them under routing standalone.".to_owned());
+                }
+                Some(match end["role"].as_str() {
+                    None | Some("dump") => NodeRole::Dump(destination),
+                    Some("reclaim") => NodeRole::Reclaim(destination),
+                    Some("dump_and_reclaim") => NodeRole::DumpAndReclaim(destination),
+                    Some(_) => return Err("role is dump, reclaim or dump_and_reclaim.".to_owned()),
+                })
+            }
+        };
+        let document = self.workspace.active_document().ok_or("No project is open.")?;
+        let before = document.haulage().clone();
+        let mut after = before.clone();
+        let tolerance = after.settings.join_tolerance_m;
+        let end_node = |network: &mut HaulNetwork, at: DVec3| -> Result<crate::model::haulage::NodeId, String> {
+            match network
+                .nodes
+                .iter()
+                .filter(|node| node.pos.distance(at) <= tolerance)
+                .min_by(|a, b| a.pos.distance(at).total_cmp(&b.pos.distance(at)))
+            {
+                Some(node) => Ok(node.id),
+                None => network.add_node(at).map_err(|error| format!("{error:#}")),
+            }
+        };
+        // The road's pieces: the whole of it, or pieces about node_every_m
+        // long, cut at points put in at those distances along it.
+        let pieces: Vec<Vec<DVec3>> = match arguments["node_every_m"].as_f64().filter(|every| *every > 0.0) {
+            None => vec![points.clone()],
+            Some(every) => {
+                let mut pieces = vec![vec![points[0]]];
+                let mut along = 0.0;
+                for pair in points.windows(2) {
+                    let (from, to) = (pair[0], pair[1]);
+                    let length = from.distance(to);
+                    let mut done = 0.0;
+                    while along + (length - done) >= every {
+                        done += every - along;
+                        let cut = from.lerp(to, done / length);
+                        if let Some(piece) = pieces.last_mut() {
+                            piece.push(cut);
+                        }
+                        pieces.push(vec![cut]);
+                        along = 0.0;
+                    }
+                    along += length - done;
+                    if let Some(piece) = pieces.last_mut() {
+                        piece.push(to);
+                    }
+                }
+                // A last piece too short to stand alone joins the one before.
+                if pieces.len() > 1
+                    && pieces
+                        .last()
+                        .is_some_and(|piece| piece.windows(2).map(|pair| pair[0].distance(pair[1])).sum::<f64>() < every * 0.25)
+                    && let Some(tail) = pieces.pop()
+                    && let Some(piece) = pieces.last_mut()
+                {
+                    piece.pop();
+                    piece.extend(tail);
+                }
+                pieces
+            }
+        };
+        let name = arguments["name"].as_str().unwrap_or_default().to_owned();
+        let mut roads = Vec::new();
+        let mut nodes = Vec::new();
+        for (index, piece) in pieces.iter().enumerate() {
+            let from = end_node(&mut after, piece[0])?;
+            let to = end_node(&mut after, piece[piece.len() - 1])?;
+            if from == to {
+                return Err("The road's two ends join the same node.".to_owned());
+            }
+            let piece_name = if pieces.len() > 1 {
+                format!("{name} {}", index + 1).trim().to_owned()
+            } else {
+                name.clone()
+            };
+            let road = after
+                .add_road(piece_name, from, to, piece[1..piece.len() - 1].to_vec())
+                .map_err(|error| format!("{error:#}"))?;
+            if let Some(limit) = arguments["speed_limit_kph"].as_f64()
+                && let Some(entry) = after.roads.iter_mut().find(|entry| entry.id == road)
+            {
+                entry.speed_limit_kph = Some(limit);
+            }
+            if nodes.is_empty() {
+                nodes.push(from);
+            }
+            nodes.push(to);
+            roads.push(road);
+        }
+        let (from, to) = (nodes[0], nodes[nodes.len() - 1]);
+        let (first, last) = (points[0], points[points.len() - 1]);
+        if let Some(role) = role
+            && let Some(node) = after.nodes.iter_mut().find(|node| node.id == to)
+        {
+            node.role = Some(role);
+        }
+        after.validate().map_err(|error| format!("{error:#}"))?;
+        // Measured on the road as it was stored: its ends at its nodes.
+        let shape: Vec<DVec3> = std::iter::once(after.nodes.iter().find(|node| node.id == from).map_or(first, |node| node.pos))
+            .chain(points[1..points.len() - 1].iter().copied())
+            .chain(std::iter::once(after.nodes.iter().find(|node| node.id == to).map_or(last, |node| node.pos)))
+            .collect();
+        let length: f64 = shape.windows(2).map(|pair| pair[0].distance(pair[1])).sum();
+        let steepest = shape
+            .windows(2)
+            .filter_map(|pair| {
+                let run = pair[0].truncate().distance(pair[1].truncate());
+                (run > 1e-9).then(|| (pair[1].z - pair[0].z).abs() / run)
+            })
+            .fold(0.0, f64::max);
+        self.execute_job_edit(Command::SetHaulNetwork {
+            before: Box::new(before),
+            after: Box::new(after),
+        });
+        self.editor.haul_route = None;
+        self.refresh_haulage_view();
+        self.invalidate_geometry();
+        Ok(json!({
+            "roads": roads.iter().map(|road| road.0).collect::<Vec<_>>(),
+            "nodes": nodes.iter().map(|node| node.0).collect::<Vec<_>>(),
+            "length_m": length,
+            "steepest_grade": steepest,
+        }))
+    }
+
     fn mcp_schedule_status(&mut self) -> Result<Value, String> {
         use crate::app::planning_pipeline::StageState;
 
@@ -740,7 +975,7 @@ impl App<'_> {
         let (_, text) = crate::ui::elements::schedule_calendar::schedule_report_text(&self.editor, document.schedule(), document, grouping, ',')
             .ok_or("No schedule has been calculated yet.")?;
         let report = &schedule.report;
-        Ok(json!({
+        let mut result = json!({
             "solver": {
                 "quality": report.quality.map(|quality| format!("{quality:?}").to_lowercase()),
                 "objective": report.objective,
@@ -749,8 +984,31 @@ impl App<'_> {
                 "solve_seconds": report.solve_s,
             },
             "hours_calculated": schedule.requested_end_h,
-            "report_csv": super::plain(&text),
-        }))
+        });
+        let text = super::plain(&text);
+        let wanted: Option<Vec<&str>> = arguments["sections"].as_array().map(|sections| sections.iter().filter_map(Value::as_str).collect());
+        match arguments["format"].as_str() {
+            Some("csv") if wanted.is_none() => result["report_csv"] = json!(text),
+            Some("csv") => {
+                let kept: Vec<&str> = text
+                    .split("\n\n")
+                    .filter(|block| {
+                        block
+                            .lines()
+                            .next()
+                            .is_some_and(|title| wanted.as_ref().is_some_and(|wanted| wanted.iter().any(|name| name.eq_ignore_ascii_case(title.trim()))))
+                    })
+                    .collect();
+                result["report_csv"] = json!(kept.join("\n\n"));
+            }
+            None | Some("tables") => {
+                let tables = report_tables(&text, wanted.as_deref())?;
+                result["title"] = json!(text.lines().next().unwrap_or_default().trim_matches('"'));
+                result["tables"] = tables;
+            }
+            Some(_) => return Err("format is tables or csv.".to_owned()),
+        }
+        Ok(result)
     }
 }
 
@@ -797,6 +1055,9 @@ fn example_plan(document: &crate::model::Document) -> crate::model::schedule::Sc
             },
         }];
     }
+    // Reclaimed material carries only the grades listed here, so the ore
+    // rule's grade must be one of them for the stockpile's ore to be routed.
+    plan.experiment_mut().grades = vec![(field(1), crate::model::schedule::experiment::GradeUnit::Percent)];
     plan.add_reclaim_bar("Rehandle", Some(agent), 1, WorkWindow { start_h: 168.0, end_h: None }, vec![stockpile], None)?;
     let truck = plan.trucks_mut().add_class("Haul truck")?;
     // A class starts with no trucks, which hauls nothing.
@@ -850,4 +1111,47 @@ fn example_network() -> anyhow::Result<HaulNetwork> {
     // Served as an example, so it must be one the project would take.
     network.validate()?;
     Ok(network)
+}
+
+/// The report's CSV text as its tables: after the title, each block is a
+/// table's title line, then its header and rows. Read from the export's own
+/// text, so what the tables say and what the export writes cannot differ.
+fn report_tables(text: &str, wanted: Option<&[&str]>) -> Result<Value, String> {
+    let mut tables = serde_json::Map::new();
+    for block in text.split("\n\n").skip(1) {
+        let Some((title, body)) = block.split_once('\n') else { continue };
+        let title = title.trim();
+        if wanted.is_some_and(|wanted| !wanted.iter().any(|name| name.eq_ignore_ascii_case(title))) {
+            continue;
+        }
+        let mut reader = csv::ReaderBuilder::new().flexible(true).from_reader(body.as_bytes());
+        let columns: Vec<String> = reader.headers().map_err(|error| error.to_string())?.iter().map(ToOwned::to_owned).collect();
+        let rows: Vec<Value> = reader
+            .records()
+            .map(|record| {
+                record.map(|record| {
+                    Value::Array(
+                        record
+                            .iter()
+                            .map(|cell| {
+                                if cell.is_empty() {
+                                    Value::Null
+                                } else {
+                                    match cell.parse::<f64>().ok().filter(|number| number.is_finite()) {
+                                        None => json!(cell),
+                                        // Whole figures as whole numbers, as the text wrote them.
+                                        Some(_) if let Ok(whole) = cell.parse::<i64>() => json!(whole),
+                                        Some(number) => json!(number),
+                                    }
+                                }
+                            })
+                            .collect(),
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|error| error.to_string())?;
+        tables.insert(title.to_owned(), json!({ "columns": columns, "rows": rows }));
+    }
+    Ok(Value::Object(tables))
 }

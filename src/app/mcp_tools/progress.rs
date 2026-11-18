@@ -264,10 +264,11 @@ impl App<'_> {
                 // the answer, as it does for any call.
                 let notes: Vec<String> = self.mcp_new_warnings().into_iter().collect();
                 if let Some(problem) = problem {
+                    // The work failed: its reason is the answer, not the
+                    // result the call gave as the work started.
                     response["result"]["isError"] = json!(true);
-                    if let Some(content) = response["result"]["content"].as_array_mut() {
-                        content.push(json!({ "type": "text", "text": problem }));
-                    }
+                    response["result"]["content"] = json!([{ "type": "text", "text": problem }]);
+                    response["result"].as_object_mut().map(|result| result.remove("structuredContent"));
                 } else if let Some(content) = response["result"]["content"].as_array_mut() {
                     content.push(json!({ "type": "text", "text": "The work it started has finished." }));
                 }
