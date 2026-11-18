@@ -706,8 +706,19 @@ pub(super) fn clip_mesh_by_surface(
     side: TriSurfaceCutSide,
     progress: &crate::model::progress::Phase,
 ) -> Result<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>)> {
-    let reference_surface = validate_reference_surface(reference)?;
-    if reference_surface.skipped_vertical_faces > 0 {
+    // A topography that folds over itself in plan - most often a sliver
+    // flipped where two surfaces were stitched - gives two heights for the
+    // same ground, so it is repaired first, as Solid Between does. Where it
+    // folds, the sheet that keeps more of the surface is the one trimmed
+    // against: the highest when keeping what lies below, the lowest above.
+    let keep = match side {
+        TriSurfaceCutSide::CutTop => FoldLayer::Highest,
+        TriSurfaceCutSide::CutBottom => FoldLayer::Lowest,
+    };
+    let (reference_surface, repaired) = single_valued_surface(reference, keep)?;
+    if repaired {
+        userspace_log!("{}", tr!("cmd-cuts-repaired-topography"));
+    } else if reference_surface.skipped_vertical_faces > 0 {
         userspace_warn!("{}", tr!("cmd-cuts-ignored-vertical-faces", count = reference_surface.skipped_vertical_faces.to_string()));
     }
     Ok(clip_mesh_by_prepared_surface(target, &reference_surface, side, 0.0, progress))
@@ -1449,20 +1460,6 @@ pub(super) struct PreparedReferenceSurface {
     pub(super) skipped_vertical_faces: usize,
 }
 
-pub(super) fn validate_reference_surface(reference: &mesh_data::Triangulation) -> Result<PreparedReferenceSurface> {
-    let prepared = prepare_reference_surface_relaxed(reference)?;
-    if let Some(fold) = first_fold(&prepared, reference_xy_overlap_area_tolerance(reference)) {
-        anyhow::bail!(tr!(
-            "err-tri-topography-overlaps-itself",
-            first = fold.first.to_string(),
-            second = fold.second.to_string(),
-            area = format!("{:.6}", fold.area),
-            z_delta = format!("{:.6}", fold.z_delta)
-        ));
-    }
-    Ok(prepared)
-}
-
 /// Two faces of one surface covering the same ground in plan at different
 /// heights.
 struct Fold {
@@ -1474,14 +1471,9 @@ struct Fold {
     coincident: bool,
 }
 
-/// The first place `prepared` covers the same ground twice, if it does.
-fn first_fold(prepared: &PreparedReferenceSurface, overlap_area_tolerance: f64) -> Option<Fold> {
-    folds(prepared, overlap_area_tolerance, false).0
-}
-
-/// The first place `prepared` covers the same ground twice, and with `all`,
-/// which of its faces take part in any fold.
-fn folds(prepared: &PreparedReferenceSurface, overlap_area_tolerance: f64, all: bool) -> (Option<Fold>, Vec<bool>) {
+/// The first place `prepared` folds over itself, and which of its faces
+/// cover the same ground as another, folded or coincident.
+fn folds(prepared: &PreparedReferenceSurface, overlap_area_tolerance: f64) -> (Option<Fold>, Vec<bool>) {
     use rayon::prelude::*;
 
     // Each face is checked against the faces after it, a face at a time and
@@ -1491,7 +1483,7 @@ fn folds(prepared: &PreparedReferenceSurface, overlap_area_tolerance: f64, all: 
         let triangle = prepared.triangles[index];
         let bounds = triangle_xy_bounds(triangle);
         prepared.spatial.for_each_xy_bounds_candidate_index_with_stack(bounds.0, bounds.1, stack, |other_index| {
-            if other_index <= index || (!all && !found.is_empty()) {
+            if other_index <= index {
                 return;
             }
             let overlap = triangle_intersection_xy(triangle, prepared.triangles[other_index]);
@@ -1502,54 +1494,35 @@ fn folds(prepared: &PreparedReferenceSurface, overlap_area_tolerance: f64, all: 
             let z_delta = overlap_z_delta(triangle, prepared.triangles[other_index], &overlap);
             // Coincident triangles - a sliver duplicated where two surfaces
             // were merged - still give one height wherever they overlap, so
-            // the surface is single-valued there, and only a fold, where the
-            // heights differ, is refused. They are still two layers, though,
-            // and taken whole each counts the ground under it again, so they
-            // are noted for the repair to make one.
-            let coincident = z_delta <= REFERENCE_COINCIDENT_Z_TOLERANCE;
-            if !coincident || all {
-                found.push(Fold {
-                    first: index,
-                    second: other_index,
-                    area: overlap_area,
-                    z_delta,
-                    coincident,
-                });
-            }
+            // the surface is single-valued there; only a fold, where the
+            // heights differ, needs a sheet chosen. They are still two
+            // layers, though, and taken whole each counts the ground under
+            // it again, so they are noted for the repair to make one.
+            found.push(Fold {
+                first: index,
+                second: other_index,
+                area: overlap_area,
+                z_delta,
+                coincident: z_delta <= REFERENCE_COINCIDENT_Z_TOLERANCE,
+            });
         });
     };
-    let mut found: Vec<Fold> = if all {
-        (0..prepared.triangles.len())
-            .into_par_iter()
-            .fold(
-                || (Vec::new(), Vec::new()),
-                |(mut stack, mut found), index| {
-                    fold_of(index, &mut stack, &mut found);
-                    (stack, found)
-                },
-            )
-            .flat_map_iter(|(_, found)| found)
-            .collect()
-    } else {
-        (0..prepared.triangles.len())
-            .into_par_iter()
-            .map_init(Vec::new, |stack, index| {
-                let mut found = Vec::new();
-                fold_of(index, stack, &mut found);
-                found.into_iter().min_by_key(|fold| fold.second)
-            })
-            .find_first(Option::is_some)
-            .flatten()
-            .into_iter()
-            .collect()
-    };
+    let mut found: Vec<Fold> = (0..prepared.triangles.len())
+        .into_par_iter()
+        .fold(
+            || (Vec::new(), Vec::new()),
+            |(mut stack, mut found), index| {
+                fold_of(index, &mut stack, &mut found);
+                (stack, found)
+            },
+        )
+        .flat_map_iter(|(_, found)| found)
+        .collect();
     found.sort_by_key(|fold| (fold.first, fold.second));
-    let mut folded = vec![false; if all { prepared.triangles.len() } else { 0 }];
-    if all {
-        for fold in &found {
-            folded[fold.first] = true;
-            folded[fold.second] = true;
-        }
+    let mut folded = vec![false; prepared.triangles.len()];
+    for fold in &found {
+        folded[fold.first] = true;
+        folded[fold.second] = true;
     }
     (found.into_iter().find(|fold| !fold.coincident), folded)
 }
@@ -1587,7 +1560,7 @@ pub(super) const REPAIR_WELD: f64 = 1.0e-3;
 /// the fold's own height, and by the weld where it was cracked.
 pub(super) fn single_valued_surface(surface: &mesh_data::Triangulation, keep: FoldLayer) -> Result<(PreparedReferenceSurface, bool)> {
     let prepared = prepare_reference_surface_relaxed(surface)?;
-    let (fold, folded) = folds(&prepared, reference_xy_overlap_area_tolerance(surface), true);
+    let (fold, folded) = folds(&prepared, reference_xy_overlap_area_tolerance(surface));
     // Most surfaces need nothing, and saying so takes a fraction of the
     // weld below, which runs on one thread over every corner.
     if fold.is_none() && !folded.iter().any(|&folded| folded) && plainly_sound(&prepared) {
