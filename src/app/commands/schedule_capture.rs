@@ -2834,6 +2834,9 @@ struct HaulCapture<'a> {
     /// Sources offered a destination, and those that reached one by road.
     offered: BTreeSet<SourceId>,
     routed: BTreeSet<SourceId>,
+    /// Where trucks meet each destination, dumping or loading: found once,
+    /// as a dump with no node of its own is found by a search of every road.
+    meets: BTreeMap<(ProjectDestinationId, bool), Option<glam::DVec3>>,
 }
 impl<'a> HaulCapture<'a> {
     fn new(network: &'a crate::model::haulage::HaulNetwork, points: &'a BTreeMap<ProjectDestinationId, glam::DVec3>, plan: &'a SchedulePlan) -> Self {
@@ -2847,10 +2850,12 @@ impl<'a> HaulCapture<'a> {
             unroutable: BTreeMap::new(),
             offered: BTreeSet::new(),
             routed: BTreeSet::new(),
+            meets: BTreeMap::new(),
         }
     }
-    fn point(&self, id: ProjectDestinationId, reclaim: bool) -> Option<glam::DVec3> {
-        self.network.destination_point(id, reclaim, self.points.get(&id).copied())
+    fn point(&mut self, id: ProjectDestinationId, reclaim: bool) -> Option<glam::DVec3> {
+        let (network, points) = (self.network, self.points);
+        *self.meets.entry((id, reclaim)).or_insert_with(|| network.destination_point(id, reclaim, points.get(&id).copied()))
     }
     /// The haul's cycle along the roads, or `None` when no road route
     /// reaches the destination from this source: there is no other way to
