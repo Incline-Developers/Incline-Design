@@ -7,6 +7,9 @@
 //! switches on, with the port and token saved there, and writes the answer
 //! back as a line. Nothing else is written to standard output, which is the
 //! protocol's.
+//!
+//! `incline-design mcp --headless` is the other way round: an Incline of the
+//! client's own in this process, with no window (`app::headless`).
 
 use std::{
     io::{self, BufRead, BufReader, Read, Write},

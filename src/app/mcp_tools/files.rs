@@ -203,16 +203,16 @@ pub(super) fn definitions() -> Vec<Value> {
         tool(
             "new_project",
             "Start a new project",
-            "Start a new, empty project in place of the one open, as File > New does. If the open project has unsaved changes the user is asked in the window whether to save them first.",
-            json!({}),
+            "Start a new, empty project in place of the one open, as File > New does. If the open project has unsaved changes, the user is asked in the window whether to save them first, unless discard_changes is given; with no window (mcp --headless), the call fails instead.",
+            json!({ "discard_changes": discard_changes() }),
             &[],
             false,
         ),
         tool(
             "open_project",
             "Open a project",
-            "Open a project file in place of the one open, as File > Open does. If the open project has unsaved changes the user is asked in the window whether to save them first.",
-            json!({ "path": path }),
+            "Open a project file in place of the one open, as File > Open does. If the open project has unsaved changes, the user is asked in the window whether to save them first, unless discard_changes is given; with no window (mcp --headless), the call fails instead.",
+            json!({ "path": path, "discard_changes": discard_changes() }),
             &["path"],
             false,
         ),
@@ -230,7 +230,9 @@ impl App<'_> {
             "export" => self.mcp_export(arguments),
             "save_project" => self.mcp_save_project(arguments),
             "open_project" => self.mcp_open_project(arguments),
-            "new_project" => self.mcp_command(UiCommand::NewProject).map(|()| json!({ "new_project": true })),
+            "new_project" => self
+                .mcp_replace_project(FileDialogAction::NewProject, arguments)
+                .map(|()| json!({ "new_project": true })),
             _ => return None,
         };
         Some(result.map_or_else(failed, |value| ok(&value)))
@@ -495,8 +497,22 @@ impl App<'_> {
         if !path.is_file() {
             return Err(format!("There is no file {}.", path.display()));
         }
-        self.mcp_action(FileDialogAction::OpenProject(vec![path.clone()]))?;
+        self.mcp_replace_project(FileDialogAction::OpenProject(vec![path.clone()]), arguments)?;
         Ok(json!({ "opening": path.display().to_string() }))
+    }
+
+    /// Put `action`'s project in place of the one open: its unsaved changes
+    /// dropped when the arguments say to, else left for the user to decide
+    /// on in the window, or, with no window, refused.
+    fn mcp_replace_project(&mut self, action: FileDialogAction, arguments: &Value) -> Result<(), String> {
+        let discard = arguments["discard_changes"].as_bool().unwrap_or(false);
+        if !discard && self.headless && self.has_unsaved_changes_for_exit() {
+            return Err("The open project has unsaved changes. Save them with save_project, or pass discard_changes to drop them.".to_owned());
+        }
+        self.project_replacement_bypass = discard;
+        let result = self.mcp_action(action);
+        self.project_replacement_bypass = false;
+        result
     }
 }
 
@@ -515,4 +531,9 @@ fn preview_csv(arguments: &Value) -> Result<Value, String> {
             "columns": drill.headers.iter().zip(&mapping.columns).map(|(header, role)| (header.clone(), json!(drill_role_name(role)))).collect::<serde_json::Map<_, _>>(),
         },
     }))
+}
+
+/// The schema of the argument that drops a project's unsaved changes.
+fn discard_changes() -> Value {
+    json!({ "type": "boolean", "description": "Drop the open project's unsaved changes without asking. False if left out." })
 }

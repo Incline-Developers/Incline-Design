@@ -37,8 +37,8 @@ Working well with large projects: surfaces can run to tens of millions of triang
 deleted and replaced items included, is kept for undo until the project is saved; saving clears that history and frees it. \
 So save after each heavy step (building, trimming or cutting a surface, deleting big items), and unload what the next step \
 does not need with set_loaded, or pass unload_source where a tool offers it; get_project says what is loaded. \
-open_project asks the user in the window when the open project has unsaved changes, and nothing can be saved until they \
-answer, so save first and never reopen the open file to reload it. save_project with a path is Save As: the project then \
+open_project asks the user in the window when the open project has unsaved changes (unless told to discard them), and \
+nothing can be saved until they answer, so save first and never reopen the open file to reload it. save_project with a path is Save As: the project then \
 lives at that path, which keeps the user's own file untouched while you work.\n\n\
 Designing: sample_surface reads the ground's RL at points, to fit a design to it before drawing. A terrain surface is \
 single-valued, so its breaklines must not cross in plan at different RLs; when triangulate fails, get_activity names the \

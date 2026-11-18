@@ -227,6 +227,11 @@ impl App<'_> {
     }
 
     fn mcp_export_video(&mut self, arguments: &Value) -> Result<Value, String> {
+        // The recording follows the window's camera through Animate, frame
+        // by frame, so it needs a window to follow.
+        if self.headless {
+            return Err("This Incline has no window (it was started with mcp --headless), and a schedule video is recorded from the window's view of Animate.".to_owned());
+        }
         use crate::ui::state::{PlanningView, VideoExportRequest, Workspace};
         let path = std::path::PathBuf::from(arguments["path"].as_str().ok_or("Give the path.")?);
         if !path.is_absolute() {
