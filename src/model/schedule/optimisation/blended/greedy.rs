@@ -29,12 +29,14 @@
 //!   hours, crusher day, dump and pile room, shared by all loaders. Trucks are
 //!   not allotted to loaders beforehand: the program shares them out.
 //!
-//! The objective is the interval's movement value plus, for each tonne moved,
+//! The objective is the interval's movement value plus, for each tonne dug,
 //! a production credit that covers negative value and the maximum marginal
-//! target penalty, keeping production preferable to standing.
+//! target penalty, keeping digging preferable to standing.
 //! An interval sees nothing after itself, so without the credit a block whose
 //! material is worth nothing until it is out of the way would never be dug,
-//! and the ore behind it never reached. With positive values and no soft
+//! and the ore behind it never reached. A reclaimed tonne uncovers nothing,
+//! so it is credited only its destination's marginal target penalty: a
+//! reclaim at a loss is never preferred to leaving the pile for later. With positive values and no soft
 //! targets, the credit is a tie-break of 1e-7 of the largest
 //! value per tonne, and so are authored routing preferences. Soft targets
 //! subtract the running destination-period penalty from that objective.
@@ -105,7 +107,9 @@ use super::{
     plan::PlanTargets,
     replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow, ReplayReport, replay_cancellable},
 };
-use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MaterialId, SourceId, StockpileId, TaskKind, TruckClassId};
+use crate::model::schedule::optimisation::{
+    Activity, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MaterialId, MovementCandidate, SourceId, StockpileId, TaskKind, TruckClassId,
+};
 
 /// Remaining tonnes at or below which a block counts as finished.
 const FINISHED_T: f64 = 1e-9;
@@ -355,6 +359,9 @@ struct State<'a> {
     /// What of each candidate's weight is not money: the production credit
     /// and the tie-breaks.
     credit: Vec<f64>,
+    /// The credit each candidate would carry as digging: what an automatic
+    /// loader's reclaim is weighed against, since it takes digging time.
+    dig_credit: Vec<f64>,
     /// Money per tonne of each candidate, its weight less its credit, with
     /// the largest of them in size and the largest credit: the lookahead
     /// reads these each day, and none of them changes.
@@ -673,12 +680,29 @@ impl<'a> State<'a> {
             *entry = entry.max(cost);
         }
         let target_credit: f64 = target_costs.values().sum();
+        let mut destination_credit = BTreeMap::<DestinationId, f64>::new();
+        for ((destination, _), cost) in &target_costs {
+            *destination_credit.entry(*destination).or_default() += cost;
+        }
         let credit = -worst.iter().copied().fold(0.0_f64, f64::min) + target_credit + tie;
         let latest = input.movements.iter().map(|candidate| candidate.routing_preference).max().unwrap_or(0);
+        let preference = |candidate: &MovementCandidate| tie * 0.5 * f64::from(candidate.routing_preference) / f64::from(latest + 1);
+        // Digging that loses money still uncovers what is under it, which
+        // an interval cannot see, so every dig carries the whole credit. A
+        // reclaim uncovers nothing: what it leaves stays on the pile for
+        // later, so it carries only what its destination's grade targets
+        // could cost it this day - the blend still to come the interval
+        // cannot see either - and the tie-breaks. A reclaim at a loss to a
+        // dump is never worth more than standing.
+        let dig_credit: Vec<f64> = input.movements.iter().map(|candidate| credit - preference(candidate)).collect();
         let credit: Vec<f64> = input
             .movements
             .iter()
-            .map(|candidate| credit - tie * 0.5 * f64::from(candidate.routing_preference) / f64::from(latest + 1))
+            .zip(&dig_credit)
+            .map(|(candidate, dig)| match candidate.activity {
+                Activity::Reclaim => destination_credit.get(&candidate.destination).copied().unwrap_or(0.0) + tie - preference(candidate),
+                _ => *dig,
+            })
             .collect();
         let weight: Vec<f64> = values.iter().zip(&credit).map(|(value, credit)| value + credit).collect();
         let money: Vec<f64> = weight.iter().zip(&credit).map(|(weight, credit)| weight - credit).collect();
@@ -710,6 +734,7 @@ impl<'a> State<'a> {
             shared,
             weight,
             credit,
+            dig_credit,
             money,
             money_largest,
             credit_largest,
@@ -1783,8 +1808,8 @@ impl<'a> State<'a> {
                             for (pile, released) in self.companion_piles(bar, interval) {
                                 for index in self.reclaim_candidates(bar.loader, pile, bar.task, interval) {
                                     let value = conditional_value(input, index, &released.blend, released.tonnes);
-                                    let credit = price.map_or(0.0, |price| hours * (self.credit[index] - price).max(0.0));
-                                    let weight = self.weight[index] - self.credit[index] + credit;
+                                    let credit = price.map_or(0.0, |price| hours * (self.dig_credit[index] - price).max(0.0));
+                                    let weight = self.money[index] + credit;
                                     let col = problem.add_keyed_column(("movement", index, segment), weight + value, 0.0..);
                                     credited.insert(col.index(), credit);
                                     columns.push((index, segment, col));
