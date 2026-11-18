@@ -855,11 +855,15 @@ fn ground_gates(
                 .fold((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |(lo, hi), point| (lo.min(*point), hi.max(*point)))
         })
     };
-    // Only ground some bar digs can hold anything up.
-    let dug: Vec<(usize, GroundId, (glam::DVec2, glam::DVec2))> = block_ground
+    // Only ground some bar digs can hold anything up. Sorted by its west
+    // edge, so each block looks only at ground whose extent can reach it
+    // east to west, not at every block of the mine.
+    let mut dug: Vec<(usize, GroundId, (glam::DVec2, glam::DVec2))> = block_ground
         .iter()
         .map(|(position, ground)| (*position, *ground, bounds(&blocks[*position].ground)))
         .collect();
+    dug.sort_by(|a, b| a.2.0.x.total_cmp(&b.2.0.x));
+    let widest = dug.iter().map(|(_, _, (lo, hi))| hi.x - lo.x).filter(|width| width.is_finite()).fold(0.0_f64, f64::max);
     let reach = buffer_m + 1e-9;
     positions
         .par_iter()
@@ -867,8 +871,13 @@ fn ground_gates(
             let block = &blocks[*position];
             let ground = *block_ground.get(position)?;
             let (lo, hi) = bounds(&block.ground);
-            let mut over: Vec<(f64, GroundId)> = Vec::new();
-            for (other_position, other_ground, (other_lo, other_hi)) in &dug {
+            // Ground whose west edge is further west than this could not
+            // come within reach even at the widest; further east than the
+            // block's east edge plus the reach, it could not either.
+            let first = dug.partition_point(|(_, _, (other_lo, _))| other_lo.x < lo.x - reach - widest);
+            let last = dug.partition_point(|(_, _, (other_lo, _))| other_lo.x <= hi.x + reach);
+            let mut over: Vec<(usize, f64, GroundId)> = Vec::new();
+            for (other_position, other_ground, (other_lo, other_hi)) in &dug[first..last.max(first)] {
                 let other = &blocks[*other_position];
                 if other.flitch.base < block.flitch.top - 1e-6 {
                     continue;
@@ -882,8 +891,11 @@ fn ground_gates(
                 if buffer_m <= 0.0 && crate::model::arrangement::overlap_area(&other.ground, &block.ground) <= SHARED_GROUND_M2 {
                     continue;
                 }
-                over.push((other.flitch.base, *other_ground));
+                over.push((*other_position, other.flitch.base, *other_ground));
             }
+            // In the blocks' own order, as the full scan found them.
+            over.sort_unstable_by_key(|(position, ..)| *position);
+            let over: Vec<(f64, GroundId)> = over.into_iter().map(|(_, base, ground)| (base, ground)).collect();
             let nearest = over.iter().map(|(base, _)| *base).fold(f64::INFINITY, f64::min);
             let above: Vec<GroundId> = over.into_iter().filter(|(base, _)| *base <= nearest + 1e-6).map(|(_, ground)| ground).collect();
             (!above.is_empty()).then(|| BlastJob {
@@ -2621,6 +2633,9 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
     // The chosen order's dispatch, kept for the run, and the order.
     let mut dispatched = None;
     let mut auto_order = None;
+    // The model's fingerprint, where it is already known: the saved
+    // schedule's, when the order chosen is the one that answers it.
+    let mut known_fingerprint = None;
     // ---- the automatic bars' order ------------------------------------------
     // Two orders for the automatic bars' ground: the long-term plan's, and
     // the ground from the top down. The plan sees the loaders, crushers,
@@ -2783,6 +2798,9 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
             (None, [Some(planned), Some(top_down)]) if top_down > planned => 1,
             _ => 0,
         };
+        if restorable.is_some() {
+            known_fingerprint = saved.and_then(|hint| hint.fingerprint);
+        }
         let summary = candidates[0].2;
         if summary.rounds > 0 {
             notes.push(tr!(
@@ -2822,7 +2840,7 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
         ground_sources: input.ground.len(),
         event_budget_restricted,
     };
-    let stable_fingerprint = stable_fingerprint(source, &input);
+    let stable_fingerprint = known_fingerprint.unwrap_or_else(|| stable_fingerprint(source, &input));
     let fingerprint = {
         let mut hasher = DefaultHasher::new();
         source.runtime.hash(&mut hasher);
@@ -2853,7 +2871,7 @@ struct HaulCapture<'a> {
     searches: BTreeMap<(ProjectDestinationId, trucking::TruckClassId), Option<crate::model::haulage::routing::DestinationSearch<'a>>>,
     /// Cycles already worked out, by everything one depends on. A block's
     /// portions share its haul, so all but the first are looked up here.
-    cycles: std::collections::HashMap<CycleKey, Option<trucking::CycleBreakdown>>,
+    cycles: std::collections::HashMap<CycleKey, Option<trucking::CycleBreakdown>, foldhash::fast::FixedState>,
     /// Sources each destination offered by routing could not be reached
     /// from by road, so no candidate was made for them.
     unroutable: BTreeMap<ProjectDestinationId, BTreeSet<SourceId>>,
@@ -2872,7 +2890,7 @@ impl<'a> HaulCapture<'a> {
             index: crate::model::haulage::network::RoadIndex::new(network),
             plan,
             searches: BTreeMap::new(),
-            cycles: std::collections::HashMap::new(),
+            cycles: std::collections::HashMap::default(),
             unroutable: BTreeMap::new(),
             offered: BTreeSet::new(),
             routed: BTreeSet::new(),
