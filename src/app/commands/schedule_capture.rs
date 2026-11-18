@@ -2855,7 +2855,10 @@ impl<'a> HaulCapture<'a> {
     }
     fn point(&mut self, id: ProjectDestinationId, reclaim: bool) -> Option<glam::DVec3> {
         let (network, points) = (self.network, self.points);
-        *self.meets.entry((id, reclaim)).or_insert_with(|| network.destination_point(id, reclaim, points.get(&id).copied()))
+        *self
+            .meets
+            .entry((id, reclaim))
+            .or_insert_with(|| network.destination_point(id, reclaim, points.get(&id).copied()))
     }
     /// The haul's cycle along the roads, or `None` when no road route
     /// reaches the destination from this source: there is no other way to
