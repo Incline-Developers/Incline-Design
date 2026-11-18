@@ -145,6 +145,7 @@ impl App<'_> {
                     clock_s: frame.clock_s,
                     labels: frame.labels,
                     view: frame.view,
+                    hidden: frame.hidden,
                     sync: true,
                 });
             }

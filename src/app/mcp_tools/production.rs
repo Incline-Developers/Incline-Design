@@ -227,7 +227,7 @@ pub(super) fn definitions() -> Vec<Value> {
         tool(
             "export_schedule_video",
             "Record the schedule as a video",
-            "Record the calculated production schedule's animation to a video file, as Animate's export does: stretches of the schedule (hours from the start) played back to back at hours_per_second, at fps frames a second and width by height pixels. The view is placed as render_view places one (frame, box, view, azimuth, elevation, perspective, section) on the first frame and held to the end; with none given it frames everything Animate draws, and view window follows the user's window instead. Shows the Animate page first. Runs in the background.",
+            "Record the calculated production schedule's animation to a video file, as Animate's export does: stretches of the schedule (hours from the start) played back to back at hours_per_second, at fps frames a second and width by height pixels. The view is placed as render_view places one (frame, box, view, azimuth, elevation, perspective, section) on the first frame and held to the end, and only, show and hide choose what is drawn as they do there; with none given it frames everything Animate draws, and view window follows the user's window instead. Shows the Animate page first. Runs in the background.",
             video_schema(json!({
                 "path": { "type": "string", "description": "An absolute path; its extension picks the format." },
                 "segments": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "[start, end] hours. The whole schedule if left out." },
@@ -948,8 +948,16 @@ impl App<'_> {
         };
         self.execute_file_dialog_action(crate::app::commands::file::FileDialogAction::ExportVideo(path.clone(), request))
             .map_err(|error| format!("{error:#}"))?;
+        // What it leaves out, as render_view reads only, show and hide; the
+        // window's own hidden items when none of them is given.
+        let hidden = if ["only", "show", "hide"].iter().any(|key| !arguments[*key].is_null()) {
+            Some(std::sync::Arc::new(self.mcp_scene_filter(arguments, false)?.hidden))
+        } else {
+            None
+        };
         if let Some(recording) = self.video_recording.as_mut() {
             recording.view = view;
+            recording.hidden = hidden;
         }
         Ok(json!({ "recording": path.display().to_string() }))
     }
@@ -1014,7 +1022,7 @@ impl App<'_> {
 
 /// The video's own arguments with render_view's for placing its view.
 fn video_schema(mut properties: Value) -> Value {
-    for key in ["frame", "box", "view", "azimuth", "elevation", "perspective", "section"] {
+    for key in ["frame", "box", "view", "azimuth", "elevation", "perspective", "section", "only", "show", "hide"] {
         properties[key] = super::view::view_property(key);
     }
     properties

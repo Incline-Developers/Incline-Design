@@ -139,8 +139,8 @@ pub(super) fn definitions() -> Vec<Value> {
 
 /// The editor state a requested view is drawn with in place of the
 /// window's: what is hidden and what is highlighted.
-struct SceneFilter {
-    hidden: HashSet<SceneEntityId>,
+pub(super) struct SceneFilter {
+    pub(super) hidden: HashSet<SceneEntityId>,
     selected: HashSet<SceneEntityId>,
 }
 
@@ -272,7 +272,7 @@ impl App<'_> {
     /// What a view hides and highlights: the project's own visibility with
     /// `show` and `hide` applied, or only `only`; and `highlight`. The
     /// user's view keeps their selection unless asked to highlight.
-    fn mcp_scene_filter(&self, arguments: &Value, window: bool) -> Result<SceneFilter, String> {
+    pub(super) fn mcp_scene_filter(&self, arguments: &Value, window: bool) -> Result<SceneFilter, String> {
         let only = self.mcp_entities(&arguments["only"])?;
         let mut hidden = if arguments["only"].is_null() {
             self.editor.hidden_handles.clone()

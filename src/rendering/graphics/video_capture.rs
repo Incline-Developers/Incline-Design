@@ -59,6 +59,10 @@ pub(crate) struct VideoFrameInput<'frame> {
     /// the MCP server only, which the browser has none of.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) view: Option<VideoView>,
+    /// What to leave out, in place of what the window hides; the window's
+    /// when `None`. Set by the MCP server only.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) hidden: Option<std::sync::Arc<std::collections::HashSet<crate::model::SceneEntityId>>>,
     /// Bring the GPU's copy of the scene up to date first, as there is no
     /// window frame doing it.
     pub(crate) sync: bool,
@@ -115,6 +119,24 @@ impl Graphics<'_> {
     /// Render one video frame and start copying it back; collect it with
     /// [`Self::take_video_frames`].
     pub(crate) fn render_video_frame(&mut self, input: VideoFrameInput<'_>) {
+        // The video's own hidden items stand in for the window's for this
+        // frame only, as render_view's do.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut input = input;
+            let hidden = input.hidden.take();
+            let editor = input.editor;
+            let window = hidden.map(|hidden| std::mem::replace(&mut editor.hidden_handles, (*hidden).clone()));
+            self.render_video_frame_drawn(VideoFrameInput { editor: &mut *editor, ..input });
+            if let Some(window) = window {
+                editor.hidden_handles = window;
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.render_video_frame_drawn(input);
+    }
+
+    fn render_video_frame_drawn(&mut self, input: VideoFrameInput<'_>) {
         let VideoFrameInput {
             editor,
             document,
@@ -129,6 +151,8 @@ impl Graphics<'_> {
             labels: shown_labels,
             #[cfg(not(target_arch = "wasm32"))]
             view,
+            #[cfg(not(target_arch = "wasm32"))]
+                hidden: _,
             sync,
         } = input;
         let mut target = match self.video_target.take() {

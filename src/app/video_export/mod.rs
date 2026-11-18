@@ -36,6 +36,8 @@ pub(crate) struct VideoFrameRequest {
     pub(crate) labels: crate::rendering::graphics::video_capture::VideoLabels,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) view: Option<crate::rendering::graphics::video_capture::VideoView>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) hidden: Option<std::sync::Arc<std::collections::HashSet<crate::model::SceneEntityId>>>,
 }
 
 /// A recording in progress.
@@ -62,6 +64,10 @@ pub(crate) struct Recording {
     /// The view the video is recorded from; the window's when `None`.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) view: Option<crate::rendering::graphics::video_capture::VideoView>,
+    /// What the video leaves out, in place of what the window hides; the
+    /// window's when `None`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) hidden: Option<std::sync::Arc<std::collections::HashSet<crate::model::SceneEntityId>>>,
 }
 
 impl Recording {
@@ -84,6 +90,8 @@ impl Recording {
                 labels: self.labels,
                 #[cfg(not(target_arch = "wasm32"))]
                 view: self.view,
+                #[cfg(not(target_arch = "wasm32"))]
+                hidden: self.hidden.clone(),
             }
         })
     }
@@ -214,6 +222,8 @@ impl<'a> App<'a> {
             render_requested: false,
             #[cfg(not(target_arch = "wasm32"))]
             view: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            hidden: None,
             restore_time_h: self.editor.schedule_time_h,
         });
         self.editor.video_export_frame = Some((width, height));

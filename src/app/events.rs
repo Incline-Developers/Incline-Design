@@ -324,6 +324,8 @@ impl<'a> App<'a> {
                                         labels: frame.labels,
                                         #[cfg(not(target_arch = "wasm32"))]
                                         view: frame.view,
+                                        #[cfg(not(target_arch = "wasm32"))]
+                                        hidden: frame.hidden,
                                         sync: false,
                                     });
                                     if let Some(next) = self.video_recording.as_ref().and_then(|recording| recording.upcoming_time()) {
