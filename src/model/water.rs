@@ -7,7 +7,9 @@
 //! level to the lower, as fast as Manning's formula lets a sheet of that depth
 //! run down that fall (the diffusive wave: the fall of the water surface
 //! drives the flow and friction holds it back, with no momentum carried from
-//! one step to the next).
+//! one step to the next). Manning's slope is the water surface's own over the
+//! triangles beside a side, not only the fall along it, so water runs as fast
+//! across the triangles as along them.
 //!
 //! A step is taken implicitly, the flows being those of the levels it ends
 //! at: slivers and near-vertical batter faces cost accuracy in time, never a
@@ -22,7 +24,10 @@
 //!
 //! The ground is one roughness and one infiltration rate for the whole
 //! surface. Water leaves over the surface's open edge, at the rate the same
-//! sheet would carry on down the ground behind it.
+//! sheet would carry on down the ground behind it, unless the edge is closed.
+//! Besides the rain, a run can start under a water level, take in inflows,
+//! and hold vertices at a level that changes over time ([`Boundaries`]):
+//! what the Environment Agency's 2D benchmarks drive a model with.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -127,6 +132,73 @@ impl WaterSettings {
     pub(crate) fn duration_s(&self) -> f64 {
         (self.rain_hours + self.run_on_hours) * 3600.0
     }
+}
+
+/// A value that changes over a run: `(seconds, value)` pairs in time order,
+/// taken in a straight line between them and held past either end.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Series(pub(crate) Vec<(f64, f64)>);
+
+impl Series {
+    pub(crate) fn at(&self, time: f64) -> f64 {
+        let points = &self.0;
+        let Some(&(first_time, first)) = points.first() else {
+            return 0.0;
+        };
+        if time <= first_time {
+            return first;
+        }
+        for pair in points.windows(2) {
+            let ((t0, v0), (t1, v1)) = (pair[0], pair[1]);
+            if time <= t1 {
+                return if t1 > t0 { v0 + (v1 - v0) * (time - t0) / (t1 - t0) } else { v1 };
+            }
+        }
+        points[points.len() - 1].1
+    }
+
+    /// The value's mean over `from..to`: exact, the series being straight
+    /// between its points.
+    fn mean(&self, from: f64, to: f64) -> f64 {
+        if to <= from {
+            return self.at(from);
+        }
+        let mut times = vec![from];
+        times.extend(self.0.iter().map(|point| point.0).filter(|time| *time > from && *time < to));
+        times.push(to);
+        let area: f64 = times.windows(2).map(|pair| 0.5 * (self.at(pair[0]) + self.at(pair[1])) * (pair[1] - pair[0])).sum();
+        area / (to - from)
+    }
+}
+
+/// Water poured onto the surface: cubic metres a second over time, shared
+/// among `vertices`, each with its share of the whole.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Inflow {
+    pub(crate) vertices: Vec<(u32, f64)>,
+    pub(crate) flow: Series,
+}
+
+/// Vertices whose water stands at a level that changes over time, as at a
+/// lake or a river beside the surface: water runs onto the surface from
+/// them while they stand higher, and back off it when they stand lower.
+/// Where the ground stands above the level they are dry.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Stage {
+    pub(crate) vertices: Vec<u32>,
+    pub(crate) level: Series,
+}
+
+/// What drives a run besides its rain, and where its water may leave.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Boundaries {
+    /// The water level when the run begins: ground below it starts under
+    /// water.
+    pub(crate) initial_level: Option<f64>,
+    /// No water leaves over the surface's open edge.
+    pub(crate) closed_edge: bool,
+    pub(crate) inflows: Vec<Inflow>,
+    pub(crate) stages: Vec<Stage>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -780,19 +852,28 @@ impl Pools {
 /// `over` the sill it has to get out by, whose cube root is `root`, and
 /// falling `fall` to the level at the lower end, both above zero. `carry` is
 /// what the side carries for a metre of depth to the five-thirds down a fall
-/// of one in one, and `per_metre` one over its length.
+/// of one in one, `per_metre` one over its length, and `surface` the fall of
+/// the water surface across the side (see [`side_surfaces`]).
 ///
 /// The fall is the water's own, so a vertex that is given more than it can
 /// pass on stands higher and passes on more: nothing piles up behind a fall
 /// that was shallow when the step began.
-fn flow_over(over: f64, root: f64, fall: f64, carry: f64, per_metre: f64) -> (f64, f64) {
+fn flow_over(over: f64, root: f64, fall: f64, carry: f64, per_metre: f64, surface: f64) -> (f64, f64) {
     let depth = over * root * root;
     let slope = fall * per_metre;
-    // Below the least fall Manning's formula is asked about, in proportion
-    // to the fall, so the flow comes to nothing as the fall does.
-    let (run, more) = if slope > MIN_SLOPE {
+    let (run, more) = if surface > slope && surface > MIN_SLOPE {
+        // The water surface falls more steeply across the side than along
+        // it, as where water runs obliquely to the triangles: Manning's slope
+        // is the surface's own, held for the step, and the side carries in
+        // proportion to its fall.
+        let scale = 1.0 / surface.sqrt();
+        (slope * scale, per_metre * scale)
+    } else if slope > MIN_SLOPE {
         (slope.sqrt(), 0.5 * per_metre / slope.sqrt())
     } else {
+        // Below the least fall Manning's formula is asked about, in
+        // proportion to the fall, so the flow comes to nothing as the fall
+        // does.
         (slope / MIN_SLOPE.sqrt(), per_metre / MIN_SLOPE.sqrt())
     };
     (carry * depth * run, carry * (5.0 / 3.0 * root * root * run + depth * more))
@@ -864,6 +945,38 @@ fn kept_depth(area: f64, have: f64, solved: f64, outs: &mut [(f64, f64)]) -> f64
     solved
 }
 
+/// The fall of the water surface at `level` across each side: the gradient
+/// of the surface over each triangle beside it, the gentler of the two.
+///
+/// What a side carries goes by Manning's formula, whose slope is the water
+/// surface's. The fall along a side is that slope only where the water runs
+/// along it: running obliquely across a triangle the water falls more
+/// steeply than along any of its sides, and by the sides' falls alone it
+/// would run faster across the triangles than along them. The gentler of the
+/// two triangles is taken so that a pond's flat surface governs at its shore,
+/// rather than the ground rising out of it.
+fn side_surfaces(ground: &Ground, faces_of: &[[u32; 2]], level: &[f64], surface: &mut [f64]) {
+    let face_fall = |face: u32| {
+        let [a, b, c] = ground.faces[face as usize].map(|vertex| vertex as usize);
+        let (p, q, r) = (ground.vertices[a], ground.vertices[b], ground.vertices[c]);
+        let (u, v) = ([q[0] - p[0], q[1] - p[1]], [r[0] - p[0], r[1] - p[1]]);
+        let det = u[0] * v[1] - u[1] * v[0];
+        if det.abs() <= 1e-9 * (u[0] * u[0] + u[1] * u[1] + v[0] * v[0] + v[1] * v[1]) {
+            return 0.0;
+        }
+        let (du, dv) = (level[b] - level[a], level[c] - level[a]);
+        let gx = (du * v[1] - dv * u[1]) / det;
+        let gy = (dv * u[0] - du * v[0]) / det;
+        gx.hypot(gy)
+    };
+    surface.par_iter_mut().zip(faces_of).with_min_len(4096).for_each(|(surface, faces)| {
+        *surface = match *faces {
+            [first, u32::MAX] => face_fall(first),
+            [first, second] => face_fall(first).min(face_fall(second)),
+        };
+    });
+}
+
 /// A side's flow at the levels `level` at its two ends, whose grounds are
 /// `bed`: what it carries from its first end to its second in cubic metres a
 /// second, how that answers to the fall along it, and what it would carry
@@ -871,12 +984,15 @@ fn kept_depth(area: f64, have: f64, solved: f64, outs: &mut [(f64, f64)]) -> f64
 /// nothing where the pond limit holds the side.
 ///
 /// Manning's, at the depth of the upper end's water over the higher of the
-/// two grounds. `pond_limit` is the most a side as flat as a pond conducts.
-fn side_flow(level: [f64; 2], bed: [f64; 2], weight: f64, length: f64, roughness: f64, pond_limit: f64) -> (f64, f64, f64) {
+/// two grounds. `pond_limit` is the most a side as flat as a pond conducts,
+/// and `surface` the fall of the water surface across the side.
+fn side_flow(level: [f64; 2], bed: [f64; 2], weight: f64, length: f64, roughness: f64, pond_limit: f64, surface: f64) -> (f64, f64, f64) {
     let (upper, lower, sign) = if level[0] >= level[1] { (level[0], level[1], 1.0) } else { (level[1], level[0], -1.0) };
     let drop = upper - lower;
     let fall = drop / length;
-    let per_depth = weight / (roughness * fall.max(MIN_SLOPE).sqrt());
+    // Manning's slope is the water surface's own where it falls more steeply
+    // across the side than along it.
+    let per_depth = weight / (roughness * fall.max(MIN_SLOPE).max(surface).sqrt());
     let deep = upper - bed[0].max(bed[1]);
     let manning = if deep > FILM { per_depth * deep.cbrt().powi(2) * deep } else { 0.0 };
     // The limit is for ponds: it rises with the fall, so it never holds back
@@ -917,14 +1033,28 @@ fn side_flow(level: [f64; 2], bed: [f64; 2], weight: f64, length: f64, roughness
 ///
 /// Both parts run on every thread (see [`hand_down`]), and the answer is the
 /// same on any number of them.
-pub(crate) fn simulate(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBool, progress: &Progress, keep: &mut (dyn FnMut(WaterFrame) + Send)) -> Result<(), WaterError> {
+pub(crate) fn simulate(
+    ground: &Ground,
+    settings: &WaterSettings,
+    boundaries: &Boundaries,
+    cancel: &AtomicBool,
+    progress: &Progress,
+    keep: &mut (dyn FnMut(WaterFrame) + Send),
+) -> Result<(), WaterError> {
     // On a thread of the pool: a step is thousands of short shared loops, and
     // from outside the pool each one is handed over and waited for, which
     // costs more than most of them do.
-    rayon::scope(|_| simulate_on_pool(ground, settings, cancel, progress, keep))
+    rayon::scope(|_| simulate_on_pool(ground, settings, boundaries, cancel, progress, keep))
 }
 
-fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBool, progress: &Progress, keep: &mut (dyn FnMut(WaterFrame) + Send)) -> Result<(), WaterError> {
+fn simulate_on_pool(
+    ground: &Ground,
+    settings: &WaterSettings,
+    boundaries: &Boundaries,
+    cancel: &AtomicBool,
+    progress: &Progress,
+    keep: &mut (dyn FnMut(WaterFrame) + Send),
+) -> Result<(), WaterError> {
     let count = ground.vertices.len();
     let operators = Operators::new(ground);
     let total_area: f64 = operators.catchment.iter().sum();
@@ -950,7 +1080,13 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
     let mut before = vec![0.0f64; count];
     // What a metre of depth to the five-thirds carries over the open edge.
     let outlet: Vec<f64> = (0..count)
-        .map(|vertex| operators.outlet_width[vertex] * operators.outlet_slope[vertex].sqrt() / roughness)
+        .map(|vertex| {
+            if boundaries.closed_edge {
+                0.0
+            } else {
+                operators.outlet_width[vertex] * operators.outlet_slope[vertex].sqrt() / roughness
+            }
+        })
         .collect();
 
     // Beside each vertex's sides, in the same order, so the hand-down reads
@@ -966,8 +1102,37 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
             )
         })
         .collect();
+    // The triangles beside each side, the second `u32::MAX` at the open
+    // edge, and the fall of the water surface across each side as the part
+    // of a step being taken begins.
+    let mut faces_of = vec![[u32::MAX; 2]; operators.edges.len()];
+    for (index, face) in ground.faces.iter().enumerate() {
+        for corner in 0..3 {
+            let (a, b) = (face[corner], face[(corner + 1) % 3]);
+            if let Ok(edge) = operators.edges.binary_search(&[a.min(b), a.max(b)]) {
+                let slot = &mut faces_of[edge];
+                if slot[0] == u32::MAX {
+                    slot[0] = index as u32;
+                } else {
+                    slot[1] = index as u32;
+                }
+            }
+        }
+    }
+    let mut surface = vec![0.0f64; operators.edges.len()];
 
-    let mut depth = vec![0.0f64; count];
+    let mut depth: Vec<f64> = match boundaries.initial_level {
+        Some(level) => bed.iter().map(|bed| (level - bed).max(0.0)).collect(),
+        None => vec![0.0f64; count],
+    };
+    // Which stage, if any, holds each vertex's level.
+    let mut held_by = vec![u32::MAX; count];
+    for (index, stage) in boundaries.stages.iter().enumerate() {
+        for &vertex in &stage.vertices {
+            held_by[vertex as usize] = index as u32;
+        }
+    }
+    let held = |vertex: usize| held_by[vertex] != u32::MAX;
     let mut arrival = vec![0u8; count];
     let mut reached = vec![false; count];
     keep(frame(&operators, &depth, std::mem::take(&mut arrival), 0.0));
@@ -1047,6 +1212,20 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
             depth.par_iter_mut().enumerate().with_min_len(4096).for_each(|(vertex, depth)| {
                 *depth = (*depth + falling * operators.catchment[vertex] / operators.area[vertex] - soak).max(0.0);
             });
+            // What is poured on over the part, and the levels held at the
+            // stages at its end.
+            for inflow in &boundaries.inflows {
+                let volume = inflow.flow.mean(time, time + step) * step;
+                for &(vertex, share) in &inflow.vertices {
+                    depth[vertex as usize] += volume * share / operators.area[vertex as usize];
+                }
+            }
+            for stage in &boundaries.stages {
+                let level = stage.level.at(time + step);
+                for &vertex in &stage.vertices {
+                    depth[vertex as usize] = (level - bed[vertex as usize]).max(0.0);
+                }
+            }
 
             // A step is taken implicitly: the levels at its end are those at
             // which every side's flow, at those levels, leaves every vertex with
@@ -1060,6 +1239,8 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
             // its own turn comes. See [`hands`] for which sides hand down.
             level.par_iter_mut().zip(bed.par_iter().zip(&depth)).for_each(|(level, (bed, depth))| *level = bed + depth);
             started.copy_from_slice(&level);
+            side_surfaces(ground, &faces_of, &started, &mut surface);
+            let surface = &surface;
             // A side hands down from `from` to `to` when the way is clear: the
             // water at `to` stands lower than the ground at `from`, so nothing
             // below can hold back what comes down.
@@ -1075,7 +1256,7 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
                 // What its givers passed on: each one's flow at the depth it
                 // settled at, down to this vertex's level as the step began.
                 let mut given = 0.0;
-                for (&(other, _), &(carry, per_metre)) in operators.adjacent[sides.clone()].iter().zip(&reach[sides.clone()]) {
+                for (&(other, edge), &(carry, per_metre)) in operators.adjacent[sides.clone()].iter().zip(&reach[sides.clone()]) {
                     let other = other as usize;
                     if gives(other, vertex) {
                         let passed = passed.get(other);
@@ -1085,7 +1266,7 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
                             let (over, fall) = (deep - sill, deep + bed[other] - level[vertex]);
                             if over > 0.0 && fall > 0.0 {
                                 let root = if sill == 0.0 { kept_root.get(other) } else { over.cbrt() };
-                                given += passed * step * flow_over(over, root, fall, carry, per_metre).0;
+                                given += passed * step * flow_over(over, root, fall, carry, per_metre, surface[edge as usize]).0;
                             }
                         }
                     }
@@ -1097,14 +1278,14 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
                 } else {
                     // The sides it gives by, gathered once: each one's sill, the
                     // fall to it from this vertex's ground, and what it carries.
-                    let mut outs = [(0.0f64, 0.0f64, 0.0f64, 0.0f64); OUT_SIDES];
+                    let mut outs = [(0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64); OUT_SIDES];
                     let mut gathered = 0;
                     // More than the room made for them go on the heap.
                     let mut spilled = Vec::new();
-                    for (&(other, _), &(carry, per_metre)) in operators.adjacent[sides.clone()].iter().zip(&reach[sides.clone()]) {
+                    for (&(other, edge), &(carry, per_metre)) in operators.adjacent[sides.clone()].iter().zip(&reach[sides.clone()]) {
                         let other = other as usize;
                         if gives(vertex, other) {
-                            let side = ((bed[other] - bed[vertex]).max(0.0), bed[vertex] - level[other], carry, per_metre);
+                            let side = ((bed[other] - bed[vertex]).max(0.0), bed[vertex] - level[other], carry, per_metre, surface[edge as usize]);
                             if gathered < OUT_SIDES {
                                 outs[gathered] = side;
                                 gathered += 1;
@@ -1121,10 +1302,10 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
                     // and down each of those.
                     let leaves = |deep: f64, root: f64| {
                         let (mut flow, mut more) = (outlet[vertex] * deep * root * root, 5.0 / 3.0 * outlet[vertex] * root * root);
-                        for &(sill, drop, carry, per_metre) in outs {
+                        for &(sill, drop, carry, per_metre, surface) in outs {
                             let (over, fall) = (deep - sill, deep + drop);
                             if over > 0.0 && fall > 0.0 {
-                                let side = flow_over(over, if sill == 0.0 { root } else { over.cbrt() }, fall, carry, per_metre);
+                                let side = flow_over(over, if sill == 0.0 { root } else { over.cbrt() }, fall, carry, per_metre, surface);
                                 flow += side.0;
                                 more += side.1;
                             }
@@ -1167,7 +1348,7 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
                     let (upper, lower) = if started[vertex] >= started[other] { (vertex, other) } else { (other, vertex) };
                     started[lower] >= bed[upper] && started[upper] - bed[upper] > FILM
                 });
-                *level = if backed_up { started[vertex] } else { bed[vertex] + depth[vertex] };
+                *level = if backed_up || held(vertex) { started[vertex] } else { bed[vertex] + depth[vertex] };
             });
             let held_before = total(count, |vertex| operators.area[vertex] * (started[vertex] - bed[vertex]));
             for turn in 0..NEWTON_TURNS {
@@ -1190,6 +1371,7 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
                         operators.length[edge],
                         roughness,
                         POOL_EXCHANGE * storage[a].min(storage[b]),
+                        surface[edge],
                     );
                     (side.0 as f32, side.1 as f32, side.2 as f32)
                 };
@@ -1249,7 +1431,8 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
                     // whether that is more than it can be left at: a depth's
                     // worth of it over the step.
                     let short = toward - drain + storage[vertex] * (started[vertex] - level[vertex]);
-                    let unsettled = short.abs() > storage[vertex] * (SETTLED_DEPTH + SETTLED_SHARE * (level[vertex] - bed[vertex]));
+                    // A held vertex's level is given, whatever its balance.
+                    let unsettled = !held(vertex) && short.abs() > storage[vertex] * (SETTLED_DEPTH + SETTLED_SHARE * (level[vertex] - bed[vertex]));
                     (target, storage[vertex] + draining, short, unsettled)
                 };
                 if whole {
@@ -1293,7 +1476,7 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
                     listed[vertex as usize] = false;
                 }
                 let mut list = |vertex: u32| {
-                    if !std::mem::replace(&mut listed[vertex as usize], true) {
+                    if !held(vertex as usize) && !std::mem::replace(&mut listed[vertex as usize], true) {
                         active.push(vertex);
                     }
                 };
@@ -1387,6 +1570,7 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
                     operators.length[edge],
                     roughness,
                     POOL_EXCHANGE * storage[a].min(storage[b]),
+                    surface[edge],
                 )
                 .0;
             });
@@ -1446,7 +1630,9 @@ fn simulate_on_pool(ground: &Ground, settings: &WaterSettings, cancel: &AtomicBo
                     out(0.0, drain);
                 }
                 let outs = if spilled.is_empty() { &mut outs[..gathered] } else { &mut spilled[..] };
-                kept.set(vertex, kept_depth(area, have, solved, outs));
+                // A held vertex stands at its level, whatever it gives and is
+                // given: the water beyond it makes up the difference.
+                kept.set(vertex, if held(vertex) { solved } else { kept_depth(area, have, solved, outs) });
                 for &(other, edge) in sides {
                     if inflow(vertex, edge) < 0.0 {
                         release(&waiting, other, next);

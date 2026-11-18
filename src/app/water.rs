@@ -167,7 +167,10 @@ impl App<'_> {
             let mesh = Arc::new(ground.to_mesh().ok_or_else(|| water_error(WaterError::Empty))?);
             let face_order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
             let landed = shared.ground.get_or_init(|| LiveGround { ground, mesh, face_order });
-            crate::model::water::simulate(&landed.ground, &settings, &signal, progress, &mut |frame| shared.frames().push(Arc::new(frame))).map_err(water_error)
+            crate::model::water::simulate(&landed.ground, &settings, &crate::model::water::Boundaries::default(), &signal, progress, &mut |frame| {
+                shared.frames().push(Arc::new(frame))
+            })
+            .map_err(water_error)
         };
         let progress = self.spawn_job_sharing_progress(
             tr!("water-job", surface = name.clone()),
