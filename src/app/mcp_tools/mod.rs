@@ -49,7 +49,6 @@ mod view;
 use glam::DVec3;
 pub(super) use jobs::PendingWait;
 use serde_json::{Value, json};
-pub(super) use view::PendingCapture;
 
 use crate::{
     app::App,
@@ -198,8 +197,7 @@ enum Target {
 }
 
 impl App<'_> {
-    /// Run the tool `tools/call` names, with its arguments. `capture_viewport`
-    /// is answered by `app/mcp.rs` itself, as it waits for a frame.
+    /// Run the tool `tools/call` names, with its arguments.
     pub(super) fn call_mcp_tool(&mut self, params: &Value) -> Value {
         let mut result = self.dispatch_mcp_tool(params);
         let notes: Vec<String> = self.mcp_new_warnings().into_iter().chain(self.mcp_memory_warning()).collect();

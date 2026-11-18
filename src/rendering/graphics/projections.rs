@@ -403,7 +403,7 @@ impl<'a> Graphics<'a> {
             center,
             self.camera.forward(),
             self.camera.up(),
-            (GIZMO_LENGTH_POINTS * self.window.scale_factor()) as f32,
+            (GIZMO_LENGTH_POINTS * self.scale_factor()) as f32,
             // The gizmo is a foreground overlay sized to constant screen space,
             // so its arms reach furthest in world units exactly when the camera
             // is zoomed in and the scene-fitted depth slab is thinnest - project
@@ -421,7 +421,7 @@ impl<'a> Graphics<'a> {
             azimuth_degrees,
             self.camera.forward(),
             self.camera.up(),
-            (GIZMO_LENGTH_POINTS * self.window.scale_factor()) as f32,
+            (GIZMO_LENGTH_POINTS * self.scale_factor()) as f32,
             // Sized to constant screen space like the Move gizmo, so it wants
             // the same freedom from the scene-fitted depth slab.
             |world| self.world_to_window_px_unclipped_depth(&view_proj, world),
@@ -437,7 +437,7 @@ impl<'a> Graphics<'a> {
         let half_length = slice_visible_half_length(self.projection.zoom, screen);
         let half_height = self.projection.zoom;
         let world_per_pixel = 2.0 * self.projection.zoom / f64::from(screen.1.max(1.0));
-        let points_per_pixel = 1.0 / self.window.scale_factor();
+        let points_per_pixel = 1.0 / self.scale_factor();
         let strike_pt = 2.0 * half_length / world_per_pixel * points_per_pixel;
         let height_pt = 2.0 * half_height / world_per_pixel * points_per_pixel;
         let axis = section_grid::upright_axis(slice.direction);
@@ -1117,7 +1117,7 @@ impl Graphics<'_> {
         if px_per_world <= 0.0 || !px_per_world.is_finite() {
             return None;
         }
-        let wanted = CONTOUR_LABEL_SPACING_POINTS * self.window.scale_factor() / px_per_world;
+        let wanted = CONTOUR_LABEL_SPACING_POINTS * self.scale_factor() / px_per_world;
         Some(2f64.powf(wanted.log2().ceil()))
     }
 }

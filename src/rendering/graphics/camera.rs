@@ -303,7 +303,7 @@ pub(super) fn in_plane_screen_move(dx: f64, dy: f64, right: DVec3, up: DVec3, no
 
 /// Camera forward and up for a standard view; the section takes the same pair
 /// to turn its plane to, so the two views agree on where "north" looks.
-pub(super) fn standard_view_basis(view: crate::ui::state::StandardView) -> (DVec3, DVec3) {
+pub(crate) fn standard_view_basis(view: crate::ui::state::StandardView) -> (DVec3, DVec3) {
     match view {
         crate::ui::state::StandardView::Up => (DVec3::NEG_Z, DVec3::Y),
         crate::ui::state::StandardView::Down => (DVec3::Z, DVec3::Y),
@@ -1662,6 +1662,20 @@ impl<'a> Graphics<'a> {
         self.camera_controller.begin_view_transition(&self.camera, forward, up, self.projection.zoom);
         self.camera_controller.cancel_orbit();
         self.orbit_marker = None;
+    }
+
+    /// Turn the camera to look along `forward` at once, about the point it
+    /// looks at and from as far, ending any swing under way. For a turn the
+    /// caller frames straight after, which a swing would undo as it ran.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn snap_view_direction(&mut self, view: crate::ui::state::StandardView) {
+        let (forward, up) = standard_view_basis(view);
+        self.camera_controller.cancel_view_transition();
+        self.camera_controller.cancel_orbit();
+        self.orbit_marker = None;
+        let target = self.camera.target();
+        let distance = (target - self.camera.position).length().max(1.0e-3);
+        self.camera.look_to(target - forward * distance, forward, up, distance);
     }
 
     /// Whether a [`Self::set_view_direction`] swing is still under way.

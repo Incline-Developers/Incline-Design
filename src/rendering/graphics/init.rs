@@ -29,9 +29,24 @@ pub(super) fn make_cinematic_shader(device: &wgpu::Device, label: &str, body: &'
     })
 }
 
+/// The size, in pixels, a renderer with no window takes for its own targets.
+const HEADLESS_SIZE: (u32, u32) = (1280, 800);
+
 impl<'a> Graphics<'a> {
     pub(crate) async fn new(window: Arc<Window>) -> Result<Graphics<'a>> {
-        let window_size = window.inner_size();
+        Self::create(Some(window)).await
+    }
+
+    /// A renderer with no window: nothing is presented, and the scene is only
+    /// ever drawn offscreen, for the pictures an MCP client asks for
+    /// (`render_view`) and video frames. Needs a GPU, but no display.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) async fn new_headless() -> Result<Graphics<'a>> {
+        Self::create(None).await
+    }
+
+    async fn create(window: Option<Arc<Window>>) -> Result<Graphics<'a>> {
+        let window_size = window.as_ref().map_or(winit::dpi::PhysicalSize::new(HEADLESS_SIZE.0, HEADLESS_SIZE.1), |window| window.inner_size());
         // The web backend's ResizeObserver may not have delivered its first
         // event when asynchronous WebGPU initialization begins. Read the
         // attached canvas directly so the first surface is not permanently
@@ -40,13 +55,18 @@ impl<'a> Graphics<'a> {
         let window_size = {
             use winit::platform::web::WindowExtWebSys;
 
-            window.canvas().map_or(window_size, |canvas| {
-                let scale_factor = window.scale_factor();
-                winit::dpi::PhysicalSize::new(
-                    (f64::from(canvas.client_width().max(1)) * scale_factor).round() as u32,
-                    (f64::from(canvas.client_height().max(1)) * scale_factor).round() as u32,
-                )
-            })
+            window
+                .as_ref()
+                .and_then(|window| {
+                    let scale_factor = window.scale_factor();
+                    window.canvas().map(|canvas| {
+                        winit::dpi::PhysicalSize::new(
+                            (f64::from(canvas.client_width().max(1)) * scale_factor).round() as u32,
+                            (f64::from(canvas.client_height().max(1)) * scale_factor).round() as u32,
+                        )
+                    })
+                })
+                .unwrap_or(window_size)
         };
         // Minimized/hidden Wayland windows may initially report 0×0. wgpu
         // surfaces, projection aspect ratios and attachments all require a
@@ -71,12 +91,12 @@ impl<'a> Graphics<'a> {
             display: None,
         });
 
-        let surface = instance.create_surface(window.clone())?;
+        let surface = window.as_ref().map(|window| instance.create_surface(window.clone())).transpose()?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
+                compatible_surface: surface.as_ref(),
                 force_fallback_adapter: false,
                 apply_limit_buckets: false,
             })
@@ -174,7 +194,17 @@ impl<'a> Graphics<'a> {
             }
         });
 
-        let surface_caps = surface.get_capabilities(&adapter);
+        // With no window, what an offscreen target can be: the format the
+        // readback understands, and nothing to present.
+        let surface_caps = surface.as_ref().map_or_else(
+            || wgpu::SurfaceCapabilities {
+                formats: vec![wgpu::TextureFormat::Rgba8UnormSrgb],
+                present_modes: vec![wgpu::PresentMode::Fifo],
+                alpha_modes: vec![wgpu::CompositeAlphaMode::Opaque],
+                ..wgpu::SurfaceCapabilities::default()
+            },
+            |surface| surface.get_capabilities(&adapter),
+        );
         // Browser WebGPU surfaces expose only the base `*Unorm` canvas
         // formats, while native backends commonly expose their `*UnormSrgb`
         // counterparts directly. The configured format must come from the
@@ -209,7 +239,7 @@ impl<'a> Graphics<'a> {
             .find(|mode| surface_caps.present_modes.contains(mode));
         userspace_log!("{}", tr!("init-surface-present-mode", mode = format!("{present_mode:?}")));
         // Blended by its alpha only where the window cuts its own corners.
-        let corners_alpha_mode = window_corners::WindowCorners::alpha_mode(&window, &surface_caps);
+        let corners_alpha_mode = window.as_ref().and_then(|window| window_corners::WindowCorners::alpha_mode(window, &surface_caps));
         let alpha_mode = match corners_alpha_mode {
             Some(mode) => mode,
             None => surface_caps.alpha_modes.first().copied().ok_or_else(|| anyhow!(tr!("err-gfx-no-alpha-modes")))?,
@@ -238,7 +268,9 @@ impl<'a> Graphics<'a> {
         let scene_cache = Self::create_scene_cache_target(&device, &config, &scene_cache_blit_layout);
         let (depth_texture, depth_view) = Self::create_depth_target(&device, &config, sample_count);
 
-        surface.configure(&device, &config);
+        if let Some(surface) = &surface {
+            surface.configure(&device, &config);
+        }
 
         let block_model_volume_shader = make_shader(&device, "../shaders/block_model_volume.wgsl", include_str!("../shaders/block_model_volume.wgsl"));
         let block_model_transparency_fallback_shader = make_shader(
@@ -777,7 +809,7 @@ impl<'a> Graphics<'a> {
         let text_index_gpu = Self::create_stream_buffer(&device, "Document Text Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
 
         let text_system = TextSystem::new();
-        let gui = Gui::new(&window, &device, gui_format);
+        let gui = window.as_ref().map(|window| Gui::new(window, &device, gui_format));
         // High-precision block-model attachments are created on first visible
         // use; ordinary document and topology views pay no full-screen VRAM
         // cost for them.
@@ -919,6 +951,8 @@ impl<'a> Graphics<'a> {
             camera_lock: None,
             video_target: None,
             #[cfg(not(target_arch = "wasm32"))]
+            view_target: None,
+            #[cfg(not(target_arch = "wasm32"))]
             panel_windows: Vec::new(),
             section_preview_rendered: false,
             embedded_slice_preview: None,
@@ -936,7 +970,9 @@ impl<'a> Graphics<'a> {
     pub(crate) fn reconfigure(&mut self) {
         // Surface recovery does not change attachment dimensions. Rebuilding
         // full-resolution MSAA/depth targets on every failure wastes GPU memory.
-        self.surface.configure(&self.device, &self.config);
+        if let Some(surface) = &self.surface {
+            surface.configure(&self.device, &self.config);
+        }
     }
 
     pub(crate) fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -949,7 +985,9 @@ impl<'a> Graphics<'a> {
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
+            if let Some(surface) = &self.surface {
+            surface.configure(&self.device, &self.config);
+        }
             let (msaa_color, msaa_view) = Self::create_msaa_target(&self.device, &self.config, self.sample_count);
             self.msaa_view = msaa_view;
             let (depth_texture, depth_view) = Self::create_depth_target(&self.device, &self.config, self.sample_count);

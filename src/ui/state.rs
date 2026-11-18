@@ -382,6 +382,14 @@ impl EditorState {
         self.task_history.truncate(TASK_HISTORY_LEN);
     }
 
+    /// The active pattern and the holes selected in it, in order.
+    pub(crate) fn selected_pattern_holes(&self) -> Option<(crate::model::drill_hole::DrillHoleId, Vec<usize>)> {
+        let id = self.active_drill_hole?;
+        let mut holes: Vec<usize> = self.selected_drill_holes.iter().filter(|hole| hole.dataset == id).map(|hole| hole.hole).collect();
+        holes.sort_unstable();
+        Some((id, holes))
+    }
+
     /// Drop everything selected, in every workspace's terms: whole scene
     /// entities and the individual drill holes Drill & Blast picks.
     pub(crate) fn clear_scene_selection(&mut self) {
@@ -5740,9 +5748,11 @@ pub(crate) enum UiCommand {
         reload: bool,
     },
     DeleteBlastLibraryItem(BlastLibraryItem),
-    /// Load the selected holes of the active dataset with the named rule, or
-    /// unload them with `None`.
-    ChargeSelectedHoles {
+    /// Load holes of a dataset with the named rule, or unload them with
+    /// `None`.
+    ChargeHoles {
+        dataset: crate::model::drill_hole::DrillHoleId,
+        holes: Vec<usize>,
         rule: Option<String>,
     },
     FinishPolyClose,
@@ -5771,7 +5781,12 @@ pub(crate) enum UiCommand {
     FocusScheduleAnimationSolid(crate::model::SolidId),
     OpenSurveyDefinitions,
     OpenSurveyTransform,
-    TransformSurveySelection,
+    /// Move items and design objects from one coordinate system to another.
+    TransformSurvey {
+        entities: Vec<SceneEntityId>,
+        from: Option<String>,
+        to: Option<String>,
+    },
     /// Write one coordinate system to the config, replacing `target` if it
     /// names an existing system and adding one otherwise. The edit travels
     /// with the command so switching rows mid-edit cannot drop it.
@@ -6211,8 +6226,15 @@ pub(crate) enum UiCommand {
     OpenCreateTriangulation,
     /// Open the Move to dialog that sets one axis of every selected object.
     OpenMoveToAxisDialog(Axis),
-    /// Insert vertices at every plan-view crossing between selected polylines.
+    /// Insert vertices at every plan-view crossing between selected polylines,
+    /// or start picking them when fewer than two are selected.
     InsertPointsAtIntersections,
+    /// Insert vertices at every plan-view crossing between these polylines:
+    /// the MCP server's, where the window works on its selection.
+    #[cfg(not(target_arch = "wasm32"))]
+    InsertPointsAtCrossings {
+        object_ids: Vec<ObjectId>,
+    },
     /// Open the elevation input for inserting vertices into selected polylines.
     OpenInsertPointAtElevationDialog,
     /// Insert vertices where selected polylines cross an elevation.
@@ -6402,13 +6424,13 @@ impl UiCommand {
             | Self::DeleteSurveyDefinition(_)
             | Self::SetSurveyLocalSystem(_)
             | Self::SelectExplorerRow(_)
-            | Self::TransformSurveySelection
+            | Self::TransformSurvey { .. }
             | Self::ToggleViewOption(_)
             | Self::SetPanelPoppedOut(..)
             | Self::SetMcpEnabled(_)
             | Self::SetMcpPort(_)
             | Self::SetInitiation { .. }
-            | Self::ChargeSelectedHoles { .. }
+            | Self::ChargeHoles { .. }
             | Self::BeginRenameItem(_)
             | Self::PreviewMoveDelta(_)
             | Self::PreviewCollarRotation(_)
@@ -6896,6 +6918,11 @@ impl UiCommand {
             Self::RelimitLineResize { .. } => report(tr!("common-relimit-line"), String::new()),
             Self::CommitBatterBerm => report(tr!("common-create-batter-berm"), tr!("state-apply-generated-rings")),
             Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::InsertPointsAtCrossings { object_ids } => report(
+                tr!("state-insert-intersection-points"),
+                tr!("common-count-object-s", count = object_ids.len().to_string()),
+            ),
             Self::ApplyObjectEdit { object, .. } => report(tr!("common-edit-object"), object.kind_name()),
             Self::InsertPointsAtElevation { object_ids, elevation } => report(
                 tr!("state-insert-points-elevation"),

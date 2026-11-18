@@ -307,11 +307,11 @@ impl App<'_> {
             return Err(format!("There is no charge rule {name}. get_blast lists them."));
         }
         let dataset = collection.id;
-        // Charge works on the holes selected in the active pattern, as it
-        // does from the window.
-        self.editor.active_drill_hole = Some(dataset);
-        self.editor.selected_drill_holes = holes.iter().map(|hole| DrillHoleRef { dataset, hole: *hole }).collect();
-        self.mcp_run_command(UiCommand::ChargeSelectedHoles { rule: rule.clone() })?;
+        self.mcp_run_command(UiCommand::ChargeHoles {
+            dataset,
+            holes: holes.clone(),
+            rule: rule.clone(),
+        })?;
         Ok(json!({ "holes": holes.len(), "rule": rule }))
     }
 

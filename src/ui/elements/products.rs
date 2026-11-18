@@ -231,9 +231,8 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
         explorer_note(ui, tr!("products-no-rules"));
     }
     let active = editor.active_rule().map(|rule| rule.name.clone());
-    let selected_holes = editor
-        .active_drill_hole
-        .map_or(0, |id| editor.selected_drill_holes.iter().filter(|hole| hole.dataset == id).count());
+    let pattern_holes = editor.selected_pattern_holes();
+    let selected_holes = pattern_holes.as_ref().map_or(0, |(_, holes)| holes.len());
     // Rules are pictured on a hole of the active pattern's median depth, so
     // the bar shows the proportions the rule will actually load.
     let depth = editor
@@ -276,7 +275,7 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
                 .show(ui)
                 .clicked()
             {
-                commands.push(UiCommand::ChargeSelectedHoles { rule: Some(rule.name.clone()) });
+                commands.extend(pattern_holes.clone().map(|(dataset, holes)| UiCommand::ChargeHoles { dataset, holes, rule: Some(rule.name.clone()) }));
                 ui.close();
             }
             if ContextMenuAction::new(tr!("products-unload-selected-holes-count", count = selected_holes.to_string()))
@@ -284,7 +283,7 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
                 .show(ui)
                 .clicked()
             {
-                commands.push(UiCommand::ChargeSelectedHoles { rule: None });
+                commands.extend(pattern_holes.clone().map(|(dataset, holes)| UiCommand::ChargeHoles { dataset, holes, rule: None }));
                 ui.close();
             }
             if ContextMenuAction::new(tr!("products-edit-rule")).show(ui).clicked() {

@@ -580,7 +580,7 @@ impl<'a> Graphics<'a> {
             &mut unused_fill_vertices,
             &mut unused_fill_indices,
             self.scene_origin,
-            self.window.scale_factor() as f32,
+            self.scale_factor() as f32,
         );
         for triangulation in triangulations {
             if !triangulation.state.loaded || editor.hidden_handles.contains(&triangulation.entity_id()) {

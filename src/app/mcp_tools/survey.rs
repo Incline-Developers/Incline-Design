@@ -100,7 +100,7 @@ pub(super) fn definitions() -> Vec<Value> {
         tool(
             "run_rain_simulation",
             "Simulate rain on a surface",
-            "Rain on a surface and follow the water as it runs off, ponds and soaks in, as Rain Simulation does. The run opens in a tab of its own; rain_simulation shows it at an instant, and capture_viewport looks at it. Settings left out take their defaults (20 mm over 4 hours, 4 hours run on, roughness 0.035, 2 mm/h infiltration, 30 s steps).",
+            "Rain on a surface and follow the water as it runs off, ponds and soaks in, as Rain Simulation does. The run opens in a tab of its own; rain_simulation shows it at an instant, and render_view with view window looks at it while its tab is shown. Settings left out take their defaults (20 mm over 4 hours, 4 hours run on, roughness 0.035, 2 mm/h infiltration, 30 s steps).",
             json!({
                 "surface": { "type": "integer", "minimum": 0 },
                 "rain_mm": { "type": "number", "exclusiveMinimum": 0 },
@@ -205,12 +205,11 @@ impl App<'_> {
                 target => handles.extend(entity(target)),
             }
         }
-        // The transform works on the selection, from the dialog's two systems.
-        self.editor.clear_scene_selection();
-        self.editor.selected_handles.extend(handles);
-        self.editor.survey.source_system = Some(from);
-        self.editor.survey.target_system = Some(to);
-        self.mcp_do(UiCommand::TransformSurveySelection)?;
+        self.mcp_do(UiCommand::TransformSurvey {
+            entities: handles,
+            from: Some(from),
+            to: Some(to),
+        })?;
         Ok(json!({ "started": true }))
     }
 

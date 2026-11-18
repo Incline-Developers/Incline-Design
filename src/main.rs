@@ -45,12 +45,20 @@ fn main() -> Result<()> {
     // `incline-design mcp`: relay MCP over standard input and output to the
     // window already running. Before logging starts, as standard output is
     // the protocol's.
-    if std::env::args().nth(1).as_deref() == Some("mcp") {
+    let mut arguments = std::env::args().skip(1);
+    let (first, second) = (arguments.next(), arguments.next());
+    let headless = first.as_deref() == Some("mcp") && second.as_deref() == Some("--headless");
+    if first.as_deref() == Some("mcp") && !headless {
         return Ok(mcp::stdio::run()?);
     }
     app::memory::tune_allocator();
     let _logging_guard = logging::init();
     std::thread::spawn(model::asset_storage::initialize_native);
+    // `incline-design mcp --headless`: an Incline of the client's own, with
+    // no window, spoken to over standard input and output.
+    if headless {
+        return app::headless::run();
+    }
     (|| {
         let event_loop = EventLoop::new()?;
         let mut app = App::new()?;

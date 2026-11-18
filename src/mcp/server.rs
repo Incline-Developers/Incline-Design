@@ -37,6 +37,8 @@ pub(crate) struct Server {
     calls: Receiver<Call>,
     stop: Arc<AtomicBool>,
     listener: Option<JoinHandle<()>>,
+    /// Set once the one client of a server on standard input has gone.
+    closed: Arc<AtomicBool>,
 }
 
 impl Server {
@@ -59,7 +61,39 @@ impl Server {
             calls,
             stop,
             listener: Some(listener),
+            closed: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Serve the one client on the other end of standard input and output,
+    /// a message a line each way, as `incline-design mcp --headless` does:
+    /// the process is the client's own Incline. Nothing else may write to
+    /// standard output, which is the protocol's.
+    pub(crate) fn on_standard_io(wake: Arc<dyn Fn() + Send + Sync>) -> io::Result<Self> {
+        let (sender, calls) = channel();
+        let closed = Arc::new(AtomicBool::new(false));
+        let gone = Arc::clone(&closed);
+        // Not joined: it sits in a read of standard input until the client
+        // closes it, which is also when the process is done.
+        std::thread::Builder::new().name("mcp-stdio".to_owned()).spawn(move || {
+            if let Err(error) = serve_standard_io(&sender, &wake) {
+                log::warn!("The MCP client's connection failed: {error}");
+            }
+            gone.store(true, Ordering::Relaxed);
+            wake();
+        })?;
+        Ok(Self {
+            port: 0,
+            calls,
+            stop: Arc::new(AtomicBool::new(false)),
+            listener: None,
+            closed,
+        })
+    }
+
+    /// Whether the client of a server on standard input has gone.
+    pub(crate) fn closed(&self) -> bool {
+        self.closed.load(Ordering::Relaxed)
     }
 
     pub(crate) fn port(&self) -> u16 {
@@ -103,6 +137,35 @@ fn listen(listener: &TcpListener, stop: &AtomicBool, token: &Arc<String>, sender
             }
         }
     }
+}
+
+/// Answer each line of standard input on standard output until it closes.
+fn serve_standard_io(sender: &Sender<Call>, wake: &Arc<dyn Fn() + Send + Sync>) -> io::Result<()> {
+    use std::io::{BufRead, Write};
+
+    let stdin = io::stdin();
+    let mut stdout = io::stdout().lock();
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let answer = |request| ask(sender, wake, request);
+        let response = match serde_json::from_str::<Value>(&line) {
+            Err(_) => Some(serde_json::json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "Parse error" } })),
+            // A batch, from an older client: each answered in turn.
+            Ok(Value::Array(messages)) => {
+                let responses: Vec<Value> = messages.iter().filter_map(|message| super::http::one(message, &answer)).collect();
+                (!responses.is_empty()).then_some(Value::Array(responses))
+            }
+            Ok(message) => super::http::one(&message, &answer),
+        };
+        if let Some(response) = response {
+            writeln!(stdout, "{response}")?;
+            stdout.flush()?;
+        }
+    }
+    Ok(())
 }
 
 /// Hand `request` to the main thread and wait for its answer. `None` if the

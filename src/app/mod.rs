@@ -7,6 +7,8 @@ pub(crate) mod geophysics; // Geophysics files linked to drill-hole datasets
 pub(crate) mod geophysics_web;
 pub(crate) mod haulage_pipeline; // The Haulage workspace's Setup run/invalidation model
 pub(crate) mod io; /* Handles session serialisation */
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod headless; // `incline-design mcp --headless`: Incline with no window, for one MCP client
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod mcp; // The MCP server: started and stopped to follow Preferences, its requests answered here
 #[cfg(not(target_arch = "wasm32"))]
@@ -354,14 +356,14 @@ pub(crate) struct App<'a> {
     /// The MCP server, while it runs. See `mcp`.
     #[cfg(not(target_arch = "wasm32"))]
     mcp_server: Option<crate::mcp::Server>,
+    /// Whether this Incline has no window, serving one MCP client (`headless`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) headless: bool,
     /// The warnings and errors in the activity log an MCP client has been
     /// told of, so each tool result can carry only the new ones. `None`
     /// until the first call, which takes the log as it stands as seen.
     #[cfg(not(target_arch = "wasm32"))]
     mcp_seen_warnings: Option<std::collections::HashSet<crate::logging::ConsoleEntryId>>,
-    /// `capture_viewport` calls waiting for a frame to be drawn.
-    #[cfg(not(target_arch = "wasm32"))]
-    mcp_captures: Vec<mcp_tools::PendingCapture>,
     /// `get_tasks` calls waiting for the background work to finish.
     #[cfg(not(target_arch = "wasm32"))]
     mcp_waits: Vec<mcp_tools::PendingWait>,
@@ -713,9 +715,9 @@ impl<'a> Default for App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             mcp_server: None,
             #[cfg(not(target_arch = "wasm32"))]
-            mcp_seen_warnings: None,
+            headless: false,
             #[cfg(not(target_arch = "wasm32"))]
-            mcp_captures: Vec::new(),
+            mcp_seen_warnings: None,
             #[cfg(not(target_arch = "wasm32"))]
             mcp_waits: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -2783,13 +2785,11 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         let panel_deadline = self.poll_panel_repaints(now);
-        // A look at the viewport the MCP server is waiting on is answered once
-        // its frame has drawn, and a wait for the background work once it is
-        // done, so the loop keeps coming back until then.
+        // A wait for the background work the MCP server is holding is
+        // answered once the work is done, so the loop keeps coming back
+        // until then.
         #[cfg(not(target_arch = "wasm32"))]
-        let capture_deadline = self.poll_mcp_captures().then(|| now + Duration::from_millis(16));
-        #[cfg(not(target_arch = "wasm32"))]
-        let capture_deadline = capture_deadline.or_else(|| self.poll_mcp_waits().then(|| now + Duration::from_millis(100)));
+        let capture_deadline = self.poll_mcp_waits().then(|| now + Duration::from_millis(100));
         #[cfg(target_arch = "wasm32")]
         let capture_deadline: Option<Instant> = None;
         #[cfg(target_arch = "wasm32")]

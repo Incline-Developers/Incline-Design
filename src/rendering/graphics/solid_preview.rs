@@ -65,7 +65,13 @@ impl SolidPreviewTarget {
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
         let (texture, view, gui_view) = Self::create_color_target(&graphics.device, &config);
-        let texture_id = graphics.gui.register_native_texture(&graphics.device, &gui_view);
+        // Shown in the window's UI, so registered with it; a renderer with no
+        // window has no UI to show it in.
+        let texture_id = graphics
+            .gui
+            .as_mut()
+            .map(|gui| gui.register_native_texture(&graphics.device, &gui_view))
+            .unwrap_or_default();
         let camera = Camera::new(glam::DVec3::new(0.0, 0.0, 10.0), 0.0, 0.0);
         let projection = Projection::new(size.width, size.height, -1000.0, 1000.0);
         let mut camera_uniform = CameraUniform::new();
@@ -141,7 +147,9 @@ impl SolidPreviewTarget {
         self.projection.resize(self.size.width, self.size.height);
         self.camera_uniform.update_viewport(self.size.width, self.size.height);
         (self.texture, self.view, self.gui_view) = Self::create_color_target(&graphics.device, &self.config);
-        graphics.gui.update_native_texture(&graphics.device, self.texture_id, &self.gui_view);
+        if let Some(gui) = graphics.gui.as_mut() {
+            gui.update_native_texture(&graphics.device, self.texture_id, &self.gui_view);
+        }
         let (msaa_color, msaa_view) = Graphics::create_msaa_target(&graphics.device, &self.config, graphics.sample_count);
         let (depth_texture, depth_view) = Graphics::create_depth_target(&graphics.device, &self.config, graphics.sample_count);
         self.msaa_color = msaa_color;

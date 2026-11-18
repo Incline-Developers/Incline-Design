@@ -140,7 +140,7 @@ impl<'a> App<'a> {
     pub(crate) fn handle_ui_command(&mut self, command: UiCommand) -> Result<()> {
         let requires_project = matches!(
             &command,
-            UiCommand::TransformSurveySelection
+            UiCommand::TransformSurvey { .. }
                 | UiCommand::ImportOmfPaths(_)
                 | UiCommand::ImportDxfPathsInto(_)
                 | UiCommand::ImportTriangulationPaths(_)
@@ -682,8 +682,8 @@ impl<'a> App<'a> {
                 self.delete_blast_library_item(item);
                 Ok(())
             }
-            UiCommand::ChargeSelectedHoles { rule } => {
-                self.charge_selected_holes(rule);
+            UiCommand::ChargeHoles { dataset, holes, rule } => {
+                self.charge_holes_with_rule(dataset, holes, rule);
                 Ok(())
             }
             UiCommand::RequestDeleteLayer(layer_id) => {
@@ -1211,7 +1211,7 @@ impl<'a> App<'a> {
                 }
                 result
             }
-            UiCommand::TransformSurveySelection => self.transform_survey_selection(),
+            UiCommand::TransformSurvey { entities, from, to } => self.transform_survey(&entities, &from, &to),
             UiCommand::OpenPreferences => {
                 self.editor.show_preferences = true;
                 Ok(())
@@ -1355,6 +1355,11 @@ impl<'a> App<'a> {
             }
             UiCommand::InsertPointsAtIntersections => {
                 self.insert_points_at_selected_intersections();
+                Ok(())
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            UiCommand::InsertPointsAtCrossings { object_ids } => {
+                self.insert_points_at_crossings(object_ids);
                 Ok(())
             }
             UiCommand::OpenInsertPointAtElevationDialog => {

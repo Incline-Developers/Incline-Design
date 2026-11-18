@@ -20,7 +20,7 @@ use std::{
     },
 };
 
-use super::{readback::RgbaReadback, *};
+use super::{offscreen::OffscreenTarget, readback::RgbaReadback, *};
 
 /// Frames copied back but not yet collected before the export stops
 /// drawing new ones; see [`Graphics::video_readback_full`].
@@ -61,120 +61,20 @@ struct InFlight {
 }
 
 pub(crate) struct VideoTarget {
-    size: winit::dpi::PhysicalSize<u32>,
-    config: wgpu::SurfaceConfiguration,
-    texture: wgpu::Texture,
-    /// The scene draws through the sRGB view, egui through the plain one,
-    /// as they do on the window's surface.
-    view: wgpu::TextureView,
-    gui_view: wgpu::TextureView,
-    projection: Projection,
-    camera_uniform: CameraUniform,
-    camera_buffer: wgpu::Buffer,
-    camera_bind_group: wgpu::BindGroup,
-    msaa_color: wgpu::Texture,
-    msaa_view: wgpu::TextureView,
-    depth_texture: wgpu::Texture,
-    depth_view: wgpu::TextureView,
-    transparency_targets: Option<BlockModelTransparencyTargets>,
-    volume_target: Option<BlockModelVolumeTarget>,
-    viewport_rect: ViewportRect,
+    target: OffscreenTarget,
     overlay: crate::ui::VideoOverlay,
     in_flight: VecDeque<InFlight>,
 }
 
 impl VideoTarget {
     fn new(graphics: &Graphics<'_>, width: u32, height: u32) -> Self {
-        let size = winit::dpi::PhysicalSize::new(width.max(1), height.max(1));
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            format: graphics.config.format,
-            width: size.width,
-            height: size.height,
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
-            view_formats: graphics.config.view_formats.clone(),
-            desired_maximum_frame_latency: 2,
-            color_space: wgpu::SurfaceColorSpace::Auto,
-        };
-        let texture = graphics.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Video frame target"),
-            size: wgpu::Extent3d {
-                width: size.width,
-                height: size.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: config.format.add_srgb_suffix(),
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[config.format.remove_srgb_suffix()],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let gui_view = texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(config.format.remove_srgb_suffix()),
-            ..Default::default()
-        });
-        let mut camera_uniform = CameraUniform::new();
-        camera_uniform.update_viewport(size.width, size.height);
-        let camera_buffer = {
-            use wgpu::util::DeviceExt;
-            graphics.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Video frame camera"),
-                contents: bytemuck::bytes_of(&camera_uniform),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            })
-        };
-        let camera_bind_group = graphics.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Video frame camera bind group"),
-            layout: &graphics.camera_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-        });
-        let (msaa_color, msaa_view) = Graphics::create_msaa_target(&graphics.device, &config, graphics.sample_count);
-        let (depth_texture, depth_view) = Graphics::create_depth_target(&graphics.device, &config, graphics.sample_count);
-        let overlay = crate::ui::VideoOverlay::new(&graphics.device, config.format.remove_srgb_suffix(), graphics.gui.visuals());
+        let target = OffscreenTarget::new(graphics, width, height, "Video frame");
+        let overlay = crate::ui::VideoOverlay::new(&graphics.device, target.config.format.remove_srgb_suffix(), graphics.gui.as_ref().map_or_else(crate::ui::default_visuals, Gui::visuals));
         Self {
-            size,
-            projection: graphics.projection.cropped_to(size.width, size.height),
-            config,
-            texture,
-            view,
-            gui_view,
-            camera_uniform,
-            camera_buffer,
-            camera_bind_group,
-            msaa_color,
-            msaa_view,
-            depth_texture,
-            depth_view,
-            transparency_targets: None,
-            volume_target: None,
-            viewport_rect: ViewportRect::full(size.width, size.height),
+            target,
             overlay,
             in_flight: VecDeque::new(),
         }
-    }
-
-    /// Trade this target's camera, targets and size with the renderer's, so
-    /// the renderer's own passes draw into it. Called in pairs.
-    fn swap_into(&mut self, graphics: &mut Graphics<'_>) {
-        std::mem::swap(&mut graphics.projection, &mut self.projection);
-        std::mem::swap(&mut graphics.camera_uniform, &mut self.camera_uniform);
-        std::mem::swap(&mut graphics.camera_buffer, &mut self.camera_buffer);
-        std::mem::swap(&mut graphics.camera_bind_group, &mut self.camera_bind_group);
-        std::mem::swap(&mut graphics.msaa_color, &mut self.msaa_color);
-        std::mem::swap(&mut graphics.msaa_view, &mut self.msaa_view);
-        std::mem::swap(&mut graphics.depth_texture, &mut self.depth_texture);
-        std::mem::swap(&mut graphics.depth_view, &mut self.depth_view);
-        std::mem::swap(&mut graphics.block_model_transparency_targets, &mut self.transparency_targets);
-        std::mem::swap(&mut graphics.block_model_volume_target, &mut self.volume_target);
-        std::mem::swap(&mut graphics.config, &mut self.config);
-        std::mem::swap(&mut graphics.size, &mut self.size);
-        std::mem::swap(&mut graphics.viewport_rect, &mut self.viewport_rect);
     }
 }
 
@@ -202,15 +102,15 @@ impl Graphics<'_> {
             labels: shown_labels,
         } = input;
         let mut target = match self.video_target.take() {
-            Some(target) if target.size.width == width && target.size.height == height => target,
+            Some(target) if target.target.size.width == width && target.target.size.height == height => target,
             _ => VideoTarget::new(self, width, height),
         };
         // The window's projection this frame - its clip planes fitted to the
         // scene - reshaped to the video.
-        target.projection = self.projection.cropped_to(width, height);
+        target.target.projection = self.projection.cropped_to(width, height);
         // Labels and icons as large against the frame as they are against the
         // viewport: the video is as many points tall as the viewport is.
-        let window_ppp = self.gui.pixels_per_point().max(0.1);
+        let window_ppp = self.ui_pixels_per_point().max(0.1);
         let viewport_points = (self.viewport_rect.height as f32 / window_ppp).max(1.0);
         let shrink = ((self.viewport_rect.width as f32 / self.viewport_rect.height.max(1) as f32) / (width as f32 / height as f32)).min(1.0);
         let pixels_per_point = height as f32 / (viewport_points * shrink);
@@ -222,7 +122,7 @@ impl Graphics<'_> {
         let window_icons = std::mem::take(&mut editor.animation_machine_icons);
         let window_labels = std::mem::take(&mut editor.animation_machine_labels);
 
-        target.swap_into(self);
+        target.target.swap_into(self);
         self.camera_uniform
             .update_view_proj(&self.camera, &self.projection, self.scene_origin, self.vertical_exaggeration);
         self.camera_uniform.set_section_slab(self.section_slab(), self.scene_origin);
@@ -263,7 +163,7 @@ impl Graphics<'_> {
         // The viewport's view, overlays included, as the image export draws it.
         self.render_scene_pass(
             &mut encoder,
-            &target.view,
+            &target.target.view,
             full,
             editor,
             triangulations,
@@ -273,12 +173,12 @@ impl Graphics<'_> {
             rasters,
             true,
         );
-        self.render_editor_overlay_pass(&mut encoder, &target.view, full, editor, false);
+        self.render_editor_overlay_pass(&mut encoder, &target.target.view, full, editor, false);
         target.overlay.paint(
             &self.device,
             &self.queue,
             &mut encoder,
-            &target.gui_view,
+            &target.target.gui_view,
             [width, height],
             pixels_per_point,
             editor,
@@ -286,9 +186,9 @@ impl Graphics<'_> {
             project,
             shown_labels,
         );
-        let readback = RgbaReadback::record(&self.device, &mut encoder, &target.texture, "Video frame readback");
+        let readback = RgbaReadback::record(&self.device, &mut encoder, &target.target.texture, "Video frame readback");
         self.queue.submit(std::iter::once(encoder.finish()));
-        target.swap_into(self);
+        target.target.swap_into(self);
 
         let state = Arc::new(AtomicU8::new(MAP_PENDING));
         let signal = Arc::clone(&state);

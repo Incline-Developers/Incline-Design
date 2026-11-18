@@ -29,7 +29,10 @@ window's own controls do: drawing and editing designs, building and cutting surf
 optimising, scheduling, drill and blast, and importing and exporting files. Ids are the numbers get_project and the other \
 get_ tools report. Long work runs in the background and returns once started: get_tasks follows it and can wait for it, and \
 get_activity says if it failed. Setups kept as JSON (solids' plans, scenarios, the schedule) are read whole and changed with \
-JSON merge patches. Changes are made in the open window and can be undone there; capture_viewport shows what they look like.\n\n\
+JSON merge patches. Changes are made in the open window and can be undone there; render_view draws a picture of the result.\n\n\
+Looking and showing: render_view takes the whole view as arguments and draws it on its own, so looking never moves the \
+user's camera or selection. The window is the user's: get_selection reads what they have selected, to work on it, and \
+show_in_window is the only tool that changes their view or selection, for when they have asked to be shown something.\n\n\
 Working well with large projects: surfaces can run to tens of millions of triangles, and memory is the limit. Every change, \
 deleted and replaced items included, is kept for undo until the project is saved; saving clears that history and frees it. \
 So save after each heavy step (building, trimming or cutting a surface, deleting big items), and unload what the next step \
@@ -147,11 +150,6 @@ impl App<'_> {
             return;
         }
         for call in calls {
-            // A look at the viewport is answered once a frame has drawn it.
-            if call.request["method"] == "tools/call" && call.request["params"]["name"] == "capture_viewport" {
-                self.begin_mcp_capture(call);
-                continue;
-            }
             // A wait for the background work is answered once it is done.
             if call.request["method"] == "tools/call"
                 && call.request["params"]["name"] == "get_tasks"

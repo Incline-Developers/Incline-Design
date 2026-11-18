@@ -145,7 +145,7 @@ fn post(request: &Request, answer: &dyn Fn(Value) -> Option<Value>) -> Response 
 
 /// The response to one message: none for a notification, or for a response
 /// the client sent.
-fn one(message: &Value, answer: &dyn Fn(Value) -> Option<Value>) -> Option<Value> {
+pub(super) fn one(message: &Value, answer: &dyn Fn(Value) -> Option<Value>) -> Option<Value> {
     if message.get("method").is_none() || message.get("id").is_none() {
         return None;
     }

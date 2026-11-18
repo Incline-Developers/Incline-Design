@@ -519,10 +519,7 @@ impl App<'_> {
                 if polylines.len() < 2 {
                     return failed("Crossings need at least two polylines.");
                 }
-                // The tool works on the selection, as it does from the menu.
-                self.editor.clear_scene_selection();
-                self.editor.selected_handles.extend(polylines.iter().map(|id| SceneEntityId::Object(*id)));
-                UiCommand::InsertPointsAtIntersections
+                UiCommand::InsertPointsAtCrossings { object_ids: polylines }
             }
         };
         match self.handle_reported_ui_command(command) {

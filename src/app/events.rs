@@ -232,21 +232,7 @@ impl<'a> App<'a> {
                     self.redraw_requested = true;
                 }
                 WindowEvent::RedrawRequested => {
-                    self.poll_triangulation_loads();
-                    self.poll_block_model_loads();
-                    self.poll_point_cloud_loads();
-                    self.poll_raster_loads();
-                    self.poll_saves();
-                    self.poll_jobs();
-                    self.reconcile_optimization_runs();
-                    self.refresh_status_message();
-                    if let Some(usage) = self.memory_sampler.poll() {
-                        self.editor.memory_usage = Some(usage);
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    if let Some(cores) = self.cpu_sampler.poll() {
-                        self.editor.cpu_usage = cores;
-                    }
+                    self.poll_background_work();
                     let now = Instant::now();
                     let frame_interval = self.frame_interval();
                     if self.last_render_time.is_some_and(|last_render| now.duration_since(last_render) < frame_interval) {
@@ -270,37 +256,7 @@ impl<'a> App<'a> {
                     self.sync_window_frame(&project);
                     #[cfg(target_os = "macos")]
                     crate::mac::sync_menu_state(&self.editor, &project);
-                    // The Solids Setup page's inspection mesh is rebuilt before
-                    // the frame that shows it, and borrowed straight into the
-                    // render input - it is never a project item.
-                    // Invalidation first: the edits made since the last frame
-                    // decide which stages are still current, and so what a run
-                    // in flight is allowed to schedule. Doing this after the
-                    // geometry sync would let one frame's work start against a
-                    // demand that the same frame's edit had already retired.
-                    self.sync_auto_run();
-                    self.sync_planning_pipeline();
-                    self.auto_run_planning();
-                    self.auto_run_haulage();
-                    self.auto_recalculate_schedule();
-                    self.release_pipeline_residency();
-                    self.sync_improve_progress();
-                    self.pick_entry_ground();
-                    self.sync_solid_preview();
-                    self.sync_schedule_animation();
-                    self.drive_video_recording();
-                    self.sync_reserve_setup_stats();
-                    self.sync_blasting_view();
-                    self.sync_blasting_bench();
-                    self.sync_blasting_outlines();
-                    self.sync_dig_blocks();
-                    self.refresh_solid_view_retained();
-                    self.refresh_reserves_scene();
-                    self.sync_blasting_frame();
-                    self.sync_haulage_frame();
-                    self.sync_animation_frame();
-                    self.sync_water();
-                    self.sync_page_locks();
+                    self.advance_project();
                     let showing_solid_preview = self.showing_solid_preview();
                     let completing_topology_load = self.topology_uploads_pending();
                     let applied_resize = self.take_resize_to_apply(now);
@@ -2034,4 +1990,63 @@ fn point_in_convex_quad(point: (f32, f32), quad: &[(f32, f32); 4]) -> bool {
         }
     }
     orientation != 0.0
+}
+
+impl App<'_> {
+    /// Take in what background work has finished: loads, saves and jobs.
+    /// Each frame of the window, or each turn of the loop with no window.
+    pub(crate) fn poll_background_work(&mut self) {
+        self.poll_triangulation_loads();
+        self.poll_block_model_loads();
+        self.poll_point_cloud_loads();
+        self.poll_raster_loads();
+        self.poll_saves();
+        self.poll_jobs();
+        self.reconcile_optimization_runs();
+        self.refresh_status_message();
+        if let Some(usage) = self.memory_sampler.poll() {
+            self.editor.memory_usage = Some(usage);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(cores) = self.cpu_sampler.poll() {
+            self.editor.cpu_usage = cores;
+        }
+    }
+
+    /// The project's own work for one step, whether or not a window draws
+    /// it: the planning, haulage and schedule runs it keeps current, and the
+    /// scenes the pages show built for them.
+    pub(crate) fn advance_project(&mut self) {
+        // The Solids Setup page's inspection mesh is rebuilt before
+        // the frame that shows it, and borrowed straight into the
+        // render input - it is never a project item.
+        // Invalidation first: the edits made since the last frame
+        // decide which stages are still current, and so what a run
+        // in flight is allowed to schedule. Doing this after the
+        // geometry sync would let one frame's work start against a
+        // demand that the same frame's edit had already retired.
+        self.sync_auto_run();
+        self.sync_planning_pipeline();
+        self.auto_run_planning();
+        self.auto_run_haulage();
+        self.auto_recalculate_schedule();
+        self.release_pipeline_residency();
+        self.sync_improve_progress();
+        self.pick_entry_ground();
+        self.sync_solid_preview();
+        self.sync_schedule_animation();
+        self.drive_video_recording();
+        self.sync_reserve_setup_stats();
+        self.sync_blasting_view();
+        self.sync_blasting_bench();
+        self.sync_blasting_outlines();
+        self.sync_dig_blocks();
+        self.refresh_solid_view_retained();
+        self.refresh_reserves_scene();
+        self.sync_blasting_frame();
+        self.sync_haulage_frame();
+        self.sync_animation_frame();
+        self.sync_water();
+        self.sync_page_locks();
+    }
 }

@@ -133,7 +133,12 @@ impl<'a> Graphics<'a> {
         } = input;
         // Acquire before any queue writes: a hidden/unavailable surface can fail
         // indefinitely, and write_buffer staging allocations live until submit.
-        let output = match self.surface.get_current_texture() {
+        // Only a renderer with a window draws frames; one without draws
+        // only offscreen (`render_view`).
+        let (Some(surface), Some(window)) = (self.surface.as_ref(), self.window.clone()) else {
+            return Err(RenderSurfaceError::Lost);
+        };
+        let output = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(output) | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
             wgpu::CurrentSurfaceTexture::Timeout => return Err(RenderSurfaceError::Timeout),
             wgpu::CurrentSurfaceTexture::Occluded => return Err(RenderSurfaceError::Occluded),
@@ -179,7 +184,7 @@ impl<'a> Graphics<'a> {
         // projected first, through the camera as fitted to the rect the last
         // frame left; only a frame whose panels move it sees those a frame
         // late.
-        let scale_factor = self.window.scale_factor() as f32;
+        let scale_factor = self.scale_factor() as f32;
         self.update_tool_projections(editor, document, drill_holes);
         // Animate's machines: each drawn as its model where it is close
         // enough to read, and otherwise as an icon the UI paints, held on the
@@ -197,8 +202,11 @@ impl<'a> Graphics<'a> {
         let camera_forward = self.camera.forward();
         let camera_up = self.camera.up();
         let world_per_physical_pixel = (!self.projection.is_perspective()).then(|| 2.0 * self.projection.zoom / f64::from(self.viewport_rect.height.max(1)));
-        let (ui_output, ui_paint) = self.gui.layout(
-            &self.window,
+        let Some(gui) = self.gui.as_mut() else {
+            return Err(RenderSurfaceError::Lost);
+        };
+        let (ui_output, ui_paint) = gui.layout(
+            &window,
             editor,
             document,
             project,
@@ -222,31 +230,7 @@ impl<'a> Graphics<'a> {
             self.invalidate_geometry();
         }
         let mut scene_content_changed = self.geometry_dirty;
-        let grid_uniform = GridUniform::new(
-            self.scene_origin,
-            editor.renderer_background_color,
-            &self.camera,
-            &self.projection,
-            self.vertical_exaggeration,
-            f64::from(self.screen_size().1),
-            &editor.xy_grid_style,
-            self.window.scale_factor(),
-        );
-        self.queue.write_buffer(&self.grid_buffer, 0, bytemuck::bytes_of(&grid_uniform));
-        if editor.slice_grid_enabled
-            && let Some((axis, axis_spacing, elevation_spacing)) = self.section_grid_spacing(editor.section_grid_style.level_spacing)
-        {
-            let section_grid_uniform = SectionGridUniform::new(
-                self.scene_origin,
-                editor.renderer_background_color,
-                axis,
-                axis_spacing,
-                elevation_spacing,
-                &editor.section_grid_style,
-                self.window.scale_factor(),
-            );
-            self.queue.write_buffer(&self.section_grid_buffer, 0, bytemuck::bytes_of(&section_grid_uniform));
-        }
+        self.write_grid_uniforms(editor);
         // Advance non-blocking volume-usage readbacks. Their callbacks only
         // send a small bitset through a channel; residency changes are applied
         // later by the normal streaming pass.
@@ -266,143 +250,25 @@ impl<'a> Graphics<'a> {
         });
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") });
 
-        let gpu_work_was_pending = self.point_cloud_gpu.has_pending_uploads() || self.block_model_gpu.has_pending_builds();
-        self.raster_gpu
-            .sync(&self.device, &self.queue, self.scene_origin, rasters, &self.raster_surface_bind_group_layout);
-        // A section builds a cut texture for every mesh in the cache, so while
-        // one is up only what is drawn stays.
-        let no_surfaces = std::collections::HashSet::new();
-        let retained = if self.section_slab().is_some() { &no_surfaces } else { retained_surfaces };
-        self.triangulation_gpu.sync(
-            &self.device,
-            &self.queue,
-            self.scene_origin,
+        let (synced_content, gpu_work_was_pending) = self.sync_scene_content(
+            &mut encoder,
+            SceneContent {
+                editor,
+                document,
+                triangulations,
+                block_models,
+                drill_holes,
+                point_clouds,
+                rasters,
+                solid_preview,
+                retained_surfaces,
+            },
             scale_factor,
-            triangulations,
-            solid_preview,
-            retained,
-            rasters,
-            editor,
-            &self.surface_style_bind_group_layout,
-            &self.surface_chunk_bind_group_layout,
-            &self.edge_style_bind_group_layout,
         );
+        scene_content_changed |= synced_content;
         let section_cuts = self.section_slab().is_some_and(|slab| slab.outlines);
         self.triangulation_gpu
             .sync_section_cuts(&self.device, &mut encoder, section_cuts, &self.section_cut_bind_group_layout);
-        self.block_model_gpu.sync(
-            &self.device,
-            &self.queue,
-            self.scene_origin,
-            scale_factor,
-            block_models,
-            editor,
-            &self.surface_style_bind_group_layout,
-            &self.block_model_volume_bind_group_layout,
-        );
-        self.drill_hole_gpu.sync(&self.device, &self.queue, self.scene_origin, drill_holes, editor);
-        self.point_cloud_gpu.sync(
-            &self.device,
-            &self.queue,
-            &mut encoder,
-            self.scene_origin,
-            scale_factor,
-            glam::Mat4::from_cols_array_2d(&self.camera_uniform.view_proj),
-            (self.camera.position - self.scene_origin).as_vec3(),
-            point_clouds,
-            editor,
-            &self.point_cloud_style_bind_group_layout,
-        );
-        self.design_point_gpu.sync(
-            &self.device,
-            &self.queue,
-            document,
-            &editor.hidden_handles,
-            self.scene_origin,
-            scale_factor,
-            editor.show_points || editor.active_tool == crate::ui::state::ActiveTool::DeletePoints,
-            self.geometry_dirty || self.cached_document_revision != document.revision(),
-        );
-        // Selection, hover and translucency only restyle: the shaders read
-        // them from the style buffer. The key also covers hiding and
-        // translucency, which change what is tessellated and what the static
-        // chunks claim, so a geometry pass still runs; `document_scene_key`
-        // keeps it from re-tessellating when nothing it bakes has changed.
-        let render_style_key = editor.render_style_key();
-        if self.cached_render_style_key != Some(render_style_key) {
-            self.cached_render_style_key = Some(render_style_key);
-            self.geometry_dirty = true;
-            self.document_style_dirty = true;
-            self.overlay_dirty = true;
-        }
-        let needs_geometry_rebuild = self.geometry_dirty || self.cached_document_revision != document.revision() || (self.cached_scale_factor - scale_factor).abs() > f32::EPSILON;
-
-        if needs_geometry_rebuild {
-            scene_content_changed = true;
-            // Reconcile the static stroke chunks first so the stream rebuild
-            // below knows which objects they own and can skip them.
-            self.static_strokes
-                .sync(&self.device, &self.queue, document, editor, &mut self.document_style_slots, self.scene_origin, scale_factor);
-            // Most geometry passes come from editor-state invalidation with
-            // the document untouched; tessellate only when an input changed.
-            let scene_key = build::document_scene_key(document, editor, self.static_strokes.claimed_key(), self.scene_origin, scale_factor);
-            if self.cached_document_scene_key != Some(scene_key) {
-                rebuild_document_scene(DocumentSceneBuildInput {
-                    editor,
-                    document,
-                    static_ids: self.static_strokes.claimed(),
-                    fill_cache: &mut self.polyline_fill_cache,
-                    text_system: &mut self.text_system,
-                    slots: &mut self.document_style_slots,
-                    lyon_buffer: &mut self.lyon_buffer,
-                    strokes: &mut self.strokes,
-                    text_vertex_buf: &mut self.text_vertex_buf,
-                    text_index_buf: &mut self.text_index_buf,
-                    text_draw_batches: &mut self.text_draw_batches,
-                    pick_records: &mut self.pick_records,
-                    text_pick_records: &mut self.text_pick_records,
-                    object_ranges: &mut self.document_object_ranges,
-                    scene_origin: self.scene_origin,
-                    scale_factor,
-                });
-                self.upload_scene_stream_buffers();
-                self.cached_document_scene_key = Some(scene_key);
-            }
-            if self.cached_document_revision != document.revision() {
-                // Both slot holders have rebuilt against this document.
-                self.document_style_slots.retain(document);
-            }
-            self.document_style_dirty = true;
-
-            self.cached_scale_factor = scale_factor;
-            self.cached_document_revision = document.revision();
-            self.geometry_dirty = false;
-        }
-
-        if self.document_style_dirty {
-            restyle_document_scene(
-                &mut self.document_draw_batches,
-                &self.document_object_ranges,
-                editor,
-                &self.strokes,
-                &self.lyon_buffer.vertices,
-                &self.lyon_buffer.indices,
-            );
-            let flags = self.document_style_slots.flags(editor);
-            self.document_style.write(&self.device, &self.queue, &flags);
-            let claimed = self.static_strokes.claimed();
-            self.document_style.static_highlighted = editor
-                .selected_handles
-                .iter()
-                .chain(&editor.tri_hover_handles)
-                .filter_map(|handle| match handle {
-                    SceneEntityId::Object(id) => Some(*id),
-                    _ => None,
-                })
-                .chain(editor.tool_highlight_id)
-                .any(|id| claimed.contains(&id));
-            self.document_style_dirty = false;
-        }
 
         // Per-frame pass for the live drawing tools; the static scene above no
         // longer rebuilds while they run. Rebuilt while a tool is active and
@@ -450,7 +316,7 @@ impl<'a> Graphics<'a> {
         let water_running = !self.water.is_empty() && editor.water.playing;
         if water_running {
             self.water_clock_s += (time_s - self.water_clock_last_s.unwrap_or(time_s)).clamp(0.0, 0.1);
-            self.window.request_redraw();
+            self.request_redraw();
         }
         self.water_clock_last_s = water_running.then_some(time_s);
         if !self.water.is_empty() {
@@ -498,11 +364,6 @@ impl<'a> Graphics<'a> {
                 "Editor Overlay Stroke Buffer",
             );
             self.overlay_dirty = false;
-        }
-
-        if needs_geometry_rebuild && self.frame_index.wrapping_sub(self.last_text_cache_trim_frame) >= TEXT_CACHE_TRIM_INTERVAL_FRAMES {
-            self.text_system.text_cache.trim();
-            self.last_text_cache_trim_frame = self.frame_index;
         }
 
         let primary_frustum = frustum::Frustum::from_view_proj(glam::Mat4::from_cols_array_2d(&self.camera_uniform.view_proj));
@@ -613,7 +474,9 @@ impl<'a> Graphics<'a> {
         );
 
         // The UI, over the scene: laid out before it, at the top of the frame.
-        self.gui.paint(&self.device, &self.queue, &mut encoder, &gui_view, ui_paint);
+        if let Some(gui) = self.gui.as_mut() {
+            gui.paint(&self.device, &self.queue, &mut encoder, &gui_view, ui_paint);
+        }
         // Keep the startup view framed on the window the splash is centred
         // on, until the splash goes - see `track_startup_view_framing`.
         self.track_startup_view_framing(project.needs_startup_dialog);
@@ -621,7 +484,7 @@ impl<'a> Graphics<'a> {
         // raycaster's reduced-quality frames are always followed by a
         // full-quality one once the camera settles / resizing stops.
         if self.interaction_active() {
-            self.window.request_redraw();
+            self.request_redraw();
         }
         // Continue draining the bounded point-cloud upload queue without
         // treating background upload progress as camera interaction.
@@ -630,7 +493,7 @@ impl<'a> Graphics<'a> {
             || self.block_model_gpu.has_pending_feedback()
             || self.block_model_gpu.has_visible_pending_streaming(&primary_frustum, &editor.hidden_handles)
         {
-            self.window.request_redraw();
+            self.request_redraw();
         }
 
         // Last, over the UI too: see `window_corners`.
@@ -643,7 +506,7 @@ impl<'a> Graphics<'a> {
                 .block_model_gpu
                 .schedule_visible_volume_feedback(&self.device, &self.queue, &primary_frustum, &editor.hidden_handles)
         {
-            self.window.request_redraw();
+            self.request_redraw();
         }
         self.queue.present(output);
         if let Some(capture) = pending_screenshot {
@@ -653,6 +516,213 @@ impl<'a> Graphics<'a> {
         self.release_retired_attachments();
 
         Ok(ui_output)
+    }
+}
+
+/// What the scene is drawn from, for [`Graphics::sync_scene_content`].
+pub(crate) struct SceneContent<'frame> {
+    pub(crate) editor: &'frame EditorState,
+    pub(crate) document: &'frame Document,
+    pub(crate) triangulations: &'frame [OpenTriangulation],
+    pub(crate) block_models: &'frame [OpenBlockModel],
+    pub(crate) drill_holes: &'frame [OpenDrillHoleDataset],
+    pub(crate) point_clouds: &'frame [OpenPointCloud],
+    pub(crate) rasters: &'frame [OpenRasterTexture],
+    pub(crate) solid_preview: &'frame [OpenTriangulation],
+    pub(crate) retained_surfaces: &'frame std::collections::HashSet<crate::model::triangulation::TriangulationId>,
+}
+
+impl Graphics<'_> {
+    /// Write the plan and section grids' uniforms for the camera as it now
+    /// stands.
+    pub(super) fn write_grid_uniforms(&self, editor: &EditorState) {
+        let grid_uniform = GridUniform::new(
+            self.scene_origin,
+            editor.renderer_background_color,
+            &self.camera,
+            &self.projection,
+            self.vertical_exaggeration,
+            f64::from(self.screen_size().1),
+            &editor.xy_grid_style,
+            self.scale_factor(),
+        );
+        self.queue.write_buffer(&self.grid_buffer, 0, bytemuck::bytes_of(&grid_uniform));
+        if editor.slice_grid_enabled
+            && let Some((axis, axis_spacing, elevation_spacing)) = self.section_grid_spacing(editor.section_grid_style.level_spacing)
+        {
+            let section_grid_uniform = SectionGridUniform::new(
+                self.scene_origin,
+                editor.renderer_background_color,
+                axis,
+                axis_spacing,
+                elevation_spacing,
+                &editor.section_grid_style,
+                self.scale_factor(),
+            );
+            self.queue.write_buffer(&self.section_grid_buffer, 0, bytemuck::bytes_of(&section_grid_uniform));
+        }
+    }
+
+    /// Bring what is on the GPU up to date with the project: surfaces, block
+    /// models, drillholes, point clouds (at the detail the current camera
+    /// asks for), rasters and the design objects, styled for the selection.
+    /// Shared by the window's frame and the assistant's view, which draws
+    /// without one. Returns whether the scene's content changed, and whether
+    /// GPU work was already under way before this.
+    pub(super) fn sync_scene_content(&mut self, encoder: &mut wgpu::CommandEncoder, content: SceneContent<'_>, scale_factor: f32) -> (bool, bool) {
+        let SceneContent {
+            editor,
+            document,
+            triangulations,
+            block_models,
+            drill_holes,
+            point_clouds,
+            rasters,
+            solid_preview,
+            retained_surfaces,
+        } = content;
+        let mut scene_content_changed = self.geometry_dirty;
+        let gpu_work_was_pending = self.point_cloud_gpu.has_pending_uploads() || self.block_model_gpu.has_pending_builds();
+        self.raster_gpu
+            .sync(&self.device, &self.queue, self.scene_origin, rasters, &self.raster_surface_bind_group_layout);
+        // A section builds a cut texture for every mesh in the cache, so while
+        // one is up only what is drawn stays.
+        let no_surfaces = std::collections::HashSet::new();
+        let retained = if self.section_slab().is_some() { &no_surfaces } else { retained_surfaces };
+        self.triangulation_gpu.sync(
+            &self.device,
+            &self.queue,
+            self.scene_origin,
+            scale_factor,
+            triangulations,
+            solid_preview,
+            retained,
+            rasters,
+            editor,
+            &self.surface_style_bind_group_layout,
+            &self.surface_chunk_bind_group_layout,
+            &self.edge_style_bind_group_layout,
+        );
+        self.block_model_gpu.sync(
+            &self.device,
+            &self.queue,
+            self.scene_origin,
+            scale_factor,
+            block_models,
+            editor,
+            &self.surface_style_bind_group_layout,
+            &self.block_model_volume_bind_group_layout,
+        );
+        self.drill_hole_gpu.sync(&self.device, &self.queue, self.scene_origin, drill_holes, editor);
+        self.point_cloud_gpu.sync(
+            &self.device,
+            &self.queue,
+            encoder,
+            self.scene_origin,
+            scale_factor,
+            glam::Mat4::from_cols_array_2d(&self.camera_uniform.view_proj),
+            (self.camera.position - self.scene_origin).as_vec3(),
+            point_clouds,
+            editor,
+            &self.point_cloud_style_bind_group_layout,
+        );
+        self.design_point_gpu.sync(
+            &self.device,
+            &self.queue,
+            document,
+            &editor.hidden_handles,
+            self.scene_origin,
+            scale_factor,
+            editor.show_points || editor.active_tool == crate::ui::state::ActiveTool::DeletePoints,
+            self.geometry_dirty || self.cached_document_revision != document.revision(),
+        );
+        // Selection, hover and translucency only restyle: the shaders read
+        // them from the style buffer. The key also covers hiding and
+        // translucency, which change what is tessellated and what the static
+        // chunks claim, so a geometry pass still runs; `document_scene_key`
+        // keeps it from re-tessellating when nothing it bakes has changed.
+        let render_style_key = editor.render_style_key();
+        if self.cached_render_style_key != Some(render_style_key) {
+            self.cached_render_style_key = Some(render_style_key);
+            self.geometry_dirty = true;
+            self.document_style_dirty = true;
+            self.overlay_dirty = true;
+        }
+        let needs_geometry_rebuild = self.geometry_dirty || self.cached_document_revision != document.revision() || (self.cached_scale_factor - scale_factor).abs() > f32::EPSILON;
+
+        if needs_geometry_rebuild {
+            scene_content_changed = true;
+            // Reconcile the static stroke chunks first so the stream rebuild
+            // below knows which objects they own and can skip them.
+            self.static_strokes
+                .sync(&self.device, &self.queue, document, editor, &mut self.document_style_slots, self.scene_origin, scale_factor);
+            // Most geometry passes come from editor-state invalidation with
+            // the document untouched; tessellate only when an input changed.
+            let scene_key = build::document_scene_key(document, editor, self.static_strokes.claimed_key(), self.scene_origin, scale_factor);
+            if self.cached_document_scene_key != Some(scene_key) {
+                rebuild_document_scene(DocumentSceneBuildInput {
+                    editor,
+                    document,
+                    static_ids: self.static_strokes.claimed(),
+                    fill_cache: &mut self.polyline_fill_cache,
+                    text_system: &mut self.text_system,
+                    slots: &mut self.document_style_slots,
+                    lyon_buffer: &mut self.lyon_buffer,
+                    strokes: &mut self.strokes,
+                    text_vertex_buf: &mut self.text_vertex_buf,
+                    text_index_buf: &mut self.text_index_buf,
+                    text_draw_batches: &mut self.text_draw_batches,
+                    pick_records: &mut self.pick_records,
+                    text_pick_records: &mut self.text_pick_records,
+                    object_ranges: &mut self.document_object_ranges,
+                    scene_origin: self.scene_origin,
+                    scale_factor,
+                });
+                self.upload_scene_stream_buffers();
+                self.cached_document_scene_key = Some(scene_key);
+            }
+            if self.cached_document_revision != document.revision() {
+                // Both slot holders have rebuilt against this document.
+                self.document_style_slots.retain(document);
+            }
+            self.document_style_dirty = true;
+
+            self.cached_scale_factor = scale_factor;
+            self.cached_document_revision = document.revision();
+            self.geometry_dirty = false;
+        }
+
+        if self.document_style_dirty {
+            restyle_document_scene(
+                &mut self.document_draw_batches,
+                &self.document_object_ranges,
+                editor,
+                &self.strokes,
+                &self.lyon_buffer.vertices,
+                &self.lyon_buffer.indices,
+            );
+            let flags = self.document_style_slots.flags(editor);
+            self.document_style.write(&self.device, &self.queue, &flags);
+            let claimed = self.static_strokes.claimed();
+            self.document_style.static_highlighted = editor
+                .selected_handles
+                .iter()
+                .chain(&editor.tri_hover_handles)
+                .filter_map(|handle| match handle {
+                    SceneEntityId::Object(id) => Some(*id),
+                    _ => None,
+                })
+                .chain(editor.tool_highlight_id)
+                .any(|id| claimed.contains(&id));
+            self.document_style_dirty = false;
+        }
+
+        if needs_geometry_rebuild && self.frame_index.wrapping_sub(self.last_text_cache_trim_frame) >= TEXT_CACHE_TRIM_INTERVAL_FRAMES {
+            self.text_system.text_cache.trim();
+            self.last_text_cache_trim_frame = self.frame_index;
+        }
+
+        (scene_content_changed, gpu_work_was_pending)
     }
 }
 

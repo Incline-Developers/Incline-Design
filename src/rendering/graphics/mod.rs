@@ -50,6 +50,7 @@ pub(crate) mod frustum;
 pub(crate) mod init;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod panel_window;
+pub(crate) mod offscreen;
 pub(crate) mod passes;
 pub(crate) mod projections;
 mod readback;
@@ -363,7 +364,8 @@ pub(crate) struct ActiveScene {
 pub(crate) struct Graphics<'a> {
     // GPU resource owners are declared before device/surface/window so they
     // are dropped first during shutdown.
-    pub(super) gui: Gui,
+    /// The window's UI; `None` with no window.
+    pub(super) gui: Option<Gui>,
     pub(super) text_system: TextSystem,
     /// The pipelines the ordinary scene pass and the editor overlay draw with.
     pub(super) scene_pipelines: Shared<scene_pipelines::ScenePipelines>,
@@ -446,14 +448,16 @@ pub(crate) struct Graphics<'a> {
     solid_preview_key: Option<u64>,
     /// The framing the preview is being held at, while a pane is holding it.
     solid_preview_framing: Option<solid_preview::HeldFraming>,
-    pub(super) surface: wgpu::Surface<'a>,
+    /// What the window is drawn on; `None` with no window.
+    pub(super) surface: Option<wgpu::Surface<'a>>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) adapter: wgpu::Adapter,
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) instance: wgpu::Instance,
     pub(super) queue: wgpu::Queue,
     pub(super) device: wgpu::Device,
-    pub(super) window: Arc<Window>,
+    /// `None` for a renderer that only draws offscreen.
+    pub(super) window: Option<Arc<Window>>,
     pub(super) config: wgpu::SurfaceConfiguration,
     pub(super) sample_count: u32,
     pub(super) size: winit::dpi::PhysicalSize<u32>,
@@ -594,6 +598,9 @@ pub(crate) struct Graphics<'a> {
     /// The video export's offscreen target and the frames it has in flight;
     /// see `video_capture.rs`.
     pub(super) video_target: Option<video_capture::VideoTarget>,
+    /// The target `render_view` last drew into, kept for the next of its size.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) view_target: Option<offscreen::OffscreenTarget>,
 }
 
 impl Graphics<'_> {
@@ -765,6 +772,33 @@ impl SliceViewState {
         self.view_offset = normal * depth;
     }
 
+    /// A section just entered, looking square-on at the line through
+    /// `center` (in display space) along `direction`; `saved_camera` and
+    /// `saved_zoom` are put back on leaving it.
+    pub(super) fn entered(center: DVec3, direction: DVec2, width: f64, move_speed: f64, rotate_speed: f64, saved_camera: Camera, saved_zoom: f64) -> Self {
+        Self {
+            center,
+            direction: direction.normalize_or(DVec2::X),
+            width,
+            outlines: false,
+            move_speed,
+            rotate_speed,
+            input: SliceInputState::default(),
+            pan: DVec2::ZERO,
+            scroll: 0.0,
+            walk: 0.0,
+            orbit: DVec2::ZERO,
+            orbit_dragging: false,
+            yaw: 0.0,
+            pitch: 0.0,
+            viewing_from_front: true,
+            saved_camera,
+            saved_zoom,
+            view_offset: DVec3::ZERO,
+            turn_to: None,
+        }
+    }
+
     pub(super) fn camera_basis(&self) -> (DVec3, DVec3, DVec3) {
         camera_frame(self.normal(), self.yaw, self.pitch)
     }
@@ -912,7 +946,7 @@ pub(super) fn slice_visible_half_length(zoom: f64, screen: Size) -> f64 {
 /// Bound the infinite section slab over the scene's display-space extents.
 /// The overview's visible line length must not limit depth: orbiting can bring
 /// geometry farther along the section into view even at a very small zoom.
-fn slice_depth_half_extent(center: DVec3, strike: DVec3, forward: DVec3, half_width: f64, bounds: Option<(DVec3, DVec3)>) -> f64 {
+pub(super) fn slice_depth_half_extent(center: DVec3, strike: DVec3, forward: DVec3, half_width: f64, bounds: Option<(DVec3, DVec3)>) -> f64 {
     let mut tilt_depth: f64 = 0.0;
     if let Some((min, max)) = bounds {
         for i in 0..8 {
@@ -949,6 +983,18 @@ pub(super) struct BlockModelVolumeTarget {
 }
 
 impl<'a> Graphics<'a> {
+    /// Ask the window for a frame; nothing without one.
+    pub(crate) fn request_redraw(&self) {
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    /// The window's pixels per point; 1 without one.
+    pub(crate) fn scale_factor(&self) -> f64 {
+        self.window.as_ref().map_or(1.0, |window| window.scale_factor())
+    }
+
     pub(crate) fn invalidate_geometry(&mut self) {
         self.geometry_dirty = true;
         self.overlay_dirty = true;
@@ -990,16 +1036,19 @@ impl<'a> Graphics<'a> {
     /// Whether a floating egui surface - a tile, card or menu over the canvas -
     /// covers this window position, in physical pixels.
     pub(crate) fn overlay_at_physical_position(&self, x: f32, y: f32) -> bool {
-        self.gui.overlay_at_physical_position(x, y)
+        self.gui.as_ref().is_some_and(|gui| gui.overlay_at_physical_position(x, y))
     }
 
     pub(crate) fn gui_input(&mut self, event: &WindowEvent) -> egui_winit::EventResponse {
-        let mut response = self.gui.handle_event(&self.window, event);
+        let (Some(gui), Some(window)) = (self.gui.as_mut(), self.window.as_ref()) else {
+            return egui_winit::EventResponse::default();
+        };
+        let mut response = gui.handle_event(window, event);
         // egui's generic `consumed` result can be false on a secondary-button
         // release because no widget is actively using that button. A visible
         // UI surface must still own both halves of a right click so it cannot
         // open the canvas context menu or complete a pending orbit gesture.
-        if matches!(event, WindowEvent::MouseInput { button: MouseButton::Right, .. }) && self.gui.pointer_over_ui() {
+        if matches!(event, WindowEvent::MouseInput { button: MouseButton::Right, .. }) && gui.pointer_over_ui() {
             response.consumed = true;
         }
         response
@@ -1008,14 +1057,16 @@ impl<'a> Graphics<'a> {
     /// The CJK faces arrived: lay the UI and document text out again with them.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn reload_cjk_fonts(&mut self) {
-        self.gui.reload_fonts();
+        if let Some(gui) = self.gui.as_mut() {
+            gui.reload_fonts();
+        }
         self.text_system = TextSystem::new();
         self.cached_document_scene_key = None;
     }
 
     /// The UI's points to the window's physical pixels.
     pub(crate) fn ui_pixels_per_point(&self) -> f32 {
-        self.gui.pixels_per_point()
+        self.gui.as_ref().map_or(1.0, Gui::pixels_per_point)
     }
 
     /// Whether the window cuts its own corners round. See `window_corners`.
@@ -1033,12 +1084,16 @@ impl<'a> Graphics<'a> {
 
     /// See [`crate::ui::Gui::release_pointer`].
     pub(crate) fn release_ui_pointer(&mut self) {
-        self.gui.release_pointer();
+        if let Some(gui) = self.gui.as_mut() {
+            gui.release_pointer();
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn queue_browser_paste(&mut self, text: String) {
-        self.gui.queue_paste(text);
+        if let Some(gui) = self.gui.as_mut() {
+            gui.queue_paste(text);
+        }
     }
 
     pub(crate) fn set_scroll_zooms(&mut self, held: bool) {
@@ -1128,7 +1183,9 @@ impl<'a> Graphics<'a> {
             return;
         }
         self.config.present_mode = mode;
-        self.surface.configure(&self.device, &self.config);
+        if let Some(surface) = &self.surface {
+            surface.configure(&self.device, &self.config);
+        }
         crate::userspace_log!("{}", crate::i18n::tr!("init-surface-present-mode", mode = format!("{mode:?}")));
     }
 
@@ -1234,27 +1291,7 @@ impl<'a> Graphics<'a> {
         self.projection.zoom = (half_length.max(1.0) / aspect * 1.1).max(1.0e-4);
 
         let center = self.exaggerate_point(center_world);
-        let slice = SliceViewState {
-            center,
-            direction: direction.normalize_or(DVec2::X),
-            width,
-            outlines: false,
-            move_speed,
-            rotate_speed,
-            input: SliceInputState::default(),
-            pan: DVec2::ZERO,
-            scroll: 0.0,
-            walk: 0.0,
-            orbit: DVec2::ZERO,
-            orbit_dragging: false,
-            yaw: 0.0,
-            pitch: 0.0,
-            viewing_from_front: true,
-            saved_camera,
-            saved_zoom,
-            view_offset: DVec3::ZERO,
-            turn_to: None,
-        };
+        let slice = SliceViewState::entered(center, direction, width, move_speed, rotate_speed, saved_camera, saved_zoom);
         let (forward, _, up) = slice.camera_basis();
         self.camera.look_to(slice.center, forward, up, self.projection.zoom);
         self.slice_view = Some(slice);
@@ -1389,7 +1426,7 @@ impl<'a> Graphics<'a> {
         {
             use winit::platform::web::WindowExtWebSys;
 
-            let Some(canvas) = self.window.canvas() else { return };
+            let Some(canvas) = self.window.as_ref().and_then(|window| window.canvas()) else { return };
             let Some(document) = canvas.owner_document() else { return };
             let has_method = |object: &wasm_bindgen::JsValue, name: &str| js_sys::Reflect::get(object, &name.into()).is_ok_and(|value| value.is_function());
             // winit 0.30 calls these APIs without feature detection or exception
@@ -1408,12 +1445,15 @@ impl<'a> Graphics<'a> {
                 return;
             }
         }
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
         if fly_active {
-            if self.window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
-                let _ = self.window.set_cursor_grab(CursorGrabMode::Confined);
+            if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
+                let _ = window.set_cursor_grab(CursorGrabMode::Confined);
             }
         } else {
-            let _ = self.window.set_cursor_grab(CursorGrabMode::None);
+            let _ = window.set_cursor_grab(CursorGrabMode::None);
         }
     }
 }

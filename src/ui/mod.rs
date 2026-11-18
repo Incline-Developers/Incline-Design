@@ -2048,6 +2048,12 @@ pub(crate) fn scene_background_color(dark_mode: bool) -> [f32; 4] {
     [linear(fill.r()), linear(fill.g()), linear(fill.b()), 1.0]
 }
 
+/// The look a window has before any preference changes it, for a surface
+/// drawn with no window to match.
+pub(crate) fn default_visuals() -> egui::Visuals {
+    theme_visuals(false, SELECTION_COLOR)
+}
+
 fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visuals {
     let mut visuals = if dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
     visuals.selection.bg_fill = selection_color.gamma_multiply(0.35);

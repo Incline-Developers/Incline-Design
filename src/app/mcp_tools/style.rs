@@ -106,17 +106,6 @@ pub(super) fn definitions() -> Vec<Value> {
             }),
             &[],
         ),
-        looks(
-            "section_view",
-            "Section view",
-            "Look at a vertical section along a line, as the section tool does, showing everything within width of it; or leave section view. Leave from and to out to leave.",
-            json!({
-                "from": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "[x, y, z] one end of the section line." },
-                "to": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "[x, y, z] the other end." },
-                "width": { "type": "number", "exclusiveMinimum": 0, "description": "How thick a slab either side is shown. The tool's if left out." },
-            }),
-            &[],
-        ),
     ]
 }
 
@@ -129,7 +118,6 @@ impl App<'_> {
             "style_drillholes" => self.mcp_style_drillholes(arguments),
             "drape_raster" => self.mcp_drape_raster(arguments),
             "set_display" => Ok(display(arguments)),
-            "section_view" => return Some(self.mcp_section_view(arguments)),
             _ => return None,
         };
         let commands = match commands {
@@ -371,31 +359,6 @@ impl App<'_> {
         } else {
             UiCommand::UndrapeRaster(raster.id)
         }])
-    }
-
-    fn mcp_section_view(&mut self, arguments: &Value) -> Value {
-        if let Some(width) = arguments["width"].as_f64().filter(|width| *width > 0.0) {
-            self.editor.slice_width_input = width;
-        }
-        let (from, to) = (parse_point(&arguments["from"]), parse_point(&arguments["to"]));
-        if from.is_some() != to.is_some() {
-            return failed("Give both from and to, or neither to leave section view.");
-        }
-        // Moving to another section leaves the one shown first.
-        self.leave_slice_mode();
-        match (from, to) {
-            (None, None) => ok(&json!({ "section_view": false })),
-            (Some(from), Some(to)) => {
-                if self.graphics.is_none() {
-                    return failed("The viewport is not ready yet.");
-                }
-                if !self.enter_section(from, to) {
-                    return failed("from and to are the same point seen from above: a section needs a line.");
-                }
-                ok(&json!({ "section_view": true, "width": self.editor.slice_width_input }))
-            }
-            _ => failed("Give both from and to, or neither to leave section view."),
-        }
     }
 }
 
