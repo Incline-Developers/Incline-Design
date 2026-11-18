@@ -289,8 +289,10 @@ impl App<'_> {
     }
 
     fn mcp_schedule_report(&mut self, arguments: &Value) -> Result<Value, String> {
-        // The report reads the held result as the schedule pages show it,
-        // which only a window showing one of them keeps up to date.
+        // The report reads the held result, and names blocks by their bars'
+        // areas, as the schedule pages show them; only a window showing one
+        // of them keeps those up to date.
+        self.mirror_schedule_bar_views();
         self.mirror_schedule_calculation();
         let grouping = match arguments["by"].as_str() {
             None | Some("day") => ReportGrouping::Day,
