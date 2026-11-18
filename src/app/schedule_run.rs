@@ -182,6 +182,7 @@ impl ImproveFeed {
 /// finish too, so every solve stops either way, and a panic in the solve
 /// fails the run rather than losing it (natively: the browser build aborts
 /// on a panic).
+#[allow(clippy::too_many_arguments)]
 fn solve_reporting(
     input: Arc<crate::model::schedule::optimisation::blended::input::BlendInput>,
     identity: super::schedule_solve::ScheduleRunIdentity,
@@ -190,6 +191,7 @@ fn solve_reporting(
     early: &dyn Fn(&super::schedule_solve::ScheduleCompletion),
     feed: &Arc<ImproveFeed>,
     dispatched: Option<crate::model::schedule::optimisation::blended::greedy::Dispatched>,
+    start: Option<Arc<crate::model::schedule::optimisation::blended::replay::BlendSolution>>,
 ) -> super::schedule_solve::ScheduleCompletion {
     use super::schedule_solve::{ScheduleActivity, ScheduleCompletion, SolveTermination, execute_schedule};
     use crate::model::schedule::optimisation::background;
@@ -209,7 +211,7 @@ fn solve_reporting(
         },
         || {
             let solved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                execute_schedule(Arc::clone(&input), identity, options, cancel, &activity, early, dispatched)
+                execute_schedule(Arc::clone(&input), identity, options, cancel, &activity, early, dispatched, start)
             }));
             done.store(true, Ordering::Release);
             solved
@@ -635,7 +637,20 @@ impl crate::app::App<'_> {
             .and_then(|held| held.saved.clone())
             .or_else(|| self.workspace.active_document().and_then(|document| document.saved_schedule().cloned()))
             .and_then(|held| held.auto_order.as_ref().and_then(|order| order.memory.clone()));
-        let saved_hint = match saved.as_ref().filter(|saved| (saved.requested_end_h - requested_end_h).abs() <= 1e-9) {
+        // Improve works on the schedule shown, when it answers the project:
+        // its order is dealt again rather than planned, and the search starts
+        // from it rather than from a dispatch of its own.
+        let improving = self
+            .schedule_calculation
+            .as_ref()
+            .filter(|_| mode == ScheduleRunMode::Improve && self.schedule_calculation_is_current())
+            .and_then(|held| held.saved.clone())
+            .filter(|held| (held.requested_end_h - requested_end_h).abs() <= 1e-9);
+        let saved_hint = match saved
+            .as_ref()
+            .or(improving.as_ref())
+            .filter(|saved| (saved.requested_end_h - requested_end_h).abs() <= 1e-9)
+        {
             Some(saved) => Some(schedule_capture::SavedHint {
                 fingerprint: Some(saved.fingerprint),
                 auto_order: saved.auto_order.clone(),
@@ -773,7 +788,8 @@ impl crate::app::App<'_> {
                         Err(reason) => log::warn!("schedule run {serial}: day-by-day schedule not shown early: {reason}"),
                     }
                 };
-                let completion = solve_reporting(Arc::clone(&input), identity, options, cancel, &early, &worker_feed, dispatched);
+                let start = improving.filter(|held| held.fingerprint == stable_fingerprint).map(|held| Arc::clone(&held.solution));
+                let completion = solve_reporting(Arc::clone(&input), identity, options, cancel, &early, &worker_feed, dispatched, start);
                 if !completion.usable() {
                     return Ok(not_published(&completion));
                 }

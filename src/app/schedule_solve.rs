@@ -780,6 +780,25 @@ pub(crate) fn restore_saved(
     Some(out)
 }
 
+/// `start`, a schedule of the captured input, on the reduced one it was
+/// reduced to, replayed there: what the run would otherwise dispatch to
+/// start from. `None` when the replay will not have it, and the run
+/// dispatches after all.
+fn resumed(input: &BlendInput, reduced: &Reduced, start: &BlendSolution, cancel: &CancelFlag) -> Option<greedy::Dispatched> {
+    let mut worked = input.clone();
+    if let (Some(chain), Some(timeline)) = (worked.drill_blast.as_mut(), start.drill_blast.as_ref()) {
+        chain.fixed = Some(timeline.clone());
+    }
+    let mut solution = reduced.compress(start);
+    let stop = AtomicBool::new(cancel.is_cancelled());
+    let replay = replay_as_published(&worked, &mut solution, &stop).filter(ReplayReport::is_valid);
+    if replay.is_none() {
+        log::info!("the schedule shown did not replay on the reduced model, so the run dispatched its own");
+    }
+    replay.map(|replay| greedy::Dispatched { solution, replay })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_schedule(
     input: Arc<BlendInput>,
     identity: ScheduleRunIdentity,
@@ -788,6 +807,7 @@ pub(crate) fn execute_schedule(
     activity: &ScheduleActivity,
     early: &dyn Fn(&ScheduleCompletion),
     dispatched: Option<greedy::Dispatched>,
+    start: Option<Arc<crate::model::schedule::optimisation::blended::replay::BlendSolution>>,
 ) -> ScheduleCompletion {
     let mut out = ScheduleCompletion::new(identity, options, input);
     if cancel.is_cancelled() {
@@ -823,6 +843,7 @@ pub(crate) fn execute_schedule(
     let early = |shown: &ScheduleCompletion| early(&mapped_back(shown.clone(), &reduced, &captured));
     activity.set(3);
     activity.stage(ImproveStage::FirstSchedule);
+    let dispatched = dispatched.or_else(|| start.and_then(|start| resumed(&out.input, &reduced, &start, cancel)));
     let attempt = hourly_dispatch(&mut out, cancel, dispatched);
     if !options.first_schedule_only {
         let out = super::scip_blend::improve(out, attempt, budget_started, cancel, activity, &early);

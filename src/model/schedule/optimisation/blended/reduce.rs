@@ -34,6 +34,8 @@ pub(crate) struct Reduced {
     /// Each reduced candidate's original candidates, with each one's share
     /// of its tonnes.
     back: Vec<Vec<(usize, f64)>>,
+    /// Each original candidate's reduced one.
+    forward: Vec<usize>,
 }
 
 impl Reduced {
@@ -184,7 +186,39 @@ impl Reduced {
                 ..value.clone()
             })
             .collect();
-        Self { input: reduced, back }
+        Self { input: reduced, back, forward }
+    }
+
+    /// `solution`, a schedule of the original input, as one of the reduced:
+    /// each original candidate's tonnes onto the one standing for it, which
+    /// is exact, as the portions split them as the merged column would.
+    pub(crate) fn compress(&self, solution: &BlendSolution) -> BlendSolution {
+        let mut compressed = solution.clone();
+        let mut rows: BTreeMap<(usize, usize, usize), f64> = BTreeMap::new();
+        for row in &solution.movements {
+            *rows.entry((row.interval, row.segment, self.forward[row.candidate])).or_default() += row.tonnes_t;
+        }
+        compressed.movements = rows
+            .into_iter()
+            .map(|((interval, segment, candidate), tonnes_t)| MovementRow {
+                candidate,
+                interval,
+                segment,
+                tonnes_t,
+            })
+            .collect();
+        for chunk in &mut compressed.chunks {
+            let mut receipts: Vec<(usize, f64)> = Vec::new();
+            for &(candidate, tonnes) in &chunk.receipts {
+                let candidate = self.forward[candidate];
+                match receipts.iter_mut().find(|(kept, _)| *kept == candidate) {
+                    Some((_, held)) => *held += tonnes,
+                    None => receipts.push((candidate, tonnes)),
+                }
+            }
+            chunk.receipts = receipts;
+        }
+        compressed
     }
 
     /// `solution`, a schedule of the reduced input, as one of the original.
