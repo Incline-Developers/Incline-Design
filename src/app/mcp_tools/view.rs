@@ -169,25 +169,25 @@ impl App<'_> {
         ok(&json!({ "kind": kind, "id": id, "visible": visible }))
     }
 
-    fn mcp_render_view(&mut self, arguments: &Value) -> Result<Value, String> {
+    /// Where the view `arguments` describe looks from, as render_view reads
+    /// them: frame, box, view, azimuth, elevation and section.
+    pub(super) fn mcp_view_aim(&self, arguments: &Value) -> Result<ViewAim, String> {
         let named = arguments["view"].as_str();
         if let Some(name) = named
             && !NAMED_VIEWS.contains(&name)
         {
             return Err(format!("view is one of {}.", NAMED_VIEWS.join(", ")));
         }
-        let window = named == Some("window");
-        if window && self.headless {
-            return Err("This Incline has no window (it was started with mcp --headless), so there is no view of the user's to draw.".to_owned());
+        if named == Some("window") && self.headless {
+            return Err("This Incline has no window (it was started with mcp --headless), so there is no view of the user's to use.".to_owned());
         }
-        let size = self.mcp_view_size(arguments, window)?;
-        let aim = if let Some((from, to, width)) = section(&arguments["section"])? {
+        Ok(if let Some((from, to, width)) = section(&arguments["section"])? {
             ViewAim::Section {
                 from,
                 to,
                 width: width.unwrap_or(DEFAULT_SECTION_WIDTH),
             }
-        } else if window {
+        } else if named == Some("window") {
             ViewAim::Window
         } else {
             let (forward, up) = view_direction(named, arguments)?;
@@ -196,7 +196,14 @@ impl App<'_> {
                 up,
                 bounds: self.mcp_view_bounds(arguments)?,
             }
-        };
+        })
+    }
+
+    fn mcp_render_view(&mut self, arguments: &Value) -> Result<Value, String> {
+        let named = arguments["view"].as_str();
+        let aim = self.mcp_view_aim(arguments)?;
+        let window = matches!(aim, ViewAim::Window);
+        let size = self.mcp_view_size(arguments, window)?;
         let request = ViewRequest {
             aim,
             perspective: arguments["perspective"].as_bool().unwrap_or(false),
@@ -586,6 +593,16 @@ impl App<'_> {
         Ok(json!({ "workspace": format!("{:?}", self.editor.active_workspace), "schedule_hours": self.editor.schedule_time_h }))
     }
 
+}
+
+/// render_view's schema for one of the arguments that place its view, for
+/// another tool that takes a view the same way.
+pub(super) fn view_property(key: &str) -> Value {
+    definitions()
+        .into_iter()
+        .find(|tool| tool["name"] == "render_view")
+        .map(|tool| tool["inputSchema"]["properties"][key].clone())
+        .unwrap_or(Value::Null)
 }
 
 /// A section's line and slab width, if `value` gives one.

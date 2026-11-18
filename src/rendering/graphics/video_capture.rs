@@ -20,7 +20,11 @@ use std::{
     },
 };
 
-use super::{offscreen::OffscreenTarget, readback::RgbaReadback, *};
+use super::{
+    offscreen::{OffscreenTarget, ViewAim},
+    readback::RgbaReadback,
+    *,
+};
 
 /// Frames copied back but not yet collected before the export stops
 /// drawing new ones; see [`Graphics::video_readback_full`].
@@ -53,6 +57,18 @@ pub(crate) struct VideoFrameInput<'frame> {
     /// travelled, so they move at the video's pace rather than the window's.
     pub(crate) clock_s: f64,
     pub(crate) labels: VideoLabels,
+    /// The view to record from; the window's camera when `None`.
+    pub(crate) view: Option<VideoView>,
+    /// Bring the GPU's copy of the scene up to date first, as there is no
+    /// window frame doing it.
+    pub(crate) sync: bool,
+}
+
+/// A video's own view of the scene, in place of the window's.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VideoView {
+    pub(crate) aim: ViewAim,
+    pub(crate) perspective: bool,
 }
 
 struct InFlight {
@@ -64,6 +80,9 @@ pub(crate) struct VideoTarget {
     target: OffscreenTarget,
     overlay: crate::ui::VideoOverlay,
     in_flight: VecDeque<InFlight>,
+    /// A video's own view as placed on its first frame and held after, so
+    /// the shot stays put while the ground is cut under it.
+    held: Option<ViewAim>,
 }
 
 impl VideoTarget {
@@ -74,6 +93,7 @@ impl VideoTarget {
             target,
             overlay,
             in_flight: VecDeque::new(),
+            held: None,
         }
     }
 }
@@ -100,6 +120,8 @@ impl Graphics<'_> {
             size: (width, height),
             clock_s,
             labels: shown_labels,
+            view,
+            sync,
         } = input;
         let mut target = match self.video_target.take() {
             Some(target) if target.target.size.width == width && target.target.size.height == height => target,
@@ -107,7 +129,15 @@ impl Graphics<'_> {
         };
         // The window's projection this frame - its clip planes fitted to the
         // scene - reshaped to the video.
-        target.target.projection = self.projection.cropped_to(width, height);
+        target.target.projection = match view {
+            None => self.projection.cropped_to(width, height),
+            Some(view) => {
+                let mut projection = self.projection.clone();
+                projection.resize(width, height);
+                projection.set_perspective(view.perspective);
+                projection
+            }
+        };
         // Labels and icons as large against the frame as they are against the
         // viewport: the video is as many points tall as the viewport is.
         let window_ppp = self.ui_pixels_per_point().max(0.1);
@@ -122,7 +152,31 @@ impl Graphics<'_> {
         let window_icons = std::mem::take(&mut editor.animation_machine_icons);
         let window_labels = std::mem::take(&mut editor.animation_machine_labels);
 
+        // A video's own view takes the camera, and leaves out the window's
+        // section, for the frame; both are put back after.
+        let window_camera = view.map(|_| self.camera.clone());
+        let window_section = if view.is_some() { self.slice_view.take() } else { None };
         target.target.swap_into(self);
+        if let Some(view) = view {
+            let held = match target.held {
+                Some(held) => held,
+                None => {
+                    let held = match view.aim {
+                        ViewAim::Frame { forward, up, bounds: None } => ViewAim::Frame {
+                            forward,
+                            up,
+                            bounds: self.scene_bounds_now(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles),
+                        },
+                        aim => aim,
+                    };
+                    target.held = Some(held);
+                    held
+                }
+            };
+            if let Err(error) = self.place_camera(held, document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles) {
+                log::warn!("The video's view could not be placed: {error}");
+            }
+        }
         self.camera_uniform
             .update_view_proj(&self.camera, &self.projection, self.scene_origin, self.vertical_exaggeration);
         self.camera_uniform.set_section_slab(self.section_slab(), self.scene_origin);
@@ -159,6 +213,25 @@ impl Graphics<'_> {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Video frame encoder"),
         });
+        if sync {
+            let retained = std::collections::HashSet::new();
+            let scale_factor = self.scale_factor() as f32;
+            self.sync_scene_content(
+                &mut encoder,
+                frame::SceneContent {
+                    editor,
+                    document,
+                    triangulations,
+                    block_models,
+                    drill_holes,
+                    point_clouds,
+                    rasters,
+                    solid_preview: &[],
+                    retained_surfaces: &retained,
+                },
+                scale_factor,
+            );
+        }
         let full = ViewportRect::full(width, height);
         // The viewport's view, overlays included, as the image export draws it.
         self.render_scene_pass(
@@ -189,6 +262,11 @@ impl Graphics<'_> {
         let readback = RgbaReadback::record(&self.device, &mut encoder, &target.target.texture, "Video frame readback");
         self.queue.submit(std::iter::once(encoder.finish()));
         target.target.swap_into(self);
+        if let Some(camera) = window_camera {
+            self.camera = camera;
+            self.slice_view = window_section;
+            self.scene_cache_key = None;
+        }
 
         let state = Arc::new(AtomicU8::new(MAP_PENDING));
         let signal = Arc::clone(&state);

@@ -309,7 +309,7 @@ impl<'a> App<'a> {
                             Ok(ui_output) => {
                                 // The video export's frame, drawn from the
                                 // geometry this frame just uploaded.
-                                if let Some((size, clock_s, labels)) = self.video_recording.as_mut().and_then(|recording| recording.take_render_request()) {
+                                if let Some(frame) = self.video_recording.as_mut().and_then(|recording| recording.take_render_request()) {
                                     graphics.render_video_frame(crate::rendering::graphics::video_capture::VideoFrameInput {
                                         editor: &mut self.editor,
                                         document: &self.scene_document,
@@ -319,9 +319,11 @@ impl<'a> App<'a> {
                                         point_clouds: &self.point_clouds,
                                         rasters: &self.raster_textures,
                                         project: &project,
-                                        size,
-                                        clock_s,
-                                        labels,
+                                        size: frame.size,
+                                        clock_s: frame.clock_s,
+                                        labels: frame.labels,
+                                        view: frame.view,
+                                        sync: false,
                                     });
                                     if let Some(next) = self.video_recording.as_ref().and_then(|recording| recording.upcoming_time()) {
                                         self.editor.schedule_time_h = next;

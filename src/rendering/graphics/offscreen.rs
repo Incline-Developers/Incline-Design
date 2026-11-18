@@ -143,7 +143,7 @@ pub(crate) struct ViewRequest {
 }
 
 /// Where a requested view looks from.
-#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum ViewAim {
     /// Along `forward`, with `up` as near as it can be to up in the picture,
     /// framing `bounds`, or everything shown when `None`.
@@ -213,26 +213,7 @@ impl Graphics<'_> {
             rasters,
             ..
         } = content;
-        let hidden = &editor.hidden_handles;
-        if let ViewAim::Frame { forward, up, bounds } = request.aim {
-            let bounds = match bounds {
-                Some(bounds) => Some(bounds),
-                None => {
-                    self.invalidate_scene_bounds();
-                    self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden);
-                    self.cached_scene_bounds
-                }
-            };
-            let (min, max) = bounds.ok_or("There is nothing shown to frame.")?;
-            self.aim_camera_at(min, max, forward, up);
-        }
-        if let ViewAim::Section { from, to, width: slab } = request.aim {
-            self.aim_at_section(from, to, slab)?;
-            self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden);
-            self.fit_depth_to_section();
-        } else {
-            self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
-        }
+        self.place_camera(request.aim, document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles)?;
         self.camera_uniform
             .update_view_proj(&self.camera, &self.projection, self.scene_origin, self.vertical_exaggeration);
         self.camera_uniform.set_section_slab(self.section_slab(), self.scene_origin);
@@ -253,6 +234,57 @@ impl Graphics<'_> {
         let rgba = readback.unpack().map_err(|error| format!("The picture could not be read back: {error:#}"));
         readback.buffer.unmap();
         rgba
+    }
+
+}
+
+impl Graphics<'_> {
+    /// Put the camera where `aim` says, its depth range fitted to what it
+    /// sees; `Window` leaves the camera as it is. A section is put in place
+    /// for the draw, which the caller takes away again after.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn place_camera(
+        &mut self,
+        aim: ViewAim,
+        document: &Document,
+        triangulations: &[OpenTriangulation],
+        block_models: &[OpenBlockModel],
+        drill_holes: &[OpenDrillHoleDataset],
+        point_clouds: &[OpenPointCloud],
+        hidden: &std::collections::HashSet<SceneEntityId>,
+    ) -> Result<(), String> {
+        if let ViewAim::Frame { forward, up, bounds } = aim {
+            let (min, max) = match bounds {
+                Some(bounds) => bounds,
+                None => self
+                    .scene_bounds_now(document, triangulations, block_models, drill_holes, point_clouds, hidden)
+                    .ok_or("There is nothing shown to frame.")?,
+            };
+            self.aim_camera_at(min, max, forward, up);
+        }
+        if let ViewAim::Section { from, to, width } = aim {
+            self.aim_at_section(from, to, width)?;
+            self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+            self.fit_depth_to_section();
+        } else {
+            self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+        }
+        Ok(())
+    }
+
+    /// The box round everything drawn, worked out afresh.
+    pub(super) fn scene_bounds_now(
+        &mut self,
+        document: &Document,
+        triangulations: &[OpenTriangulation],
+        block_models: &[OpenBlockModel],
+        drill_holes: &[OpenDrillHoleDataset],
+        point_clouds: &[OpenPointCloud],
+        hidden: &std::collections::HashSet<SceneEntityId>,
+    ) -> Option<(DVec3, DVec3)> {
+        self.invalidate_scene_bounds();
+        self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+        self.cached_scene_bounds
     }
 
     /// Look square-on at the section along `from`..`to`, `width` thick,

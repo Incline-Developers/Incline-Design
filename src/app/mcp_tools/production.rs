@@ -88,8 +88,8 @@ pub(super) fn definitions() -> Vec<Value> {
         tool(
             "export_schedule_video",
             "Record the schedule as a video",
-            "Record the calculated production schedule's animation to a video file, as Animate's export does: stretches of the schedule (hours from the start) played back to back at hours_per_second, at fps frames a second and width by height pixels. Shows the Animate page first. Runs in the background.",
-            json!({
+            "Record the calculated production schedule's animation to a video file, as Animate's export does: stretches of the schedule (hours from the start) played back to back at hours_per_second, at fps frames a second and width by height pixels. The view is placed as render_view places one (frame, box, view, azimuth, elevation, perspective, section) on the first frame and held to the end; with none given it frames everything Animate draws, and view window follows the user's window instead. Shows the Animate page first. Runs in the background.",
+            video_schema(json!({
                 "path": { "type": "string", "description": "An absolute path; its extension picks the format." },
                 "segments": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "[start, end] hours. The whole schedule if left out." },
                 "hours_per_second": { "type": "number", "exclusiveMinimum": 0 },
@@ -98,7 +98,7 @@ pub(super) fn definitions() -> Vec<Value> {
                 "height": { "type": "integer", "minimum": 16, "description": "1080 if left out." },
                 "destination_labels": { "type": "boolean" },
                 "machine_labels": { "type": "boolean" },
-            }),
+            })),
             &["path", "hours_per_second"],
             false,
         ),
@@ -227,16 +227,30 @@ impl App<'_> {
     }
 
     fn mcp_export_video(&mut self, arguments: &Value) -> Result<Value, String> {
-        // The recording follows the window's camera through Animate, frame
-        // by frame, so it needs a window to follow.
-        if self.headless {
-            return Err("This Incline has no window (it was started with mcp --headless), and a schedule video is recorded from the window's view of Animate.".to_owned());
-        }
-        use crate::ui::state::{PlanningView, VideoExportRequest, Workspace};
+        use crate::{
+            rendering::graphics::{offscreen::ViewAim, video_capture::VideoView},
+            ui::state::{PlanningView, VideoExportRequest, Workspace},
+        };
+        let view = match self.mcp_view_aim(arguments)? {
+            ViewAim::Window => None,
+            aim => Some(VideoView {
+                aim,
+                perspective: arguments["perspective"].as_bool().unwrap_or(false),
+            }),
+        };
         let path = std::path::PathBuf::from(arguments["path"].as_str().ok_or("Give the path.")?);
         if !path.is_absolute() {
             return Err(format!("{} is not an absolute path.", path.display()));
         }
+        // The recording plays Animate, so Animate is shown first.
+        let mut commands = Vec::new();
+        crate::ui::elements::main_menu::select_workspace(&mut self.editor, &mut commands, Workspace::Planning);
+        self.handle_ui_commands(commands);
+        self.handle_ui_commands(vec![UiCommand::SetPlanningView(PlanningView::Animate)]);
+        self.editor.schedule_animation_enabled = true;
+        // Animate shows the held result; it is put on the page here rather
+        // than on the next frame, which a window with no frames never draws.
+        self.mirror_schedule_calculation();
         let schedule = self
             .editor
             .schedule_result
@@ -266,18 +280,18 @@ impl App<'_> {
             destination_labels: arguments["destination_labels"].as_bool().unwrap_or(true),
             machine_labels: arguments["machine_labels"].as_bool().unwrap_or(true),
         };
-        // The recording plays Animate, so Animate is shown first.
-        let mut commands = Vec::new();
-        crate::ui::elements::main_menu::select_workspace(&mut self.editor, &mut commands, Workspace::Planning);
-        self.handle_ui_commands(commands);
-        self.handle_ui_commands(vec![UiCommand::SetPlanningView(PlanningView::Animate)]);
-        self.editor.schedule_animation_enabled = true;
         self.execute_file_dialog_action(crate::app::commands::file::FileDialogAction::ExportVideo(path.clone(), request))
             .map_err(|error| format!("{error:#}"))?;
+        if let Some(recording) = self.video_recording.as_mut() {
+            recording.view = view;
+        }
         Ok(json!({ "recording": path.display().to_string() }))
     }
 
-    fn mcp_schedule_report(&self, arguments: &Value) -> Result<Value, String> {
+    fn mcp_schedule_report(&mut self, arguments: &Value) -> Result<Value, String> {
+        // The report reads the held result as the schedule pages show it,
+        // which only a window showing one of them keeps up to date.
+        self.mirror_schedule_calculation();
         let grouping = match arguments["by"].as_str() {
             None | Some("day") => ReportGrouping::Day,
             Some("week") => ReportGrouping::Week,
@@ -305,4 +319,12 @@ impl App<'_> {
             "report_csv": super::plain(&text),
         }))
     }
+}
+
+/// The video's own arguments with render_view's for placing its view.
+fn video_schema(mut properties: Value) -> Value {
+    for key in ["frame", "box", "view", "azimuth", "elevation", "perspective", "section"] {
+        properties[key] = super::view::view_property(key);
+    }
+    properties
 }

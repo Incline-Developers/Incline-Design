@@ -108,11 +108,51 @@ impl App<'_> {
         self.poll_mcp_waits();
         self.poll_background_work();
         self.advance_project();
+        self.draw_due_video_frame();
         let now = Instant::now();
         if self.scanned_model_kept_until.is_some_and(|until| until <= now) {
             self.scanned_model_kept_until = None;
             self.evict_unloaded_items();
         }
+    }
+
+    /// Draw the video frame a recording has due, as the window does after
+    /// its own frame, and pass on the frames that have come back.
+    fn draw_due_video_frame(&mut self) {
+        if let Some(frame) = self.video_recording.as_mut().and_then(super::video_export::Recording::take_render_request) {
+            let project = self.project_view();
+            let drawn = super::events::drawn_surfaces(
+                &self.editor,
+                false,
+                &self.triangulations,
+                &self.solid_view_body,
+                &self.reserves_scene,
+                &self.schedule_animation,
+                &self.water,
+                None,
+            );
+            if let Some(graphics) = self.graphics.as_mut() {
+                graphics.render_video_frame(crate::rendering::graphics::video_capture::VideoFrameInput {
+                    editor: &mut self.editor,
+                    document: &self.scene_document,
+                    triangulations: drawn.0,
+                    block_models: &self.block_models,
+                    drill_holes: &self.drill_holes,
+                    point_clouds: &self.point_clouds,
+                    rasters: &self.raster_textures,
+                    project: &project,
+                    size: frame.size,
+                    clock_s: frame.clock_s,
+                    labels: frame.labels,
+                    view: frame.view,
+                    sync: true,
+                });
+            }
+            if let Some(next) = self.video_recording.as_ref().and_then(super::video_export::Recording::upcoming_time) {
+                self.editor.schedule_time_h = next;
+            }
+        }
+        self.collect_video_frames();
     }
 
     /// Whether the client has gone and nothing being written is left to
@@ -123,7 +163,8 @@ impl App<'_> {
 
     /// When the next turn is due unless a request comes first.
     fn headless_deadline(&self, now: Instant) -> Instant {
-        let busy = !self.pending_jobs.is_empty() || !self.pending_saves.is_empty() || !self.pending_file_dialogs.is_empty() || !self.mcp_waits.is_empty();
+        let busy = self.video_recording.is_some()
+            || !self.pending_jobs.is_empty() || !self.pending_saves.is_empty() || !self.pending_file_dialogs.is_empty() || !self.mcp_waits.is_empty();
         let turn = now + if busy { BUSY_TURN } else { IDLE_TURN };
         [self.schedule_auto_deadline, self.planning_auto_deadline, self.haulage_auto_deadline, self.scanned_model_kept_until]
             .into_iter()
