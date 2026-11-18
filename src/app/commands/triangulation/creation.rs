@@ -211,6 +211,9 @@ impl<'a> App<'a> {
                 app.insert_generated_triangulation(generated);
             }
             Err(error) => {
+                // The dialog shows it in the window; the activity log keeps it
+                // for anything following the job from outside (the MCP server).
+                crate::userspace_error!("{error:#}");
                 let upper_surface_retry_available = !upper_surface && upper_surface_retry_available(&error, surface_type);
                 app.editor.tri_create_failure = Some(crate::ui::state::TriCreateFailure {
                     message: format!("{error:#}"),
@@ -711,33 +714,125 @@ fn conflicting_z_detail(a: glam::DVec3, b: glam::DVec3, c: glam::DVec3, d: glam:
     }
 }
 
-fn validate_breakline_edge_z(paths: &[BreaklineRef<'_>], path_index: usize, edge_index: usize) -> Result<()> {
+/// The breakline edges bucketed on a uniform XY grid, so an edge is tested
+/// only against the edges near it. Edge ids run through the paths in order,
+/// edge by edge, so sorted ids visit candidates in the same order as a scan
+/// of every edge would.
+struct BreaklineEdgeGrid {
+    origin: glam::DVec2,
+    cell: f64,
+    columns: usize,
+    rows: usize,
+    cells: Vec<Vec<u32>>,
+    edges: Vec<(usize, usize)>,
+}
+
+impl BreaklineEdgeGrid {
+    fn new(paths: &[BreaklineRef<'_>]) -> Self {
+        let edges: Vec<(usize, usize)> = paths
+            .iter()
+            .copied()
+            .enumerate()
+            .flat_map(|(path_index, path)| (0..breakline_edge_count(path)).map(move |edge_index| (path_index, edge_index)))
+            .collect();
+        let mut min = glam::DVec2::splat(f64::INFINITY);
+        let mut max = glam::DVec2::splat(f64::NEG_INFINITY);
+        let mut length = 0.0;
+        for &(path_index, edge_index) in &edges {
+            let (a, b) = breakline_edge(paths[path_index], edge_index);
+            min = min.min(a.truncate()).min(b.truncate());
+            max = max.max(a.truncate()).max(b.truncate());
+            length += a.truncate().distance(b.truncate());
+        }
+        if edges.is_empty() {
+            return Self {
+                origin: glam::DVec2::ZERO,
+                cell: 1.0,
+                columns: 1,
+                rows: 1,
+                cells: vec![Vec::new()],
+                edges,
+            };
+        }
+        let extent = (max - min).max(glam::DVec2::splat(crate::model::kernel::XY_TOL));
+        // About one edge across a cell, with no more cells than a few per edge.
+        let mut cell = (length / edges.len() as f64).max(crate::model::kernel::XY_TOL);
+        let budget = (edges.len() * 4).max(1024) as f64;
+        if (extent.x / cell).ceil() * (extent.y / cell).ceil() > budget {
+            cell = (extent.x * extent.y / budget).sqrt();
+        }
+        let columns = ((extent.x / cell).floor() as usize + 1).max(1);
+        let rows = ((extent.y / cell).floor() as usize + 1).max(1);
+        let mut grid = Self {
+            origin: min,
+            cell,
+            columns,
+            rows,
+            cells: vec![Vec::new(); columns * rows],
+            edges,
+        };
+        for id in 0..grid.edges.len() {
+            let (path_index, edge_index) = grid.edges[id];
+            let (a, b) = breakline_edge(paths[path_index], edge_index);
+            let (x0, y0, x1, y1) = grid.span(a, b);
+            for row in y0..=y1 {
+                for column in x0..=x1 {
+                    grid.cells[row * columns + column].push(id as u32);
+                }
+            }
+        }
+        grid
+    }
+
+    /// The cells an edge's XY box touches, padded by the kernel tolerance
+    /// within which segments still count as touching or overlapping.
+    fn span(&self, a: glam::DVec3, b: glam::DVec3) -> (usize, usize, usize, usize) {
+        let pad = glam::DVec2::splat(crate::model::kernel::XY_TOL * 2.0);
+        let low = (a.truncate().min(b.truncate()) - pad - self.origin) / self.cell;
+        let high = (a.truncate().max(b.truncate()) + pad - self.origin) / self.cell;
+        let clamp = |value: f64, count: usize| (value.floor().max(0.0) as usize).min(count - 1);
+        (clamp(low.x, self.columns), clamp(low.y, self.rows), clamp(high.x, self.columns), clamp(high.y, self.rows))
+    }
+
+    /// The edges near segment `a`-`b`, as (path, edge) in path order.
+    fn near(&self, a: glam::DVec3, b: glam::DVec3) -> Vec<(usize, usize)> {
+        let (x0, y0, x1, y1) = self.span(a, b);
+        let mut ids: Vec<u32> = (y0..=y1)
+            .flat_map(|row| (x0..=x1).flat_map(move |column| self.cells[row * self.columns + column].iter().copied()))
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids.into_iter().map(|id| self.edges[id as usize]).collect()
+    }
+}
+
+fn validate_breakline_edge_z(paths: &[BreaklineRef<'_>], grid: &BreaklineEdgeGrid, path_index: usize, edge_index: usize) -> Result<()> {
     let (a, b) = breakline_edge(paths[path_index], edge_index);
 
-    for (other_path_index, other_path) in paths.iter().copied().enumerate() {
-        for other_edge_index in 0..breakline_edge_count(other_path) {
-            if other_path_index == path_index && other_edge_index == edge_index {
-                continue;
-            }
-            let (c, d) = breakline_edge(other_path, other_edge_index);
-            if let Some(detail) = conflicting_z_detail(a, b, c, d) {
-                return Err(anyhow::Error::new(BreaklineConflictFailure {
-                    message: tr!(
-                        "err-tri-breakline-edges-conflicting-elevations",
-                        path_index = path_index.to_string(),
-                        edge_index = edge_index.to_string(),
-                        a = format!("{a:.3}"),
-                        b = format!("{b:.3}"),
-                        other_path_index = other_path_index.to_string(),
-                        other_edge_index = other_edge_index.to_string(),
-                        c = format!("{c:.3}"),
-                        d = format!("{d:.3}"),
-                        detail = detail
-                    ),
-                    edges: [[a, b], [c, d]],
-                    kind: BreaklineConflictKind::ConflictingElevation,
-                }));
-            }
+    // Only edges whose padded boxes meet can cross, touch or overlap, which
+    // is all `conflicting_z_detail` reports.
+    for (other_path_index, other_edge_index) in grid.near(a, b) {
+        if other_path_index == path_index && other_edge_index == edge_index {
+            continue;
+        }
+        let (c, d) = breakline_edge(paths[other_path_index], other_edge_index);
+        if let Some(detail) = conflicting_z_detail(a, b, c, d) {
+            return Err(anyhow::Error::new(BreaklineConflictFailure {
+                message: tr!(
+                    "err-tri-breakline-edges-conflicting-elevations",
+                    path_index = path_index.to_string(),
+                    edge_index = edge_index.to_string(),
+                    a = format!("{a:.3}"),
+                    b = format!("{b:.3}"),
+                    other_path_index = other_path_index.to_string(),
+                    other_edge_index = other_edge_index.to_string(),
+                    c = format!("{c:.3}"),
+                    d = format!("{d:.3}"),
+                    detail = detail
+                ),
+                edges: [[a, b], [c, d]],
+                kind: BreaklineConflictKind::ConflictingElevation,
+            }));
         }
     }
 
@@ -876,6 +971,7 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
         userspace_warn!("{}", tr!("cmd-creation-generate-upper-surface-ignored-count", count = ignored_edges.len().to_string()));
     }
 
+    let edge_grid = BreaklineEdgeGrid::new(if upper_surface { &[] } else { &paths });
     let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::new();
     let mut handle_z: HashMap<usize, f64> = HashMap::new();
 
@@ -929,7 +1025,7 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
                 continue;
             }
             if !upper_surface {
-                validate_breakline_edge_z(&paths, path_index, i)?;
+                validate_breakline_edge_z(&paths, &edge_grid, path_index, i)?;
             }
 
             let (edge_start, edge_end) = breakline_edge(path, i);

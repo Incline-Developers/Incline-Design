@@ -354,6 +354,11 @@ pub(crate) struct App<'a> {
     /// The MCP server, while it runs. See `mcp`.
     #[cfg(not(target_arch = "wasm32"))]
     mcp_server: Option<crate::mcp::Server>,
+    /// The warnings and errors in the activity log an MCP client has been
+    /// told of, so each tool result can carry only the new ones. `None`
+    /// until the first call, which takes the log as it stands as seen.
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_seen_warnings: Option<std::collections::HashSet<crate::logging::ConsoleEntryId>>,
     /// `capture_viewport` calls waiting for a frame to be drawn.
     #[cfg(not(target_arch = "wasm32"))]
     mcp_captures: Vec<mcp_tools::PendingCapture>,
@@ -707,6 +712,8 @@ impl<'a> Default for App<'a> {
             next_ui_repaint_deadline: None,
             #[cfg(not(target_arch = "wasm32"))]
             mcp_server: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_seen_warnings: None,
             #[cfg(not(target_arch = "wasm32"))]
             mcp_captures: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]

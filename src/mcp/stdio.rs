@@ -32,7 +32,16 @@ pub(crate) fn run() -> io::Result<()> {
         if line.trim().is_empty() {
             continue;
         }
-        let answer = match relay(&mut connection, &settings, &line) {
+        let reused = connection.is_some();
+        let mut result = relay(&mut connection, &settings, &line);
+        // A connection kept from an earlier message goes stale when the
+        // window restarts or drops it while idle; the message never reached
+        // the window then, so it is sent again on a fresh one.
+        if reused && result.as_ref().is_err_and(stale) {
+            connection = None;
+            result = relay(&mut connection, &settings, &line);
+        }
+        let answer = match result {
             Ok(answer) => answer,
             Err(error) => {
                 connection = None;
@@ -97,6 +106,15 @@ fn relay(connection: &mut Option<BufReader<TcpStream>>, settings: &McpSettings, 
         401 => Err(io::Error::new(io::ErrorKind::PermissionDenied, "the token did not match the window's")),
         other => Err(io::Error::other(format!("the window answered {other}"))),
     }
+}
+
+/// Whether `error` means the connection was closed under the message before
+/// the window read it.
+fn stale(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
+    )
 }
 
 /// What to answer when the window could not be reached: an error for a

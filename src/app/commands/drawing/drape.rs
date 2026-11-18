@@ -7,7 +7,7 @@ use crate::{
     i18n::tr,
     logging::CommandReportSpec,
     model::{
-        Command, Object, SceneEntityId,
+        Command, Object, ObjectId, SceneEntityId,
         triangulation::{OpenTriangulation, TriangulationId},
     },
     ui::state::{ActiveTool, DrapePhase},
@@ -78,33 +78,11 @@ impl<'a> App<'a> {
     }
 
     fn apply_drape_to_topologies(&mut self, topology_ids: &[TriangulationId]) {
-        let selected_ids: HashSet<_> = topology_ids.iter().copied().collect();
-        let surfaces: Vec<_> = self.triangulations.iter().filter(|topology| selected_ids.contains(&topology.id)).collect();
-        if surfaces.is_empty() {
+        let object_ids = self.editor.drape_object_ids.clone();
+        let Some((changed_objects, intersected_vertices, changed_vertices)) = self.drape_objects(&object_ids, topology_ids) else {
             userspace_warn!("{}", tr!("cmd-drape-selected-topologies-no-longer-loaded"));
             return;
-        }
-
-        let mut intersected_vertices = 0usize;
-        let mut changed_vertices = 0usize;
-        let replacements: Vec<_> = self
-            .editor
-            .drape_object_ids
-            .iter()
-            .filter_map(|id| {
-                let before = self.active_document().get_object(*id)?.clone();
-                let mut after = before.clone();
-                let (intersected, changed) = drape_object(&mut after, &surfaces);
-                intersected_vertices += intersected;
-                changed_vertices += changed;
-                (before != after).then_some(Command::Replace { before, after })
-            })
-            .collect();
-        let changed_objects = replacements.len();
-
-        if !replacements.is_empty() {
-            self.execute_edit(Command::Batch(replacements));
-        }
+        };
 
         let selected_objects = self.editor.drape_object_ids.clone();
         self.editor.selected_handles = selected_objects.iter().copied().map(SceneEntityId::Object).collect();
@@ -133,6 +111,37 @@ impl<'a> App<'a> {
                 ),
             );
         }
+    }
+
+    /// Drape `object_ids` onto the uppermost of `topology_ids` as one undo
+    /// step: the objects changed, the vertices that met a surface and the
+    /// vertices that moved. `None` if none of the surfaces is loaded.
+    pub(crate) fn drape_objects(&mut self, object_ids: &[ObjectId], topology_ids: &[TriangulationId]) -> Option<(usize, usize, usize)> {
+        let selected_ids: HashSet<_> = topology_ids.iter().copied().collect();
+        let surfaces: Vec<_> = self.triangulations.iter().filter(|topology| selected_ids.contains(&topology.id)).collect();
+        if surfaces.is_empty() {
+            return None;
+        }
+
+        let mut intersected_vertices = 0usize;
+        let mut changed_vertices = 0usize;
+        let replacements: Vec<_> = object_ids
+            .iter()
+            .filter_map(|id| {
+                let before = self.active_document().get_object(*id)?.clone();
+                let mut after = before.clone();
+                let (intersected, changed) = drape_object(&mut after, &surfaces);
+                intersected_vertices += intersected;
+                changed_vertices += changed;
+                (before != after).then_some(Command::Replace { before, after })
+            })
+            .collect();
+        let changed_objects = replacements.len();
+
+        if !replacements.is_empty() {
+            self.execute_edit(Command::Batch(replacements));
+        }
+        Some((changed_objects, intersected_vertices, changed_vertices))
     }
 }
 
@@ -167,7 +176,7 @@ fn drape_object(object: &mut Object, surfaces: &[&OpenTriangulation]) -> (usize,
     (intersected, changed)
 }
 
-fn uppermost_topology_z(point: DVec3, surfaces: &[&OpenTriangulation]) -> Option<f64> {
+pub(crate) fn uppermost_topology_z(point: DVec3, surfaces: &[&OpenTriangulation]) -> Option<f64> {
     surfaces
         .iter()
         .filter_map(|surface| {

@@ -29,7 +29,17 @@ window's own controls do: drawing and editing designs, building and cutting surf
 optimising, scheduling, drill and blast, and importing and exporting files. Ids are the numbers get_project and the other \
 get_ tools report. Long work runs in the background and returns once started: get_tasks follows it and can wait for it, and \
 get_activity says if it failed. Setups kept as JSON (solids' plans, scenarios, the schedule) are read whole and changed with \
-JSON merge patches. Changes are made in the open window and can be undone there; capture_viewport shows what they look like.";
+JSON merge patches. Changes are made in the open window and can be undone there; capture_viewport shows what they look like.\n\n\
+Working well with large projects: surfaces can run to tens of millions of triangles, and memory is the limit. Every change, \
+deleted and replaced items included, is kept for undo until the project is saved; saving clears that history and frees it. \
+So save after each heavy step (building, trimming or cutting a surface, deleting big items), and unload what the next step \
+does not need with set_loaded, or pass unload_source where a tool offers it; get_project says what is loaded. \
+open_project asks the user in the window when the open project has unsaved changes, and nothing can be saved until they \
+answer, so save first and never reopen the open file to reload it. save_project with a path is Save As: the project then \
+lives at that path, which keeps the user's own file untouched while you work.\n\n\
+Designing: sample_surface reads the ground's RL at points, to fit a design to it before drawing. A terrain surface is \
+single-valued, so its breaklines must not cross in plan at different RLs; when triangulate fails, get_activity names the \
+two edges that conflict.";
 
 impl App<'_> {
     /// Hand the event loop to the MCP server to wake it with, and start the

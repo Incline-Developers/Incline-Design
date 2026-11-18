@@ -19,6 +19,8 @@ use crate::{
 
 /// How many activity entries `get_activity` returns unless asked for more.
 const DEFAULT_ACTIVITY: usize = 20;
+/// How many of an activity entry's detail lines `get_activity` returns.
+const DEFAULT_ACTIVITY_DETAILS: usize = 20;
 /// How many objects `get_layer` returns at a time unless asked for more.
 const DEFAULT_OBJECT_PAGE: usize = 200;
 /// How many holes `get_drillholes` returns at a time unless asked for more.
@@ -44,7 +46,7 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "get_project",
             "title": "Get project",
-            "description": "Describe the project open in Incline Design: its name and file, whether it has unsaved changes, and every item in it with its id: surfaces (triangulations), block models (block and variable counts, extents), drillhole collections (hole and field counts), point clouds, rasters, and design layers. Whether each is loaded and whether it is hidden, and the explorer folder it is filed in (folders lists them by section). Coordinates are in the project's own units, usually metres, with Z up.",
+            "description": "Describe the project open in Incline Design: its name and file, whether it has unsaved changes, how much of the computer's memory is in use, and every item in it with its id: surfaces (triangulations), block models (block and variable counts, extents), drillhole collections (hole and field counts), point clouds, rasters, and design layers. Whether each is loaded and whether it is hidden, and the explorer folder it is filed in (folders lists them by section). Coordinates are in the project's own units, usually metres, with Z up.",
             "inputSchema": no_arguments(),
             "annotations": { "readOnlyHint": true },
         }),
@@ -58,11 +60,12 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "get_activity",
             "title": "Get activity",
-            "description": "Read Incline Design's activity log, newest last: what the user and the application have done, with any warnings and errors, each with its time, severity, title, summary and details.",
+            "description": "Read Incline Design's activity log, newest last: what the user and the application have done, with any warnings and errors, each with its time, severity, title, summary and details. A long run of details is cut short, with how many more there were.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "limit": { "type": "integer", "minimum": 1, "description": "How many of the most recent entries to return. 20 if left out." },
+                    "details": { "type": "integer", "minimum": 0, "description": "How many detail lines to return for each entry. 20 if left out." },
                 },
                 "additionalProperties": false,
             },
@@ -111,6 +114,21 @@ pub(super) fn definitions() -> Vec<Value> {
             "annotations": { "readOnlyHint": true },
         }),
         json!({
+            "name": "sample_surface",
+            "title": "Sample surfaces",
+            "description": "Read the RL of surfaces at points seen from above: for each [x, y], the z of the uppermost of the given surfaces there, or null where none of them is. Useful for fitting a design to the ground. The surfaces must be loaded; set_visibility loads them.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "surfaces": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0 }, "description": "Surface ids." },
+                    "points": { "type": "array", "minItems": 1, "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "[x, y] pairs in the project's units." },
+                },
+                "required": ["surfaces", "points"],
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": true },
+        }),
+        json!({
             "name": "get_block_model",
             "title": "Get block model",
             "description": "Describe one block model: its block count, grid, extent, the variable it is coloured by, and its variables with their types and any category names. Name variables in statistics to have each one's count, missing values, minimum, maximum and mean worked out (for a categorical variable, the number of blocks in each category). Statistics need the model loaded; set_visibility loads it.",
@@ -146,18 +164,27 @@ pub(super) fn definitions() -> Vec<Value> {
     ]
 }
 
+/// A tool's result, from what it worked out or why it could not.
+fn outcome(result: Result<Value, String>) -> Value {
+    result.map_or_else(failed, |value| ok(&value))
+}
+
 impl App<'_> {
     /// Run `name` if it is one of these tools.
     pub(super) fn call_mcp_read_tool(&mut self, name: &str, arguments: &Value) -> Option<Value> {
         Some(match name {
             "get_project" => ok(&self.mcp_project()),
             "get_selection" => ok(&self.mcp_selection()),
-            "get_activity" => ok(&activity(arguments["limit"].as_u64().map_or(DEFAULT_ACTIVITY, |limit| limit as usize))),
-            "get_layer" => self.mcp_layer(arguments),
-            "get_objects" => self.mcp_objects(arguments),
-            "get_surface" => self.mcp_surface(arguments),
-            "get_block_model" => self.mcp_block_model(arguments),
-            "get_drillholes" => self.mcp_drillholes(arguments),
+            "get_activity" => ok(&activity(
+                arguments["limit"].as_u64().map_or(DEFAULT_ACTIVITY, |limit| limit as usize),
+                arguments["details"].as_u64().map_or(DEFAULT_ACTIVITY_DETAILS, |details| details as usize),
+            )),
+            "get_layer" => outcome(self.mcp_layer(arguments)),
+            "get_objects" => outcome(self.mcp_objects(arguments)),
+            "get_surface" => outcome(self.mcp_surface(arguments)),
+            "sample_surface" => outcome(self.mcp_sample_surface(arguments)),
+            "get_block_model" => outcome(self.mcp_block_model(arguments)),
+            "get_drillholes" => outcome(self.mcp_drillholes(arguments)),
             _ => return None,
         })
     }
@@ -178,6 +205,9 @@ impl App<'_> {
             "name": project.map(|project| project.name.clone()),
             "file": project.and_then(|project| project.path.as_ref()).map(|path| path.display().to_string()),
             "unsaved_changes": project.is_some_and(|project| project.dirty),
+            "memory": self.editor.memory_usage.map(|usage| json!({
+                "used_gb": super::gigabytes(usage.used), "total_gb": super::gigabytes(usage.total),
+            })),
             "surfaces": view.triangulations.iter().map(|item| json!({
                 "id": item.id.0, "name": item.name, "loaded": item.is_loaded, "hidden": item.is_hidden, "folder": item.folder.map(|folder| folder.0),
             })).collect::<Vec<_>>(),
@@ -270,24 +300,24 @@ impl App<'_> {
         json!({ "selected": selected })
     }
 
-    fn mcp_layer(&self, arguments: &Value) -> Value {
+    fn mcp_layer(&self, arguments: &Value) -> Result<Value, String> {
         let Some(id) = arguments["id"].as_u64() else {
-            return failed("get_layer needs the layer's id.");
+            return Err("get_layer needs the layer's id.".into());
         };
         let Some(document) = self.workspace.active_document() else {
-            return failed("No project is open.");
+            return Err("No project is open.".into());
         };
         let Some(layer) = document.layer(LayerId(id)) else {
-            return failed(format!("There is no design layer with id {id}. get_project lists them."));
+            return Err(format!("There is no design layer with id {id}. get_project lists them."));
         };
         if !layer.loaded || document.deferred_layers.contains_key(&layer.id) {
-            return failed(format!("The design layer {} is not loaded. Load it with set_visibility, then ask again.", layer.name));
+            return Err(format!("The design layer {} is not loaded. Load it with set_visibility, then ask again.", layer.name));
         }
         let offset = arguments["offset"].as_u64().unwrap_or(0) as usize;
         let limit = arguments["limit"].as_u64().map_or(DEFAULT_OBJECT_PAGE, |limit| limit as usize);
         let on_layer: Vec<&Object> = document.objects().iter().filter(|object| object.layer() == layer.id).collect();
         let page: Vec<Value> = on_layer.iter().skip(offset).take(limit).map(|object| object_json(document, object)).collect();
-        json!({
+        Ok(json!({
             "id": layer.id.0,
             "name": layer.name,
             "colour": hex(layer.color),
@@ -296,15 +326,15 @@ impl App<'_> {
             "object_count": on_layer.len(),
             "offset": offset,
             "objects": page,
-        })
+        }))
     }
 
-    fn mcp_objects(&self, arguments: &Value) -> Value {
+    fn mcp_objects(&self, arguments: &Value) -> Result<Value, String> {
         let Some(ids) = arguments["ids"].as_array() else {
-            return failed("get_objects needs a list of ids.");
+            return Err("get_objects needs a list of ids.".into());
         };
         let Some(document) = self.workspace.active_document() else {
-            return failed("No project is open.");
+            return Err("No project is open.".into());
         };
         let mut objects = Vec::new();
         let mut missing = Vec::new();
@@ -319,18 +349,18 @@ impl App<'_> {
             }
         }
         // An object on a layer that is not loaded is not in memory to find.
-        json!({ "objects": objects, "not_found": missing })
+        Ok(json!({ "objects": objects, "not_found": missing }))
     }
 
-    fn mcp_surface(&self, arguments: &Value) -> Value {
+    fn mcp_surface(&self, arguments: &Value) -> Result<Value, String> {
         let Some(id) = arguments["id"].as_u64() else {
-            return failed("get_surface needs the surface's id.");
+            return Err("get_surface needs the surface's id.".into());
         };
         let Some(surface) = self.triangulations.iter().find(|surface| surface.id.0 == id) else {
-            return failed(format!("There is no surface with id {id}. get_project lists them."));
+            return Err(format!("There is no surface with id {id}. get_project lists them."));
         };
         if !surface.state.loaded || surface.state.deferred.is_some() {
-            return failed(format!("The surface {} is not loaded. Load it with set_visibility, then ask again.", surface.name));
+            return Err(format!("The surface {} is not loaded. Load it with set_visibility, then ask again.", surface.name));
         }
         let mesh = &surface.mesh;
         let bounds = mesh.bounds();
@@ -340,7 +370,7 @@ impl App<'_> {
             .raster_texture
             .and_then(|raster| self.raster_textures.iter().find(|item| item.id == raster))
             .map(|raster| json!({ "id": raster.id.0, "name": raster.name }));
-        json!({
+        Ok(json!({
             "id": id,
             "name": surface.name,
             "vertices": mesh.vertex_count(),
@@ -352,15 +382,43 @@ impl App<'_> {
             "volume": measured.closed.then_some(measured.volume.abs()),
             "colour": hex(surface.color),
             "draped_raster": raster,
-        })
+        }))
     }
 
-    fn mcp_block_model(&self, arguments: &Value) -> Value {
+    fn mcp_sample_surface(&self, arguments: &Value) -> Result<Value, String> {
+        let ids = arguments["surfaces"].as_array().ok_or("sample_surface needs a list of surface ids.")?;
+        let mut surfaces = Vec::with_capacity(ids.len());
+        for id in ids {
+            let id = id.as_u64().ok_or("Surface ids are whole numbers.")?;
+            let surface = self
+                .triangulations
+                .iter()
+                .find(|surface| surface.id.0 == id)
+                .ok_or_else(|| format!("There is no surface with id {id}. get_project lists them."))?;
+            if !surface.state.loaded || surface.state.deferred.is_some() {
+                return Err(format!("The surface {} is not loaded. Load it with set_visibility, then ask again.", surface.name));
+            }
+            surfaces.push(surface);
+        }
+        let points = arguments["points"].as_array().ok_or("sample_surface needs a list of [x, y] points.")?;
+        let rls = points
+            .iter()
+            .map(|point| {
+                let (Some(x), Some(y)) = (point[0].as_f64(), point[1].as_f64()) else {
+                    return Err("Each point is [x, y].".to_owned());
+                };
+                Ok(crate::app::commands::drawing::drape::uppermost_topology_z(DVec3::new(x, y, 0.0), &surfaces))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(json!({ "rls": rls }))
+    }
+
+    fn mcp_block_model(&self, arguments: &Value) -> Result<Value, String> {
         let Some(id) = arguments["id"].as_u64() else {
-            return failed("get_block_model needs the block model's id.");
+            return Err("get_block_model needs the block model's id.".into());
         };
         let Some(model) = self.block_models.iter().find(|model| model.id.0 == id) else {
-            return failed(format!("There is no block model with id {id}. get_project lists them."));
+            return Err(format!("There is no block model with id {id}. get_project lists them."));
         };
         let metadata = &model.model.metadata;
         let variables: Vec<Value> = metadata
@@ -396,7 +454,7 @@ impl App<'_> {
                 statistics.insert(name.to_owned(), result.unwrap_or_else(|error| json!({ "error": error })));
             }
         }
-        json!({
+        Ok(json!({
             "id": id,
             "name": model.name,
             "blocks": metadata.n_blocks,
@@ -406,18 +464,18 @@ impl App<'_> {
             "coloured_by": model.active_color_variable,
             "variables": variables,
             "statistics": statistics,
-        })
+        }))
     }
 
-    fn mcp_drillholes(&self, arguments: &Value) -> Value {
+    fn mcp_drillholes(&self, arguments: &Value) -> Result<Value, String> {
         let Some(id) = arguments["id"].as_u64() else {
-            return failed("get_drillholes needs the collection's id.");
+            return Err("get_drillholes needs the collection's id.".into());
         };
         let Some(collection) = self.drill_holes.iter().find(|collection| collection.id.0 == id) else {
-            return failed(format!("There is no drillhole collection with id {id}. get_project lists them."));
+            return Err(format!("There is no drillhole collection with id {id}. get_project lists them."));
         };
         if !collection.state.loaded || collection.state.deferred.is_some() {
-            return failed(format!("The drillholes {} are not loaded. Load them with set_visibility, then ask again.", collection.name));
+            return Err(format!("The drillholes {} are not loaded. Load them with set_visibility, then ask again.", collection.name));
         }
         let dataset = &collection.dataset;
         let fields: Vec<Value> = dataset
@@ -472,14 +530,14 @@ impl App<'_> {
                 value
             })
             .collect();
-        json!({
+        Ok(json!({
             "id": id,
             "name": collection.name,
             "fields": fields,
             "hole_count": chosen.len(),
             "offset": offset,
             "holes": holes,
-        })
+        }))
     }
 }
 
@@ -656,19 +714,26 @@ fn variable_statistics(model: &crate::model::formats::block_model_data::BlockMod
 }
 
 /// The last `limit` activity entries, oldest first.
-fn activity(limit: usize) -> Value {
+fn activity(limit: usize, detail_limit: usize) -> Value {
     let (_, entries) = crate::logging::console_snapshot();
     let start = entries.len().saturating_sub(limit);
     let entries: Vec<Value> = entries[start..]
         .iter()
         .map(|entry| {
-            json!({
+            let mut value = json!({
                 "time": entry.timestamp,
                 "severity": format!("{:?}", entry.severity).to_lowercase(),
                 "title": entry.title,
                 "summary": entry.summary,
-                "details": entry.details,
-            })
+                "details": entry.details.iter().take(detail_limit).collect::<Vec<_>>(),
+            });
+            // One job can log thousands of lines (every constraint a cut
+            // skipped); the count says there were more without filling the
+            // client's context with them.
+            if entry.details.len() > detail_limit {
+                value["more_details"] = json!(entry.details.len() - detail_limit);
+            }
+            value
         })
         .collect();
     json!({ "entries": entries })

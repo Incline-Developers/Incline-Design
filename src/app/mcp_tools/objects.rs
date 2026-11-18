@@ -131,6 +131,17 @@ pub(super) fn definitions() -> Vec<Value> {
             &["ids"],
             true,
         ),
+        changes(
+            "drape_objects",
+            "Drape onto surfaces",
+            "Lay design objects onto surfaces, as Drape to Topology does: each vertex (and each point and text) moves straight up or down to the uppermost of the surfaces at its x and y. Vertices outside every surface stay where they are, and circles are left alone. Returns how many objects and vertices changed.",
+            json!({
+                "ids": ids(),
+                "surfaces": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0 }, "description": "Surface ids. They must be loaded; set_visibility loads them." },
+            }),
+            &["ids", "surfaces"],
+            true,
+        ),
     ]
 }
 
@@ -146,6 +157,7 @@ impl App<'_> {
             "batter_berm" => self.mcp_batter_berm(arguments),
             "explode_polylines" => self.mcp_explode(arguments),
             "insert_points" => self.mcp_insert_points(arguments),
+            "drape_objects" => self.mcp_drape_objects(arguments),
             _ => return None,
         })
     }
@@ -462,6 +474,37 @@ impl App<'_> {
             exploded += 1;
         }
         ok(&json!({ "exploded": exploded }))
+    }
+
+    fn mcp_drape_objects(&mut self, arguments: &Value) -> Value {
+        let objects = match self.mcp_editable_objects(arguments, "ids") {
+            Ok(objects) => objects,
+            Err(error) => return failed(error),
+        };
+        let Some(surfaces) = arguments["surfaces"].as_array() else {
+            return failed("drape_objects needs a list of surface ids.");
+        };
+        let mut surface_ids = Vec::with_capacity(surfaces.len());
+        for id in surfaces {
+            let Some(id) = id.as_u64() else {
+                return failed("Surface ids are whole numbers.");
+            };
+            let Some(surface) = self.triangulations.iter().find(|surface| surface.id.0 == id) else {
+                return failed(format!("There is no surface with id {id}. get_project lists them."));
+            };
+            if !surface.state.loaded || surface.state.deferred.is_some() {
+                return failed(format!("The surface {} is not loaded. Load it with set_visibility, then ask again.", surface.name));
+            }
+            surface_ids.push(surface.id);
+        }
+        let object_ids: Vec<ObjectId> = objects.iter().map(Object::id).collect();
+        match self.drape_objects(&object_ids, &surface_ids) {
+            Some((objects, intersected, changed)) => {
+                self.invalidate_geometry();
+                ok(&json!({ "objects_changed": objects, "vertices_on_a_surface": intersected, "vertices_moved": changed }))
+            }
+            None => failed("None of those surfaces is loaded."),
+        }
     }
 
     fn mcp_insert_points(&mut self, arguments: &Value) -> Value {

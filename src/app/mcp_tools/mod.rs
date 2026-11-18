@@ -98,6 +98,18 @@ fn items_schema(description: &str) -> Value {
     })
 }
 
+/// How full the machine's memory is, as a fraction, before every tool's
+/// result carries a warning.
+const MEMORY_WARNING_FRACTION: f32 = 0.8;
+
+/// How many new warnings a tool result lists before saying how many more.
+const NEW_WARNINGS_SHOWN: usize = 5;
+
+/// `bytes` in gigabytes, to one decimal place.
+fn gigabytes(bytes: u64) -> String {
+    format!("{:.1}", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+}
+
 /// A tool's successful result.
 fn ok(value: &Value) -> Value {
     json!({ "content": [{ "type": "text", "text": plain(&serde_json::to_string_pretty(value).unwrap_or_default()) }], "isError": false })
@@ -189,6 +201,60 @@ impl App<'_> {
     /// Run the tool `tools/call` names, with its arguments. `capture_viewport`
     /// is answered by `app/mcp.rs` itself, as it waits for a frame.
     pub(super) fn call_mcp_tool(&mut self, params: &Value) -> Value {
+        let mut result = self.dispatch_mcp_tool(params);
+        let notes: Vec<String> = self.mcp_new_warnings().into_iter().chain(self.mcp_memory_warning()).collect();
+        if let Some(content) = result["content"].as_array_mut() {
+            content.extend(notes.into_iter().map(|text| json!({ "type": "text", "text": text })));
+        }
+        result
+    }
+
+    /// The warnings and errors logged since the last tool call, which the
+    /// window shows the user and the AI would otherwise only find by
+    /// reading the activity log: a background job that failed, a dialog
+    /// waiting on the user.
+    fn mcp_new_warnings(&mut self) -> Option<String> {
+        let (_, entries) = crate::logging::console_snapshot();
+        let flagged = entries
+            .iter()
+            .filter(|entry| matches!(entry.severity, crate::logging::ConsoleSeverity::Warn | crate::logging::ConsoleSeverity::Error));
+        let Some(seen) = self.mcp_seen_warnings.as_mut() else {
+            self.mcp_seen_warnings = Some(flagged.map(|entry| entry.id).collect());
+            return None;
+        };
+        let new: Vec<&crate::logging::ConsoleEntry> = flagged.filter(|entry| seen.insert(entry.id)).collect();
+        if new.is_empty() {
+            return None;
+        }
+        let mut lines: Vec<String> = new
+            .iter()
+            .take(NEW_WARNINGS_SHOWN)
+            .map(|entry| format!("{} ({:?}): {}", entry.title, entry.severity, entry.summary))
+            .collect();
+        if new.len() > NEW_WARNINGS_SHOWN {
+            lines.push(format!("and {} more; get_activity lists them.", new.len() - NEW_WARNINGS_SHOWN));
+        }
+        Some(format!("New in the activity log since the last call:\n{}", lines.join("\n")))
+    }
+
+    /// A warning for the AI when the machine's memory is nearly full, so it
+    /// frees some before a big job runs it out: the window is what an
+    /// out-of-memory kill takes down, with any unsaved work.
+    fn mcp_memory_warning(&self) -> Option<String> {
+        let usage = self.editor.memory_usage?;
+        if usage.fraction() < MEMORY_WARNING_FRACTION {
+            return None;
+        }
+        Some(format!(
+            "Warning: this computer's memory is {:.0}% full ({} of {} GB in use). Before anything heavy, save the project to clear its undo history and unload items the work no longer needs (set_loaded), or a big job may run it out of memory and close Incline Design, losing unsaved work.",
+            usage.fraction() * 100.0,
+            gigabytes(usage.used),
+            gigabytes(usage.total)
+        ))
+    }
+
+    /// Run the tool `tools/call` names.
+    fn dispatch_mcp_tool(&mut self, params: &Value) -> Value {
         let arguments = &params["arguments"];
         let name = params["name"].as_str().unwrap_or_default();
         if let Some(result) = self.call_mcp_read_tool(name, arguments) {
