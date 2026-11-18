@@ -47,8 +47,9 @@ impl<'a> App<'a> {
     }
 
     fn route_window_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, window_id: winit::window::WindowId, event: WindowEvent) {
-        if self.graphics.as_ref().and_then(|graphics| graphics.slice_preview_window_id()) == Some(window_id) {
-            self.handle_slice_preview_event(event);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(kind) = self.panel_window_kind(window_id) {
+            self.handle_panel_window_event(kind, event);
             return;
         }
         // A dropped secondary window can still have a final queued event.
@@ -391,18 +392,7 @@ impl<'a> App<'a> {
                                 self.place_window_frame();
                                 self.collect_video_frames();
                                 self.handle_ui_commands(ui_output.commands);
-                                self.sync_slice_preview_window(event_loop);
-                                if let Some(graphics) = self.graphics.as_mut() {
-                                    graphics.request_slice_preview_redraw_if_scene_changed(
-                                        &self.editor,
-                                        &self.scene_document,
-                                        &self.triangulations,
-                                        &self.block_models,
-                                        &self.drill_holes,
-                                        &self.point_clouds,
-                                        &self.raster_textures,
-                                    );
-                                }
+                                self.sync_panel_windows(event_loop);
                                 // Keep move panel preview in sync - apply whenever the panel delta
                                 // differs from the last applied preview (catches typed values that
                                 // don't always trigger changed() on every frame).
@@ -778,173 +768,6 @@ impl<'a> App<'a> {
         }
     }
 
-    fn handle_slice_preview_event(&mut self, event: WindowEvent) {
-        match event {
-            WindowEvent::ModifiersChanged(modifiers) => {
-                self.modifiers = modifiers.state();
-            }
-            WindowEvent::Focused(false) => {
-                if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.release_slice_keys();
-                }
-                self.slice_preview_middle_down = false;
-                self.redraw_requested = true;
-            }
-            WindowEvent::CloseRequested => {
-                if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.close_slice_preview();
-                }
-                self.editor.slice_preview_detached = false;
-                self.slice_preview_cursor_px = None;
-                self.slice_preview_middle_down = false;
-                self.redraw_requested = true;
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                let next = (position.x, position.y);
-                let viewport = self.graphics.as_ref().and_then(|graphics| graphics.slice_preview_viewport());
-                let changed = if self.slice_preview_middle_down
-                    && let Some(previous) = self.slice_preview_cursor_px
-                    && let Some((size, scale_factor)) = viewport
-                {
-                    let fitted_zoom = crate::ui::state::fitted_slice_preview_zoom(self.editor.slice_half_length, size.height, scale_factor);
-                    let current_zoom = fitted_zoom * self.editor.slice_preview_navigation.zoom_multiplier();
-                    self.editor
-                        .slice_preview_navigation
-                        .pan_by_pixels([next.0 - previous.0, next.1 - previous.1], current_zoom, f64::from(size.height))
-                } else {
-                    false
-                };
-                self.slice_preview_cursor_px = Some(next);
-                if changed && let Some(graphics) = self.graphics.as_ref() {
-                    graphics.request_slice_preview_redraw();
-                }
-            }
-            WindowEvent::CursorLeft { .. } => {
-                self.slice_preview_cursor_px = None;
-                self.slice_preview_middle_down = false;
-            }
-            WindowEvent::MouseInput {
-                state,
-                button: MouseButton::Middle,
-                ..
-            } => {
-                self.slice_preview_middle_down = state == ElementState::Pressed;
-            }
-            WindowEvent::MouseWheel { delta, .. } => {
-                // Only a notch the section walk leaves alone reaches the zoom below.
-                if self.slice_walk_scroll(&event) {
-                    if let Some(graphics) = self.graphics.as_ref() {
-                        graphics.request_slice_preview_redraw();
-                    }
-                } else {
-                    let scroll = crate::rendering::graphics::scroll_pixels(&delta);
-                    let changed = self
-                        .graphics
-                        .as_ref()
-                        .and_then(|graphics| graphics.slice_preview_viewport())
-                        .is_some_and(|(size, scale_factor)| {
-                            let cursor = self.slice_preview_cursor_px.unwrap_or((f64::from(size.width) * 0.5, f64::from(size.height) * 0.5));
-                            let fitted_zoom = crate::ui::state::fitted_slice_preview_zoom(self.editor.slice_half_length, size.height, scale_factor);
-                            self.editor
-                                .slice_preview_navigation
-                                .zoom_at_pixel(scroll, [cursor.0, cursor.1], [f64::from(size.width), f64::from(size.height)], fitted_zoom)
-                        });
-                    if changed && let Some(graphics) = self.graphics.as_ref() {
-                        graphics.request_slice_preview_redraw();
-                    }
-                }
-            }
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        state: ElementState::Pressed,
-                        physical_key: PhysicalKey::Code(KeyCode::KeyF | KeyCode::Home),
-                        ..
-                    },
-                ..
-            } => {
-                self.editor.slice_preview_navigation.reset();
-                if let Some(graphics) = self.graphics.as_ref() {
-                    graphics.request_slice_preview_redraw();
-                }
-            }
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        state: ElementState::Pressed,
-                        physical_key: PhysicalKey::Code(KeyCode::Escape),
-                        ..
-                    },
-                ..
-            } => {
-                if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.close_slice_preview();
-                }
-                self.editor.slice_preview_detached = false;
-                self.slice_preview_cursor_px = None;
-                self.slice_preview_middle_down = false;
-                self.redraw_requested = true;
-            }
-            // Same W/S/Q/E handling as the main window, via the shared `slice_key`.
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        state,
-                        physical_key: PhysicalKey::Code(key @ (KeyCode::KeyW | KeyCode::KeyS | KeyCode::KeyQ | KeyCode::KeyE)),
-                        ..
-                    },
-                ..
-            } if !self.modifiers.control_key() && !(cfg!(target_os = "macos") && self.modifiers.super_key()) => {
-                if self.slice_key(key, state) {
-                    if let Some(graphics) = self.graphics.as_ref() {
-                        graphics.request_slice_preview_redraw();
-                    }
-                    self.redraw_requested = true;
-                }
-            }
-            WindowEvent::Resized(size) => {
-                if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.resize_slice_preview(size);
-                }
-            }
-            WindowEvent::RedrawRequested => {
-                if self.slice_surface_retry_deadline.is_some_and(|deadline| Instant::now() < deadline) {
-                    return;
-                }
-                self.slice_surface_retry_deadline = None;
-                let result = self.graphics.as_mut().map(|graphics| {
-                    graphics.render_slice_preview(
-                        &self.scene_document,
-                        &self.triangulations,
-                        &self.block_models,
-                        &self.drill_holes,
-                        &self.point_clouds,
-                        &self.raster_textures,
-                        &self.editor,
-                    )
-                });
-                match result {
-                    Some(Err(RenderSurfaceError::Lost | RenderSurfaceError::Outdated)) => {
-                        if let Some(graphics) = self.graphics.as_mut() {
-                            graphics.reconfigure_slice_preview();
-                        }
-                        self.slice_surface_retry_deadline = Some(Instant::now() + Duration::from_millis(250));
-                    }
-                    Some(Err(RenderSurfaceError::Timeout | RenderSurfaceError::Occluded)) => {
-                        self.slice_surface_retry_deadline = Some(Instant::now() + Duration::from_millis(250));
-                    }
-                    Some(Err(RenderSurfaceError::Validation)) => {
-                        if let Some(graphics) = self.graphics.as_mut() {
-                            graphics.close_slice_preview();
-                        }
-                        self.editor.slice_preview_detached = false;
-                    }
-                    Some(Ok(())) | None => {}
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 impl<'a> App<'a> {
@@ -1127,7 +950,7 @@ impl<'a> App<'a> {
 
     /// Routes one of the section's W/S/Q/E keys to the slice camera. Shared by
     /// the main window and the detached section preview.
-    fn slice_key(&mut self, key: KeyCode, state: ElementState) -> bool {
+    pub(super) fn slice_key(&mut self, key: KeyCode, state: ElementState) -> bool {
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.slice_process_key(key, state == ElementState::Pressed);
         }

@@ -10,6 +10,7 @@ pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Allocator settings, and browser address-space budgeting for large allocations
 pub(crate) mod memory_usage; // The status bar's memory and per-core CPU readouts
+pub(crate) mod panel_windows; // Panels popped out of the main window into windows of their own
 pub(crate) mod planning_pipeline; // The Solids workspace's six-stage run/invalidation model
 pub(crate) mod schedule_animation; // Schedule Animate's derived, scrubbed geometry
 pub(crate) mod schedule_pipeline; // The Schedule workspace's Setup run/invalidation model
@@ -347,6 +348,13 @@ pub(crate) struct App<'a> {
     /// Keeping it in the application event loop prevents timed repaints from
     /// being discarded when there is otherwise no window activity.
     next_ui_repaint_deadline: Option<Instant>,
+    /// The popped-out panels' windows, in [`crate::ui::state::PanelKind::ALL`]'s
+    /// order. See `panel_windows`.
+    #[cfg(not(target_arch = "wasm32"))]
+    panel_window_states: [panel_windows::PanelWindowState; 4],
+    /// What the popped-out panels last showed of this window.
+    #[cfg(not(target_arch = "wasm32"))]
+    panel_view_key: panel_windows::PanelViewKey,
     window: Option<Arc<Window>>,
     /// The title last given to the window, so it is set only when it changes.
     window_title: String,
@@ -417,7 +425,6 @@ pub(crate) struct App<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     cpu_sampler: memory_usage::CpuSampler,
     surface_retry_pending: bool,
-    slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
     last_snap_poll_instant: Option<Instant>,
     editor: EditorState,
@@ -621,8 +628,6 @@ pub(crate) struct App<'a> {
     /// The water runs whose tabs are open. Session-only.
     pub(crate) water: crate::app::water::WaterRuns,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
-    slice_preview_cursor_px: Option<(f64, f64)>,
-    slice_preview_middle_down: bool,
     pending_selection_click: Option<crate::rendering::graphics::camera::ScenePick>,
     move_session_original: Option<MoveSession>,
     /// Captured collar placements, shared by Move Collar and Rotate Collar:
@@ -684,6 +689,10 @@ impl<'a> Default for App<'a> {
             discard_changes_on_deferred_exit: false,
             redraw_requested: false,
             next_ui_repaint_deadline: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            panel_window_states: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            panel_view_key: Default::default(),
             window: None,
             window_title: String::new(),
             window_state_stale: true,
@@ -729,7 +738,6 @@ impl<'a> Default for App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             cpu_sampler: memory_usage::CpuSampler::new(),
             surface_retry_pending: false,
-            slice_surface_retry_deadline: None,
             last_scroll_instant: None,
             last_snap_poll_instant: None,
             editor: EditorState::new(),
@@ -817,8 +825,6 @@ impl<'a> Default for App<'a> {
             schedule_animation: Default::default(),
             water: Default::default(),
             solid_preview_restore_requested: None,
-            slice_preview_cursor_px: None,
-            slice_preview_middle_down: false,
             pending_selection_click: None,
             move_session_original: None,
             collar_move_session: None,
@@ -952,6 +958,8 @@ impl<'a> App<'a> {
         self.editor.well_log_style = config.well_log_style.sanitized();
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
+        self.editor.show_assistant = config.show_assistant;
+        self.editor.popped_out = config.popped_out;
         self.editor.ui_size_percent = io::finite_clamped(config.ui_size_percent, 50.0, 200.0, io::default_ui_size_percent());
         self.editor.renderer_background_color = crate::ui::scene_background_color(config.dark_mode);
         self.editor.snap_poll_rate = config.snap_poll_rate.clamp(5, 1000);
@@ -2184,37 +2192,7 @@ impl<'a> App<'a> {
         self.pending_resize = None;
         self.last_render_time = None;
         self.surface_retry_pending = false;
-        self.slice_surface_retry_deadline = None;
         self.redraw_requested = false;
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn sync_slice_preview_window(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        if !self.editor.slice_preview_detached || self.graphics.as_ref().is_some_and(|graphics| graphics.slice_preview_window_id().is_some()) {
-            return;
-        }
-        let attributes = Window::default_attributes()
-            .with_title(crate::i18n::tr!("err-file-section-preview-title", app = crate::APP_NAME.to_string()))
-            .with_window_icon(window_icon())
-            .with_min_inner_size(winit::dpi::PhysicalSize::new(320, 240))
-            .with_inner_size(winit::dpi::PhysicalSize::new(800, 700));
-        #[cfg(target_os = "linux")]
-        let attributes = attributes.with_name(crate::APP_ID, crate::APP_ID);
-        let result = event_loop.create_window(attributes).map(Arc::new).map_err(anyhow::Error::from).and_then(|window| {
-            self.graphics
-                .as_mut()
-                .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-file-renderer-not-ready")))?
-                .open_slice_preview(window)
-        });
-        if let Err(error) = result {
-            log::error!("{}", crate::i18n::tr!("app-failed-detach-top-down-preview", error = format!("{error:#}")));
-            self.editor.slice_preview_detached = false;
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn sync_slice_preview_window(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.editor.slice_preview_detached = false;
     }
 
     fn project_view_key(&self) -> u64 {
@@ -2769,16 +2747,14 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             self.haulage_auto_deadline = None;
             self.redraw_requested = true;
         }
-        if self.slice_surface_retry_deadline.is_some_and(|deadline| deadline <= now) {
-            self.slice_surface_retry_deadline = None;
-            if let Some(graphics) = self.graphics.as_ref() {
-                graphics.request_slice_preview_redraw();
-            }
-        }
         if self.scanned_model_kept_until.is_some_and(|until| until <= now) {
             self.scanned_model_kept_until = None;
             self.evict_unloaded_items();
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let panel_deadline = self.poll_panel_repaints(now);
+        #[cfg(target_arch = "wasm32")]
+        let panel_deadline: Option<Instant> = None;
         let continuous_redraw = self.graphics.as_ref().is_some_and(Graphics::needs_continuous_redraw);
         if self.redraw_requested || continuous_redraw {
             self.frame_demanded_at.get_or_insert(now);
@@ -2810,13 +2786,13 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         let trackpad_deadline = trackpad_active.then(|| now + Duration::from_millis(4));
         let wake_deadline = wake_deadline
             .into_iter()
-            .chain(self.slice_surface_retry_deadline)
             .chain(resize_settle_deadline)
             .chain(self.schedule_auto_deadline)
             .chain(self.planning_auto_deadline)
             .chain(self.haulage_auto_deadline)
             .chain(self.scanned_model_kept_until)
             .chain(trackpad_deadline)
+            .chain(panel_deadline)
             .min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));

@@ -10,6 +10,8 @@ pub(crate) mod dialogs;
 pub(crate) mod elements;
 pub(crate) mod fonts;
 mod scaling;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod secondary;
 pub(crate) mod state;
 pub(crate) mod widgets;
 
@@ -80,28 +82,35 @@ fn surface_screen_rect(window_rect: egui::Rect, window_width: u32, screen_size: 
     })
 }
 
+/// Set a window's context up the way every Incline window has it: its
+/// fonts, image loaders, spacing and hint timing, and the light theme until
+/// the editor's own is applied.
+fn configure_context(ctx: &egui::Context) {
+    ctx.options_mut(|options| {
+        options.zoom_with_keyboard = false;
+        options.zoom_factor = scaling::zoom_factor(100.0);
+    });
+    setup_custom_fonts(ctx);
+    egui_extras::install_image_loaders(ctx);
+    ctx.all_styles_mut(|style| {
+        // Tooltips wait out a deliberate hover rather than firing the moment the pointer
+        // crosses a widget, but the grace time keeps them instant while sweeping along a
+        // row of toolbar buttons that are already showing one.
+        style.interaction.show_tooltips_only_when_still = false;
+        style.interaction.tooltip_delay = 0.5;
+        style.interaction.tooltip_grace_time = 0.2;
+        // egui 0.37 made stock buttons roomier (8x2 padding, 20pt rows);
+        // the panels are laid out for the tighter 0.36 spacing.
+        style.spacing.button_padding = egui::vec2(4.0, 1.0);
+        style.spacing.interact_size.y = 18.0;
+    });
+    ctx.set_visuals(theme_visuals(false, SELECTION_COLOR));
+}
+
 impl Gui {
     pub(crate) fn new(window: &Window, device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         let ctx = egui::Context::default();
-        ctx.options_mut(|options| {
-            options.zoom_with_keyboard = false;
-            options.zoom_factor = scaling::zoom_factor(100.0);
-        });
-        setup_custom_fonts(&ctx);
-        egui_extras::install_image_loaders(&ctx);
-        ctx.all_styles_mut(|style| {
-            // Tooltips wait out a deliberate hover rather than firing the moment the pointer
-            // crosses a widget, but the grace time keeps them instant while sweeping along a
-            // row of toolbar buttons that are already showing one.
-            style.interaction.show_tooltips_only_when_still = false;
-            style.interaction.tooltip_delay = 0.5;
-            style.interaction.tooltip_grace_time = 0.2;
-            // egui 0.37 made stock buttons roomier (8x2 padding, 20pt rows);
-            // the panels are laid out for the tighter 0.36 spacing.
-            style.spacing.button_padding = egui::vec2(4.0, 1.0);
-            style.spacing.interact_size.y = 18.0;
-        });
-        ctx.set_visuals(theme_visuals(false, SELECTION_COLOR));
+        configure_context(&ctx);
 
         let state = egui_winit::State::new(ctx.clone(), egui::ViewportId::ROOT, window, Some(window.scale_factor() as f32), window.theme(), None);
         let renderer = egui_wgpu::Renderer::new(device, surface_format, egui_wgpu::RendererOptions::default());
@@ -357,39 +366,54 @@ impl Gui {
     /// Paint what [`Self::layout`] laid out over `target_view`, which holds
     /// the frame's scene.
     pub(crate) fn paint(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, target_view: &wgpu::TextureView, paint: UiPaint) {
-        for (id, image_deltas) in &paint.textures.set {
-            for image_delta in image_deltas {
-                self.renderer.update_texture(device, queue, *id, image_delta);
-            }
-        }
-        let extra_command_buffers = self.renderer.update_buffers(device, queue, encoder, &paint.jobs, &paint.screen);
-        for command_buffer in extra_command_buffers {
-            queue.submit(std::iter::once(command_buffer));
-        }
+        paint_ui(&mut self.renderer, device, queue, encoder, target_view, paint, wgpu::LoadOp::Load);
+    }
+}
 
-        {
-            let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("egui Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.renderer.render(&mut render_pass.forget_lifetime(), &paint.jobs, &paint.screen);
+/// Upload what a frame's UI needs and paint it over `target_view`, loading
+/// what is there as `load` says: the scene under the main window's UI, or a
+/// clear for a window that has nothing under it.
+fn paint_ui(
+    renderer: &mut egui_wgpu::Renderer,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    target_view: &wgpu::TextureView,
+    paint: UiPaint,
+    load: wgpu::LoadOp<wgpu::Color>,
+) {
+    for (id, image_deltas) in &paint.textures.set {
+        for image_delta in image_deltas {
+            renderer.update_texture(device, queue, *id, image_delta);
         }
+    }
+    let extra_command_buffers = renderer.update_buffers(device, queue, encoder, &paint.jobs, &paint.screen);
+    for command_buffer in extra_command_buffers {
+        queue.submit(std::iter::once(command_buffer));
+    }
 
-        for id in &paint.textures.free {
-            self.renderer.free_texture(id);
-        }
+    {
+        let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("egui Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        renderer.render(&mut render_pass.forget_lifetime(), &paint.jobs, &paint.screen);
+    }
+
+    for id in &paint.textures.free {
+        renderer.free_texture(id);
     }
 }
 
@@ -805,16 +829,17 @@ fn draw_ui(
     let planning_tabs_bottom = planning_tabs.as_ref().map_or(f32::NEG_INFINITY, |tabs| tabs.rect.bottom());
 
     if editor.is_planning_setup() {
-        let explorer = if editor.is_schedule_pane() {
+        let explorer = if editor.is_schedule_pane() || editor.is_popped_out(state::PanelKind::Explorer) {
             elements::explorer::ExplorerLayout::empty()
         } else {
-            elements::explorer::draw_explorer(root_ui, editor, project, document, commands)
+            elements::explorer::draw_explorer(root_ui, editor, project, document, commands, false)
         };
-        let console_rect = editor.show_console.then(|| {
+        let assistant = draw_docked_assistant(root_ui, editor, commands);
+        let console_rect = (editor.show_console && !editor.is_popped_out(state::PanelKind::Console)).then(|| {
             let available_height = root_ui.available_height();
             let toolbar_height = elements::toolbars::bottom_toolbar_height();
             let (console_min, console_max) = chrome::panel_size_limits(available_height - toolbar_height);
-            elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
+            elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot, commands)
         });
         let console = console_rect.unwrap_or(egui::Rect::NOTHING);
         let setup_group = editor.setup_group;
@@ -858,10 +883,15 @@ fn draw_ui(
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
         chrome::paint_regions(
             ctx,
-            [viewport_bar_rect, console].into_iter().chain(explorer.regions).chain(planning_layout.regions),
+            [viewport_bar_rect, console]
+                .into_iter()
+                .chain(explorer.regions)
+                .chain(planning_layout.regions)
+                .chain(assistant.iter().flat_map(|island| island.regions.iter().copied())),
             status_bar_rect,
         );
         chrome::paint_grips(ctx, planning_layout.grips);
+        chrome::paint_grips(ctx, assistant.map(|island| island.grip));
         if let Some(tabs) = &planning_tabs {
             tabs.paint(ctx);
         }
@@ -880,23 +910,25 @@ fn draw_ui(
 
     // A rain simulation's tab shows nothing of the project's, so it has no
     // explorer to choose from.
-    let explorer = if editor.is_water_run() {
+    let explorer = if editor.is_water_run() || editor.is_popped_out(state::PanelKind::Explorer) {
         // As for the optional panels below: keep the root auto-id sequence
         // the same whether or not this one is drawn.
         root_ui.skip_ahead_auto_ids(1);
         elements::explorer::ExplorerLayout::empty()
     } else {
-        elements::explorer::draw_explorer(root_ui, editor, project, document, commands)
+        elements::explorer::draw_explorer(root_ui, editor, project, document, commands, false)
     };
+    // Down the far right, the whole height under the viewport bar.
+    let assistant = draw_docked_assistant(root_ui, editor, commands);
 
     // The console belongs below the bottom toolbar. Reserve the toolbar's height
     // before showing the console so dragging it to its maximum cannot starve the
     // toolbar (or the side panels drawn afterward) of layout space.
-    let console_rect = editor.show_console.then(|| {
+    let console_rect = (editor.show_console && !editor.is_popped_out(state::PanelKind::Console)).then(|| {
         let available_height = root_ui.available_height();
         let toolbar_height = elements::toolbars::bottom_toolbar_height();
         let (console_min, console_max) = chrome::panel_size_limits(available_height - toolbar_height);
-        elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
+        elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot, commands)
     });
     if console_rect.is_none() {
         // `Panel::show` creates one direct child of `root_ui`. Keep the root
@@ -1575,7 +1607,8 @@ fn draw_ui(
         ]
         .into_iter()
         .chain(explorer.regions)
-        .chain(planning_regions),
+        .chain(planning_regions)
+        .chain(assistant.iter().flat_map(|island| island.regions.iter().copied())),
         status_bar_rect,
     );
     // Centre the explorer resize grip on its full-height column.
@@ -1591,7 +1624,8 @@ fn draw_ui(
             ])
             // The island names its own seam, so the grip lights up for whichever
             // of the right-edge panels the workspace drew.
-            .chain(planning_grips),
+            .chain(planning_grips)
+            .chain(assistant.map(|island| island.grip)),
     );
     // Over the regions' chrome: the open workspace tab reaches down through
     // the gap to the viewport bar under it, and Planning's tabs sit in the
@@ -1661,6 +1695,17 @@ fn draw_initiation_cards(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui:
         painter.add(egui::Shape::convex_polygon(pointer, fill, stroke));
         painter.rect(rect, 3.0 * scale, fill, stroke, egui::StrokeKind::Inside);
         painter.galley(rect.center() - galley.size() * 0.5, galley, egui::Color32::WHITE);
+    }
+}
+
+/// The Assistant, docked down the right of the main window while it is shown
+/// and not popped out. Keeps the root's auto-id sequence the same either way.
+fn draw_docked_assistant(root_ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> Option<widgets::island::IslandResponse<()>> {
+    if editor.show_assistant && !editor.is_popped_out(state::PanelKind::Assistant) {
+        Some(elements::assistant::draw_assistant_island(root_ui, editor, commands))
+    } else {
+        root_ui.skip_ahead_auto_ids(1);
+        None
     }
 }
 

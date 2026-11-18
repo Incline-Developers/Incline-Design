@@ -43,7 +43,7 @@ const LOGO_SIZE: f32 = 18.0;
 const LOGO_MARGIN: f32 = 6.0;
 /// Space between the run of menus and tabs and the window's buttons, at
 /// either end of the bar.
-const WINDOW_BUTTONS_GAP: f32 = 8.0;
+pub(crate) const WINDOW_BUTTONS_GAP: f32 = 8.0;
 /// Space between the last menu and the workspace tabs, on top of the bar's
 /// item spacing, so the two runs read as two rather than one.
 #[cfg(not(target_os = "macos"))]
@@ -52,7 +52,7 @@ const MENUS_TABS_GAP: f32 = 2.0;
 /// menus and the workspace tabs' names. Centred on the
 /// row they ride high, the bar's top padding being only the window's edge.
 /// See [`lowered`].
-const LABEL_DROP: f32 = 2.0;
+pub(crate) const LABEL_DROP: f32 = 2.0;
 /// Space either side of a workspace tab's label.
 const TAB_PADDING: f32 = 10.0;
 /// Vertical space a workspace tab claims in the bar.
@@ -103,12 +103,8 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
     // Not a region: the bar spans the window and carries the gap's own colour,
     // so it reads as the backdrop the workspace is laid on rather than as a
     // panel of its own. See `chrome::window_bar_frame`.
-    let frame = crate::ui::chrome::window_bar_frame(ui);
+    let frame = title_bar_frame(ui);
     let mut tabs = None;
-    let frame = frame.inner_margin(egui::Margin {
-        top: frame.inner_margin.top + TOP_PADDING,
-        ..frame.inner_margin
-    });
     let rect = egui::Panel::top("main_menu")
         .show_separator_line(false)
         .frame(frame)
@@ -164,6 +160,17 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
         .response
         .rect;
     (rect, tabs)
+}
+
+/// The frame of a bar that is its window's title bar too: the window bar's,
+/// with room above it so what is on it is not pinned to the window's edge.
+/// The Assistant's window has one as well (`elements::assistant`).
+pub(crate) fn title_bar_frame(ui: &egui::Ui) -> egui::Frame {
+    let frame = crate::ui::chrome::window_bar_frame(ui);
+    frame.inner_margin(egui::Margin {
+        top: frame.inner_margin.top + TOP_PADDING,
+        ..frame.inner_margin
+    })
 }
 
 /// Lay `add_contents` out along the bar [`LABEL_DROP`] lower than the row
@@ -391,7 +398,7 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
 fn draw_view_menu(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
     let view_menu = tr!("menu-view");
     MenuBarMenu::new(&view_menu).show(ui, |ui| {
-        for toggle in [ViewToggle::Console, ViewToggle::DarkMode] {
+        for toggle in [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::Assistant] {
             if ContextMenuAction::new(toggle.label()).checked(toggle.get(editor)).show(ui).clicked() {
                 commands.push(UiCommand::ToggleViewOption(toggle));
                 ui.close();

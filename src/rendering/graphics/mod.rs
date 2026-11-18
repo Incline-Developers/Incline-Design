@@ -48,6 +48,8 @@ pub(crate) mod cinematic;
 pub(crate) mod frame;
 pub(crate) mod frustum;
 pub(crate) mod init;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod panel_window;
 pub(crate) mod passes;
 pub(crate) mod projections;
 mod readback;
@@ -428,12 +430,16 @@ pub(crate) struct Graphics<'a> {
     pub(super) depth_view: wgpu::TextureView,
     pub(super) block_model_transparency_targets: Option<BlockModelTransparencyTargets>,
     pub(super) block_model_volume_target: Option<BlockModelVolumeTarget>,
-    slice_preview: Option<slice_preview::DetachedSlicePreview>,
+    /// The windows of the panels popped out of this one. See `panel_window`.
+    #[cfg(not(target_arch = "wasm32"))]
+    panel_windows: Vec<panel_window::PanelWindow>,
+    /// The section preview's picture was drawn again this frame, so a
+    /// window showing it has to be drawn again too.
+    section_preview_rendered: bool,
     embedded_slice_preview: Option<slice_preview::EmbeddedSlicePreview>,
     /// Scene fingerprints of the last rendered slice previews; a preview only
     /// re-renders when its key (or its own view state) changes.
     embedded_preview_scene_key: Option<u64>,
-    detached_preview_scene_key: Option<u64>,
     /// The Solids Setup page's offscreen orbit view, and the fingerprint of
     /// what it last drew.
     solid_preview: Option<solid_preview::SolidPreviewTarget>,

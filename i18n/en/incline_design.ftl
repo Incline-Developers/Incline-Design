@@ -1084,7 +1084,6 @@ app-could-not-restore-browser-project = Could not restore the browser project: {
 app-deleted-browser-project = Deleted browser project
 app-failed-create-window-error = Failed to create window: { $error }
 app-failed-create-window-icon-error = Failed to create window icon: { $error }
-app-failed-detach-top-down-preview = Failed to detach top-down preview: { $error }
 app-failed-initialize-graphics-error = Failed to initialise graphics: { $error }
 app-browser-preferences-load-failed = Failed to load browser preferences: { $error }
 app-failed-load-config-file-error = Failed to load config file: { $error }
@@ -3508,13 +3507,12 @@ state-cut-topology-pit-shell = Cut Topography to Pit Shell
 state-cut-triangulation-polyline = Cut Triangulation by Polyline
 state-cut-triangulation-z = Clip Triangulation by Elevation
 state-dark-mode = Dark Mode
+state-assistant = Assistant
 state-data-ticked-export-checklist = The data ticked in the export checklist
-state-detached = Detached
 state-disabled = Disabled
 state-discard-project-changes = Discard Project Changes
 state-discard-replace-project = Discard and Replace Project
 state-discarding-unsaved-changes = Discarding unsaved changes
-state-docked = Docked
 state-drape-raster = Drape Raster
 state-drill-pattern = Drill Pattern
 state-duplicate-layer = Duplicate Layer
@@ -3609,7 +3607,6 @@ state-show-console = Show Console
 state-show-project = Show Project
 state-shown = Shown
 state-slice-mode = Section View
-state-slice-preview = Section Preview
 state-south = South
 state-stem-contours = { $stem } Contours
 state-trim-above = Trim above
@@ -3899,7 +3896,6 @@ viewport-interval-data = Interval data
 viewport-intervals = Intervals
 viewport-m-from-collar-toward-bearing = m from collar, toward { $bearing }°
 viewport-navigation-hint = Middle-drag to pan · Scroll to zoom
-viewport-navigation-hint-detach = Middle-drag to pan · Scroll to zoom · Click to detach
 viewport-n = N
 viewport-no-data-variable = No data for this variable
 viewport-no-density-log-hole = No density log for this hole
@@ -4797,7 +4793,6 @@ err-file-opening-browser-project = Opening browser project…
 err-file-layer-description = layer { $layer }
 
 # src/app/mod.rs
-err-file-section-preview-title = { $app } | Section preview (wheel to zoom, middle-drag to pan, F to fit)
 err-file-browser-window-failed = Could not create the browser window: { $error }
 
 # src/app/jobs.rs
@@ -5648,3 +5643,21 @@ water-error-settings = The storm's settings are not all valid numbers.
 water-error-no-surface = Choose a loaded surface to rain on.
 water-error-empty = The surface has no area in plan to rain on.
 water-clock = { $time } / { $end }
+
+## The Assistant (ui/elements/assistant.rs)
+assistant-title = Assistant
+assistant-empty = Ask the Assistant about your project, or to do something in it.
+assistant-not-connected = No AI provider is connected yet.
+assistant-message-hint = Message the Assistant, or type / for commands
+assistant-send = Send
+assistant-send-not-connected = Connect an AI provider to send messages.
+assistant-command-clear = Clear the conversation
+assistant-command-help = List the commands
+assistant-commands-heading = Commands:
+assistant-unknown-command = There is no { $name } command. Type /help to list them.
+
+## Panels popped out into windows of their own (ui/widgets/pop_out.rs)
+panel-pop-out = Pop out into its own window
+panel-explorer = Explorer
+panel-console = Console
+panel-section-preview = Section Preview

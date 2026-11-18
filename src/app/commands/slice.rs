@@ -34,8 +34,6 @@ impl<'a> App<'a> {
         self.editor.slice_pending_start = None;
         self.editor.active_tool = ActiveTool::None;
         self.editor.slice_preview_navigation.reset();
-        self.slice_preview_cursor_px = None;
-        self.slice_preview_middle_down = false;
         self.set_fly_mode_enabled(false);
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.set_fly_mode_enabled(false);
@@ -87,13 +85,10 @@ impl<'a> App<'a> {
         self.editor.slice_mode_enabled = false;
         self.editor.slice_preview_detached = false;
         self.editor.slice_preview_navigation.reset();
-        self.slice_preview_cursor_px = None;
-        self.slice_preview_middle_down = false;
         self.editor.selection_box_start_px = None;
         self.editor.selection_box_current_px = None;
         self.pending_selection_click = None;
         if let Some(graphics) = self.graphics.as_mut() {
-            graphics.close_slice_preview();
             graphics.exit_slice_mode();
         }
         self.end_right_orbit();

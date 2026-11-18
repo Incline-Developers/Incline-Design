@@ -1129,19 +1129,6 @@ impl<'a> App<'a> {
             UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
             UiCommand::SetTopologyContours(enabled) => self.set_topology_contours(enabled),
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::SetSlicePreviewDetached(detached) => {
-                self.editor.slice_preview_detached = cfg!(not(target_arch = "wasm32")) && detached && self.editor.slice_mode_enabled;
-                self.slice_preview_cursor_px = None;
-                self.slice_preview_middle_down = false;
-                if !self.editor.slice_preview_detached
-                    && let Some(graphics) = self.graphics.as_mut()
-                {
-                    graphics.close_slice_preview();
-                }
-                self.redraw_requested = true;
-                Ok(())
-            }
             UiCommand::SetShowPoints(enabled) => self.set_show_points(enabled),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SetCinematicEnabled(enabled) => self.set_cinematic_enabled(enabled),
@@ -1224,6 +1211,7 @@ impl<'a> App<'a> {
             UiCommand::SetLanguage(choice) => self.set_language(choice),
             UiCommand::SetWellLogStyle(style) => self.set_well_log_style(style),
             UiCommand::ToggleViewOption(option) => self.toggle_view_option(option),
+            UiCommand::SetPanelPoppedOut(kind, popped_out) => self.set_panel_popped_out(kind, popped_out),
             UiCommand::RemoveTriangulation(id) => {
                 self.remove_triangulation(id);
                 Ok(())

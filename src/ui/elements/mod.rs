@@ -7,6 +7,7 @@
 //! [`bar_strip`] is the one piece shared between them: the layout the two bars
 //! across the top of the window are laid out on.
 
+pub(crate) mod assistant;
 pub(crate) mod blast;
 pub(crate) mod blasting;
 pub(crate) mod block_model;
@@ -20,6 +21,8 @@ pub(crate) mod haulage;
 /// The Improve run's floating progress card.
 pub(crate) mod improve_progress;
 pub(crate) mod main_menu;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod panel_window;
 pub(crate) mod planning_setup;
 pub(crate) mod planning_tabs;
 pub(crate) mod products;

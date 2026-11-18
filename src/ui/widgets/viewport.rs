@@ -1698,9 +1698,6 @@ impl ViewportMiniMap {
     }
 
     pub(crate) fn show(self, ctx: &egui::Context, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-        #[cfg(target_arch = "wasm32")]
-        let _ = commands;
-
         if editor.slice_preview_detached {
             return;
         }
@@ -1724,7 +1721,7 @@ impl ViewportMiniMap {
         let preview_size = egui::vec2(side, side);
         let preview_pos = egui::pos2(self.viewport_rect.right() - preview_size.x - SLICE_PREVIEW_MARGIN, top);
         let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::ZERO);
-        egui::Window::new("")
+        let shown = egui::Window::new("")
             .id(self.id)
             .order(egui::Order::Foreground)
             .fixed_pos(preview_pos)
@@ -1736,78 +1733,98 @@ impl ViewportMiniMap {
             .frame(frame)
             .show(ctx, |ui| {
                 let size = ui.available_size().max(egui::vec2(120.0, 120.0));
-                let response = if let Some(texture_id) = editor.slice_preview_texture {
-                    ui.add(
-                        egui::Image::new(egui::load::SizedTexture::new(texture_id, size))
-                            .fit_to_exact_size(size)
-                            .sense(egui::Sense::click_and_drag()),
-                    )
-                } else {
-                    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
-                    ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
-                    response
-                };
-                let pixels_per_point = ctx.pixels_per_point();
-                editor.slice_preview_size_px = [
-                    (response.rect.width() * pixels_per_point).round().max(1.0) as u32,
-                    (response.rect.height() * pixels_per_point).round().max(1.0) as u32,
-                ];
-
-                let fitted_zoom = crate::ui::state::fitted_slice_preview_zoom(editor.slice_half_length, editor.slice_preview_size_px[1], f64::from(pixels_per_point));
-                let current_zoom = fitted_zoom * editor.slice_preview_navigation.zoom_multiplier();
-                let mut navigation_changed = false;
-                if response.dragged_by(egui::PointerButton::Middle) {
-                    let delta = response.drag_delta() * pixels_per_point;
-                    navigation_changed |=
-                        editor
-                            .slice_preview_navigation
-                            .pan_by_pixels([f64::from(delta.x), f64::from(delta.y)], current_zoom, f64::from(editor.slice_preview_size_px[1]));
-                }
-
-                if response.hovered() {
-                    let scroll = ui.input(|input| {
-                        input
-                            .events
-                            .iter()
-                            .filter_map(|event| match event {
-                                egui::Event::MouseWheel { unit, delta, .. } => Some(match unit {
-                                    egui::MouseWheelUnit::Point => f64::from(delta.y * pixels_per_point),
-                                    // Match the native camera's convention that one wheel
-                                    // line is approximately one hundred physical pixels.
-                                    egui::MouseWheelUnit::Line => f64::from(delta.y) * 100.0,
-                                    egui::MouseWheelUnit::Page => f64::from(delta.y) * f64::from(editor.slice_preview_size_px[1]),
-                                }),
-                                _ => None,
-                            })
-                            .sum::<f64>()
-                    });
-                    if scroll != 0.0 {
-                        let pointer = response.hover_pos().unwrap_or(response.rect.center());
-                        let cursor_px = [
-                            f64::from((pointer.x - response.rect.left()) * pixels_per_point),
-                            f64::from((pointer.y - response.rect.top()) * pixels_per_point),
-                        ];
-                        navigation_changed |= editor.slice_preview_navigation.zoom_at_pixel(
-                            scroll,
-                            cursor_px,
-                            [f64::from(editor.slice_preview_size_px[0]), f64::from(editor.slice_preview_size_px[1])],
-                            fitted_zoom,
-                        );
-                    }
-                }
-
-                if navigation_changed {
-                    ctx.request_repaint();
-                }
-
-                #[cfg(not(target_arch = "wasm32"))]
-                if response.clicked() {
-                    commands.push(UiCommand::SetSlicePreviewDetached(true));
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                response.hint(tr!("viewport-navigation-hint-detach"));
-                #[cfg(target_arch = "wasm32")]
-                response.hint(tr!("viewport-navigation-hint"));
+                draw_preview_picture(ui, editor, editor.slice_preview_texture, size);
             });
+        if let Some(shown) = shown
+            && crate::ui::widgets::pop_out::corner_button(ctx, "section_preview", shown.response.rect, tr!("panel-pop-out"))
+        {
+            commands.push(UiCommand::SetPanelPoppedOut(crate::ui::state::PanelKind::SectionPreview, true));
+        }
     }
+}
+
+/// The section preview's picture, `size` across, and its navigation:
+/// middle-drag pans, the wheel zooms. `texture` is the picture as the window
+/// it is drawn in knows it.
+fn draw_preview_picture(ui: &mut egui::Ui, editor: &mut EditorState, texture: Option<egui::TextureId>, size: egui::Vec2) {
+    let response = if let Some(texture_id) = texture {
+        ui.add(
+            egui::Image::new(egui::load::SizedTexture::new(texture_id, size))
+                .fit_to_exact_size(size)
+                .sense(egui::Sense::click_and_drag()),
+        )
+    } else {
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+        ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+        response
+    };
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    editor.slice_preview_size_px = [
+        (response.rect.width() * pixels_per_point).round().max(1.0) as u32,
+        (response.rect.height() * pixels_per_point).round().max(1.0) as u32,
+    ];
+
+    let fitted_zoom = crate::ui::state::fitted_slice_preview_zoom(editor.slice_half_length, editor.slice_preview_size_px[1], f64::from(pixels_per_point));
+    let current_zoom = fitted_zoom * editor.slice_preview_navigation.zoom_multiplier();
+    let mut navigation_changed = false;
+    if response.dragged_by(egui::PointerButton::Middle) {
+        let delta = response.drag_delta() * pixels_per_point;
+        navigation_changed |=
+            editor
+                .slice_preview_navigation
+                .pan_by_pixels([f64::from(delta.x), f64::from(delta.y)], current_zoom, f64::from(editor.slice_preview_size_px[1]));
+    }
+
+    if response.hovered() {
+        let scroll = ui.input(|input| {
+            input
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    egui::Event::MouseWheel { unit, delta, .. } => Some(match unit {
+                        egui::MouseWheelUnit::Point => f64::from(delta.y * pixels_per_point),
+                        // Match the native camera's convention that one wheel
+                        // line is approximately one hundred physical pixels.
+                        egui::MouseWheelUnit::Line => f64::from(delta.y) * 100.0,
+                        egui::MouseWheelUnit::Page => f64::from(delta.y) * f64::from(editor.slice_preview_size_px[1]),
+                    }),
+                    _ => None,
+                })
+                .sum::<f64>()
+        });
+        if scroll != 0.0 {
+            let pointer = response.hover_pos().unwrap_or(response.rect.center());
+            let cursor_px = [
+                f64::from((pointer.x - response.rect.left()) * pixels_per_point),
+                f64::from((pointer.y - response.rect.top()) * pixels_per_point),
+            ];
+            navigation_changed |= editor.slice_preview_navigation.zoom_at_pixel(
+                scroll,
+                cursor_px,
+                [f64::from(editor.slice_preview_size_px[0]), f64::from(editor.slice_preview_size_px[1])],
+                fitted_zoom,
+            );
+        }
+    }
+
+    if navigation_changed {
+        ui.ctx().request_repaint();
+    }
+
+    response.hint(tr!("viewport-navigation-hint"));
+}
+
+/// Draw the section preview filling a window of its own, popped out
+/// (`app/panel_windows.rs`). Returns its region.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn draw_section_preview_window(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
+    let _ = commands;
+    egui::CentralPanel::default()
+        .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
+        .show(ui, |ui| {
+            let size = ui.available_size().max(egui::vec2(1.0, 1.0));
+            draw_preview_picture(ui, editor, editor.slice_preview_window_texture, size);
+        })
+        .response
+        .rect
 }

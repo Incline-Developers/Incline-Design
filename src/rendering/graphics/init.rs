@@ -918,13 +918,14 @@ impl<'a> Graphics<'a> {
             pending_screenshot: None,
             camera_lock: None,
             video_target: None,
-            slice_preview: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            panel_windows: Vec::new(),
+            section_preview_rendered: false,
             embedded_slice_preview: None,
             embedded_preview_scene_key: None,
             solid_preview: None,
             solid_preview_key: None,
             solid_preview_framing: None,
-            detached_preview_scene_key: None,
             #[cfg(not(target_arch = "wasm32"))]
             cinematic: None,
             #[cfg(not(target_arch = "wasm32"))]

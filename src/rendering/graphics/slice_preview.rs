@@ -6,10 +6,9 @@ use glam::DVec3;
 use wgpu::util::DeviceExt;
 use winit::{
     dpi::PhysicalSize,
-    window::{Window, WindowId},
 };
 
-use super::{BlockModelTransparencyTargets, BlockModelVolumeTarget, Graphics, RenderSurfaceError};
+use super::{BlockModelTransparencyTargets, BlockModelVolumeTarget, Graphics};
 use crate::{
     model::{Document, block_model::OpenBlockModel, drill_hole::OpenDrillHoleDataset, point_cloud::OpenPointCloud, raster::OpenRasterTexture, triangulation::OpenTriangulation},
     rendering::camera::{Camera, CameraUniform, Projection},
@@ -172,30 +171,10 @@ struct OverlayTransform {
 /// physical pixel wide, so the overview tessellates each segment into a quad.
 const SLICE_OVERLAY_LINE_WIDTH_POINTS: f64 = 2.0;
 
-pub(super) struct DetachedSlicePreview {
-    window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
-    size: PhysicalSize<u32>,
-    camera: Camera,
-    projection: Projection,
-    camera_uniform: CameraUniform,
-    camera_buffer: wgpu::Buffer,
-    camera_bind_group: wgpu::BindGroup,
-    msaa_color: wgpu::Texture,
-    msaa_view: wgpu::TextureView,
-    depth_texture: wgpu::Texture,
-    depth_view: wgpu::TextureView,
-    transparency_targets: Option<BlockModelTransparencyTargets>,
-    volume_target: Option<BlockModelVolumeTarget>,
-    overlay_pipeline: wgpu::RenderPipeline,
-    overlay_transform_buffer: wgpu::Buffer,
-    overlay_bind_group: wgpu::BindGroup,
-    overlay_buffer: wgpu::Buffer,
-    overlay_capacity: usize,
-}
-
 pub(super) struct EmbeddedSlicePreview {
+    /// Counts the colour targets made, so a popped-out preview's window
+    /// knows to register the new one (`panel_window`).
+    generation: u64,
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     gui_view: wgpu::TextureView,
@@ -220,199 +199,81 @@ pub(super) struct EmbeddedSlicePreview {
     overlay_capacity: usize,
 }
 
-impl DetachedSlicePreview {
-    #[cfg(not(target_arch = "wasm32"))]
-    fn new(graphics: &Graphics<'_>, window: Arc<Window>) -> anyhow::Result<Self> {
-        let size = window.inner_size();
-        let surface = graphics.instance.create_surface(window.clone())?;
-        let capabilities = surface.get_capabilities(&graphics.adapter);
-        if !capabilities.formats.contains(&graphics.config.format) {
-            anyhow::bail!(crate::i18n::tr!("err-gfx-preview-format"));
-        }
-        let present_mode = capabilities
-            .present_modes
-            .iter()
-            .copied()
-            .find(|mode| *mode == wgpu::PresentMode::Fifo)
-            .or_else(|| capabilities.present_modes.first().copied())
-            .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-gfx-preview-present-mode")))?;
-        let alpha_mode = capabilities
-            .alpha_modes
-            .first()
-            .copied()
-            .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-gfx-preview-alpha-mode")))?;
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: graphics.config.format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode,
-            alpha_mode,
-            view_formats: graphics.config.view_formats.clone(),
-            desired_maximum_frame_latency: 2,
-            color_space: wgpu::SurfaceColorSpace::Auto,
-        };
-        surface.configure(&graphics.device, &config);
-
-        let camera = Camera::new(DVec3::new(0.0, 0.0, 10.0), 0.0, 0.0);
-        let projection = Projection::new(config.width, config.height, -1000.0, 1000.0);
-        let mut camera_uniform = CameraUniform::new();
-        camera_uniform.update_viewport(config.width, config.height);
-        let camera_buffer = graphics.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Top-down preview camera"),
-            contents: bytemuck::bytes_of(&camera_uniform),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let camera_layout = graphics.scene_pipelines.render_pipeline.get_bind_group_layout(0);
-        let camera_bind_group = graphics.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Top-down preview camera bind group"),
-            layout: &camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-        });
-        let (msaa_color, msaa_view) = Graphics::create_msaa_target(&graphics.device, &config, graphics.sample_count);
-        let (depth_texture, depth_view) = Graphics::create_depth_target(&graphics.device, &config, graphics.sample_count);
-        let transparency_targets = None;
-        let volume_target = None;
-        let (overlay_pipeline, overlay_transform_buffer, overlay_bind_group) = Self::create_overlay_pipeline(graphics, config.format.add_srgb_suffix());
-        let overlay_buffer = graphics.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Top-down slice overlay"),
-            size: size_of::<OverlayVertex>() as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        Ok(Self {
-            window,
-            surface,
-            config,
-            size,
-            camera,
-            projection,
-            camera_uniform,
-            camera_buffer,
-            camera_bind_group,
-            msaa_color,
-            msaa_view,
-            depth_texture,
-            depth_view,
-            transparency_targets,
-            volume_target,
-            overlay_pipeline,
-            overlay_transform_buffer,
-            overlay_bind_group,
-            overlay_buffer,
-            overlay_capacity: 1,
-        })
-    }
-
-    fn create_overlay_pipeline(graphics: &Graphics<'_>, format: wgpu::TextureFormat) -> (wgpu::RenderPipeline, wgpu::Buffer, wgpu::BindGroup) {
-        let device = &graphics.device;
-        let transform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Top-down slice overlay transform"),
-            contents: bytemuck::bytes_of(&OverlayTransform {
-                center: [0.0; 2],
-                scale: [1.0; 2],
-            }),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Top-down slice overlay layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Top-down slice overlay bind group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: transform_buffer.as_entire_binding(),
-            }],
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Top-down slice overlay shader"),
-            source: wgpu::ShaderSource::Wgsl(OVERLAY_SHADER.into()),
-        });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Top-down slice overlay pipeline layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Top-down slice overlay pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: size_of::<OverlayVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4],
-                })],
+/// The pipeline the preview's overlay strokes (the slice's outline and
+/// line) are drawn with, and its transform.
+fn create_overlay_pipeline(graphics: &Graphics<'_>, format: wgpu::TextureFormat) -> (wgpu::RenderPipeline, wgpu::Buffer, wgpu::BindGroup) {
+    let device = &graphics.device;
+    let transform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Top-down slice overlay transform"),
+        contents: bytemuck::bytes_of(&OverlayTransform {
+            center: [0.0; 2],
+            scale: [1.0; 2],
+        }),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Top-down slice overlay layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        (pipeline, transform_buffer, bind_group)
-    }
-
-    fn recreate_targets(&mut self, graphics: &Graphics<'_>) {
-        let (msaa_color, msaa_view) = Graphics::create_msaa_target(&graphics.device, &self.config, graphics.sample_count);
-        let (depth_texture, depth_view) = Graphics::create_depth_target(&graphics.device, &self.config, graphics.sample_count);
-        self.msaa_color = msaa_color;
-        self.msaa_view = msaa_view;
-        self.depth_texture = depth_texture;
-        self.depth_view = depth_view;
-        self.transparency_targets = None;
-        self.volume_target = None;
-    }
-
-    fn id(&self) -> WindowId {
-        self.window.id()
-    }
-
-    fn request_redraw(&self) {
-        self.window.request_redraw();
-    }
-
-    fn ensure_overlay_capacity(&mut self, device: &wgpu::Device, required: usize) {
-        if required <= self.overlay_capacity {
-            return;
-        }
-        self.overlay_capacity = required.next_power_of_two();
-        self.overlay_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Top-down slice overlay"),
-            size: (self.overlay_capacity * size_of::<OverlayVertex>()) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-    }
+            count: None,
+        }],
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Top-down slice overlay bind group"),
+        layout: &bind_group_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: transform_buffer.as_entire_binding(),
+        }],
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Top-down slice overlay shader"),
+        source: wgpu::ShaderSource::Wgsl(OVERLAY_SHADER.into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Top-down slice overlay pipeline layout"),
+        bind_group_layouts: &[Some(&bind_group_layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Top-down slice overlay pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<OverlayVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4],
+            })],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+    (pipeline, transform_buffer, bind_group)
 }
 
 impl EmbeddedSlicePreview {
@@ -453,7 +314,7 @@ impl EmbeddedSlicePreview {
         let (depth_texture, depth_view) = Graphics::create_depth_target(&graphics.device, &config, graphics.sample_count);
         let transparency_targets = None;
         let volume_target = None;
-        let (overlay_pipeline, overlay_transform_buffer, overlay_bind_group) = DetachedSlicePreview::create_overlay_pipeline(graphics, config.format.add_srgb_suffix());
+        let (overlay_pipeline, overlay_transform_buffer, overlay_bind_group) = create_overlay_pipeline(graphics, config.format.add_srgb_suffix());
         let overlay_buffer = graphics.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Embedded top-down slice overlay"),
             size: size_of::<OverlayVertex>() as u64,
@@ -461,6 +322,7 @@ impl EmbeddedSlicePreview {
             mapped_at_creation: false,
         });
         Self {
+            generation: 0,
             texture,
             view,
             gui_view,
@@ -518,6 +380,7 @@ impl EmbeddedSlicePreview {
         self.projection.resize(self.size.width, self.size.height);
         self.camera_uniform.update_viewport(self.size.width, self.size.height);
         (self.texture, self.view, self.gui_view) = Self::create_color_target(&graphics.device, &self.config);
+        self.generation += 1;
         graphics.gui.update_native_texture(&graphics.device, self.texture_id, &self.gui_view);
         let (msaa_color, msaa_view) = Graphics::create_msaa_target(&graphics.device, &self.config, graphics.sample_count);
         let (depth_texture, depth_view) = Graphics::create_depth_target(&graphics.device, &self.config, graphics.sample_count);
@@ -544,6 +407,20 @@ impl EmbeddedSlicePreview {
 }
 
 impl<'a> Graphics<'a> {
+    /// The section preview's picture, for a window showing it, and the
+    /// generation of the texture it is in.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn section_preview_view(&self) -> Option<(u64, wgpu::TextureView)> {
+        self.embedded_slice_preview.as_ref().map(|preview| (preview.generation, preview.gui_view.clone()))
+    }
+
+    /// Whether the section preview's picture was drawn again since this was
+    /// last asked.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn take_section_preview_rendered(&mut self) -> bool {
+        std::mem::take(&mut self.section_preview_rendered)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_embedded_slice_preview(
         &mut self,
@@ -555,7 +432,8 @@ impl<'a> Graphics<'a> {
         rasters: &[OpenRasterTexture],
         editor: &mut EditorState,
     ) {
-        if !editor.slice_mode_enabled || editor.slice_preview_detached {
+        // Popped out too: its window shows the same picture.
+        if !editor.slice_mode_enabled {
             editor.slice_preview_texture = None;
             return;
         }
@@ -585,6 +463,7 @@ impl<'a> Graphics<'a> {
         };
         if resized || self.interaction_active() || self.point_cloud_gpu.has_pending_uploads() || self.embedded_preview_scene_key != Some(key) {
             self.embedded_preview_scene_key = Some(key);
+            self.section_preview_rendered = true;
             self.render_embedded_slice_preview_inner(
                 &mut preview,
                 document,
@@ -598,32 +477,6 @@ impl<'a> Graphics<'a> {
             );
         }
         self.embedded_slice_preview = Some(preview);
-    }
-
-    /// Request a detached-preview redraw only when the scene it would show
-    /// has changed (or an interaction is in flight). Called once per main
-    /// frame; without the key check every main redraw forced a second full
-    /// scene render in the preview window.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn request_slice_preview_redraw_if_scene_changed(
-        &mut self,
-        editor: &EditorState,
-        document: &Document,
-        triangulations: &[OpenTriangulation],
-        block_models: &[OpenBlockModel],
-        drill_holes: &[OpenDrillHoleDataset],
-        point_clouds: &[OpenPointCloud],
-        rasters: &[OpenRasterTexture],
-    ) {
-        let Some(preview) = &self.slice_preview else {
-            return;
-        };
-        let key = slice_preview_scene_key(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters);
-        let view_pending = self.slice_view.as_ref().is_some_and(super::SliceViewState::has_pending_updates);
-        if self.interaction_active() || self.point_cloud_gpu.has_pending_uploads() || view_pending || self.detached_preview_scene_key != Some(key) {
-            self.detached_preview_scene_key = Some(key);
-            preview.request_redraw();
-        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -728,192 +581,6 @@ impl<'a> Graphics<'a> {
         std::mem::swap(&mut self.size, &mut preview.size);
 
         self.queue.submit([encoder.finish()]);
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn open_slice_preview(&mut self, window: Arc<Window>) -> anyhow::Result<()> {
-        let preview = DetachedSlicePreview::new(self, window)?;
-        preview.request_redraw();
-        self.slice_preview = Some(preview);
-        Ok(())
-    }
-
-    pub(crate) fn close_slice_preview(&mut self) {
-        self.slice_preview = None;
-    }
-
-    pub(crate) fn slice_preview_window_id(&self) -> Option<WindowId> {
-        self.slice_preview.as_ref().map(DetachedSlicePreview::id)
-    }
-
-    pub(crate) fn slice_preview_viewport(&self) -> Option<(PhysicalSize<u32>, f64)> {
-        self.slice_preview.as_ref().map(|preview| (preview.size, preview.window.scale_factor()))
-    }
-
-    pub(crate) fn request_slice_preview_redraw(&self) {
-        if let Some(preview) = &self.slice_preview {
-            preview.request_redraw();
-        }
-    }
-
-    pub(crate) fn resize_slice_preview(&mut self, size: PhysicalSize<u32>) {
-        let Some(mut preview) = self.slice_preview.take() else {
-            return;
-        };
-        if size.width > 0 && size.height > 0 {
-            preview.size = size;
-            preview.config.width = size.width;
-            preview.config.height = size.height;
-            preview.projection.resize(size.width, size.height);
-            preview.camera_uniform.update_viewport(size.width, size.height);
-            preview.surface.configure(&self.device, &preview.config);
-            preview.recreate_targets(self);
-            preview.request_redraw();
-        }
-        self.slice_preview = Some(preview);
-    }
-
-    pub(crate) fn reconfigure_slice_preview(&mut self) {
-        if let Some(preview) = self.slice_preview.as_ref() {
-            preview.surface.configure(&self.device, &preview.config);
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn render_slice_preview(
-        &mut self,
-        document: &Document,
-        triangulations: &[OpenTriangulation],
-        block_models: &[OpenBlockModel],
-        drill_holes: &[OpenDrillHoleDataset],
-        point_clouds: &[OpenPointCloud],
-        rasters: &[OpenRasterTexture],
-        editor: &EditorState,
-    ) -> Result<(), RenderSurfaceError> {
-        let Some(mut preview) = self.slice_preview.take() else {
-            return Ok(());
-        };
-        let result = self.render_slice_preview_inner(&mut preview, document, triangulations, block_models, drill_holes, point_clouds, rasters, editor);
-        self.slice_preview = Some(preview);
-        result
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn render_slice_preview_inner(
-        &mut self,
-        preview: &mut DetachedSlicePreview,
-        document: &Document,
-        triangulations: &[OpenTriangulation],
-        block_models: &[OpenBlockModel],
-        drill_holes: &[OpenDrillHoleDataset],
-        point_clouds: &[OpenPointCloud],
-        rasters: &[OpenRasterTexture],
-        editor: &EditorState,
-    ) -> Result<(), RenderSurfaceError> {
-        let output = match preview.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(output) | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
-            wgpu::CurrentSurfaceTexture::Timeout => return Err(RenderSurfaceError::Timeout),
-            wgpu::CurrentSurfaceTexture::Occluded => return Err(RenderSurfaceError::Occluded),
-            wgpu::CurrentSurfaceTexture::Outdated => return Err(RenderSurfaceError::Outdated),
-            wgpu::CurrentSurfaceTexture::Lost => return Err(RenderSurfaceError::Lost),
-            wgpu::CurrentSurfaceTexture::Validation => return Err(RenderSurfaceError::Validation),
-        };
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(preview.config.format.add_srgb_suffix()),
-            ..Default::default()
-        });
-
-        let aspect = (preview.config.width as f64 / preview.config.height.max(1) as f64).max(1e-9);
-        let (center, zoom) = slice_preview_view(editor, preview.size, preview.window.scale_factor());
-        preview.projection.zoom = zoom;
-        preview.camera.reset_to_plan_view(center, zoom);
-
-        std::mem::swap(&mut self.camera, &mut preview.camera);
-        std::mem::swap(&mut self.projection, &mut preview.projection);
-        std::mem::swap(&mut self.camera_uniform, &mut preview.camera_uniform);
-        std::mem::swap(&mut self.camera_buffer, &mut preview.camera_buffer);
-        std::mem::swap(&mut self.camera_bind_group, &mut preview.camera_bind_group);
-        std::mem::swap(&mut self.msaa_color, &mut preview.msaa_color);
-        std::mem::swap(&mut self.msaa_view, &mut preview.msaa_view);
-        std::mem::swap(&mut self.depth_texture, &mut preview.depth_texture);
-        std::mem::swap(&mut self.depth_view, &mut preview.depth_view);
-        std::mem::swap(&mut self.block_model_transparency_targets, &mut preview.transparency_targets);
-        std::mem::swap(&mut self.block_model_volume_target, &mut preview.volume_target);
-        std::mem::swap(&mut self.config, &mut preview.config);
-        std::mem::swap(&mut self.size, &mut preview.size);
-
-        self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
-        self.camera_uniform
-            .update_view_proj(&self.camera, &self.projection, self.scene_origin, self.vertical_exaggeration);
-        self.camera_uniform.update_viewport(self.size.width, self.size.height);
-        self.camera_uniform.set_interaction_quality(1.0, 1.0);
-        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&self.camera_uniform));
-
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Top-down full scene encoder"),
-        });
-        self.render_scene_pass(
-            &mut encoder,
-            &view,
-            ViewportRect::full(self.size.width, self.size.height),
-            editor,
-            triangulations,
-            block_models,
-            drill_holes,
-            point_clouds,
-            rasters,
-            false,
-        );
-
-        let plan_center = [center.x - self.scene_origin.x, center.y - self.scene_origin.y];
-        let transform = OverlayTransform {
-            center: [plan_center[0] as f32, plan_center[1] as f32],
-            scale: [(1.0 / (aspect * zoom)) as f32, (1.0 / zoom) as f32],
-        };
-        self.queue.write_buffer(&preview.overlay_transform_buffer, 0, bytemuck::bytes_of(&transform));
-        let overlay = slice_overlay_vertices(editor, self.scene_origin, zoom, self.config.height, preview.window.scale_factor());
-        preview.ensure_overlay_capacity(&self.device, overlay.len());
-        self.queue.write_buffer(&preview.overlay_buffer, 0, bytemuck::cast_slice(&overlay));
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Top-down slice indicator pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&preview.overlay_pipeline);
-            pass.set_bind_group(0, &preview.overlay_bind_group, &[]);
-            pass.set_vertex_buffer(0, preview.overlay_buffer.slice(..));
-            pass.draw(0..overlay.len() as u32, 0..1);
-        }
-
-        std::mem::swap(&mut self.camera, &mut preview.camera);
-        std::mem::swap(&mut self.projection, &mut preview.projection);
-        std::mem::swap(&mut self.camera_uniform, &mut preview.camera_uniform);
-        std::mem::swap(&mut self.camera_buffer, &mut preview.camera_buffer);
-        std::mem::swap(&mut self.camera_bind_group, &mut preview.camera_bind_group);
-        std::mem::swap(&mut self.msaa_color, &mut preview.msaa_color);
-        std::mem::swap(&mut self.msaa_view, &mut preview.msaa_view);
-        std::mem::swap(&mut self.depth_texture, &mut preview.depth_texture);
-        std::mem::swap(&mut self.depth_view, &mut preview.depth_view);
-        std::mem::swap(&mut self.block_model_transparency_targets, &mut preview.transparency_targets);
-        std::mem::swap(&mut self.block_model_volume_target, &mut preview.volume_target);
-        std::mem::swap(&mut self.config, &mut preview.config);
-        std::mem::swap(&mut self.size, &mut preview.size);
-
-        self.queue.submit([encoder.finish()]);
-        self.queue.present(output);
-        Ok(())
     }
 }
 

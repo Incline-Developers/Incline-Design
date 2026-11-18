@@ -51,6 +51,8 @@ pub(crate) struct PreferencesDraft {
     pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
     pub(crate) dark_mode: bool,
     pub(crate) show_console: bool,
+    pub(crate) show_assistant: bool,
+    pub(crate) popped_out: PoppedOutPanels,
     pub(crate) ui_size_percent: f64,
     pub(crate) snap_poll_rate: u32,
     pub(crate) vsync_enabled: bool,
@@ -90,6 +92,8 @@ impl Default for PreferencesDraft {
             well_log_style: crate::ui::widgets::log_traces::WellLogStyle::default(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
+            show_assistant: false,
+            popped_out: PoppedOutPanels::default(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
             vsync_enabled: crate::app::io::default_vsync_enabled(),
@@ -2210,6 +2214,15 @@ pub(crate) struct EditorState {
     pub(crate) memory_usage: Option<crate::app::memory_usage::MemoryUsage>,
     /// The window the UI is drawn in. See [`WindowFrame`].
     pub(crate) window_frame: WindowFrame,
+    /// Whether the Assistant is showing. A preference, as the console's is.
+    pub(crate) show_assistant: bool,
+    /// The Assistant's conversation. See [`AssistantState`].
+    pub(crate) assistant: AssistantState,
+    /// Which panels are popped out into windows of their own. A preference.
+    pub(crate) popped_out: PoppedOutPanels,
+    /// The popped-out panels' windows, as their title bars need them.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) panel_frames: PanelWindowFrames,
     /// Each processor core's load, `0.0..=1.0`, refreshed by `App` every
     /// `memory_usage::CPU_SAMPLE_PERIOD`. Empty until the first reading, and
     /// always on the web, where a browser does not say.
@@ -2472,6 +2485,10 @@ pub(crate) struct EditorState {
     pub(crate) slice_preview_detached: bool,
     /// GPU texture rendered with the normal shaded plan-view scene pass.
     pub(crate) slice_preview_texture: Option<egui::TextureId>,
+    /// The same picture, as the section preview's own window knows it while
+    /// it is popped out (`app/panel_windows.rs`).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) slice_preview_window_texture: Option<egui::TextureId>,
     /// Offscreen image of the solid being inspected on the Solids Setup page,
     /// the frame size it is asked to fill, and how it is being orbited.
     pub(crate) solid_preview_texture: Option<egui::TextureId>,
@@ -4051,12 +4068,43 @@ impl EditorState {
         self.reference_surface_dialog = None;
     }
 
+    /// Whether `kind` is showing at all, docked or not.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn panel_shown(&self, kind: PanelKind) -> bool {
+        match kind {
+            PanelKind::Explorer => true,
+            PanelKind::Console => self.show_console,
+            PanelKind::Assistant => self.show_assistant,
+            PanelKind::SectionPreview => self.slice_mode_enabled,
+        }
+    }
+
+    /// Whether `kind` is in a window of its own rather than docked. Never in
+    /// the browser, which has one window.
+    pub(crate) fn is_popped_out(&self, kind: PanelKind) -> bool {
+        cfg!(not(target_arch = "wasm32"))
+            && match kind {
+                PanelKind::Explorer => self.popped_out.explorer,
+                PanelKind::Console => self.popped_out.console,
+                PanelKind::Assistant => self.popped_out.assistant,
+                PanelKind::SectionPreview => self.slice_preview_detached,
+            }
+    }
+
+    /// Whether `kind` wants a window of its own now: showing, and popped out.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn wants_panel_window(&self, kind: PanelKind) -> bool {
+        self.panel_shown(kind) && self.is_popped_out(kind)
+    }
+
     pub(crate) fn current_preferences(&self) -> PreferencesDraft {
         PreferencesDraft {
             language: self.language,
             well_log_style: self.well_log_style,
             dark_mode: self.dark_mode,
             show_console: self.show_console,
+            show_assistant: self.show_assistant,
+            popped_out: self.popped_out,
             ui_size_percent: self.ui_size_percent,
             snap_poll_rate: self.snap_poll_rate,
             vsync_enabled: self.vsync_enabled,
@@ -4117,6 +4165,8 @@ impl EditorState {
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
+            show_assistant: false,
+            popped_out: PoppedOutPanels::default(),
             show_borehole_inspector: false,
             show_schedule_inspector: true,
             borehole_inspector_tab: BoreholeInspectorTab::default(),
@@ -4138,6 +4188,8 @@ impl EditorState {
             measured_fps: None,
             memory_usage: None,
             window_frame: WindowFrame::default(),
+            assistant: AssistantState::default(),
+            panel_frames: PanelWindowFrames::default(),
             cpu_usage: Vec::new(),
             frame_rate_window: (0, 0.0),
             debug_surface_chunks: false,
@@ -4267,6 +4319,7 @@ impl EditorState {
             slice_mode_enabled: false,
             slice_preview_detached: false,
             slice_preview_texture: None,
+            slice_preview_window_texture: None,
             solid_preview_texture: None,
             solid_preview_size_px: [420, 420],
             solid_preview_view: SolidPreviewView::default(),
@@ -5162,6 +5215,7 @@ impl ToolHatch {
 pub(crate) enum ViewToggle {
     Console,
     DarkMode,
+    Assistant,
 }
 
 impl ViewToggle {
@@ -5169,6 +5223,7 @@ impl ViewToggle {
         match self {
             Self::Console => tr!("state-show-console"),
             Self::DarkMode => tr!("state-dark-mode"),
+            Self::Assistant => tr!("state-assistant"),
         }
     }
 
@@ -5179,6 +5234,7 @@ impl ViewToggle {
         match self {
             Self::Console => editor.show_console,
             Self::DarkMode => editor.dark_mode,
+            Self::Assistant => editor.show_assistant,
         }
     }
 }
@@ -5308,6 +5364,89 @@ pub(crate) struct WindowFrame {
     pub(crate) buttons_centre_y: f32,
 }
 
+/// A panel that can leave the main window for a window of its own, on the
+/// desktop: popped out with the button in its corner, and docked again by
+/// closing that window. See `app/panel_windows.rs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PanelKind {
+    Explorer,
+    Console,
+    Assistant,
+    /// The section view's top-down preview.
+    SectionPreview,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PanelKind {
+    pub(crate) const ALL: [Self; 4] = [Self::Explorer, Self::Console, Self::Assistant, Self::SectionPreview];
+
+    /// The name its window goes by.
+    pub(crate) fn title(self) -> String {
+        match self {
+            Self::Explorer => tr!("panel-explorer"),
+            Self::Console => tr!("panel-console"),
+            Self::Assistant => tr!("assistant-title"),
+            Self::SectionPreview => tr!("panel-section-preview"),
+        }
+    }
+}
+
+/// Which panels are popped out into windows of their own. Saved with the
+/// preferences, so they come back where they were left. The section
+/// preview's is not: it goes with the section view, which is not saved
+/// either (`EditorState::slice_preview_detached`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct PoppedOutPanels {
+    pub(crate) explorer: bool,
+    pub(crate) console: bool,
+    pub(crate) assistant: bool,
+}
+
+/// One popped-out panel's window, as its title bar needs it: mirrored in as
+/// the main window's is into [`EditorState::window_frame`].
+#[derive(Clone, Debug, Default)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) struct PanelWindowFrames {
+    pub(crate) explorer: WindowFrame,
+    pub(crate) console: WindowFrame,
+    pub(crate) assistant: WindowFrame,
+    pub(crate) section_preview: WindowFrame,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PanelWindowFrames {
+    pub(crate) fn get_mut(&mut self, kind: PanelKind) -> &mut WindowFrame {
+        match kind {
+            PanelKind::Explorer => &mut self.explorer,
+            PanelKind::Console => &mut self.console,
+            PanelKind::Assistant => &mut self.assistant,
+            PanelKind::SectionPreview => &mut self.section_preview,
+        }
+    }
+}
+
+/// The Assistant: where the AI is talked to and set up. Shown by View >
+/// Assistant ([`EditorState::show_assistant`]), docked on the right of the
+/// main window or popped out into its own. Its UI is
+/// `ui/elements/assistant.rs`.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct AssistantState {
+    /// The message being written, not yet sent.
+    pub(crate) draft: String,
+    /// The conversation so far, oldest first.
+    pub(crate) messages: Vec<AssistantMessage>,
+}
+
+/// One entry in the Assistant's conversation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AssistantMessage {
+    /// What the user sent.
+    User(String),
+    /// Something the Assistant's window itself says: a `/` command's answer.
+    Notice(String),
+}
+
 /// Something the title bar asks of the window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum WindowAction {
@@ -5378,8 +5517,6 @@ pub(crate) enum UiCommand {
     CopyCutsTo(Vec<(crate::model::SolidId, BenchSelection)>),
     SetFlyModeEnabled(bool),
     SetSliceModeEnabled(bool),
-    #[cfg(not(target_arch = "wasm32"))]
-    SetSlicePreviewDetached(bool),
     NewProject,
     /// Save a never-saved browser project under `name`, from the dialog its
     /// first Save opened.
@@ -5681,6 +5818,8 @@ pub(crate) enum UiCommand {
     /// current value rather than the UI sending one, so the row and the
     /// Interface tab cannot disagree about what is being toggled.
     ToggleViewOption(ViewToggle),
+    /// Pop a panel out into a window of its own (`true`), or dock it back.
+    SetPanelPoppedOut(PanelKind, bool),
     SaveProject,
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs(u32),
@@ -6278,6 +6417,7 @@ impl UiCommand {
             | Self::SelectExplorerRow(_)
             | Self::TransformSurveySelection
             | Self::ToggleViewOption(_)
+            | Self::SetPanelPoppedOut(..)
             | Self::SetInitiation { .. }
             | Self::ChargeSelectedHoles { .. }
             | Self::BeginRenameItem(_)
@@ -6406,8 +6546,6 @@ impl UiCommand {
             Self::SetLanguage(choice) => report(tr!("status-language"), choice.endonym().to_owned()),
             Self::SetFlyModeEnabled(enabled) => report(tr!("common-fly-mode"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
             Self::SetSliceModeEnabled(enabled) => report(tr!("state-slice-mode"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::SetSlicePreviewDetached(detached) => report(tr!("state-slice-preview"), if *detached { tr!("state-detached") } else { tr!("state-docked") }),
             Self::NewProject => report(tr!("state-create-project"), tr!("state-untitled-project")),
             #[cfg(target_arch = "wasm32")]
             #[cfg(target_arch = "wasm32")]
