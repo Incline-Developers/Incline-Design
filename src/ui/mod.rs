@@ -835,7 +835,11 @@ fn draw_ui(
         );
         let ctx = root_ui.ctx();
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
-        chrome::paint_regions(ctx, [viewport_bar_rect, console].into_iter().chain(explorer.regions).chain(planning_layout.regions), status_bar_rect);
+        chrome::paint_regions(
+            ctx,
+            [viewport_bar_rect, console].into_iter().chain(explorer.regions).chain(planning_layout.regions),
+            status_bar_rect,
+        );
         chrome::paint_grips(ctx, planning_layout.grips);
         if let Some(tabs) = &planning_tabs {
             tabs.paint(ctx);

@@ -3,9 +3,15 @@
 //! The mesh is the ground's own wet triangles, each vertex carrying the
 //! water's depth and velocity at the two kept instants the timeline lies
 //! between; `shaders/water.wgsl` blends the two, lifts the vertex to the
-//! water's level and shades it: ripples and foam carried along the flow, the
-//! ground showing through the shallows, the sky on the pools, rings while it
-//! rains. Built app-side when the instants change (`app/water.rs`), uploaded
+//! water's level and shades it: still pools glassy, running water faintly
+//! streaked along its way, white water only in a deep torrent, the ground
+//! showing through the pale blue shallows, the sky on the pools, rings while it
+//! rains.
+//!
+//! A dry corner of a wet triangle is given the water's level too, below the
+//! ground there, as a depth under zero: the surface carries on level and the
+//! shore falls where it meets the ground, inside the triangle, rather than
+//! along the triangle's sides with the surface drooping down to them. Built app-side when the instants change (`app/water.rs`), uploaded
 //! here once per change, and drawn by the editor overlay pass. The ripples
 //! move only while the run's timeline plays.
 
@@ -32,7 +38,9 @@ const CLOCK_WRAP_S: f64 = 3600.0;
 pub(crate) struct WaterVertex {
     /// The ground, relative to the mesh's anchor.
     position: [f32; 3],
-    /// The water's depth at the earlier instant and the later.
+    /// The water's depth at the earlier instant and the later: under zero on
+    /// a dry corner of a wet triangle, by how far the water's level there
+    /// lies below the ground.
     depth: [f32; 2],
     /// Its velocity in plan at each, metres a second.
     flow_from: [f32; 2],
@@ -40,9 +48,82 @@ pub(crate) struct WaterVertex {
     /// How far from the earlier instant to the later the water came, 0 to 1:
     /// until then the vertex stays as it was at the earlier.
     arrival: f32,
+    /// The water surface's normal at each instant: see [`surface_normals`].
+    normal_from: [f32; 3],
+    normal_to: [f32; 3],
 }
 
-pub(crate) const WATER_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2, 4 => Float32];
+pub(crate) const WATER_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 7] =
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2, 4 => Float32, 5 => Float32x3, 6 => Float32x3];
+
+/// Each vertex's depth, with a dry corner of a wet triangle given the water's
+/// level as a depth under zero: the lowest of the wet triangles' levels around
+/// it (each the mean over its wet corners, as `flow_velocity` takes it), when
+/// that is below the ground. A dry corner the water stands above stays as it
+/// was: the run says it is dry.
+fn shore_depths(ground: &Ground, depth: &[f32]) -> Vec<f32> {
+    use rayon::prelude::*;
+    let face_level: Vec<Option<f64>> = ground
+        .faces
+        .par_iter()
+        .map(|face| {
+            let wet: Vec<f64> = face
+                .iter()
+                .map(|&corner| corner as usize)
+                .filter(|&vertex| depth[vertex] >= FILM_DEPTH)
+                .map(|vertex| ground.vertices[vertex][2] + f64::from(depth[vertex]))
+                .collect();
+            (!wet.is_empty() && wet.len() < 3).then(|| wet.iter().sum::<f64>() / wet.len() as f64)
+        })
+        .collect();
+    let mut level = vec![f64::INFINITY; ground.vertices.len()];
+    for (face, face_level) in ground.faces.iter().zip(&face_level) {
+        if let Some(face_level) = *face_level {
+            for &corner in face {
+                let lowest = &mut level[corner as usize];
+                *lowest = lowest.min(face_level);
+            }
+        }
+    }
+    depth
+        .iter()
+        .zip(&level)
+        .zip(&ground.vertices)
+        .map(|((&deep, &level), vertex)| {
+            if deep < FILM_DEPTH && level.is_finite() {
+                deep.min((level - vertex[2]) as f32)
+            } else {
+                deep
+            }
+        })
+        .collect()
+}
+
+/// The water surface's normal at each vertex: the area-weighted mean of the
+/// wet triangles' around it, the surface standing at the ground plus `shore`.
+/// Smooth across the triangles, so running water does not break into facets
+/// where its slope turns. Straight up where there is no water.
+fn surface_normals(ground: &Ground, shore: &[f32]) -> Vec<[f32; 3]> {
+    let mut summed = vec![DVec3::ZERO; ground.vertices.len()];
+    for face in &ground.faces {
+        if !face.iter().any(|&corner| shore[corner as usize] >= FILM_DEPTH) {
+            continue;
+        }
+        let [a, b, c] = face.map(|corner| {
+            let vertex = ground.vertices[corner as usize];
+            DVec3::new(vertex[0], vertex[1], vertex[2] + f64::from(shore[corner as usize]))
+        });
+        // Its length is twice the triangle's area, which is the weight.
+        let mut normal = (b - a).cross(c - a);
+        if normal.z < 0.0 {
+            normal = -normal;
+        }
+        for &corner in face {
+            summed[corner as usize] += normal;
+        }
+    }
+    summed.into_iter().map(|normal| normal.try_normalize().unwrap_or(DVec3::Z).as_vec3().to_array()).collect()
+}
 
 struct WaterChunk {
     vertices: Vec<WaterVertex>,
@@ -73,6 +154,20 @@ impl WaterMesh {
             _ => None,
         };
         let depth_from = |vertex: usize| from.map_or(0.0, |from| from[vertex]);
+        let one_instant = from.is_none_or(|from| std::ptr::eq(from, to));
+        let shore_to = shore_depths(ground, to);
+        let shore_from = match from {
+            Some(from) if !one_instant => Some(shore_depths(ground, from)),
+            _ => None,
+        };
+        let normal_to = surface_normals(ground, &shore_to);
+        let normal_from = shore_from.as_ref().map(|shore| surface_normals(ground, shore));
+        // A dry start is dry everywhere; one instant is the same at both ends.
+        let drawn_from = |vertex: usize| match (&shore_from, from) {
+            (Some(shore), _) => (shore[vertex], normal_from.as_ref().map_or([0.0, 0.0, 1.0], |normal| normal[vertex])),
+            (None, Some(_)) => (shore_to[vertex], normal_to[vertex]),
+            (None, None) => (shore_to[vertex].min(0.0), normal_to[vertex]),
+        };
         let velocity_from = |vertex: usize| match (&flow_from, from) {
             (Some(flow), _) => flow[vertex],
             (None, Some(_)) => flow_to[vertex],
@@ -110,12 +205,15 @@ impl WaterMesh {
                 if slot[vertex] == UNUSED {
                     slot[vertex] = chunk.vertices.len() as u32;
                     placed.push(corner);
+                    let (shore_from, normal_from) = drawn_from(vertex);
                     chunk.vertices.push(WaterVertex {
                         position: (DVec3::from_array(ground.vertices[vertex]) - anchor).as_vec3().to_array(),
-                        depth: [depth_from(vertex), to[vertex]],
+                        depth: [shore_from, shore_to[vertex]],
                         flow_from: velocity_from(vertex),
                         flow_to: flow_to[vertex],
                         arrival: arrival.get(vertex).map_or(0.0, |part| f32::from(*part) / 255.0),
+                        normal_from,
+                        normal_to: normal_to[vertex],
                     });
                 }
                 chunk.indices.push(slot[vertex]);

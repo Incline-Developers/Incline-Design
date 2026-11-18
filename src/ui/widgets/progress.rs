@@ -331,11 +331,7 @@ fn draw_readout(ui: &mut egui::Ui, deck: &Deck, now: f64, status: &str, task: &s
         response
     };
     if response.hovered() {
-        painter.rect_filled(
-            rect.expand2(egui::vec2(0.0, HOVER_FILL_PAD)),
-            GROUP_CORNER_RADIUS,
-            ui.visuals().widgets.hovered.bg_fill,
-        );
+        painter.rect_filled(rect.expand2(egui::vec2(0.0, HOVER_FILL_PAD)), GROUP_CORNER_RADIUS, ui.visuals().widgets.hovered.bg_fill);
     }
 
     // Newest at the right end, each older one to the left of it.

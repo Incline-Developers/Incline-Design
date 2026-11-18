@@ -1,6 +1,11 @@
-// A rain simulation's water: clear over the shallows, dark in the pools,
-// rippled along the flow, foaming where it runs fast, and ringed by the
-// drops while it rains.
+// A rain simulation's water: a pale blue wash over the shallows and deep
+// blue in the pools, glassy where it lies still and
+// faintly streaked where it runs, white only down a deep torrent, and ringed
+// by the drops while it rains.
+//
+// The surface is level wherever the water is: a dry corner of a wet triangle
+// carries the water's level as a depth under zero, so the shore is where the
+// depth reaches zero inside the triangle, not along its sides.
 //
 // The pattern is drawn at whatever size reads on screen: ripples a metre
 // across up close, and the same ripples at twice, four times, ... the size
@@ -20,13 +25,17 @@ struct WaterUniform {
 struct VertexInput {
     // The ground, relative to the anchor.
     @location(0) position: vec3<f32>,
-    // The water's depth at the earlier instant and the later.
+    // The water's depth at the earlier instant and the later; under zero on
+    // a dry corner, by how far the level lies below the ground.
     @location(1) depth: vec2<f32>,
     // Its velocity in plan at each, metres a second.
     @location(2) flow_from: vec2<f32>,
     @location(3) flow_to: vec2<f32>,
     // How far from the earlier instant to the later the water came here.
     @location(4) arrival: f32,
+    // The water surface's normal at each instant, smooth over the triangles.
+    @location(5) normal_from: vec3<f32>,
+    @location(6) normal_to: vec3<f32>,
 };
 
 struct VertexOutput {
@@ -39,6 +48,8 @@ struct VertexOutput {
     // Plan position relative to the anchor: what the pattern is laid out
     // on, so it stays put when the scene's origin moves.
     @location(4) plan: vec2<f32>,
+    // Before vertical exaggeration.
+    @location(5) normal: vec3<f32>,
 };
 
 // The shallowest water drawn, and the depth by which it is fully there.
@@ -53,6 +64,13 @@ const CARRY_LIMIT: f32 = 2.5;
 const RIPPLE_PIXELS: f32 = 12.0;
 // And a rain ring's cell.
 const RING_PIXELS: f32 = 60.0;
+// How many times longer than wide a streak of running water is, and how many
+// directions across a half turn the streaks are drawn in: a fragment blends
+// the two either side of its flow, each fixed over the whole surface so the
+// pattern never shears where the flow turns.
+const STREAK_STRETCH: f32 = 3.0;
+const STREAK_DIRECTIONS: f32 = 8.0;
+const PI: f32 = 3.14159265;
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
@@ -60,7 +78,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // to the later instant in what is left.
     let blend = clamp((water.params.x - in.arrival) / max(1.0 - in.arrival, 1.0e-3), 0.0, 1.0);
     let depth = mix(in.depth.x, in.depth.y, blend);
-    let world = water.anchor.xyz + in.position + vec3<f32>(0.0, 0.0, max(depth, 0.0) + water.params.z);
+    // Not held at the ground: a dry corner lies under it, so the level runs on
+    // flat to where it meets the ground.
+    let world = water.anchor.xyz + in.position + vec3<f32>(0.0, 0.0, depth + water.params.z);
     var out: VertexOutput;
     out.clip_position = camera.view_proj * vec4<f32>(world, 1.0);
     out.world = world;
@@ -68,6 +88,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.flow = mix(in.flow_from, in.flow_to, blend);
     out.section_offset = section_plane_offset(world);
     out.plan = in.position.xy;
+    out.normal = mix(in.normal_from, in.normal_to, blend);
     return out;
 }
 
@@ -107,24 +128,65 @@ fn ripples(q: vec2<f32>, t: f32) -> f32 {
     return 0.65 * a + 0.35 * b;
 }
 
-// The waves' slope in xy and the foam's lace in z, at one size of the
-// pattern (`scale` metres to a ripple cell), carried along by the flow: the
-// pattern is drawn twice, each copy sliding downstream and fading out as
-// the other fades in, so it moves without ever stretching.
-fn carried(plan: vec2<f32>, flow: vec2<f32>, scale: f32, t: f32) -> vec3<f32> {
+// The waves' slope in xy and the foam's lace in z at a point of the
+// pattern, in its own units.
+fn pattern(q: vec2<f32>, t: f32) -> vec3<f32> {
+    let e = 0.12;
+    let h = ripples(q, t);
+    let slope = vec2<f32>(ripples(q + vec2<f32>(e, 0.0), t) - h, ripples(q + vec2<f32>(0.0, e), t) - h) / e;
+    let lace = fbm3(vec3<f32>(q * 1.7 + vec2<f32>(4.0, 9.0), 2.0 + t * 0.2));
+    return vec3<f32>(slope, lace);
+}
+
+// The pattern laid along `dir` and drawn out `stretch` times its width that
+// way, as slope over the plan and lace.
+fn pattern_along(q: vec2<f32>, dir: vec2<f32>, stretch: f32, t: f32) -> vec3<f32> {
+    let side = vec2<f32>(-dir.y, dir.x);
+    let p = pattern(vec2<f32>(dot(q, dir) / stretch, dot(q, side)), t);
+    return vec3<f32>(dir * (p.x / stretch) + side * p.y, p.z);
+}
+
+// The streaks along the `k`th of the fixed directions. Each direction has its
+// own pattern, the same wherever it is drawn, so the flow turning from one to
+// the next fades between them rather than jumping; the last wraps round to
+// the first.
+fn streaks(q: vec2<f32>, k: f32, t: f32) -> vec3<f32> {
+    let index = k % STREAK_DIRECTIONS;
+    let angle = index * PI / STREAK_DIRECTIONS;
+    let offset = vec2<f32>(hash3(vec3<f32>(index, 1.0, 2.0)), hash3(vec3<f32>(index, 3.0, 4.0))) * 37.0;
+    return pattern_along(q + offset, vec2<f32>(cos(angle), sin(angle)), STREAK_STRETCH, t);
+}
+
+// The pattern at one size (`scale` metres to a ripple cell), carried along
+// by the flow: drawn twice, each copy sliding downstream and fading out as
+// the other fades in, so it moves without ever stretching. Where the water
+// runs, it is drawn out into streaks along its way.
+fn carried(plan: vec2<f32>, flow: vec2<f32>, streak: f32, scale: f32, t: f32) -> vec3<f32> {
     // A larger pattern is carried faster over the ground, or it would seem
     // to stand still from far off.
     var run = flow / sqrt(scale);
     run *= min(1.0, CARRY_LIMIT / max(length(run), 1.0e-5));
+    // The two fixed directions either side of the flow's, and how far
+    // between them it lies. Streaks look the same either way along them.
+    let turn = fract(atan2(flow.y, flow.x) / PI) * STREAK_DIRECTIONS;
+    let lower = floor(turn);
+    let toward_upper = turn - lower;
     var sum = vec3<f32>(0.0);
     for (var i = 0; i < 2; i++) {
         let phase = fract(t / CARRY_PERIOD + 0.5 * f32(i));
         let q = plan / scale - run * (phase - 0.5) * CARRY_PERIOD + vec2<f32>(13.0, 5.0) * f32(i);
-        let e = 0.12;
-        let h = ripples(q, t);
-        let slope = vec2<f32>(ripples(q + vec2<f32>(e, 0.0), t) - h, ripples(q + vec2<f32>(0.0, e), t) - h) / e;
-        let lace = fbm3(vec3<f32>(q * 1.7 + vec2<f32>(4.0, 9.0), 2.0 + t * 0.2));
-        sum += vec3<f32>(slope, lace) * (1.0 - abs(2.0 * phase - 1.0));
+        var here = vec3<f32>(0.0);
+        if streak < 1.0 {
+            here += pattern(q, t) * (1.0 - streak);
+        }
+        if streak > 0.0 {
+            // The streaks churn slower than still water shivers: what they
+            // show is the water going by.
+            let slow = t * 0.4;
+            let along = streaks(q, lower, slow) * (1.0 - toward_upper) + streaks(q, lower + 1.0, slow) * toward_upper;
+            here += along * streak;
+        }
+        sum += here * (1.0 - abs(2.0 * phase - 1.0));
     }
     return sum;
 }
@@ -173,26 +235,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Derivatives before anything that can end the invocation.
     let exaggeration = max(camera.cam_forward.w, 1.0e-6);
     let shown = in.world * vec3<f32>(1.0, 1.0, exaggeration);
-    let facet = cross(dpdx(shown), dpdy(shown));
     let footprint = max(length(dpdx(in.plan)), length(dpdy(in.plan)));
     if outside_section_slab(in.section_offset) {
         discard;
     }
-    let depth = max(in.depth, 0.0);
-    // Nothing at all where the water runs out to no depth.
-    let edge = smoothstep(FILM_DEPTH, SHORE_DEPTH, depth);
+    // Nothing at all where the water runs out to no depth: past the shore.
+    let edge = smoothstep(FILM_DEPTH, SHORE_DEPTH, in.depth);
     if edge <= 0.0 {
         discard;
     }
+    let depth = max(in.depth, 0.0);
     let t = water.anchor.w;
     let speed = length(in.flow);
+    // How far the water is drawn out into streaks: still water has none.
+    let streak = smoothstep(0.1, 0.8, speed);
 
     // The water's own surface, level on a pool and lying along the ground
-    // where it runs, seen from above.
-    var level = facet / max(length(facet), 1.0e-20);
-    if level.z < 0.0 {
-        level = -level;
-    }
+    // where it runs, seen from above; a normal leans less as the heights are
+    // stretched.
+    let level = normalize(vec3<f32>(in.normal.xy, in.normal.z / exaggeration) + vec3<f32>(0.0, 0.0, 1.0e-6));
     var view = -camera.cam_forward.xyz;
     if camera.cam_position.w > 0.5 {
         view = normalize(camera.cam_position.xyz - shown);
@@ -203,12 +264,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let size = log2(max(footprint * RIPPLE_PIXELS, 1.0));
     let step_down = floor(size);
     let between = smoothstep(0.0, 1.0, size - step_down);
-    let wave = mix(carried(in.plan, in.flow, exp2(step_down), t), carried(in.plan, in.flow, exp2(step_down + 1.0), t), between);
+    let wave = mix(carried(in.plan, in.flow, streak, exp2(step_down), t), carried(in.plan, in.flow, streak, exp2(step_down + 1.0), t), between);
 
-    // Still pools are glassy; the faster the flow the rougher the surface.
-    // A film a few centimetres deep has no waves to speak of, and waves
-    // drawn large for a far camera stand lower than their size.
-    let chop = (0.035 + 0.16 * smoothstep(0.2, 2.2, speed)) * smoothstep(0.02, 0.3, depth) / (1.0 + 0.3 * step_down);
+    // White water only where a deep, fast torrent breaks: its Froude number
+    // well over one, half a metre deep and more. Rain running off in sheets
+    // and rills is fast, but it does not foam: it is streaked and wet.
+    let froude = speed / sqrt(9.81 * max(depth, 0.01));
+    let rush = smoothstep(2.0, 3.5, froude) * smoothstep(2.5, 4.5, speed) * smoothstep(0.3, 0.7, depth);
+
+    // Still pools are glassy; running water is faintly streaked, and broken
+    // water rough. A film a few centimetres deep has no waves to speak of,
+    // and waves drawn large for a far camera stand lower than their size.
+    let chop = (0.03 + 0.025 * streak + 0.1 * rush) * smoothstep(0.02, 0.3, depth) / (1.0 + 0.3 * step_down);
     var slope = wave.xy * chop;
     if water.params.y > 0.5 {
         let ring_size = log2(max(footprint * RING_PIXELS, 1.0));
@@ -224,31 +291,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let light = STANDARD_SUN_COLOR * max(sun.z, 0.0) * 0.9 + STANDARD_SKY_COLOR;
 
     // What is under the surface, made to tell a puddle from a pond at a
-    // glance: a film barely tints the ground, a few centimetres are a pale
-    // wash, half a metre is clear turquoise with the ground plain through
-    // it, and the ground goes on fading until some metres down. Two rates of
-    // fading together, so neither the first centimetres nor the last metres
-    // are all one colour; and the water's own colour darkens with its depth,
-    // not with how thick the fading has made it. The slant of the view counts
-    // for little, so the same depth reads the same from any side.
+    // glance, on one scale of blue: a film barely tints the ground, a few
+    // centimetres are a pale blue wash with the ground plain through it, and
+    // by a metre or two it is an opaque deep blue, darkening with depth.
+    // Water holds back red first, so what shows through cools as it fades.
+    // Two rates of fading together, so neither the first centimetres nor the
+    // last are all one colour; the slant of the view counts for little, so
+    // the same depth reads the same from any side.
     let path = depth / max(facing, 0.6);
-    let through = (0.5 * exp(-path * vec3<f32>(4.0, 2.6, 2.2)) + 0.5 * exp(-path * vec3<f32>(0.9, 0.5, 0.4))) * 0.97;
-    let body = mix(vec3<f32>(0.16, 0.52, 0.56), vec3<f32>(0.01, 0.05, 0.22), 1.0 - exp(-depth * 0.7)) * light;
+    let through = (0.5 * exp(-path * vec3<f32>(5.0, 3.4, 2.4)) + 0.5 * exp(-path * vec3<f32>(1.3, 0.8, 0.55))) * 0.95;
+    let body = mix(vec3<f32>(0.30, 0.52, 0.78), vec3<f32>(0.02, 0.07, 0.27), 1.0 - exp(-depth * 0.8)) * light;
     // A film mirrors little: it is wet ground more than a sheet of water.
     fresnel *= 0.25 + 0.75 * smoothstep(0.01, 0.15, depth);
 
     // What is on it: the sky, and the sun broken into glints by the waves.
     let mirror = reflect(-view, normal);
     let glance = max(dot(mirror, sun), 0.0);
-    let mirrored = sky_toward(mirror) + STANDARD_SUN_COLOR * (pow(glance, 600.0) * 18.0 + pow(glance, 60.0) * 0.25);
+    let mirrored = sky_toward(mirror) + STANDARD_SUN_COLOR * (pow(glance, 600.0) * 8.0 + pow(glance, 60.0) * 0.15);
 
-    // Foam where the water runs fast, or fast and shallow, and a thin line
-    // of it along the shore of anything moving.
-    let rush = clamp(smoothstep(1.5, 3.0, speed) + 0.8 * smoothstep(0.9, 1.8, speed) * (1.0 - smoothstep(0.15, 0.6, depth)), 0.0, 1.0);
-    var foam = smoothstep(0.62 - 0.32 * rush, 0.75, wave.z) * rush;
-    foam = max(foam, 0.5 * (1.0 - smoothstep(0.02, 0.10, depth)) * smoothstep(0.42, 0.6, wave.z) * smoothstep(0.25, 0.7, speed));
-    foam *= smoothstep(0.02, 0.08, depth);
-    let foam_color = vec3<f32>(0.90, 0.91, 0.88) * light;
+    // Foam on the white water, in streaks along the flow as the lace is:
+    // broken and off-white, never a sheet.
+    let foam = smoothstep(0.66 - 0.2 * rush, 0.8, wave.z) * rush * 0.6;
+    let foam_color = vec3<f32>(0.82, 0.80, 0.74) * light;
 
     // Laid over the ground behind as light added and light held back.
     let seen = (through.r + through.g + through.b) / 3.0;
