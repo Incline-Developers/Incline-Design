@@ -1696,6 +1696,7 @@ schedule-run-stop-early-note = Stop and keep the best schedule found so far.
 schedule-run-job = Calculating schedule
 schedule-run-never = Not run yet. Press Run All Periods, or switch on Auto.
 schedule-run-working = Calculating through day { $day }…
+schedule-run-restoring = Checking the schedule saved with the project… Run to calculate it afresh instead.
 schedule-haulage-waiting = Waiting for Haulage
 schedule-solids-tonnage = Tonnage
 schedule-unmeasured-as-zero = Count unreserved blocks as 0 t

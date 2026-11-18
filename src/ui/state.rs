@@ -3237,6 +3237,9 @@ pub(crate) struct EditorState {
     pub(crate) schedule_run_improving: bool,
     /// Whether the run in flight is an Improve run, so its control shows it.
     pub(crate) schedule_run_improve: bool,
+    /// Whether the run in flight only checks the schedule saved with the
+    /// project, so Run stays offered and takes its place.
+    pub(crate) schedule_run_restoring: bool,
     /// The Improve run in flight, or the last one until its card is put
     /// away: what its progress card shows.
     pub(crate) improve_progress: Option<std::sync::Arc<crate::model::schedule::optimisation::progress::ImproveProgress>>,
@@ -3934,6 +3937,7 @@ impl EditorState {
         self.schedule_run_working = false;
         self.schedule_run_improving = false;
         self.schedule_run_improve = false;
+        self.schedule_run_restoring = false;
         self.improve_progress = None;
         self.schedule_run_repair = None;
         self.close_sequence_editor();
@@ -4651,6 +4655,7 @@ impl EditorState {
             schedule_run_working: false,
             schedule_run_improving: false,
             schedule_run_improve: false,
+            schedule_run_restoring: false,
             improve_progress: None,
             improve_card_collapsed: false,
             improve_stop_after_stall_min: None,

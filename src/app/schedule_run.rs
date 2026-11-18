@@ -114,6 +114,9 @@ pub(crate) struct PendingScheduleRun {
     auto: bool,
     /// Started by [`ScheduleRunMode::Improve`].
     pub(crate) improve: bool,
+    /// Only checking whether the schedule saved with the project still
+    /// answers it, and ending quietly when not: Run takes its place.
+    restore_only: bool,
     /// Where the worker leaves the day-by-day schedule for the UI thread.
     early: Arc<Mutex<Option<Arc<CalculatedSchedule>>>>,
     /// Whether the held result is this run's day-by-day schedule.
@@ -651,6 +654,7 @@ impl crate::app::App<'_> {
             requested_end_h,
             auto,
             improve: mode == ScheduleRunMode::Improve,
+            restore_only,
             early: early_slot,
             showing_early: false,
             feed,
@@ -1179,6 +1183,7 @@ impl crate::app::App<'_> {
         let running = self.pending_schedule_run.as_ref().map(|pending| pending.requested_end_h);
         let improving = self.pending_schedule_run.as_ref().is_some_and(|pending| pending.showing_early) && current;
         let improve = self.pending_schedule_run.as_ref().is_some_and(|pending| pending.improve);
+        let restoring = self.pending_schedule_run.as_ref().is_some_and(|pending| pending.restore_only);
         let result = self.schedule_calculation.clone().filter(|_| current);
         self.mirror_scenario_values(result.as_deref());
         let semantic = self.schedule_semantic_key();
@@ -1217,6 +1222,7 @@ impl crate::app::App<'_> {
             _ if recalculating => tr!("schedule-run-updating"),
             (None, _, None) if no_assigned_bars && starting => tr!("schedule-run-no-bars"),
             (None, _, None) if empty_dig_bars && starting => tr!("schedule-run-empty-bars"),
+            (Some(_), _, _) if restoring => tr!("schedule-run-restoring"),
             (Some(end_h), _, _) if improving => tr!("schedule-run-improving", day = day_of(end_h).to_string()),
             (Some(end_h), _, _) => tr!("schedule-run-working", day = day_of(end_h).to_string()),
             // The newest attempt failed: say so first, then what is still
@@ -1272,6 +1278,7 @@ impl crate::app::App<'_> {
             || self.editor.schedule_run_working != running.is_some()
             || self.editor.schedule_run_improving != improving
             || self.editor.schedule_run_improve != improve
+            || self.editor.schedule_run_restoring != restoring
             || self.editor.schedule_run_repair != repair
         {
             // The one it replaces may be held here alone by now, and freeing
@@ -1285,6 +1292,7 @@ impl crate::app::App<'_> {
             self.editor.schedule_run_working = running.is_some();
             self.editor.schedule_run_improving = improving;
             self.editor.schedule_run_improve = improve;
+            self.editor.schedule_run_restoring = restoring;
             self.editor.schedule_run_repair = repair;
             self.redraw_requested = true;
         }

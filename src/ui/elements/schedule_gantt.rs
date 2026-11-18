@@ -500,7 +500,9 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     use crate::ui::elements::planning_setup::{CANCEL_TINT, IMPROVE_TINT, RUN_ALL_TINT, RUN_STEP_TINT};
 
     let working = editor.schedule_run_working;
-    let startable = !working;
+    // A check of the schedule saved with the project, which ends quietly
+    // when it is out of date, gives way to a run someone asks for.
+    let startable = !working || editor.schedule_run_restoring;
     // With Auto on, a current schedule is kept current on its own, so Run and
     // Run All are held. Without one - never run, blocked, or the last attempt
     // failed - they are what starts it, running the Setup steps it waits on.
