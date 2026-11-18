@@ -362,6 +362,12 @@ impl SchedulePlan {
         self.inherited_bars().into_iter().map(|(_, bar)| bar).chain(self.bars.iter())
     }
 
+    /// The bar `id`, the open scenario's own or one it inherits: what a
+    /// calculated schedule's work names.
+    pub(crate) fn bar_with_inherited(&self, id: super::BarId) -> Option<&ScheduleBar> {
+        self.bar(id).or_else(|| self.inherited_bars().into_iter().map(|(_, bar)| bar).find(|bar| bar.id == id))
+    }
+
     /// The steps the scenarios the open one starts from are calculated at,
     /// over their horizons, as (end, step) in hours: the planner's weeks of
     /// a short-term scenario stay hour by hour in the long-term one that

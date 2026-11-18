@@ -316,7 +316,7 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
                     continue;
                 }
                 seen.push(execution.source);
-                let bar = plan.bar(execution.bar);
+                let bar = plan.bar_with_inherited(execution.bar);
                 let report = editor.schedule_bar_reports.iter().find(|report| report.bar == execution.bar);
                 let source = match bar {
                     Some(bar) => qualified_source_label(execution.source, bar, report, schedule, destinations),
@@ -435,7 +435,7 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
         // Built only on hover, as on the Gantt: it scans the result.
         if response.hovered() {
             let tooltip = schedule.executions_at(hour).find(|execution| execution.agent == agent.id).and_then(|execution| {
-                let bar = plan.bar(execution.bar)?;
+                let bar = plan.bar_with_inherited(execution.bar)?;
                 let report = editor.schedule_bar_reports.iter().find(|report| report.bar == execution.bar);
                 Some(execution_tooltip(execution, bar, report, schedule, plan, destinations))
             });
