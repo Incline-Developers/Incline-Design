@@ -410,27 +410,11 @@ pub(crate) fn parse_stream(mut input: impl Read, mapping: &CsvColumnMapping, mut
         .zip(builders)
         .zip(layout.resource_roles.iter().copied())
         .zip(categories)
-        .map(|(((name, values), role), categories)| {
-            let mut values = values.finish();
-            if role == CsvColumnRole::Value
-                && let Some((code, count)) = missing_value_code(&values)
-            {
-                let mut cleaned = BlockColumnBuilder::default();
-                for value in values.iter() {
-                    cleaned.push(if value == code { f64::NAN } else { value });
-                }
-                values = cleaned.finish();
-                crate::userspace_log!(
-                    "{}",
-                    crate::i18n::tr!("csv-block-model-missing-code", column = name.clone(), code = code.to_string(), count = count.to_string())
-                );
-            }
-            BlockModelColumn {
-                name,
-                values: Arc::new(values),
-                categories: (role == CsvColumnRole::Category).then(|| categories.into_iter().map(|(label, code)| (code, label)).collect()),
-                category_colors: BTreeMap::new(),
-            }
+        .map(|(((name, values), role), categories)| BlockModelColumn {
+            name,
+            values: Arc::new(values.finish()),
+            categories: (role == CsvColumnRole::Category).then(|| categories.into_iter().map(|(label, code)| (code, label)).collect()),
+            category_colors: BTreeMap::new(),
         })
         .collect();
     let model = BlockModelData::from_columns(block_count, overall_lower, overall_upper, columns, retained_geometry_bytes)
@@ -763,23 +747,6 @@ fn unique_resource_names(headers: &[String], mapping: &CsvColumnMapping) -> Vec<
             name
         })
         .collect()
-}
-
-/// The code a column marks missing values with, and how many blocks carry
-/// it: one of the usual absent-value numbers, when it is the only negative
-/// value in the column. A column with other negatives - a block value in
-/// money - keeps every number as it is.
-fn missing_value_code(values: &crate::model::formats::block_column::BlockColumn) -> Option<(f64, usize)> {
-    const CODES: [f64; 6] = [-99.0, -999.0, -9999.0, -99999.0, -1.0e30, -1.0e20];
-    let mut found: Option<(f64, usize)> = None;
-    for value in values.iter().filter(|value| *value < 0.0) {
-        match &mut found {
-            Some((code, count)) if *code == value => *count += 1,
-            None if CODES.contains(&value) => found = Some((value, 1)),
-            _ => return None,
-        }
-    }
-    found
 }
 
 fn parse_required_number(field: &str, row: usize, header: &str) -> Result<f64, CsvBlockModelError> {

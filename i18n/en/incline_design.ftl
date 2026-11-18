@@ -1187,7 +1187,6 @@ cmd-block-model-created-block-model-name-ordinary = Created block model '{ $name
 cmd-block-model-failed-load-block-model-error = Failed to load block model: { $error }
 cmd-block-model-generated-ore-mesh-from-block = Generated ore mesh from block model '{ $name }'
 cmd-block-model-imported-block-model-source-path = Imported block model source { $path }
-csv-block-model-missing-code = { $count } blocks of { $column } hold { $code }, read as missing values
 cmd-block-model-loaded-block-model-name-blocks = Loaded block model '{ $name }': { $blocks } blocks, { $variables } variables
 cmd-block-model-loading-name = Loading { $name }
 cmd-block-model-loading-name-ellipsis = Loading { $name }…

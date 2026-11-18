@@ -1352,12 +1352,16 @@ pub(crate) fn compute_reserve_totals(
             }
             stats.min = Some(stats.min.map_or(value, |min| min.min(value)));
             stats.max = Some(stats.max.map_or(value, |max| max.max(value)));
+            // A negative value is a model's blank (-99, typically) and reads
+            // as zero, as the solid reserves and the schedule read it; the
+            // minimum still shows the code.
+            let read = if value < 0.0 { 0.0 } else { value };
             if field.aggregation == ReserveAggregation::Sum {
-                sum += value;
+                sum += read;
             } else if let Some(weights) = &weights {
                 let weight = weights.at(index);
                 if weight.is_finite() && weight > 0.0 {
-                    sum += value * weight;
+                    sum += read * weight;
                     weight_sum += weight;
                 } else {
                     stats.unusable_weights += 1;
