@@ -143,9 +143,6 @@ pub(crate) struct Config {
     /// Show the console pannel
     #[serde(default = "default_show_console")]
     pub(crate) show_console: bool,
-    /// Show the Assistant.
-    #[serde(default)]
-    pub(crate) show_assistant: bool,
     /// Which panels are popped out into windows of their own.
     #[serde(default)]
     pub(crate) popped_out: crate::ui::state::PoppedOutPanels,
@@ -261,7 +258,6 @@ impl Default for Config {
             well_log_style: crate::ui::widgets::log_traces::WellLogStyle::default(),
             dark_mode: default_dark_mode(),
             show_console: default_show_console(),
-            show_assistant: false,
             popped_out: crate::ui::state::PoppedOutPanels::default(),
             ui_size_percent: default_ui_size_percent(),
             snap_poll_rate: default_snap_poll_rate(),

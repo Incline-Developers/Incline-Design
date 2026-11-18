@@ -4,7 +4,6 @@ pub(crate) mod bar_line_chart;
 pub(crate) mod borehole_log;
 pub(crate) mod collapsible_section;
 pub(crate) mod color;
-pub(crate) mod composer;
 pub(crate) mod context_menu;
 pub(crate) mod data_grid;
 pub(crate) mod data_table;

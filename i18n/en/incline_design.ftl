@@ -3274,7 +3274,6 @@ menu-build-solid-surfaces = Build Solid from Surfaces...
 
 ## Modelling strings
 
-
 ## Object strings
 
 object-edit-appearance = Appearance
@@ -3325,7 +3324,6 @@ omf-optimization-scenarios-unreadable = The project's optimisation scenarios cou
 omf-skipped-drillhole-data-saved-older = Skipped drillhole data saved in an older layout ({ $names }); import it again from its source files
 
 ## Plot strings
-
 
 ## Point strings
 
@@ -3507,7 +3505,6 @@ state-cut-topology-pit-shell = Cut Topography to Pit Shell
 state-cut-triangulation-polyline = Cut Triangulation by Polyline
 state-cut-triangulation-z = Clip Triangulation by Elevation
 state-dark-mode = Dark Mode
-state-assistant = Assistant
 state-data-ticked-export-checklist = The data ticked in the export checklist
 state-disabled = Disabled
 state-discard-project-changes = Discard Project Changes
@@ -4820,7 +4817,6 @@ err-file-worker-pool-failed = Could not start the browser worker pool: { $error 
 err-file-event-loop-failed = Could not create the browser event loop: { $error }
 err-file-app-state-failed = Could not create the application state: { $error }
 
-
 # src/model/formats/point_cloud.rs
 err-cloud-unsupported-extension = Unsupported point cloud file type: { $name }
 err-cloud-open-failed = Could not open the point cloud file { $name }
@@ -5354,7 +5350,6 @@ err-solids-missing-geometry = Missing block geometry at block { $index }
 err-solids-piece-context = In the piece from RL { $base } to { $top }, against the block centred at ({ $x }, { $y }, RL { $z }) of { $size_x } x { $size_y } x { $size_z }
 err-solids-overlap = A block's overlap exceeds its volume across the planning pieces, so the pieces overlap each other
 
-
 # src/model/mod.rs
 err-bm-polyline-min-vertices = { $what } needs at least 2 vertices
 err-bm-polyline-bad-vertex = { $what } contains an invalid vertex
@@ -5569,7 +5564,6 @@ err-gfx-model-too-deep = The machine model has too many nested parts
 err-gfx-model-index-range = The machine model has a face that points past its vertices
 err-gfx-model-empty = The machine model has no faces
 
-
 # src/app/memory.rs and its callers (browser builds)
 err-memory-estimate-overflows = The memory estimate for the { $what } is too large
 err-memory-over-budget = The { $what } needs { $needed } MiB, but only { $remaining } MiB is left of the browser's 3 GiB working memory
@@ -5644,20 +5638,20 @@ water-error-no-surface = Choose a loaded surface to rain on.
 water-error-empty = The surface has no area in plan to rain on.
 water-clock = { $time } / { $end }
 
-## The Assistant (ui/elements/assistant.rs)
-assistant-title = Assistant
-assistant-empty = Ask the Assistant about your project, or to do something in it.
-assistant-not-connected = No AI provider is connected yet.
-assistant-message-hint = Message the Assistant, or type / for commands
-assistant-send = Send
-assistant-send-not-connected = Connect an AI provider to send messages.
-assistant-command-clear = Clear the conversation
-assistant-command-help = List the commands
-assistant-commands-heading = Commands:
-assistant-unknown-command = There is no { $name } command. Type /help to list them.
-
 ## Panels popped out into windows of their own (ui/widgets/pop_out.rs)
 panel-pop-out = Pop out into its own window
-panel-explorer = Explorer
 panel-console = Console
 panel-section-preview = Section Preview
+
+## The MCP server (mcp/, app/mcp.rs, Preferences > MCP)
+mcp-title = MCP
+mcp-desktop-only = The MCP server runs in the desktop app.
+mcp-enabled = MCP Server
+mcp-port = Port
+mcp-port-help = The port on this computer the server listens on. Change it if another program already uses it.
+mcp-status = Status
+mcp-status-off = Off
+mcp-status-running = Running
+mcp-status-failed = Could not start ({ $error })
+mcp-address = Address
+mcp-started = MCP server running at { $url }

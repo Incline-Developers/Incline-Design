@@ -53,7 +53,6 @@ pub(crate) struct Island {
     fill: Option<egui::Color32>,
     flush: bool,
     bare: bool,
-    filling: bool,
 }
 
 /// What an island claimed, and what its content returned.
@@ -81,7 +80,6 @@ impl Island {
             fill: None,
             flush: false,
             bare: false,
-            filling: false,
         }
     }
 
@@ -121,14 +119,6 @@ impl Island {
         self
     }
 
-    /// Take all the room there is, with no seam: for an island popped out
-    /// into a window of its own (`app/panel_windows.rs`). Its grip is then
-    /// not one to draw.
-    pub(crate) fn filling(mut self, filling: bool) -> Self {
-        self.filling = filling;
-        self
-    }
-
     /// Draw the island. `content` receives the rect it has to work in.
     pub(crate) fn show<R>(self, ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui, egui::Rect) -> R) -> IslandResponse<R> {
         let mut frame = chrome::region_frame(ui);
@@ -140,19 +130,6 @@ impl Island {
             (false, true) => frame.inner_margin(egui::Margin::ZERO),
             (false, false) => frame,
         };
-        if self.filling {
-            let response = egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-                let rect = ui.available_rect_before_wrap();
-                ui.set_clip_rect(ui.clip_rect().intersect(rect));
-                content(ui, rect)
-            });
-            let rect = response.response.rect;
-            return IslandResponse {
-                regions: if self.bare { Vec::new() } else { vec![rect] },
-                grip: chrome::Grip::new(rect, self.side.seam(), ui.scope_id().with(self.id)),
-                inner: response.inner,
-            };
-        }
         // No island takes more than half of what is left when it is claimed.
         // Each one would otherwise keep the width it was dragged to until the
         // window ran out, leaving the last island and the workspace to absorb

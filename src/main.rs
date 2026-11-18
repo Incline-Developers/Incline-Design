@@ -9,6 +9,8 @@ mod i18n;
 mod logging;
 #[cfg(target_os = "macos")]
 mod mac;
+#[cfg(not(target_arch = "wasm32"))]
+mod mcp;
 mod model;
 mod natural_sort;
 mod rendering;
@@ -40,12 +42,20 @@ pub(crate) const APP_RELEASE: &str = env!("CARGO_PKG_VERSION");
 /// Desktop main function
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<()> {
+    // `incline-design mcp`: relay MCP over standard input and output to the
+    // window already running. Before logging starts, as standard output is
+    // the protocol's.
+    if std::env::args().nth(1).as_deref() == Some("mcp") {
+        return Ok(mcp::stdio::run()?);
+    }
     app::memory::tune_allocator();
     let _logging_guard = logging::init();
     std::thread::spawn(model::asset_storage::initialize_native);
     (|| {
         let event_loop = EventLoop::new()?;
         let mut app = App::new()?;
+        // The MCP server wakes the loop with it when a request comes in.
+        app.set_event_loop_proxy(event_loop.create_proxy());
         // App construction loads the saved language. Log startup afterwards so
         // the terminal and activity console use that language too.
         logging::startup_log();

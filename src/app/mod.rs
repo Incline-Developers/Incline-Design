@@ -8,6 +8,9 @@ pub(crate) mod geophysics_web;
 pub(crate) mod haulage_pipeline; // The Haulage workspace's Setup run/invalidation model
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
+pub(crate) mod mcp; // The MCP server: started and stopped to follow Preferences, its requests answered here
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod mcp_tools; // The MCP server's tools
 pub(crate) mod memory; // Allocator settings, and browser address-space budgeting for large allocations
 pub(crate) mod memory_usage; // The status bar's memory and per-core CPU readouts
 pub(crate) mod panel_windows; // Panels popped out of the main window into windows of their own
@@ -348,6 +351,13 @@ pub(crate) struct App<'a> {
     /// Keeping it in the application event loop prevents timed repaints from
     /// being discarded when there is otherwise no window activity.
     next_ui_repaint_deadline: Option<Instant>,
+    /// The MCP server, while it runs. See `mcp`.
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_server: Option<crate::mcp::Server>,
+    /// Wakes the event loop from another thread: the MCP server's, when a
+    /// request comes in.
+    #[cfg(not(target_arch = "wasm32"))]
+    event_loop_proxy: Option<winit::event_loop::EventLoopProxy<()>>,
     /// The popped-out panels' windows, in [`crate::ui::state::PanelKind::ALL`]'s
     /// order. See `panel_windows`.
     #[cfg(not(target_arch = "wasm32"))]
@@ -690,6 +700,10 @@ impl<'a> Default for App<'a> {
             redraw_requested: false,
             next_ui_repaint_deadline: None,
             #[cfg(not(target_arch = "wasm32"))]
+            mcp_server: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            event_loop_proxy: None,
+            #[cfg(not(target_arch = "wasm32"))]
             panel_window_states: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             panel_view_key: Default::default(),
@@ -958,7 +972,6 @@ impl<'a> App<'a> {
         self.editor.well_log_style = config.well_log_style.sanitized();
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
-        self.editor.show_assistant = config.show_assistant;
         self.editor.popped_out = config.popped_out;
         self.editor.ui_size_percent = io::finite_clamped(config.ui_size_percent, 50.0, 200.0, io::default_ui_size_percent());
         self.editor.renderer_background_color = crate::ui::scene_background_color(config.dark_mode);
@@ -2808,8 +2821,14 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         self.teardown_window();
     }
 
-    #[cfg_attr(not(target_arch = "wasm32"), expect(unused_variables))]
     fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: AppEvent) {
+        // On the desktop the only event is the MCP server's: a request is
+        // waiting for the main thread.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let () = event;
+            self.serve_mcp();
+        }
         #[cfg(target_arch = "wasm32")]
         match event {
             AppEvent::GraphicsInitializationFinished => {

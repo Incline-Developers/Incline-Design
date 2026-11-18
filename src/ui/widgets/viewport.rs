@@ -1769,10 +1769,9 @@ fn draw_preview_picture(ui: &mut egui::Ui, editor: &mut EditorState, texture: Op
     let mut navigation_changed = false;
     if response.dragged_by(egui::PointerButton::Middle) {
         let delta = response.drag_delta() * pixels_per_point;
-        navigation_changed |=
-            editor
-                .slice_preview_navigation
-                .pan_by_pixels([f64::from(delta.x), f64::from(delta.y)], current_zoom, f64::from(editor.slice_preview_size_px[1]));
+        navigation_changed |= editor
+            .slice_preview_navigation
+            .pan_by_pixels([f64::from(delta.x), f64::from(delta.y)], current_zoom, f64::from(editor.slice_preview_size_px[1]));
     }
 
     if response.hovered() {

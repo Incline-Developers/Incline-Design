@@ -164,7 +164,7 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
 
 /// The frame of a bar that is its window's title bar too: the window bar's,
 /// with room above it so what is on it is not pinned to the window's edge.
-/// The Assistant's window has one as well (`elements::assistant`).
+/// A popped-out panel's window has one as well (`elements::panel_window`).
 pub(crate) fn title_bar_frame(ui: &egui::Ui) -> egui::Frame {
     let frame = crate::ui::chrome::window_bar_frame(ui);
     frame.inner_margin(egui::Margin {
@@ -398,7 +398,7 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
 fn draw_view_menu(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
     let view_menu = tr!("menu-view");
     MenuBarMenu::new(&view_menu).show(ui, |ui| {
-        for toggle in [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::Assistant] {
+        for toggle in [ViewToggle::DarkMode, ViewToggle::Console] {
             if ContextMenuAction::new(toggle.label()).checked(toggle.get(editor)).show(ui).clicked() {
                 commands.push(UiCommand::ToggleViewOption(toggle));
                 ui.close();

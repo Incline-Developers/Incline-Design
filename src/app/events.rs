@@ -767,7 +767,6 @@ impl<'a> App<'a> {
             }
         }
     }
-
 }
 
 impl<'a> App<'a> {

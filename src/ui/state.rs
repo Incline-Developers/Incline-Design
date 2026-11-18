@@ -51,7 +51,6 @@ pub(crate) struct PreferencesDraft {
     pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
     pub(crate) dark_mode: bool,
     pub(crate) show_console: bool,
-    pub(crate) show_assistant: bool,
     pub(crate) popped_out: PoppedOutPanels,
     pub(crate) ui_size_percent: f64,
     pub(crate) snap_poll_rate: u32,
@@ -92,7 +91,6 @@ impl Default for PreferencesDraft {
             well_log_style: crate::ui::widgets::log_traces::WellLogStyle::default(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
-            show_assistant: false,
             popped_out: PoppedOutPanels::default(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
@@ -2214,12 +2212,11 @@ pub(crate) struct EditorState {
     pub(crate) memory_usage: Option<crate::app::memory_usage::MemoryUsage>,
     /// The window the UI is drawn in. See [`WindowFrame`].
     pub(crate) window_frame: WindowFrame,
-    /// Whether the Assistant is showing. A preference, as the console's is.
-    pub(crate) show_assistant: bool,
-    /// The Assistant's conversation. See [`AssistantState`].
-    pub(crate) assistant: AssistantState,
     /// Which panels are popped out into windows of their own. A preference.
     pub(crate) popped_out: PoppedOutPanels,
+    /// The MCP server. See [`McpState`].
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) mcp: McpState,
     /// The popped-out panels' windows, as their title bars need them.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) panel_frames: PanelWindowFrames,
@@ -4072,9 +4069,7 @@ impl EditorState {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn panel_shown(&self, kind: PanelKind) -> bool {
         match kind {
-            PanelKind::Explorer => true,
             PanelKind::Console => self.show_console,
-            PanelKind::Assistant => self.show_assistant,
             PanelKind::SectionPreview => self.slice_mode_enabled,
         }
     }
@@ -4084,9 +4079,7 @@ impl EditorState {
     pub(crate) fn is_popped_out(&self, kind: PanelKind) -> bool {
         cfg!(not(target_arch = "wasm32"))
             && match kind {
-                PanelKind::Explorer => self.popped_out.explorer,
                 PanelKind::Console => self.popped_out.console,
-                PanelKind::Assistant => self.popped_out.assistant,
                 PanelKind::SectionPreview => self.slice_preview_detached,
             }
     }
@@ -4103,7 +4096,6 @@ impl EditorState {
             well_log_style: self.well_log_style,
             dark_mode: self.dark_mode,
             show_console: self.show_console,
-            show_assistant: self.show_assistant,
             popped_out: self.popped_out,
             ui_size_percent: self.ui_size_percent,
             snap_poll_rate: self.snap_poll_rate,
@@ -4165,7 +4157,6 @@ impl EditorState {
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
-            show_assistant: false,
             popped_out: PoppedOutPanels::default(),
             show_borehole_inspector: false,
             show_schedule_inspector: true,
@@ -4188,8 +4179,8 @@ impl EditorState {
             measured_fps: None,
             memory_usage: None,
             window_frame: WindowFrame::default(),
-            assistant: AssistantState::default(),
             panel_frames: PanelWindowFrames::default(),
+            mcp: McpState::default(),
             cpu_usage: Vec::new(),
             frame_rate_window: (0, 0.0),
             debug_surface_chunks: false,
@@ -5215,7 +5206,6 @@ impl ToolHatch {
 pub(crate) enum ViewToggle {
     Console,
     DarkMode,
-    Assistant,
 }
 
 impl ViewToggle {
@@ -5223,7 +5213,6 @@ impl ViewToggle {
         match self {
             Self::Console => tr!("state-show-console"),
             Self::DarkMode => tr!("state-dark-mode"),
-            Self::Assistant => tr!("state-assistant"),
         }
     }
 
@@ -5234,7 +5223,6 @@ impl ViewToggle {
         match self {
             Self::Console => editor.show_console,
             Self::DarkMode => editor.dark_mode,
-            Self::Assistant => editor.show_assistant,
         }
     }
 }
@@ -5369,23 +5357,19 @@ pub(crate) struct WindowFrame {
 /// closing that window. See `app/panel_windows.rs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PanelKind {
-    Explorer,
     Console,
-    Assistant,
     /// The section view's top-down preview.
     SectionPreview,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl PanelKind {
-    pub(crate) const ALL: [Self; 4] = [Self::Explorer, Self::Console, Self::Assistant, Self::SectionPreview];
+    pub(crate) const ALL: [Self; 2] = [Self::Console, Self::SectionPreview];
 
     /// The name its window goes by.
     pub(crate) fn title(self) -> String {
         match self {
-            Self::Explorer => tr!("panel-explorer"),
             Self::Console => tr!("panel-console"),
-            Self::Assistant => tr!("assistant-title"),
             Self::SectionPreview => tr!("panel-section-preview"),
         }
     }
@@ -5398,9 +5382,7 @@ impl PanelKind {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct PoppedOutPanels {
-    pub(crate) explorer: bool,
     pub(crate) console: bool,
-    pub(crate) assistant: bool,
 }
 
 /// One popped-out panel's window, as its title bar needs it: mirrored in as
@@ -5408,9 +5390,7 @@ pub(crate) struct PoppedOutPanels {
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) struct PanelWindowFrames {
-    pub(crate) explorer: WindowFrame,
     pub(crate) console: WindowFrame,
-    pub(crate) assistant: WindowFrame,
     pub(crate) section_preview: WindowFrame,
 }
 
@@ -5418,33 +5398,34 @@ pub(crate) struct PanelWindowFrames {
 impl PanelWindowFrames {
     pub(crate) fn get_mut(&mut self, kind: PanelKind) -> &mut WindowFrame {
         match kind {
-            PanelKind::Explorer => &mut self.explorer,
             PanelKind::Console => &mut self.console,
-            PanelKind::Assistant => &mut self.assistant,
             PanelKind::SectionPreview => &mut self.section_preview,
         }
     }
 }
 
-/// The Assistant: where the AI is talked to and set up. Shown by View >
-/// Assistant ([`EditorState::show_assistant`]), docked on the right of the
-/// main window or popped out into its own. Its UI is
-/// `ui/elements/assistant.rs`.
+/// The MCP server (`mcp`), as Preferences > MCP shows it. `App` keeps it in step with the server (`app/mcp.rs`). The browser
+/// cannot run one, and leaves it off.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct AssistantState {
-    /// The message being written, not yet sent.
-    pub(crate) draft: String,
-    /// The conversation so far, oldest first.
-    pub(crate) messages: Vec<AssistantMessage>,
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) struct McpState {
+    pub(crate) enabled: bool,
+    pub(crate) port: u16,
+    /// What a client must send as its bearer token.
+    pub(crate) token: String,
+    pub(crate) status: McpStatus,
 }
 
-/// One entry in the Assistant's conversation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum AssistantMessage {
-    /// What the user sent.
-    User(String),
-    /// Something the Assistant's window itself says: a `/` command's answer.
-    Notice(String),
+/// Whether the MCP server is running.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) enum McpStatus {
+    #[default]
+    Off,
+    Running,
+    /// It was switched on but could not start, for this reason (the port in
+    /// use, most often).
+    Failed(String),
 }
 
 /// Something the title bar asks of the window.
@@ -5820,6 +5801,12 @@ pub(crate) enum UiCommand {
     ToggleViewOption(ViewToggle),
     /// Pop a panel out into a window of its own (`true`), or dock it back.
     SetPanelPoppedOut(PanelKind, bool),
+    /// Switch the MCP server on or off.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    SetMcpEnabled(bool),
+    /// Move the MCP server to another port.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    SetMcpPort(u16),
     SaveProject,
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs(u32),
@@ -6418,6 +6405,8 @@ impl UiCommand {
             | Self::TransformSurveySelection
             | Self::ToggleViewOption(_)
             | Self::SetPanelPoppedOut(..)
+            | Self::SetMcpEnabled(_)
+            | Self::SetMcpPort(_)
             | Self::SetInitiation { .. }
             | Self::ChargeSelectedHoles { .. }
             | Self::BeginRenameItem(_)
@@ -10327,6 +10316,8 @@ pub(crate) enum PropertyTab {
     Interface,
     Camera,
     Performance,
+    /// The MCP server that lets AI tools work with Incline (`mcp`).
+    Mcp,
     Developer,
 }
 

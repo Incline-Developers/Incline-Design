@@ -1,5 +1,5 @@
 //! Panels popped out of the main window into windows of their own: the
-//! explorer, the console, the Assistant and the section view's preview
+//! console and the section view's preview
 //! ([`PanelKind`]), on the desktop.
 //!
 //! Each window is opened and closed to follow
@@ -23,14 +23,14 @@ use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use web_time::Instant;
+#[cfg(target_os = "linux")]
+use winit::platform::wayland::WindowAttributesExtWayland;
 #[cfg(not(target_arch = "wasm32"))]
 use winit::{
     event::{ElementState, KeyEvent, WindowEvent},
     keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
-#[cfg(target_os = "linux")]
-use winit::platform::wayland::WindowAttributesExtWayland;
 
 use crate::app::App;
 #[cfg(not(target_arch = "wasm32"))]
@@ -40,9 +40,7 @@ use crate::ui::state::{PanelKind, UiCommand, WindowAction};
 #[cfg(not(target_arch = "wasm32"))]
 fn open_size(kind: PanelKind) -> winit::dpi::LogicalSize<f64> {
     match kind {
-        PanelKind::Explorer => winit::dpi::LogicalSize::new(340.0, 720.0),
         PanelKind::Console => winit::dpi::LogicalSize::new(900.0, 360.0),
-        PanelKind::Assistant => winit::dpi::LogicalSize::new(440.0, 640.0),
         PanelKind::SectionPreview => winit::dpi::LogicalSize::new(640.0, 640.0),
     }
 }
@@ -59,7 +57,6 @@ pub(super) struct PanelViewKey {
     theme: (bool, u64),
     project: u64,
     console: u64,
-    assistant: usize,
 }
 
 /// One popped-out panel's window state, kept by `App`.
@@ -165,7 +162,6 @@ impl App<'_> {
             theme: (self.editor.dark_mode, self.editor.ui_size_percent.to_bits()),
             project: project.finish(),
             console: crate::logging::console_snapshot().0,
-            assistant: self.editor.assistant.messages.len(),
         }
     }
 
@@ -318,17 +314,12 @@ impl App<'_> {
     #[cfg(not(target_arch = "wasm32"))]
     fn render_panel_window(&mut self, kind: PanelKind) {
         self.sync_panel_frame(kind);
-        let project = self.project_view();
         let console = crate::logging::console_snapshot();
         let navigation = (self.editor.slice_preview_navigation, self.editor.slice_preview_size_px);
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
-        let context = crate::ui::elements::panel_window::PanelWindowContext {
-            project: &project,
-            document: &self.scene_document,
-            console: &console,
-        };
+        let context = crate::ui::elements::panel_window::PanelWindowContext { console: &console };
         let result = graphics.render_panel_window(kind, &mut self.editor, |ui, editor, commands| {
             crate::ui::elements::panel_window::draw_panel_window(ui, kind, editor, &context, commands);
         });

@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use glam::DVec3;
 use wgpu::util::DeviceExt;
-use winit::{
-    dpi::PhysicalSize,
-};
+use winit::dpi::PhysicalSize;
 
 use super::{BlockModelTransparencyTargets, BlockModelVolumeTarget, Graphics};
 use crate::{

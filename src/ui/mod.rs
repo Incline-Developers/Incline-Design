@@ -829,12 +829,11 @@ fn draw_ui(
     let planning_tabs_bottom = planning_tabs.as_ref().map_or(f32::NEG_INFINITY, |tabs| tabs.rect.bottom());
 
     if editor.is_planning_setup() {
-        let explorer = if editor.is_schedule_pane() || editor.is_popped_out(state::PanelKind::Explorer) {
+        let explorer = if editor.is_schedule_pane() {
             elements::explorer::ExplorerLayout::empty()
         } else {
-            elements::explorer::draw_explorer(root_ui, editor, project, document, commands, false)
+            elements::explorer::draw_explorer(root_ui, editor, project, document, commands)
         };
-        let assistant = draw_docked_assistant(root_ui, editor, commands);
         let console_rect = (editor.show_console && !editor.is_popped_out(state::PanelKind::Console)).then(|| {
             let available_height = root_ui.available_height();
             let toolbar_height = elements::toolbars::bottom_toolbar_height();
@@ -883,15 +882,10 @@ fn draw_ui(
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
         chrome::paint_regions(
             ctx,
-            [viewport_bar_rect, console]
-                .into_iter()
-                .chain(explorer.regions)
-                .chain(planning_layout.regions)
-                .chain(assistant.iter().flat_map(|island| island.regions.iter().copied())),
+            [viewport_bar_rect, console].into_iter().chain(explorer.regions).chain(planning_layout.regions),
             status_bar_rect,
         );
         chrome::paint_grips(ctx, planning_layout.grips);
-        chrome::paint_grips(ctx, assistant.map(|island| island.grip));
         if let Some(tabs) = &planning_tabs {
             tabs.paint(ctx);
         }
@@ -910,16 +904,14 @@ fn draw_ui(
 
     // A rain simulation's tab shows nothing of the project's, so it has no
     // explorer to choose from.
-    let explorer = if editor.is_water_run() || editor.is_popped_out(state::PanelKind::Explorer) {
+    let explorer = if editor.is_water_run() {
         // As for the optional panels below: keep the root auto-id sequence
         // the same whether or not this one is drawn.
         root_ui.skip_ahead_auto_ids(1);
         elements::explorer::ExplorerLayout::empty()
     } else {
-        elements::explorer::draw_explorer(root_ui, editor, project, document, commands, false)
+        elements::explorer::draw_explorer(root_ui, editor, project, document, commands)
     };
-    // Down the far right, the whole height under the viewport bar.
-    let assistant = draw_docked_assistant(root_ui, editor, commands);
 
     // The console belongs below the bottom toolbar. Reserve the toolbar's height
     // before showing the console so dragging it to its maximum cannot starve the
@@ -1607,8 +1599,7 @@ fn draw_ui(
         ]
         .into_iter()
         .chain(explorer.regions)
-        .chain(planning_regions)
-        .chain(assistant.iter().flat_map(|island| island.regions.iter().copied())),
+        .chain(planning_regions),
         status_bar_rect,
     );
     // Centre the explorer resize grip on its full-height column.
@@ -1624,8 +1615,7 @@ fn draw_ui(
             ])
             // The island names its own seam, so the grip lights up for whichever
             // of the right-edge panels the workspace drew.
-            .chain(planning_grips)
-            .chain(assistant.map(|island| island.grip)),
+            .chain(planning_grips),
     );
     // Over the regions' chrome: the open workspace tab reaches down through
     // the gap to the viewport bar under it, and Planning's tabs sit in the
@@ -1695,17 +1685,6 @@ fn draw_initiation_cards(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui:
         painter.add(egui::Shape::convex_polygon(pointer, fill, stroke));
         painter.rect(rect, 3.0 * scale, fill, stroke, egui::StrokeKind::Inside);
         painter.galley(rect.center() - galley.size() * 0.5, galley, egui::Color32::WHITE);
-    }
-}
-
-/// The Assistant, docked down the right of the main window while it is shown
-/// and not popped out. Keeps the root's auto-id sequence the same either way.
-fn draw_docked_assistant(root_ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> Option<widgets::island::IslandResponse<()>> {
-    if editor.show_assistant && !editor.is_popped_out(state::PanelKind::Assistant) {
-        Some(elements::assistant::draw_assistant_island(root_ui, editor, commands))
-    } else {
-        root_ui.skip_ahead_auto_ids(1);
-        None
     }
 }
 

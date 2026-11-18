@@ -775,15 +775,12 @@ impl ExplorerLayout {
 }
 
 /// Draw the full-height project explorer.
-/// `in_window` draws it filling a window of its own, popped out
-/// (`app/panel_windows.rs`), rather than as the main window's left column.
 pub(crate) fn draw_explorer(
     ui: &mut egui::Ui,
     editor: &mut EditorState,
     project: &UiProjectView,
     document: &crate::model::Document,
     commands: &mut Vec<UiCommand>,
-    in_window: bool,
 ) -> ExplorerLayout {
     let (surface, _) = crate::ui::widgets::tree_row_colors(ui);
     // The column arranges panes rather than being one, so it takes no frame of
@@ -794,7 +791,6 @@ pub(crate) fn draw_explorer(
         .default_width(280.0)
         .min_width(220.0)
         .bare()
-        .filling(in_window)
         .show(ui, |ui, _| {
             // Which page this is, read once. A pane drawn early in the frame
             // can change the step (a click in the cut steps' tree opens a
@@ -923,17 +919,7 @@ pub(crate) fn draw_explorer(
     // pane that can be dragged taller says so with a seam of its own, so no
     // resizable edge in the column is left unmarked.
     let (panes, seams, scope) = column.inner;
-    // Popped out, the column has the window to itself and no seam to drag.
-    let column_grip = (!in_window).then_some(column.grip);
-    // The pop-out button, in the corner of the column's top pane.
-    if !in_window
-        && let Some(top) = panes.iter().copied().filter(|pane| pane.is_positive()).min_by(|a, b| a.top().total_cmp(&b.top()))
-        && crate::ui::widgets::pop_out::corner_button(ui.ctx(), "explorer", crate::ui::chrome::region_rect(top), tr!("panel-pop-out"))
-    {
-        commands.push(UiCommand::SetPanelPoppedOut(crate::ui::state::PanelKind::Explorer, true));
-    }
-    let grips = column_grip
-        .into_iter()
+    let grips = std::iter::once(column.grip)
         .chain(
             [
                 (seams[0], CUT_STEPS_PANEL_ID, crate::ui::chrome::Edge::Bottom),

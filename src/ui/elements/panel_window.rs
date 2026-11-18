@@ -1,24 +1,18 @@
 //! A panel popped out of the main window into a window of its own
-//! (`app/panel_windows.rs`): the explorer, the console, the Assistant or the
-//! section view's preview.
+//! (`app/panel_windows.rs`): the console or the section view's preview.
 //!
 //! Dressed as the main window is: a bar across the top that is the window's
 //! title bar too, naming the panel, and the panel under it with the same gap
 //! round it. Closing the window puts the panel back where it was docked.
 
-use crate::{
-    model::Document,
-    ui::{
-        chrome,
-        elements::{main_menu, title_bar},
-        state::{EditorState, PanelKind, UiCommand, UiProjectView},
-    },
+use crate::ui::{
+    chrome,
+    elements::{main_menu, title_bar},
+    state::{EditorState, PanelKind, UiCommand},
 };
 
 /// What a popped-out panel may draw from, beyond the editor.
 pub(crate) struct PanelWindowContext<'a> {
-    pub(crate) project: &'a UiProjectView,
-    pub(crate) document: &'a Document,
     pub(crate) console: &'a crate::logging::ConsoleSnapshot,
 }
 
@@ -53,12 +47,7 @@ pub(crate) fn draw_panel_window(root_ui: &mut egui::Ui, kind: PanelKind, editor:
         .frame(egui::Frame::NONE)
         .show(root_ui, |_| {});
     let (regions, grips) = match kind {
-        PanelKind::Explorer => {
-            let layout = crate::ui::elements::explorer::draw_explorer(root_ui, editor, context.project, context.document, commands, true);
-            (layout.regions, layout.grips)
-        }
         PanelKind::Console => (vec![crate::ui::elements::console::draw_console_window(root_ui, context.console)], Vec::new()),
-        PanelKind::Assistant => (vec![crate::ui::elements::assistant::draw_assistant_window(root_ui, editor, commands)], Vec::new()),
         PanelKind::SectionPreview => (vec![crate::ui::widgets::viewport::draw_section_preview_window(root_ui, editor, commands)], Vec::new()),
     };
 

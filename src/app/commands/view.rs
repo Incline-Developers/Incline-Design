@@ -149,7 +149,6 @@ impl<'a> App<'a> {
         match option {
             ViewToggle::Console => preferences.show_console = value,
             ViewToggle::DarkMode => preferences.dark_mode = value,
-            ViewToggle::Assistant => preferences.show_assistant = value,
         }
         self.apply_preferences(preferences)
     }
@@ -163,9 +162,7 @@ impl<'a> App<'a> {
         let popped_out = popped_out && cfg!(not(target_arch = "wasm32"));
         let mut preferences = self.editor.current_preferences();
         match kind {
-            PanelKind::Explorer => preferences.popped_out.explorer = popped_out,
             PanelKind::Console => preferences.popped_out.console = popped_out,
-            PanelKind::Assistant => preferences.popped_out.assistant = popped_out,
             PanelKind::SectionPreview => {
                 self.editor.slice_preview_detached = popped_out && self.editor.slice_mode_enabled;
                 self.redraw_requested = true;
@@ -222,7 +219,6 @@ impl<'a> App<'a> {
         self.editor.well_log_style = preferences.well_log_style;
         self.editor.dark_mode = preferences.dark_mode;
         self.editor.show_console = preferences.show_console;
-        self.editor.show_assistant = preferences.show_assistant;
         self.editor.popped_out = preferences.popped_out;
         self.editor.ui_size_percent = preferences.ui_size_percent;
         self.editor.renderer_background_color = crate::ui::scene_background_color(preferences.dark_mode);
@@ -540,7 +536,6 @@ pub(crate) fn config_from(
         well_log_style: preferences.well_log_style,
         dark_mode: preferences.dark_mode,
         show_console: preferences.show_console,
-        show_assistant: preferences.show_assistant,
         popped_out: preferences.popped_out,
         ui_size_percent: preferences.ui_size_percent,
         snap_poll_rate: preferences.snap_poll_rate,

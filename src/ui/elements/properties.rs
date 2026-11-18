@@ -20,14 +20,18 @@ use crate::{
     },
 };
 
+/// The Preferences window's size, on a screen with room for it. The import
+/// and export dialogs are as tall (`dialogs::import_export`).
+pub(crate) const PREFERENCES_SIZE: egui::Vec2 = egui::vec2(600.0, 380.0);
+
 pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     if !editor.show_preferences {
         return;
     }
     let mut open = true;
     let available = ui.ctx().content_rect().size() - egui::vec2(24.0, 24.0);
-    let scale = (available.x / 600.0).min(available.y / 480.0).clamp(0.1, 1.0);
-    let size = egui::vec2(600.0, 480.0) * scale;
+    let scale = (available.x / PREFERENCES_SIZE.x).min(available.y / PREFERENCES_SIZE.y).clamp(0.1, 1.0);
+    let size = PREFERENCES_SIZE * scale;
     crate::ui::widgets::menu::DragableMenu::new("preferences", tr!("preferences-title"))
         .open(&mut open)
         .fixed_size(size)
@@ -58,6 +62,7 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, comm
                     (PropertyTab::Interface, tr!("properties-interface")),
                     (PropertyTab::Camera, tr!("properties-camera")),
                     (PropertyTab::Performance, tr!("properties-performance")),
+                    (PropertyTab::Mcp, tr!("mcp-title")),
                     (PropertyTab::Developer, tr!("properties-developer")),
                 ] {
                     let response = crate::ui::widgets::explorer::ExplorerEntry::new(ui.scope_id().with(tab as u8), label)
@@ -78,6 +83,7 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, comm
                         PropertyTab::Interface => draw_interface_settings(ui, editor, commands),
                         PropertyTab::Camera => draw_camera_settings(ui, editor, commands),
                         PropertyTab::Performance => draw_performance_settings(ui, editor, commands),
+                        PropertyTab::Mcp => draw_mcp_settings(ui, editor, commands),
                         PropertyTab::Developer => draw_developer_settings(ui, editor, commands),
                     });
             });
@@ -478,6 +484,44 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
         },
         Some(reset_interface_defaults),
     );
+}
+
+/// The MCP server: on or off, its port, and where it is. Each change is made as it is committed, as the rest of Preferences'
+/// are, and saved apart from them (`mcp`).
+fn draw_mcp_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    menu::menu_section(ui, tr!("mcp-title"));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (editor, commands);
+        menu::menu_note(ui, tr!("mcp-desktop-only"));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use crate::ui::state::McpStatus;
+
+        let mcp = &editor.mcp;
+        let mut enabled = mcp.enabled;
+        if committed(&MenuFieldBool::new(tr!("mcp-enabled"), &mut enabled).show(ui)) {
+            commands.push(UiCommand::SetMcpEnabled(enabled));
+        }
+        let mut port = u32::from(mcp.port);
+        let port_field = MenuFieldU32::new(tr!("mcp-port"), &mut port, 1024..=65535).help_text(tr!("mcp-port-help")).show(ui);
+        if committed(&port_field)
+            && let Ok(port) = u16::try_from(port)
+        {
+            commands.push(UiCommand::SetMcpPort(port));
+        }
+        let status = match &mcp.status {
+            McpStatus::Off => tr!("mcp-status-off"),
+            McpStatus::Running => tr!("mcp-status-running"),
+            McpStatus::Failed(error) => tr!("mcp-status-failed", error = error.clone()),
+        };
+        read_only_row(ui, &tr!("mcp-status"), &status);
+        if mcp.status == McpStatus::Running {
+            read_only_row(ui, &tr!("mcp-address"), &crate::mcp::url(mcp.port));
+        }
+        ui.add_space(6.0);
+    }
 }
 
 fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {

@@ -85,8 +85,8 @@ pub(crate) enum MacMenuAction {
 }
 
 /// The View menu's rows, in the order they are drawn. The egui menu bar draws
-/// the same three - see [`crate::ui::elements::main_menu`].
-pub(crate) const VIEW_TOGGLES: [ViewToggle; 3] = [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::Assistant];
+/// the same two - see [`crate::ui::elements::main_menu`].
+pub(crate) const VIEW_TOGGLES: [ViewToggle; 2] = [ViewToggle::DarkMode, ViewToggle::Console];
 
 /// A workspace's root menus all carry the tag [`workspace_menu_tag`] gives
 /// it, so [`set_workspace_menus`] finds them without matching on a

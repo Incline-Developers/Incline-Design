@@ -1,6 +1,6 @@
 //! The button that pops a docked panel out into a window of its own
-//! (`app/panel_windows.rs`), in the panel's corner. Closing that window docks
-//! it again.
+//! (`app/panel_windows.rs`), in the panel's corner, out of sight until the
+//! pointer comes near it. Closing that window docks it again.
 //!
 //! A box with an arrow leaving it, painted rather than drawn from an icon so
 //! it stays sharp at any size. Not in the browser, which has one window.
@@ -11,22 +11,39 @@ use super::hint::Hint;
 const BUTTON_SIZE: f32 = 18.0;
 /// Space between the tile and the corner of the region it sits in.
 const CORNER_INSET: f32 = 4.0;
+/// How near the panel's corner the pointer has to be for the button to show:
+/// a square this wide, in the corner.
+const REVEAL_DISTANCE: f32 = 64.0;
+/// How long the button takes to fade in or out.
+const FADE_SECONDS: f32 = 0.12;
 /// Side of the box drawn in the tile.
 const GLYPH_SIZE: f32 = 9.0;
 /// Length of each stroke of the arrow's head.
 const ARROW_HEAD: f32 = 3.5;
 
 /// A pop-out button floating in the top-right corner of `region`, over what
-/// the panel draws there. Returns whether it was pressed.
+/// the panel draws there, shown only while the pointer is near that corner.
+/// Returns whether it was pressed.
 pub(crate) fn corner_button(ctx: &egui::Context, id_salt: &str, region: egui::Rect, hint: impl Into<egui::WidgetText>) -> bool {
     if cfg!(target_arch = "wasm32") || !region.is_positive() {
         return false;
     }
+    let id = egui::Id::unique(("pop_out_button", id_salt));
+    let near_corner = egui::Rect::from_min_max(
+        egui::pos2(region.right() - REVEAL_DISTANCE, region.top()),
+        egui::pos2(region.right(), region.top() + REVEAL_DISTANCE),
+    );
+    let near = ctx.pointer_hover_pos().is_some_and(|pointer| near_corner.contains(pointer));
+    let opacity = ctx.animate_bool_with_time(id.with("shown"), near, FADE_SECONDS);
+    if opacity <= 0.0 {
+        return false;
+    }
     let pos = egui::pos2(region.right() - CORNER_INSET - BUTTON_SIZE, region.top() + CORNER_INSET);
-    egui::Area::new(egui::Id::unique(("pop_out_button", id_salt)))
+    egui::Area::new(id)
         .order(egui::Order::Middle)
         .fixed_pos(pos)
         .show(ctx, |ui| {
+            ui.set_opacity(opacity);
             let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(BUTTON_SIZE), egui::Sense::hover());
             button(ui, rect, hint).clicked()
         })

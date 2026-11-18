@@ -1,5 +1,5 @@
-//! The UI of a window besides the main one: the Assistant's
-//! (`app/assistant_window.rs`).
+//! The UI of a window besides the main one: a popped-out panel's
+//! (`app/panel_windows.rs`).
 //!
 //! A context, winit bridge and renderer of its own, set up as the main
 //! window's are ([`super::configure_context`]) and following the same theme

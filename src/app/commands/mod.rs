@@ -1212,6 +1212,8 @@ impl<'a> App<'a> {
             UiCommand::SetWellLogStyle(style) => self.set_well_log_style(style),
             UiCommand::ToggleViewOption(option) => self.toggle_view_option(option),
             UiCommand::SetPanelPoppedOut(kind, popped_out) => self.set_panel_popped_out(kind, popped_out),
+            UiCommand::SetMcpEnabled(enabled) => self.set_mcp_enabled(enabled),
+            UiCommand::SetMcpPort(port) => self.set_mcp_port(port),
             UiCommand::RemoveTriangulation(id) => {
                 self.remove_triangulation(id);
                 Ok(())
