@@ -753,6 +753,17 @@ impl<'a> State<'a> {
         })
     }
 
+    /// Whether `task` has ground `loader` may dig beside the loaders
+    /// `admitted` holds in each area: a dig bar's current block, or any
+    /// block of an automatic bar's reach, which need not start at the head
+    /// of its sequence.
+    fn has_room(&self, loader: usize, task: usize, interval: Interval, admitted: &[BTreeSet<usize>]) -> bool {
+        match self.reach(task, &BTreeSet::new(), interval) {
+            Some(reach) => reach.iter().any(|block| self.area_room(loader, *block, admitted)),
+            None => self.current_block(task).is_none_or(|block| self.area_room(loader, block, admitted)),
+        }
+    }
+
     /// The loaders each area holds in `topology`, in any segment.
     fn occupied_by(&self, topology: &Topology) -> Vec<BTreeSet<usize>> {
         let mut occupied = vec![BTreeSet::new(); self.input.loader_areas.len()];
@@ -995,6 +1006,8 @@ impl<'a> State<'a> {
         // (target, terms of fed tonnes and the grade they carry)
         let mut receipts: BTreeMap<usize, Vec<(Col, f64, f64)>> = BTreeMap::new();
         let mut today: Vec<(usize, GroundId, Col)> = Vec::new();
+        // Each loader's tonnes in each area with a loader limit, per day.
+        let mut in_area: BTreeMap<(usize, usize, usize), Vec<(Col, f64)>> = BTreeMap::new();
         let ends_h = interval.start_h + days as f64 * 24.0;
         for (task_index, task) in input.tasks.iter().enumerate() {
             let TaskKind::Dig { sequence } = &task.kind else { continue };
@@ -1059,6 +1072,9 @@ impl<'a> State<'a> {
                     let held = taken.entry(block).or_insert((left, Vec::new()));
                     held.1.push((x, 1.0));
                     loader_days.entry((loader, d)).or_default().1.push((x, 1.0));
+                    for area in self.areas_of.get(&block).into_iter().flatten() {
+                        in_area.entry((*area, d, loader)).or_default().push((x, 1.0));
+                    }
                     let mut split = vec![(x, -1.0)];
                     for (k, fraction, gain, contained) in feeds.iter().filter(|feed| feed.1 > 0.0) {
                         let y = problem.add_column(gain * later(d), 0.0..);
@@ -1083,6 +1099,23 @@ impl<'a> State<'a> {
         }
         for (left, terms) in taken.into_values() {
             problem.add_row(..=left, terms);
+        }
+        // A loader limit as the hourly program cannot break it: each loader's
+        // tonnes in an area are its share of the day there, and the shares
+        // of the area's loaders come to no more than its limit.
+        let mut shares: BTreeMap<(usize, usize), Vec<(Col, f64)>> = BTreeMap::new();
+        for ((area, d, loader), mut terms) in in_area {
+            let cap = loader_days.get(&(loader, d)).map_or(0.0, |(cap, _)| *cap);
+            let share = problem.add_column(0.0, 0.0..=1.0);
+            terms.push((share, -cap));
+            problem.add_row(..=0.0, terms);
+            shares.entry((area, d)).or_default().push((share, 1.0));
+        }
+        for ((area, _), terms) in shares {
+            let limit = f64::from(input.loader_areas[area].loaders);
+            if terms.len() as f64 > limit {
+                problem.add_row(..=limit, terms);
+            }
         }
         for ((_, _), (cap, terms)) in loader_days {
             if !terms.is_empty() {
@@ -1163,14 +1196,16 @@ impl<'a> State<'a> {
             let Some(rate) = interval_rate(&input.loaders[loader], k) else { continue };
             let Some(task) = authored_tasks(input, loader)
                 .into_iter()
-                .find(|&task| self.ready(task, interval, rate.dig_tph, rate.reclaim_tph) && self.current_block(task).is_none_or(|block| self.area_room(loader, block, &admitted)))
+                .find(|&task| self.ready(task, interval, rate.dig_tph, rate.reclaim_tph) && self.has_room(loader, task, interval, &admitted))
             else {
                 continue;
             };
-            let Some(mut bar) = self.open_bar(loader, task, &BTreeSet::new(), interval) else { continue };
-            // An automatic bar's reach may run into another area: blocks in
-            // one that is full are out of its reach this interval, as its
-            // current block was checked to be in one with room.
+            let Some(mut bar) = self.open_bar(loader, task, &BTreeSet::new(), interval) else {
+                continue;
+            };
+            // An automatic bar's reach may run into several areas: blocks in
+            // one that is full are out of its reach this interval, and some
+            // block of it was checked to be in one with room.
             bar.blocks.retain(|block| self.area_room(loader, *block, &admitted));
             for block in &bar.blocks {
                 for area in self.areas_of.get(block).into_iter().flatten() {
@@ -1513,14 +1548,18 @@ impl<'a> State<'a> {
                 }
             }
             let Some(task) = following else { continue };
-            let Some(opened) = self.open_bar(bar.loader, task, &gone, interval) else {
+            let Some(mut opened) = self.open_bar(bar.loader, task, &gone, interval) else {
                 continue;
             };
-            if matches!(input.tasks[task].kind, TaskKind::Dig { .. }) && opened.blocks.is_empty() {
+            // A loader does not move into an area full of others: an
+            // automatic bar's reach keeps only the blocks in areas with room.
+            let occupied = self.occupied_by(topology);
+            if input.tasks[task].lookahead_t > 0.0 {
+                opened.blocks.retain(|block| self.area_room(bar.loader, *block, &occupied));
+            } else if opened.blocks.iter().any(|block| !self.area_room(bar.loader, *block, &occupied)) {
                 continue;
             }
-            let occupied = self.occupied_by(topology);
-            if opened.blocks.iter().any(|block| !self.area_room(bar.loader, *block, &occupied)) {
+            if matches!(input.tasks[task].kind, TaskKind::Dig { .. }) && opened.blocks.is_empty() {
                 continue;
             }
             next.segments[last + 1].push(opened);
