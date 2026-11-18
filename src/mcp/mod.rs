@@ -25,7 +25,7 @@ pub(crate) mod stdio;
 use std::io;
 
 use serde::{Deserialize, Serialize};
-pub(crate) use server::Server;
+pub(crate) use server::{Call, Server};
 
 /// The port the server listens on unless the user picks another.
 pub(crate) const DEFAULT_PORT: u16 = 2608;

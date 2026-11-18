@@ -354,6 +354,12 @@ pub(crate) struct App<'a> {
     /// The MCP server, while it runs. See `mcp`.
     #[cfg(not(target_arch = "wasm32"))]
     mcp_server: Option<crate::mcp::Server>,
+    /// `capture_viewport` calls waiting for a frame to be drawn.
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_captures: Vec<mcp_tools::PendingCapture>,
+    /// `get_tasks` calls waiting for the background work to finish.
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_waits: Vec<mcp_tools::PendingWait>,
     /// Wakes the event loop from another thread: the MCP server's, when a
     /// request comes in.
     #[cfg(not(target_arch = "wasm32"))]
@@ -701,6 +707,10 @@ impl<'a> Default for App<'a> {
             next_ui_repaint_deadline: None,
             #[cfg(not(target_arch = "wasm32"))]
             mcp_server: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_captures: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_waits: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             event_loop_proxy: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -2766,6 +2776,15 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         let panel_deadline = self.poll_panel_repaints(now);
+        // A look at the viewport the MCP server is waiting on is answered once
+        // its frame has drawn, and a wait for the background work once it is
+        // done, so the loop keeps coming back until then.
+        #[cfg(not(target_arch = "wasm32"))]
+        let capture_deadline = self.poll_mcp_captures().then(|| now + Duration::from_millis(16));
+        #[cfg(not(target_arch = "wasm32"))]
+        let capture_deadline = capture_deadline.or_else(|| self.poll_mcp_waits().then(|| now + Duration::from_millis(100)));
+        #[cfg(target_arch = "wasm32")]
+        let capture_deadline: Option<Instant> = None;
         #[cfg(target_arch = "wasm32")]
         let panel_deadline: Option<Instant> = None;
         let continuous_redraw = self.graphics.as_ref().is_some_and(Graphics::needs_continuous_redraw);
@@ -2806,6 +2825,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             .chain(self.scanned_model_kept_until)
             .chain(trackpad_deadline)
             .chain(panel_deadline)
+            .chain(capture_deadline)
             .min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));

@@ -348,7 +348,7 @@ impl<'a> App<'a> {
     /// blocks and the Blasting steps their bench bodies, with the project's
     /// own surfaces hidden; measuring those framed nothing there, and the
     /// camera stayed put or swung to the world origin.
-    fn framed_triangulations(&self) -> &[crate::model::triangulation::OpenTriangulation] {
+    pub(crate) fn framed_triangulations(&self) -> &[crate::model::triangulation::OpenTriangulation] {
         crate::app::events::drawn_surfaces(
             &self.editor,
             self.showing_solid_preview(),

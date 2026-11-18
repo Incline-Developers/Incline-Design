@@ -85,45 +85,54 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn handle_ui_commands(&mut self, commands: Vec<UiCommand>) {
-        let had_commands = !commands.is_empty();
-        if had_commands {
-            self.last_ui_command_at = Some(web_time::Instant::now());
-        }
         for command in commands {
-            // A widget being dragged reports the same command every frame.
-            // The first opens a console entry for the edit; the rest are that
-            // same edit still happening, and would bury the console.
-            let mut spec = command.console_report_spec();
-            if let (Some(spec), crate::ui::state::UiCommand::Schedule { edit, .. }) = (spec.as_mut(), &command)
-                && let Some(subject) = self.schedule_report_subject(edit)
-            {
-                spec.summary = subject;
+            // Each one reports its own failure, in the activity log.
+            let _ = self.handle_reported_ui_command(command);
+        }
+    }
+
+    /// Run one command as the window's controls do, reported in the activity
+    /// log, and hand back whether it failed there and then. A command that
+    /// starts a background job succeeds once the job is started; the job
+    /// reports its own outcome when it lands.
+    pub(crate) fn handle_reported_ui_command(&mut self, command: UiCommand) -> Result<()> {
+        self.last_ui_command_at = Some(web_time::Instant::now());
+        self.redraw_requested = true;
+        // A widget being dragged reports the same command every frame.
+        // The first opens a console entry for the edit; the rest are that
+        // same edit still happening, and would bury the console.
+        let mut spec = command.console_report_spec();
+        if let (Some(spec), crate::ui::state::UiCommand::Schedule { edit, .. }) = (spec.as_mut(), &command)
+            && let Some(subject) = self.schedule_report_subject(edit)
+        {
+            spec.summary = subject;
+        }
+        let result = match spec.filter(|_| self.should_report_to_console(&command)) {
+            Some(spec) => {
+                let report_id = crate::logging::begin_command_report(spec);
+                let result = crate::logging::with_report_scope(report_id, || self.handle_ui_command(command));
+                crate::logging::finish_command_report(report_id, result.as_ref().err());
+                result
             }
-            match spec.filter(|_| self.should_report_to_console(&command)) {
-                Some(spec) => {
-                    let report_id = crate::logging::begin_command_report(spec);
-                    let result = crate::logging::with_report_scope(report_id, || self.handle_ui_command(command));
-                    crate::logging::finish_command_report(report_id, result.as_ref().err());
-                }
-                // A command quiet enough to have no row of its own is most
-                // often a step of the tool in hand (Drape's Confirm), so
-                // whatever it does report goes under that tool's name.
-                None => {
-                    let run = |app: &mut Self| {
-                        if let Err(err) = app.handle_ui_command(command) {
-                            userspace_error!("{}", tr!("cmd-commands-command-failed-error", error = format!("{err:#}")));
-                        }
-                    };
-                    match self.editor.active_tool.report_spec() {
-                        Some(spec) => crate::logging::with_deferred_report(spec, || run(self)),
-                        None => run(self),
+            // A command quiet enough to have no row of its own is most
+            // often a step of the tool in hand (Drape's Confirm), so
+            // whatever it does report goes under that tool's name.
+            None => {
+                let run = |app: &mut Self| {
+                    let result = app.handle_ui_command(command);
+                    if let Err(err) = &result {
+                        userspace_error!("{}", tr!("cmd-commands-command-failed-error", error = format!("{err:#}")));
                     }
+                    result
+                };
+                match self.editor.active_tool.report_spec() {
+                    Some(spec) => crate::logging::with_deferred_report(spec, || run(self)),
+                    None => run(self),
                 }
             }
-        }
-        if had_commands {
-            self.redraw_requested = true;
-        }
+        };
+        self.redraw_requested = true;
+        result
     }
     /// Dispatch a UI command to the relevant domain handler (in the sibling
     /// `commands::*` modules). This is a thin router; the work lives in those

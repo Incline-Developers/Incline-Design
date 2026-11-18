@@ -240,7 +240,7 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
 /// view's own first step rather than a drawing tool, so it survives too. The
 /// cursor mode is left as the user set it: it does nothing without a drawing
 /// tool to use it, and it is theirs again the moment production is back.
-fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, workspace: Workspace) {
+pub(crate) fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, workspace: Workspace) {
     if editor.active_workspace == workspace {
         return;
     }

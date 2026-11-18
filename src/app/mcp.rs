@@ -23,9 +23,13 @@ const PROTOCOL_VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", 
 /// What the server tells a client about itself when it connects.
 #[cfg(not(target_arch = "wasm32"))]
 const INSTRUCTIONS: &str = "This server is Incline Design, a mine design application, with the user's project open in it. \
-Its tools read what the window shows (the project's surfaces, block models, drillholes, point clouds, rasters and design \
-layers, the selection, and the activity log) and change it the way the window's own controls do. Ids are the numbers \
-get_project reports. Changes are made in the open window and can be undone there.";
+Its tools read what the project holds (surfaces, block models, drillholes, point clouds, rasters, design layers and their \
+objects, the Planning setup, optimisation and schedules), show and look at it in the viewport, and change it the way the \
+window's own controls do: drawing and editing designs, building and cutting surfaces, estimating block models, reserving, \
+optimising, scheduling, drill and blast, and importing and exporting files. Ids are the numbers get_project and the other \
+get_ tools report. Long work runs in the background and returns once started: get_tasks follows it and can wait for it, and \
+get_activity says if it failed. Setups kept as JSON (solids' plans, scenarios, the schedule) are read whole and changed with \
+JSON merge patches. Changes are made in the open window and can be undone there; capture_viewport shows what they look like.";
 
 impl App<'_> {
     /// Hand the event loop to the MCP server to wake it with, and start the
@@ -133,6 +137,19 @@ impl App<'_> {
             return;
         }
         for call in calls {
+            // A look at the viewport is answered once a frame has drawn it.
+            if call.request["method"] == "tools/call" && call.request["params"]["name"] == "capture_viewport" {
+                self.begin_mcp_capture(call);
+                continue;
+            }
+            // A wait for the background work is answered once it is done.
+            if call.request["method"] == "tools/call"
+                && call.request["params"]["name"] == "get_tasks"
+                && call.request["params"]["arguments"]["wait_seconds"].as_f64().is_some_and(|seconds| seconds > 0.0)
+            {
+                self.begin_mcp_wait(call);
+                continue;
+            }
             let response = self.answer_mcp(&call.request);
             call.reply(response);
         }

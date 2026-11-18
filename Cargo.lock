@@ -1828,6 +1828,7 @@ name = "incline-design"
 version = "0.4.0"
 dependencies = [
  "anyhow",
+ "base64",
  "bytemuck",
  "chrono",
  "console_error_panic_hook",

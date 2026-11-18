@@ -1,6 +1,6 @@
 //! Vertical slice view: two-click line placement and mode enter/exit.
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 
 use crate::{app::App, i18n::tr, ui::state::ActiveTool, userspace_log};
 
@@ -22,10 +22,16 @@ impl<'a> App<'a> {
             self.invalidate_overlay();
             return;
         };
+        self.enter_section(start, point);
+    }
 
+    /// Look at the vertical section along the line from `start` to `point`,
+    /// as the second click of the section tool does. Returns false when the
+    /// two are the same point in plan, which gives no line.
+    pub(crate) fn enter_section(&mut self, start: DVec3, point: DVec3) -> bool {
         let delta = (point - start).truncate();
         if delta.length_squared() <= 1.0e-12 {
-            return;
+            return false;
         }
         let direction: DVec2 = delta.normalize();
         let center = (start + point) * 0.5;
@@ -63,6 +69,7 @@ impl<'a> App<'a> {
                 length = (half_length * 2.0).to_string()
             )
         );
+        true
     }
 
     /// Toggle the vertical slice viewing mode. Enabling without a drawn line

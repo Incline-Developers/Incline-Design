@@ -17,6 +17,10 @@ use crate::{userspace_log, userspace_warn};
 pub(crate) enum ScreenshotTarget {
     #[cfg(not(target_arch = "wasm32"))]
     Native(PathBuf),
+    /// Handed back, as pixels, to the MCP tool that asked for a look at the
+    /// viewport (`app/mcp_tools`).
+    #[cfg(not(target_arch = "wasm32"))]
+    Mcp(std::sync::mpsc::SyncSender<Result<ViewportPixels, String>>),
     #[cfg(target_arch = "wasm32")]
     Browser(String),
 }
@@ -30,7 +34,29 @@ pub(super) struct PendingScreenshot {
     target: ScreenshotTarget,
 }
 
+/// The viewport as it was drawn, top row first, four bytes a pixel.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct ViewportPixels {
+    pub(crate) rgba: Vec<u8>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
 impl<'a> Graphics<'a> {
+    /// Queue a look at the viewport for an MCP tool: the next rendered frame
+    /// sends its pixels to `reply`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn request_mcp_capture(&mut self, reply: std::sync::mpsc::SyncSender<Result<ViewportPixels, String>>) {
+        self.pending_screenshot = Some(ScreenshotTarget::Mcp(reply));
+        self.window.request_redraw();
+    }
+
+    /// Whether a capture is waiting for the next frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn screenshot_pending(&self) -> bool {
+        self.pending_screenshot.is_some()
+    }
+
     /// Queue a viewport export; the next rendered frame writes the PNG.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn request_screenshot(&mut self, path: PathBuf) {
@@ -102,6 +128,20 @@ impl<'a> Graphics<'a> {
         {
             let path = match &capture.target {
                 ScreenshotTarget::Native(path) => path.clone(),
+                ScreenshotTarget::Mcp(reply) => {
+                    let pixels = capture
+                        .readback
+                        .map_blocking(&self.device)
+                        .and_then(|()| {
+                            let pixels = cropped_rgba(&capture);
+                            capture.readback.buffer.unmap();
+                            pixels
+                        })
+                        .map(|(rgba, width, height)| ViewportPixels { rgba, width, height })
+                        .map_err(|error| format!("{error:#}"));
+                    let _ = reply.send(pixels);
+                    return;
+                }
             };
             if let Err(error) = self.write_screenshot_png(&capture) {
                 userspace_warn!(
@@ -142,7 +182,9 @@ impl<'a> Graphics<'a> {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn write_screenshot_png(&self, capture: &PendingScreenshot) -> Result<()> {
-        let ScreenshotTarget::Native(path) = &capture.target;
+        let ScreenshotTarget::Native(path) = &capture.target else {
+            return Ok(());
+        };
         capture.readback.map_blocking(&self.device)?;
         let png = encode_mapped_png(capture)?;
         capture.readback.buffer.unmap();
@@ -152,6 +194,12 @@ impl<'a> Graphics<'a> {
 }
 
 fn encode_mapped_png(capture: &PendingScreenshot) -> Result<Vec<u8>> {
+    let (cropped, crop_width, crop_height) = cropped_rgba(capture)?;
+    encode_png(&cropped, crop_width, crop_height)
+}
+
+/// The mapped capture's visible-viewport part, and its width and height.
+fn cropped_rgba(capture: &PendingScreenshot) -> Result<(Vec<u8>, u32, u32)> {
     let rgba = capture.readback.unpack()?;
     let (width, height) = (capture.readback.width, capture.readback.height);
 
@@ -173,14 +221,18 @@ fn encode_mapped_png(capture: &PendingScreenshot) -> Result<Vec<u8>> {
         }
         out
     };
+    Ok((cropped, crop_width as u32, crop_height as u32))
+}
 
+/// `rgba`, `width` by `height`, as a PNG file's bytes.
+pub(crate) fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     {
-        let mut encoder = png::Encoder::new(&mut bytes, crop_width as u32, crop_height as u32);
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header()?;
-        writer.write_image_data(&cropped)?;
+        writer.write_image_data(rgba)?;
         writer.finish()?;
     }
     Ok(bytes)
