@@ -355,6 +355,12 @@ struct State<'a> {
     /// What of each candidate's weight is not money: the production credit
     /// and the tie-breaks.
     credit: Vec<f64>,
+    /// Money per tonne of each candidate, its weight less its credit, with
+    /// the largest of them in size and the largest credit: the lookahead
+    /// reads these each day, and none of them changes.
+    money: Vec<f64>,
+    money_largest: f64,
+    credit_largest: f64,
     /// Grade-conditional value earned by the rows so far.
     conditional: f64,
     /// Keyed (candidate, interval, segment).
@@ -674,7 +680,10 @@ impl<'a> State<'a> {
             .iter()
             .map(|candidate| credit - tie * 0.5 * f64::from(candidate.routing_preference) / f64::from(latest + 1))
             .collect();
-        let weight = values.iter().zip(&credit).map(|(value, credit)| value + credit).collect();
+        let weight: Vec<f64> = values.iter().zip(&credit).map(|(value, credit)| value + credit).collect();
+        let money: Vec<f64> = weight.iter().zip(&credit).map(|(weight, credit)| weight - credit).collect();
+        let money_largest = money.iter().map(|value| value.abs()).fold(1.0_f64, f64::max);
+        let credit_largest = credit.iter().copied().fold(0.0_f64, f64::max);
         Self {
             input,
             target_totals: input.target_opening.iter().map(|&(i, p, t, q)| ((i, p), (t, q))).collect(),
@@ -701,6 +710,9 @@ impl<'a> State<'a> {
             shared,
             weight,
             credit,
+            money,
+            money_largest,
+            credit_largest,
             conditional: 0.0,
             rows: BTreeMap::new(),
             durations: BTreeMap::new(),
@@ -964,9 +976,9 @@ impl<'a> State<'a> {
         let days = LOOKAHEAD_DAYS;
         // Money per tonne, the production credit that has every loader dig
         // its day, and a tie-break per day of the plan's order.
-        let credit = self.credit.iter().copied().fold(0.0_f64, f64::max);
-        let money: Vec<f64> = self.weight.iter().zip(&self.credit).map(|(weight, credit)| weight - credit).collect();
-        let largest = money.iter().map(|value| value.abs()).fold(1.0_f64, f64::max);
+        let credit = self.credit_largest;
+        let money = &self.money;
+        let largest = self.money_largest;
         let order_cost = ORDER_COST * largest;
         let later = |d: usize| (1.0 - DAY_DISCOUNT).powi(d as i32);
         let crushers: Vec<usize> = input
