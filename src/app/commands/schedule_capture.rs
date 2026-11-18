@@ -2658,7 +2658,7 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
             also_above: &left_above,
             dependencies: &dependencies,
             machine_tasks: &identities.auto_blast_tasks,
-            budget: Duration::from_secs(20),
+            stop: experiment.plan_stop,
             stable: &stable,
             memory: saved.and_then(|hint| hint.memory.as_deref()),
             allowed: &allowed,
@@ -2670,6 +2670,7 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
             let mut hasher = WidthFreeHasher::default();
             stable_fingerprint(source, &input).hash(&mut hasher);
             experiment.discount_rate.to_bits().hash(&mut hasher);
+            format!("{:?}", experiment.plan_stop).hash(&mut hasher);
             for end in &period_ends_h {
                 end.to_bits().hash(&mut hasher);
             }

@@ -44,6 +44,45 @@ pub(crate) const DEFAULT_DISCOUNT_RATE: f64 = 0.10;
 /// The relative MIP gap Stage 5A verified and this reuses rather than
 /// restating: one default, in one place.
 pub(crate) const DEFAULT_RELATIVE_GAP: f64 = 1e-4;
+/// The long-term plan stops by default at the first round adding less than
+/// this share of its value.
+pub(crate) const DEFAULT_PLAN_IMPROVEMENT: f64 = 0.001;
+/// The most rounds the long-term plan may be set to.
+pub(crate) const MAX_PLAN_ROUNDS: u32 = 200;
+
+/// When the long-term plan that orders the automatic bars' ground stops
+/// refining it, short of proving it the best. The first two give the same
+/// order for the same project every time; a time limit gives whatever the
+/// machine reached in it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub(crate) enum PlanStop {
+    /// At the first round that adds less than this share of the plan's value.
+    Improvement(f64),
+    /// After this many rounds.
+    Rounds(u32),
+    /// After this many seconds.
+    Seconds(f64),
+}
+
+impl Default for PlanStop {
+    fn default() -> Self {
+        Self::Improvement(DEFAULT_PLAN_IMPROVEMENT)
+    }
+}
+
+impl PlanStop {
+    /// Whether the setting can be used: a share between nothing and all of
+    /// the value, at least one round and at most [`MAX_PLAN_ROUNDS`], or a
+    /// time no longer than Improve may take.
+    pub(crate) fn is_valid(self) -> bool {
+        match self {
+            Self::Improvement(share) => share.is_finite() && share > 0.0 && share < 1.0,
+            Self::Rounds(rounds) => (1..=MAX_PLAN_ROUNDS).contains(&rounds),
+            Self::Seconds(seconds) => seconds.is_finite() && seconds > 0.0 && seconds <= MAX_SOLVE_SECONDS,
+        }
+    }
+}
 
 /// Legacy unit settings remain readable. New tracking uses Stored and capture
 /// always blends in the field's stored scale, including for legacy selections.
@@ -162,6 +201,8 @@ pub(crate) struct ExperimentConfig {
     /// automatic bars' ground discounts later value. Zero weighs a tonne
     /// moved in the last year as one moved in the first.
     pub(crate) discount_rate: f64,
+    /// When the long-term plan stops refining its order.
+    pub(crate) plan_stop: PlanStop,
     /// The tracked grade columns. Legacy unit tags are retained for file
     /// compatibility; capture now uses stored numbers directly. Ordered,
     /// because the model indexes grades by position.
@@ -180,6 +221,7 @@ impl Default for ExperimentConfig {
             solve_seconds: DEFAULT_SOLVE_SECONDS,
             relative_gap: DEFAULT_RELATIVE_GAP,
             discount_rate: DEFAULT_DISCOUNT_RATE,
+            plan_stop: PlanStop::default(),
             grades: Vec::new(),
             stockpiles: Vec::new(),
         }
@@ -247,6 +289,14 @@ impl ExperimentConfig {
             return Err(ScheduleError::InvalidExperimentSetting);
         }
         self.relative_gap = gap;
+        Ok(())
+    }
+
+    pub(crate) fn set_plan_stop(&mut self, stop: PlanStop) -> ScheduleResult {
+        if !stop.is_valid() {
+            return Err(ScheduleError::InvalidExperimentSetting);
+        }
+        self.plan_stop = stop;
         Ok(())
     }
 

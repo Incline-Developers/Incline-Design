@@ -13,7 +13,7 @@ use crate::{
         Document, ReserveAggregation,
         schedule::{
             SchedulePlan,
-            experiment::{GradeUnit, MAX_SOLVE_SECONDS, MIN_INTERVAL_H},
+            experiment::{GradeUnit, MAX_SOLVE_SECONDS, MIN_INTERVAL_H, PlanStop},
         },
     },
     ui::{
@@ -238,6 +238,51 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
                 _ => crate::userspace_warn!("{}", invalid),
             }
         }
+        plan_stop_rows(rows, experiment.plan_stop, session, &mut edits);
     });
     commands.append(&mut edits);
 }
+
+/// When the long-term plan stops refining its order: at a round adding less
+/// than a share of its value, after a number of rounds, or at a time limit,
+/// picked across the row with the figure for the one picked beside it.
+fn plan_stop_rows(rows: &mut PropertyRows<'_>, stop: PlanStop, session: u32, edits: &mut Vec<UiCommand>) {
+    rows.section(&tr!("experiment-plan-stop"));
+    let labels = [
+        tr!("experiment-plan-stop-improvement"),
+        tr!("experiment-plan-stop-iterations"),
+        tr!("experiment-plan-stop-time"),
+    ];
+    let (selected, mut value, unit) = match stop {
+        PlanStop::Improvement(share) => (0, share * 100.0, "%".to_owned()),
+        PlanStop::Rounds(rounds) => (1, f64::from(rounds), tr!("experiment-plan-stop-iterations-unit")),
+        PlanStop::Seconds(seconds) => (2, seconds, "s".to_owned()),
+    };
+    let (picked, committed, response) = rows.choice_entry("plan_stop", &labels, selected, &mut value, &unit);
+    response.hint(tr!("experiment-plan-stop-help"));
+    // A newly picked rule starts from its own default figure.
+    let wanted = match picked {
+        Some(0) => Some(PlanStop::default()),
+        Some(1) => Some(PlanStop::Rounds(DEFAULT_PLAN_ROUNDS)),
+        Some(_) => Some(PlanStop::Seconds(DEFAULT_PLAN_SECONDS)),
+        None if committed => Some(match stop {
+            PlanStop::Improvement(_) => PlanStop::Improvement(value / 100.0),
+            PlanStop::Rounds(_) => PlanStop::Rounds(if value.fract() == 0.0 && value >= 1.0 && value <= f64::from(u32::MAX) {
+                value as u32
+            } else {
+                0
+            }),
+            PlanStop::Seconds(_) => PlanStop::Seconds(value),
+        }),
+        None => None,
+    };
+    match wanted {
+        Some(next) if next.is_valid() && next != stop => edits.push(UiCommand::schedule(session, ScheduleEdit::SetPlanStop(next))),
+        Some(next) if !next.is_valid() => crate::userspace_warn!("{}", crate::model::schedule::ScheduleError::InvalidExperimentSetting.message()),
+        _ => {}
+    }
+}
+
+/// The figures a newly picked rule for the long-term plan starts from.
+const DEFAULT_PLAN_ROUNDS: u32 = 10;
+const DEFAULT_PLAN_SECONDS: f64 = 20.0;

@@ -6628,6 +6628,7 @@ impl UiCommand {
                 | ScheduleEdit::SetPeriodUnit(_)
                 | ScheduleEdit::SetExperimentSolveLimits { .. }
                 | ScheduleEdit::SetDiscountRate(_)
+                | ScheduleEdit::SetPlanStop(_)
                 | ScheduleEdit::SetDependency { .. }
                 | ScheduleEdit::SetLoaderLimit(_)
                 | ScheduleEdit::SetExperimentGradeUnit { .. }
@@ -9002,6 +9003,8 @@ pub(crate) enum ScheduleEdit {
     SetPeriodUnit(crate::model::schedule::periods::PeriodUnit),
     /// The yearly rate, as a fraction, the long-term plan discounts at.
     SetDiscountRate(f64),
+    /// When the long-term plan stops refining its order.
+    SetPlanStop(crate::model::schedule::experiment::PlanStop),
     SetExperimentSolveLimits {
         seconds: f64,
         relative_gap: f64,

@@ -87,8 +87,8 @@ pub(crate) struct PlanRequest<'a> {
     /// The chain's tasks automatic bars on machines work, by position: one
     /// blast each, in no order yet - the plan's is what will order them.
     pub(crate) machine_tasks: &'a [usize],
-    /// How long the pricing may run.
-    pub(crate) budget: std::time::Duration,
+    /// When the pricing stops short of proving the plan the best.
+    pub(crate) stop: crate::model::schedule::experiment::PlanStop,
     /// Each block's identity across edits, which its `GroundId` is not.
     pub(crate) stable: &'a BTreeMap<GroundId, u64>,
     /// What the last plan over this mine left: see [`PlanMemory`].
@@ -1243,6 +1243,15 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         Some(column)
     };
     let (mut value, mut bound, mut rounds) = (0.0, f64::INFINITY, 0);
+    use crate::model::schedule::experiment::PlanStop;
+    let out_of_time = || matches!(request.stop, PlanStop::Seconds(seconds) if started.elapsed().as_secs_f64() >= seconds);
+    let most_rounds = match request.stop {
+        PlanStop::Rounds(most) => (most as usize).min(MAX_ROUNDS),
+        _ => MAX_ROUNDS,
+    };
+    // The value at the end of the round before, for a plan that stops once a
+    // round adds too little.
+    let mut last_value: Option<f64> = None;
     let restarted = prior_share.is_some();
     let (mut best_value, mut flat) = (f64::NEG_INFINITY, 0);
     // The master's plans, as the groups each digs: what one digs, and so
@@ -1256,7 +1265,7 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         idle: u32,
     }
     let mut plans: Vec<Plan> = Vec::new();
-    while rounds < MAX_ROUNDS && started.elapsed() < request.budget {
+    while rounds < most_rounds && !out_of_time() {
         if cancelled() {
             return None;
         }
@@ -1521,7 +1530,10 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             // goes on from it. Presolve gains nothing on a program this
             // small and has failed to give one back solved.
             let options = solver::Options {
-                time_limit: request.budget.saturating_sub(started.elapsed()).as_secs_f64().max(0.1),
+                time_limit: match request.stop {
+                    PlanStop::Seconds(seconds) => (seconds - started.elapsed().as_secs_f64()).max(0.1),
+                    _ => solver::Options::default().time_limit,
+                },
                 presolve: false,
                 simplex_strategy: solver::SimplexStrategy::Primal,
                 ..solver::Options::default()
@@ -1540,8 +1552,8 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                 );
             }
             if solution.status != solver::Status::Optimal {
-                // The last mix stands; the budget ends the plan.
-                stop = started.elapsed() >= request.budget;
+                // The last mix stands; the time limit ends the plan.
+                stop = out_of_time();
                 break;
             }
             basis = solution.basis.clone();
@@ -1555,7 +1567,7 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             for hinge in &hinges {
                 prices[hinge.row] = prices[hinge.row].min(hinge.cost);
             }
-            if started.elapsed() >= request.budget || cancelled() {
+            if out_of_time() || cancelled() {
                 stop = true;
                 break;
             }
@@ -1627,6 +1639,14 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         plans.retain(|plan| plan.idle < IDLE_ROUNDS);
         if stop {
             break;
+        }
+        // Each round's split can only add to the value; one that adds less
+        // than the setting asks ends the plan.
+        if let PlanStop::Improvement(least) = request.stop {
+            if last_value.is_some_and(|last| value - last < least * value.abs().max(1.0)) {
+                break;
+            }
+            last_value = Some(value);
         }
     }
     // How much of each block the plan has dug by the end of each period.
