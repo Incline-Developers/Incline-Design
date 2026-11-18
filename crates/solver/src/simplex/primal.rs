@@ -504,37 +504,55 @@ impl Primal {
             return;
         }
         let row_of = |index: isize| if index >= 0 { index as usize } else { (index + num_row) as usize };
-        self.ph1_sorter_r.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        let mut max_theta = self.ph1_sorter_r[0].0;
+        // HiGHS sorts both lists in full (its own note says a partial sort
+        // would do). The keys are distinct, so their order is one order: the
+        // relaxed list is put in order a growing chunk at a time, as far as
+        // the gradient lasts, which is seldom far.
+        let key = |a: &(f64, isize), b: &(f64, isize)| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1));
+        let sorter_r = &mut self.ph1_sorter_r;
+        let mut max_theta = f64::NAN;
         let mut gradient = self.theta_dual.abs();
-        for &(theta, index) in &self.ph1_sorter_r {
-            gradient -= self.col_aq.array[row_of(index)].abs();
-            if gradient <= 0.0 {
-                break;
+        let (mut start, mut chunk) = (0, 8);
+        'scan: while start < sorter_r.len() {
+            let end = (start + chunk).min(sorter_r.len());
+            if end < sorter_r.len() {
+                sorter_r[start..].select_nth_unstable_by(end - start - 1, key);
             }
-            max_theta = theta;
-        }
-        self.ph1_sorter_t.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        let mut max_alpha: f64 = 0.0;
-        let mut last = self.ph1_sorter_t.len();
-        for (i, &(theta, index)) in self.ph1_sorter_t.iter().enumerate() {
-            let abs_alpha = self.col_aq.array[row_of(index)].abs();
-            if theta > max_theta {
-                last = i;
-                break;
+            sorter_r[start..end].sort_unstable_by(key);
+            if start == 0 {
+                max_theta = sorter_r[0].0;
             }
-            max_alpha = max_alpha.max(abs_alpha);
+            for &(theta, index) in &sorter_r[start..end] {
+                gradient -= self.col_aq.array[row_of(index)].abs();
+                if gradient <= 0.0 {
+                    break 'scan;
+                }
+                max_theta = theta;
+            }
+            start = end;
+            chunk *= 2;
         }
+        // In the tight list's order, the entries before the first whose theta
+        // passes the largest: the largest pivot among them, and the last of
+        // them in that order with a pivot over a tenth of it.
+        let cut = self.ph1_sorter_t.iter().filter(|entry| entry.0 > max_theta).min_by(|a, b| key(a, b)).copied();
+        let before = |entry: &(f64, isize)| cut.is_none_or(|cut| key(entry, &cut).is_lt());
+        let max_alpha = self
+            .ph1_sorter_t
+            .iter()
+            .filter(|entry| before(entry))
+            .map(|&(_, index)| self.col_aq.array[row_of(index)].abs())
+            .fold(0.0_f64, f64::max);
         self.row_out = NO_ROW_CHOSEN;
         self.move_out = 0;
-        for i in (1..=last).rev() {
-            let index = self.ph1_sorter_t[i - 1].1;
-            let row = row_of(index);
-            if self.col_aq.array[row].abs() > max_alpha * 0.1 {
-                self.row_out = row as isize;
-                self.move_out = if index >= 0 { 1 } else { -1 };
-                break;
-            }
+        if let Some(&(_, index)) = self
+            .ph1_sorter_t
+            .iter()
+            .filter(|entry| before(entry) && self.col_aq.array[row_of(entry.1)].abs() > max_alpha * 0.1)
+            .max_by(|a, b| key(a, b))
+        {
+            self.row_out = row_of(index) as isize;
+            self.move_out = if index >= 0 { 1 } else { -1 };
         }
     }
 
