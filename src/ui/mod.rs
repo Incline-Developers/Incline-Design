@@ -196,14 +196,18 @@ impl Gui {
         self.renderer.update_egui_texture_from_wgpu_texture(device, view, wgpu::FilterMode::Linear, id);
     }
 
+    /// Run the frame's UI: lay it out, take its commands and the scene's
+    /// rect, and tessellate what it draws, which [`Self::paint`] puts on
+    /// screen once the scene is under it.
+    ///
+    /// Laid out before the scene is drawn, so the scene fills the rect this
+    /// frame's panels leave rather than last frame's: a panel that opens or
+    /// goes would otherwise leave the scene a frame in the old place, and the
+    /// ground the panel gave up bare.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn render(
+    pub(crate) fn layout(
         &mut self,
         window: &Window,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        target_view: &wgpu::TextureView,
         editor: &mut EditorState,
         document: &mut Document,
         project: &UiProjectView,
@@ -217,7 +221,7 @@ impl Gui {
         camera_forward: [f32; 3],
         camera_up: [f32; 3],
         world_per_physical_pixel: Option<f64>,
-    ) -> UiFrameOutput {
+    ) -> (UiFrameOutput, UiPaint) {
         self.update_scale(window, editor.ui_size_percent);
         let selection_color = SELECTION_COLOR;
         let visuals = &self.ctx.global_style().visuals;
@@ -286,7 +290,7 @@ impl Gui {
             console_snapshot: &console_snapshot,
         };
         let mut canvas_rect_logical = egui::Rect::NOTHING;
-        let mut full_output = self.ctx.run_ui(raw_input, |ui| {
+        let full_output = self.ctx.run_ui(raw_input, |ui| {
             geometry_dirty |= draw_ui(
                 ui,
                 editor,
@@ -310,12 +314,6 @@ impl Gui {
         mirror_copy_text_to_browser_clipboard(&full_output.platform_output);
         self.state.handle_platform_output(window, full_output.platform_output);
 
-        for (id, image_deltas) in full_output.textures_delta.set.drain() {
-            for image_delta in image_deltas {
-                self.renderer.update_texture(device, queue, id, &image_delta);
-            }
-        }
-
         let pixels_per_point = full_output.pixels_per_point;
         // Read once the frame's widgets have run. A held button is the gesture:
         // `dragged_id` alone would miss the press before the pointer has moved
@@ -327,8 +325,44 @@ impl Gui {
             size_in_pixels: screen_size,
             pixels_per_point,
         };
-        let extra_command_buffers = self.renderer.update_buffers(device, queue, encoder, &paint_jobs, &screen_descriptor);
 
+        let canvas_rect = if editor.is_planning_setup() {
+            ViewportRect { x: 0, y: 0, width: 0, height: 0 }
+        } else if canvas_rect_logical.is_finite() && canvas_rect_logical.is_positive() {
+            ViewportRect {
+                x: (canvas_rect_logical.min.x * pixels_per_point).round().max(0.0) as u32,
+                y: (canvas_rect_logical.min.y * pixels_per_point).round().max(0.0) as u32,
+                width: ((canvas_rect_logical.width() * pixels_per_point).round().max(1.0)) as u32,
+                height: ((canvas_rect_logical.height() * pixels_per_point).round().max(1.0)) as u32,
+            }
+        } else {
+            ViewportRect::full(screen_size[0], screen_size[1])
+        };
+
+        let output = UiFrameOutput {
+            repaint_after,
+            geometry_dirty,
+            commands,
+            canvas_rect,
+            pointer_gesture_active,
+        };
+        let paint = UiPaint {
+            jobs: paint_jobs,
+            textures: full_output.textures_delta,
+            screen: screen_descriptor,
+        };
+        (output, paint)
+    }
+
+    /// Paint what [`Self::layout`] laid out over `target_view`, which holds
+    /// the frame's scene.
+    pub(crate) fn paint(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, target_view: &wgpu::TextureView, paint: UiPaint) {
+        for (id, image_deltas) in &paint.textures.set {
+            for image_delta in image_deltas {
+                self.renderer.update_texture(device, queue, *id, image_delta);
+            }
+        }
+        let extra_command_buffers = self.renderer.update_buffers(device, queue, encoder, &paint.jobs, &paint.screen);
         for command_buffer in extra_command_buffers {
             queue.submit(std::iter::once(command_buffer));
         }
@@ -350,34 +384,21 @@ impl Gui {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            self.renderer.render(&mut render_pass.forget_lifetime(), &paint_jobs, &screen_descriptor);
+            self.renderer.render(&mut render_pass.forget_lifetime(), &paint.jobs, &paint.screen);
         }
 
-        for id in full_output.textures_delta.free.drain() {
-            self.renderer.free_texture(&id);
-        }
-
-        let canvas_rect = if editor.is_planning_setup() {
-            ViewportRect { x: 0, y: 0, width: 0, height: 0 }
-        } else if canvas_rect_logical.is_finite() && canvas_rect_logical.is_positive() {
-            ViewportRect {
-                x: (canvas_rect_logical.min.x * pixels_per_point).round().max(0.0) as u32,
-                y: (canvas_rect_logical.min.y * pixels_per_point).round().max(0.0) as u32,
-                width: ((canvas_rect_logical.width() * pixels_per_point).round().max(1.0)) as u32,
-                height: ((canvas_rect_logical.height() * pixels_per_point).round().max(1.0)) as u32,
-            }
-        } else {
-            ViewportRect::full(screen_size[0], screen_size[1])
-        };
-
-        UiFrameOutput {
-            repaint_after,
-            geometry_dirty,
-            commands,
-            canvas_rect,
-            pointer_gesture_active,
+        for id in &paint.textures.free {
+            self.renderer.free_texture(id);
         }
     }
+}
+
+/// What a frame's UI draws, laid out and tessellated by [`Gui::layout`] and
+/// waiting for [`Gui::paint`].
+pub(crate) struct UiPaint {
+    jobs: Vec<egui::ClippedPrimitive>,
+    textures: egui::TexturesDelta,
+    screen: ScreenDescriptor,
 }
 
 /// What the video export paints over each frame it renders: the destination

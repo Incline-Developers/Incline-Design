@@ -453,7 +453,8 @@ pub(crate) struct Graphics<'a> {
     pub(super) size: winit::dpi::PhysicalSize<u32>,
     /// The sub-rect of the window the scene is actually visible through, once
     /// the toolbars/status bar around it are accounted for. Sourced from
-    /// egui's layout one frame behind, via `apply_canvas_rect`.
+    /// this frame's egui layout, which runs before the scene is drawn, via
+    /// `apply_canvas_rect`.
     pub(super) viewport_rect: ViewportRect,
     /// The window-centring offset, in viewport pixels, that the startup view
     /// currently carries - see `track_startup_view_framing`. `None` once the

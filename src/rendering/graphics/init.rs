@@ -993,9 +993,9 @@ impl<'a> Graphics<'a> {
         }
     }
 
-    /// Apply the visible scene sub-rect computed by this frame's egui layout,
-    /// for use starting next frame (the scene pass runs before egui layout,
-    /// so it's always one frame behind - see `frame::render`).
+    /// Apply the visible scene sub-rect this frame's egui layout leaves. The
+    /// UI is laid out before the scene is drawn, so the scene takes it this
+    /// same frame - see `frame::render`.
     pub(super) fn apply_canvas_rect(&mut self, rect: ViewportRect) {
         if rect.width == 0 || rect.height == 0 || rect == self.viewport_rect {
             return;

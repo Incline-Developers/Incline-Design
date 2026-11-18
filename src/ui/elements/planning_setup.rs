@@ -1299,8 +1299,9 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
             (image_rect.width() * pixels_per_point).round().max(1.0) as u32,
             (image_rect.height() * pixels_per_point).round().max(1.0) as u32,
         ];
-        // The renderer works a frame behind this measurement, so a resized
-        // column needs one more frame to redraw at its new size.
+        // The preview is drawn at this size after the layout and before the
+        // image is painted, so a resized column shows it at its new size the
+        // same frame. A change still asks for another, as a moved view does.
         let mut view_changed = editor.solid_preview_size_px != size_px;
         editor.solid_preview_size_px = size_px;
 
