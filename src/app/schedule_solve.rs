@@ -840,10 +840,23 @@ pub(crate) fn execute_schedule(
     let captured = Arc::clone(&out.input);
     let reduced = Reduced::new(&captured);
     out.input = Arc::new(reduced.input.clone());
-    let early = |shown: &ScheduleCompletion| early(&mapped_back(shown.clone(), &reduced, &captured));
     activity.set(3);
     activity.stage(ImproveStage::FirstSchedule);
-    let dispatched = dispatched.or_else(|| start.and_then(|start| resumed(&out.input, &reduced, &start, cancel)));
+    // Improve from the schedule on screen starts from that same schedule,
+    // over the same model: showing it again would only take the time to map
+    // it back and replay it, which on a large mine is seconds of the budget.
+    let resumed = if dispatched.is_none() {
+        start.and_then(|start| resumed(&out.input, &reduced, &start, cancel))
+    } else {
+        None
+    };
+    let shown_already = resumed.is_some();
+    let dispatched = dispatched.or(resumed);
+    let early = |shown: &ScheduleCompletion| {
+        if !shown_already || shown.day_by_day.as_ref().is_none_or(|summary| summary.role != DayByDayRole::Early) {
+            early(&mapped_back(shown.clone(), &reduced, &captured));
+        }
+    };
     let attempt = hourly_dispatch(&mut out, cancel, dispatched);
     if !options.first_schedule_only {
         let out = super::scip_blend::improve(out, attempt, budget_started, cancel, activity, &early);
