@@ -1148,7 +1148,7 @@ impl<'a> State<'a> {
                 }
                 let position = before / task.lookahead_t;
                 for d in 0..days {
-                    let x = problem.add_column((credit + rest) * later(d) - order_cost * position, 0.0..);
+                    let x = problem.add_keyed_column(("dig", task_index, block, day + d as u32), (credit + rest) * later(d) - order_cost * position, 0.0..);
                     if d == 0 {
                         today.push((task_index, block, x));
                     }
@@ -1160,7 +1160,7 @@ impl<'a> State<'a> {
                     }
                     let mut split = vec![(x, -1.0)];
                     for (k, fraction, gain, contained) in feeds.iter().filter(|feed| feed.1 > 0.0) {
-                        let y = problem.add_column(gain * later(d), 0.0..);
+                        let y = problem.add_keyed_column(("feed", task_index, block, day + d as u32, *k), gain * later(d), 0.0..);
                         split.push((y, 1.0));
                         crusher_days.entry((*k, d)).or_default().push((y, *fraction));
                         let id = input.destinations[*k].id;
@@ -1189,7 +1189,7 @@ impl<'a> State<'a> {
         let mut shares: BTreeMap<(usize, usize), Vec<(Col, f64)>> = BTreeMap::new();
         for ((area, d, loader), mut terms) in in_area {
             let cap = loader_days.get(&(loader, d)).map_or(0.0, |(cap, _)| *cap);
-            let share = problem.add_column(0.0, 0.0..=1.0);
+            let share = problem.add_keyed_column(("share", area, day + d as u32, loader), 0.0, 0.0..=1.0);
             terms.push((share, -cap));
             problem.add_row(..=0.0, terms);
             shares.entry((area, d)).or_default().push((share, 1.0));
@@ -1225,11 +1225,11 @@ impl<'a> State<'a> {
             } else {
                 (0.0, 0.0)
             };
-            for (boundary, direction, slope) in spec.specification.hinges() {
+            for (hinge, (boundary, direction, slope)) in spec.specification.hinges().into_iter().enumerate() {
                 if slope == 0.0 {
                     continue;
                 }
-                let slack = problem.add_column(-slope * later(d), 0.0..);
+                let slack = problem.add_keyed_column(("slack", target, hinge), -slope * later(d), 0.0..);
                 let mut row = vec![(slack, -1.0)];
                 row.extend(terms.iter().map(|&(y, fraction, contained)| (y, direction * (contained - boundary * fraction))));
                 problem.add_row(..=-direction * (opening_q - boundary * opening_t), row);
