@@ -423,12 +423,38 @@ impl Primal {
                 best_measure = dual_infeasibility * dual_infeasibility / self.edge_weight[col];
             }
         }
-        for col in 0..self.num_tot {
-            let dual_infeasibility = -(nonbasic_move[col] as f64) * work_dual[col];
-            if dual_infeasibility > self.dual_feasibility_tolerance && dual_infeasibility * dual_infeasibility > best_measure * self.edge_weight[col] {
-                self.variable_in = Some(col);
-                best_measure = dual_infeasibility * dual_infeasibility / self.edge_weight[col];
+        // Most variables are dual feasible, so each block of them is first
+        // passed over by a test free of bounds checks and branches, which the
+        // compiler can vectorise; a block with a candidate is then read in
+        // order as before, so the same column is chosen.
+        const BLOCK: usize = 8;
+        let tolerance = self.dual_feasibility_tolerance;
+        let n = self.num_tot;
+        let (moves, duals, weights) = (&nonbasic_move[..n], &work_dual[..n], &self.edge_weight[..n]);
+        let whole = n - n % BLOCK;
+        let mut start = 0;
+        while start < n {
+            let end = if start < whole { start + BLOCK } else { n };
+            if start < whole {
+                let step: &[i8; BLOCK] = moves[start..end].try_into().expect("a whole block");
+                let dual: &[f64; BLOCK] = duals[start..end].try_into().expect("a whole block");
+                let mut any = false;
+                for lane in 0..BLOCK {
+                    any |= -(step[lane] as f64) * dual[lane] > tolerance;
+                }
+                if !any {
+                    start = end;
+                    continue;
+                }
             }
+            for col in start..end {
+                let dual_infeasibility = -(moves[col] as f64) * duals[col];
+                if dual_infeasibility > tolerance && dual_infeasibility * dual_infeasibility > best_measure * weights[col] {
+                    self.variable_in = Some(col);
+                    best_measure = dual_infeasibility * dual_infeasibility / weights[col];
+                }
+            }
+            start = end;
         }
     }
 
