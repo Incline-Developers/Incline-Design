@@ -458,6 +458,21 @@ pub(crate) fn context_submenu<R>(ui: &mut egui::Ui, label: &str, enabled: bool, 
     if !enabled {
         return None;
     }
+    // egui opens a submenu whenever the pointer is inside its row, even with
+    // something drawn over the row, such as a colour picker opened from the
+    // same menu. Hovering the row only counts when the row is what is under
+    // the pointer, so the submenu does not open beneath that picker. egui
+    // widens the row by half the item spacing, so the same is done here.
+    let row = response.rect.expand2(ui.spacing().item_spacing / 2.0);
+    let covered = ui
+        .ctx()
+        .pointer_hover_pos()
+        .filter(|pos| row.contains(*pos))
+        .and_then(|pos| ui.ctx().layer_id_at(pos))
+        .is_some_and(|layer| layer != ui.layer_id());
+    if covered {
+        return None;
+    }
     let title: egui::WidgetText = label.into();
     // egui frames the nested popup from its own style, not the row's, so the
     // config carries this module's frame metrics along with the parent's
