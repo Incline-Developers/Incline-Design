@@ -1009,18 +1009,29 @@ pub(crate) enum Object {
         rotation: f64,
         color: ObjectColor,
     },
+    /// A pit designed from a closed string: `verts` is the string, always
+    /// closed, and `pit` what it is designed with and what that came to. It
+    /// draws as its string and its benches; see [`pit_design::object`].
+    PitDesign {
+        id: ObjectId,
+        layer: LayerId,
+        verts: Vec<PolyVertex>,
+        color: ObjectColor,
+        line_weight: f32,
+        pit: Box<pit_design::object::PitObject>,
+    },
 }
 
 impl Object {
     pub(crate) fn id(&self) -> ObjectId {
         match self {
-            Object::Point { id, .. } | Object::Polyline { id, .. } | Object::Circle { id, .. } | Object::Text { id, .. } => *id,
+            Object::Point { id, .. } | Object::Polyline { id, .. } | Object::Circle { id, .. } | Object::Text { id, .. } | Object::PitDesign { id, .. } => *id,
         }
     }
 
     pub(crate) fn layer(&self) -> LayerId {
         match self {
-            Object::Point { layer, .. } | Object::Polyline { layer, .. } | Object::Circle { layer, .. } | Object::Text { layer, .. } => *layer,
+            Object::Point { layer, .. } | Object::Polyline { layer, .. } | Object::Circle { layer, .. } | Object::Text { layer, .. } | Object::PitDesign { layer, .. } => *layer,
         }
     }
 
@@ -1033,12 +1044,13 @@ impl Object {
             Object::Polyline { .. } => crate::i18n::tr!("common-polyline"),
             Object::Circle { .. } => crate::i18n::tr!("common-circle"),
             Object::Text { .. } => crate::i18n::tr!("common-text"),
+            Object::PitDesign { .. } => crate::i18n::tr!("pit-design-kind"),
         }
     }
 
     pub(crate) fn color(&self) -> ObjectColor {
         match self {
-            Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Circle { color, .. } | Object::Text { color, .. } => *color,
+            Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Circle { color, .. } | Object::Text { color, .. } | Object::PitDesign { color, .. } => *color,
         }
     }
 
@@ -1123,6 +1135,19 @@ impl Object {
                 rotation.to_bits().hash(&mut hasher);
                 hash_color(&mut hasher, *color);
             }
+            Object::PitDesign {
+                verts,
+                color,
+                line_weight,
+                pit,
+                ..
+            } => {
+                4u8.hash(&mut hasher);
+                hash_verts(&mut hasher, verts);
+                hash_color(&mut hasher, *color);
+                line_weight.to_bits().hash(&mut hasher);
+                serde_json::to_vec(pit).unwrap_or_default().hash(&mut hasher);
+            }
         }
         hasher.finish()
     }
@@ -1177,6 +1202,15 @@ impl Object {
                     return Err(crate::i18n::tr!("err-bm-circle-bad-line-weight"));
                 }
             }
+            Object::PitDesign { verts, line_weight, .. } => {
+                require_finite_verts(verts, &crate::i18n::tr!("pit-design-kind"))?;
+                if verts.len() < 3 {
+                    return Err(crate::i18n::tr!("err-bm-closed-polyline-min-vertices"));
+                }
+                if !line_weight.is_finite() || *line_weight < 0.0 {
+                    return Err(crate::i18n::tr!("err-bm-polyline-bad-line-weight"));
+                }
+            }
             Object::Text { pos, height, rotation, .. } => {
                 if !pos.is_finite() {
                     return Err(crate::i18n::tr!("err-bm-text-bad-position"));
@@ -1201,6 +1235,12 @@ impl Object {
                     vertex.pos += delta;
                 }
             }
+            Object::PitDesign { verts, pit, .. } => {
+                for vertex in verts.iter_mut() {
+                    vertex.pos += delta;
+                }
+                pit.translate(delta, verts);
+            }
         }
     }
 
@@ -1209,7 +1249,7 @@ impl Object {
         let pos = match self {
             Object::Point { pos, .. } | Object::Text { pos, .. } => *pos,
             Object::Circle { center, .. } => *center,
-            Object::Polyline { verts, .. } => verts.first().map_or(DVec3::ZERO, |vertex| vertex.pos),
+            Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => verts.first().map_or(DVec3::ZERO, |vertex| vertex.pos),
         };
         match axis {
             Axis::X => pos.x,
@@ -1227,7 +1267,7 @@ impl Object {
         match self {
             Object::Point { pos, .. } | Object::Text { pos, .. } => set(pos),
             Object::Circle { center, .. } => set(center),
-            Object::Polyline { verts, .. } => {
+            Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => {
                 for vertex in verts {
                     set(&mut vertex.pos);
                 }
@@ -1291,6 +1331,20 @@ impl Object {
                 rotation: *rotation,
                 color: *color,
             },
+            Object::PitDesign {
+                verts,
+                color,
+                line_weight,
+                pit,
+                ..
+            } => Object::PitDesign {
+                id,
+                layer,
+                verts: verts.clone(),
+                color: *color,
+                line_weight: *line_weight,
+                pit: pit.clone(),
+            },
         }
     }
 
@@ -1312,6 +1366,9 @@ impl Object {
     pub(crate) fn string_geometry(&self) -> Option<(Cow<'_, [PolyVertex]>, bool)> {
         match self {
             Object::Polyline { verts, closed, .. } => Some((Cow::Borrowed(verts.as_slice()), *closed)),
+            // The string the pit is designed from; its benches are drawn
+            // strings of their own ([`Self::pit_strings`]).
+            Object::PitDesign { verts, .. } => Some((Cow::Borrowed(verts.as_slice()), true)),
             Object::Circle { center, radius, .. } => {
                 let verts = geometry::circle_polyline_vertices(*center, *radius, glam::DVec2::X)?;
                 Some((Cow::Owned(verts.to_vec()), true))
@@ -1349,12 +1406,61 @@ impl Object {
         }
     }
 
-    /// Stroke width, for the two variants that carry one.
+    /// Stroke width, for the variants that carry one.
     pub(crate) fn line_weight(&self) -> Option<f32> {
         match self {
-            Object::Polyline { line_weight, .. } | Object::Circle { line_weight, .. } => Some(*line_weight),
+            Object::Polyline { line_weight, .. } | Object::Circle { line_weight, .. } | Object::PitDesign { line_weight, .. } => Some(*line_weight),
             _ => None,
         }
+    }
+
+    /// A pit design's benches and ramp as worked out, each string with its
+    /// role: the string it is designed from is not among them (it is the
+    /// object's own, [`Self::string_geometry`]). Empty for anything else, and
+    /// for a design not worked out yet.
+    pub(crate) fn pit_strings(&self) -> &[pit_design::DesignString] {
+        match self {
+            // The design's first string is the starting ring, which the
+            // object's own string stands for.
+            Object::PitDesign { pit, .. } => pit.design().map_or(&[], |design| design.strings.get(1..).unwrap_or_default()),
+            _ => &[],
+        }
+    }
+
+    /// A pit design as plain polylines, all with its id and layer: its
+    /// string first, then each of its benches' and ramp's strings in their
+    /// colours. Nothing for anything else.
+    pub(crate) fn pit_polylines(&self) -> Vec<Object> {
+        let Object::PitDesign {
+            id,
+            layer,
+            verts,
+            color,
+            line_weight,
+            ..
+        } = self
+        else {
+            return Vec::new();
+        };
+        let mut polylines = vec![Object::Polyline {
+            id: *id,
+            layer: *layer,
+            verts: verts.clone(),
+            closed: true,
+            color: *color,
+            fill: FillStyle::Clear,
+            line_weight: *line_weight,
+        }];
+        polylines.extend(self.pit_strings().iter().map(|string| Object::Polyline {
+            id: *id,
+            layer: *layer,
+            verts: string.points.iter().copied().map(PolyVertex::straight).collect(),
+            closed: string.closed,
+            color: ObjectColor::Fixed(string.kind.colour()),
+            fill: FillStyle::Clear,
+            line_weight: *line_weight,
+        }));
+        polylines
     }
 }
 
@@ -1422,9 +1528,6 @@ pub(crate) struct Document {
     schedule: schedule::SchedulePlan,
     #[serde(default)]
     haulage: haulage::HaulNetwork,
-    /// Pit designs; see [`pit_design::item`].
-    #[serde(default)]
-    pit_designs: pit_design::item::PitDesigns,
     /// The latest calculated schedule, kept with the project when it is saved.
     /// Not part of its content: recalculating does not make a project unsaved,
     /// and the one run that should says so itself.
@@ -2028,52 +2131,6 @@ impl Document {
         self.touch();
     }
 
-    pub(crate) fn pit_designs(&self) -> &pit_design::item::PitDesigns {
-        &self.pit_designs
-    }
-
-    pub(crate) fn pit_design(&self, id: pit_design::item::PitDesignId) -> Option<&pit_design::item::PitDesign> {
-        self.pit_designs.get(id)
-    }
-
-    /// Swap in the whole list of pit designs, as one undoable edit does. The
-    /// allocator never goes down, so an id retired on one branch of history
-    /// is not reissued on another.
-    pub(crate) fn set_pit_designs(&mut self, mut designs: pit_design::item::PitDesigns) {
-        designs.raise_allocator_to(&self.pit_designs);
-        if self.pit_designs != designs {
-            self.pit_designs = designs;
-            self.touch();
-        }
-    }
-
-    /// Install pit designs read back from a save file.
-    pub(crate) fn restore_pit_designs(&mut self, designs: pit_design::item::PitDesigns) {
-        self.pit_designs = designs;
-        self.touch();
-    }
-
-    /// Copy another document's pit designs onto this one, ids intact: what
-    /// the scene composite reads them through.
-    pub(crate) fn append_pit_designs_from(&mut self, source: &Document) {
-        self.pit_designs.designs.extend(source.pit_designs.designs.iter().cloned());
-        self.pit_designs.next_id = self.pit_designs.next_id.max(source.pit_designs.next_id);
-        self.touch();
-    }
-
-    /// Add an imported project's pit designs to this one's, each under a new
-    /// id where its own is taken.
-    pub(crate) fn merge_pit_designs_from(&mut self, source: &Document) {
-        for design in &source.pit_designs.designs {
-            let mut design = design.clone();
-            if self.pit_designs.get(design.id).is_some() {
-                design.id = self.pit_designs.allocate_id();
-            }
-            self.pit_designs = self.pit_designs.with(design);
-        }
-        self.touch();
-    }
-
     pub(crate) fn merge_haulage_from(&mut self, source: &Document) {
         if self.haulage.nodes.is_empty() {
             self.haulage = source.haulage.clone();
@@ -2445,7 +2502,6 @@ impl Document {
         // stale pre-namespace entries cannot alias new ids.
         self.object_revisions = self.objects.iter().map(|object| (object.id(), self.revision)).collect();
         self.haulage.apply_namespace(namespace);
-        self.pit_designs.apply_namespace(namespace);
         self.next_layer_id = runtime_id(self.next_layer_id);
         self.next_object_id = runtime_id(self.next_object_id);
     }
@@ -2575,7 +2631,6 @@ impl Document {
         // because an undo puts the whole plan back, it un-dirties by itself.
         self.schedule.hash_content(&mut hasher);
         self.haulage.hash_content(&mut hasher);
-        self.pit_designs.hash_content(&mut hasher);
         hasher.finish()
     }
 
@@ -3622,12 +3677,6 @@ pub(crate) enum Command {
         before: Box<haulage::HaulNetwork>,
         after: Box<haulage::HaulNetwork>,
     },
-    /// Replace the whole list of pit designs: one settled edit, a design
-    /// added or deleted, or a build recording what it made.
-    SetPitDesigns {
-        before: Box<pit_design::item::PitDesigns>,
-        after: Box<pit_design::item::PitDesigns>,
-    },
     SetSchedulePlan {
         before: Box<schedule::SchedulePlan>,
         after: Box<schedule::SchedulePlan>,
@@ -3674,6 +3723,9 @@ impl Command {
             size_of::<Object>()
                 + match object {
                     Object::Polyline { verts, .. } => verts.len().saturating_mul(size_of::<PolyVertex>()),
+                    Object::PitDesign { verts, .. } => {
+                        verts.len().saturating_mul(size_of::<PolyVertex>()) + object.pit_strings().iter().map(|string| string.points.len() * size_of::<DVec3>()).sum::<usize>()
+                    }
                     Object::Text { content, .. } => content.len(),
                     Object::Point { .. } | Object::Circle { .. } => 0,
                 }
@@ -3709,7 +3761,6 @@ impl Command {
                 Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::SetSchedulePlan { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::SetHaulNetwork { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
-                Command::SetPitDesigns { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::EditSolid { .. } => size_of::<SolidEdit>().saturating_mul(2),
                 Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
                 Command::SetTieIns { before, after, .. } => before
@@ -3901,7 +3952,6 @@ impl Command {
             | Command::RenameFolder { .. }
             | Command::SetLayerPlacement { .. }
             | Command::SetHaulNetwork { .. }
-            | Command::SetPitDesigns { .. }
             | Command::EditSolid { .. }
             | Command::SetSchedulePlan { .. } => {}
         }
@@ -4045,10 +4095,6 @@ impl Command {
             }
             Command::SetHaulNetwork { after, .. } => {
                 target.document.set_haulage((**after).clone());
-                target.effects.document_changed = true;
-            }
-            Command::SetPitDesigns { after, .. } => {
-                target.document.set_pit_designs((**after).clone());
                 target.effects.document_changed = true;
             }
             Command::SetSchedulePlan { after, .. } => {
@@ -4210,10 +4256,6 @@ impl Command {
             }
             Command::SetHaulNetwork { before, .. } => {
                 target.document.set_haulage((**before).clone());
-                target.effects.document_changed = true;
-            }
-            Command::SetPitDesigns { before, .. } => {
-                target.document.set_pit_designs((**before).clone());
                 target.effects.document_changed = true;
             }
             Command::SetSchedulePlan { before, .. } => {

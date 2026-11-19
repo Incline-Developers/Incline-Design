@@ -117,7 +117,7 @@ pub(crate) fn draw_selection_appearance(
     for handle in &editor.selected_handles {
         let kind = match handle {
             SceneEntityId::Object(id) => match document.get_object(*id) {
-                Some(crate::model::Object::Polyline { .. } | crate::model::Object::Circle { .. }) => 0,
+                Some(crate::model::Object::Polyline { .. } | crate::model::Object::Circle { .. } | crate::model::Object::PitDesign { .. }) => 0,
                 Some(crate::model::Object::Point { .. }) => 1,
                 Some(crate::model::Object::Text { .. }) => 2,
                 None => continue,
@@ -137,7 +137,7 @@ pub(crate) fn draw_selection_appearance(
             .iter()
             .copied()
             .filter(|id| match document.get_object(*id) {
-                Some(crate::model::Object::Polyline { .. } | crate::model::Object::Circle { .. }) => kind == 0,
+                Some(crate::model::Object::Polyline { .. } | crate::model::Object::Circle { .. } | crate::model::Object::PitDesign { .. }) => kind == 0,
                 Some(crate::model::Object::Point { .. }) => kind == 1,
                 Some(crate::model::Object::Text { .. }) => kind == 2,
                 None => false,
@@ -170,6 +170,24 @@ pub(crate) fn draw_selection_appearance(
         {
             commands.push(UiCommand::OpenObjectEditDialog(*object_id));
             commands.push(UiCommand::CloseCanvasContextMenu);
+        }
+        // A pit design opens in Pit Design, and a closed polyline can become
+        // one there.
+        if editor.selected_handles.len() == 1
+            && let [object_id] = objects.as_slice()
+            && let Some(object) = document.get_object(*object_id)
+        {
+            let pit = matches!(object, crate::model::Object::PitDesign { .. });
+            if (pit || (matches!(object, crate::model::Object::Polyline { .. }) && object.encloses_area()))
+                && crate::ui::widgets::context_menu::ContextMenuAction::new(tr!("pit-design-menu")).show(ui).clicked()
+            {
+                commands.push(UiCommand::OpenPitDesign);
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
+            if pit && crate::ui::widgets::context_menu::ContextMenuAction::new(tr!("pit-design-explode")).show(ui).clicked() {
+                commands.push(UiCommand::ExplodePitDesign(*object_id));
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
         }
         if crate::ui::widgets::context_menu::ContextMenuAction::new(tr!("properties-move-layer")).show(ui).clicked() {
             let target_layer = project

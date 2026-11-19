@@ -432,7 +432,7 @@ fn entity(target: Target) -> Option<SceneEntityId> {
 fn object_points(object: &Object) -> Vec<DVec3> {
     match object {
         Object::Point { pos, .. } | Object::Text { pos, .. } => vec![*pos],
-        Object::Polyline { verts, .. } => verts.iter().map(|vertex| vertex.pos).collect(),
+        Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => verts.iter().map(|vertex| vertex.pos).collect(),
         Object::Circle { center, radius, .. } => vec![*center - DVec3::new(*radius, *radius, 0.0), *center + DVec3::new(*radius, *radius, 0.0)],
     }
 }

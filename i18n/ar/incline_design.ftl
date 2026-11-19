@@ -4506,7 +4506,6 @@ err-omf-element-part-unreadable = في العنصر '{ $name }' ‏{ $what } ت�
 err-omf-part-reserves = قائمة حقول احتياطي
 err-omf-part-solids = مجسّمات التخطيط
 err-omf-part-haulage = شبكة طرق النقل
-err-omf-part-pit-designs = تصاميم الحفر
 err-omf-read-layer-objects = تعذّرت قراءة كائنات طبقة التصميم '{ $name }'
 err-omf-read-layer = تعذّرت قراءة طبقة التصميم '{ $name }'
 err-omf-validate-designs = التصاميم '{ $name }' غير صالحة
@@ -5042,8 +5041,7 @@ err-file-desc-opt-report = تقرير التحسين
 pit-design-menu = تصميم الحفرة
 pit-design-title = تصميم الحفرة
 pick-selection-pit-string-prompt = حدد الخط المغلق الذي تُصمَّم منه الحفرة.
-pit-design-string = خط البداية
-pit-design-string-help = الخط المغلق الذي يبدأ منه التصميم: قدم القاع عند البناء صعودًا، أو الحافة عند البناء نزولًا. يحتفظ التصميم بنسخته الخاصة، فتحرير الخط المتعدد لا يغيّر شيئًا حتى «تحديث».
+pit-design-string-help = الخط المتعدد المغلق الذي تُصمَّم منه الحفرة: قدم القاع عند البناء صعودًا، أو الحافة عند البناء نزولًا. يصبح تصميم الحفرة في مكانه، وتحرير رؤوسه يعيد تصميم الحفرة.
 pit-design-direction = البناء
 pit-design-direction-help = صعودًا من أرضية، والجدران تتدرج إلى الخارج كلما ارتفعت، أو نزولًا من حافة علوية، والجدران تتدرج إلى الداخل كلما تعمقت الحفرة.
 pit-design-up = صعودًا من الأرضية
@@ -5089,9 +5087,7 @@ pit-design-switchback-every = المصاطب بين الانعطافات
 pit-design-switchback-every-help = عدد المصاطب التي يصعدها المنحدر قبل أن يرتد. حيث لا يتسع الانعطاف، يواصل المنحدر مصطبة أخرى وينعطف هناك.
 pit-design-inside-radius = نصف القطر الداخلي
 pit-design-inside-radius-help = أضيق انعطاف للحافة الداخلية للطريق في المتعرج.
-pit-design-output-section = المخرجات
-pit-design-surface = السطح
-pit-design-surface-help = إنشاء سطح الحفرة أيضًا من خطوطها، جاهزًا للدمج في التضاريس.
+pit-design-surface-help = يبني سطح الحفرة من خطوطها، جاهزًا للدمج في التضاريس. إعادة البناء تستبدل في مكانه السطح الذي بُني من قبل.
 pit-design-trim = قص على التضاريس
 pit-design-trim-help = إزالة السطح حيث يقع فوق التضاريس.
 pit-design-result-section = التصميم
@@ -5120,29 +5116,30 @@ pit-design-problem-string = يجب أن يكون خط البداية خطًا م
 pit-design-problem-stop-elevation = منسوب التوقف خلف الخط: تحته عند البناء صعودًا، وفوقه عند البناء نزولًا.
 pit-design-problem-no-topography = اختر التضاريس التي يبرز عندها التصميم.
 pit-design-problem-topography-not-loaded = حمِّل { $name } ليبرز التصميم عندها.
-pit-design-created = صُمِّمت { $benches } مصاطب ({ $ended })، بوصفها { $strings } خطًا على { $layer }.
 pit-design-created-surface = أُنشئ سطح الحفرة، { $name }.
-pit-design-report-summary = يبني تصميم حفرة في طبقته وسطحه.
+pit-design-report-summary = يبني سطح تصميم حفرة.
+pit-design-kind = تصميم الحفرة
+pit-design-surface-section = السطح
+pit-design-explode = تفكيك
+pit-design-explode-help = يحوّل تصميم الحفرة إلى خطوط متعددة: خطه وخطوط كل مصطبة، لتحريرها يدويًا. لم تعد مصمَّمة؛ والتراجع يعيد التصميم.
+pit-design-report-explode = يحوّل تصميم حفرة إلى خطوط متعددة.
+pit-design-building-surface = جارٍ بناء سطح { $name }
+pit-design-surface-failed = تعذّر بناء سطح الحفرة: { $error }
+pit-design-surface-overtaken = استُبعد السطح الذي بُني لـ { $name }: تغيّر التصميم أثناء بنائه. أعد بناءه.
+pit-design-exploded =
+    { $count ->
+        [zero] فُكّك تصميم الحفرة.
+        [one] فُكّك تصميم الحفرة إلى خط متعدد واحد.
+        [two] فُكّك تصميم الحفرة إلى خطين متعددين.
+        [few] فُكّك تصميم الحفرة إلى { $count } خطوط متعددة.
+        [many] فُكّك تصميم الحفرة إلى { $count } خطًا متعددًا.
+       *[other] فُكّك تصميم الحفرة إلى { $count } خط متعدد.
+    }
 pit-design-default-name = تصميم الحفرة
 pit-design-scenario-default = الحالة الأساسية
-pit-design-string-source-gone = لم يعد الخط المتعدد الذي نُسخ منه خط هذا التصميم في أي طبقة محمّلة.
-pit-design-deleted = حُذف تصميم الحفرة { $name }. تبقى طبقته وسطحه.
-pit-design-copy-name = نسخة من { $name }
 pit-design-gone = لم يعد تصميم الحفرة هذا في المشروع.
-pit-design-building = جارٍ بناء تصميم الحفرة { $name }
 pit-design-no-bench-fits = لا تتسع ولا مصطبة واحدة: { $reason }
-pit-design-build-failed = تعذّر بناء تصميم الحفرة: { $error }
-pit-design-surface-unlinked = تُرك السطح { $name } كما كان. لم يعد التصميم يبني سطحًا، لذا لم يعد السطح تابعًا له.
-pit-design-report-delete = يحذف تصميم حفرة مع الإبقاء على طبقته وسطحه.
-pit-design-report-duplicate = ينسخ تصميم حفرة دون طبقته وسطحه.
-pit-design-none-yet = لا توجد في هذا المشروع تصاميم حفر بعد. اضغط «جديد» واختر الخط المغلق الذي يبدأ منه التصميم.
-pit-design-choose = اختر تصميمًا
-pit-design-design = التصميم
-pit-design-design-help = تصاميم الحفر في المشروع. يحتفظ كل منها بنسخته الخاصة من خطه وبسيناريوهاته، ويعيد بناء طبقته وسطحه الخاصين.
-pit-design-new = جديد
-pit-design-duplicate = تكرار
-pit-design-delete = حذف
-pit-design-new-help = «جديد» يبدأ تصميمًا من خط مغلق تختاره. «تكرار» ينسخ التصميم المفتوح دون طبقته وسطحه. «حذف» يزيل التصميم ويبقي ما بناه.
+pit-design-none-yet = اختر خطًا متعددًا مغلقًا لتصميم حفرة منه، أو تصميم حفرة لتحريره.
 pit-design-name = الاسم
 pit-design-scenario = السيناريو
 pit-design-scenario-help = كل سيناريو مجموعة كاملة من إعدادات التصميم. النشط هو ما تعرضه المعاينة وما يبنيه «بناء».
@@ -5151,23 +5148,14 @@ pit-design-scenario-copy = نسخ
 pit-design-scenario-remove = إزالة
 pit-design-scenario-copy-help = «نسخ» يضيف سيناريو بإعدادات النشط ويجعله نشطًا. «إزالة» يحذف السيناريو النشط؛ ويبقى للتصميم دائمًا سيناريو واحد.
 pit-design-scenario-copy-name = نسخة من { $name }
-pit-design-string-copied = { $points } نقطة عند المنسوب { $rl }
-pit-design-string-change = تغيير
-pit-design-string-update = تحديث
-pit-design-string-update-help = «تغيير» يختار خطًا مغلقًا آخر للتصميم. «تحديث» ينسخ الخط مجددًا من الخط المتعدد الذي جاء منه، بعد تحرير ذلك الخط.
 pit-design-rebuild = إعادة البناء
 pit-design-build = بناء
 pit-design-not-built = غير مبني
-pit-design-output-layer = الطبقة
 pit-design-output-surface = السطح
 pit-design-standing = مبني
 pit-design-current = محدّث
-pit-design-out-of-date = تغيّر التصميم منذ بنائه. أعد بناءه لتحديث طبقته وسطحه.
-pit-design-layer-edited = حُرّرت طبقته منذ بنائه. إعادة البناء تستبدل تلك التعديلات.
-pit-design-surface-edited = حُرّر سطحه منذ بنائه. إعادة البناء تستبدل تلك التعديلات.
-pit-design-row-out-of-date = { $name } (غير محدّث)
-pit-design-row-not-built = { $name } (غير مبني)
-pit-design-open = فتح في تصميم الحفرة
+pit-design-out-of-date = تغيّر التصميم منذ بناء سطحه. أعد بناءه لتحديثه.
+pit-design-surface-edited = حُرّر السطح منذ بنائه. إعادة البناء تستبدل تلك التعديلات.
 pit-design-flats =
     { $count ->
         [zero] لا توجد مصاطب تسير مستوية قبل أن تصعد.

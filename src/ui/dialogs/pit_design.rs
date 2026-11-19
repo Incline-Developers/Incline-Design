@@ -1,29 +1,30 @@
-//! Pit Design: the window that edits a project's pit designs, and what it
-//! holds while it is open.
+//! Pit Design: the window that edits a pit design object, and what it holds
+//! while it is open.
 //!
-//! The window edits a copy of one design ([`DraftDesign::working`]). Once no
-//! field is mid-edit, `App::sync_pit_design_draft` writes the copy into the
-//! project as one undoable step, and takes the project's version back when
-//! an undo or redo changes it underneath. `App::update_pit_design_preview`
-//! builds the copy in the background whenever it changes, and the viewport
-//! draws the result while the window is open. Build writes it into its
-//! layer and surface.
+//! The window edits a copy of what the object is designed with
+//! ([`PitDesignDraft::working`]). Once no field is mid-edit,
+//! `App::sync_pit_design_draft` writes the copy to the object as one undo
+//! step, and takes the object's version back when undo or redo changes it.
+//! `App::update_pit_design_preview` works the copy out in the background
+//! whenever it changes, and the viewport draws the result over the object
+//! until the object's own design catches up.
 
 use glam::{DVec2, DVec3};
 
 use crate::{
     i18n::tr,
     model::{
+        ObjectId, PolyVertex,
         pit_design::{
             Design, Direction, End, Problem,
-            item::{PitDesign, PitDesignId, ScenarioId, Standing},
+            object::{PitObject, ScenarioId, SurfaceStanding},
             settings::{PitDesignSettings, StopMode},
         },
         triangulation::{GeometryVersion, TriangulationId},
     },
     ui::{
         elements::properties::read_only_row,
-        state::{EditorState, SelectionPickTool, UiCommand, UiPitDesignEntry, UiProjectView},
+        state::{EditorState, SelectionPickTool, UiCommand, UiProjectView},
         widgets::{
             hint::Hint,
             menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
@@ -33,10 +34,11 @@ use crate::{
 
 const FIELD_WIDTH: f32 = 190.0;
 
-/// What a preview is built from. Two previews from equal keys are the same.
+/// What a preview is worked out from. Two previews from equal keys are the
+/// same.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PreviewKey {
-    pub(crate) base: Vec<DVec3>,
+    pub(crate) verts: Vec<PolyVertex>,
     pub(crate) settings: PitDesignSettings,
     /// The version of the ground it daylights against, when it does.
     pub(crate) ground: Option<GeometryVersion>,
@@ -55,7 +57,7 @@ pub(crate) enum NoDesign {
     TopographyNotLoaded(String),
 }
 
-/// A finished preview: the design, and the string it was built from.
+/// A finished preview: the design, and the string it was worked out from.
 #[derive(Clone, Debug)]
 pub(crate) struct Preview {
     pub(crate) design: Result<Design, NoDesign>,
@@ -67,65 +69,60 @@ pub(crate) struct Preview {
     pub(crate) ramp_start: Option<DVec3>,
 }
 
-/// The design open in the window.
-#[derive(Clone, Debug)]
-pub(crate) struct DraftDesign {
-    /// The design as the project last held it.
-    pub(crate) synced: PitDesign,
-    /// The copy the window edits.
-    pub(crate) working: PitDesign,
+/// What the window shows of its object beyond what it edits.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DraftFacts {
+    /// The surface it built, while that exists.
+    pub(crate) surface: Option<(TriangulationId, String)>,
+    pub(crate) surface_standing: SurfaceStanding,
+    /// Whether the object's own design is what it comes to now.
+    pub(crate) fresh: bool,
 }
 
 /// The window's state.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PitDesignDraft {
-    /// The design open, if there is one.
-    pub(crate) design: Option<DraftDesign>,
+    /// The pit design object open, if there is one.
+    object: Option<ObjectId>,
+    /// What the object was designed with as last seen.
+    pub(crate) synced: Option<PitObject>,
+    /// The copy the window edits.
+    pub(crate) working: Option<PitObject>,
+    pub(crate) facts: DraftFacts,
     /// No field is mid-edit: no pointer held down and no text field typed
-    /// in, so the working copy can be written to the project.
+    /// in, so the copy can be written to the object.
     pub(crate) settled: bool,
     /// The viewport is waiting for a click on the string where the ramp
     /// starts.
     pub(crate) picking_ramp_start: bool,
-    /// The last preview built, and what it was built from.
+    /// The last preview worked out, and what from.
     pub(crate) preview: Option<Preview>,
     pub(crate) built_for: Option<PreviewKey>,
-    /// The preview being built, by its job's token.
+    /// The preview being worked out, by its job's token.
     pub(crate) building: Option<(u64, PreviewKey)>,
     pub(crate) next_token: u64,
 }
 
 impl PitDesignDraft {
-    /// The window open on `design`.
-    pub(crate) fn on(design: PitDesign) -> Self {
+    /// The window open on pit design object `id`, designed with `pit`.
+    pub(crate) fn on(id: ObjectId, pit: PitObject) -> Self {
         Self {
-            design: Some(DraftDesign {
-                synced: design.clone(),
-                working: design,
-            }),
+            object: Some(id),
+            synced: Some(pit.clone()),
+            working: Some(pit),
             settled: true,
             ..Self::default()
         }
     }
 
-    pub(crate) fn design_id(&self) -> Option<PitDesignId> {
-        self.design.as_ref().map(|design| design.working.id)
+    pub(crate) fn object_id(&self) -> Option<ObjectId> {
+        self.object
     }
 
-    /// The design shown, if there is one and it is current.
-    pub(crate) fn current_design(&self) -> Option<&Design> {
-        if self.building.is_some() {
-            return None;
-        }
-        self.preview.as_ref().and_then(|preview| preview.design.as_ref().ok())
-    }
-
-    /// Forget the preview, for a design opened anew.
-    pub(crate) fn clear_preview(&mut self) {
-        self.preview = None;
-        self.built_for = None;
-        self.building = None;
-        self.picking_ramp_start = false;
+    /// Whether the viewport draws the preview over the object: while the
+    /// copy differs from it, or its own design is not yet current.
+    pub(crate) fn shows_preview(&self) -> bool {
+        self.object.is_some() && (self.working != self.synced || !self.facts.fresh)
     }
 }
 
@@ -149,17 +146,21 @@ pub(crate) fn no_design_text(reason: &NoDesign) -> String {
         NoDesign::NotClosed => tr!("pit-design-problem-string"),
         NoDesign::NoTopography => tr!("pit-design-problem-no-topography"),
         NoDesign::TopographyNotLoaded(name) => tr!("pit-design-problem-topography-not-loaded", name = name.clone()),
-        NoDesign::Settings(problem) => match problem {
-            Problem::BenchHeight => tr!("pit-design-problem-bench-height"),
-            Problem::FaceAngle => tr!("pit-design-problem-face-angle"),
-            Problem::BermWidth => tr!("pit-design-problem-berm-width"),
-            Problem::RampWidth => tr!("pit-design-problem-ramp-width"),
-            Problem::RampGradient => tr!("pit-design-problem-ramp-gradient"),
-            Problem::Switchback => tr!("pit-design-problem-switchback"),
-            Problem::Benches => tr!("pit-design-problem-benches"),
-            Problem::DaylightDown => tr!("pit-design-problem-daylight-down"),
-            Problem::StopElevation => tr!("pit-design-problem-stop-elevation"),
-        },
+        NoDesign::Settings(problem) => problem_text(*problem),
+    }
+}
+
+pub(crate) fn problem_text(problem: Problem) -> String {
+    match problem {
+        Problem::BenchHeight => tr!("pit-design-problem-bench-height"),
+        Problem::FaceAngle => tr!("pit-design-problem-face-angle"),
+        Problem::BermWidth => tr!("pit-design-problem-berm-width"),
+        Problem::RampWidth => tr!("pit-design-problem-ramp-width"),
+        Problem::RampGradient => tr!("pit-design-problem-ramp-gradient"),
+        Problem::Switchback => tr!("pit-design-problem-switchback"),
+        Problem::Benches => tr!("pit-design-problem-benches"),
+        Problem::DaylightDown => tr!("pit-design-problem-daylight-down"),
+        Problem::StopElevation => tr!("pit-design-problem-stop-elevation"),
     }
 }
 
@@ -180,12 +181,10 @@ fn stopped_short(design: &Design) -> bool {
     matches!(design.end, End::OutOfRoom | End::RampTooLong | End::LeftGround)
 }
 
-/// How a design's outputs stand, from the window's copy of it and what the
-/// project holds.
-pub(crate) fn standing(design: &PitDesign, entry: Option<&UiPitDesignEntry>, project: &UiProjectView) -> Standing {
-    let ground = design.settings().ground().and_then(|id| project.triangulations.iter().find(|surface| surface.id == id)).map(|surface| surface.geometry);
-    let (has_layer, has_surface) = entry.map_or((false, false), |entry| (entry.layer.is_some(), entry.surface.is_some()));
-    design.standing(ground, has_layer, has_surface)
+/// How tall the window's scrolling body may be: the window, its heading and
+/// its actions all fit on screen.
+fn body_height(ctx: &egui::Context) -> f32 {
+    (ctx.content_rect().height() - 220.0).max(200.0)
 }
 
 /// A row of buttons under a label: which was clicked.
@@ -223,47 +222,59 @@ pub(crate) fn draw_pit_design_dialog(ui: &mut egui::Ui, editor: &mut EditorState
         .min_width(420.0)
         .max_width(440.0)
         .show(ui.ctx(), |ui| {
-            draw_design_picker(ui, draft, project, commands);
-            let Some(open_design) = draft.design.as_mut() else {
+            let Some(id) = draft.object_id() else {
                 menu::menu_note(ui, tr!("pit-design-none-yet"));
+                if button_row(ui, String::new(), tr!("pit-design-string-help"), &[(tr!("pit-design-pick"), true)]).is_some() {
+                    commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::PitDesignString));
+                }
+                ui.add_space(4.0);
+                menu::menu_actions(ui, |ui| {
+                    if ui.add(MenuButton::new(tr!("common-close"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                        close = true;
+                    }
+                });
                 return;
             };
-            let id = open_design.working.id;
-            let entry = project.pit_designs.iter().find(|entry| entry.id == id);
-            draw_name_and_scenarios(ui, &mut open_design.working);
-            draw_string_row(ui, &open_design.working, entry, commands);
-
-            let Some(scenario) = open_design.working.scenario_mut() else {
-                return;
-            };
-            let settings = &mut scenario.settings;
-            draw_settings(ui, settings, project, commands);
-
-            menu::menu_section(ui, tr!("pit-design-output-section"));
-            MenuFieldBool::new(tr!("pit-design-surface"), &mut settings.surface)
-                .help_text(tr!("pit-design-surface-help"))
-                .show(ui);
-            if settings.surface && settings.daylights() {
-                MenuFieldBool::new(tr!("pit-design-trim"), &mut settings.trim_to_topography)
-                    .help_text(tr!("pit-design-trim-help"))
-                    .show(ui);
+            // The design's settings and what they come to scroll between its
+            // name and the actions, which stay in view.
+            if let Some(working) = draft.working.as_mut() {
+                MenuFieldText::new(tr!("pit-design-name"), &mut working.name).width(FIELD_WIDTH).show(ui);
             }
-            draw_outputs(ui, &open_design.working, entry, project);
+            egui::ScrollArea::vertical()
+                .id_salt("pit_design_body")
+                .max_height(body_height(ui.ctx()))
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    let Some(working) = draft.working.as_mut() else {
+                        return;
+                    };
+                    draw_scenarios(ui, working);
+                    let Some(scenario) = working.scenario_mut() else {
+                        return;
+                    };
+                    let settings = &mut scenario.settings;
+                    draw_settings(ui, settings, project, commands);
 
-            menu::menu_section(ui, tr!("pit-design-result-section"));
-            let settings = open_design.working.settings();
-            draw_result(ui, draft, &settings);
+                    menu::menu_section(ui, tr!("pit-design-surface-section"));
+                    if settings.daylights() {
+                        MenuFieldBool::new(tr!("pit-design-trim"), &mut settings.trim_to_topography)
+                            .help_text(tr!("pit-design-trim-help"))
+                            .show(ui);
+                    }
+                    draw_surface(ui, &draft.facts, id, commands);
+
+                    menu::menu_section(ui, tr!("pit-design-result-section"));
+                    let settings = working.settings();
+                    draw_result(ui, draft, &settings);
+                });
 
             ui.add_space(4.0);
-            let has_design = draft.current_design().is_some_and(|design| design.benches > 0);
-            let built = entry.is_some_and(|entry| entry.layer.is_some() || entry.surface.is_some());
             let cancelled = menu::dialog_cancelled(ui.ctx());
             menu::menu_actions(ui, |ui| {
-                let label = if built { tr!("pit-design-rebuild") } else { tr!("pit-design-build") };
-                if ui.add(MenuButton::new(label).primary().enabled(has_design)).clicked() {
-                    commands.push(UiCommand::BuildPitDesign(id));
+                if ui.add(MenuButton::new(tr!("pit-design-explode"))).hint(tr!("pit-design-explode-help")).clicked() {
+                    commands.push(UiCommand::ExplodePitDesign(id));
                 }
-                if ui.add(MenuButton::new(tr!("common-close"))).clicked() || cancelled {
+                if ui.add(MenuButton::new(tr!("common-close")).primary()).clicked() || cancelled {
                     close = true;
                 }
             });
@@ -276,47 +287,8 @@ pub(crate) fn draw_pit_design_dialog(ui: &mut egui::Ui, editor: &mut EditorState
     }
 }
 
-/// The project's designs to choose between, and New, Duplicate and Delete.
-fn draw_design_picker(ui: &mut egui::Ui, draft: &PitDesignDraft, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
-    let open_id = draft.design_id();
-    if !project.pit_designs.is_empty() {
-        let mut chosen = open_id;
-        let chosen_text = draft
-            .design
-            .as_ref()
-            .map_or_else(|| tr!("pit-design-choose"), |design| design.working.name.clone());
-        MenuFieldCombo::new(
-            "pit_design_open",
-            tr!("pit-design-design"),
-            &mut chosen,
-            chosen_text,
-            project.pit_designs.iter().map(|entry| (Some(entry.id), entry.name.clone().into())),
-        )
-        .width(FIELD_WIDTH)
-        .help_text(tr!("pit-design-design-help"))
-        .show(ui);
-        if chosen != open_id
-            && let Some(id) = chosen
-        {
-            commands.push(UiCommand::OpenPitDesignItem(id));
-        }
-    }
-    let buttons = [
-        (tr!("pit-design-new"), true),
-        (tr!("pit-design-duplicate"), open_id.is_some()),
-        (tr!("pit-design-delete"), open_id.is_some()),
-    ];
-    match button_row(ui, String::new(), tr!("pit-design-new-help"), &buttons) {
-        Some(0) => commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::PitDesignString)),
-        Some(1) => commands.extend(open_id.map(UiCommand::DuplicatePitDesign)),
-        Some(2) => commands.extend(open_id.map(UiCommand::DeletePitDesign)),
-        _ => {}
-    }
-}
-
-/// The design's name, and its scenarios: which is active, add and remove.
-fn draw_name_and_scenarios(ui: &mut egui::Ui, design: &mut PitDesign) {
-    MenuFieldText::new(tr!("pit-design-name"), &mut design.name).width(FIELD_WIDTH).show(ui);
+/// The design's scenarios: which is active, its name, and copy and remove.
+fn draw_scenarios(ui: &mut egui::Ui, design: &mut PitObject) {
     let mut active: ScenarioId = design.scenario().map_or(design.active, |scenario| scenario.id);
     let chosen = design.scenario().map(|scenario| scenario.name.clone()).unwrap_or_default();
     MenuFieldCombo::new(
@@ -344,29 +316,6 @@ fn draw_name_and_scenarios(ui: &mut egui::Ui, design: &mut PitDesign) {
         Some(1) => {
             design.remove_scenario();
         }
-        _ => {}
-    }
-}
-
-/// The string the design starts from, with Change and Update.
-fn draw_string_row(ui: &mut egui::Ui, design: &PitDesign, entry: Option<&UiPitDesignEntry>, commands: &mut Vec<UiCommand>) {
-    let level = if design.base.is_empty() {
-        0.0
-    } else {
-        design.base.iter().map(|point| point.z).sum::<f64>() / design.base.len() as f64
-    };
-    let text = tr!("pit-design-string-copied", points = design.base.len().to_string(), rl = format!("{level:.1}"));
-    MenuField::new(tr!("pit-design-string")).help_text(tr!("pit-design-string-help")).show(ui, |ui, row_height, _| {
-        ui.allocate_ui_with_layout(egui::vec2(FIELD_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.add(egui::Label::new(text.clone()).truncate()).hint(text.clone());
-        })
-        .response
-    });
-    let differs = entry.is_some_and(|entry| entry.source_differs);
-    let buttons = [(tr!("pit-design-string-change"), true), (tr!("pit-design-string-update"), differs)];
-    match button_row(ui, String::new(), tr!("pit-design-string-update-help"), &buttons) {
-        Some(0) => commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::PitDesignBase)),
-        Some(1) => commands.push(UiCommand::UpdatePitDesignString),
         _ => {}
     }
 }
@@ -537,28 +486,25 @@ fn draw_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &
     }
 }
 
-/// Where the design was built to, and whether that still matches it.
-fn draw_outputs(ui: &mut egui::Ui, design: &PitDesign, entry: Option<&UiPitDesignEntry>, project: &UiProjectView) {
+
+/// The surface the design built, how it stands, and Build.
+fn draw_surface(ui: &mut egui::Ui, facts: &DraftFacts, id: ObjectId, commands: &mut Vec<UiCommand>) {
     let warning = ui.visuals().warn_fg_color;
-    let not_built = tr!("pit-design-not-built");
-    let layer = entry.and_then(|entry| entry.layer.as_ref()).map_or_else(|| not_built.clone(), |(_, name)| name.clone());
-    read_only_row(ui, &tr!("pit-design-output-layer"), &layer);
-    if design.settings().surface || entry.is_some_and(|entry| entry.surface.is_some()) {
-        let surface = entry.and_then(|entry| entry.surface.as_ref()).map_or(not_built, |(_, name)| name.clone());
-        read_only_row(ui, &tr!("pit-design-output-surface"), &surface);
-    }
-    match standing(design, entry, project) {
-        Standing::NotBuilt => {}
-        Standing::Current => read_only_row(ui, &tr!("pit-design-standing"), &tr!("pit-design-current")),
-        Standing::OutOfDate => {
+    let name = facts.surface.as_ref().map_or_else(|| tr!("pit-design-not-built"), |(_, name)| name.clone());
+    read_only_row(ui, &tr!("pit-design-output-surface"), &name);
+    match facts.surface_standing {
+        SurfaceStanding::NotBuilt => {}
+        SurfaceStanding::Current => read_only_row(ui, &tr!("pit-design-standing"), &tr!("pit-design-current")),
+        SurfaceStanding::OutOfDate => {
             ui.colored_label(warning, tr!("pit-design-out-of-date"));
         }
+        SurfaceStanding::Edited => {
+            ui.colored_label(warning, tr!("pit-design-surface-edited"));
+        }
     }
-    if entry.is_some_and(|entry| entry.layer_edited) {
-        ui.colored_label(warning, tr!("pit-design-layer-edited"));
-    }
-    if entry.is_some_and(|entry| entry.surface_edited) {
-        ui.colored_label(warning, tr!("pit-design-surface-edited"));
+    let label = if facts.surface.is_some() { tr!("pit-design-rebuild") } else { tr!("pit-design-build") };
+    if button_row(ui, String::new(), tr!("pit-design-surface-help"), &[(label, true)]).is_some() {
+        commands.push(UiCommand::BuildPitSurface(id));
     }
 }
 

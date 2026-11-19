@@ -48,7 +48,7 @@ fn selection_summary(object_ids: &[ObjectId], document: &Document) -> String {
     for &oid in object_ids {
         match document.get_object(oid) {
             Some(Object::Point { .. }) => points += 1,
-            Some(Object::Polyline { closed: true, .. }) => polylines += 1,
+            Some(Object::Polyline { closed: true, .. } | Object::PitDesign { .. }) => polylines += 1,
             Some(Object::Polyline { closed: false, .. }) => strings += 1,
             Some(Object::Circle { .. }) => circles += 1,
             Some(Object::Text { .. }) => texts += 1,

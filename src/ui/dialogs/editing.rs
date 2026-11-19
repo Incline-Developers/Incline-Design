@@ -57,6 +57,7 @@ fn object_kind_label(object: &crate::model::Object) -> String {
         crate::model::Object::Polyline { .. } => tr!("common-polyline"),
         crate::model::Object::Circle { .. } => tr!("common-circle"),
         crate::model::Object::Text { .. } => tr!("common-text"),
+        crate::model::Object::PitDesign { .. } => tr!("pit-design-kind"),
     }
 }
 

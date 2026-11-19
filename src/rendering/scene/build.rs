@@ -282,6 +282,20 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                     }
                 }
             }
+            // Its string in its own colour, and its benches and ramp in the
+            // colours of what each is: all one object, picked and selected
+            // whole.
+            Object::PitDesign { verts, line_weight, .. } => {
+                tessellate_polyline_stroke(&mut draw_ctx, verts, true, *line_weight, rgba);
+                for string in object.pit_strings() {
+                    let points: Vec<crate::model::PolyVertex> = string.points.iter().copied().map(crate::model::PolyVertex::straight).collect();
+                    let weight = match string.kind {
+                        crate::model::pit_design::StringKind::RampEdge => *line_weight * 1.5,
+                        _ => *line_weight,
+                    };
+                    tessellate_polyline_stroke(&mut draw_ctx, &points, string.closed, weight, string.kind.colour());
+                }
+            }
             Object::Text {
                 pos, content, height, rotation, ..
             } => {
@@ -536,7 +550,7 @@ fn object_center(object: &Object) -> DVec3 {
     match object {
         Object::Point { pos, .. } | Object::Text { pos, .. } => *pos,
         Object::Circle { center, .. } => *center,
-        Object::Polyline { verts, .. } => average_positions(verts.iter().map(|vertex| vertex.pos)),
+        Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => average_positions(verts.iter().map(|vertex| vertex.pos)),
     }
 }
 
@@ -670,16 +684,18 @@ pub(crate) fn rebuild_dynamic_scene(input: DynamicSceneBuildInput<'_>) {
         }
     }
 
-    // Pit Design's preview: its rings, and its ramp's edges and centreline.
+    // Pit Design's preview, while it shows what the object does not yet:
+    // its rings, and its ramp's edges and centreline.
     if let Some(design) = editor
         .pit_design
         .as_ref()
+        .filter(|draft| draft.shows_preview())
         .and_then(|draft| draft.preview.as_ref())
         .and_then(|preview| preview.design.as_ref().ok())
     {
         use crate::model::pit_design::StringKind;
         for string in &design.strings {
-            let colour = crate::app::commands::pit_design::string_colour(string.kind);
+            let colour = string.kind.colour();
             let weight = match string.kind {
                 StringKind::RampEdge => 2.5,
                 StringKind::RampCentreline => 1.0,

@@ -1,32 +1,32 @@
-//! Pit Design through MCP: the project's pit designs, read, made, changed,
-//! built and deleted as the Pit Design window does, and `design_pit`, which
-//! makes one and builds it in one call.
+//! Pit Design through MCP: pit design objects, read, made from closed
+//! polylines, changed, exploded and given surfaces as the Pit Design window
+//! does, and `design_pit`, which makes one in one call.
 
 use serde_json::{Value, json};
 
 use super::{failed, merge_patch, ok};
 use crate::{
-    app::App,
+    app::{App, commands::pit_design::pit_parts},
     model::{
-        ObjectId,
+        Object, ObjectId,
         pit_design::{
             Design, End,
-            item::{PitDesign, PitDesignId, ScenarioId, Standing},
+            object::{Outcome, PitObject, ScenarioId, SurfaceStanding},
             settings::{PitDesignSettings, StopMode},
         },
         triangulation::TriangulationId,
     },
-    ui::dialogs::pit_design::{NoDesign, end_text, no_design_text},
+    ui::dialogs::pit_design::{NoDesign, end_text, no_design_text, problem_text},
 };
 
-const SETTINGS_DESCRIPTION: &str = "A scenario's settings: direction (up from a floor's toe, or down from a crest); bench_height; face_angle (degrees from horizontal); berm_width; wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id to daylight against, building up); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius) ; surface (build the surface too) and trim_to_topography.";
+const SETTINGS_DESCRIPTION: &str = "A scenario's settings: direction (up from a floor's toe, or down from a crest); bench_height; face_angle (degrees from horizontal); berm_width; wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id to daylight against, building up); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius); trim_to_topography (its surface, when it daylights).";
 
 pub(super) fn definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "get_pit_designs",
             "title": "Read the pit designs",
-            "description": "Read the project's pit designs, as Design > Pit Design keeps them. Each design keeps its own copy of the closed string it starts from, its scenarios (each a full set of settings, one active), and the layer and surface it built. Without design: a summary of each, with whether its outputs are up to date (standing: not_built, current or out_of_date) and edited by hand since. With design: that one whole, its string's points and every scenario's settings included, which set_pit_design takes back.",
+            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). It holds scenarios, each a full set of settings, one active, and remembers the surface it built (surface_standing: not_built, current, out_of_date, or edited by hand since). Without design: a summary of each. With design (its object id): that one whole, every scenario's settings and what the active one comes to included, which set_pit_design takes back.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "design": { "type": "integer", "minimum": 0 } },
@@ -37,12 +37,12 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "set_pit_design",
             "title": "Make or change a pit design",
-            "description": format!("Make a pit design from a closed polyline (string, no design), or change one (design). settings is a JSON merge patch over a scenario's settings, the active one unless scenario names another: give only what changes. A new design starts from the window's defaults. string on an existing design gives it that polyline's points in place of its own, its ramp starts reset. active makes a scenario the one the design builds. Nothing is built: the result says what the active scenario comes to, as the window's preview does, and build_pit_design builds it. {SETTINGS_DESCRIPTION}"),
+            "description": format!("Make a closed polyline a pit design, in its place and keeping its id (string), or change a pit design (design). settings is a JSON merge patch over a scenario's settings, the active one unless scenario names another: give only what changes. A new design starts from the window's defaults. active makes a scenario the one the design is built with. The design is worked out at once: the result says what it comes to. Its string is edited like any polyline's vertices (move_objects and the vertex tools), and the design follows. {SETTINGS_DESCRIPTION}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "design": { "type": "integer", "minimum": 0 },
-                    "string": { "type": "integer", "minimum": 0, "description": "A closed polyline: the floor's toe building up, the crest building down." },
+                    "design": { "type": "integer", "minimum": 0, "description": "A pit design's object id." },
+                    "string": { "type": "integer", "minimum": 0, "description": "A closed polyline to make a pit design: the floor's toe building up, the crest building down." },
                     "name": { "type": "string", "minLength": 1 },
                     "scenario": { "type": "integer", "minimum": 0, "description": "The scenario settings and scenario_name change. The active one if left out." },
                     "scenario_name": { "type": "string", "minLength": 1 },
@@ -55,13 +55,13 @@ pub(super) fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": "manage_pit_design",
-            "title": "Delete, duplicate or rework a pit design",
-            "description": "delete a pit design (its layer and surface stay, as ordinary items); duplicate it (a copy with no outputs); update_string (copy its string again from the polyline it came from, after that was edited); add_scenario (a copy of the active scenario, made active, named name); remove_scenario (the active one, or scenario; a design keeps at least one). Returns any new id.",
+            "title": "Explode a pit design or change its scenarios",
+            "description": "explode a pit design into polylines on its layer (its string keeps the object's id, and each bench, crest and ramp string becomes a polyline of its own): they are no longer designed; add_scenario (a copy of the active scenario, made active, named name); remove_scenario (the active one, or scenario; a design keeps at least one). A pit design is deleted with delete_objects, copied with copy_objects. Returns any new ids.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "design": { "type": "integer", "minimum": 0 },
-                    "action": { "type": "string", "enum": ["delete", "duplicate", "update_string", "add_scenario", "remove_scenario"] },
+                    "action": { "type": "string", "enum": ["explode", "add_scenario", "remove_scenario"] },
                     "name": { "type": "string", "minLength": 1 },
                     "scenario": { "type": "integer", "minimum": 0 },
                 },
@@ -71,15 +71,12 @@ pub(super) fn definitions() -> Vec<Value> {
             "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false },
         }),
         json!({
-            "name": "build_pit_design",
-            "title": "Build a pit design",
-            "description": "Build a pit design's active scenario into its layer (toes, crests, ramp edges and centreline) and, when its settings ask for one, its surface (trimmed to the daylight topography with trim_to_topography): the layer and surface it built before are replaced in place, keeping their names and places, or new ones are made. One undo step. Edits made by hand to them since are lost: get_pit_designs says when there are any. It runs in the background: the result gives its task, which get_tasks follows. With preview, only say what the design comes to.",
+            "name": "build_pit_surface",
+            "title": "Build a pit design's surface",
+            "description": "Build a pit design's surface from its strings, trimmed to the topography it daylights against when trim_to_topography is set: the surface it built before is replaced in place, keeping its name and place, or a new one is made. One undo step. Edits made by hand to that surface since are lost: get_pit_designs says when there are any. It runs in the background: the result gives its task, which get_tasks follows.",
             "inputSchema": {
                 "type": "object",
-                "properties": {
-                    "design": { "type": "integer", "minimum": 0 },
-                    "preview": { "type": "boolean", "description": "Only say what the design comes to; build nothing. False if left out." },
-                },
+                "properties": { "design": { "type": "integer", "minimum": 0 } },
                 "required": ["design"],
                 "additionalProperties": false,
             },
@@ -88,7 +85,7 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "design_pit",
             "title": "Design a pit in one call",
-            "description": "Make a pit design from a closed polyline and build it, in one call: set_pit_design with string, then build_pit_design. Up from a floor's toe (each bench a face at face_angle rising bench_height, then a berm berm_width wide) or down from a crest. Exactly one of benches, stop_rl or daylight says where it stops. The ramp climbs at gradient along the steeper edge of the road, starting where the string passes nearest start, as a spiral round the walls or, with switchback_every, turning back on a level pad. Every ring is kept sound: where the next bench has no room, the design stops at the last good one and says why. With preview it only says what the design comes to, and makes nothing. Returns the design's id, which the other pit design tools take.",
+            "description": "Make a pit design from a closed polyline, in its place, in one call: set_pit_design with string and these settings, then (with surface) build_pit_surface. Up from a floor's toe (each bench a face at face_angle rising bench_height, then a berm berm_width wide) or down from a crest. Exactly one of benches, stop_rl or daylight says where it stops. The ramp climbs at gradient along the steeper edge of the road, starting where the string passes nearest start, as a spiral round the walls or, with switchback_every, turning back on a level pad. Every ring is kept sound: where the next bench has no room, the design stops at the last good one and says why. With preview it only says what the design comes to, and makes nothing. Returns the design's id, which the other pit design tools take.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -143,7 +140,6 @@ fn one_call_settings(arguments: &Value) -> Result<PitDesignSettings, String> {
         berm_width: number("berm_width")?,
         wall_radius: arguments["wall_radius"].as_f64().unwrap_or(0.0),
         ramp: false,
-        surface: arguments["surface"].as_bool().unwrap_or(false),
         trim_to_topography: arguments["trim"].as_bool().unwrap_or(true),
         ..PitDesignSettings::default()
     };
@@ -197,11 +193,12 @@ fn end_name(end: End) -> &'static str {
     }
 }
 
-fn standing_name(standing: Standing) -> &'static str {
+fn surface_standing_name(standing: SurfaceStanding) -> &'static str {
     match standing {
-        Standing::NotBuilt => "not_built",
-        Standing::Current => "current",
-        Standing::OutOfDate => "out_of_date",
+        SurfaceStanding::NotBuilt => "not_built",
+        SurfaceStanding::Current => "current",
+        SurfaceStanding::OutOfDate => "out_of_date",
+        SurfaceStanding::Edited => "edited",
     }
 }
 
@@ -245,6 +242,14 @@ fn no_design_message(reason: &NoDesign) -> String {
     }
 }
 
+/// What a design came to, or why it came to nothing.
+fn comes_to(design: &Result<Design, NoDesign>) -> Value {
+    match design {
+        Ok(design) => summary(design),
+        Err(reason) => json!({ "problem": no_design_message(reason) }),
+    }
+}
+
 impl App<'_> {
     /// Run `name` if it is one of these tools.
     pub(super) fn call_mcp_pit_design_tool(&mut self, name: &str, arguments: &Value) -> Option<Value> {
@@ -252,7 +257,7 @@ impl App<'_> {
             "get_pit_designs" => self.mcp_get_pit_designs(arguments),
             "set_pit_design" => self.mcp_set_pit_design(arguments),
             "manage_pit_design" => self.mcp_manage_pit_design(arguments),
-            "build_pit_design" => self.mcp_build_pit_design(arguments),
+            "build_pit_surface" => self.mcp_build_pit_surface(arguments),
             "design_pit" => self.mcp_design_pit(arguments),
             _ => return None,
         };
@@ -262,62 +267,74 @@ impl App<'_> {
         })
     }
 
-    fn mcp_pit_design(&self, arguments: &Value) -> Result<PitDesign, String> {
-        let id = arguments["design"].as_u64().ok_or("Give design, a pit design's id.")?;
-        self.workspace
+    /// The pit design object `arguments` names, and what it is designed with.
+    fn mcp_pit_design(&self, arguments: &Value) -> Result<(ObjectId, PitObject), String> {
+        let id = arguments["design"].as_u64().map(ObjectId).ok_or("Give design, a pit design's object id.")?;
+        let object = self
+            .workspace
             .active_document()
-            .and_then(|document| document.pit_design(PitDesignId(id)))
-            .cloned()
-            .ok_or_else(|| format!("There is no pit design with id {id}: get_pit_designs lists them."))
+            .and_then(|document| document.get_object(id))
+            .ok_or_else(|| format!("There is no design object with id {} in a loaded layer: get_pit_designs lists the pit designs.", id.0))?;
+        let (_, pit) = pit_parts(object).ok_or_else(|| format!("Object {} is a {}, not a pit design: set_pit_design with string makes a closed polyline one.", id.0, object.kind_name()))?;
+        Ok((id, pit.clone()))
     }
 
-    /// The design a design comes to, or why there is none.
-    fn mcp_pit_preview(&self, design: &PitDesign) -> Value {
-        match self.design_pit_now(&design.base, &design.settings()).and_then(|preview| preview.design) {
-            Ok(built) => summary(&built),
-            Err(reason) => json!({ "problem": no_design_message(&reason) }),
-        }
+    fn mcp_describe_pit(&self, object: &Object) -> Value {
+        let Some((verts, pit)) = pit_parts(object) else {
+            return Value::Null;
+        };
+        let settings = pit.settings();
+        let ground = settings
+            .ground()
+            .and_then(|id| self.triangulations.iter().find(|surface| surface.id == id))
+            .filter(|surface| surface.state.loaded)
+            .map(|surface| surface.geometry);
+        let surface = pit.surface.as_ref().and_then(|link| self.triangulations.iter().find(|item| item.id == link.id));
+        let layer = self.workspace.active_document().and_then(|document| document.layer(object.layer()));
+        json!({
+            "id": object.id().0,
+            "name": pit.name,
+            "layer": layer.map(|layer| json!({ "id": layer.id.0, "name": layer.name })),
+            "active": pit.scenario().map(|scenario| scenario.id.0),
+            "scenarios": pit.scenarios.iter().map(|scenario| json!({ "id": scenario.id.0, "name": scenario.name })).collect::<Vec<_>>(),
+            "fresh": pit.is_fresh(verts, ground),
+            "surface": surface.map(|item| json!({ "id": item.id.0, "name": item.name })),
+            "surface_standing": surface_standing_name(pit.surface_standing(verts, surface.map(|item| item.geometry), ground)),
+        })
     }
 
     fn mcp_get_pit_designs(&self, arguments: &Value) -> Result<Value, String> {
-        let entries = self.pit_design_entries();
-        let project = self.project_view();
-        let describe = |design: &PitDesign| {
-            let entry = entries.iter().find(|entry| entry.id == design.id);
-            let standing = crate::ui::dialogs::pit_design::standing(design, entry, &project);
-            json!({
-                "id": design.id.0,
-                "name": design.name,
-                "active": design.scenario().map(|scenario| scenario.id.0),
-                "scenarios": design.scenarios.iter().map(|scenario| json!({ "id": scenario.id.0, "name": scenario.name })).collect::<Vec<_>>(),
-                "standing": standing_name(standing),
-                "layer": entry.and_then(|entry| entry.layer.as_ref()).map(|(id, name)| json!({ "id": id.0, "name": name })),
-                "surface": entry.and_then(|entry| entry.surface.as_ref()).map(|(id, name)| json!({ "id": id.0, "name": name })),
-                "layer_edited": entry.is_some_and(|entry| entry.layer_edited),
-                "surface_edited": entry.is_some_and(|entry| entry.surface_edited),
-                "string_source": design.base_source.map(|source| source.0),
-                "string_source_changed": entry.is_some_and(|entry| entry.source_differs),
-            })
-        };
         if arguments.get("design").is_some() {
-            let design = self.mcp_pit_design(arguments)?;
-            let mut value = describe(&design);
-            value["string"] = json!(design.base.iter().map(|point| [point.x, point.y, point.z]).collect::<Vec<_>>());
+            let (id, pit) = self.mcp_pit_design(arguments)?;
+            let object = self.operand_object(id).ok_or("The design is gone.")?;
+            let mut value = self.mcp_describe_pit(object);
+            if let Some((verts, _)) = pit_parts(object) {
+                value["string"] = json!(verts.iter().map(|vertex| [vertex.pos.x, vertex.pos.y, vertex.pos.z]).collect::<Vec<_>>());
+            }
             value["scenarios"] = json!(
-                design
-                    .scenarios
+                pit.scenarios
                     .iter()
                     .map(|scenario| json!({ "id": scenario.id.0, "name": scenario.name, "settings": scenario.settings }))
                     .collect::<Vec<_>>()
             );
+            value["comes_to"] = match pit.derived.as_ref().map(|derived| &derived.outcome) {
+                Some(Outcome::Design(design)) => summary(design),
+                Some(Outcome::NotClosed) => json!({ "problem": no_design_message(&NoDesign::NotClosed) }),
+                Some(Outcome::Problem(problem)) => json!({ "problem": problem_text(*problem) }),
+                None => json!({ "problem": "Not worked out yet." }),
+            };
             return Ok(value);
         }
-        let designs = self.workspace.active_document().map(|document| document.pit_designs().designs.clone()).unwrap_or_default();
-        Ok(json!({ "designs": designs.iter().map(describe).collect::<Vec<_>>() }))
+        let designs: Vec<Value> = self
+            .workspace
+            .active_document()
+            .map(|document| document.objects().iter().filter(|object| pit_parts(object).is_some()).map(|object| self.mcp_describe_pit(object)).collect())
+            .unwrap_or_default();
+        Ok(json!({ "designs": designs }))
     }
 
-    /// A closed polyline's points, for a design's string.
-    fn mcp_closed_string(&self, arguments: &Value) -> Result<Option<(ObjectId, Vec<glam::DVec3>)>, String> {
+    /// A closed polyline's id, if `arguments` gives one.
+    fn mcp_closed_polyline(&self, arguments: &Value) -> Result<Option<ObjectId>, String> {
         let Some(id) = arguments["string"].as_u64().map(ObjectId) else {
             return Ok(None);
         };
@@ -326,50 +343,34 @@ impl App<'_> {
             .active_document()
             .and_then(|document| document.get_object(id))
             .ok_or_else(|| format!("There is no design object with id {} in a loaded layer.", id.0))?;
-        let points = object
-            .tessellated_path()
-            .filter(|(points, closed)| *closed && points.len() >= 3)
-            .map(|(points, _)| points)
-            .ok_or("The string must be a closed polyline round some area.")?;
-        Ok(Some((id, points)))
+        if !(matches!(object, Object::Polyline { .. }) && object.encloses_area()) {
+            return Err(format!("Object {} is a {}: a pit design is made from a closed polyline round some area.", id.0, object.kind_name()));
+        }
+        Ok(Some(id))
     }
 
     fn mcp_set_pit_design(&mut self, arguments: &Value) -> Result<Value, String> {
-        let string = self.mcp_closed_string(arguments)?;
-        let mut design = if arguments.get("design").is_some() {
-            let mut design = self.mcp_pit_design(arguments)?;
-            if let Some((source, base)) = string {
-                design.base = base;
-                design.base_source = Some(source);
-                for scenario in &mut design.scenarios {
-                    scenario.settings.ramp_start = None;
-                }
+        let (id, mut pit) = match (arguments.get("design").is_some(), self.mcp_closed_polyline(arguments)?) {
+            (true, None) => self.mcp_pit_design(arguments)?,
+            (false, Some(string)) => {
+                self.make_pit_design(string, arguments["name"].as_str().map(str::to_owned), None)
+                    .map_err(|error| format!("{error:#}"))?;
+                self.mcp_pit_design(&json!({ "design": string.0 }))?
             }
-            design
-        } else {
-            let (source, _) = string.ok_or("A new design needs string, a closed polyline's id.")?;
-            if !self.activate_project_for_object(source) {
-                return Err("The string's project could not be made the active one.".to_owned());
-            }
-            let name = arguments["name"].as_str().map(str::to_owned);
-            let id = self.create_pit_design(source, name, None).map_err(|error| format!("{error:#}"))?;
-            self.workspace
-                .active_document()
-                .and_then(|document| document.pit_design(id))
-                .cloned()
-                .ok_or("The new design was not kept.")?
+            (true, Some(_)) => return Err("Give design to change a pit design, or string to make one, not both.".to_owned()),
+            (false, None) => return Err("Give design, a pit design's id, or string, a closed polyline to make one.".to_owned()),
         };
         if let Some(name) = arguments["name"].as_str() {
-            design.name = name.to_owned();
+            pit.name = name.to_owned();
         }
         if let Some(active) = arguments["active"].as_u64().map(ScenarioId) {
-            if !design.scenarios.iter().any(|scenario| scenario.id == active) {
+            if !pit.scenarios.iter().any(|scenario| scenario.id == active) {
                 return Err(format!("The design has no scenario with id {}.", active.0));
             }
-            design.active = active;
+            pit.active = active;
         }
-        let target = arguments["scenario"].as_u64().map(ScenarioId).or_else(|| design.scenario().map(|scenario| scenario.id));
-        let scenario = design
+        let target = arguments["scenario"].as_u64().map(ScenarioId).or_else(|| pit.scenario().map(|scenario| scenario.id));
+        let scenario = pit
             .scenarios
             .iter_mut()
             .find(|scenario| Some(scenario.id) == target)
@@ -382,77 +383,48 @@ impl App<'_> {
             merge_patch(&mut value, patch);
             scenario.settings = serde_json::from_value(value).map_err(|error| format!("The settings do not fit a pit design scenario: {error}"))?;
         }
-        let id = design.id;
-        self.replace_pit_design(design.clone());
-        Ok(json!({ "design": id.0, "comes_to": self.mcp_pit_preview(&design) }))
+        let design = self.set_pit_now(id, pit).map_err(|error| format!("{error:#}"))?;
+        Ok(json!({ "design": id.0, "comes_to": comes_to(&design) }))
     }
 
     fn mcp_manage_pit_design(&mut self, arguments: &Value) -> Result<Value, String> {
-        let mut design = self.mcp_pit_design(arguments)?;
-        let id = design.id;
+        let (id, mut pit) = self.mcp_pit_design(arguments)?;
         match arguments["action"].as_str().unwrap_or_default() {
-            "delete" => {
-                self.delete_pit_design(id);
-                Ok(json!({ "deleted": id.0 }))
-            }
-            "duplicate" => {
-                let before: Vec<PitDesignId> = self.active_pit_design_ids();
-                self.duplicate_pit_design(id);
-                let new = self.active_pit_design_ids().into_iter().find(|candidate| !before.contains(candidate)).ok_or("The copy was not made.")?;
-                Ok(json!({ "design": new.0 }))
-            }
-            "update_string" => {
-                let source = design.base_source.ok_or("The design's string was not copied from a polyline in this project.")?;
-                let points = self
-                    .mcp_closed_string(&json!({ "string": source.0 }))?
-                    .map(|(_, points)| points)
-                    .ok_or("The polyline the string came from is gone.")?;
-                design.base = points;
-                self.replace_pit_design(design.clone());
-                Ok(json!({ "design": id.0, "comes_to": self.mcp_pit_preview(&design) }))
+            "explode" => {
+                let ids = self.explode_pit_design(id).map_err(|error| format!("{error:#}"))?;
+                Ok(json!({ "polylines": ids.iter().map(|id| id.0).collect::<Vec<_>>() }))
             }
             "add_scenario" => {
                 let name = arguments["name"]
                     .as_str()
                     .map(str::to_owned)
-                    .unwrap_or_else(|| crate::i18n::tr!("pit-design-scenario-copy-name", name = design.scenario().map(|scenario| scenario.name.clone()).unwrap_or_default()));
-                let scenario = design.add_scenario(name);
-                self.replace_pit_design(design);
-                Ok(json!({ "design": id.0, "scenario": scenario.0 }))
+                    .unwrap_or_else(|| crate::i18n::tr!("pit-design-scenario-copy-name", name = pit.scenario().map(|scenario| scenario.name.clone()).unwrap_or_default()));
+                let scenario = pit.add_scenario(name);
+                let design = self.set_pit_now(id, pit).map_err(|error| format!("{error:#}"))?;
+                Ok(json!({ "design": id.0, "scenario": scenario.0, "comes_to": comes_to(&design) }))
             }
             "remove_scenario" => {
                 if let Some(scenario) = arguments["scenario"].as_u64().map(ScenarioId) {
-                    if !design.scenarios.iter().any(|candidate| candidate.id == scenario) {
+                    if !pit.scenarios.iter().any(|candidate| candidate.id == scenario) {
                         return Err(format!("The design has no scenario with id {}.", scenario.0));
                     }
-                    design.active = scenario;
+                    pit.active = scenario;
                 }
-                if !design.remove_scenario() {
+                if !pit.remove_scenario() {
                     return Err("A design keeps at least one scenario.".to_owned());
                 }
-                let active = design.active;
-                self.replace_pit_design(design);
-                Ok(json!({ "design": id.0, "active": active.0 }))
+                let active = pit.active;
+                let design = self.set_pit_now(id, pit).map_err(|error| format!("{error:#}"))?;
+                Ok(json!({ "design": id.0, "active": active.0, "comes_to": comes_to(&design) }))
             }
-            other => Err(format!("action is delete, duplicate, update_string, add_scenario or remove_scenario, not {other}.")),
+            other => Err(format!("action is explode, add_scenario or remove_scenario, not {other}.")),
         }
     }
 
-    fn mcp_build_pit_design(&mut self, arguments: &Value) -> Result<Value, String> {
-        let design = self.mcp_pit_design(arguments)?;
-        let comes_to = match self.design_pit_now(&design.base, &design.settings()).and_then(|preview| preview.design) {
-            Ok(built) => built,
-            Err(reason) => return Err(no_design_message(&reason)),
-        };
-        let mut result = json!({ "design": design.id.0, "comes_to": summary(&comes_to) });
-        if arguments["preview"].as_bool().unwrap_or(false) {
-            return Ok(result);
-        }
-        if comes_to.benches == 0 {
-            return Err(format!("Not even one bench fits: {}", end_text(&comes_to)));
-        }
+    fn mcp_build_pit_surface(&mut self, arguments: &Value) -> Result<Value, String> {
+        let (id, _) = self.mcp_pit_design(arguments)?;
         let before = self.running_task_tickets();
-        self.build_pit_design(design.id).map_err(|error| format!("{error:#}"))?;
+        self.build_pit_surface(id).map_err(|error| format!("{error:#}"))?;
         let tasks: Vec<Value> = self
             .background_tasks
             .reported
@@ -460,31 +432,34 @@ impl App<'_> {
             .filter(|task| !before.contains(&task.ticket))
             .map(|task| json!({ "id": task.ticket.0, "task": task.label.trim_end_matches(['.', '…', ' ']) }))
             .collect();
-        result["tasks"] = json!(tasks);
-        result["note"] = json!("The layer and surface go in together once the build finishes: get_tasks follows it, and get_pit_designs says what it made.");
-        Ok(result)
+        Ok(json!({ "design": id.0, "tasks": tasks, "note": "The surface goes in once it is built: get_tasks follows it, and get_pit_designs says what it made." }))
     }
 
     fn mcp_design_pit(&mut self, arguments: &Value) -> Result<Value, String> {
         let settings = one_call_settings(arguments)?;
-        let (source, base) = self.mcp_closed_string(arguments)?.ok_or("design_pit needs string, a closed polyline's id.")?;
-        let comes_to = match self.design_pit_now(&base, &settings).and_then(|preview| preview.design) {
+        let string = self.mcp_closed_polyline(arguments)?.ok_or("design_pit needs string, a closed polyline's id.")?;
+        let verts = match self.operand_object(string) {
+            Some(Object::Polyline { verts, .. }) => verts.clone(),
+            _ => return Err("design_pit needs string, a closed polyline's id.".to_owned()),
+        };
+        let design = self.design_pit_now(&verts, &settings).and_then(|preview| preview.design);
+        let built = match &design {
             Ok(built) => built,
-            Err(reason) => return Err(no_design_message(&reason)),
+            Err(reason) => return Err(no_design_message(reason)),
         };
         if arguments["preview"].as_bool().unwrap_or(false) {
-            return Ok(summary(&comes_to));
+            return Ok(summary(built));
         }
-        if comes_to.benches == 0 {
-            return Err(format!("Not even one bench fits: {}", end_text(&comes_to)));
+        if built.benches == 0 {
+            return Err(format!("Not even one bench fits: {}", end_text(built)));
         }
-        if !self.activate_project_for_object(source) {
-            return Err("The string's project could not be made the active one.".to_owned());
+        self.make_pit_design(string, arguments["name"].as_str().map(str::to_owned), Some(settings))
+            .map_err(|error| format!("{error:#}"))?;
+        let mut result = json!({ "design": string.0, "comes_to": comes_to(&design) });
+        if arguments["surface"].as_bool().unwrap_or(false) {
+            let built = self.mcp_build_pit_surface(&json!({ "design": string.0 }))?;
+            result["tasks"] = built["tasks"].clone();
         }
-        let name = arguments["name"].as_str().map(str::to_owned);
-        let id = self.create_pit_design(source, name, Some(settings)).map_err(|error| format!("{error:#}"))?;
-        let mut result = self.mcp_build_pit_design(&json!({ "design": id.0 }))?;
-        result["design"] = json!(id.0);
         Ok(result)
     }
 }

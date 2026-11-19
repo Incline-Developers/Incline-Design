@@ -276,6 +276,11 @@ impl App<'_> {
                     fill.inspect(|fill| *object_fill = *fill);
                     weight.inspect(|weight| *line_weight = *weight);
                 }
+                // Always closed, never filled: its benches draw inside it.
+                Object::PitDesign { color, line_weight, .. } => {
+                    colour.inspect(|colour| *color = *colour);
+                    weight.inspect(|weight| *line_weight = *weight);
+                }
             }
             if let Err(error) = after.validate_geometry() {
                 return failed(format!("Design object {}: {error}", before.id().0));

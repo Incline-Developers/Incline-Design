@@ -167,7 +167,7 @@ fn drape_object(object: &mut Object, surfaces: &[&OpenTriangulation]) -> (usize,
         // Refused before it gets here; a circle has no vertices to drape and
         // draping its centre alone would move the shape, not lay it down.
         Object::Circle { .. } => {}
-        Object::Polyline { verts, .. } => {
+        Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => {
             for vertex in verts {
                 drape_point(&mut vertex.pos);
             }

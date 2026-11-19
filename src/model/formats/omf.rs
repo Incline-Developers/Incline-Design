@@ -87,8 +87,6 @@ const META_SOLIDS: &str = "incline:solids";
 /// planning metadata beside it so a future shape change can be read back
 /// deliberately rather than guessed at.
 const META_HAULAGE: &str = "incline:haulage";
-/// Designs element: the project's pit designs.
-const META_PIT_DESIGNS: &str = "incline:pit-designs";
 const META_SCHEDULE: &str = "incline:schedule";
 /// The latest calculated schedule's decisions: see
 /// [`crate::model::schedule::optimisation::blended::saved`].
@@ -138,7 +136,6 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_SCHEDULE,
     META_SCHEDULE_RESULT,
     META_HAULAGE,
-    META_PIT_DESIGNS,
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_ARRAY_ITEMS: u64 = u32::MAX as u64;
@@ -754,9 +751,6 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
     if !document.haulage().is_pristine() {
         put(&mut element, META_HAULAGE, serde_json::to_value(document.haulage().local_copy())?);
     }
-    if !document.pit_designs().designs.is_empty() {
-        put(&mut element, META_PIT_DESIGNS, serde_json::to_value(document.pit_designs().local_copy())?);
-    }
     let schedule = document.schedule();
     if !schedule.is_pristine() {
         put(
@@ -849,6 +843,16 @@ enum DesignRecord {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         hidden: bool,
     },
+    /// Its string comes from the object's run of segments, always closed;
+    /// what it is designed with, and its benches as worked out, are here.
+    PitDesign {
+        id: u64,
+        color: ObjectColor,
+        line_weight: f32,
+        pit: Box<crate::model::pit_design::object::PitObject>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
+    },
 }
 
 /// One layer's objects as a composite of at most two elements: every polyline
@@ -909,6 +913,25 @@ fn write_design_layer<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writ
                     color,
                     fill: *fill,
                     line_weight: *line_weight,
+                    hidden,
+                });
+            }
+            Object::PitDesign { verts, line_weight, pit, .. } => {
+                if verts.len() < 3 {
+                    bail!(tr!("err-omf-polyline-too-few-vertices", id = id.to_string(), layer = layer.name.to_string()));
+                }
+                let first = line_vertices.len() as u32;
+                let count = verts.len() as u32;
+                line_vertices.extend(verts.iter().map(|vertex| vertex.pos.to_array()));
+                segments.extend((0..count - 1).map(|index| [first + index, first + index + 1]));
+                segments.push([first + count - 1, first]);
+                bulges.extend(verts.iter().map(|vertex| Some(vertex.bulge)));
+                segment_objects.extend(std::iter::repeat_n(Some(id as i64), verts.len()));
+                records.push(DesignRecord::PitDesign {
+                    id,
+                    color,
+                    line_weight: *line_weight,
+                    pit: pit.clone(),
                     hidden,
                 });
             }
@@ -2696,12 +2719,6 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 Err(error) => unreadable(&tr!("err-omf-part-haulage"), format!("{error:#}")),
             }
         }
-        if let Some(value) = element.metadata.get(META_PIT_DESIGNS).cloned() {
-            match serde_json::from_value::<crate::model::pit_design::item::PitDesigns>(value) {
-                Ok(designs) => document.restore_pit_designs(designs),
-                Err(error) => unreadable(&tr!("err-omf-part-pit-designs"), error.to_string()),
-            }
-        }
         if let Some(value) = element.metadata.get(META_SCHEDULE).cloned() {
             // A schedule is refused whole rather than defaulted: a dig rate
             // that failed to parse must not come back as a plausible-looking
@@ -2793,6 +2810,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             let (id, hidden) = match &record {
                 DesignRecord::Point { id, hidden, .. }
                 | DesignRecord::Polyline { id, hidden, .. }
+                | DesignRecord::PitDesign { id, hidden, .. }
                 | DesignRecord::Circle { id, hidden, .. }
                 | DesignRecord::Text { id, hidden, .. } => (*id, *hidden),
             };
@@ -2850,6 +2868,37 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                         color,
                         fill,
                         line_weight,
+                    }
+                }
+                DesignRecord::PitDesign { color, line_weight, pit, .. } => {
+                    let run = take_run()?;
+                    let run_segments = &segments[run.clone()];
+                    let first = run_segments[0][0];
+                    let count = run_segments.len();
+                    let closed = count >= 3 && run_segments[count - 1] == [first + count as u32 - 1, first];
+                    let sequential = run_segments[..count - 1]
+                        .iter()
+                        .enumerate()
+                        .all(|(index, segment)| *segment == [first + index as u32, first + index as u32 + 1]);
+                    let vertices = line_vertices.get(first as usize..first as usize + count);
+                    let (true, true, Some(vertices)) = (closed, sequential, vertices) else {
+                        bail!(tr!("err-omf-design-polyline-not-continuous", id = id.to_string()));
+                    };
+                    let bulge = |index: usize| bulges.as_ref().and_then(|bulges| bulges.get(run.start + index).copied().flatten()).unwrap_or(0.0);
+                    let verts: Vec<PolyVertex> = vertices.iter().enumerate().map(|(index, pos)| PolyVertex { pos: *pos, bulge: bulge(index) }).collect();
+                    let mut pit = pit;
+                    // Its string came offset by the file's origin; what it
+                    // holds in coordinates moves with it.
+                    if self.project_origin != DVec3::ZERO {
+                        pit.translate(self.project_origin, &verts);
+                    }
+                    Object::PitDesign {
+                        id: object_id,
+                        layer,
+                        verts,
+                        color,
+                        line_weight,
+                        pit,
                     }
                 }
                 DesignRecord::Polyline { color, fill, line_weight, .. } => {

@@ -845,7 +845,7 @@ impl<'a> Graphics<'a> {
             if let Some((target_id, point)) = editor.move_vertex_target {
                 if let Some(obj) = document.get_object(target_id) {
                     match (obj, point) {
-                        (Object::Polyline { verts, .. }, crate::model::ObjectPoint::Vertex(vertex_index)) => {
+                        (Object::Polyline { verts, .. } | Object::PitDesign { verts, .. }, crate::model::ObjectPoint::Vertex(vertex_index)) => {
                             if let Some(vertex) = verts.get(vertex_index) {
                                 sum += vertex.pos;
                                 count += 1;
@@ -868,7 +868,7 @@ impl<'a> Graphics<'a> {
                         && let Some(obj) = document.get_object(id)
                     {
                         match obj {
-                            Object::Polyline { verts, .. } => {
+                            Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => {
                                 for vertex in verts {
                                     sum += vertex.pos;
                                     count += 1;

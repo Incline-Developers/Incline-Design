@@ -570,47 +570,6 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
     });
 }
 
-/// The project's pit designs, under its design layers: a click opens one in
-/// Pit Design, and its menu builds, copies or deletes it.
-fn pit_design_rows(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
-    use crate::model::pit_design::item::Standing;
-    for design in &project.pit_designs {
-        let title = match design.standing {
-            Standing::OutOfDate => tr!("pit-design-row-out-of-date", name = design.name.clone()),
-            Standing::NotBuilt => tr!("pit-design-row-not-built", name = design.name.clone()),
-            Standing::Current => design.name.clone(),
-        };
-        let row = ExplorerEntry::new(egui::Id::unique(("explorer_pit_design", design.id)), entry_label(&title, true))
-            .leading_icon(unthemed_icon!("solid_pit.svg"), HEADER_DESIGNS)
-            .show(ui);
-        let response = row.response;
-        if response.clicked() {
-            commands.push(UiCommand::OpenPitDesignItem(design.id));
-        }
-        context_menu_popup(&response, design.name.clone(), |ui| {
-            if ContextMenuAction::new(tr!("pit-design-open")).show(ui).clicked() {
-                commands.push(UiCommand::OpenPitDesignItem(design.id));
-                ui.close();
-            }
-            let built = design.layer.is_some() || design.surface.is_some();
-            let build = if built { tr!("pit-design-rebuild") } else { tr!("pit-design-build") };
-            if ContextMenuAction::new(build).show(ui).clicked() {
-                commands.push(UiCommand::BuildPitDesign(design.id));
-                ui.close();
-            }
-            if ContextMenuAction::new(tr!("explorer-duplicate")).show(ui).clicked() {
-                commands.push(UiCommand::DuplicatePitDesign(design.id));
-                ui.close();
-            }
-            context_menu_separator(ui);
-            if ContextMenuAction::new(tr!("pit-design-delete")).show(ui).clicked() {
-                commands.push(UiCommand::DeletePitDesign(design.id));
-                ui.close();
-            }
-        });
-    }
-}
-
 /// One list of rows a section draws: the entries, and how to draw one.
 ///
 /// A section hands `draw_section_body` one of these per kind it admits, so a
@@ -1062,7 +1021,6 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     },
                 };
                 draw_section_body::<(LayerDrag,)>(ui, SectionKind::Designs, design_folders, commands, &mut rows, &mut [&mut design_layers]);
-                pit_design_rows(ui, project, commands);
             });
         let designs_row = designs_header_toggle.union(designs_header.inner);
         attach_header_drop::<(LayerDrag,)>(ui, &designs_row, SectionKind::Designs, commands);

@@ -2312,7 +2312,6 @@ impl<'a> App<'a> {
             (triangulation.state.loaded && !self.editor.hidden_handles.contains(&triangulation.entity_id())).hash(&mut hasher);
             triangulation.raster_texture.hash(&mut hasher);
             triangulation.color.map(f32::to_bits).hash(&mut hasher);
-            triangulation.geometry.hash(&mut hasher);
             triangulation.state.hash_row(&mut hasher);
         }
 
@@ -2457,7 +2456,6 @@ impl<'a> App<'a> {
                 color: tri.color,
                 folder: tri.state.folder,
                 section: tri.state.section,
-                geometry: tri.geometry,
             })
             .collect::<Vec<_>>();
         let mut block_models = self
@@ -2619,7 +2617,6 @@ impl<'a> App<'a> {
             active_triangulation_for_menu,
             schedule: self.workspace.active_document().map(|document| document.schedule().clone()).unwrap_or_default(),
             haulage: self.workspace.active_document().map(|document| document.haulage().clone()).unwrap_or_default(),
-            pit_designs: self.pit_design_entries(),
             haul_points: self.workspace.active_document().map(|document| self.haul_destination_points(document)).unwrap_or_default(),
             haul_destinations: self
                 .workspace

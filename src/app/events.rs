@@ -2067,5 +2067,6 @@ impl App<'_> {
         self.sync_animation_frame();
         self.sync_water();
         self.sync_page_locks();
+        self.refresh_pit_designs();
     }
 }

@@ -205,9 +205,8 @@ impl<'a> App<'a> {
                 | UiCommand::SetReserveMapping { .. }
                 | UiCommand::SetReserveModelIncluded { .. }
                 | UiCommand::AddSolid { .. }
-                | UiCommand::BuildPitDesign(_)
-                | UiCommand::DeletePitDesign(_)
-                | UiCommand::DuplicatePitDesign(_)
+                | UiCommand::BuildPitSurface(_)
+                | UiCommand::ExplodePitDesign(_)
                 | UiCommand::DeleteSolid(_)
                 | UiCommand::SaveSolidPreviewToProject
                 | UiCommand::UpdateSolid { .. }
@@ -1410,23 +1409,8 @@ impl<'a> App<'a> {
                 self.close_pit_design();
                 Ok(())
             }
-            UiCommand::OpenPitDesignItem(id) => {
-                self.open_pit_design_item(id);
-                Ok(())
-            }
-            UiCommand::UpdatePitDesignString => {
-                self.update_pit_design_string();
-                Ok(())
-            }
-            UiCommand::BuildPitDesign(id) => self.build_pit_design(id),
-            UiCommand::DeletePitDesign(id) => {
-                self.delete_pit_design(id);
-                Ok(())
-            }
-            UiCommand::DuplicatePitDesign(id) => {
-                self.duplicate_pit_design(id);
-                Ok(())
-            }
+            UiCommand::BuildPitSurface(id) => self.build_pit_surface(id),
+            UiCommand::ExplodePitDesign(id) => self.explode_pit_design(id).map(|_| ()),
             UiCommand::BeginPitRampStartPick => {
                 self.begin_pit_ramp_start_pick();
                 Ok(())

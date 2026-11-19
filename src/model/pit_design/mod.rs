@@ -18,12 +18,12 @@
 //! Places on a ring are found again on the next by where each point of the
 //! next was offset from (`ring::Ring::sources`).
 
-pub(crate) mod item;
+pub(crate) mod object;
 pub(crate) mod ring;
 pub(crate) mod road;
 pub(crate) mod settings;
 #[cfg(test)]
-mod item_tests;
+mod object_tests;
 #[cfg(test)]
 mod tests;
 
@@ -142,7 +142,8 @@ impl Spec {
 }
 
 /// Why settings cannot make a design.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum Problem {
     BenchHeight,
     FaceAngle,
@@ -157,7 +158,8 @@ pub(crate) enum Problem {
     StopElevation,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum StringKind {
     Toe,
     Crest,
@@ -165,7 +167,19 @@ pub(crate) enum StringKind {
     RampCentreline,
 }
 
-#[derive(Clone, Debug)]
+impl StringKind {
+    /// The colour a string is drawn in, by what it is.
+    pub(crate) fn colour(self) -> [f32; 4] {
+        match self {
+            Self::Toe => [0.30, 0.60, 0.95, 1.0],
+            Self::Crest => [0.90, 0.35, 0.25, 1.0],
+            Self::RampEdge => [0.35, 0.80, 0.40, 1.0],
+            Self::RampCentreline => [0.62, 0.66, 0.62, 1.0],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DesignString {
     pub(crate) kind: StringKind,
     pub(crate) points: Vec<DVec3>,
@@ -173,7 +187,7 @@ pub(crate) struct DesignString {
 }
 
 /// What one bench came to, for checking against what was asked.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BenchReport {
     /// The RL it starts from.
     pub(crate) elevation: f64,
@@ -184,7 +198,7 @@ pub(crate) struct BenchReport {
 }
 
 /// What a bench's stretch of ramp came to.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RampReport {
     /// Its rise over its run along its steeper edge, from where it leaves to
     /// where it arrives.
@@ -204,7 +218,8 @@ pub(crate) struct RampReport {
 }
 
 /// Why a design ended where it did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum End {
     /// Every bench asked for was built.
     Complete,
@@ -218,7 +233,7 @@ pub(crate) enum End {
     LeftGround,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Design {
     pub(crate) strings: Vec<DesignString>,
     pub(crate) benches: u32,
@@ -259,6 +274,24 @@ impl Design {
     /// The RL of the last ring built.
     pub(crate) fn final_elevation(&self) -> f64 {
         self.levels.last().copied().unwrap_or_default()
+    }
+
+    /// The same design moved by `delta`: a design moves with its string.
+    pub(crate) fn translated(&self, delta: DVec3) -> Self {
+        let mut moved = self.clone();
+        for string in &mut moved.strings {
+            for point in &mut string.points {
+                *point += delta;
+            }
+        }
+        for level in &mut moved.levels {
+            *level += delta.z;
+        }
+        for bench in &mut moved.report {
+            bench.elevation += delta.z;
+        }
+        moved.ramp_exit = moved.ramp_exit.map(|exit| exit + delta);
+        moved
     }
 }
 

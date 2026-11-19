@@ -1,0 +1,198 @@
+//! A pit design object: what it holds survives saving, its scenarios add and
+//! remove as the window and MCP do them, it says truly whether its benches
+//! and surface still match it, and it moves and explodes whole.
+
+use glam::{DVec2, DVec3};
+
+use super::{
+    Base, DesignString, StringKind, design,
+    object::{Derived, Outcome, PitObject, ScenarioId, SurfaceLink, SurfaceStanding, inputs_key},
+    settings::{PitDesignSettings, StopMode},
+};
+use crate::model::{
+    LayerId, Object, ObjectColor, ObjectId, PolyVertex,
+    triangulation::{GeometryVersion, TriangulationId},
+};
+
+fn square(level: f64) -> Vec<PolyVertex> {
+    [(0.0, 0.0), (300.0, 0.0), (300.0, 200.0), (0.0, 200.0)]
+        .into_iter()
+        .map(|(x, y)| PolyVertex::straight(DVec3::new(x, y, level)))
+        .collect()
+}
+
+fn settings() -> PitDesignSettings {
+    PitDesignSettings {
+        benches: 3,
+        ramp_start: Some(DVec2::new(300.0, 100.0)),
+        ..PitDesignSettings::default()
+    }
+}
+
+/// A pit design object on `verts`, its design worked out.
+fn pit_object(verts: Vec<PolyVertex>, settings: PitDesignSettings) -> Object {
+    let mut pit = PitObject::new("North pit".to_owned(), "Base case".to_owned(), settings.clone());
+    let points: Vec<DVec3> = verts.iter().map(|vertex| vertex.pos).collect();
+    let base = Base::from_points(&points).expect("a closed string");
+    let spec = settings.spec(points[0].truncate());
+    let worked = design(&base, &spec, None, &|| false).expect("a design");
+    pit.derived = Some(Derived {
+        inputs: inputs_key(&verts, &settings),
+        ground: None,
+        outcome: Outcome::Design(Box::new(worked)),
+    });
+    Object::PitDesign {
+        id: ObjectId(7),
+        layer: LayerId(1),
+        verts,
+        color: ObjectColor::ByLayer,
+        line_weight: 1.0,
+        pit: Box::new(pit),
+    }
+}
+
+fn parts(object: &Object) -> (&[PolyVertex], &PitObject) {
+    match object {
+        Object::PitDesign { verts, pit, .. } => (verts, pit),
+        _ => panic!("not a pit design"),
+    }
+}
+
+#[test]
+fn saves_and_reads_back_whole() {
+    let mut object = pit_object(square(100.0), settings());
+    if let Object::PitDesign { pit, .. } = &mut object {
+        pit.add_scenario("Steeper".to_owned());
+        pit.scenario_mut().expect("a scenario").settings.face_angle = 75.0;
+        pit.surface = Some(SurfaceLink {
+            id: TriangulationId(9),
+            inputs: 3,
+            ground: None,
+            trimmed: false,
+            geometry: GeometryVersion::mint(),
+        });
+    }
+    let json = serde_json::to_string(&object).expect("an object serialises");
+    let read: Object = serde_json::from_str(&json).expect("and reads back");
+    assert_eq!(read, object);
+    // Settings missing from a file read as their defaults; unknown ones are refused.
+    let partial: PitDesignSettings = serde_json::from_str(r#"{"bench_height": 10.0}"#).expect("partial settings read");
+    assert_eq!(partial.bench_height, 10.0);
+    assert_eq!(partial.face_angle, PitDesignSettings::default().face_angle);
+    assert!(serde_json::from_str::<PitDesignSettings>(r#"{"bench_hieght": 10.0}"#).is_err());
+}
+
+#[test]
+fn scenarios_copy_and_remove() {
+    let mut pit = PitObject::new("Pit".to_owned(), "Base case".to_owned(), settings());
+    let base = pit.active;
+    pit.scenario_mut().expect("a scenario").settings.berm_width = 12.0;
+    let copy = pit.add_scenario("Copy".to_owned());
+    assert_eq!(pit.active, copy, "a copy becomes the active scenario");
+    assert_eq!(pit.settings().berm_width, 12.0, "with the settings it was copied from");
+    pit.scenario_mut().expect("a scenario").settings.berm_width = 6.0;
+    assert_eq!(pit.scenarios.iter().find(|scenario| scenario.id == base).map(|scenario| scenario.settings.berm_width), Some(12.0));
+    assert!(pit.remove_scenario());
+    assert_eq!(pit.active, base);
+    assert!(!pit.remove_scenario(), "a design keeps one scenario");
+    pit.active = ScenarioId(99);
+    assert_eq!(pit.scenario().map(|scenario| scenario.id), Some(base), "an active id naming no scenario falls back to the first");
+}
+
+#[test]
+fn says_when_its_benches_are_stale() {
+    let object = pit_object(square(100.0), settings());
+    let (verts, pit) = parts(&object);
+    assert!(pit.is_fresh(verts, None));
+    let mut moved_vertex = verts.to_vec();
+    moved_vertex[1].pos.x += 5.0;
+    assert!(!pit.is_fresh(&moved_vertex, None), "an edited string makes the design stale");
+    let mut changed = pit.clone();
+    changed.scenario_mut().expect("a scenario").settings.bench_height = 10.0;
+    assert!(!changed.is_fresh(verts, None), "so does a changed setting");
+    let mut switched = pit.clone();
+    switched.add_scenario("Other".to_owned());
+    switched.scenario_mut().expect("a scenario").settings.berm_width = 3.0;
+    assert!(!switched.is_fresh(verts, None), "and another scenario made active");
+
+    // Against ground, the ground's version counts too; without, it does not.
+    assert!(pit.is_fresh(verts, Some(GeometryVersion::mint())));
+    let mut daylit = pit.clone();
+    {
+        let settings = &mut daylit.scenario_mut().expect("a scenario").settings;
+        settings.stop = StopMode::Daylight;
+        settings.topography = Some(TriangulationId(4));
+    }
+    let ground = GeometryVersion::mint();
+    daylit.derived = Some(Derived {
+        inputs: inputs_key(verts, &daylit.settings()),
+        ground: Some(ground),
+        outcome: Outcome::NotClosed,
+    });
+    assert!(daylit.is_fresh(verts, Some(ground)));
+    assert!(!daylit.is_fresh(verts, Some(GeometryVersion::mint())), "the ground edited since");
+}
+
+#[test]
+fn moves_whole() {
+    let mut object = pit_object(square(100.0), settings());
+    let before = object.clone();
+    let delta = DVec3::new(50.0, -20.0, 5.0);
+    object.translate(delta);
+    let (verts, pit) = parts(&object);
+    assert!(pit.is_fresh(verts, None), "a design that does not daylight moves with its string, still current");
+    assert_eq!(pit.settings().ramp_start, Some(DVec2::new(350.0, 80.0)), "its ramp start moves with it");
+    let moved = pit.design().expect("a design");
+    let original = parts(&before).1.design().expect("a design");
+    assert_eq!(moved.strings[1].points[0], original.strings[1].points[0] + delta);
+    assert_eq!(moved.final_elevation(), original.final_elevation() + delta.z);
+}
+
+#[test]
+fn surface_standing_follows_design_and_edits() {
+    let object = pit_object(square(100.0), settings());
+    let (verts, pit) = parts(&object);
+    assert_eq!(pit.surface_standing(verts, None, None), SurfaceStanding::NotBuilt);
+    let geometry = GeometryVersion::mint();
+    let mut built = pit.clone();
+    built.surface = Some(SurfaceLink {
+        id: TriangulationId(2),
+        inputs: inputs_key(verts, &pit.settings()),
+        ground: None,
+        trimmed: pit.settings().trims(),
+        geometry,
+    });
+    assert_eq!(built.surface_standing(verts, Some(geometry), None), SurfaceStanding::Current);
+    assert_eq!(built.surface_standing(verts, None, None), SurfaceStanding::NotBuilt, "the surface deleted");
+    assert_eq!(built.surface_standing(verts, Some(GeometryVersion::mint()), None), SurfaceStanding::Edited);
+    let mut changed = built.clone();
+    changed.scenario_mut().expect("a scenario").settings.berm_width = 3.0;
+    assert_eq!(changed.surface_standing(verts, Some(geometry), None), SurfaceStanding::OutOfDate);
+}
+
+#[test]
+fn draws_and_explodes_as_its_strings() {
+    let object = pit_object(square(100.0), settings());
+    let (verts, pit) = parts(&object);
+    let design = pit.design().expect("a design");
+    // Its own string stands for the design's first ring.
+    assert_eq!(object.pit_strings(), &design.strings[1..]);
+    let polylines = object.pit_polylines();
+    assert_eq!(polylines.len(), design.strings.len());
+    match &polylines[0] {
+        Object::Polyline { verts: first, closed, .. } => {
+            assert_eq!(first.as_slice(), verts, "the string comes first, as it was");
+            assert!(closed);
+        }
+        _ => panic!("a polyline"),
+    }
+    let ramp = design.strings.iter().position(|string: &DesignString| string.kind == StringKind::RampEdge).expect("a ramp");
+    match &polylines[ramp] {
+        Object::Polyline { color, closed, .. } => {
+            assert_eq!(*color, ObjectColor::Fixed(StringKind::RampEdge.colour()));
+            assert!(!closed);
+        }
+        _ => panic!("a polyline"),
+    }
+    assert!(polylines.iter().all(|polyline| polyline.id() == object.id() && polyline.layer() == object.layer()));
+}

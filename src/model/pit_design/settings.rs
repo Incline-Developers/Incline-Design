@@ -44,8 +44,8 @@ pub(crate) struct PitDesignSettings {
     pub(crate) stop_elevation: f64,
     /// The ground a design built up daylights against.
     pub(crate) topography: Option<TriangulationId>,
-    /// Whether building the design also builds its surface.
-    pub(crate) surface: bool,
+    /// Whether its surface is trimmed to the topography it daylights
+    /// against.
     pub(crate) trim_to_topography: bool,
 }
 
@@ -69,7 +69,6 @@ impl Default for PitDesignSettings {
             benches: 8,
             stop_elevation: 0.0,
             topography: None,
-            surface: true,
             trim_to_topography: true,
         }
     }
@@ -122,6 +121,6 @@ impl PitDesignSettings {
     /// Whether the surface is trimmed to the topography: only a design that
     /// daylights against one is.
     pub(crate) fn trims(&self) -> bool {
-        self.surface && self.trim_to_topography && self.ground().is_some()
+        self.trim_to_topography && self.ground().is_some()
     }
 }

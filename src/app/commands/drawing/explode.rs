@@ -24,6 +24,13 @@ impl<'a> App<'a> {
             return;
         }
         self.editor.tool_highlight_id = None;
+        // A pit design explodes into the polylines it draws.
+        if matches!(self.active_document().get_object(object_id), Some(Object::PitDesign { .. })) {
+            if let Err(error) = self.explode_pit_design(object_id) {
+                crate::userspace_error!("{error:#}");
+            }
+            return;
+        }
         self.explode_polyline(object_id);
     }
 
@@ -36,7 +43,7 @@ impl<'a> App<'a> {
                     .workspace
                     .active_document()
                     .and_then(|document| document.get_object(id))
-                    .is_some_and(|object| matches!(object, Object::Polyline { .. })) =>
+                    .is_some_and(|object| matches!(object, Object::Polyline { .. } | Object::PitDesign { .. })) =>
             {
                 Some(id)
             }

@@ -624,6 +624,24 @@ fn object_json(document: &Document, object: &Object) -> Value {
         Object::Text {
             pos, content, height, rotation, ..
         } => json!({ "type": "text", "position": point(*pos), "text": content, "height": height, "rotation": rotation.to_degrees() }),
+        Object::PitDesign {
+            verts, line_weight, pit, ..
+        } => {
+            let mut value = json!({
+                "type": "pit_design",
+                "name": pit.name,
+                "closed": true,
+                "vertices": verts.iter().map(|vertex| point(vertex.pos)).collect::<Vec<_>>(),
+                "line_weight": line_weight,
+                "benches": pit.design().map(|design| design.benches),
+                "strings": object.pit_strings().len(),
+                "note": "A pit design: get_pit_designs reads it whole, set_pit_design changes it.",
+            });
+            if verts.iter().any(|vertex| vertex.bulge != 0.0) {
+                value["bulges"] = json!(verts.iter().map(|vertex| vertex.bulge).collect::<Vec<_>>());
+            }
+            value
+        }
     };
     value["id"] = json!(object.id().0);
     value["colour"] = json!(object_colour(object.color()));

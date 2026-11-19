@@ -444,7 +444,7 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
             (Object::Circle { center, .. }, Some(ObjectPoint::Center)) => {
                 draw_screen_point_marker_sized(&mut overlay, *center, 11.0, ACTIVE_POINT_COLOR);
             }
-            (Object::Polyline { verts, .. }, Some(ObjectPoint::Vertex(selected_index))) => {
+            (Object::Polyline { verts, .. } | Object::PitDesign { verts, .. }, Some(ObjectPoint::Vertex(selected_index))) => {
                 for (index, v) in verts.iter().enumerate() {
                     let selected = index == selected_index;
                     draw_screen_point_marker_sized(

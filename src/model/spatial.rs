@@ -223,6 +223,15 @@ fn object_bbox(object: &Object) -> (DVec3, DVec3) {
         } => points_bbox(&text_bounds_corners(*pos, content, *height, *rotation)),
         Object::Circle { center, radius, .. } => (*center - DVec3::new(*radius, *radius, 0.0), *center + DVec3::new(*radius, *radius, 0.0)),
         Object::Polyline { verts, closed, .. } => polyline_bulge_bounds(verts, *closed).unwrap_or((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY))),
+        // Its string and everything it draws from it.
+        Object::PitDesign { verts, .. } => {
+            let (mut min, mut max) = polyline_bulge_bounds(verts, true).unwrap_or((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)));
+            for point in object.pit_strings().iter().flat_map(|string| &string.points) {
+                min = min.min(*point);
+                max = max.max(*point);
+            }
+            (min, max)
+        }
     }
 }
 

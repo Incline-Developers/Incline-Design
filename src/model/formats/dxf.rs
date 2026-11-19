@@ -174,6 +174,13 @@ fn add_object_to_drawing(document: &Document, object: &Object, drawing: &mut Dra
     let object_color = object.color();
 
     match object {
+        // Other programs see a pit design as what it draws: its string and
+        // its benches' strings, as polylines.
+        Object::PitDesign { .. } => {
+            for polyline in object.pit_polylines() {
+                add_object_to_drawing(document, &polyline, drawing);
+            }
+        }
         Object::Point { pos, .. } => {
             let mut entity = Entity::new(EntityType::ModelPoint(ModelPoint {
                 location: point_from_vec3(*pos),
