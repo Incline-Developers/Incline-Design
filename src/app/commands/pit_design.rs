@@ -70,12 +70,12 @@ fn design_on_worker(verts: &[PolyVertex], settings: &PitDesignSettings, ground: 
             design: Err(NoDesign::NotClosed),
             base_elevation: 0.0,
             base_unevenness: 0.0,
-            ramp_start: None,
+            ramp_starts: Vec::new(),
         });
     };
     let default_start = points.first().map_or(DVec2::ZERO, |point| point.truncate());
     let spec = settings.spec(default_start);
-    let ramp_start = spec.ramp.as_ref().map(|ramp| nearest_on_string(&points, ramp.start));
+    let ramp_starts = spec.ramps.iter().map(|ramp| nearest_on_string(&points, ramp.start)).collect();
     let sample = |point: DVec2| ground.and_then(|ground| ground.rl(point));
     let sampler: Option<pit_design::Ground<'_>> = ground.map(|_| &sample as pit_design::Ground<'_>);
     let design = pit_design::design(&base, &spec, sampler, &|| cancel.is_cancelled());
@@ -84,7 +84,7 @@ fn design_on_worker(verts: &[PolyVertex], settings: &PitDesignSettings, ground: 
         design: design.map_err(NoDesign::Settings),
         base_elevation: base.elevation,
         base_unevenness: base.unevenness,
-        ramp_start,
+        ramp_starts,
     })
 }
 
@@ -331,9 +331,8 @@ impl App<'_> {
                 })
         });
         if carried {
-            // The ramp is placed once the benches are set.
-            settings.ramp = false;
-            settings.ramp_start = None;
+            // The ramps are placed once the benches are set.
+            settings.ramps.clear();
             let level = points.iter().map(|point| point.z).sum::<f64>() / points.len().max(1) as f64;
             settings.stop_elevation = level + settings.direction.sign() * settings.bench_height * f64::from(settings.benches.max(1));
         }
@@ -563,7 +562,7 @@ impl App<'_> {
                 design: Err(reason),
                 base_elevation: 0.0,
                 base_unevenness: 0.0,
-                ramp_start: None,
+                ramp_starts: Vec::new(),
             });
             draft.built_for = Some(key);
         }
@@ -672,9 +671,9 @@ impl App<'_> {
             return;
         };
         draft.stage = stage;
-        let has_ramp = draft.working.as_ref().is_some_and(|working| working.settings().ramp);
+        let has_ramp = draft.working.as_ref().is_some_and(|working| !working.settings().ramps.is_empty());
         match stage {
-            PitStage::Ramp if !has_ramp => self.begin_pit_ramp_start_pick(),
+            PitStage::Ramp if !has_ramp => self.begin_pit_ramp_start_pick(0),
             PitStage::Ramp => {}
             PitStage::Benches => self.cancel_pit_ramp_start_pick(),
         }
@@ -684,7 +683,13 @@ impl App<'_> {
     /// Where on the string the ramp would start were the cursor clicked:
     /// the marker that follows it while the start is picked.
     pub(crate) fn update_pit_ramp_hover(&mut self) {
-        let Some(id) = self.editor.pit_design.as_ref().filter(|draft| draft.picking_ramp_start).and_then(PitDesignDraft::object_id) else {
+        let Some(id) = self
+            .editor
+            .pit_design
+            .as_ref()
+            .filter(|draft| draft.picking_ramp.is_some())
+            .and_then(PitDesignDraft::object_id)
+        else {
             return;
         };
         let Some(points) = self.operand_object(id).and_then(Object::tessellated_path).map(|(points, _)| points) else {
@@ -704,26 +709,29 @@ impl App<'_> {
         }
     }
 
-    /// Wait for a click on the string where the ramp starts.
-    pub(crate) fn begin_pit_ramp_start_pick(&mut self) {
+    /// Wait for a click on the string where ramp `index` starts: a new
+    /// ramp, where it is one past the last.
+    pub(crate) fn begin_pit_ramp_start_pick(&mut self, index: usize) {
         if let Some(draft) = self.editor.pit_design.as_mut()
             && draft.object_id().is_some()
         {
-            draft.picking_ramp_start = true;
+            draft.picking_region = false;
+            draft.picking_ramp = Some(index);
             self.invalidate_overlay();
         }
     }
 
     pub(crate) fn cancel_pit_ramp_start_pick(&mut self) {
         if let Some(draft) = self.editor.pit_design.as_mut() {
-            draft.picking_ramp_start = false;
+            draft.picking_ramp = None;
             draft.ramp_hover = None;
         }
         self.invalidate_overlay();
     }
 
-    /// A click while picking the ramp's start: it places the ramp there, at
-    /// the point of the string nearest the click.
+    /// A click while picking a ramp's start: it places the ramp there, at
+    /// the point of the string nearest the click; a new ramp, cut as the
+    /// last one is, where the pick was for one.
     pub(crate) fn pick_pit_ramp_start_at_cursor(&mut self) {
         let Some(id) = self.editor.pit_design.as_ref().and_then(PitDesignDraft::object_id) else {
             return;
@@ -739,12 +747,18 @@ impl App<'_> {
             return;
         };
         let nearest = nearest_on_string(&points, cursor.truncate());
+        let index = self.editor.pit_design.as_ref().and_then(|draft| draft.picking_ramp).unwrap_or(0);
         if let Some(working) = self.editor.pit_design.as_mut().and_then(|draft| draft.working.as_mut()) {
-            working.settings.ramp = true;
-            working.settings.ramp_start = Some(nearest.truncate());
+            let ramps = &mut working.settings.ramps;
+            if index >= ramps.len() {
+                let like = ramps.last().cloned().unwrap_or_default();
+                ramps.push(crate::model::pit_design::settings::RampSettings { from: None, to: None, ..like });
+            }
+            let index = index.min(ramps.len() - 1);
+            ramps[index].start = Some(nearest.truncate());
         }
         if let Some(draft) = self.editor.pit_design.as_mut() {
-            draft.picking_ramp_start = false;
+            draft.picking_ramp = None;
             draft.ramp_hover = None;
         }
         self.update_pit_design_preview();
@@ -757,7 +771,7 @@ impl App<'_> {
         if let Some(draft) = self.editor.pit_design.as_mut()
             && draft.object_id().is_some()
         {
-            draft.picking_ramp_start = false;
+            draft.picking_ramp = None;
             draft.ramp_hover = None;
             draft.picking_region = true;
             self.invalidate_overlay();

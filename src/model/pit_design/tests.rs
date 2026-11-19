@@ -68,7 +68,7 @@ fn with_ramp(direction: Direction, layout: Layout, start: DVec2, clockwise: bool
         berm_width,
         rules: BenchRules::default(),
         wall_radius: 30.0,
-        ramp: Some(RampSpec {
+        ramps: vec![RampSpec {
             width: 28.0,
             gradient,
             start,
@@ -78,7 +78,7 @@ fn with_ramp(direction: Direction, layout: Layout, start: DVec2, clockwise: bool
             to: None,
             bands: Vec::new(),
             exit_flat: 0.0,
-        }),
+        }],
         stop,
     }
 }
@@ -194,7 +194,7 @@ fn assert_sound_climbing(name: &str, design: &Design, ramp: &RampSpec, at_gradie
     // where the bench needs more room, flatter only where it says so.
     assert_eq!(design.report.len(), design.benches as usize, "{name}: a report for every bench");
     for (index, bench) in design.report.iter().enumerate() {
-        let road = bench.ramp.unwrap_or_else(|| panic!("{name}: bench {index} has no ramp"));
+        let road = bench.ramp().unwrap_or_else(|| panic!("{name}: bench {index} has no ramp"));
         if road.lengthened == 0.0 && at_gradient {
             assert!(
                 road.steepest >= ramp.gradient - 0.005,
@@ -206,7 +206,7 @@ fn assert_sound_climbing(name: &str, design: &Design, ramp: &RampSpec, at_gradie
         assert!(road.steepest <= ramp.gradient + 1.0e-6, "{name}: bench {index} is steeper than its gradient");
         assert!(road.narrowest >= ramp.width * 0.96, "{name}: bench {index} narrows to {:.1} m", road.narrowest);
     }
-    let lengthened = design.report.iter().filter(|bench| bench.ramp.is_some_and(|road| road.lengthened > 0.0)).count();
+    let lengthened = design.report.iter().filter(|bench| bench.ramp().is_some_and(|road| road.lengthened > 0.0)).count();
     assert!(
         !at_gradient || lengthened * 10 <= design.report.len().max(10),
         "{name}: {lengthened} stretches climb flatter than asked"
@@ -225,7 +225,7 @@ fn spirals_up_are_sound_and_complete() {
             let spec = with_ramp(Direction::Up, Layout::Spiral, start, clockwise, Stop::Benches(10), ramp);
             let design = built(kind, 100.0, &spec, None);
             let name = format!("{kind} up, clockwise {clockwise}, gradient and berm {ramp:?}");
-            assert_sound(&name, &design, spec.ramp.as_ref().unwrap());
+            assert_sound(&name, &design, &spec.ramps[0]);
             assert_eq!(design.end, End::Complete, "{name}: stopped at bench {}", design.benches);
         }
     }
@@ -238,7 +238,7 @@ fn switchbacks_up_turn_back_and_are_sound() {
         let layout = Layout::Switchback { every: 3, inside_radius: 15.0 };
         let spec = with_ramp(Direction::Up, layout, start, false, Stop::Benches(10), ramp);
         let design = built(kind, 100.0, &spec, None);
-        assert_sound(&format!("{kind} switchback, gradient and berm {ramp:?}"), &design, spec.ramp.as_ref().unwrap());
+        assert_sound(&format!("{kind} switchback, gradient and berm {ramp:?}"), &design, &spec.ramps[0]);
         // Turned back at least once: the centreline heads both ways round.
         let centreline = design.strings.iter().find(|string| string.kind == StringKind::RampCentreline).unwrap();
         let centre = centreline.points.iter().fold(DVec2::ZERO, |sum, point| sum + point.truncate()) / centreline.points.len() as f64;
@@ -262,7 +262,7 @@ fn designs_down_are_sound() {
             let spec = with_ramp(Direction::Down, Layout::Spiral, start, clockwise, Stop::Benches(40), ramp);
             let design = built(kind, 500.0, &spec, None);
             let name = format!("{kind} down, clockwise {clockwise}, gradient and berm {ramp:?}");
-            assert_sound(&name, &design, spec.ramp.as_ref().unwrap());
+            assert_sound(&name, &design, &spec.ramps[0]);
             assert!(design.benches >= benches, "{name}: only {} benches", design.benches);
         }
     }
@@ -274,7 +274,7 @@ fn stops_at_an_rl_and_at_daylight() {
     let at_rl = spec(Direction::Up, Layout::Spiral, start, false, Stop::Elevation(137.0));
     let design = built("floor", 100.0, &at_rl, None);
     assert_eq!(design.levels, vec![100.0, 115.0, 130.0, 137.0], "the last bench is cut short to meet the RL");
-    assert_sound("floor to RL 137", &design, at_rl.ramp.as_ref().unwrap());
+    assert_sound("floor to RL 137", &design, &at_rl.ramps[0]);
 
     // Ground rising to the east, from 140 at x = -200 to 220 at x = 600.
     let ground = |point: DVec2| Some(160.0 + point.x * 0.1);
@@ -324,10 +324,10 @@ fn settings_that_make_no_design_say_why() {
     zoned.rules.height_cycle = vec![10.0, 0.0];
     assert_eq!(problem(zoned), Some(Problem::BenchHeight));
     let mut flats = spec(Direction::Up, Layout::Spiral, start, false, Stop::Benches(3));
-    flats.ramp.as_mut().unwrap().exit_flat = -1.0;
+    flats.ramps[0].exit_flat = -1.0;
     assert_eq!(problem(flats.clone()), Some(Problem::RampBand));
-    flats.ramp.as_mut().unwrap().exit_flat = 0.0;
-    flats.ramp.as_mut().unwrap().bands.push(super::RampBand {
+    flats.ramps[0].exit_flat = 0.0;
+    flats.ramps[0].bands.push(super::RampBand {
         from: 120.0,
         to: 140.0,
         width: Some(0.0),
@@ -344,7 +344,7 @@ fn dumps_build_up_stepping_in_and_down_to_the_ground() {
         spec.kind = Kind::Dump;
         let dump = built("crest", 300.0, &spec, None);
         let name = format!("dump up, clockwise {clockwise}");
-        assert_sound(&name, &dump, spec.ramp.as_ref().unwrap());
+        assert_sound(&name, &dump, &spec.ramps[0]);
         assert!(dump.dump);
         assert!(dump.benches >= 5, "{name}: only {} lifts", dump.benches);
         assert!(dump.levels.windows(2).all(|pair| pair[1] > pair[0]), "{name}: built up");
@@ -368,7 +368,7 @@ fn dumps_build_up_stepping_in_and_down_to_the_ground() {
     let mut spec = with_ramp(Direction::Down, Layout::Spiral, start, false, Stop::Daylight, RAMPS[0]);
     spec.kind = Kind::Dump;
     let dump = built("rect", 300.0, &spec, Some(&ground));
-    assert_sound("dump down", &dump, spec.ramp.as_ref().unwrap());
+    assert_sound("dump down", &dump, &spec.ramps[0]);
     assert_eq!(dump.end, End::Daylight);
     assert!(dump.levels.windows(2).all(|pair| pair[1] < pair[0]), "built down");
     let last = dump.strings.iter().rev().find(|string| string.closed).unwrap();
@@ -409,7 +409,7 @@ fn bench_rules_land_on_the_right_benches() {
     // 170 and 180. The catch berms come before the fourth and seventh; the
     // zone holds the three starting between 130 and 160.
     let mut flat = spec(Direction::Up, Layout::Spiral, outline("rect")[0], false, Stop::Benches(8));
-    flat.ramp = None;
+    flat.ramps.clear();
     flat.wall_radius = 0.0;
     flat.rules = varied();
     let plain = built("rect", 100.0, &flat, None);
@@ -465,7 +465,7 @@ fn bench_rules_land_on_the_right_benches() {
         let mut ramped = spec(Direction::Up, Layout::Spiral, outline(kind)[0], false, Stop::Benches(8));
         ramped.rules = varied();
         let design = built(kind, 100.0, &ramped, None);
-        assert_sound(&format!("{kind} with bench rules"), &design, ramped.ramp.as_ref().unwrap());
+        assert_sound(&format!("{kind} with bench rules"), &design, &ramped.ramps[0]);
     }
 
     // A dump built up takes its zones by their RLs too.
@@ -527,7 +527,7 @@ fn apart_at(first: &DesignString, second: &DesignString, point: DVec2) -> f64 {
 fn walls_take_their_sector_and_region() {
     let run = |angle: f64| 15.0 / f64::to_radians(angle).tan();
     let mut flat = spec(Direction::Up, Layout::Spiral, outline("rect")[0], false, Stop::Benches(3));
-    flat.ramp = None;
+    flat.ramps.clear();
     flat.wall_radius = 0.0;
     flat.rules.sectors = sectors();
     let design = built("rect", 100.0, &flat, None);
@@ -598,7 +598,7 @@ fn walls_cut_otherwise_still_make_sound_designs() {
                 }
                 let design = built(kind, 100.0, &spec, None);
                 let name = format!("{kind} up {layout:?} with {what}");
-                assert_sound(&name, &design, spec.ramp.as_ref().unwrap());
+                assert_sound(&name, &design, &spec.ramps[0]);
                 if !(what == "both" && matches!(kind, "circle" | "floor")) {
                     assert_eq!(design.end, End::Complete, "{name}: {} benches", design.benches);
                 }
@@ -620,7 +620,7 @@ fn walls_cut_otherwise_still_make_sound_designs() {
             let name = format!("{kind} down with {what}");
             // Built down where the walls vary, a stretch can come out a
             // little flatter than asked, never steeper.
-            assert_sound_climbing(&name, &design, spec.ramp.as_ref().unwrap(), false);
+            assert_sound_climbing(&name, &design, &spec.ramps[0], false);
             assert!(design.benches >= 2, "{name}: {} benches", design.benches);
         }
     }
@@ -729,7 +729,7 @@ fn conditioned_rings_are_lighter_and_no_steeper() {
             let design = built(kind, elevation, &spec, None);
             let points: Vec<DVec3> = outline(kind).iter().map(|point| point.extend(elevation)).collect();
             let raw = super::design_with(&Base::from_points(&points).unwrap(), &spec, None, &|| false, Additions::FlatsFirst, false).unwrap();
-            assert_sound(&name, &design, spec.ramp.as_ref().unwrap());
+            assert_sound(&name, &design, &spec.ramps[0]);
             assert!(design.benches >= raw.benches, "{name}: {} benches conditioned, {} not", design.benches, raw.benches);
             let short = steeper_than_cut(&design, spec.face_angle);
             assert!(short <= 1.0e-3, "{name}: a crest {short:.4} m nearer its toe than the face's run");
@@ -815,10 +815,10 @@ fn a_ramp_runs_where_and_as_its_table_says() {
     // Ending at RL 160: the four benches below it have the ramp, those
     // above none, and the road tops out at 160.
     let mut spec = super::tests::spec(Direction::Up, Layout::Spiral, start, false, Stop::Benches(7));
-    spec.ramp.as_mut().unwrap().to = Some(160.0);
+    spec.ramps[0].to = Some(160.0);
     let design = built("rect", 100.0, &spec, None);
     assert_eq!(design.benches, 7);
-    let on: Vec<bool> = design.report.iter().map(|bench| bench.ramp.is_some()).collect();
+    let on: Vec<bool> = design.report.iter().map(|bench| bench.ramp().is_some()).collect();
     assert_eq!(on, [true, true, true, true, false, false, false]);
     let top = centreline(&design).iter().map(|point| point.z).fold(f64::NEG_INFINITY, f64::max);
     assert!((top - 160.0).abs() < 1.0e-6, "the road tops out at {top}");
@@ -827,9 +827,9 @@ fn a_ramp_runs_where_and_as_its_table_says() {
     // Beginning at RL 130: it starts from the third bench, as a ramp begins
     // anywhere, and climbs from there.
     let mut spec = super::tests::spec(Direction::Up, Layout::Spiral, start, false, Stop::Benches(7));
-    spec.ramp.as_mut().unwrap().from = Some(130.0);
+    spec.ramps[0].from = Some(130.0);
     let design = built("rect", 100.0, &spec, None);
-    let on: Vec<bool> = design.report.iter().map(|bench| bench.ramp.is_some()).collect();
+    let on: Vec<bool> = design.report.iter().map(|bench| bench.ramp().is_some()).collect();
     assert_eq!(on, [false, false, true, true, true, true, true]);
     let bottom = centreline(&design).iter().map(|point| point.z).fold(f64::INFINITY, f64::min);
     assert!((bottom - 130.0).abs() < 1.0e-6, "the road starts at {bottom}");
@@ -839,7 +839,7 @@ fn a_ramp_runs_where_and_as_its_table_says() {
     // 20 m flat before each climb; and a 40 m flat where it leaves the pit.
     let mut spec = super::tests::spec(Direction::Up, Layout::Spiral, start, false, Stop::Benches(6));
     {
-        let ramp = spec.ramp.as_mut().unwrap();
+        let ramp = &mut spec.ramps[0];
         ramp.bands = vec![super::RampBand {
             from: 100.0,
             to: 130.0,
@@ -851,7 +851,7 @@ fn a_ramp_runs_where_and_as_its_table_says() {
     let design = built("rect", 100.0, &spec, None);
     assert_eq!(design.benches, 6);
     for (index, bench) in design.report.iter().enumerate() {
-        let road = bench.ramp.unwrap();
+        let road = bench.ramp().unwrap();
         // Two benches one lane wide, then one tapering out to the full width
         // from where the last arrived, then the rest full width.
         if index < 2 {
@@ -871,9 +871,130 @@ fn a_ramp_runs_where_and_as_its_table_says() {
     // Built down, the exit flat is at its first bench, where it leaves the
     // crest.
     let mut spec = super::tests::spec(Direction::Down, Layout::Spiral, outline("crest")[2], false, Stop::Benches(4));
-    spec.ramp.as_mut().unwrap().exit_flat = 40.0;
+    spec.ramps[0].exit_flat = 40.0;
     let design = built("crest", 300.0, &spec, None);
-    assert!(design.report[0].ramp.unwrap().flat >= 40.0);
+    assert!(design.report[0].ramp().unwrap().flat >= 40.0);
     let (top_level, _) = level_ends(&centreline(&design));
     assert!(top_level >= 40.0 * 0.95, "it leaves the pit on a {top_level:.1} m flat");
+}
+
+/// Hold each ramp of a design to what a sound one is: every stretch of it at
+/// its gradient (flatter only where it says so) and its width.
+fn assert_ramps_sound(name: &str, design: &Design, ramps: &[RampSpec]) {
+    assert!(design.benches > 0, "{name}: no bench built");
+    assert_eq!(crossings(design), 0, "{name}: strings cross at different heights");
+    for bench in &design.report {
+        for road in &bench.ramps {
+            let ramp = &ramps[road.ramp];
+            assert!(
+                road.steepest <= ramp.gradient + 1.0e-6,
+                "{name}: ramp {} at RL {} climbs at {:.4}",
+                road.ramp,
+                bench.elevation,
+                road.steepest
+            );
+            if road.lengthened == 0.0 {
+                assert!(
+                    road.steepest >= ramp.gradient - 0.005,
+                    "{name}: ramp {} at RL {} climbs at {:.4}",
+                    road.ramp,
+                    bench.elevation,
+                    road.steepest
+                );
+            }
+            assert!(
+                road.narrowest >= ramp.width * 0.96,
+                "{name}: ramp {} at RL {} narrows to {:.1}",
+                road.ramp,
+                bench.elevation,
+                road.narrowest
+            );
+        }
+    }
+    let (rings, edges) = breaklines(design);
+    if let Err(error) = crate::app::commands::triangulation::creation::cdt_surface_from_breaklines(&rings, &edges) {
+        panic!("{name}: no single-valued surface: {error:#}");
+    }
+}
+
+#[test]
+fn two_ramps_climb_a_pit_side_by_side() {
+    // On opposite walls of a rectangle, and of an ell, the whole way up.
+    for (kind, starts) in [
+        ("rect", [DVec2::new(150.0, 0.0), DVec2::new(250.0, 250.0)]),
+        ("ell", [DVec2::new(250.0, 0.0), DVec2::new(100.0, 500.0)]),
+    ] {
+        let mut spec = super::tests::spec(Direction::Up, Layout::Spiral, starts[0], false, Stop::Benches(6));
+        let mut second = spec.ramps[0].clone();
+        second.start = starts[1];
+        second.width = 20.0;
+        spec.ramps.push(second);
+        let design = built(kind, 100.0, &spec, None);
+        let name = format!("{kind} with two ramps");
+        assert_eq!(design.end, End::Complete, "{name}: {} benches, blocked {:?}", design.benches, design.blocked_ramp);
+        assert_ramps_sound(&name, &design, &spec.ramps);
+        assert!(design.report.iter().all(|bench| bench.ramps.len() == 2), "{name}: both ramps on every bench");
+        let centrelines = design.strings.iter().filter(|string| string.kind == StringKind::RampCentreline).count();
+        assert_eq!(centrelines, 2, "{name}: a centreline each");
+        assert!(
+            design.ramp_exits.iter().all(|exit| exit.is_some_and(|exit| (exit.z - 190.0).abs() < 1.0e-6)),
+            "{name}: both top out"
+        );
+    }
+
+    // A second ramp beginning at RL 145, on its berm, while the first
+    // carries on past it.
+    let mut spec = super::tests::spec(Direction::Up, Layout::Spiral, DVec2::new(150.0, 0.0), false, Stop::Benches(6));
+    let mut second = spec.ramps[0].clone();
+    second.start = DVec2::new(250.0, 250.0);
+    second.from = Some(145.0);
+    spec.ramps.push(second);
+    let design = built("rect", 100.0, &spec, None);
+    assert_eq!(design.end, End::Complete, "{} benches, blocked {:?}", design.benches, design.blocked_ramp);
+    assert_ramps_sound("rect with a second ramp from RL 145", &design, &spec.ramps);
+    let on: Vec<usize> = design.report.iter().map(|bench| bench.ramps.len()).collect();
+    assert_eq!(on, [1, 1, 1, 2, 2, 2]);
+
+    // Two ramps asked to start side by side cannot both be laid: the design
+    // stops, and says which found no room.
+    let mut spec = super::tests::spec(Direction::Up, Layout::Spiral, DVec2::new(150.0, 0.0), false, Stop::Benches(6));
+    let mut second = spec.ramps[0].clone();
+    second.start = DVec2::new(160.0, 0.0);
+    spec.ramps.push(second);
+    let design = built("rect", 100.0, &spec, None);
+    assert_eq!(design.end, End::OutOfRoom);
+    assert_eq!(design.blocked_ramp, Some(1));
+}
+
+#[test]
+fn two_ramps_down_and_with_a_switchback() {
+    // Built down from a crest, two ramps on opposite sides.
+    let crest = outline("crest");
+    let mut spec = super::tests::spec(Direction::Down, Layout::Spiral, crest[1], false, Stop::Benches(5));
+    let mut second = spec.ramps[0].clone();
+    second.start = crest[6];
+    spec.ramps.push(second);
+    let design = built("crest", 300.0, &spec, None);
+    assert!(design.benches >= 4, "{} benches, ended {:?}, blocked {:?}", design.benches, design.end, design.blocked_ramp);
+    assert_ramps_sound("crest down with two ramps", &design, &spec.ramps);
+    assert!(design.report.iter().all(|bench| bench.ramps.len() == 2));
+
+    // A spiral on one wall and a switchback on the other: the switchback
+    // keeps to its wall while the spiral goes round, so the spiral climbs
+    // into it in the end, and the design stops there saying so.
+    let mut spec = super::tests::spec(Direction::Up, Layout::Spiral, DVec2::new(150.0, 0.0), false, Stop::Benches(6));
+    let mut second = spec.ramps[0].clone();
+    second.start = DVec2::new(250.0, 250.0);
+    second.layout = Layout::Switchback { every: 2, inside_radius: 15.0 };
+    spec.ramps.push(second);
+    let design = built("rect", 100.0, &spec, None);
+    assert!(design.benches >= 3, "{} benches, ended {:?}, blocked {:?}", design.benches, design.end, design.blocked_ramp);
+    if design.end == End::OutOfRoom {
+        assert!(design.blocked_ramp.is_some(), "a design stopped for want of room names the ramp");
+    }
+    assert_ramps_sound("rect with a spiral and a switchback", &design, &spec.ramps);
+    assert!(
+        design.report.iter().flat_map(|bench| &bench.ramps).any(|road| road.ramp == 1 && road.switchback),
+        "the second ramp turns back"
+    );
 }

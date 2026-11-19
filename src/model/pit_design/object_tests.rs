@@ -23,7 +23,10 @@ fn square(level: f64) -> Vec<PolyVertex> {
 fn settings() -> PitDesignSettings {
     PitDesignSettings {
         benches: 3,
-        ramp_start: Some(DVec2::new(300.0, 100.0)),
+        ramps: vec![super::settings::RampSettings {
+            start: Some(DVec2::new(300.0, 100.0)),
+            ..Default::default()
+        }],
         ..PitDesignSettings::default()
     }
 }
@@ -111,7 +114,7 @@ fn moves_whole() {
     object.translate(delta);
     let (verts, pit) = parts(&object);
     assert!(pit.is_fresh(verts, None), "a design that does not daylight moves with its string, still current");
-    assert_eq!(pit.settings().ramp_start, Some(DVec2::new(350.0, 80.0)), "its ramp start moves with it");
+    assert_eq!(pit.settings().ramps[0].start, Some(DVec2::new(350.0, 80.0)), "its ramp start moves with it");
     let moved = pit.design().expect("a design");
     let original = parts(&before).1.design().expect("a design");
     assert_eq!(moved.strings[1].points[0], original.strings[1].points[0] + delta);

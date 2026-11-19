@@ -130,7 +130,7 @@ impl RampSpec {
 
     /// The band a bench starting at `elevation` is laid by, if any: the
     /// last listed that holds it.
-    fn band(&self, elevation: f64, sign: f64) -> Option<&RampBand> {
+    pub(crate) fn band(&self, elevation: f64, sign: f64) -> Option<&RampBand> {
         self.bands.iter().rev().find(|band| {
             Zone {
                 from: band.from,
@@ -331,7 +331,8 @@ pub(crate) struct Spec {
     /// a sharp nose of rock (building up) or a sharp corner of pit (building
     /// down); also what keeps the ramp from turning tighter than its walls.
     pub(crate) wall_radius: f64,
-    pub(crate) ramp: Option<RampSpec>,
+    /// The ramps, each laid bench by bench on the benches it runs on.
+    pub(crate) ramps: Vec<RampSpec>,
     pub(crate) stop: Stop,
 }
 
@@ -384,7 +385,7 @@ impl Spec {
         {
             return Some(Problem::Region);
         }
-        if let Some(ramp) = &self.ramp {
+        for ramp in &self.ramps {
             if !positive(ramp.width) || !ramp.bands.iter().all(|band| band.width.is_none_or(positive)) {
                 return Some(Problem::RampWidth);
             }
@@ -509,7 +510,7 @@ pub(crate) struct DesignString {
 }
 
 /// What one bench came to, for checking against what was asked.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BenchReport {
     /// The RL it starts from.
     pub(crate) elevation: f64,
@@ -521,12 +522,24 @@ pub(crate) struct BenchReport {
     pub(crate) berm: [f64; 2],
     /// The plan area inside the ring it ends on.
     pub(crate) area: f64,
-    pub(crate) ramp: Option<RampReport>,
+    /// What each ramp on it came to, in the order the ramps are listed.
+    pub(crate) ramps: Vec<RampReport>,
+}
+
+#[cfg(test)]
+impl BenchReport {
+    /// What the first ramp on it came to, if any ramp is on it.
+    pub(crate) fn ramp(&self) -> Option<RampReport> {
+        self.ramps.first().copied()
+    }
 }
 
 /// What a bench's stretch of ramp came to.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RampReport {
+    /// Which ramp, by its place in the list.
+    #[serde(default)]
+    pub(crate) ramp: usize,
     /// Its rise over its run along its steeper edge, from where it leaves to
     /// where it arrives.
     pub(crate) grade: f64,
@@ -586,6 +599,13 @@ pub(crate) struct Design {
     /// What the walls come to overall, facing each way.
     #[serde(default)]
     pub(crate) walls: Vec<walls::WallReport>,
+    /// Where each ramp leaves the pit, in the order they are listed.
+    #[serde(default)]
+    pub(crate) ramp_exits: Vec<Option<DVec3>>,
+    /// The ramp that found no room, where the design stopped for want of
+    /// it.
+    #[serde(default)]
+    pub(crate) blocked_ramp: Option<usize>,
 }
 
 impl Design {
@@ -613,6 +633,9 @@ impl Design {
             wall.bearing = (wall.bearing + 180.0).rem_euclid(360.0);
         }
         self.ramp_exit = self.ramp_exit.map(|exit| DVec3::new(exit.x, exit.y, -exit.z));
+        for exit in self.ramp_exits.iter_mut().flatten() {
+            exit.z = -exit.z;
+        }
         self.dump = true;
         self
     }
@@ -632,6 +655,9 @@ impl Design {
             bench.elevation += delta.z;
         }
         moved.ramp_exit = moved.ramp_exit.map(|exit| exit + delta);
+        for exit in moved.ramp_exits.iter_mut().flatten() {
+            *exit += delta;
+        }
         moved
     }
 }
@@ -678,8 +704,18 @@ struct RampCursor {
 /// A bench's stretch of ramp as laid, with the switchback it turned back on
 /// to start, if it did, and how far its start was moved to fit.
 struct Laid {
+    /// Which ramp, by its place in the list.
+    index: usize,
     stretch: Stretch,
     turn: Option<Turn>,
+    /// Where the last stretch of its ramp arrived, if it carries on from
+    /// one: its far edge's end, and where its near edge ended on the ring.
+    handover: Option<(DVec2, f64)>,
+    /// Whether it was laid along the bench's start ring, beginning on its
+    /// berm.
+    on_start: bool,
+    /// The flat its ramp's band, or its leaving the pit, asked of it.
+    base_flat: f64,
     moved: f64,
     /// How long a flat it was laid with before its climb.
     flat: f64,
@@ -737,7 +773,7 @@ fn design_dump(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
     let flipped = Spec {
         kind: Kind::Pit,
         direction: spec.direction.flipped(),
-        ramp: spec.ramp.as_ref().map(RampSpec::turned_over),
+        ramps: spec.ramps.iter().map(RampSpec::turned_over).collect(),
         stop: match spec.stop {
             Stop::Elevation(elevation) => Stop::Elevation(-elevation),
             stop => stop,
@@ -773,7 +809,7 @@ fn design_pit(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &
         if best.end != End::OutOfRoom || cancelled() {
             break;
         }
-        if additions == Additions::LongerOnly && spec.ramp.is_none() {
+        if additions == Additions::LongerOnly && spec.ramps.is_empty() {
             continue;
         }
         let other = design_with(base, spec, ground, cancelled, additions, condition)?;
@@ -814,15 +850,14 @@ fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
             additions,
             condition,
             strings: vec![level_string(spec, &start, base.elevation, true)],
-            left: Vec::new(),
-            right: Vec::new(),
-            centreline: Vec::new(),
+            roads: vec![Road::default(); spec.ramps.len()],
             ramp_length: 0.0,
             start_moved: 0.0,
             built: Built::default(),
+            blocked: None,
         },
-        // Begun on the first bench it is on.
-        ramp: None,
+        // Each begun on the first bench it is on.
+        ramps: vec![None; spec.ramps.len()],
         current: start,
         elevation: base.elevation,
         levels: vec![base.elevation],
@@ -843,7 +878,7 @@ fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
             break End::Complete;
         };
         let snapshot = state.clone();
-        match state.builder.bench(&state.current, state.elevation, cut, state.ramp_for(&cut), None) {
+        match state.builder.bench(&state.current, state.elevation, cut, state.ramps_for(&cut), None) {
             Ok(bench) => {
                 let added = bench.added;
                 state.advance(bench, cut);
@@ -876,22 +911,32 @@ fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
         report,
         ..
     } = state;
-    let ramp_exit = match spec.direction {
-        Direction::Up => builder.centreline.last().copied(),
-        Direction::Down => builder.centreline.first().copied(),
-    };
     let Builder {
         mut strings,
-        left,
-        right,
-        centreline,
+        roads,
         ramp_length,
         start_moved,
+        blocked,
         ..
     } = builder;
-    for (points, kind) in [(left, StringKind::RampEdge), (right, StringKind::RampEdge), (centreline, StringKind::RampCentreline)] {
-        if points.len() >= 2 {
-            strings.push(DesignString { kind, points, closed: false });
+    // Where each ramp leaves the pit: its top building up, where building
+    // down it began.
+    let ramp_exits: Vec<Option<DVec3>> = roads
+        .iter()
+        .map(|road| match spec.direction {
+            Direction::Up => road.centreline.last().copied(),
+            Direction::Down => road.centreline.first().copied(),
+        })
+        .collect();
+    for road in roads {
+        for (points, kind) in [
+            (road.left, StringKind::RampEdge),
+            (road.right, StringKind::RampEdge),
+            (road.centreline, StringKind::RampCentreline),
+        ] {
+            if points.len() >= 2 {
+                strings.push(DesignString { kind, points, closed: false });
+            }
         }
     }
     let mut design = Design {
@@ -902,7 +947,9 @@ fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
         end,
         ramp_length,
         ramp_start_moved: start_moved,
-        ramp_exit,
+        ramp_exit: ramp_exits.first().copied().flatten(),
+        ramp_exits,
+        blocked_ramp: blocked.filter(|_| end == End::OutOfRoom),
         volume,
         dump: false,
         walls: Vec::new(),
@@ -1079,7 +1126,8 @@ struct State<'a> {
     current: Vec<DVec2>,
     elevation: f64,
     levels: Vec<f64>,
-    ramp: Option<RampCursor>,
+    /// Where each ramp is, on a bench it is on.
+    ramps: Vec<Option<RampCursor>>,
     benches: u32,
     volume: f64,
     report: Vec<BenchReport>,
@@ -1104,19 +1152,24 @@ impl State<'_> {
         }
     }
 
-    /// The ramp on the next bench, cut as `cut` says: none where the ramp is
+    /// Each ramp on the next bench, cut as `cut` says: none where a ramp is
     /// not on it, and begun anew where it was not on the last. It leaves the
     /// pit on its last bench, building up (where that is known: not where
     /// the design stops on the ground), and on its first building down.
-    fn ramp_for(&self, cut: &Cut) -> Option<RampOn> {
+    fn ramps_for(&self, cut: &Cut) -> Vec<Option<RampOn>> {
+        (0..self.builder.spec.ramps.len()).map(|index| self.ramp_for(index, cut)).collect()
+    }
+
+    /// [`Self::ramps_for`] for the ramp listed at `index`.
+    fn ramp_for(&self, index: usize, cut: &Cut) -> Option<RampOn> {
         let spec = self.builder.spec;
-        let ramp = spec.ramp.as_ref()?;
+        let ramp = spec.ramps.get(index)?;
         let sign = self.builder.sign;
         if !ramp.holds(self.elevation, sign) {
             return None;
         }
-        let begins = self.ramp.is_none();
-        let cursor = self.ramp.unwrap_or_else(|| RampCursor {
+        let begins = self.ramps[index].is_none();
+        let cursor = self.ramps[index].unwrap_or_else(|| RampCursor {
             at: ring::nearest(&self.current, ramp.start).0,
             // Building down walks the ramp from its top, the way it falls.
             direction: if ramp.climbs_clockwise == (spec.direction == Direction::Up) { -1.0 } else { 1.0 },
@@ -1149,12 +1202,12 @@ impl State<'_> {
             face_angle,
             berm,
             area: ring::signed_area(&bench.end),
-            ramp: bench.ramp,
+            ramps: bench.ramps,
         });
         self.elevation += self.builder.sign * height;
         self.levels.push(self.elevation);
         self.benches += 1;
-        self.ramp = bench.next_ramp;
+        self.ramps = bench.next_ramps;
         self.current = bench.end;
     }
 }
@@ -1193,7 +1246,7 @@ fn relaid<'a>(history: &[(State<'a>, Option<Added>)], depth: usize, benches: u32
         let mut rebuilt = history[..history.len() - depth].to_vec();
         let cut = trial.next_cut()?;
         let snapshot = trial.clone();
-        let bench = trial.builder.bench(&trial.current, trial.elevation, cut, trial.ramp_for(&cut), Some(after)).ok()?;
+        let bench = trial.builder.bench(&trial.current, trial.elevation, cut, trial.ramps_for(&cut), Some(after)).ok()?;
         after = bench.added?;
         trial.advance(bench, cut);
         remember(&mut rebuilt, snapshot, Some(after));
@@ -1205,7 +1258,7 @@ fn relaid<'a>(history: &[(State<'a>, Option<Added>)], depth: usize, benches: u32
                 break true;
             };
             let snapshot = trial.clone();
-            match trial.builder.bench(&trial.current, trial.elevation, cut, trial.ramp_for(&cut), None) {
+            match trial.builder.bench(&trial.current, trial.elevation, cut, trial.ramps_for(&cut), None) {
                 Ok(bench) => {
                     let added = bench.added;
                     trial.advance(bench, cut);
@@ -1244,17 +1297,25 @@ struct Builder<'a> {
     /// Whether its end rings are conditioned.
     condition: bool,
     strings: Vec<DesignString>,
-    /// The ramp's edges, left and right of the way it is built, and its
-    /// centreline, joined up bench to bench.
-    left: Vec<DVec3>,
-    right: Vec<DVec3>,
-    centreline: Vec<DVec3>,
+    /// Each ramp's strings, joined up bench to bench.
+    roads: Vec<Road>,
     ramp_length: f64,
-    /// How far along the wall from where it was asked to the ramp had to
-    /// start to fit.
+    /// How far along the wall from where it was asked a ramp had to start
+    /// to fit, at most.
     start_moved: f64,
     /// Every string built so far, for keeping the next bench clear of them.
     built: Built,
+    /// The ramp last found no room on a bench.
+    blocked: Option<usize>,
+}
+
+/// A ramp's strings: its edges, left and right of the way it is built, and
+/// its centreline, joined up bench to bench.
+#[derive(Clone, Default)]
+struct Road {
+    left: Vec<DVec3>,
+    right: Vec<DVec3>,
+    centreline: Vec<DVec3>,
 }
 
 /// Strings already built, as segments binned in a grid over the plan.
@@ -1317,10 +1378,26 @@ impl Built {
 /// what its stretch of ramp came to.
 struct Bench {
     end: Vec<DVec2>,
-    next_ramp: Option<RampCursor>,
-    ramp: Option<RampReport>,
-    /// What was added to its stretch to leave it sound, if it has one.
+    /// Where each ramp carries on from on the next bench.
+    next_ramps: Vec<Option<RampCursor>>,
+    ramps: Vec<RampReport>,
+    /// What was added to its first stretch to leave it sound, if it has one.
     added: Option<Added>,
+}
+
+impl Laid {
+    /// It as placed on its bench.
+    fn placed(&self) -> Placed<'_> {
+        Placed {
+            stretch: &self.stretch,
+            join: match (&self.turn, self.handover) {
+                (Some(turn), _) => Join::TurnsBack(turn),
+                (None, Some((handover, at))) => Join::CarriesOn { handover, at },
+                (None, None) => Join::Begins,
+            },
+            on_start: self.on_start,
+        }
+    }
 }
 
 /// Length added to a stretch to leave its bench sound: a flat before its
@@ -1340,128 +1417,62 @@ const MEETS: f64 = 1.0e-3;
 
 impl Builder<'_> {
     /// Build one bench from the ring `from` at `elevation`, cut as `cut`
-    /// says: its height, its face, and the berm it leaves first.
+    /// says: its height, its face, and the berm it leaves first; with a
+    /// stretch of each ramp in `ramps` that is on it.
     ///
-    /// Where the ramp's stretch would leave the bench unsound (its handover
-    /// crowding a corner, say), the stretch is laid a little longer, a hair
-    /// flatter and never steeper, until it does not.
+    /// The ramps are laid one after another, those carrying on first, each
+    /// against the bench's rings with those before it in place. Where a
+    /// ramp's stretch would leave the bench unsound (its handover crowding a
+    /// corner, say), it is laid with a flat before its climb, or failing
+    /// every flat, a little longer, a hair flatter and never steeper, until
+    /// it does not. Where no way of laying it does, the bench is not built,
+    /// and the ramp is noted as the one with no room.
     ///
-    /// With `after`, only additions after it are tried: the bench is being
-    /// laid again because the one after it would not build.
-    fn bench(&mut self, from: &[DVec2], elevation: f64, cut: Cut, ramp: Option<RampOn>, after: Option<Added>) -> Result<Bench, End> {
+    /// With `after`, only additions after it are tried for the first ramp:
+    /// the bench is being laid again because the one after it would not
+    /// build.
+    fn bench(&mut self, from: &[DVec2], elevation: f64, cut: Cut, ramps: Vec<Option<RampOn>>, after: Option<Added>) -> Result<Bench, End> {
         let spec = self.spec;
         let sign = self.sign;
         let height = cut.height;
         let walls = cut.walls(spec);
-        // What the ramp's band, and its leaving the pit here, ask of this
-        // bench's stretch: its width, and how far it runs level before and
-        // after it climbs. Whatever is added to leave the bench sound comes
-        // on top.
-        let (width, base_flat, flat_end) = match (ramp, spec.ramp.as_ref()) {
-            (Some(on), Some(ramp_spec)) => {
-                let band = ramp_spec.band(elevation, sign);
-                let exit = if on.exits { ramp_spec.exit_flat } else { 0.0 };
-                let (before, after) = match spec.direction {
-                    Direction::Up => (0.0, exit),
-                    Direction::Down => (exit, 0.0),
-                };
-                (
-                    band.and_then(|band| band.width).unwrap_or(ramp_spec.width),
-                    band.and_then(|band| band.flat).unwrap_or(0.0) + before,
-                    after,
-                )
-            }
-            _ => (0.0, 0.0, 0.0),
-        };
-        let ramp = ramp.map(|on| on.cursor);
+        let leaves_berm = !walls.no_berm();
         // A ramp beginning on a bench above the first starts on its berm, at
         // the toe of the face it climbs, as one beginning on the floor does:
-        // the berm is laid first, and the stretch laid from it as from a
-        // bench with no berm of its own. Laid from the crest below, the
-        // berm narrowing under it would tilt the ring the road's far side is
-        // set off from.
-        let leaves_berm = !walls.no_berm();
-        let berm_ring;
-        let (from, walls, ramp) = match ramp {
-            Some(cursor) if cursor.handover.is_none() && leaves_berm && spec.ramp.is_some() => {
-                berm_ring = rings(spec, from, &walls, None)?.0;
-                let at = ring::nearest(&berm_ring, ring::point_at(from, cursor.at)).0;
-                (berm_ring.as_slice(), walls::Walls { fixed_berm: Some(0.0), ..walls }, Some(RampCursor { at, ..cursor }))
-            }
-            _ => (from, walls, ramp),
-        };
-        let (laid, start_ring, end_ring) = match (ramp, spec.ramp.as_ref()) {
-            (Some(cursor), Some(ramp_spec)) => {
-                // Time for a switchback: tried first, and where it will not
-                // fit, the ramp carries on round for another bench and
-                // tries again on the next.
-                let turn = match ramp_spec.layout {
-                    Layout::Switchback { every, inside_radius } if cursor.handover.is_some() && cursor.since_turn >= every => Some(inside_radius),
-                    _ => None,
-                };
-                let mut last = End::OutOfRoom;
-                let mut found = None;
-                for turn in [turn, None].into_iter().take(if turn.is_some() { 2 } else { 1 }) {
-                    // A flat before the climb first, which keeps the grade;
-                    // only where none works, a longer climb, a little flatter.
-                    let climb = height / ramp_spec.gradient;
-                    let start_drift = {
-                        let on = walls.on(from);
-                        on.berm(cursor.at) + on.face(cursor.at)
-                    };
-                    let lay = |flat: f64, longer: f64| Lay {
-                        side: sign,
-                        drift: start_drift,
-                        // A stretch carrying on, whose end ring is spliced
-                        // from its far edge: a road's first stretch has its
-                        // end ring set off from the ring beside it.
-                        varies: !walls.alike() && cursor.handover.is_some(),
-                        far_start: cursor.handover.filter(|_| !walls.alike()),
-                        width,
-                        climb_length: climb + longer,
-                        flat: base_flat + flat,
-                        flat_end,
-                        // Carrying on from a road of another width, as far
-                        // out as that one's far edge arrived. Within the gap
-                        // a handover takes up, it is this width already.
-                        start_across: cursor
-                            .handover
-                            .map(|handover| handover.distance(ring::point_at(from, cursor.at)))
-                            .filter(|across| (across - width).abs() > HANDOVER_GAP),
-                    };
-                    let flats_after = match (self.additions, after) {
-                        (Additions::LongerOnly, _) | (_, Some(Added { longer: true, .. })) => None,
-                        (Additions::FlatsFirst, None) => Some(None),
-                        (Additions::FlatsFirst, Some(Added { longer: false, length })) => Some(Some(length)),
-                    };
-                    let longer_after = match after {
-                        Some(Added { longer: true, length }) => Some(length),
-                        _ => None,
-                    };
-                    let flat = || match flats_after {
-                        Some(floor) => shortest(floor, &mut |flat| self.attempt(from, cursor, lay(flat, 0.0), turn, &walls, elevation)),
-                        None => Err(End::OutOfRoom),
-                    };
-                    let tried = flat().or_else(|_| shortest(longer_after, &mut |longer| self.attempt(from, cursor, lay(0.0, longer), turn, &walls, elevation)));
-                    match tried {
-                        Ok(attempt) => {
-                            found = Some(attempt);
-                            break;
-                        }
-                        Err(end) => last = end,
-                    }
+        // it is laid along the bench's start ring, as from a bench with no
+        // berm of its own, once the ramps carrying on have made that ring.
+        // Laid from the crest below, the berm narrowing under it would tilt
+        // the ring the road's far side is set off from.
+        let on_start = |on: &RampOn| on.cursor.handover.is_none() && leaves_berm;
+        let order: Vec<usize> = (0..ramps.len())
+            .filter(|&index| ramps[index].is_some_and(|on| !on_start(&on)))
+            .chain((0..ramps.len()).filter(|&index| ramps[index].is_some_and(|on| on_start(&on))))
+            .collect();
+        let mut laid: Vec<Laid> = Vec::new();
+        let mut rings_now: Option<(Vec<DVec2>, Vec<DVec2>)> = None;
+        for (place, &index) in order.iter().enumerate() {
+            let (Some(on), Some(ramp_spec)) = (ramps[index], spec.ramps.get(index)) else {
+                continue;
+            };
+            match self.lay_ramp(from, elevation, &walls, &laid, index, on, on_start(&on), if place == 0 { after } else { None }) {
+                Ok((stretch, start_ring, end_ring)) => {
+                    self.start_moved = self.start_moved.max(stretch.moved);
+                    laid.push(stretch);
+                    rings_now = Some((start_ring, end_ring));
                 }
-                let (laid, start_ring, end_ring) = found.ok_or(last)?;
-                self.start_moved = self.start_moved.max(laid.moved);
-                (Some(laid), start_ring, end_ring)
+                Err(end) => {
+                    self.blocked = Some(index);
+                    let _ = ramp_spec;
+                    return Err(end);
+                }
             }
-            _ => {
-                let (start_ring, end_ring) = rings(spec, from, &walls, None).and_then(|rings| self.clear_of_built(rings, None, None, elevation, height))?;
-                (None, start_ring, end_ring)
-            }
+        }
+        let (start_ring, end_ring) = match rings_now {
+            Some(rings) => rings,
+            None => rings(spec, from, &walls, &[]).and_then(|rings| self.clear_of_built(rings, &[], elevation, height))?,
         };
         let end_ring = if self.condition {
-            self.conditioned(start_ring.as_slice(), end_ring, laid.as_ref(), elevation, height)
+            self.conditioned(start_ring.as_slice(), end_ring, &laid, elevation, height)
         } else {
             end_ring
         };
@@ -1478,47 +1489,165 @@ impl Builder<'_> {
                 .add((0..ring.len()).map(|index| (ring[index].extend(z), ring[(index + 1) % ring.len()].extend(z))));
         }
 
-        // Where the ramp carries on from on the ring the next bench starts
+        // Where each ramp carries on from on the ring the next bench starts
         // from: where its near edge arrived.
-        let mut ramp_report = None;
-        let next_ramp = match (&laid, ramp) {
-            (Some(laid), Some(cursor)) => {
-                let (near, far) = self.lay_road(&laid.stretch, laid.turn.as_ref(), from, elevation, height);
-                ramp_report = Some(RampReport {
-                    flat: laid.flat,
-                    lengthened: laid.lengthened,
-                    switchback: laid.turn.is_some(),
-                    ..measure_road(&near, &far, height)
-                });
-                let (Some(near_end), Some(far_end)) = (laid.stretch.edges.near.last(), laid.stretch.edges.far.last()) else {
-                    return Err(End::OutOfRoom);
-                };
-                let edge = &laid.stretch.edges.near;
-                let heading = edge
-                    .len()
-                    .checked_sub(2)
-                    .and_then(|before| (near_end.0 - edge[before].0).try_normalize())
-                    .unwrap_or(DVec2::ZERO);
-                Some(RampCursor {
-                    at: ring::nearest(&end_ring, near_end.0).0,
-                    direction: laid.stretch.direction,
-                    handover: Some(far_end.0),
-                    since_turn: if laid.turn.is_some() { 1 } else { cursor.since_turn + 1 },
-                    heading,
-                })
-            }
-            _ => None,
-        };
-        let added = laid.as_ref().map(|laid| Added {
+        let mut next_ramps: Vec<Option<RampCursor>> = vec![None; ramps.len()];
+        let mut reports: Vec<RampReport> = Vec::new();
+        let mut by_ramp: Vec<&Laid> = laid.iter().collect();
+        by_ramp.sort_by_key(|laid| laid.index);
+        for laid in by_ramp {
+            let Some(on) = ramps[laid.index] else {
+                continue;
+            };
+            let (near, far) = self.lay_road(laid.index, &laid.stretch, laid.turn.as_ref(), elevation, height);
+            reports.push(RampReport {
+                ramp: laid.index,
+                flat: laid.flat,
+                lengthened: laid.lengthened,
+                switchback: laid.turn.is_some(),
+                ..measure_road(&near, &far, height)
+            });
+            let (Some(near_end), Some(far_end)) = (laid.stretch.edges.near.last(), laid.stretch.edges.far.last()) else {
+                return Err(End::OutOfRoom);
+            };
+            let edge = &laid.stretch.edges.near;
+            let heading = edge
+                .len()
+                .checked_sub(2)
+                .and_then(|before| (near_end.0 - edge[before].0).try_normalize())
+                .unwrap_or(DVec2::ZERO);
+            next_ramps[laid.index] = Some(RampCursor {
+                at: ring::nearest(&end_ring, near_end.0).0,
+                direction: laid.stretch.direction,
+                handover: Some(far_end.0),
+                since_turn: if laid.turn.is_some() { 1 } else { on.cursor.since_turn + 1 },
+                heading,
+            });
+        }
+        let added = laid.first().map(|laid| Added {
             longer: laid.lengthened > 0.0,
-            length: if laid.lengthened > 0.0 { laid.lengthened } else { laid.flat - base_flat },
+            length: if laid.lengthened > 0.0 { laid.lengthened } else { laid.flat - laid.base_flat },
         });
         Ok(Bench {
             end: end_ring,
-            next_ramp,
-            ramp: ramp_report,
+            next_ramps,
+            ramps: reports,
             added,
         })
+    }
+
+    /// Lay ramp `index`'s stretch on a bench, with `laid` already in place:
+    /// its stretch, and the bench's rings with it. Laid along the bench's
+    /// start ring where `on_start` says, beginning on its berm.
+    #[allow(clippy::too_many_arguments)]
+    fn lay_ramp(
+        &self,
+        from: &[DVec2],
+        elevation: f64,
+        walls: &walls::Walls<'_>,
+        laid: &[Laid],
+        index: usize,
+        on: RampOn,
+        on_start: bool,
+        after: Option<Added>,
+    ) -> Result<(Laid, Vec<DVec2>, Vec<DVec2>), End> {
+        let spec = self.spec;
+        let sign = self.sign;
+        let height = walls.height;
+        let ramp_spec = &spec.ramps[index];
+        // What the ramp's band, and its leaving the pit here, ask of this
+        // bench's stretch: its width, and how far it runs level before and
+        // after it climbs. Whatever is added to leave the bench sound comes
+        // on top.
+        let band = ramp_spec.band(elevation, sign);
+        let exit = if on.exits { ramp_spec.exit_flat } else { 0.0 };
+        let (before, flat_end) = match spec.direction {
+            Direction::Up => (0.0, exit),
+            Direction::Down => (exit, 0.0),
+        };
+        let width = band.and_then(|band| band.width).unwrap_or(ramp_spec.width);
+        let base_flat = band.and_then(|band| band.flat).unwrap_or(0.0) + before;
+        // Laid along the start ring, the ring the ramps carrying on have
+        // made, as from a bench with no berm.
+        let start;
+        let (along, lay_walls, cursor) = if on_start {
+            let placed: Vec<Placed<'_>> = laid.iter().map(Laid::placed).collect();
+            start = start_ring(spec, from, walls, &placed)?;
+            let at = ring::nearest(&start, ring::point_at(from, on.cursor.at)).0;
+            (start.as_slice(), walls::Walls { fixed_berm: Some(0.0), ..*walls }, RampCursor { at, ..on.cursor })
+        } else {
+            (from, *walls, on.cursor)
+        };
+        // Time for a switchback: tried first, and where it will not fit,
+        // the ramp carries on round for another bench and tries again on
+        // the next.
+        let turn = match ramp_spec.layout {
+            Layout::Switchback { every, inside_radius } if cursor.handover.is_some() && cursor.since_turn >= every => Some(inside_radius),
+            _ => None,
+        };
+        let mut last = End::OutOfRoom;
+        for turn in [turn, None].into_iter().take(if turn.is_some() { 2 } else { 1 }) {
+            // A flat before the climb first, which keeps the grade; only
+            // where none works, a longer climb, a little flatter.
+            let climb = height / ramp_spec.gradient;
+            let start_drift = {
+                let on = lay_walls.on(along);
+                on.berm(cursor.at) + on.face(cursor.at)
+            };
+            let lay = |flat: f64, longer: f64| Lay {
+                side: sign,
+                drift: start_drift,
+                // A stretch carrying on, whose end ring is spliced from its
+                // far edge: a road's first stretch has its end ring set off
+                // from the ring beside it.
+                varies: !walls.alike() && cursor.handover.is_some(),
+                far_start: cursor.handover.filter(|_| !walls.alike()),
+                width,
+                climb_length: climb + longer,
+                flat: base_flat + flat,
+                flat_end,
+                // Carrying on from a road of another width, as far out as
+                // that one's far edge arrived. Within the gap a handover
+                // takes up, it is this width already.
+                start_across: cursor
+                    .handover
+                    .map(|handover| handover.distance(ring::point_at(along, cursor.at)))
+                    .filter(|across| (across - width).abs() > HANDOVER_GAP),
+            };
+            let flats_after = match (self.additions, after) {
+                (Additions::LongerOnly, _) | (_, Some(Added { longer: true, .. })) => None,
+                (Additions::FlatsFirst, None) => Some(None),
+                (Additions::FlatsFirst, Some(Added { longer: false, length })) => Some(Some(length)),
+            };
+            let longer_after = match after {
+                Some(Added { longer: true, length }) => Some(length),
+                _ => None,
+            };
+            let try_with = |lay: Lay| {
+                self.attempt(
+                    from,
+                    along,
+                    cursor,
+                    lay,
+                    turn,
+                    walls,
+                    &lay_walls,
+                    elevation,
+                    laid,
+                    (index, on_start, base_flat),
+                    ramp_spec.gradient,
+                )
+            };
+            let flat = || match flats_after {
+                Some(floor) => shortest(floor, &mut |flat| try_with(lay(flat, 0.0))),
+                None => Err(End::OutOfRoom),
+            };
+            match flat().or_else(|_| shortest(longer_after, &mut |longer| try_with(lay(0.0, longer)))) {
+                Ok(attempt) => return Ok(attempt),
+                Err(end) => last = end,
+            }
+        }
+        Err(last)
     }
 
     /// A bench's end ring conditioned (see [`ring::conditioned`]): moved
@@ -1527,9 +1656,9 @@ impl Builder<'_> {
     /// next bench is set off from it, so its berm is as wide as asked. Where
     /// the conditioned ring would not be as sound as the bench was, it stays
     /// as it was.
-    fn conditioned(&self, start_ring: &[DVec2], end_ring: Vec<DVec2>, laid: Option<&Laid>, elevation: f64, height: f64) -> Vec<DVec2> {
+    fn conditioned(&self, start_ring: &[DVec2], end_ring: Vec<DVec2>, laid: &[Laid], elevation: f64, height: f64) -> Vec<DVec2> {
         let mut road: Vec<(DVec2, DVec2)> = Vec::new();
-        if let Some(laid) = laid {
+        for laid in laid {
             for edge in [&laid.stretch.edges.near, &laid.stretch.edges.far] {
                 road.extend(edge.windows(2).map(|pair| (pair[0].0, pair[1].0)));
             }
@@ -1546,67 +1675,79 @@ impl Builder<'_> {
         // Building up the waste side of a crest is out from the pit, and
         // building down, of a toe, in.
         let end = ring::conditioned(&end_ring, self.sign, &keep);
-        let stretch = laid.map(|laid| &laid.stretch);
-        let sound = !unsound(start_ring, &end, stretch) && stretch.is_none_or(|stretch| !crowded_handover(&end, stretch) && arrives_on(&end, stretch));
-        if sound && let Ok((_, end)) = self.clear_of_built((start_ring.to_vec(), end), stretch, laid.and_then(|laid| laid.turn.as_ref()), elevation, height) {
+        let sound = (laid.is_empty() && !unsound(start_ring, &end, None))
+            || laid.iter().all(|laid| {
+                let stretch = &laid.stretch;
+                !unsound(start_ring, &end, Some(stretch)) && !crowded_handover(&end, stretch) && arrives_on(&end, stretch)
+            });
+        let all: Vec<&Laid> = laid.iter().collect();
+        if sound && let Ok((_, end)) = self.clear_of_built((start_ring.to_vec(), end), &all, elevation, height) {
             return end;
         }
         end_ring
     }
 
-    /// One try at a bench's stretch of ramp and its rings: carried on from
-    /// the last (or begun), or turned back on a pad `turn` the inside radius
-    /// of its turn.
+    /// One try at a ramp's stretch on a bench and the bench's rings with
+    /// it and those `laid` before it: carried on from the last (or begun),
+    /// or turned back on a pad `turn` the inside radius of its turn, along
+    /// `along` (the ring the bench starts from, or its start ring).
     #[allow(clippy::too_many_arguments)]
-    fn attempt(&self, from: &[DVec2], cursor: RampCursor, lay: Lay, turn: Option<f64>, walls: &walls::Walls<'_>, elevation: f64) -> Result<(Laid, Vec<DVec2>, Vec<DVec2>), End> {
+    fn attempt(
+        &self,
+        from: &[DVec2],
+        along: &[DVec2],
+        cursor: RampCursor,
+        lay: Lay,
+        turn: Option<f64>,
+        walls: &walls::Walls<'_>,
+        lay_walls: &walls::Walls<'_>,
+        elevation: f64,
+        laid: &[Laid],
+        (index, on_start, base_flat): (usize, bool, f64),
+        gradient: f64,
+    ) -> Result<(Laid, Vec<DVec2>, Vec<DVec2>), End> {
         let (stretch, turn, moved) = match (turn, cursor.handover) {
             (Some(radius), Some(handover)) => {
-                let (stretch, turn) = turn_back(from, cursor, handover, lay, radius, walls)?;
+                let (stretch, turn) = turn_back(along, cursor, handover, lay, radius, lay_walls)?;
                 (stretch, Some(turn), 0.0)
             }
             _ => {
-                let (stretch, moved) = lay_stretch(from, cursor, lay, walls)?;
+                let (stretch, moved) = lay_stretch(along, cursor, lay, lay_walls)?;
                 (stretch, None, moved)
             }
         };
-        let join = match (&turn, cursor.handover) {
-            (Some(turn), _) => Join::TurnsBack(turn),
-            (None, Some(handover)) => Join::CarriesOn { handover, at: cursor.at },
-            (None, None) => Join::Begins,
-        };
         let height = walls.height;
-        let (start_ring, end_ring) = rings(self.spec, from, walls, Some((&stretch, join)))?;
-        let (start_ring, end_ring) = self.clear_of_built((start_ring, end_ring), Some(&stretch), turn.as_ref(), elevation, height)?;
-        Ok((
-            Laid {
-                stretch,
-                turn,
-                moved,
-                flat: lay.flat,
-                lengthened: lay.climb_length - height / self.spec.ramp.as_ref().map_or(1.0, |ramp| ramp.gradient),
-            },
-            start_ring,
-            end_ring,
-        ))
+        let candidate = Laid {
+            index,
+            stretch,
+            turn,
+            handover: cursor.handover.map(|handover| (handover, cursor.at)),
+            on_start,
+            base_flat,
+            moved,
+            flat: lay.flat,
+            lengthened: lay.climb_length - height / gradient,
+        };
+        let (start_ring, end_ring) = {
+            let placed: Vec<Placed<'_>> = laid.iter().chain(std::iter::once(&candidate)).map(Laid::placed).collect();
+            let rings = rings(self.spec, from, walls, &placed)?;
+            let all: Vec<&Laid> = laid.iter().chain(std::iter::once(&candidate)).collect();
+            self.clear_of_built(rings, &all, elevation, height)?
+        };
+        Ok((candidate, start_ring, end_ring))
     }
 
     /// A bench's rings, if they and its stretch keep clear of everything
     /// built before them: no string of the design may cross another at a
     /// different height, so a bench that would is not built.
-    fn clear_of_built(
-        &self,
-        rings: (Vec<DVec2>, Vec<DVec2>),
-        stretch: Option<&Stretch>,
-        turn: Option<&Turn>,
-        elevation: f64,
-        height: f64,
-    ) -> Result<(Vec<DVec2>, Vec<DVec2>), End> {
+    fn clear_of_built(&self, rings: (Vec<DVec2>, Vec<DVec2>), laid: &[&Laid], elevation: f64, height: f64) -> Result<(Vec<DVec2>, Vec<DVec2>), End> {
         let end_elevation = elevation + self.sign * height;
         let mut candidate: Vec<(DVec3, DVec3)> = Vec::new();
         for (ring, z) in [(&rings.0, elevation), (&rings.1, end_elevation)] {
             candidate.extend((0..ring.len()).map(|index| (ring[index].extend(z), ring[(index + 1) % ring.len()].extend(z))));
         }
-        if let Some(stretch) = stretch {
+        for laid in laid {
+            let stretch = &laid.stretch;
             for edge in [&stretch.edges.near, &stretch.edges.far] {
                 let points: Vec<DVec3> = edge
                     .iter()
@@ -1614,10 +1755,10 @@ impl Builder<'_> {
                     .collect();
                 candidate.extend(points.windows(2).map(|pair| (pair[0], pair[1])));
             }
-        }
-        if let Some(turn) = turn {
-            for edge in [&turn.inner, &turn.outer] {
-                candidate.extend(edge.windows(2).map(|pair| (pair[0].extend(elevation), pair[1].extend(elevation))));
+            if let Some(turn) = &laid.turn {
+                for edge in [&turn.inner, &turn.outer] {
+                    candidate.extend(edge.windows(2).map(|pair| (pair[0].extend(elevation), pair[1].extend(elevation))));
+                }
             }
         }
         if self.built.crossed_by(&candidate) { Err(End::OutOfRoom) } else { Ok(rings) }
@@ -1625,22 +1766,24 @@ impl Builder<'_> {
 
     /// Add a stretch's edges and centreline to the ramp's strings, and give
     /// back its edges as laid, near then far.
-    fn lay_road(&mut self, stretch: &Stretch, turn: Option<&Turn>, from: &[DVec2], elevation: f64, height: f64) -> (Vec<DVec3>, Vec<DVec3>) {
+    fn lay_road(&mut self, index: usize, stretch: &Stretch, turn: Option<&Turn>, elevation: f64, height: f64) -> (Vec<DVec3>, Vec<DVec3>) {
+        let road = &mut self.roads[index];
+        let mut ramp_length = 0.0;
         if let Some(turn) = turn {
             // The pad, level: each edge of the road arriving runs on round
             // the turn, the near one the outside of it.
             let level = |points: &[DVec2]| -> Vec<DVec3> { points.iter().map(|point| point.extend(elevation)).collect() };
             let (outer, inner) = (level(&turn.outer), level(&turn.inner));
-            let near_on_left = self.left.last().zip(outer.first()).is_some_and(|(left, start)| left.distance(*start) <= HANDOVER_GAP);
+            let near_on_left = road.left.last().zip(outer.first()).is_some_and(|(left, start)| left.distance(*start) <= HANDOVER_GAP);
             let (left, right) = if near_on_left { (outer, inner) } else { (inner, outer) };
             for edge in [&left, &right] {
                 self.built.add(edge.windows(2).map(|pair| (pair[0], pair[1])));
             }
-            join(&mut self.left, left);
-            join(&mut self.right, right);
+            join(&mut road.left, left);
+            join(&mut road.right, right);
             let centre = level(&turn.centre);
-            self.ramp_length += turn.centre.windows(2).map(|pair| pair[0].distance(pair[1])).sum::<f64>();
-            join(&mut self.centreline, centre);
+            ramp_length += turn.centre.windows(2).map(|pair| pair[0].distance(pair[1])).sum::<f64>();
+            join(&mut road.centreline, centre);
         }
         let rise = self.sign * height;
         let at_height = |chain: &[(DVec2, f64)]| -> Vec<DVec3> {
@@ -1657,21 +1800,22 @@ impl Builder<'_> {
         // left of a road running against the ring's order.
         let far_on_left = self.sign * stretch.direction < 0.0;
         let (left, right) = if far_on_left { (far.clone(), near.clone()) } else { (near.clone(), far.clone()) };
-        join(&mut self.left, left);
-        join(&mut self.right, right);
+        join(&mut road.left, left);
+        join(&mut road.right, right);
         // The centreline at each station, half way between the edges.
         let centre: Vec<DVec3> = stretch
             .stations
             .iter()
             .map(|(parameter, climbed)| {
-                let near = point_by_source(&stretch.edges.near, *parameter, from.len());
-                let far = point_by_source(&stretch.edges.far, *parameter, from.len());
+                let near = point_by_source(&stretch.edges.near, *parameter, stretch.count);
+                let far = point_by_source(&stretch.edges.far, *parameter, stretch.count);
                 let middle = near.lerp(far, 0.5);
                 DVec3::new(middle.x, middle.y, elevation + rise * climbed)
             })
             .collect();
-        self.ramp_length += centre.windows(2).map(|pair| pair[0].truncate().distance(pair[1].truncate())).sum::<f64>();
-        join(&mut self.centreline, centre);
+        ramp_length += centre.windows(2).map(|pair| pair[0].truncate().distance(pair[1].truncate())).sum::<f64>();
+        join(&mut road.centreline, centre);
+        self.ramp_length += ramp_length;
         (near, far)
     }
 }
@@ -1717,6 +1861,7 @@ fn measure_road(near: &[DVec3], far: &[DVec3], height: f64) -> RampReport {
         narrowest = narrowest.min(nearest);
     }
     RampReport {
+        ramp: 0,
         grade,
         steepest,
         narrowest: if narrowest.is_finite() { narrowest } else { 0.0 },
@@ -1953,44 +2098,57 @@ fn with_pad(start_ring: &[DVec2], pad: &[DVec2]) -> Option<Vec<DVec2>> {
         .max_by(|a, b| ring::signed_area(a).total_cmp(&ring::signed_area(b)))
 }
 
-/// The two rings of a bench from `from`: the one it starts on, across the
-/// berm, and the one it ends on, across the face; or why there are none
-/// that make a sound bench.
-///
-/// The berm narrows to nothing under the stretch, where the road takes its
-/// place; where the stretch carries on from the one before, the ring steps
-/// across the road to it, and that step is road, not set off at all. Beside
-/// the stretch the face rises from the road's far edge, and is shorter the
-/// higher the road has climbed, meeting it where it arrives.
-fn rings(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, stretch: Option<(&Stretch, Join<'_>)>) -> Result<(Vec<DVec2>, Vec<DVec2>), End> {
+/// A stretch of ramp placed on a bench: how it joins what came before it,
+/// and whether it was laid along the bench's start ring (a ramp beginning
+/// on a bench above the first, on its berm) rather than along the ring the
+/// bench starts from.
+#[derive(Clone, Copy)]
+struct Placed<'a> {
+    stretch: &'a Stretch,
+    join: Join<'a>,
+    on_start: bool,
+}
+
+/// The ring a bench starts on: the ring it starts from, `from`, set off
+/// across the berm. Under each stretch of road laid along `from`, the berm
+/// narrows to nothing, the road taking its place; where a stretch carries
+/// on from the one before, the ring steps across the road to it, and that
+/// step is road, not set off at all. Round a switchback's pad, level with
+/// the bench's start, the ring goes round the pad.
+fn start_ring(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, placed: &[Placed<'_>]) -> Result<Vec<DVec2>, End> {
     let sign = spec.direction.sign();
     let count = from.len();
+    let along_from: Vec<&Placed<'_>> = placed.iter().filter(|placed| !placed.on_start).collect();
     let start_ring = if walls.no_berm() {
         from.to_vec()
     } else {
-        // A point at each of the stretch's stations, where its edges have
-        // theirs: the berm narrows under the road point for point with it,
+        // A point at each of the stretches' stations, where their edges have
+        // theirs: the berm narrows under each road point for point with it,
         // and so stays the road's own side of its near edge. And points
         // enough near a slope region that its blend is followed.
-        let handover = stretch.and_then(|(stretch, join)| match join {
-            Join::CarriesOn { handover, .. } => Some((handover, ring::point_at(from, stretch.from))),
-            _ => None,
-        });
-        // The step across the road where the last stretch arrived is road,
-        // set off by nothing: it is found as one edge, so it is never split.
-        let step = handover.and_then(|(pushed, start)| {
-            (0..count).find(|&index| {
-                let (a, b) = (from[index], from[(index + 1) % count]);
-                (a.distance(pushed) <= MEETS && b.distance(start) <= MEETS) || (a.distance(start) <= MEETS && b.distance(pushed) <= MEETS)
+        let handovers: Vec<(DVec2, DVec2)> = along_from
+            .iter()
+            .filter_map(|placed| match placed.join {
+                Join::CarriesOn { handover, .. } => Some((handover, ring::point_at(from, placed.stretch.from))),
+                _ => None,
             })
-        });
-        let mut cuts: Vec<f64> = stretch.map_or_else(Vec::new, |(stretch, _)| stretch.stations.iter().map(|(parameter, _)| *parameter).collect());
-        cuts.extend(
-            walls
-                .splits(from)
-                .into_iter()
-                .filter(|parameter| step.is_none_or(|step| parameter.floor() as usize != step)),
-        );
+            .collect();
+        // The step across the road where a last stretch arrived is road,
+        // set off by nothing: it is found as one edge, so it is never split.
+        let steps: Vec<usize> = handovers
+            .iter()
+            .filter_map(|(pushed, start)| {
+                (0..count).find(|&index| {
+                    let (a, b) = (from[index], from[(index + 1) % count]);
+                    (a.distance(*pushed) <= MEETS && b.distance(*start) <= MEETS) || (a.distance(*start) <= MEETS && b.distance(*pushed) <= MEETS)
+                })
+            })
+            .collect();
+        let mut cuts: Vec<f64> = along_from
+            .iter()
+            .flat_map(|placed| placed.stretch.stations.iter().map(|(parameter, _)| *parameter))
+            .collect();
+        cuts.extend(walls.splits(from).into_iter().filter(|parameter| !steps.contains(&(parameter.floor() as usize))));
         let (split, at) = ring::with_points_at(from, &cuts);
         let facings = walls.facings(&split);
         let distances: Vec<EdgeOffset> = (0..split.len())
@@ -1999,7 +2157,7 @@ fn rings(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, stretch: Option<
                 let is = |a: DVec2, b: DVec2| {
                     (split[index].distance(a) <= MEETS && split[next].distance(b) <= MEETS) || (split[index].distance(b) <= MEETS && split[next].distance(a) <= MEETS)
                 };
-                if handover.is_some_and(|(pushed, start)| is(pushed, start)) {
+                if handovers.iter().any(|(pushed, start)| is(*pushed, *start)) {
                     return EdgeOffset::even(0.0);
                 }
                 let middle = middle_parameter(at[index], at[next], count);
@@ -2007,10 +2165,10 @@ fn rings(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, stretch: Option<
                 // [`walls::Walls::offsets`] has it.
                 let start = walls.berm_at(split[index], facings[index]);
                 let end = walls.berm_at(split[next], facings[next]);
-                match stretch.filter(|(stretch, _)| stretch.climbed_at(middle).is_some()) {
-                    Some((stretch, _)) => EdgeOffset {
-                        start: sign * start * stretch.climbed_at(at[index]).unwrap_or(0.0),
-                        end: sign * end * stretch.climbed_at(at[next]).unwrap_or(1.0),
+                match along_from.iter().find(|placed| placed.stretch.climbed_at(middle).is_some()) {
+                    Some(placed) => EdgeOffset {
+                        start: sign * start * placed.stretch.climbed_at(at[index]).unwrap_or(0.0),
+                        end: sign * end * placed.stretch.climbed_at(at[next]).unwrap_or(1.0),
                     },
                     None => EdgeOffset {
                         start: sign * start,
@@ -2019,24 +2177,39 @@ fn rings(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, stretch: Option<
                 }
             })
             .collect();
-        let start_ring = walls.unfolded(walls.offset(&split, &distances).into_iter().next().ok_or(End::OutOfRoom)?);
-        match stretch {
-            Some((stretch, Join::CarriesOn { .. })) => along_far_edge(start_ring, stretch),
-            _ => start_ring,
+        let mut start_ring = walls.unfolded(walls.offset(&split, &distances).into_iter().next().ok_or(End::OutOfRoom)?);
+        for placed in &along_from {
+            if let Join::CarriesOn { .. } = placed.join {
+                start_ring = along_far_edge(start_ring, placed.stretch);
+            }
         }
+        start_ring
     };
     // A switchback's pad is level with the bench's start: the ring goes
     // round it.
-    let start_ring = match stretch {
-        Some((_, Join::TurnsBack(turn))) => with_pad(&start_ring, &turn.pad).ok_or(End::OutOfRoom)?,
-        _ => start_ring,
-    };
+    let mut start_ring = start_ring;
+    for placed in &along_from {
+        if let Join::TurnsBack(turn) = placed.join {
+            start_ring = with_pad(&start_ring, &turn.pad).ok_or(End::OutOfRoom)?;
+        }
+    }
     // Near a slope region, the start ring with points enough to follow its
     // blend across the face.
-    let start_ring = match walls.splits(&start_ring) {
+    Ok(match walls.splits(&start_ring) {
         splits if splits.is_empty() => start_ring,
         splits => ring::with_points_at(&start_ring, &splits).0,
-    };
+    })
+}
+
+/// The two rings of a bench: the ring it starts on (see [`start_ring`]), and
+/// the ring it ends on, the start ring set off across the face, beside each
+/// stretch of road where the face above it comes to. Each stretch's end
+/// ring is worked out on its own, and where there are several they are
+/// spliced into one, each changing the plain ring only round its own road.
+/// `None` where the bench is not a sound piece of design.
+fn rings(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, placed: &[Placed<'_>]) -> Result<(Vec<DVec2>, Vec<DVec2>), End> {
+    let sign = spec.direction.sign();
+    let start_ring = start_ring(spec, from, walls, placed)?;
     let plain = || {
         let distances = walls.offsets(&start_ring, sign, |walls, point, facing| walls.face_at(point, facing));
         walls
@@ -2046,24 +2219,139 @@ fn rings(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, stretch: Option<
             .map(|ring| walls.unfolded(ring))
             .ok_or(End::OutOfRoom)
     };
-    let end_ring = match stretch {
-        None => plain()?,
-        Some((stretch, Join::Begins)) => beside_new_ramp(&start_ring, stretch, walls, sign).ok_or(End::OutOfRoom)?,
-        Some((stretch, _)) => spliced(&plain()?, stretch, from, walls, sign).ok_or(End::OutOfRoom)?,
+    let end_ring = match placed {
+        [] => plain()?,
+        [only] => end_beside(&start_ring, &plain, from, walls, sign, only)?,
+        several => {
+            let plain_ring = plain()?;
+            let ends: Vec<Vec<DVec2>> = several
+                .iter()
+                .map(|placed| end_beside(&start_ring, &|| Ok(plain_ring.clone()), from, walls, sign, placed))
+                .collect::<Result<_, _>>()?;
+            merged(&plain_ring, &ends).ok_or(End::OutOfRoom)?
+        }
     };
-    // The handover the next stretch starts from stays as it is.
-    let keep: Vec<DVec2> = stretch
-        .and_then(|(stretch, _)| Some(vec![stretch.edges.near.last()?.0, stretch.edges.far.last()?.0]))
-        .unwrap_or_default();
+    // The handovers the next stretches start from stay as they are.
+    let keep: Vec<DVec2> = placed
+        .iter()
+        .flat_map(|placed| [placed.stretch.edges.near.last().map(|point| point.0), placed.stretch.edges.far.last().map(|point| point.0)])
+        .flatten()
+        .collect();
     let end_ring = ring::filleted(&end_ring, walls.wall_radius, sign, &keep);
-    let sound = !unsound(&start_ring, &end_ring, stretch.map(|(stretch, _)| stretch))
-        && stretch.is_none_or(|(stretch, join)| {
-            !crowded_handover(&end_ring, stretch) && arrives_on(&end_ring, stretch) && carries_on(from, stretch, join) && !pinched(stretch, stretch.width)
+    let sound = (placed.is_empty() && !unsound(&start_ring, &end_ring, None))
+        || placed.iter().all(|placed| {
+            let stretch = placed.stretch;
+            !unsound(&start_ring, &end_ring, Some(stretch))
+                && !crowded_handover(&end_ring, stretch)
+                && arrives_on(&end_ring, stretch)
+                && carries_on(from, stretch, placed.join)
+                && !pinched(stretch, stretch.width)
         });
-    if !sound {
+    // Two roads on one bench keep apart: one may not cross the other, nor
+    // come within a road's width of it.
+    let apart = placed.iter().enumerate().all(|(index, first)| {
+        placed[index + 1..].iter().all(|second| {
+            let edges = |stretch: &Stretch| -> Vec<(DVec2, DVec2)> {
+                [&stretch.edges.near, &stretch.edges.far]
+                    .into_iter()
+                    .flat_map(|edge| edge.windows(2).map(|pair| (pair[0].0, pair[1].0)))
+                    .collect()
+            };
+            let (a, b) = (edges(first.stretch), edges(second.stretch));
+            let gap = first.stretch.width.min(second.stretch.width);
+            !crosses(&a, &b) && b.iter().all(|(c, d)| a.iter().all(|(e, f)| segment_gap(*c, *d, *e, *f) >= gap))
+        })
+    });
+    if !sound || !apart {
         return Err(End::OutOfRoom);
     }
     Ok((start_ring, end_ring))
+}
+
+/// The ring a bench ends on beside one stretch of road, alone: set off
+/// beside a new road from the start ring, or spliced into the plain ring
+/// (`plain`) along one carrying on.
+fn end_beside(
+    start_ring: &[DVec2],
+    plain: &dyn Fn() -> Result<Vec<DVec2>, End>,
+    from: &[DVec2],
+    walls: &walls::Walls<'_>,
+    sign: f64,
+    placed: &Placed<'_>,
+) -> Result<Vec<DVec2>, End> {
+    match placed.join {
+        Join::Begins => beside_new_ramp(start_ring, placed.stretch, walls, sign).ok_or(End::OutOfRoom),
+        _ => spliced(&plain()?, placed.stretch, from, walls, sign).ok_or(End::OutOfRoom),
+    }
+}
+
+/// Several end rings, each the plain ring changed round one road, spliced
+/// into one: each one's run off the plain ring put in place of the same
+/// stretch of the others. `None` where a ring leaves the plain ring in more
+/// than one run, or where two runs overlap.
+fn merged(plain: &[DVec2], rings: &[Vec<DVec2>]) -> Option<Vec<DVec2>> {
+    let mut merged = rings.first()?.clone();
+    for ring in &rings[1..] {
+        let count = ring.len();
+        let off: Vec<bool> = ring.iter().map(|point| ring::nearest(plain, *point).1 > MERGE_OFF).collect();
+        let starts: Vec<usize> = (0..count).filter(|&index| off[index] && !off[(index + count - 1) % count]).collect();
+        let &[first] = starts.as_slice() else {
+            if starts.is_empty() {
+                continue;
+            }
+            return None;
+        };
+        // The run off the plain ring, with the points on it either side
+        // where it leaves and rejoins.
+        let leave = (first + count - 1) % count;
+        let mut run = vec![ring[leave]];
+        let mut index = first;
+        while off[index] {
+            run.push(ring[index]);
+            index = (index + 1) % count;
+        }
+        run.push(ring[index]);
+        let (from, to) = (run[0], run[run.len() - 1]);
+        // Where it leaves and rejoins the ring merged so far, which is the
+        // plain ring there unless two runs overlap.
+        let (at_from, off_from) = ring::nearest(&merged, from);
+        let (at_to, off_to) = ring::nearest(&merged, to);
+        if off_from > MERGE_OFF || off_to > MERGE_OFF {
+            return None;
+        }
+        // The run, then the merged ring on round from where it rejoins to
+        // where it leaves.
+        let total = merged.len();
+        let mut points = run;
+        let mut index = (at_to.floor() as usize + 1) % total;
+        let span = (at_from - at_to).rem_euclid(total as f64);
+        let mut walked = (index as f64 - at_to).rem_euclid(total as f64);
+        while walked < span {
+            points.push(merged[index]);
+            index = (index + 1) % total;
+            walked += 1.0;
+        }
+        merged = ring::cleaned(points);
+        if merged.len() < 3 || ring::signed_area(&merged) <= 0.0 {
+            return None;
+        }
+    }
+    Some(merged)
+}
+
+/// How far a ring may stand off the plain ring and still be on it, in
+/// splicing several roads' rings into one.
+const MERGE_OFF: f64 = 1.0e-3;
+
+/// How near segment `a`-`b` comes to segment `c`-`d`.
+fn segment_gap(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> f64 {
+    if crossing(a, b, c, d).is_some() {
+        return 0.0;
+    }
+    [(a, c, d), (b, c, d), (c, a, b), (d, a, b)]
+        .into_iter()
+        .map(|(point, from, to)| crate::model::kernel::project_onto_segment(point, from, to).0.distance(point))
+        .fold(f64::INFINITY, f64::min)
 }
 
 /// The ring a bench ends on, where a stretch of ramp crosses it: the start

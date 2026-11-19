@@ -1409,8 +1409,8 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ExplodePitDesign(id) => self.explode_pit_design(id).map(|_| ()),
-            UiCommand::BeginPitRampStartPick => {
-                self.begin_pit_ramp_start_pick();
+            UiCommand::BeginPitRampStartPick(index) => {
+                self.begin_pit_ramp_start_pick(index);
                 Ok(())
             }
             UiCommand::BeginPitRegionPick => {

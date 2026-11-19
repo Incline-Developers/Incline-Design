@@ -32,32 +32,83 @@ pub(crate) struct PitDesignSettings {
     /// berms, and bands of RL cut otherwise.
     pub(crate) bench_rules: BenchRules,
     pub(crate) wall_radius: f64,
-    pub(crate) ramp: bool,
-    pub(crate) ramp_width: f64,
-    /// Rise over run, as a percentage.
-    pub(crate) ramp_gradient: f64,
-    /// The RLs the ramp begins and ends at, the way the design is built;
-    /// the whole pit where none is given.
-    pub(crate) ramp_from: Option<f64>,
-    pub(crate) ramp_to: Option<f64>,
-    /// Bands of RL whose stretches of road are laid otherwise: narrower, or
-    /// with a flat.
-    pub(crate) ramp_bands: Vec<RampBand>,
-    /// How far the ramp runs level where it leaves the pit.
-    pub(crate) ramp_exit_flat: f64,
-    /// Where the ramp leaves the string, in plan; the string's first point
-    /// if none has been picked.
-    pub(crate) ramp_start: Option<DVec2>,
-    pub(crate) climbs_clockwise: bool,
-    pub(crate) switchback: bool,
-    /// Benches climbed between turns.
-    pub(crate) switchback_every: u32,
-    pub(crate) inside_radius: f64,
+    /// The ramps, each laid on the benches it runs on: none for a design
+    /// with no ramp.
+    pub(crate) ramps: Vec<RampSettings>,
     pub(crate) stop: StopMode,
     pub(crate) benches: u32,
     pub(crate) stop_elevation: f64,
     /// The ground a design built up daylights against.
     pub(crate) topography: Option<TriangulationId>,
+}
+
+/// One ramp of a pit design, as its settings say.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RampSettings {
+    pub(crate) width: f64,
+    /// Rise over run, as a percentage.
+    pub(crate) gradient: f64,
+    /// Where it leaves the string, in plan; the string's first point if
+    /// none has been picked.
+    pub(crate) start: Option<DVec2>,
+    pub(crate) climbs_clockwise: bool,
+    pub(crate) switchback: bool,
+    /// Benches climbed between turns.
+    pub(crate) switchback_every: u32,
+    pub(crate) inside_radius: f64,
+    /// The RLs it begins and ends at, the way the design is built; the
+    /// whole pit where none is given.
+    pub(crate) from: Option<f64>,
+    pub(crate) to: Option<f64>,
+    /// Bands of RL whose stretches of road are laid otherwise: narrower, or
+    /// with a flat.
+    pub(crate) bands: Vec<RampBand>,
+    /// How far it runs level where it leaves the pit.
+    pub(crate) exit_flat: f64,
+}
+
+impl Default for RampSettings {
+    fn default() -> Self {
+        Self {
+            width: 25.0,
+            gradient: 10.0,
+            start: None,
+            climbs_clockwise: false,
+            switchback: false,
+            switchback_every: 3,
+            inside_radius: 15.0,
+            from: None,
+            to: None,
+            bands: Vec::new(),
+            exit_flat: 0.0,
+        }
+    }
+}
+
+impl RampSettings {
+    /// The design engine's ramp, starting at `default_start` unless its
+    /// start has been picked.
+    pub(crate) fn spec(&self, default_start: DVec2) -> RampSpec {
+        RampSpec {
+            width: self.width,
+            gradient: self.gradient / 100.0,
+            from: self.from,
+            to: self.to,
+            bands: self.bands.clone(),
+            exit_flat: self.exit_flat,
+            start: self.start.unwrap_or(default_start),
+            climbs_clockwise: self.climbs_clockwise,
+            layout: if self.switchback {
+                Layout::Switchback {
+                    every: self.switchback_every,
+                    inside_radius: self.inside_radius,
+                }
+            } else {
+                Layout::Spiral
+            },
+        }
+    }
 }
 
 impl Default for PitDesignSettings {
@@ -70,18 +121,7 @@ impl Default for PitDesignSettings {
             berm_width: 8.0,
             bench_rules: BenchRules::default(),
             wall_radius: 15.0,
-            ramp: true,
-            ramp_width: 25.0,
-            ramp_gradient: 10.0,
-            ramp_from: None,
-            ramp_to: None,
-            ramp_bands: Vec::new(),
-            ramp_exit_flat: 0.0,
-            ramp_start: None,
-            climbs_clockwise: false,
-            switchback: false,
-            switchback_every: 3,
-            inside_radius: 15.0,
+            ramps: vec![RampSettings::default()],
             stop: StopMode::Benches,
             benches: 8,
             stop_elevation: 0.0,
@@ -91,8 +131,8 @@ impl Default for PitDesignSettings {
 }
 
 impl PitDesignSettings {
-    /// The design engine's settings, the ramp starting at `default_start`
-    /// unless one has been picked.
+    /// The design engine's settings, a ramp starting at `default_start`
+    /// unless its start has been picked.
     pub(crate) fn spec(&self, default_start: DVec2) -> Spec {
         Spec {
             kind: self.kind,
@@ -102,24 +142,7 @@ impl PitDesignSettings {
             berm_width: self.berm_width,
             rules: self.bench_rules.clone(),
             wall_radius: self.wall_radius,
-            ramp: self.ramp.then(|| RampSpec {
-                width: self.ramp_width,
-                gradient: self.ramp_gradient / 100.0,
-                from: self.ramp_from,
-                to: self.ramp_to,
-                bands: self.ramp_bands.clone(),
-                exit_flat: self.ramp_exit_flat,
-                start: self.ramp_start.unwrap_or(default_start),
-                climbs_clockwise: self.climbs_clockwise,
-                layout: if self.switchback {
-                    Layout::Switchback {
-                        every: self.switchback_every,
-                        inside_radius: self.inside_radius,
-                    }
-                } else {
-                    Layout::Spiral
-                },
-            }),
+            ramps: self.ramps.iter().map(|ramp| ramp.spec(default_start)).collect(),
             stop: match self.stop {
                 StopMode::Benches => Stop::Benches(self.benches),
                 StopMode::Elevation => Stop::Elevation(self.stop_elevation),

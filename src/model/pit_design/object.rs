@@ -88,7 +88,7 @@ impl PitObject {
     /// worked out, which moves with the string unless it daylights against
     /// ground that stays put. `verts` is the string after the move.
     pub(crate) fn translate(&mut self, delta: DVec3, verts: &[PolyVertex]) {
-        if let Some(start) = &mut self.settings.ramp_start {
+        for start in self.settings.ramps.iter_mut().filter_map(|ramp| ramp.start.as_mut()) {
             *start += delta.truncate();
         }
         let settings = self.settings();

@@ -170,7 +170,7 @@ impl<'a> App<'a> {
             let canvas_pick_mode_active = self.editor.triangulation_pick_target.is_some()
                 || self.editor.optimization.start_pick.is_some()
                 || self.editor.drill_pattern_awaiting_shape_pick
-                || self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start || draft.picking_region);
+                || self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp.is_some() || draft.picking_region);
             let suppress_view_mode_canvas_click = self.editor.view_mode_owns_canvas_click() && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
             if !suppress_view_mode_canvas_click || canvas_pick_mode_active {
                 self.handle_mouse_press(&event);
@@ -701,7 +701,7 @@ impl<'a> App<'a> {
                     if self.editor.active_tool == ActiveTool::ExplodePolyline && hover_pick_due {
                         self.update_explode_hover();
                     }
-                    if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start) {
+                    if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp.is_some()) {
                         self.update_pit_ramp_hover();
                     }
                     if (self.editor.triangulation_pick_target.is_some()
@@ -777,7 +777,7 @@ impl<'a> App<'a> {
             ..
         } = event
         {
-            if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start) {
+            if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp.is_some()) {
                 self.editor.canvas_context_menu_open = false;
                 self.pick_pit_ramp_start_at_cursor();
                 return;
@@ -1438,7 +1438,7 @@ impl<'a> App<'a> {
                     self.redraw_requested = true;
                 } else if self.editor.text_editing_enabled {
                     self.cancel_text_edit();
-                } else if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start) {
+                } else if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp.is_some()) {
                     self.cancel_pit_ramp_start_pick();
                 } else if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region) {
                     self.cancel_pit_region_pick();

@@ -321,20 +321,16 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     draw_tie_preview(&mut overlay, editor);
     // Where Pit Design's ramp would leave its string, while its start is
     // picked: the point a click places it at.
-    if let Some(hover) = editor.pit_design.as_ref().filter(|draft| draft.picking_ramp_start).and_then(|draft| draft.ramp_hover) {
+    if let Some(hover) = editor.pit_design.as_ref().filter(|draft| draft.picking_ramp.is_some()).and_then(|draft| draft.ramp_hover) {
         draw_screen_cross(&mut overlay, hover, 20.0, 8.0, [0.05, 0.35, 0.1, 1.0]);
         draw_screen_cross(&mut overlay, hover, 18.0, 4.0, [0.95, 0.95, 0.95, 1.0]);
     }
-    // Where Pit Design's ramp leaves its string.
-    if let Some(start) = editor
-        .pit_design
-        .as_ref()
-        .filter(|draft| draft.working.as_ref().is_some_and(|working| working.settings().ramp))
-        .and_then(|draft| draft.preview.as_ref())
-        .and_then(|preview| preview.ramp_start)
-    {
-        draw_screen_cross(&mut overlay, start, 20.0, 8.0, [0.05, 0.35, 0.1, 1.0]);
-        draw_screen_cross(&mut overlay, start, 18.0, 4.0, [0.45, 0.9, 0.5, 1.0]);
+    // Where each of Pit Design's ramps leaves its string.
+    if let Some(preview) = editor.pit_design.as_ref().and_then(|draft| draft.preview.as_ref()) {
+        for start in &preview.ramp_starts {
+            draw_screen_cross(&mut overlay, *start, 20.0, 8.0, [0.05, 0.35, 0.1, 1.0]);
+            draw_screen_cross(&mut overlay, *start, 18.0, 4.0, [0.45, 0.9, 0.5, 1.0]);
+        }
     }
     // The directional shells' starting point already picked, shown while it is picked again.
     if let Some(pick) = editor.optimization.start_pick.as_ref()
