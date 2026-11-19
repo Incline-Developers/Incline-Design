@@ -451,6 +451,7 @@ pub(crate) enum MenuRow {
     InsertAtElevation,
     SetAxis(Axis),
     CreateTriangulation,
+    PitDesign,
     ClipSurfaceByPolyline,
     SliceSurfaceByZ,
     TrimTopology,
@@ -532,6 +533,7 @@ const PRODUCTION_MENUS: &[WorkspaceMenu] = &[
             submenu(MenuTitle::InsertPoint, &[MenuRow::InsertAtIntersection, MenuRow::InsertAtElevation]),
             submenu(MenuTitle::MoveTo, &[MenuRow::SetAxis(Axis::X), MenuRow::SetAxis(Axis::Y), MenuRow::SetAxis(Axis::Z)]),
             rows(&[MenuRow::CreateTriangulation]),
+            rows(&[MenuRow::PitDesign]),
         ],
     },
     WorkspaceMenu {
@@ -636,6 +638,7 @@ impl MenuRow {
             Self::InsertAtElevation => tr!("ws-menubar-design-insert-point-at-elevation"),
             Self::SetAxis(axis) => tr!("common-set") + &format!(" {}...", axis.label()),
             Self::CreateTriangulation => tr!("ws-menubar-design-create-triangulation"),
+            Self::PitDesign => tr!("pit-design-menu"),
             Self::ClipSurfaceByPolyline => tr!("common-clip-surface-polyline"),
             Self::SliceSurfaceByZ => tr!("common-slice-triangulation-z-range"),
             Self::TrimTopology => tr!("common-trim-topology"),
@@ -666,6 +669,7 @@ impl MenuRow {
             Self::InsertAtElevation => UiCommand::OpenInsertPointAtElevationDialog,
             Self::SetAxis(axis) => UiCommand::OpenMoveToAxisDialog(axis),
             Self::CreateTriangulation => UiCommand::OpenCreateTriangulation,
+            Self::PitDesign => UiCommand::OpenPitDesign,
             Self::ClipSurfaceByPolyline => UiCommand::OpenCutTriangulationByPolyline,
             Self::SliceSurfaceByZ => UiCommand::OpenCutTriangulationByZ,
             Self::TrimTopology => UiCommand::OpenCutTriangulationBySurface,
@@ -699,7 +703,13 @@ impl MenuRow {
             // dialog states and changes with Pick. Insert at Intersection has
             // no dialog, and opens straight into the pick when the selection
             // has nothing to cross.
-            Self::InsertAtIntersection | Self::InsertAtElevation | Self::SetAxis(_) | Self::CreateTriangulation | Self::ReferencePoints | Self::ReferenceSurface => true,
+            Self::InsertAtIntersection
+            | Self::InsertAtElevation
+            | Self::SetAxis(_)
+            | Self::CreateTriangulation
+            | Self::PitDesign
+            | Self::ReferencePoints
+            | Self::ReferenceSurface => true,
             // The tools taking two surfaces pick both in their dialog.
             Self::TrimTopology
             | Self::CutTopologyByPitShell
@@ -734,6 +744,7 @@ impl MenuRow {
             Self::SetAxis(Axis::Y) => "ws-menubar-design-move-to-y",
             Self::SetAxis(Axis::Z) => "ws-menubar-design-move-to-z",
             Self::CreateTriangulation => "ws-menubar-design-create-triangulation",
+            Self::PitDesign => "ws-menubar-design-pit-design",
             Self::ClipSurfaceByPolyline => "ws-menubar-triangulation-clip-by-polyline",
             Self::SliceSurfaceByZ => "ws-menubar-triangulation-slice-by-z",
             Self::TrimTopology => "ws-menubar-triangulation-trim-topology",

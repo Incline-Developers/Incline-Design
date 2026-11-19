@@ -27,6 +27,12 @@ fn core() -> Vec<Value> {
     tools
 }
 
+fn design() -> Vec<Value> {
+    let mut tools = super::objects::definitions();
+    tools.extend(super::pit_design::definitions());
+    tools
+}
+
 fn surfaces() -> Vec<Value> {
     jobs::definitions().into_iter().filter(|tool| tool["name"] != "get_tasks").collect()
 }
@@ -47,8 +53,8 @@ struct Group {
 const GROUPS: [Group; 7] = [
     Group {
         name: "design",
-        about: "drawing and editing design objects: move, offset, batters and berms, explode, insert points, drape",
-        tools: super::objects::definitions,
+        about: "drawing and editing design objects: move, offset, batters and berms, explode, insert points, drape; designing a pit with its haul ramp",
+        tools: design,
     },
     Group {
         name: "surfaces",

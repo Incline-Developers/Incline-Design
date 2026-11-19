@@ -273,7 +273,7 @@ impl<'a> Graphics<'a> {
         // Per-frame pass for the live drawing tools; the static scene above no
         // longer rebuilds while they run. Rebuilt while a tool is active and
         // once more after it deactivates (to clear the buffers).
-        let dynamic_active = editor.batter_berm_dialog_open;
+        let dynamic_active = editor.batter_berm_dialog_open || editor.pit_design.is_some();
         if dynamic_active || !self.dynamic_strokes.is_empty() {
             rebuild_dynamic_scene(DynamicSceneBuildInput {
                 editor,

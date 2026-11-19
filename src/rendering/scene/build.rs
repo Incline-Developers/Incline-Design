@@ -669,6 +669,32 @@ pub(crate) fn rebuild_dynamic_scene(input: DynamicSceneBuildInput<'_>) {
             }
         }
     }
+
+    // Pit Design's preview: its rings, and its ramp's edges and centreline.
+    if let Some(design) = editor
+        .pit_design
+        .as_ref()
+        .and_then(|draft| draft.preview.as_ref())
+        .and_then(|preview| preview.design.as_ref().ok())
+    {
+        use crate::model::pit_design::StringKind;
+        for string in &design.strings {
+            let colour = crate::app::commands::pit_design::string_colour(string.kind);
+            let weight = match string.kind {
+                StringKind::RampEdge => 2.5,
+                StringKind::RampCentreline => 1.0,
+                StringKind::Toe | StringKind::Crest => 1.5,
+            };
+            for pair in string.points.windows(2) {
+                draw_line(&mut draw_ctx, pair[0], pair[1], weight, colour);
+            }
+            if string.closed
+                && let (Some(&first), Some(&last)) = (string.points.first(), string.points.last())
+            {
+                draw_line(&mut draw_ctx, last, first, weight, colour);
+            }
+        }
+    }
 }
 
 pub(crate) struct FlowSceneBuildInput<'a> {

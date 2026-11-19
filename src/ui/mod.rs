@@ -561,6 +561,9 @@ struct UiFrameContext<'a> {
 /// to, the way out, why it is being asked - goes in `minor` rather than being
 /// punctuated onto the end, so the banner can dim it. See [`ViewportMessage`].
 fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
+    if editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start) {
+        return Some(ViewportMessage::text(tr!("pit-design-ramp-start-prompt")).minor(tr!("ui-esc-cancels")));
+    }
     if editor.optimization.start_pick.is_some() {
         return Some(ViewportMessage::text(tr!("opt-pick-prompt")).minor(tr!("ui-esc-cancels")));
     }
@@ -1326,6 +1329,7 @@ fn draw_ui(
     dialogs::editing::draw_move_to_layer_dialog(root_ui, editor, project, commands);
     dialogs::editing::draw_move_to_axis_dialog(root_ui, editor, commands);
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
+    dialogs::pit_design::draw_pit_design_dialog(root_ui, editor, project, commands);
     dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
     elements::properties::draw_preferences(root_ui, editor, commands);

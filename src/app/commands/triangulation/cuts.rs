@@ -704,7 +704,7 @@ pub(super) struct SurfaceClipVertex {
     pub(super) height_delta: f64,
 }
 
-pub(super) fn clip_mesh_by_surface(
+pub(crate) fn clip_mesh_by_surface(
     target: &mesh_data::Triangulation,
     reference: &mesh_data::Triangulation,
     side: TriSurfaceCutSide,

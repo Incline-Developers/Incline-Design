@@ -1011,7 +1011,7 @@ fn lower_conflicting_breakline_edges(paths: &[BreaklineRef<'_>]) -> HashSet<(usi
     ignored
 }
 
-pub(super) fn cdt_surface_from_breaklines(boundaries: &[Vec<glam::DVec3>], constraints: &[Vec<glam::DVec3>]) -> Result<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>)> {
+pub(crate) fn cdt_surface_from_breaklines(boundaries: &[Vec<glam::DVec3>], constraints: &[Vec<glam::DVec3>]) -> Result<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>)> {
     cdt_surface_from_breaklines_impl(boundaries, constraints, false)
 }
 

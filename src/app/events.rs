@@ -167,8 +167,10 @@ impl<'a> App<'a> {
         }
 
         if !gui_consumed {
-            let canvas_pick_mode_active =
-                self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick;
+            let canvas_pick_mode_active = self.editor.triangulation_pick_target.is_some()
+                || self.editor.optimization.start_pick.is_some()
+                || self.editor.drill_pattern_awaiting_shape_pick
+                || self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start);
             let suppress_view_mode_canvas_click = self.editor.view_mode_owns_canvas_click() && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
             if !suppress_view_mode_canvas_click || canvas_pick_mode_active {
                 self.handle_mouse_press(&event);
@@ -411,6 +413,11 @@ impl<'a> App<'a> {
                                 if self.editor.batter_berm_dialog_open {
                                     self.update_batter_berm_preview();
                                     self.invalidate_overlay();
+                                }
+                                // Pit Design rebuilds its preview, in the
+                                // background, when its settings change.
+                                if self.editor.pit_design.is_some() {
+                                    self.update_pit_design_preview();
                                 }
                                 // Clear in-progress stroke when switching away from drawing tools.
                                 if !matches!(self.editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly) && !self.editor.pending_stroke.is_empty() {
@@ -768,6 +775,11 @@ impl<'a> App<'a> {
             ..
         } = event
         {
+            if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start) {
+                self.editor.canvas_context_menu_open = false;
+                self.pick_pit_ramp_start_at_cursor();
+                return;
+            }
             if self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick {
                 self.editor.canvas_context_menu_open = false;
                 self.begin_select_or_drag();
@@ -1416,6 +1428,8 @@ impl<'a> App<'a> {
                     self.redraw_requested = true;
                 } else if self.editor.text_editing_enabled {
                     self.cancel_text_edit();
+                } else if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start) {
+                    self.cancel_pit_ramp_start_pick();
                 } else if self.editor.optimization.start_pick.is_some() {
                     self.cancel_shell_start_pick();
                 } else if self.editor.triangulation_pick_target.is_some() {

@@ -12,6 +12,7 @@ pub(crate) mod npv_schedule; // Handles the schedules under optimization scenari
 pub(crate) mod object_edit;
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod optimization; // Handles pit optimization's scenario list, editor and scenarios file.
+pub(crate) mod pit_design; // Designs a pit's benches and ramp from a closed string.
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
@@ -1396,6 +1397,22 @@ impl<'a> App<'a> {
             }
             UiCommand::OpenInsertPointAtElevationDialog => {
                 self.open_insert_point_at_elevation_dialog();
+                Ok(())
+            }
+            UiCommand::OpenPitDesign => {
+                self.open_pit_design();
+                Ok(())
+            }
+            UiCommand::ClosePitDesign => {
+                self.close_pit_design();
+                Ok(())
+            }
+            UiCommand::CommitPitDesign => {
+                self.commit_pit_design();
+                Ok(())
+            }
+            UiCommand::BeginPitRampStartPick => {
+                self.begin_pit_ramp_start_pick();
                 Ok(())
             }
             UiCommand::OpenObjectEditDialog(id) => {

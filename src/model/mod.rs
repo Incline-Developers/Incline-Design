@@ -29,6 +29,7 @@ pub(crate) mod numbers;
 pub(crate) mod object_edit;
 pub(crate) mod optimization;
 pub(crate) mod optimization_run;
+pub(crate) mod pit_design;
 pub(crate) mod point_cloud;
 pub(crate) mod point_features;
 pub(crate) mod progress;

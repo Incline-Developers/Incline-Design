@@ -429,6 +429,7 @@ impl EditorState {
         self.tri_create_open
             || self.move_to_axis_dialog.is_some()
             || self.insert_point_at_elevation_dialog.is_some()
+            || self.pit_design.is_some()
             || self.tri_cut_poly_open
             || self.tri_cut_z_open
             || self.tri_contour_open
@@ -1139,6 +1140,8 @@ pub(crate) struct SelectionCounts {
 pub(crate) enum SelectionPickTool {
     SetAxis,
     InsertAtElevation,
+    /// The closed string Pit Design builds from.
+    PitDesignString,
     /// Has no dialog: opens straight into the pick when the selection holds
     /// too little to run on, and runs on Done.
     InsertAtIntersection,
@@ -2466,6 +2469,8 @@ pub(crate) struct EditorState {
     /// A tool's Pick is up: the viewport selects for that tool until Done.
     pub(crate) selection_pick: Option<SelectionPick>,
     pub(crate) insert_point_at_elevation_dialog: Option<crate::ui::dialogs::InsertPointAtElevationDialog>,
+    /// Pit Design, open while it holds its settings and preview.
+    pub(crate) pit_design: Option<crate::ui::dialogs::pit_design::PitDesignDraft>,
     /// The "Edit Object" dialog, holding a working copy of one design object
     /// until Apply or OK hands it back to the document.
     pub(crate) object_edit_dialog: Option<crate::ui::dialogs::object_edit::ObjectEditDialog>,
@@ -3729,6 +3734,7 @@ impl EditorState {
             || self.move_to_layer_dialog.is_some()
             || self.move_to_axis_dialog.is_some()
             || self.insert_point_at_elevation_dialog.is_some()
+            || self.pit_design.is_some()
             || self.new_layer_dialog_open
             || self.survey.definitions_open
             || self.survey.transform_open
@@ -3908,6 +3914,7 @@ impl EditorState {
         self.move_to_layer_dialog = None;
         self.move_to_axis_dialog = None;
         self.insert_point_at_elevation_dialog = None;
+        self.pit_design = None;
         self.object_edit_dialog = None;
         self.measurement_start = None;
         self.measurement_end = None;
@@ -4317,6 +4324,7 @@ impl EditorState {
             selection_counts: SelectionCounts::default(),
             selection_pick: None,
             insert_point_at_elevation_dialog: None,
+            pit_design: None,
             object_edit_dialog: None,
             xray_enabled: false,
             cinematic_enabled: false,
@@ -6251,6 +6259,11 @@ pub(crate) enum UiCommand {
     },
     /// Open the elevation input for inserting vertices into selected polylines.
     OpenInsertPointAtElevationDialog,
+    OpenPitDesign,
+    ClosePitDesign,
+    CommitPitDesign,
+    /// Wait for a click on Pit Design's string where its ramp starts.
+    BeginPitRampStartPick,
     /// Insert vertices where selected polylines cross an elevation.
     InsertPointsAtElevation {
         object_ids: Vec<ObjectId>,
@@ -6508,6 +6521,9 @@ impl UiCommand {
             | Self::OpenCreateTriangulation
             | Self::OpenMoveToAxisDialog(_)
             | Self::OpenInsertPointAtElevationDialog
+            | Self::OpenPitDesign
+            | Self::ClosePitDesign
+            | Self::BeginPitRampStartPick
             | Self::OpenObjectEditDialog(_)
             | Self::OpenPointCloudTin
             | Self::OpenPointCloudJoin
@@ -6941,6 +6957,7 @@ impl UiCommand {
             Self::BeginOffsetPick { object_ids, .. } => report(tr!("common-offset"), tr!("common-count-object-s", count = object_ids.len().to_string())),
             Self::RelimitLineResize { .. } => report(tr!("common-relimit-line"), String::new()),
             Self::CommitBatterBerm => report(tr!("common-create-batter-berm"), tr!("state-apply-generated-rings")),
+            Self::CommitPitDesign => report(tr!("pit-design-title"), tr!("pit-design-report-summary")),
             Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
             #[cfg(not(target_arch = "wasm32"))]
             Self::InsertPointsAtCrossings { object_ids } => report(tr!("state-insert-intersection-points"), tr!("common-count-object-s", count = object_ids.len().to_string())),

@@ -171,6 +171,9 @@ pub(crate) enum JobKey {
     DigBlockCount {
         key: u64,
     },
+    /// Pit Design's preview, built from its settings; each change of them
+    /// starts another, which cancels the one before.
+    PitDesignPreview(u64),
     /// A job not tied to any tracked source (always applied).
     #[allow(dead_code)]
     Anonymous,
@@ -341,6 +344,7 @@ impl<'a> App<'a> {
             // Held under its key, which a reader checks against the ground
             // and lines it is counting.
             JobKey::DigBlockCount { .. } => true,
+            JobKey::PitDesignPreview(_) => true,
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects

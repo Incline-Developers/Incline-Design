@@ -21,7 +21,7 @@ use crate::{
 const DEFAULT_TRIANGULATION_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
 mod contours;
-mod creation;
+pub(crate) mod creation;
 pub(crate) mod cuts;
 mod geometry;
 mod include;

@@ -319,6 +319,11 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         }
     }
     draw_tie_preview(&mut overlay, editor);
+    // Where Pit Design's ramp leaves its string.
+    if let Some(start) = editor.pit_design.as_ref().and_then(|draft| draft.preview.as_ref()).and_then(|preview| preview.ramp_start) {
+        draw_screen_cross(&mut overlay, start, 20.0, 8.0, [0.05, 0.35, 0.1, 1.0]);
+        draw_screen_cross(&mut overlay, start, 18.0, 4.0, [0.45, 0.9, 0.5, 1.0]);
+    }
     // The directional shells' starting point already picked, shown while it is picked again.
     if let Some(pick) = editor.optimization.start_pick.as_ref()
         && let Some((x, y)) = editor.optimization.draft.as_ref().and_then(|draft| draft.scenario.output.shell_start)

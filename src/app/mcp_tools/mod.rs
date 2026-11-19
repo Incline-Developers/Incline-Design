@@ -39,6 +39,7 @@ mod groups;
 mod items;
 mod jobs;
 mod objects;
+mod pit_design;
 mod plan_grid;
 mod planning;
 mod production;
@@ -327,6 +328,9 @@ impl App<'_> {
             return result;
         }
         if let Some(result) = self.call_mcp_object_tool(name, arguments) {
+            return result;
+        }
+        if let Some(result) = self.call_mcp_pit_design_tool(name, arguments) {
             return result;
         }
         if let Some(result) = self.call_mcp_job_tool(name, arguments) {
