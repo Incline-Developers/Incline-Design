@@ -185,6 +185,11 @@ impl App<'_> {
                 SceneEntityId::BlockModel(id) if self.block_models.iter().any(|model| model.id == *id && model.state.loaded) => {
                     counts.block_models += 1;
                 }
+                SceneEntityId::PrismoidGrid(id) => {
+                    if let Some(item) = self.prismoid_grids.iter().find(|item| item.id == *id && item.state.loaded) {
+                        counts.grid_masked_cells += item.summary.masked_cells;
+                    }
+                }
                 _ => {}
             }
         }

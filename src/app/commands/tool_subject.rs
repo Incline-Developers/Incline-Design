@@ -322,6 +322,7 @@ impl App<'_> {
         self.editor.tri_prismoid_mask_object_name = polyline_id.map_or_else(String::new, |id| self.boundary_name(id));
         self.editor.tri_prismoid_mask_object_id = polyline_id;
         self.editor.tri_prismoid_mask_mode = TriPolylineClipMode::KeepInside;
+        self.editor.tri_prismoid_mask_unmask = false;
         if let Some(id) = only(&self.selected_prismoid_grids()) {
             self.set_mask_grid(id);
         }

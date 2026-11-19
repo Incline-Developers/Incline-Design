@@ -217,6 +217,7 @@ impl<'a> App<'a> {
                 | UiCommand::OpenHoleMisfit
                 | UiCommand::ExecuteHoleMisfit { .. }
                 | UiCommand::TogglePrismoidMask
+                | UiCommand::UnmaskAllPrismoids
                 | UiCommand::OpenMaskPrismoidGridByPolyline
                 | UiCommand::ExecuteMaskPrismoidGridByPolyline { .. }
                 | UiCommand::OpenTrimPrismoidGrids
@@ -1913,12 +1914,16 @@ impl<'a> App<'a> {
                 self.toggle_prismoid_mask();
                 Ok(())
             }
+            UiCommand::UnmaskAllPrismoids => {
+                self.unmask_all_prismoids();
+                Ok(())
+            }
             UiCommand::OpenMaskPrismoidGridByPolyline => {
                 self.open_mask_prismoid_grid();
                 Ok(())
             }
-            UiCommand::ExecuteMaskPrismoidGridByPolyline { grid, polyline_id, mode } => {
-                let result = self.mask_prismoid_grid_by_polyline(grid, polyline_id, mode);
+            UiCommand::ExecuteMaskPrismoidGridByPolyline { grid, polyline_id, mode, unmask } => {
+                let result = self.mask_prismoid_grid_by_polyline(grid, polyline_id, mode, unmask);
                 if result.is_ok() {
                     self.editor.tri_prismoid_mask_open = false;
                 }

@@ -925,6 +925,7 @@ impl<'a> Graphics<'a> {
             chunk_bounds_outline: None,
             model_envelope_outline: None,
             cell_selection_outline: None,
+            masked_cell_outline: None,
             section_cell_lines: None,
             section_cell_rim: None,
             prismoid_lattices: (None, Vec::new()),

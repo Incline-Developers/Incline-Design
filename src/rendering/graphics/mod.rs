@@ -592,6 +592,8 @@ pub(crate) struct Graphics<'a> {
     pub(super) model_envelope_outline: Option<(u64, Vec<passes::ChunkBoundsOutline>)>,
     /// The rim round the picked prismoids, keyed by the selection's revision.
     pub(super) cell_selection_outline: Option<(u64, Vec<passes::ChunkBoundsOutline>)>,
+    /// The rim round the prismoids masked by hand, keyed by the App's key.
+    pub(super) masked_cell_outline: Option<(u64, Vec<passes::ChunkBoundsOutline>)>,
     /// The lines between the section's crossed prismoids, and round the
     /// selected ones, keyed by the cells' revision.
     pub(super) section_cell_lines: Option<(u64, Vec<passes::ChunkBoundsOutline>)>,

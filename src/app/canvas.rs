@@ -497,6 +497,12 @@ impl<'a> App<'a> {
             if self.editor.active_tool == ActiveTool::None && self.select_tie_at_cursor() {
                 return;
             }
+            // A prismoid masked by hand is drawn as a hole: during Mask
+            // Prismoids' pick a click in front of what it hit takes it.
+            if self.pick_masked_prismoid_cell(pending_selection_click.as_ref()) {
+                self.invalidate_geometry();
+                return;
+            }
             if let Some(pick) = pending_selection_click {
                 let world = pick.world;
                 let handle = pick.entity;

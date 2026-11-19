@@ -511,6 +511,7 @@ pub(crate) enum MenuRow {
     MisfitAtHoles,
     MaskPrismoidGridByPolyline,
     MaskPrismoids,
+    UnmaskAllPrismoids,
     TrimPrismoidGrids,
     NewLayer,
 }
@@ -721,6 +722,7 @@ const GEOLOGY_MENUS: &[WorkspaceMenu] = &[
                 // One row masks the selected prismoids, or picks them first,
                 // and, ticked when all are masked by hand, unmasks them.
                 MenuRow::MaskPrismoids,
+                MenuRow::UnmaskAllPrismoids,
                 MenuRow::TrimPrismoidGrids,
             ]),
         ],
@@ -862,6 +864,7 @@ impl MenuRow {
             Self::MisfitAtHoles => tr!("common-misfit-at-holes-ellipsis"),
             Self::MaskPrismoidGridByPolyline => tr!("common-mask-prismoid-grid-polyline"),
             Self::MaskPrismoids => tr!("common-mask-prismoids"),
+            Self::UnmaskAllPrismoids => tr!("common-unmask-all-prismoids"),
             Self::TrimPrismoidGrids => tr!("common-trim-prismoid-grids-topology-ellipsis"),
             Self::NewLayer => tr!("ws-menubar-geology-new-layer"),
         }
@@ -955,6 +958,7 @@ impl MenuRow {
             Self::MisfitAtHoles => UiCommand::OpenHoleMisfit,
             Self::MaskPrismoidGridByPolyline => UiCommand::OpenMaskPrismoidGridByPolyline,
             Self::MaskPrismoids => UiCommand::TogglePrismoidMask,
+            Self::UnmaskAllPrismoids => UiCommand::UnmaskAllPrismoids,
             Self::TrimPrismoidGrids => UiCommand::OpenTrimPrismoidGrids,
             Self::NewLayer => UiCommand::OpenNewLayer,
         }
@@ -1016,6 +1020,7 @@ impl MenuRow {
             | Self::MisfitAtHoles
             | Self::MaskPrismoidGridByPolyline
             | Self::MaskPrismoids
+            | Self::UnmaskAllPrismoids
             | Self::TrimPrismoidGrids => true,
         }
     }
@@ -1023,8 +1028,9 @@ impl MenuRow {
     /// Whether the row can run as the editor stands, beside
     /// [`MenuRow::enabled`]: a tool as its toolbar cell is (layer, fly,
     /// section), and a row on the stroke being drawn. No row waits on the
-    /// selection. The Design menu's functions Geology offers run as that
-    /// menu runs them.
+    /// selection but Unmask All Prismoids, which has no dialog to choose
+    /// grids in. The Design menu's functions Geology offers run as that menu
+    /// runs them.
     pub(crate) fn ready(self, editor: &EditorState) -> bool {
         match self {
             Self::Tool(tool) => {
@@ -1043,6 +1049,7 @@ impl MenuRow {
             Self::DragVertex | Self::NudgeRl => !editor.fly_mode_enabled,
             // Saved only while drawn: the switch on and a section up.
             Self::SaveSurfaceLines => editor.slice_mode_enabled && editor.section_surface_lines_on(),
+            Self::UnmaskAllPrismoids => editor.selection_counts.grid_masked_cells > 0,
             _ => true,
         }
     }
@@ -1176,6 +1183,7 @@ impl MenuRow {
             Self::MisfitAtHoles => "ws-menubar-modelling-misfit-at-holes",
             Self::MaskPrismoidGridByPolyline => "ws-menubar-modelling-mask-prismoid-grid-polyline",
             Self::MaskPrismoids => "ws-menubar-modelling-mask-prismoids",
+            Self::UnmaskAllPrismoids => "ws-menubar-modelling-unmask-all-prismoids",
             Self::TrimPrismoidGrids => "ws-menubar-modelling-trim-prismoid-grids",
             Self::NewLayer => "ws-menubar-geology-new-layer",
         }

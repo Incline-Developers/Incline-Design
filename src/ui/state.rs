@@ -1485,6 +1485,9 @@ pub(crate) struct SelectionCounts {
     pub(crate) prismoid_cells: usize,
     /// Of those, the ones masked by hand.
     pub(crate) masked_prismoid_cells: usize,
+    /// The prismoids masked by hand in the selected loaded grids, which
+    /// Unmask All Prismoids unmasks.
+    pub(crate) grid_masked_cells: usize,
     /// Selected points on quality-marked layers, which Misfit at Holes
     /// compares; counted only while its pick is up.
     pub(crate) quality_points: usize,
@@ -3127,6 +3130,10 @@ pub(crate) struct EditorState {
     pub(crate) selected_dig_block_infos: Vec<DigBlockInfo>,
     /// The prismoids picked on a drawn grid, in Geology.
     pub(crate) cell_selection: Option<CellSelection>,
+    /// Roof and floor segments round the drawn grids' prismoids masked by
+    /// hand, with the key they were made for; only while Mask Prismoids'
+    /// pick is up, in Geology.
+    pub(crate) masked_cell_outline: Option<(u64, Vec<[DVec3; 2]>)>,
     /// Lines copied in a planning cut step, and whether they came from Dig
     /// Strips (flitch strips) or Blasting (bench blast lines): each pastes
     /// only into the step it was copied from.
@@ -3537,13 +3544,14 @@ pub(crate) struct EditorState {
     pub(crate) tri_prismoid_difference_value: Option<String>,
     pub(crate) tri_prismoid_difference_name_input: String,
     pub(crate) tri_prismoid_difference_name_auto: bool,
-    /// Mask Prismoid Grid by Polyline: the grid, the closed polyline and
-    /// which side of it is kept.
+    /// Mask Prismoid Grid by Polyline: the grid, the closed polyline, which
+    /// side of it stays active, and whether it masks or unmasks.
     pub(crate) tri_prismoid_mask_open: bool,
     pub(crate) tri_prismoid_mask_grid: Option<PrismoidGridId>,
     pub(crate) tri_prismoid_mask_object_id: Option<ObjectId>,
     pub(crate) tri_prismoid_mask_object_name: String,
     pub(crate) tri_prismoid_mask_mode: TriPolylineClipMode,
+    pub(crate) tri_prismoid_mask_unmask: bool,
     /// Trim Prismoid Grids to Topography: the grids ticked, the topography,
     /// the side kept and, for one grid, the new grid's name.
     pub(crate) tri_prismoid_trim_open: bool,
@@ -5308,6 +5316,7 @@ impl EditorState {
             solid_preview_image_revision: 0,
             selected_dig_block_infos: Vec::new(),
             cell_selection: None,
+            masked_cell_outline: None,
             cut_clipboard: (false, Vec::new()),
             copy_cuts_dialog: None,
             selected_blast: None,
@@ -5521,6 +5530,7 @@ impl EditorState {
             tri_prismoid_mask_object_id: None,
             tri_prismoid_mask_object_name: String::new(),
             tri_prismoid_mask_mode: TriPolylineClipMode::KeepInside,
+            tri_prismoid_mask_unmask: false,
             tri_prismoid_trim_open: false,
             tri_prismoid_trim_grids: Vec::new(),
             tri_prismoid_trim_topology: None,
@@ -7477,15 +7487,19 @@ pub(crate) enum UiCommand {
     /// Mask the selected prismoids by hand, or unmask them when every one
     /// is masked by hand; with none selected, pick them first.
     TogglePrismoidMask,
+    /// Unmask every prismoid masked by hand in each selected loaded grid.
+    UnmaskAllPrismoids,
     /// Open Mask Prismoid Grid by Polyline, on the one grid and the one
     /// closed polyline selected if any.
     OpenMaskPrismoidGridByPolyline,
     /// Mask by hand every active prismoid of `grid` whose centre falls on
-    /// the side of the polyline `mode` does not keep.
+    /// the side of the polyline `mode` does not keep; with `unmask`, unmask
+    /// every one masked by hand on the side it keeps.
     ExecuteMaskPrismoidGridByPolyline {
         grid: PrismoidGridId,
         polyline_id: ObjectId,
         mode: TriPolylineClipMode,
+        unmask: bool,
     },
     /// Open Trim Prismoid Grids to Topography with the loaded prismoid grids
     /// selected ticked.
@@ -8262,6 +8276,7 @@ impl UiCommand {
             Self::ExecuteDifferencePrismoidGrids { name, .. } => report(tr!("state-difference-prismoid-grids"), name.clone()),
             Self::ExecuteHoleMisfit { seam, .. } => report(tr!("state-hole-misfit"), misfit_seam_label(seam.as_ref().map(|(_, target)| target))),
             Self::TogglePrismoidMask => report(tr!("common-mask-prismoids"), tr!("state-selected-prismoid-grid")),
+            Self::UnmaskAllPrismoids => report(tr!("common-unmask-all-prismoids"), tr!("state-selected-prismoid-grids")),
             Self::ExecuteMaskPrismoidGridByPolyline { .. } => report(tr!("state-mask-prismoid-grid"), tr!("state-selected-prismoid-grid")),
             Self::ExecuteTrimPrismoidGrids { side, .. } => report(tr!("state-trim-prismoid-grids"), side.trim_label()),
             Self::ExecuteCreateRegularBlockModel { .. } => report(tr!("block-model-regular-title"), tr!("state-selected-prismoid-grids")),

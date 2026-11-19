@@ -27,7 +27,7 @@ use crate::{
         project::{ModelEnvelope, ProjectItemState},
         rbf::NODE_BUDGET,
         solid_reserves::NumericTotal,
-        spatial::TriangleBvh,
+        spatial::{TriangleBvh, ray_triangle},
         triangulation::{GeometryVersion, quality_key, same_quality_name},
     },
 };
@@ -1508,6 +1508,48 @@ impl PrismoidGrid {
         best.map(|(cell, _)| cell)
     }
 
+    /// The cell masked by hand that the ray from `origin` along unit
+    /// `direction` meets first, with how far along the ray: on its roof or
+    /// floor as [`Self::closed_mesh`] would draw them were it active, a cut
+    /// cell by its cut triangles. A masked cell is drawn as a hole. Only hits
+    /// at points `shown` keeps count, as a section's slab clips the view.
+    pub(crate) fn picked_masked_cell(&self, origin: DVec3, direction: DVec3, shown: impl Fn(DVec3) -> bool) -> Option<(usize, f64)> {
+        let plan = self.lattice.corners();
+        let hit = |triangle: [DVec3; 3]| ray_triangle(origin, direction, triangle).filter(|distance| shown(origin + direction * *distance));
+        let mut best: Option<(usize, f64)> = None;
+        for cell in (0..self.masked.len()).filter(|cell| self.masked[*cell]) {
+            let nearest = match self.cut.triangles_of(cell) {
+                Some(triangles) => triangles
+                    .flat_map(|points| {
+                        let at = |height: fn(&CutPoint) -> f64| points.map(|point| self.lattice.to_world(point.plan).extend(height(&point)));
+                        [at(|point| point.roof), at(|point| point.floor)]
+                    })
+                    .filter_map(hit)
+                    .min_by(f64::total_cmp),
+                None => {
+                    let [a, b, c, d] = self.cell_corners(cell);
+                    let roof = |corner: usize| plan[corner].extend(self.roof[corner]);
+                    let floor = |corner: usize| plan[corner].extend(self.floor[corner]);
+                    [
+                        [roof(a), roof(b), roof(c)],
+                        [roof(a), roof(c), roof(d)],
+                        [floor(a), floor(c), floor(b)],
+                        [floor(a), floor(d), floor(c)],
+                    ]
+                    .into_iter()
+                    .filter_map(hit)
+                    .min_by(f64::total_cmp)
+                }
+            };
+            if let Some(distance) = nearest
+                && best.is_none_or(|(_, held)| distance < held)
+            {
+                best = Some((cell, distance));
+            }
+        }
+        best
+    }
+
     /// Where the vertical plane through `point` with horizontal unit `normal`
     /// crosses the active cells, in order along the plane: distances from
     /// `point` towards `(-normal.y, normal.x)`, as a section frames them.
@@ -1939,13 +1981,18 @@ impl PrismoidGrid {
 
     /// The lattice size, the active cells, the range of roof minus floor
     /// over every corner of an active cell, and the totals: a derived block
-    /// model's bit for bit without an envelope, to rounding with one.
+    /// model's bit for bit without an envelope, to rounding with one; and
+    /// the cells masked by hand.
     pub(crate) fn summary(&self) -> PrismoidGridSummary {
-        self.summary_of(self.active.iter().enumerate().filter(|(_, active)| **active).map(|(cell, _)| cell))
+        let masked_cells = self.masked.iter().filter(|masked| **masked).count();
+        PrismoidGridSummary {
+            masked_cells,
+            ..self.summary_of(self.active.iter().enumerate().filter(|(_, active)| **active).map(|(cell, _)| cell))
+        }
     }
 
     /// [`Self::summary`] over the given active cells, taken in cell order:
-    /// `active_cells` counts them.
+    /// `active_cells` counts them, and `masked_cells` is 0.
     pub(crate) fn summary_of(&self, cells: impl Iterator<Item = usize>) -> PrismoidGridSummary {
         let (columns, rows) = (self.lattice.columns(), self.lattice.rows());
         let (u_edges, v_edges) = (edges(&self.lattice.u_sizes), edges(&self.lattice.v_sizes));
@@ -2010,6 +2057,7 @@ impl PrismoidGrid {
             columns,
             rows,
             active_cells,
+            masked_cells: 0,
             vertical_thickness: thickness,
             volume,
             weighting: if tonnes.is_some() { Weighting::ByTonnes } else { Weighting::ByVolume },
@@ -3014,6 +3062,8 @@ pub(crate) struct PrismoidGridSummary {
     pub(crate) columns: usize,
     pub(crate) rows: usize,
     pub(crate) active_cells: usize,
+    /// The cells masked by hand, which Unmask All Prismoids brings back.
+    pub(crate) masked_cells: usize,
     /// Roof minus floor, smallest and largest; `None` with no active cell.
     pub(crate) vertical_thickness: Option<(f64, f64)>,
     /// Cubic metres in the active prismoids.

@@ -682,6 +682,24 @@ impl App<'_> {
         self.spawn_mask_edit(runtime_id, id, name, source, mask, move |grid, _, _| Ok(mask_cells(grid, cells, mask)));
     }
 
+    /// Unmask every prismoid masked by hand in each selected loaded grid,
+    /// one undoable step per grid.
+    pub(crate) fn unmask_all_prismoids(&mut self) {
+        let Some(runtime_id) = self.workspace.active_project().map(|project| project.runtime_id) else {
+            return;
+        };
+        let selected = &self.editor.selected_handles;
+        let grids: Vec<_> = self
+            .prismoid_grids
+            .iter()
+            .filter(|item| item.state.loaded && item.summary.masked_cells > 0 && selected.contains(&item.entity_id()))
+            .map(|item| (item.id, item.name.clone(), Arc::clone(&item.grid)))
+            .collect();
+        for (id, name, source) in grids {
+            self.spawn_mask_edit(runtime_id, id, name, source, false, |grid, _, _| Ok(unmask_all(grid)));
+        }
+    }
+
     /// Run a mask edit's `compute` on the job queue keyed by the grid, as
     /// the grid is copied whole however few cells change, and put its result
     /// in place with [`Self::replace_prismoid_mask`].
@@ -767,16 +785,17 @@ impl App<'_> {
 
     /// Mask by hand, on the job queue and as one undoable step, every active
     /// prismoid whose centre lies on the side of a closed polyline that
-    /// `mode` does not keep.
-    pub(crate) fn mask_prismoid_grid_by_polyline(&mut self, grid_id: PrismoidGridId, polyline_id: ObjectId, mode: TriPolylineClipMode) -> Result<()> {
+    /// `mode` does not keep; with `unmask`, unmask every one masked by hand
+    /// on the side it keeps.
+    pub(crate) fn mask_prismoid_grid_by_polyline(&mut self, grid_id: PrismoidGridId, polyline_id: ObjectId, mode: TriPolylineClipMode, unmask: bool) -> Result<()> {
         let gone = || anyhow::anyhow!("{}", tr!("cmd-commands-select-one-prismoid-grid-polyline"));
         let runtime_id = self.workspace.active_project().map(|project| project.runtime_id).ok_or_else(gone)?;
         let item = self.prismoid_grids.iter().find(|item| item.id == grid_id && item.state.loaded).ok_or_else(gone)?;
         let (source, name) = (Arc::clone(&item.grid), item.name.clone());
         let ring = mask_ring(self.scene_document.get_object(polyline_id).and_then(Object::closed_boundary))?;
-        self.spawn_mask_edit(runtime_id, grid_id, name, source, true, move |grid, cancel, progress| {
-            let cells = cells_by_ring(grid, &ring, mode, cancel, &progress.phase(0.0, 1.0)).ok_or(crate::app::jobs::Cancelled)?;
-            Ok(mask_cells(grid, cells, true))
+        self.spawn_mask_edit(runtime_id, grid_id, name, source, !unmask, move |grid, cancel, progress| {
+            let cells = cells_by_ring(grid, &ring, mode, unmask, cancel, &progress.phase(0.0, 1.0)).ok_or(crate::app::jobs::Cancelled)?;
+            Ok(mask_cells(grid, cells, !unmask))
         });
         Ok(())
     }
@@ -1156,12 +1175,76 @@ impl App<'_> {
         }
         self.refresh_prismoid_scene();
         self.refresh_prismoid_lattice_lines();
+        self.refresh_masked_cell_outline();
+    }
+
+    /// Outline the drawn grids' prismoids masked by hand while Mask
+    /// Prismoids' pick is up in Geology, only when the pick, a grid or what
+    /// is hidden moved: a still frame costs a hash.
+    fn refresh_masked_cell_outline(&mut self) {
+        let picking = self.editor.active_workspace == Workspace::Geology && self.editor.selection_pick.as_ref().is_some_and(|pick| pick.tool == SelectionPickTool::MaskPrismoids);
+        if !picking {
+            if self.editor.masked_cell_outline.take().is_some() {
+                self.request_topology_redraw();
+            }
+            return;
+        }
+        let shown = section_grids(&self.editor, &self.prismoid_grids, &self.prismoid_drawn);
+        let mut hasher = DefaultHasher::new();
+        for item in shown.clone() {
+            item.id.hash(&mut hasher);
+            (Arc::as_ptr(&item.grid) as usize).hash(&mut hasher);
+        }
+        let key = hasher.finish();
+        if self.editor.masked_cell_outline.as_ref().is_some_and(|(held, _)| *held == key) {
+            return;
+        }
+        let outline = shown.flat_map(|item| item.grid.selection_outline(&item.grid.masked)).collect();
+        self.editor.masked_cell_outline = Some((key, outline));
+        self.request_topology_redraw();
     }
 
     /// Pick the prismoid a click on a drawn grid landed on, by Leo's
     /// selection modes one grain down: the grid stays selected while any of
     /// its cells is. False when the point is on no active cell.
     pub(crate) fn pick_prismoid_cell(&mut self, id: PrismoidGridId, world: DVec3) -> bool {
+        self.click_prismoid_cell(id, world, |grid| grid.picked_cell(world))
+    }
+
+    /// During Mask Prismoids' pick, pick the prismoid masked by hand nearest
+    /// along the cursor's ray, on a drawn grid shown and not frozen, as
+    /// [`Self::pick_prismoid_cell`] picks; a click's `hit` nearer than it
+    /// wins. False with none. Not in a 2D section, which draws no hole.
+    pub(crate) fn pick_masked_prismoid_cell(&mut self, hit: Option<&ScenePick>) -> bool {
+        let picking = self.editor.active_workspace == Workspace::Geology && self.editor.selection_pick.as_ref().is_some_and(|pick| pick.tool == SelectionPickTool::MaskPrismoids);
+        let Some(graphics) = self.graphics.as_ref().filter(|_| picking) else {
+            return false;
+        };
+        let slab = graphics.section_slab();
+        if slab.as_ref().is_some_and(|slab| slab.outlines) {
+            return false;
+        }
+        let (origin, direction) = graphics.cursor_model_ray();
+        let frozen = &self.editor.pick_frozen;
+        let nearest = section_grids(&self.editor, &self.prismoid_grids, &self.prismoid_drawn)
+            .filter(|item| !frozen.contains(&item.entity_id()))
+            .filter_map(|item| {
+                let shown = |at: DVec3| slab.as_ref().is_none_or(|slab| slab.contains(at));
+                item.grid.picked_masked_cell(origin, direction, shown).map(|(cell, distance)| (item.id, cell, distance))
+            })
+            .min_by(|(.., one), (.., other)| one.total_cmp(other));
+        let Some((id, cell, distance)) = nearest else {
+            return false;
+        };
+        if hit.is_some_and(|hit| (hit.world - origin).dot(direction) < distance) {
+            return false;
+        }
+        self.click_prismoid_cell(id, origin + direction * distance, |_| Some(cell))
+    }
+
+    /// Pick the cell `cell_of` finds on grid `id`, the click landing at
+    /// `world`, by [`Self::pick_prismoid_cell`]'s modes. False with none.
+    fn click_prismoid_cell(&mut self, id: PrismoidGridId, world: DVec3, cell_of: impl FnOnce(&PrismoidGrid) -> Option<usize>) -> bool {
         let entity = SceneEntityId::PrismoidGrid(id);
         let Some((grid, name, stratum)) = self
             .prismoid_grids
@@ -1171,7 +1254,7 @@ impl App<'_> {
         else {
             return false;
         };
-        let Some(cell) = grid.picked_cell(world) else {
+        let Some(cell) = cell_of(&grid) else {
             return false;
         };
         let held = self
@@ -1720,16 +1803,18 @@ fn mask_ring(boundary: Option<Vec<DVec3>>) -> Result<Vec<mesh_data::Vertex>> {
 
 /// The active cells `mode` masks against `ring`, each judged by its plan
 /// centre: Keep inside masks those outside the ring, Keep outside those
-/// inside. A centre on the ring takes the one answer `ring_contains` gives
-/// it. `None` when cancelled.
-fn cells_by_ring(grid: &PrismoidGrid, ring: &[mesh_data::Vertex], mode: TriPolylineClipMode, cancel: &CancelFlag, progress: &Phase) -> Option<Vec<usize>> {
+/// inside. With `unmask`, the cells masked by hand on the side `mode`
+/// keeps instead. A centre on the ring takes the one answer
+/// `ring_contains` gives it. `None` when cancelled.
+fn cells_by_ring(grid: &PrismoidGrid, ring: &[mesh_data::Vertex], mode: TriPolylineClipMode, unmask: bool, cancel: &CancelFlag, progress: &Phase) -> Option<Vec<usize>> {
     let (low, high) = ring.iter().fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(low, high), point| {
         let point = DVec2::new(point.x, point.y);
         (low.min(point), high.max(point))
     });
     let keep_inside = mode == TriPolylineClipMode::KeepInside;
+    let (candidates, side) = if unmask { (&grid.masked, keep_inside) } else { (&grid.active, !keep_inside) };
     let cells = grid.lattice.cell_count();
-    let mut masked = Vec::new();
+    let mut taken = Vec::new();
     for (cell, centre) in grid.cell_centres() {
         if cell % 4096 == 0 {
             if cancel.is_cancelled() {
@@ -1737,15 +1822,15 @@ fn cells_by_ring(grid: &PrismoidGrid, ring: &[mesh_data::Vertex], mode: TriPolyl
             }
             progress.set_fraction(cell as f32 / cells as f32);
         }
-        if !grid.active[cell] {
+        if !candidates[cell] {
             continue;
         }
         let inside = centre.cmpge(low).all() && centre.cmple(high).all() && ring_contains(ring, mesh_data::Vertex::new(centre.x, centre.y, 0.0));
-        if inside != keep_inside {
-            masked.push(cell);
+        if inside == side {
+            taken.push(cell);
         }
     }
-    Some(masked)
+    Some(taken)
 }
 
 /// The cells a marquee takes off a grid in 3D: the active cells whose
@@ -1832,6 +1917,12 @@ fn mask_cells(grid: &PrismoidGrid, cells: impl IntoIterator<Item = usize>, mask:
         let summary = grid.summary();
         (grid, summary, count)
     })
+}
+
+/// [`mask_cells`] unmasking every cell of `grid` masked by hand.
+fn unmask_all(grid: &PrismoidGrid) -> Option<MaskedGrid> {
+    let masked = grid.masked.iter().enumerate().filter(|(_, masked)| **masked).map(|(cell, _)| cell);
+    mask_cells(grid, masked, false)
 }
 
 /// The grid a mask edit was made on, still in the active project (`current`)

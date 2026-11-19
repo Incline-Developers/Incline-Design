@@ -535,7 +535,7 @@ impl<'a> Graphics<'a> {
             )
     }
 
-    pub(super) fn cursor_model_ray(&self) -> (DVec3, DVec3) {
+    pub(crate) fn cursor_model_ray(&self) -> (DVec3, DVec3) {
         self.model_ray_at_viewport_px(self.camera_controller.mouse_loc)
     }
 

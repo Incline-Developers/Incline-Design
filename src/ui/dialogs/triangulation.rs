@@ -2098,9 +2098,9 @@ fn difference_name_refusal(this: Option<&UiPrismoidGridEntry>, other: Option<&Ui
         .map(|refusal| crate::app::commands::prismoid_grid::difference_name_words(refusal, &this.name))
 }
 
-/// Mask Prismoid Grid by Polyline: the grid, the closed polyline and the
-/// side kept, as the polyline cut takes them; nothing new is made, so there
-/// is no name.
+/// Mask Prismoid Grid by Polyline: the grid, the closed polyline, mask or
+/// unmask, and the side kept, as the polyline cut takes them; nothing new is
+/// made, so there is no name.
 pub(crate) fn draw_mask_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     if !editor.tri_prismoid_mask_open || editor.triangulation_pick_target.is_some() {
         return;
@@ -2165,6 +2165,17 @@ pub(crate) fn draw_mask_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut Edi
 
             ui.add_space(4.0);
 
+            let unmask = editor.tri_prismoid_mask_unmask;
+            MenuField::new(tr!("tri-operation")).show(ui, |ui, row_height, _| {
+                let (response, clicked) = centered_choice_buttons(ui, row_height, [(tr!("tri-mask"), !unmask), (tr!("tri-unmask"), unmask)]);
+                if let Some(index) = clicked {
+                    editor.tri_prismoid_mask_unmask = index == 1;
+                }
+                response
+            });
+
+            ui.add_space(4.0);
+
             MenuField::new(tr!("tri-mask-active-side")).show(ui, |ui, row_height, _| {
                 let (response, clicked) = centered_choice_buttons(
                     ui,
@@ -2183,9 +2194,11 @@ pub(crate) fn draw_mask_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut Edi
             });
             tool_help_panel(
                 ui,
-                match editor.tri_prismoid_mask_mode {
-                    TriPolylineClipMode::KeepInside => tr!("tri-mask-keep-inside-help"),
-                    TriPolylineClipMode::KeepOutside => tr!("tri-mask-keep-outside-help"),
+                match (editor.tri_prismoid_mask_mode, editor.tri_prismoid_mask_unmask) {
+                    (TriPolylineClipMode::KeepInside, false) => tr!("tri-mask-keep-inside-help"),
+                    (TriPolylineClipMode::KeepOutside, false) => tr!("tri-mask-keep-outside-help"),
+                    (TriPolylineClipMode::KeepInside, true) => tr!("tri-unmask-keep-inside-help"),
+                    (TriPolylineClipMode::KeepOutside, true) => tr!("tri-unmask-keep-outside-help"),
                 },
             );
 
@@ -2193,15 +2206,17 @@ pub(crate) fn draw_mask_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut Edi
             ui.separator();
 
             let can_run = grid.is_some() && editor.tri_prismoid_mask_object_id.is_some();
+            let run_label = if editor.tri_prismoid_mask_unmask { tr!("tri-unmask") } else { tr!("tri-mask") };
             menu::menu_actions(ui, |ui| {
                 let confirm = menu::dialog_confirmed(ui.ctx());
-                if (ui.add(MenuButton::new(tr!("tri-mask")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                if (ui.add(MenuButton::new(run_label).primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let (Some(grid), Some(polyline_id)) = (editor.tri_prismoid_mask_grid, editor.tri_prismoid_mask_object_id)
                 {
                     commands.push(UiCommand::ExecuteMaskPrismoidGridByPolyline {
                         grid,
                         polyline_id,
                         mode: editor.tri_prismoid_mask_mode,
+                        unmask: editor.tri_prismoid_mask_unmask,
                     });
                 }
                 if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {

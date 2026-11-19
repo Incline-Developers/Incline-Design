@@ -18,6 +18,9 @@ const MODEL_ENVELOPE_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 0.9];
 /// Width, in logical pixels, of the rim round the picked prismoids.
 const CELL_OUTLINE_WIDTH: f32 = 2.0;
 
+/// The rim round the prismoids masked by hand, muted beside the selection's.
+const MASKED_CELL_OUTLINE_COLOR: [f32; 4] = [0.72, 0.72, 0.74, 0.85];
+
 /// How far a selected prismoid grid's wire colours are mixed toward the
 /// selection blue: the share Leo's `SELECTION_TINT` tints a selected surface.
 const PRISMOID_WIRE_SELECTION_TINT: f32 = 0.6;
@@ -815,6 +818,18 @@ impl<'a> Graphics<'a> {
         });
     }
 
+    /// Rebuild [`Self::masked_cell_outline`] when the App's outline, the
+    /// scene origin or the scale factor moved since it was built. None in a
+    /// 2D section, as [`Self::rebuild_cell_selection_outline`].
+    fn rebuild_masked_cell_outline(&mut self, editor: &EditorState) {
+        let held = self.masked_cell_outline.take();
+        let section_2d = self.camera_uniform.section_cuts();
+        self.masked_cell_outline = editor.masked_cell_outline.as_ref().filter(|_| !section_2d).map(|(key, outline)| {
+            let segments = outline.iter().map(|[from, to]| (*from, *to));
+            self.keyed_outline(held, *key, segments, CELL_OUTLINE_WIDTH, MASKED_CELL_OUTLINE_COLOR, "Masked Cell Outline Strokes")
+        });
+    }
+
     /// Rebuild the lines between the section's crossed prismoids and round
     /// the selected ones when the cells were cut again, or the scene origin
     /// or the scale factor moved.
@@ -978,6 +993,7 @@ impl<'a> Graphics<'a> {
             self.rebuild_chunk_bounds_outline(editor, triangulations, point_clouds);
             self.rebuild_model_envelope_outline(editor);
             self.rebuild_cell_selection_outline(editor);
+            self.rebuild_masked_cell_outline(editor);
             self.rebuild_section_cell_outlines();
             self.rebuild_prismoid_lattice_lines();
         }
@@ -1756,7 +1772,14 @@ impl<'a> Graphics<'a> {
             render_pass.draw(0..6, 0..outline.instance_count);
         }
 
-        let keyed = [&self.model_envelope_outline, &self.cell_selection_outline, &self.section_cell_lines, &self.section_cell_rim];
+        // The masked rim before the selection's, which draws over it.
+        let keyed = [
+            &self.model_envelope_outline,
+            &self.masked_cell_outline,
+            &self.cell_selection_outline,
+            &self.section_cell_lines,
+            &self.section_cell_rim,
+        ];
         // The coloured lattices first, so the rim and the section lines
         // draw over them.
         // A hidden grid, or any in a 2D section, keeps its strokes and skips
