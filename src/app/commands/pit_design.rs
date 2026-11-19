@@ -340,7 +340,7 @@ impl App<'_> {
                 .unwrap_or_default();
             crate::model::project::unique_item_name(tr!("pit-design-default-name"), names.iter().map(String::as_str))
         });
-        PitObject::new(name, tr!("pit-design-scenario-default"), settings)
+        PitObject::new(name, settings)
     }
 
     /// Work `pit`'s design out here and now, so a new one draws at once.
@@ -725,9 +725,9 @@ impl App<'_> {
             return;
         };
         let nearest = nearest_on_string(&points, cursor.truncate());
-        if let Some(scenario) = self.editor.pit_design.as_mut().and_then(|draft| draft.working.as_mut()).and_then(PitObject::scenario_mut) {
-            scenario.settings.ramp = true;
-            scenario.settings.ramp_start = Some(nearest.truncate());
+        if let Some(working) = self.editor.pit_design.as_mut().and_then(|draft| draft.working.as_mut()) {
+            working.settings.ramp = true;
+            working.settings.ramp_start = Some(nearest.truncate());
         }
         if let Some(draft) = self.editor.pit_design.as_mut() {
             draft.picking_ramp_start = false;

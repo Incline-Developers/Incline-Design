@@ -5136,16 +5136,8 @@ pit-design-exploded =
        *[other] Ocak tasarımı { $count } çoklu çizgiye dönüştürüldü.
     }
 pit-design-default-name = Ocak tasarımı
-pit-design-scenario-default = Temel durum
 pit-design-gone = Bu ocak tasarımı artık projede değil.
 pit-design-name = Ad
-pit-design-scenario = Senaryo
-pit-design-scenario-help = Her senaryo, tasarım için eksiksiz bir ayar takımıdır. Etkin olan, önizlemenin gösterdiği ve Kur'un kurduğudur.
-pit-design-scenario-name = Senaryo adı
-pit-design-scenario-copy = Kopyala
-pit-design-scenario-remove = Kaldır
-pit-design-scenario-copy-help = Kopyala, etkin senaryonun ayarlarıyla bir senaryo ekler ve onu etkin yapar. Kaldır, etkin senaryoyu kaldırır; bir tasarımda her zaman bir tane kalır.
-pit-design-scenario-copy-name = { $name } kopyası
 pit-design-flats =
     { $count ->
        *[other] { $count } basamak, rampanın eğimini korumak için yere ihtiyaç duyduğu yerde, yükselmeden önce toplam { $length } m düz gidiyor.

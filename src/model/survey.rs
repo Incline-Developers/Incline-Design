@@ -132,10 +132,8 @@ pub(crate) fn transform_object(transform: &crate::model::crs::SurveyTransform, o
             for vertex in verts.iter_mut() {
                 vertex.pos = transform.point(vertex.pos)?;
             }
-            for scenario in &mut pit.scenarios {
-                if let Some(start) = &mut scenario.settings.ramp_start {
-                    *start = transform.point(start.extend(level))?.truncate();
-                }
+            if let Some(start) = &mut pit.settings.ramp_start {
+                *start = transform.point(start.extend(level))?.truncate();
             }
             pit.derived = None;
         }

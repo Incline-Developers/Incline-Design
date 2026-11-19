@@ -1,12 +1,11 @@
-//! A pit design object: what it holds survives saving, its scenarios add and
-//! remove as the panel and MCP do them, it says truly whether its benches
-//! still match it, and it moves and explodes whole.
+//! A pit design object: what it holds survives saving, it says truly whether
+//! its benches still match it, and it moves and explodes whole.
 
 use glam::{DVec2, DVec3};
 
 use super::{
     Base, DesignString, StringKind, design,
-    object::{Derived, Outcome, PitObject, ScenarioId, inputs_key},
+    object::{Derived, Outcome, PitObject, inputs_key},
     settings::{PitDesignSettings, StopMode},
 };
 use crate::model::{
@@ -31,7 +30,7 @@ fn settings() -> PitDesignSettings {
 
 /// A pit design object on `verts`, its design worked out.
 fn pit_object(verts: Vec<PolyVertex>, settings: PitDesignSettings) -> Object {
-    let mut pit = PitObject::new("North pit".to_owned(), "Base case".to_owned(), settings.clone());
+    let mut pit = PitObject::new("North pit".to_owned(), settings.clone());
     let points: Vec<DVec3> = verts.iter().map(|vertex| vertex.pos).collect();
     let base = Base::from_points(&points).expect("a closed string");
     let spec = settings.spec(points[0].truncate());
@@ -62,8 +61,7 @@ fn parts(object: &Object) -> (&[PolyVertex], &PitObject) {
 fn saves_and_reads_back_whole() {
     let mut object = pit_object(square(100.0), settings());
     if let Object::PitDesign { pit, .. } = &mut object {
-        pit.add_scenario("Steeper".to_owned());
-        pit.scenario_mut().expect("a scenario").settings.face_angle = 75.0;
+        pit.settings.face_angle = 75.0;
     }
     let json = serde_json::to_string(&object).expect("an object serialises");
     let read: Object = serde_json::from_str(&json).expect("and reads back");
@@ -76,23 +74,6 @@ fn saves_and_reads_back_whole() {
 }
 
 #[test]
-fn scenarios_copy_and_remove() {
-    let mut pit = PitObject::new("Pit".to_owned(), "Base case".to_owned(), settings());
-    let base = pit.active;
-    pit.scenario_mut().expect("a scenario").settings.berm_width = 12.0;
-    let copy = pit.add_scenario("Copy".to_owned());
-    assert_eq!(pit.active, copy, "a copy becomes the active scenario");
-    assert_eq!(pit.settings().berm_width, 12.0, "with the settings it was copied from");
-    pit.scenario_mut().expect("a scenario").settings.berm_width = 6.0;
-    assert_eq!(pit.scenarios.iter().find(|scenario| scenario.id == base).map(|scenario| scenario.settings.berm_width), Some(12.0));
-    assert!(pit.remove_scenario());
-    assert_eq!(pit.active, base);
-    assert!(!pit.remove_scenario(), "a design keeps one scenario");
-    pit.active = ScenarioId(99);
-    assert_eq!(pit.scenario().map(|scenario| scenario.id), Some(base), "an active id naming no scenario falls back to the first");
-}
-
-#[test]
 fn says_when_its_benches_are_stale() {
     let object = pit_object(square(100.0), settings());
     let (verts, pit) = parts(&object);
@@ -101,18 +82,14 @@ fn says_when_its_benches_are_stale() {
     moved_vertex[1].pos.x += 5.0;
     assert!(!pit.is_fresh(&moved_vertex, None), "an edited string makes the design stale");
     let mut changed = pit.clone();
-    changed.scenario_mut().expect("a scenario").settings.bench_height = 10.0;
+    changed.settings.bench_height = 10.0;
     assert!(!changed.is_fresh(verts, None), "so does a changed setting");
-    let mut switched = pit.clone();
-    switched.add_scenario("Other".to_owned());
-    switched.scenario_mut().expect("a scenario").settings.berm_width = 3.0;
-    assert!(!switched.is_fresh(verts, None), "and another scenario made active");
 
     // Against ground, the ground's version counts too; without, it does not.
     assert!(pit.is_fresh(verts, Some(GeometryVersion::mint())));
     let mut daylit = pit.clone();
     {
-        let settings = &mut daylit.scenario_mut().expect("a scenario").settings;
+        let settings = &mut daylit.settings;
         settings.stop = StopMode::Daylight;
         settings.topography = Some(TriangulationId(4));
     }

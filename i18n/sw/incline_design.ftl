@@ -5127,16 +5127,8 @@ pit-design-exploded =
        *[other] Usanifu wa shimo umevunjwa kuwa mistari { $count }.
     }
 pit-design-default-name = Usanifu wa shimo
-pit-design-scenario-default = Hali ya msingi
 pit-design-gone = Usanifu huo wa shimo haupo tena kwenye mradi.
 pit-design-name = Jina
-pit-design-scenario = Hali
-pit-design-scenario-help = Kila hali ni seti kamili ya mipangilio ya usanifu. Iliyo hai ndiyo inayoonyeshwa na onyesho la awali na kujengwa na Jenga.
-pit-design-scenario-name = Jina la hali
-pit-design-scenario-copy = Nakili
-pit-design-scenario-remove = Ondoa
-pit-design-scenario-copy-help = Nakili huongeza hali yenye mipangilio ya iliyo hai na kuifanya hai. Ondoa huondoa hali iliyo hai; usanifu hubaki na moja kila wakati.
-pit-design-scenario-copy-name = Nakala ya { $name }
 pit-design-flats =
     { $count ->
         [one] Ngazi moja inaenda sawa kwa m { $length } kabla ya kupanda, mahali barabara inahitaji nafasi ili kudumisha mwinuko wake.

@@ -5094,16 +5094,8 @@ pit-design-exploded =
        *[other] 已将采坑设计分解为 { $count } 条多段线。
     }
 pit-design-default-name = 采坑设计
-pit-design-scenario-default = 基准方案
 pit-design-gone = 该采坑设计已不在项目中。
 pit-design-name = 名称
-pit-design-scenario = 方案
-pit-design-scenario-help = 每个方案都是设计的一整套设置。当前方案即预览显示且“构建”所构建的方案。
-pit-design-scenario-name = 方案名称
-pit-design-scenario-copy = 复制
-pit-design-scenario-remove = 移除
-pit-design-scenario-copy-help = “复制”以当前方案的设置添加一个方案并使其成为当前方案。“移除”删除当前方案；设计始终保留一个方案。
-pit-design-scenario-copy-name = { $name } 副本
 pit-design-flats =
     { $count ->
        *[other] { $count } 个台阶在上坡前共有 { $length } m 平路，用于坡道保持坡度所需的空间。

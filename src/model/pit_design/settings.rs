@@ -1,4 +1,4 @@
-//! What a pit design's scenario sets: everything the engine needs beyond
+//! What a pit design is designed with: everything the engine needs beyond
 //! the string it starts from, in the units people give it.
 
 use glam::DVec2;
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::{Direction, Layout, RampSpec, Spec, Stop};
 use crate::model::triangulation::TriangulationId;
 
-/// Where a design stops, as a scenario sets it.
+/// Where a design stops, as its settings say.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum StopMode {
@@ -16,7 +16,7 @@ pub(crate) enum StopMode {
     Daylight,
 }
 
-/// Everything a scenario sets. Two designs from the same string and equal
+/// Everything a pit design sets. Two designs from the same string and equal
 /// settings are the same design.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]

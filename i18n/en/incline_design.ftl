@@ -5770,7 +5770,6 @@ pit-design-explode-help = Turn the pit design into polylines: its string and eac
 pit-design-explode = Explode
 pit-design-kind = Pit design
 pit-design-default-name = Pit design
-pit-design-scenario-default = Base case
 pit-design-gone = That pit design is no longer in the project.
 pit-design-draw-prompt = Click the toe of the pit's floor, or its crest, point by point.
 pit-design-draw-close = Click the first point, or press Enter, to close the string.
@@ -5792,13 +5791,6 @@ pit-design-ramp-remove-help = Design the pit with no ramp. Its settings are kept
 pit-design-ramp-move = Move
 pit-design-done = Done
 pit-design-name = Name
-pit-design-scenario = Scenario
-pit-design-scenario-help = Each scenario is a full set of settings for the design. The active one is what the preview shows and Build builds.
-pit-design-scenario-name = Scenario name
-pit-design-scenario-copy = Copy
-pit-design-scenario-remove = Remove
-pit-design-scenario-copy-help = Copy adds a scenario with the active one's settings and makes it active. Remove takes the active scenario away; a design always keeps one.
-pit-design-scenario-copy-name = { $name } copy
 pit-design-flats =
     { $count ->
         [one] One bench runs level for { $length } m before it climbs, where the ramp needs the room to hold its gradient.

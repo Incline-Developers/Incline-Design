@@ -5225,16 +5225,8 @@ pit-design-exploded =
        *[other] Rozbito projekt wyrobiska na { $count } polilinii.
     }
 pit-design-default-name = Projekt wyrobiska
-pit-design-scenario-default = Wariant bazowy
 pit-design-gone = Tego projektu wyrobiska nie ma już w projekcie.
 pit-design-name = Nazwa
-pit-design-scenario = Scenariusz
-pit-design-scenario-help = Każdy scenariusz to pełny zestaw ustawień projektu. Aktywny pokazuje podgląd i to jego buduje Buduj.
-pit-design-scenario-name = Nazwa scenariusza
-pit-design-scenario-copy = Kopiuj
-pit-design-scenario-remove = Usuń
-pit-design-scenario-copy-help = Kopiuj dodaje scenariusz z ustawieniami aktywnego i czyni go aktywnym. Usuń zabiera aktywny scenariusz; projekt zawsze ma co najmniej jeden.
-pit-design-scenario-copy-name = { $name } kopia
 pit-design-flats =
     { $count ->
         [one] { $count } piętro biegnie poziomo przez { $length } m, zanim się wzniesie, gdzie rampa potrzebuje miejsca, by utrzymać nachylenie.

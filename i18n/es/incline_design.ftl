@@ -5093,16 +5093,8 @@ pit-design-exploded =
        *[other] Diseño de rajo descompuesto en { $count } polilíneas.
     }
 pit-design-default-name = Diseño de rajo
-pit-design-scenario-default = Caso base
 pit-design-gone = Ese diseño de rajo ya no está en el proyecto.
 pit-design-name = Nombre
-pit-design-scenario = Escenario
-pit-design-scenario-help = Cada escenario es un conjunto completo de ajustes del diseño. El activo es el que muestra la vista previa y el que construye Construir.
-pit-design-scenario-name = Nombre del escenario
-pit-design-scenario-copy = Copiar
-pit-design-scenario-remove = Quitar
-pit-design-scenario-copy-help = Copiar añade un escenario con los ajustes del activo y lo activa. Quitar elimina el escenario activo; un diseño siempre conserva uno.
-pit-design-scenario-copy-name = { $name } copia
 pit-design-flats =
     { $count ->
         [one] Un banco va a nivel durante { $length } m antes de subir, donde la rampa necesita el espacio para mantener su pendiente.

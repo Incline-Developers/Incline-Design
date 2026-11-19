@@ -5096,16 +5096,8 @@ pit-design-exploded =
        *[other] Conception de fosse décomposée en { $count } polylignes.
     }
 pit-design-default-name = Conception de fosse
-pit-design-scenario-default = Cas de base
 pit-design-gone = Cette conception de fosse n’est plus dans le projet.
 pit-design-name = Nom
-pit-design-scenario = Scénario
-pit-design-scenario-help = Chaque scénario est un jeu complet de réglages pour la conception. L’actif est celui que montre l’aperçu et que Construire construit.
-pit-design-scenario-name = Nom du scénario
-pit-design-scenario-copy = Copier
-pit-design-scenario-remove = Retirer
-pit-design-scenario-copy-help = Copier ajoute un scénario avec les réglages de l’actif et le rend actif. Retirer enlève le scénario actif ; une conception en garde toujours un.
-pit-design-scenario-copy-name = { $name } copie
 pit-design-flats =
     { $count ->
         [one] Un gradin court à plat sur { $length } m avant de monter, là où la rampe a besoin de place pour garder sa pente.

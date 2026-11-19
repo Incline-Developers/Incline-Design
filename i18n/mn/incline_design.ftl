@@ -5146,16 +5146,8 @@ pit-design-exploded =
        *[other] Уурхайн төслийг { $count } олон шугам болгон задаллаа.
     }
 pit-design-default-name = Уурхайн төсөл
-pit-design-scenario-default = Үндсэн хувилбар
 pit-design-gone = Тэр уурхайн төсөл төсөлд байхаа больсон.
 pit-design-name = Нэр
-pit-design-scenario = Хувилбар
-pit-design-scenario-help = Хувилбар бүр нь төслийн бүрэн тохиргоо юм. Идэвхтэй хувилбарыг урьдчилан харахад харуулж, «Барих» түүнийг барина.
-pit-design-scenario-name = Хувилбарын нэр
-pit-design-scenario-copy = Хуулах
-pit-design-scenario-remove = Хасах
-pit-design-scenario-copy-help = «Хуулах» нь идэвхтэй хувилбарын тохиргоотой хувилбар нэмээд идэвхтэй болгоно. «Хасах» нь идэвхтэй хувилбарыг хасна; төсөлд үргэлж нэг нь үлдэнэ.
-pit-design-scenario-copy-name = { $name } хуулбар
 pit-design-flats =
     { $count ->
         [one] Нэг уступ өгсөхөөсөө өмнө { $length } м тэгш явна, налуугаа барихад налуу замд зай хэрэгтэй газар.

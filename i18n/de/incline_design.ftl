@@ -5136,16 +5136,8 @@ pit-design-exploded =
        *[other] Grubenentwurf in { $count } Polylinien aufgelöst.
     }
 pit-design-default-name = Grubenentwurf
-pit-design-scenario-default = Basisfall
 pit-design-gone = Dieser Grubenentwurf ist nicht mehr im Projekt.
 pit-design-name = Name
-pit-design-scenario = Szenario
-pit-design-scenario-help = Jedes Szenario ist ein vollständiger Satz von Einstellungen für den Entwurf. Das aktive zeigt die Vorschau, und Bauen baut es.
-pit-design-scenario-name = Name des Szenarios
-pit-design-scenario-copy = Kopieren
-pit-design-scenario-remove = Entfernen
-pit-design-scenario-copy-help = Kopieren fügt ein Szenario mit den Einstellungen des aktiven hinzu und macht es aktiv. Entfernen nimmt das aktive Szenario weg; ein Entwurf behält immer eines.
-pit-design-scenario-copy-name = { $name } Kopie
 pit-design-flats =
     { $count ->
         [one] Eine Strosse verläuft { $length } m eben, bevor sie ansteigt, wo die Rampe den Platz braucht, um ihre Steigung zu halten.

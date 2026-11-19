@@ -5093,16 +5093,8 @@ pit-design-exploded =
        *[other] Projeto de cava decomposto em { $count } polilinhas.
     }
 pit-design-default-name = Projeto de cava
-pit-design-scenario-default = Caso base
 pit-design-gone = Esse projeto de cava já não está no projeto.
 pit-design-name = Nome
-pit-design-scenario = Cenário
-pit-design-scenario-help = Cada cenário é um conjunto completo de definições do projeto. O ativo é o que a pré-visualização mostra e o que Construir constrói.
-pit-design-scenario-name = Nome do cenário
-pit-design-scenario-copy = Copiar
-pit-design-scenario-remove = Remover
-pit-design-scenario-copy-help = Copiar adiciona um cenário com as definições do ativo e torna-o ativo. Remover retira o cenário ativo; um projeto mantém sempre um.
-pit-design-scenario-copy-name = { $name } cópia
 pit-design-flats =
     { $count ->
         [one] Uma bancada segue nivelada durante { $length } m antes de subir, onde a rampa precisa do espaço para manter a sua inclinação.

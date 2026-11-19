@@ -5094,16 +5094,8 @@ pit-design-exploded =
        *[other] Desain pit dipecah menjadi { $count } polilinia.
     }
 pit-design-default-name = Desain pit
-pit-design-scenario-default = Kasus dasar
 pit-design-gone = Desain pit itu tidak lagi ada di proyek.
 pit-design-name = Nama
-pit-design-scenario = Skenario
-pit-design-scenario-help = Setiap skenario adalah satu set lengkap pengaturan desain. Yang aktif adalah yang ditampilkan pratinjau dan yang dibangun oleh Bangun.
-pit-design-scenario-name = Nama skenario
-pit-design-scenario-copy = Salin
-pit-design-scenario-remove = Buang
-pit-design-scenario-copy-help = Salin menambahkan skenario dengan pengaturan yang aktif dan menjadikannya aktif. Buang menghapus skenario aktif; desain selalu menyimpan satu.
-pit-design-scenario-copy-name = Salinan { $name }
 pit-design-flats =
     { $count ->
        *[other] { $count } jenjang berjalan datar sejauh { $length } m seluruhnya sebelum menanjak, tempat ramp membutuhkan ruang untuk mempertahankan kemiringannya.

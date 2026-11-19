@@ -5122,16 +5122,8 @@ pit-design-exploded =
        *[other] Đã tách thiết kế moong thành { $count } đường đa tuyến.
     }
 pit-design-default-name = Thiết kế moong
-pit-design-scenario-default = Trường hợp cơ sở
 pit-design-gone = Thiết kế moong đó không còn trong dự án.
 pit-design-name = Tên
-pit-design-scenario = Kịch bản
-pit-design-scenario-help = Mỗi kịch bản là một bộ thiết lập đầy đủ cho thiết kế. Kịch bản đang hoạt động là thứ bản xem trước hiển thị và Dựng sẽ dựng.
-pit-design-scenario-name = Tên kịch bản
-pit-design-scenario-copy = Sao chép
-pit-design-scenario-remove = Bỏ
-pit-design-scenario-copy-help = Sao chép thêm một kịch bản với thiết lập của kịch bản đang hoạt động và kích hoạt nó. Bỏ xóa kịch bản đang hoạt động; thiết kế luôn giữ một kịch bản.
-pit-design-scenario-copy-name = Bản sao { $name }
 pit-design-flats =
     { $count ->
        *[other] { $count } tầng chạy phẳng tổng cộng { $length } m trước khi lên dốc, ở nơi đường dốc cần chỗ để giữ độ dốc.

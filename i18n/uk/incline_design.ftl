@@ -5207,16 +5207,8 @@ pit-design-exploded =
        *[other] Проєкт кар'єру розбито на { $count } полілінії.
     }
 pit-design-default-name = Проєкт кар'єру
-pit-design-scenario-default = Базовий варіант
 pit-design-gone = Цього проєкту кар'єру більше немає в проєкті.
 pit-design-name = Назва
-pit-design-scenario = Сценарій
-pit-design-scenario-help = Кожен сценарій це повний набір налаштувань проєкту. Активний показує попередній перегляд, і його будує «Побудувати».
-pit-design-scenario-name = Назва сценарію
-pit-design-scenario-copy = Копіювати
-pit-design-scenario-remove = Прибрати
-pit-design-scenario-copy-help = «Копіювати» додає сценарій з налаштуваннями активного і робить його активним. «Прибрати» видаляє активний сценарій; у проєкті завжди лишається один.
-pit-design-scenario-copy-name = { $name } копія
 pit-design-flats =
     { $count ->
         [one] { $count } уступ іде горизонтально { $length } м перед підйомом, де з'їзду потрібне місце, щоб тримати ухил.

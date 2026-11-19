@@ -5141,16 +5141,8 @@ pit-design-exploded =
        *[other] فُكّك تصميم الحفرة إلى { $count } خط متعدد.
     }
 pit-design-default-name = تصميم الحفرة
-pit-design-scenario-default = الحالة الأساسية
 pit-design-gone = لم يعد تصميم الحفرة هذا في المشروع.
 pit-design-name = الاسم
-pit-design-scenario = السيناريو
-pit-design-scenario-help = كل سيناريو مجموعة كاملة من إعدادات التصميم. النشط هو ما تعرضه المعاينة وما يبنيه «بناء».
-pit-design-scenario-name = اسم السيناريو
-pit-design-scenario-copy = نسخ
-pit-design-scenario-remove = إزالة
-pit-design-scenario-copy-help = «نسخ» يضيف سيناريو بإعدادات النشط ويجعله نشطًا. «إزالة» يحذف السيناريو النشط؛ ويبقى للتصميم دائمًا سيناريو واحد.
-pit-design-scenario-copy-name = نسخة من { $name }
 pit-design-flats =
     { $count ->
         [zero] لا توجد مصاطب تسير مستوية قبل أن تصعد.

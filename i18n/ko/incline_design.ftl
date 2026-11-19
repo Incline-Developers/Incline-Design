@@ -5128,16 +5128,8 @@ pit-design-exploded =
        *[other] 피트 설계를 폴리라인 { $count }개로 분해했습니다.
     }
 pit-design-default-name = 피트 설계
-pit-design-scenario-default = 기본 사례
 pit-design-gone = 그 피트 설계는 더 이상 프로젝트에 없습니다.
 pit-design-name = 이름
-pit-design-scenario = 시나리오
-pit-design-scenario-help = 각 시나리오는 설계의 완전한 설정 묶음입니다. 활성 시나리오가 미리 보기에 표시되고 구축에서 구축됩니다.
-pit-design-scenario-name = 시나리오 이름
-pit-design-scenario-copy = 복사
-pit-design-scenario-remove = 제거
-pit-design-scenario-copy-help = 복사는 활성 시나리오의 설정으로 시나리오를 추가하고 활성화합니다. 제거는 활성 시나리오를 없앱니다. 설계에는 항상 하나가 남습니다.
-pit-design-scenario-copy-name = { $name } 사본
 pit-design-flats =
     { $count ->
        *[other] 벤치 { $count }개에서 램프가 경사를 유지할 공간이 필요한 곳에, 오르기 전 평탄 구간이 모두 { $length } m 있습니다.

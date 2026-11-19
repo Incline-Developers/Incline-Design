@@ -17,7 +17,7 @@ use crate::{
         ObjectId, PolyVertex,
         pit_design::{
             Design, Direction, End, Problem,
-            object::{PitObject, ScenarioId},
+            object::PitObject,
             settings::{PitDesignSettings, StopMode},
         },
         triangulation::{GeometryVersion, TriangulationId},
@@ -217,7 +217,7 @@ fn button_row(ui: &mut egui::Ui, label: String, help: String, buttons: &[(String
 }
 
 /// The Pit Design tool's panel, docked in the viewport while a pit design is
-/// open in it: its name, scenarios and settings, its surface, and what it
+/// open in it: its name and settings, and what it
 /// comes to.
 pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
     // Drawing the string: how its corners are made.
@@ -265,17 +265,11 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                     };
                     match stage {
                         PitStage::Benches => {
-                            draw_scenarios(ui, working);
-                            if let Some(scenario) = working.scenario_mut() {
-                                draw_bench_settings(ui, &mut scenario.settings, project);
-                            }
+                            draw_bench_settings(ui, &mut working.settings, project);
                         }
                         PitStage::Ramp => {
                             menu::menu_section(ui, tr!("pit-design-ramp-section"));
-                            let Some(scenario) = working.scenario_mut() else {
-                                return;
-                            };
-                            let settings = &mut scenario.settings;
+                            let settings = &mut working.settings;
                             if picking {
                                 menu::menu_note(ui, tr!("pit-design-ramp-picking"));
                             } else if !settings.ramp {
@@ -324,40 +318,7 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
     draft.settled = !ui.ctx().input(|input| input.pointer.any_down()) && ui.ctx().memory(|memory| memory.focused().is_none());
 }
 
-/// The design's scenarios: which is active, its name, and copy and remove.
-fn draw_scenarios(ui: &mut egui::Ui, design: &mut PitObject) {
-    let mut active: ScenarioId = design.scenario().map_or(design.active, |scenario| scenario.id);
-    let chosen = design.scenario().map(|scenario| scenario.name.clone()).unwrap_or_default();
-    MenuFieldCombo::new(
-        "pit_design_scenario",
-        tr!("pit-design-scenario"),
-        &mut active,
-        chosen,
-        design.scenarios.iter().map(|scenario| (scenario.id, scenario.name.clone().into())),
-    )
-    .width(FIELD_WIDTH)
-    .help_text(tr!("pit-design-scenario-help"))
-    .show(ui);
-    design.active = active;
-    if let Some(scenario) = design.scenario_mut() {
-        MenuFieldText::new(tr!("pit-design-scenario-name"), &mut scenario.name).width(FIELD_WIDTH).show(ui);
-    }
-    let buttons = [(tr!("pit-design-scenario-copy"), true), (tr!("pit-design-scenario-remove"), design.scenarios.len() > 1)];
-    match button_row(ui, String::new(), tr!("pit-design-scenario-copy-help"), &buttons) {
-        Some(0) => {
-            let name = design
-                .scenario()
-                .map_or_else(|| tr!("pit-design-scenario-default"), |scenario| tr!("pit-design-scenario-copy-name", name = scenario.name.clone()));
-            design.add_scenario(name);
-        }
-        Some(1) => {
-            design.remove_scenario();
-        }
-        _ => {}
-    }
-}
-
-/// The scenario's benches, stop and ramp.
+/// The pit's benches and where it stops.
 fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &UiProjectView) {
     let chosen = direction_label(settings.direction);
     MenuFieldCombo::new(

@@ -3,10 +3,9 @@
 //! A pit design lives in a design layer like any polyline: its own vertices
 //! are the closed string it is built from (the floor's toe built up, the
 //! crest built down), and it draws as that string and the benches and ramp
-//! designed from it. What it is built with is its scenarios, each a full set
-//! of settings, one active.
+//! designed from it, with its settings.
 //!
-//! The benches are worked out from the string and the active scenario, in
+//! The benches are worked out from the string and the settings, in
 //! the background, and kept on the object with what they were worked out
 //! from ([`Derived`]): moving the object moves them with it, and any other
 //! change leaves them to be worked out again. They are derived, so working
@@ -22,31 +21,17 @@ use serde::{Deserialize, Serialize};
 use super::{Design, Problem, settings::PitDesignSettings};
 use crate::model::{PolyVertex, triangulation::GeometryVersion};
 
-/// A scenario's id within its design.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub(crate) struct ScenarioId(pub(crate) u64);
-
 /// What a pit design object holds beyond its string.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PitObject {
-    /// What it is called: its surface is named after it.
+    /// What it is called.
     pub(crate) name: String,
-    pub(crate) scenarios: Vec<Scenario>,
-    pub(crate) active: ScenarioId,
-    pub(crate) next_scenario_id: u64,
+    /// What it is designed with.
+    pub(crate) settings: PitDesignSettings,
     /// The design as last worked out, and what from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) derived: Option<Derived>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Scenario {
-    pub(crate) id: ScenarioId,
-    pub(crate) name: String,
-    pub(crate) settings: PitDesignSettings,
 }
 
 /// What the string and settings came to when last worked out.
@@ -72,59 +57,13 @@ pub(crate) enum Outcome {
 }
 
 impl PitObject {
-    /// A design with one scenario.
-    pub(crate) fn new(name: String, scenario_name: String, settings: PitDesignSettings) -> Self {
-        Self {
-            name,
-            scenarios: vec![Scenario {
-                id: ScenarioId(0),
-                name: scenario_name,
-                settings,
-            }],
-            active: ScenarioId(0),
-            next_scenario_id: 1,
-            derived: None,
-        }
+    pub(crate) fn new(name: String, settings: PitDesignSettings) -> Self {
+        Self { name, settings, derived: None }
     }
 
-    /// The active scenario: the one `active` names, or the first if it names
-    /// none (a design always has one).
-    pub(crate) fn scenario(&self) -> Option<&Scenario> {
-        self.scenarios.iter().find(|scenario| scenario.id == self.active).or_else(|| self.scenarios.first())
-    }
-
-    pub(crate) fn scenario_mut(&mut self) -> Option<&mut Scenario> {
-        let active = self.scenario()?.id;
-        self.scenarios.iter_mut().find(|scenario| scenario.id == active)
-    }
-
-    /// The active scenario's settings.
+    /// What it is designed with, as a copy.
     pub(crate) fn settings(&self) -> PitDesignSettings {
-        self.scenario().map(|scenario| scenario.settings.clone()).unwrap_or_default()
-    }
-
-    /// Add a copy of the active scenario under `name` and make it active.
-    pub(crate) fn add_scenario(&mut self, name: String) -> ScenarioId {
-        let id = ScenarioId(self.next_scenario_id.max(self.scenarios.iter().map(|scenario| scenario.id.0 + 1).max().unwrap_or(0)));
-        self.next_scenario_id = id.0 + 1;
-        let settings = self.settings();
-        self.scenarios.push(Scenario { id, name, settings });
-        self.active = id;
-        id
-    }
-
-    /// Remove the active scenario, unless it is the last, and make its
-    /// neighbour active.
-    pub(crate) fn remove_scenario(&mut self) -> bool {
-        if self.scenarios.len() < 2 {
-            return false;
-        }
-        let Some(index) = self.scenarios.iter().position(|scenario| scenario.id == self.active) else {
-            return false;
-        };
-        self.scenarios.remove(index);
-        self.active = self.scenarios[index.min(self.scenarios.len() - 1)].id;
-        true
+        self.settings.clone()
     }
 
     /// The design worked out, if it has been and there is one.
@@ -135,7 +74,7 @@ impl PitObject {
         }
     }
 
-    /// Whether what was worked out is what `verts` and the active scenario
+    /// Whether what was worked out is what `verts` and the settings
     /// come to now, against the ground at version `ground` (for a design that
     /// daylights).
     pub(crate) fn is_fresh(&self, verts: &[PolyVertex], ground: Option<GeometryVersion>) -> bool {
@@ -149,10 +88,8 @@ impl PitObject {
     /// worked out, which moves with the string unless it daylights against
     /// ground that stays put. `verts` is the string after the move.
     pub(crate) fn translate(&mut self, delta: DVec3, verts: &[PolyVertex]) {
-        for scenario in &mut self.scenarios {
-            if let Some(start) = &mut scenario.settings.ramp_start {
-                *start += delta.truncate();
-            }
+        if let Some(start) = &mut self.settings.ramp_start {
+            *start += delta.truncate();
         }
         let settings = self.settings();
         if let Some(derived) = &mut self.derived {

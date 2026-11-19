@@ -5123,16 +5123,8 @@ pit-design-exploded =
        *[other] ピット設計を { $count } 本のポリラインに分解しました。
     }
 pit-design-default-name = ピット設計
-pit-design-scenario-default = 基本ケース
 pit-design-gone = そのピット設計はもうプロジェクトにありません。
 pit-design-name = 名前
-pit-design-scenario = シナリオ
-pit-design-scenario-help = 各シナリオは設計の完全な設定一式です。アクティブなシナリオがプレビューに表示され、「構築」で構築されます。
-pit-design-scenario-name = シナリオ名
-pit-design-scenario-copy = コピー
-pit-design-scenario-remove = 除去
-pit-design-scenario-copy-help = 「コピー」はアクティブなシナリオの設定でシナリオを追加し、それをアクティブにします。「除去」はアクティブなシナリオを取り除きます。設計には常に一つ残ります。
-pit-design-scenario-copy-name = { $name } のコピー
 pit-design-flats =
     { $count ->
        *[other] { $count } 段のベンチで、ランプが勾配を保つための余地が必要な箇所に、登り始める前の水平区間が合計 { $length } m あります。

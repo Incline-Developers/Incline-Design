@@ -5137,16 +5137,8 @@ pit-design-exploded =
        *[other] Progetto della fossa scomposto in { $count } polilinee.
     }
 pit-design-default-name = Progetto della fossa
-pit-design-scenario-default = Caso base
 pit-design-gone = Quel progetto della fossa non è più nel progetto.
 pit-design-name = Nome
-pit-design-scenario = Scenario
-pit-design-scenario-help = Ogni scenario è un insieme completo di impostazioni per il progetto. Quello attivo è ciò che mostra l'anteprima e che Costruisci costruisce.
-pit-design-scenario-name = Nome dello scenario
-pit-design-scenario-copy = Copia
-pit-design-scenario-remove = Rimuovi
-pit-design-scenario-copy-help = Copia aggiunge uno scenario con le impostazioni di quello attivo e lo rende attivo. Rimuovi toglie lo scenario attivo; un progetto ne tiene sempre uno.
-pit-design-scenario-copy-name = { $name } copia
 pit-design-flats =
     { $count ->
         [one] Un gradino corre in piano per { $length } m prima di salire, dove la rampa ha bisogno di spazio per tenere la sua pendenza.

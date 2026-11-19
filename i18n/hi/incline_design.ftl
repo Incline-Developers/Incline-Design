@@ -5095,16 +5095,8 @@ pit-design-exploded =
        *[other] पिट डिज़ाइन को { $count } पॉलीलाइनों में विघटित किया।
     }
 pit-design-default-name = पिट डिज़ाइन
-pit-design-scenario-default = आधार स्थिति
 pit-design-gone = वह पिट डिज़ाइन अब प्रोजेक्ट में नहीं है।
 pit-design-name = नाम
-pit-design-scenario = परिदृश्य
-pit-design-scenario-help = हर परिदृश्य डिज़ाइन की सेटिंग्स का पूरा समूह है। सक्रिय परिदृश्य वही है जो पूर्वावलोकन दिखाता है और बनाएँ बनाता है।
-pit-design-scenario-name = परिदृश्य का नाम
-pit-design-scenario-copy = कॉपी करें
-pit-design-scenario-remove = निकालें
-pit-design-scenario-copy-help = कॉपी करें सक्रिय परिदृश्य की सेटिंग्स के साथ एक परिदृश्य जोड़ता है और उसे सक्रिय करता है। निकालें सक्रिय परिदृश्य हटाता है; डिज़ाइन में हमेशा एक रहता है।
-pit-design-scenario-copy-name = { $name } प्रति
 pit-design-flats =
     { $count ->
         [one] एक बेंच चढ़ने से पहले { $length } मी समतल चलती है, जहाँ रैंप को अपनी ढलान बनाए रखने के लिए जगह चाहिए।

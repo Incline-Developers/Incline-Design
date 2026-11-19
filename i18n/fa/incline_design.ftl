@@ -5094,16 +5094,8 @@ pit-design-exploded =
        *[other] طراحی پیت به { $count } چندخطی تجزیه شد.
     }
 pit-design-default-name = طراحی پیت
-pit-design-scenario-default = حالت پایه
 pit-design-gone = آن طراحی پیت دیگر در پروژه نیست.
 pit-design-name = نام
-pit-design-scenario = سناریو
-pit-design-scenario-help = هر سناریو مجموعهٔ کاملی از تنظیمات طراحی است. سناریوی فعال همان است که پیش‌نمایش نشان می‌دهد و «ساخت» می‌سازد.
-pit-design-scenario-name = نام سناریو
-pit-design-scenario-copy = کپی
-pit-design-scenario-remove = برداشتن
-pit-design-scenario-copy-help = «کپی» سناریویی با تنظیمات سناریوی فعال می‌افزاید و آن را فعال می‌کند. «برداشتن» سناریوی فعال را حذف می‌کند؛ طراحی همیشه یکی را نگه می‌دارد.
-pit-design-scenario-copy-name = کپی { $name }
 pit-design-flats =
     { $count ->
        *[other] { $count } پله پیش از بالا رفتن، روی هم { $length } متر هموار می‌روند، جایی که رمپ برای نگه داشتن شیب خود جا لازم دارد.

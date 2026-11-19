@@ -11,7 +11,7 @@ use crate::{
         Object, ObjectId,
         pit_design::{
             Design, End,
-            object::{Outcome, PitObject, ScenarioId},
+            object::{Outcome, PitObject},
             settings::{PitDesignSettings, StopMode},
         },
         triangulation::TriangulationId,
@@ -19,14 +19,14 @@ use crate::{
     ui::dialogs::pit_design::{NoDesign, end_text, no_design_text, problem_text},
 };
 
-const SETTINGS_DESCRIPTION: &str = "A scenario's settings: direction (up from a floor's toe, or down from a crest); bench_height; face_angle (degrees from horizontal); berm_width; wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id to daylight against, building up); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius). Its surface is made with triangulate, which takes a pit design as every string it draws.";
+const SETTINGS_DESCRIPTION: &str = "A pit design's settings: direction (up from a floor's toe, or down from a crest); bench_height; face_angle (degrees from horizontal); berm_width; wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id to daylight against, building up); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius). Its surface is made with triangulate, which takes a pit design as every string it draws.";
 
 pub(super) fn definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "get_pit_designs",
             "title": "Read the pit designs",
-            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). It holds scenarios, each a full set of settings, one active. Without design: a summary of each. With design (its object id): that one whole, every scenario's settings and what the active one comes to included, which set_pit_design takes back.",
+            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). Without design: a summary of each. With design (its object id): that one whole, its settings and what they come to included, which set_pit_design takes back.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "design": { "type": "integer", "minimum": 0 } },
@@ -37,35 +37,29 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "set_pit_design",
             "title": "Make or change a pit design",
-            "description": format!("Make a closed polyline a pit design, in its place and keeping its id (string), or change a pit design (design). settings is a JSON merge patch over a scenario's settings, the active one unless scenario names another: give only what changes. A new design starts from the window's defaults. active makes a scenario the one the design is built with. The design is worked out at once: the result says what it comes to. Its string is edited like any polyline's vertices (move_objects and the vertex tools), and the design follows. {SETTINGS_DESCRIPTION}"),
+            "description": format!("Make a closed polyline a pit design, in its place and keeping its id (string), or change a pit design (design). settings is a JSON merge patch over its settings: give only what changes. A new design starts from the Pit Design tool's defaults, with no ramp. The design is worked out at once: the result says what it comes to. Its string is edited like any polyline's vertices (move_objects and the vertex tools), and the design follows. {SETTINGS_DESCRIPTION}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "design": { "type": "integer", "minimum": 0, "description": "A pit design's object id." },
                     "string": { "type": "integer", "minimum": 0, "description": "A closed polyline to make a pit design: the floor's toe building up, the crest building down." },
                     "name": { "type": "string", "minLength": 1 },
-                    "scenario": { "type": "integer", "minimum": 0, "description": "The scenario settings and scenario_name change. The active one if left out." },
-                    "scenario_name": { "type": "string", "minLength": 1 },
                     "settings": { "type": "object" },
-                    "active": { "type": "integer", "minimum": 0, "description": "Make this scenario active." },
                 },
                 "additionalProperties": false,
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
         }),
         json!({
-            "name": "manage_pit_design",
-            "title": "Explode a pit design or change its scenarios",
-            "description": "explode a pit design into polylines on its layer (its string keeps the object's id, and each bench, crest and ramp string becomes a polyline of its own): they are no longer designed; add_scenario (a copy of the active scenario, made active, named name); remove_scenario (the active one, or scenario; a design keeps at least one). A pit design is deleted with delete_objects, copied with copy_objects. Returns any new ids.",
+            "name": "explode_pit_design",
+            "title": "Explode a pit design",
+            "description": "Turn a pit design into polylines on its layer, as the Pit Design tool's Explode does: its string keeps the object's id, and each toe, crest and ramp string becomes a polyline of its own. They are no longer designed. A pit design is deleted with delete_objects and copied with copy_objects, like any object. Returns the polylines' ids.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "design": { "type": "integer", "minimum": 0 },
-                    "action": { "type": "string", "enum": ["explode", "add_scenario", "remove_scenario"] },
-                    "name": { "type": "string", "minLength": 1 },
-                    "scenario": { "type": "integer", "minimum": 0 },
                 },
-                "required": ["design", "action"],
+                "required": ["design"],
                 "additionalProperties": false,
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false },
@@ -232,7 +226,7 @@ impl App<'_> {
         let result = match name {
             "get_pit_designs" => self.mcp_get_pit_designs(arguments),
             "set_pit_design" => self.mcp_set_pit_design(arguments),
-            "manage_pit_design" => self.mcp_manage_pit_design(arguments),
+            "explode_pit_design" => self.mcp_explode_pit_design(arguments),
             "design_pit" => self.mcp_design_pit(arguments),
             _ => return None,
         };
@@ -269,8 +263,6 @@ impl App<'_> {
             "id": object.id().0,
             "name": pit.name,
             "layer": layer.map(|layer| json!({ "id": layer.id.0, "name": layer.name })),
-            "active": pit.scenario().map(|scenario| scenario.id.0),
-            "scenarios": pit.scenarios.iter().map(|scenario| json!({ "id": scenario.id.0, "name": scenario.name })).collect::<Vec<_>>(),
             "fresh": pit.is_fresh(verts, ground),
         })
     }
@@ -283,12 +275,7 @@ impl App<'_> {
             if let Some((verts, _)) = pit_parts(object) {
                 value["string"] = json!(verts.iter().map(|vertex| [vertex.pos.x, vertex.pos.y, vertex.pos.z]).collect::<Vec<_>>());
             }
-            value["scenarios"] = json!(
-                pit.scenarios
-                    .iter()
-                    .map(|scenario| json!({ "id": scenario.id.0, "name": scenario.name, "settings": scenario.settings }))
-                    .collect::<Vec<_>>()
-            );
+            value["settings"] = json!(pit.settings);
             value["comes_to"] = match pit.derived.as_ref().map(|derived| &derived.outcome) {
                 Some(Outcome::Design(design)) => summary(design),
                 Some(Outcome::NotClosed) => json!({ "problem": no_design_message(&NoDesign::NotClosed) }),
@@ -335,62 +322,19 @@ impl App<'_> {
         if let Some(name) = arguments["name"].as_str() {
             pit.name = name.to_owned();
         }
-        if let Some(active) = arguments["active"].as_u64().map(ScenarioId) {
-            if !pit.scenarios.iter().any(|scenario| scenario.id == active) {
-                return Err(format!("The design has no scenario with id {}.", active.0));
-            }
-            pit.active = active;
-        }
-        let target = arguments["scenario"].as_u64().map(ScenarioId).or_else(|| pit.scenario().map(|scenario| scenario.id));
-        let scenario = pit
-            .scenarios
-            .iter_mut()
-            .find(|scenario| Some(scenario.id) == target)
-            .ok_or_else(|| format!("The design has no scenario with id {}.", target.map_or(0, |id| id.0)))?;
-        if let Some(name) = arguments["scenario_name"].as_str() {
-            scenario.name = name.to_owned();
-        }
         if let Some(patch) = arguments.get("settings") {
-            let mut value = serde_json::to_value(&scenario.settings).map_err(|error| error.to_string())?;
+            let mut value = serde_json::to_value(&pit.settings).map_err(|error| error.to_string())?;
             merge_patch(&mut value, patch);
-            scenario.settings = serde_json::from_value(value).map_err(|error| format!("The settings do not fit a pit design scenario: {error}"))?;
+            pit.settings = serde_json::from_value(value).map_err(|error| format!("The settings do not fit a pit design: {error}"))?;
         }
         let design = self.set_pit_now(id, pit).map_err(|error| format!("{error:#}"))?;
         Ok(json!({ "design": id.0, "comes_to": comes_to(&design) }))
     }
 
-    fn mcp_manage_pit_design(&mut self, arguments: &Value) -> Result<Value, String> {
-        let (id, mut pit) = self.mcp_pit_design(arguments)?;
-        match arguments["action"].as_str().unwrap_or_default() {
-            "explode" => {
-                let ids = self.explode_pit_design(id).map_err(|error| format!("{error:#}"))?;
-                Ok(json!({ "polylines": ids.iter().map(|id| id.0).collect::<Vec<_>>() }))
-            }
-            "add_scenario" => {
-                let name = arguments["name"]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| crate::i18n::tr!("pit-design-scenario-copy-name", name = pit.scenario().map(|scenario| scenario.name.clone()).unwrap_or_default()));
-                let scenario = pit.add_scenario(name);
-                let design = self.set_pit_now(id, pit).map_err(|error| format!("{error:#}"))?;
-                Ok(json!({ "design": id.0, "scenario": scenario.0, "comes_to": comes_to(&design) }))
-            }
-            "remove_scenario" => {
-                if let Some(scenario) = arguments["scenario"].as_u64().map(ScenarioId) {
-                    if !pit.scenarios.iter().any(|candidate| candidate.id == scenario) {
-                        return Err(format!("The design has no scenario with id {}.", scenario.0));
-                    }
-                    pit.active = scenario;
-                }
-                if !pit.remove_scenario() {
-                    return Err("A design keeps at least one scenario.".to_owned());
-                }
-                let active = pit.active;
-                let design = self.set_pit_now(id, pit).map_err(|error| format!("{error:#}"))?;
-                Ok(json!({ "design": id.0, "active": active.0, "comes_to": comes_to(&design) }))
-            }
-            other => Err(format!("action is explode, add_scenario or remove_scenario, not {other}.")),
-        }
+    fn mcp_explode_pit_design(&mut self, arguments: &Value) -> Result<Value, String> {
+        let (id, _) = self.mcp_pit_design(arguments)?;
+        let ids = self.explode_pit_design(id).map_err(|error| format!("{error:#}"))?;
+        Ok(json!({ "polylines": ids.iter().map(|id| id.0).collect::<Vec<_>>() }))
     }
 
     fn mcp_design_pit(&mut self, arguments: &Value) -> Result<Value, String> {
