@@ -6291,7 +6291,7 @@ pub(crate) enum UiCommand {
     /// Take up the Pit Design tool: on the pit design selected, or on a
     /// closed polyline selected, which becomes one.
     OpenPitDesign,
-    /// Done with the pit in Pit Design's panel: ready to draw the next.
+    /// Done with the pit in Pit Design's panel: the tool is put down.
     FinishPitDesign,
     /// Build a pit design object's surface.
     BuildPitSurface(ObjectId),

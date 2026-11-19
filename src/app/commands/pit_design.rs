@@ -245,28 +245,20 @@ impl App<'_> {
     }
 
     /// Done with the pit in the panel: what it was editing is kept, and the
-    /// tool waits for the next string.
+    /// tool is put down, as it is once its one pit is made.
     pub(crate) fn finish_pit_editing(&mut self) {
-        self.flush_pit_design_draft();
-        if let Some(settings) = self.editor.pit_design.as_ref().and_then(|draft| draft.working.as_ref()).map(PitObject::settings) {
-            self.editor.pit_last_settings = Some(settings);
-        }
-        self.cancel_jobs(|key| matches!(key, JobKey::PitDesignPreview(_)));
-        self.editor.pit_design = Some(PitDesignDraft::default());
-        self.invalidate_overlay();
+        self.close_pit_design();
+        self.editor.active_tool = ActiveTool::None;
     }
 
-    /// Escape with Pit Design: a string being drawn is dropped, a pit being
-    /// edited is finished, and with neither the tool is put down.
+    /// Escape with Pit Design: a string being drawn is dropped, and with none
+    /// the tool is put down, the pit being edited kept as it is.
     pub(crate) fn escape_pit_design(&mut self) {
         if !self.editor.pending_stroke.is_empty() {
             self.editor.pending_stroke.clear();
             self.invalidate_geometry();
-        } else if !self.editor.pit_drawing() {
-            self.finish_pit_editing();
         } else {
-            self.close_pit_design();
-            self.editor.active_tool = ActiveTool::None;
+            self.finish_pit_editing();
         }
     }
 

@@ -324,17 +324,13 @@ impl<'a> App<'a> {
                 self.invalidate_geometry();
             }
             // A pit's string closes on Enter; with none drawn, Enter finishes
-            // the pit being edited, and then puts the tool down.
+            // the pit being edited and puts the tool down.
             ActiveTool::PitDesign if self.editor.pit_drawing() && self.editor.pending_stroke.len() >= 3 => self.finish_pit_string(),
             ActiveTool::PitDesign if !self.editor.pending_stroke.is_empty() => {
                 self.editor.pending_stroke.clear();
                 self.invalidate_geometry();
             }
-            ActiveTool::PitDesign if !self.editor.pit_drawing() => self.finish_pit_editing(),
-            ActiveTool::PitDesign => {
-                self.editor.active_tool = ActiveTool::None;
-                self.close_pit_design();
-            }
+            ActiveTool::PitDesign => self.finish_pit_editing(),
             ActiveTool::MakeLine => {
                 if self.editor.pending_stroke.is_empty() {
                     self.editor.active_tool = ActiveTool::None;
