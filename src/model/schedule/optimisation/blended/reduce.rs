@@ -27,7 +27,70 @@ use super::{
     input::{BlendInput, ConditionalValue},
     replay::{BlendSolution, MovementRow},
 };
-use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, MaterialId, SourceId};
+use crate::model::schedule::{
+    optimisation::{Activity, DestinationId, DestinationKind, MaterialId, MovementCandidate, SourceId},
+    trucking::CycleBreakdown,
+};
+
+/// A candidate by every field it has, its numbers by their bits: two are
+/// the same key exactly when they are identical. With `material` left out,
+/// the route the candidate takes. Built by naming every field, so a field
+/// added to a candidate is a field added here.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct CandidateKey {
+    material: Option<MaterialId>,
+    loader: crate::model::schedule::optimisation::LoaderId,
+    activity: Activity,
+    source: SourceId,
+    destination: DestinationId,
+    truck: crate::model::schedule::optimisation::TruckClassId,
+    truck_hours_per_tonne: u64,
+    cycle: [u64; 8],
+    routing_rule: crate::model::schedule::optimisation::RoutingRuleId,
+    routing_preference: u32,
+    cashflow: Vec<(crate::model::schedule::optimisation::CashflowRuleId, u64)>,
+}
+
+impl CandidateKey {
+    fn new(candidate: &MovementCandidate, with_material: bool) -> Self {
+        let MovementCandidate {
+            loader,
+            activity,
+            source,
+            material,
+            destination,
+            truck,
+            truck_hours_per_tonne,
+            cycle,
+            routing_rule,
+            routing_preference,
+            cashflow,
+        } = candidate;
+        let CycleBreakdown {
+            spot_h,
+            load_h,
+            loaded_h,
+            dump_h,
+            empty_h,
+            loaded_km,
+            empty_km,
+            rise_m,
+        } = *cycle;
+        Self {
+            material: with_material.then_some(*material),
+            loader: *loader,
+            activity: *activity,
+            source: *source,
+            destination: *destination,
+            truck: *truck,
+            truck_hours_per_tonne: truck_hours_per_tonne.to_bits(),
+            cycle: [spot_h, load_h, loaded_h, dump_h, empty_h, loaded_km, empty_km, rise_m].map(f64::to_bits),
+            routing_rule: *routing_rule,
+            routing_preference: *routing_preference,
+            cashflow: cashflow.iter().map(|item| (item.rule, item.value_per_tonne.to_bits())).collect(),
+        }
+    }
+}
 
 pub(crate) struct Reduced {
     pub(crate) input: BlendInput,
@@ -40,16 +103,14 @@ pub(crate) struct Reduced {
 
 impl Reduced {
     pub(crate) fn new(input: &BlendInput) -> Self {
-        // Every candidate named by its Debug text, which is exact for every
-        // field, floating point included, and covers any field added later.
-        // Formatted once each and side by side: a large model's candidates run
-        // to hundreds of thousands, and this was most of what the reduction cost.
-        let names: Vec<String> = input.movements.par_iter().map(|candidate| format!("{candidate:?}")).collect();
+        // Every candidate by its key, built side by side: a large model's
+        // candidates run to hundreds of thousands.
+        let names: Vec<CandidateKey> = input.movements.par_iter().map(|candidate| CandidateKey::new(candidate, true)).collect();
 
         // Duplicates: the first of each set of identical candidates stands
         // for all of them.
-        let mut first: HashMap<&str, usize, foldhash::fast::FixedState> = HashMap::with_capacity_and_hasher(names.len(), Default::default());
-        let canonical: Vec<usize> = names.iter().enumerate().map(|(index, name)| *first.entry(name.as_str()).or_insert(index)).collect();
+        let mut first: HashMap<&CandidateKey, usize, foldhash::fast::FixedState> = HashMap::with_capacity_and_hasher(names.len(), Default::default());
+        let canonical: Vec<usize> = names.iter().enumerate().map(|(index, name)| *first.entry(name).or_insert(index)).collect();
         drop(first);
 
         // Dumps whose receipts no grade reads.
@@ -74,26 +135,16 @@ impl Reduced {
                 by_block.entry((candidate.source, candidate.material)).or_default().push(index);
             }
         }
-        // The route each of those takes: its name with the material left out.
-        let routed: Vec<usize> = by_block.values().flatten().copied().collect();
-        let mut route_of: Vec<Option<String>> = vec![None; input.movements.len()];
-        // Its name with the material read as 0, which is the name of the same
-        // candidate with `material: MaterialId(0)`: no other field, nested
-        // ones included, is called `material`.
-        let routes: Vec<(usize, String)> = routed
-            .par_iter()
-            .map(|&index| {
-                let name = &names[index];
-                let field = "material: MaterialId(";
-                let start = name.find(field).expect("a candidate's name holds its material") + field.len();
-                let end = start + name[start..].find(')').expect("a material's name is closed");
-                (index, format!("{}0{}", &name[..start], &name[end..]))
-            })
-            .collect();
-        for (index, route) in routes {
-            route_of[index] = Some(route);
+        // The route each of those takes: its key with the material left out,
+        // numbered.
+        let mut route_of: Vec<Option<u32>> = vec![None; input.movements.len()];
+        let mut numbered: HashMap<CandidateKey, u32, foldhash::fast::FixedState> = HashMap::default();
+        for &index in by_block.values().flatten() {
+            let next = numbered.len() as u32;
+            route_of[index] = Some(*numbered.entry(CandidateKey::new(&input.movements[index], false)).or_insert(next));
         }
-        let route = |index: usize| route_of[index].as_deref().expect("every block candidate has its route");
+        drop(numbered);
+        let route = |index: usize| route_of[index].expect("every block candidate has its route");
 
         // For a merged material, the representative it joins; and every
         // candidate's stand-in: itself, or the representative's candidate on
@@ -103,23 +154,23 @@ impl Reduced {
         for source in &mut ground {
             let block = SourceId::Ground(source.id);
             // Mergeable materials grouped by the routes they take.
-            let mut groups: BTreeMap<Vec<&str>, Vec<usize>> = BTreeMap::new();
+            let mut groups: BTreeMap<Vec<u32>, Vec<usize>> = BTreeMap::new();
             for (position, share) in source.material.iter().enumerate() {
                 let Some(candidates) = by_block.get(&(block, share.material)) else { continue };
                 if !candidates.iter().all(|&index| plain_dump(input.movements[index].destination)) {
                     continue;
                 }
-                let mut routes: Vec<&str> = candidates.iter().map(|&index| route(index)).collect();
+                let mut routes: Vec<u32> = candidates.iter().map(|&index| route(index)).collect();
                 routes.sort_unstable();
                 groups.entry(routes).or_default().push(position);
             }
             let mut dropped = BTreeSet::new();
             for positions in groups.values().filter(|positions| positions.len() > 1) {
                 let representative = source.material[positions[0]].material;
-                let routes: HashMap<&str, usize, foldhash::fast::FixedState> = by_block[&(block, representative)].iter().map(|&index| (route(index), index)).collect();
+                let routes: HashMap<u32, usize, foldhash::fast::FixedState> = by_block[&(block, representative)].iter().map(|&index| (route(index), index)).collect();
                 for &position in &positions[1..] {
                     for &index in &by_block[&(block, source.material[position].material)] {
-                        stand_in[index] = routes[route(index)];
+                        stand_in[index] = routes[&route(index)];
                     }
                     source.material[positions[0]].fraction += source.material[position].fraction;
                     dropped.insert(position);
