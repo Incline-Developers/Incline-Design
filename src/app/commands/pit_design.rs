@@ -75,7 +75,7 @@ fn design_on_worker(verts: &[PolyVertex], settings: &PitDesignSettings, ground: 
     };
     let default_start = points.first().map_or(DVec2::ZERO, |point| point.truncate());
     let spec = settings.spec(default_start);
-    let ramp_start = spec.ramp.map(|ramp| nearest_on_string(&points, ramp.start));
+    let ramp_start = spec.ramp.as_ref().map(|ramp| nearest_on_string(&points, ramp.start));
     let sample = |point: DVec2| ground.and_then(|ground| ground.rl(point));
     let sampler: Option<pit_design::Ground<'_>> = ground.map(|_| &sample as pit_design::Ground<'_>);
     let design = pit_design::design(&base, &spec, sampler, &|| cancel.is_cancelled());

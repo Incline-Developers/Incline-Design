@@ -45,6 +45,8 @@ pub(crate) struct Stretch {
     /// How far out its far edge is set from its near edge: a little more
     /// than its width, as its edges lean off the ring.
     pub(crate) across: f64,
+    /// The road's width.
+    pub(crate) width: f64,
 }
 
 impl Stretch {
@@ -102,15 +104,27 @@ pub(crate) struct Lay {
     /// starts to climb: a flat where it leaves, laid where the bench would
     /// not be sound with the climb starting at once.
     pub(crate) flat: f64,
+    /// The plan length it runs level after it climbs: a flat where the ramp
+    /// leaves the pit.
+    pub(crate) flat_end: f64,
+    /// How far out from its near edge its far edge starts, where it carries
+    /// on from a stretch of another width: it tapers from that to its own
+    /// over [`WIDTH_TAPER`] times the difference along.
+    pub(crate) start_across: Option<f64>,
 }
 
+/// How many times a change in a road's width it takes to taper from one to
+/// the other, along it.
+pub(crate) const WIDTH_TAPER: f64 = 5.0;
+
 /// How far up a stretch a point is that lies `running` along its steeper
-/// edge of `total`, the first `flat` of it level.
-fn share(running: f64, total: f64, flat: f64) -> f64 {
-    if total <= flat {
+/// edge of `total`, the first `flat` and last `flat_end` of it level.
+fn share(running: f64, total: f64, flat: f64, flat_end: f64) -> f64 {
+    let climb = total - flat - flat_end;
+    if climb <= 0.0 {
         return if running >= total { 1.0 } else { 0.0 };
     }
-    ((running - flat) / (total - flat)).clamp(0.0, 1.0)
+    ((running - flat) / climb).clamp(0.0, 1.0)
 }
 
 /// Why a stretch could not be laid.
@@ -133,7 +147,7 @@ pub(crate) fn lay(ring: &[DVec2], from: f64, direction: f64, lay: Lay, reach: &d
     // No stretch takes the whole way round: it would meet its own start.
     let longest = around * 0.9;
     let attempt = |run: f64| build(ring, &arcs, from, direction, run, lay, reach);
-    let wanted = lay.climb_length + lay.flat;
+    let wanted = lay.climb_length + lay.flat + lay.flat_end;
     let close_enough = wanted * 1.0e-4;
     // The climb rises with the run, nearly in proportion to it: round a
     // bend the inside edge is shorter than the ring, and round a corner the
@@ -208,8 +222,9 @@ fn build(ring: &[DVec2], arcs: &[f64], from: f64, direction: f64, run: f64, lay:
     // How far up the stretch each station is: first by distance along the
     // ring, then by the length the road's own edges climb over, which the
     // edges depend on in turn. A few rounds settle it.
-    let flat_share = lay.flat / (lay.climb_length + lay.flat).max(f64::MIN_POSITIVE);
-    let mut climbed: Vec<f64> = along.iter().map(|distance| share(*distance, run, run * flat_share)).collect();
+    let whole = (lay.climb_length + lay.flat + lay.flat_end).max(f64::MIN_POSITIVE);
+    let (flat_share, end_share) = (lay.flat / whole, lay.flat_end / whole);
+    let mut climbed: Vec<f64> = along.iter().map(|distance| share(*distance, run, run * flat_share, run * end_share)).collect();
     let mut edges = RoadEdges {
         near: Vec::new(),
         far: Vec::new(),
@@ -218,13 +233,24 @@ fn build(ring: &[DVec2], arcs: &[f64], from: f64, direction: f64, run: f64, lay:
     // set apart by a little more than the width, they are the width apart
     // square across.
     let across = lay.width * (1.0 + (lay.drift / lay.climb_length).powi(2)).sqrt();
+    // Carrying on from a road of another width, the far edge starts out from
+    // the near edge as far as that one's did, and tapers to its own.
+    let start_across = lay.start_across.unwrap_or(across);
+    let taper = (start_across - across).abs() * WIDTH_TAPER;
+    let across_at = |distance: f64| {
+        if taper > 0.0 {
+            across + (start_across - across) * (1.0 - distance / taper).max(0.0)
+        } else {
+            across
+        }
+    };
     for _ in 0..3 {
         let near_distance: Vec<f64> = climbed.iter().zip(&parameters).map(|(&t, &parameter)| lay.side * reach(t, parameter)).collect();
         let near = offset_open(ring, &parameters, direction, &near_distance);
         let far = if lay.varies {
-            beside(&near, lay.width, lay.side * direction > 0.0, (from, direction, count), lay.far_start)
+            beside(&near, lay.width, lay.side * direction > 0.0, (from, direction, count), lay.far_start, taper)
         } else {
-            let far_distance: Vec<f64> = near_distance.iter().map(|distance| distance + lay.side * across).collect();
+            let far_distance: Vec<f64> = near_distance.iter().zip(&along).map(|(distance, along)| distance + lay.side * across_at(*along)).collect();
             offset_open(ring, &parameters, direction, &far_distance)
         };
         edges = RoadEdges { near, far };
@@ -233,11 +259,12 @@ fn build(ring: &[DVec2], arcs: &[f64], from: f64, direction: f64, run: f64, lay:
         let steps: Vec<f64> = near.iter().zip(&far).map(|(a, b)| a.min(*b)).collect();
         let total: f64 = steps.iter().sum();
         let flat = lay.flat.min(total);
+        let flat_end = lay.flat_end.min(total - flat);
         let mut running = 0.0;
         climbed = std::iter::once(0.0)
             .chain(steps.iter().map(|step| {
                 running += step;
-                if total > 0.0 { share(running, total, flat) } else { 1.0 }
+                if total > 0.0 { share(running, total, flat, flat_end) } else { 1.0 }
             }))
             .collect();
     }
@@ -267,11 +294,12 @@ fn build(ring: &[DVec2], arcs: &[f64], from: f64, direction: f64, run: f64, lay:
     let steps: Vec<f64> = near.iter().zip(&far).map(|(a, b)| a.min(*b)).collect();
     let total: f64 = steps.iter().sum();
     let flat = lay.flat.min(total);
+    let flat_end = lay.flat_end.min(total - flat);
     let mut running = 0.0;
     let climbed: Vec<f64> = std::iter::once(0.0)
         .chain(steps.iter().map(|step| {
             running += step;
-            if total > 0.0 { share(running, total, flat) } else { 1.0 }
+            if total > 0.0 { share(running, total, flat, flat_end) } else { 1.0 }
         }))
         .collect();
     Stretch {
@@ -282,6 +310,8 @@ fn build(ring: &[DVec2], arcs: &[f64], from: f64, direction: f64, run: f64, lay:
         stations: fine.into_iter().zip(climbed).collect(),
         count,
         across,
+        // Tapering from another width, it is as narrow as the narrower.
+        width: lay.width.min(lay.width * start_across / across),
     }
 }
 
@@ -293,7 +323,7 @@ fn build(ring: &[DVec2], arcs: &[f64], from: f64, direction: f64, run: f64, lay:
 /// of `count` points). Where it carries on from the stretch before, it
 /// starts where the last far edge arrived (`start`) and eases on to its
 /// own line over a road's width along.
-fn beside(near: &[(DVec2, f64)], width: f64, right: bool, (from, direction, count): (f64, f64, usize), start: Option<DVec2>) -> Vec<(DVec2, f64)> {
+fn beside(near: &[(DVec2, f64)], width: f64, right: bool, (from, direction, count): (f64, f64, usize), start: Option<DVec2>, taper: f64) -> Vec<(DVec2, f64)> {
     let points: Vec<DVec2> = near.iter().map(|point| point.0).collect();
     let around = count as f64;
     // The far edge runs along the near one, so each point is looked for
@@ -338,8 +368,10 @@ fn beside(near: &[(DVec2, f64)], width: f64, right: bool, (from, direction, coun
         .collect();
     if let (Some(start), Some(first)) = (start, far.first()) {
         let shift = start - first.0;
+        // Over a road's width, or the taper from another width if longer.
+        let ease = width.max(taper);
         for point in &mut far {
-            let share = 1.0 - point.2 / width;
+            let share = 1.0 - point.2 / ease;
             if share <= 0.0 {
                 break;
             }

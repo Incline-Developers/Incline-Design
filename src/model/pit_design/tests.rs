@@ -74,6 +74,10 @@ fn with_ramp(direction: Direction, layout: Layout, start: DVec2, clockwise: bool
             start,
             climbs_clockwise: clockwise,
             layout,
+            from: None,
+            to: None,
+            bands: Vec::new(),
+            exit_flat: 0.0,
         }),
         stop,
     }
@@ -203,7 +207,10 @@ fn assert_sound_climbing(name: &str, design: &Design, ramp: &RampSpec, at_gradie
         assert!(road.narrowest >= ramp.width * 0.96, "{name}: bench {index} narrows to {:.1} m", road.narrowest);
     }
     let lengthened = design.report.iter().filter(|bench| bench.ramp.is_some_and(|road| road.lengthened > 0.0)).count();
-    assert!(!at_gradient || lengthened * 10 <= design.report.len().max(10), "{name}: {lengthened} stretches climb flatter than asked");
+    assert!(
+        !at_gradient || lengthened * 10 <= design.report.len().max(10),
+        "{name}: {lengthened} stretches climb flatter than asked"
+    );
     let (rings, edges) = breaklines(design);
     if let Err(error) = crate::app::commands::triangulation::creation::cdt_surface_from_breaklines(&rings, &edges) {
         panic!("{name}: no single-valued surface: {error:#}");
@@ -316,6 +323,17 @@ fn settings_that_make_no_design_say_why() {
     zoned.rules.zones[0].wall_radius = None;
     zoned.rules.height_cycle = vec![10.0, 0.0];
     assert_eq!(problem(zoned), Some(Problem::BenchHeight));
+    let mut flats = spec(Direction::Up, Layout::Spiral, start, false, Stop::Benches(3));
+    flats.ramp.as_mut().unwrap().exit_flat = -1.0;
+    assert_eq!(problem(flats.clone()), Some(Problem::RampBand));
+    flats.ramp.as_mut().unwrap().exit_flat = 0.0;
+    flats.ramp.as_mut().unwrap().bands.push(super::RampBand {
+        from: 120.0,
+        to: 140.0,
+        width: Some(0.0),
+        flat: None,
+    });
+    assert_eq!(problem(flats), Some(Problem::RampWidth));
 }
 
 #[test]
@@ -765,4 +783,97 @@ fn winding_inside(ring: &[DVec2], point: DVec2) -> bool {
         }
     }
     inside
+}
+
+/// The length of `chain` it runs level at its top end, and at its bottom.
+fn level_ends(chain: &[DVec3]) -> (f64, f64) {
+    let level = |points: &mut dyn Iterator<Item = &DVec3>| {
+        let mut points = points.peekable();
+        let Some(first) = points.next() else {
+            return 0.0;
+        };
+        let (mut length, mut last) = (0.0, *first);
+        for point in points {
+            if (point.z - first.z).abs() > 1.0e-6 {
+                break;
+            }
+            length += point.truncate().distance(last.truncate());
+            last = *point;
+        }
+        length
+    };
+    let top_first = chain.first().zip(chain.last()).is_some_and(|(first, last)| first.z > last.z);
+    let (from_start, from_end) = (level(&mut chain.iter()), level(&mut chain.iter().rev()));
+    if top_first { (from_start, from_end) } else { (from_end, from_start) }
+}
+
+#[test]
+fn a_ramp_runs_where_and_as_its_table_says() {
+    let start = outline("rect")[0];
+    let centreline = |design: &Design| design.strings.iter().find(|string| string.kind == StringKind::RampCentreline).unwrap().points.clone();
+
+    // Ending at RL 160: the four benches below it have the ramp, those
+    // above none, and the road tops out at 160.
+    let mut spec = super::tests::spec(Direction::Up, Layout::Spiral, start, false, Stop::Benches(7));
+    spec.ramp.as_mut().unwrap().to = Some(160.0);
+    let design = built("rect", 100.0, &spec, None);
+    assert_eq!(design.benches, 7);
+    let on: Vec<bool> = design.report.iter().map(|bench| bench.ramp.is_some()).collect();
+    assert_eq!(on, [true, true, true, true, false, false, false]);
+    let top = centreline(&design).iter().map(|point| point.z).fold(f64::NEG_INFINITY, f64::max);
+    assert!((top - 160.0).abs() < 1.0e-6, "the road tops out at {top}");
+    assert_eq!(crossings(&design), 0);
+
+    // Beginning at RL 130: it starts from the third bench, as a ramp begins
+    // anywhere, and climbs from there.
+    let mut spec = super::tests::spec(Direction::Up, Layout::Spiral, start, false, Stop::Benches(7));
+    spec.ramp.as_mut().unwrap().from = Some(130.0);
+    let design = built("rect", 100.0, &spec, None);
+    let on: Vec<bool> = design.report.iter().map(|bench| bench.ramp.is_some()).collect();
+    assert_eq!(on, [false, false, true, true, true, true, true]);
+    let bottom = centreline(&design).iter().map(|point| point.z).fold(f64::INFINITY, f64::min);
+    assert!((bottom - 130.0).abs() < 1.0e-6, "the road starts at {bottom}");
+    assert_eq!(crossings(&design), 0);
+
+    // A one-lane bottom: the two benches below RL 130 a 15 m road with a
+    // 20 m flat before each climb; and a 40 m flat where it leaves the pit.
+    let mut spec = super::tests::spec(Direction::Up, Layout::Spiral, start, false, Stop::Benches(6));
+    {
+        let ramp = spec.ramp.as_mut().unwrap();
+        ramp.bands = vec![super::RampBand {
+            from: 100.0,
+            to: 130.0,
+            width: Some(15.0),
+            flat: Some(20.0),
+        }];
+        ramp.exit_flat = 40.0;
+    }
+    let design = built("rect", 100.0, &spec, None);
+    assert_eq!(design.benches, 6);
+    for (index, bench) in design.report.iter().enumerate() {
+        let road = bench.ramp.unwrap();
+        // Two benches one lane wide, then one tapering out to the full width
+        // from where the last arrived, then the rest full width.
+        if index < 2 {
+            assert!(road.narrowest >= 15.0 * 0.96 && road.narrowest < 20.0, "bench {index}: {:.1} m wide", road.narrowest);
+            assert!(road.flat >= 20.0, "bench {index}: a {:.1} m flat", road.flat);
+        } else if index == 2 {
+            assert!(road.narrowest >= 15.0 * 0.96, "bench {index}: {:.1} m wide", road.narrowest);
+        } else {
+            assert!(road.narrowest >= 28.0 * 0.96, "bench {index}: {:.1} m wide", road.narrowest);
+        }
+        assert!(road.steepest <= 0.1 + 1.0e-6, "bench {index} climbs at {:.4}", road.steepest);
+    }
+    let (top_level, _) = level_ends(&centreline(&design));
+    assert!(top_level >= 40.0 * 0.95, "it leaves the pit on a {top_level:.1} m flat");
+    assert_eq!(crossings(&design), 0);
+
+    // Built down, the exit flat is at its first bench, where it leaves the
+    // crest.
+    let mut spec = super::tests::spec(Direction::Down, Layout::Spiral, outline("crest")[2], false, Stop::Benches(4));
+    spec.ramp.as_mut().unwrap().exit_flat = 40.0;
+    let design = built("crest", 300.0, &spec, None);
+    assert!(design.report[0].ramp.unwrap().flat >= 40.0);
+    let (top_level, _) = level_ends(&centreline(&design));
+    assert!(top_level >= 40.0 * 0.95, "it leaves the pit on a {top_level:.1} m flat");
 }

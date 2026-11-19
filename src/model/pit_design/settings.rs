@@ -4,7 +4,7 @@
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
-use super::{BenchRules, Direction, Kind, Layout, RampSpec, Spec, Stop};
+use super::{BenchRules, Direction, Kind, Layout, RampBand, RampSpec, Spec, Stop};
 use crate::model::triangulation::TriangulationId;
 
 /// Where a design stops, as its settings say.
@@ -36,6 +36,15 @@ pub(crate) struct PitDesignSettings {
     pub(crate) ramp_width: f64,
     /// Rise over run, as a percentage.
     pub(crate) ramp_gradient: f64,
+    /// The RLs the ramp begins and ends at, the way the design is built;
+    /// the whole pit where none is given.
+    pub(crate) ramp_from: Option<f64>,
+    pub(crate) ramp_to: Option<f64>,
+    /// Bands of RL whose stretches of road are laid otherwise: narrower, or
+    /// with a flat.
+    pub(crate) ramp_bands: Vec<RampBand>,
+    /// How far the ramp runs level where it leaves the pit.
+    pub(crate) ramp_exit_flat: f64,
     /// Where the ramp leaves the string, in plan; the string's first point
     /// if none has been picked.
     pub(crate) ramp_start: Option<DVec2>,
@@ -64,6 +73,10 @@ impl Default for PitDesignSettings {
             ramp: true,
             ramp_width: 25.0,
             ramp_gradient: 10.0,
+            ramp_from: None,
+            ramp_to: None,
+            ramp_bands: Vec::new(),
+            ramp_exit_flat: 0.0,
             ramp_start: None,
             climbs_clockwise: false,
             switchback: false,
@@ -92,6 +105,10 @@ impl PitDesignSettings {
             ramp: self.ramp.then(|| RampSpec {
                 width: self.ramp_width,
                 gradient: self.ramp_gradient / 100.0,
+                from: self.ramp_from,
+                to: self.ramp_to,
+                bands: self.ramp_bands.clone(),
+                exit_flat: self.ramp_exit_flat,
                 start: self.ramp_start.unwrap_or(default_start),
                 climbs_clockwise: self.climbs_clockwise,
                 layout: if self.switchback {

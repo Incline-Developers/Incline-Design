@@ -16,7 +16,7 @@ use crate::{
     model::{
         ObjectId, PolyVertex,
         pit_design::{
-            Design, Direction, End, Kind, Problem, Zone,
+            Design, Direction, End, Kind, Problem, RampBand, Zone,
             object::PitObject,
             settings::{PitDesignSettings, StopMode},
             walls::{Sector, WallReport},
@@ -183,6 +183,7 @@ pub(crate) fn problem_text(problem: Problem) -> String {
         Problem::BermWidth => tr!("pit-design-problem-berm-width"),
         Problem::Zone => tr!("pit-design-problem-zone"),
         Problem::WallRadius => tr!("pit-design-problem-wall-radius"),
+        Problem::RampBand => tr!("pit-design-problem-ramp-band"),
         Problem::Sector => tr!("pit-design-problem-sector"),
         Problem::Region => tr!("pit-design-problem-region"),
         Problem::RampWidth => tr!("pit-design-problem-ramp-width"),
@@ -300,7 +301,8 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                                     commands.push(UiCommand::BeginPitRampStartPick);
                                 }
                             } else {
-                                draw_ramp_settings(ui, settings, commands);
+                                let base_rl = draft.built_for.as_ref().and_then(|key| key.verts.first()).map_or(0.0, |vertex| vertex.pos.z);
+                                draw_ramp_settings(ui, settings, commands, base_rl);
                                 if button_row(ui, String::new(), tr!("pit-design-ramp-remove-help"), &[(tr!("pit-design-ramp-remove"), true)]).is_some() {
                                     settings.ramp = false;
                                 }
@@ -666,7 +668,7 @@ fn draw_slope_rules(ui: &mut egui::Ui, settings: &mut PitDesignSettings, picking
 
 /// The ramp's settings, for a pit that has one: where it starts, its
 /// width and gradient, which way it climbs, and how it turns.
-fn draw_ramp_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, commands: &mut Vec<UiCommand>) {
+fn draw_ramp_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, commands: &mut Vec<UiCommand>, base_rl: f64) {
     MenuFieldF64::new(tr!("pit-design-ramp-width"), &mut settings.ramp_width, 0.1..=1000.0)
         .width(FIELD_WIDTH)
         .speed(0.1)
@@ -736,6 +738,107 @@ fn draw_ramp_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, comma
             .suffix(" m")
             .help_text(tr!("pit-design-inside-radius-help"))
             .show(ui);
+    }
+    if menu::menu_section_folding(ui, "pit_design_ramp_extent", tr!("pit-design-ramp-extent-section")) {
+        draw_ramp_extent(ui, settings, base_rl);
+    }
+}
+
+/// Where the ramp runs, and how its stretches are laid bench by bench: the
+/// RLs it begins and ends at, a flat where it leaves the pit, and bands of
+/// RL laid narrower or with a flat.
+fn draw_ramp_extent(ui: &mut egui::Ui, settings: &mut PitDesignSettings, base_rl: f64) {
+    let sign = settings.direction.sign();
+    let height = settings.bench_height;
+    // Each end at the design's own, or at an RL of its own.
+    for (id, label, help, value, default, whole) in [
+        (
+            "pit_design_ramp_from",
+            tr!("pit-design-ramp-begins"),
+            tr!("pit-design-ramp-begins-help"),
+            &mut settings.ramp_from,
+            base_rl,
+            tr!("pit-design-ramp-begins-string"),
+        ),
+        (
+            "pit_design_ramp_to",
+            tr!("pit-design-ramp-ends"),
+            tr!("pit-design-ramp-ends-help"),
+            &mut settings.ramp_to,
+            base_rl + sign * 4.0 * height,
+            tr!("pit-design-ramp-ends-last"),
+        ),
+    ] {
+        let mut at_rl = value.is_some();
+        let chosen = if at_rl { tr!("pit-design-ramp-at-rl") } else { whole.clone() };
+        MenuFieldCombo::new(id, label, &mut at_rl, chosen, [(false, whole.into()), (true, tr!("pit-design-ramp-at-rl").into())])
+            .width(FIELD_WIDTH)
+            .help_text(help)
+            .show(ui);
+        match (at_rl, value.as_mut()) {
+            (false, _) => *value = None,
+            (true, None) => *value = Some(default),
+            (true, Some(rl)) => {
+                ui.push_id(id, |ui| {
+                    MenuFieldF64::new(tr!("pit-design-ramp-rl"), rl, f64::MIN..=f64::MAX)
+                        .width(FIELD_WIDTH)
+                        .speed(0.5)
+                        .suffix(" m")
+                        .show(ui);
+                });
+            }
+        }
+    }
+    MenuFieldF64::new(tr!("pit-design-ramp-exit-flat"), &mut settings.ramp_exit_flat, 0.0..=10000.0)
+        .width(FIELD_WIDTH)
+        .speed(0.5)
+        .suffix(" m")
+        .help_text(tr!("pit-design-ramp-exit-flat-help"))
+        .show(ui);
+
+    let width = settings.ramp_width;
+    let mut remove = None;
+    for (index, band) in settings.ramp_bands.iter_mut().enumerate() {
+        ui.push_id(("pit_design_ramp_band", index), |ui| {
+            menu::menu_section(ui, tr!("pit-design-ramp-band", number = (index + 1).to_string()));
+            MenuFieldF64::new(tr!("pit-design-zone-from"), &mut band.from, f64::MIN..=f64::MAX)
+                .width(FIELD_WIDTH)
+                .speed(0.5)
+                .suffix(" m")
+                .show(ui);
+            MenuFieldF64::new(tr!("pit-design-zone-to"), &mut band.to, f64::MIN..=f64::MAX)
+                .width(FIELD_WIDTH)
+                .speed(0.5)
+                .suffix(" m")
+                .show(ui);
+            // A value the band leaves to the ramp shows the ramp's, and
+            // becomes the band's own once changed.
+            for (label, value, ramp, range) in [
+                (tr!("pit-design-ramp-width"), &mut band.width, width, 0.1..=1000.0),
+                (tr!("pit-design-ramp-band-flat"), &mut band.flat, 0.0, 0.0..=10000.0),
+            ] {
+                let mut shown = value.unwrap_or(ramp);
+                if MenuFieldF64::new(label, &mut shown, range).width(FIELD_WIDTH).speed(0.1).suffix(" m").show(ui).changed() {
+                    *value = Some(shown);
+                }
+            }
+            if button_row(ui, String::new(), String::new(), &[(tr!("pit-design-ramp-band-remove"), true)]).is_some() {
+                remove = Some(index);
+            }
+        });
+    }
+    if let Some(index) = remove {
+        settings.ramp_bands.remove(index);
+    }
+    if button_row(ui, String::new(), tr!("pit-design-ramp-band-add-help"), &[(tr!("pit-design-ramp-band-add"), true)]).is_some() {
+        // A new band takes the next two benches' worth of RL from the end of
+        // the last, or from the string.
+        let from = settings.ramp_bands.last().map_or(base_rl, |band| band.to);
+        settings.ramp_bands.push(RampBand {
+            from,
+            to: from + sign * 2.0 * height,
+            ..RampBand::default()
+        });
     }
 }
 

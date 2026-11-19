@@ -19,7 +19,7 @@ use crate::{
     ui::dialogs::pit_design::{NoDesign, end_text, no_design_text, problem_text},
 };
 
-const SETTINGS_DESCRIPTION: &str = "A pit design's settings: kind (pit, cut into the ground, or dump, a dump or stockpile built on it); direction (a pit up from its floor's toe or down from its crest, a dump up from its toe stepping in or down from its top stepping out); bench_height; face_angle (degrees from horizontal); berm_width; bench_rules (height_cycle, a list of heights the benches take in turn; catch_every and catch_width, a berm that wide every that many benches; zones, bands of RL from..to whose benches take their own height, face_angle, berm_width and wall_radius, a bench taking the zone it starts in and the last listed winning; sectors, each a bearing the walls face (dip direction, degrees from north) with its face_angle, berm_width and optional inter_ramp target, interpolated round the compass; regions, each an outline ([x, y] points) whose walls take its face_angle and berm_width, blending over blend metres across its edge; inter_ramp, a target to check the walls against; a region counts over a zone, a zone over a sector, a sector over the design); wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id: a pit built up daylights against it, a dump built down meets it); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius). Its surface is made with triangulate, which takes a pit design as every string it draws.";
+const SETTINGS_DESCRIPTION: &str = "A pit design's settings: kind (pit, cut into the ground, or dump, a dump or stockpile built on it); direction (a pit up from its floor's toe or down from its crest, a dump up from its toe stepping in or down from its top stepping out); bench_height; face_angle (degrees from horizontal); berm_width; bench_rules (height_cycle, a list of heights the benches take in turn; catch_every and catch_width, a berm that wide every that many benches; zones, bands of RL from..to whose benches take their own height, face_angle, berm_width and wall_radius, a bench taking the zone it starts in and the last listed winning; sectors, each a bearing the walls face (dip direction, degrees from north) with its face_angle, berm_width and optional inter_ramp target, interpolated round the compass; regions, each an outline ([x, y] points) whose walls take its face_angle and berm_width, blending over blend metres across its edge; inter_ramp, a target to check the walls against; a region counts over a zone, a zone over a sector, a sector over the design); wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id: a pit built up daylights against it, a dump built down meets it); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius), ramp_from and ramp_to (RLs it begins and ends at, the way the design is built; null for the whole pit), ramp_exit_flat (a level run where it leaves the pit), ramp_bands (bands of RL from..to whose stretches take their own width and/or a flat before they climb; a change of width tapers over five times the change). Its surface is made with triangulate, which takes a pit design as every string it draws.";
 
 pub(super) fn definitions() -> Vec<Value> {
     vec![
@@ -150,6 +150,24 @@ pub(super) fn definitions() -> Vec<Value> {
                             "clockwise": { "type": "boolean", "description": "Climb clockwise seen from above. False if left out." },
                             "switchback_every": { "type": "integer", "minimum": 1, "description": "Turn back every this many benches. A spiral if left out." },
                             "inside_radius": { "type": "number", "minimum": 0, "description": "The tightest the road's inside edge turns on a switchback. 15 if left out." },
+                            "from": { "type": "number", "description": "The RL it begins at, the way the design is built: on the benches starting from it. The string if left out." },
+                            "to": { "type": "number", "description": "The RL it ends at: the benches starting beyond it have no ramp. The last bench if left out." },
+                            "exit_flat": { "type": "number", "minimum": 0, "description": "How far it runs level where it leaves the pit: at its top building up (where its last bench is known), at its first bench building down. 0 if left out." },
+                            "bands": {
+                                "type": "array",
+                                "description": "Bands of RL whose stretches of road are laid otherwise: narrower (a one-lane bottom), or running level at least so far before they climb. A change of width tapers over five times the change.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "from": { "type": "number" },
+                                        "to": { "type": "number" },
+                                        "width": { "type": "number", "exclusiveMinimum": 0 },
+                                        "flat": { "type": "number", "minimum": 0 },
+                                    },
+                                    "required": ["from", "to"],
+                                    "additionalProperties": false,
+                                },
+                            },
                         },
                         "required": ["width", "gradient"],
                         "additionalProperties": false,
@@ -225,6 +243,12 @@ fn one_call_settings(arguments: &Value) -> Result<PitDesignSettings, String> {
             settings.switchback_every = u32::try_from(every).unwrap_or(u32::MAX);
         }
         settings.inside_radius = ramp["inside_radius"].as_f64().unwrap_or(15.0);
+        settings.ramp_from = ramp["from"].as_f64();
+        settings.ramp_to = ramp["to"].as_f64();
+        settings.ramp_exit_flat = ramp["exit_flat"].as_f64().unwrap_or(0.0);
+        if !ramp["bands"].is_null() {
+            settings.ramp_bands = serde_json::from_value(ramp["bands"].clone()).map_err(|error| format!("ramp bands: {error}"))?;
+        }
     }
     Ok(settings)
 }
