@@ -2845,13 +2845,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ به حجمی تحویل می�
 destination-problem-missing = ⁨{ $rule }⁩ به مقصدی تحویل می‌دهد که دیگر در زمان‌بندی نیست
 destination-rule-matches-all = همهٔ مواد
 destination-rule-sources-count = { $count ->
+        [one] ۱ مبدأ
+       *[other] { $count } مبدأ
+    }
 schedule-run-period-note = اجرای بازه: یک روز دیگر زمان‌بندی کن.
 schedule-run-whole-note = اجرای همهٔ بازه‌ها: تا روز پایان برنامه‌ریزی زمان‌بندی کن.
 schedule-improve-note = بهبود: به دنبال زمان‌بندی بهتر بگرد، تا حد زمانی حل.
 schedule-improving-note = در جست‌وجوی زمان‌بندی بهتر.
-        [one] ۱ مبدأ
-       *[other] { $count } مبدأ
-    }
 schedule-improve-finishing = اجرای { $run }: زودتر با بهترین زمان‌بندی یافته تا اکنون پایان می‌یابد.
 schedule-improve-stalled = در { $minutes } min زمان‌بندی بهتری نیامد؛ اجرا پایان می‌یابد.
 improve-card-title = بهبود زمان‌بندی
@@ -4464,6 +4464,7 @@ err-omf-element-part-unreadable = عنصر «{ $name }» دارای { $what } ا
 err-omf-part-reserves = فهرست فیلدهای ذخایر
 err-omf-part-solids = حجم‌های برنامه‌ریزی
 err-omf-part-haulage = شبکهٔ جاده‌های حمل
+err-omf-part-pit-designs = طراحی‌های پیت
 err-omf-read-layer-objects = خواندن اشیای لایهٔ طراحی «{ $name }» ممکن نشد
 err-omf-read-layer = خواندن لایهٔ طراحی «{ $name }» ممکن نشد
 err-omf-validate-designs = طرح‌های «{ $name }» معتبر نیستند
@@ -5000,9 +5001,7 @@ pit-design-menu = طراحی پیت
 pit-design-title = طراحی پیت
 pick-selection-pit-string-prompt = خط بسته‌ای را که پیت از آن طراحی می‌شود انتخاب کنید.
 pit-design-string = خط آغاز
-pit-design-string-help = خط بسته‌ای که پیت از آن طراحی می‌شود: پاشنه کف آن هنگام ساختن رو به بالا، یا تاج آن هنگام ساختن رو به پایین.
-pit-design-string-chosen = خط بسته
-pit-design-string-none = انتخاب نشده
+pit-design-string-help = خط بسته‌ای که طراحی از آن آغاز می‌شود: پای کف هنگام ساخت رو به بالا، یا تاج هنگام ساخت رو به پایین. طراحی نسخهٔ خودش را نگه می‌دارد، پس ویرایش چندخطی تا «به‌روزرسانی» چیزی را تغییر نمی‌دهد.
 pit-design-direction = ساخت
 pit-design-direction-help = رو به بالا از یک کف، که دیواره‌ها با بالا رفتن پله‌پله به بیرون می‌روند، یا رو به پایین از یک تاج، که دیواره‌ها با عمیق‌تر شدن پیت پله‌پله به درون می‌آیند.
 pit-design-up = رو به بالا از کف
@@ -5055,7 +5054,6 @@ pit-design-trim = برش با توپوگرافی
 pit-design-trim-help = سطح را جایی که بالای توپوگرافی است ببُر.
 pit-design-result-section = طراحی
 pit-design-designing = در حال طراحی...
-pit-design-pick-string-first = یک خط بسته برای طراحی انتخاب کنید.
 pit-design-benches-built = پله‌ها
 pit-design-final-rl = تراز نهایی
 pit-design-ramp-length = طول رمپ
@@ -5080,9 +5078,68 @@ pit-design-problem-string = خط آغاز باید یک پلی‌لاین بست
 pit-design-problem-stop-elevation = تراز توقف پشت خط است: هنگام ساختن رو به بالا زیر آن، هنگام ساختن رو به پایین بالای آن.
 pit-design-problem-no-topography = توپوگرافی‌ای را که طراحی به آن می‌رسد انتخاب کنید.
 pit-design-problem-topography-not-loaded = برای رسیدن به سطح آن، { $name } را بارگذاری کنید.
-pit-design-layer-name = طراحی پیت
-pit-design-building-surface = در حال ساخت سطح پیت
-pit-design-surface-failed = خطوط پیت افزوده نشد: سطح آن ساخته نشد. { $error }
 pit-design-created = { $benches } پله طراحی شد ({ $ended })، به صورت { $strings } خط روی { $layer }.
 pit-design-created-surface = سطح پیت ساخته شد، { $name }.
-pit-design-report-summary = خطوط طراحی را روی یک لایه تازه، همراه با سطح آن، می‌افزاید.
+pit-design-report-summary = یک طراحی پیت را در لایه و سطح خودش می‌سازد.
+pit-design-default-name = طراحی پیت
+pit-design-scenario-default = حالت پایه
+pit-design-string-source-gone = چندخطی‌ای که خط این طراحی از آن کپی شده دیگر در هیچ لایهٔ بارگذاری‌شده‌ای نیست.
+pit-design-deleted = طراحی پیت { $name } حذف شد. لایه و سطح آن حفظ می‌شوند.
+pit-design-copy-name = کپی { $name }
+pit-design-gone = آن طراحی پیت دیگر در پروژه نیست.
+pit-design-building = در حال ساخت طراحی پیت { $name }
+pit-design-no-bench-fits = حتی یک پله هم جا نمی‌شود: { $reason }
+pit-design-build-failed = طراحی پیت ساخته نشد: { $error }
+pit-design-surface-unlinked = سطح { $name } همان‌طور که بود ماند. طراحی دیگر سطحی نمی‌سازد، پس آن سطح دیگر متعلق به آن نیست.
+pit-design-report-delete = یک طراحی پیت را حذف می‌کند و لایه و سطح آن را نگه می‌دارد.
+pit-design-report-duplicate = یک طراحی پیت را بدون لایه و سطحش کپی می‌کند.
+pit-design-none-yet = این پروژه هنوز طراحی پیتی ندارد. «جدید» را بزنید و خط بسته‌ای را که طراحی از آن آغاز می‌شود انتخاب کنید.
+pit-design-choose = یک طراحی انتخاب کنید
+pit-design-design = طراحی
+pit-design-design-help = طراحی‌های پیت پروژه. هر کدام نسخهٔ خودش از خط و سناریوهایش را نگه می‌دارد و لایه و سطح خودش را از نو می‌سازد.
+pit-design-new = جدید
+pit-design-duplicate = تکثیر
+pit-design-delete = حذف
+pit-design-new-help = «جدید» طراحی‌ای را از خط بسته‌ای که انتخاب می‌کنید آغاز می‌کند. «تکثیر» طراحی باز را بدون لایه و سطحش کپی می‌کند. «حذف» طراحی را برمی‌دارد و آنچه ساخته را نگه می‌دارد.
+pit-design-name = نام
+pit-design-scenario = سناریو
+pit-design-scenario-help = هر سناریو مجموعهٔ کاملی از تنظیمات طراحی است. سناریوی فعال همان است که پیش‌نمایش نشان می‌دهد و «ساخت» می‌سازد.
+pit-design-scenario-name = نام سناریو
+pit-design-scenario-copy = کپی
+pit-design-scenario-remove = برداشتن
+pit-design-scenario-copy-help = «کپی» سناریویی با تنظیمات سناریوی فعال می‌افزاید و آن را فعال می‌کند. «برداشتن» سناریوی فعال را حذف می‌کند؛ طراحی همیشه یکی را نگه می‌دارد.
+pit-design-scenario-copy-name = کپی { $name }
+pit-design-string-copied = { $points } نقطه در تراز { $rl }
+pit-design-string-change = تغییر
+pit-design-string-update = به‌روزرسانی
+pit-design-string-update-help = «تغییر» خط بستهٔ دیگری برای طراحی انتخاب می‌کند. «به‌روزرسانی» خط را پس از ویرایش آن چندخطی، دوباره از همان چندخطی کپی می‌کند.
+pit-design-rebuild = ساخت دوباره
+pit-design-build = ساخت
+pit-design-not-built = ساخته نشده
+pit-design-output-layer = لایه
+pit-design-output-surface = سطح
+pit-design-standing = ساخته شده
+pit-design-current = به‌روز
+pit-design-out-of-date = طراحی پس از ساخت تغییر کرده است. برای به‌روز کردن لایه و سطح آن دوباره بسازید.
+pit-design-layer-edited = لایهٔ آن پس از ساخت ویرایش شده است. ساخت دوباره جای آن ویرایش‌ها را می‌گیرد.
+pit-design-surface-edited = سطح آن پس از ساخت ویرایش شده است. ساخت دوباره جای آن ویرایش‌ها را می‌گیرد.
+pit-design-row-out-of-date = { $name } (قدیمی)
+pit-design-row-not-built = { $name } (ساخته نشده)
+pit-design-open = باز کردن در طراحی پیت
+pit-design-flats =
+    { $count ->
+       *[other] { $count } پله پیش از بالا رفتن، روی هم { $length } متر هموار می‌روند، جایی که رمپ برای نگه داشتن شیب خود جا لازم دارد.
+    }
+pit-design-flatter =
+    { $count ->
+       *[other] { $count } پله کم‌شیب‌تر از شیب خواسته‌شده بالا می‌روند: هیچ بخش همواری آن‌ها را پایدار نمی‌کرد.
+    }
+pit-design-bench-table = پله‌ها
+pit-design-table-rl = تراز
+pit-design-table-grade = شیب
+pit-design-table-flat = هموار
+pit-design-table-width = پهنا
+pit-design-table-turn = دور
+pit-design-table-turned = زیگزاگ
+pit-design-table-flatter-hint = { $length } متر بیش از آنچه شیب می‌خواهد بالا می‌رود، پس کم‌شیب‌تر است: هیچ بخش همواری پیش از آن پله را پایدار نکرد.
+pit-design-table-narrow-hint = باریک‌تر از { $width } متر خواسته‌شده، جایی که در پیچ دیواره تحویل می‌دهد.

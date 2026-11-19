@@ -2872,13 +2872,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ giao đến một khối đặc
 destination-problem-missing = ⁨{ $rule }⁩ giao đến một điểm đến không còn trong lịch trình
 destination-rule-matches-all = Mọi vật liệu
 destination-rule-sources-count = { $count ->
+        [one] 1 nguồn
+       *[other] { $count } nguồn
+    }
 schedule-run-period-note = Chạy một kỳ: lập lịch thêm một ngày.
 schedule-run-whole-note = Chạy mọi kỳ: lập lịch đến ngày kết thúc kế hoạch.
 schedule-improve-note = Cải thiện: tìm lịch trình tốt hơn, tối đa đến giới hạn thời gian giải.
 schedule-improving-note = Đang tìm lịch trình tốt hơn.
-        [one] 1 nguồn
-       *[other] { $count } nguồn
-    }
 schedule-improve-finishing = Lần chạy { $run }: kết thúc sớm với lịch trình tốt nhất tìm được cho đến lúc đó.
 schedule-improve-stalled = Không có lịch trình tốt hơn trong { $minutes } phút; đang kết thúc lần chạy.
 improve-card-title = Đang cải thiện lịch trình
@@ -4492,6 +4492,7 @@ err-omf-element-part-unreadable = Phần tử '{ $name }' có { $what } không �
 err-omf-part-reserves = danh sách trường trữ lượng
 err-omf-part-solids = các khối đặc quy hoạch
 err-omf-part-haulage = mạng lưới đường vận chuyển
+err-omf-part-pit-designs = các thiết kế moong
 err-omf-read-layer-objects = Không thể đọc các đối tượng của lớp thiết kế '{ $name }'
 err-omf-read-layer = Không thể đọc lớp thiết kế '{ $name }'
 err-omf-validate-designs = Các thiết kế '{ $name }' không hợp lệ
@@ -5028,9 +5029,7 @@ pit-design-menu = Thiết kế moong
 pit-design-title = Thiết kế moong
 pick-selection-pit-string-prompt = Chọn đường khép kín để thiết kế moong.
 pit-design-string = Đường xuất phát
-pit-design-string-help = Đường khép kín mà moong được thiết kế từ đó: chân tầng của đáy khi xây lên, hoặc mép trên khi xây xuống.
-pit-design-string-chosen = Đường khép kín
-pit-design-string-none = Chưa chọn
+pit-design-string-help = Đường khép kín mà thiết kế bắt đầu: chân đáy khi xây lên, hoặc mép trên khi xây xuống. Thiết kế giữ bản sao riêng, nên sửa đường đa tuyến không thay đổi gì cho đến khi Cập nhật.
 pit-design-direction = Xây dựng
 pit-design-direction-help = Lên từ đáy, các bờ lùi tầng ra ngoài khi lên cao, hoặc xuống từ mép trên, các bờ lùi tầng vào trong khi moong sâu dần.
 pit-design-up = Lên từ đáy
@@ -5083,7 +5082,6 @@ pit-design-trim = Cắt theo địa hình
 pit-design-trim-help = Cắt bỏ bề mặt ở nơi nó nằm trên địa hình.
 pit-design-result-section = Thiết kế
 pit-design-designing = Đang thiết kế...
-pit-design-pick-string-first = Chọn một đường khép kín để thiết kế.
 pit-design-benches-built = Tầng
 pit-design-final-rl = Cao độ cuối
 pit-design-ramp-length = Chiều dài đường dốc
@@ -5108,9 +5106,68 @@ pit-design-problem-string = Đường xuất phát phải là một polyline kh�
 pit-design-problem-stop-elevation = Cao độ dừng nằm phía sau đường: thấp hơn khi xây lên, cao hơn khi xây xuống.
 pit-design-problem-no-topography = Chọn địa hình để lộ ra mặt đất.
 pit-design-problem-topography-not-loaded = Hãy tải { $name } để lộ ra mặt đất theo nó.
-pit-design-layer-name = Thiết kế moong
-pit-design-building-surface = Đang dựng bề mặt moong
-pit-design-surface-failed = Chưa thêm các đường của moong: không thể dựng bề mặt của nó. { $error }
 pit-design-created = Đã thiết kế { $benches } tầng ({ $ended }), thành { $strings } đường trên { $layer }.
 pit-design-created-surface = Đã dựng bề mặt moong, { $name }.
-pit-design-report-summary = Thêm các đường của thiết kế vào một lớp mới, cùng bề mặt của nó.
+pit-design-report-summary = Dựng một thiết kế moong vào lớp và bề mặt của nó.
+pit-design-default-name = Thiết kế moong
+pit-design-scenario-default = Trường hợp cơ sở
+pit-design-string-source-gone = Đường đa tuyến mà đường của thiết kế này được sao chép từ đó không còn trong lớp đã tải nào.
+pit-design-deleted = Đã xóa thiết kế moong { $name }. Lớp và bề mặt của nó được giữ lại.
+pit-design-copy-name = Bản sao { $name }
+pit-design-gone = Thiết kế moong đó không còn trong dự án.
+pit-design-building = Đang dựng thiết kế moong { $name }
+pit-design-no-bench-fits = Không vừa nổi một tầng: { $reason }
+pit-design-build-failed = Không thể dựng thiết kế moong: { $error }
+pit-design-surface-unlinked = Giữ nguyên bề mặt { $name }. Thiết kế không còn dựng bề mặt nữa, nên nó không còn thuộc thiết kế.
+pit-design-report-delete = Xóa một thiết kế moong, giữ lại lớp và bề mặt của nó.
+pit-design-report-duplicate = Sao chép một thiết kế moong, không kèm lớp và bề mặt.
+pit-design-none-yet = Dự án này chưa có thiết kế moong nào. Nhấn Mới và chọn đường khép kín mà một thiết kế bắt đầu.
+pit-design-choose = Chọn thiết kế
+pit-design-design = Thiết kế
+pit-design-design-help = Các thiết kế moong của dự án. Mỗi thiết kế giữ bản sao riêng của đường và các kịch bản, và dựng lại lớp và bề mặt của riêng nó.
+pit-design-new = Mới
+pit-design-duplicate = Nhân bản
+pit-design-delete = Xóa
+pit-design-new-help = Mới bắt đầu một thiết kế từ đường khép kín bạn chọn. Nhân bản sao chép thiết kế đang mở, không kèm lớp và bề mặt. Xóa bỏ thiết kế và giữ lại những gì nó đã dựng.
+pit-design-name = Tên
+pit-design-scenario = Kịch bản
+pit-design-scenario-help = Mỗi kịch bản là một bộ thiết lập đầy đủ cho thiết kế. Kịch bản đang hoạt động là thứ bản xem trước hiển thị và Dựng sẽ dựng.
+pit-design-scenario-name = Tên kịch bản
+pit-design-scenario-copy = Sao chép
+pit-design-scenario-remove = Bỏ
+pit-design-scenario-copy-help = Sao chép thêm một kịch bản với thiết lập của kịch bản đang hoạt động và kích hoạt nó. Bỏ xóa kịch bản đang hoạt động; thiết kế luôn giữ một kịch bản.
+pit-design-scenario-copy-name = Bản sao { $name }
+pit-design-string-copied = { $points } điểm ở cao độ { $rl }
+pit-design-string-change = Đổi
+pit-design-string-update = Cập nhật
+pit-design-string-update-help = Đổi chọn một đường khép kín khác cho thiết kế. Cập nhật sao chép lại đường từ đường đa tuyến gốc, sau khi đường đó được sửa.
+pit-design-rebuild = Dựng lại
+pit-design-build = Dựng
+pit-design-not-built = Chưa dựng
+pit-design-output-layer = Lớp
+pit-design-output-surface = Bề mặt
+pit-design-standing = Đã dựng
+pit-design-current = Mới nhất
+pit-design-out-of-date = Thiết kế đã thay đổi kể từ khi dựng. Hãy dựng lại để cập nhật lớp và bề mặt của nó.
+pit-design-layer-edited = Lớp của nó đã được sửa kể từ khi dựng. Dựng lại sẽ thay thế các chỉnh sửa đó.
+pit-design-surface-edited = Bề mặt của nó đã được sửa kể từ khi dựng. Dựng lại sẽ thay thế các chỉnh sửa đó.
+pit-design-row-out-of-date = { $name } (đã cũ)
+pit-design-row-not-built = { $name } (chưa dựng)
+pit-design-open = Mở trong Thiết kế moong
+pit-design-flats =
+    { $count ->
+       *[other] { $count } tầng chạy phẳng tổng cộng { $length } m trước khi lên dốc, ở nơi đường dốc cần chỗ để giữ độ dốc.
+    }
+pit-design-flatter =
+    { $count ->
+       *[other] { $count } tầng lên dốc thoải hơn độ dốc yêu cầu: không đoạn phẳng nào giữ được chúng ổn định.
+    }
+pit-design-bench-table = Tầng
+pit-design-table-rl = Cao độ
+pit-design-table-grade = Độ dốc
+pit-design-table-flat = Phẳng
+pit-design-table-width = Rộng
+pit-design-table-turn = Quay đầu
+pit-design-table-turned = Chữ chi
+pit-design-table-flatter-hint = Lên dốc dài hơn { $length } m so với độ dốc yêu cầu, nên thoải hơn: không đoạn phẳng nào trước nó giữ được tầng ổn định.
+pit-design-table-narrow-hint = Hẹp hơn { $width } m yêu cầu, ở nơi nó nối tiếp tại chỗ ngoặt của vách.

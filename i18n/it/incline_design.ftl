@@ -2887,13 +2887,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ consegna a un solido che non è
 destination-problem-missing = ⁨{ $rule }⁩ consegna a una destinazione che non è più nel cronoprogramma
 destination-rule-matches-all = Tutto il materiale
 destination-rule-sources-count = { $count ->
+        [one] 1 origine
+       *[other] { $count } origini
+    }
 schedule-run-period-note = Esegui periodo: pianifica un giorno in più.
 schedule-run-whole-note = Esegui tutti i periodi: pianifica fino al giorno finale di pianificazione.
 schedule-improve-note = Improve: cerca un cronoprogramma migliore, fino al limite di tempo di soluzione.
 schedule-improving-note = Ricerca di un cronoprogramma migliore.
-        [one] 1 origine
-       *[other] { $count } origini
-    }
 schedule-improve-finishing = Esecuzione { $run }: conclusione anticipata con il miglior cronoprogramma trovato finora.
 schedule-improve-stalled = Nessun cronoprogramma migliore in { $minutes } min; l'esecuzione si conclude.
 improve-card-title = Miglioramento del cronoprogramma
@@ -4506,6 +4506,7 @@ err-omf-element-part-unreadable = L'elemento '{ $name }' ha { $what } che non è
 err-omf-part-reserves = un elenco di campi delle riserve
 err-omf-part-solids = solidi di pianificazione
 err-omf-part-haulage = una rete di piste di trasporto
+err-omf-part-pit-designs = i progetti della fossa
 err-omf-read-layer-objects = Impossibile leggere gli oggetti del livello di disegno '{ $name }'
 err-omf-read-layer = Impossibile leggere il livello di disegno '{ $name }'
 err-omf-validate-designs = I disegni '{ $name }' non sono validi
@@ -5042,9 +5043,7 @@ pit-design-menu = Progettazione della fossa
 pit-design-title = Progettazione della fossa
 pick-selection-pit-string-prompt = Selezionate la linea chiusa da cui progettare la fossa.
 pit-design-string = Linea di partenza
-pit-design-string-help = La linea chiusa da cui si progetta la fossa: il piede del suo fondo quando è costruita verso l'alto, o il suo ciglio quando è costruita verso il basso.
-pit-design-string-chosen = Linea chiusa
-pit-design-string-none = Nessuna scelta
+pit-design-string-help = La linea chiusa da cui parte il progetto: il piede del fondo quando è costruito verso l'alto, o la cresta quando è costruito verso il basso. Il progetto ne tiene una copia propria, quindi modificare la polilinea non cambia nulla fino ad Aggiorna.
 pit-design-direction = Costruisci
 pit-design-direction-help = Verso l'alto da un fondo, con le pareti che si gradonano verso l'esterno salendo, o verso il basso da un ciglio, con le pareti che si gradonano verso l'interno man mano che la fossa si approfondisce.
 pit-design-up = Verso l'alto dal fondo
@@ -5097,7 +5096,6 @@ pit-design-trim = Rifila alla topografia
 pit-design-trim-help = Togli la superficie dove sta sopra la topografia.
 pit-design-result-section = Progetto
 pit-design-designing = Progettazione in corso...
-pit-design-pick-string-first = Scegliete una linea chiusa da cui progettare.
 pit-design-benches-built = Gradini
 pit-design-final-rl = Quota finale
 pit-design-ramp-length = Lunghezza rampa
@@ -5122,9 +5120,70 @@ pit-design-problem-string = La linea di partenza deve essere una polilinea chius
 pit-design-problem-stop-elevation = La quota di arresto è dietro la linea: sotto costruendo verso l'alto, sopra costruendo verso il basso.
 pit-design-problem-no-topography = Scegliete la topografia contro cui affiorare.
 pit-design-problem-topography-not-loaded = Caricate { $name } per affiorare contro di essa.
-pit-design-layer-name = Progetto della fossa
-pit-design-building-surface = Costruzione della superficie della fossa
-pit-design-surface-failed = Le linee della fossa non sono state aggiunte: non è stato possibile costruirne la superficie. { $error }
 pit-design-created = Progettati { $benches } gradini ({ $ended }), come { $strings } linee su { $layer }.
 pit-design-created-surface = Costruita la superficie della fossa, { $name }.
-pit-design-report-summary = Aggiunge le linee del progetto su un nuovo livello, e la sua superficie.
+pit-design-report-summary = Costruisce un progetto della fossa nel suo livello e nella sua superficie.
+pit-design-default-name = Progetto della fossa
+pit-design-scenario-default = Caso base
+pit-design-string-source-gone = La polilinea da cui è stata copiata la linea di questo progetto non è più in un livello caricato.
+pit-design-deleted = Progetto della fossa { $name } eliminato. Il suo livello e la sua superficie restano.
+pit-design-copy-name = { $name } copia
+pit-design-gone = Quel progetto della fossa non è più nel progetto.
+pit-design-building = Costruzione del progetto della fossa { $name }
+pit-design-no-bench-fits = Non ci sta nemmeno un gradino: { $reason }
+pit-design-build-failed = Il progetto della fossa non è stato costruito: { $error }
+pit-design-surface-unlinked = La superficie { $name } resta com'era. Il progetto non costruisce più una superficie, quindi non è più sua.
+pit-design-report-delete = Elimina un progetto della fossa, tenendo il suo livello e la sua superficie.
+pit-design-report-duplicate = Copia un progetto della fossa, senza il suo livello e la sua superficie.
+pit-design-none-yet = Questo progetto non ha ancora progetti della fossa. Premi Nuovo e scegli la linea chiusa da cui parte un progetto.
+pit-design-choose = Scegli un progetto
+pit-design-design = Progetto
+pit-design-design-help = I progetti della fossa del progetto. Ognuno tiene una copia propria della sua linea e i suoi scenari, e ricostruisce il proprio livello e la propria superficie.
+pit-design-new = Nuovo
+pit-design-duplicate = Duplica
+pit-design-delete = Elimina
+pit-design-new-help = Nuovo avvia un progetto da una linea chiusa che scegli. Duplica copia il progetto aperto, senza il suo livello e la sua superficie. Elimina toglie il progetto e tiene ciò che ha costruito.
+pit-design-name = Nome
+pit-design-scenario = Scenario
+pit-design-scenario-help = Ogni scenario è un insieme completo di impostazioni per il progetto. Quello attivo è ciò che mostra l'anteprima e che Costruisci costruisce.
+pit-design-scenario-name = Nome dello scenario
+pit-design-scenario-copy = Copia
+pit-design-scenario-remove = Rimuovi
+pit-design-scenario-copy-help = Copia aggiunge uno scenario con le impostazioni di quello attivo e lo rende attivo. Rimuovi toglie lo scenario attivo; un progetto ne tiene sempre uno.
+pit-design-scenario-copy-name = { $name } copia
+pit-design-string-copied = { $points } punti a quota { $rl }
+pit-design-string-change = Cambia
+pit-design-string-update = Aggiorna
+pit-design-string-update-help = Cambia sceglie un'altra linea chiusa per il progetto. Aggiorna ricopia la linea dalla polilinea da cui proviene, dopo che quella polilinea è stata modificata.
+pit-design-rebuild = Ricostruisci
+pit-design-build = Costruisci
+pit-design-not-built = Non costruito
+pit-design-output-layer = Livello
+pit-design-output-surface = Superficie
+pit-design-standing = Costruito
+pit-design-current = Aggiornato
+pit-design-out-of-date = Il progetto è cambiato da quando è stato costruito. Ricostruiscilo per aggiornare il suo livello e la sua superficie.
+pit-design-layer-edited = Il suo livello è stato modificato da quando è stato costruito. Ricostruire sostituisce quelle modifiche.
+pit-design-surface-edited = La sua superficie è stata modificata da quando è stato costruito. Ricostruire sostituisce quelle modifiche.
+pit-design-row-out-of-date = { $name } (non aggiornato)
+pit-design-row-not-built = { $name } (non costruito)
+pit-design-open = Apri in Progettazione della fossa
+pit-design-flats =
+    { $count ->
+        [one] Un gradino corre in piano per { $length } m prima di salire, dove la rampa ha bisogno di spazio per tenere la sua pendenza.
+       *[other] { $count } gradini corrono in piano per { $length } m in tutto prima di salire, dove la rampa ha bisogno di spazio per tenere la sua pendenza.
+    }
+pit-design-flatter =
+    { $count ->
+        [one] Un gradino sale meno ripido della pendenza: nessun tratto in piano lo lascerebbe stabile.
+       *[other] { $count } gradini salgono meno ripidi della pendenza: nessun tratto in piano li lascerebbe stabili.
+    }
+pit-design-bench-table = Gradini
+pit-design-table-rl = Quota
+pit-design-table-grade = Pendenza
+pit-design-table-flat = In piano
+pit-design-table-width = Larghezza
+pit-design-table-turn = Svolta
+pit-design-table-turned = Tornante
+pit-design-table-flatter-hint = Sale su { $length } m in più di quanto chiede la pendenza, quindi è meno ripida: nessun tratto in piano prima lasciava il gradino stabile.
+pit-design-table-narrow-hint = Più stretta dei { $width } m richiesti, dove si raccorda a una curva della parete.

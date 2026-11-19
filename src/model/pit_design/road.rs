@@ -89,6 +89,19 @@ pub(crate) struct Lay {
     pub(crate) width: f64,
     /// The plan length (along its steeper edge) it climbs the bench over.
     pub(crate) climb_length: f64,
+    /// The plan length (along its steeper edge) it runs level before it
+    /// starts to climb: a flat where it leaves, laid where the bench would
+    /// not be sound with the climb starting at once.
+    pub(crate) flat: f64,
+}
+
+/// How far up a stretch a point is that lies `running` along its steeper
+/// edge of `total`, the first `flat` of it level.
+fn share(running: f64, total: f64, flat: f64) -> f64 {
+    if total <= flat {
+        return if running >= total { 1.0 } else { 0.0 };
+    }
+    ((running - flat) / (total - flat)).clamp(0.0, 1.0)
 }
 
 /// Why a stretch could not be laid.
@@ -109,7 +122,7 @@ pub(crate) fn lay(ring: &[DVec2], from: f64, direction: f64, lay: Lay, extra: &d
     // No stretch takes the whole way round: it would meet its own start.
     let longest = around * 0.9;
     let attempt = |run: f64| build(ring, &arcs, from, direction, run, lay, extra);
-    let wanted = lay.climb_length;
+    let wanted = lay.climb_length + lay.flat;
     let close_enough = wanted * 1.0e-4;
     // The climb rises with the run, nearly in proportion to it: round a
     // bend the inside edge is shorter than the ring, and round a corner the
@@ -184,7 +197,8 @@ fn build(ring: &[DVec2], arcs: &[f64], from: f64, direction: f64, run: f64, lay:
     // How far up the stretch each station is: first by distance along the
     // ring, then by the length the road's own edges climb over, which the
     // edges depend on in turn. A few rounds settle it.
-    let mut climbed: Vec<f64> = along.iter().map(|distance| if run > 0.0 { distance / run } else { 1.0 }).collect();
+    let flat_share = lay.flat / (lay.climb_length + lay.flat).max(f64::MIN_POSITIVE);
+    let mut climbed: Vec<f64> = along.iter().map(|distance| share(*distance, run, run * flat_share)).collect();
     let mut edges = RoadEdges {
         near: Vec::new(),
         far: Vec::new(),
@@ -204,11 +218,12 @@ fn build(ring: &[DVec2], arcs: &[f64], from: f64, direction: f64, run: f64, lay:
         let far = chain_lengths(&edges.far, &parameters, direction, count);
         let steps: Vec<f64> = near.iter().zip(&far).map(|(a, b)| a.min(*b)).collect();
         let total: f64 = steps.iter().sum();
+        let flat = lay.flat.min(total);
         let mut running = 0.0;
         climbed = std::iter::once(0.0)
             .chain(steps.iter().map(|step| {
                 running += step;
-                if total > 0.0 { running / total } else { 1.0 }
+                if total > 0.0 { share(running, total, flat) } else { 1.0 }
             }))
             .collect();
     }
@@ -237,11 +252,12 @@ fn build(ring: &[DVec2], arcs: &[f64], from: f64, direction: f64, run: f64, lay:
     let far = chain_lengths(&edges.far, &fine, direction, count);
     let steps: Vec<f64> = near.iter().zip(&far).map(|(a, b)| a.min(*b)).collect();
     let total: f64 = steps.iter().sum();
+    let flat = lay.flat.min(total);
     let mut running = 0.0;
     let climbed: Vec<f64> = std::iter::once(0.0)
         .chain(steps.iter().map(|step| {
             running += step;
-            if total > 0.0 { running / total } else { 1.0 }
+            if total > 0.0 { share(running, total, flat) } else { 1.0 }
         }))
         .collect();
     Stretch {

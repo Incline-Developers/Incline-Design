@@ -610,6 +610,24 @@ impl<'a> Graphics<'a> {
             .map(|point| self.unexaggerate_point(point))
     }
 
+    /// [`Self::cursor_world`], with how far in plan `tolerance_px` pixels
+    /// reach from it there: for picking a place on geometry the viewport
+    /// does not draw as pickable, by distance in plan.
+    pub(crate) fn cursor_on_plane(&self, plane_z: f64, tolerance_px: f32) -> Option<(DVec3, f64)> {
+        let mouse = self.camera_controller.mouse_loc;
+        let beside = (mouse.0 + tolerance_px, mouse.1);
+        let (here, there) = if self.slice_view.is_some() {
+            (self.section_point_at_px(mouse)?, self.section_point_at_px(beside)?)
+        } else {
+            let screen = self.screen_size();
+            let aspect = screen.0 as f64 / screen.1.max(1.0) as f64;
+            let displayed_plane_z = self.scene_origin.z + (plane_z - self.scene_origin.z) * self.vertical_exaggeration;
+            let at = |px| screen_to_world_on_plane(&self.camera, self.projection.zoom, aspect, screen, px, displayed_plane_z).map(|point| self.unexaggerate_point(point));
+            (at(mouse)?, at(beside)?)
+        };
+        Some((here, here.truncate().distance(there.truncate())))
+    }
+
     /// All pickable CPU geometry: the per-rebuild stream plus every visible
     /// static stroke chunk. Chunks whose layer is hidden are excluded, matching
     /// the stream path where hidden objects emit no pick records.

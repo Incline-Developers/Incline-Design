@@ -2845,13 +2845,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ livre à un solide qui n’est 
 destination-problem-missing = ⁨{ $rule }⁩ livre à une destination qui n’existe plus dans le planning
 destination-rule-matches-all = Tout matériau
 destination-rule-sources-count = { $count ->
+        [one] 1 source
+       *[other] { $count } sources
+    }
 schedule-run-period-note = Exécuter la période : planifie un jour de plus.
 schedule-run-whole-note = Exécuter toutes les périodes : planifie jusqu’au dernier jour de planification.
 schedule-improve-note = Improve : cherche un meilleur planning, jusqu’à la limite de temps de résolution.
 schedule-improving-note = Recherche d’un meilleur planning.
-        [one] 1 source
-       *[other] { $count } sources
-    }
 schedule-improve-finishing = Exécution { $run } : fin anticipée avec le meilleur planning trouvé jusque-là.
 schedule-improve-stalled = Aucun meilleur planning en { $minutes } min ; fin de l’exécution.
 improve-card-title = Amélioration du planning
@@ -4465,6 +4465,7 @@ err-omf-element-part-unreadable = L’élément « { $name } » a { $what } qui 
 err-omf-part-reserves = une liste de champs de réserves
 err-omf-part-solids = des solides de planification
 err-omf-part-haulage = un réseau de pistes de roulage
+err-omf-part-pit-designs = les conceptions de fosse
 err-omf-read-layer-objects = Impossible de lire les objets de la couche de tracé « { $name } »
 err-omf-read-layer = Impossible de lire la couche de tracé « { $name } »
 err-omf-validate-designs = Les tracés « { $name } » ne sont pas valides
@@ -5001,9 +5002,7 @@ pit-design-menu = Conception de fosse
 pit-design-title = Conception de fosse
 pick-selection-pit-string-prompt = Sélectionnez la ligne fermée à partir de laquelle concevoir la fosse.
 pit-design-string = Ligne de départ
-pit-design-string-help = La ligne fermée à partir de laquelle la fosse est conçue : le pied de son fond quand elle est construite vers le haut, ou sa crête quand elle est construite vers le bas.
-pit-design-string-chosen = Ligne fermée
-pit-design-string-none = Aucune choisie
+pit-design-string-help = La ligne fermée dont part la conception : le pied du fond quand elle est construite vers le haut, ou la crête quand elle est construite vers le bas. La conception garde sa propre copie : modifier la polyligne ne change rien avant Mettre à jour.
 pit-design-direction = Construire
 pit-design-direction-help = Vers le haut depuis un fond, les parois se décalant vers l'extérieur en montant, ou vers le bas depuis une crête, les parois se décalant vers l'intérieur à mesure que la fosse s'approfondit.
 pit-design-up = Vers le haut depuis le fond
@@ -5056,7 +5055,6 @@ pit-design-trim = Ajuster à la topographie
 pit-design-trim-help = Retirer la surface là où elle dépasse la topographie.
 pit-design-result-section = Conception
 pit-design-designing = Conception en cours...
-pit-design-pick-string-first = Choisissez une ligne fermée à partir de laquelle concevoir.
 pit-design-benches-built = Gradins
 pit-design-final-rl = Cote finale
 pit-design-ramp-length = Longueur de rampe
@@ -5081,9 +5079,70 @@ pit-design-problem-string = La ligne de départ doit être une polyligne fermée
 pit-design-problem-stop-elevation = La cote d'arrêt est derrière la ligne : en dessous en construisant vers le haut, au-dessus en construisant vers le bas.
 pit-design-problem-no-topography = Choisissez la topographie contre laquelle affleurer.
 pit-design-problem-topography-not-loaded = Chargez { $name } pour affleurer contre elle.
-pit-design-layer-name = Conception de fosse
-pit-design-building-surface = Construction de la surface de la fosse
-pit-design-surface-failed = Les lignes de la fosse n'ont pas été ajoutées : sa surface n'a pas pu être construite. { $error }
 pit-design-created = { $benches } gradins conçus ({ $ended }), en { $strings } lignes sur { $layer }.
 pit-design-created-surface = Surface de la fosse construite, { $name }.
-pit-design-report-summary = Ajoute les lignes de la conception sur un nouveau calque, et sa surface.
+pit-design-report-summary = Construit une conception de fosse dans son calque et sa surface.
+pit-design-default-name = Conception de fosse
+pit-design-scenario-default = Cas de base
+pit-design-string-source-gone = La polyligne dont la ligne de cette conception a été copiée n’est plus dans un calque chargé.
+pit-design-deleted = Conception de fosse { $name } supprimée. Son calque et sa surface sont conservés.
+pit-design-copy-name = { $name } copie
+pit-design-gone = Cette conception de fosse n’est plus dans le projet.
+pit-design-building = Construction de la conception de fosse { $name }
+pit-design-no-bench-fits = Pas même un gradin ne tient : { $reason }
+pit-design-build-failed = La conception de fosse n’a pas pu être construite : { $error }
+pit-design-surface-unlinked = La surface { $name } est laissée telle quelle. La conception ne construit plus de surface, elle n’est donc plus la sienne.
+pit-design-report-delete = Supprime une conception de fosse en gardant son calque et sa surface.
+pit-design-report-duplicate = Copie une conception de fosse, sans son calque ni sa surface.
+pit-design-none-yet = Ce projet n’a encore aucune conception de fosse. Cliquez sur Nouvelle et choisissez la ligne fermée dont part une conception.
+pit-design-choose = Choisir une conception
+pit-design-design = Conception
+pit-design-design-help = Les conceptions de fosse du projet. Chacune garde sa propre copie de sa ligne et ses scénarios, et reconstruit son propre calque et sa propre surface.
+pit-design-new = Nouvelle
+pit-design-duplicate = Dupliquer
+pit-design-delete = Supprimer
+pit-design-new-help = Nouvelle commence une conception à partir d’une ligne fermée choisie. Dupliquer copie la conception ouverte, sans son calque ni sa surface. Supprimer retire la conception et garde ce qu’elle a construit.
+pit-design-name = Nom
+pit-design-scenario = Scénario
+pit-design-scenario-help = Chaque scénario est un jeu complet de réglages pour la conception. L’actif est celui que montre l’aperçu et que Construire construit.
+pit-design-scenario-name = Nom du scénario
+pit-design-scenario-copy = Copier
+pit-design-scenario-remove = Retirer
+pit-design-scenario-copy-help = Copier ajoute un scénario avec les réglages de l’actif et le rend actif. Retirer enlève le scénario actif ; une conception en garde toujours un.
+pit-design-scenario-copy-name = { $name } copie
+pit-design-string-copied = { $points } points à la cote { $rl }
+pit-design-string-change = Changer
+pit-design-string-update = Mettre à jour
+pit-design-string-update-help = Changer choisit une autre ligne fermée pour la conception. Mettre à jour recopie la ligne depuis la polyligne d’origine, une fois celle-ci modifiée.
+pit-design-rebuild = Reconstruire
+pit-design-build = Construire
+pit-design-not-built = Non construite
+pit-design-output-layer = Calque
+pit-design-output-surface = Surface
+pit-design-standing = Construite
+pit-design-current = À jour
+pit-design-out-of-date = La conception a changé depuis sa construction. Reconstruisez pour mettre à jour son calque et sa surface.
+pit-design-layer-edited = Son calque a été modifié depuis sa construction. Reconstruire remplace ces modifications.
+pit-design-surface-edited = Sa surface a été modifiée depuis sa construction. Reconstruire remplace ces modifications.
+pit-design-row-out-of-date = { $name } (périmée)
+pit-design-row-not-built = { $name } (non construite)
+pit-design-open = Ouvrir dans Conception de fosse
+pit-design-flats =
+    { $count ->
+        [one] Un gradin court à plat sur { $length } m avant de monter, là où la rampe a besoin de place pour garder sa pente.
+       *[other] { $count } gradins courent à plat sur { $length } m au total avant de monter, là où la rampe a besoin de place pour garder sa pente.
+    }
+pit-design-flatter =
+    { $count ->
+        [one] Un gradin monte moins raide que la pente : aucun palier ne le laisserait stable.
+       *[other] { $count } gradins montent moins raide que la pente : aucun palier ne les laisserait stables.
+    }
+pit-design-bench-table = Gradins
+pit-design-table-rl = Cote
+pit-design-table-grade = Pente
+pit-design-table-flat = Palier
+pit-design-table-width = Largeur
+pit-design-table-turn = Virage
+pit-design-table-turned = Lacet
+pit-design-table-flatter-hint = Monte sur { $length } m de plus que la pente ne le demande, donc moins raide : aucun palier avant lui ne laissait le gradin stable.
+pit-design-table-narrow-hint = Plus étroite que les { $width } m demandés, là où elle se raccorde à un virage du talus.

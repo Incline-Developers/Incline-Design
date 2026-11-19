@@ -2845,13 +2845,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ mengirim ke solid yang tidak la
 destination-problem-missing = ⁨{ $rule }⁩ mengirim ke tujuan yang tidak lagi ada di jadwal
 destination-rule-matches-all = Semua material
 destination-rule-sources-count = { $count ->
+        [one] 1 sumber
+       *[other] { $count } sumber
+    }
 schedule-run-period-note = Jalankan Periode: jadwalkan satu hari lagi.
 schedule-run-whole-note = Jalankan Semua Periode: jadwalkan hingga hari akhir perencanaan.
 schedule-improve-note = Tingkatkan: cari jadwal yang lebih baik, hingga batas waktu penyelesaian.
 schedule-improving-note = Mencari jadwal yang lebih baik.
-        [one] 1 sumber
-       *[other] { $count } sumber
-    }
 schedule-improve-finishing = Eksekusi { $run }: berakhir lebih awal dengan jadwal terbaik yang ditemukan sejauh ini.
 schedule-improve-stalled = Tidak ada jadwal yang lebih baik dalam { $minutes } mnt; mengakhiri eksekusi.
 improve-card-title = Meningkatkan jadwal
@@ -4464,6 +4464,7 @@ err-omf-element-part-unreadable = Elemen '{ $name }' memiliki { $what } yang tid
 err-omf-part-reserves = daftar bidang cadangan
 err-omf-part-solids = solid perencanaan
 err-omf-part-haulage = jaringan jalan angkut
+err-omf-part-pit-designs = desain pit
 err-omf-read-layer-objects = Tidak dapat membaca objek layer desain '{ $name }'
 err-omf-read-layer = Tidak dapat membaca layer desain '{ $name }'
 err-omf-validate-designs = Desain '{ $name }' tidak valid
@@ -5000,9 +5001,7 @@ pit-design-menu = Desain Pit
 pit-design-title = Desain Pit
 pick-selection-pit-string-prompt = Pilih garis tertutup untuk mendesain pit.
 pit-design-string = Garis awal
-pit-design-string-help = Garis tertutup tempat pit didesain: kaki lantainya saat dibangun ke atas, atau puncak lerengnya saat dibangun ke bawah.
-pit-design-string-chosen = Garis tertutup
-pit-design-string-none = Belum dipilih
+pit-design-string-help = Garis tertutup tempat desain dimulai: kaki dasar saat dibangun ke atas, atau puncak saat dibangun ke bawah. Desain menyimpan salinannya sendiri, jadi menyunting polilinia tidak mengubah apa pun sampai Perbarui.
 pit-design-direction = Bangun
 pit-design-direction-help = Ke atas dari lantai, dengan dinding berjenjang ke luar saat naik, atau ke bawah dari puncak lereng, dengan dinding berjenjang ke dalam saat pit semakin dalam.
 pit-design-up = Ke atas dari lantai
@@ -5055,7 +5054,6 @@ pit-design-trim = Pangkas ke topografi
 pit-design-trim-help = Potong permukaan di bagian yang berada di atas topografi.
 pit-design-result-section = Desain
 pit-design-designing = Mendesain...
-pit-design-pick-string-first = Pilih garis tertutup untuk didesain.
 pit-design-benches-built = Jenjang
 pit-design-final-rl = RL akhir
 pit-design-ramp-length = Panjang ramp
@@ -5080,9 +5078,68 @@ pit-design-problem-string = Garis awal harus berupa polyline tertutup yang menge
 pit-design-problem-stop-elevation = RL berhenti berada di belakang garis: di bawahnya saat membangun ke atas, di atasnya saat membangun ke bawah.
 pit-design-problem-no-topography = Pilih topografi tempat desain muncul ke permukaan.
 pit-design-problem-topography-not-loaded = Muat { $name } untuk muncul ke permukaannya.
-pit-design-layer-name = Desain pit
-pit-design-building-surface = Membangun permukaan pit
-pit-design-surface-failed = Garis-garis pit tidak ditambahkan: permukaannya tidak dapat dibangun. { $error }
 pit-design-created = { $benches } jenjang didesain ({ $ended }), sebagai { $strings } garis pada { $layer }.
 pit-design-created-surface = Permukaan pit dibangun, { $name }.
-pit-design-report-summary = Menambahkan garis-garis desain pada layer baru, beserta permukaannya.
+pit-design-report-summary = Membangun desain pit ke lapisan dan permukaannya.
+pit-design-default-name = Desain pit
+pit-design-scenario-default = Kasus dasar
+pit-design-string-source-gone = Polilinia asal salinan garis desain ini tidak lagi berada di lapisan yang dimuat.
+pit-design-deleted = Desain pit { $name } dihapus. Lapisan dan permukaannya tetap ada.
+pit-design-copy-name = Salinan { $name }
+pit-design-gone = Desain pit itu tidak lagi ada di proyek.
+pit-design-building = Membangun desain pit { $name }
+pit-design-no-bench-fits = Satu jenjang pun tidak muat: { $reason }
+pit-design-build-failed = Desain pit tidak dapat dibangun: { $error }
+pit-design-surface-unlinked = Permukaan { $name } dibiarkan seperti semula. Desain tidak lagi membangun permukaan, jadi permukaan itu bukan miliknya lagi.
+pit-design-report-delete = Menghapus desain pit dan mempertahankan lapisan serta permukaannya.
+pit-design-report-duplicate = Menyalin desain pit, tanpa lapisan dan permukaannya.
+pit-design-none-yet = Proyek ini belum memiliki desain pit. Tekan Baru dan pilih garis tertutup tempat desain dimulai.
+pit-design-choose = Pilih desain
+pit-design-design = Desain
+pit-design-design-help = Desain pit proyek. Masing-masing menyimpan salinan garis dan skenarionya sendiri, serta membangun ulang lapisan dan permukaannya sendiri.
+pit-design-new = Baru
+pit-design-duplicate = Gandakan
+pit-design-delete = Hapus
+pit-design-new-help = Baru memulai desain dari garis tertutup yang Anda pilih. Gandakan menyalin desain yang terbuka, tanpa lapisan dan permukaannya. Hapus membuang desain dan mempertahankan apa yang telah dibangunnya.
+pit-design-name = Nama
+pit-design-scenario = Skenario
+pit-design-scenario-help = Setiap skenario adalah satu set lengkap pengaturan desain. Yang aktif adalah yang ditampilkan pratinjau dan yang dibangun oleh Bangun.
+pit-design-scenario-name = Nama skenario
+pit-design-scenario-copy = Salin
+pit-design-scenario-remove = Buang
+pit-design-scenario-copy-help = Salin menambahkan skenario dengan pengaturan yang aktif dan menjadikannya aktif. Buang menghapus skenario aktif; desain selalu menyimpan satu.
+pit-design-scenario-copy-name = Salinan { $name }
+pit-design-string-copied = { $points } titik pada RL { $rl }
+pit-design-string-change = Ganti
+pit-design-string-update = Perbarui
+pit-design-string-update-help = Ganti memilih garis tertutup lain untuk desain. Perbarui menyalin ulang garis dari polilinia asalnya, setelah polilinia itu disunting.
+pit-design-rebuild = Bangun ulang
+pit-design-build = Bangun
+pit-design-not-built = Belum dibangun
+pit-design-output-layer = Lapisan
+pit-design-output-surface = Permukaan
+pit-design-standing = Dibangun
+pit-design-current = Terkini
+pit-design-out-of-date = Desain telah berubah sejak dibangun. Bangun ulang untuk memperbarui lapisan dan permukaannya.
+pit-design-layer-edited = Lapisannya telah disunting sejak dibangun. Membangun ulang menggantikan suntingan itu.
+pit-design-surface-edited = Permukaannya telah disunting sejak dibangun. Membangun ulang menggantikan suntingan itu.
+pit-design-row-out-of-date = { $name } (usang)
+pit-design-row-not-built = { $name } (belum dibangun)
+pit-design-open = Buka di Desain Pit
+pit-design-flats =
+    { $count ->
+       *[other] { $count } jenjang berjalan datar sejauh { $length } m seluruhnya sebelum menanjak, tempat ramp membutuhkan ruang untuk mempertahankan kemiringannya.
+    }
+pit-design-flatter =
+    { $count ->
+       *[other] { $count } jenjang menanjak lebih landai dari kemiringannya: tidak ada bagian datar yang akan membuatnya stabil.
+    }
+pit-design-bench-table = Jenjang
+pit-design-table-rl = RL
+pit-design-table-grade = Kemiringan
+pit-design-table-flat = Datar
+pit-design-table-width = Lebar
+pit-design-table-turn = Belokan
+pit-design-table-turned = Switchback
+pit-design-table-flatter-hint = Menanjak sepanjang { $length } m lebih dari yang diminta kemiringan, jadi lebih landai: tidak ada bagian datar sebelumnya yang membuat jenjang stabil.
+pit-design-table-narrow-hint = Lebih sempit dari { $width } m yang diminta, tempat ia bersambung di tikungan dinding.

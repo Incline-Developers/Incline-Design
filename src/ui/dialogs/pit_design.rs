@@ -1,148 +1,51 @@
-//! Pit Design: what its dialog holds while it is open, and the dialog.
+//! Pit Design: the window that edits a project's pit designs, and what it
+//! holds while it is open.
 //!
-//! The dialog edits [`PitDesignSettings`]; `App::update_pit_design_preview`
-//! builds the design from them in the background whenever they change, and
-//! the viewport draws it while the dialog is open.
+//! The window edits a copy of one design ([`DraftDesign::working`]). Once no
+//! field is mid-edit, `App::sync_pit_design_draft` writes the copy into the
+//! project as one undoable step, and takes the project's version back when
+//! an undo or redo changes it underneath. `App::update_pit_design_preview`
+//! builds the copy in the background whenever it changes, and the viewport
+//! draws the result while the window is open. Build writes it into its
+//! layer and surface.
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 
 use crate::{
     i18n::tr,
     model::{
-        ObjectId,
-        pit_design::{Design, Direction, End, Layout, Problem, RampSpec, Spec, Stop},
-        triangulation::TriangulationId,
+        pit_design::{
+            Design, Direction, End, Problem,
+            item::{PitDesign, PitDesignId, ScenarioId, Standing},
+            settings::{PitDesignSettings, StopMode},
+        },
+        triangulation::{GeometryVersion, TriangulationId},
     },
     ui::{
         elements::properties::read_only_row,
-        state::{EditorState, SelectionPickTool, UiCommand, UiProjectView},
+        state::{EditorState, SelectionPickTool, UiCommand, UiPitDesignEntry, UiProjectView},
         widgets::{
             hint::Hint,
-            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldU32},
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
         },
     },
 };
 
-const FIELD_WIDTH: f32 = 170.0;
+const FIELD_WIDTH: f32 = 190.0;
 
-/// Where a design stops, as the dialog offers it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StopMode {
-    Benches,
-    Elevation,
-    Daylight,
-}
-
-/// Everything the dialog sets. Two designs from the same string and equal
-/// settings are the same design.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct PitDesignSettings {
-    pub(crate) direction: Direction,
-    pub(crate) bench_height: f64,
-    /// Degrees from horizontal.
-    pub(crate) face_angle: f64,
-    pub(crate) berm_width: f64,
-    pub(crate) wall_radius: f64,
-    pub(crate) ramp: bool,
-    pub(crate) ramp_width: f64,
-    /// Rise over run, as a percentage.
-    pub(crate) ramp_gradient: f64,
-    /// Where the ramp leaves the string, in plan; its first point if none
-    /// has been picked.
-    pub(crate) ramp_start: Option<DVec2>,
-    pub(crate) climbs_clockwise: bool,
-    pub(crate) switchback: bool,
-    /// Benches climbed between turns.
-    pub(crate) switchback_every: u32,
-    pub(crate) inside_radius: f64,
-    pub(crate) stop: StopMode,
-    pub(crate) benches: u32,
-    pub(crate) stop_elevation: f64,
-    pub(crate) topography: Option<TriangulationId>,
-    pub(crate) surface: bool,
-    pub(crate) trim_to_topography: bool,
-}
-
-impl Default for PitDesignSettings {
-    fn default() -> Self {
-        Self {
-            direction: Direction::Up,
-            bench_height: 15.0,
-            face_angle: 70.0,
-            berm_width: 8.0,
-            wall_radius: 15.0,
-            ramp: true,
-            ramp_width: 25.0,
-            ramp_gradient: 10.0,
-            ramp_start: None,
-            climbs_clockwise: false,
-            switchback: false,
-            switchback_every: 3,
-            inside_radius: 15.0,
-            stop: StopMode::Benches,
-            benches: 8,
-            stop_elevation: 0.0,
-            topography: None,
-            surface: true,
-            trim_to_topography: true,
-        }
-    }
-}
-
-impl PitDesignSettings {
-    /// The design engine's settings, the ramp starting at `default_start`
-    /// unless one has been picked.
-    pub(crate) fn spec(&self, default_start: DVec2) -> Spec {
-        Spec {
-            direction: self.direction,
-            bench_height: self.bench_height,
-            face_angle: self.face_angle,
-            berm_width: self.berm_width,
-            wall_radius: self.wall_radius,
-            ramp: self.ramp.then(|| RampSpec {
-                width: self.ramp_width,
-                gradient: self.ramp_gradient / 100.0,
-                start: self.ramp_start.unwrap_or(default_start),
-                climbs_clockwise: self.climbs_clockwise,
-                layout: if self.switchback {
-                    Layout::Switchback {
-                        every: self.switchback_every,
-                        inside_radius: self.inside_radius,
-                    }
-                } else {
-                    Layout::Spiral
-                },
-            }),
-            stop: match self.stop {
-                StopMode::Benches => Stop::Benches(self.benches),
-                StopMode::Elevation => Stop::Elevation(self.stop_elevation),
-                StopMode::Daylight => Stop::Daylight,
-            },
-        }
-    }
-
-    /// Whether the surface is trimmed to the topography: only a design that
-    /// daylights against one is.
-    pub(crate) fn trims(&self) -> bool {
-        self.surface && self.trim_to_topography && self.stop == StopMode::Daylight && self.topography.is_some()
-    }
-}
-
-/// What a preview is built from: the document as it was, the string and the
-/// settings.
+/// What a preview is built from. Two previews from equal keys are the same.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PreviewKey {
-    pub(crate) revision: u64,
-    pub(crate) base: Option<ObjectId>,
+    pub(crate) base: Vec<DVec3>,
     pub(crate) settings: PitDesignSettings,
+    /// The version of the ground it daylights against, when it does.
+    pub(crate) ground: Option<GeometryVersion>,
 }
 
 /// Why there is no design to show.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum NoDesign {
-    /// No string picked yet.
-    NoString,
-    /// The picked string is not closed round some area.
+    /// The string is not closed round some area.
     NotClosed,
     /// The settings cannot make a design.
     Settings(Problem),
@@ -161,14 +64,26 @@ pub(crate) struct Preview {
     pub(crate) base_unevenness: f64,
     /// Where the ramp was asked to start, on the string, for the viewport's
     /// marker.
-    pub(crate) ramp_start: Option<glam::DVec3>,
+    pub(crate) ramp_start: Option<DVec3>,
 }
 
-/// The dialog's state.
+/// The design open in the window.
+#[derive(Clone, Debug)]
+pub(crate) struct DraftDesign {
+    /// The design as the project last held it.
+    pub(crate) synced: PitDesign,
+    /// The copy the window edits.
+    pub(crate) working: PitDesign,
+}
+
+/// The window's state.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PitDesignDraft {
-    pub(crate) base: Option<ObjectId>,
-    pub(crate) settings: PitDesignSettings,
+    /// The design open, if there is one.
+    pub(crate) design: Option<DraftDesign>,
+    /// No field is mid-edit: no pointer held down and no text field typed
+    /// in, so the working copy can be written to the project.
+    pub(crate) settled: bool,
     /// The viewport is waiting for a click on the string where the ramp
     /// starts.
     pub(crate) picking_ramp_start: bool,
@@ -181,12 +96,36 @@ pub(crate) struct PitDesignDraft {
 }
 
 impl PitDesignDraft {
+    /// The window open on `design`.
+    pub(crate) fn on(design: PitDesign) -> Self {
+        Self {
+            design: Some(DraftDesign {
+                synced: design.clone(),
+                working: design,
+            }),
+            settled: true,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn design_id(&self) -> Option<PitDesignId> {
+        self.design.as_ref().map(|design| design.working.id)
+    }
+
     /// The design shown, if there is one and it is current.
     pub(crate) fn current_design(&self) -> Option<&Design> {
         if self.building.is_some() {
             return None;
         }
         self.preview.as_ref().and_then(|preview| preview.design.as_ref().ok())
+    }
+
+    /// Forget the preview, for a design opened anew.
+    pub(crate) fn clear_preview(&mut self) {
+        self.preview = None;
+        self.built_for = None;
+        self.building = None;
+        self.picking_ramp_start = false;
     }
 }
 
@@ -207,7 +146,6 @@ fn stop_label(stop: StopMode) -> String {
 
 pub(crate) fn no_design_text(reason: &NoDesign) -> String {
     match reason {
-        NoDesign::NoString => tr!("pit-design-pick-string-first"),
         NoDesign::NotClosed => tr!("pit-design-problem-string"),
         NoDesign::NoTopography => tr!("pit-design-problem-no-topography"),
         NoDesign::TopographyNotLoaded(name) => tr!("pit-design-problem-topography-not-loaded", name = name.clone()),
@@ -242,6 +180,31 @@ fn stopped_short(design: &Design) -> bool {
     matches!(design.end, End::OutOfRoom | End::RampTooLong | End::LeftGround)
 }
 
+/// How a design's outputs stand, from the window's copy of it and what the
+/// project holds.
+pub(crate) fn standing(design: &PitDesign, entry: Option<&UiPitDesignEntry>, project: &UiProjectView) -> Standing {
+    let ground = design.settings().ground().and_then(|id| project.triangulations.iter().find(|surface| surface.id == id)).map(|surface| surface.geometry);
+    let (has_layer, has_surface) = entry.map_or((false, false), |entry| (entry.layer.is_some(), entry.surface.is_some()));
+    design.standing(ground, has_layer, has_surface)
+}
+
+/// A row of buttons under a label: which was clicked.
+fn button_row(ui: &mut egui::Ui, label: String, help: String, buttons: &[(String, bool)]) -> Option<usize> {
+    let mut clicked = None;
+    MenuField::new(label).help_text(help).show(ui, |ui, row_height, _| {
+        ui.allocate_ui_with_layout(egui::vec2(FIELD_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            for (index, (text, enabled)) in buttons.iter().enumerate() {
+                let width = menu::natural_button_width(ui, text, 40.0);
+                if ui.add(MenuButton::new(text.clone()).min_width(width).enabled(*enabled)).clicked() {
+                    clicked = Some(index);
+                }
+            }
+        })
+        .response
+    });
+    clicked
+}
+
 pub(crate) fn draw_pit_design_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     // Out of the way while the viewport picks for it.
     if editor.selection_pick.is_some() {
@@ -254,226 +217,357 @@ pub(crate) fn draw_pit_design_dialog(ui: &mut egui::Ui, editor: &mut EditorState
         return;
     }
     let mut open = true;
-    let (mut apply, mut close) = (false, false);
+    let mut close = false;
     DragableMenu::new("pit_design_dialog", tr!("pit-design-title"))
         .open(&mut open)
-        .min_width(400.0)
-        .max_width(420.0)
+        .min_width(420.0)
+        .max_width(440.0)
         .show(ui.ctx(), |ui| {
-            let settings = &mut draft.settings;
-            let string_text = if draft.base.is_some() {
-                tr!("pit-design-string-chosen")
-            } else {
-                tr!("pit-design-string-none")
+            draw_design_picker(ui, draft, project, commands);
+            let Some(open_design) = draft.design.as_mut() else {
+                menu::menu_note(ui, tr!("pit-design-none-yet"));
+                return;
             };
-            if menu::picked_selection_field(ui, tr!("pit-design-string"), string_text, tr!("pit-design-string-help"), FIELD_WIDTH) {
-                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::PitDesignString));
-            }
-            let chosen = direction_label(settings.direction);
-            MenuFieldCombo::new(
-                "pit_design_direction",
-                tr!("pit-design-direction"),
-                &mut settings.direction,
-                chosen,
-                [Direction::Up, Direction::Down].map(|direction| (direction, direction_label(direction).into())),
-            )
-            .width(FIELD_WIDTH)
-            .help_text(tr!("pit-design-direction-help"))
-            .show(ui);
+            let id = open_design.working.id;
+            let entry = project.pit_designs.iter().find(|entry| entry.id == id);
+            draw_name_and_scenarios(ui, &mut open_design.working);
+            draw_string_row(ui, &open_design.working, entry, commands);
 
-            menu::menu_section(ui, tr!("pit-design-benches-section"));
-            MenuFieldF64::new(tr!("pit-design-bench-height"), &mut settings.bench_height, 0.1..=1000.0)
-                .width(FIELD_WIDTH)
-                .speed(0.1)
-                .suffix(" m")
-                .show(ui);
-            MenuFieldF64::new(tr!("pit-design-face-angle"), &mut settings.face_angle, 1.0..=89.0)
-                .width(FIELD_WIDTH)
-                .speed(0.5)
-                .suffix("°")
-                .show(ui);
-            MenuFieldF64::new(tr!("pit-design-berm-width"), &mut settings.berm_width, 0.0..=1000.0)
-                .width(FIELD_WIDTH)
-                .speed(0.1)
-                .suffix(" m")
-                .show(ui);
-            MenuFieldF64::new(tr!("pit-design-wall-radius"), &mut settings.wall_radius, 0.0..=10000.0)
-                .width(FIELD_WIDTH)
-                .speed(0.5)
-                .suffix(" m")
-                .help_text(tr!("pit-design-wall-radius-help"))
-                .show(ui);
-
-            menu::menu_section(ui, tr!("pit-design-stop-section"));
-            // Building down there is no ground to daylight against.
-            let stops: Vec<StopMode> = match settings.direction {
-                Direction::Up => vec![StopMode::Benches, StopMode::Elevation, StopMode::Daylight],
-                Direction::Down => vec![StopMode::Benches, StopMode::Elevation],
+            let Some(scenario) = open_design.working.scenario_mut() else {
+                return;
             };
-            if !stops.contains(&settings.stop) {
-                settings.stop = StopMode::Benches;
-            }
-            let chosen = stop_label(settings.stop);
-            MenuFieldCombo::new(
-                "pit_design_stop",
-                tr!("pit-design-stop"),
-                &mut settings.stop,
-                chosen,
-                stops.into_iter().map(|stop| (stop, stop_label(stop).into())),
-            )
-            .width(FIELD_WIDTH)
-            .help_text(tr!("pit-design-stop-help"))
-            .show(ui);
-            match settings.stop {
-                StopMode::Benches => {
-                    MenuFieldU32::new(tr!("pit-design-benches"), &mut settings.benches, 1..=u32::MAX)
-                        .width(FIELD_WIDTH)
-                        .show(ui);
-                }
-                StopMode::Elevation => {
-                    MenuFieldF64::new(tr!("pit-design-stop-rl"), &mut settings.stop_elevation, f64::MIN..=f64::MAX)
-                        .width(FIELD_WIDTH)
-                        .speed(0.5)
-                        .suffix(" m")
-                        .show(ui);
-                }
-                StopMode::Daylight => {}
-            }
-            if settings.stop == StopMode::Daylight {
-                let surfaces: Vec<(TriangulationId, &str)> = project.triangulations.iter().map(|entry| (entry.id, entry.name.as_str())).collect();
-                let chosen = settings
-                    .topography
-                    .and_then(|id| surfaces.iter().find(|(surface, _)| *surface == id).map(|(_, name)| (*name).to_owned()))
-                    .unwrap_or_else(|| tr!("pit-design-topography-none"));
-                MenuFieldCombo::new(
-                    "pit_design_topography",
-                    tr!("pit-design-topography"),
-                    &mut settings.topography,
-                    chosen,
-                    std::iter::once((None, tr!("pit-design-topography-none").into())).chain(surfaces.iter().map(|(id, name)| (Some(*id), (*name).into()))),
-                )
-                .width(FIELD_WIDTH)
-                .help_text(tr!("pit-design-topography-help"))
-                .show(ui);
-            }
-
-            menu::menu_section(ui, tr!("pit-design-ramp-section"));
-            MenuFieldBool::new(tr!("pit-design-ramp"), &mut settings.ramp).show(ui);
-            if settings.ramp {
-                MenuFieldF64::new(tr!("pit-design-ramp-width"), &mut settings.ramp_width, 0.1..=1000.0)
-                    .width(FIELD_WIDTH)
-                    .speed(0.1)
-                    .suffix(" m")
-                    .show(ui);
-                MenuFieldF64::new(tr!("pit-design-ramp-gradient"), &mut settings.ramp_gradient, 0.1..=100.0)
-                    .width(FIELD_WIDTH)
-                    .speed(0.1)
-                    .suffix(" %")
-                    .help_text(tr!("pit-design-ramp-gradient-help"))
-                    .show(ui);
-                let start_text = settings.ramp_start.map_or_else(
-                    || tr!("pit-design-ramp-start-default"),
-                    |start| tr!("pit-design-ramp-start-picked", x = format!("{:.1}", start.x), y = format!("{:.1}", start.y)),
-                );
-                let mut pick = false;
-                MenuField::new(tr!("pit-design-ramp-start"))
-                    .help_text(tr!("pit-design-ramp-start-help"))
-                    .show(ui, |ui, row_height, _| {
-                        ui.allocate_ui_with_layout(egui::vec2(FIELD_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            let pick_label = tr!("pit-design-pick");
-                            let pick_width = menu::natural_button_width(ui, &pick_label, 52.0);
-                            let text_width = FIELD_WIDTH - ui.spacing().item_spacing.x - pick_width;
-                            ui.allocate_ui_with_layout(egui::vec2(text_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                ui.set_min_width(text_width);
-                                ui.add(egui::Label::new(start_text.clone()).truncate()).hint(start_text.clone());
-                            });
-                            pick = ui.add(MenuButton::new(pick_label).min_width(pick_width).enabled(draft.base.is_some())).clicked();
-                        })
-                        .response
-                    });
-                if pick {
-                    commands.push(UiCommand::BeginPitRampStartPick);
-                }
-                let turn_label = |clockwise: bool| if clockwise { tr!("pit-design-clockwise") } else { tr!("pit-design-anticlockwise") };
-                let chosen = turn_label(settings.climbs_clockwise);
-                MenuFieldCombo::new(
-                    "pit_design_climbs",
-                    tr!("pit-design-climbs"),
-                    &mut settings.climbs_clockwise,
-                    chosen,
-                    [false, true].map(|clockwise| (clockwise, turn_label(clockwise).into())),
-                )
-                .width(FIELD_WIDTH)
-                .help_text(tr!("pit-design-climbs-help"))
-                .show(ui);
-                let layout_label = |switchback: bool| if switchback { tr!("pit-design-switchback") } else { tr!("pit-design-spiral") };
-                let chosen = layout_label(settings.switchback);
-                MenuFieldCombo::new(
-                    "pit_design_layout",
-                    tr!("pit-design-layout"),
-                    &mut settings.switchback,
-                    chosen,
-                    [false, true].map(|switchback| (switchback, layout_label(switchback).into())),
-                )
-                .width(FIELD_WIDTH)
-                .help_text(tr!("pit-design-layout-help"))
-                .show(ui);
-                if settings.switchback {
-                    MenuFieldU32::new(tr!("pit-design-switchback-every"), &mut settings.switchback_every, 1..=u32::MAX)
-                        .width(FIELD_WIDTH)
-                        .help_text(tr!("pit-design-switchback-every-help"))
-                        .show(ui);
-                    MenuFieldF64::new(tr!("pit-design-inside-radius"), &mut settings.inside_radius, 0.0..=10000.0)
-                        .width(FIELD_WIDTH)
-                        .speed(0.5)
-                        .suffix(" m")
-                        .help_text(tr!("pit-design-inside-radius-help"))
-                        .show(ui);
-                }
-            }
+            let settings = &mut scenario.settings;
+            draw_settings(ui, settings, project, commands);
 
             menu::menu_section(ui, tr!("pit-design-output-section"));
             MenuFieldBool::new(tr!("pit-design-surface"), &mut settings.surface)
                 .help_text(tr!("pit-design-surface-help"))
                 .show(ui);
-            if settings.surface && settings.stop == StopMode::Daylight {
+            if settings.surface && settings.daylights() {
                 MenuFieldBool::new(tr!("pit-design-trim"), &mut settings.trim_to_topography)
                     .help_text(tr!("pit-design-trim-help"))
                     .show(ui);
             }
+            draw_outputs(ui, &open_design.working, entry, project);
 
             menu::menu_section(ui, tr!("pit-design-result-section"));
-            draw_result(ui, draft);
+            let settings = open_design.working.settings();
+            draw_result(ui, draft, &settings);
 
             ui.add_space(4.0);
-            let can_apply = draft.current_design().is_some_and(|design| design.benches > 0);
+            let has_design = draft.current_design().is_some_and(|design| design.benches > 0);
+            let built = entry.is_some_and(|entry| entry.layer.is_some() || entry.surface.is_some());
             let cancelled = menu::dialog_cancelled(ui.ctx());
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(tr!("edit-apply")).primary().enabled(can_apply)).clicked() {
-                    apply = true;
+                let label = if built { tr!("pit-design-rebuild") } else { tr!("pit-design-build") };
+                if ui.add(MenuButton::new(label).primary().enabled(has_design)).clicked() {
+                    commands.push(UiCommand::BuildPitDesign(id));
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || cancelled {
+                if ui.add(MenuButton::new(tr!("common-close"))).clicked() || cancelled {
                     close = true;
                 }
             });
         });
-    if apply {
-        commands.push(UiCommand::CommitPitDesign);
-    } else if close || !open {
-        editor.pit_design = None;
+    // A field is mid-edit while the pointer is down on it or text is being
+    // typed into it; until then the copy waits to be written.
+    draft.settled = !ui.ctx().input(|input| input.pointer.any_down()) && ui.ctx().memory(|memory| memory.focused().is_none());
+    if close || !open {
         commands.push(UiCommand::ClosePitDesign);
     }
 }
 
-/// What the settings come to: the design's figures, or why there is none.
-fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft) {
-    let warning = ui.visuals().warn_fg_color;
-    if draft.building.is_some() && draft.preview.is_none() {
-        menu::menu_note(ui, tr!("pit-design-designing"));
+/// The project's designs to choose between, and New, Duplicate and Delete.
+fn draw_design_picker(ui: &mut egui::Ui, draft: &PitDesignDraft, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    let open_id = draft.design_id();
+    if !project.pit_designs.is_empty() {
+        let mut chosen = open_id;
+        let chosen_text = draft
+            .design
+            .as_ref()
+            .map_or_else(|| tr!("pit-design-choose"), |design| design.working.name.clone());
+        MenuFieldCombo::new(
+            "pit_design_open",
+            tr!("pit-design-design"),
+            &mut chosen,
+            chosen_text,
+            project.pit_designs.iter().map(|entry| (Some(entry.id), entry.name.clone().into())),
+        )
+        .width(FIELD_WIDTH)
+        .help_text(tr!("pit-design-design-help"))
+        .show(ui);
+        if chosen != open_id
+            && let Some(id) = chosen
+        {
+            commands.push(UiCommand::OpenPitDesignItem(id));
+        }
+    }
+    let buttons = [
+        (tr!("pit-design-new"), true),
+        (tr!("pit-design-duplicate"), open_id.is_some()),
+        (tr!("pit-design-delete"), open_id.is_some()),
+    ];
+    match button_row(ui, String::new(), tr!("pit-design-new-help"), &buttons) {
+        Some(0) => commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::PitDesignString)),
+        Some(1) => commands.extend(open_id.map(UiCommand::DuplicatePitDesign)),
+        Some(2) => commands.extend(open_id.map(UiCommand::DeletePitDesign)),
+        _ => {}
+    }
+}
+
+/// The design's name, and its scenarios: which is active, add and remove.
+fn draw_name_and_scenarios(ui: &mut egui::Ui, design: &mut PitDesign) {
+    MenuFieldText::new(tr!("pit-design-name"), &mut design.name).width(FIELD_WIDTH).show(ui);
+    let mut active: ScenarioId = design.scenario().map_or(design.active, |scenario| scenario.id);
+    let chosen = design.scenario().map(|scenario| scenario.name.clone()).unwrap_or_default();
+    MenuFieldCombo::new(
+        "pit_design_scenario",
+        tr!("pit-design-scenario"),
+        &mut active,
+        chosen,
+        design.scenarios.iter().map(|scenario| (scenario.id, scenario.name.clone().into())),
+    )
+    .width(FIELD_WIDTH)
+    .help_text(tr!("pit-design-scenario-help"))
+    .show(ui);
+    design.active = active;
+    if let Some(scenario) = design.scenario_mut() {
+        MenuFieldText::new(tr!("pit-design-scenario-name"), &mut scenario.name).width(FIELD_WIDTH).show(ui);
+    }
+    let buttons = [(tr!("pit-design-scenario-copy"), true), (tr!("pit-design-scenario-remove"), design.scenarios.len() > 1)];
+    match button_row(ui, String::new(), tr!("pit-design-scenario-copy-help"), &buttons) {
+        Some(0) => {
+            let name = design
+                .scenario()
+                .map_or_else(|| tr!("pit-design-scenario-default"), |scenario| tr!("pit-design-scenario-copy-name", name = scenario.name.clone()));
+            design.add_scenario(name);
+        }
+        Some(1) => {
+            design.remove_scenario();
+        }
+        _ => {}
+    }
+}
+
+/// The string the design starts from, with Change and Update.
+fn draw_string_row(ui: &mut egui::Ui, design: &PitDesign, entry: Option<&UiPitDesignEntry>, commands: &mut Vec<UiCommand>) {
+    let level = if design.base.is_empty() {
+        0.0
+    } else {
+        design.base.iter().map(|point| point.z).sum::<f64>() / design.base.len() as f64
+    };
+    let text = tr!("pit-design-string-copied", points = design.base.len().to_string(), rl = format!("{level:.1}"));
+    MenuField::new(tr!("pit-design-string")).help_text(tr!("pit-design-string-help")).show(ui, |ui, row_height, _| {
+        ui.allocate_ui_with_layout(egui::vec2(FIELD_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.add(egui::Label::new(text.clone()).truncate()).hint(text.clone());
+        })
+        .response
+    });
+    let differs = entry.is_some_and(|entry| entry.source_differs);
+    let buttons = [(tr!("pit-design-string-change"), true), (tr!("pit-design-string-update"), differs)];
+    match button_row(ui, String::new(), tr!("pit-design-string-update-help"), &buttons) {
+        Some(0) => commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::PitDesignBase)),
+        Some(1) => commands.push(UiCommand::UpdatePitDesignString),
+        _ => {}
+    }
+}
+
+/// The scenario's benches, stop and ramp.
+fn draw_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    let chosen = direction_label(settings.direction);
+    MenuFieldCombo::new(
+        "pit_design_direction",
+        tr!("pit-design-direction"),
+        &mut settings.direction,
+        chosen,
+        [Direction::Up, Direction::Down].map(|direction| (direction, direction_label(direction).into())),
+    )
+    .width(FIELD_WIDTH)
+    .help_text(tr!("pit-design-direction-help"))
+    .show(ui);
+
+    menu::menu_section(ui, tr!("pit-design-benches-section"));
+    MenuFieldF64::new(tr!("pit-design-bench-height"), &mut settings.bench_height, 0.1..=1000.0)
+        .width(FIELD_WIDTH)
+        .speed(0.1)
+        .suffix(" m")
+        .show(ui);
+    MenuFieldF64::new(tr!("pit-design-face-angle"), &mut settings.face_angle, 1.0..=89.0)
+        .width(FIELD_WIDTH)
+        .speed(0.5)
+        .suffix("°")
+        .show(ui);
+    MenuFieldF64::new(tr!("pit-design-berm-width"), &mut settings.berm_width, 0.0..=1000.0)
+        .width(FIELD_WIDTH)
+        .speed(0.1)
+        .suffix(" m")
+        .show(ui);
+    MenuFieldF64::new(tr!("pit-design-wall-radius"), &mut settings.wall_radius, 0.0..=10000.0)
+        .width(FIELD_WIDTH)
+        .speed(0.5)
+        .suffix(" m")
+        .help_text(tr!("pit-design-wall-radius-help"))
+        .show(ui);
+
+    menu::menu_section(ui, tr!("pit-design-stop-section"));
+    // Building down there is no ground to daylight against.
+    let stops: Vec<StopMode> = match settings.direction {
+        Direction::Up => vec![StopMode::Benches, StopMode::Elevation, StopMode::Daylight],
+        Direction::Down => vec![StopMode::Benches, StopMode::Elevation],
+    };
+    if !stops.contains(&settings.stop) {
+        settings.stop = StopMode::Benches;
+    }
+    let chosen = stop_label(settings.stop);
+    MenuFieldCombo::new(
+        "pit_design_stop",
+        tr!("pit-design-stop"),
+        &mut settings.stop,
+        chosen,
+        stops.into_iter().map(|stop| (stop, stop_label(stop).into())),
+    )
+    .width(FIELD_WIDTH)
+    .help_text(tr!("pit-design-stop-help"))
+    .show(ui);
+    match settings.stop {
+        StopMode::Benches => {
+            MenuFieldU32::new(tr!("pit-design-benches"), &mut settings.benches, 1..=u32::MAX)
+                .width(FIELD_WIDTH)
+                .show(ui);
+        }
+        StopMode::Elevation => {
+            MenuFieldF64::new(tr!("pit-design-stop-rl"), &mut settings.stop_elevation, f64::MIN..=f64::MAX)
+                .width(FIELD_WIDTH)
+                .speed(0.5)
+                .suffix(" m")
+                .show(ui);
+        }
+        StopMode::Daylight => {
+            let surfaces: Vec<(TriangulationId, &str)> = project.triangulations.iter().map(|entry| (entry.id, entry.name.as_str())).collect();
+            let chosen = settings
+                .topography
+                .and_then(|id| surfaces.iter().find(|(surface, _)| *surface == id).map(|(_, name)| (*name).to_owned()))
+                .unwrap_or_else(|| tr!("pit-design-topography-none"));
+            MenuFieldCombo::new(
+                "pit_design_topography",
+                tr!("pit-design-topography"),
+                &mut settings.topography,
+                chosen,
+                std::iter::once((None, tr!("pit-design-topography-none").into())).chain(surfaces.iter().map(|(id, name)| (Some(*id), (*name).into()))),
+            )
+            .width(FIELD_WIDTH)
+            .help_text(tr!("pit-design-topography-help"))
+            .show(ui);
+        }
+    }
+
+    menu::menu_section(ui, tr!("pit-design-ramp-section"));
+    MenuFieldBool::new(tr!("pit-design-ramp"), &mut settings.ramp).show(ui);
+    if !settings.ramp {
         return;
     }
+    MenuFieldF64::new(tr!("pit-design-ramp-width"), &mut settings.ramp_width, 0.1..=1000.0)
+        .width(FIELD_WIDTH)
+        .speed(0.1)
+        .suffix(" m")
+        .show(ui);
+    MenuFieldF64::new(tr!("pit-design-ramp-gradient"), &mut settings.ramp_gradient, 0.1..=100.0)
+        .width(FIELD_WIDTH)
+        .speed(0.1)
+        .suffix(" %")
+        .help_text(tr!("pit-design-ramp-gradient-help"))
+        .show(ui);
+    let start_text = settings.ramp_start.map_or_else(
+        || tr!("pit-design-ramp-start-default"),
+        |start: DVec2| tr!("pit-design-ramp-start-picked", x = format!("{:.1}", start.x), y = format!("{:.1}", start.y)),
+    );
+    let mut pick = false;
+    MenuField::new(tr!("pit-design-ramp-start"))
+        .help_text(tr!("pit-design-ramp-start-help"))
+        .show(ui, |ui, row_height, _| {
+            ui.allocate_ui_with_layout(egui::vec2(FIELD_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let pick_label = tr!("pit-design-pick");
+                let pick_width = menu::natural_button_width(ui, &pick_label, 52.0);
+                let text_width = FIELD_WIDTH - ui.spacing().item_spacing.x - pick_width;
+                ui.allocate_ui_with_layout(egui::vec2(text_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.set_min_width(text_width);
+                    ui.add(egui::Label::new(start_text.clone()).truncate()).hint(start_text.clone());
+                });
+                pick = ui.add(MenuButton::new(pick_label).min_width(pick_width)).clicked();
+            })
+            .response
+        });
+    if pick {
+        commands.push(UiCommand::BeginPitRampStartPick);
+    }
+    let turn_label = |clockwise: bool| if clockwise { tr!("pit-design-clockwise") } else { tr!("pit-design-anticlockwise") };
+    let chosen = turn_label(settings.climbs_clockwise);
+    MenuFieldCombo::new(
+        "pit_design_climbs",
+        tr!("pit-design-climbs"),
+        &mut settings.climbs_clockwise,
+        chosen,
+        [false, true].map(|clockwise| (clockwise, turn_label(clockwise).into())),
+    )
+    .width(FIELD_WIDTH)
+    .help_text(tr!("pit-design-climbs-help"))
+    .show(ui);
+    let layout_label = |switchback: bool| if switchback { tr!("pit-design-switchback") } else { tr!("pit-design-spiral") };
+    let chosen = layout_label(settings.switchback);
+    MenuFieldCombo::new(
+        "pit_design_layout",
+        tr!("pit-design-layout"),
+        &mut settings.switchback,
+        chosen,
+        [false, true].map(|switchback| (switchback, layout_label(switchback).into())),
+    )
+    .width(FIELD_WIDTH)
+    .help_text(tr!("pit-design-layout-help"))
+    .show(ui);
+    if settings.switchback {
+        MenuFieldU32::new(tr!("pit-design-switchback-every"), &mut settings.switchback_every, 1..=u32::MAX)
+            .width(FIELD_WIDTH)
+            .help_text(tr!("pit-design-switchback-every-help"))
+            .show(ui);
+        MenuFieldF64::new(tr!("pit-design-inside-radius"), &mut settings.inside_radius, 0.0..=10000.0)
+            .width(FIELD_WIDTH)
+            .speed(0.5)
+            .suffix(" m")
+            .help_text(tr!("pit-design-inside-radius-help"))
+            .show(ui);
+    }
+}
+
+/// Where the design was built to, and whether that still matches it.
+fn draw_outputs(ui: &mut egui::Ui, design: &PitDesign, entry: Option<&UiPitDesignEntry>, project: &UiProjectView) {
+    let warning = ui.visuals().warn_fg_color;
+    let not_built = tr!("pit-design-not-built");
+    let layer = entry.and_then(|entry| entry.layer.as_ref()).map_or_else(|| not_built.clone(), |(_, name)| name.clone());
+    read_only_row(ui, &tr!("pit-design-output-layer"), &layer);
+    if design.settings().surface || entry.is_some_and(|entry| entry.surface.is_some()) {
+        let surface = entry.and_then(|entry| entry.surface.as_ref()).map_or(not_built, |(_, name)| name.clone());
+        read_only_row(ui, &tr!("pit-design-output-surface"), &surface);
+    }
+    match standing(design, entry, project) {
+        Standing::NotBuilt => {}
+        Standing::Current => read_only_row(ui, &tr!("pit-design-standing"), &tr!("pit-design-current")),
+        Standing::OutOfDate => {
+            ui.colored_label(warning, tr!("pit-design-out-of-date"));
+        }
+    }
+    if entry.is_some_and(|entry| entry.layer_edited) {
+        ui.colored_label(warning, tr!("pit-design-layer-edited"));
+    }
+    if entry.is_some_and(|entry| entry.surface_edited) {
+        ui.colored_label(warning, tr!("pit-design-surface-edited"));
+    }
+}
+
+/// What the settings come to: the design's figures, or why there is none.
+fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSettings) {
+    let ramp = settings.ramp;
+    let warning = ui.visuals().warn_fg_color;
     let Some(preview) = draft.preview.as_ref() else {
-        menu::menu_note(ui, tr!("pit-design-pick-string-first"));
+        menu::menu_note(ui, tr!("pit-design-designing"));
         return;
     };
     match &preview.design {
@@ -483,7 +577,7 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft) {
         Ok(design) => {
             read_only_row(ui, &tr!("pit-design-benches-built"), &design.benches.to_string());
             read_only_row(ui, &tr!("pit-design-final-rl"), &format!("{:.1} m", design.final_elevation()));
-            if draft.settings.ramp {
+            if ramp {
                 read_only_row(ui, &tr!("pit-design-ramp-length"), &format!("{:.0} m", design.ramp_length));
             }
             read_only_row(ui, &tr!("pit-design-volume"), &format!("{:.0} m³", design.volume));
@@ -496,6 +590,26 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft) {
             if design.ramp_start_moved > 0.0 {
                 ui.colored_label(warning, tr!("pit-design-start-moved", distance = format!("{:.0}", design.ramp_start_moved)));
             }
+            if ramp {
+                let flats: Vec<f64> = design.report.iter().filter_map(|bench| bench.ramp).map(|road| road.flat).filter(|flat| *flat > 0.0).collect();
+                if !flats.is_empty() {
+                    menu::menu_note(
+                        ui,
+                        tr!(
+                            "pit-design-flats",
+                            count = flats.len(),
+                            length = format!("{:.0}", flats.iter().sum::<f64>())
+                        ),
+                    );
+                }
+                let flatter = design.report.iter().filter(|bench| bench.ramp.is_some_and(|road| road.lengthened > 0.0)).count();
+                if flatter > 0 {
+                    ui.colored_label(warning, tr!("pit-design-flatter", count = flatter));
+                }
+                if menu::menu_section_folding(ui, "pit_design_bench_table", tr!("pit-design-bench-table")) {
+                    draw_bench_table(ui, design, settings);
+                }
+            }
             if preview.base_unevenness > 0.01 {
                 ui.colored_label(
                     warning,
@@ -506,9 +620,58 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft) {
                     ),
                 );
             }
-            if draft.building.is_some() {
-                menu::menu_note(ui, tr!("pit-design-designing"));
-            }
         }
     }
+    if draft.building.is_some() {
+        menu::menu_note(ui, tr!("pit-design-designing"));
+    }
+}
+
+/// Each bench as built: its RL, its ramp's grade, flat and narrowest width,
+/// and whether it turned back; what falls short of the settings in the
+/// warning colour.
+fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSettings) {
+    let warning = ui.visuals().warn_fg_color;
+    let weak = ui.visuals().weak_text_color();
+    let gradient = settings.ramp_gradient / 100.0;
+    egui::Grid::new("pit_design_benches").striped(true).num_columns(5).spacing([12.0, 2.0]).show(ui, |ui| {
+        for heading in [
+            tr!("pit-design-table-rl"),
+            tr!("pit-design-table-grade"),
+            tr!("pit-design-table-flat"),
+            tr!("pit-design-table-width"),
+            tr!("pit-design-table-turn"),
+        ] {
+            ui.label(egui::RichText::new(heading).color(weak).small());
+        }
+        ui.end_row();
+        for bench in &design.report {
+            let top = bench.elevation + settings.direction.sign() * bench.height;
+            ui.label(format!("{:.1}–{top:.1}", bench.elevation));
+            match bench.ramp {
+                Some(road) => {
+                    let grade = format!("{:.1} %", road.steepest * 100.0);
+                    if road.lengthened > 0.0 || road.steepest < gradient - 0.005 {
+                        ui.colored_label(warning, grade).hint(tr!("pit-design-table-flatter-hint", length = format!("{:.0}", road.lengthened)));
+                    } else {
+                        ui.label(grade);
+                    }
+                    ui.label(if road.flat > 0.0 { format!("{:.0} m", road.flat) } else { String::new() });
+                    let width = format!("{:.1} m", road.narrowest);
+                    if road.narrowest < settings.ramp_width * 0.99 {
+                        ui.colored_label(warning, width).hint(tr!("pit-design-table-narrow-hint", width = format!("{:.1}", settings.ramp_width)));
+                    } else {
+                        ui.label(width);
+                    }
+                    ui.label(if road.switchback { tr!("pit-design-table-turned") } else { String::new() });
+                }
+                None => {
+                    for _ in 0..4 {
+                        ui.label("");
+                    }
+                }
+            }
+            ui.end_row();
+        }
+    });
 }

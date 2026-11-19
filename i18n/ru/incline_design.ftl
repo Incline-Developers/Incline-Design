@@ -3518,15 +3518,15 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ доставляет в тел�
 destination-problem-missing = ⁨{ $rule }⁩ доставляет в пункт назначения, которого больше нет в графике
 destination-rule-matches-all = Весь материал
 destination-rule-sources-count = { $count ->
-schedule-run-period-note = Запустить период: рассчитать график ещё на один день.
-schedule-run-whole-note = Запустить все периоды: рассчитать график до конечного дня планирования.
-schedule-improve-note = Улучшить: искать лучший график в пределах лимита времени решения.
-schedule-improving-note = Идёт поиск лучшего графика.
         [one] { $count } источник
         [few] { $count } источника
         [many] { $count } источников
        *[other] { $count } источника
     }
+schedule-run-period-note = Запустить период: рассчитать график ещё на один день.
+schedule-run-whole-note = Запустить все периоды: рассчитать график до конечного дня планирования.
+schedule-improve-note = Улучшить: искать лучший график в пределах лимита времени решения.
+schedule-improving-note = Идёт поиск лучшего графика.
 schedule-improve-finishing = Запуск { $run }: досрочное завершение с лучшим из найденных графиков.
 schedule-improve-stalled = Лучшего графика не было { $minutes } min; запуск завершается.
 improve-card-title = Улучшение графика
@@ -4844,6 +4844,7 @@ err-omf-element-part-unreadable = У элемента «{ $name }» есть ч�
 err-omf-part-reserves = список полей запасов
 err-omf-part-solids = тела планирования
 err-omf-part-haulage = сеть карьерных дорог
+err-omf-part-pit-designs = проекты карьера
 err-omf-read-layer-objects = Не удалось прочитать объекты проектного слоя «{ $name }»
 err-omf-read-layer = Не удалось прочитать проектный слой «{ $name }»
 err-omf-validate-designs = Проекты «{ $name }» недопустимы
@@ -5381,9 +5382,7 @@ pit-design-menu = Проектирование карьера
 pit-design-title = Проектирование карьера
 pick-selection-pit-string-prompt = Выберите замкнутую линию, от которой проектируется карьер.
 pit-design-string = Исходная линия
-pit-design-string-help = Замкнутая линия, от которой проектируется карьер: нижняя бровка его дна при построении вверх или верхняя бровка при построении вниз.
-pit-design-string-chosen = Замкнутая линия
-pit-design-string-none = Не выбрана
+pit-design-string-help = Замкнутая линия, от которой начинается проект: подошва дна при построении вверх или бровка при построении вниз. Проект хранит свою копию, поэтому правка полилинии ничего не меняет до нажатия «Обновить».
 pit-design-direction = Построение
 pit-design-direction-help = Вверх от дна, когда борта уступами отходят наружу по мере подъёма, или вниз от верхней бровки, когда борта уступами сходятся внутрь по мере углубления карьера.
 pit-design-up = Вверх от дна
@@ -5436,7 +5435,6 @@ pit-design-trim = Обрезать по топографии
 pit-design-trim-help = Удалить поверхность там, где она выше топографии.
 pit-design-result-section = Проект
 pit-design-designing = Проектирование...
-pit-design-pick-string-first = Выберите замкнутую линию, от которой проектировать.
 pit-design-benches-built = Уступы
 pit-design-final-rl = Конечная отметка
 pit-design-ramp-length = Длина съезда
@@ -5461,9 +5459,74 @@ pit-design-problem-string = Исходная линия должна быть з
 pit-design-problem-stop-elevation = Отметка окончания лежит позади линии: ниже неё при построении вверх, выше при построении вниз.
 pit-design-problem-no-topography = Выберите топографию для выхода на поверхность.
 pit-design-problem-topography-not-loaded = Загрузите { $name }, чтобы выйти на неё.
-pit-design-layer-name = Проект карьера
-pit-design-building-surface = Построение поверхности карьера
-pit-design-surface-failed = Линии карьера не добавлены: не удалось построить его поверхность. { $error }
 pit-design-created = Спроектировано уступов: { $benches } ({ $ended }), линий: { $strings } на слое { $layer }.
 pit-design-created-surface = Построена поверхность карьера, { $name }.
-pit-design-report-summary = Добавляет линии проекта на новый слой и его поверхность.
+pit-design-report-summary = Строит проект карьера в его слой и его поверхность.
+pit-design-default-name = Проект карьера
+pit-design-scenario-default = Базовый вариант
+pit-design-string-source-gone = Полилинии, из которой скопирована линия этого проекта, больше нет в загруженном слое.
+pit-design-deleted = Проект карьера { $name } удалён. Его слой и поверхность сохранены.
+pit-design-copy-name = { $name } копия
+pit-design-gone = Этого проекта карьера больше нет в проекте.
+pit-design-building = Строится проект карьера { $name }
+pit-design-no-bench-fits = Не помещается ни одного уступа: { $reason }
+pit-design-build-failed = Не удалось построить проект карьера: { $error }
+pit-design-surface-unlinked = Поверхность { $name } оставлена как была. Проект больше не строит поверхность, поэтому она больше ему не принадлежит.
+pit-design-report-delete = Удаляет проект карьера, сохраняя его слой и поверхность.
+pit-design-report-duplicate = Копирует проект карьера без его слоя и поверхности.
+pit-design-none-yet = В этом проекте пока нет проектов карьера. Нажмите «Новый» и выберите замкнутую линию, от которой начинается проект.
+pit-design-choose = Выберите проект
+pit-design-design = Проект
+pit-design-design-help = Проекты карьера этого проекта. Каждый хранит свою копию линии и свои сценарии и перестраивает свой слой и свою поверхность.
+pit-design-new = Новый
+pit-design-duplicate = Дублировать
+pit-design-delete = Удалить
+pit-design-new-help = «Новый» начинает проект от выбранной замкнутой линии. «Дублировать» копирует открытый проект без его слоя и поверхности. «Удалить» убирает проект и сохраняет то, что он построил.
+pit-design-name = Имя
+pit-design-scenario = Сценарий
+pit-design-scenario-help = Каждый сценарий это полный набор настроек проекта. Активный показывает предпросмотр, и его строит «Построить».
+pit-design-scenario-name = Имя сценария
+pit-design-scenario-copy = Копировать
+pit-design-scenario-remove = Убрать
+pit-design-scenario-copy-help = «Копировать» добавляет сценарий с настройками активного и делает его активным. «Убрать» удаляет активный сценарий; у проекта всегда остаётся один.
+pit-design-scenario-copy-name = { $name } копия
+pit-design-string-copied = { $points } точек на отметке { $rl }
+pit-design-string-change = Сменить
+pit-design-string-update = Обновить
+pit-design-string-update-help = «Сменить» выбирает для проекта другую замкнутую линию. «Обновить» заново копирует линию из полилинии, из которой она взята, после её правки.
+pit-design-rebuild = Перестроить
+pit-design-build = Построить
+pit-design-not-built = Не построен
+pit-design-output-layer = Слой
+pit-design-output-surface = Поверхность
+pit-design-standing = Построен
+pit-design-current = Актуален
+pit-design-out-of-date = Проект изменился после построения. Перестройте его, чтобы обновить слой и поверхность.
+pit-design-layer-edited = Его слой изменён после построения. Перестройка заменит эти правки.
+pit-design-surface-edited = Его поверхность изменена после построения. Перестройка заменит эти правки.
+pit-design-row-out-of-date = { $name } (устарел)
+pit-design-row-not-built = { $name } (не построен)
+pit-design-open = Открыть в проектировании карьера
+pit-design-flats =
+    { $count ->
+        [one] { $count } уступ идёт горизонтально { $length } м перед подъёмом, где съезду нужно место, чтобы держать уклон.
+        [few] { $count } уступа идут горизонтально в сумме { $length } м перед подъёмом, где съезду нужно место, чтобы держать уклон.
+        [many] { $count } уступов идут горизонтально в сумме { $length } м перед подъёмом, где съезду нужно место, чтобы держать уклон.
+       *[other] { $count } уступа идут горизонтально в сумме { $length } м перед подъёмом, где съезду нужно место, чтобы держать уклон.
+    }
+pit-design-flatter =
+    { $count ->
+        [one] { $count } уступ поднимается положе уклона: никакой горизонтальный участок не сделал бы его устойчивым.
+        [few] { $count } уступа поднимаются положе уклона: никакой горизонтальный участок не сделал бы их устойчивыми.
+        [many] { $count } уступов поднимаются положе уклона: никакой горизонтальный участок не сделал бы их устойчивыми.
+       *[other] { $count } уступа поднимаются положе уклона: никакой горизонтальный участок не сделал бы их устойчивыми.
+    }
+pit-design-bench-table = Уступы
+pit-design-table-rl = Отметка
+pit-design-table-grade = Уклон
+pit-design-table-flat = Горизонт.
+pit-design-table-width = Ширина
+pit-design-table-turn = Разворот
+pit-design-table-turned = Серпантин
+pit-design-table-flatter-hint = Поднимается на { $length } м длиннее, чем требует уклон, поэтому положе: никакой горизонтальный участок перед ним не делал уступ устойчивым.
+pit-design-table-narrow-hint = Уже заданных { $width } м там, где съезд переходит на повороте борта.

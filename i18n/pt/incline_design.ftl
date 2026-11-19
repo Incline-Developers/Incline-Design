@@ -2843,13 +2843,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ entrega num sólido que já nã
 destination-problem-missing = ⁨{ $rule }⁩ entrega num destino que já não está no cronograma
 destination-rule-matches-all = Todo o material
 destination-rule-sources-count = { $count ->
+        [one] 1 origem
+       *[other] { $count } origens
+    }
 schedule-run-period-note = Executar período: programa mais um dia.
 schedule-run-whole-note = Executar todos os períodos: programa até ao dia final do planeamento.
 schedule-improve-note = Melhorar: procura um cronograma melhor, até ao limite de tempo de resolução.
 schedule-improving-note = A procurar um cronograma melhor.
-        [one] 1 origem
-       *[other] { $count } origens
-    }
 schedule-improve-finishing = Execução { $run }: a terminar mais cedo com o melhor cronograma encontrado até agora.
 schedule-improve-stalled = Nenhum cronograma melhor em { $minutes } min; a terminar a execução.
 improve-card-title = A melhorar o cronograma
@@ -4462,6 +4462,7 @@ err-omf-element-part-unreadable = O elemento '{ $name }' tem { $what } que não 
 err-omf-part-reserves = uma lista de campos de reservas
 err-omf-part-solids = sólidos de planeamento
 err-omf-part-haulage = uma rede de estradas de transporte
+err-omf-part-pit-designs = os projetos de cava
 err-omf-read-layer-objects = Não foi possível ler os objetos da camada de desenho '{ $name }'
 err-omf-read-layer = Não foi possível ler a camada de desenho '{ $name }'
 err-omf-validate-designs = Os desenhos '{ $name }' não são válidos
@@ -4998,9 +4999,7 @@ pit-design-menu = Projeto de cava
 pit-design-title = Projeto de cava
 pick-selection-pit-string-prompt = Selecione a linha fechada a partir da qual projetar a cava.
 pit-design-string = Linha de partida
-pit-design-string-help = A linha fechada a partir da qual a cava é projetada: o pé do seu fundo quando é construída para cima, ou a sua crista quando é construída para baixo.
-pit-design-string-chosen = Linha fechada
-pit-design-string-none = Nenhuma escolhida
+pit-design-string-help = A linha fechada de onde parte o projeto: o pé do fundo quando é construído para cima, ou a crista quando é construído para baixo. O projeto guarda a sua própria cópia, por isso editar a polilinha não muda nada até Atualizar.
 pit-design-direction = Construir
 pit-design-direction-help = Para cima a partir de um fundo, com os taludes recuando para fora à medida que sobem, ou para baixo a partir de uma crista, com os taludes avançando para dentro à medida que a cava aprofunda.
 pit-design-up = Para cima a partir do fundo
@@ -5053,7 +5052,6 @@ pit-design-trim = Recortar à topografia
 pit-design-trim-help = Retirar a superfície onde fica acima da topografia.
 pit-design-result-section = Projeto
 pit-design-designing = A projetar...
-pit-design-pick-string-first = Escolha uma linha fechada a partir da qual projetar.
 pit-design-benches-built = Bancadas
 pit-design-final-rl = Cota final
 pit-design-ramp-length = Comprimento da rampa
@@ -5078,9 +5076,70 @@ pit-design-problem-string = A linha de partida deve ser uma polilinha fechada à
 pit-design-problem-stop-elevation = A cota de parada está atrás da linha: abaixo ao construir para cima, acima ao construir para baixo.
 pit-design-problem-no-topography = Escolha a topografia contra a qual aflorar.
 pit-design-problem-topography-not-loaded = Carregue { $name } para aflorar contra ela.
-pit-design-layer-name = Projeto de cava
-pit-design-building-surface = A construir a superfície da cava
-pit-design-surface-failed = As linhas da cava não foram adicionadas: não foi possível construir a sua superfície. { $error }
 pit-design-created = Projetadas { $benches } bancadas ({ $ended }), como { $strings } linhas em { $layer }.
 pit-design-created-surface = Construída a superfície da cava, { $name }.
-pit-design-report-summary = Adiciona as linhas do projeto numa nova camada, e a sua superfície.
+pit-design-report-summary = Constrói um projeto de cava na sua camada e na sua superfície.
+pit-design-default-name = Projeto de cava
+pit-design-scenario-default = Caso base
+pit-design-string-source-gone = A polilinha de onde foi copiada a linha deste projeto já não está numa camada carregada.
+pit-design-deleted = Projeto de cava { $name } eliminado. A sua camada e a sua superfície mantêm-se.
+pit-design-copy-name = { $name } cópia
+pit-design-gone = Esse projeto de cava já não está no projeto.
+pit-design-building = A construir o projeto de cava { $name }
+pit-design-no-bench-fits = Nem uma bancada cabe: { $reason }
+pit-design-build-failed = Não foi possível construir o projeto de cava: { $error }
+pit-design-surface-unlinked = A superfície { $name } fica como estava. O projeto já não constrói superfície, por isso deixou de ser sua.
+pit-design-report-delete = Elimina um projeto de cava, mantendo a sua camada e a sua superfície.
+pit-design-report-duplicate = Copia um projeto de cava, sem a sua camada e a sua superfície.
+pit-design-none-yet = Este projeto ainda não tem projetos de cava. Prima Novo e escolha a linha fechada de onde parte um projeto.
+pit-design-choose = Escolha um projeto
+pit-design-design = Projeto
+pit-design-design-help = Os projetos de cava do projeto. Cada um guarda a sua própria cópia da linha e os seus cenários, e reconstrói a sua própria camada e superfície.
+pit-design-new = Novo
+pit-design-duplicate = Duplicar
+pit-design-delete = Eliminar
+pit-design-new-help = Novo começa um projeto a partir de uma linha fechada que escolher. Duplicar copia o projeto aberto, sem a sua camada e superfície. Eliminar retira o projeto e mantém o que construiu.
+pit-design-name = Nome
+pit-design-scenario = Cenário
+pit-design-scenario-help = Cada cenário é um conjunto completo de definições do projeto. O ativo é o que a pré-visualização mostra e o que Construir constrói.
+pit-design-scenario-name = Nome do cenário
+pit-design-scenario-copy = Copiar
+pit-design-scenario-remove = Remover
+pit-design-scenario-copy-help = Copiar adiciona um cenário com as definições do ativo e torna-o ativo. Remover retira o cenário ativo; um projeto mantém sempre um.
+pit-design-scenario-copy-name = { $name } cópia
+pit-design-string-copied = { $points } pontos à cota { $rl }
+pit-design-string-change = Alterar
+pit-design-string-update = Atualizar
+pit-design-string-update-help = Alterar escolhe outra linha fechada para o projeto. Atualizar volta a copiar a linha da polilinha de onde veio, depois de essa polilinha ser editada.
+pit-design-rebuild = Reconstruir
+pit-design-build = Construir
+pit-design-not-built = Não construído
+pit-design-output-layer = Camada
+pit-design-output-surface = Superfície
+pit-design-standing = Construído
+pit-design-current = Atualizado
+pit-design-out-of-date = O projeto mudou desde que foi construído. Reconstrua para atualizar a sua camada e a sua superfície.
+pit-design-layer-edited = A sua camada foi editada desde que foi construída. Reconstruir substitui essas edições.
+pit-design-surface-edited = A sua superfície foi editada desde que foi construída. Reconstruir substitui essas edições.
+pit-design-row-out-of-date = { $name } (desatualizado)
+pit-design-row-not-built = { $name } (não construído)
+pit-design-open = Abrir no Projeto de cava
+pit-design-flats =
+    { $count ->
+        [one] Uma bancada segue nivelada durante { $length } m antes de subir, onde a rampa precisa do espaço para manter a sua inclinação.
+       *[other] { $count } bancadas seguem niveladas durante { $length } m no total antes de subir, onde a rampa precisa do espaço para manter a sua inclinação.
+    }
+pit-design-flatter =
+    { $count ->
+        [one] Uma bancada sobe com menos inclinação do que a pedida: nenhum troço nivelado a deixaria estável.
+       *[other] { $count } bancadas sobem com menos inclinação do que a pedida: nenhum troço nivelado as deixaria estáveis.
+    }
+pit-design-bench-table = Bancadas
+pit-design-table-rl = Cota
+pit-design-table-grade = Inclinação
+pit-design-table-flat = Nivelado
+pit-design-table-width = Largura
+pit-design-table-turn = Volta
+pit-design-table-turned = Ziguezague
+pit-design-table-flatter-hint = Sobe ao longo de mais { $length } m do que a inclinação pede, por isso é menos inclinada: nenhum troço nivelado antes dela deixou a bancada estável.
+pit-design-table-narrow-hint = Mais estreita do que os { $width } m pedidos, onde liga numa curva do talude.

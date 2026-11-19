@@ -659,6 +659,7 @@ impl ProjectStore {
             scene.clone_reserve_fields_from(document);
             scene.clone_solids_from(document);
             scene.append_haulage_from(document);
+            scene.append_pit_designs_from(document);
         }
         scene.rebuild_object_index();
         scene

@@ -2845,13 +2845,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ 运往的实体已不再是堆�
 destination-problem-missing = ⁨{ $rule }⁩ 运往的目的地已不在排程中
 destination-rule-matches-all = 所有物料
 destination-rule-sources-count = { $count ->
+        [one] 1 个来源
+       *[other] { $count } 个来源
+    }
 schedule-run-period-note = 运行周期：多排程一天。
 schedule-run-whole-note = 运行全部周期：排程至规划结束日。
 schedule-improve-note = 改进：搜索更优的排程，最长至求解时间上限。
 schedule-improving-note = 正在寻找更优的排程。
-        [one] 1 个来源
-       *[other] { $count } 个来源
-    }
 schedule-improve-finishing = 运行 { $run }：正在提前结束，保留目前找到的最佳排程。
 schedule-improve-stalled = { $minutes } min 内没有更优的排程；正在结束运行。
 improve-card-title = 正在改进排程
@@ -4464,6 +4464,7 @@ err-omf-element-part-unreadable = 元素“{ $name }”有无法读取的{ $what
 err-omf-part-reserves = 储量字段列表
 err-omf-part-solids = 规划实体
 err-omf-part-haulage = 运输道路网络
+err-omf-part-pit-designs = 采坑设计
 err-omf-read-layer-objects = 无法读取设计图层“{ $name }”的对象
 err-omf-read-layer = 无法读取设计图层“{ $name }”
 err-omf-validate-designs = 设计“{ $name }”无效
@@ -5000,9 +5001,7 @@ pit-design-menu = 采坑设计
 pit-design-title = 采坑设计
 pick-selection-pit-string-prompt = 选择用来设计采坑的闭合线。
 pit-design-string = 起始线
-pit-design-string-help = 设计采坑所依据的闭合线: 向上构建时为坑底的坡脚线,向下构建时为坡顶线。
-pit-design-string-chosen = 闭合线
-pit-design-string-none = 未选择
+pit-design-string-help = 设计起始的闭合线：向上构建时为坑底的坡脚，向下构建时为坡顶。设计保留自己的副本，因此编辑多段线在点击“更新”之前不会改变任何内容。
 pit-design-direction = 构建
 pit-design-direction-help = 从坑底向上,边帮随升高逐级向外扩展;或从坡顶向下,边帮随采坑加深逐级向内收缩。
 pit-design-up = 从坑底向上
@@ -5055,7 +5054,6 @@ pit-design-trim = 修剪到地形
 pit-design-trim-help = 切除高出地形的曲面部分。
 pit-design-result-section = 设计
 pit-design-designing = 正在设计...
-pit-design-pick-string-first = 请选择一条用于设计的闭合线。
 pit-design-benches-built = 台阶
 pit-design-final-rl = 最终标高
 pit-design-ramp-length = 坡道长度
@@ -5080,9 +5078,68 @@ pit-design-problem-string = 起始线必须是围成一定面积的闭合多段�
 pit-design-problem-stop-elevation = 终止标高位于线的后方: 向上构建时低于该线,向下构建时高于该线。
 pit-design-problem-no-topography = 请选择出露所依据的地形。
 pit-design-problem-topography-not-loaded = 请加载 { $name } 以便出露到其上。
-pit-design-layer-name = 采坑设计
-pit-design-building-surface = 正在生成采坑曲面
-pit-design-surface-failed = 未添加采坑的线: 无法生成其曲面。{ $error }
 pit-design-created = 已设计 { $benches } 个台阶 ({ $ended }),作为 { $strings } 条线添加到 { $layer }。
 pit-design-created-surface = 已生成采坑曲面 { $name }。
-pit-design-report-summary = 将设计的线添加到新图层,并添加其曲面。
+pit-design-report-summary = 将采坑设计构建到其图层和曲面中。
+pit-design-default-name = 采坑设计
+pit-design-scenario-default = 基准方案
+pit-design-string-source-gone = 复制此设计线条的多段线已不在任何已加载的图层中。
+pit-design-deleted = 已删除采坑设计 { $name }。其图层和曲面保留。
+pit-design-copy-name = { $name } 副本
+pit-design-gone = 该采坑设计已不在项目中。
+pit-design-building = 正在构建采坑设计 { $name }
+pit-design-no-bench-fits = 连一个台阶都放不下：{ $reason }
+pit-design-build-failed = 无法构建采坑设计：{ $error }
+pit-design-surface-unlinked = 曲面 { $name } 保持原样。设计不再构建曲面，因此它不再属于该设计。
+pit-design-report-delete = 删除采坑设计，保留其图层和曲面。
+pit-design-report-duplicate = 复制采坑设计，不含其图层和曲面。
+pit-design-none-yet = 此项目还没有采坑设计。点击“新建”，然后选择设计起始的闭合线。
+pit-design-choose = 选择设计
+pit-design-design = 设计
+pit-design-design-help = 项目的采坑设计。每个设计保留其线条和方案的副本，并重新构建自己的图层和曲面。
+pit-design-new = 新建
+pit-design-duplicate = 复制
+pit-design-delete = 删除
+pit-design-new-help = “新建”从您选择的闭合线开始一个设计。“复制”复制打开的设计，不含其图层和曲面。“删除”移除设计并保留它构建的内容。
+pit-design-name = 名称
+pit-design-scenario = 方案
+pit-design-scenario-help = 每个方案都是设计的一整套设置。当前方案即预览显示且“构建”所构建的方案。
+pit-design-scenario-name = 方案名称
+pit-design-scenario-copy = 复制
+pit-design-scenario-remove = 移除
+pit-design-scenario-copy-help = “复制”以当前方案的设置添加一个方案并使其成为当前方案。“移除”删除当前方案；设计始终保留一个方案。
+pit-design-scenario-copy-name = { $name } 副本
+pit-design-string-copied = RL { $rl } 处 { $points } 个点
+pit-design-string-change = 更换
+pit-design-string-update = 更新
+pit-design-string-update-help = “更换”为设计选择另一条闭合线。“更新”在原多段线被编辑后，从中重新复制线条。
+pit-design-rebuild = 重新构建
+pit-design-build = 构建
+pit-design-not-built = 未构建
+pit-design-output-layer = 图层
+pit-design-output-surface = 曲面
+pit-design-standing = 已构建
+pit-design-current = 最新
+pit-design-out-of-date = 设计在构建后已更改。请重新构建以更新其图层和曲面。
+pit-design-layer-edited = 其图层在构建后被编辑过。重新构建将替换这些编辑。
+pit-design-surface-edited = 其曲面在构建后被编辑过。重新构建将替换这些编辑。
+pit-design-row-out-of-date = { $name }（已过时）
+pit-design-row-not-built = { $name }（未构建）
+pit-design-open = 在采坑设计中打开
+pit-design-flats =
+    { $count ->
+       *[other] { $count } 个台阶在上坡前共有 { $length } m 平路，用于坡道保持坡度所需的空间。
+    }
+pit-design-flatter =
+    { $count ->
+       *[other] { $count } 个台阶的坡度比要求的缓：任何平路段都无法使其稳固。
+    }
+pit-design-bench-table = 台阶
+pit-design-table-rl = RL
+pit-design-table-grade = 坡度
+pit-design-table-flat = 平路
+pit-design-table-width = 宽度
+pit-design-table-turn = 回头
+pit-design-table-turned = 之字形
+pit-design-table-flatter-hint = 爬升比坡度要求多出 { $length } m，因此更缓：其前方的任何平路段都无法使台阶稳固。
+pit-design-table-narrow-hint = 在墙体转弯处衔接的位置，比要求的 { $width } m 窄。

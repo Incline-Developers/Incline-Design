@@ -2943,15 +2943,15 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ dostarcza do bryły, która nie
 destination-problem-missing = ⁨{ $rule }⁩ dostarcza do miejsca docelowego, którego nie ma już w harmonogramie
 destination-rule-matches-all = Cały materiał
 destination-rule-sources-count = { $count ->
-schedule-run-period-note = Uruchom okres: zaplanuj jeszcze jeden dzień.
-schedule-run-whole-note = Uruchom wszystkie okresy: zaplanuj do planowanego dnia końcowego.
-schedule-improve-note = Popraw: szukaj lepszego harmonogramu, nie dłużej niż limit czasu rozwiązywania.
-schedule-improving-note = Szukanie lepszego harmonogramu.
         [one] 1 źródło
         [few] { $count } źródła
         [many] { $count } źródeł
        *[other] { $count } źródeł
     }
+schedule-run-period-note = Uruchom okres: zaplanuj jeszcze jeden dzień.
+schedule-run-whole-note = Uruchom wszystkie okresy: zaplanuj do planowanego dnia końcowego.
+schedule-improve-note = Popraw: szukaj lepszego harmonogramu, nie dłużej niż limit czasu rozwiązywania.
+schedule-improving-note = Szukanie lepszego harmonogramu.
 schedule-improve-finishing = Przebieg { $run }: wcześniejsze zakończenie z najlepszym dotychczas znalezionym harmonogramem.
 schedule-improve-stalled = Brak lepszego harmonogramu od { $minutes } min; kończenie przebiegu.
 improve-card-title = Poprawianie harmonogramu
@@ -4592,6 +4592,7 @@ err-omf-element-part-unreadable = Element „{ $name }” ma { $what }, których
 err-omf-part-reserves = listę pól zasobów
 err-omf-part-solids = bryły planowania
 err-omf-part-haulage = sieć dróg transportowych
+err-omf-part-pit-designs = projekty wyrobisk
 err-omf-read-layer-objects = Nie udało się odczytać obiektów warstwy projektowej „{ $name }”
 err-omf-read-layer = Nie udało się odczytać warstwy projektowej „{ $name }”
 err-omf-validate-designs = Projekty „{ $name }” są nieprawidłowe
@@ -5128,9 +5129,7 @@ pit-design-menu = Projekt wyrobiska
 pit-design-title = Projekt wyrobiska
 pick-selection-pit-string-prompt = Zaznacz zamkniętą linię, od której projektowane jest wyrobisko.
 pit-design-string = Linia wyjściowa
-pit-design-string-help = Zamknięta linia, od której projektowane jest wyrobisko: podnóże jego dna przy budowie w górę lub jego krawędź przy budowie w dół.
-pit-design-string-chosen = Linia zamknięta
-pit-design-string-none = Nie wybrano
+pit-design-string-help = Zamknięta linia, od której zaczyna się projekt: stopa dna przy budowie w górę lub krawędź przy budowie w dół. Projekt trzyma własną kopię, więc edycja polilinii niczego nie zmienia aż do Aktualizuj.
 pit-design-direction = Budowa
 pit-design-direction-help = W górę od dna, gdy ściany odsuwają się piętrami na zewnątrz w miarę wznoszenia, lub w dół od krawędzi, gdy ściany schodzą piętrami do środka w miarę pogłębiania wyrobiska.
 pit-design-up = W górę od dna
@@ -5183,7 +5182,6 @@ pit-design-trim = Przytnij do topografii
 pit-design-trim-help = Usuń powierzchnię tam, gdzie leży ponad topografią.
 pit-design-result-section = Projekt
 pit-design-designing = Projektowanie...
-pit-design-pick-string-first = Wybierz zamkniętą linię, od której projektować.
 pit-design-benches-built = Piętra
 pit-design-final-rl = Rzędna końcowa
 pit-design-ramp-length = Długość rampy
@@ -5208,9 +5206,74 @@ pit-design-problem-string = Linia wyjściowa musi być zamkniętą polilinią wo
 pit-design-problem-stop-elevation = Rzędna końcowa leży za linią: poniżej przy budowie w górę, powyżej przy budowie w dół.
 pit-design-problem-no-topography = Wybierz topografię, na którą projekt ma wyjść.
 pit-design-problem-topography-not-loaded = Wczytaj { $name }, aby na nią wyjść.
-pit-design-layer-name = Projekt wyrobiska
-pit-design-building-surface = Budowanie powierzchni wyrobiska
-pit-design-surface-failed = Nie dodano linii wyrobiska: nie udało się zbudować jego powierzchni. { $error }
 pit-design-created = Zaprojektowano pięter: { $benches } ({ $ended }), jako linii: { $strings } na { $layer }.
 pit-design-created-surface = Zbudowano powierzchnię wyrobiska, { $name }.
-pit-design-report-summary = Dodaje linie projektu na nowej warstwie oraz jego powierzchnię.
+pit-design-report-summary = Buduje projekt wyrobiska w jego warstwie i powierzchni.
+pit-design-default-name = Projekt wyrobiska
+pit-design-scenario-default = Wariant bazowy
+pit-design-string-source-gone = Polilinii, z której skopiowano linię tego projektu, nie ma już w żadnej wczytanej warstwie.
+pit-design-deleted = Usunięto projekt wyrobiska { $name }. Jego warstwa i powierzchnia zostają.
+pit-design-copy-name = { $name } kopia
+pit-design-gone = Tego projektu wyrobiska nie ma już w projekcie.
+pit-design-building = Budowanie projektu wyrobiska { $name }
+pit-design-no-bench-fits = Nie mieści się ani jedno piętro: { $reason }
+pit-design-build-failed = Nie udało się zbudować projektu wyrobiska: { $error }
+pit-design-surface-unlinked = Powierzchnia { $name } zostaje bez zmian. Projekt nie buduje już powierzchni, więc nie jest już jego.
+pit-design-report-delete = Usuwa projekt wyrobiska, zachowując jego warstwę i powierzchnię.
+pit-design-report-duplicate = Kopiuje projekt wyrobiska bez jego warstwy i powierzchni.
+pit-design-none-yet = Ten projekt nie ma jeszcze projektów wyrobisk. Naciśnij Nowy i wybierz zamkniętą linię, od której zaczyna się projekt.
+pit-design-choose = Wybierz projekt
+pit-design-design = Projekt
+pit-design-design-help = Projekty wyrobisk w projekcie. Każdy trzyma własną kopię swojej linii i swoje scenariusze oraz odbudowuje własną warstwę i powierzchnię.
+pit-design-new = Nowy
+pit-design-duplicate = Duplikuj
+pit-design-delete = Usuń
+pit-design-new-help = Nowy zaczyna projekt od wybranej zamkniętej linii. Duplikuj kopiuje otwarty projekt bez jego warstwy i powierzchni. Usuń usuwa projekt i zachowuje to, co zbudował.
+pit-design-name = Nazwa
+pit-design-scenario = Scenariusz
+pit-design-scenario-help = Każdy scenariusz to pełny zestaw ustawień projektu. Aktywny pokazuje podgląd i to jego buduje Buduj.
+pit-design-scenario-name = Nazwa scenariusza
+pit-design-scenario-copy = Kopiuj
+pit-design-scenario-remove = Usuń
+pit-design-scenario-copy-help = Kopiuj dodaje scenariusz z ustawieniami aktywnego i czyni go aktywnym. Usuń zabiera aktywny scenariusz; projekt zawsze ma co najmniej jeden.
+pit-design-scenario-copy-name = { $name } kopia
+pit-design-string-copied = { $points } punktów na rzędnej { $rl }
+pit-design-string-change = Zmień
+pit-design-string-update = Aktualizuj
+pit-design-string-update-help = Zmień wybiera inną zamkniętą linię dla projektu. Aktualizuj ponownie kopiuje linię z polilinii, z której pochodzi, po jej edycji.
+pit-design-rebuild = Odbuduj
+pit-design-build = Buduj
+pit-design-not-built = Niezbudowany
+pit-design-output-layer = Warstwa
+pit-design-output-surface = Powierzchnia
+pit-design-standing = Zbudowany
+pit-design-current = Aktualny
+pit-design-out-of-date = Projekt zmienił się od zbudowania. Odbuduj go, aby uaktualnić jego warstwę i powierzchnię.
+pit-design-layer-edited = Jego warstwa była edytowana od zbudowania. Odbudowa zastąpi te zmiany.
+pit-design-surface-edited = Jego powierzchnia była edytowana od zbudowania. Odbudowa zastąpi te zmiany.
+pit-design-row-out-of-date = { $name } (nieaktualny)
+pit-design-row-not-built = { $name } (niezbudowany)
+pit-design-open = Otwórz w projekcie wyrobiska
+pit-design-flats =
+    { $count ->
+        [one] { $count } piętro biegnie poziomo przez { $length } m, zanim się wzniesie, gdzie rampa potrzebuje miejsca, by utrzymać nachylenie.
+        [few] { $count } piętra biegną poziomo łącznie przez { $length } m, zanim się wzniosą, gdzie rampa potrzebuje miejsca, by utrzymać nachylenie.
+        [many] { $count } pięter biegnie poziomo łącznie przez { $length } m, zanim się wzniosą, gdzie rampa potrzebuje miejsca, by utrzymać nachylenie.
+       *[other] { $count } piętra biegną poziomo łącznie przez { $length } m, zanim się wzniosą, gdzie rampa potrzebuje miejsca, by utrzymać nachylenie.
+    }
+pit-design-flatter =
+    { $count ->
+        [one] { $count } piętro wznosi się łagodniej niż nachylenie: żaden poziomy odcinek nie uczyniłby go stabilnym.
+        [few] { $count } piętra wznoszą się łagodniej niż nachylenie: żaden poziomy odcinek nie uczyniłby ich stabilnymi.
+        [many] { $count } pięter wznosi się łagodniej niż nachylenie: żaden poziomy odcinek nie uczyniłby ich stabilnymi.
+       *[other] { $count } piętra wznoszą się łagodniej niż nachylenie: żaden poziomy odcinek nie uczyniłby ich stabilnymi.
+    }
+pit-design-bench-table = Piętra
+pit-design-table-rl = Rzędna
+pit-design-table-grade = Nachylenie
+pit-design-table-flat = Poziomo
+pit-design-table-width = Szerokość
+pit-design-table-turn = Zawrót
+pit-design-table-turned = Serpentyna
+pit-design-table-flatter-hint = Wznosi się na { $length } m dłużej, niż wymaga nachylenie, więc jest łagodniejsza: żaden poziomy odcinek przed nią nie czynił piętra stabilnym.
+pit-design-table-narrow-hint = Węższa niż zadane { $width } m tam, gdzie przechodzi na zakręcie skarpy.

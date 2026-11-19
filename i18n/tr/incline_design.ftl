@@ -2887,13 +2887,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ artık stok sahası veya dökü
 destination-problem-missing = ⁨{ $rule }⁩ artık çizelgede olmayan bir hedefe teslim ediyor
 destination-rule-matches-all = Tüm malzeme
 destination-rule-sources-count = { $count ->
+        [one] 1 kaynak
+       *[other] { $count } kaynak
+    }
 schedule-run-period-note = Dönemi Çalıştır: bir gün daha çizelgeler.
 schedule-run-whole-note = Tüm Dönemleri Çalıştır: planlama bitiş gününe kadar çizelgeler.
 schedule-improve-note = İyileştir: çözüm süresi sınırına kadar daha iyi bir çizelge arar.
 schedule-improving-note = Daha iyi bir çizelge aranıyor.
-        [one] 1 kaynak
-       *[other] { $count } kaynak
-    }
 schedule-improve-finishing = Çalıştırma { $run }: o ana kadar bulunan en iyi çizelgeyle erken bitiriliyor.
 schedule-improve-stalled = { $minutes } dk içinde daha iyi çizelge bulunamadı; çalıştırma bitiriliyor.
 improve-card-title = Çizelge iyileştiriliyor
@@ -4506,6 +4506,7 @@ err-omf-element-part-unreadable = '{ $name }' öğesinde okunamayan ve dışarı
 err-omf-part-reserves = bir rezerv alan listesi
 err-omf-part-solids = planlama katıları
 err-omf-part-haulage = bir nakliye yolu ağı
+err-omf-part-pit-designs = ocak tasarımları
 err-omf-read-layer-objects = '{ $name }' tasarım katmanının nesneleri okunamadı
 err-omf-read-layer = '{ $name }' tasarım katmanı okunamadı
 err-omf-validate-designs = '{ $name }' tasarımları geçerli değil
@@ -5042,9 +5043,7 @@ pit-design-menu = Ocak Tasarımı
 pit-design-title = Ocak Tasarımı
 pick-selection-pit-string-prompt = Ocağın tasarlanacağı kapalı çizgiyi seçin.
 pit-design-string = Başlangıç çizgisi
-pit-design-string-help = Ocağın tasarlandığı kapalı çizgi: yukarı doğru inşa edilirken tabanının topuğu, aşağı doğru inşa edilirken kreti.
-pit-design-string-chosen = Kapalı çizgi
-pit-design-string-none = Seçilmedi
+pit-design-string-help = Tasarımın başladığı kapalı çizgi: yukarı doğru kurulurken tabanın topuğu, aşağı doğru kurulurken kretin kendisi. Tasarım kendi kopyasını tutar, bu yüzden çoklu çizgiyi düzenlemek Güncelle'ye kadar hiçbir şeyi değiştirmez.
 pit-design-direction = İnşa
 pit-design-direction-help = Bir tabandan yukarı, duvarlar yükseldikçe dışa doğru basamaklanarak, ya da bir kretten aşağı, ocak derinleştikçe duvarlar içe doğru basamaklanarak.
 pit-design-up = Tabandan yukarı
@@ -5097,7 +5096,6 @@ pit-design-trim = Topografyaya kırp
 pit-design-trim-help = Yüzeyi topografyanın üzerinde kaldığı yerde kes.
 pit-design-result-section = Tasarım
 pit-design-designing = Tasarlanıyor...
-pit-design-pick-string-first = Tasarım için kapalı bir çizgi seçin.
 pit-design-benches-built = Basamaklar
 pit-design-final-rl = Son kot
 pit-design-ramp-length = Rampa uzunluğu
@@ -5122,9 +5120,68 @@ pit-design-problem-string = Başlangıç çizgisi bir alanı çevreleyen kapalı
 pit-design-problem-stop-elevation = Durma kotu çizginin gerisinde: yukarı inşa ederken altında, aşağı inşa ederken üstünde.
 pit-design-problem-no-topography = Yüzeye çıkılacak topografyayı seçin.
 pit-design-problem-topography-not-loaded = Ona karşı yüzeye çıkmak için { $name } yükleyin.
-pit-design-layer-name = Ocak tasarımı
-pit-design-building-surface = Ocak yüzeyi oluşturuluyor
-pit-design-surface-failed = Ocağın çizgileri eklenmedi: yüzeyi oluşturulamadı. { $error }
 pit-design-created = { $benches } basamak tasarlandı ({ $ended }), { $layer } üzerinde { $strings } çizgi olarak.
 pit-design-created-surface = Ocağın yüzeyi oluşturuldu, { $name }.
-pit-design-report-summary = Tasarımın çizgilerini yeni bir katmana ve yüzeyini ekler.
+pit-design-report-summary = Bir ocak tasarımını katmanına ve yüzeyine kurar.
+pit-design-default-name = Ocak tasarımı
+pit-design-scenario-default = Temel durum
+pit-design-string-source-gone = Bu tasarımın çizgisinin kopyalandığı çoklu çizgi artık yüklü bir katmanda değil.
+pit-design-deleted = { $name } ocak tasarımı silindi. Katmanı ve yüzeyi korunuyor.
+pit-design-copy-name = { $name } kopyası
+pit-design-gone = Bu ocak tasarımı artık projede değil.
+pit-design-building = { $name } ocak tasarımı kuruluyor
+pit-design-no-bench-fits = Tek bir basamak bile sığmıyor: { $reason }
+pit-design-build-failed = Ocak tasarımı kurulamadı: { $error }
+pit-design-surface-unlinked = { $name } yüzeyi olduğu gibi bırakıldı. Tasarım artık yüzey kurmuyor, bu yüzden artık onun değil.
+pit-design-report-delete = Bir ocak tasarımını siler, katmanını ve yüzeyini korur.
+pit-design-report-duplicate = Bir ocak tasarımını, katmanı ve yüzeyi olmadan kopyalar.
+pit-design-none-yet = Bu projede henüz ocak tasarımı yok. Yeni'ye basın ve bir tasarımın başladığı kapalı çizgiyi seçin.
+pit-design-choose = Bir tasarım seçin
+pit-design-design = Tasarım
+pit-design-design-help = Projenin ocak tasarımları. Her biri çizgisinin ve senaryolarının kendi kopyasını tutar ve kendi katmanını ve yüzeyini yeniden kurar.
+pit-design-new = Yeni
+pit-design-duplicate = Çoğalt
+pit-design-delete = Sil
+pit-design-new-help = Yeni, seçtiğiniz kapalı bir çizgiden bir tasarım başlatır. Çoğalt, açık tasarımı katmanı ve yüzeyi olmadan kopyalar. Sil, tasarımı kaldırır ve kurduklarını korur.
+pit-design-name = Ad
+pit-design-scenario = Senaryo
+pit-design-scenario-help = Her senaryo, tasarım için eksiksiz bir ayar takımıdır. Etkin olan, önizlemenin gösterdiği ve Kur'un kurduğudur.
+pit-design-scenario-name = Senaryo adı
+pit-design-scenario-copy = Kopyala
+pit-design-scenario-remove = Kaldır
+pit-design-scenario-copy-help = Kopyala, etkin senaryonun ayarlarıyla bir senaryo ekler ve onu etkin yapar. Kaldır, etkin senaryoyu kaldırır; bir tasarımda her zaman bir tane kalır.
+pit-design-scenario-copy-name = { $name } kopyası
+pit-design-string-copied = RL { $rl } kotunda { $points } nokta
+pit-design-string-change = Değiştir
+pit-design-string-update = Güncelle
+pit-design-string-update-help = Değiştir, tasarım için başka bir kapalı çizgi seçer. Güncelle, çizgiyi geldiği çoklu çizgiden, o çizgi düzenlendikten sonra yeniden kopyalar.
+pit-design-rebuild = Yeniden kur
+pit-design-build = Kur
+pit-design-not-built = Kurulmadı
+pit-design-output-layer = Katman
+pit-design-output-surface = Yüzey
+pit-design-standing = Kuruldu
+pit-design-current = Güncel
+pit-design-out-of-date = Tasarım kurulduğundan beri değişti. Katmanını ve yüzeyini güncellemek için yeniden kurun.
+pit-design-layer-edited = Katmanı kurulduğundan beri düzenlendi. Yeniden kurmak bu düzenlemelerin yerini alır.
+pit-design-surface-edited = Yüzeyi kurulduğundan beri düzenlendi. Yeniden kurmak bu düzenlemelerin yerini alır.
+pit-design-row-out-of-date = { $name } (güncel değil)
+pit-design-row-not-built = { $name } (kurulmadı)
+pit-design-open = Ocak tasarımında aç
+pit-design-flats =
+    { $count ->
+       *[other] { $count } basamak, rampanın eğimini korumak için yere ihtiyaç duyduğu yerde, yükselmeden önce toplam { $length } m düz gidiyor.
+    }
+pit-design-flatter =
+    { $count ->
+       *[other] { $count } basamak eğimden daha yatık yükseliyor: hiçbir düz kesim onları sağlam bırakmazdı.
+    }
+pit-design-bench-table = Basamaklar
+pit-design-table-rl = RL
+pit-design-table-grade = Eğim
+pit-design-table-flat = Düz
+pit-design-table-width = Genişlik
+pit-design-table-turn = Dönüş
+pit-design-table-turned = Zikzak
+pit-design-table-flatter-hint = Eğimin istediğinden { $length } m daha uzun yükselir, bu yüzden daha yatıktır: önündeki hiçbir düz kesim basamağı sağlam bırakmadı.
+pit-design-table-narrow-hint = Duvarın bir dönüşünde bağlandığı yerde istenen { $width } m'den daha dar.

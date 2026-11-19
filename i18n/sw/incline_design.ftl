@@ -2877,13 +2877,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ inapeleka kwenye kigumu ambacho
 destination-problem-missing = ⁨{ $rule }⁩ inapeleka mahali pa kupeleka ambapo hapamo tena kwenye ratiba
 destination-rule-matches-all = Nyenzo zote
 destination-rule-sources-count = { $count ->
+        [one] chanzo 1
+       *[other] vyanzo { $count }
+    }
 schedule-run-period-note = Endesha Kipindi: panga siku moja zaidi.
 schedule-run-whole-note = Endesha Vipindi Vyote: panga hadi siku ya mwisho ya upangaji.
 schedule-improve-note = Boresha: tafuta ratiba bora zaidi, hadi kikomo cha muda wa kutatua.
 schedule-improving-note = Inatafuta ratiba bora zaidi.
-        [one] chanzo 1
-       *[other] vyanzo { $count }
-    }
 schedule-improve-finishing = Uendeshaji { $run }: unamaliza mapema na ratiba bora iliyopatikana hadi sasa.
 schedule-improve-stalled = Hakuna ratiba bora zaidi ndani ya dak { $minutes }; inamaliza uendeshaji.
 improve-card-title = Inaboresha ratiba
@@ -4496,6 +4496,7 @@ err-omf-element-part-unreadable = Elementi '{ $name }' ina { $what } ambavyo hav
 err-omf-part-reserves = orodha ya sehemu za akiba
 err-omf-part-solids = vitu vimara vya upangaji
 err-omf-part-haulage = mtandao wa barabara za usafirishaji
+err-omf-part-pit-designs = usanifu wa mashimo
 err-omf-read-layer-objects = Imeshindwa kusoma vitu vya safu ya muundo '{ $name }'
 err-omf-read-layer = Imeshindwa kusoma safu ya muundo '{ $name }'
 err-omf-validate-designs = Miundo '{ $name }' si sahihi
@@ -5032,9 +5033,7 @@ pit-design-menu = Usanifu wa Shimo
 pit-design-title = Usanifu wa Shimo
 pick-selection-pit-string-prompt = Chagua mstari uliofungwa wa kusanifu shimo kutoka kwake.
 pit-design-string = Mstari wa kuanzia
-pit-design-string-help = Mstari uliofungwa ambao shimo husanifiwa kutoka kwake: chini ya sakafu yake linapojengwa kuelekea juu, au ukingo wake wa juu linapojengwa kuelekea chini.
-pit-design-string-chosen = Mstari uliofungwa
-pit-design-string-none = Hakuna uliochaguliwa
+pit-design-string-help = Mstari uliofungwa ambao usanifu unaanzia: mguu wa sakafu ukijengwa kwenda juu, au ukingo wa juu ukijengwa kwenda chini. Usanifu huhifadhi nakala yake, kwa hivyo kuhariri mistari hakubadilishi chochote hadi Sasisha.
 pit-design-direction = Jenga
 pit-design-direction-help = Kuelekea juu kutoka sakafu, kuta zikipanda kwa ngazi kuelekea nje, au kuelekea chini kutoka ukingo wa juu, kuta zikishuka kwa ngazi kuelekea ndani shimo linapoongezeka kina.
 pit-design-up = Juu kutoka sakafu
@@ -5087,7 +5086,6 @@ pit-design-trim = Kata kwa topografia
 pit-design-trim-help = Ondoa uso mahali ulipo juu ya topografia.
 pit-design-result-section = Usanifu
 pit-design-designing = Inasanifu...
-pit-design-pick-string-first = Chagua mstari uliofungwa wa kusanifu kutoka kwake.
 pit-design-benches-built = Ngazi
 pit-design-final-rl = RL ya mwisho
 pit-design-ramp-length = Urefu wa barabara ya mteremko
@@ -5112,9 +5110,70 @@ pit-design-problem-string = Mstari wa kuanzia lazima uwe polilaini iliyofungwa i
 pit-design-problem-stop-elevation = RL ya kusimama iko nyuma ya mstari: chini yake unapojenga kuelekea juu, juu yake unapojenga kuelekea chini.
 pit-design-problem-no-topography = Chagua topografia ya kutokeza juu yake.
 pit-design-problem-topography-not-loaded = Pakia { $name } ili kutokeza juu yake.
-pit-design-layer-name = Usanifu wa shimo
-pit-design-building-surface = Inajenga uso wa shimo
-pit-design-surface-failed = Mistari ya shimo haikuongezwa: uso wake haukuweza kujengwa. { $error }
 pit-design-created = Imesanifu ngazi { $benches } ({ $ended }), kama mistari { $strings } kwenye { $layer }.
 pit-design-created-surface = Imejenga uso wa shimo, { $name }.
-pit-design-report-summary = Huongeza mistari ya usanifu kwenye tabaka jipya, pamoja na uso wake.
+pit-design-report-summary = Hujenga usanifu wa shimo kwenye tabaka na uso wake.
+pit-design-default-name = Usanifu wa shimo
+pit-design-scenario-default = Hali ya msingi
+pit-design-string-source-gone = Mistari ambayo mstari wa usanifu huu ulinakiliwa kutoka kwake haiko tena kwenye tabaka lililopakiwa.
+pit-design-deleted = Usanifu wa shimo { $name } umefutwa. Tabaka na uso wake vimebaki.
+pit-design-copy-name = Nakala ya { $name }
+pit-design-gone = Usanifu huo wa shimo haupo tena kwenye mradi.
+pit-design-building = Inajenga usanifu wa shimo { $name }
+pit-design-no-bench-fits = Hata ngazi moja haitoshei: { $reason }
+pit-design-build-failed = Usanifu wa shimo haukuweza kujengwa: { $error }
+pit-design-surface-unlinked = Uso { $name } umeachwa kama ulivyokuwa. Usanifu haujengi uso tena, kwa hivyo si wake tena.
+pit-design-report-delete = Hufuta usanifu wa shimo, ukibakiza tabaka na uso wake.
+pit-design-report-duplicate = Hunakili usanifu wa shimo, bila tabaka na uso wake.
+pit-design-none-yet = Mradi huu bado hauna usanifu wa shimo. Bonyeza Mpya na uchague mstari uliofungwa ambao usanifu unaanzia.
+pit-design-choose = Chagua usanifu
+pit-design-design = Usanifu
+pit-design-design-help = Usanifu wa mashimo wa mradi. Kila mmoja huhifadhi nakala yake ya mstari na hali zake, na hujenga upya tabaka na uso wake.
+pit-design-new = Mpya
+pit-design-duplicate = Nakala
+pit-design-delete = Futa
+pit-design-new-help = Mpya huanza usanifu kutoka mstari uliofungwa unaouchagua. Nakala hunakili usanifu ulio wazi, bila tabaka na uso wake. Futa huondoa usanifu na kubakiza ulichojenga.
+pit-design-name = Jina
+pit-design-scenario = Hali
+pit-design-scenario-help = Kila hali ni seti kamili ya mipangilio ya usanifu. Iliyo hai ndiyo inayoonyeshwa na onyesho la awali na kujengwa na Jenga.
+pit-design-scenario-name = Jina la hali
+pit-design-scenario-copy = Nakili
+pit-design-scenario-remove = Ondoa
+pit-design-scenario-copy-help = Nakili huongeza hali yenye mipangilio ya iliyo hai na kuifanya hai. Ondoa huondoa hali iliyo hai; usanifu hubaki na moja kila wakati.
+pit-design-scenario-copy-name = Nakala ya { $name }
+pit-design-string-copied = Pointi { $points } kwenye RL { $rl }
+pit-design-string-change = Badilisha
+pit-design-string-update = Sasisha
+pit-design-string-update-help = Badilisha huchagua mstari mwingine uliofungwa kwa usanifu. Sasisha hunakili tena mstari kutoka mistari ulikotoka, baada ya mistari hiyo kuhaririwa.
+pit-design-rebuild = Jenga upya
+pit-design-build = Jenga
+pit-design-not-built = Haijajengwa
+pit-design-output-layer = Tabaka
+pit-design-output-surface = Uso
+pit-design-standing = Imejengwa
+pit-design-current = Ya sasa
+pit-design-out-of-date = Usanifu umebadilika tangu ujengwe. Jenga upya ili kusasisha tabaka na uso wake.
+pit-design-layer-edited = Tabaka lake limehaririwa tangu lijengwe. Kujenga upya kunachukua nafasi ya mabadiliko hayo.
+pit-design-surface-edited = Uso wake umehaririwa tangu ujengwe. Kujenga upya kunachukua nafasi ya mabadiliko hayo.
+pit-design-row-out-of-date = { $name } (imepitwa na wakati)
+pit-design-row-not-built = { $name } (haijajengwa)
+pit-design-open = Fungua katika Usanifu wa Shimo
+pit-design-flats =
+    { $count ->
+        [one] Ngazi moja inaenda sawa kwa m { $length } kabla ya kupanda, mahali barabara inahitaji nafasi ili kudumisha mwinuko wake.
+       *[other] Ngazi { $count } zinaenda sawa kwa jumla ya m { $length } kabla ya kupanda, mahali barabara inahitaji nafasi ili kudumisha mwinuko wake.
+    }
+pit-design-flatter =
+    { $count ->
+        [one] Ngazi moja inapanda kwa mwinuko mdogo kuliko ulioombwa: hakuna sehemu sawa ambayo ingeifanya imara.
+       *[other] Ngazi { $count } zinapanda kwa mwinuko mdogo kuliko ulioombwa: hakuna sehemu sawa ambayo ingezifanya imara.
+    }
+pit-design-bench-table = Ngazi
+pit-design-table-rl = RL
+pit-design-table-grade = Mwinuko
+pit-design-table-flat = Sawa
+pit-design-table-width = Upana
+pit-design-table-turn = Mzunguko
+pit-design-table-turned = Zigizaga
+pit-design-table-flatter-hint = Inapanda kwa m { $length } zaidi ya mwinuko unavyotaka, kwa hivyo ni laini zaidi: hakuna sehemu sawa kabla yake iliyoifanya ngazi imara.
+pit-design-table-narrow-hint = Nyembamba kuliko m { $width } zilizoombwa, mahali inapounganika kwenye kona ya ukuta.

@@ -2896,13 +2896,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ нөөцийн овоолго �
 destination-problem-missing = ⁨{ $rule }⁩ хуваарьт байхаа больсон очих газар руу хүргэнэ
 destination-rule-matches-all = Бүх материал
 destination-rule-sources-count = { $count ->
+        [one] 1 эх үүсвэр
+       *[other] { $count } эх үүсвэр
+    }
 schedule-run-period-note = Үеийг ажиллуулах: хуваарьт өөр нэг өдөр нэмнэ.
 schedule-run-whole-note = Бүх үеийг ажиллуулах: төлөвлөлтийн сүүлчийн өдөр хүртэл хуваарилна.
 schedule-improve-note = Сайжруулах: бодолтын хугацааны хязгаар хүртэл илүү сайн хуваарь хайна.
 schedule-improving-note = Илүү сайн хуваарь хайж байна.
-        [one] 1 эх үүсвэр
-       *[other] { $count } эх үүсвэр
-    }
 schedule-improve-finishing = { $run }-р ажиллагаа: одоогоор олсон хамгийн сайн хуваариар эрт дуусгаж байна.
 schedule-improve-stalled = { $minutes } min дотор илүү сайн хуваарь гарсангүй; ажиллагааг дуусгаж байна.
 improve-card-title = Хуваарийг сайжруулж байна
@@ -4515,6 +4515,7 @@ err-omf-element-part-unreadable = '{ $name }' элемент уншиж боло
 err-omf-part-reserves = нөөцийн талбаруудын жагсаалт
 err-omf-part-solids = төлөвлөлтийн хатуу биетүүд
 err-omf-part-haulage = тээврийн замын сүлжээ
+err-omf-part-pit-designs = уурхайн төслүүд
 err-omf-read-layer-objects = '{ $name }' зургийн давхаргын объектуудыг уншиж чадсангүй
 err-omf-read-layer = '{ $name }' зургийн давхаргыг уншиж чадсангүй
 err-omf-validate-designs = '{ $name }' зураг төсөл буруу байна
@@ -5051,9 +5052,7 @@ pit-design-menu = Уурхайн зураг төсөл
 pit-design-title = Уурхайн зураг төсөл
 pick-selection-pit-string-prompt = Уурхайг төлөвлөх хаалттай шугамыг сонгоно уу.
 pit-design-string = Эхлэх шугам
-pit-design-string-help = Уурхайг төлөвлөх хаалттай шугам: дээш барихад ёроолын доод ирмэг, доош барихад дээд ирмэг.
-pit-design-string-chosen = Хаалттай шугам
-pit-design-string-none = Сонгоогүй
+pit-design-string-help = Төсөл эхлэх битүү шугам: дээш барихад ёроолын хормой, доош барихад орой. Төсөл өөрийн хуулбарыг хадгалдаг тул олон шугамыг засахад «Шинэчлэх» хүртэл юу ч өөрчлөгдөхгүй.
 pit-design-direction = Барих
 pit-design-direction-help = Ёроолоос дээш, өгсөх тусам хана гадагш уступ үүсгэнэ, эсвэл дээд ирмэгээс доош, уурхай гүнзгийрэх тусам хана дотогш уступ үүсгэнэ.
 pit-design-up = Ёроолоос дээш
@@ -5106,7 +5105,6 @@ pit-design-trim = Топографаар тайрах
 pit-design-trim-help = Топографаас дээш байгаа гадаргууг тайрна.
 pit-design-result-section = Төсөл
 pit-design-designing = Төлөвлөж байна...
-pit-design-pick-string-first = Төлөвлөх хаалттай шугам сонгоно уу.
 pit-design-benches-built = Уступууд
 pit-design-final-rl = Эцсийн өндөр
 pit-design-ramp-length = Налуу замын урт
@@ -5131,9 +5129,70 @@ pit-design-problem-string = Эхлэх шугам нь талбайг хүрээ
 pit-design-problem-stop-elevation = Зогсох өндөр шугамын ард байна: дээш барихад доор нь, доош барихад дээр нь.
 pit-design-problem-no-topography = Гадаргад гарах топографыг сонгоно уу.
 pit-design-problem-topography-not-loaded = Түүн дээр гадаргад гарахын тулд { $name }-г ачаална уу.
-pit-design-layer-name = Уурхайн төсөл
-pit-design-building-surface = Уурхайн гадаргууг байгуулж байна
-pit-design-surface-failed = Уурхайн шугамууд нэмэгдсэнгүй: гадаргууг нь байгуулж чадсангүй. { $error }
 pit-design-created = { $benches } уступ төлөвлөсөн ({ $ended }), { $layer } дээр { $strings } шугам болгон.
 pit-design-created-surface = Уурхайн гадаргуу { $name }-г байгуулсан.
-pit-design-report-summary = Төслийн шугамуудыг шинэ давхаргад, гадаргуутай нь хамт нэмнэ.
+pit-design-report-summary = Уурхайн төслийг давхарга болон гадаргууд нь барина.
+pit-design-default-name = Уурхайн төсөл
+pit-design-scenario-default = Үндсэн хувилбар
+pit-design-string-source-gone = Энэ төслийн шугамыг хуулсан олон шугам ачаалсан давхаргад байхаа больсон.
+pit-design-deleted = { $name } уурхайн төслийг устгалаа. Давхарга болон гадаргуу нь хэвээр үлдэнэ.
+pit-design-copy-name = { $name } хуулбар
+pit-design-gone = Тэр уурхайн төсөл төсөлд байхаа больсон.
+pit-design-building = { $name } уурхайн төслийг барьж байна
+pit-design-no-bench-fits = Нэг ч уступ багтахгүй байна: { $reason }
+pit-design-build-failed = Уурхайн төслийг барьж чадсангүй: { $error }
+pit-design-surface-unlinked = { $name } гадаргууг байсан чигээр нь үлдээлээ. Төсөл гадаргуу барихаа больсон тул тэр нь төслийнх байхаа больсон.
+pit-design-report-delete = Уурхайн төслийг устгаж, давхарга болон гадаргууг нь хадгална.
+pit-design-report-duplicate = Уурхайн төслийг давхарга, гадаргуугүйгээр хуулна.
+pit-design-none-yet = Энэ төсөлд одоогоор уурхайн төсөл алга. «Шинэ»-г дарж, төсөл эхлэх битүү шугамыг сонгоно уу.
+pit-design-choose = Төсөл сонгох
+pit-design-design = Төсөл
+pit-design-design-help = Төслийн уурхайн төслүүд. Тус бүр шугам болон хувилбаруудынхаа өөрийн хуулбарыг хадгалж, өөрийн давхарга, гадаргууг дахин барина.
+pit-design-new = Шинэ
+pit-design-duplicate = Хувилах
+pit-design-delete = Устгах
+pit-design-new-help = «Шинэ» нь таны сонгосон битүү шугамаас төсөл эхлүүлнэ. «Хувилах» нь нээлттэй төслийг давхарга, гадаргуугүйгээр хуулна. «Устгах» нь төслийг хасаж, барьсан зүйлийг нь хадгална.
+pit-design-name = Нэр
+pit-design-scenario = Хувилбар
+pit-design-scenario-help = Хувилбар бүр нь төслийн бүрэн тохиргоо юм. Идэвхтэй хувилбарыг урьдчилан харахад харуулж, «Барих» түүнийг барина.
+pit-design-scenario-name = Хувилбарын нэр
+pit-design-scenario-copy = Хуулах
+pit-design-scenario-remove = Хасах
+pit-design-scenario-copy-help = «Хуулах» нь идэвхтэй хувилбарын тохиргоотой хувилбар нэмээд идэвхтэй болгоно. «Хасах» нь идэвхтэй хувилбарыг хасна; төсөлд үргэлж нэг нь үлдэнэ.
+pit-design-scenario-copy-name = { $name } хуулбар
+pit-design-string-copied = RL { $rl } дээрх { $points } цэг
+pit-design-string-change = Солих
+pit-design-string-update = Шинэчлэх
+pit-design-string-update-help = «Солих» нь төсөлд өөр битүү шугам сонгоно. «Шинэчлэх» нь шугамыг гарал үүслийн олон шугамаас, түүнийг зассаны дараа дахин хуулна.
+pit-design-rebuild = Дахин барих
+pit-design-build = Барих
+pit-design-not-built = Бариагүй
+pit-design-output-layer = Давхарга
+pit-design-output-surface = Гадаргуу
+pit-design-standing = Барьсан
+pit-design-current = Шинэчлэгдсэн
+pit-design-out-of-date = Барьснаас хойш төсөл өөрчлөгдсөн. Давхарга, гадаргууг нь шинэчлэхийн тулд дахин барина уу.
+pit-design-layer-edited = Барьснаас хойш давхаргыг нь зассан. Дахин барих нь тэр засваруудыг орлоно.
+pit-design-surface-edited = Барьснаас хойш гадаргууг нь зассан. Дахин барих нь тэр засваруудыг орлоно.
+pit-design-row-out-of-date = { $name } (хуучирсан)
+pit-design-row-not-built = { $name } (бариагүй)
+pit-design-open = Уурхайн зураг төсөлд нээх
+pit-design-flats =
+    { $count ->
+        [one] Нэг уступ өгсөхөөсөө өмнө { $length } м тэгш явна, налуугаа барихад налуу замд зай хэрэгтэй газар.
+       *[other] { $count } уступ өгсөхөөсөө өмнө нийт { $length } м тэгш явна, налуугаа барихад налуу замд зай хэрэгтэй газар.
+    }
+pit-design-flatter =
+    { $count ->
+        [one] Нэг уступ налуунаас бага налуугаар өгсөнө: ямар ч тэгш хэсэг түүнийг тогтвортой болгохгүй байсан.
+       *[other] { $count } уступ налуунаас бага налуугаар өгсөнө: ямар ч тэгш хэсэг тэднийг тогтвортой болгохгүй байсан.
+    }
+pit-design-bench-table = Уступууд
+pit-design-table-rl = RL
+pit-design-table-grade = Налуу
+pit-design-table-flat = Тэгш
+pit-design-table-width = Өргөн
+pit-design-table-turn = Эргэлт
+pit-design-table-turned = Зигзаг
+pit-design-table-flatter-hint = Налуугийн шаардлагаас { $length } м илүү урт өгсдөг тул илүү намхан: өмнөх ямар ч тэгш хэсэг уступыг тогтвортой болгосонгүй.
+pit-design-table-narrow-hint = Хананы эргэлтэд залгах газар шаардсан { $width } м-ээс нарийн.

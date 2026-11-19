@@ -2874,13 +2874,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ は、ストックパイルで�
 destination-problem-missing = ⁨{ $rule }⁩ は、スケジュールにもう存在しない搬出先に搬出しています
 destination-rule-matches-all = すべての材料
 destination-rule-sources-count = { $count ->
+        [one] 発生源 1 件
+       *[other] 発生源 { $count } 件
+    }
 schedule-run-period-note = 期間を実行: スケジュールをさらに1日進めます。
 schedule-run-whole-note = 全期間を実行: 計画の最終日までスケジュールします。
 schedule-improve-note = 改善: 求解の制限時間まで、より良いスケジュールを探します。
 schedule-improving-note = より良いスケジュールを探しています。
-        [one] 発生源 1 件
-       *[other] 発生源 { $count } 件
-    }
 schedule-improve-finishing = 実行 { $run }: それまでの最良のスケジュールで早めに終了します。
 schedule-improve-stalled = { $minutes } 分間、より良いスケジュールが見つからなかったため、実行を終了します。
 improve-card-title = スケジュールを改善中
@@ -4493,6 +4493,7 @@ err-omf-element-part-unreadable = 要素「{ $name }」の { $what } を読み�
 err-omf-part-reserves = 埋蔵量フィールド一覧
 err-omf-part-solids = 計画ソリッド
 err-omf-part-haulage = 運搬路ネットワーク
+err-omf-part-pit-designs = ピット設計
 err-omf-read-layer-objects = 設計レイヤー「{ $name }」のオブジェクトを読み込めませんでした
 err-omf-read-layer = 設計レイヤー「{ $name }」を読み込めませんでした
 err-omf-validate-designs = 設計「{ $name }」が無効です
@@ -5029,9 +5030,7 @@ pit-design-menu = ピット設計
 pit-design-title = ピット設計
 pick-selection-pit-string-prompt = ピットを設計する元の閉じたラインを選択してください。
 pit-design-string = 開始ライン
-pit-design-string-help = ピットを設計する元の閉じたライン: 上向きに構築する場合は底盤の法尻、下向きに構築する場合は法肩です。
-pit-design-string-chosen = 閉じたライン
-pit-design-string-none = 未選択
+pit-design-string-help = 設計の始まりとなる閉じたライン。上向きに構築するときは底面の法尻、下向きに構築するときは法肩です。設計は独自のコピーを保持するため、ポリラインを編集しても「更新」するまで何も変わりません。
 pit-design-direction = 構築
 pit-design-direction-help = 底盤から上向きに、上がるにつれて壁面を外側へベンチ状に広げるか、法肩から下向きに、ピットが深くなるにつれて壁面を内側へベンチ状に狭めます。
 pit-design-up = 底盤から上向き
@@ -5084,7 +5083,6 @@ pit-design-trim = 地形にトリム
 pit-design-trim-help = 地形より上にあるサーフェスを切り取ります。
 pit-design-result-section = 設計
 pit-design-designing = 設計中...
-pit-design-pick-string-first = 設計元の閉じたラインを選んでください。
 pit-design-benches-built = ベンチ
 pit-design-final-rl = 最終標高
 pit-design-ramp-length = ランプ長
@@ -5109,9 +5107,68 @@ pit-design-problem-string = 開始ラインは、ある面積を囲む閉じた�
 pit-design-problem-stop-elevation = 停止標高がラインの後ろ側にあります: 上向きの構築では下、下向きの構築では上になっています。
 pit-design-problem-no-topography = 地表に出る地形を選んでください。
 pit-design-problem-topography-not-loaded = 地表に出るには { $name } を読み込んでください。
-pit-design-layer-name = ピット設計
-pit-design-building-surface = ピットのサーフェスを作成中
-pit-design-surface-failed = ピットのラインは追加されませんでした: サーフェスを作成できませんでした。{ $error }
 pit-design-created = { $benches } ベンチを設計しました ({ $ended })。{ $layer } に { $strings } 本のラインとして追加しました。
 pit-design-created-surface = ピットのサーフェス { $name } を作成しました。
-pit-design-report-summary = 設計のラインを新しいレイヤーに、そのサーフェスとともに追加します。
+pit-design-report-summary = ピット設計をそのレイヤーとサーフェスに構築します。
+pit-design-default-name = ピット設計
+pit-design-scenario-default = 基本ケース
+pit-design-string-source-gone = この設計のラインのコピー元のポリラインは、読み込まれたレイヤーにもうありません。
+pit-design-deleted = ピット設計 { $name } を削除しました。そのレイヤーとサーフェスは残ります。
+pit-design-copy-name = { $name } のコピー
+pit-design-gone = そのピット設計はもうプロジェクトにありません。
+pit-design-building = ピット設計 { $name } を構築中
+pit-design-no-bench-fits = ベンチが一つも収まりません: { $reason }
+pit-design-build-failed = ピット設計を構築できませんでした: { $error }
+pit-design-surface-unlinked = サーフェス { $name } はそのまま残しました。設計がサーフェスを構築しなくなったため、もうその設計のものではありません。
+pit-design-report-delete = ピット設計を削除し、そのレイヤーとサーフェスは残します。
+pit-design-report-duplicate = ピット設計を、そのレイヤーとサーフェスなしでコピーします。
+pit-design-none-yet = このプロジェクトにはまだピット設計がありません。「新規」を押して、設計の始まりとなる閉じたラインを選んでください。
+pit-design-choose = 設計を選択
+pit-design-design = 設計
+pit-design-design-help = プロジェクトのピット設計。それぞれがラインとシナリオの独自のコピーを保持し、自分のレイヤーとサーフェスを再構築します。
+pit-design-new = 新規
+pit-design-duplicate = 複製
+pit-design-delete = 削除
+pit-design-new-help = 「新規」は選んだ閉じたラインから設計を始めます。「複製」は開いている設計を、そのレイヤーとサーフェスなしでコピーします。「削除」は設計を取り除き、構築したものは残します。
+pit-design-name = 名前
+pit-design-scenario = シナリオ
+pit-design-scenario-help = 各シナリオは設計の完全な設定一式です。アクティブなシナリオがプレビューに表示され、「構築」で構築されます。
+pit-design-scenario-name = シナリオ名
+pit-design-scenario-copy = コピー
+pit-design-scenario-remove = 除去
+pit-design-scenario-copy-help = 「コピー」はアクティブなシナリオの設定でシナリオを追加し、それをアクティブにします。「除去」はアクティブなシナリオを取り除きます。設計には常に一つ残ります。
+pit-design-scenario-copy-name = { $name } のコピー
+pit-design-string-copied = RL { $rl } の { $points } 点
+pit-design-string-change = 変更
+pit-design-string-update = 更新
+pit-design-string-update-help = 「変更」は設計に別の閉じたラインを選びます。「更新」は、元のポリラインが編集された後に、そこからラインを再びコピーします。
+pit-design-rebuild = 再構築
+pit-design-build = 構築
+pit-design-not-built = 未構築
+pit-design-output-layer = レイヤー
+pit-design-output-surface = サーフェス
+pit-design-standing = 構築済み
+pit-design-current = 最新
+pit-design-out-of-date = 構築後に設計が変更されました。レイヤーとサーフェスを最新にするには再構築してください。
+pit-design-layer-edited = 構築後にそのレイヤーが編集されました。再構築するとその編集は置き換えられます。
+pit-design-surface-edited = 構築後にそのサーフェスが編集されました。再構築するとその編集は置き換えられます。
+pit-design-row-out-of-date = { $name } (古い)
+pit-design-row-not-built = { $name } (未構築)
+pit-design-open = ピット設計で開く
+pit-design-flats =
+    { $count ->
+       *[other] { $count } 段のベンチで、ランプが勾配を保つための余地が必要な箇所に、登り始める前の水平区間が合計 { $length } m あります。
+    }
+pit-design-flatter =
+    { $count ->
+       *[other] { $count } 段のベンチが指定勾配より緩く登ります。水平区間ではそのベンチを健全にできませんでした。
+    }
+pit-design-bench-table = ベンチ
+pit-design-table-rl = RL
+pit-design-table-grade = 勾配
+pit-design-table-flat = 水平
+pit-design-table-width = 幅
+pit-design-table-turn = 折返し
+pit-design-table-turned = スイッチバック
+pit-design-table-flatter-hint = 勾配が求めるより { $length } m 長く登るため、緩くなっています。手前の水平区間ではベンチを健全にできませんでした。
+pit-design-table-narrow-hint = 壁の曲がり目で引き継ぐ箇所で、指定の { $width } m より狭くなっています。

@@ -2886,13 +2886,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ liefert an einen Körper, der k
 destination-problem-missing = ⁨{ $rule }⁩ liefert an ein Ziel, das nicht mehr im Zeitplan ist
 destination-rule-matches-all = Alles Material
 destination-rule-sources-count = { $count ->
+        [one] 1 Quelle
+       *[other] { $count } Quellen
+    }
 schedule-run-period-note = Zeitraum berechnen: einen weiteren Tag einplanen.
 schedule-run-whole-note = Alle Zeiträume berechnen: bis zum Planungsendtag einplanen.
 schedule-improve-note = Verbessern: nach einem besseren Zeitplan suchen, bis zum Lösungszeitlimit.
 schedule-improving-note = Es wird nach einem besseren Zeitplan gesucht.
-        [one] 1 Quelle
-       *[other] { $count } Quellen
-    }
 schedule-improve-finishing = Lauf { $run }: endet vorzeitig mit dem bisher besten gefundenen Zeitplan.
 schedule-improve-stalled = Kein besserer Zeitplan in { $minutes } min; der Lauf wird beendet.
 improve-card-title = Zeitplan wird verbessert
@@ -4505,6 +4505,7 @@ err-omf-element-part-unreadable = Das Element '{ $name }' hat { $what }, das nic
 err-omf-part-reserves = eine Vorratsfeldliste
 err-omf-part-solids = Planungskörper
 err-omf-part-haulage = ein Transportstraßennetz
+err-omf-part-pit-designs = die Grubenentwürfe
 err-omf-read-layer-objects = Die Objekte der Entwurfsebene '{ $name }' konnten nicht gelesen werden
 err-omf-read-layer = Die Entwurfsebene '{ $name }' konnte nicht gelesen werden
 err-omf-validate-designs = Die Entwürfe '{ $name }' sind ungültig
@@ -5041,9 +5042,7 @@ pit-design-menu = Grubenentwurf
 pit-design-title = Grubenentwurf
 pick-selection-pit-string-prompt = Wählen Sie die geschlossene Linie aus, von der aus die Grube entworfen wird.
 pit-design-string = Ausgangslinie
-pit-design-string-help = Die geschlossene Linie, von der aus die Grube entworfen wird: der Böschungsfuß ihrer Sohle beim Aufbau nach oben oder ihre Böschungskante beim Aufbau nach unten.
-pit-design-string-chosen = Geschlossene Linie
-pit-design-string-none = Keine ausgewählt
+pit-design-string-help = Die geschlossene Linie, von der der Entwurf ausgeht: der Böschungsfuß der Sohle beim Aufbau nach oben oder die Böschungskante beim Aufbau nach unten. Der Entwurf behält eine eigene Kopie, sodass Änderungen an der Polylinie erst mit Aktualisieren wirken.
 pit-design-direction = Aufbau
 pit-design-direction-help = Nach oben von einer Sohle, wobei die Wände beim Ansteigen nach außen abgestuft werden, oder nach unten von einer Böschungskante, wobei die Wände mit zunehmender Tiefe nach innen abgestuft werden.
 pit-design-up = Nach oben von der Sohle
@@ -5096,7 +5095,6 @@ pit-design-trim = An Topografie kappen
 pit-design-trim-help = Die Oberfläche dort wegschneiden, wo sie über der Topografie liegt.
 pit-design-result-section = Entwurf
 pit-design-designing = Wird entworfen...
-pit-design-pick-string-first = Wählen Sie eine geschlossene Linie, von der aus entworfen wird.
 pit-design-benches-built = Strossen
 pit-design-final-rl = Endhöhe
 pit-design-ramp-length = Rampenlänge
@@ -5121,9 +5119,70 @@ pit-design-problem-string = Die Ausgangslinie muss eine geschlossene Polylinie u
 pit-design-problem-stop-elevation = Die Endhöhe liegt hinter der Linie: darunter beim Aufbau nach oben, darüber beim Aufbau nach unten.
 pit-design-problem-no-topography = Wählen Sie die Topografie, an der der Entwurf zutage tritt.
 pit-design-problem-topography-not-loaded = Laden Sie { $name }, um daran zutage zu treten.
-pit-design-layer-name = Grubenentwurf
-pit-design-building-surface = Oberfläche der Grube wird erstellt
-pit-design-surface-failed = Die Linien der Grube wurden nicht hinzugefügt: Ihre Oberfläche konnte nicht erstellt werden. { $error }
 pit-design-created = { $benches } Strossen entworfen ({ $ended }), als { $strings } Linien auf { $layer }.
 pit-design-created-surface = Oberfläche der Grube erstellt, { $name }.
-pit-design-report-summary = Fügt die Linien des Entwurfs auf einer neuen Ebene hinzu, und seine Oberfläche.
+pit-design-report-summary = Baut einen Grubenentwurf in seine Ebene und seine Oberfläche.
+pit-design-default-name = Grubenentwurf
+pit-design-scenario-default = Basisfall
+pit-design-string-source-gone = Die Polylinie, aus der die Linie dieses Entwurfs kopiert wurde, ist in keiner geladenen Ebene mehr.
+pit-design-deleted = Grubenentwurf { $name } gelöscht. Seine Ebene und seine Oberfläche bleiben erhalten.
+pit-design-copy-name = { $name } Kopie
+pit-design-gone = Dieser Grubenentwurf ist nicht mehr im Projekt.
+pit-design-building = Grubenentwurf { $name } wird gebaut
+pit-design-no-bench-fits = Nicht einmal eine Strosse passt: { $reason }
+pit-design-build-failed = Der Grubenentwurf konnte nicht gebaut werden: { $error }
+pit-design-surface-unlinked = Oberfläche { $name } bleibt, wie sie war. Der Entwurf baut keine Oberfläche mehr, daher gehört sie nicht mehr zu ihm.
+pit-design-report-delete = Löscht einen Grubenentwurf und behält seine Ebene und Oberfläche.
+pit-design-report-duplicate = Kopiert einen Grubenentwurf, ohne seine Ebene und Oberfläche.
+pit-design-none-yet = Dieses Projekt hat noch keine Grubenentwürfe. Klicken Sie auf Neu und wählen Sie die geschlossene Linie, von der ein Entwurf ausgeht.
+pit-design-choose = Entwurf wählen
+pit-design-design = Entwurf
+pit-design-design-help = Die Grubenentwürfe des Projekts. Jeder behält eine eigene Kopie seiner Linie und seine Szenarien und baut seine eigene Ebene und Oberfläche neu.
+pit-design-new = Neu
+pit-design-duplicate = Duplizieren
+pit-design-delete = Löschen
+pit-design-new-help = Neu beginnt einen Entwurf mit einer gewählten geschlossenen Linie. Duplizieren kopiert den offenen Entwurf ohne seine Ebene und Oberfläche. Löschen entfernt den Entwurf und behält, was er gebaut hat.
+pit-design-name = Name
+pit-design-scenario = Szenario
+pit-design-scenario-help = Jedes Szenario ist ein vollständiger Satz von Einstellungen für den Entwurf. Das aktive zeigt die Vorschau, und Bauen baut es.
+pit-design-scenario-name = Name des Szenarios
+pit-design-scenario-copy = Kopieren
+pit-design-scenario-remove = Entfernen
+pit-design-scenario-copy-help = Kopieren fügt ein Szenario mit den Einstellungen des aktiven hinzu und macht es aktiv. Entfernen nimmt das aktive Szenario weg; ein Entwurf behält immer eines.
+pit-design-scenario-copy-name = { $name } Kopie
+pit-design-string-copied = { $points } Punkte auf RL { $rl }
+pit-design-string-change = Ändern
+pit-design-string-update = Aktualisieren
+pit-design-string-update-help = Ändern wählt eine andere geschlossene Linie für den Entwurf. Aktualisieren kopiert die Linie erneut aus der Polylinie, von der sie stammt, nachdem diese bearbeitet wurde.
+pit-design-rebuild = Neu bauen
+pit-design-build = Bauen
+pit-design-not-built = Nicht gebaut
+pit-design-output-layer = Ebene
+pit-design-output-surface = Oberfläche
+pit-design-standing = Gebaut
+pit-design-current = Aktuell
+pit-design-out-of-date = Der Entwurf hat sich seit dem Bauen geändert. Bauen Sie neu, um seine Ebene und Oberfläche anzugleichen.
+pit-design-layer-edited = Seine Ebene wurde seit dem Bauen bearbeitet. Neu bauen ersetzt diese Änderungen.
+pit-design-surface-edited = Seine Oberfläche wurde seit dem Bauen bearbeitet. Neu bauen ersetzt diese Änderungen.
+pit-design-row-out-of-date = { $name } (veraltet)
+pit-design-row-not-built = { $name } (nicht gebaut)
+pit-design-open = In Grubenentwurf öffnen
+pit-design-flats =
+    { $count ->
+        [one] Eine Strosse verläuft { $length } m eben, bevor sie ansteigt, wo die Rampe den Platz braucht, um ihre Steigung zu halten.
+       *[other] { $count } Strossen verlaufen insgesamt { $length } m eben, bevor sie ansteigen, wo die Rampe den Platz braucht, um ihre Steigung zu halten.
+    }
+pit-design-flatter =
+    { $count ->
+        [one] Eine Strosse steigt flacher als die Steigung: kein ebenes Stück würde sie standsicher lassen.
+       *[other] { $count } Strossen steigen flacher als die Steigung: kein ebenes Stück würde sie standsicher lassen.
+    }
+pit-design-bench-table = Strossen
+pit-design-table-rl = RL
+pit-design-table-grade = Steigung
+pit-design-table-flat = Eben
+pit-design-table-width = Breite
+pit-design-table-turn = Wende
+pit-design-table-turned = Serpentine
+pit-design-table-flatter-hint = Steigt auf { $length } m mehr, als die Steigung verlangt, und ist daher flacher: kein ebenes Stück davor ließ die Strosse standsicher.
+pit-design-table-narrow-hint = Schmaler als die verlangten { $width } m, wo sie an einer Biegung der Wand übergibt.

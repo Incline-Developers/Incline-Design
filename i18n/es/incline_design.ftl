@@ -2843,13 +2843,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ entrega a un sólido que ya no 
 destination-problem-missing = ⁨{ $rule }⁩ entrega a un destino que ya no está en el programa
 destination-rule-matches-all = Todo el material
 destination-rule-sources-count = { $count ->
+        [one] 1 origen
+       *[other] { $count } orígenes
+    }
 schedule-run-period-note = Ejecutar período: programa un día más.
 schedule-run-whole-note = Ejecutar todos los períodos: programa hasta el día final de la planificación.
 schedule-improve-note = Mejorar: busca un programa mejor, hasta el límite de tiempo de resolución.
 schedule-improving-note = Buscando un programa mejor.
-        [one] 1 origen
-       *[other] { $count } orígenes
-    }
 schedule-improve-finishing = Ejecución { $run }: terminando antes con el mejor programa encontrado hasta el momento.
 schedule-improve-stalled = Ningún programa mejor en { $minutes } min; finalizando la ejecución.
 improve-card-title = Mejorando el programa
@@ -4462,6 +4462,7 @@ err-omf-element-part-unreadable = El elemento '{ $name }' tiene { $what } que no
 err-omf-part-reserves = una lista de campos de reservas
 err-omf-part-solids = sólidos de planificación
 err-omf-part-haulage = una red de caminos de acarreo
+err-omf-part-pit-designs = los diseños de rajo
 err-omf-read-layer-objects = No se pudieron leer los objetos de la capa de diseño '{ $name }'
 err-omf-read-layer = No se pudo leer la capa de diseño '{ $name }'
 err-omf-validate-designs = Los diseños '{ $name }' no son válidos
@@ -4998,9 +4999,7 @@ pit-design-menu = Diseño de rajo
 pit-design-title = Diseño de rajo
 pick-selection-pit-string-prompt = Seleccione la línea cerrada desde la que se diseña el rajo.
 pit-design-string = Línea de partida
-pit-design-string-help = La línea cerrada desde la que se diseña el rajo: el pie de su fondo cuando se construye hacia arriba, o su cresta cuando se construye hacia abajo.
-pit-design-string-chosen = Línea cerrada
-pit-design-string-none = Ninguna elegida
+pit-design-string-help = La línea cerrada desde la que parte el diseño: el pie del fondo cuando se construye hacia arriba, o la cresta cuando se construye hacia abajo. El diseño guarda su propia copia, así que editar la polilínea no cambia nada hasta Actualizar.
 pit-design-direction = Construir
 pit-design-direction-help = Hacia arriba desde un fondo, con los taludes escalonándose hacia fuera al subir, o hacia abajo desde una cresta, con los taludes escalonándose hacia dentro al profundizar.
 pit-design-up = Hacia arriba desde el fondo
@@ -5053,7 +5052,6 @@ pit-design-trim = Recortar a la topografía
 pit-design-trim-help = Quitar la superficie donde queda por encima de la topografía.
 pit-design-result-section = Diseño
 pit-design-designing = Diseñando...
-pit-design-pick-string-first = Elija una línea cerrada desde la que diseñar.
 pit-design-benches-built = Bancos
 pit-design-final-rl = Cota final
 pit-design-ramp-length = Longitud de rampa
@@ -5078,9 +5076,70 @@ pit-design-problem-string = La línea de partida debe ser una polilínea cerrada
 pit-design-problem-stop-elevation = La cota de parada queda detrás de la línea: por debajo al construir hacia arriba, por encima al construir hacia abajo.
 pit-design-problem-no-topography = Elija la topografía contra la que aflorar.
 pit-design-problem-topography-not-loaded = Cargue { $name } para aflorar contra ella.
-pit-design-layer-name = Diseño de rajo
-pit-design-building-surface = Construyendo la superficie del rajo
-pit-design-surface-failed = No se añadieron las líneas del rajo: no se pudo construir su superficie. { $error }
 pit-design-created = Se diseñaron { $benches } bancos ({ $ended }), como { $strings } líneas en { $layer }.
 pit-design-created-surface = Se construyó la superficie del rajo, { $name }.
-pit-design-report-summary = Añade las líneas del diseño en una capa nueva, y su superficie.
+pit-design-report-summary = Construye un diseño de rajo en su capa y su superficie.
+pit-design-default-name = Diseño de rajo
+pit-design-scenario-default = Caso base
+pit-design-string-source-gone = La polilínea de la que se copió la línea de este diseño ya no está en ninguna capa cargada.
+pit-design-deleted = Diseño de rajo { $name } eliminado. Su capa y su superficie se conservan.
+pit-design-copy-name = { $name } copia
+pit-design-gone = Ese diseño de rajo ya no está en el proyecto.
+pit-design-building = Construyendo el diseño de rajo { $name }
+pit-design-no-bench-fits = No cabe ni un banco: { $reason }
+pit-design-build-failed = No se pudo construir el diseño de rajo: { $error }
+pit-design-surface-unlinked = La superficie { $name } se deja como estaba. El diseño ya no construye superficie, así que ya no es suya.
+pit-design-report-delete = Elimina un diseño de rajo y conserva su capa y su superficie.
+pit-design-report-duplicate = Copia un diseño de rajo, sin su capa ni su superficie.
+pit-design-none-yet = Este proyecto aún no tiene diseños de rajo. Pulse Nuevo y elija la línea cerrada desde la que parte un diseño.
+pit-design-choose = Elija un diseño
+pit-design-design = Diseño
+pit-design-design-help = Los diseños de rajo del proyecto. Cada uno guarda su propia copia de su línea y sus escenarios, y reconstruye su propia capa y superficie.
+pit-design-new = Nuevo
+pit-design-duplicate = Duplicar
+pit-design-delete = Eliminar
+pit-design-new-help = Nuevo inicia un diseño desde una línea cerrada que elija. Duplicar copia el diseño abierto, sin su capa ni su superficie. Eliminar quita el diseño y conserva lo que construyó.
+pit-design-name = Nombre
+pit-design-scenario = Escenario
+pit-design-scenario-help = Cada escenario es un conjunto completo de ajustes del diseño. El activo es el que muestra la vista previa y el que construye Construir.
+pit-design-scenario-name = Nombre del escenario
+pit-design-scenario-copy = Copiar
+pit-design-scenario-remove = Quitar
+pit-design-scenario-copy-help = Copiar añade un escenario con los ajustes del activo y lo activa. Quitar elimina el escenario activo; un diseño siempre conserva uno.
+pit-design-scenario-copy-name = { $name } copia
+pit-design-string-copied = { $points } puntos a cota { $rl }
+pit-design-string-change = Cambiar
+pit-design-string-update = Actualizar
+pit-design-string-update-help = Cambiar elige otra línea cerrada para el diseño. Actualizar vuelve a copiar la línea desde la polilínea de la que vino, una vez editada esa polilínea.
+pit-design-rebuild = Reconstruir
+pit-design-build = Construir
+pit-design-not-built = Sin construir
+pit-design-output-layer = Capa
+pit-design-output-surface = Superficie
+pit-design-standing = Construido
+pit-design-current = Al día
+pit-design-out-of-date = El diseño ha cambiado desde que se construyó. Reconstrúyalo para poner al día su capa y su superficie.
+pit-design-layer-edited = Su capa se ha editado desde que se construyó. Reconstruir reemplaza esas ediciones.
+pit-design-surface-edited = Su superficie se ha editado desde que se construyó. Reconstruir reemplaza esas ediciones.
+pit-design-row-out-of-date = { $name } (desactualizado)
+pit-design-row-not-built = { $name } (sin construir)
+pit-design-open = Abrir en Diseño de rajo
+pit-design-flats =
+    { $count ->
+        [one] Un banco va a nivel durante { $length } m antes de subir, donde la rampa necesita el espacio para mantener su pendiente.
+       *[other] { $count } bancos van a nivel durante { $length } m en total antes de subir, donde la rampa necesita el espacio para mantener su pendiente.
+    }
+pit-design-flatter =
+    { $count ->
+        [one] Un banco sube con menos pendiente de la pedida: ningún tramo a nivel lo dejaría estable.
+       *[other] { $count } bancos suben con menos pendiente de la pedida: ningún tramo a nivel los dejaría estables.
+    }
+pit-design-bench-table = Bancos
+pit-design-table-rl = Cota
+pit-design-table-grade = Pendiente
+pit-design-table-flat = A nivel
+pit-design-table-width = Ancho
+pit-design-table-turn = Giro
+pit-design-table-turned = Zigzag
+pit-design-table-flatter-hint = Sube a lo largo de { $length } m más de lo que pide la pendiente, así que es más tendida: ningún tramo a nivel antes de él dejó el banco estable.
+pit-design-table-narrow-hint = Más estrecha que los { $width } m pedidos, donde enlaza en un giro del talud.

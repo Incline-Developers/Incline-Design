@@ -1422,6 +1422,9 @@ pub(crate) struct Document {
     schedule: schedule::SchedulePlan,
     #[serde(default)]
     haulage: haulage::HaulNetwork,
+    /// Pit designs; see [`pit_design::item`].
+    #[serde(default)]
+    pit_designs: pit_design::item::PitDesigns,
     /// The latest calculated schedule, kept with the project when it is saved.
     /// Not part of its content: recalculating does not make a project unsaved,
     /// and the one run that should says so itself.
@@ -2025,6 +2028,52 @@ impl Document {
         self.touch();
     }
 
+    pub(crate) fn pit_designs(&self) -> &pit_design::item::PitDesigns {
+        &self.pit_designs
+    }
+
+    pub(crate) fn pit_design(&self, id: pit_design::item::PitDesignId) -> Option<&pit_design::item::PitDesign> {
+        self.pit_designs.get(id)
+    }
+
+    /// Swap in the whole list of pit designs, as one undoable edit does. The
+    /// allocator never goes down, so an id retired on one branch of history
+    /// is not reissued on another.
+    pub(crate) fn set_pit_designs(&mut self, mut designs: pit_design::item::PitDesigns) {
+        designs.raise_allocator_to(&self.pit_designs);
+        if self.pit_designs != designs {
+            self.pit_designs = designs;
+            self.touch();
+        }
+    }
+
+    /// Install pit designs read back from a save file.
+    pub(crate) fn restore_pit_designs(&mut self, designs: pit_design::item::PitDesigns) {
+        self.pit_designs = designs;
+        self.touch();
+    }
+
+    /// Copy another document's pit designs onto this one, ids intact: what
+    /// the scene composite reads them through.
+    pub(crate) fn append_pit_designs_from(&mut self, source: &Document) {
+        self.pit_designs.designs.extend(source.pit_designs.designs.iter().cloned());
+        self.pit_designs.next_id = self.pit_designs.next_id.max(source.pit_designs.next_id);
+        self.touch();
+    }
+
+    /// Add an imported project's pit designs to this one's, each under a new
+    /// id where its own is taken.
+    pub(crate) fn merge_pit_designs_from(&mut self, source: &Document) {
+        for design in &source.pit_designs.designs {
+            let mut design = design.clone();
+            if self.pit_designs.get(design.id).is_some() {
+                design.id = self.pit_designs.allocate_id();
+            }
+            self.pit_designs = self.pit_designs.with(design);
+        }
+        self.touch();
+    }
+
     pub(crate) fn merge_haulage_from(&mut self, source: &Document) {
         if self.haulage.nodes.is_empty() {
             self.haulage = source.haulage.clone();
@@ -2396,6 +2445,7 @@ impl Document {
         // stale pre-namespace entries cannot alias new ids.
         self.object_revisions = self.objects.iter().map(|object| (object.id(), self.revision)).collect();
         self.haulage.apply_namespace(namespace);
+        self.pit_designs.apply_namespace(namespace);
         self.next_layer_id = runtime_id(self.next_layer_id);
         self.next_object_id = runtime_id(self.next_object_id);
     }
@@ -2525,6 +2575,7 @@ impl Document {
         // because an undo puts the whole plan back, it un-dirties by itself.
         self.schedule.hash_content(&mut hasher);
         self.haulage.hash_content(&mut hasher);
+        self.pit_designs.hash_content(&mut hasher);
         hasher.finish()
     }
 
@@ -3571,6 +3622,12 @@ pub(crate) enum Command {
         before: Box<haulage::HaulNetwork>,
         after: Box<haulage::HaulNetwork>,
     },
+    /// Replace the whole list of pit designs: one settled edit, a design
+    /// added or deleted, or a build recording what it made.
+    SetPitDesigns {
+        before: Box<pit_design::item::PitDesigns>,
+        after: Box<pit_design::item::PitDesigns>,
+    },
     SetSchedulePlan {
         before: Box<schedule::SchedulePlan>,
         after: Box<schedule::SchedulePlan>,
@@ -3652,6 +3709,7 @@ impl Command {
                 Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::SetSchedulePlan { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::SetHaulNetwork { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
+                Command::SetPitDesigns { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::EditSolid { .. } => size_of::<SolidEdit>().saturating_mul(2),
                 Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
                 Command::SetTieIns { before, after, .. } => before
@@ -3843,6 +3901,7 @@ impl Command {
             | Command::RenameFolder { .. }
             | Command::SetLayerPlacement { .. }
             | Command::SetHaulNetwork { .. }
+            | Command::SetPitDesigns { .. }
             | Command::EditSolid { .. }
             | Command::SetSchedulePlan { .. } => {}
         }
@@ -3986,6 +4045,10 @@ impl Command {
             }
             Command::SetHaulNetwork { after, .. } => {
                 target.document.set_haulage((**after).clone());
+                target.effects.document_changed = true;
+            }
+            Command::SetPitDesigns { after, .. } => {
+                target.document.set_pit_designs((**after).clone());
                 target.effects.document_changed = true;
             }
             Command::SetSchedulePlan { after, .. } => {
@@ -4147,6 +4210,10 @@ impl Command {
             }
             Command::SetHaulNetwork { before, .. } => {
                 target.document.set_haulage((**before).clone());
+                target.effects.document_changed = true;
+            }
+            Command::SetPitDesigns { before, .. } => {
+                target.document.set_pit_designs((**before).clone());
                 target.effects.document_changed = true;
             }
             Command::SetSchedulePlan { before, .. } => {

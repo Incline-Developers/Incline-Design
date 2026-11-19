@@ -1140,8 +1140,10 @@ pub(crate) struct SelectionCounts {
 pub(crate) enum SelectionPickTool {
     SetAxis,
     InsertAtElevation,
-    /// The closed string Pit Design builds from.
+    /// The closed string a new pit design starts from.
     PitDesignString,
+    /// The closed string the open pit design takes in place of its own.
+    PitDesignBase,
     /// Has no dialog: opens straight into the pick when the selection holds
     /// too little to run on, and runs on Done.
     InsertAtIntersection,
@@ -6259,9 +6261,17 @@ pub(crate) enum UiCommand {
     },
     /// Open the elevation input for inserting vertices into selected polylines.
     OpenInsertPointAtElevationDialog,
+    /// Open Pit Design: on the design of the closed string selected, a new
+    /// one from it, or the design it was last on.
     OpenPitDesign,
+    OpenPitDesignItem(crate::model::pit_design::item::PitDesignId),
     ClosePitDesign,
-    CommitPitDesign,
+    /// Copy the open design's string again from the polyline it came from.
+    UpdatePitDesignString,
+    /// Build a pit design into its layer and surface.
+    BuildPitDesign(crate::model::pit_design::item::PitDesignId),
+    DeletePitDesign(crate::model::pit_design::item::PitDesignId),
+    DuplicatePitDesign(crate::model::pit_design::item::PitDesignId),
     /// Wait for a click on Pit Design's string where its ramp starts.
     BeginPitRampStartPick,
     /// Insert vertices where selected polylines cross an elevation.
@@ -6522,6 +6532,8 @@ impl UiCommand {
             | Self::OpenMoveToAxisDialog(_)
             | Self::OpenInsertPointAtElevationDialog
             | Self::OpenPitDesign
+            | Self::OpenPitDesignItem(_)
+            | Self::UpdatePitDesignString
             | Self::ClosePitDesign
             | Self::BeginPitRampStartPick
             | Self::OpenObjectEditDialog(_)
@@ -6957,7 +6969,9 @@ impl UiCommand {
             Self::BeginOffsetPick { object_ids, .. } => report(tr!("common-offset"), tr!("common-count-object-s", count = object_ids.len().to_string())),
             Self::RelimitLineResize { .. } => report(tr!("common-relimit-line"), String::new()),
             Self::CommitBatterBerm => report(tr!("common-create-batter-berm"), tr!("state-apply-generated-rings")),
-            Self::CommitPitDesign => report(tr!("pit-design-title"), tr!("pit-design-report-summary")),
+            Self::BuildPitDesign(_) => report(tr!("pit-design-title"), tr!("pit-design-report-summary")),
+            Self::DeletePitDesign(_) => report(tr!("pit-design-title"), tr!("pit-design-report-delete")),
+            Self::DuplicatePitDesign(_) => report(tr!("pit-design-title"), tr!("pit-design-report-duplicate")),
             Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
             #[cfg(not(target_arch = "wasm32"))]
             Self::InsertPointsAtCrossings { object_ids } => report(tr!("state-insert-intersection-points"), tr!("common-count-object-s", count = object_ids.len().to_string())),
@@ -7241,6 +7255,26 @@ pub(crate) struct UiTriangulationEntry {
     /// Folder the triangulation sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
+    /// Its geometry's version, which changes with every edit of it.
+    pub(crate) geometry: crate::model::triangulation::GeometryVersion,
+}
+
+/// A pit design, as the Pit Design window and the explorer show it.
+#[derive(Clone, Debug)]
+pub(crate) struct UiPitDesignEntry {
+    pub(crate) id: crate::model::pit_design::item::PitDesignId,
+    pub(crate) name: String,
+    /// The layer and surface it built, while they exist.
+    pub(crate) layer: Option<(crate::model::LayerId, String)>,
+    pub(crate) surface: Option<(TriangulationId, String)>,
+    /// Its layer or surface has been edited since it built them.
+    pub(crate) layer_edited: bool,
+    pub(crate) surface_edited: bool,
+    /// The polyline its string was copied from is still there and is not
+    /// what it was copied as.
+    pub(crate) source_differs: bool,
+    /// How its outputs stand against the design as the project holds it.
+    pub(crate) standing: crate::model::pit_design::item::Standing,
 }
 
 #[derive(Clone, Debug)]
@@ -7308,6 +7342,7 @@ pub(crate) struct UiProjectView {
     /// second project must not change or show the first one's fleet.
     pub(crate) schedule: crate::model::schedule::SchedulePlan,
     pub(crate) haulage: crate::model::haulage::HaulNetwork,
+    pub(crate) pit_designs: Vec<UiPitDesignEntry>,
     pub(crate) haul_points: std::collections::BTreeMap<crate::model::schedule::DestinationId, DVec3>,
     pub(crate) haul_destinations: Vec<crate::model::schedule::destinations::DestinationView>,
     /// Runtime id of the active project, the session token fleet edits are

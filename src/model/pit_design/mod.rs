@@ -18,8 +18,12 @@
 //! Places on a ring are found again on the next by where each point of the
 //! next was offset from (`ring::Ring::sources`).
 
+pub(crate) mod item;
 pub(crate) mod ring;
 pub(crate) mod road;
+pub(crate) mod settings;
+#[cfg(test)]
+mod item_tests;
 #[cfg(test)]
 mod tests;
 
@@ -31,7 +35,8 @@ use self::{
 };
 
 /// Which way a design is built from its string.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum Direction {
     /// From a floor (toe) string, out and up.
     Up,
@@ -167,6 +172,37 @@ pub(crate) struct DesignString {
     pub(crate) closed: bool,
 }
 
+/// What one bench came to, for checking against what was asked.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BenchReport {
+    /// The RL it starts from.
+    pub(crate) elevation: f64,
+    pub(crate) height: f64,
+    /// The plan area inside the ring it ends on.
+    pub(crate) area: f64,
+    pub(crate) ramp: Option<RampReport>,
+}
+
+/// What a bench's stretch of ramp came to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RampReport {
+    /// Its rise over its run along its steeper edge, from where it leaves to
+    /// where it arrives.
+    pub(crate) grade: f64,
+    /// The steepest either edge gets over any metre of its run.
+    pub(crate) steepest: f64,
+    /// The narrowest the road is between its edges.
+    pub(crate) narrowest: f64,
+    /// How long a flat it runs level before it climbs, laid to leave the
+    /// bench sound.
+    pub(crate) flat: f64,
+    /// How much longer than asked its climb is, where no flat would leave
+    /// the bench sound: what makes it flatter than asked.
+    pub(crate) lengthened: f64,
+    /// Whether it turned back on a switchback to start.
+    pub(crate) switchback: bool,
+}
+
 /// Why a design ended where it did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum End {
@@ -186,6 +222,8 @@ pub(crate) enum End {
 pub(crate) struct Design {
     pub(crate) strings: Vec<DesignString>,
     pub(crate) benches: u32,
+    /// Each bench built, in the order built.
+    pub(crate) report: Vec<BenchReport>,
     /// The RL each ring is at, the starting string's first.
     pub(crate) levels: Vec<f64>,
     pub(crate) end: End,
@@ -269,6 +307,10 @@ struct Laid {
     stretch: Stretch,
     turn: Option<Turn>,
     moved: f64,
+    /// How long a flat it was laid with before its climb.
+    flat: f64,
+    /// How much longer than asked its climb was laid, where no flat would do.
+    lengthened: f64,
 }
 
 /// How a bench's stretch of ramp joins what came before it.
@@ -306,6 +348,29 @@ pub(crate) type Ground<'a> = &'a dyn Fn(DVec2) -> Option<f64>;
 /// Build the design a base string and its settings describe, stopping early
 /// if `cancelled` says to.
 pub(crate) fn design(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &dyn Fn() -> bool) -> Result<Design, Problem> {
+    let flats = design_with(base, spec, ground, cancelled, Additions::FlatsFirst)?;
+    // A ramp kept to its gradient by flats can come to a bench with no room
+    // where one climbing a little flatter would have found it, the benches
+    // before having put it somewhere else: the design that gets further is
+    // the one given, flats first where both get as far.
+    if flats.end != End::OutOfRoom || spec.ramp.is_none() || cancelled() {
+        return Ok(flats);
+    }
+    let longer = design_with(base, spec, ground, cancelled, Additions::LongerOnly)?;
+    Ok(if longer.benches > flats.benches { longer } else { flats })
+}
+
+/// What a stretch may have added to it to leave its bench sound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Additions {
+    /// A flat before its climb, keeping its gradient; failing every flat, a
+    /// longer climb.
+    FlatsFirst,
+    /// Only a longer climb, a little flatter.
+    LongerOnly,
+}
+
+fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &dyn Fn() -> bool, additions: Additions) -> Result<Design, Problem> {
     if let Some(problem) = spec.problem() {
         return Err(problem);
     }
@@ -316,66 +381,80 @@ pub(crate) fn design(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cance
         return Err(Problem::StopElevation);
     }
     let start = base.ring.clone();
-    let mut builder = Builder {
-        spec,
-        sign,
-        strings: vec![level_string(spec, &start, base.elevation, true)],
-        left: Vec::new(),
-        right: Vec::new(),
-        centreline: Vec::new(),
-        ramp_length: 0.0,
-        start_moved: 0.0,
-        built: Built::default(),
+    let mut state = State {
+        builder: Builder {
+            spec,
+            sign,
+            additions,
+            strings: vec![level_string(spec, &start, base.elevation, true)],
+            left: Vec::new(),
+            right: Vec::new(),
+            centreline: Vec::new(),
+            ramp_length: 0.0,
+            start_moved: 0.0,
+            built: Built::default(),
+        },
+        ramp: spec.ramp.map(|ramp| RampCursor {
+            at: ring::nearest(&start, ramp.start).0,
+            // Building down walks the ramp from its top, the way it falls.
+            direction: if ramp.climbs_clockwise == (spec.direction == Direction::Up) { -1.0 } else { 1.0 },
+            handover: None,
+            since_turn: 0,
+            heading: DVec2::ZERO,
+        }),
+        current: start,
+        elevation: base.elevation,
+        levels: vec![base.elevation],
+        benches: 0,
+        volume: 0.0,
+        report: Vec::new(),
     };
-    let mut current = start;
-    let mut elevation = base.elevation;
-    let mut levels = vec![elevation];
-    let mut ramp = spec.ramp.map(|ramp| RampCursor {
-        at: ring::nearest(&current, ramp.start).0,
-        // Building down walks the ramp from its top, the way it falls.
-        direction: if ramp.climbs_clockwise == (spec.direction == Direction::Up) { -1.0 } else { 1.0 },
-        handover: None,
-        since_turn: 0,
-        heading: DVec2::ZERO,
-    });
-    let mut benches = 0;
-    let mut volume = 0.0;
+    // The state before each of the last few benches built, and what was
+    // added to its stretch: where a bench cannot be built for want of room,
+    // one of them is laid again with more added, and the benches after it
+    // built again from there.
+    let mut history: History<'_> = Vec::new();
     let end = loop {
         if cancelled() {
             break End::Complete;
         }
-        let height = match spec.stop {
-            Stop::Benches(count) if benches >= count => break End::Complete,
-            Stop::Elevation(stop) => {
-                let left = (stop - elevation) * sign;
-                if left <= 1.0e-6 {
-                    break End::Complete;
-                }
-                left.min(spec.bench_height)
+        let Some(height) = state.next_height() else {
+            break End::Complete;
+        };
+        let snapshot = state.clone();
+        match state.builder.bench(&state.current, state.elevation, height, state.berm(), state.ramp, None) {
+            Ok(bench) => {
+                let added = bench.added;
+                state.advance(bench, height);
+                remember(&mut history, snapshot, added);
             }
-            _ => spec.bench_height,
-        };
-        let berm = if benches == 0 { 0.0 } else { spec.berm_width };
-        let bench = match builder.bench(&current, elevation, height, berm, ramp) {
-            Ok(bench) => bench,
+            Err(End::OutOfRoom) if !cancelled() => match (1..=history.len()).find_map(|depth| relaid(&history, depth, state.benches)) {
+                Some((relaid, rebuilt)) => {
+                    state = relaid;
+                    history = rebuilt;
+                }
+                None => break End::OutOfRoom,
+            },
             Err(end) => break end,
-        };
-        volume += frustum(ring::signed_area(&current), ring::signed_area(&bench.end), height);
-        elevation += sign * height;
-        levels.push(elevation);
-        benches += 1;
-        ramp = bench.next_ramp;
-        current = bench.end;
+        }
         if spec.stop == Stop::Daylight
             && let Some(ground) = ground
         {
-            match clear_of_ground(&current, elevation, ground) {
+            match clear_of_ground(&state.current, state.elevation, ground) {
                 Some(true) => break End::Daylight,
                 Some(false) => {}
                 None => break End::LeftGround,
             }
         }
     };
+    let State {
+        builder,
+        levels,
+        benches,
+        volume,
+        report,
+        ..
+    } = state;
     let ramp_exit = match spec.direction {
         Direction::Up => builder.centreline.last().copied(),
         Direction::Down => builder.centreline.first().copied(),
@@ -397,6 +476,7 @@ pub(crate) fn design(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cance
     Ok(Design {
         strings,
         benches,
+        report,
         levels,
         end,
         ramp_length,
@@ -404,6 +484,118 @@ pub(crate) fn design(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cance
         ramp_exit,
         volume,
     })
+}
+
+/// A design as far as it has been built.
+#[derive(Clone)]
+struct State<'a> {
+    builder: Builder<'a>,
+    /// The ring the next bench starts from, at `elevation`.
+    current: Vec<DVec2>,
+    elevation: f64,
+    levels: Vec<f64>,
+    ramp: Option<RampCursor>,
+    benches: u32,
+    volume: f64,
+    report: Vec<BenchReport>,
+}
+
+impl State<'_> {
+    /// How high the next bench is, or `None` if the design is complete.
+    fn next_height(&self) -> Option<f64> {
+        let spec = self.builder.spec;
+        match spec.stop {
+            Stop::Benches(count) if self.benches >= count => None,
+            Stop::Elevation(stop) => {
+                let left = (stop - self.elevation) * self.builder.sign;
+                (left > 1.0e-6).then(|| left.min(spec.bench_height))
+            }
+            _ => Some(spec.bench_height),
+        }
+    }
+
+    /// The berm the next bench leaves first: none before the first.
+    fn berm(&self) -> f64 {
+        if self.benches == 0 { 0.0 } else { self.builder.spec.berm_width }
+    }
+
+    /// Take a bench built `height` high from where the design stands.
+    fn advance(&mut self, bench: Bench, height: f64) {
+        self.volume += frustum(ring::signed_area(&self.current), ring::signed_area(&bench.end), height);
+        self.report.push(BenchReport {
+            elevation: self.elevation,
+            height,
+            area: ring::signed_area(&bench.end),
+            ramp: bench.ramp,
+        });
+        self.elevation += self.builder.sign * height;
+        self.levels.push(self.elevation);
+        self.benches += 1;
+        self.ramp = bench.next_ramp;
+        self.current = bench.end;
+    }
+}
+
+/// How many benches back a design goes to lay one again, where a bench
+/// cannot be built for want of room.
+const RELAY_DEPTH: usize = 3;
+
+/// How many times a bench is laid again, each time with more added to its
+/// stretch, before going back a bench further.
+const RELAYS: usize = 4;
+
+/// The states before the last few benches built, each with what was added
+/// to its bench's stretch: what a design can go back to.
+type History<'a> = Vec<(State<'a>, Option<Added>)>;
+
+/// Keep the state before a bench built, and what was added to its stretch,
+/// as one of the last few a design can go back to.
+fn remember<'a>(history: &mut History<'a>, before: State<'a>, added: Option<Added>) {
+    history.push((before, added));
+    if history.len() > RELAY_DEPTH {
+        history.remove(0);
+    }
+}
+
+/// The design with the bench `depth` back in `history` laid again, each
+/// time with more added to its stretch than it had, and the benches after it
+/// built again, until the design holds `benches` and one more: the design,
+/// and the history to go back through from there. `None` if no relaying
+/// lets them all be built.
+fn relaid<'a>(history: &[(State<'a>, Option<Added>)], depth: usize, benches: u32) -> Option<(State<'a>, History<'a>)> {
+    let (before, added) = history.get(history.len().checked_sub(depth)?)?;
+    let mut after = (*added)?;
+    for _ in 0..RELAYS {
+        let mut trial = before.clone();
+        let mut rebuilt = history[..history.len() - depth].to_vec();
+        let height = trial.next_height()?;
+        let snapshot = trial.clone();
+        let bench = trial.builder.bench(&trial.current, trial.elevation, height, trial.berm(), trial.ramp, Some(after)).ok()?;
+        after = bench.added?;
+        trial.advance(bench, height);
+        remember(&mut rebuilt, snapshot, Some(after));
+        let built = loop {
+            if trial.benches > benches {
+                break true;
+            }
+            let Some(height) = trial.next_height() else {
+                break true;
+            };
+            let snapshot = trial.clone();
+            match trial.builder.bench(&trial.current, trial.elevation, height, trial.berm(), trial.ramp, None) {
+                Ok(bench) => {
+                    let added = bench.added;
+                    trial.advance(bench, height);
+                    remember(&mut rebuilt, snapshot, added);
+                }
+                Err(_) => break false,
+            }
+        };
+        if built {
+            return Some((trial, rebuilt));
+        }
+    }
+    None
 }
 
 /// Whether a whole ring stands above the ground: `None` where it leaves the
@@ -421,9 +613,11 @@ fn clear_of_ground(points: &[DVec2], elevation: f64, ground: Ground<'_>) -> Opti
     Some(true)
 }
 
+#[derive(Clone)]
 struct Builder<'a> {
     spec: &'a Spec,
     sign: f64,
+    additions: Additions,
     strings: Vec<DesignString>,
     /// The ramp's edges, left and right of the way it is built, and its
     /// centreline, joined up bench to bench.
@@ -439,7 +633,7 @@ struct Builder<'a> {
 }
 
 /// Strings already built, as segments binned in a grid over the plan.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Built {
     segments: Vec<(DVec3, DVec3)>,
     cells: std::collections::HashMap<(i64, i64), Vec<u32>>,
@@ -494,10 +688,23 @@ impl Built {
     }
 }
 
-/// One bench built: the ring the next starts from, and where its ramp is.
+/// One bench built: the ring the next starts from, where its ramp is, and
+/// what its stretch of ramp came to.
 struct Bench {
     end: Vec<DVec2>,
     next_ramp: Option<RampCursor>,
+    ramp: Option<RampReport>,
+    /// What was added to its stretch to leave it sound, if it has one.
+    added: Option<Added>,
+}
+
+/// Length added to a stretch to leave its bench sound: a flat before its
+/// climb, or failing every flat, a longer climb. Ordered from least to
+/// most: every flat before any longer climb.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Added {
+    longer: bool,
+    length: f64,
 }
 
 /// How far a ramp's start is moved at a time to find where it fits.
@@ -513,7 +720,10 @@ impl Builder<'_> {
     /// Where the ramp's stretch would leave the bench unsound (its handover
     /// crowding a corner, say), the stretch is laid a little longer, a hair
     /// flatter and never steeper, until it does not.
-    fn bench(&mut self, from: &[DVec2], elevation: f64, height: f64, berm: f64, ramp: Option<RampCursor>) -> Result<Bench, End> {
+    ///
+    /// With `after`, only additions after it are tried: the bench is being
+    /// laid again because the one after it would not build.
+    fn bench(&mut self, from: &[DVec2], elevation: f64, height: f64, berm: f64, ramp: Option<RampCursor>, after: Option<Added>) -> Result<Bench, End> {
         let spec = self.spec;
         let sign = self.sign;
         let face = spec.face_run(height);
@@ -528,21 +738,37 @@ impl Builder<'_> {
                 };
                 let mut last = End::OutOfRoom;
                 let mut found = None;
-                'tries: for turn in [turn, None].into_iter().take(if turn.is_some() { 2 } else { 1 }) {
-                    for lengthen in LENGTHENINGS {
-                        let lay = Lay {
-                            side: sign,
-                            drift: berm + face,
-                            width: ramp_spec.width,
-                            climb_length: height / ramp_spec.gradient + lengthen,
-                        };
-                        match self.attempt(from, cursor, lay, turn, berm, face, elevation, height) {
-                            Ok(attempt) => {
-                                found = Some(attempt);
-                                break 'tries;
-                            }
-                            Err(end) => last = end,
+                for turn in [turn, None].into_iter().take(if turn.is_some() { 2 } else { 1 }) {
+                    // A flat before the climb first, which keeps the grade;
+                    // only where none works, a longer climb, a little flatter.
+                    let climb = height / ramp_spec.gradient;
+                    let lay = |flat: f64, longer: f64| Lay {
+                        side: sign,
+                        drift: berm + face,
+                        width: ramp_spec.width,
+                        climb_length: climb + longer,
+                        flat,
+                    };
+                    let flats_after = match (self.additions, after) {
+                        (Additions::LongerOnly, _) | (_, Some(Added { longer: true, .. })) => None,
+                        (Additions::FlatsFirst, None) => Some(None),
+                        (Additions::FlatsFirst, Some(Added { longer: false, length })) => Some(Some(length)),
+                    };
+                    let longer_after = match after {
+                        Some(Added { longer: true, length }) => Some(length),
+                        _ => None,
+                    };
+                    let flat = || match flats_after {
+                        Some(floor) => shortest(floor, &mut |flat| self.attempt(from, cursor, lay(flat, 0.0), turn, berm, face, elevation, height)),
+                        None => Err(End::OutOfRoom),
+                    };
+                    let tried = flat().or_else(|_| shortest(longer_after, &mut |longer| self.attempt(from, cursor, lay(0.0, longer), turn, berm, face, elevation, height)));
+                    match tried {
+                        Ok(attempt) => {
+                            found = Some(attempt);
+                            break;
                         }
+                        Err(end) => last = end,
                     }
                 }
                 let (laid, start_ring, end_ring) = found.ok_or(last)?;
@@ -569,9 +795,16 @@ impl Builder<'_> {
 
         // Where the ramp carries on from on the ring the next bench starts
         // from: where its near edge arrived.
+        let mut ramp_report = None;
         let next_ramp = match (&laid, ramp) {
             (Some(laid), Some(cursor)) => {
-                self.lay_road(&laid.stretch, laid.turn.as_ref(), from, elevation, height);
+                let (near, far) = self.lay_road(&laid.stretch, laid.turn.as_ref(), from, elevation, height);
+                ramp_report = Some(RampReport {
+                    flat: laid.flat,
+                    lengthened: laid.lengthened,
+                    switchback: laid.turn.is_some(),
+                    ..measure_road(&near, &far, height)
+                });
                 let (Some(near_end), Some(far_end)) = (laid.stretch.edges.near.last(), laid.stretch.edges.far.last()) else {
                     return Err(End::OutOfRoom);
                 };
@@ -591,7 +824,16 @@ impl Builder<'_> {
             }
             _ => None,
         };
-        Ok(Bench { end: end_ring, next_ramp })
+        let added = laid.as_ref().map(|laid| Added {
+            longer: laid.lengthened > 0.0,
+            length: if laid.lengthened > 0.0 { laid.lengthened } else { laid.flat },
+        });
+        Ok(Bench {
+            end: end_ring,
+            next_ramp,
+            ramp: ramp_report,
+            added,
+        })
     }
 
     /// One try at a bench's stretch of ramp and its rings: carried on from
@@ -626,7 +868,17 @@ impl Builder<'_> {
         };
         let (start_ring, end_ring) = rings(self.spec, from, berm, face, Some((&stretch, join)))?;
         let (start_ring, end_ring) = self.clear_of_built((start_ring, end_ring), Some(&stretch), turn.as_ref(), elevation, height)?;
-        Ok((Laid { stretch, turn, moved }, start_ring, end_ring))
+        Ok((
+            Laid {
+                stretch,
+                turn,
+                moved,
+                flat: lay.flat,
+                lengthened: lay.climb_length - height / self.spec.ramp.map_or(1.0, |ramp| ramp.gradient),
+            },
+            start_ring,
+            end_ring,
+        ))
     }
 
     /// A bench's rings, if they and its stretch keep clear of everything
@@ -662,8 +914,9 @@ impl Builder<'_> {
         if self.built.crossed_by(&candidate) { Err(End::OutOfRoom) } else { Ok(rings) }
     }
 
-    /// Add a stretch's edges and centreline to the ramp's strings.
-    fn lay_road(&mut self, stretch: &Stretch, turn: Option<&Turn>, from: &[DVec2], elevation: f64, height: f64) {
+    /// Add a stretch's edges and centreline to the ramp's strings, and give
+    /// back its edges as laid, near then far.
+    fn lay_road(&mut self, stretch: &Stretch, turn: Option<&Turn>, from: &[DVec2], elevation: f64, height: f64) -> (Vec<DVec3>, Vec<DVec3>) {
         if let Some(turn) = turn {
             // The pad, level: each edge of the road arriving runs on round
             // the turn, the near one the outside of it.
@@ -694,7 +947,7 @@ impl Builder<'_> {
         // Building out from an anticlockwise ring, the far edge is on the
         // left of a road running against the ring's order.
         let far_on_left = self.sign * stretch.direction < 0.0;
-        let (left, right) = if far_on_left { (far, near) } else { (near, far) };
+        let (left, right) = if far_on_left { (far.clone(), near.clone()) } else { (near.clone(), far.clone()) };
         join(&mut self.left, left);
         join(&mut self.right, right);
         // The centreline at each station, half way between the edges.
@@ -710,12 +963,100 @@ impl Builder<'_> {
             .collect();
         self.ramp_length += centre.windows(2).map(|pair| pair[0].truncate().distance(pair[1].truncate())).sum::<f64>();
         join(&mut self.centreline, centre);
+        (near, far)
     }
 }
 
-/// How much longer than its climb a stretch is tried at, in turn, where it
-/// would leave its bench unsound as laid: each a little flatter.
-const LENGTHENINGS: [f64; 7] = [0.0, 5.0, 10.0, 20.0, 30.0, 45.0, 60.0];
+/// What a stretch's edges, as laid, come to: its grade along the steeper
+/// edge over its climb (its flat left out), the steepest metre of either,
+/// and the narrowest the road gets.
+fn measure_road(near: &[DVec3], far: &[DVec3], height: f64) -> RampReport {
+    let run = |edge: &[DVec3]| {
+        edge.windows(2)
+            .filter(|pair| (pair[1].z - pair[0].z).abs() > 1.0e-9)
+            .map(|pair| pair[0].truncate().distance(pair[1].truncate()))
+            .sum::<f64>()
+    };
+    let shorter = run(near).min(run(far));
+    let grade = if shorter > 0.0 { height / shorter } else { 0.0 };
+    let mut steepest: f64 = 0.0;
+    for edge in [near, far] {
+        let Some(&first) = edge.first() else {
+            continue;
+        };
+        let (mut anchor, mut run) = (first, 0.0);
+        for pair in edge.windows(2) {
+            run += pair[0].truncate().distance(pair[1].truncate());
+            if run >= 1.0 {
+                steepest = steepest.max((pair[1].z - anchor.z).abs() / run);
+                anchor = pair[1];
+                run = 0.0;
+            }
+        }
+    }
+    let mut narrowest = f64::INFINITY;
+    for point in near {
+        let nearest = far
+            .windows(2)
+            .filter(|pair| point.z >= pair[0].z.min(pair[1].z) - SAME_HEIGHT && point.z <= pair[0].z.max(pair[1].z) + SAME_HEIGHT)
+            .map(|pair| crate::model::kernel::project_onto_segment(point.truncate(), pair[0].truncate(), pair[1].truncate()).0.distance(point.truncate()))
+            .fold(f64::INFINITY, f64::min);
+        narrowest = narrowest.min(nearest);
+    }
+    RampReport {
+        grade,
+        steepest,
+        narrowest: if narrowest.is_finite() { narrowest } else { 0.0 },
+        flat: 0.0,
+        lengthened: 0.0,
+        switchback: false,
+    }
+}
+
+/// The lengths added to a stretch, in turn, where it would leave its bench
+/// unsound as laid (a flat before its climb, or failing that a longer
+/// climb): the first that works is then shortened as far as it will go.
+const ADDED: [f64; 7] = [0.0, 5.0, 10.0, 20.0, 30.0, 45.0, 60.0];
+
+/// How close the shortest length added that works is found.
+const ADDED_TOLERANCE: f64 = 0.5;
+
+/// A stretch tried with the shortest length added that leaves the bench
+/// sound: none if it can be, else the first of [`ADDED`] that works,
+/// shortened by halves toward the one before it that did not. With
+/// `floor`, only lengths more than it are tried, by at least the tolerance.
+fn shortest<T>(floor: Option<f64>, attempt: &mut impl FnMut(f64) -> Result<T, End>) -> Result<T, End> {
+    // Why the first try failed: the longer ones are only less likely to fit.
+    let mut first: Option<End> = None;
+    let mut below = floor;
+    let least = floor.map_or(f64::NEG_INFINITY, |floor| floor + ADDED_TOLERANCE);
+    for added in ADDED.into_iter().filter(|added| *added >= least) {
+        match attempt(added) {
+            Ok(found) => {
+                let Some(mut low) = below else {
+                    return Ok(found);
+                };
+                let (mut high, mut best) = (added, found);
+                while high - low > ADDED_TOLERANCE {
+                    let middle = (low + high) * 0.5;
+                    match attempt(middle) {
+                        Ok(found) => {
+                            high = middle;
+                            best = found;
+                        }
+                        Err(_) => low = middle,
+                    }
+                }
+                return Ok(best);
+            }
+            Err(end) => {
+                first.get_or_insert(end);
+                below = Some(added);
+            }
+        }
+    }
+    Err(first.unwrap_or(End::OutOfRoom))
+}
 
 /// Lay a bench's stretch of ramp from `cursor` along `from`, and how far
 /// along the wall it had to start from where it was asked to fit: a ramp
@@ -1294,7 +1635,7 @@ fn pinched(stretch: &Stretch, width: f64) -> bool {
 }
 
 /// The share of its width a road may narrow to and still be sound.
-const PINCH: f64 = 0.9;
+const PINCH: f64 = 0.96;
 
 /// How far a stretch's edge may start from where the last one arrived; the
 /// edge is joined straight on to it.

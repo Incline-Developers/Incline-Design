@@ -2845,13 +2845,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ ऐसे ठोस को प�
 destination-problem-missing = ⁨{ $rule }⁩ ऐसे गंतव्य को पहुँचाता है जो अब शेड्यूल में नहीं है
 destination-rule-matches-all = सारी सामग्री
 destination-rule-sources-count = { $count ->
+        [one] 1 स्रोत
+       *[other] { $count } स्रोत
+    }
 schedule-run-period-note = अवधि चलाएँ: शेड्यूल में एक और दिन जोड़ें।
 schedule-run-whole-note = सभी अवधियाँ चलाएँ: योजना के अंतिम दिन तक शेड्यूल करें।
 schedule-improve-note = Improve: हल की समय सीमा तक बेहतर शेड्यूल खोजें।
 schedule-improving-note = बेहतर शेड्यूल खोजा जा रहा है।
-        [one] 1 स्रोत
-       *[other] { $count } स्रोत
-    }
 schedule-improve-finishing = रन { $run }: अब तक के सबसे अच्छे शेड्यूल के साथ जल्दी समाप्त हो रहा है।
 schedule-improve-stalled = { $minutes } min में कोई बेहतर शेड्यूल नहीं; रन समाप्त किया जा रहा है।
 improve-card-title = शेड्यूल सुधारा जा रहा है
@@ -4464,6 +4464,7 @@ err-omf-element-part-unreadable = तत्व '{ $name }' में { $what } �
 err-omf-part-reserves = रिज़र्व फ़ील्ड सूची
 err-omf-part-solids = प्लानिंग ठोस
 err-omf-part-haulage = ढुलाई सड़क नेटवर्क
+err-omf-part-pit-designs = पिट डिज़ाइन
 err-omf-read-layer-objects = डिज़ाइन लेयर '{ $name }' के ऑब्जेक्ट पढ़े नहीं जा सके
 err-omf-read-layer = डिज़ाइन लेयर '{ $name }' पढ़ी नहीं जा सकी
 err-omf-validate-designs = डिज़ाइन '{ $name }' मान्य नहीं हैं
@@ -5000,9 +5001,7 @@ pit-design-menu = पिट डिज़ाइन
 pit-design-title = पिट डिज़ाइन
 pick-selection-pit-string-prompt = वह बंद रेखा चुनें जिससे पिट डिज़ाइन करना है।
 pit-design-string = आरंभिक रेखा
-pit-design-string-help = वह बंद रेखा जिससे पिट डिज़ाइन किया जाता है: ऊपर की ओर बनाते समय इसके तल का टो, नीचे की ओर बनाते समय इसका क्रेस्ट।
-pit-design-string-chosen = बंद रेखा
-pit-design-string-none = कोई नहीं चुनी
+pit-design-string-help = वह बंद रेखा जिससे डिज़ाइन शुरू होता है: ऊपर की ओर बनाते समय तल का पाद, या नीचे की ओर बनाते समय शिखर। डिज़ाइन अपनी प्रति रखता है, इसलिए पॉलीलाइन संपादित करने से अपडेट तक कुछ नहीं बदलता।
 pit-design-direction = निर्माण
 pit-design-direction-help = तल से ऊपर, जहाँ ऊपर चढ़ते हुए दीवारें बाहर की ओर बेंच बनाती हैं, या क्रेस्ट से नीचे, जहाँ पिट गहरा होने पर दीवारें भीतर की ओर बेंच बनाती हैं।
 pit-design-up = तल से ऊपर
@@ -5055,7 +5054,6 @@ pit-design-trim = टोपोग्राफ़ी तक ट्रिम क�
 pit-design-trim-help = सतह को वहाँ काटें जहाँ वह टोपोग्राफ़ी से ऊपर है।
 pit-design-result-section = डिज़ाइन
 pit-design-designing = डिज़ाइन हो रहा है...
-pit-design-pick-string-first = डिज़ाइन के लिए एक बंद रेखा चुनें।
 pit-design-benches-built = बेंच
 pit-design-final-rl = अंतिम RL
 pit-design-ramp-length = रैंप लंबाई
@@ -5080,9 +5078,70 @@ pit-design-problem-string = आरंभिक रेखा किसी क्�
 pit-design-problem-stop-elevation = रुकने का RL रेखा के पीछे है: ऊपर बनाते समय इसके नीचे, नीचे बनाते समय इसके ऊपर।
 pit-design-problem-no-topography = सतह पर निकलने के लिए टोपोग्राफ़ी चुनें।
 pit-design-problem-topography-not-loaded = उस पर सतह पर निकलने के लिए { $name } लोड करें।
-pit-design-layer-name = पिट डिज़ाइन
-pit-design-building-surface = पिट की सतह बनाई जा रही है
-pit-design-surface-failed = पिट की रेखाएँ नहीं जोड़ी गईं: इसकी सतह नहीं बन सकी। { $error }
 pit-design-created = { $benches } बेंच डिज़ाइन की गईं ({ $ended }), { $layer } पर { $strings } रेखाओं के रूप में।
 pit-design-created-surface = पिट की सतह { $name } बनाई गई।
-pit-design-report-summary = डिज़ाइन की रेखाएँ एक नई परत पर, और उसकी सतह, जोड़ता है।
+pit-design-report-summary = पिट डिज़ाइन को उसकी परत और सतह में बनाता है।
+pit-design-default-name = पिट डिज़ाइन
+pit-design-scenario-default = आधार स्थिति
+pit-design-string-source-gone = जिस पॉलीलाइन से इस डिज़ाइन की रेखा कॉपी की गई थी, वह अब किसी लोड की गई परत में नहीं है।
+pit-design-deleted = पिट डिज़ाइन { $name } हटाया गया। उसकी परत और सतह रखी गई हैं।
+pit-design-copy-name = { $name } प्रति
+pit-design-gone = वह पिट डिज़ाइन अब प्रोजेक्ट में नहीं है।
+pit-design-building = पिट डिज़ाइन { $name } बन रहा है
+pit-design-no-bench-fits = एक भी बेंच नहीं समाती: { $reason }
+pit-design-build-failed = पिट डिज़ाइन नहीं बन सका: { $error }
+pit-design-surface-unlinked = सतह { $name } को जैसी थी वैसी ही छोड़ा गया। डिज़ाइन अब सतह नहीं बनाता, इसलिए वह अब उसकी नहीं है।
+pit-design-report-delete = पिट डिज़ाइन हटाता है, उसकी परत और सतह रखते हुए।
+pit-design-report-duplicate = पिट डिज़ाइन की प्रति बनाता है, उसकी परत और सतह के बिना।
+pit-design-none-yet = इस प्रोजेक्ट में अभी कोई पिट डिज़ाइन नहीं है। नया दबाएँ और वह बंद रेखा चुनें जिससे डिज़ाइन शुरू होता है।
+pit-design-choose = डिज़ाइन चुनें
+pit-design-design = डिज़ाइन
+pit-design-design-help = प्रोजेक्ट के पिट डिज़ाइन। हर एक अपनी रेखा और परिदृश्यों की अपनी प्रति रखता है, और अपनी परत और सतह फिर से बनाता है।
+pit-design-new = नया
+pit-design-duplicate = डुप्लिकेट करें
+pit-design-delete = हटाएँ
+pit-design-new-help = नया आपकी चुनी बंद रेखा से डिज़ाइन शुरू करता है। डुप्लिकेट खुले डिज़ाइन की प्रति बनाता है, उसकी परत और सतह के बिना। हटाएँ डिज़ाइन हटाता है और जो उसने बनाया उसे रखता है।
+pit-design-name = नाम
+pit-design-scenario = परिदृश्य
+pit-design-scenario-help = हर परिदृश्य डिज़ाइन की सेटिंग्स का पूरा समूह है। सक्रिय परिदृश्य वही है जो पूर्वावलोकन दिखाता है और बनाएँ बनाता है।
+pit-design-scenario-name = परिदृश्य का नाम
+pit-design-scenario-copy = कॉपी करें
+pit-design-scenario-remove = निकालें
+pit-design-scenario-copy-help = कॉपी करें सक्रिय परिदृश्य की सेटिंग्स के साथ एक परिदृश्य जोड़ता है और उसे सक्रिय करता है। निकालें सक्रिय परिदृश्य हटाता है; डिज़ाइन में हमेशा एक रहता है।
+pit-design-scenario-copy-name = { $name } प्रति
+pit-design-string-copied = RL { $rl } पर { $points } बिंदु
+pit-design-string-change = बदलें
+pit-design-string-update = अपडेट करें
+pit-design-string-update-help = बदलें डिज़ाइन के लिए दूसरी बंद रेखा चुनता है। अपडेट करें रेखा को उस पॉलीलाइन से फिर कॉपी करता है जिससे वह आई थी, उसके संपादित होने के बाद।
+pit-design-rebuild = फिर से बनाएँ
+pit-design-build = बनाएँ
+pit-design-not-built = नहीं बना
+pit-design-output-layer = परत
+pit-design-output-surface = सतह
+pit-design-standing = बना
+pit-design-current = अद्यतन
+pit-design-out-of-date = बनने के बाद डिज़ाइन बदल गया है। उसकी परत और सतह अद्यतन करने के लिए फिर से बनाएँ।
+pit-design-layer-edited = बनने के बाद उसकी परत संपादित हुई है। फिर से बनाना उन संपादनों को बदल देगा।
+pit-design-surface-edited = बनने के बाद उसकी सतह संपादित हुई है। फिर से बनाना उन संपादनों को बदल देगा।
+pit-design-row-out-of-date = { $name } (पुराना)
+pit-design-row-not-built = { $name } (नहीं बना)
+pit-design-open = पिट डिज़ाइन में खोलें
+pit-design-flats =
+    { $count ->
+        [one] एक बेंच चढ़ने से पहले { $length } मी समतल चलती है, जहाँ रैंप को अपनी ढलान बनाए रखने के लिए जगह चाहिए।
+       *[other] { $count } बेंच चढ़ने से पहले कुल { $length } मी समतल चलती हैं, जहाँ रैंप को अपनी ढलान बनाए रखने के लिए जगह चाहिए।
+    }
+pit-design-flatter =
+    { $count ->
+        [one] एक बेंच ढलान से कम ढलवाँ चढ़ती है: कोई समतल खंड उसे सुदृढ़ नहीं छोड़ता।
+       *[other] { $count } बेंच ढलान से कम ढलवाँ चढ़ती हैं: कोई समतल खंड उन्हें सुदृढ़ नहीं छोड़ता।
+    }
+pit-design-bench-table = बेंच
+pit-design-table-rl = RL
+pit-design-table-grade = ढलान
+pit-design-table-flat = समतल
+pit-design-table-width = चौड़ाई
+pit-design-table-turn = मोड़
+pit-design-table-turned = स्विचबैक
+pit-design-table-flatter-hint = ढलान की माँग से { $length } मी अधिक में चढ़ती है, इसलिए कम ढलवाँ है: इसके पहले कोई समतल खंड बेंच को सुदृढ़ नहीं छोड़ता था।
+pit-design-table-narrow-hint = माँगी गई { $width } मी से संकरी, जहाँ यह दीवार के मोड़ पर जुड़ती है।

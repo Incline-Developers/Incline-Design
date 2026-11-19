@@ -297,6 +297,7 @@ impl App<'_> {
             }
             SelectionPickTool::InsertAtElevation => self.open_insert_point_at_elevation_dialog(),
             SelectionPickTool::PitDesignString => self.open_pit_design(),
+            SelectionPickTool::PitDesignBase => self.change_pit_design_string(),
             SelectionPickTool::InsertAtIntersection => self.insert_points_at_selected_intersections(),
             SelectionPickTool::CreateTriangulation => self.take_triangulation_sources(),
             SelectionPickTool::ReferencePoints => self.open_reference_points(),

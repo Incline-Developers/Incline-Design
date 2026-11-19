@@ -87,6 +87,8 @@ const META_SOLIDS: &str = "incline:solids";
 /// planning metadata beside it so a future shape change can be read back
 /// deliberately rather than guessed at.
 const META_HAULAGE: &str = "incline:haulage";
+/// Designs element: the project's pit designs.
+const META_PIT_DESIGNS: &str = "incline:pit-designs";
 const META_SCHEDULE: &str = "incline:schedule";
 /// The latest calculated schedule's decisions: see
 /// [`crate::model::schedule::optimisation::blended::saved`].
@@ -136,6 +138,7 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_SCHEDULE,
     META_SCHEDULE_RESULT,
     META_HAULAGE,
+    META_PIT_DESIGNS,
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_ARRAY_ITEMS: u64 = u32::MAX as u64;
@@ -750,6 +753,9 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
     put(&mut element, META_SOLIDS, serde_json::to_value(solids)?);
     if !document.haulage().is_pristine() {
         put(&mut element, META_HAULAGE, serde_json::to_value(document.haulage().local_copy())?);
+    }
+    if !document.pit_designs().designs.is_empty() {
+        put(&mut element, META_PIT_DESIGNS, serde_json::to_value(document.pit_designs().local_copy())?);
     }
     let schedule = document.schedule();
     if !schedule.is_pristine() {
@@ -2688,6 +2694,12 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             match network {
                 Ok(network) => document.restore_haulage(network),
                 Err(error) => unreadable(&tr!("err-omf-part-haulage"), format!("{error:#}")),
+            }
+        }
+        if let Some(value) = element.metadata.get(META_PIT_DESIGNS).cloned() {
+            match serde_json::from_value::<crate::model::pit_design::item::PitDesigns>(value) {
+                Ok(designs) => document.restore_pit_designs(designs),
+                Err(error) => unreadable(&tr!("err-omf-part-pit-designs"), error.to_string()),
             }
         }
         if let Some(value) = element.metadata.get(META_SCHEDULE).cloned() {

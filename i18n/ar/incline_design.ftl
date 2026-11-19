@@ -2845,13 +2845,13 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ تسلّم إلى جسم صلب
 destination-problem-missing = ⁨{ $rule }⁩ تسلّم إلى وجهة لم تعد في الجدول الزمني
 destination-rule-matches-all = كل المواد
 destination-rule-sources-count = { $count ->
+        [one] مصدر واحد
+       *[other] { $count } من المصادر
+    }
 schedule-run-period-note = تشغيل الفترة: جدولة يوم واحد إضافي.
 schedule-run-whole-note = تشغيل كل الفترات: الجدولة حتى يوم نهاية التخطيط.
 schedule-improve-note = التحسين: البحث عن جدول زمني أفضل، حتى حد زمن الحل.
 schedule-improving-note = جارٍ البحث عن جدول زمني أفضل.
-        [one] مصدر واحد
-       *[other] { $count } من المصادر
-    }
 schedule-improve-finishing = التشغيل { $run }: ينتهي مبكرًا بأفضل جدول زمني وُجد حتى الآن.
 schedule-improve-stalled = لا جدول أفضل منذ { $minutes } min؛ جارٍ إنهاء التشغيل.
 improve-card-title = جارٍ تحسين الجدول الزمني
@@ -4506,6 +4506,7 @@ err-omf-element-part-unreadable = في العنصر '{ $name }' ‏{ $what } ت�
 err-omf-part-reserves = قائمة حقول احتياطي
 err-omf-part-solids = مجسّمات التخطيط
 err-omf-part-haulage = شبكة طرق النقل
+err-omf-part-pit-designs = تصاميم الحفر
 err-omf-read-layer-objects = تعذّرت قراءة كائنات طبقة التصميم '{ $name }'
 err-omf-read-layer = تعذّرت قراءة طبقة التصميم '{ $name }'
 err-omf-validate-designs = التصاميم '{ $name }' غير صالحة
@@ -5042,9 +5043,7 @@ pit-design-menu = تصميم الحفرة
 pit-design-title = تصميم الحفرة
 pick-selection-pit-string-prompt = حدد الخط المغلق الذي تُصمَّم منه الحفرة.
 pit-design-string = خط البداية
-pit-design-string-help = الخط المغلق الذي تُصمَّم منه الحفرة: قدم أرضيتها عند البناء صعودًا، أو حافتها العلوية عند البناء نزولًا.
-pit-design-string-chosen = خط مغلق
-pit-design-string-none = لم يُختر شيء
+pit-design-string-help = الخط المغلق الذي يبدأ منه التصميم: قدم القاع عند البناء صعودًا، أو الحافة عند البناء نزولًا. يحتفظ التصميم بنسخته الخاصة، فتحرير الخط المتعدد لا يغيّر شيئًا حتى «تحديث».
 pit-design-direction = البناء
 pit-design-direction-help = صعودًا من أرضية، والجدران تتدرج إلى الخارج كلما ارتفعت، أو نزولًا من حافة علوية، والجدران تتدرج إلى الداخل كلما تعمقت الحفرة.
 pit-design-up = صعودًا من الأرضية
@@ -5097,7 +5096,6 @@ pit-design-trim = قص على التضاريس
 pit-design-trim-help = إزالة السطح حيث يقع فوق التضاريس.
 pit-design-result-section = التصميم
 pit-design-designing = جارٍ التصميم...
-pit-design-pick-string-first = اختر خطًا مغلقًا للتصميم منه.
 pit-design-benches-built = المصاطب
 pit-design-final-rl = المنسوب النهائي
 pit-design-ramp-length = طول المنحدر
@@ -5122,9 +5120,78 @@ pit-design-problem-string = يجب أن يكون خط البداية خطًا م
 pit-design-problem-stop-elevation = منسوب التوقف خلف الخط: تحته عند البناء صعودًا، وفوقه عند البناء نزولًا.
 pit-design-problem-no-topography = اختر التضاريس التي يبرز عندها التصميم.
 pit-design-problem-topography-not-loaded = حمِّل { $name } ليبرز التصميم عندها.
-pit-design-layer-name = تصميم الحفرة
-pit-design-building-surface = جارٍ إنشاء سطح الحفرة
-pit-design-surface-failed = لم تُضف خطوط الحفرة: تعذر إنشاء سطحها. { $error }
 pit-design-created = صُمِّمت { $benches } مصاطب ({ $ended })، بوصفها { $strings } خطًا على { $layer }.
 pit-design-created-surface = أُنشئ سطح الحفرة، { $name }.
-pit-design-report-summary = يضيف خطوط التصميم على طبقة جديدة، وسطحه.
+pit-design-report-summary = يبني تصميم حفرة في طبقته وسطحه.
+pit-design-default-name = تصميم الحفرة
+pit-design-scenario-default = الحالة الأساسية
+pit-design-string-source-gone = لم يعد الخط المتعدد الذي نُسخ منه خط هذا التصميم في أي طبقة محمّلة.
+pit-design-deleted = حُذف تصميم الحفرة { $name }. تبقى طبقته وسطحه.
+pit-design-copy-name = نسخة من { $name }
+pit-design-gone = لم يعد تصميم الحفرة هذا في المشروع.
+pit-design-building = جارٍ بناء تصميم الحفرة { $name }
+pit-design-no-bench-fits = لا تتسع ولا مصطبة واحدة: { $reason }
+pit-design-build-failed = تعذّر بناء تصميم الحفرة: { $error }
+pit-design-surface-unlinked = تُرك السطح { $name } كما كان. لم يعد التصميم يبني سطحًا، لذا لم يعد السطح تابعًا له.
+pit-design-report-delete = يحذف تصميم حفرة مع الإبقاء على طبقته وسطحه.
+pit-design-report-duplicate = ينسخ تصميم حفرة دون طبقته وسطحه.
+pit-design-none-yet = لا توجد في هذا المشروع تصاميم حفر بعد. اضغط «جديد» واختر الخط المغلق الذي يبدأ منه التصميم.
+pit-design-choose = اختر تصميمًا
+pit-design-design = التصميم
+pit-design-design-help = تصاميم الحفر في المشروع. يحتفظ كل منها بنسخته الخاصة من خطه وبسيناريوهاته، ويعيد بناء طبقته وسطحه الخاصين.
+pit-design-new = جديد
+pit-design-duplicate = تكرار
+pit-design-delete = حذف
+pit-design-new-help = «جديد» يبدأ تصميمًا من خط مغلق تختاره. «تكرار» ينسخ التصميم المفتوح دون طبقته وسطحه. «حذف» يزيل التصميم ويبقي ما بناه.
+pit-design-name = الاسم
+pit-design-scenario = السيناريو
+pit-design-scenario-help = كل سيناريو مجموعة كاملة من إعدادات التصميم. النشط هو ما تعرضه المعاينة وما يبنيه «بناء».
+pit-design-scenario-name = اسم السيناريو
+pit-design-scenario-copy = نسخ
+pit-design-scenario-remove = إزالة
+pit-design-scenario-copy-help = «نسخ» يضيف سيناريو بإعدادات النشط ويجعله نشطًا. «إزالة» يحذف السيناريو النشط؛ ويبقى للتصميم دائمًا سيناريو واحد.
+pit-design-scenario-copy-name = نسخة من { $name }
+pit-design-string-copied = { $points } نقطة عند المنسوب { $rl }
+pit-design-string-change = تغيير
+pit-design-string-update = تحديث
+pit-design-string-update-help = «تغيير» يختار خطًا مغلقًا آخر للتصميم. «تحديث» ينسخ الخط مجددًا من الخط المتعدد الذي جاء منه، بعد تحرير ذلك الخط.
+pit-design-rebuild = إعادة البناء
+pit-design-build = بناء
+pit-design-not-built = غير مبني
+pit-design-output-layer = الطبقة
+pit-design-output-surface = السطح
+pit-design-standing = مبني
+pit-design-current = محدّث
+pit-design-out-of-date = تغيّر التصميم منذ بنائه. أعد بناءه لتحديث طبقته وسطحه.
+pit-design-layer-edited = حُرّرت طبقته منذ بنائه. إعادة البناء تستبدل تلك التعديلات.
+pit-design-surface-edited = حُرّر سطحه منذ بنائه. إعادة البناء تستبدل تلك التعديلات.
+pit-design-row-out-of-date = { $name } (غير محدّث)
+pit-design-row-not-built = { $name } (غير مبني)
+pit-design-open = فتح في تصميم الحفرة
+pit-design-flats =
+    { $count ->
+        [zero] لا توجد مصاطب تسير مستوية قبل أن تصعد.
+        [one] مصطبة واحدة تسير مستوية مسافة { $length } م قبل أن تصعد، حيث يحتاج المنحدر المساحة ليحافظ على ميله.
+        [two] مصطبتان تسيران مستويتين مسافة { $length } م إجمالًا قبل أن تصعدا، حيث يحتاج المنحدر المساحة ليحافظ على ميله.
+        [few] { $count } مصاطب تسير مستوية مسافة { $length } م إجمالًا قبل أن تصعد، حيث يحتاج المنحدر المساحة ليحافظ على ميله.
+        [many] { $count } مصطبة تسير مستوية مسافة { $length } م إجمالًا قبل أن تصعد، حيث يحتاج المنحدر المساحة ليحافظ على ميله.
+       *[other] { $count } مصطبة تسير مستوية مسافة { $length } م إجمالًا قبل أن تصعد، حيث يحتاج المنحدر المساحة ليحافظ على ميله.
+    }
+pit-design-flatter =
+    { $count ->
+        [zero] لا توجد مصاطب تصعد بميل أقل من المطلوب.
+        [one] مصطبة واحدة تصعد بميل أقل من المطلوب: لا يجعلها أي مقطع مستوٍ سليمة.
+        [two] مصطبتان تصعدان بميل أقل من المطلوب: لا يجعلهما أي مقطع مستوٍ سليمتين.
+        [few] { $count } مصاطب تصعد بميل أقل من المطلوب: لا يجعلها أي مقطع مستوٍ سليمة.
+        [many] { $count } مصطبة تصعد بميل أقل من المطلوب: لا يجعلها أي مقطع مستوٍ سليمة.
+       *[other] { $count } مصطبة تصعد بميل أقل من المطلوب: لا يجعلها أي مقطع مستوٍ سليمة.
+    }
+pit-design-bench-table = المصاطب
+pit-design-table-rl = المنسوب
+pit-design-table-grade = الميل
+pit-design-table-flat = مستوٍ
+pit-design-table-width = العرض
+pit-design-table-turn = الالتفاف
+pit-design-table-turned = متعرج
+pit-design-table-flatter-hint = يصعد على مسافة أطول بـ { $length } م مما يطلبه الميل، فهو أقل ميلًا: لم يجعل أي مقطع مستوٍ قبله المصطبة سليمة.
+pit-design-table-narrow-hint = أضيق من { $width } م المطلوبة، حيث يتصل عند منعطف في الجدار.

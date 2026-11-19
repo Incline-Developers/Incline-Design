@@ -158,7 +158,20 @@ fn assert_sound(name: &str, design: &Design, ramp: &RampSpec) {
     assert!(design.benches > 0, "{name}: no bench built");
     assert_eq!(crossings(design), 0, "{name}: strings cross at different heights");
     assert!(steepest(design) <= ramp.gradient + 1.0e-6, "{name}: the ramp is steeper than its gradient");
-    assert!(narrowest(design) >= ramp.width * 0.9, "{name}: the road narrows to {:.1} m", narrowest(design));
+    assert!(narrowest(design) >= ramp.width * 0.96, "{name}: the road narrows to {:.1} m", narrowest(design));
+    // Each bench's stretch climbs at the gradient asked: a flat before it
+    // where the bench needs more room, flatter only where it says so.
+    assert_eq!(design.report.len(), design.benches as usize, "{name}: a report for every bench");
+    for (index, bench) in design.report.iter().enumerate() {
+        let road = bench.ramp.unwrap_or_else(|| panic!("{name}: bench {index} has no ramp"));
+        if road.lengthened == 0.0 {
+            assert!(road.steepest >= ramp.gradient - 0.005, "{name}: bench {index} climbs at {:.4}, not {}", road.steepest, ramp.gradient);
+        }
+        assert!(road.steepest <= ramp.gradient + 1.0e-6, "{name}: bench {index} is steeper than its gradient");
+        assert!(road.narrowest >= ramp.width * 0.96, "{name}: bench {index} narrows to {:.1} m", road.narrowest);
+    }
+    let lengthened = design.report.iter().filter(|bench| bench.ramp.is_some_and(|road| road.lengthened > 0.0)).count();
+    assert!(lengthened * 10 <= design.report.len().max(10), "{name}: {lengthened} stretches climb flatter than asked");
     let (rings, edges) = design.breaklines();
     if let Err(error) = crate::app::commands::triangulation::creation::cdt_surface_from_breaklines(&rings, &edges) {
         panic!("{name}: no single-valued surface: {error:#}");
@@ -256,3 +269,4 @@ fn settings_that_make_no_design_say_why() {
     steep.face_angle = 90.0;
     assert_eq!(problem(steep), Some(Problem::FaceAngle));
 }
+

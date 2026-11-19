@@ -2925,15 +2925,15 @@ destination-problem-solid-kind = ⁨{ $rule }⁩ доставляє до тіл�
 destination-problem-missing = ⁨{ $rule }⁩ доставляє до пункту призначення, якого більше немає в графіку
 destination-rule-matches-all = Уся порода
 destination-rule-sources-count = { $count ->
-schedule-run-period-note = Запуск періоду: запланувати ще один день.
-schedule-run-whole-note = Запуск усіх періодів: запланувати до кінцевого дня планування.
-schedule-improve-note = Покращення: шукати кращий графік, не довше за ліміт часу розв'язання.
-schedule-improving-note = Пошук кращого графіка.
         [one] 1 джерело
         [few] { $count } джерела
         [many] { $count } джерел
        *[other] { $count } джерела
     }
+schedule-run-period-note = Запуск періоду: запланувати ще один день.
+schedule-run-whole-note = Запуск усіх періодів: запланувати до кінцевого дня планування.
+schedule-improve-note = Покращення: шукати кращий графік, не довше за ліміт часу розв'язання.
+schedule-improving-note = Пошук кращого графіка.
 schedule-improve-finishing = Запуск { $run }: дострокове завершення з найкращим знайденим графіком.
 schedule-improve-stalled = Кращого графіка немає вже { $minutes } хв; запуск завершується.
 improve-card-title = Покращення графіка
@@ -4574,6 +4574,7 @@ err-omf-element-part-unreadable = Елемент «{ $name }» має { $what },
 err-omf-part-reserves = список полів запасів
 err-omf-part-solids = тіла планування
 err-omf-part-haulage = мережу транспортних доріг
+err-omf-part-pit-designs = проєкти кар'єру
 err-omf-read-layer-objects = Не вдалося прочитати об'єкти проєктного шару «{ $name }»
 err-omf-read-layer = Не вдалося прочитати проєктний шар «{ $name }»
 err-omf-validate-designs = Проєкти «{ $name }» недійсні
@@ -5110,9 +5111,7 @@ pit-design-menu = Проєктування кар'єру
 pit-design-title = Проєктування кар'єру
 pick-selection-pit-string-prompt = Виберіть замкнену лінію, від якої проєктується кар'єр.
 pit-design-string = Вихідна лінія
-pit-design-string-help = Замкнена лінія, від якої проєктується кар'єр: нижня брівка його дна під час побудови вгору або верхня брівка під час побудови вниз.
-pit-design-string-chosen = Замкнена лінія
-pit-design-string-none = Не вибрано
+pit-design-string-help = Замкнена лінія, від якої починається проєкт: підошва дна при побудові вгору або брівка при побудові вниз. Проєкт зберігає власну копію, тож редагування полілінії нічого не змінює до «Оновити».
 pit-design-direction = Побудова
 pit-design-direction-help = Вгору від дна, коли борти уступами відходять назовні під час підйому, або вниз від верхньої брівки, коли борти уступами сходяться всередину з поглибленням кар'єру.
 pit-design-up = Вгору від дна
@@ -5165,7 +5164,6 @@ pit-design-trim = Обрізати за топографією
 pit-design-trim-help = Видалити поверхню там, де вона вища за топографію.
 pit-design-result-section = Проєкт
 pit-design-designing = Проєктування...
-pit-design-pick-string-first = Виберіть замкнену лінію, від якої проєктувати.
 pit-design-benches-built = Уступи
 pit-design-final-rl = Кінцева позначка
 pit-design-ramp-length = Довжина з'їзду
@@ -5190,9 +5188,74 @@ pit-design-problem-string = Вихідна лінія має бути замкн
 pit-design-problem-stop-elevation = Позначка завершення лежить позаду лінії: нижче неї під час побудови вгору, вище під час побудови вниз.
 pit-design-problem-no-topography = Виберіть топографію для виходу на поверхню.
 pit-design-problem-topography-not-loaded = Завантажте { $name }, щоб вийти на неї.
-pit-design-layer-name = Проєкт кар'єру
-pit-design-building-surface = Побудова поверхні кар'єру
-pit-design-surface-failed = Лінії кар'єру не додано: не вдалося побудувати його поверхню. { $error }
 pit-design-created = Спроєктовано уступів: { $benches } ({ $ended }), ліній: { $strings } на шарі { $layer }.
 pit-design-created-surface = Побудовано поверхню кар'єру, { $name }.
-pit-design-report-summary = Додає лінії проєкту на новий шар і його поверхню.
+pit-design-report-summary = Будує проєкт кар'єру в його шар і його поверхню.
+pit-design-default-name = Проєкт кар'єру
+pit-design-scenario-default = Базовий варіант
+pit-design-string-source-gone = Полілінії, з якої скопійовано лінію цього проєкту, більше немає в завантаженому шарі.
+pit-design-deleted = Проєкт кар'єру { $name } видалено. Його шар і поверхню збережено.
+pit-design-copy-name = { $name } копія
+pit-design-gone = Цього проєкту кар'єру більше немає в проєкті.
+pit-design-building = Будується проєкт кар'єру { $name }
+pit-design-no-bench-fits = Не вміщується жодного уступу: { $reason }
+pit-design-build-failed = Не вдалося побудувати проєкт кар'єру: { $error }
+pit-design-surface-unlinked = Поверхню { $name } залишено як була. Проєкт більше не будує поверхню, тож вона йому більше не належить.
+pit-design-report-delete = Видаляє проєкт кар'єру, зберігаючи його шар і поверхню.
+pit-design-report-duplicate = Копіює проєкт кар'єру без його шару та поверхні.
+pit-design-none-yet = У цьому проєкті ще немає проєктів кар'єру. Натисніть «Новий» і виберіть замкнену лінію, від якої починається проєкт.
+pit-design-choose = Виберіть проєкт
+pit-design-design = Проєкт
+pit-design-design-help = Проєкти кар'єру цього проєкту. Кожен зберігає власну копію лінії та свої сценарії і перебудовує власний шар і поверхню.
+pit-design-new = Новий
+pit-design-duplicate = Дублювати
+pit-design-delete = Видалити
+pit-design-new-help = «Новий» починає проєкт від вибраної замкненої лінії. «Дублювати» копіює відкритий проєкт без його шару та поверхні. «Видалити» прибирає проєкт і зберігає те, що він побудував.
+pit-design-name = Назва
+pit-design-scenario = Сценарій
+pit-design-scenario-help = Кожен сценарій це повний набір налаштувань проєкту. Активний показує попередній перегляд, і його будує «Побудувати».
+pit-design-scenario-name = Назва сценарію
+pit-design-scenario-copy = Копіювати
+pit-design-scenario-remove = Прибрати
+pit-design-scenario-copy-help = «Копіювати» додає сценарій з налаштуваннями активного і робить його активним. «Прибрати» видаляє активний сценарій; у проєкті завжди лишається один.
+pit-design-scenario-copy-name = { $name } копія
+pit-design-string-copied = { $points } точок на позначці { $rl }
+pit-design-string-change = Змінити
+pit-design-string-update = Оновити
+pit-design-string-update-help = «Змінити» вибирає для проєкту іншу замкнену лінію. «Оновити» знову копіює лінію з полілінії, з якої її взято, після її редагування.
+pit-design-rebuild = Перебудувати
+pit-design-build = Побудувати
+pit-design-not-built = Не побудовано
+pit-design-output-layer = Шар
+pit-design-output-surface = Поверхня
+pit-design-standing = Побудовано
+pit-design-current = Актуальний
+pit-design-out-of-date = Проєкт змінився після побудови. Перебудуйте його, щоб оновити шар і поверхню.
+pit-design-layer-edited = Його шар змінено після побудови. Перебудова замінить ці правки.
+pit-design-surface-edited = Його поверхню змінено після побудови. Перебудова замінить ці правки.
+pit-design-row-out-of-date = { $name } (застарів)
+pit-design-row-not-built = { $name } (не побудовано)
+pit-design-open = Відкрити в проєктуванні кар'єру
+pit-design-flats =
+    { $count ->
+        [one] { $count } уступ іде горизонтально { $length } м перед підйомом, де з'їзду потрібне місце, щоб тримати ухил.
+        [few] { $count } уступи йдуть горизонтально загалом { $length } м перед підйомом, де з'їзду потрібне місце, щоб тримати ухил.
+        [many] { $count } уступів ідуть горизонтально загалом { $length } м перед підйомом, де з'їзду потрібне місце, щоб тримати ухил.
+       *[other] { $count } уступу йдуть горизонтально загалом { $length } м перед підйомом, де з'їзду потрібне місце, щоб тримати ухил.
+    }
+pit-design-flatter =
+    { $count ->
+        [one] { $count } уступ піднімається положисто за ухил: жодна горизонтальна ділянка не зробила б його стійким.
+        [few] { $count } уступи піднімаються положисто за ухил: жодна горизонтальна ділянка не зробила б їх стійкими.
+        [many] { $count } уступів піднімаються положисто за ухил: жодна горизонтальна ділянка не зробила б їх стійкими.
+       *[other] { $count } уступу піднімаються положисто за ухил: жодна горизонтальна ділянка не зробила б їх стійкими.
+    }
+pit-design-bench-table = Уступи
+pit-design-table-rl = Позначка
+pit-design-table-grade = Ухил
+pit-design-table-flat = Горизонт.
+pit-design-table-width = Ширина
+pit-design-table-turn = Розворот
+pit-design-table-turned = Серпантин
+pit-design-table-flatter-hint = Піднімається на { $length } м довше, ніж вимагає ухил, тому положистіше: жодна горизонтальна ділянка перед ним не робила уступ стійким.
+pit-design-table-narrow-hint = Вужча за задані { $width } м там, де з'їзд переходить на повороті борту.
