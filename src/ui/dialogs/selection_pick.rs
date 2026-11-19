@@ -24,11 +24,6 @@ pub(crate) fn draw_selection_pick_prompt(ui: &mut egui::Ui, editor: &EditorState
             tr!("ui-selected-polylines", count = counts.polylines.to_string()),
             true,
         ),
-        SelectionPickTool::PitDesignString => (
-            tr!("pick-selection-pit-string-prompt"),
-            tr!("ui-selected-polylines", count = counts.polylines.to_string()),
-            counts.polylines >= 1,
-        ),
         // Nothing crosses with fewer than two.
         SelectionPickTool::InsertAtIntersection => (
             tr!("pick-selection-crossing-prompt"),

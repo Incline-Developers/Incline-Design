@@ -37,7 +37,7 @@ use crate::{
     },
     ui::{
         dialogs::pit_design::{DraftFacts, NoDesign, PitDesignDraft, Preview, PreviewKey, end_text, no_design_text},
-        state::TriSurfaceCutSide,
+        state::{ActiveTool, TriSurfaceCutSide},
     },
     userspace_log, userspace_warn,
 };
@@ -181,27 +181,69 @@ impl App<'_> {
             .map(|surface| surface.geometry)
     }
 
-    /// Open Pit Design: on the pit design selected, or on a closed polyline
-    /// selected, which becomes a pit design in its place; otherwise the
-    /// window opens as it was, or asks for one.
+    /// Take up the Pit Design tool, from the menu or the context menu: on the
+    /// pit design selected, or on a closed polyline selected, which becomes a
+    /// pit design in its place; otherwise the tool waits for a click on one.
     pub(crate) fn open_pit_design(&mut self) {
-        self.flush_pit_design_draft();
-        match self.selected_pit_or_string() {
-            Some(id) if matches!(self.operand_object(id), Some(Object::PitDesign { .. })) => self.open_pit_design_on(id),
-            Some(id) => match self.make_pit_design(id, None, None) {
-                Ok(()) => self.open_pit_design_on(id),
-                Err(error) => crate::userspace_error!("{error:#}"),
-            },
-            None => {
-                if self.editor.pit_design.is_none() {
-                    self.editor.pit_design = Some(PitDesignDraft::default());
-                }
-                self.invalidate_overlay();
-            }
+        let selected = self.selected_pit_or_string();
+        if self.editor.active_tool != ActiveTool::PitDesign {
+            self.set_active_tool_from_toolbar(ActiveTool::PitDesign);
+        }
+        if self.editor.active_tool != ActiveTool::PitDesign {
+            return;
+        }
+        if let Some(id) = selected {
+            self.open_pit_design_target(id);
+        }
+        self.invalidate_overlay();
+    }
+
+    /// A click with the Pit Design tool: on a pit design, it opens in the
+    /// panel; on a closed polyline, that becomes a pit design and opens.
+    pub(crate) fn pick_pit_design_at_cursor(&mut self) {
+        match self.pick_under_cursor() {
+            Some((SceneEntityId::Object(id), _)) if self.is_pit_target(id) => self.open_pit_design_target(id),
+            // With a design open, a click elsewhere leaves it as it is.
+            _ if self.editor.pit_design.as_ref().and_then(PitDesignDraft::object_id).is_some() => {}
+            _ => userspace_warn!("{}", tr!("pit-design-pick-prompt")),
         }
     }
 
-    /// Open the window on pit design object `id`.
+    /// Light up the pit design or closed polyline under the cursor, which a
+    /// click would open.
+    pub(crate) fn update_pit_design_hover(&mut self) {
+        let hovered = match self.pick_under_cursor() {
+            Some((SceneEntityId::Object(id), _)) if self.is_pit_target(id) => Some(id),
+            _ => None,
+        };
+        if hovered != self.editor.tool_highlight_id {
+            self.editor.tool_highlight_id = hovered;
+            self.invalidate_geometry();
+        }
+    }
+
+    /// Whether `id` is something the Pit Design tool opens: a pit design, or
+    /// a closed polyline to make one.
+    fn is_pit_target(&self, id: ObjectId) -> bool {
+        self.operand_object(id)
+            .is_some_and(|object| matches!(object, Object::PitDesign { .. }) || (matches!(object, Object::Polyline { .. }) && object.encloses_area()))
+    }
+
+    /// Open `id` in the panel, making a pit design of it first if it is a
+    /// closed polyline.
+    fn open_pit_design_target(&mut self, id: ObjectId) {
+        if matches!(self.operand_object(id), Some(Object::PitDesign { .. })) {
+            self.open_pit_design_on(id);
+            return;
+        }
+        self.flush_pit_design_draft();
+        match self.make_pit_design(id, None, None) {
+            Ok(()) => self.open_pit_design_on(id),
+            Err(error) => crate::userspace_error!("{error:#}"),
+        }
+    }
+
+    /// Open pit design object `id` in the tool's panel.
     pub(crate) fn open_pit_design_on(&mut self, id: ObjectId) {
         if self.editor.pit_design.as_ref().and_then(PitDesignDraft::object_id) != Some(id) {
             self.flush_pit_design_draft();
@@ -387,10 +429,14 @@ impl App<'_> {
         }
     }
 
-    /// Put the window away, with what it was editing written to the object.
+    /// Put the panel away, with what it was editing written to the object:
+    /// the tool is being put down.
     pub(crate) fn close_pit_design(&mut self) {
         self.flush_pit_design_draft();
         self.editor.pit_design = None;
+        if self.editor.tool_highlight_id.take().is_some() {
+            self.invalidate_geometry();
+        }
         self.cancel_jobs(|key| matches!(key, JobKey::PitDesignPreview(_)));
         self.invalidate_overlay();
     }

@@ -429,7 +429,6 @@ impl EditorState {
         self.tri_create_open
             || self.move_to_axis_dialog.is_some()
             || self.insert_point_at_elevation_dialog.is_some()
-            || self.pit_design.is_some()
             || self.tri_cut_poly_open
             || self.tri_cut_z_open
             || self.tri_contour_open
@@ -1140,8 +1139,6 @@ pub(crate) struct SelectionCounts {
 pub(crate) enum SelectionPickTool {
     SetAxis,
     InsertAtElevation,
-    /// The closed polyline, or pit design, Pit Design opens on.
-    PitDesignString,
     /// Has no dialog: opens straight into the pick when the selection holds
     /// too little to run on, and runs on Done.
     InsertAtIntersection,
@@ -3739,7 +3736,6 @@ impl EditorState {
             || self.move_to_layer_dialog.is_some()
             || self.move_to_axis_dialog.is_some()
             || self.insert_point_at_elevation_dialog.is_some()
-            || self.pit_design.is_some()
             || self.new_layer_dialog_open
             || self.survey.definitions_open
             || self.survey.transform_open
@@ -5067,6 +5063,9 @@ pub(crate) enum ActiveTool {
     PickRotationCentre,
     Chamfer,
     BatterBermOffset,
+    /// Click a closed polyline to make it a pit design, or a pit design to
+    /// edit it in the docked panel.
+    PitDesign,
     Bezier,
     VerticalSlice,
 }
@@ -5101,6 +5100,7 @@ impl ActiveTool {
             Self::PickRotationCentre => tr!("viewport-bar-fix-centre-rotation"),
             Self::Chamfer => tr!("toolbars-chamfer-polyline-corners"),
             Self::BatterBermOffset => tr!("toolbars-auto-bench"),
+            Self::PitDesign => tr!("pit-design-title"),
             Self::Bezier => tr!("toolbars-bezier-polyline"),
             Self::VerticalSlice => tr!("viewport-bar-vertical-slice-view"),
         };
@@ -6266,10 +6266,9 @@ pub(crate) enum UiCommand {
     },
     /// Open the elevation input for inserting vertices into selected polylines.
     OpenInsertPointAtElevationDialog,
-    /// Open Pit Design: on the pit design selected, or on a closed polyline
-    /// selected, which becomes one.
+    /// Take up the Pit Design tool: on the pit design selected, or on a
+    /// closed polyline selected, which becomes one.
     OpenPitDesign,
-    ClosePitDesign,
     /// Build a pit design object's surface.
     BuildPitSurface(ObjectId),
     /// Turn a pit design object into polylines.
@@ -6534,7 +6533,6 @@ impl UiCommand {
             | Self::OpenMoveToAxisDialog(_)
             | Self::OpenInsertPointAtElevationDialog
             | Self::OpenPitDesign
-            | Self::ClosePitDesign
             | Self::BeginPitRampStartPick
             | Self::OpenObjectEditDialog(_)
             | Self::OpenPointCloudTin

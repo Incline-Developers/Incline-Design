@@ -705,6 +705,9 @@ impl<'a> App<'a> {
                     if self.editor.active_tool == ActiveTool::ExplodePolyline && hover_pick_due {
                         self.update_explode_hover();
                     }
+                    if self.editor.active_tool == ActiveTool::PitDesign && hover_pick_due {
+                        self.update_pit_design_hover();
+                    }
                     if (self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick)
                         && hover_pick_due
                     {
@@ -888,6 +891,7 @@ impl<'a> App<'a> {
                 ActiveTool::BatterBermOffset if !self.editor.batter_berm_dialog_open => {
                     self.pick_batter_berm_target();
                 }
+                ActiveTool::PitDesign => self.pick_pit_design_at_cursor(),
                 _ => {}
             }
         }
@@ -1473,6 +1477,9 @@ impl<'a> App<'a> {
                     self.editor.tool_highlight_id = None;
                     self.editor.active_tool = ActiveTool::None;
                     self.invalidate_geometry();
+                } else if self.editor.active_tool == ActiveTool::PitDesign {
+                    self.close_pit_design();
+                    self.editor.active_tool = ActiveTool::None;
                 } else if self.editor.active_tool == ActiveTool::BatterBermOffset || self.editor.batter_berm_dialog_open || self.editor.batter_berm_target_id.is_some() {
                     self.cancel_batter_berm();
                 } else if self.editor.active_tool == ActiveTool::MakeCircle {
@@ -1635,6 +1642,9 @@ impl<'a> App<'a> {
             self.cancel_chamfer();
         } else if self.editor.active_tool == ActiveTool::Bezier {
             self.cancel_bezier();
+        } else if self.editor.active_tool == ActiveTool::PitDesign {
+            self.close_pit_design();
+            self.editor.active_tool = ActiveTool::None;
         } else if self.editor.active_tool == ActiveTool::BatterBermOffset || self.editor.batter_berm_dialog_open || self.editor.batter_berm_target_id.is_some() {
             self.cancel_batter_berm();
         } else if self.editor.active_tool == ActiveTool::MeasureBatterAngle {
@@ -1705,6 +1715,9 @@ impl<'a> App<'a> {
             }
             ActiveTool::BatterBermOffset if next_tool != ActiveTool::BatterBermOffset => {
                 self.cancel_batter_berm();
+            }
+            ActiveTool::PitDesign if next_tool != ActiveTool::PitDesign => {
+                self.close_pit_design();
             }
             ActiveTool::Bezier if next_tool != ActiveTool::Bezier => {
                 self.cancel_bezier();

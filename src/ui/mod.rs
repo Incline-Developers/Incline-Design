@@ -650,6 +650,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::Bezier if editor.bezier_selected_verts[1].is_none() => ViewportMessage::text(tr!("ui-click-second-vertex")),
         ActiveTool::ExplodePolyline => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline")),
+        ActiveTool::PitDesign if editor.pit_design.as_ref().is_none_or(|draft| draft.object_id().is_none()) => ViewportMessage::text(tr!("pit-design-pick-prompt")),
         ActiveTool::DeletePoints => ViewportMessage::text(tr!("ui-select-point")),
         ActiveTool::Hide => ViewportMessage::text(tr!("ui-select-designs-to-hide")),
         _ => return None,
@@ -1329,7 +1330,6 @@ fn draw_ui(
     dialogs::editing::draw_move_to_layer_dialog(root_ui, editor, project, commands);
     dialogs::editing::draw_move_to_axis_dialog(root_ui, editor, commands);
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
-    dialogs::pit_design::draw_pit_design_dialog(root_ui, editor, project, commands);
     dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
     elements::properties::draw_preferences(root_ui, editor, commands);
@@ -1415,6 +1415,10 @@ fn draw_ui(
         widgets::viewport::ViewportMiniMap::new("slice_minimap", canvas_rect)
             .below_gizmo(elements::cursors::orientation_gizmo_rect(canvas_rect))
             .show(root_ui.ctx(), editor, commands);
+    }
+    // Pit Design
+    if editor.active_tool == ActiveTool::PitDesign {
+        dialogs::pit_design::draw_pit_design_panel(root_ui, editor, project, commands, canvas_rect);
     }
     // Batter Berm
     if editor.active_tool == ActiveTool::BatterBermOffset && !editor.batter_berm_dialog_open {

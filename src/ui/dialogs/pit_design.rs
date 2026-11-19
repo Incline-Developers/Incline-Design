@@ -1,7 +1,7 @@
-//! Pit Design: the window that edits a pit design object, and what it holds
-//! while it is open.
+//! Pit Design: the tool's panel, docked in the viewport, that edits a pit
+//! design object, and what it holds while one is open.
 //!
-//! The window edits a copy of what the object is designed with
+//! The panel edits a copy of what the object is designed with
 //! ([`PitDesignDraft::working`]). Once no field is mid-edit,
 //! `App::sync_pit_design_draft` writes the copy to the object as one undo
 //! step, and takes the object's version back when undo or redo changes it.
@@ -24,10 +24,11 @@ use crate::{
     },
     ui::{
         elements::properties::read_only_row,
-        state::{EditorState, SelectionPickTool, UiCommand, UiProjectView},
+        state::{ActiveTool, EditorState, UiCommand, UiProjectView},
         widgets::{
             hint::Hint,
-            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
+            menu::{self, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
+            viewport::ViewportDockPanel,
         },
     },
 };
@@ -181,10 +182,10 @@ fn stopped_short(design: &Design) -> bool {
     matches!(design.end, End::OutOfRoom | End::RampTooLong | End::LeftGround)
 }
 
-/// How tall the window's scrolling body may be: the window, its heading and
-/// its actions all fit on screen.
-fn body_height(ctx: &egui::Context) -> f32 {
-    (ctx.content_rect().height() - 220.0).max(200.0)
+/// How tall the panel's scrolling body may be: the panel, its heading, name
+/// and actions all fit in the viewport.
+fn body_height(viewport_rect: egui::Rect) -> f32 {
+    (viewport_rect.height() - 150.0).max(160.0)
 }
 
 /// A row of buttons under a label: which was clicked.
@@ -204,45 +205,32 @@ fn button_row(ui: &mut egui::Ui, label: String, help: String, buttons: &[(String
     clicked
 }
 
-pub(crate) fn draw_pit_design_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
-    // Out of the way while the viewport picks for it.
-    if editor.selection_pick.is_some() {
-        return;
-    }
+/// The Pit Design tool's panel, docked in the viewport while a pit design is
+/// open in it: its name, scenarios and settings, its surface, and what it
+/// comes to.
+pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
     let Some(draft) = editor.pit_design.as_mut() else {
         return;
     };
+    // Out of the way while the viewport picks for it.
     if draft.picking_ramp_start {
         return;
     }
-    let mut open = true;
-    let mut close = false;
-    DragableMenu::new("pit_design_dialog", tr!("pit-design-title"))
-        .open(&mut open)
-        .min_width(420.0)
-        .max_width(440.0)
+    let Some(id) = draft.object_id() else {
+        return;
+    };
+    ViewportDockPanel::new("pit_design_panel", tr!("pit-design-title"), viewport_rect)
+        .min_width(400.0)
+        .max_width(420.0)
         .show(ui.ctx(), |ui| {
-            let Some(id) = draft.object_id() else {
-                menu::menu_note(ui, tr!("pit-design-none-yet"));
-                if button_row(ui, String::new(), tr!("pit-design-string-help"), &[(tr!("pit-design-pick"), true)]).is_some() {
-                    commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::PitDesignString));
-                }
-                ui.add_space(4.0);
-                menu::menu_actions(ui, |ui| {
-                    if ui.add(MenuButton::new(tr!("common-close"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
-                        close = true;
-                    }
-                });
-                return;
-            };
-            // The design's settings and what they come to scroll between its
-            // name and the actions, which stay in view.
             if let Some(working) = draft.working.as_mut() {
                 MenuFieldText::new(tr!("pit-design-name"), &mut working.name).width(FIELD_WIDTH).show(ui);
             }
+            // The settings and what they come to scroll between the name and
+            // the actions, which stay in view.
             egui::ScrollArea::vertical()
                 .id_salt("pit_design_body")
-                .max_height(body_height(ui.ctx()))
+                .max_height(body_height(viewport_rect))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     let Some(working) = draft.working.as_mut() else {
@@ -269,22 +257,18 @@ pub(crate) fn draw_pit_design_dialog(ui: &mut egui::Ui, editor: &mut EditorState
                 });
 
             ui.add_space(4.0);
-            let cancelled = menu::dialog_cancelled(ui.ctx());
-            menu::menu_actions(ui, |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(MenuButton::new(tr!("pit-design-done")).primary()).clicked() {
+                    commands.push(UiCommand::SetActiveTool(ActiveTool::None));
+                }
                 if ui.add(MenuButton::new(tr!("pit-design-explode"))).hint(tr!("pit-design-explode-help")).clicked() {
                     commands.push(UiCommand::ExplodePitDesign(id));
-                }
-                if ui.add(MenuButton::new(tr!("common-close")).primary()).clicked() || cancelled {
-                    close = true;
                 }
             });
         });
     // A field is mid-edit while the pointer is down on it or text is being
     // typed into it; until then the copy waits to be written.
     draft.settled = !ui.ctx().input(|input| input.pointer.any_down()) && ui.ctx().memory(|memory| memory.focused().is_none());
-    if close || !open {
-        commands.push(UiCommand::ClosePitDesign);
-    }
 }
 
 /// The design's scenarios: which is active, its name, and copy and remove.
