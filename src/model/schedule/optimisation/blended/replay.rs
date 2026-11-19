@@ -23,7 +23,7 @@ use std::{
 };
 
 use super::input::{BlendInput, BlendPile, GradeLimit, WINDOW_TOLERANCE_H, attribute_reclaim, authored_tasks, dig_authority};
-use crate::model::schedule::optimisation::{Activity, Destination, DestinationId, DestinationKind, GroundId, GroundSource, LoaderId, SourceId, StockpileId, TaskKind};
+use crate::model::schedule::optimisation::{Activity, Destination, DestinationId, DestinationKind, GroundId, GroundSource, Interval, LoaderId, SourceId, StockpileId, TaskKind};
 
 /// One published movement: how much material a candidate moved in a cell.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -72,6 +72,11 @@ pub(crate) struct BlendSolution {
     /// What drill and blast did, from the hourly dispatch that simulated it;
     /// a later solve keeps the dispatch's.
     pub(crate) drill_blast: Option<super::drill_blast::DrillBlastTimeline>,
+    /// (interval, segment): segments that begin a part of an interval the
+    /// dispatch solved in parts. What an unchunked pile received before one
+    /// is in the pile from it: reclaimable once rested, and in its blend.
+    /// Elsewhere receipts wait for the next interval.
+    pub(crate) parts: BTreeSet<(usize, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -650,6 +655,17 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     // Ground is dug only once its blast has released it: by the dispatch's
     // own timeline when the schedule carries one, otherwise by the release
     // times the input fixes.
+    // A cell's hours: its segment's share of the interval where the
+    // schedule records how long each segment ran, else the whole interval.
+    // Ground a gate frees within an interval is dug from the segment after
+    // the one its ground above went in.
+    let cell_hours = |interval: &Interval, segment: usize| -> (f64, f64) {
+        if !solution.durations.contains_key(&(interval.index, segment)) {
+            return (interval.start_h, interval.end_h);
+        }
+        let start = interval.start_h + (0..segment).map(|at| solution.durations.get(&(interval.index, at)).copied().unwrap_or(0.0)).sum::<f64>();
+        (start, start + solution.durations[&(interval.index, segment)])
+    };
     let releases: BTreeMap<GroundId, f64> = input.drill_blast.as_ref().map_or_else(BTreeMap::new, |chain| match solution.drill_blast.as_ref() {
         Some(timeline) if timeline.blasts.len() == chain.blasts.len() => timeline.releases(chain).into_iter().collect(),
         _ => chain.releases(),
@@ -669,7 +685,12 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                     .get(&ground)
                     .into_iter()
                     .flatten()
-                    .filter(|row| input.intervals.get(row.interval).is_some_and(|interval| interval.end_h <= deadline + 1e-9))
+                    .filter(|row| {
+                        input
+                            .intervals
+                            .get(row.interval)
+                            .is_some_and(|interval| cell_hours(interval, row.segment).1 <= deadline + 1e-6)
+                    })
                     .map(|row| row.tonnes_t)
                     .sum();
                 if source.tonnes_t - dug > indicator_leak(source.tonnes_t).max(REPLAY_TOLERANCE_T) {
@@ -749,7 +770,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
             let Some(candidate) = input.movements.get(row.candidate) else { continue };
             let Some(interval) = input.intervals.get(row.interval) else { continue };
             if let SourceId::Ground(ground) = candidate.source
-                && releases.get(&ground).is_some_and(|released| *released > interval.start_h + 1e-9)
+                && releases.get(&ground).is_some_and(|released| *released > cell_hours(interval, row.segment).0 + 1e-6)
             {
                 checker
                     .report
@@ -825,11 +846,27 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         }
     }
     let mut openings: HashMap<(StockpileId, usize), f64, foldhash::fast::FixedState> = HashMap::default();
+    // An unchunked pile's release as each later segment of an interval
+    // opens: what earlier segments received is reclaimable once rested.
+    let mut segment_openings: HashMap<(StockpileId, usize, usize), f64, foldhash::fast::FixedState> = HashMap::default();
     for (index, pile) in input.piles.iter().enumerate() {
         if checker.cancelled() {
             return None;
         }
-        let state = replay_pile(&mut checker, pile, &by_pile[index], &uneven, &destinations, grades, segments, &mut openings, &drawn);
+        let state = replay_pile(
+            &mut checker,
+            pile,
+            &by_pile[index],
+            &uneven,
+            &destinations,
+            grades,
+            segments,
+            &mut openings,
+            &mut segment_openings,
+            &drawn,
+            &solution.durations,
+            &solution.parts,
+        );
         checker.report.closing.push(state);
         // A chunked pile gives a reclaim bar work only in a chunk it
         // releases: closed, rested and holding material.
@@ -842,7 +879,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
 
     // ---- mandatory authored bar priority ------------------------------------
     let room = dig_room(checker.input, solution, &checker.report.pile_intervals);
-    let worked_bars = check_bar_priority(&mut checker, solution, &openings, &room, &releases, segments, &authority);
+    let worked_bars = check_bar_priority(&mut checker, solution, &openings, &segment_openings, &room, &releases, segments, &authority);
     if checker.cancelled() {
         return None;
     }
@@ -1159,10 +1196,12 @@ impl BarSources {
 ///
 /// Returns each loader's highest-priority ready bar by (loader, interval,
 /// segment): the bar whose block order its digs there follow.
+#[allow(clippy::too_many_arguments)]
 fn check_bar_priority(
     checker: &mut Checker<'_>,
     solution: &BlendSolution,
     openings: &HashMap<(StockpileId, usize), f64, foldhash::fast::FixedState>,
+    segment_openings: &HashMap<(StockpileId, usize, usize), f64, foldhash::fast::FixedState>,
     room: &HashSet<(DestinationId, usize), foldhash::fast::FixedState>,
     releases: &BTreeMap<GroundId, f64>,
     segments: usize,
@@ -1293,6 +1332,14 @@ fn check_bar_priority(
             })
         };
         for (&(_, segment), rows) in cell_rows.range((interval.index, 0)..(interval.index, segments)) {
+            // Ground released within the interval is ready from the segment
+            // it was released by: the cell opens where the segments before
+            // it end.
+            let opens_h = if solution.durations.contains_key(&(interval.index, segment)) {
+                interval.start_h + (0..segment).map(|at| solution.durations.get(&(interval.index, at)).copied().unwrap_or(0.0)).sum::<f64>()
+            } else {
+                interval.start_h
+            };
             for state in &mut states {
                 let loader = state.loader;
                 let bars = &state.bars;
@@ -1327,7 +1374,7 @@ fn check_bar_priority(
                             }
                             let from = state.current[bar].min(sequence.len());
                             for (block, released) in sequence[from..].iter().zip(&released_along[bar][from..]) {
-                                if *released <= interval.start_h + 1e-9
+                                if *released <= opens_h + 1e-6
                                     && remaining.get(block).copied().unwrap_or(0.0) > REPLAY_TOLERANCE_T
                                     && outlets.diggable(input, task, *block, |destination| room.contains(&(destination, interval.index)))
                                 {
@@ -1339,7 +1386,7 @@ fn check_bar_priority(
                         TaskKind::Dig { sequence } => {
                             rate.dig_tph > 0.0
                                 && sequence.get(state.current[bar]).is_some_and(|current| {
-                                    releases.get(current).is_none_or(|released| *released <= interval.start_h + 1e-9)
+                                    releases.get(current).is_none_or(|released| *released <= opens_h + 1e-6)
                                         && outlets.diggable(input, task, *current, |destination| room.contains(&(destination, interval.index)))
                                 })
                         }
@@ -1354,7 +1401,12 @@ fn check_bar_priority(
                             }
                             approved_sources.iter().any(|pile| {
                                 input.piles.iter().find(|entry| entry.id == *pile).is_some_and(|entry| entry.reclaims(*interval))
-                                    && openings.get(&(*pile, interval.index)).copied().unwrap_or(0.0) > REPLAY_TOLERANCE_T
+                                    && segment_openings
+                                        .get(&(*pile, interval.index, segment))
+                                        .or_else(|| openings.get(&(*pile, interval.index)))
+                                        .copied()
+                                        .unwrap_or(0.0)
+                                        > REPLAY_TOLERANCE_T
                             })
                         }
                         TaskKind::Delay => true,
@@ -1475,7 +1527,10 @@ fn replay_pile(
     grades: usize,
     segments: usize,
     openings: &mut HashMap<(StockpileId, usize), f64, foldhash::fast::FixedState>,
+    segment_openings: &mut HashMap<(StockpileId, usize, usize), f64, foldhash::fast::FixedState>,
     drawn: &BTreeMap<(StockpileId, usize), (f64, Vec<f64>)>,
+    durations: &BTreeMap<(usize, usize), f64>,
+    parts: &BTreeSet<(usize, usize)>,
 ) -> ClosingState {
     let input = checker.input;
     let (mut open_t, mut open_q) = pile.total_opening(grades);
@@ -1497,6 +1552,7 @@ fn replay_pile(
         let mut received_q = vec![0.0; grades];
         let mut reclaimed_t = 0.0;
         let mut per_segment_receipts = vec![0.0; segments];
+        let mut per_segment_received_q = vec![vec![0.0; grades]; segments];
         let mut per_segment_reclaim = vec![0.0; segments];
         // A loader that dug multiple blocks can deliver at an uneven rate.
         let mut delivering: BTreeSet<(usize, LoaderId)> = BTreeSet::new();
@@ -1519,7 +1575,12 @@ fn replay_pile(
                     // A receipt carries identified material, so its contained
                     // quantity is known exactly.
                     match fractions.get(g).copied() {
-                        Some(fraction) => *received += row.tonnes_t * fraction,
+                        Some(fraction) => {
+                            *received += row.tonnes_t * fraction;
+                            if let Some(slot) = per_segment_received_q.get_mut(row.segment) {
+                                slot[g] += row.tonnes_t * fraction;
+                            }
+                        }
                         None => checker
                             .report
                             .issues
@@ -1535,7 +1596,72 @@ fn replay_pile(
             }
         }
 
-        if resting {
+        // An unchunked pile walked segment by segment: each segment draws
+        // on the pile as it stands when the segment opens - what earlier
+        // segments of the interval received included, once rested - at that
+        // blend. Segment times come from the schedule's segment lengths.
+        let walk = pile.chunks.is_empty() && parts.range((k, 1)..(k, usize::MAX)).next().is_some();
+        let mut segment_blends: Vec<Vec<f64>> = Vec::new();
+        let mut walked_q = vec![0.0; grades];
+        if walk {
+            let (mut state_t, mut state_q) = (open_t, open_q.clone());
+            // Receipts wait to join the pile until a part begins.
+            let (mut pending_t, mut pending_q, mut pending_h) = (0.0, vec![0.0; grades], None);
+            let mut received_h = last_receipt_h;
+            let mut opens_h = interval.start_h;
+            for segment in 0..segments {
+                let length = durations.get(&(k, segment)).copied().unwrap_or(if segment == 0 { interval_duration } else { 0.0 });
+                let part = segment > 0 && parts.contains(&(k, segment));
+                if part {
+                    state_t += pending_t;
+                    for (q, received) in state_q.iter_mut().zip(&pending_q) {
+                        *q += received;
+                    }
+                    if pending_t > super::input::REST_RECEIPT_T {
+                        received_h = pending_h;
+                    }
+                    (pending_t, pending_q, pending_h) = (0.0, vec![0.0; grades], None);
+                }
+                let at = Interval { start_h: opens_h, ..*interval };
+                let rested = received_h.is_none_or(|received| pile.rested(received, at));
+                if part {
+                    segment_openings.insert((pile.id, k, segment), if rested { state_t } else { 0.0 });
+                }
+                let drawn_t = per_segment_reclaim[segment];
+                if !rested {
+                    checker.breach(|| format!("pile {} reclaim before its rest, interval {k} segment {segment}", pile.id.0), drawn_t, 0.0);
+                }
+                checker.breach(
+                    || format!("pile {} reclaim against released stock in interval {k} segment {segment}", pile.id.0),
+                    drawn_t,
+                    state_t,
+                );
+                let blend: Vec<f64> = if state_t > REPLAY_TOLERANCE_T {
+                    (0..grades).map(|g| state_q[g] / state_t).collect()
+                } else {
+                    if drawn_t > REPLAY_TOLERANCE_T {
+                        checker
+                            .report
+                            .issues
+                            .push(format!("pile {} supplied {drawn_t:.6} t from an empty pile in interval {k} segment {segment}", pile.id.0));
+                    }
+                    vec![0.0; grades]
+                };
+                for g in 0..grades {
+                    let out = drawn_t * blend[g];
+                    walked_q[g] += out;
+                    state_q[g] -= out;
+                    pending_q[g] += per_segment_received_q[segment][g];
+                }
+                state_t -= drawn_t;
+                pending_t += per_segment_receipts[segment];
+                if per_segment_receipts[segment] > super::input::REST_RECEIPT_T {
+                    pending_h = Some(opens_h + length);
+                }
+                segment_blends.push(blend);
+                opens_h += length;
+            }
+        } else if resting {
             checker.breach(|| format!("pile {} reclaim before its rest, interval {k}", pile.id.0), reclaimed_t, 0.0);
         }
         if pile.exclusive && received_t > REPLAY_TOLERANCE_T && reclaimed_t > REPLAY_TOLERANCE_T {
@@ -1556,9 +1682,12 @@ fn replay_pile(
             checker.breach(|| format!("pile {} reclaim on a day it is not reclaiming, interval {k}", pile.id.0), reclaimed_t, 0.0);
         }
 
-        // Inventory release timing: a reclaim in interval k may only draw on
-        // the released opening blend, never on material received during k.
-        checker.breach(|| format!("pile {} reclaim against released opening in interval {k}", pile.id.0), reclaimed_t, open_t);
+        // Inventory release timing for a chunked pile: a reclaim in interval
+        // k may only draw on the released opening blend, never on material
+        // received during k.
+        if !walk {
+            checker.breach(|| format!("pile {} reclaim against released opening in interval {k}", pile.id.0), reclaimed_t, open_t);
+        }
 
         // Physical occupancy throughout the interval (§3), recomputed from
         // the rows: receipts occupy on arrival, reclaim frees space as it
@@ -1600,7 +1729,7 @@ fn replay_pile(
             }
             computed
         } else {
-            if reclaimed_t > REPLAY_TOLERANCE_T {
+            if reclaimed_t > REPLAY_TOLERANCE_T && !walk {
                 checker
                     .report
                     .issues
@@ -1635,7 +1764,16 @@ fn replay_pile(
                 );
                 (fractions.iter().map(|fraction| fraction * reclaimed_t).collect(), fractions)
             }
+            _ if walk && reclaimed_t > REPLAY_TOLERANCE_T => (walked_q.clone(), walked_q.iter().map(|q| q / reclaimed_t).collect()),
             _ => (blend.iter().map(|fraction| fraction * reclaimed_t).collect(), blend.clone()),
+        };
+        // What each row carried: its segment's blend where the pile was walked.
+        let row_blend = |row: &MovementRow| -> &[f64] {
+            if walk {
+                segment_blends.get(row.segment).map_or(delivered_blend.as_slice(), Vec::as_slice)
+            } else {
+                delivered_blend.as_slice()
+            }
         };
 
         // Grade eligibility on what was actually delivered (§6).
@@ -1648,7 +1786,7 @@ fn replay_pile(
                     .is_some_and(|candidate| candidate.activity == Activity::Reclaim && candidate.source == SourceId::Stockpile(pile.id))
             {
                 let contained = checker.report.movement_contained.entry((row.candidate, k)).or_insert_with(|| vec![0.0; grades]);
-                for (q, fraction) in contained.iter_mut().zip(&delivered_blend) {
+                for (q, fraction) in contained.iter_mut().zip(row_blend(row)) {
                     *q += row.tonnes_t * fraction;
                 }
             }
@@ -1665,7 +1803,7 @@ fn replay_pile(
                 .iter()
                 .find(|entry| entry.loader == candidate.loader && entry.pile == pile.id && entry.destination == candidate.destination)
             {
-                if !qualification.holds(&delivered_blend) {
+                if !qualification.holds(row_blend(row)) {
                     checker.report.grade_issues.push(format!(
                         "pile {} delivered {:.6} t to destination {} in interval {k} outside every permitted grade range",
                         pile.id.0, row.tonnes_t, candidate.destination.0
@@ -1678,14 +1816,14 @@ fn replay_pile(
                 ));
             }
             for payment in checker.input.conditional_values.iter().filter(|entry| entry.candidate == row.candidate) {
-                if payment.holds(&delivered_blend) {
+                if payment.holds(row_blend(row)) {
                     checker.report.replayed_objective += row.tonnes_t * payment.value_per_tonne;
                 }
                 // The model's `M` for this payment's rows is the loader's rate
                 // over the interval; see `formulate`.
                 let big_m = super::input::loader_rate(checker.input, candidate, k).unwrap_or(0.0) * interval_duration;
                 checker.report.indicator_leak_value += row.tonnes_t.min(big_m * INTEGRALITY_TOLERANCE * INTEGRALITY_MARGIN) * payment.value_per_tonne.abs();
-                if payment.near_boundary(&delivered_blend, reclaimed_t) {
+                if payment.near_boundary(row_blend(row), reclaimed_t) {
                     checker.report.boundary_rows += 1;
                     checker.report.boundary_tonnes_t += row.tonnes_t;
                     checker.report.boundary_value_slack += row.tonnes_t * payment.value_per_tonne.abs();

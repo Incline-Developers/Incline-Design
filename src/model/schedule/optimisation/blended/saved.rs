@@ -68,6 +68,9 @@ struct Stored {
     drill_blast: Option<DrillBlastTimeline>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auto_order: Option<AutoOrder>,
+    /// See `BlendSolution::parts`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parts: Vec<(usize, usize)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -111,6 +114,7 @@ impl SavedSchedule {
                 .collect(),
             drill_blast: solution.drill_blast.clone(),
             auto_order: self.auto_order.clone(),
+            parts: solution.parts.iter().copied().collect(),
         })
     }
 
@@ -159,6 +163,7 @@ impl SavedSchedule {
                 reported_objective: 0.0,
                 adjustments: ExtractionAdjustments::default(),
                 drill_blast: stored.drill_blast,
+                parts: stored.parts.into_iter().collect(),
             }),
         })
     }

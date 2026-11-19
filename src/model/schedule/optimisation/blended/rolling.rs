@@ -502,6 +502,7 @@ impl Stitched {
                 reported_objective: 0.0,
                 adjustments: ExtractionAdjustments::default(),
                 drill_blast: None,
+                parts: std::collections::BTreeSet::new(),
             },
         }
     }

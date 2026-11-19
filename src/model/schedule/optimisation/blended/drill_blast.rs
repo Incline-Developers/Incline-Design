@@ -561,6 +561,30 @@ impl<'a> Chain<'a> {
             .collect()
     }
 
+    /// Whether `blast` is clear: the ground above it gone.
+    pub(crate) fn cleared(&self, blast: usize) -> bool {
+        self.events[blast].cleared_h.is_some()
+    }
+
+    /// Clear the [`BlastJob::gate`]s in `blasts` at `at_h`, within an
+    /// interval: the ground above each was dug by then, so the ground it
+    /// holds is available from that hour. A blast that is not a gate, or
+    /// is clear already, is left as it is.
+    pub(crate) fn clear_gates(&mut self, at_h: f64, blasts: &[usize]) {
+        if self.input.fixed.is_some() {
+            return;
+        }
+        for &blast in blasts {
+            if self.events[blast].cleared_h.is_some() || !self.input.blasts[blast].gate {
+                continue;
+            }
+            self.events[blast].cleared_h = Some(at_h);
+            self.gone_above[blast] = self.input.blasts[blast].above.len();
+            self.unfinished.push(blast);
+        }
+        self.finish_empty_steps(at_h);
+    }
+
     /// Whether `ground` belongs to a blast.
     pub(crate) fn in_blast(&self, ground: GroundId) -> bool {
         self.owner.contains_key(&ground)
@@ -603,6 +627,10 @@ impl<'a> Chain<'a> {
             Some(dug) => dug.iter().filter_map(|ground| self.waiting.remove(ground)).flatten().collect(),
         };
         for blast in check {
+            // Cleared already, as the ground above went within an interval.
+            if self.events[blast].cleared_h.is_some() {
+                continue;
+            }
             let above = &input.blasts[blast].above;
             let gone = &mut self.gone_above[blast];
             while above.get(*gone).is_some_and(|ground| !standing(*ground)) {
