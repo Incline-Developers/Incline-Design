@@ -17,7 +17,7 @@ use crate::{
         ObjectId, PolyVertex,
         pit_design::{
             Design, Direction, End, Problem,
-            object::{PitObject, ScenarioId, SurfaceStanding},
+            object::{PitObject, ScenarioId},
             settings::{PitDesignSettings, StopMode},
         },
         triangulation::{GeometryVersion, TriangulationId},
@@ -70,19 +70,30 @@ pub(crate) struct Preview {
     pub(crate) ramp_start: Option<DVec3>,
 }
 
-/// What the window shows of its object beyond what it edits.
+/// What the panel shows of its object beyond what it edits.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DraftFacts {
-    /// The surface it built, while that exists.
-    pub(crate) surface: Option<(TriangulationId, String)>,
-    pub(crate) surface_standing: SurfaceStanding,
     /// Whether the object's own design is what it comes to now.
     pub(crate) fresh: bool,
 }
 
-/// The window's state.
+/// The steps the Pit Design tool takes a pit through once its string is
+/// drawn: its benches first, then its ramp.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PitStage {
+    #[default]
+    Benches,
+    Ramp,
+}
+
+/// The panel's state.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PitDesignDraft {
+    /// The step the panel is on.
+    pub(crate) stage: PitStage,
+    /// Where on the string the ramp would start, under the cursor, while
+    /// its start is being picked.
+    pub(crate) ramp_hover: Option<DVec3>,
     /// The pit design object open, if there is one.
     object: Option<ObjectId>,
     /// What the object was designed with as last seen.
@@ -230,10 +241,6 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
     let Some(draft) = editor.pit_design.as_mut() else {
         return;
     };
-    // Out of the way while the viewport picks for it.
-    if draft.picking_ramp_start {
-        return;
-    }
     let Some(id) = draft.object_id() else {
         return;
     };
@@ -244,49 +251,94 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
             if let Some(working) = draft.working.as_mut() {
                 MenuFieldText::new(tr!("pit-design-name"), &mut working.name).width(FIELD_WIDTH).show(ui);
             }
-            // The settings and what they come to scroll between the name and
-            // the actions, which stay in view.
+            draw_steps(ui, draft, commands);
+            // The step's settings and what they come to scroll between the
+            // name and the actions, which stay in view.
             egui::ScrollArea::vertical()
                 .id_salt("pit_design_body")
                 .max_height(body_height(viewport_rect))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
+                    let stage = draft.stage;
+                    let picking = draft.picking_ramp_start;
                     let Some(working) = draft.working.as_mut() else {
                         return;
                     };
-                    draw_scenarios(ui, working);
-                    let Some(scenario) = working.scenario_mut() else {
-                        return;
-                    };
-                    let settings = &mut scenario.settings;
-                    draw_settings(ui, settings, project, commands);
-
-                    menu::menu_section(ui, tr!("pit-design-surface-section"));
-                    if settings.daylights() {
-                        MenuFieldBool::new(tr!("pit-design-trim"), &mut settings.trim_to_topography)
-                            .help_text(tr!("pit-design-trim-help"))
-                            .show(ui);
+                    match stage {
+                        PitStage::Benches => {
+                            draw_scenarios(ui, working);
+                            if let Some(scenario) = working.scenario_mut() {
+                                draw_bench_settings(ui, &mut scenario.settings, project);
+                            }
+                        }
+                        PitStage::Ramp => {
+                            menu::menu_section(ui, tr!("pit-design-ramp-section"));
+                            let Some(scenario) = working.scenario_mut() else {
+                                return;
+                            };
+                            let settings = &mut scenario.settings;
+                            if picking {
+                                menu::menu_note(ui, tr!("pit-design-ramp-picking"));
+                            } else if !settings.ramp {
+                                menu::menu_note(ui, tr!("pit-design-ramp-none"));
+                                if button_row(ui, String::new(), tr!("pit-design-ramp-place-help"), &[(tr!("pit-design-ramp-place"), true)]).is_some() {
+                                    commands.push(UiCommand::BeginPitRampStartPick);
+                                }
+                            } else {
+                                draw_ramp_settings(ui, settings, commands);
+                                if button_row(ui, String::new(), tr!("pit-design-ramp-remove-help"), &[(tr!("pit-design-ramp-remove"), true)]).is_some() {
+                                    settings.ramp = false;
+                                }
+                            }
+                        }
                     }
-                    draw_surface(ui, &draft.facts, id, commands);
-
                     menu::menu_section(ui, tr!("pit-design-result-section"));
                     let settings = working.settings();
                     draw_result(ui, draft, &settings);
                 });
 
             ui.add_space(4.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(MenuButton::new(tr!("pit-design-done")).primary()).hint(tr!("pit-design-done-help")).clicked() {
-                    commands.push(UiCommand::FinishPitDesign);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match draft.stage {
+                PitStage::Benches => {
+                    if ui.add(MenuButton::new(tr!("pit-design-continue")).primary()).hint(tr!("pit-design-continue-help")).clicked() {
+                        commands.push(UiCommand::PitDesignStage(PitStage::Ramp));
+                    }
+                    if ui.add(MenuButton::new(tr!("pit-design-done"))).hint(tr!("pit-design-done-help")).clicked() {
+                        commands.push(UiCommand::FinishPitDesign);
+                    }
                 }
-                if ui.add(MenuButton::new(tr!("pit-design-explode"))).hint(tr!("pit-design-explode-help")).clicked() {
-                    commands.push(UiCommand::ExplodePitDesign(id));
+                PitStage::Ramp => {
+                    if ui.add(MenuButton::new(tr!("pit-design-done")).primary()).hint(tr!("pit-design-done-help")).clicked() {
+                        commands.push(UiCommand::FinishPitDesign);
+                    }
+                    if ui.add(MenuButton::new(tr!("pit-design-back"))).clicked() {
+                        commands.push(UiCommand::PitDesignStage(PitStage::Benches));
+                    }
+                    if ui.add(MenuButton::new(tr!("pit-design-explode"))).hint(tr!("pit-design-explode-help")).clicked() {
+                        commands.push(UiCommand::ExplodePitDesign(id));
+                    }
                 }
             });
         });
     // A field is mid-edit while the pointer is down on it or text is being
     // typed into it; until then the copy waits to be written.
     draft.settled = !ui.ctx().input(|input| input.pointer.any_down()) && ui.ctx().memory(|memory| memory.focused().is_none());
+}
+
+/// The steps, Benches and Ramp, the one the panel is on held down: a
+/// click goes to either.
+fn draw_steps(ui: &mut egui::Ui, draft: &PitDesignDraft, commands: &mut Vec<UiCommand>) {
+    MenuField::new(String::new()).show(ui, |ui, row_height, _| {
+        ui.allocate_ui_with_layout(egui::vec2(FIELD_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            for (stage, label) in [(PitStage::Benches, tr!("pit-design-step-benches")), (PitStage::Ramp, tr!("pit-design-step-ramp"))] {
+                let width = menu::natural_button_width(ui, &label, 60.0);
+                if ui.add(MenuButton::new(label).min_width(width).selected(draft.stage == stage)).clicked() && draft.stage != stage {
+                    commands.push(UiCommand::PitDesignStage(stage));
+                }
+            }
+        })
+        .response
+    });
 }
 
 /// The design's scenarios: which is active, its name, and copy and remove.
@@ -323,7 +375,7 @@ fn draw_scenarios(ui: &mut egui::Ui, design: &mut PitObject) {
 }
 
 /// The scenario's benches, stop and ramp.
-fn draw_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &UiProjectView) {
     let chosen = direction_label(settings.direction);
     MenuFieldCombo::new(
         "pit_design_direction",
@@ -411,11 +463,11 @@ fn draw_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &
         }
     }
 
-    menu::menu_section(ui, tr!("pit-design-ramp-section"));
-    MenuFieldBool::new(tr!("pit-design-ramp"), &mut settings.ramp).show(ui);
-    if !settings.ramp {
-        return;
-    }
+}
+
+/// The ramp's settings, for a pit that has one: where it starts, its
+/// width and gradient, which way it climbs, and how it turns.
+fn draw_ramp_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, commands: &mut Vec<UiCommand>) {
     MenuFieldF64::new(tr!("pit-design-ramp-width"), &mut settings.ramp_width, 0.1..=1000.0)
         .width(FIELD_WIDTH)
         .speed(0.1)
@@ -436,7 +488,7 @@ fn draw_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &
         .help_text(tr!("pit-design-ramp-start-help"))
         .show(ui, |ui, row_height, _| {
             ui.allocate_ui_with_layout(egui::vec2(FIELD_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let pick_label = tr!("pit-design-pick");
+                let pick_label = tr!("pit-design-ramp-move");
                 let pick_width = menu::natural_button_width(ui, &pick_label, 52.0);
                 let text_width = FIELD_WIDTH - ui.spacing().item_spacing.x - pick_width;
                 ui.allocate_ui_with_layout(egui::vec2(text_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -488,27 +540,6 @@ fn draw_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &
     }
 }
 
-
-/// The surface the design built, how it stands, and Build.
-fn draw_surface(ui: &mut egui::Ui, facts: &DraftFacts, id: ObjectId, commands: &mut Vec<UiCommand>) {
-    let warning = ui.visuals().warn_fg_color;
-    let name = facts.surface.as_ref().map_or_else(|| tr!("pit-design-not-built"), |(_, name)| name.clone());
-    read_only_row(ui, &tr!("pit-design-output-surface"), &name);
-    match facts.surface_standing {
-        SurfaceStanding::NotBuilt => {}
-        SurfaceStanding::Current => read_only_row(ui, &tr!("pit-design-standing"), &tr!("pit-design-current")),
-        SurfaceStanding::OutOfDate => {
-            ui.colored_label(warning, tr!("pit-design-out-of-date"));
-        }
-        SurfaceStanding::Edited => {
-            ui.colored_label(warning, tr!("pit-design-surface-edited"));
-        }
-    }
-    let label = if facts.surface.is_some() { tr!("pit-design-rebuild") } else { tr!("pit-design-build") };
-    if button_row(ui, String::new(), tr!("pit-design-surface-help"), &[(label, true)]).is_some() {
-        commands.push(UiCommand::BuildPitSurface(id));
-    }
-}
 
 /// What the settings come to: the design's figures, or why there is none.
 fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSettings) {

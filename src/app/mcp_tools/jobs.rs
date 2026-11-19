@@ -63,7 +63,7 @@ pub(super) fn definitions() -> Vec<Value> {
         starts(
             "triangulate",
             "Triangulate design objects",
-            "Build a surface from design polylines and points, as Create Triangulation does: the objects are the surface's breaklines and spot heights, on hidden layers too. solid makes a closed solid from closed polylines (a stack of outlines) instead of an open surface. A surface is single-valued, so breaklines must not cross in plan at different elevations: if they do, it fails listing every place they do. Then fix the strings, or build with upper_surface; and where strings' ends only nearly meet, weld joins them.",
+            "Build a surface from design polylines, pit designs and points, as Create Triangulation does: the objects are the surface's breaklines and spot heights, on hidden layers too. A pit design gives every string it draws: its string, its benches' rings and its ramp's edges. solid makes a closed solid from closed polylines (a stack of outlines) instead of an open surface. A surface is single-valued, so breaklines must not cross in plan at different elevations: if they do, it fails listing every place they do. Then fix the strings, or build with upper_surface; and where strings' ends only nearly meet, weld joins them.",
             json!({
                 "objects": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0 }, "description": "Ids of the design objects to build from." },
                 "name": name("surface"),

@@ -1,12 +1,12 @@
 //! A pit design object: what it holds survives saving, its scenarios add and
-//! remove as the window and MCP do them, it says truly whether its benches
-//! and surface still match it, and it moves and explodes whole.
+//! remove as the panel and MCP do them, it says truly whether its benches
+//! still match it, and it moves and explodes whole.
 
 use glam::{DVec2, DVec3};
 
 use super::{
     Base, DesignString, StringKind, design,
-    object::{Derived, Outcome, PitObject, ScenarioId, SurfaceLink, SurfaceStanding, inputs_key},
+    object::{Derived, Outcome, PitObject, ScenarioId, inputs_key},
     settings::{PitDesignSettings, StopMode},
 };
 use crate::model::{
@@ -64,13 +64,6 @@ fn saves_and_reads_back_whole() {
     if let Object::PitDesign { pit, .. } = &mut object {
         pit.add_scenario("Steeper".to_owned());
         pit.scenario_mut().expect("a scenario").settings.face_angle = 75.0;
-        pit.surface = Some(SurfaceLink {
-            id: TriangulationId(9),
-            inputs: 3,
-            ground: None,
-            trimmed: false,
-            geometry: GeometryVersion::mint(),
-        });
     }
     let json = serde_json::to_string(&object).expect("an object serialises");
     let read: Object = serde_json::from_str(&json).expect("and reads back");
@@ -146,28 +139,6 @@ fn moves_whole() {
     let original = parts(&before).1.design().expect("a design");
     assert_eq!(moved.strings[1].points[0], original.strings[1].points[0] + delta);
     assert_eq!(moved.final_elevation(), original.final_elevation() + delta.z);
-}
-
-#[test]
-fn surface_standing_follows_design_and_edits() {
-    let object = pit_object(square(100.0), settings());
-    let (verts, pit) = parts(&object);
-    assert_eq!(pit.surface_standing(verts, None, None), SurfaceStanding::NotBuilt);
-    let geometry = GeometryVersion::mint();
-    let mut built = pit.clone();
-    built.surface = Some(SurfaceLink {
-        id: TriangulationId(2),
-        inputs: inputs_key(verts, &pit.settings()),
-        ground: None,
-        trimmed: pit.settings().trims(),
-        geometry,
-    });
-    assert_eq!(built.surface_standing(verts, Some(geometry), None), SurfaceStanding::Current);
-    assert_eq!(built.surface_standing(verts, None, None), SurfaceStanding::NotBuilt, "the surface deleted");
-    assert_eq!(built.surface_standing(verts, Some(GeometryVersion::mint()), None), SurfaceStanding::Edited);
-    let mut changed = built.clone();
-    changed.scenario_mut().expect("a scenario").settings.berm_width = 3.0;
-    assert_eq!(changed.surface_standing(verts, Some(geometry), None), SurfaceStanding::OutOfDate);
 }
 
 #[test]

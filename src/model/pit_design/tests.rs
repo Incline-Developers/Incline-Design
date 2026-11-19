@@ -153,6 +153,21 @@ fn narrowest(design: &Design) -> f64 {
     low
 }
 
+/// The design's strings as a surface's breaklines, as Create Triangulation
+/// takes them: its rings, closed, and its ramp's edges, open. The centreline
+/// only repeats what the edges say.
+fn breaklines(design: &Design) -> (Vec<Vec<DVec3>>, Vec<Vec<DVec3>>) {
+    let (mut rings, mut edges) = (Vec::new(), Vec::new());
+    for string in &design.strings {
+        match (string.kind, string.closed) {
+            (StringKind::RampCentreline, _) => {}
+            (_, true) => rings.push(string.points.clone()),
+            (_, false) => edges.push(string.points.clone()),
+        }
+    }
+    (rings, edges)
+}
+
 /// Hold a design to what a sound one is.
 fn assert_sound(name: &str, design: &Design, ramp: &RampSpec) {
     assert!(design.benches > 0, "{name}: no bench built");
@@ -172,7 +187,7 @@ fn assert_sound(name: &str, design: &Design, ramp: &RampSpec) {
     }
     let lengthened = design.report.iter().filter(|bench| bench.ramp.is_some_and(|road| road.lengthened > 0.0)).count();
     assert!(lengthened * 10 <= design.report.len().max(10), "{name}: {lengthened} stretches climb flatter than asked");
-    let (rings, edges) = design.breaklines();
+    let (rings, edges) = breaklines(design);
     if let Err(error) = crate::app::commands::triangulation::creation::cdt_surface_from_breaklines(&rings, &edges) {
         panic!("{name}: no single-valued surface: {error:#}");
     }

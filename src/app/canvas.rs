@@ -937,8 +937,10 @@ fn update_auto_derived_name(output: &mut String, is_auto: bool, source: &str, su
     }
 }
 
+/// Whether Create Triangulation takes this object: a polyline, or a pit
+/// design, which gives it every string it draws.
 pub(crate) fn is_triangulation_polyline(obj: &Object) -> bool {
-    matches!(obj, Object::Polyline { .. }) && obj.tessellated_path().is_some_and(|(points, closed)| points.len() >= if closed { 3 } else { 2 })
+    matches!(obj, Object::Polyline { .. } | Object::PitDesign { .. }) && obj.tessellated_path().is_some_and(|(points, closed)| points.len() >= if closed { 3 } else { 2 })
 }
 
 fn is_drill_pattern_boundary(object: &Object) -> bool {

@@ -24,21 +24,21 @@ use crate::{
     },
     i18n::tr,
     model::{
-        Command, Object, ObjectId, OpenItem, PolyVertex, SceneEntityId, SectionKind,
+        Command, Object, ObjectId, PolyVertex, SceneEntityId,
         formats::mesh_data,
         pit_design::{
             self, Base, Design,
-            object::{Derived, Outcome, PitObject, SurfaceLink, base_points, inputs_key},
+            object::{Derived, Outcome, PitObject, base_points, inputs_key},
             settings::PitDesignSettings,
         },
         spatial::TriangleBvh,
-        triangulation::{GeneratedTriangulation, GeometryVersion, TriangulationId},
+        triangulation::{GeometryVersion, TriangulationId},
     },
     ui::{
-        dialogs::pit_design::{DraftFacts, NoDesign, PitDesignDraft, Preview, PreviewKey, end_text, no_design_text},
-        state::{ActiveTool, TriSurfaceCutSide},
+        dialogs::pit_design::{DraftFacts, NoDesign, PitDesignDraft, PitStage, Preview, PreviewKey},
+        state::ActiveTool,
     },
-    userspace_log, userspace_warn,
+    userspace_log,
 };
 
 /// A topography's mesh and index, for a worker to read the ground from.
@@ -118,19 +118,6 @@ fn nearest_on_string(points: &[DVec3], point: DVec2) -> DVec3 {
         .map_or(point.extend(0.0), |(_, nearest)| nearest)
 }
 
-/// The pit's surface from its strings, trimmed to the topography when
-/// `trim` holds one.
-fn surface_on_worker(design: &Design, trim: Option<&Ground>, cancel: &CancelFlag, progress: &crate::model::progress::Progress) -> Result<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>)> {
-    let (rings, edges) = design.breaklines();
-    let (vertices, faces) = crate::app::commands::triangulation::creation::cdt_surface_from_breaklines(&rings, &edges)?;
-    anyhow::ensure!(!cancel.is_cancelled(), Cancelled);
-    let Some(ground) = trim else {
-        return Ok((vertices, faces));
-    };
-    let mesh = mesh_data::Triangulation::from_vertices_and_faces(vertices, faces)?;
-    crate::app::commands::triangulation::cuts::clip_mesh_by_surface(&mesh, &ground.mesh, TriSurfaceCutSide::CutTop, &progress.phase(0.2, 1.0))
-}
-
 /// A pit design object's parts, for the code that only reads them.
 pub(crate) fn pit_parts(object: &Object) -> Option<(&[PolyVertex], &PitObject)> {
     match object {
@@ -146,15 +133,6 @@ fn with_pit(object: &Object, pit: PitObject) -> Object {
         **held = pit;
     }
     object
-}
-
-/// What a finished surface build made, for the step that installs it.
-struct SurfaceBuild {
-    surface: GeneratedTriangulation,
-    derived: Option<Derived>,
-    inputs: u64,
-    ground: Option<GeometryVersion>,
-    trimmed: bool,
 }
 
 impl App<'_> {
@@ -348,6 +326,8 @@ impl App<'_> {
                 })
         });
         if carried {
+            // The ramp is placed once the benches are set.
+            settings.ramp = false;
             settings.ramp_start = None;
             let level = points.iter().map(|point| point.z).sum::<f64>() / points.len().max(1) as f64;
             settings.stop_elevation = level + settings.direction.sign() * settings.bench_height * f64::from(settings.benches.max(1));
@@ -465,11 +445,8 @@ impl App<'_> {
         let Some((verts, pit)) = pit_parts(object) else {
             return;
         };
-        let surface = pit.surface.as_ref().and_then(|link| self.triangulations.iter().find(|item| item.id == link.id));
         let ground = self.pit_ground_version(&pit.settings());
         let facts = DraftFacts {
-            surface: surface.map(|item| (item.id, item.name.clone())),
-            surface_standing: pit.surface_standing(verts, surface.map(|item| item.geometry), ground),
             fresh: pit.is_fresh(verts, ground),
         };
         if let Some(draft) = self.editor.pit_design.as_mut() {
@@ -674,6 +651,45 @@ impl App<'_> {
         })
     }
 
+    /// Go to a step of the panel: on to the ramp, its start picked first
+    /// if it has none, or back to the benches.
+    pub(crate) fn set_pit_stage(&mut self, stage: PitStage) {
+        let Some(draft) = self.editor.pit_design.as_mut() else {
+            return;
+        };
+        draft.stage = stage;
+        let has_ramp = draft.working.as_ref().is_some_and(|working| working.settings().ramp);
+        match stage {
+            PitStage::Ramp if !has_ramp => self.begin_pit_ramp_start_pick(),
+            PitStage::Ramp => {}
+            PitStage::Benches => self.cancel_pit_ramp_start_pick(),
+        }
+        self.invalidate_overlay();
+    }
+
+    /// Where on the string the ramp would start were the cursor clicked:
+    /// the marker that follows it while the start is picked.
+    pub(crate) fn update_pit_ramp_hover(&mut self) {
+        let Some(id) = self.editor.pit_design.as_ref().filter(|draft| draft.picking_ramp_start).and_then(PitDesignDraft::object_id) else {
+            return;
+        };
+        let Some(points) = self.operand_object(id).and_then(Object::tessellated_path).map(|(points, _)| points) else {
+            return;
+        };
+        let level = points.iter().map(|point| point.z).sum::<f64>() / points.len().max(1) as f64;
+        let hover = self
+            .graphics
+            .as_ref()
+            .and_then(|graphics| graphics.cursor_on_plane(level, crate::app::PICK_THRESHOLD_PX))
+            .map(|(cursor, _)| nearest_on_string(&points, cursor.truncate()));
+        if let Some(draft) = self.editor.pit_design.as_mut()
+            && draft.ramp_hover != hover
+        {
+            draft.ramp_hover = hover;
+            self.invalidate_overlay();
+        }
+    }
+
     /// Wait for a click on the string where the ramp starts.
     pub(crate) fn begin_pit_ramp_start_pick(&mut self) {
         if let Some(draft) = self.editor.pit_design.as_mut()
@@ -687,12 +703,13 @@ impl App<'_> {
     pub(crate) fn cancel_pit_ramp_start_pick(&mut self) {
         if let Some(draft) = self.editor.pit_design.as_mut() {
             draft.picking_ramp_start = false;
+            draft.ramp_hover = None;
         }
         self.invalidate_overlay();
     }
 
-    /// A click while picking the ramp's start: near the design's string, it
-    /// sets the start; anywhere else, the pick waits.
+    /// A click while picking the ramp's start: it places the ramp there, at
+    /// the point of the string nearest the click.
     pub(crate) fn pick_pit_ramp_start_at_cursor(&mut self) {
         let Some(id) = self.editor.pit_design.as_ref().and_then(PitDesignDraft::object_id) else {
             return;
@@ -704,19 +721,17 @@ impl App<'_> {
             return;
         };
         let level = points.iter().map(|point| point.z).sum::<f64>() / points.len().max(1) as f64;
-        let Some((cursor, tolerance)) = graphics.cursor_on_plane(level, crate::app::PICK_THRESHOLD_PX) else {
+        let Some((cursor, _)) = graphics.cursor_on_plane(level, crate::app::PICK_THRESHOLD_PX) else {
             return;
         };
         let nearest = nearest_on_string(&points, cursor.truncate());
-        if nearest.truncate().distance(cursor.truncate()) > tolerance {
-            userspace_warn!("{}", tr!("pit-design-pick-on-string"));
-            return;
-        }
         if let Some(scenario) = self.editor.pit_design.as_mut().and_then(|draft| draft.working.as_mut()).and_then(PitObject::scenario_mut) {
+            scenario.settings.ramp = true;
             scenario.settings.ramp_start = Some(nearest.truncate());
         }
         if let Some(draft) = self.editor.pit_design.as_mut() {
             draft.picking_ramp_start = false;
+            draft.ramp_hover = None;
         }
         self.update_pit_design_preview();
         self.invalidate_overlay();
@@ -753,147 +768,6 @@ impl App<'_> {
         Ok(design)
     }
 
-    /// Build pit design `id`'s surface from its strings, trimmed to the
-    /// topography it daylights against when its settings say so: the surface
-    /// it built before, replaced in place, or a new one. The design is worked
-    /// out again with the surface if it is not current.
-    pub(crate) fn build_pit_surface(&mut self, id: ObjectId) -> Result<()> {
-        self.flush_pit_design_draft();
-        let object = self.operand_object(id).cloned().ok_or_else(|| anyhow!(tr!("pit-design-gone")))?;
-        let Some((verts, pit)) = pit_parts(&object) else {
-            return Err(anyhow!(tr!("pit-design-gone")));
-        };
-        if !self.activate_project_for_object(id) {
-            return Err(anyhow!(tr!("pit-design-gone")));
-        }
-        let settings = pit.settings();
-        let ground = if settings.daylights() {
-            Some(self.pit_design_ground(settings.topography).map_err(|reason| anyhow!(no_design_text(&reason)))?)
-        } else {
-            None
-        };
-        let fresh = pit.is_fresh(verts, ground.as_ref().map(|ground| ground.version));
-        let known = pit.design().filter(|_| fresh).cloned();
-        let trim = settings.trims();
-        let name = pit.name.clone();
-        let verts = verts.to_vec();
-        // Building again replaces a build of the same design still running.
-        self.cancel_jobs(|key| *key == JobKey::PitSurface(id));
-        self.spawn_job_reporting_progress(
-            tr!("pit-design-building-surface", name = name.clone()),
-            vec![JobKey::PitSurface(id)],
-            move |cancel, progress| {
-                let (design, derived) = match known {
-                    Some(design) => (design, None),
-                    None => {
-                        let preview = design_on_worker(&verts, &settings, ground.as_ref(), cancel)?;
-                        let derived = derived_from(&verts, &settings, ground.as_ref().map(|ground| ground.version), &preview.design);
-                        (preview.design.map_err(|reason| anyhow!(no_design_text(&reason)))?, derived)
-                    }
-                };
-                anyhow::ensure!(design.benches > 0, tr!("pit-design-no-bench-fits", reason = end_text(&design)));
-                let (vertices, faces) = surface_on_worker(&design, ground.as_ref().filter(|_| trim), cancel, progress)?;
-                let surface = crate::app::commands::triangulation::session::build_generated_triangulation(name, vertices, faces, crate::ui::state::TriSurfaceType::Surface, |_| Vec::new())?;
-                Ok(SurfaceBuild {
-                    surface,
-                    derived,
-                    inputs: inputs_key(&verts, &settings),
-                    ground: settings.ground().and(ground.map(|ground| ground.version)),
-                    trimmed: trim,
-                })
-            },
-            move |app, result| match result.and_then(|built| app.install_pit_surface(id, built)) {
-                Ok(()) => {}
-                Err(error) if crate::app::jobs::is_cancelled(&error) => {}
-                Err(error) => crate::userspace_error!("{}", tr!("pit-design-surface-failed", error = format!("{error:#}"))),
-            },
-        );
-        Ok(())
-    }
-
-    /// Put a finished surface build into the project as one step: the
-    /// surface in place of the one the design built before (unless another
-    /// design copied from it links it too), and the link on the object.
-    fn install_pit_surface(&mut self, id: ObjectId, built: SurfaceBuild) -> Result<()> {
-        let SurfaceBuild {
-            surface,
-            derived,
-            inputs,
-            ground,
-            trimmed,
-        } = built;
-        let before = self.operand_object(id).cloned().ok_or_else(|| anyhow!(tr!("pit-design-gone")))?;
-        let Some((verts, pit)) = pit_parts(&before) else {
-            return Err(anyhow!(tr!("pit-design-gone")));
-        };
-        // Only onto the design it was built from: one changed since says so,
-        // and is built again on request.
-        if inputs_key(verts, &pit.settings()) != inputs {
-            userspace_warn!("{}", tr!("pit-design-surface-overtaken", name = pit.name.clone()));
-            return Ok(());
-        }
-        let linked = pit.surface.as_ref().map(|link| link.id).filter(|surface| self.triangulations.iter().any(|item| item.id == *surface));
-        // A design copied from this one carries the same link: the surface is
-        // then the original's, and the copy builds its own.
-        let shared = linked.is_some_and(|surface| {
-            self.workspace.active_document().is_some_and(|document| {
-                document
-                    .objects()
-                    .iter()
-                    .filter(|object| object.id() != id)
-                    .filter_map(pit_parts)
-                    .any(|(_, other)| other.surface.as_ref().is_some_and(|link| link.id == surface))
-            })
-        });
-        let mut commands = Vec::new();
-        let (surface_id, geometry, name) = match linked.filter(|_| !shared) {
-            Some(existing) => {
-                let command = self.replace_triangulation_command(existing, surface).ok_or_else(|| anyhow!(tr!("pit-design-gone")))?;
-                let geometry = added_geometry(&command);
-                commands.push(command);
-                let name = self.triangulations.iter().find(|item| item.id == existing).map(|item| item.name.clone()).unwrap_or_default();
-                (existing, geometry, name)
-            }
-            None => {
-                let section = SectionKind::natural_for(crate::model::MemberKind::Triangulation);
-                let (ids, added) = self.add_triangulation_commands(vec![crate::app::commands::triangulation::session::new_triangulation(surface, section)]);
-                let geometry = added.first().and_then(added_geometry);
-                let name = added
-                    .first()
-                    .and_then(|command| match command {
-                        Command::AddItem {
-                            added: Some(OpenItem::Triangulation(item)),
-                            ..
-                        } => Some(item.name.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                commands.extend(added);
-                (ids.first().copied().ok_or_else(|| anyhow!(tr!("pit-design-gone")))?, geometry, name)
-            }
-        };
-        let mut pit = pit.clone();
-        if let Some(derived) = derived {
-            pit.derived = Some(derived);
-        }
-        pit.surface = geometry.map(|geometry| SurfaceLink {
-            id: surface_id,
-            inputs,
-            ground,
-            trimmed,
-            geometry,
-        });
-        let after = with_pit(&before, pit);
-        commands.push(Command::Replace { before, after });
-        let Some(command) = Command::step(commands) else {
-            return Ok(());
-        };
-        self.execute_job_edit(command);
-        userspace_log!("{}", tr!("pit-design-created-surface", name = name));
-        self.invalidate_geometry();
-        Ok(())
-    }
-
     /// Turn pit design `id` into polylines on its layer: its string, in its
     /// place, and each of its benches' strings after it, in their colours.
     /// One undo step. The polylines' ids, the string's first.
@@ -925,20 +799,5 @@ impl App<'_> {
         userspace_log!("{}", tr!("pit-design-exploded", count = ids.len()));
         self.invalidate_geometry();
         Ok(ids)
-    }
-}
-
-/// The geometry version of the surface a command adds or puts in place.
-fn added_geometry(command: &Command) -> Option<GeometryVersion> {
-    match command {
-        Command::ReplaceItem {
-            other: Some(OpenItem::Triangulation(item)),
-            ..
-        }
-        | Command::AddItem {
-            added: Some(OpenItem::Triangulation(item)),
-            ..
-        } => Some(item.geometry),
-        _ => None,
     }
 }

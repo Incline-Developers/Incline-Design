@@ -256,21 +256,6 @@ pub(crate) struct Design {
 }
 
 impl Design {
-    /// The design's strings as a surface's breaklines: its rings, closed,
-    /// and its ramp's edges, open. The centreline only repeats what the
-    /// edges say.
-    pub(crate) fn breaklines(&self) -> (Vec<Vec<DVec3>>, Vec<Vec<DVec3>>) {
-        let (mut rings, mut edges) = (Vec::new(), Vec::new());
-        for string in &self.strings {
-            match (string.kind, string.closed) {
-                (StringKind::RampCentreline, _) => {}
-                (_, true) => rings.push(string.points.clone()),
-                (_, false) => edges.push(string.points.clone()),
-            }
-        }
-        (rings, edges)
-    }
-
     /// The RL of the last ring built.
     pub(crate) fn final_elevation(&self) -> f64 {
         self.levels.last().copied().unwrap_or_default()

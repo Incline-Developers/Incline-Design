@@ -1,5 +1,5 @@
 //! Pit Design through MCP: pit design objects, read, made from closed
-//! polylines, changed, exploded and given surfaces as the Pit Design window
+//! polylines, changed and exploded as the Pit Design tool
 //! does, and `design_pit`, which makes one in one call.
 
 use serde_json::{Value, json};
@@ -11,7 +11,7 @@ use crate::{
         Object, ObjectId,
         pit_design::{
             Design, End,
-            object::{Outcome, PitObject, ScenarioId, SurfaceStanding},
+            object::{Outcome, PitObject, ScenarioId},
             settings::{PitDesignSettings, StopMode},
         },
         triangulation::TriangulationId,
@@ -19,14 +19,14 @@ use crate::{
     ui::dialogs::pit_design::{NoDesign, end_text, no_design_text, problem_text},
 };
 
-const SETTINGS_DESCRIPTION: &str = "A scenario's settings: direction (up from a floor's toe, or down from a crest); bench_height; face_angle (degrees from horizontal); berm_width; wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id to daylight against, building up); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius); trim_to_topography (its surface, when it daylights).";
+const SETTINGS_DESCRIPTION: &str = "A scenario's settings: direction (up from a floor's toe, or down from a crest); bench_height; face_angle (degrees from horizontal); berm_width; wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id to daylight against, building up); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius). Its surface is made with triangulate, which takes a pit design as every string it draws.";
 
 pub(super) fn definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "get_pit_designs",
             "title": "Read the pit designs",
-            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). It holds scenarios, each a full set of settings, one active, and remembers the surface it built (surface_standing: not_built, current, out_of_date, or edited by hand since). Without design: a summary of each. With design (its object id): that one whole, every scenario's settings and what the active one comes to included, which set_pit_design takes back.",
+            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). It holds scenarios, each a full set of settings, one active. Without design: a summary of each. With design (its object id): that one whole, every scenario's settings and what the active one comes to included, which set_pit_design takes back.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "design": { "type": "integer", "minimum": 0 } },
@@ -71,21 +71,9 @@ pub(super) fn definitions() -> Vec<Value> {
             "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false },
         }),
         json!({
-            "name": "build_pit_surface",
-            "title": "Build a pit design's surface",
-            "description": "Build a pit design's surface from its strings, trimmed to the topography it daylights against when trim_to_topography is set: the surface it built before is replaced in place, keeping its name and place, or a new one is made. One undo step. Edits made by hand to that surface since are lost: get_pit_designs says when there are any. It runs in the background: the result gives its task, which get_tasks follows.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "design": { "type": "integer", "minimum": 0 } },
-                "required": ["design"],
-                "additionalProperties": false,
-            },
-            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true },
-        }),
-        json!({
             "name": "design_pit",
             "title": "Design a pit in one call",
-            "description": "Make a pit design from a closed polyline, in its place, in one call: set_pit_design with string and these settings, then (with surface) build_pit_surface. Up from a floor's toe (each bench a face at face_angle rising bench_height, then a berm berm_width wide) or down from a crest. Exactly one of benches, stop_rl or daylight says where it stops. The ramp climbs at gradient along the steeper edge of the road, starting where the string passes nearest start, as a spiral round the walls or, with switchback_every, turning back on a level pad. Every ring is kept sound: where the next bench has no room, the design stops at the last good one and says why. With preview it only says what the design comes to, and makes nothing. Returns the design's id, which the other pit design tools take.",
+            "description": "Make a pit design from a closed polyline, in its place, in one call: set_pit_design with string and these settings. Up from a floor's toe (each bench a face at face_angle rising bench_height, then a berm berm_width wide) or down from a crest. Exactly one of benches, stop_rl or daylight says where it stops. The ramp climbs at gradient along the steeper edge of the road, starting where the string passes nearest start, as a spiral round the walls or, with switchback_every, turning back on a level pad. Every ring is kept sound: where the next bench has no room, the design stops at the last good one and says why. With preview it only says what the design comes to, and makes nothing. Returns the design's id, which the other pit design tools take.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -113,8 +101,6 @@ pub(super) fn definitions() -> Vec<Value> {
                         "required": ["width", "gradient"],
                         "additionalProperties": false,
                     },
-                    "surface": { "type": "boolean", "description": "Also build the pit's surface. False if left out." },
-                    "trim": { "type": "boolean", "description": "Trim the surface to the daylight topography. True if left out, with daylight." },
                     "preview": { "type": "boolean", "description": "Only say what the design comes to; make nothing. False if left out." },
                 },
                 "required": ["string", "bench_height", "face_angle", "berm_width"],
@@ -140,7 +126,6 @@ fn one_call_settings(arguments: &Value) -> Result<PitDesignSettings, String> {
         berm_width: number("berm_width")?,
         wall_radius: arguments["wall_radius"].as_f64().unwrap_or(0.0),
         ramp: false,
-        trim_to_topography: arguments["trim"].as_bool().unwrap_or(true),
         ..PitDesignSettings::default()
     };
     let stops = [&arguments["benches"], &arguments["stop_rl"], &arguments["daylight"]]
@@ -190,15 +175,6 @@ fn end_name(end: End) -> &'static str {
         End::OutOfRoom => "out_of_room",
         End::RampTooLong => "no_room_for_ramp",
         End::LeftGround => "left_topography",
-    }
-}
-
-fn surface_standing_name(standing: SurfaceStanding) -> &'static str {
-    match standing {
-        SurfaceStanding::NotBuilt => "not_built",
-        SurfaceStanding::Current => "current",
-        SurfaceStanding::OutOfDate => "out_of_date",
-        SurfaceStanding::Edited => "edited",
     }
 }
 
@@ -257,7 +233,6 @@ impl App<'_> {
             "get_pit_designs" => self.mcp_get_pit_designs(arguments),
             "set_pit_design" => self.mcp_set_pit_design(arguments),
             "manage_pit_design" => self.mcp_manage_pit_design(arguments),
-            "build_pit_surface" => self.mcp_build_pit_surface(arguments),
             "design_pit" => self.mcp_design_pit(arguments),
             _ => return None,
         };
@@ -289,7 +264,6 @@ impl App<'_> {
             .and_then(|id| self.triangulations.iter().find(|surface| surface.id == id))
             .filter(|surface| surface.state.loaded)
             .map(|surface| surface.geometry);
-        let surface = pit.surface.as_ref().and_then(|link| self.triangulations.iter().find(|item| item.id == link.id));
         let layer = self.workspace.active_document().and_then(|document| document.layer(object.layer()));
         json!({
             "id": object.id().0,
@@ -298,8 +272,6 @@ impl App<'_> {
             "active": pit.scenario().map(|scenario| scenario.id.0),
             "scenarios": pit.scenarios.iter().map(|scenario| json!({ "id": scenario.id.0, "name": scenario.name })).collect::<Vec<_>>(),
             "fresh": pit.is_fresh(verts, ground),
-            "surface": surface.map(|item| json!({ "id": item.id.0, "name": item.name })),
-            "surface_standing": surface_standing_name(pit.surface_standing(verts, surface.map(|item| item.geometry), ground)),
         })
     }
 
@@ -421,20 +393,6 @@ impl App<'_> {
         }
     }
 
-    fn mcp_build_pit_surface(&mut self, arguments: &Value) -> Result<Value, String> {
-        let (id, _) = self.mcp_pit_design(arguments)?;
-        let before = self.running_task_tickets();
-        self.build_pit_surface(id).map_err(|error| format!("{error:#}"))?;
-        let tasks: Vec<Value> = self
-            .background_tasks
-            .reported
-            .iter()
-            .filter(|task| !before.contains(&task.ticket))
-            .map(|task| json!({ "id": task.ticket.0, "task": task.label.trim_end_matches(['.', '…', ' ']) }))
-            .collect();
-        Ok(json!({ "design": id.0, "tasks": tasks, "note": "The surface goes in once it is built: get_tasks follows it, and get_pit_designs says what it made." }))
-    }
-
     fn mcp_design_pit(&mut self, arguments: &Value) -> Result<Value, String> {
         let settings = one_call_settings(arguments)?;
         let string = self.mcp_closed_polyline(arguments)?.ok_or("design_pit needs string, a closed polyline's id.")?;
@@ -455,11 +413,6 @@ impl App<'_> {
         }
         self.make_pit_design(string, arguments["name"].as_str().map(str::to_owned), Some(settings))
             .map_err(|error| format!("{error:#}"))?;
-        let mut result = json!({ "design": string.0, "comes_to": comes_to(&design) });
-        if arguments["surface"].as_bool().unwrap_or(false) {
-            let built = self.mcp_build_pit_surface(&json!({ "design": string.0 }))?;
-            result["tasks"] = built["tasks"].clone();
-        }
-        Ok(result)
+        Ok(json!({ "design": string.0, "comes_to": comes_to(&design) }))
     }
 }

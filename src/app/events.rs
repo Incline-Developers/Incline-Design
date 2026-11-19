@@ -705,6 +705,9 @@ impl<'a> App<'a> {
                     if self.editor.active_tool == ActiveTool::ExplodePolyline && hover_pick_due {
                         self.update_explode_hover();
                     }
+                    if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start) {
+                        self.update_pit_ramp_hover();
+                    }
                     if (self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick)
                         && hover_pick_due
                     {

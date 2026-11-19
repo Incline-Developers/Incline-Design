@@ -13,17 +13,14 @@
 //! them out again is not an edit of its own: undo takes back the change that
 //! made them stale, with the benches it had before.
 //!
-//! The pit's surface is a surface item, which a design layer cannot hold:
-//! the object remembers which one it built, and from what.
+//! Its surface is made as any other's, with Create Triangulation, which takes
+//! every string it draws.
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
 use super::{Design, Problem, settings::PitDesignSettings};
-use crate::model::{
-    PolyVertex,
-    triangulation::{GeometryVersion, TriangulationId},
-};
+use crate::model::{PolyVertex, triangulation::GeometryVersion};
 
 /// A scenario's id within its design.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -42,9 +39,6 @@ pub(crate) struct PitObject {
     /// The design as last worked out, and what from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) derived: Option<Derived>,
-    /// The surface it built, and what from.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) surface: Option<SurfaceLink>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -77,34 +71,6 @@ pub(crate) enum Outcome {
     Problem(Problem),
 }
 
-/// The surface a pit design built.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SurfaceLink {
-    pub(crate) id: TriangulationId,
-    /// [`inputs_key`] of what it was built from.
-    pub(crate) inputs: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) ground: Option<GeometryVersion>,
-    /// Whether it was trimmed to the topography.
-    pub(crate) trimmed: bool,
-    /// Its geometry as built: any other version is an edit made since.
-    pub(crate) geometry: GeometryVersion,
-}
-
-/// How a pit design's surface stands against the design.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum SurfaceStanding {
-    /// None built, or the one built has been deleted.
-    #[default]
-    NotBuilt,
-    Current,
-    /// The design has changed since it was built.
-    OutOfDate,
-    /// The surface has been edited since it was built.
-    Edited,
-}
-
 impl PitObject {
     /// A design with one scenario.
     pub(crate) fn new(name: String, scenario_name: String, settings: PitDesignSettings) -> Self {
@@ -118,7 +84,6 @@ impl PitObject {
             active: ScenarioId(0),
             next_scenario_id: 1,
             derived: None,
-            surface: None,
         }
     }
 
@@ -200,20 +165,6 @@ impl PitObject {
                 derived.inputs = inputs_key(verts, &settings);
             }
         }
-    }
-
-    /// How its surface stands, given the surface's geometry now (if it still
-    /// exists) and the ground's version now.
-    pub(crate) fn surface_standing(&self, verts: &[PolyVertex], surface: Option<GeometryVersion>, ground: Option<GeometryVersion>) -> SurfaceStanding {
-        let (Some(link), Some(geometry)) = (&self.surface, surface) else {
-            return SurfaceStanding::NotBuilt;
-        };
-        if geometry != link.geometry {
-            return SurfaceStanding::Edited;
-        }
-        let settings = self.settings();
-        let current = link.inputs == inputs_key(verts, &settings) && (settings.ground().is_none() || link.ground == ground) && link.trimmed == settings.trims();
-        if current { SurfaceStanding::Current } else { SurfaceStanding::OutOfDate }
     }
 }
 

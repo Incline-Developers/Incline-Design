@@ -308,9 +308,19 @@ impl<'a> App<'a> {
             let Some(obj) = self.operand_object(*id) else {
                 continue;
             };
-            if !matches!(obj, Object::Polyline { .. }) {
+            if !matches!(obj, Object::Polyline { .. } | Object::PitDesign { .. }) {
                 rejected += 1;
                 continue;
+            }
+            // A pit design's surface is its string, its rings and its ramp's
+            // edges; the centreline only repeats the edges.
+            for string in obj.pit_strings().iter().filter(|string| string.kind != crate::model::pit_design::StringKind::RampCentreline) {
+                if string.points.len() >= if string.closed { 3 } else { 2 } {
+                    paths.push(BreaklinePath {
+                        points: string.points.clone(),
+                        closed: string.closed,
+                    });
+                }
             }
             match obj.tessellated_path() {
                 Some((points, closed)) if points.len() >= if closed { 3 } else { 2 } => {

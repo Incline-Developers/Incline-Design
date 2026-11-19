@@ -205,7 +205,6 @@ impl<'a> App<'a> {
                 | UiCommand::SetReserveMapping { .. }
                 | UiCommand::SetReserveModelIncluded { .. }
                 | UiCommand::AddSolid { .. }
-                | UiCommand::BuildPitSurface(_)
                 | UiCommand::ExplodePitDesign(_)
                 | UiCommand::DeleteSolid(_)
                 | UiCommand::SaveSolidPreviewToProject
@@ -1409,7 +1408,10 @@ impl<'a> App<'a> {
                 self.finish_pit_editing();
                 Ok(())
             }
-            UiCommand::BuildPitSurface(id) => self.build_pit_surface(id),
+            UiCommand::PitDesignStage(stage) => {
+                self.set_pit_stage(stage);
+                Ok(())
+            }
             UiCommand::ExplodePitDesign(id) => self.explode_pit_design(id).map(|_| ()),
             UiCommand::BeginPitRampStartPick => {
                 self.begin_pit_ramp_start_pick();

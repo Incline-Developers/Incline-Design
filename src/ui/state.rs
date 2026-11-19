@@ -6293,8 +6293,8 @@ pub(crate) enum UiCommand {
     OpenPitDesign,
     /// Done with the pit in Pit Design's panel: the tool is put down.
     FinishPitDesign,
-    /// Build a pit design object's surface.
-    BuildPitSurface(ObjectId),
+    /// Go to a step of Pit Design's panel.
+    PitDesignStage(crate::ui::dialogs::pit_design::PitStage),
     /// Turn a pit design object into polylines.
     ExplodePitDesign(ObjectId),
     /// Wait for a click on Pit Design's string where its ramp starts.
@@ -6558,6 +6558,7 @@ impl UiCommand {
             | Self::OpenInsertPointAtElevationDialog
             | Self::OpenPitDesign
             | Self::FinishPitDesign
+            | Self::PitDesignStage(_)
             | Self::BeginPitRampStartPick
             | Self::OpenObjectEditDialog(_)
             | Self::OpenPointCloudTin
@@ -6992,7 +6993,6 @@ impl UiCommand {
             Self::BeginOffsetPick { object_ids, .. } => report(tr!("common-offset"), tr!("common-count-object-s", count = object_ids.len().to_string())),
             Self::RelimitLineResize { .. } => report(tr!("common-relimit-line"), String::new()),
             Self::CommitBatterBerm => report(tr!("common-create-batter-berm"), tr!("state-apply-generated-rings")),
-            Self::BuildPitSurface(_) => report(tr!("pit-design-title"), tr!("pit-design-report-summary")),
             Self::ExplodePitDesign(_) => report(tr!("pit-design-title"), tr!("pit-design-report-explode")),
             Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
             #[cfg(not(target_arch = "wasm32"))]
