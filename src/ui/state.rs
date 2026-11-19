@@ -1395,31 +1395,6 @@ pub(crate) struct TriCreateDiagnostic {
     pub(crate) segments_world: Vec<[DVec3; 2]>,
 }
 
-/// Whether the Batter Berm tool is generating a pit or a stockpile. Combined
-/// with [`BatterBermPreviewKey::direction_up`] this picks the horizontal
-/// offset side: Pit + Up and Stockpile + Down step outward; Pit + Down and
-/// Stockpile + Up step inward. The Direction selector alone sets the vertical
-/// step (Up rises, Down falls).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum BatterBermMode {
-    Pit,
-    Stockpile,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct BatterBermPreviewKey {
-    pub(crate) target_id: ObjectId,
-    pub(crate) document_revision: u64,
-    pub(crate) width: f64,
-    pub(crate) angle: f64,
-    pub(crate) bench_height: f64,
-    pub(crate) benches: u32,
-    pub(crate) mode: BatterBermMode,
-    /// `true` = each bench rises (Direction: Up); `false` = each bench falls
-    /// (Direction: Down).
-    pub(crate) direction_up: bool,
-}
-
 /// Which sub-mode the Relimit Line tool is operating in.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum RelimitMode {
@@ -3015,37 +2990,6 @@ pub(crate) struct EditorState {
     pub(crate) ore_max_input: f64,
     pub(crate) ore_name_input: String,
 
-    // Batter Berm tool
-    pub(crate) batter_berm_dialog_open: bool,
-    pub(crate) batter_berm_target_id: Option<ObjectId>,
-    pub(crate) batter_berm_width: f64,
-    pub(crate) batter_berm_angle: f64,
-    pub(crate) batter_berm_bench_height: f64,
-    pub(crate) batter_berm_benches: u32,
-    /// Maximum number of complete, compliant batter-and-berm levels for the
-    /// current boundary and design parameters.
-    pub(crate) batter_berm_max_benches: u32,
-    pub(crate) batter_berm_mode: BatterBermMode,
-    /// Direction selector: `true` = each bench rises (Up), `false` = each bench
-    /// falls (Down). Together with [`Self::batter_berm_mode`] this decides
-    /// whether the rings step inward or outward - see [`BatterBermMode`].
-    pub(crate) batter_berm_direction_up: bool,
-    /// All iteration rings in world coords: [toe_ring_0, berm_ring_0, toe_ring_1, berm_ring_1, …]
-    pub(crate) batter_berm_rings_world: Vec<Vec<DVec3>>,
-    /// Centre and radius per ring, parallel to [`Self::batter_berm_rings_world`],
-    /// when the source is a circle. Benching a circle yields concentric
-    /// circles, so the commit writes those rather than the flattened rings the
-    /// preview draws. `None` for every other source.
-    pub(crate) batter_berm_ring_circles: Option<Vec<(DVec3, f64)>>,
-    pub(crate) batter_berm_source_world: Vec<DVec3>,
-    /// Screen projections preserve one entry per world vertex. `None` means
-    /// that vertex is outside the camera depth range, so adjacent vertices
-    /// must not be joined across the gap.
-    pub(crate) batter_berm_rings_screen_px: Vec<Vec<OptionalScreenPointPx>>,
-    pub(crate) batter_berm_source_screen_px: Vec<OptionalScreenPointPx>,
-    pub(crate) batter_berm_preview_closed: bool,
-    pub(crate) batter_berm_preview_key: Option<BatterBermPreviewKey>,
-
     // Bezier tool
     pub(crate) bezier_poly_id: Option<ObjectId>,
     /// Whether the selected source is a closed polyline rather than an open polyline.
@@ -4070,15 +4014,6 @@ impl EditorState {
         self.rotate_preview_active = false;
         self.tool_highlight_id = None;
 
-        self.batter_berm_dialog_open = false;
-        self.batter_berm_target_id = None;
-        self.batter_berm_rings_world.clear();
-        self.batter_berm_ring_circles = None;
-        self.batter_berm_source_world.clear();
-        self.batter_berm_rings_screen_px.clear();
-        self.batter_berm_source_screen_px.clear();
-        self.batter_berm_preview_key = None;
-
         self.bezier_poly_id = None;
         self.bezier_poly_closed = false;
         self.bezier_selected_verts = [None, None];
@@ -4625,23 +4560,6 @@ impl EditorState {
             ore_min_input: 0.0,
             ore_max_input: 1.0,
             ore_name_input: String::new(),
-            batter_berm_dialog_open: false,
-            batter_berm_target_id: None,
-            batter_berm_width: 8.0,
-            batter_berm_angle: 60.0,
-            batter_berm_bench_height: 12.0,
-            batter_berm_benches: 1,
-            batter_berm_max_benches: 0,
-            batter_berm_mode: BatterBermMode::Pit,
-            // Down keeps the historical default (Pit + Down = inward + down).
-            batter_berm_direction_up: false,
-            batter_berm_rings_world: Vec::new(),
-            batter_berm_ring_circles: None,
-            batter_berm_source_world: Vec::new(),
-            batter_berm_rings_screen_px: Vec::new(),
-            batter_berm_source_screen_px: Vec::new(),
-            batter_berm_preview_closed: false,
-            batter_berm_preview_key: None,
             bezier_poly_id: None,
             bezier_poly_closed: false,
             bezier_selected_verts: [None; 2],
@@ -5083,7 +5001,6 @@ pub(crate) enum ActiveTool {
     /// One click fixes the centre both views orbit about.
     PickRotationCentre,
     Chamfer,
-    BatterBermOffset,
     /// Click a closed polyline to make it a pit design, or a pit design to
     /// edit it in the docked panel.
     PitDesign,
@@ -5120,7 +5037,6 @@ impl ActiveTool {
             Self::ChargeHoles => tr!("common-charge-holes"),
             Self::PickRotationCentre => tr!("viewport-bar-fix-centre-rotation"),
             Self::Chamfer => tr!("toolbars-chamfer-polyline-corners"),
-            Self::BatterBermOffset => tr!("toolbars-auto-bench"),
             Self::PitDesign => tr!("pit-design-title"),
             Self::Bezier => tr!("toolbars-bezier-polyline"),
             Self::VerticalSlice => tr!("viewport-bar-vertical-slice-view"),
@@ -6268,11 +6184,6 @@ pub(crate) enum UiCommand {
     /// Triggers the app to select the first valid line from the selection and open the relimit
     /// dialog.
     OpenRelimitDialog,
-    /// Triggers the app to select the first valid polyline and open the batter berm dialog.
-    OpenBatterBermDialog,
-    /// Dialog "Apply" pressed - commit all batter berm rings using the current panel state.
-    CommitBatterBerm,
-    CancelBatterBerm,
     /// Open the Create Triangulation main dialog.
     OpenCreateTriangulation,
     /// Open the Move to dialog that sets one axis of every selected object.
@@ -6551,8 +6462,6 @@ impl UiCommand {
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
             | Self::OpenRelimitDialog
-            | Self::OpenBatterBermDialog
-            | Self::CancelBatterBerm
             | Self::OpenCreateTriangulation
             | Self::OpenMoveToAxisDialog(_)
             | Self::OpenInsertPointAtElevationDialog
@@ -6992,7 +6901,6 @@ impl UiCommand {
             Self::ZoomToExtents => report(tr!("common-zoom-extents"), tr!("state-preserve-view-angle")),
             Self::BeginOffsetPick { object_ids, .. } => report(tr!("common-offset"), tr!("common-count-object-s", count = object_ids.len().to_string())),
             Self::RelimitLineResize { .. } => report(tr!("common-relimit-line"), String::new()),
-            Self::CommitBatterBerm => report(tr!("common-create-batter-berm"), tr!("state-apply-generated-rings")),
             Self::ExplodePitDesign(_) => report(tr!("pit-design-title"), tr!("pit-design-report-explode")),
             Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
             #[cfg(not(target_arch = "wasm32"))]
@@ -7278,7 +7186,6 @@ pub(crate) struct UiTriangulationEntry {
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
 }
-
 
 #[derive(Clone, Debug)]
 pub(crate) struct UiBlockModelEntry {

@@ -11,7 +11,7 @@ use crate::{
     i18n::tr,
     logging::CommandReportSpec,
     model::{Axis, Command, FillStyle, LayerId, Object, ObjectColor, ObjectId, PolyVertex, SceneEntityId, geometry},
-    ui::state::{BatterBermMode, UiCommand},
+    ui::state::UiCommand,
 };
 
 /// The schema of a list of object ids.
@@ -97,22 +97,6 @@ pub(super) fn definitions() -> Vec<Value> {
             false,
         ),
         changes(
-            "batter_berm",
-            "Bench a pit or stockpile outline",
-            "Bench out from a toe or crest outline, as Batter and Berm does: each bench a batter at batter_angle rising (or falling) bench_height, then a flat berm berm_width wide. pit benches outwards and up from a pit floor (or inwards and down from a crest, with downward); stockpile benches inwards and up from a toe (or outwards and down from a crest, with downward). Returns the new outlines' ids.",
-            json!({
-                "id": { "type": "integer", "minimum": 0, "description": "A polyline or circle." },
-                "kind": { "type": "string", "enum": ["pit", "stockpile"] },
-                "benches": { "type": "integer", "minimum": 1 },
-                "bench_height": { "type": "number", "exclusiveMinimum": 0 },
-                "batter_angle": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 90, "description": "Degrees from horizontal." },
-                "berm_width": { "type": "number", "exclusiveMinimum": 0 },
-                "downward": { "type": "boolean", "description": "Bench downwards instead. False if left out." },
-            }),
-            &["id", "kind", "benches", "bench_height", "batter_angle", "berm_width"],
-            false,
-        ),
-        changes(
             "explode_polylines",
             "Explode polylines",
             "Break each polyline into its separate two-vertex lines, as Explode does.",
@@ -154,7 +138,6 @@ impl App<'_> {
             "replace_object" => self.mcp_replace_object(arguments),
             "set_objects_hidden" => self.mcp_set_objects_hidden(arguments),
             "offset_objects" => self.mcp_offset_objects(arguments),
-            "batter_berm" => self.mcp_batter_berm(arguments),
             "explode_polylines" => self.mcp_explode(arguments),
             "insert_points" => self.mcp_insert_points(arguments),
             "drape_objects" => self.mcp_drape_objects(arguments),
@@ -414,58 +397,6 @@ impl App<'_> {
         }
         let ids = self.mcp_add_new(made, tr!("cmd-offset-create-offset"));
         ok(&json!({ "ids": ids }))
-    }
-
-    fn mcp_batter_berm(&mut self, arguments: &Value) -> Value {
-        let object = match self.mcp_editable_objects(&json!({ "ids": [arguments["id"]] }), "ids") {
-            Ok(mut objects) => objects.remove(0),
-            Err(error) => return failed(error),
-        };
-        if !matches!(object, Object::Polyline { .. } | Object::Circle { .. }) {
-            return failed("Batter and berm works from a polyline or a circle.");
-        }
-        let mode = match arguments["kind"].as_str() {
-            Some("pit") => BatterBermMode::Pit,
-            Some("stockpile") => BatterBermMode::Stockpile,
-            _ => return failed("kind is pit or stockpile."),
-        };
-        let (Some(benches), Some(height), Some(angle), Some(width)) = (
-            arguments["benches"].as_u64(),
-            arguments["bench_height"].as_f64(),
-            arguments["batter_angle"].as_f64(),
-            arguments["berm_width"].as_f64(),
-        ) else {
-            return failed("batter_berm needs benches, bench_height, batter_angle and berm_width.");
-        };
-        if benches == 0 || height <= 0.0 || width <= 0.0 || !(angle > 0.0 && angle < 90.0) {
-            return failed("benches, bench_height and berm_width must be above 0, and batter_angle between 0 and 90.");
-        }
-        let before = self.workspace.active_document().map_or(0, |document| document.objects().len());
-        // The dialog's own path: the same state its fields edit, its preview
-        // and its Create button.
-        let editor = &mut self.editor;
-        editor.batter_berm_target_id = Some(object.id());
-        editor.batter_berm_dialog_open = true;
-        editor.batter_berm_preview_key = None;
-        editor.batter_berm_mode = mode;
-        editor.batter_berm_direction_up = !arguments["downward"].as_bool().unwrap_or(false);
-        editor.batter_berm_benches = u32::try_from(benches).unwrap_or(u32::MAX);
-        editor.batter_berm_bench_height = height;
-        editor.batter_berm_angle = angle;
-        editor.batter_berm_width = width;
-        self.update_batter_berm_preview();
-        let built = self.editor.batter_berm_benches;
-        if self.editor.batter_berm_rings_world.is_empty() && self.editor.batter_berm_ring_circles.as_ref().is_none_or(Vec::is_empty) {
-            self.cancel_batter_berm();
-            return failed("No bench fits: the outline closes up before the first berm. Try a shorter bench or narrower berm.");
-        }
-        self.commit_batter_berm();
-        let ids: Vec<u64> = self
-            .workspace
-            .active_document()
-            .map(|document| document.objects()[before.min(document.objects().len())..].iter().map(|object| object.id().0).collect())
-            .unwrap_or_default();
-        ok(&json!({ "benches": built, "ids": ids }))
     }
 
     fn mcp_explode(&mut self, arguments: &Value) -> Value {

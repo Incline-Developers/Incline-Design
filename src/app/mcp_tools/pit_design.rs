@@ -19,7 +19,7 @@ use crate::{
     ui::dialogs::pit_design::{NoDesign, end_text, no_design_text, problem_text},
 };
 
-const SETTINGS_DESCRIPTION: &str = "A pit design's settings: direction (up from a floor's toe, or down from a crest); bench_height; face_angle (degrees from horizontal); berm_width; wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id to daylight against, building up); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius). Its surface is made with triangulate, which takes a pit design as every string it draws.";
+const SETTINGS_DESCRIPTION: &str = "A pit design's settings: kind (pit, cut into the ground, or dump, a dump or stockpile built on it); direction (a pit up from its floor's toe or down from its crest, a dump up from its toe stepping in or down from its top stepping out); bench_height; face_angle (degrees from horizontal); berm_width; wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id: a pit built up daylights against it, a dump built down meets it); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius). Its surface is made with triangulate, which takes a pit design as every string it draws.";
 
 pub(super) fn definitions() -> Vec<Value> {
     vec![
@@ -67,20 +67,21 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "design_pit",
             "title": "Design a pit in one call",
-            "description": "Make a pit design from a closed polyline, in its place, in one call: set_pit_design with string and these settings. Up from a floor's toe (each bench a face at face_angle rising bench_height, then a berm berm_width wide) or down from a crest. Exactly one of benches, stop_rl or daylight says where it stops. The ramp climbs at gradient along the steeper edge of the road, starting where the string passes nearest start, as a spiral round the walls or, with switchback_every, turning back on a level pad. Every ring is kept sound: where the next bench has no room, the design stops at the last good one and says why. With preview it only says what the design comes to, and makes nothing. Returns the design's id, which the other pit design tools take.",
+            "description": "Make a pit or dump design from a closed polyline, in its place, in one call: set_pit_design with string and these settings. A pit up from a floor's toe (each bench a face at face_angle rising bench_height, then a berm berm_width wide) or down from a crest. Exactly one of benches, stop_rl or daylight says where it stops. The ramp climbs at gradient along the steeper edge of the road, starting where the string passes nearest start, as a spiral round the walls or, with switchback_every, turning back on a level pad. Every ring is kept sound: where the next bench has no room, the design stops at the last good one and says why. With preview it only says what the design comes to, and makes nothing. Returns the design's id, which the other pit design tools take.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "string": { "type": "integer", "minimum": 0, "description": "The closed polyline to design from: the floor's toe building up, the crest building down." },
                     "name": { "type": "string", "minLength": 1 },
-                    "direction": { "type": "string", "enum": ["up", "down"], "description": "Up from a floor, or down from a crest. up if left out." },
+                    "kind": { "type": "string", "enum": ["pit", "dump"], "description": "A pit cut into the ground, or a dump or stockpile built on it. pit if left out." },
+                    "direction": { "type": "string", "enum": ["up", "down"], "description": "A pit up from its floor or down from its crest; a dump up from its toe or down from its top. up if left out." },
                     "bench_height": { "type": "number", "exclusiveMinimum": 0 },
                     "face_angle": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 90, "description": "Degrees from horizontal." },
                     "berm_width": { "type": "number", "minimum": 0 },
                     "wall_radius": { "type": "number", "minimum": 0, "description": "The tightest the walls turn: sharp corners are rounded to it. 0 if left out." },
                     "benches": { "type": "integer", "minimum": 1, "description": "Stop after this many benches." },
                     "stop_rl": { "type": "number", "description": "Stop at this RL, the last bench cut short to meet it." },
-                    "daylight": { "type": "integer", "minimum": 0, "description": "A loaded topography surface: build up until a whole bench stands clear of it." },
+                    "daylight": { "type": "integer", "minimum": 0, "description": "A loaded topography surface: a pit built up until a whole bench stands clear of it, or a dump built down until a whole lift meets it." },
                     "ramp": {
                         "type": "object",
                         "description": "The haul ramp. None if left out.",
@@ -110,6 +111,11 @@ fn one_call_settings(arguments: &Value) -> Result<PitDesignSettings, String> {
     use crate::model::pit_design::Direction;
     let number = |key: &str| arguments[key].as_f64().ok_or_else(|| format!("design_pit needs {key}."));
     let mut settings = PitDesignSettings {
+        kind: match arguments["kind"].as_str() {
+            None | Some("pit") => crate::model::pit_design::Kind::Pit,
+            Some("dump") => crate::model::pit_design::Kind::Dump,
+            Some(other) => return Err(format!("kind is pit or dump, not {other}.")),
+        },
         direction: match arguments["direction"].as_str() {
             None | Some("up") => Direction::Up,
             Some("down") => Direction::Down,
@@ -244,7 +250,13 @@ impl App<'_> {
             .active_document()
             .and_then(|document| document.get_object(id))
             .ok_or_else(|| format!("There is no design object with id {} in a loaded layer: get_pit_designs lists the pit designs.", id.0))?;
-        let (_, pit) = pit_parts(object).ok_or_else(|| format!("Object {} is a {}, not a pit design: set_pit_design with string makes a closed polyline one.", id.0, object.kind_name()))?;
+        let (_, pit) = pit_parts(object).ok_or_else(|| {
+            format!(
+                "Object {} is a {}, not a pit design: set_pit_design with string makes a closed polyline one.",
+                id.0,
+                object.kind_name()
+            )
+        })?;
         Ok((id, pit.clone()))
     }
 
@@ -287,7 +299,14 @@ impl App<'_> {
         let designs: Vec<Value> = self
             .workspace
             .active_document()
-            .map(|document| document.objects().iter().filter(|object| pit_parts(object).is_some()).map(|object| self.mcp_describe_pit(object)).collect())
+            .map(|document| {
+                document
+                    .objects()
+                    .iter()
+                    .filter(|object| pit_parts(object).is_some())
+                    .map(|object| self.mcp_describe_pit(object))
+                    .collect()
+            })
             .unwrap_or_default();
         Ok(json!({ "designs": designs }))
     }
@@ -303,7 +322,11 @@ impl App<'_> {
             .and_then(|document| document.get_object(id))
             .ok_or_else(|| format!("There is no design object with id {} in a loaded layer.", id.0))?;
         if !(matches!(object, Object::Polyline { .. }) && object.encloses_area()) {
-            return Err(format!("Object {} is a {}: a pit design is made from a closed polyline round some area.", id.0, object.kind_name()));
+            return Err(format!(
+                "Object {} is a {}: a pit design is made from a closed polyline round some area.",
+                id.0,
+                object.kind_name()
+            ));
         }
         Ok(Some(id))
     }

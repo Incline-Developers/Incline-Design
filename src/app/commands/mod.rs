@@ -1379,10 +1379,6 @@ impl<'a> App<'a> {
                 self.open_relimit_dialog();
                 Ok(())
             }
-            UiCommand::OpenBatterBermDialog => {
-                self.open_batter_berm_dialog();
-                Ok(())
-            }
             UiCommand::OpenMoveToAxisDialog(axis) => {
                 self.open_move_to_axis(axis);
                 Ok(())
@@ -1427,14 +1423,6 @@ impl<'a> App<'a> {
             }
             UiCommand::InsertPointsAtElevation { object_ids, elevation } => {
                 self.insert_points_at_elevation(object_ids, elevation);
-                Ok(())
-            }
-            UiCommand::CommitBatterBerm => {
-                self.commit_batter_berm();
-                Ok(())
-            }
-            UiCommand::CancelBatterBerm => {
-                self.cancel_batter_berm();
                 Ok(())
             }
             UiCommand::OpenCreateTriangulation => {

@@ -5,7 +5,7 @@
 
 use glam::{DVec2, DVec3};
 
-use super::{Base, Design, DesignString, Direction, End, Layout, Problem, RampSpec, Spec, Stop, StringKind, design};
+use super::{Base, Design, DesignString, Direction, End, Kind, Layout, Problem, RampSpec, Spec, Stop, StringKind, design};
 
 /// Outlines in plan: a rectangle, a circle, an L, a star, a hand-drawn floor
 /// with a re-entrant corner, and a big crest.
@@ -58,6 +58,7 @@ fn spec(direction: Direction, layout: Layout, start: DVec2, clockwise: bool, sto
 
 fn with_ramp(direction: Direction, layout: Layout, start: DVec2, clockwise: bool, stop: Stop, (gradient, berm_width): (f64, f64)) -> Spec {
     Spec {
+        kind: Kind::Pit,
         direction,
         bench_height: 15.0,
         face_angle: 65.0,
@@ -180,7 +181,12 @@ fn assert_sound(name: &str, design: &Design, ramp: &RampSpec) {
     for (index, bench) in design.report.iter().enumerate() {
         let road = bench.ramp.unwrap_or_else(|| panic!("{name}: bench {index} has no ramp"));
         if road.lengthened == 0.0 {
-            assert!(road.steepest >= ramp.gradient - 0.005, "{name}: bench {index} climbs at {:.4}, not {}", road.steepest, ramp.gradient);
+            assert!(
+                road.steepest >= ramp.gradient - 0.005,
+                "{name}: bench {index} climbs at {:.4}, not {}",
+                road.steepest,
+                ramp.gradient
+            );
         }
         assert!(road.steepest <= ramp.gradient + 1.0e-6, "{name}: bench {index} is steeper than its gradient");
         assert!(road.narrowest >= ramp.width * 0.96, "{name}: bench {index} narrows to {:.1} m", road.narrowest);
@@ -285,3 +291,50 @@ fn settings_that_make_no_design_say_why() {
     assert_eq!(problem(steep), Some(Problem::FaceAngle));
 }
 
+#[test]
+fn dumps_build_up_stepping_in_and_down_to_the_ground() {
+    let start = outline("crest")[2];
+    for clockwise in [false, true] {
+        let mut spec = with_ramp(Direction::Up, Layout::Spiral, start, clockwise, Stop::Benches(6), RAMPS[0]);
+        spec.kind = Kind::Dump;
+        let dump = built("crest", 300.0, &spec, None);
+        let name = format!("dump up, clockwise {clockwise}");
+        assert_sound(&name, &dump, spec.ramp.as_ref().unwrap());
+        assert!(dump.dump);
+        assert!(dump.benches >= 5, "{name}: only {} lifts", dump.benches);
+        assert!(dump.levels.windows(2).all(|pair| pair[1] > pair[0]), "{name}: built up");
+        assert!(dump.report.windows(2).all(|pair| pair[1].area < pair[0].area), "{name}: each lift steps in");
+        // Climbing, the ramp goes the way round it was asked: seen from
+        // above, the centreline sweeps clockwise or anticlockwise as it rises.
+        let centreline = dump.strings.iter().find(|string| string.kind == StringKind::RampCentreline).unwrap();
+        let mut points = centreline.points.clone();
+        points.sort_by(|a, b| a.z.total_cmp(&b.z));
+        let centre = points.iter().fold(DVec2::ZERO, |sum, point| sum + point.truncate()) / points.len() as f64;
+        let turning: f64 = points
+            .windows(2)
+            .map(|pair| (pair[0].truncate() - centre).perp_dot(pair[1].truncate() - pair[0].truncate()))
+            .sum();
+        assert_eq!(turning < 0.0, clockwise, "{name}: the ramp climbs the wrong way round");
+    }
+
+    // Down from its top, stepping out until a whole lift meets ground that
+    // falls away to the east.
+    let ground = |point: DVec2| Some(260.0 - point.x * 0.02);
+    let mut spec = with_ramp(Direction::Down, Layout::Spiral, start, false, Stop::Daylight, RAMPS[0]);
+    spec.kind = Kind::Dump;
+    let dump = built("rect", 300.0, &spec, Some(&ground));
+    assert_sound("dump down", &dump, spec.ramp.as_ref().unwrap());
+    assert_eq!(dump.end, End::Daylight);
+    assert!(dump.levels.windows(2).all(|pair| pair[1] < pair[0]), "built down");
+    let last = dump.strings.iter().rev().find(|string| string.closed).unwrap();
+    assert!(
+        last.points.iter().all(|point| point.z <= ground(point.truncate()).unwrap()),
+        "the last lift's toe is on or below the ground"
+    );
+
+    // Built up, there is no ground to meet.
+    let mut spec = with_ramp(Direction::Up, Layout::Spiral, start, false, Stop::Daylight, RAMPS[0]);
+    spec.kind = Kind::Dump;
+    let points: Vec<DVec3> = outline("rect").iter().map(|point| point.extend(300.0)).collect();
+    assert_eq!(design(&Base::from_points(&points).unwrap(), &spec, None, &|| false).err(), Some(Problem::DaylightDumpUp));
+}

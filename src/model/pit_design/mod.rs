@@ -19,11 +19,11 @@
 //! next was offset from (`ring::Ring::sources`).
 
 pub(crate) mod object;
+#[cfg(test)]
+mod object_tests;
 pub(crate) mod ring;
 pub(crate) mod road;
 pub(crate) mod settings;
-#[cfg(test)]
-mod object_tests;
 #[cfg(test)]
 mod tests;
 
@@ -44,7 +44,27 @@ pub(crate) enum Direction {
     Down,
 }
 
+/// What a design is of: a pit cut into the ground, or a dump or stockpile
+/// built on it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Kind {
+    #[default]
+    Pit,
+    /// Built up from its toe stepping in, or down from its top stepping out
+    /// until it meets the ground: a pit turned upside down.
+    Dump,
+}
+
 impl Direction {
+    /// The other way.
+    fn flipped(self) -> Self {
+        match self {
+            Self::Up => Self::Down,
+            Self::Down => Self::Up,
+        }
+    }
+
     /// Out from the ring (1) or in (-1), and up (1) or down (-1): the same.
     pub(crate) fn sign(self) -> f64 {
         match self {
@@ -89,6 +109,7 @@ pub(crate) enum Stop {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Spec {
+    pub(crate) kind: Kind,
     pub(crate) direction: Direction,
     pub(crate) bench_height: f64,
     /// Bench face angle from horizontal, in degrees.
@@ -154,6 +175,9 @@ pub(crate) enum Problem {
     Benches,
     /// Daylighting builds up to the ground; a design built down has none.
     DaylightDown,
+    /// A dump meets the ground built down from its top; built up it has
+    /// none to meet.
+    DaylightDumpUp,
     /// The stop elevation is behind the string, not ahead of it.
     StopElevation,
 }
@@ -253,12 +277,34 @@ pub(crate) struct Design {
     /// The volume between the starting string and the last ring, from the
     /// rings' areas: the ground the benches enclose.
     pub(crate) volume: f64,
+    /// Whether it is a dump's, built on the ground rather than cut into it.
+    #[serde(default)]
+    pub(crate) dump: bool,
 }
 
 impl Design {
     /// The RL of the last ring built.
     pub(crate) fn final_elevation(&self) -> f64 {
         self.levels.last().copied().unwrap_or_default()
+    }
+
+    /// The design with every height turned over, as a dump is the pit it is
+    /// upside down.
+    fn turned_over(mut self) -> Self {
+        for string in &mut self.strings {
+            for point in &mut string.points {
+                point.z = -point.z;
+            }
+        }
+        for level in &mut self.levels {
+            *level = -*level;
+        }
+        for bench in &mut self.report {
+            bench.elevation = -bench.elevation;
+        }
+        self.ramp_exit = self.ramp_exit.map(|exit| DVec3::new(exit.x, exit.y, -exit.z));
+        self.dump = true;
+        self
     }
 
     /// The same design moved by `delta`: a design moves with its string.
@@ -366,6 +412,47 @@ pub(crate) type Ground<'a> = &'a dyn Fn(DVec2) -> Option<f64>;
 /// Build the design a base string and its settings describe, stopping early
 /// if `cancelled` says to.
 pub(crate) fn design(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &dyn Fn() -> bool) -> Result<Design, Problem> {
+    if spec.kind == Kind::Dump {
+        return design_dump(base, spec, ground, cancelled);
+    }
+    design_pit(base, spec, ground, cancelled)
+}
+
+/// A dump, designed as the pit it is upside down: built up stepping in, it
+/// is a pit built down stepping in with every height turned over; built
+/// down stepping out to the ground, a pit built up to daylight. The ramp
+/// that climbs one way round the dump falls that way round the pit, so it is
+/// asked to climb the other.
+fn design_dump(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &dyn Fn() -> bool) -> Result<Design, Problem> {
+    let flipped = Spec {
+        kind: Kind::Pit,
+        direction: spec.direction.flipped(),
+        ramp: spec.ramp.map(|ramp| RampSpec {
+            climbs_clockwise: !ramp.climbs_clockwise,
+            ..ramp
+        }),
+        stop: match spec.stop {
+            Stop::Elevation(elevation) => Stop::Elevation(-elevation),
+            stop => stop,
+        },
+        ..*spec
+    };
+    let base = Base {
+        ring: base.ring.clone(),
+        elevation: -base.elevation,
+        unevenness: base.unevenness,
+    };
+    let below = |point: DVec2| ground.and_then(|ground| ground(point)).map(|z| -z);
+    let ground: Option<Ground<'_>> = ground.map(|_| &below as Ground<'_>);
+    match design_pit(&base, &flipped, ground, cancelled) {
+        Ok(design) => Ok(design.turned_over()),
+        Err(Problem::DaylightDown) => Err(Problem::DaylightDumpUp),
+        Err(problem) => Err(problem),
+    }
+}
+
+/// A pit, cut into the ground.
+fn design_pit(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &dyn Fn() -> bool) -> Result<Design, Problem> {
     let flats = design_with(base, spec, ground, cancelled, Additions::FlatsFirst)?;
     // A ramp kept to its gradient by flats can come to a bench with no room
     // where one climbing a little flatter would have found it, the benches
@@ -501,6 +588,7 @@ fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
         ramp_start_moved: start_moved,
         ramp_exit,
         volume,
+        dump: false,
     })
 }
 
@@ -780,7 +868,11 @@ impl Builder<'_> {
                         Some(floor) => shortest(floor, &mut |flat| self.attempt(from, cursor, lay(flat, 0.0), turn, berm, face, elevation, height)),
                         None => Err(End::OutOfRoom),
                     };
-                    let tried = flat().or_else(|_| shortest(longer_after, &mut |longer| self.attempt(from, cursor, lay(0.0, longer), turn, berm, face, elevation, height)));
+                    let tried = flat().or_else(|_| {
+                        shortest(longer_after, &mut |longer| {
+                            self.attempt(from, cursor, lay(0.0, longer), turn, berm, face, elevation, height)
+                        })
+                    });
                     match tried {
                         Ok(attempt) => {
                             found = Some(attempt);
@@ -1017,7 +1109,11 @@ fn measure_road(near: &[DVec3], far: &[DVec3], height: f64) -> RampReport {
         let nearest = far
             .windows(2)
             .filter(|pair| point.z >= pair[0].z.min(pair[1].z) - SAME_HEIGHT && point.z <= pair[0].z.max(pair[1].z) + SAME_HEIGHT)
-            .map(|pair| crate::model::kernel::project_onto_segment(point.truncate(), pair[0].truncate(), pair[1].truncate()).0.distance(point.truncate()))
+            .map(|pair| {
+                crate::model::kernel::project_onto_segment(point.truncate(), pair[0].truncate(), pair[1].truncate())
+                    .0
+                    .distance(point.truncate())
+            })
             .fold(f64::INFINITY, f64::min);
         narrowest = narrowest.min(nearest);
     }

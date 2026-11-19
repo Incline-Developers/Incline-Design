@@ -1,4 +1,3 @@
-pub(crate) mod batter_berm;
 pub(crate) mod bezier;
 pub(crate) mod chamfer;
 pub(crate) mod drape;

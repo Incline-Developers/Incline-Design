@@ -668,22 +668,6 @@ pub(crate) fn rebuild_dynamic_scene(input: DynamicSceneBuildInput<'_>) {
     let mut unused_fill_indices: Vec<u32> = Vec::new();
     let mut draw_ctx = DrawContext::unstyled(dynamic_strokes, &mut unused_fill_vertices, &mut unused_fill_indices, scene_origin, scale_factor);
 
-    if editor.batter_berm_dialog_open {
-        const BATTER_BERM_PREVIEW_COLOR: [f32; 4] = [1.0, 0.86, 0.0, 1.0];
-
-        for ring in &editor.batter_berm_rings_world {
-            for pair in ring.windows(2) {
-                draw_line(&mut draw_ctx, pair[0], pair[1], 2.0, BATTER_BERM_PREVIEW_COLOR);
-            }
-            if editor.batter_berm_preview_closed
-                && ring.len() >= 2
-                && let (Some(&first), Some(&last)) = (ring.first(), ring.last())
-            {
-                draw_line(&mut draw_ctx, last, first, 2.0, BATTER_BERM_PREVIEW_COLOR);
-            }
-        }
-    }
-
     // Pit Design's preview, while it shows what the object does not yet:
     // its rings, and its ramp's edges and centreline.
     if let Some(design) = editor

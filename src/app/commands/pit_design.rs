@@ -168,7 +168,12 @@ impl App<'_> {
         }
         // Editing a pit, or making one of a polyline already drawn, needs no
         // layer to draw on: only drawing a new string does.
-        if self.editor.active_tool != ActiveTool::PitDesign && selected.is_some() && self.active_layer().is_none() && !self.editor.text_editing_enabled && !self.editor.slice_mode_enabled {
+        if self.editor.active_tool != ActiveTool::PitDesign
+            && selected.is_some()
+            && self.active_layer().is_none()
+            && !self.editor.text_editing_enabled
+            && !self.editor.slice_mode_enabled
+        {
             self.editor.active_tool = ActiveTool::PitDesign;
         }
         if self.editor.active_tool != ActiveTool::PitDesign {
@@ -416,7 +421,12 @@ impl App<'_> {
         if synced.as_ref() != Some(&now) {
             // A new design worked out keeps what is being typed; anything else
             // the object now holds replaces it.
-            let only_derived = synced.as_ref().is_some_and(|synced| PitObject { derived: now.derived.clone(), ..synced.clone() } == now);
+            let only_derived = synced.as_ref().is_some_and(|synced| {
+                PitObject {
+                    derived: now.derived.clone(),
+                    ..synced.clone()
+                } == now
+            });
             if let Some(draft) = self.editor.pit_design.as_mut() {
                 draft.working = match (only_derived, working) {
                     (true, Some(mut working)) => {
@@ -487,7 +497,11 @@ impl App<'_> {
             return;
         };
         let verts = verts.to_vec();
-        let ground = if settings.daylights() { Some(self.pit_design_ground(settings.topography)) } else { None };
+        let ground = if settings.daylights() {
+            Some(self.pit_design_ground(settings.topography))
+        } else {
+            None
+        };
         let key = PreviewKey {
             verts,
             settings,
@@ -740,7 +754,11 @@ impl App<'_> {
     /// Work a design out here and now, as the preview does in the
     /// background: for the MCP server.
     pub(crate) fn design_pit_now(&self, verts: &[PolyVertex], settings: &PitDesignSettings) -> Result<Preview, NoDesign> {
-        let ground = if settings.daylights() { Some(self.pit_design_ground(settings.topography)?) } else { None };
+        let ground = if settings.daylights() {
+            Some(self.pit_design_ground(settings.topography)?)
+        } else {
+            None
+        };
         design_on_worker(verts, settings, ground.as_ref(), &CancelFlag::default()).map_err(|_| NoDesign::NotClosed)
     }
 

@@ -699,12 +699,7 @@ impl MenuRow {
             // dialog states and changes with Pick. Insert at Intersection has
             // no dialog, and opens straight into the pick when the selection
             // has nothing to cross.
-            Self::InsertAtIntersection
-            | Self::InsertAtElevation
-            | Self::SetAxis(_)
-            | Self::CreateTriangulation
-            | Self::ReferencePoints
-            | Self::ReferenceSurface => true,
+            Self::InsertAtIntersection | Self::InsertAtElevation | Self::SetAxis(_) | Self::CreateTriangulation | Self::ReferencePoints | Self::ReferenceSurface => true,
             // The tools taking two surfaces pick both in their dialog.
             Self::TrimTopology
             | Self::CutTopologyByPitShell

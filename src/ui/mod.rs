@@ -649,7 +649,6 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::Bezier if editor.bezier_selected_verts[0].is_none() => ViewportMessage::text(tr!("ui-click-first-vertex")),
         ActiveTool::Bezier if editor.bezier_selected_verts[1].is_none() => ViewportMessage::text(tr!("ui-click-second-vertex")),
         ActiveTool::ExplodePolyline => ViewportMessage::text(tr!("ui-select-polyline")),
-        ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::PitDesign if editor.pit_drawing() && editor.pending_stroke.len() >= 3 => {
             ViewportMessage::text(tr!("pit-design-draw-close")).minor(tr!("pit-design-draw-close-minor"))
         }
@@ -1422,13 +1421,6 @@ fn draw_ui(
     // Pit Design
     if editor.active_tool == ActiveTool::PitDesign {
         dialogs::pit_design::draw_pit_design_panel(root_ui, editor, project, commands, canvas_rect);
-    }
-    // Batter Berm
-    if editor.active_tool == ActiveTool::BatterBermOffset && !editor.batter_berm_dialog_open {
-        commands.push(UiCommand::OpenBatterBermDialog);
-    }
-    if editor.batter_berm_dialog_open {
-        dialogs::editing::draw_batter_berm_dialog(root_ui, commands, editor, canvas_rect);
     }
     // Relimit Line
     if editor.active_tool == ActiveTool::RelimitLine

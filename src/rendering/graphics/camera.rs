@@ -1919,32 +1919,6 @@ impl<'a> Graphics<'a> {
         }
     }
 
-    /// Keep generated batter/berm preview rings inside the clip volume. They
-    /// are not committed document geometry yet, so scene bounds omit them.
-    pub(super) fn include_batter_berm_preview_in_depth(&mut self, editor: &EditorState) {
-        if !editor.batter_berm_dialog_open || editor.batter_berm_rings_world.is_empty() {
-            return;
-        }
-
-        let forward = self.camera.forward();
-        let (min_depth, max_depth) = editor
-            .batter_berm_rings_world
-            .iter()
-            .flatten()
-            .copied()
-            .filter(|point| point.x.is_finite() && point.y.is_finite() && point.z.is_finite())
-            .map(|point| {
-                let point = self.exaggerate_point(point);
-                (point - self.camera.position).dot(forward)
-            })
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), depth| (min.min(depth), max.max(depth)));
-
-        if min_depth.is_finite() {
-            let padding = (self.projection.zoom * 0.25).max(1.0);
-            self.projection.expand_view_depth_range(min_depth, max_depth, padding);
-        }
-    }
-
     /// Keep the blast outlines inside the clip volume. They are drawn on their
     /// bench's nominal crest plane, which on the topmost bench sits above the
     /// mesh roof - that roof is topography, not a cut cap - so the scene bounds

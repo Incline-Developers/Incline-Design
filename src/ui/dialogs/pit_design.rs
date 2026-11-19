@@ -16,7 +16,7 @@ use crate::{
     model::{
         ObjectId, PolyVertex,
         pit_design::{
-            Design, Direction, End, Problem,
+            Design, Direction, End, Kind, Problem,
             object::PitObject,
             settings::{PitDesignSettings, StopMode},
         },
@@ -138,17 +138,27 @@ impl PitDesignDraft {
     }
 }
 
-fn direction_label(direction: Direction) -> String {
-    match direction {
-        Direction::Up => tr!("pit-design-up"),
-        Direction::Down => tr!("pit-design-down"),
+fn direction_label(kind: Kind, direction: Direction) -> String {
+    match (kind, direction) {
+        (Kind::Pit, Direction::Up) => tr!("pit-design-up"),
+        (Kind::Pit, Direction::Down) => tr!("pit-design-down"),
+        (Kind::Dump, Direction::Up) => tr!("pit-design-dump-up"),
+        (Kind::Dump, Direction::Down) => tr!("pit-design-dump-down"),
     }
 }
 
-fn stop_label(stop: StopMode) -> String {
+fn kind_label(kind: Kind) -> String {
+    match kind {
+        Kind::Pit => tr!("pit-design-kind-pit"),
+        Kind::Dump => tr!("pit-design-kind-dump"),
+    }
+}
+
+fn stop_label(kind: Kind, stop: StopMode) -> String {
     match stop {
         StopMode::Benches => tr!("pit-design-stop-benches"),
         StopMode::Elevation => tr!("pit-design-stop-elevation"),
+        StopMode::Daylight if kind == Kind::Dump => tr!("pit-design-stop-ground"),
         StopMode::Daylight => tr!("pit-design-stop-daylight"),
     }
 }
@@ -172,6 +182,7 @@ pub(crate) fn problem_text(problem: Problem) -> String {
         Problem::Switchback => tr!("pit-design-problem-switchback"),
         Problem::Benches => tr!("pit-design-problem-benches"),
         Problem::DaylightDown => tr!("pit-design-problem-daylight-down"),
+        Problem::DaylightDumpUp => tr!("pit-design-problem-daylight-dump-up"),
         Problem::StopElevation => tr!("pit-design-problem-stop-elevation"),
     }
 }
@@ -181,6 +192,7 @@ pub(crate) fn end_text(design: &Design) -> String {
     let rl = format!("{:.1}", design.final_elevation());
     match design.end {
         End::Complete => tr!("pit-design-end-complete"),
+        End::Daylight if design.dump => tr!("pit-design-end-ground", rl = rl),
         End::Daylight => tr!("pit-design-end-daylight", rl = rl),
         End::OutOfRoom => tr!("pit-design-end-out-of-room", rl = rl),
         End::RampTooLong => tr!("pit-design-end-ramp-too-long", rl = rl),
@@ -293,7 +305,11 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
             ui.add_space(4.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match draft.stage {
                 PitStage::Benches => {
-                    if ui.add(MenuButton::new(tr!("pit-design-continue")).primary()).hint(tr!("pit-design-continue-help")).clicked() {
+                    if ui
+                        .add(MenuButton::new(tr!("pit-design-continue")).primary())
+                        .hint(tr!("pit-design-continue-help"))
+                        .clicked()
+                    {
                         commands.push(UiCommand::PitDesignStage(PitStage::Ramp));
                     }
                     if ui.add(MenuButton::new(tr!("pit-design-done"))).hint(tr!("pit-design-done-help")).clicked() {
@@ -320,13 +336,25 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
 
 /// The pit's benches and where it stops.
 fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &UiProjectView) {
-    let chosen = direction_label(settings.direction);
+    let chosen = kind_label(settings.kind);
+    MenuFieldCombo::new(
+        "pit_design_kind",
+        tr!("pit-design-type"),
+        &mut settings.kind,
+        chosen,
+        [Kind::Pit, Kind::Dump].map(|kind| (kind, kind_label(kind).into())),
+    )
+    .width(FIELD_WIDTH)
+    .help_text(tr!("pit-design-type-help"))
+    .show(ui);
+    let kind = settings.kind;
+    let chosen = direction_label(kind, settings.direction);
     MenuFieldCombo::new(
         "pit_design_direction",
         tr!("pit-design-direction"),
         &mut settings.direction,
         chosen,
-        [Direction::Up, Direction::Down].map(|direction| (direction, direction_label(direction).into())),
+        [Direction::Up, Direction::Down].map(|direction| (direction, direction_label(kind, direction).into())),
     )
     .width(FIELD_WIDTH)
     .help_text(tr!("pit-design-direction-help"))
@@ -356,21 +384,22 @@ fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, proj
         .show(ui);
 
     menu::menu_section(ui, tr!("pit-design-stop-section"));
-    // Building down there is no ground to daylight against.
-    let stops: Vec<StopMode> = match settings.direction {
-        Direction::Up => vec![StopMode::Benches, StopMode::Elevation, StopMode::Daylight],
-        Direction::Down => vec![StopMode::Benches, StopMode::Elevation],
+    // Only a pit built up, or a dump built down, meets the ground.
+    let stops: Vec<StopMode> = if settings.can_daylight() {
+        vec![StopMode::Benches, StopMode::Elevation, StopMode::Daylight]
+    } else {
+        vec![StopMode::Benches, StopMode::Elevation]
     };
     if !stops.contains(&settings.stop) {
         settings.stop = StopMode::Benches;
     }
-    let chosen = stop_label(settings.stop);
+    let chosen = stop_label(kind, settings.stop);
     MenuFieldCombo::new(
         "pit_design_stop",
         tr!("pit-design-stop"),
         &mut settings.stop,
         chosen,
-        stops.into_iter().map(|stop| (stop, stop_label(stop).into())),
+        stops.into_iter().map(|stop| (stop, stop_label(kind, stop).into())),
     )
     .width(FIELD_WIDTH)
     .help_text(tr!("pit-design-stop-help"))
@@ -406,7 +435,6 @@ fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, proj
             .show(ui);
         }
     }
-
 }
 
 /// The ramp's settings, for a pit that has one: where it starts, its
@@ -484,7 +512,6 @@ fn draw_ramp_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, comma
     }
 }
 
-
 /// What the settings come to: the design's figures, or why there is none.
 fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSettings) {
     let ramp = settings.ramp;
@@ -514,16 +541,15 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
                 ui.colored_label(warning, tr!("pit-design-start-moved", distance = format!("{:.0}", design.ramp_start_moved)));
             }
             if ramp {
-                let flats: Vec<f64> = design.report.iter().filter_map(|bench| bench.ramp).map(|road| road.flat).filter(|flat| *flat > 0.0).collect();
+                let flats: Vec<f64> = design
+                    .report
+                    .iter()
+                    .filter_map(|bench| bench.ramp)
+                    .map(|road| road.flat)
+                    .filter(|flat| *flat > 0.0)
+                    .collect();
                 if !flats.is_empty() {
-                    menu::menu_note(
-                        ui,
-                        tr!(
-                            "pit-design-flats",
-                            count = flats.len(),
-                            length = format!("{:.0}", flats.iter().sum::<f64>())
-                        ),
-                    );
+                    menu::menu_note(ui, tr!("pit-design-flats", count = flats.len(), length = format!("{:.0}", flats.iter().sum::<f64>())));
                 }
                 let flatter = design.report.iter().filter(|bench| bench.ramp.is_some_and(|road| road.lengthened > 0.0)).count();
                 if flatter > 0 {
@@ -575,14 +601,16 @@ fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSett
                 Some(road) => {
                     let grade = format!("{:.1} %", road.steepest * 100.0);
                     if road.lengthened > 0.0 || road.steepest < gradient - 0.005 {
-                        ui.colored_label(warning, grade).hint(tr!("pit-design-table-flatter-hint", length = format!("{:.0}", road.lengthened)));
+                        ui.colored_label(warning, grade)
+                            .hint(tr!("pit-design-table-flatter-hint", length = format!("{:.0}", road.lengthened)));
                     } else {
                         ui.label(grade);
                     }
                     ui.label(if road.flat > 0.0 { format!("{:.0} m", road.flat) } else { String::new() });
                     let width = format!("{:.1} m", road.narrowest);
                     if road.narrowest < settings.ramp_width * 0.99 {
-                        ui.colored_label(warning, width).hint(tr!("pit-design-table-narrow-hint", width = format!("{:.1}", settings.ramp_width)));
+                        ui.colored_label(warning, width)
+                            .hint(tr!("pit-design-table-narrow-hint", width = format!("{:.1}", settings.ramp_width)));
                     } else {
                         ui.label(width);
                     }

@@ -260,7 +260,9 @@ fn refresh_caches(dialog: &mut ObjectEditDialog) {
         }
         Object::Circle { radius, .. } => (std::f64::consts::TAU * radius, Some(std::f64::consts::PI * radius * radius), Vec::new()),
         Object::PitDesign { verts, .. } => {
-            let rows = (0..verts.len()).filter(|&edge| verts[edge].bulge.is_finite() && verts[edge].bulge.abs() > f64::EPSILON).collect();
+            let rows = (0..verts.len())
+                .filter(|&edge| verts[edge].bulge.is_finite() && verts[edge].bulge.abs() > f64::EPSILON)
+                .collect();
             (polyline_length(verts, true), polyline_area_xy(verts, true), rows)
         }
         Object::Point { .. } | Object::Text { .. } => (0.0, None, Vec::new()),

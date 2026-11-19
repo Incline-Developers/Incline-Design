@@ -4,7 +4,7 @@
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
-use super::{Direction, Layout, RampSpec, Spec, Stop};
+use super::{Direction, Kind, Layout, RampSpec, Spec, Stop};
 use crate::model::triangulation::TriangulationId;
 
 /// Where a design stops, as its settings say.
@@ -21,6 +21,8 @@ pub(crate) enum StopMode {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct PitDesignSettings {
+    /// A pit cut into the ground, or a dump or stockpile built on it.
+    pub(crate) kind: Kind,
     pub(crate) direction: Direction,
     pub(crate) bench_height: f64,
     /// Degrees from horizontal.
@@ -49,6 +51,7 @@ pub(crate) struct PitDesignSettings {
 impl Default for PitDesignSettings {
     fn default() -> Self {
         Self {
+            kind: Kind::Pit,
             direction: Direction::Up,
             bench_height: 15.0,
             face_angle: 70.0,
@@ -75,6 +78,7 @@ impl PitDesignSettings {
     /// unless one has been picked.
     pub(crate) fn spec(&self, default_start: DVec2) -> Spec {
         Spec {
+            kind: self.kind,
             direction: self.direction,
             bench_height: self.bench_height,
             face_angle: self.face_angle,
@@ -102,10 +106,15 @@ impl PitDesignSettings {
         }
     }
 
-    /// Whether the design is built against the ground: built up, until it
-    /// daylights.
+    /// Whether the design can be built until it meets the ground: a pit
+    /// built up from its floor, or a dump built down from its top.
+    pub(crate) fn can_daylight(&self) -> bool {
+        matches!((self.kind, self.direction), (Kind::Pit, Direction::Up) | (Kind::Dump, Direction::Down))
+    }
+
+    /// Whether the design is built until it meets the ground.
     pub(crate) fn daylights(&self) -> bool {
-        self.stop == StopMode::Daylight && self.direction == Direction::Up
+        self.stop == StopMode::Daylight && self.can_daylight()
     }
 
     /// The topography the design depends on, if it depends on one: the

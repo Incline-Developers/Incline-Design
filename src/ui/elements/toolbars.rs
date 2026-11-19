@@ -102,7 +102,6 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
         tool(themed_icon!(ui, "move_element.svg"), tr!("common-move-design"), ActiveTool::Move),
         tool(themed_icon!(ui, "offset_element.svg"), tr!("common-offset"), ActiveTool::OffsetElement),
         tool(themed_icon!(ui, "drape_element.svg"), tr!("common-drape-topology"), ActiveTool::DrapeToTopology),
-        tool(unthemed_icon!("auto_bench.svg"), tr!("toolbars-auto-bench"), ActiveTool::BatterBermOffset),
         tool(themed_icon!(ui, "relimit_line.svg"), tr!("common-relimit-line"), ActiveTool::RelimitLine),
         tool(themed_icon!(ui, "create_bezier.svg"), tr!("toolbars-bezier-polyline"), ActiveTool::Bezier),
         tool(themed_icon!(ui, "chamfer_corners.svg"), tr!("toolbars-chamfer-polyline-corners"), ActiveTool::Chamfer),

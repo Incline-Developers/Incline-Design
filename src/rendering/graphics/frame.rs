@@ -273,7 +273,7 @@ impl<'a> Graphics<'a> {
         // Per-frame pass for the live drawing tools; the static scene above no
         // longer rebuilds while they run. Rebuilt while a tool is active and
         // once more after it deactivates (to clear the buffers).
-        let dynamic_active = editor.batter_berm_dialog_open || editor.pit_design.is_some();
+        let dynamic_active = editor.pit_design.is_some();
         if dynamic_active || !self.dynamic_strokes.is_empty() {
             rebuild_dynamic_scene(DynamicSceneBuildInput {
                 editor,
@@ -769,7 +769,6 @@ impl Graphics<'_> {
         } else {
             self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
             self.include_tool_previews_in_depth(editor);
-            self.include_batter_berm_preview_in_depth(editor);
             self.include_blast_outlines_in_depth(editor);
             self.include_haul_blocks_in_depth(editor);
         }

@@ -165,7 +165,11 @@ fn rounds_corners_into_arcs() {
         // a radius-10 square that is not quarter circle.
         let fine = crate::model::geometry::tessellate_polyline_bulges(&verts, true);
         let expected = 100.0 * 100.0 - (4.0 - std::f64::consts::PI) * 100.0;
-        assert!((area(&fine) * sign - expected).abs() < 1.0, "the arcs bulge outward, as a rounded corner does: {} vs {expected}", area(&fine) * sign);
+        assert!(
+            (area(&fine) * sign - expected).abs() < 1.0,
+            "the arcs bulge outward, as a rounded corner does: {} vs {expected}",
+            area(&fine) * sign
+        );
         // The engine's points follow the same arcs, coarser.
         let coarse = base_points(&verts);
         assert!(coarse.len() < fine.len() / 4);

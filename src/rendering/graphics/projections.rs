@@ -799,19 +799,6 @@ impl<'a> Graphics<'a> {
             editor.offset_preview_ranges.clear();
         }
 
-        if editor.batter_berm_dialog_open && !editor.batter_berm_rings_world.is_empty() {
-            let vp = self.view_proj();
-            editor.batter_berm_source_screen_px = editor.batter_berm_source_world.iter().map(|&p| self.world_to_window_px_unclipped_depth(&vp, p)).collect();
-            editor.batter_berm_rings_screen_px = editor
-                .batter_berm_rings_world
-                .iter()
-                .map(|ring| ring.iter().map(|&p| self.world_to_window_px_unclipped_depth(&vp, p)).collect())
-                .collect();
-        } else {
-            editor.batter_berm_source_screen_px.clear();
-            editor.batter_berm_rings_screen_px.clear();
-        }
-
         if editor.slice_grid_enabled {
             // The spacing in force is kept; the grid's options open on it.
             let (lines, level_spacing) = self.build_section_grid(editor.section_grid_style.level_spacing);

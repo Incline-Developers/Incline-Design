@@ -314,7 +314,11 @@ impl<'a> App<'a> {
             }
             // A pit design's surface is its string, its rings and its ramp's
             // edges; the centreline only repeats the edges.
-            for string in obj.pit_strings().iter().filter(|string| string.kind != crate::model::pit_design::StringKind::RampCentreline) {
+            for string in obj
+                .pit_strings()
+                .iter()
+                .filter(|string| string.kind != crate::model::pit_design::StringKind::RampCentreline)
+            {
                 if string.points.len() >= if string.closed { 3 } else { 2 } {
                     paths.push(BreaklinePath {
                         points: string.points.clone(),

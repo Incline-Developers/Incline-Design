@@ -624,9 +624,7 @@ fn object_json(document: &Document, object: &Object) -> Value {
         Object::Text {
             pos, content, height, rotation, ..
         } => json!({ "type": "text", "position": point(*pos), "text": content, "height": height, "rotation": rotation.to_degrees() }),
-        Object::PitDesign {
-            verts, line_weight, pit, ..
-        } => {
+        Object::PitDesign { verts, line_weight, pit, .. } => {
             let mut value = json!({
                 "type": "pit_design",
                 "name": pit.name,

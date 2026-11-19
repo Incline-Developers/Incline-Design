@@ -1136,11 +1136,7 @@ impl Object {
                 hash_color(&mut hasher, *color);
             }
             Object::PitDesign {
-                verts,
-                color,
-                line_weight,
-                pit,
-                ..
+                verts, color, line_weight, pit, ..
             } => {
                 4u8.hash(&mut hasher);
                 hash_verts(&mut hasher, verts);
@@ -1332,11 +1328,7 @@ impl Object {
                 color: *color,
             },
             Object::PitDesign {
-                verts,
-                color,
-                line_weight,
-                pit,
-                ..
+                verts, color, line_weight, pit, ..
             } => Object::PitDesign {
                 id,
                 layer,
