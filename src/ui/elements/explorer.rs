@@ -52,6 +52,9 @@ const HEADER_BLOCK_MODELS: egui::Color32 = egui::Color32::from_rgb(0x69, 0x8F, 0
 const HEADER_DRILL_HOLES: egui::Color32 = egui::Color32::from_rgb(0xDB, 0x5F, 0x58);
 const HEADER_PRISMOID_GRIDS: egui::Color32 = egui::Color32::from_rgb(0xB0, 0x8A, 0x3E);
 
+/// The slot a prismoid grid's row holds for its mark that a source moved.
+const SOURCE_MOVED_MARK_WIDTH: f32 = 18.0;
+
 /// What every dragged explorer row has in common: the folder member it
 /// stands for, tag and all.
 trait DragPayload: Send + Sync + Clone + 'static {
@@ -793,6 +796,9 @@ const MIN_COLUMN_PANE: f32 = 96.0;
 enum LowerPane {
     StepList(super::planning_setup::StepList),
     Objects,
+    /// The picked prismoids' read-out, in Geology while the project holds a
+    /// prismoid grid.
+    Prismoids,
 }
 
 impl LowerPane {
@@ -801,6 +807,12 @@ impl LowerPane {
             return Some(Self::Objects);
         }
         super::planning_setup::step_list(editor).map(Self::StepList)
+    }
+
+    /// Decided by the project alone, never by the pick or the tree's
+    /// selection, so picking does not move the column.
+    fn prismoids(editor: &EditorState, project: &UiProjectView) -> Option<Self> {
+        (editor.active_workspace == Workspace::Geology && !project.prismoid_grids.is_empty()).then_some(Self::Prismoids)
     }
 }
 
@@ -852,7 +864,7 @@ pub(crate) fn draw_explorer(
             let setup = editor.is_planning_view(crate::ui::state::PlanningView::Setup);
             let viewport_step = editor.is_viewport_step();
             let setup_steps = setup && !viewport_step;
-            let lower = LowerPane::of(editor);
+            let lower = LowerPane::of(editor).or_else(|| LowerPane::prismoids(editor, project));
 
             // Blasting, Dig Strips and the Road Network frame the viewport, so
             // the step tree shares the column with what they work on: the
@@ -916,6 +928,9 @@ pub(crate) fn draw_explorer(
                             match lower {
                                 LowerPane::StepList(list) => super::planning_setup::draw_step_list(ui, rect, list, editor, project),
                                 LowerPane::Objects => draw_object_tree(ui, editor, project, commands),
+                                LowerPane::Prismoids => {
+                                    super::prismoid_inspector::draw_prismoid_inspector(ui, rect, editor.cell_selection.as_ref().map(|selection| &selection.rows))
+                                }
                             }
                         })
                         .response
@@ -1580,10 +1595,16 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                                 strata = stratum.strata.clone()
                             )
                         });
-                        let details = std::iter::once(details).chain(place).chain(totals_lines(&grid.summary)).collect::<Vec<_>>().join("\n");
+                        let mut details = std::iter::once(details).chain(place).chain(totals_lines(&grid.summary)).collect::<Vec<_>>().join("\n");
+                        // Made with the project view, not per frame.
+                        for line in &grid.record_lines {
+                            details.push('\n');
+                            details.push_str(line);
+                        }
                         let grid_handle = SceneEntityId::PrismoidGrid(grid.id);
                         rows.push(ExplorerRow::Entity(grid_handle));
                         let grid_locked = frozen_handles.contains(&grid_handle);
+                        let moved = !grid.staleness.moved.is_empty();
                         let row = ExplorerEntry::new(egui::Id::unique(("explorer_prismoid_grid", grid.id)), label)
                             .dimmed(!grid.is_loaded)
                             .selected(selected_handles.contains(&grid_handle))
@@ -1591,8 +1612,16 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             .toggles(EntryToggles {
                                 visible: grid.is_loaded && !grid.is_hidden,
                                 locked: grid_locked,
-                            });
+                            })
+                            .trailing(if moved { SOURCE_MOVED_MARK_WIDTH } else { 0.0 });
                         let row = with_kind_badge(row, grid.section, MemberKind::PrismoidGrid).show(ui);
+                        if let Some(slot) = row.trailing {
+                            // Denis's mark as he paints it, saying on hover what the row says.
+                            let side = slot.height().min(slot.width()) - 6.0;
+                            egui::Image::new(unthemed_icon!("status_stale.svg")).paint_at(ui, egui::Rect::from_center_size(slot.center(), egui::Vec2::splat(side)));
+                            ui.interact(slot, egui::Id::unique(("explorer_prismoid_grid_moved", grid.id)), egui::Sense::hover())
+                                .hint(details.as_str());
+                        }
                         if row.visibility_clicked {
                             commands.push(UiCommand::SetItemVisible(ItemRef::PrismoidGrid(grid.id), !(grid.is_loaded && !grid.is_hidden)));
                         }

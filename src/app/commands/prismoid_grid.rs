@@ -24,6 +24,8 @@ use crate::{
             solids_view::next_view_id,
             thickness_points::not_a_grid_reason,
             triangulation::{
+                chain_contour_segments, contour_point_key,
+                cuts::{for_each_plan_overlap, reference_xy_overlap_area_tolerance},
                 session::{build_generated_triangulation, refuse_quality},
                 solid_between::ring_contains,
             },
@@ -32,15 +34,17 @@ use crate::{
     },
     i18n::tr,
     model::{
-        Command, FolderId, ItemRef, ItemStyle, MemberKind, Object, ObjectId, OpenItem, ReserveAggregation, SceneEntityId, SectionKind,
+        Command, FillStyle, FolderId, ItemRef, ItemStyle, Layer, MemberKind, Object, ObjectColor, ObjectId, OpenItem, PolyVertex, ReserveAggregation, SceneEntityId, SectionKind,
         drill_hole::DrillColorPreset,
         formats::mesh_data::{self, Triangulation},
-        grid_surface::GridSurface,
+        geometry::triangle_xy_area,
+        grid_surface::{GridSurface, surface_at},
         numbers::format_quantity,
         prismoid_grid::{
-            AddedValues, BuildRefusal, CellReading, CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, DifferenceRefusal, DifferenceReport, OpenPrismoidGrid, PrismoidBuild,
-            PrismoidColorBy, PrismoidGrid, PrismoidGridId, PrismoidGridSummary, QualitySurface, Quantity, SectionCrossing, SectionPoint, Stratum, ValuesRefusal, Weighting,
-            build_strata, check_difference_name, ramp_position,
+            AddedValues, BuildRecord, BuildRefusal, CUT_BUDGET, CellReading, CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, DifferenceRefusal, DifferenceReport, Gone,
+            HoleRecords, Lattice, Moved, OpenPrismoidGrid, PrismoidBuild, PrismoidColorBy, PrismoidGrid, PrismoidGridId, PrismoidGridSummary, ProjectSources, QualitySurface,
+            Quantity, SectionCrossing, SectionPoint, SetPrint, SourceStamp, Staleness, Stratum, TrimRefusal, Trimmed, ValueFrom, ValueSource, ValuesRefusal, Weighting,
+            build_strata, check_difference_name, hole_prints, present_name, ramp_position,
         },
         progress::{Phase, Progress},
         project::{ModelEnvelope, ProjectItemState, unique_item_name},
@@ -48,18 +52,21 @@ use crate::{
         rbf::NODE_BUDGET,
         solid_reserves::NumericTotal,
         spatial::TriangleBvh,
-        triangulation::{GeneratedTriangulationLog, OpenTriangulation, QualityMark, TriangulationId, same_quality_name, spatial_surface_face_order, unit_label},
+        triangulation::{GeneratedTriangulationLog, GeometryVersion, OpenTriangulation, QualityMark, TriangulationId, same_quality_name, spatial_surface_face_order, unit_label},
     },
     rendering::{
         camera::SectionSlab,
         color::linear_to_srgb_byte,
-        graphics::{Graphics, camera::ScenePick},
+        graphics::{Graphics, PrismoidLattice, camera::ScenePick},
         scene::{
             drill_hole_cache::evaluate_stops,
             section_surface_lines::{SECTION_FILL_DEPTH_TIE_M, SectionCellsOfGrid},
         },
     },
-    ui::state::{CellSelection, EditorState, InspectorRow, InspectorRows, SelectionMode, SelectionPickTool, TriPolylineClipMode, TriSurfaceType, Workspace},
+    ui::state::{
+        CellSelection, EditorState, InspectorRow, InspectorRows, SelectionMode, SelectionPickTool, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, UiPrismoidGridEntry,
+        Workspace,
+    },
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -85,6 +92,36 @@ pub(crate) struct DrawnPrismoidGrid {
     map: Option<OpenRasterTexture>,
     /// What `map` was made from.
     color_by: PrismoidColorBy,
+    /// The rim round roof and floor, drawn in Solid view.
+    outline: Arc<Vec<[u32; 2]>>,
+    /// The lattice lines, drawn otherwise.
+    lattice: Arc<Vec<[u32; 2]>>,
+    /// The view `surface` is styled for.
+    shaded: bool,
+    /// The active cells sharing each lattice line.
+    lattice_cells: Arc<Vec<[u32; 4]>>,
+    /// One colour per lattice line, from what `map` was made from; `None`
+    /// where the body draws flat.
+    wire_colors: Option<Arc<Vec<[f32; 4]>>>,
+}
+
+impl DrawnPrismoidGrid {
+    /// Style the surface for its view, under a new id so the view's cache
+    /// uploads it afresh: the lattice over faces drawn clear, in the grid's
+    /// colour, or left to the view's coloured strokes with `wire_colors`; or
+    /// with `shaded` the shaded body and its dark rim.
+    fn style(&mut self, color: [f32; 4], shaded: bool) {
+        let [red, green, blue, _] = color;
+        (self.surface.edges, self.surface.color, self.surface.line_color) = if shaded {
+            (Arc::clone(&self.outline), color, PRISMOID_OUTLINE_COLOR)
+        } else if self.wire_colors.is_some() {
+            (Arc::new(Vec::new()), [red, green, blue, 0.0], color)
+        } else {
+            (Arc::clone(&self.lattice), [red, green, blue, 0.0], color)
+        };
+        self.surface.id = next_view_id();
+        self.shaded = shaded;
+    }
 }
 
 impl App<'_> {
@@ -120,24 +157,32 @@ impl App<'_> {
         let section = SectionKind::derived_for(MemberKind::PrismoidGrid, [roof_section, floor_section]);
         let envelope = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
         let (roof_label, floor_label, grid_name) = (roof_name.clone(), floor_name.clone(), name.clone());
+        let (roof_stamp, floor_stamp) = (self.prismoid_stamp(roof_id)?, self.prismoid_stamp(floor_id)?);
+        let runtime_id = self.workspace.active_project().map(|project| project.runtime_id);
         // An Err is a refusal; an Ok(Err) is a built grid failing its own
-        // check, a fault in the build rather than in the surfaces.
-        let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<Result<PrismoidBuild>> {
+        // check, a fault in the build rather than in the surfaces. A build
+        // comes with the surfaces' spacing.
+        let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<Result<(PrismoidBuild, f64)>> {
             let roof = read_grid_surface(&roof_name, roof_mesh, roof_spatial)?;
             let floor = read_grid_surface(&floor_name, floor_mesh, floor_spatial)?;
             match PrismoidGrid::between(&roof, &floor, step, envelope.as_ref(), cancel, &progress.phase(0.0, 1.0)) {
-                Ok(built) => Ok(Ok(built)),
+                Ok(built) => Ok(Ok((built, roof.spacing()))),
                 Err(BuildRefusal::Malformed(error)) => Ok(Err(error.context(grid_name))),
                 Err(refusal) => Err(refusal_words(refusal, &roof_name, &floor_name, roof.spacing() * step.get() as f64, envelope.as_ref())),
             }
         };
-        let apply = move |app: &mut App, result: Result<Result<PrismoidBuild>>| match result {
-            Err(refusal) if !crate::app::jobs::is_cancelled(&refusal) => userspace_warn!("{refusal:#}"),
+        let apply = move |app: &mut App, result: Result<Result<(PrismoidBuild, f64)>>| match result {
+            Err(refusal) if !crate::app::jobs::is_cancelled(&refusal) => {
+                userspace_warn!("{refusal:#}");
+                app.reopen_refused(runtime_id, |editor| editor.tri_prismoid_open = true);
+            }
             Err(_) => {}
             Ok(Err(fault)) => userspace_error!("{fault:#}"),
-            Ok(Ok(PrismoidBuild { grid, crossed, holes })) => {
+            Ok(Ok((PrismoidBuild { grid, crossed, holes }, spacing))) => {
+                let prints = hole_prints(&grid.lattice, &app.hole_records());
                 let id = app.insert_prismoid_grid(name, grid, section);
-                if let Some(item) = app.prismoid_grids.iter().find(|item| item.id == id) {
+                if let Some(item) = app.prismoid_grids.iter_mut().find(|item| item.id == id) {
+                    item.built_from = Some(BuildRecord::now(roof_stamp, floor_stamp, spacing, step, envelope, prints));
                     log_built_prismoid_grid(item, crossed, holes, &roof_label, &floor_label);
                 }
             }
@@ -179,14 +224,16 @@ impl App<'_> {
         let envelope = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
         let surfaces: Vec<String> = sources.iter().map(|source| source.0.clone()).collect();
         let (labels, words) = (surfaces.clone(), stated.clone());
-        let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<Result<Vec<Option<PrismoidBuild>>>> {
+        let stamps = horizons.iter().map(|(id, _)| self.prismoid_stamp(*id)).collect::<Result<Vec<_>>>()?;
+        let runtime_id = self.workspace.active_project().map(|project| project.runtime_id);
+        let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<Result<(Vec<Option<PrismoidBuild>>, f64)>> {
             let grids = sources
                 .into_iter()
                 .map(|(name, mesh, spatial, _)| read_grid_surface(&name, mesh, spatial))
                 .collect::<Result<Vec<_>>>()?;
             let size = grids[0].spacing() * step.get() as f64;
             match build_strata(&grids, step, envelope.as_ref(), cancel, &progress.phase(0.0, 1.0)) {
-                Ok(built) => Ok(Ok(built)),
+                Ok(built) => Ok(Ok((built, grids[0].spacing()))),
                 Err((index, BuildRefusal::Malformed(error))) => Ok(Err(error.context(words.intervals[index].clone()))),
                 Err((_, BuildRefusal::Cancelled)) => anyhow::bail!(crate::app::jobs::Cancelled),
                 Err((index, refusal)) => {
@@ -203,8 +250,8 @@ impl App<'_> {
                 }
             }
         };
-        let apply = move |app: &mut App, result: Result<Result<Vec<Option<PrismoidBuild>>>>| {
-            let built = match result {
+        let apply = move |app: &mut App, result: Result<Result<(Vec<Option<PrismoidBuild>>, f64)>>| {
+            let (built, spacing) = match result {
                 Ok(Ok(built)) => built,
                 Ok(Err(fault)) => {
                     userspace_error!("{fault:#}");
@@ -212,6 +259,7 @@ impl App<'_> {
                 }
                 Err(refusal) if !crate::app::jobs::is_cancelled(&refusal) => {
                     userspace_warn!("{refusal:#}");
+                    app.reopen_refused(runtime_id, |editor| editor.tri_strata_open = true);
                     return;
                 }
                 Err(_) => return,
@@ -230,8 +278,16 @@ impl App<'_> {
             }
             if built.iter().all(Option::is_none) {
                 userspace_warn!("{}", tr!("cmd-prismoid-grid-strata-none-built", name = stated.strata.clone()));
+                app.reopen_refused(runtime_id, |editor| editor.tri_strata_open = true);
                 return;
             }
+            let mut prints: Vec<Vec<SetPrint>> = {
+                let records = app.hole_records();
+                built
+                    .iter()
+                    .map(|build| build.as_ref().map(|build| hole_prints(&build.grid.lattice, &records)).unwrap_or_default())
+                    .collect()
+            };
             // A strata is never rebuilt in place, so each build has a folder
             // of its own.
             let Some(project) = app.workspace.active_project_mut() else {
@@ -251,7 +307,9 @@ impl App<'_> {
                 let id = app.insert_prismoid_grid_in(stratum.intervals[index].clone(), grid, section, folder, Some(record));
                 app.editor.selected_handles.insert(SceneEntityId::PrismoidGrid(id));
                 made += 1;
-                if let Some(item) = app.prismoid_grids.iter().find(|item| item.id == id) {
+                if let Some(item) = app.prismoid_grids.iter_mut().find(|item| item.id == id) {
+                    let prints = std::mem::take(&mut prints[index]);
+                    item.built_from = Some(BuildRecord::now(stamps[index].clone(), stamps[index + 1].clone(), spacing, step, envelope, prints));
                     log_built_prismoid_grid(item, crossed, holes, &labels[index], &labels[index + 1]);
                 }
                 if crossed > 0 && index > 0 && index + 1 < count {
@@ -291,6 +349,40 @@ impl App<'_> {
             .ok_or_else(|| anyhow::anyhow!("{}", tr!("cmd-thickness-points-surface-gone")))?;
         refuse_quality(&item.name, item.quality.as_ref())?;
         Ok((item.name.clone(), Arc::clone(&item.mesh), Arc::clone(&item.spatial), item.state.section))
+    }
+
+    /// A surface's name and geometry token, for a grid's build record.
+    fn prismoid_stamp(&self, id: TriangulationId) -> Result<SourceStamp> {
+        self.triangulations
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| SourceStamp {
+                name: item.name.clone(),
+                geometry: item.geometry,
+            })
+            .ok_or_else(|| anyhow::anyhow!("{}", tr!("cmd-thickness-points-surface-gone")))
+    }
+
+    /// The project as a grid's build record is checked against; the holes'
+    /// records are read only when some grid has a record.
+    pub(crate) fn prismoid_sources(&self) -> ProjectSources<'_> {
+        let recorded = self.prismoid_grids.iter().any(|item| item.built_from.is_some());
+        ProjectSources {
+            surfaces: self.triangulations.iter().map(|item| (item.name.as_str(), item.geometry)).collect(),
+            drill_holes: if recorded { self.hole_records() } else { Vec::new() },
+            grids: self.prismoid_grids.iter().map(|item| item.name.as_str()).collect(),
+            envelope: self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope),
+        }
+    }
+
+    /// The loaded drill-hole sets' correction records, each with its hole's
+    /// box in plan.
+    fn hole_records(&self) -> Vec<HoleRecords<'_>> {
+        self.drill_holes
+            .iter()
+            .filter(|item| item.state.loaded && item.state.deferred.is_none())
+            .map(|item| HoleRecords::of(&item.name, &item.dataset))
+            .collect()
     }
 
     /// Read quality surfaces into a prismoid grid's cells, `density` as its
@@ -341,6 +433,22 @@ impl App<'_> {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let sources = surfaces
+            .iter()
+            .filter_map(|id| self.triangulations.iter().find(|item| item.id == *id))
+            .filter_map(|item| {
+                Some(ValueSource {
+                    value: item.quality.as_ref()?.name.clone(),
+                    from: ValueFrom::Surface {
+                        surface: SourceStamp {
+                            name: item.name.clone(),
+                            geometry: item.geometry,
+                        },
+                        density: density == Some(item.id),
+                    },
+                })
+            })
+            .collect();
         let mut keys = vec![JobKey::PrismoidGrid(grid_id)];
         keys.extend(surfaces.iter().map(|id| JobKey::Triangulation(*id)));
         let grid = Arc::clone(&source);
@@ -351,37 +459,56 @@ impl App<'_> {
                 let added = tr!("cmd-prismoid-grid-qualities-added", count = lines.len().to_string(), grid = name.clone());
                 (merged, std::iter::once(added).chain(lines).collect())
             });
-            app.replace_prismoid_values(runtime_id, grid_id, &name, &source, result);
+            app.replace_prismoid_values(runtime_id, grid_id, &name, &source, result, sources, false);
         };
         self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-adding-qualities"), keys, compute, apply);
         Ok(())
     }
 
-    /// Put a grid's copy with values added in place as one undoable step and
-    /// log `lines`, its totals and the next step; a refusal is warned, and
-    /// nothing is replaced when the grid is gone or moved on from `source`.
-    fn replace_prismoid_values(&mut self, runtime_id: u32, grid_id: PrismoidGridId, name: &str, source: &Arc<PrismoidGrid>, result: Result<(PrismoidGrid, Vec<String>)>) {
+    /// Put a grid's copy with values added in place as one undoable step,
+    /// its record noting `sources`, and log `lines`, its totals and the next
+    /// step; a refusal is warned, and nothing is replaced when the grid is
+    /// gone or moved on from `source`.
+    /// `difference` words the lines for a difference, not for qualities.
+    /// True when the copy was put in place.
+    #[allow(clippy::too_many_arguments)]
+    fn replace_prismoid_values(
+        &mut self,
+        runtime_id: u32,
+        grid_id: PrismoidGridId,
+        name: &str,
+        source: &Arc<PrismoidGrid>,
+        result: Result<(PrismoidGrid, Vec<String>)>,
+        sources: Vec<ValueSource>,
+        difference: bool,
+    ) -> bool {
         let (merged, lines) = match result {
             Ok(added) => added,
             Err(refusal) if !crate::app::jobs::is_cancelled(&refusal) => {
                 userspace_warn!("{refusal:#}");
-                return;
+                return false;
             }
-            Err(_) => return,
+            Err(_) => return false,
         };
         let current = self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id);
         let Some(item) = self.prismoid_grids.iter().find(|item| item.id == grid_id).filter(|_| current) else {
-            userspace_warn!("{}", tr!("cmd-prismoid-grid-qualities-discarded", grid = name.to_owned()));
-            return;
+            if difference {
+                userspace_warn!("{}", tr!("cmd-prismoid-grid-difference-discarded", grid = name.to_owned()));
+            } else {
+                userspace_warn!("{}", tr!("cmd-prismoid-grid-qualities-discarded", grid = name.to_owned()));
+            }
+            return false;
         };
         if !Arc::ptr_eq(&item.grid, source) {
-            userspace_warn!("{}", tr!("cmd-prismoid-grid-changed-while-reading", grid = item.name.clone()));
-            return;
+            if difference {
+                userspace_warn!("{}", tr!("cmd-prismoid-grid-changed-while-comparing", grid = item.name.clone()));
+            } else {
+                userspace_warn!("{}", tr!("cmd-prismoid-grid-changed-while-reading", grid = item.name.clone()));
+            }
+            return false;
         }
-        let mut replacement = item.clone();
-        replacement.summary = merged.summary();
+        let replacement = with_merged_values(item, merged, sources);
         let totals = totals_lines(&replacement.summary);
-        replacement.grid = Arc::new(merged);
         self.execute_edit_for(
             runtime_id,
             Command::ReplaceItem {
@@ -392,7 +519,12 @@ impl App<'_> {
         for line in lines.into_iter().chain(totals) {
             userspace_log!("{line}");
         }
-        userspace_log!("{}", tr!("cmd-prismoid-grid-qualities-rederive"));
+        if difference {
+            userspace_log!("{}", tr!("cmd-prismoid-grid-difference-rederive"));
+        } else {
+            userspace_log!("{}", tr!("cmd-prismoid-grid-qualities-rederive"));
+        }
+        true
     }
 
     /// Compare two loaded prismoid grids cell by cell, this grid less the
@@ -432,11 +564,18 @@ impl App<'_> {
         // A name the grid keeps, or its density's, is refused before the
         // work; any other held name is replaced, and the line says so.
         let names: Vec<_> = source.cell_values.iter().map(|values| (values.name.as_str(), values.role)).collect();
-        check_difference_name(&names, &other_name, &name).map_err(|refusal| anyhow::anyhow!("{}", values_refusal_words(refusal, &grid_name)))?;
+        check_difference_name(&names, &other_name, &name).map_err(|refusal| anyhow::anyhow!("{}", difference_name_words(refusal, &grid_name)))?;
         let replaces = names.iter().any(|(held, _)| same_quality_name(held, &name));
         let keys = vec![JobKey::PrismoidGrid(grid_id), JobKey::PrismoidGrid(other_id)];
         let (grid, name_a, name_b) = (Arc::clone(&source), grid_name.clone(), other_name.clone());
         let other_read = Arc::clone(&other);
+        let compared_with = ValueSource {
+            value: name.clone(),
+            from: ValueFrom::Difference {
+                other: other_name.clone(),
+                of: Some(quantity.clone()),
+            },
+        };
         let compute = move |cancel: &CancelFlag, _: &Progress| -> Result<(PrismoidGrid, Vec<String>)> {
             let compared = grid
                 .difference(&other, &quantity, name.clone(), unit.clone(), cancel)
@@ -445,7 +584,7 @@ impl App<'_> {
             let lines = difference_lines(&name, &name_a, &name_b, &unit, other_unit.as_deref(), replaces, &report);
             let merged = grid
                 .with_values(vec![AddedValues { surface: name_b.clone(), values }])
-                .map_err(|refusal| anyhow::anyhow!("{}", values_refusal_words(refusal, &name_a)))?;
+                .map_err(|refusal| anyhow::anyhow!("{}", difference_name_words(refusal, &name_a)))?;
             Ok((merged, lines))
         };
         let apply = move |app: &mut App, result: Result<(PrismoidGrid, Vec<String>)>| {
@@ -453,9 +592,15 @@ impl App<'_> {
                 && let Some(changed) = other_grid_changed(&app.prismoid_grids, other_id, &other_read, &other_name)
             {
                 userspace_warn!("{changed}");
+                app.reopen_refused(Some(runtime_id), |editor| editor.tri_prismoid_difference_open = true);
                 return;
             }
-            app.replace_prismoid_values(runtime_id, grid_id, &grid_name, &source, result);
+            // A refusal, or a grid gone or changed: each asks for the
+            // comparison again, so the dialog comes back with it.
+            let cancelled = result.as_ref().is_err_and(crate::app::jobs::is_cancelled);
+            if !app.replace_prismoid_values(runtime_id, grid_id, &grid_name, &source, result, vec![compared_with], true) && !cancelled {
+                app.reopen_refused(Some(runtime_id), |editor| editor.tri_prismoid_difference_open = true);
+            }
         };
         self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-differencing"), keys, compute, apply);
         Ok(())
@@ -483,6 +628,7 @@ impl App<'_> {
         let mark = surface_mark(index.map(|index| &grid.cell_values[index]));
         let (quantity, label) = (mark.name.clone(), name.clone());
         let contoured = quantity.clone();
+        let runtime_id = self.workspace.active_project().map(|project| project.runtime_id);
         let compute = move |cancel: &CancelFlag, _: &Progress| -> Result<GeneratedTriangulationLog> {
             if cancel.is_cancelled() {
                 anyhow::bail!(crate::app::jobs::Cancelled);
@@ -501,11 +647,14 @@ impl App<'_> {
         };
         let apply = move |app: &mut App, result: Result<GeneratedTriangulationLog>| {
             let made = result.is_ok();
+            let cancelled = result.as_ref().is_err_and(crate::app::jobs::is_cancelled);
             app.apply_generated_triangulation_job(result, &[]);
             // Contour Lines reads z, so the lines of this surface are values;
             // said here, as the contour tool does not carry the mark.
             if made {
                 userspace_log!("{}", tr!("cmd-prismoid-grid-surface-contours-are-values", quantity = contoured));
+            } else if !cancelled {
+                app.reopen_refused(runtime_id, |editor| editor.tri_prismoid_surface_open = true);
             }
         };
         self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-making-surface"), vec![JobKey::PrismoidGrid(grid_id)], compute, apply);
@@ -572,7 +721,11 @@ impl App<'_> {
         };
         let grid_name = item.name.clone();
         let Some((grid, summary, count)) = changed else {
-            userspace_log!("{}", tr!("cmd-prismoid-grid-mask-nothing", grid = grid_name));
+            if mask {
+                userspace_log!("{}", tr!("cmd-prismoid-grid-mask-nothing", grid = grid_name));
+            } else {
+                userspace_log!("{}", tr!("cmd-prismoid-grid-unmask-nothing", grid = grid_name));
+            }
             return;
         };
         let active = summary.active_cells;
@@ -628,6 +781,255 @@ impl App<'_> {
         Ok(())
     }
 
+    /// Trim each of `grids` to the topology `surface` on the job queue,
+    /// keeping the ground on `side` of it, into a new grid per source; the
+    /// sources stay as they are. A strata's intervals go into one new folder
+    /// for it. `name` names the new grid when there is one source. A surface
+    /// that folds over any of the grids refuses the whole run. Ground within
+    /// `allowance` metres (0 to 1) of a roof or floor is taken as on it. An
+    /// interval whose build record says its roof was built from `surface`
+    /// itself is left out, with a line saying so; a grid with no record is
+    /// trimmed.
+    pub(crate) fn trim_prismoid_grids(
+        &mut self,
+        grids: Vec<PrismoidGridId>,
+        surface: TriangulationId,
+        side: TriSurfaceCutSide,
+        name: Option<String>,
+        allowance: f64,
+    ) -> Result<()> {
+        anyhow::ensure!((0.0..=1.0).contains(&allowance), "{}", tr!("tri-prismoid-trim-touching-range"));
+        let gone = || anyhow::anyhow!("{}", tr!("cmd-commands-select-prismoid-grids-trim"));
+        let mut sources = grids
+            .iter()
+            .map(|id| {
+                self.prismoid_grids.iter().find(|item| item.id == *id && item.state.loaded).map(|item| TrimSource {
+                    id: item.id,
+                    grid: Arc::clone(&item.grid),
+                    name: item.name.clone(),
+                    stratum: item.stratum.clone(),
+                    section: item.state.section,
+                    roof_geometry: item.built_from.as_ref().map(|record| record.roof.geometry),
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+            .filter(|sources| !sources.is_empty())
+            .ok_or_else(gone)?;
+        // Each strata's intervals top first, as they are logged.
+        sources.sort_by_key(|source| source.stratum.as_ref().map(|stratum| (stratum.strata.clone(), stratum.index)));
+        let (surface_name, mesh, spatial, _) = self.prismoid_source(surface)?;
+        let surface_geometry = self.prismoid_stamp(surface)?.geometry;
+        sources.retain(|source| {
+            let skip = roof_is_trimming_surface(source.roof_geometry, surface_geometry);
+            if skip {
+                userspace_log!(
+                    "{}",
+                    tr!(
+                        "cmd-prismoid-grid-trim-interval-roof-is-surface",
+                        grid = source.name.clone(),
+                        surface = surface_name.clone()
+                    )
+                );
+            }
+            !skip
+        });
+        if sources.is_empty() {
+            return Ok(());
+        }
+        let grids: Vec<PrismoidGridId> = sources.iter().map(|source| source.id).collect();
+        let project_runtime_id = self.workspace.active_project().map(|project| project.runtime_id);
+        let (keep_below, relation) = (side == TriSurfaceCutSide::CutTop, side.retained_relation());
+        let reads: Vec<_> = sources
+            .iter()
+            .map(|source| {
+                (
+                    Arc::clone(&source.grid),
+                    source.name.clone(),
+                    source.stratum.as_ref().map(|stratum| stratum.category().to_owned()),
+                )
+            })
+            .collect();
+        let label = surface_name.clone();
+        // An Err is a refusal; an Ok(Err) is a trimmed grid failing its own
+        // check, a fault in the trim rather than in the surface.
+        let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<Result<(Vec<TrimOutcome>, usize)>> {
+            let count = reads.len() as f32;
+            let slack = reference_xy_overlap_area_tolerance(&mesh);
+            let read = |stack: &mut Vec<usize>, at: DVec2| surface_at(&mesh, &spatial, stack, at);
+            let overlaps = |stack: &mut Vec<usize>, overlap: &mut Vec<DVec3>, triangle: [DVec2; 3], visit: &mut dyn FnMut([DVec3; 3], &[DVec3])| {
+                let target = triangle.map(|point| mesh_data::Vertex { x: point.x, y: point.y, z: 0.0 });
+                for_each_plan_overlap(target, &mesh, &spatial, slack, stack, overlap, |ground, shared| {
+                    visit(ground.map(|point| DVec3::new(point.x, point.y, point.z)), shared)
+                });
+            };
+            let mut outcomes = Vec::new();
+            for (index, (grid, grid_name, interval)) in reads.iter().enumerate() {
+                let phase = progress.phase(index as f32 / count, (index + 1) as f32 / count);
+                let trimmed = match grid.trimmed(read, overlaps, slack, keep_below, allowance, CUT_BUDGET, cancel, &phase) {
+                    Ok(trimmed) => trimmed,
+                    Err(TrimRefusal::Malformed(error)) => return Ok(Err(error.context(grid_name.clone()))),
+                    Err(refusal) => anyhow::bail!("{}", trim_refusal_words(refusal, grid_name, &surface_name)),
+                };
+                let lines = trim_lines(grid_name, &surface_name, &relation, interval.as_deref(), allowance, &trimmed);
+                let reached = trimmed.reached.active_cells > 0;
+                let (roof_strings, floor_strings) = (chain_contour_segments(trimmed.roof_contacts), chain_contour_segments(trimmed.floor_contacts));
+                outcomes.push(TrimOutcome {
+                    grid: trimmed.grid,
+                    lines,
+                    reached,
+                    roof_strings,
+                    floor_strings,
+                });
+            }
+            let upright = upright_faces_over(&mesh, &spatial, slack, reads.iter().map(|(grid, ..)| &grid.lattice));
+            Ok(Ok((outcomes, upright)))
+        };
+        let apply = move |app: &mut App, result: Result<Result<(Vec<TrimOutcome>, usize)>>| match result {
+            Err(refusal) => userspace_warn!("{refusal:#}"),
+            Ok(Err(fault)) => userspace_error!("{fault:#}"),
+            Ok(Ok((outcomes, upright))) => {
+                if upright > 0 {
+                    userspace_warn!("{}", tr!("cmd-cuts-ignored-vertical-faces", count = upright.to_string()));
+                }
+                app.place_trimmed_grids(sources, outcomes, &label, side, name, project_runtime_id)
+            }
+        };
+        let mut keys: Vec<JobKey> = grids.iter().map(|id| JobKey::PrismoidGrid(*id)).collect();
+        keys.push(JobKey::Triangulation(surface));
+        self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-trimming"), keys, compute, apply);
+        Ok(())
+    }
+
+    /// Log each trim and insert the grids it kept, selected, beside their
+    /// sources; a strata's go into one new folder named for the trim, each
+    /// carrying its interval's record. A source that moved on while it was
+    /// trimmed is dropped with a warning and the rest are made. A surface
+    /// reaching none of the grids ends with a warning. Where it met the
+    /// roofs and floors of the grids placed go as strings into one new layer
+    /// of the project the trim was started in (`project_runtime_id`).
+    fn place_trimmed_grids(
+        &mut self,
+        sources: Vec<TrimSource>,
+        outcomes: Vec<TrimOutcome>,
+        surface: &str,
+        side: TriSurfaceCutSide,
+        name: Option<String>,
+        project_runtime_id: Option<u32>,
+    ) {
+        let mut kept = Vec::with_capacity(sources.len());
+        let mut contacts: Vec<GridStrings> = Vec::new();
+        for (source, outcome) in sources.iter().zip(&outcomes) {
+            if let Some(changed) = trimmed_grid_changed(&self.prismoid_grids, source.id, &source.grid, &source.name) {
+                userspace_warn!("{changed}");
+                kept.push(false);
+                continue;
+            }
+            contacts.push((&outcome.roof_strings, &outcome.floor_strings));
+            for line in &outcome.lines {
+                userspace_log!("{line}");
+            }
+            kept.push(outcome.grid.is_some());
+        }
+        let reached = outcomes.iter().any(|outcome| outcome.reached);
+        let subcrop = subcrop_strings(&contacts);
+        let placements = {
+            let folders = self.workspace.active_project().map(|project| &project.project.folders);
+            trim_placements(&sources, &kept, surface, side, name.as_deref(), |folder, section| {
+                unique_item_name(folder, folders.map(|folders| folders.names(section)).unwrap_or_default().into_iter())
+            })
+        };
+        // Each new folder by its name and section.
+        let mut new_folders: Vec<(String, SectionKind, Option<FolderId>)> = Vec::new();
+        let mut made = Vec::new();
+        for ((source, outcome), placement) in sources.into_iter().zip(outcomes).zip(placements) {
+            let (Some(placement), Some(grid)) = (placement, outcome.grid) else {
+                continue;
+            };
+            let folder = match &placement.stratum {
+                None => None,
+                Some(stratum) => match new_folders.iter().find(|(named, section, _)| *named == stratum.strata && *section == source.section) {
+                    Some((.., folder)) => *folder,
+                    None => {
+                        let folder = self
+                            .workspace
+                            .active_project_mut()
+                            .and_then(|project| project.project.folders.add(source.section, stratum.strata.clone()));
+                        new_folders.push((stratum.strata.clone(), source.section, folder));
+                        folder
+                    }
+                },
+            };
+            made.push(self.insert_prismoid_grid_in(placement.name, grid, source.section, folder, placement.stratum));
+        }
+        if !made.is_empty() {
+            self.editor.selected_handles.clear();
+            self.editor.selected_handles.extend(made.into_iter().map(SceneEntityId::PrismoidGrid));
+        }
+        if !reached {
+            userspace_warn!("{}", tr!("cmd-prismoid-grid-trim-reaches-none", surface = surface.to_owned()));
+        }
+        if let (Some(runtime_id), false) = (project_runtime_id, subcrop.is_empty()) {
+            self.add_subcrop_layer(runtime_id, subcrop, surface);
+        }
+    }
+
+    /// Add `subcrop` as a new layer of the project `runtime_id` in one
+    /// undoable step, named for `surface` and not taken, and log it.
+    fn add_subcrop_layer(&mut self, runtime_id: u32, subcrop: Subcrop, surface: &str) {
+        let surface = surface_stem(surface);
+        let Some(project) = self.workspace.projects.iter_mut().find(|project| project.runtime_id == runtime_id) else {
+            userspace_warn!("{}", tr!("cmd-prismoid-grid-trim-subcrop-discarded-project-closed", surface = surface));
+            return;
+        };
+        let document = &mut project.project.document;
+        let layer_name = unique_item_name(
+            tr!("cmd-prismoid-grid-trim-subcrop-layer", surface = surface.clone()),
+            document.layers().iter().map(|layer| layer.name.as_str()),
+        );
+        let layer_id = document.allocate_layer_id();
+        let (roof, floor) = (subcrop.roof.len(), subcrop.floor.len());
+        let strings = subcrop
+            .roof
+            .into_iter()
+            .map(|verts| (verts, SUBCROP_ROOF_COLOR))
+            .chain(subcrop.floor.into_iter().map(|verts| (verts, SUBCROP_FLOOR_COLOR)));
+        let objects = strings
+            .map(|(verts, color)| Object::Polyline {
+                id: document.allocate_object_id(),
+                layer: layer_id,
+                verts: verts.into_iter().map(PolyVertex::straight).collect(),
+                closed: false,
+                color: ObjectColor::Fixed(color),
+                fill: FillStyle::Clear,
+                line_weight: 1.0,
+            })
+            .collect();
+        let layer = Layer {
+            id: layer_id,
+            name: layer_name.clone(),
+            color_index: None,
+            color: [1.0, 1.0, 1.0, 1.0],
+            loaded: true,
+            hidden: false,
+            elevation: 0.0,
+            folder: None,
+            section: SectionKind::natural_layer(),
+            quality: None,
+        };
+        self.execute_edit_for(runtime_id, Command::AddLayerSnapshot { layer, objects });
+        userspace_log!(
+            "{}",
+            tr!(
+                "cmd-prismoid-grid-trim-subcrop",
+                layer = layer_name,
+                roof = roof.to_string(),
+                surface = surface,
+                floor = floor.to_string()
+            )
+        );
+        self.invalidate_geometry();
+    }
+
     /// Add a built prismoid grid to the project, dirty, at its section's
     /// root, and select it.
     pub(crate) fn insert_prismoid_grid(&mut self, name: String, grid: PrismoidGrid, section: SectionKind) -> PrismoidGridId {
@@ -652,6 +1054,8 @@ impl App<'_> {
             grid: Arc::new(grid),
             color_by: PrismoidColorBy::default(),
             stratum,
+            built_from: None,
+            shaded: false,
         });
         self.touch_active_project_content();
         self.invalidate_geometry();
@@ -662,11 +1066,27 @@ impl App<'_> {
     /// unchanged choice records nothing.
     pub(crate) fn set_prismoid_grid_color_by(&mut self, id: PrismoidGridId, change: impl FnOnce(&mut PrismoidColorBy)) {
         let item = ItemRef::PrismoidGrid(id);
-        let Some(ItemStyle::PrismoidGrid { loaded, hidden, mut color_by }) = self.item_style(item) else {
+        let Some(ItemStyle::PrismoidGrid {
+            loaded,
+            hidden,
+            mut color_by,
+            shaded,
+        }) = self.item_style(item)
+        else {
             return;
         };
         change(&mut color_by);
-        self.set_item_style(item, ItemStyle::PrismoidGrid { loaded, hidden, color_by });
+        self.set_item_style(item, ItemStyle::PrismoidGrid { loaded, hidden, color_by, shaded });
+    }
+
+    /// Draw a grid as a shaded body or as its lattice lines, as one undoable
+    /// style step; an unchanged choice records nothing.
+    pub(crate) fn set_prismoid_grid_shaded(&mut self, id: PrismoidGridId, shaded: bool) {
+        let item = ItemRef::PrismoidGrid(id);
+        let Some(ItemStyle::PrismoidGrid { loaded, hidden, color_by, .. }) = self.item_style(item) else {
+            return;
+        };
+        self.set_item_style(item, ItemStyle::PrismoidGrid { loaded, hidden, color_by, shaded });
     }
 
     /// Keep the view's meshes in step with the open grids, in Geology. Runs
@@ -685,6 +1105,11 @@ impl App<'_> {
         }
         if let Some(selection) = self.editor.cell_selection.as_mut() {
             follow_grid_rename(selection, &self.prismoid_grids);
+            // The view checks records only when the project moves; a frame
+            // here compares what it found and copies it on a change.
+            if let Some((_, view)) = self.ui_project_view_cache.borrow().as_ref() {
+                follow_grid_record(selection, &view.prismoid_grids);
+            }
         }
         if self.editor.active_workspace == Workspace::Geology {
             let grids = &self.prismoid_grids;
@@ -717,8 +1142,20 @@ impl App<'_> {
             for id in recolour {
                 self.spawn_prismoid_map(id);
             }
+            let grids = &self.prismoid_grids;
+            let mut restyled = false;
+            for drawn in &mut self.prismoid_drawn {
+                if let Some(item) = grids.iter().find(|item| Some(item.id) == drawn.surface.prismoid_grid && item.shaded != drawn.shaded) {
+                    drawn.style(item.color, item.shaded);
+                    restyled = true;
+                }
+            }
+            if restyled {
+                self.request_topology_redraw();
+            }
         }
         self.refresh_prismoid_scene();
+        self.refresh_prismoid_lattice_lines();
     }
 
     /// Pick the prismoid a click on a drawn grid landed on, by Leo's
@@ -871,7 +1308,7 @@ impl App<'_> {
         let Some(item) = self.prismoid_grids.iter().find(|item| item.id == id) else {
             return;
         };
-        let (grid, name, color, color_by) = (Arc::clone(&item.grid), item.name.clone(), item.color, item.color_by.clone());
+        let (grid, name, color, color_by, shaded) = (Arc::clone(&item.grid), item.name.clone(), item.color, item.color_by.clone(), item.shaded);
         let (index, range) = map_inputs(item);
         let corners = grid.lattice.corner_count();
         if corners > NODE_BUDGET {
@@ -907,18 +1344,27 @@ impl App<'_> {
             phase.set_fraction(0.8);
             proceed()?;
             let map = prismoid_map(&grid, &name, index, range, color_by.preset);
-            let mut surface = preview_triangulation(name, Arc::new(mesh), spatial, closed.outline, order, color, PRISMOID_OUTLINE_COLOR);
-            surface.id = next_view_id();
+            let lattice_cells = Arc::new(closed.lattice_cells);
+            let wire_colors = lattice_colors(&grid, color, &lattice_cells, index, range, color_by.preset).map(Arc::new);
+            let (outline, lattice) = (Arc::new(closed.outline), Arc::new(closed.lattice));
+            let mut surface = preview_triangulation(name, Arc::new(mesh), spatial, Arc::clone(&outline), order, color, PRISMOID_OUTLINE_COLOR);
             surface.raster_texture = map.as_ref().map(|raster| raster.id);
             surface.always_show_edges = true;
             surface.prismoid_grid = Some(id);
             phase.finish();
-            Ok(DrawnPrismoidGrid {
+            let mut drawn = DrawnPrismoidGrid {
                 source: grid,
                 surface,
                 map,
                 color_by,
-            })
+                outline,
+                lattice,
+                shaded,
+                lattice_cells,
+                wire_colors,
+            };
+            drawn.style(color, shaded);
+            Ok(drawn)
         };
         let apply = move |app: &mut App, result: Result<DrawnPrismoidGrid>| match result {
             Ok(drawn) => {
@@ -947,14 +1393,21 @@ impl App<'_> {
         let Some(item) = self.prismoid_grids.iter().find(|item| item.id == id) else {
             return;
         };
-        let (grid, name, color_by) = (Arc::clone(&item.grid), item.name.clone(), item.color_by.clone());
+        type Recoloured = (Arc<PrismoidGrid>, PrismoidColorBy, Option<OpenRasterTexture>, Option<Arc<Vec<[f32; 4]>>>);
+        let (grid, name, color, color_by) = (Arc::clone(&item.grid), item.name.clone(), item.color, item.color_by.clone());
         let (index, range) = map_inputs(item);
-        let compute = move |_: &CancelFlag| -> Result<(Arc<PrismoidGrid>, PrismoidColorBy, Option<OpenRasterTexture>)> {
+        let cells = self
+            .prismoid_drawn
+            .iter()
+            .find(|drawn| drawn.surface.prismoid_grid == Some(id) && Arc::ptr_eq(&drawn.source, &grid))
+            .map(|drawn| Arc::clone(&drawn.lattice_cells));
+        let compute = move |_: &CancelFlag| -> Result<Recoloured> {
             let map = prismoid_map(&grid, &name, index, range, color_by.preset);
-            Ok((grid, color_by, map))
+            let wire_colors = cells.and_then(|cells| lattice_colors(&grid, color, &cells, index, range, color_by.preset)).map(Arc::new);
+            Ok((grid, color_by, map, wire_colors))
         };
-        let apply = move |app: &mut App, result: Result<(Arc<PrismoidGrid>, PrismoidColorBy, Option<OpenRasterTexture>)>| {
-            let Ok((grid, color_by, map)) = result else {
+        let apply = move |app: &mut App, result: Result<Recoloured>| {
+            let Ok((grid, color_by, map, wire_colors)) = result else {
                 return;
             };
             let current = app
@@ -972,6 +1425,12 @@ impl App<'_> {
             drawn.surface.raster_texture = map.as_ref().map(|raster| raster.id);
             drawn.map = map;
             drawn.color_by = color_by;
+            // Only a flip between coloured and flat wires restyles the surface.
+            let flips = drawn.wire_colors.is_some() != wire_colors.is_some();
+            drawn.wire_colors = wire_colors;
+            if flips {
+                drawn.style(color, drawn.shaded);
+            }
             app.refresh_prismoid_scene();
             app.invalidate_topology_bounds_and_redraw();
         };
@@ -993,6 +1452,7 @@ impl App<'_> {
         }
         for drawn in &self.prismoid_drawn {
             drawn.surface.prismoid_grid.hash(&mut hasher);
+            drawn.surface.id.hash(&mut hasher);
             (Arc::as_ptr(&drawn.surface.mesh) as usize).hash(&mut hasher);
             drawn.map.as_ref().map(|map| map.id).hash(&mut hasher);
         }
@@ -1017,6 +1477,27 @@ impl App<'_> {
         let maps = self.prismoid_drawn.iter().filter_map(|drawn| drawn.map.as_ref());
         self.prismoid_rasters = self.raster_textures.iter().chain(maps).cloned().collect();
         self.prismoid_scene_key = Some(key);
+    }
+
+    /// Hand the view the drawn grids whose lattice lines draw in colour,
+    /// only when one of them or its colours moved: a still frame costs a
+    /// hash. None off Geology.
+    fn refresh_prismoid_lattice_lines(&mut self) {
+        let key = prismoid_lattice_key(&self.editor, &self.prismoid_drawn);
+        let Some(graphics) = self.graphics.as_mut().filter(|graphics| graphics.prismoid_lattices_key() != Some(key)) else {
+            return;
+        };
+        let lattices = coloured_lattices(&self.editor, &self.prismoid_drawn)
+            .map(|(drawn, colors)| PrismoidLattice {
+                entity: drawn.surface.entity_id(),
+                mesh: Arc::clone(&drawn.surface.mesh),
+                lattice: Arc::clone(&drawn.lattice),
+                colors: Arc::clone(colors),
+                width: drawn.surface.line_weight.unwrap_or(1.0),
+                revision: lattice_revision(drawn, colors),
+            })
+            .collect();
+        graphics.set_prismoid_lattices(key, lattices);
     }
 
     /// Cut the drawn grids along a 2D section again, only when the plane, a
@@ -1052,6 +1533,14 @@ impl App<'_> {
             }
         }
         graphics.set_section_cells(cut);
+    }
+
+    /// Open a dialog again after its job refused, with what was typed in it
+    /// (closing keeps it), while the project the job ran in is still active.
+    fn reopen_refused(&mut self, runtime_id: Option<u32>, open: impl FnOnce(&mut EditorState)) {
+        if runtime_id.is_some() && self.workspace.active_project().map(|project| project.runtime_id) == runtime_id {
+            open(&mut self.editor);
+        }
     }
 }
 
@@ -1117,6 +1606,51 @@ fn section_colors(item: &OpenPrismoidGrid, crossing: &SectionCrossing) -> Vec<[f
         },
         None => crossing.points.iter().map(|point| ramp(point.roof - point.floor)).collect(),
     }
+}
+
+/// One colour per lattice line, `cells` listing each line's cells, from the
+/// inputs the body's colours are made from: each line's value from
+/// [`PrismoidGrid::wire_values`] on the ramp, or the grid's own colour,
+/// opaque, where no cell gives it one. `None` where the body draws flat.
+fn lattice_colors(grid: &PrismoidGrid, color: [f32; 4], cells: &[[u32; 4]], index: Option<usize>, range: Option<(f64, f64)>, preset: DrillColorPreset) -> Option<Vec<[f32; 4]>> {
+    let (min, max) = range.filter(|_| grid.lattice.is_regular())?;
+    let [red, green, blue, _] = color;
+    let stops = preset.stops();
+    let ramp = |value: f64| {
+        let [red, green, blue] = evaluate_stops(ramp_position(value, (min, max)), &stops, preset.smooth());
+        [red, green, blue, 1.0]
+    };
+    let values = grid.wire_values(cells, index);
+    Some(values.into_iter().map(|value| value.map_or([red, green, blue, 1.0], ramp)).collect())
+}
+
+/// The drawn grids whose lattice lines draw in their own colours, with
+/// those colours: in Geology, out of Solid view, and coloured.
+fn coloured_lattices<'d>(editor: &EditorState, drawn: &'d [DrawnPrismoidGrid]) -> impl Iterator<Item = (&'d DrawnPrismoidGrid, &'d Arc<Vec<[f32; 4]>>)> {
+    let geology = editor.active_workspace == Workspace::Geology;
+    drawn
+        .iter()
+        .filter(move |drawn| geology && !drawn.shaded)
+        .filter_map(|drawn| Some((drawn, drawn.wire_colors.as_ref()?)))
+}
+
+/// Moves with a coloured lattice's view id, mesh or colours.
+fn lattice_revision(drawn: &DrawnPrismoidGrid, colors: &Arc<Vec<[f32; 4]>>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    drawn.surface.id.hash(&mut hasher);
+    (Arc::as_ptr(&drawn.surface.mesh) as usize).hash(&mut hasher);
+    (Arc::as_ptr(colors) as usize).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// What the view's coloured lattices are handed over from: each one's
+/// revision.
+fn prismoid_lattice_key(editor: &EditorState, drawn: &[DrawnPrismoidGrid]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for (drawn, colors) in coloured_lattices(editor, drawn) {
+        lattice_revision(drawn, colors).hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// How a click on a prismoid, `selected` or not, picks it, by the canvas's
@@ -1280,6 +1814,7 @@ fn cell_selection(entity: SceneEntityId, grid: Arc<PrismoidGrid>, name: &str, st
             revision: 0,
             outline: Vec::new(),
             rows: InspectorRows::default(),
+            built: Vec::new(),
         };
         refresh_cell_selection(&mut selection);
         selection
@@ -1346,9 +1881,8 @@ fn cell_selection_rows(selection: &CellSelection) -> InspectorRows {
             prismoid_selection_rows(&selection.name, &selection.grid.summary_of(cells))
         }
     };
-    if let Some(stratum) = &selection.stratum {
-        rows.properties.splice(1..1, stratum_rows(stratum));
-    }
+    let placed = selection.stratum.as_ref().map(stratum_rows).unwrap_or_default();
+    rows.properties.splice(1..1, placed.into_iter().chain(selection.built.iter().cloned()));
     if selection.masked > 0 {
         rows.properties
             .push(inspector_row(tr!("prismoid-inspector-masked"), selection.masked.to_string(), None, None));
@@ -1377,6 +1911,84 @@ fn stratum_rows(stratum: &Stratum) -> Vec<InspectorRow> {
         inspector_row(tr!("prismoid-inspector-above"), neighbour(stratum.above()), None, None),
         inspector_row(tr!("prismoid-inspector-below"), neighbour(stratum.below()), None, None),
     ]
+}
+
+/// What a grid was built from and when, then each source moved since: the
+/// inspector's rows, made with the project view.
+pub(crate) fn built_rows(record: &BuildRecord, staleness: &Staleness, project: &ProjectSources<'_>) -> Vec<InspectorRow> {
+    let (roof, floor) = (present_name(&record.roof, project), present_name(&record.floor, project));
+    let surfaces = tr!("prismoid-inspector-built-from-surfaces", roof = roof.to_owned(), floor = floor.to_owned());
+    let mut rows = vec![
+        inspector_row(tr!("prismoid-inspector-built-from"), surfaces, None, None),
+        inspector_row(tr!("prismoid-inspector-built"), built_date(&record.built), None, Some(record.application.clone())),
+    ];
+    rows.extend(
+        staleness
+            .moved
+            .iter()
+            .map(|moved| inspector_row(tr!("prismoid-inspector-changed"), moved_line(moved), None, None)),
+    );
+    rows
+}
+
+/// A grid's hover lines on its build, made with the project view: what it
+/// was built from, surfaces by their present names, then each source moved
+/// since and each no longer in the project.
+pub(crate) fn record_lines(record: Option<&BuildRecord>, staleness: &Staleness, project: &ProjectSources<'_>) -> Vec<String> {
+    let Some(record) = record else {
+        return vec![tr!("explorer-prismoid-grid-no-record")];
+    };
+    let mut lines = vec![tr!(
+        "explorer-prismoid-grid-built",
+        roof = present_name(&record.roof, project).to_owned(),
+        floor = present_name(&record.floor, project).to_owned(),
+        spacing = cell_size(record.spacing),
+        step = record.step.to_string(),
+        date = built_date(&record.built),
+        application = record.application.clone()
+    )];
+    lines.extend(record.envelope.map(|_| tr!("explorer-prismoid-grid-built-envelope")));
+    lines.extend(record.values.iter().map(|source| match &source.from {
+        ValueFrom::Surface { surface, .. } => tr!(
+            "explorer-prismoid-grid-built-value",
+            value = source.value.clone(),
+            surface = present_name(surface, project).to_owned()
+        ),
+        ValueFrom::Difference { other, .. } => tr!("explorer-prismoid-grid-built-difference", value = source.value.clone(), other = other.clone()),
+    }));
+    lines.extend(staleness.moved.iter().map(moved_line));
+    lines.extend(staleness.gone.iter().map(|gone| match gone {
+        Gone::Surface(name) => tr!("explorer-prismoid-grid-source-gone", name = name.clone()),
+        Gone::Grid(name) => tr!("explorer-prismoid-grid-no-grid-named", name = name.clone()),
+    }));
+    lines
+}
+
+fn moved_line(moved: &Moved) -> String {
+    match moved {
+        Moved::Holes { count, latest } => tr!("explorer-prismoid-grid-holes-corrected", count = count.to_string(), date = built_date(latest)),
+        Moved::HoleRecords => tr!("explorer-prismoid-grid-holes-changed"),
+        Moved::Surface(name) => tr!("explorer-prismoid-grid-surface-moved", name = name.clone()),
+        Moved::Envelope => tr!("explorer-prismoid-grid-envelope-moved"),
+    }
+}
+
+/// A recorded instant to the minute on the viewer's clock, so dates written
+/// under different offsets read in order; as written when it does not read.
+fn built_date(date: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(date).map_or_else(|_| date.to_owned(), |date| date.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+}
+
+/// Carry the inspector rows the project view last made for the selection's
+/// grid into its rows when they changed.
+fn follow_grid_record(selection: &mut CellSelection, entries: &[UiPrismoidGridEntry]) {
+    let Some(entry) = entries.iter().find(|entry| SceneEntityId::PrismoidGrid(entry.id) == selection.entity) else {
+        return;
+    };
+    if selection.built != entry.record_rows {
+        selection.built.clone_from(&entry.record_rows);
+        selection.rows = cell_selection_rows(selection);
+    }
 }
 
 /// Carry a rename of the selection's grid into its rows.
@@ -1445,8 +2057,9 @@ fn inspector_row(key: String, value: String, unit: Option<&str>, note: Option<St
 }
 
 /// The inspector's rows for one prismoid of the grid `name`: where it is,
-/// its size and thicknesses, then its volume, tonnes and every value it
-/// holds. Columns, rows and corners count from 1 at the lattice origin.
+/// its size and thicknesses, then its volume (and, for a prismoid a trim cut,
+/// from what), tonnes and every value it holds. Columns, rows and corners
+/// count from 1 at the lattice origin.
 fn prismoid_cell_rows(name: &str, grid: &PrismoidGrid, cell: usize) -> InspectorRows {
     let lattice = &grid.lattice;
     let columns = lattice.columns();
@@ -1462,7 +2075,7 @@ fn prismoid_cell_rows(name: &str, grid: &PrismoidGrid, cell: usize) -> Inspector
             None,
         ),
         inspector_row(
-            tr!("solids-plan-area"),
+            tr!("tri-prismoid-cell-size"),
             tr!(
                 "prismoid-inspector-plan-size",
                 along_u = cell_size(lattice.u_sizes[column]),
@@ -1512,6 +2125,12 @@ fn prismoid_cell_rows(name: &str, grid: &PrismoidGrid, cell: usize) -> Inspector
         },
     };
     let mut contents = vec![inspector_row(tr!("tri-volume"), format_quantity(volume, 1), Some("m³"), None), tonnes];
+    if grid.cut.cell_index(cell).is_some() {
+        contents.insert(
+            1,
+            inspector_row(tr!("prismoid-inspector-volume-from"), tr!("prismoid-inspector-cut-along-topography"), None, None),
+        );
+    }
     for values in &grid.cell_values {
         let unit = (!values.unit.is_empty()).then_some(values.unit.as_str());
         contents.push(match values.values[cell] {
@@ -1576,6 +2195,18 @@ fn add_qualities(grid: &PrismoidGrid, grid_name: &str, inputs: Vec<QualityInput>
     Ok((merged, lines))
 }
 
+/// `item` holding `merged`, its build record, when it has one, noting
+/// where the merged values came from.
+fn with_merged_values(item: &OpenPrismoidGrid, merged: PrismoidGrid, sources: Vec<ValueSource>) -> OpenPrismoidGrid {
+    let mut replacement = item.clone();
+    replacement.summary = merged.summary();
+    replacement.grid = Arc::new(merged);
+    if let Some(record) = &mut replacement.built_from {
+        record.note_values(sources);
+    }
+    replacement
+}
+
 /// The mark a surface made from a grid's `values` carries, or from its
 /// vertical thickness with `None`.
 fn surface_mark(values: Option<&CellValues>) -> QualityMark {
@@ -1633,7 +2264,288 @@ fn other_grid_changed(grids: &[OpenPrismoidGrid], other_id: PrismoidGridId, read
         return None;
     }
     let name = item.map_or(name, |item| item.name.as_str());
-    Some(tr!("cmd-prismoid-grid-changed-while-reading", grid = name.to_owned()))
+    Some(tr!("cmd-prismoid-grid-changed-while-comparing", grid = name.to_owned()))
+}
+
+/// A selected grid as a trim takes it.
+struct TrimSource {
+    id: PrismoidGridId,
+    grid: Arc<PrismoidGrid>,
+    name: String,
+    stratum: Option<Stratum>,
+    section: SectionKind,
+    /// The geometry its build record says its roof was built from.
+    roof_geometry: Option<GeometryVersion>,
+}
+
+/// Whether a grid's roof was built from the trimming surface, by the
+/// geometry its build record names; a grid with no record says nothing.
+fn roof_is_trimming_surface(roof: Option<GeometryVersion>, surface: GeometryVersion) -> bool {
+    roof == Some(surface)
+}
+
+/// What a trim makes of one grid: the grid kept, if any, its console lines,
+/// and whether the surface reached any of its active cells.
+struct TrimOutcome {
+    grid: Option<PrismoidGrid>,
+    lines: Vec<String>,
+    reached: bool,
+    /// Where the surface meets the roofs and floors of the cut cells, as
+    /// chained strings.
+    roof_strings: Vec<Vec<DVec3>>,
+    floor_strings: Vec<Vec<DVec3>>,
+}
+
+/// The colour of the subcrop strings where the surface meets a roof.
+const SUBCROP_ROOF_COLOR: [f32; 4] = [0.95, 0.55, 0.1, 1.0];
+
+/// The colour of the subcrop strings where the surface meets a floor.
+const SUBCROP_FLOOR_COLOR: [f32; 4] = [0.2, 0.7, 0.95, 1.0];
+
+/// The strings of a trim run's subcrop layer.
+#[derive(Debug, Default, PartialEq)]
+struct Subcrop {
+    roof: Vec<Vec<DVec3>>,
+    floor: Vec<Vec<DVec3>>,
+}
+
+impl Subcrop {
+    fn is_empty(&self) -> bool {
+        self.roof.is_empty() && self.floor.is_empty()
+    }
+}
+
+/// One grid's roof strings and floor strings.
+type GridStrings<'a> = (&'a [Vec<DVec3>], &'a [Vec<DVec3>]);
+
+/// The roof and floor strings of each grid of a run, as one layer holds them.
+/// An interval's floor and the next one's roof are one horizon, so each floor
+/// segment that is a segment of another grid's roof strings (both ends at the
+/// same `contour_point_key`, either way round) is left out and what is left of
+/// a floor string is chained again: the line is held once, also where the
+/// lower interval is pinched or masked along part of it.
+fn subcrop_strings(grids: &[GridStrings]) -> Subcrop {
+    type Key = (i64, i64, i64);
+    let key_of = |pair: &[DVec3]| {
+        let (a, b) = (contour_point_key(pair[0]), contour_point_key(pair[1]));
+        if a <= b { (a, b) } else { (b, a) }
+    };
+    let segments = |string: &Vec<DVec3>| -> Vec<(Key, Key)> { string.windows(2).map(key_of).collect() };
+    let mut subcrop = Subcrop::default();
+    for (index, (roof, floor)) in grids.iter().enumerate() {
+        subcrop.roof.extend(roof.iter().cloned());
+        let others: std::collections::HashSet<(Key, Key)> = grids
+            .iter()
+            .enumerate()
+            .filter(|(other, _)| *other != index)
+            .flat_map(|(_, (roof, _))| roof.iter().flat_map(segments))
+            .collect();
+        for string in floor.iter() {
+            let unshared: Vec<[DVec3; 2]> = string.windows(2).filter(|pair| !others.contains(&key_of(pair))).map(|pair| [pair[0], pair[1]]).collect();
+            if unshared.len() + 1 == string.len() || string.len() < 2 {
+                subcrop.floor.push(string.clone());
+            } else {
+                subcrop.floor.extend(chain_contour_segments(unshared));
+            }
+        }
+    }
+    subcrop
+}
+
+/// Where a trim puts one grid it kept: the new grid's name and, for a
+/// strata's interval, its record, whose strata names the new folder.
+#[derive(Debug, PartialEq)]
+struct TrimPlacement {
+    name: String,
+    stratum: Option<Stratum>,
+}
+
+/// Where a trim puts each grid it `kept`, in source order: a lone source
+/// takes the typed `name`, the rest the default; each source strata gets one
+/// folder, named by `unique_folder` from the trim's folder name in the
+/// source's section, and its intervals keep their records with only the
+/// strata renamed to it.
+fn trim_placements(
+    sources: &[TrimSource],
+    kept: &[bool],
+    surface: &str,
+    side: TriSurfaceCutSide,
+    name: Option<&str>,
+    mut unique_folder: impl FnMut(String, SectionKind) -> String,
+) -> Vec<Option<TrimPlacement>> {
+    let lone = sources.len() == 1;
+    // Each source strata and section with the name of its new folder.
+    let mut folders: Vec<(&str, SectionKind, String)> = Vec::new();
+    sources
+        .iter()
+        .zip(kept)
+        .map(|(source, kept)| {
+            if !*kept {
+                return None;
+            }
+            let grid_name = match name {
+                Some(name) if lone => name.to_owned(),
+                _ => trim_name(&source.name, surface, side),
+            };
+            let stratum = source.stratum.as_ref().map(|stratum| {
+                let held = folders.iter().find(|(strata, section, _)| *strata == stratum.strata && *section == source.section);
+                let folder = match held {
+                    Some((.., folder)) => folder.clone(),
+                    None => {
+                        let folder = unique_folder(trim_strata_name(&stratum.strata, surface, side), source.section);
+                        folders.push((&stratum.strata, source.section, folder.clone()));
+                        folder
+                    }
+                };
+                Stratum {
+                    strata: folder,
+                    ..stratum.clone()
+                }
+            });
+            Some(TrimPlacement { name: grid_name, stratum })
+        })
+        .collect()
+}
+
+/// Why a trim of grid `id` is dropped at its apply: the grid, `name` when
+/// the job read it as `read`, is gone or no longer holds that grid.
+fn trimmed_grid_changed(grids: &[OpenPrismoidGrid], id: PrismoidGridId, read: &Arc<PrismoidGrid>, name: &str) -> Option<String> {
+    let item = grids.iter().find(|item| item.id == id);
+    if item.is_some_and(|item| Arc::ptr_eq(&item.grid, read)) {
+        return None;
+    }
+    let name = item.map_or(name, |item| item.name.as_str());
+    Some(tr!("cmd-prismoid-grid-changed-while-trimming", grid = name.to_owned()))
+}
+
+/// A surface's name without its file extension, as a derived name takes it.
+fn surface_stem(name: &str) -> String {
+    let stem = std::path::Path::new(name).file_stem().and_then(|value| value.to_str()).unwrap_or(name).trim();
+    if stem.is_empty() { name.to_owned() } else { stem.to_owned() }
+}
+
+/// The default name of `grid` trimmed to `surface`, saying the side kept.
+pub(crate) fn trim_name(grid: &str, surface: &str, side: TriSurfaceCutSide) -> String {
+    let (grid, surface) = (grid.to_owned(), surface_stem(surface));
+    match side {
+        TriSurfaceCutSide::CutTop => tr!("cmd-prismoid-grid-trim-name-below", grid = grid, surface = surface),
+        TriSurfaceCutSide::CutBottom => tr!("cmd-prismoid-grid-trim-name-above", grid = grid, surface = surface),
+    }
+}
+
+/// The name of the folder a strata's trimmed intervals go into.
+fn trim_strata_name(strata: &str, surface: &str, side: TriSurfaceCutSide) -> String {
+    let (strata, surface) = (strata.to_owned(), surface_stem(surface));
+    match side {
+        TriSurfaceCutSide::CutTop => tr!("cmd-prismoid-grid-trim-strata-name-below", strata = strata, surface = surface),
+        TriSurfaceCutSide::CutBottom => tr!("cmd-prismoid-grid-trim-strata-name-above", strata = strata, surface = surface),
+    }
+}
+
+/// A trim refused, in words naming the grid and the surface.
+fn trim_refusal_words(refusal: TrimRefusal, grid: &str, surface: &str) -> String {
+    match refusal {
+        TrimRefusal::Folded { count, first } => tr!(
+            "cmd-prismoid-grid-trim-folded",
+            surface = surface.to_owned(),
+            count = count.to_string(),
+            grid = grid.to_owned(),
+            x = format!("{:.2}", first.x),
+            y = format!("{:.2}", first.y)
+        ),
+        TrimRefusal::Cancelled => tr!("common-cancelled"),
+        TrimRefusal::Malformed(error) => format!("{:#}", error.context(grid.to_owned())),
+        TrimRefusal::TooLarge { budget } => tr!(
+            "cmd-prismoid-grid-trim-too-many-cuts",
+            grid = grid.to_owned(),
+            surface = surface.to_owned(),
+            budget = budget.to_string()
+        ),
+    }
+}
+
+/// How many faces of `mesh` stand upright in plan (no more plan area than
+/// `slack`, which a trim ignores) over the plan bounds of `lattices`.
+fn upright_faces_over<'a>(mesh: &Triangulation, spatial: &TriangleBvh, slack: f64, lattices: impl Iterator<Item = &'a Lattice>) -> usize {
+    let corners: Vec<DVec2> = lattices.flat_map(Lattice::corners).collect();
+    let min = corners.iter().fold(DVec2::splat(f64::INFINITY), |min, corner| min.min(*corner));
+    let max = corners.iter().fold(DVec2::splat(f64::NEG_INFINITY), |max, corner| max.max(*corner));
+    let (mut count, mut stack) = (0, Vec::new());
+    spatial.for_each_xy_bounds_candidate_index_with_stack(min, max, &mut stack, |face| {
+        let upright = mesh
+            .face_vertex_indices(face)
+            .is_some_and(|face| triangle_xy_area(face.map(|index| mesh.vertices()[index])).abs() <= slack);
+        count += usize::from(upright);
+    });
+    count
+}
+
+/// The console lines for `grid` trimmed to `surface`, keeping the ground
+/// `relation` it: what became of its prismoids, or that nothing was kept (by
+/// `interval` for a strata's interval); what was cut along the surface;
+/// when ground was taken as touching a roof or floor within `allowance`
+/// metres, the area and the most volume that could have shifted; the kept
+/// grid's totals; then what was trimmed off where the surface reaches, and
+/// the prismoids beyond it.
+fn trim_lines(grid: &str, surface: &str, relation: &str, interval: Option<&str>, allowance: f64, trimmed: &Trimmed) -> Vec<String> {
+    let (grid, surface, relation) = (grid.to_owned(), surface.to_owned(), relation.to_owned());
+    let kept = trimmed.grid.as_ref().map(PrismoidGrid::summary);
+    let mut lines = Vec::new();
+    match (&kept, interval) {
+        (Some(_), _) => lines.push(tr!(
+            "cmd-prismoid-grid-trimmed",
+            grid = grid,
+            surface = surface.clone(),
+            relation = relation,
+            whole = trimmed.whole.to_string(),
+            cut = trimmed.cut.to_string(),
+            gone = trimmed.gone.to_string()
+        )),
+        (None, Some(interval)) => lines.push(tr!(
+            "cmd-prismoid-grid-trim-interval-none",
+            interval = interval.to_owned(),
+            relation = relation,
+            surface = surface.clone()
+        )),
+        (None, None) => lines.push(tr!("cmd-prismoid-grid-trim-nothing", grid = grid, relation = relation, surface = surface.clone())),
+    }
+    if trimmed.triangles > 0 {
+        lines.push(tr!(
+            "cmd-prismoid-grid-trim-cut",
+            surface = surface.clone(),
+            count = trimmed.cut.to_string(),
+            triangles = trimmed.triangles.to_string()
+        ));
+    }
+    if trimmed.touching_area > 0.0 {
+        lines.push(tr!(
+            "cmd-prismoid-grid-trim-touching",
+            surface = surface.clone(),
+            allowance = format_quantity(allowance, 3),
+            area = format_quantity(trimmed.touching_area, 0),
+            shift = format_quantity(allowance * trimmed.touching_area, 1)
+        ));
+    }
+    if let Some(summary) = &kept {
+        lines.extend(totals_lines(summary));
+    }
+    // The cuts are exact, so the source less the kept grid over the cells the
+    // surface reaches is what was trimmed off.
+    let reached = &trimmed.reached;
+    let tonnes = |summary: &PrismoidGridSummary| summary.tonnes.as_ref().and_then(|tonnes| tonnes.value(ReserveAggregation::Sum));
+    let volume = format_quantity(reached.volume - kept.as_ref().map_or(0.0, |kept| kept.volume), 0);
+    lines.push(match tonnes(reached) {
+        Some(off) => tr!(
+            "cmd-prismoid-grid-trimmed-off-tonnes",
+            volume = volume,
+            tonnes = format_quantity(off - kept.as_ref().and_then(tonnes).unwrap_or(0.0), 0)
+        ),
+        None => tr!("cmd-prismoid-grid-trimmed-off", volume = volume),
+    });
+    if trimmed.beyond > 0 {
+        lines.push(tr!("cmd-prismoid-grid-trimmed-beyond", count = trimmed.beyond.to_string(), surface = surface));
+    }
+    lines
 }
 
 /// The console lines for a difference `name` kept on `grid`, `grid` less
@@ -1703,6 +2615,15 @@ pub(crate) fn values_refusal_words(refusal: ValuesRefusal, grid_name: &str) -> S
     }
 }
 
+/// [`values_refusal_words`] for a difference kept on `grid_name`, whose
+/// refused name is the difference's own, not the other grid's.
+pub(crate) fn difference_name_words(refusal: ValuesRefusal, grid_name: &str) -> String {
+    match refusal {
+        ValuesRefusal::Reserved { quality, .. } => tr!("cmd-prismoid-grid-difference-reserved", quality = quality),
+        refusal => values_refusal_words(refusal, grid_name),
+    }
+}
+
 /// A cell size in metres to the centimetre: a size read off a surface's
 /// vertices carries their rounding.
 pub(super) fn cell_size(size: f64) -> String {
@@ -1760,7 +2681,7 @@ fn log_built_prismoid_grid(item: &OpenPrismoidGrid, crossed: usize, holes: usize
         userspace_log!("{line}");
     }
     if crossed > 0 {
-        userspace_warn!(
+        userspace_log!(
             "{}",
             tr!("cmd-prismoid-grid-crossed", count = (crossed as i64), roof = roof.to_string(), floor = floor.to_string())
         );

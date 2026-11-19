@@ -36,7 +36,10 @@ use crate::{
             mesh_data::{Triangulation, Vertex},
         },
         point_cloud::{LoadedPointCloud, OpenPointCloud, prepare_for_render},
-        prismoid_grid::{CellValueRole, CellValues, DEFAULT_PRISMOID_GRID_COLOR, Lattice, LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidColorBy, PrismoidGrid, Stratum},
+        prismoid_grid::{
+            BuildRecord, CellValueRole, CellValues, CutPoint, CutPrismoids, DEFAULT_PRISMOID_GRID_COLOR, Lattice, LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidColorBy,
+            PrismoidGrid, Stratum,
+        },
         progress::Phase,
         project::{self, ModellingSettings, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
@@ -125,6 +128,8 @@ const META_CHARGES: &str = "incline:charges";
 const META_DERIVED_COLUMNS: &str = "incline:derived_columns";
 /// Project-level: the pit optimization scenarios, as their own versioned JSON.
 const META_OPTIMIZATION: &str = "incline:optimization";
+/// What a prismoid grid was built from, written only when it has a record.
+const META_BUILT_FROM: &str = "incline:built_from";
 
 /// Every `incline:` key the writer puts on an element.
 ///
@@ -159,6 +164,7 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_SCHEDULE,
     META_SCHEDULE_RESULT,
     META_HAULAGE,
+    META_BUILT_FROM,
 ];
 /// On a prismoid grid's cell values, not an element: what they are for,
 /// written only for a density.
@@ -1452,6 +1458,27 @@ fn write_prismoid_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
         put(&mut outline, META_KIND, "prismoid_outline");
         parts.push(outline);
     }
+    // Only when something is cut, as the masks: the kept faces of the cut
+    // cells, in the outline's frame (world plan, elevations).
+    let cut = &grid.cut;
+    if !cut.is_empty() {
+        let world = |plan: DVec2| lattice.origin + lattice.u * plan.x + lattice.v * plan.y;
+        let vertices = cut.points.iter().map(|point| world(point.plan).extend(point.roof).to_array());
+        let surface = Surface::new(writer.array_vertices(vertices)?, writer.array_triangles(cut.triangles.clone())?);
+        let mut cut_element = Element::new(format!("{} cut", open.name), surface);
+        cut_element.color = color;
+        let floors = writer.array_numbers(cut.points.iter().map(|point| Some(point.floor)))?;
+        cut_element.attributes.push(Attribute::from_numbers("cut_floor", Location::Vertices, floors));
+        let cells = cut
+            .cells
+            .iter()
+            .enumerate()
+            .flat_map(|(index, cell)| std::iter::repeat_n(Some(f64::from(*cell)), (cut.starts[index + 1] - cut.starts[index]) as usize));
+        let cells = writer.array_numbers(cells)?;
+        cut_element.attributes.push(Attribute::from_numbers("cut_prismoid", Location::Primitives, cells));
+        put(&mut cut_element, META_KIND, "prismoid_cut");
+        parts.push(cut_element);
+    }
     let mut element = Element::new(open.name.clone(), omf_crate::Composite::new(parts));
     element.color = color;
     put(&mut element, META_KIND, "prismoid_grid");
@@ -1467,9 +1494,15 @@ fn write_prismoid_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
     if open.color_by != PrismoidColorBy::default() {
         style["color_by"] = serde_json::to_value(&open.color_by)?;
     }
+    if open.shaded {
+        style["shaded"] = json!(true);
+    }
     put(&mut element, META_STYLE, style);
     if let Some(stratum) = &open.stratum {
         put(&mut element, META_STRATUM, serde_json::to_value(stratum)?);
+    }
+    if let Some(record) = &open.built_from {
+        put(&mut element, META_BUILT_FROM, serde_json::to_value(record)?);
     }
     Ok(element)
 }
@@ -3701,7 +3734,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     }
 
     /// Rebuild a prismoid grid written by [`write_prismoid_grid`] from its
-    /// roof, floor and mask; the outline is derived, so it is not read.
+    /// roof, floor, mask and cut cells; the outline is derived, so it is not
+    /// read.
     fn read_prismoid_grid(&mut self, element: &omf_crate::Element) -> Result<LoadedPrismoidGrid> {
         let name = element_name(element);
         let omf_crate::Geometry::Composite(composite) = &element.geometry else {
@@ -3765,6 +3799,10 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             }
         }
         let elevations = |heights: Vec<f64>| heights.into_iter().map(|height| base.z + height).collect::<Vec<_>>();
+        let cut = match part("prismoid_cut") {
+            Some(cut) => self.read_prismoid_cut(cut, &lattice, name)?,
+            None => CutPrismoids::default(),
+        };
         let grid = PrismoidGrid {
             lattice,
             roof: elevations(roof_heights),
@@ -3772,12 +3810,17 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             active,
             masked,
             cell_values,
+            cut,
         };
         grid.check().with_context(|| tr!("err-omf-prismoid-grid", name = name.to_string()))?;
         let style = element.metadata.get(META_STYLE);
         let stratum = element.metadata.get(META_STRATUM).map(|record| Stratum::deserialize(record).ok().filter(Stratum::is_whole));
         if let Some(None) = stratum {
             self.bundle.warnings.push(tr!("omf-prismoid-stratum-dropped", name = name.to_string()));
+        }
+        let built_from = element.metadata.get(META_BUILT_FROM).map(|record| BuildRecord::deserialize(record).ok());
+        if let Some(None) = built_from {
+            self.bundle.warnings.push(tr!("omf-prismoid-record-dropped", name = name.to_string()));
         }
         Ok(LoadedPrismoidGrid {
             name: name.to_owned(),
@@ -3786,9 +3829,100 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             grid: Arc::new(grid),
             color_by: style_value(style, "color_by").unwrap_or_default(),
             stratum: stratum.flatten(),
+            built_from: built_from.flatten(),
+            shaded: style_value(style, "shaded").unwrap_or(false),
         })
     }
 
+    /// The cut cells of a prismoid grid from its `prismoid_cut` surface: its
+    /// triangles grouped by `cut_prismoid`, each cell given only the points
+    /// its triangles use, in the lattice frame. The means are worked out, not
+    /// read.
+    fn read_prismoid_cut(&mut self, element: &omf_crate::Element, lattice: &Lattice, name: &str) -> Result<CutPrismoids> {
+        let refused = |reason: String| anyhow::anyhow!(tr!("err-omf-prismoid-cut-malformed", name = name.to_string(), reason = reason));
+        let omf_crate::Geometry::Surface(surface) = &element.geometry else {
+            return Err(refused(tr!("err-omf-prismoid-cut-not-surface")));
+        };
+        let offset = self.project_origin + DVec3::from_array(surface.origin);
+        let vertices = self.read_vertices(&surface.vertices)?;
+        ensure_items(surface.triangles.item_count(), &tr!("err-omf-items-grid-faces"))?;
+        let triangles = self.reader.array_triangles_vec(&surface.triangles)?;
+        let number = |attribute_name: &str, location: omf_crate::Location| {
+            element.attributes.iter().find_map(|attribute| match &attribute.data {
+                omf_crate::AttributeData::Number { values, .. } if attribute.name == attribute_name && attribute.location == location => Some(values),
+                _ => None,
+            })
+        };
+        let Some(floors) = number("cut_floor", omf_crate::Location::Vertices) else {
+            return Err(refused(tr!("err-omf-prismoid-cut-missing-attribute", attribute = "cut_floor".to_owned())));
+        };
+        let Some(cells) = number("cut_prismoid", omf_crate::Location::Primitives) else {
+            return Err(refused(tr!("err-omf-prismoid-cut-missing-attribute", attribute = "cut_prismoid".to_owned())));
+        };
+        let (floors, cells) = (read_numbers(self.reader, floors)?, read_numbers(self.reader, cells)?);
+        group_prismoid_cut(lattice, offset, &vertices, &floors, &triangles, &cells).map_err(refused)
+    }
+}
+
+/// The cells of a cut surface's `triangles` over its `vertices`, each cell
+/// holding only the points its triangles use, in the lattice frame, with
+/// `floors` per vertex and `cells` per triangle read as they were saved.
+/// The reason it is malformed, when it is.
+fn group_prismoid_cut(lattice: &Lattice, offset: DVec3, vertices: &[DVec3], floors: &[Option<f64>], triangles: &[[u32; 3]], cells: &[Option<f64>]) -> Result<CutPrismoids, String> {
+    if floors.len() != vertices.len() || cells.len() != triangles.len() {
+        return Err(tr!(
+            "err-omf-prismoid-cut-length-mismatch",
+            vertices = vertices.len().to_string(),
+            floors = floors.len().to_string(),
+            triangles = triangles.len().to_string(),
+            cells = cells.len().to_string()
+        ));
+    }
+    let cell_count = lattice.cell_count();
+    let mut by_cell = std::collections::BTreeMap::<usize, Vec<[u32; 3]>>::new();
+    for (triangle, cell) in triangles.iter().zip(cells) {
+        let cell = cell
+            .filter(|cell| cell.fract() == 0.0 && *cell >= 0.0 && *cell < cell_count as f64)
+            .ok_or_else(|| cell.map_or_else(|| tr!("err-omf-prismoid-cut-no-cell"), |cell| tr!("err-omf-prismoid-cut-bad-cell", cell = cell.to_string())))?;
+        if triangle.iter().any(|index| *index as usize >= vertices.len()) {
+            return Err(tr!("err-omf-prismoid-cut-index-past-vertices"));
+        }
+        by_cell.entry(cell as usize).or_default().push(*triangle);
+    }
+    let mut grouped = Vec::with_capacity(by_cell.len());
+    for (cell, cell_triangles) in by_cell {
+        let mut local = std::collections::HashMap::new();
+        let mut points = Vec::new();
+        let mut remapped = Vec::with_capacity(cell_triangles.len());
+        for triangle in cell_triangles {
+            let mut mapped = [0u32; 3];
+            for (slot, index) in mapped.iter_mut().zip(triangle) {
+                *slot = match local.get(&index) {
+                    Some(found) => *found,
+                    None => {
+                        let (vertex, floor) = (
+                            vertices[index as usize] + offset,
+                            floors[index as usize].ok_or_else(|| tr!("err-omf-prismoid-cut-missing-floor", vertex = index.to_string()))?,
+                        );
+                        let at = points.len() as u32;
+                        points.push(CutPoint {
+                            plan: lattice.to_lattice(vertex.truncate()),
+                            roof: vertex.z,
+                            floor: offset.z + floor,
+                        });
+                        local.insert(index, at);
+                        at
+                    }
+                };
+            }
+            remapped.push(mapped);
+        }
+        grouped.push((cell, points, remapped));
+    }
+    Ok(CutPrismoids::build(lattice, grouped))
+}
+
+impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     /// Rebuild a dataset written by [`write_drill_holes`].
     fn read_drill_dataset(&mut self, element: &omf_crate::Element) -> Result<Option<ImportedDrillHoles>> {
         use crate::model::drill_hole::{DrillInterval, TraceStation};

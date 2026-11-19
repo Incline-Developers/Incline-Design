@@ -606,6 +606,7 @@ impl<'a> Graphics<'a> {
         // Built now because the drill pipeline layout borrows its own.
         let drill_hole_gpu = DrillHoleGpuCache::new(&device);
         let document_style = DocumentStyleGpu::new(&device);
+        let prismoid_wire_styles = passes::PrismoidWireStyles::new(&device, &document_style.layout);
         // wgpu handles are not Send or Sync on wasm, where nothing crosses threads.
         let scene_pipelines = Shared::new(scene_pipelines::create_scene_pipelines(
             &device,
@@ -926,6 +927,9 @@ impl<'a> Graphics<'a> {
             cell_selection_outline: None,
             section_cell_lines: None,
             section_cell_rim: None,
+            prismoid_lattices: (None, Vec::new()),
+            prismoid_lattice_lines: Vec::new(),
+            prismoid_wire_styles,
             pending_screenshot: None,
             camera_lock: None,
             video_target: None,

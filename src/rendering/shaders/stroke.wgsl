@@ -76,7 +76,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, stroke: StrokeInstance) -> 
         out.clip_position = CULLED_POSITION;
         return out;
     }
-    out.color = document_styled_color(stroke.color, flags);
+    out.color = document_pass_color(document_styled_color(stroke.color, flags));
     out.disc_radius = -1.0;
 
     // Thin a fading stroke down to a pixel as its ground shrinks on screen,
@@ -89,6 +89,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, stroke: StrokeInstance) -> 
         half_width = clamp(width * 0.5, min(0.5, half_width), half_width);
         out.color.a *= clamp(width, FADE_MIN_ALPHA, 1.0);
     }
+    half_width += document_pass_widening();
 
     let corner = QUAD[vertex_index];
     let pixel_to_ndc = vec2<f32>(2.0 / camera.viewport.x, 2.0 / camera.viewport.y);

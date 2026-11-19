@@ -185,6 +185,7 @@ impl<'a> App<'a> {
                 | UiCommand::BeginDrillPatternShapePick
                 | UiCommand::CreateDrillPattern { .. }
                 | UiCommand::CreateLayer { .. }
+                | UiCommand::OpenNewLayer
                 | UiCommand::CreateFolder(_)
                 | UiCommand::DeleteFolder { .. }
                 | UiCommand::DeleteFolderAndContents { .. }
@@ -206,7 +207,7 @@ impl<'a> App<'a> {
                 | UiCommand::OpenBuildStrata
                 | UiCommand::ExecuteBuildStrata { .. }
                 | UiCommand::OpenCreateBlockModelFromPrismoidGrid
-                | UiCommand::CreateBlockModelFromPrismoidGrid(_)
+                | UiCommand::CreateBlockModelFromPrismoidGrids(_)
                 | UiCommand::OpenAddPrismoidQualities
                 | UiCommand::ExecuteAddPrismoidQualities { .. }
                 | UiCommand::OpenPrismoidGridToSurface
@@ -218,6 +219,10 @@ impl<'a> App<'a> {
                 | UiCommand::TogglePrismoidMask
                 | UiCommand::OpenMaskPrismoidGridByPolyline
                 | UiCommand::ExecuteMaskPrismoidGridByPolyline { .. }
+                | UiCommand::OpenTrimPrismoidGrids
+                | UiCommand::ExecuteTrimPrismoidGrids { .. }
+                | UiCommand::OpenCreateRegularBlockModel
+                | UiCommand::ExecuteCreateRegularBlockModel { .. }
                 | UiCommand::BuildCollarPoints { .. }
                 | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
@@ -532,6 +537,14 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::CreateLayer { name } => self.create_layer(name),
+            UiCommand::OpenNewLayer => {
+                if !self.editor.new_layer_dialog_open {
+                    self.editor.new_layer_dialog_open = true;
+                    self.editor.new_layer_name = tr!("ws-menubar-design");
+                    self.set_active_tool_from_toolbar(ActiveTool::None);
+                }
+                Ok(())
+            }
             UiCommand::CreateFolder(section) => self.create_folder(section),
             UiCommand::DeleteFolder { section, folder } => self.delete_folder(section, folder),
             UiCommand::DeleteFolderAndContents { section, folder } => self.delete_folder_and_contents(section, folder),
@@ -1808,16 +1821,19 @@ impl<'a> App<'a> {
                 self.set_prismoid_grid_color_by(id, |color_by| color_by.preset = preset);
                 Ok(())
             }
+            UiCommand::SetPrismoidGridShaded { id, shaded } => {
+                self.set_prismoid_grid_shaded(id, shaded);
+                Ok(())
+            }
             UiCommand::OpenCreateBlockModelFromPrismoidGrid => {
                 self.open_prismoid_block_model();
                 Ok(())
             }
-            UiCommand::CreateBlockModelFromPrismoidGrid(grid_id) => {
-                let too_fine = self
-                    .prismoid_grids
+            UiCommand::CreateBlockModelFromPrismoidGrids(grid_ids) => {
+                let items: Vec<_> = self.prismoid_grids.iter().filter(|item| grid_ids.contains(&item.id)).collect();
+                let too_fine = items
                     .iter()
-                    .find(|item| item.id == grid_id)
-                    .and_then(|item| block_model::prismoid_cells_too_fine(&item.grid).map(|size| (item.name.clone(), size)));
+                    .find_map(|item| block_model::prismoid_cells_too_fine(&item.grid).map(|size| (item.name.clone(), size)));
                 if let Some((grid, size)) = too_fine {
                     userspace_warn!(
                         "{}",
@@ -1830,7 +1846,15 @@ impl<'a> App<'a> {
                     );
                     return Ok(());
                 }
-                let result = self.create_block_model_from_prismoid_grid(grid_id);
+                // Several grids make one model; one keeps no count budget.
+                let active: Vec<usize> = items.iter().map(|item| item.summary.active_cells).collect();
+                if grid_ids.len() > 1
+                    && let Some(issue) = block_model::stacked_over_budget(&active)
+                {
+                    userspace_warn!("{issue}");
+                    return Ok(());
+                }
+                let result = self.create_block_model_from_prismoid_grids(grid_ids);
                 if result.is_ok() {
                     self.editor.tri_prismoid_block_open = false;
                 }
@@ -1897,6 +1921,34 @@ impl<'a> App<'a> {
                 let result = self.mask_prismoid_grid_by_polyline(grid, polyline_id, mode);
                 if result.is_ok() {
                     self.editor.tri_prismoid_mask_open = false;
+                }
+                result
+            }
+            UiCommand::OpenTrimPrismoidGrids => {
+                self.open_trim_prismoid_grids();
+                Ok(())
+            }
+            UiCommand::ExecuteTrimPrismoidGrids {
+                grids,
+                surface,
+                side,
+                name,
+                allowance,
+            } => {
+                let result = self.trim_prismoid_grids(grids, surface, side, name, allowance);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_trim_open = false;
+                }
+                result
+            }
+            UiCommand::OpenCreateRegularBlockModel => {
+                self.open_create_regular_block_model();
+                Ok(())
+            }
+            UiCommand::ExecuteCreateRegularBlockModel { grids, size, name } => {
+                let result = self.create_regular_block_model_from_prismoid_grids(grids, size, name);
+                if result.is_ok() {
+                    self.editor.regular_block_model_open = false;
                 }
                 result
             }

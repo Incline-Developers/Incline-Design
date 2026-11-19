@@ -44,7 +44,7 @@ impl App<'_> {
             ToolSubject::PrismoidQualities(id) => self.set_prismoid_qualities_grid(id),
             ToolSubject::PrismoidSurface(id) => self.set_prismoid_surface_grid(id),
             ToolSubject::MisfitGrid(id) => self.set_misfit_grid(id),
-            ToolSubject::PrismoidBlockModel(id) => self.set_prismoid_block_grid(id),
+            ToolSubject::RegularBlockGrids(ids) => self.set_regular_block_grids(ids),
             ToolSubject::MaskGrid(id) => self.set_mask_grid(id),
             ToolSubject::ThicknessSurface(id) => self.set_thickness_surface(id),
             ToolSubject::SeamSurface(id) => self.set_seam_surface(id),
@@ -296,18 +296,11 @@ impl App<'_> {
         self.editor.tri_prismoid_difference_name_auto = true;
     }
 
+    /// Open Create Block Model from Prismoid Grid with the loaded grids in
+    /// the selection ticked.
     pub(crate) fn open_prismoid_block_model(&mut self) {
         self.editor.tri_prismoid_block_open = true;
-        self.editor.tri_prismoid_block_grid = None;
-        if let Some(id) = only(&self.selected_prismoid_grids()) {
-            self.set_prismoid_block_grid(id);
-        }
-    }
-
-    fn set_prismoid_block_grid(&mut self, id: PrismoidGridId) {
-        if self.prismoid_grid_loaded(id) {
-            self.editor.tri_prismoid_block_grid = Some(id);
-        }
+        self.editor.tri_prismoid_block_grids = self.selected_prismoid_grids();
     }
 
     /// A closed polyline as a boundary row names it: by its layer.
@@ -338,6 +331,18 @@ impl App<'_> {
         if self.prismoid_grid_loaded(id) {
             self.editor.tri_prismoid_mask_grid = Some(id);
         }
+    }
+
+    /// Open Trim Prismoid Grids to Topography with every loaded grid selected
+    /// ticked; its dialog ticks the rest and chooses the topography.
+    pub(crate) fn open_trim_prismoid_grids(&mut self) {
+        self.editor.tri_prismoid_trim_open = true;
+        self.editor.tri_prismoid_trim_grids = self.selected_prismoid_grids();
+        self.editor.tri_prismoid_trim_topology = None;
+        self.editor.tri_prismoid_trim_side = crate::ui::state::TriSurfaceCutSide::CutTop;
+        self.editor.tri_prismoid_trim_name_input.clear();
+        self.editor.tri_prismoid_trim_name_auto = true;
+        self.editor.tri_prismoid_trim_allowance = crate::ui::state::PRISMOID_TRIM_ALLOWANCE;
     }
 
     /// Open Clip to Surface, on the seam's two surfaces when the selection

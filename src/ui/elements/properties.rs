@@ -242,7 +242,7 @@ fn prismoid_key_text(spread: Option<&ValueSpread>, thickness: (f64, f64)) -> Pri
     let ends = |(min, max): (f64, f64)| PrismoidKeyBar::Ends(format!("{min:.2}"), format!("{max:.2}"));
     let Some(spread) = spread else {
         return PrismoidKeyText {
-            title: tr!("thickness-points-column-vertical"),
+            title: tr!("viewport-prismoid-value-unit", value = tr!("thickness-points-column-vertical"), unit = "m".to_owned()),
             bar: ends(thickness),
             no_value: None,
         };
@@ -306,8 +306,9 @@ fn fitted_combo<T: PartialEq>(ui: &mut egui::Ui, id: impl std::hash::Hash + std:
     if selected == full { response } else { response.hint(full) }.changed()
 }
 
-/// The key to one selected prismoid grid's colours, with what they follow
-/// and their scale: the ramp, with the grid's own range at its ends.
+/// One selected prismoid grid's Solid view switch, and the key to its
+/// colours, with what they follow and their scale: the ramp, with the grid's
+/// own range at its ends.
 pub(crate) fn draw_prismoid_grid_legend(
     ui: &egui::Ui,
     editor: &EditorState,
@@ -326,7 +327,7 @@ pub(crate) fn draw_prismoid_grid_legend(
     let (Some(grid), None) = (shown.next(), shown.next()) else {
         return;
     };
-    let Some(thickness) = grid.summary.vertical_thickness.filter(|_| grid.regular) else {
+    let Some(thickness) = grid.summary.vertical_thickness else {
         return;
     };
     // Along the bottom edge clear of the tool panels' corner, as the
@@ -344,18 +345,30 @@ pub(crate) fn draw_prismoid_grid_legend(
     let bottom = card.filter(|_| card_up).map_or(canvas.bottom(), |card| card.top());
     let spreads = &grid.summary.spreads;
     let index = grid.color_by.index(spreads.iter().map(|spread| spread.name.as_str()));
-    let text = prismoid_key_text(index.map(|index| &spreads[index]), thickness);
+    // An irregular lattice draws flat, so its card holds the switch alone.
+    let text = grid.regular.then(|| prismoid_key_text(index.map(|index| &spreads[index]), thickness));
     let stops: Vec<_> = ramp_bar_stops(grid.color_by.preset)
         .into_iter()
         .map(|(t, [red, green, blue])| (t, rgba_to_color32([red, green, blue, 1.0])))
         .collect();
-    ViewportDockPanel::new("prismoid_grid_legend", text.title, canvas)
+    let title = text.as_ref().map_or_else(|| grid.name.clone(), |text| text.title.clone());
+    ViewportDockPanel::new("prismoid_grid_legend", title, canvas)
         .anchor(egui::Align2::LEFT_BOTTOM, egui::pos2(left, bottom - BLOCK_MODEL_CARD_GAP))
         .order(egui::Order::Middle)
         .min_width(PRISMOID_LEGEND_WIDTH + 20.0)
         .max_width(PRISMOID_LEGEND_WIDTH + 20.0)
         .show(ui.ctx(), |ui| {
             ui.set_width(PRISMOID_LEGEND_WIDTH);
+            let mut shaded = grid.shaded;
+            MenuFieldBool::new(tr!("viewport-prismoid-solid-view"), &mut shaded)
+                .help_text(tr!("viewport-prismoid-solid-view-help"))
+                .show(ui);
+            if shaded != grid.shaded {
+                commands.push(UiCommand::SetPrismoidGridShaded { id: grid.id, shaded });
+            }
+            let Some(text) = text else {
+                return;
+            };
             draw_prismoid_color_fields(ui, grid.id, &grid.color_by, spreads, index, commands);
             let weak = ui.visuals().weak_text_color();
             let font = egui::TextStyle::Small.resolve(ui.style());

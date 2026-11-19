@@ -18,6 +18,139 @@ const MODEL_ENVELOPE_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 0.9];
 /// Width, in logical pixels, of the rim round the picked prismoids.
 const CELL_OUTLINE_WIDTH: f32 = 2.0;
 
+/// How far a selected prismoid grid's wire colours are mixed toward the
+/// selection blue: the share Leo's `SELECTION_TINT` tints a selected surface.
+const PRISMOID_WIRE_SELECTION_TINT: f32 = 0.6;
+
+/// How far, in logical pixels, the blue glow under a selected prismoid
+/// grid's wires reaches past each side of the wire.
+const PRISMOID_WIRE_GLOW_SPREAD: f32 = 3.0;
+
+/// The pass word's `y` flags for a prismoid grid's wires, read by
+/// `document_style.wgsl`: mix toward the selection colour, draw as the glow,
+/// make translucent.
+const WIRE_PASS_TINT: u32 = 1;
+const WIRE_PASS_GLOW: u32 = 2;
+const WIRE_PASS_TRANSLUCENT: u32 = 4;
+
+/// The pass words a grid's chunks draw with, in order: one plain pass, or
+/// for a selected grid the glow and then the tinted wires.
+fn prismoid_wire_passes(selected: bool, translucent: bool) -> &'static [u32] {
+    match (selected, translucent) {
+        (false, false) => &[0],
+        (false, true) => &[WIRE_PASS_TRANSLUCENT],
+        (true, false) => &[WIRE_PASS_GLOW, WIRE_PASS_TINT],
+        (true, true) => &[WIRE_PASS_GLOW | WIRE_PASS_TRANSLUCENT, WIRE_PASS_TINT | WIRE_PASS_TRANSLUCENT],
+    }
+}
+
+/// The held entries kept for the grids handed over, as (entity, key) in
+/// order: `Some(held)` where one was built for that key, `None` where it
+/// must be built. Selecting, hiding or a 2D section never change a key, so
+/// they never reach here; an entry is dropped only when its grid is.
+fn retain_prismoid_wires<E: PartialEq, H>(mut held: Vec<(E, u64, H)>, grids: &[(E, u64)]) -> Vec<Option<H>> {
+    grids
+        .iter()
+        .map(|(entity, key)| {
+            let at = held.iter().position(|(held_entity, ..)| held_entity == entity)?;
+            let (_, built, chunks) = held.swap_remove(at);
+            (built == *key).then_some(chunks)
+        })
+        .collect()
+}
+
+/// Strokes from `items` in chunks of `per_chunk`, each handed to `upload` as
+/// soon as it is full (the last when the items end) and then dropped, so at
+/// most one chunk is held. `push` appends an item's strokes, none for an
+/// empty one.
+fn chunk_strokes<I, S, C>(items: impl IntoIterator<Item = I>, per_chunk: usize, mut push: impl FnMut(I, &mut Vec<S>), mut upload: impl FnMut(&[S]) -> C) -> Vec<C> {
+    let per_chunk = per_chunk.max(1);
+    let mut chunks = Vec::new();
+    let mut strokes = Vec::new();
+    for item in items {
+        push(item, &mut strokes);
+        while strokes.len() >= per_chunk {
+            chunks.push(upload(&strokes[..per_chunk]));
+            strokes.drain(..per_chunk);
+        }
+    }
+    if !strokes.is_empty() {
+        chunks.push(upload(&strokes));
+    }
+    chunks
+}
+
+/// The bind groups a prismoid grid's wires draw with, one per pass word in
+/// use: Leo's document style layout over a zeroed flag buffer (our strokes
+/// carry no style slot) and our own pass word.
+pub(crate) struct PrismoidWireStyles {
+    groups: Vec<(u32, wgpu::Buffer, wgpu::BindGroup)>,
+    spread_written: Option<u32>,
+}
+
+impl PrismoidWireStyles {
+    pub(crate) fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> Self {
+        let flags = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Prismoid Wire Style Flags"),
+            contents: bytemuck::cast_slice(&[0_u32]),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let words = [
+            0,
+            WIRE_PASS_TRANSLUCENT,
+            WIRE_PASS_GLOW,
+            WIRE_PASS_GLOW | WIRE_PASS_TRANSLUCENT,
+            WIRE_PASS_TINT,
+            WIRE_PASS_TINT | WIRE_PASS_TRANSLUCENT,
+        ];
+        let groups = words
+            .into_iter()
+            .map(|word| {
+                let pass = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Prismoid Wire Style Pass"),
+                    contents: bytemuck::cast_slice(&[0_u32, word, PRISMOID_WIRE_SELECTION_TINT.to_bits(), 0]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Prismoid Wire Style"),
+                    layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: flags.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: pass.as_entire_binding(),
+                        },
+                    ],
+                });
+                (word, pass, group)
+            })
+            .collect();
+        Self { groups, spread_written: None }
+    }
+
+    /// Widen the glow by its spread in physical pixels for `scale_factor`,
+    /// writing it only when the factor changed.
+    fn set_scale(&mut self, queue: &wgpu::Queue, scale_factor: f32) {
+        let spread = (PRISMOID_WIRE_GLOW_SPREAD * scale_factor).to_bits();
+        if self.spread_written == Some(spread) {
+            return;
+        }
+        self.spread_written = Some(spread);
+        for (word, pass, _) in &self.groups {
+            if word & WIRE_PASS_GLOW != 0 {
+                queue.write_buffer(pass, 12, bytemuck::cast_slice(&[spread]));
+            }
+        }
+    }
+
+    fn group(&self, word: u32) -> &wgpu::BindGroup {
+        &self.groups.iter().find(|(held, ..)| *held == word).expect("every wire pass word has a bind group").2
+    }
+}
+
 /// The model envelope the view outlines: set, and in Geology.
 pub(super) fn shown_model_envelope(editor: &EditorState) -> Option<&crate::model::project::ModelEnvelope> {
     editor.model_envelope.as_ref().filter(|_| editor.active_workspace == crate::ui::state::Workspace::Geology)
@@ -728,43 +861,101 @@ impl<'a> Graphics<'a> {
         render_pass.draw_indexed(0..count, 0, 0..1);
     }
 
-    /// `held` again when it was built for `key`, the scene origin and the
-    /// scale factor; else the strokes along `segments`, built for them.
+    /// Rebuild each coloured prismoid lattice's wire strokes when its colours
+    /// (its revision), the scene origin or the scale factor moved since they
+    /// were built. A held entry stays for every grid the App hands over,
+    /// whether it is selected, hidden or in a 2D section: those only change
+    /// how, or whether, the draw runs.
+    fn rebuild_prismoid_lattice_lines(&mut self) {
+        self.prismoid_wire_styles.set_scale(&self.queue, self.window.scale_factor() as f32);
+        let held = std::mem::take(&mut self.prismoid_lattice_lines);
+        let keys = self
+            .prismoid_lattices
+            .1
+            .iter()
+            .map(|grid| (grid.entity, self.stroke_key(grid.revision)))
+            .collect::<Vec<_>>();
+        let kept = retain_prismoid_wires(held, &keys);
+        let mut lines = Vec::new();
+        for (grid, kept) in self.prismoid_lattices.1.iter().zip(kept) {
+            let kept = kept.map(|chunks| (self.stroke_key(grid.revision), chunks));
+            let vertices = grid.mesh.vertices();
+            let point = |index: u32| {
+                let vertex = &vertices[index as usize];
+                DVec3::new(vertex.x, vertex.y, vertex.z)
+            };
+            let wires = grid
+                .lattice
+                .iter()
+                .zip(grid.colors.iter())
+                .map(|([from, to], color)| (point(*from), point(*to), grid.width, *color));
+            let (key, chunks) = self.keyed_strokes(kept, grid.revision, wires, "Prismoid Lattice Strokes");
+            lines.push((grid.entity, key, chunks));
+        }
+        self.prismoid_lattice_lines = lines;
+    }
+
+    /// The key a keyed stroke set is built for: `key`, the scene origin and
+    /// the scale factor.
+    fn stroke_key(&self, key: impl std::hash::Hash) -> u64 {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        (key, self.scene_origin.to_array().map(f64::to_bits), (self.window.scale_factor() as f32).to_bits()).hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// [`Self::keyed_strokes`] with one width and colour.
     fn keyed_outline(
         &self,
-        held: Option<(u64, ChunkBoundsOutline)>,
+        held: Option<(u64, Vec<ChunkBoundsOutline>)>,
         key: impl std::hash::Hash,
         segments: impl IntoIterator<Item = (DVec3, DVec3)>,
         width: f32,
         color: [f32; 4],
         label: &str,
-    ) -> (u64, ChunkBoundsOutline) {
+    ) -> (u64, Vec<ChunkBoundsOutline>) {
+        self.keyed_strokes(held, key, segments.into_iter().map(|(from, to)| (from, to, width, color)), label)
+    }
+
+    /// `held` again when it was built for `key`, the scene origin and the
+    /// scale factor; else the strokes along `segments`, each with its width
+    /// and colour, built for them in order, in buffers of at most Leo's edge
+    /// chunk size. Each buffer is uploaded as it fills, so the host holds one
+    /// chunk of strokes at most.
+    fn keyed_strokes(
+        &self,
+        held: Option<(u64, Vec<ChunkBoundsOutline>)>,
+        key: impl std::hash::Hash,
+        segments: impl IntoIterator<Item = (DVec3, DVec3, f32, [f32; 4])>,
+        label: &str,
+    ) -> (u64, Vec<ChunkBoundsOutline>) {
+        const TARGET_CHUNK_BYTES: usize = 64 * 1024 * 1024;
         let scale_factor = self.window.scale_factor() as f32;
-        let key = {
-            use std::hash::{DefaultHasher, Hash, Hasher};
-            let mut hasher = DefaultHasher::new();
-            (key, self.scene_origin.to_array().map(f64::to_bits), scale_factor.to_bits()).hash(&mut hasher);
-            hasher.finish()
-        };
+        let key = self.stroke_key(key);
         if let Some(held) = held.filter(|(built, _)| *built == key) {
             return held;
         }
-        let mut strokes = Vec::new();
         let mut unused_fill_vertices = Vec::new();
         let mut unused_fill_indices = Vec::new();
-        let mut context = crate::rendering::geometry::DrawContext::unstyled(&mut strokes, &mut unused_fill_vertices, &mut unused_fill_indices, self.scene_origin, scale_factor);
-        for (from, to) in segments {
-            crate::rendering::geometry::draw_line(&mut context, from, to, width, color);
-        }
-        let outline = ChunkBoundsOutline {
-            instance_buffer: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(&strokes),
-                usage: wgpu::BufferUsages::VERTEX,
-            }),
-            instance_count: strokes.len() as u32,
-        };
-        (key, outline)
+        let buffer_limit = (self.device.limits().max_buffer_size as usize).min(TARGET_CHUNK_BYTES);
+        let per_chunk = (buffer_limit / size_of::<crate::rendering::StrokeInstance>()).max(1);
+        let chunks = chunk_strokes(
+            segments,
+            per_chunk,
+            |(from, to, width, color), strokes| {
+                let mut context = crate::rendering::geometry::DrawContext::unstyled(strokes, &mut unused_fill_vertices, &mut unused_fill_indices, self.scene_origin, scale_factor);
+                crate::rendering::geometry::draw_line(&mut context, from, to, width, color);
+            },
+            |chunk| ChunkBoundsOutline {
+                instance_buffer: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(chunk),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                instance_count: chunk.len() as u32,
+            },
+        );
+        (key, chunks)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -788,6 +979,7 @@ impl<'a> Graphics<'a> {
             self.rebuild_model_envelope_outline(editor);
             self.rebuild_cell_selection_outline(editor);
             self.rebuild_section_cell_outlines();
+            self.rebuild_prismoid_lattice_lines();
         }
         let bg_color = editor.renderer_background_color;
         let clear_color = [bg_color[0].clamp(0.0, 1.0) as f64, bg_color[1].clamp(0.0, 1.0) as f64, bg_color[2].clamp(0.0, 1.0) as f64];
@@ -1565,7 +1757,25 @@ impl<'a> Graphics<'a> {
         }
 
         let keyed = [&self.model_envelope_outline, &self.cell_selection_outline, &self.section_cell_lines, &self.section_cell_rim];
-        for (_, outline) in keyed.into_iter().flatten() {
+        // The coloured lattices first, so the rim and the section lines
+        // draw over them.
+        // A hidden grid, or any in a 2D section, keeps its strokes and skips
+        // the draw, as Leo's edges do.
+        if !self.camera_uniform.section_cuts() {
+            render_pass.set_pipeline(&self.pipes().stroke_render_pipeline);
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
+            let shown = self.prismoid_lattice_lines.iter().filter(|(entity, ..)| !editor.hidden_handles.contains(entity));
+            for (entity, _, chunks) in shown {
+                for &word in prismoid_wire_passes(editor.drawn_selected(entity), editor.translucent_handles.contains(entity)) {
+                    render_pass.set_bind_group(1, self.prismoid_wire_styles.group(word), &[]);
+                    for outline in chunks {
+                        render_pass.set_vertex_buffer(0, outline.instance_buffer.slice(..));
+                        render_pass.draw(0..6, 0..outline.instance_count);
+                    }
+                }
+            }
+        }
+        for outline in keyed.into_iter().flatten().flat_map(|(_, chunks)| chunks) {
             render_pass.set_pipeline(&self.pipes().stroke_render_pipeline);
             render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
             render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);

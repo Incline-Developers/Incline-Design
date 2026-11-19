@@ -729,6 +729,8 @@ impl<'a> App<'a> {
                 summary,
                 color_by,
                 stratum,
+                built_from,
+                shaded,
             } = imported.loaded;
             let name = project::unique_item_name(name, self.prismoid_grids.iter().map(|item| item.name.as_str()));
             self.prismoid_grids.push(OpenPrismoidGrid {
@@ -743,6 +745,8 @@ impl<'a> App<'a> {
                 summary,
                 color_by,
                 stratum,
+                built_from,
+                shaded,
             });
         }
     }

@@ -320,6 +320,9 @@ fn draw_recent_function_rows(ui: &mut egui::Ui, editor: &EditorState, project: &
         if let Some(checked) = row.checked(editor) {
             action = action.checked(checked);
         }
+        if let Some(icon) = row.icon(ui) {
+            action = action.icon(icon);
+        }
         if action.show(ui).clicked() {
             commands.push(row.command());
             commands.push(UiCommand::NoteRecentFunction(row));

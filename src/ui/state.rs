@@ -711,7 +711,11 @@ impl EditorState {
             || self.tri_prismoid_surface_open
             || self.tri_prismoid_difference_open
             || self.tri_prismoid_mask_open
+            // Its topography is picked from the view, as Clip to Surface's
+            // limits are, so the lock lifts while that pick is armed.
+            || (self.tri_prismoid_trim_open && self.triangulation_pick_target.is_none())
             || self.tri_prismoid_block_open
+            || self.regular_block_model_open
     }
 
     /// Lock or unlock one scene entity by name. Layer locks go through
@@ -918,6 +922,9 @@ pub(crate) struct CellSelection {
     /// Roof and floor segments round the rim of the selected cells.
     pub(crate) outline: Vec<[DVec3; 2]>,
     pub(crate) rows: InspectorRows,
+    /// The rows on the grid's build record, as the project view last made
+    /// them; empty for a grid without a record.
+    pub(crate) built: Vec<InspectorRow>,
 }
 
 /// What the inspector reads out about a pick, formatted App-side: one
@@ -1552,6 +1559,8 @@ pub(crate) enum TriangulationPickTarget {
     PrismoidRoof,
     /// The floor half of the Build Prismoid Grid tool.
     PrismoidFloor,
+    /// The topography Trim Prismoid Grids to Topography trims to.
+    PrismoidTrimTopology,
     /// The closed polyline Mask Prismoid Grid by Polyline masks along.
     PrismoidMaskBoundary,
     /// One of the seam's two surfaces Clip to Surface clips.
@@ -1581,7 +1590,8 @@ pub(crate) enum ToolSubject {
     PrismoidQualities(PrismoidGridId),
     PrismoidSurface(PrismoidGridId),
     MisfitGrid(PrismoidGridId),
-    PrismoidBlockModel(PrismoidGridId),
+    /// The grids ticked for a regular block model, in any order.
+    RegularBlockGrids(Vec<PrismoidGridId>),
     MaskGrid(PrismoidGridId),
     ThicknessSurface(TriangulationId),
     SeamSurface(TriangulationId),
@@ -1590,7 +1600,7 @@ pub(crate) enum ToolSubject {
 impl TriangulationPickTarget {
     pub(crate) fn prompt(self) -> String {
         match self {
-            Self::TrimTopology | Self::CutPitTopology | Self::IncludeTopology => tr!("state-click-topology-viewport"),
+            Self::TrimTopology | Self::CutPitTopology | Self::IncludeTopology | Self::PrismoidTrimTopology => tr!("state-click-topology-viewport"),
             Self::CutPitShell => tr!("state-click-pit-shell-viewport"),
             Self::IncludeShape => tr!("state-click-pit-stockpile-solid-viewport"),
             Self::SolidDesign => tr!("state-click-design-surface-viewport"),
@@ -1613,6 +1623,10 @@ impl TriangulationPickTarget {
         matches!(self, Self::ClipBoundary | Self::PrismoidMaskBoundary)
     }
 }
+
+/// The default metres within which Trim Prismoid Grids takes the topography
+/// as on a roof or floor (GPS pickups are good to a few centimetres).
+pub(crate) const PRISMOID_TRIM_ALLOWANCE: f64 = 0.05;
 
 const SLICE_PREVIEW_DEFAULT_WIDTH_POINTS: f64 = 220.0;
 const SLICE_PREVIEW_DEFAULT_FILL: f64 = 0.72;
@@ -3530,9 +3544,29 @@ pub(crate) struct EditorState {
     pub(crate) tri_prismoid_mask_object_id: Option<ObjectId>,
     pub(crate) tri_prismoid_mask_object_name: String,
     pub(crate) tri_prismoid_mask_mode: TriPolylineClipMode,
-    /// Create Block Model from Prismoid Grid: the grid its blocks come from.
+    /// Trim Prismoid Grids to Topography: the grids ticked, the topography,
+    /// the side kept and, for one grid, the new grid's name.
+    pub(crate) tri_prismoid_trim_open: bool,
+    pub(crate) tri_prismoid_trim_grids: Vec<PrismoidGridId>,
+    pub(crate) tri_prismoid_trim_topology: Option<TriangulationId>,
+    pub(crate) tri_prismoid_trim_side: TriSurfaceCutSide,
+    pub(crate) tri_prismoid_trim_name_input: String,
+    pub(crate) tri_prismoid_trim_name_auto: bool,
+    /// How near a roof or floor the topography is taken as on it, in metres.
+    pub(crate) tri_prismoid_trim_allowance: f64,
+    /// Create Block Model from Prismoid Grid: the grids ticked, whose
+    /// prismoids become its blocks.
     pub(crate) tri_prismoid_block_open: bool,
-    pub(crate) tri_prismoid_block_grid: Option<PrismoidGridId>,
+    pub(crate) tri_prismoid_block_grids: Vec<PrismoidGridId>,
+    /// Create Regular Block Model from Prismoid Grids: the grids ticked, in
+    /// the order their categories take codes, and the block size and name,
+    /// each following the ticks until typed over.
+    pub(crate) regular_block_model_open: bool,
+    pub(crate) regular_block_model_grids: Vec<RegularBlockGrid>,
+    pub(crate) regular_block_model_size: f64,
+    pub(crate) regular_block_model_size_auto: bool,
+    pub(crate) regular_block_model_name_input: String,
+    pub(crate) regular_block_model_name_auto: bool,
     /// The active project's model envelope, mirrored each frame for the
     /// view's outline.
     pub(crate) model_envelope: Option<crate::model::project::ModelEnvelope>,
@@ -4469,6 +4503,7 @@ impl EditorState {
             || self.tri_prismoid_difference_open
             || self.hole_misfit_dialog.is_some()
             || self.tri_prismoid_mask_open
+            || self.tri_prismoid_trim_open
             || self.tri_cut_z_open
             || self.tri_cut_surface_open
             || self.tri_solid_open
@@ -4482,6 +4517,7 @@ impl EditorState {
             || self.point_cloud_classify_open
             || self.block_model_create_open
             || self.ore_triangulation_open
+            || self.regular_block_model_open
             || self.tri_prismoid_block_open
             || self.optimization.dialog_open()
             || {
@@ -4994,6 +5030,9 @@ impl EditorState {
         self.tri_cut_poly_object_name.clear();
         self.tri_prismoid_mask_open = false;
         self.tri_prismoid_mask_object_id = None;
+        self.tri_prismoid_trim_open = false;
+        self.tri_prismoid_trim_grids.clear();
+        self.tri_prismoid_trim_topology = None;
         self.tri_prismoid_qualities_open = false;
         self.tri_prismoid_surface_open = false;
         self.tri_prismoid_surface_grid = None;
@@ -5001,7 +5040,9 @@ impl EditorState {
         self.tri_prismoid_difference_grid = None;
         self.tri_prismoid_difference_other = None;
         self.tri_prismoid_block_open = false;
-        self.tri_prismoid_block_grid = None;
+        self.tri_prismoid_block_grids.clear();
+        self.regular_block_model_open = false;
+        self.regular_block_model_grids.clear();
         // Snapshotted object ids, and a hold on the selection while it is up:
         // neither can outlive the project they were taken from.
         self.reference_surface_dialog = None;
@@ -5480,8 +5521,21 @@ impl EditorState {
             tri_prismoid_mask_object_id: None,
             tri_prismoid_mask_object_name: String::new(),
             tri_prismoid_mask_mode: TriPolylineClipMode::KeepInside,
+            tri_prismoid_trim_open: false,
+            tri_prismoid_trim_grids: Vec::new(),
+            tri_prismoid_trim_topology: None,
+            tri_prismoid_trim_side: TriSurfaceCutSide::CutTop,
+            tri_prismoid_trim_name_input: String::new(),
+            tri_prismoid_trim_name_auto: true,
+            tri_prismoid_trim_allowance: PRISMOID_TRIM_ALLOWANCE,
             tri_prismoid_block_open: false,
-            tri_prismoid_block_grid: None,
+            tri_prismoid_block_grids: Vec::new(),
+            regular_block_model_open: false,
+            regular_block_model_grids: Vec::new(),
+            regular_block_model_size: 10.0,
+            regular_block_model_size_auto: true,
+            regular_block_model_name_input: String::new(),
+            regular_block_model_name_auto: true,
             model_envelope: None,
             tri_cut_surface_unload_source: true,
             tri_cut_to_open: false,
@@ -6574,6 +6628,8 @@ pub(crate) enum UiCommand {
     CreateLayer {
         name: String,
     },
+    /// Open the Create a new layer dialog, named Design.
+    OpenNewLayer,
     /// Create a collection under a section, named Collection, Collection (2), etc.
     CreateFolder(SectionKind),
     /// Remove a folder. The items it held return to the section root.
@@ -7371,11 +7427,11 @@ pub(crate) enum UiCommand {
         step: std::num::NonZeroUsize,
         name: String,
     },
-    /// Open Create Block Model from Prismoid Grid, on the one prismoid grid
-    /// selected if any.
+    /// Open Create Block Model from Prismoid Grid with the loaded prismoid
+    /// grids selected ticked.
     OpenCreateBlockModelFromPrismoidGrid,
-    /// Create a block model from a prismoid grid.
-    CreateBlockModelFromPrismoidGrid(PrismoidGridId),
+    /// Create one block model from `grids`.
+    CreateBlockModelFromPrismoidGrids(Vec<PrismoidGridId>),
     /// Open Add Qualities, on the one prismoid grid selected if any.
     OpenAddPrismoidQualities,
     /// Read quality surfaces into a prismoid grid's cells, `density` as its
@@ -7431,6 +7487,29 @@ pub(crate) enum UiCommand {
         polyline_id: ObjectId,
         mode: TriPolylineClipMode,
     },
+    /// Open Trim Prismoid Grids to Topography with the loaded prismoid grids
+    /// selected ticked.
+    OpenTrimPrismoidGrids,
+    /// Make a new grid from each of `grids`, keeping the ground on `side`
+    /// of `surface`; `name` names it when there is one grid.
+    ExecuteTrimPrismoidGrids {
+        grids: Vec<PrismoidGridId>,
+        surface: TriangulationId,
+        side: TriSurfaceCutSide,
+        name: Option<String>,
+        /// Metres within which the surface is taken as on a roof or floor.
+        allowance: f64,
+    },
+    /// Open Create Regular Block Model from Prismoid Grids with the loaded
+    /// prismoid grids selected ticked.
+    OpenCreateRegularBlockModel,
+    /// Create a regular block model of cubes of side `size` across the model
+    /// envelope from `grids`, named `name`.
+    ExecuteCreateRegularBlockModel {
+        grids: Vec<PrismoidGridId>,
+        size: f64,
+        name: String,
+    },
     /// Colour a prismoid grid by one of its values, or by its vertical
     /// thickness with `None`.
     SetPrismoidGridColorValue {
@@ -7440,6 +7519,11 @@ pub(crate) enum UiCommand {
     SetPrismoidGridColorPreset {
         id: PrismoidGridId,
         preset: DrillColorPreset,
+    },
+    /// Draw a prismoid grid as a shaded body, or as its lattice lines.
+    SetPrismoidGridShaded {
+        id: PrismoidGridId,
+        shaded: bool,
     },
     /// Build a closed solid from a design surface and the topography it meets.
     ExecuteBuildSolidFromSurfaces {
@@ -7561,6 +7645,7 @@ impl UiCommand {
             | Self::AddTypedStrokeVertex(_)
             | Self::AddStrokeVertexAlongBearing { .. }
             | Self::ToggleCreateDrillPattern
+            | Self::OpenNewLayer
             | Self::BeginDrillPatternShapePick
             | Self::ClearSelection
             | Self::AddToSequence { .. }
@@ -7644,11 +7729,13 @@ impl UiCommand {
             | Self::OpenBuildPrismoidGrid
             | Self::OpenBuildStrata
             | Self::OpenMaskPrismoidGridByPolyline
+            | Self::OpenTrimPrismoidGrids
             | Self::OpenAddPrismoidQualities
             | Self::OpenPrismoidGridToSurface
             | Self::OpenDifferencePrismoidGrids
             | Self::OpenHoleMisfit
             | Self::OpenCreateBlockModelFromPrismoidGrid
+            | Self::OpenCreateRegularBlockModel
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
             | Self::OpenContourTriangulation
@@ -8169,15 +8256,18 @@ impl UiCommand {
             Self::ExecuteBuildSolidFromSurfaces { name, .. } => report(tr!("tri-build-solid-surfaces"), name.clone()),
             Self::ExecuteBuildPrismoidGrid { name, .. } => report(tr!("tri-build-prismoid-grid"), name.clone()),
             Self::ExecuteBuildStrata { name, .. } => report(tr!("tri-build-strata"), name.clone()),
-            Self::CreateBlockModelFromPrismoidGrid(_) => report(tr!("common-create-block-model-from-prismoid-grid"), tr!("state-selected-prismoid-grid")),
+            Self::CreateBlockModelFromPrismoidGrids(_) => report(tr!("common-create-block-model-from-prismoid-grid"), tr!("state-selected-prismoid-grids")),
             Self::ExecuteAddPrismoidQualities { .. } => report(tr!("state-add-prismoid-qualities"), tr!("state-selected-prismoid-grid")),
             Self::ExecutePrismoidGridToSurface { name, .. } => report(tr!("state-prismoid-grid-to-surface"), name.clone()),
             Self::ExecuteDifferencePrismoidGrids { name, .. } => report(tr!("state-difference-prismoid-grids"), name.clone()),
             Self::ExecuteHoleMisfit { seam, .. } => report(tr!("state-hole-misfit"), misfit_seam_label(seam.as_ref().map(|(_, target)| target))),
             Self::TogglePrismoidMask => report(tr!("common-mask-prismoids"), tr!("state-selected-prismoid-grid")),
             Self::ExecuteMaskPrismoidGridByPolyline { .. } => report(tr!("state-mask-prismoid-grid"), tr!("state-selected-prismoid-grid")),
+            Self::ExecuteTrimPrismoidGrids { side, .. } => report(tr!("state-trim-prismoid-grids"), side.trim_label()),
+            Self::ExecuteCreateRegularBlockModel { .. } => report(tr!("block-model-regular-title"), tr!("state-selected-prismoid-grids")),
             Self::SetPrismoidGridColorValue { value, .. } => report(tr!("state-colour-prismoid-grid"), value.clone().unwrap_or_else(|| tr!("thickness-points-column-vertical"))),
             Self::SetPrismoidGridColorPreset { preset, .. } => report(tr!("state-set-prismoid-grid-colour-preset"), preset.label()),
+            Self::SetPrismoidGridShaded { shaded, .. } => report(tr!("state-set-prismoid-grid-shaded"), if *shaded { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),
             Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!("common-merge-shell-into-topology"), name.clone()),
             Self::Undo => report(tr!("common-undo"), tr!("state-previous-edit")),
@@ -8473,6 +8563,26 @@ pub(crate) struct UiPrismoidGridEntry {
     /// Folder the grid sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
+    /// Worked out with the view, so only when the project moves, as are
+    /// the two below.
+    pub(crate) staleness: crate::model::prismoid_grid::Staleness,
+    /// The hover's lines on the build record.
+    pub(crate) record_lines: Vec<String>,
+    /// The inspector's rows on the build record.
+    pub(crate) record_rows: Vec<InspectorRow>,
+    pub(crate) shaded: bool,
+}
+
+/// One grid as Create Regular Block Model from Prismoid Grids takes it: its
+/// name, the category its ground carries, its first cell's sides along x
+/// and y, and those as the refusals print them.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RegularBlockGrid {
+    pub(crate) id: PrismoidGridId,
+    pub(crate) name: String,
+    pub(crate) category: String,
+    pub(crate) cell: [f64; 2],
+    pub(crate) cell_label: String,
 }
 
 /// One horizon of Build Strata's list.
@@ -11659,4 +11769,12 @@ pub(crate) struct SeamChoice {
     pub(crate) field: Option<String>,
     pub(crate) value: Option<crate::model::drill_hole::ReferenceTarget>,
     pub(crate) side: crate::model::drill_hole::ReferenceSide,
+}
+
+impl EditorState {
+    /// Whether the view draws `entity` as selected: a selected item, except
+    /// the grid whose prismoids are picked, which the rim round them marks.
+    pub(crate) fn drawn_selected(&self, entity: &SceneEntityId) -> bool {
+        self.selected_handles.contains(entity) && self.cell_selection.as_ref().is_none_or(|cells| cells.entity != *entity)
+    }
 }

@@ -281,6 +281,9 @@ impl<'a> App<'a> {
                     self.editor.tri_prismoid_roof_id = None;
                 }
             }
+            // The dialog names the grid from the topography while the name
+            // is its own.
+            TriangulationPickTarget::PrismoidTrimTopology => self.editor.tri_prismoid_trim_topology = Some(id),
             TriangulationPickTarget::CutPitTopology => {
                 self.editor.tri_cut_pitshell_topology_id = Some(id);
                 if self.editor.tri_cut_pitshell_pitshell_id == Some(id) {

@@ -2562,7 +2562,8 @@ impl<'a> App<'a> {
                 section: raster.state.section,
             })
             .collect::<Vec<_>>();
-        let mut prismoid_grids = self.prismoid_grids.iter().map(prismoid_grid_entry).collect::<Vec<_>>();
+        let sources = self.prismoid_sources();
+        let mut prismoid_grids = self.prismoid_grids.iter().map(|grid| prismoid_grid_entry(grid, &sources)).collect::<Vec<_>>();
 
         // Explorer display order is natural (alphanumeric) by item name.
         // Sorting the view only leaves retained project order untouched.
@@ -2711,8 +2712,16 @@ impl<'a> App<'a> {
     }
 }
 
-/// One prismoid grid's explorer row.
-fn prismoid_grid_entry(grid: &crate::model::prismoid_grid::OpenPrismoidGrid) -> crate::ui::state::UiPrismoidGridEntry {
+/// One prismoid grid's explorer row, its record checked against `sources`.
+fn prismoid_grid_entry(grid: &crate::model::prismoid_grid::OpenPrismoidGrid, sources: &crate::model::prismoid_grid::ProjectSources<'_>) -> crate::ui::state::UiPrismoidGridEntry {
+    use crate::app::commands::prismoid_grid::{built_rows, record_lines};
+
+    let staleness = grid
+        .built_from
+        .as_ref()
+        .map(|record| crate::model::prismoid_grid::staleness(record, &grid.grid.lattice, sources))
+        .unwrap_or_default();
+    let record_rows = grid.built_from.as_ref().map(|record| built_rows(record, &staleness, sources)).unwrap_or_default();
     crate::ui::state::UiPrismoidGridEntry {
         id: grid.id,
         name: grid.name.clone(),
@@ -2728,6 +2737,10 @@ fn prismoid_grid_entry(grid: &crate::model::prismoid_grid::OpenPrismoidGrid) -> 
         stratum: grid.stratum.clone(),
         folder: grid.state.folder,
         section: grid.state.section,
+        record_lines: record_lines(grid.built_from.as_ref(), &staleness, sources),
+        record_rows,
+        staleness,
+        shaded: grid.shaded,
     }
 }
 

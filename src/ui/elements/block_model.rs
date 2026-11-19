@@ -1,14 +1,20 @@
 use crate::{
+    app::commands::block_model::{regular_block_issue, regular_order},
     i18n::tr,
     model::{
         block_model::OpenBlockModel,
         drill_hole::{DrillFieldKind, OpenDrillHoleDataset},
         kriging::KrigingGrid,
+        prismoid_grid::PrismoidGridId,
     },
     ui::{
         EditorState, UiCommand,
-        state::{OreFilterMode, ToolSubject},
-        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, menu_field_label},
+        dialogs::triangulation::prismoid_grid_checklist,
+        state::{OreFilterMode, ToolSubject, UiPrismoidGridEntry, UiProjectView},
+        widgets::{
+            hint::Hint,
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, menu_field_label},
+        },
     },
 };
 
@@ -363,4 +369,118 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
     if !open {
         editor.ore_triangulation_open = false;
     }
+}
+
+/// Create Regular Block Model from Prismoid Grids: the loaded grids to tick,
+/// listed in the order their categories take codes, the name and the block
+/// size, which follow the ticks until typed over, and the first entry rule
+/// broken.
+pub(crate) fn draw_create_regular_block_model_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    let listed = regular_order(project.prismoid_grids.iter().filter(|grid| grid.is_loaded).collect());
+    let mut open = true;
+    DragableMenu::new("create_regular_block_model_dialog", tr!("block-model-regular-title"))
+        .open(&mut open)
+        .min_width(390.0)
+        .show(ui.ctx(), |ui| {
+            // As in Create Block Model: Enter in a field only commits it.
+            let editing_field = ui.ctx().memory(|memory| memory.focused().is_some());
+            menu::menu_note(ui, tr!("block-model-regular-help"));
+            ui.add_space(4.0);
+
+            // A grid unloaded or removed under the dialog leaves the ticks,
+            // and the size and name follow what is left.
+            let before = editor.regular_block_model_grids.len();
+            editor.regular_block_model_grids.retain(|grid| listed.iter().any(|entry| entry.id == grid.id));
+            let ticked: Vec<PrismoidGridId> = editor.regular_block_model_grids.iter().map(|grid| grid.id).collect();
+            let mut ticks = (ticked.len() != before).then(|| ticked.clone());
+            MenuField::new(tr!("common-prismoid-grids"))
+                .help_text(tr!("block-model-regular-grids-help"))
+                .show(ui, |_, _, _| ());
+            let label = |entry: &UiPrismoidGridEntry| match editor.regular_block_model_grids.iter().find(|grid| grid.id == entry.id) {
+                Some(grid) => tr!(
+                    "block-model-regular-grid-row",
+                    name = grid.name.clone(),
+                    category = grid.category.clone(),
+                    size = grid.cell_label.clone()
+                ),
+                None => entry.name.clone(),
+            };
+            if let Some(clicked) = prismoid_grid_checklist(ui, "regular_block_model_grids", &listed, &ticked, label) {
+                ticks = Some(clicked);
+            }
+            if let Some(ids) = ticks {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::RegularBlockGrids(ids)));
+            }
+
+            if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.regular_block_model_name_input)
+                .show(ui)
+                .changed()
+            {
+                editor.regular_block_model_name_auto = false;
+            }
+
+            menu::menu_section(ui, tr!("block-model-block-grid"));
+            if let Some(envelope) = &editor.model_envelope {
+                ui.small(envelope.summary());
+            }
+            if MenuFieldF64::new(tr!("block-model-block-size"), &mut editor.regular_block_model_size, 0.001..=f64::MAX)
+                .help_text(tr!("block-model-regular-cube-size-help"))
+                .speed(1.0)
+                .max_decimals(3)
+                .show(ui)
+                .changed()
+            {
+                editor.regular_block_model_size_auto = false;
+            }
+            let issue = regular_block_issue(editor.model_envelope.as_ref(), &editor.regular_block_model_grids, editor.regular_block_model_size);
+            match &issue {
+                Ok(dims) => {
+                    ui.small(tr!(
+                        "block-grid-summary",
+                        x = dims[0].to_string(),
+                        y = dims[1].to_string(),
+                        z = dims[2].to_string(),
+                        count = dims.iter().product::<usize>().to_string()
+                    ));
+                }
+                Err(rule) => {
+                    ui.colored_label(ui.visuals().error_fg_color, rule.as_str());
+                }
+            }
+
+            let blocker = regular_block_blocker(editor.regular_block_model_grids.len(), &issue, &editor.regular_block_model_name_input);
+            let can_run = blocker.is_none();
+            menu::menu_actions(ui, |ui| {
+                let confirm = !editing_field && menu::dialog_confirmed(ui.ctx());
+                let mut create = ui.add(MenuButton::new(tr!("common-create")).primary().enabled(can_run));
+                if let Some(reason) = blocker.as_deref() {
+                    create = create.hint(reason);
+                }
+                if create.clicked() || (confirm && can_run) {
+                    commands.push(UiCommand::ExecuteCreateRegularBlockModel {
+                        grids: editor.regular_block_model_grids.iter().map(|grid| grid.id).collect(),
+                        size: editor.regular_block_model_size,
+                        name: editor.regular_block_model_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.regular_block_model_open = false;
+                }
+            });
+        });
+    if !open {
+        editor.regular_block_model_open = false;
+    }
+}
+
+/// Why Create Regular Block Model cannot run yet, from the number of grids
+/// ticked, the entry rules' verdict and the name typed; `None` when it can.
+fn regular_block_blocker(ticked: usize, issue: &Result<[usize; 3], String>, name: &str) -> Option<String> {
+    if ticked == 0 {
+        return Some(tr!("block-model-regular-needs-grids"));
+    }
+    if let Err(rule) = issue {
+        return Some(rule.clone());
+    }
+    name.trim().is_empty().then(|| tr!("block-model-regular-needs-name"))
 }

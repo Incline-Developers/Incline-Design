@@ -286,7 +286,34 @@ impl GridSurface {
 /// triangles and where sheets stacked there differ by more than
 /// `HEIGHT_TOLERANCE`. Faces upright in plan give none.
 pub(crate) fn surface_z_single(mesh: &mesh_data::Triangulation, spatial: &TriangleBvh, stack: &mut Vec<usize>, point: DVec2) -> Option<f64> {
-    let mut range: Option<(f64, f64)> = None;
+    let SurfaceAt::At(z) = surface_at(mesh, spatial, stack, point) else { return None };
+    Some(z)
+}
+
+/// What a surface gives at one point in plan.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum SurfaceAt {
+    /// No triangle of the surface lies over the point.
+    Beyond,
+    /// One height, sheets touching there within `HEIGHT_TOLERANCE`.
+    At(f64),
+    /// Two or more heights: the surface folds over itself or stands
+    /// upright there.
+    Folded,
+}
+
+/// The surface at `point`, telling where it ends from where it folds.
+/// Faces upright in plan are passed over. Only the faces holding the point,
+/// edges and corners included, are compared, each on its own plane: a face
+/// beside a crease is not read on its plane carried past the edge. Where no
+/// face holds it, one height is read: at the nearest edge point of the faces
+/// within the plan tolerance, the face first in the mesh on a tie.
+pub(crate) fn surface_at(mesh: &mesh_data::Triangulation, spatial: &TriangleBvh, stack: &mut Vec<usize>, point: DVec2) -> SurfaceAt {
+    // The lowest and highest height of the faces holding the point; and of
+    // the faces only near it, the nearest point's squared distance, face and
+    // height.
+    let mut held: Option<(f64, f64)> = None;
+    let mut near: Option<(f64, usize, f64)> = None;
     spatial.for_each_xy_bounds_candidate_index_with_stack(point, point, stack, |face| {
         let Some(corners) = mesh.face_vertex_indices(face) else {
             return;
@@ -297,17 +324,32 @@ pub(crate) fn surface_z_single(mesh: &mesh_data::Triangulation, spatial: &Triang
         });
         let (along, across) = (b - a, c - a);
         let normal = along.cross(across);
-        let inside = matches!(
-            kernel::point_in_polyline(point, [a, b, c].map(DVec3::truncate)),
-            PolyContainment::Inside | PolyContainment::OnBoundary
-        );
-        if !inside || normal.z.abs() <= f64::EPSILON * along.truncate().length() * across.truncate().length() {
+        if normal.z.abs() <= f64::EPSILON * along.truncate().length() * across.truncate().length() {
             return;
         }
-        let z = a.z - (normal.x * (point.x - a.x) + normal.y * (point.y - a.y)) / normal.z;
-        range = Some(range.map_or((z, z), |(lowest, highest)| (lowest.min(z), highest.max(z))));
+        let plan = [a, b, c].map(DVec3::truncate);
+        let height = |at: DVec2| a.z - (normal.x * (at.x - a.x) + normal.y * (at.y - a.y)) / normal.z;
+        let sides = [0, 1, 2].map(|at| kernel::orient2d(plan[at], plan[(at + 1) % 3], point));
+        if sides.iter().all(|side| *side >= 0.0) || sides.iter().all(|side| *side <= 0.0) {
+            let z = height(point);
+            held = Some(held.map_or((z, z), |(lowest, highest)| (lowest.min(z), highest.max(z))));
+        } else if matches!(kernel::point_in_polyline(point, plan), PolyContainment::OnBoundary) {
+            let nearest = [0, 1, 2]
+                .map(|at| kernel::project_onto_segment(point, plan[at], plan[(at + 1) % 3]).0)
+                .into_iter()
+                .fold(plan[0], |best, edge| if edge.distance_squared(point) < best.distance_squared(point) { edge } else { best });
+            let distance = nearest.distance_squared(point);
+            if near.is_none_or(|(least, first, _)| (distance, face) < (least, first)) {
+                near = Some((distance, face, height(nearest)));
+            }
+        }
     });
-    range.filter(|(lowest, highest)| highest - lowest <= HEIGHT_TOLERANCE).map(|(lowest, _)| lowest)
+    match (held, near) {
+        (Some((lowest, highest)), _) if highest - lowest <= HEIGHT_TOLERANCE => SurfaceAt::At(lowest),
+        (Some(_), _) => SurfaceAt::Folded,
+        (None, Some((.., z))) => SurfaceAt::At(z),
+        (None, None) => SurfaceAt::Beyond,
+    }
 }
 
 /// The leg length, and the corner where the legs meet, when the triangle is

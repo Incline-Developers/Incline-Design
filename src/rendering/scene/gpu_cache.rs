@@ -1461,7 +1461,7 @@ impl TriangulationGpuCache {
             }
             let entity = triangulation.entity_id();
             let raster_texture = triangulation.raster_texture.filter(|id| drawable_rasters.contains(id));
-            let selected = editor.selected_handles.contains(&entity);
+            let selected = editor.drawn_selected(&entity);
             // Selection is represented by the hatching below. A live
             // picker hover temporarily overrides the face colour as well so the
             // candidate remains obvious even when it was already selected.

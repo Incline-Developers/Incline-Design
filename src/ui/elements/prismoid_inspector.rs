@@ -1,38 +1,34 @@
-//! The panel beside the scene that reads out what a pick on the view holds,
-//! from rows the App derives at each change.
+//! The pane under the explorer tree that reads out what a pick on the view
+//! holds, from rows the App derives at each change.
 
 use crate::{
     i18n::tr,
     ui::{
         state::{InspectorRow, InspectorRows},
-        widgets::{
-            data_grid::{PropertyRows, PropertyTable, property_table_height},
-            island::{Island, IslandResponse, Side},
-        },
+        widgets::data_grid::{PropertyRows, PropertyTable, stack_slot, table_stack},
     },
 };
 
-pub(crate) const PANEL_ID: &str = "prismoid_inspector_panel";
-
-/// The inspector down the right edge: the pick's properties, then what it
-/// holds below them.
-pub(crate) fn draw_prismoid_inspector(ui: &mut egui::Ui, rows: &InspectorRows) -> IslandResponse<()> {
-    Island::new(PANEL_ID, Side::Right)
-        .default_width(300.0)
-        .min_width(200.0)
-        .max_width(420.0)
-        .flush()
-        .show(ui, |ui, rect| {
-            let split = (rect.top() + property_table_height(ui, rows.properties.len() + 1)).min(rect.bottom());
-            let (properties, contents) = rect.split_top_bottom_at_y(split);
-            PropertyTable::new("prismoid_inspector_properties", properties, &rows.title).show(ui, |table| draw_rows(table, &rows.properties));
-            PropertyTable::new("prismoid_inspector_contents", contents, &tr!("solids-contents")).show(ui, |table| draw_rows(table, &rows.contents));
-        })
+/// The pick's properties, then what it holds below them, in one scroll; with
+/// nothing picked, one row saying how to pick.
+pub(crate) fn draw_prismoid_inspector(ui: &mut egui::Ui, rect: egui::Rect, rows: Option<&InspectorRows>) {
+    let Some(rows) = rows else {
+        PropertyTable::new("prismoid_inspector_properties", rect, &tr!("planning-properties")).show(ui, |table| {
+            table.header(&tr!("planning-property"), &tr!("planning-value"));
+            table.readonly(&tr!("solids-selection"), &tr!("prismoid-inspector-select-prismoids"), None, None);
+        });
+        return;
+    };
+    table_stack(ui, rect, "prismoid_inspector", |ui| {
+        PropertyTable::new("prismoid_inspector_properties", stack_slot(ui), &rows.title).show(ui, |table| draw_rows(table, &rows.properties));
+        PropertyTable::new("prismoid_inspector_contents", stack_slot(ui), &tr!("solids-contents")).show(ui, |table| draw_rows(table, &rows.contents));
+    });
 }
 
 fn draw_rows(table: &mut PropertyRows<'_>, rows: &[InspectorRow]) {
     table.header(&tr!("planning-property"), &tr!("planning-value"));
+    // A note says what a figure rests on or leaves out, never an error.
     for row in rows {
-        table.readonly(&row.key, &row.value, row.unit.as_deref(), row.note.as_deref());
+        table.readonly_warning(&row.key, &row.value, row.unit.as_deref(), row.note.as_deref());
     }
 }

@@ -241,6 +241,8 @@ pub(crate) fn draw_hole_misfit_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
         .filter(|dataset| dataset.state.loaded && (draft.holes.is_empty() || draft.holes.iter().any(|hole| hole.dataset == dataset.id)))
         .collect();
     let holes_label = match (draft.holes.len(), involved.as_slice()) {
+        // Quality points alone are compared until a seam is picked.
+        (0, _) if !draft.quality_points.is_empty() && draft.seam.value.is_none() => tr!("hole-misfit-holes-without-seam"),
         (0, involved) => tr!("hole-misfit-every-hole", datasets = involved.len().to_string()),
         (count, [dataset]) => tr!("reference-points-count-holes-from-dataset", count = count.to_string(), dataset = dataset.name.clone()),
         (count, involved) => tr!("reference-points-holes-from-datasets", count = count.to_string(), datasets = involved.len().to_string()),

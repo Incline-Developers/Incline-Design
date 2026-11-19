@@ -341,12 +341,12 @@ fn is_major_contour(z_level: f64, major_interval: f64) -> bool {
 /// Quantized endpoint key. Both triangles adjacent to a mesh edge interpolate
 /// the crossing from the same two vertices, so matching endpoints agree to
 /// float noise; quantizing at the kernel tolerance makes them hash-equal.
-fn contour_point_key(p: glam::DVec3) -> (i64, i64, i64) {
+pub(crate) fn contour_point_key(p: glam::DVec3) -> (i64, i64, i64) {
     let q = crate::model::kernel::XY_TOL;
     ((p.x / q).round() as i64, (p.y / q).round() as i64, (p.z / q).round() as i64)
 }
 
-fn chain_contour_segments(segments: Vec<[glam::DVec3; 2]>) -> Vec<Vec<glam::DVec3>> {
+pub(crate) fn chain_contour_segments(segments: Vec<[glam::DVec3; 2]>) -> Vec<Vec<glam::DVec3>> {
     // Endpoint key -> segments touching that point, for O(1) chain extension.
     let mut by_endpoint: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
     for (index, segment) in segments.iter().enumerate() {

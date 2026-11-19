@@ -3,10 +3,11 @@
 //! values per cell.
 
 use std::{
+    collections::{HashMap, HashSet},
     num::NonZeroUsize,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -19,14 +20,15 @@ use crate::{
     i18n::tr,
     model::{
         block_model::BlockBounds,
-        drill_hole::DrillColorPreset,
+        drill_hole::{Correction, DrillColorPreset, DrillHoleDataset},
         formats::mesh_data,
-        grid_surface::{GridSurface, HEIGHT_TOLERANCE, NODE_TOLERANCE, surface_z_single},
+        grid_surface::{GridSurface, HEIGHT_TOLERANCE, NODE_TOLERANCE, SurfaceAt, surface_z_single},
         progress::{Phase, Progress},
         project::{ModelEnvelope, ProjectItemState},
+        rbf::NODE_BUDGET,
         solid_reserves::NumericTotal,
         spatial::TriangleBvh,
-        triangulation::{quality_key, same_quality_name},
+        triangulation::{GeometryVersion, quality_key, same_quality_name},
     },
 };
 
@@ -254,8 +256,14 @@ impl Lattice {
     /// A plan point as distances along `u` and `v` from the origin: the exact
     /// inverse of `corners`, also for axes `check` admits a hair off unit and
     /// perpendicular.
-    fn to_lattice(&self, at: DVec2) -> DVec2 {
+    pub(crate) fn to_lattice(&self, at: DVec2) -> DVec2 {
         DMat2::from_cols(self.u, self.v).inverse() * (at - self.origin)
+    }
+
+    /// A point in the lattice frame (distances along `u` and `v` from the
+    /// origin) as a plan point: the inverse of [`Self::to_lattice`].
+    pub(crate) fn to_world(&self, at: DVec2) -> DVec2 {
+        self.origin + self.u * at.x + self.v * at.y
     }
 
     /// The (column, row) of this lattice's cell (0, 0) in `other`'s cells
@@ -325,6 +333,17 @@ fn quads(columns: usize, rows: usize, mut nodes: impl FnMut(usize, usize) -> Opt
     faces
 }
 
+/// A height on the two triangles of a cell, from `z` at its corners a, b
+/// (along `u`), c and d, at `local`, 0 to 1 across the cell along each.
+fn height_in(z: &[f64], [a, b, c, d]: [usize; 4], local: DVec2) -> f64 {
+    let (fs, ft) = (local.x, local.y);
+    if fs >= ft {
+        z[a] + fs * (z[b] - z[a]) + ft * (z[c] - z[b])
+    } else {
+        z[a] + ft * (z[d] - z[a]) + fs * (z[c] - z[d])
+    }
+}
+
 /// Distances from the lattice origin to each line between cells, from 0.
 fn edges(sizes: &[f64]) -> Vec<f64> {
     let mut edges = vec![0.0];
@@ -352,6 +371,265 @@ pub(crate) enum CellValueRole {
     Density,
 }
 
+/// How far the topography must pass a roof or floor for a prismoid to be
+/// cut: nearer, it is taken as meeting it.
+const CUT_CONTACT: f64 = 1e-6;
+
+/// The most cut triangles one trimmed grid holds: as many as the corners a
+/// grid is drawn with.
+pub(crate) const CUT_BUDGET: usize = NODE_BUDGET;
+
+/// A point of a cut prismoid's triangles: its plan position in the lattice's
+/// frame (distances along `u` and `v` from the origin) and the kept roof and
+/// kept floor there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CutPoint {
+    pub(crate) plan: DVec2,
+    pub(crate) roof: f64,
+    pub(crate) floor: f64,
+}
+
+/// The prismoids a trim cut along a topography. A cut prismoid is kept as
+/// triangles over the part of its plan where the topography leaves ground,
+/// the kept roof and floor each linear on a triangle, so volumes sum exactly.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct CutPrismoids {
+    /// The cut cells, ascending.
+    pub(crate) cells: Vec<u32>,
+    /// Where each cut cell's triangles start in `triangles`: one more entry
+    /// than `cells`, the last the triangle count; empty when nothing is cut.
+    pub(crate) starts: Vec<u32>,
+    /// The kept roof's and floor's means of each cut cell, as its box holds
+    /// its exact volume at the kept part's mid height.
+    pub(crate) means: Vec<[f64; 2]>,
+    pub(crate) points: Vec<CutPoint>,
+    /// Indices into `points`; a cell's triangles use only its own points.
+    pub(crate) triangles: Vec<[u32; 3]>,
+    /// Per lattice cell, its index in `cells` or `u32::MAX`; empty when
+    /// nothing is cut.
+    of_cell: Vec<u32>,
+}
+
+/// The barycentric weights of `at` on a triangle of plan points.
+fn barycentric([a, b, c]: [DVec2; 3], at: DVec2) -> [f64; 3] {
+    let det = (b - a).perp_dot(c - a);
+    let (second, third) = ((at - a).perp_dot(c - a) / det, (b - a).perp_dot(at - a) / det);
+    [1.0 - second - third, second, third]
+}
+
+/// The point of a triangle nearest to `at`: `at` itself when inside.
+fn closest_in_triangle(triangle: [DVec2; 3], at: DVec2) -> DVec2 {
+    if barycentric(triangle, at).iter().all(|weight| *weight >= 0.0) {
+        return at;
+    }
+    let mut nearest = triangle[0];
+    let mut least = f64::INFINITY;
+    for (from, to) in [(0, 1), (1, 2), (2, 0)] {
+        let (a, b) = (triangle[from], triangle[to]);
+        let along = b - a;
+        let candidate = a + along * ((at - a).dot(along) / along.length_squared()).clamp(0.0, 1.0);
+        let distance = (candidate - at).length_squared();
+        if distance < least {
+            (nearest, least) = (candidate, distance);
+        }
+    }
+    nearest
+}
+
+/// The plan area of a triangle of cut points.
+fn cut_area([a, b, c]: [CutPoint; 3]) -> f64 {
+    ((b.plan - a.plan).perp_dot(c.plan - a.plan) * 0.5).abs()
+}
+
+/// The roof and floor means a cut cell's triangles give its box: the volume
+/// over the cell's plan area, centred on the kept part's mid height.
+fn cut_means(triangles: impl Iterator<Item = [CutPoint; 3]>, cell_area: f64) -> [f64; 2] {
+    let (mut volume, mut middle, mut area) = (0.0, 0.0, 0.0);
+    for triangle in triangles {
+        let share = cut_area(triangle);
+        volume += share * triangle.iter().map(|point| point.roof - point.floor).sum::<f64>() / 3.0;
+        middle += share * triangle.iter().map(|point| (point.roof + point.floor) / 2.0).sum::<f64>() / 3.0;
+        area += share;
+    }
+    let centre = if area > 0.0 { middle / area } else { 0.0 };
+    let height = volume / cell_area;
+    [centre + height / 2.0, centre - height / 2.0]
+}
+
+impl CutPrismoids {
+    /// The cut cells with their own points and triangles, cells ascending.
+    /// Each cell's points are welded when their plan positions match at the
+    /// kernel's tolerance and their kept roofs and kept floors each agree
+    /// within it too, keeping the first; points over one plan position with
+    /// different heights stay apart, as at an upright face of the ground,
+    /// where the cliff draws as an open line. Triangles left with fewer than
+    /// three points or no plan area are dropped, and cells left with no
+    /// triangle.
+    pub(crate) fn build(lattice: &Lattice, cells: Vec<(usize, Vec<CutPoint>, Vec<[u32; 3]>)>) -> CutPrismoids {
+        let mut cut = CutPrismoids::default();
+        let columns = lattice.columns();
+        let quantum = crate::model::kernel::XY_TOL;
+        let mut welded: std::collections::HashMap<(i64, i64), Vec<u32>> = std::collections::HashMap::new();
+        for (cell, points, triangles) in cells {
+            let first = cut.points.len();
+            let triangles_first = cut.triangles.len();
+            welded.clear();
+            let mut at = Vec::with_capacity(points.len());
+            for point in &points {
+                let key = ((point.plan.x / quantum).round() as i64, (point.plan.y / quantum).round() as i64);
+                let held = welded.entry(key).or_default();
+                let same = held.iter().copied().find(|index| {
+                    let other = cut.points[*index as usize];
+                    (other.roof - point.roof).abs() <= quantum && (other.floor - point.floor).abs() <= quantum
+                });
+                let index = same.unwrap_or_else(|| {
+                    cut.points.push(*point);
+                    let index = (cut.points.len() - 1) as u32;
+                    held.push(index);
+                    index
+                });
+                at.push(index);
+            }
+            for triangle in triangles {
+                let [a, b, c] = triangle.map(|index| at[index as usize]);
+                if a == b || b == c || a == c {
+                    continue;
+                }
+                if cut_area([a, b, c].map(|index| cut.points[index as usize])) <= 0.0 {
+                    continue;
+                }
+                cut.triangles.push([a, b, c]);
+            }
+            if cut.triangles.len() == triangles_first {
+                cut.points.truncate(first);
+                continue;
+            }
+            cut.cells.push(cell as u32);
+            cut.starts.push(triangles_first as u32);
+        }
+        if cut.cells.is_empty() {
+            return CutPrismoids::default();
+        }
+        cut.starts.push(cut.triangles.len() as u32);
+        cut.of_cell = vec![u32::MAX; lattice.cell_count()];
+        for (index, cell) in cut.cells.iter().enumerate() {
+            cut.of_cell[*cell as usize] = index as u32;
+        }
+        let means: Vec<[f64; 2]> = (0..cut.cells.len())
+            .map(|index| {
+                let cell = cut.cells[index] as usize;
+                cut_means(cut.triangles_at(index), lattice.u_sizes[cell % columns] * lattice.v_sizes[cell / columns])
+            })
+            .collect();
+        cut.means = means;
+        cut
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+
+    /// The position in `cells` of a lattice cell, when it is cut.
+    pub(crate) fn cell_index(&self, cell: usize) -> Option<usize> {
+        self.of_cell.get(cell).copied().filter(|index| *index != u32::MAX).map(|index| index as usize)
+    }
+
+    /// The kept roof's and floor's means of a cut cell.
+    pub(crate) fn mean(&self, cell: usize) -> Option<[f64; 2]> {
+        self.cell_index(cell).map(|index| self.means[index])
+    }
+
+    /// The triangles of a cut cell.
+    pub(crate) fn triangles_of(&self, cell: usize) -> Option<impl Iterator<Item = [CutPoint; 3]> + '_> {
+        self.cell_index(cell).map(|index| self.triangles_at(index))
+    }
+
+    fn triangles_at(&self, index: usize) -> impl Iterator<Item = [CutPoint; 3]> + '_ {
+        let range = self.starts[index] as usize..self.starts[index + 1] as usize;
+        self.triangles[range].iter().map(|triangle| triangle.map(|point| self.points[point as usize]))
+    }
+
+    pub(crate) fn triangle_count(&self) -> usize {
+        self.triangles.len()
+    }
+
+    /// The point indices of the triangles of the cut cell at `index`.
+    fn indices_at(&self, index: usize) -> &[[u32; 3]] {
+        &self.triangles[self.starts[index] as usize..self.starts[index + 1] as usize]
+    }
+
+    /// The kept roof, kept floor and the roof's gradient (dz/ds, dz/dt, in
+    /// the lattice frame) at a lattice-frame point of the cut cell at
+    /// `index`: on the triangle holding it, else at the nearest point of the
+    /// cell's triangles, where the kept part ends.
+    fn read(&self, index: usize, at: DVec2) -> Option<(f64, f64, DVec2)> {
+        let mut best: Option<(f64, [CutPoint; 3], DVec2)> = None;
+        for triangle in self.triangles_at(index) {
+            let nearest = closest_in_triangle(triangle.map(|point| point.plan), at);
+            let distance = (nearest - at).length_squared();
+            if best.is_none_or(|(least, ..)| distance < least) {
+                best = Some((distance, triangle, nearest));
+                if distance == 0.0 {
+                    break;
+                }
+            }
+        }
+        let (_, triangle, nearest) = best?;
+        let weights = barycentric(triangle.map(|point| point.plan), nearest);
+        let blend = |value: fn(&CutPoint) -> f64| weights.iter().zip(&triangle).map(|(weight, point)| weight * value(point)).sum::<f64>();
+        let [a, b, c] = triangle;
+        let (e1, e2) = (b.plan - a.plan, c.plan - a.plan);
+        let (d1, d2) = (b.roof - a.roof, c.roof - a.roof);
+        let det = e1.perp_dot(e2);
+        let gradient = DVec2::new((d1 * e2.y - d2 * e1.y) / det, (d2 * e1.x - d1 * e2.x) / det);
+        Some((blend(|point| point.roof), blend(|point| point.floor), gradient))
+    }
+
+    /// Whether a lattice-frame point of the cut cell at `index` lies on a kept
+    /// triangle, to `kernel::XY_TOL`; false where the trim took the ground away.
+    fn covers(&self, index: usize, at: DVec2) -> bool {
+        let tolerance = crate::model::kernel::XY_TOL;
+        self.triangles_at(index)
+            .any(|triangle| (closest_in_triangle(triangle.map(|point| point.plan), at) - at).length_squared() <= tolerance * tolerance)
+    }
+
+    /// The part of the cut cell at `index`'s boundary that lies on the line
+    /// from `from` to `to` (lattice-frame points), as segments of cut
+    /// points ordered from `from` towards `to`, each end on the line to
+    /// `kernel::XY_TOL`.
+    fn along_edge(&self, index: usize, from: DVec2, to: DVec2) -> Vec<[CutPoint; 2]> {
+        let tolerance = crate::model::kernel::XY_TOL;
+        let (length, direction) = ((to - from).length(), (to - from).normalize());
+        let on_line = |point: &CutPoint| {
+            let offset = point.plan - from;
+            direction.perp_dot(offset).abs() <= tolerance && -tolerance <= offset.dot(direction) && offset.dot(direction) <= length + tolerance
+        };
+        let mut segments = Vec::new();
+        for triangle in self.triangles_at(index) {
+            for (first, second) in [(0, 1), (1, 2), (2, 0)] {
+                let (one, other) = (triangle[first], triangle[second]);
+                if on_line(&one) && on_line(&other) {
+                    let ordered = if (one.plan - from).dot(direction) <= (other.plan - from).dot(direction) {
+                        [one, other]
+                    } else {
+                        [other, one]
+                    };
+                    segments.push(ordered);
+                }
+            }
+        }
+        segments
+    }
+
+    /// Bytes held.
+    fn estimated_bytes(&self) -> usize {
+        (self.cells.len() + self.starts.len() + self.of_cell.len()) * size_of::<u32>()
+            + self.means.len() * size_of::<[f64; 2]>()
+            + self.points.len() * size_of::<CutPoint>()
+            + self.triangles.len() * size_of::<[u32; 3]>()
+    }
+}
+
 /// Roof and floor elevations at every corner, row by row from the first
 /// row: corner (`column`, `row`) at `row * (columns + 1) + column`, cell
 /// (`column`, `row`) at `row * columns + column`.
@@ -365,6 +643,8 @@ pub(crate) struct PrismoidGrid {
     /// brings back.
     pub(crate) masked: Vec<bool>,
     pub(crate) cell_values: Vec<CellValues>,
+    /// The prismoids a trim cut along a topography; empty when none is.
+    pub(crate) cut: CutPrismoids,
 }
 
 impl PrismoidGrid {
@@ -372,7 +652,8 @@ impl PrismoidGrid {
     /// axes; at least one cell, each size finite and positive; finite heights
     /// with the roof never below the floor; both masks and values for every
     /// cell, no cell masked by hand still active, each set of values named,
-    /// no reserved or column name, no name twice, at most one density.
+    /// no reserved or column name, no name twice, at most one density; and
+    /// cut prismoids, if any, well formed.
     pub(crate) fn check(&self) -> Result<()> {
         let lattice = &self.lattice;
         if lattice.columns() == 0 || lattice.rows() == 0 {
@@ -442,6 +723,76 @@ impl PrismoidGrid {
         }
         if self.cell_values.iter().filter(|values| values.role == CellValueRole::Density).count() > 1 {
             bail!(tr!("err-prismoid-grid-two-densities"));
+        }
+        self.check_cut()
+    }
+
+    /// Whether the cut prismoids are well formed: lists that agree, cells
+    /// ascending and taken by a trim (active or masked by hand), each cell's
+    /// triangles inside it with kept heights finite and the roof never below
+    /// the floor, and means as its triangles give them.
+    fn check_cut(&self) -> Result<()> {
+        let cut = &self.cut;
+        if cut.is_empty() {
+            let bare = cut.starts.is_empty() && cut.means.is_empty() && cut.points.is_empty() && cut.triangles.is_empty() && cut.of_cell.is_empty();
+            if !bare {
+                bail!(tr!("err-prismoid-grid-cut-lists"));
+            }
+            return Ok(());
+        }
+        let lattice = &self.lattice;
+        let (count, cells) = (cut.cells.len(), lattice.cell_count());
+        let shaped = cut.starts.len() == count + 1
+            && cut.means.len() == count
+            && cut.of_cell.len() == cells
+            && cut.starts[0] == 0
+            && cut.starts[count] as usize == cut.triangle_count()
+            && cut.starts.windows(2).all(|pair| pair[0] <= pair[1])
+            && cut.triangles.iter().flatten().all(|point| (*point as usize) < cut.points.len())
+            && cut.of_cell.iter().filter(|index| **index != u32::MAX).count() == count;
+        if !shaped {
+            bail!(tr!("err-prismoid-grid-cut-lists"));
+        }
+        let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));
+        let columns = lattice.columns();
+        for (index, cell) in cut.cells.iter().map(|cell| *cell as usize).enumerate() {
+            let named = || cell.to_string();
+            let ascending = index == 0 || cut.cells[index - 1] < cut.cells[index];
+            if !ascending || cell >= cells || !(self.active[cell] || self.masked[cell]) || cut.of_cell[cell] as usize != index {
+                bail!(tr!("err-prismoid-grid-cut-cell", cell = named()));
+            }
+            let (column, row) = (cell % columns, cell / columns);
+            let slack = crate::model::kernel::XY_TOL;
+            let inside = |point: &CutPoint| {
+                point.plan.x >= u_edges[column] - slack
+                    && point.plan.x <= u_edges[column + 1] + slack
+                    && point.plan.y >= v_edges[row] - slack
+                    && point.plan.y <= v_edges[row + 1] + slack
+            };
+            let cell_area = lattice.u_sizes[column] * lattice.v_sizes[row];
+            let mut area = 0.0;
+            for triangle in cut.triangles_at(index) {
+                if !triangle.iter().all(inside) {
+                    bail!(tr!("err-prismoid-grid-cut-footprint", cell = named()));
+                }
+                area += cut_area(triangle);
+            }
+            if area > cell_area * (1.0 + 1e-9) {
+                bail!(tr!("err-prismoid-grid-cut-footprint", cell = named()));
+            }
+            let points = cut.triangles[cut.starts[index] as usize..cut.starts[index + 1] as usize].iter().flatten();
+            if !points
+                .map(|point| cut.points[*point as usize])
+                .all(|point| point.roof.is_finite() && point.floor.is_finite() && point.roof - point.floor >= -1e-9)
+            {
+                bail!(tr!("err-prismoid-grid-cut-heights", cell = named()));
+            }
+            let held = cut.means[index];
+            let mean = cut_means(cut.triangles_at(index), cell_area);
+            let same = |held: f64, mean: f64| held.is_finite() && (held - mean).abs() <= 1e-9 * mean.abs().max(1.0);
+            if !same(held[0], mean[0]) || !same(held[1], mean[1]) {
+                bail!(tr!("err-prismoid-grid-cut-means", cell = named()));
+            }
         }
         Ok(())
     }
@@ -609,6 +960,7 @@ impl PrismoidGrid {
             active,
             masked: vec![false; kept_columns * kept_rows],
             cell_values: Vec::new(),
+            cut: CutPrismoids::default(),
         };
         grid.check().map_err(BuildRefusal::Malformed)?;
         if envelope.is_some_and(|envelope| !grid.fits(envelope)) {
@@ -619,27 +971,50 @@ impl PrismoidGrid {
     }
 
     /// Whether the grid lies in `envelope`: its lattice on the envelope's
-    /// axes, and every active cell's corners inside it, roof and floor.
+    /// axes, and every active cell's corners and every cut cell's points
+    /// inside it, roof and floor.
     pub(crate) fn fits(&self, envelope: &ModelEnvelope) -> bool {
         let lattice = &self.lattice;
         if (lattice.u, lattice.v) != (DVec2::X, DVec2::Y) {
             return false;
         }
         let (corners, columns) = (lattice.corners(), lattice.columns());
-        self.active.iter().enumerate().filter(|(_, active)| **active).all(|(cell, _)| {
+        let corners_fit = self.active.iter().enumerate().filter(|(_, active)| **active).all(|(cell, _)| {
             let first = cell / columns * (columns + 1) + cell % columns;
             [first, first + 1, first + columns + 1, first + columns + 2]
                 .into_iter()
                 .all(|corner| envelope.contains_xy(corners[corner]) && envelope.contains_z(self.roof[corner]) && envelope.contains_z(self.floor[corner]))
-        })
+        });
+        corners_fit
+            && self
+                .cut
+                .points
+                .iter()
+                .all(|point| envelope.contains_xy(lattice.to_world(point.plan)) && envelope.contains_z(point.roof) && envelope.contains_z(point.floor))
+    }
+
+    /// The segments of a cut cell's stored triangles that lie on the lattice
+    /// edge from corner `from` to corner `to` (each a (column, row) of
+    /// corners), ordered from `from` towards `to`, leaving out segments whose
+    /// ends both have no kept thickness. `None` when the cell is not cut.
+    fn cut_side(&self, cell: usize, from: (usize, usize), to: (usize, usize), u_edges: &[f64], v_edges: &[f64]) -> Option<Vec<[CutPoint; 2]>> {
+        const NONE: f64 = 1e-9;
+        let index = self.cut.cell_index(cell)?;
+        let [from, to] = [from, to].map(|(column, row)| DVec2::new(u_edges[column], v_edges[row]));
+        let mut segments = self.cut.along_edge(index, from, to);
+        segments.retain(|ends| ends.iter().any(|end| end.roof - end.floor > NONE));
+        Some(segments)
     }
 
     /// The vertical walls along every edge of an active cell whose neighbour
-    /// is inactive or off the lattice, two outward-facing triangles each.
+    /// is inactive or off the lattice, two outward-facing triangles each; on
+    /// a cut cell, one wall per segment of the cut's boundary on that edge,
+    /// none where the kept ground has no thickness.
     pub(crate) fn outline_walls(&self) -> (Vec<DVec3>, Vec<[u32; 3]>) {
         let lattice = &self.lattice;
         let (columns, rows) = (lattice.columns(), lattice.rows());
         let corners = lattice.corners();
+        let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));
         let active = |column: Option<usize>, row: Option<usize>| match (column, row) {
             (Some(column), Some(row)) if column < columns && row < rows => self.active[row * columns + column],
             _ => false,
@@ -663,15 +1038,25 @@ impl PrismoidGrid {
                     if active(beside_column, beside_row) {
                         continue;
                     }
-                    let first = vertices.len() as u32;
-                    for (corner_column, corner_row) in [from, to] {
-                        let index = corner_row * (columns + 1) + corner_column;
-                        let plan = corners[index];
-                        vertices.push(plan.extend(self.roof[index]));
-                        vertices.push(plan.extend(self.floor[index]));
+                    let mut wall = |ends: [(DVec2, f64, f64); 2]| {
+                        let first = vertices.len() as u32;
+                        for (plan, roof, floor) in ends {
+                            vertices.push(plan.extend(roof));
+                            vertices.push(plan.extend(floor));
+                        }
+                        let [from_roof, from_floor, to_roof, to_floor] = [first, first + 1, first + 2, first + 3];
+                        triangles.extend([[to_roof, from_roof, from_floor], [to_roof, from_floor, to_floor]]);
+                    };
+                    if let Some(segments) = self.cut_side(row * columns + column, from, to, &u_edges, &v_edges) {
+                        for ends in segments {
+                            wall(ends.map(|end| (lattice.to_world(end.plan), end.roof, end.floor)));
+                        }
+                        continue;
                     }
-                    let [from_roof, from_floor, to_roof, to_floor] = [first, first + 1, first + 2, first + 3];
-                    triangles.extend([[to_roof, from_roof, from_floor], [to_roof, from_floor, to_floor]]);
+                    wall([from, to].map(|(corner_column, corner_row)| {
+                        let index = corner_row * (columns + 1) + corner_column;
+                        (corners[index], self.roof[index], self.floor[index])
+                    }));
                 }
             }
         }
@@ -681,11 +1066,13 @@ impl PrismoidGrid {
     /// Roof and floor segments round the rim of a set of cells: `cells` is a
     /// mask in cell order, and each side of a selected cell whose neighbour
     /// is not selected (or is off the lattice) gives one roof and one floor
-    /// segment.
+    /// segment; a cut cell's sides follow its cut, as [`Self::outline_walls`]
+    /// does.
     pub(crate) fn selection_outline(&self, cells: &[bool]) -> Vec<[DVec3; 2]> {
         let lattice = &self.lattice;
         let (columns, rows) = (lattice.columns(), lattice.rows());
         let corners = lattice.corners();
+        let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));
         let selected = |column: Option<usize>, row: Option<usize>| match (column, row) {
             (Some(column), Some(row)) if column < columns && row < rows => cells[row * columns + column],
             _ => false,
@@ -706,6 +1093,14 @@ impl PrismoidGrid {
                     if selected(beside_column, beside_row) {
                         continue;
                     }
+                    if let Some(rim) = self.cut_side(row * columns + column, from, to, &u_edges, &v_edges) {
+                        for [one, other] in rim {
+                            let [one_plan, other_plan] = [one, other].map(|end| lattice.to_world(end.plan));
+                            segments.push([one_plan.extend(one.roof), other_plan.extend(other.roof)]);
+                            segments.push([one_plan.extend(one.floor), other_plan.extend(other.floor)]);
+                        }
+                        continue;
+                    }
                     let [from, to] = [from, to].map(|(corner_column, corner_row)| corner_row * (columns + 1) + corner_column);
                     segments.push([corners[from].extend(self.roof[from]), corners[to].extend(self.roof[to])]);
                     segments.push([corners[from].extend(self.floor[from]), corners[to].extend(self.floor[to])]);
@@ -717,7 +1112,9 @@ impl PrismoidGrid {
 
     /// The closed body of the active cells: roof, floor facing down, and
     /// [`Self::outline_walls`] less the triangles a closed corner flattens.
-    /// `None` with no active cell.
+    /// A cut cell gives its stored triangles twice, the kept roof facing up
+    /// and the kept floor down, with no wall inside it; its wires follow the
+    /// cut. `None` with no active cell.
     pub(crate) fn closed_mesh(&self) -> Option<PrismoidMesh> {
         const UNSET: u32 = u32::MAX;
         let columns = self.lattice.columns();
@@ -725,7 +1122,7 @@ impl PrismoidGrid {
         let mut vertices = Vec::new();
         let mut roof_at = vec![UNSET; plan.len()];
         let mut floor_at = vec![UNSET; plan.len()];
-        let mut place = |at: &mut [u32], heights: &[f64], corner: usize| {
+        let place = |vertices: &mut Vec<mesh_data::Vertex>, at: &mut [u32], heights: &[f64], corner: usize| {
             if at[corner] == UNSET {
                 at[corner] = vertices.len() as u32;
                 vertices.push(mesh_vertex(plan[corner].extend(heights[corner])));
@@ -733,16 +1130,116 @@ impl PrismoidGrid {
             at[corner]
         };
         let mut faces = Vec::new();
+        let (mut cut_roof_at, mut cut_floor_at) = (vec![UNSET; self.cut.points.len()], vec![UNSET; self.cut.points.len()]);
         for (cell, _) in self.active.iter().enumerate().filter(|(_, active)| **active) {
+            if let Some(index) = self.cut.cell_index(cell) {
+                for triangle in self.cut.indices_at(index) {
+                    let [a, b, c] = triangle.map(|point| self.cut.points[point as usize].plan);
+                    // Anticlockwise in the lattice's frame faces up.
+                    let [x, y, z] = if (b - a).perp_dot(c - a) >= 0.0 {
+                        *triangle
+                    } else {
+                        [triangle[0], triangle[2], triangle[1]]
+                    };
+                    let mut at = |placed: &mut [u32], point: u32, height: fn(&CutPoint) -> f64| {
+                        if placed[point as usize] == UNSET {
+                            placed[point as usize] = vertices.len() as u32;
+                            let held = self.cut.points[point as usize];
+                            vertices.push(mesh_vertex(self.lattice.to_world(held.plan).extend(height(&held))));
+                        }
+                        placed[point as usize]
+                    };
+                    let [ra, rb, rc] = [x, y, z].map(|point| at(&mut cut_roof_at, point, |held| held.roof));
+                    let [fa, fb, fc] = [x, y, z].map(|point| at(&mut cut_floor_at, point, |held| held.floor));
+                    faces.extend([[ra, rb, rc], [fa, fc, fb]]);
+                }
+                continue;
+            }
             let a = (cell / columns) * (columns + 1) + cell % columns;
             let d = a + columns + 1;
             let corners = [a, a + 1, d + 1, d];
-            let [ra, rb, rc, rd] = corners.map(|corner| place(&mut roof_at, &self.roof, corner));
-            let [fa, fb, fc, fd] = corners.map(|corner| place(&mut floor_at, &self.floor, corner));
+            let [ra, rb, rc, rd] = corners.map(|corner| place(&mut vertices, &mut roof_at, &self.roof, corner));
+            let [fa, fb, fc, fd] = corners.map(|corner| place(&mut vertices, &mut floor_at, &self.floor, corner));
             faces.extend([[ra, rb, rc], [ra, rc, rd], [fa, fc, fb], [fa, fd, fc]]);
         }
         if faces.is_empty() {
             return None;
+        }
+        // Each active cell's sides on roof and floor, a side two active
+        // cells share by the lower or left one, and each corner's vertical,
+        // less what a closed corner flattens.
+        let flat = |corner: usize| self.roof[corner] == self.floor[corner];
+        let active = |column: usize, row: usize| self.active[row * columns + column];
+        let mut seen = vec![false; plan.len()];
+        let (u_edges, v_edges) = (edges(&self.lattice.u_sizes), edges(&self.lattice.v_sizes));
+        let mut lattice = Vec::new();
+        let mut lattice_cells: Vec<[u32; 4]> = Vec::new();
+        let rows = self.lattice.rows();
+        for (cell, _) in self.active.iter().enumerate().filter(|(_, active)| **active) {
+            let (column, row) = (cell % columns, cell / columns);
+            let a = row * (columns + 1) + column;
+            let d = a + columns + 1;
+            let sides = [
+                (a, a + 1, row == 0 || !active(column, row - 1)),
+                (a + 1, d + 1, true),
+                (d, d + 1, true),
+                (a, d, column == 0 || !active(column - 1, row)),
+            ];
+            let neighbour = |column: usize, row: usize| {
+                if column < columns && row < rows && active(column, row) {
+                    (row * columns + column) as u32
+                } else {
+                    UNSET
+                }
+            };
+            let side_cells = [
+                [cell as u32, UNSET, UNSET, UNSET],
+                [cell as u32, neighbour(column + 1, row), UNSET, UNSET],
+                [cell as u32, neighbour(column, row + 1), UNSET, UNSET],
+                [cell as u32, UNSET, UNSET, UNSET],
+            ];
+            for (side, (from, to, _)) in sides.into_iter().enumerate().filter(|(_, (_, _, drawn))| *drawn) {
+                let node = |corner: usize| (corner % (columns + 1), corner / (columns + 1));
+                if let Some(segments) = self.cut_side(cell, node(from), node(to), &u_edges, &v_edges) {
+                    for ends in segments {
+                        for height in [|end: &CutPoint| end.roof, |end: &CutPoint| end.floor] {
+                            let [one, other] = ends.map(|end| {
+                                vertices.push(mesh_vertex(self.lattice.to_world(end.plan).extend(height(&end))));
+                                vertices.len() as u32 - 1
+                            });
+                            lattice.push([one, other]);
+                            lattice_cells.push(side_cells[side]);
+                        }
+                    }
+                    continue;
+                }
+                lattice.push([roof_at[from], roof_at[to]]);
+                lattice_cells.push(side_cells[side]);
+                if !(flat(from) && flat(to)) {
+                    lattice.push([floor_at[from], floor_at[to]]);
+                    lattice_cells.push(side_cells[side]);
+                }
+            }
+            for corner in [a, a + 1, d + 1, d] {
+                if !std::mem::replace(&mut seen[corner], true) && !flat(corner) {
+                    let roof = place(&mut vertices, &mut roof_at, &self.roof, corner);
+                    let floor = place(&mut vertices, &mut floor_at, &self.floor, corner);
+                    lattice.push([roof, floor]);
+                    let (node_column, node_row) = (corner % (columns + 1), corner / (columns + 1));
+                    let mut around = [UNSET; 4];
+                    let mut taken = 0;
+                    for (dc, dr) in [(1, 1), (0, 1), (1, 0), (0, 0)] {
+                        if node_column >= dc && node_row >= dr {
+                            let found = neighbour(node_column - dc, node_row - dr);
+                            if found != UNSET {
+                                around[taken] = found;
+                                taken += 1;
+                            }
+                        }
+                    }
+                    lattice_cells.push(around);
+                }
+            }
         }
         let (walls, wall_faces) = self.outline_walls();
         let offset = vertices.len() as u32;
@@ -763,13 +1260,20 @@ impl PrismoidGrid {
                 [[first, first + 2], [first + 1, first + 3]]
             })
             .collect();
-        Some(PrismoidMesh { vertices, faces, outline })
+        Some(PrismoidMesh {
+            vertices,
+            faces,
+            outline,
+            lattice,
+            lattice_cells,
+        })
     }
 
     /// A surface whose height is the vertical thickness with `None`: the
     /// roof's triangles of [`Self::closed_mesh`] with z = roof less floor at
-    /// each corner. With `Some(index)`, one set of values: a node at the
-    /// centre of every active cell holding a finite value, z the value, and
+    /// each corner, or at each point of a cut cell's triangles. With
+    /// `Some(index)`, one set of values: a node at the centre of every
+    /// active cell holding a finite value, z the value, and
     /// two triangles on each 2 by 2 block of such cells, so a cell without a
     /// value leaves a hole. `None` with no face, or an `index` naming no
     /// values.
@@ -789,10 +1293,34 @@ impl PrismoidGrid {
                     }
                     at[corner]
                 };
-                quads(columns, rows, |column, row| {
+                let mut faces = quads(columns, rows, |column, row| {
                     let cell = row * columns + column;
-                    self.active[cell].then(|| self.cell_corners(cell).map(&mut place))
-                })
+                    (self.active[cell] && self.cut.cell_index(cell).is_none()).then(|| self.cell_corners(cell).map(&mut place))
+                });
+                let mut cut_at = vec![UNSET; self.cut.points.len()];
+                for cell in &self.cut.cells {
+                    if !self.active[*cell as usize] {
+                        continue;
+                    }
+                    let Some(index) = self.cut.cell_index(*cell as usize) else { continue };
+                    for triangle in self.cut.indices_at(index) {
+                        let [a, b, c] = triangle.map(|point| self.cut.points[point as usize].plan);
+                        let [x, y, z] = if (b - a).perp_dot(c - a) >= 0.0 {
+                            *triangle
+                        } else {
+                            [triangle[0], triangle[2], triangle[1]]
+                        };
+                        faces.push([x, y, z].map(|point| {
+                            if cut_at[point as usize] == UNSET {
+                                cut_at[point as usize] = vertices.len() as u32;
+                                let held = self.cut.points[point as usize];
+                                vertices.push(mesh_vertex(self.lattice.to_world(held.plan).extend(held.roof - held.floor)));
+                            }
+                            cut_at[point as usize]
+                        }));
+                    }
+                }
+                faces
             }
             Some(index) => {
                 let values = &self.cell_values.get(index)?.values;
@@ -817,7 +1345,8 @@ impl PrismoidGrid {
     /// lattice's frame: x along `u` and y along `v` from the origin, z the
     /// elevation. Top and bottom are the roof's and floor's mean heights over
     /// the two triangles [`Self::closed_mesh`] draws, so a box holds its
-    /// prismoid's volume. A cell whose box has no height is left out.
+    /// prismoid's volume; for a prismoid a trim cut, its cut's means. A cell
+    /// whose box has no height is left out.
     pub(crate) fn blocks(&self) -> Vec<(usize, BlockBounds)> {
         let (u_edges, v_edges) = (edges(&self.lattice.u_sizes), edges(&self.lattice.v_sizes));
         let mut blocks = Vec::new();
@@ -836,11 +1365,33 @@ impl PrismoidGrid {
         let mean = |heights: &[f64], [a, b, c, d]: [usize; 4]| (2.0 * heights[a] + heights[b] + 2.0 * heights[c] + heights[d]) / 6.0;
         let (column, row) = (cell % columns, cell / columns);
         let corners = self.cell_corners(cell);
-        let (top, bottom) = (mean(&self.roof, corners), mean(&self.floor, corners));
+        let [top, bottom] = self.cut.mean(cell).unwrap_or_else(|| [mean(&self.roof, corners), mean(&self.floor, corners)]);
         (top > bottom).then(|| BlockBounds {
             lower: DVec3::new(u_edges[column], v_edges[row], bottom),
             upper: DVec3::new(u_edges[column + 1], v_edges[row + 1], top),
         })
+    }
+
+    /// A cell's eight corner heights, in [`CORNER_HEIGHT_COLUMNS`] order (roof
+    /// a, b, c, d, then floor a, b, c, d): the nodes' heights, and for a cut
+    /// cell its box, the kept roof's mean at all four roof corners and the
+    /// kept floor's mean at all four floor corners, so its two prisms hold
+    /// exactly the cell's kept volume.
+    pub(crate) fn cell_corner_heights(&self, cell: usize) -> [f64; 8] {
+        if let Some([roof, floor]) = self.cut.mean(cell) {
+            return [roof, roof, roof, roof, floor, floor, floor, floor];
+        }
+        let [a, b, c, d] = self.cell_corners(cell);
+        [
+            self.roof[a],
+            self.roof[b],
+            self.roof[c],
+            self.roof[d],
+            self.floor[a],
+            self.floor[b],
+            self.floor[c],
+            self.floor[d],
+        ]
     }
 
     /// The corner nodes of a cell, in [`CORNER_HEIGHT_COLUMNS`] order.
@@ -932,6 +1483,10 @@ impl PrismoidGrid {
             if !self.active[cell] {
                 continue;
             }
+            if let Some(index) = self.cut.cell_index(cell) {
+                crossings.extend(self.cut_crossings(cell, index, (point, along, start, slope), [from, to], shortest));
+                continue;
+            }
             let ends = [from, to].map(|stop| point + along * stop);
             let [first, last] = ends.map(|plan| {
                 let local = lattice.local_in(column, row, plan, &u_edges, &v_edges);
@@ -954,26 +1509,93 @@ impl PrismoidGrid {
         crossings
     }
 
+    /// The crossings of a trace through a cut cell, cut triangle by
+    /// triangle: one per run of kept ground along it, in order. The trace is
+    /// `(point, along, start, slope)`: its origin and unit direction in plan,
+    /// and the same in the lattice's frame; `span` is the stretch of it inside
+    /// the cell.
+    fn cut_crossings(&self, cell: usize, index: usize, (point, along, start, slope): (DVec2, DVec2, DVec2, DVec2), span: [f64; 2], shortest: f64) -> Vec<SectionCrossing> {
+        const LEVEL: f64 = 1e-12;
+        let tolerance = crate::model::kernel::XY_TOL;
+        // The stretch of the trace in each triangle, with the kept roof and
+        // floor at each end.
+        let mut stretches: Vec<(f64, f64, [f64; 2], [f64; 2])> = Vec::new();
+        for triangle in self.cut.triangles_at(index) {
+            let plans = triangle.map(|held| held.plan);
+            let facing = (plans[1] - plans[0]).perp_dot(plans[2] - plans[0]).signum();
+            let [mut low, mut high] = span;
+            for (one, other) in [(0, 1), (1, 2), (2, 0)] {
+                let edge = plans[other] - plans[one];
+                let length = edge.length();
+                let (level, rate) = (facing * edge.perp_dot(start - plans[one]) / length, facing * edge.perp_dot(slope) / length);
+                if rate.abs() <= LEVEL {
+                    if level < -tolerance {
+                        high = f64::NEG_INFINITY;
+                    }
+                } else {
+                    let bound = -level / rate;
+                    if rate > 0.0 {
+                        low = low.max(bound);
+                    } else {
+                        high = high.min(bound);
+                    }
+                }
+            }
+            if high - low <= shortest {
+                continue;
+            }
+            let heights = [low, high].map(|stop| {
+                let weights = barycentric(plans, start + slope * stop);
+                let blend = |value: fn(&CutPoint) -> f64| weights.iter().zip(&triangle).map(|(weight, held)| weight * value(held)).sum::<f64>();
+                (blend(|held| held.roof), blend(|held| held.floor))
+            });
+            stretches.push((low, high, [heights[0].0, heights[0].1], [heights[1].0, heights[1].1]));
+        }
+        stretches.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Stretches that meet or overlap are one run of kept ground.
+        let mut runs: Vec<Vec<(f64, f64, f64)>> = Vec::new();
+        for (low, high, [roof_low, floor_low], [roof_high, floor_high]) in stretches {
+            match runs.last_mut() {
+                Some(run) if low <= run.last().map_or(f64::NEG_INFINITY, |end| end.0) + tolerance => {
+                    if run.last().is_some_and(|end| high > end.0) {
+                        run.push((high, roof_high, floor_high));
+                    }
+                }
+                _ => runs.push(vec![(low, roof_low, floor_low), (high, roof_high, floor_high)]),
+            }
+        }
+        runs.into_iter()
+            .map(|run| SectionCrossing {
+                cell,
+                along: [run[0].0, run[run.len() - 1].0],
+                points: run
+                    .into_iter()
+                    .map(|(stop, roof, floor)| SectionPoint {
+                        plan: point + along * stop,
+                        roof,
+                        floor,
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
     /// Roof and floor over a plan point in a cell, on the triangles
-    /// [`Self::closed_mesh`] draws: with corners a, b (along `u`), c and d
-    /// (along `v`), `[a, b, c]` where the point is at least as far across the
-    /// cell along `u` as along `v`, else `[a, c, d]`.
+    /// [`Self::closed_mesh`] draws (on a cut cell, on its cut triangles, the
+    /// nearest point of them where the trim took the ground away): with
+    /// corners a, b (along `u`), c and d (along `v`), `[a, b, c]` where the
+    /// point is at least as far across the cell along `u` as along `v`, else
+    /// `[a, c, d]`.
     fn heights_at(&self, cell: usize, plan: DVec2, u_edges: &[f64], v_edges: &[f64]) -> (f64, f64) {
         let lattice = &self.lattice;
+        if let Some((roof, floor, _)) = self.cut.cell_index(cell).and_then(|index| self.cut.read(index, lattice.to_lattice(plan))) {
+            return (roof, floor);
+        }
         let columns = lattice.columns();
         let (column, row) = (cell % columns, cell / columns);
         let local = lattice.local_in(column, row, plan, u_edges, v_edges).clamp(DVec2::ZERO, DVec2::ONE);
-        let (fs, ft) = (local.x, local.y);
-        let a = row * (columns + 1) + column;
-        let d = a + columns + 1;
-        let (b, c) = (a + 1, d + 1);
-        let height = |z: &[f64]| {
-            if fs >= ft {
-                z[a] + fs * (z[b] - z[a]) + ft * (z[c] - z[b])
-            } else {
-                z[a] + ft * (z[d] - z[a]) + fs * (z[c] - z[d])
-            }
-        };
+        let corners = self.cell_corners(cell);
+        let height = |z: &[f64]| height_in(z, corners, local);
         (height(&self.roof), height(&self.floor))
     }
 
@@ -981,6 +1603,9 @@ impl PrismoidGrid {
     /// takes for a plan point in a cell.
     fn roof_slope_in(&self, cell: usize, plan: DVec2, u_edges: &[f64], v_edges: &[f64]) -> DVec2 {
         let lattice = &self.lattice;
+        if let Some((_, _, gradient)) = self.cut.cell_index(cell).and_then(|index| self.cut.read(index, lattice.to_lattice(plan))) {
+            return lattice.u * gradient.x + lattice.v * gradient.y;
+        }
         let columns = lattice.columns();
         let (column, row) = (cell % columns, cell / columns);
         let local = lattice.local_in(column, row, plan, u_edges, v_edges).clamp(DVec2::ZERO, DVec2::ONE);
@@ -989,9 +1614,17 @@ impl PrismoidGrid {
         lattice.u * (along_u / lattice.u_sizes[column]) + lattice.v * (along_v / lattice.v_sizes[row])
     }
 
+    /// Whether a plan point lies in the part of a cut cell the trim took
+    /// away, so that nothing is read there (the drawing's nearest-point read
+    /// is for drawing only).
+    fn cut_misses(&self, cell: usize, plan: DVec2) -> bool {
+        self.cut.cell_index(cell).is_some_and(|index| !self.cut.covers(index, self.lattice.to_lattice(plan)))
+    }
+
     /// The roof, floor and roof slope over a plan point, on the triangles
-    /// [`Self::closed_mesh`] draws; why not, off the lattice or on a cell
-    /// that is not active.
+    /// [`Self::closed_mesh`] draws, and nothing in the part of a cut cell the
+    /// trim took away; why not, off the lattice or on a cell that is not
+    /// active.
     pub(crate) fn reading_at(&self, plan: DVec2) -> std::result::Result<PlanReading, PlanMiss> {
         let lattice = &self.lattice;
         let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));
@@ -1001,6 +1634,9 @@ impl PrismoidGrid {
             return Err(PlanMiss::Masked);
         }
         if !self.active[cell] {
+            return Err(PlanMiss::Inactive);
+        }
+        if self.cut_misses(cell, plan) {
             return Err(PlanMiss::Inactive);
         }
         let (roof, floor) = self.heights_at(cell, plan, &u_edges, &v_edges);
@@ -1021,7 +1657,7 @@ impl PrismoidGrid {
         let plan = at.truncate();
         let (column, row) = lattice.cell_at_in(plan, &u_edges, &v_edges)?;
         let cell = row * lattice.columns() + column;
-        if !self.active[cell] {
+        if !self.active[cell] || self.cut_misses(cell, plan) {
             return None;
         }
         let (roof, floor) = self.heights_at(cell, plan, &u_edges, &v_edges);
@@ -1089,13 +1725,18 @@ impl PrismoidGrid {
     }
 
     /// Thickness at every corner as a position from 0 to 1 across `range`,
-    /// 0.5 where the range is flat. `None` unless the lattice is regular: the
-    /// map to the texture is affine, and a tensor lattice's corners are not
-    /// evenly spaced.
+    /// 0.5 where the range is flat. With a cut prismoid, instead the kept
+    /// thickness at four texels along each cell side (centres on the quarter
+    /// lines), so colour reaches zero where the kept ground ends. `None`
+    /// unless the lattice is regular: the map to the texture is affine, and a
+    /// tensor lattice's corners are not evenly spaced.
     pub(crate) fn thickness_map(&self, range: (f64, f64), max_side: u32) -> Option<ThicknessMap> {
         let lattice = &self.lattice;
         if !lattice.is_regular() {
             return None;
+        }
+        if !self.cut.is_empty() {
+            return Some(self.cut_thickness_map(range, max_side));
         }
         // A side too long for a texture keeps every `step`-th corner, its
         // last texel clamped to the last corner.
@@ -1113,8 +1754,52 @@ impl PrismoidGrid {
         Some(ThicknessMap {
             size: [width as u32, height as u32],
             positions,
-            world_to_uv: texel_world_to_uv(lattice, along_u, along_v, 0.5),
+            world_to_uv: texel_world_to_uv(lattice, along_u, along_v, 1, 0.5),
         })
+    }
+
+    /// [`Self::thickness_map`] of a regular lattice with cut prismoids: a
+    /// texel on every quarter line of a cell side, corners included; a cut
+    /// cell's from its triangles, any other from its corners' triangles.
+    fn cut_thickness_map(&self, range: (f64, f64), max_side: u32) -> ThicknessMap {
+        use rayon::prelude::*;
+        const QUARTERS: usize = 4;
+        let lattice = &self.lattice;
+        let (columns, rows) = (lattice.columns(), lattice.rows());
+        let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));
+        let (along_u, along_v) = (texel_fit(QUARTERS * columns, max_side, 1), texel_fit(QUARTERS * rows, max_side, 1));
+        let ((column_step, width), (row_step, height)) = (along_u, along_v);
+        // The cell a quarter line lies in, the one beyond it on a cell edge,
+        // and where in it.
+        let place = |quarter: usize, cells: usize| {
+            let cell = (quarter / QUARTERS).min(cells - 1);
+            (cell, (quarter - QUARTERS * cell) as f64 / QUARTERS as f64)
+        };
+        let positions = (0..height)
+            .into_par_iter()
+            .flat_map_iter(|texel_row| {
+                let (row, local_v) = place((texel_row * row_step).min(QUARTERS * rows), rows);
+                let (u_edges, v_edges) = (&u_edges, &v_edges);
+                (0..width).map(move |texel_column| {
+                    let (column, local_u) = place((texel_column * column_step).min(QUARTERS * columns), columns);
+                    let (cell, local) = (row * columns + column, DVec2::new(local_u, local_v));
+                    let at = DVec2::new(u_edges[column] + local.x * lattice.u_sizes[column], v_edges[row] + local.y * lattice.v_sizes[row]);
+                    let (roof, floor) = match self.cut.cell_index(cell) {
+                        Some(index) => self.cut.read(index, at).map_or((0.0, 0.0), |(roof, floor, _)| (roof, floor)),
+                        None => {
+                            let corners = self.cell_corners(cell);
+                            (height_in(&self.roof, corners, local), height_in(&self.floor, corners, local))
+                        }
+                    };
+                    ramp_position(roof - floor, range)
+                })
+            })
+            .collect();
+        ThicknessMap {
+            size: [width as u32, height as u32],
+            positions,
+            world_to_uv: texel_world_to_uv(lattice, along_u, along_v, QUARTERS, 0.5),
+        }
     }
 
     /// One cell value as positions from 0 to 1 across `range` (0.5 where the
@@ -1169,7 +1854,7 @@ impl PrismoidGrid {
         Some(CellValueMap {
             size: [width as u32, height as u32],
             positions,
-            world_to_uv: texel_world_to_uv(lattice, along_u, along_v, 1.0),
+            world_to_uv: texel_world_to_uv(lattice, along_u, along_v, 1, 1.0),
         })
     }
 
@@ -1219,6 +1904,10 @@ impl PrismoidGrid {
                 let height = self.roof[corner] - self.floor[corner];
                 thickness = Some(thickness.map_or((height, height), |(min, max)| (min.min(height), max.max(height))));
             }
+            for point in self.cut.triangles_of(cell).into_iter().flatten().flatten() {
+                let height = point.roof - point.floor;
+                thickness = thickness.map(|(min, max)| (min.min(height), max.max(height)));
+            }
             for (values, spread) in self.cell_values.iter().zip(&mut spreads) {
                 spread.take(values.values[cell]);
             }
@@ -1259,14 +1948,64 @@ impl PrismoidGrid {
         }
     }
 
-    /// Bytes held by the heights, the masks and the cell values.
+    /// The value each lattice line shows, from the active cells sharing it
+    /// (`cells`, one entry per line as [`PrismoidMesh::lattice_cells`]): the
+    /// mean of value `index` (or of thickness with `None`) weighted as
+    /// [`Self::summary_of`] weights qualities, by tonnes where the grid has a
+    /// density, else by volume. Signs are kept. `None` where no cell holds
+    /// both a value and a usable weight.
+    pub(crate) fn wire_values(&self, cells: &[[u32; 4]], index: Option<usize>) -> Vec<Option<f64>> {
+        let (u_edges, v_edges) = (edges(&self.lattice.u_sizes), edges(&self.lattice.v_sizes));
+        let stretch = self.stretch();
+        let density = self.cell_values.iter().find(|values| values.role == CellValueRole::Density);
+        let values = index.map(|index| self.cell_values.get(index));
+        let per_cell: Vec<Option<(f64, f64)>> = (0..self.active.len())
+            .map(|cell| {
+                if !self.active[cell] {
+                    return None;
+                }
+                let (bounds, measure) = self.measure_in(cell, &u_edges, &v_edges, stretch)?;
+                let value = match values {
+                    None => Some(bounds.upper.z - bounds.lower.z),
+                    Some(values) => values?.values[cell],
+                }
+                .filter(|value| value.is_finite())?;
+                let weight = match density {
+                    Some(density) => density.values[cell].map(|value| measure.per_volume(value)),
+                    None => Some(measure.volume()),
+                }
+                .filter(|weight| weight.is_finite() && *weight > 0.0)?;
+                Some((value, weight))
+            })
+            .collect();
+        cells
+            .iter()
+            .map(|line| {
+                let (mut sum, mut weights) = (0.0, 0.0);
+                let mut counted = false;
+                for (value, weight) in line
+                    .iter()
+                    .filter(|cell| **cell != u32::MAX)
+                    .filter_map(|cell| per_cell.get(*cell as usize).copied().flatten())
+                {
+                    sum += value * weight;
+                    weights += weight;
+                    counted = true;
+                }
+                counted.then_some(sum / weights)
+            })
+            .collect()
+    }
+
+    /// Bytes held by the heights, the masks, the cell values and the cut
+    /// prismoids.
     pub(crate) fn estimated_bytes(&self) -> usize {
         let values: usize = self
             .cell_values
             .iter()
             .map(|cell_values| cell_values.name.len() + cell_values.unit.len() + cell_values.values.len() * size_of::<Option<f64>>())
             .sum();
-        (self.roof.len() + self.floor.len()) * size_of::<f64>() + self.active.len() + self.masked.len() + values
+        (self.roof.len() + self.floor.len()) * size_of::<f64>() + self.active.len() + self.masked.len() + values + self.cut.estimated_bytes()
     }
 
     /// A copy with `cells` masked by hand, or with `mask` false unmasked, and
@@ -1286,13 +2025,722 @@ impl PrismoidGrid {
         }
         grid.map(|grid| (grid, changed))
     }
+
+    /// The cells a trim takes: the active ones and those masked by hand.
+    fn taken(&self) -> Vec<bool> {
+        self.active.iter().zip(&self.masked).map(|(active, masked)| *active || *masked).collect()
+    }
+
+    /// `read` at every corner node (at `plan`) of the cells `taken` marks,
+    /// rows in parallel.
+    fn read_trim_nodes(
+        &self,
+        read: &(impl Fn(&mut Vec<usize>, DVec2) -> SurfaceAt + Sync),
+        taken: &[bool],
+        plan: &[DVec2],
+        cancel: &CancelFlag,
+    ) -> Result<Vec<Option<SurfaceAt>>, TrimRefusal> {
+        use rayon::prelude::*;
+        let (columns, rows) = (self.lattice.columns(), self.lattice.rows());
+        let mut needed = vec![false; plan.len()];
+        for cell in (0..taken.len()).filter(|cell| taken[*cell]) {
+            for node in self.cell_corners(cell) {
+                needed[node] = true;
+            }
+        }
+        Ok((0..=rows)
+            .into_par_iter()
+            .map_init(Vec::new, |stack, row| {
+                (!cancel.is_cancelled()).then(|| {
+                    (row * (columns + 1)..(row + 1) * (columns + 1))
+                        .map(|node| needed[node].then(|| read(stack, plan[node])))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or(TrimRefusal::Cancelled)?
+            .concat())
+    }
+
+    /// A copy trimmed to a surface, cut exactly along it. `read` gives the
+    /// surface at a plan point (with a search stack of its own per thread),
+    /// and `overlaps` hands its visitor each face of the surface over a
+    /// world plan triangle with the exact plan overlap of the two (its
+    /// points' heights mean nothing). A plan overlap may exceed its triangle
+    /// by `slack` of area before it is a fold.
+    ///
+    /// The surface is read at every corner node, held between the floor and
+    /// the roof, and taken as the roof with `keep_below`, else as the floor.
+    /// Each active or hand-masked cell is cut over its two lattice triangles
+    /// (or the triangles an earlier trim cut it into) against every surface
+    /// face over them: left out where the surface does not cover it, gone
+    /// where the surface keeps none of it, kept as it was where it keeps
+    /// all, and otherwise cut, its kept roof (or floor) following the
+    /// surface inside it. The two sides' kept thicknesses add up to the
+    /// source's at every point. Any plan point where the surface gives two
+    /// heights, or a cut grid past `budget` triangles, refuses the whole trim.
+    ///
+    /// Where the surface lies within `allowance` metres of a roof or floor it
+    /// is taken as exactly on it (the nearer one where two are that close),
+    /// before the cut; 0 takes nothing as touching. The plan area taken so
+    /// is in [`Trimmed::touching_area`].
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn trimmed(
+        &self,
+        read: impl Fn(&mut Vec<usize>, DVec2) -> SurfaceAt + Sync,
+        overlaps: impl Fn(&mut Vec<usize>, &mut Vec<DVec3>, [DVec2; 3], &mut dyn FnMut([DVec3; 3], &[DVec3])) + Sync,
+        slack: f64,
+        keep_below: bool,
+        allowance: f64,
+        budget: usize,
+        cancel: &CancelFlag,
+        progress: &Phase,
+    ) -> Result<Trimmed, TrimRefusal> {
+        use std::sync::atomic::AtomicBool;
+
+        use rayon::prelude::*;
+        let lattice = &self.lattice;
+        let (columns, rows, cells) = (lattice.columns(), lattice.rows(), lattice.cell_count());
+        let plan = lattice.corners();
+        let taken = self.taken();
+        let nodes = self.read_trim_nodes(&read, &taken, &plan, cancel)?;
+        progress.set_fraction(0.1);
+        let (mut roof, mut floor) = (self.roof.clone(), self.floor.clone());
+        for (node, at) in nodes.iter().enumerate() {
+            if let Some(SurfaceAt::At(z)) = at {
+                let (node_roof, node_floor) = (self.roof[node], self.floor[node]);
+                let height = if allowance > 0.0 {
+                    Snap::of(*z, node_roof, node_floor, allowance).level_of(*z, node_roof, node_floor)
+                } else {
+                    *z
+                };
+                let height = height.clamp(node_floor, node_roof);
+                if keep_below {
+                    roof[node] = height;
+                } else {
+                    floor[node] = height;
+                }
+            }
+        }
+        let folded_nodes: Vec<DVec2> = nodes.iter().zip(&plan).filter(|(at, _)| **at == Some(SurfaceAt::Folded)).map(|(_, point)| *point).collect();
+        let (stop, stored, swept) = (AtomicBool::new(false), AtomicUsize::new(0), AtomicUsize::new(0));
+        let sweep = progress.phase(0.1, 0.9);
+        let swept_rows: Option<Vec<Vec<(usize, CellCut, f64)>>> = (0..rows)
+            .into_par_iter()
+            .map_init(CutScratch::default, |scratch, row| {
+                let mut found = Vec::new();
+                for cell in (row * columns..(row + 1) * columns).filter(|cell| taken[*cell]) {
+                    if stop.load(Ordering::Relaxed) || cancel.is_cancelled() {
+                        return None;
+                    }
+                    let beyond = self.cell_corners(cell).iter().any(|node| nodes[*node] == Some(SurfaceAt::Beyond));
+                    scratch.touching = 0.0;
+                    let outcome = if beyond {
+                        CellCut::Beyond
+                    } else {
+                        self.cut_cell(cell, &plan, &overlaps, slack, keep_below, allowance, scratch)
+                    };
+                    let held = match &outcome {
+                        CellCut::Whole => self.cut.cell_index(cell).map_or(0, |index| (self.cut.starts[index + 1] - self.cut.starts[index]) as usize),
+                        CellCut::Cut(_, triangles, _) => triangles.len(),
+                        _ => 0,
+                    };
+                    if held > 0 && stored.fetch_add(held, Ordering::Relaxed) + held > budget {
+                        stop.store(true, Ordering::Relaxed);
+                        return None;
+                    }
+                    found.push((cell, outcome, scratch.touching));
+                }
+                sweep.set_items(swept.fetch_add(1, Ordering::Relaxed) as u64 + 1, rows as u64);
+                Some(found)
+            })
+            .collect();
+        if stop.load(Ordering::Relaxed) {
+            return Err(TrimRefusal::TooLarge { budget });
+        }
+        let swept_rows = swept_rows.ok_or(TrimRefusal::Cancelled)?;
+        let folded_cells = swept_rows
+            .iter()
+            .flatten()
+            .filter(|(_, outcome, _)| matches!(outcome, CellCut::Folded))
+            .map(|(cell, _, _)| *cell);
+        let mut folds = folded_nodes.into_iter().chain(folded_cells.map(|cell| lattice.cell_centre(cell % columns, cell / columns)));
+        if let Some(first) = folds.next() {
+            return Err(TrimRefusal::Folded { count: folds.count() + 1, first });
+        }
+        let mut trimmed = Trimmed {
+            grid: None,
+            whole: 0,
+            cut: 0,
+            gone: 0,
+            beyond: 0,
+            reached: self.summary_of(std::iter::empty()),
+            triangles: 0,
+            roof_contacts: Vec::new(),
+            floor_contacts: Vec::new(),
+            touching_area: 0.0,
+        };
+        let (mut active, mut masked) = (vec![false; cells], vec![false; cells]);
+        let mut reached = vec![false; cells];
+        let mut cut_cells = Vec::new();
+        let mut made = Vec::new();
+        for (cell, outcome, touching) in swept_rows.into_iter().flatten() {
+            let was_active = usize::from(self.active[cell]);
+            if self.active[cell] {
+                trimmed.touching_area += touching;
+            }
+            match outcome {
+                CellCut::Beyond => {
+                    trimmed.beyond += was_active;
+                    continue;
+                }
+                CellCut::Folded => continue,
+                CellCut::Gone => trimmed.gone += was_active,
+                CellCut::Whole => {
+                    (active[cell], masked[cell]) = (self.active[cell], self.masked[cell]);
+                    trimmed.whole += was_active;
+                    if let Some(triangles) = self.cut.triangles_of(cell) {
+                        let points: Vec<CutPoint> = triangles.flatten().collect();
+                        let indices = (0..points.len() as u32 / 3).map(|triangle| [3 * triangle, 3 * triangle + 1, 3 * triangle + 2]).collect();
+                        cut_cells.push((cell, points, indices));
+                    }
+                }
+                CellCut::Cut(points, triangles, contacts) => {
+                    (active[cell], masked[cell]) = (self.active[cell], self.masked[cell]);
+                    trimmed.cut += was_active;
+                    cut_cells.push((cell, points, triangles));
+                    made.push((cell, contacts));
+                }
+            }
+            reached[cell] = self.active[cell];
+        }
+        let cut = CutPrismoids::build(lattice, cut_cells);
+        // Triangles too small to keep leave a cut with nothing: gone.
+        for (cell, contacts) in made {
+            match cut.cell_index(cell) {
+                Some(index) => {
+                    trimmed.triangles += (cut.starts[index + 1] - cut.starts[index]) as usize;
+                    if self.active[cell] {
+                        trimmed.roof_contacts.extend(contacts.roof);
+                        trimmed.floor_contacts.extend(contacts.floor);
+                    }
+                }
+                None => {
+                    let was_active = usize::from(self.active[cell]);
+                    (active[cell], masked[cell]) = (false, false);
+                    (trimmed.cut, trimmed.gone) = (trimmed.cut - was_active, trimmed.gone + was_active);
+                }
+            }
+        }
+        trimmed.reached = self.summary_of((0..cells).filter(|cell| reached[*cell]));
+        if active.contains(&true) {
+            let grid = PrismoidGrid {
+                lattice: lattice.clone(),
+                roof,
+                floor,
+                active,
+                masked,
+                cell_values: self.cell_values.clone(),
+                cut,
+            };
+            grid.check().map_err(TrimRefusal::Malformed)?;
+            trimmed.grid = Some(grid);
+        }
+        progress.set_fraction(1.0);
+        Ok(trimmed)
+    }
+
+    /// What the surface does to one cell, over its pieces (see
+    /// [`Self::trimmed`]): the plan overlaps of each piece with the surface's
+    /// faces, then whole, gone or cut by what height the surface keeps at
+    /// their points. With an `allowance` above 0 the surface is first taken
+    /// as on a roof or floor within that distance (see [`Snap`]), and the plan
+    /// area so taken is left in `scratch.touching`.
+    #[allow(clippy::too_many_arguments)]
+    fn cut_cell(
+        &self,
+        cell: usize,
+        plan: &[DVec2],
+        overlaps: &(impl Fn(&mut Vec<usize>, &mut Vec<DVec3>, [DVec2; 3], &mut dyn FnMut([DVec3; 3], &[DVec3])) + Sync),
+        slack: f64,
+        keep_below: bool,
+        allowance: f64,
+        scratch: &mut CutScratch,
+    ) -> CellCut {
+        let lattice = &self.lattice;
+        let CutScratch {
+            stack,
+            overlap,
+            pieces,
+            verts,
+            polys,
+            touching,
+        } = scratch;
+        pieces.clear();
+        verts.clear();
+        polys.clear();
+        match self.cut.triangles_of(cell) {
+            Some(triangles) => pieces.extend(triangles.map(|triangle| Piece {
+                plan: triangle.map(|point| lattice.origin + lattice.u * point.plan.x + lattice.v * point.plan.y),
+                roof: triangle.map(|point| point.roof),
+                floor: triangle.map(|point| point.floor),
+            })),
+            None => {
+                let [a, b, c, d] = self.cell_corners(cell);
+                pieces.extend([[a, b, c], [a, c, d]].map(|nodes| Piece {
+                    plan: nodes.map(|node| plan[node]),
+                    roof: nodes.map(|node| self.roof[node]),
+                    floor: nodes.map(|node| self.floor[node]),
+                }));
+            }
+        }
+        let (mut least_over_roof, mut most_over_floor) = (f64::INFINITY, f64::NEG_INFINITY);
+        let (mut folded, mut beyond) = (false, false);
+        for (index, piece) in pieces.iter().enumerate() {
+            let area = ((piece.plan[1] - piece.plan[0]).perp_dot(piece.plan[2] - piece.plan[0]) / 2.0).abs();
+            let mut covered = 0.0;
+            overlaps(stack, overlap, piece.plan, &mut |ground, shared| {
+                let ground_plan = ground.map(|point| point.truncate());
+                let ground_z = ground.map(|point| point.z);
+                let start = verts.len();
+                for point in shared {
+                    let at = point.truncate();
+                    let vert = Vert {
+                        plan: at,
+                        roof: piece.at(&piece.roof, at),
+                        floor: piece.at(&piece.floor, at),
+                        ground: height_on(&ground_plan, &ground_z, at),
+                    };
+                    least_over_roof = least_over_roof.min(vert.ground - vert.roof);
+                    most_over_floor = most_over_floor.max(vert.ground - vert.floor);
+                    verts.push(vert);
+                }
+                covered += polygon_area(&verts[start..]);
+                polys.push(Poly {
+                    piece: index,
+                    range: start..verts.len(),
+                    ground_plan,
+                    ground_z,
+                    snap: Snap::None,
+                });
+            });
+            if covered > area * (1.0 + 1e-9) + slack {
+                folded = true;
+                break;
+            }
+            beyond |= covered < area * (1.0 - 1e-9) - slack;
+        }
+        if folded {
+            return CellCut::Folded;
+        }
+        if beyond {
+            return CellCut::Beyond;
+        }
+        if allowance > 0.0 {
+            // Split each overlap into parts on which the surface taken as
+            // touching is linear, and read whole and gone off those.
+            (least_over_roof, most_over_floor) = (f64::INFINITY, f64::NEG_INFINITY);
+            for poly in std::mem::take(polys) {
+                let piece = &pieces[poly.piece];
+                let at = |plan: DVec2| Vert {
+                    plan,
+                    roof: piece.at(&piece.roof, plan),
+                    floor: piece.at(&piece.floor, plan),
+                    ground: height_on(&poly.ground_plan, &poly.ground_z, plan),
+                };
+                let polygon = verts[poly.range.clone()].to_vec();
+                for (part, snap) in snap_parts(&polygon, allowance, &at) {
+                    let start = verts.len();
+                    for vert in part {
+                        let level = snap.level(&vert);
+                        least_over_roof = least_over_roof.min(level - vert.roof);
+                        most_over_floor = most_over_floor.max(level - vert.floor);
+                        verts.push(vert);
+                    }
+                    if snap != Snap::None {
+                        *touching += polygon_area(&verts[start..]);
+                    }
+                    polys.push(Poly {
+                        range: start..verts.len(),
+                        snap,
+                        ..poly.clone()
+                    });
+                }
+            }
+        }
+        let (whole, gone) = if keep_below {
+            (least_over_roof >= -CUT_CONTACT, most_over_floor <= CUT_CONTACT)
+        } else {
+            (most_over_floor <= CUT_CONTACT, least_over_roof >= -CUT_CONTACT)
+        };
+        if whole {
+            return CellCut::Whole;
+        }
+        if gone {
+            return CellCut::Gone;
+        }
+        let pick: fn(f64, f64) -> f64 = if keep_below { f64::min } else { f64::max };
+        let kept = |vert: &Vert, snap: Snap| {
+            let level = snap.level(vert);
+            CutPoint {
+                plan: lattice.to_lattice(vert.plan),
+                roof: pick(vert.roof, level),
+                floor: pick(vert.floor, level),
+            }
+        };
+        let (mut points, mut triangles) = (Vec::new(), Vec::new());
+        let mut contacts = Contacts::default();
+        for poly in polys.iter() {
+            let piece = &pieces[poly.piece];
+            let at = |plan: DVec2| Vert {
+                plan,
+                roof: piece.at(&piece.roof, plan),
+                floor: piece.at(&piece.floor, plan),
+                ground: height_on(&poly.ground_plan, &poly.ground_z, plan),
+            };
+            let whole = &verts[poly.range.clone()];
+            let level = |vert: &Vert| poly.snap.level(vert);
+            if allowance > 0.0 {
+                snap_contacts(whole, poly, piece, allowance, &at, &mut contacts);
+            }
+            contacts.floor.extend(contact_of(whole, |vert| level(vert) - vert.floor, &at));
+            let (under, rest) = split_convex(whole, |vert| level(vert) - vert.floor, &at);
+            contacts.roof.extend(contact_of(&rest, |vert| level(vert) - vert.roof, &at));
+            let (inside, over) = split_convex(&rest, |vert| level(vert) - vert.roof, &at);
+            // Ground taken as on the roof keeps nothing above it: its part
+            // is all `inside`, with no thickness.
+            let keeps = match (keep_below, poly.snap) {
+                (true, _) => [inside, over],
+                (false, Snap::Roof) => [under, Vec::new()],
+                (false, _) => [under, inside],
+            };
+            for part in keeps.iter().filter(|part| part.len() >= 3) {
+                let first = points.len() as u32;
+                points.extend(part.iter().map(|vert| kept(vert, poly.snap)));
+                for index in 1..part.len() as u32 - 1 {
+                    let triangle = [first, first + index, first + index + 1];
+                    if cut_area(triangle.map(|point| points[point as usize])) > 0.0 {
+                        triangles.push(triangle);
+                    }
+                }
+            }
+        }
+        if triangles.is_empty() {
+            CellCut::Gone
+        } else {
+            CellCut::Cut(points, triangles, contacts)
+        }
+    }
 }
 
-/// A prismoid grid as one closed mesh, with the line round its roof and floor.
+/// What a trim does to one cell.
+enum CellCut {
+    Beyond,
+    Folded,
+    Gone,
+    Whole,
+    /// Cut: its own points (plan in the lattice frame) and triangles.
+    Cut(Vec<CutPoint>, Vec<[u32; 3]>, Contacts),
+}
+
+/// Where the surface meets the roofs and floors inside one cut cell, as
+/// world segments at the surface's height there.
+#[derive(Default)]
+struct Contacts {
+    roof: Vec<[DVec3; 2]>,
+    floor: Vec<[DVec3; 2]>,
+}
+
+/// One triangle of a cell in world plan, with the roof and floor at its points.
+struct Piece {
+    plan: [DVec2; 3],
+    roof: [f64; 3],
+    floor: [f64; 3],
+}
+
+impl Piece {
+    /// The linear height `z` gives on this triangle at a plan point.
+    fn at(&self, z: &[f64; 3], at: DVec2) -> f64 {
+        height_on(&self.plan, z, at)
+    }
+}
+
+/// A point of an overlap polygon with the roof, floor and ground there.
+#[derive(Clone, Copy)]
+struct Vert {
+    plan: DVec2,
+    roof: f64,
+    floor: f64,
+    ground: f64,
+}
+
+/// An overlap polygon: its piece, its points in `verts`, its ground face
+/// and the horizon the ground is taken as touching on it.
+#[derive(Clone)]
+struct Poly {
+    piece: usize,
+    range: std::ops::Range<usize>,
+    ground_plan: [DVec2; 3],
+    ground_z: [f64; 3],
+    snap: Snap,
+}
+
+/// The horizon a surface is taken as lying on, where it is within the
+/// trim's allowance of one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Snap {
+    None,
+    Roof,
+    Floor,
+}
+
+impl Snap {
+    /// What the ground height `ground` is taken as over a roof and floor:
+    /// on a horizon it is within `allowance` of, the nearer where it is
+    /// within both (the roof on a tie).
+    fn of(ground: f64, roof: f64, floor: f64, allowance: f64) -> Snap {
+        let (near_roof, near_floor) = ((ground - roof).abs() <= allowance, (ground - floor).abs() <= allowance);
+        match (near_roof, near_floor) {
+            (true, true) if ground >= (roof + floor) / 2.0 => Snap::Roof,
+            (true, true) => Snap::Floor,
+            (true, false) => Snap::Roof,
+            (false, true) => Snap::Floor,
+            (false, false) => Snap::None,
+        }
+    }
+
+    /// The height taken for ground `ground` over a roof and floor.
+    fn level_of(self, ground: f64, roof: f64, floor: f64) -> f64 {
+        match self {
+            Snap::None => ground,
+            Snap::Roof => roof,
+            Snap::Floor => floor,
+        }
+    }
+
+    fn level(self, vert: &Vert) -> f64 {
+        self.level_of(vert.ground, vert.roof, vert.floor)
+    }
+}
+
+/// What each thread of a trim keeps between cells.
+#[derive(Default)]
+struct CutScratch {
+    stack: Vec<usize>,
+    overlap: Vec<DVec3>,
+    pieces: Vec<Piece>,
+    verts: Vec<Vert>,
+    polys: Vec<Poly>,
+    /// The plan area of the cell last cut taken as touching a horizon.
+    touching: f64,
+}
+
+/// A convex overlap polygon cut into parts on each of which the ground taken
+/// as touching a horizon (see [`Snap::of`]) is linear: split along the lines
+/// where the ground is `allowance` over and under the roof and the floor,
+/// and, where it is within both, along the line half way between them.
+fn snap_parts(polygon: &[Vert], allowance: f64, at: &impl Fn(DVec2) -> Vert) -> Vec<(Vec<Vert>, Snap)> {
+    let mut parts: Vec<(Vec<Vert>, bool, bool)> = vec![(polygon.to_vec(), false, false)];
+    for roof in [true, false] {
+        let gap = |vert: &Vert| vert.ground - if roof { vert.roof } else { vert.floor };
+        let mut next = Vec::new();
+        for (part, near_roof, near_floor) in parts {
+            let (not_below, below) = split_convex(&part, |vert| -gap(vert) - allowance, at);
+            let (near, above) = split_convex(&not_below, |vert| gap(vert) - allowance, at);
+            let flags = |near_horizon: bool| if roof { (near_horizon, near_floor) } else { (near_roof, near_horizon) };
+            for (piece, near_horizon) in [(near, true), (below, false), (above, false)] {
+                if piece.len() >= 3 && polygon_area(&piece) > 0.0 {
+                    let (a, b) = flags(near_horizon);
+                    next.push((piece, a, b));
+                }
+            }
+        }
+        parts = next;
+    }
+    let mut snapped = Vec::new();
+    for (part, near_roof, near_floor) in parts {
+        match (near_roof, near_floor) {
+            (false, false) => snapped.push((part, Snap::None)),
+            (true, false) => snapped.push((part, Snap::Roof)),
+            (false, true) => snapped.push((part, Snap::Floor)),
+            (true, true) => {
+                let (roof_nearer, floor_nearer) = split_convex(&part, |vert| -(vert.ground - (vert.roof + vert.floor) / 2.0), at);
+                for (piece, snap) in [(roof_nearer, Snap::Roof), (floor_nearer, Snap::Floor)] {
+                    if piece.len() >= 3 && polygon_area(&piece) > 0.0 {
+                        snapped.push((piece, snap));
+                    }
+                }
+            }
+        }
+    }
+    snapped
+}
+
+/// Whether `point` is in the triangle `triangle` (its edges included).
+fn in_triangle(triangle: &[DVec2; 3], point: DVec2) -> bool {
+    let sides = [0, 1, 2].map(|index| (triangle[(index + 1) % 3] - triangle[index]).perp_dot(point - triangle[index]));
+    sides.iter().all(|side| *side >= 0.0) || sides.iter().all(|side| *side <= 0.0)
+}
+
+/// The subcrop segments on the edges of a part of an overlap where the ground
+/// taken as touching steps across a roof or floor: an edge inside the overlap
+/// with the ground at or over the roof on one side and under it on the
+/// other, or at or under the floor on one side and over it on the other,
+/// where the kept seam begins. Each is given from the side at the horizon.
+fn snap_contacts(part: &[Vert], poly: &Poly, piece: &Piece, allowance: f64, at: &impl Fn(DVec2) -> Vert, contacts: &mut Contacts) {
+    const PROBE: f64 = 1e-6;
+    let centre = part.iter().map(|vert| vert.plan).sum::<DVec2>() / part.len() as f64;
+    for (index, from) in part.iter().enumerate() {
+        let to = &part[(index + 1) % part.len()];
+        let edge = to.plan - from.plan;
+        let length = edge.length();
+        if length < 1e-9 {
+            continue;
+        }
+        let middle = (from.plan + to.plan) / 2.0;
+        let normal = edge.perp() / length;
+        let outward = if normal.dot(middle - centre) >= 0.0 { normal } else { -normal };
+        let probe = middle + outward * PROBE;
+        if !in_triangle(&piece.plan, probe) || !in_triangle(&poly.ground_plan, probe) {
+            continue;
+        }
+        let (here, there) = (at(middle), at(probe));
+        let there_snap = Snap::of(there.ground, there.roof, there.floor, allowance);
+        let (here_level, there_level) = (poly.snap.level(&here), there_snap.level(&there));
+        let end = |vert: &Vert| vert.plan.extend(poly.snap.level(vert));
+        if here_level >= here.roof && there_level < there.roof {
+            contacts.roof.push([end(from), end(to)]);
+        }
+        if here_level <= here.floor && there_level > there.floor {
+            contacts.floor.push([end(from), end(to)]);
+        }
+    }
+}
+
+/// The linear height `z` gives on the triangle `plan` at a point in it.
+fn height_on(plan: &[DVec2; 3], z: &[f64; 3], at: DVec2) -> f64 {
+    let (e1, e2) = (plan[1] - plan[0], plan[2] - plan[0]);
+    let det = e1.perp_dot(e2);
+    if det == 0.0 {
+        return (z[0] + z[1] + z[2]) / 3.0;
+    }
+    let d = at - plan[0];
+    let (l1, l2) = (d.perp_dot(e2) / det, e1.perp_dot(d) / det);
+    z[0] + l1 * (z[1] - z[0]) + l2 * (z[2] - z[0])
+}
+
+/// The plan area of a convex polygon.
+fn polygon_area(points: &[Vert]) -> f64 {
+    let Some(first) = points.first() else { return 0.0 };
+    let twice: f64 = points.windows(2).skip(1).map(|pair| (pair[0].plan - first.plan).perp_dot(pair[1].plan - first.plan)).sum();
+    (twice / 2.0).abs()
+}
+
+/// A convex polygon split by the sign of `d`, linear on it: the points with
+/// `d` at most 0, and those above. A crossing lies on both, its heights read
+/// again by `at` from the planes, so the parts tile the polygon exactly.
+fn split_convex(polygon: &[Vert], d: impl Fn(&Vert) -> f64, at: &impl Fn(DVec2) -> Vert) -> (Vec<Vert>, Vec<Vert>) {
+    let (mut low, mut high) = (Vec::new(), Vec::new());
+    for (index, from) in polygon.iter().enumerate() {
+        let to = &polygon[(index + 1) % polygon.len()];
+        let (d_from, d_to) = (d(from), d(to));
+        (if d_from <= 0.0 { &mut low } else { &mut high }).push(*from);
+        if (d_from <= 0.0) != (d_to <= 0.0) {
+            let crossing = if d_from == 0.0 {
+                *from
+            } else if d_to == 0.0 {
+                *to
+            } else {
+                at(from.plan + (to.plan - from.plan) * (d_from / (d_from - d_to)))
+            };
+            low.push(crossing);
+            high.push(crossing);
+        }
+    }
+    (low, high)
+}
+
+/// The segment where `d`, linear on a convex polygon, is 0 across it, at the
+/// ground height there; none unless `d` changes sign strictly inside the
+/// polygon, or when the segment has no length.
+fn contact_of(polygon: &[Vert], d: impl Fn(&Vert) -> f64, at: &impl Fn(DVec2) -> Vert) -> Option<[DVec3; 2]> {
+    if polygon.len() < 3 || !polygon.iter().any(|vert| d(vert) < 0.0) || !polygon.iter().any(|vert| d(vert) > 0.0) {
+        return None;
+    }
+    let mut ends: Vec<DVec3> = Vec::with_capacity(2);
+    for (index, from) in polygon.iter().enumerate() {
+        let to = &polygon[(index + 1) % polygon.len()];
+        let (d_from, d_to) = (d(from), d(to));
+        let vert = if d_from == 0.0 {
+            *from
+        } else if (d_from < 0.0 && d_to > 0.0) || (d_from > 0.0 && d_to < 0.0) {
+            at(from.plan + (to.plan - from.plan) * (d_from / (d_from - d_to)))
+        } else {
+            continue;
+        };
+        let end = vert.plan.extend(vert.ground);
+        if !ends.iter().any(|other| other.distance(end) < 1e-9) {
+            ends.push(end);
+        }
+    }
+    match ends[..] {
+        [a, b] => Some([a, b]),
+        _ => None,
+    }
+}
+
+/// A prismoid grid trimmed to a surface, and how its active cells fared:
+/// kept with no cut, cut, gone, or beyond the surface.
+#[derive(Debug)]
+pub(crate) struct Trimmed {
+    /// `None` when no active cell is kept.
+    pub(crate) grid: Option<PrismoidGrid>,
+    pub(crate) whole: usize,
+    pub(crate) cut: usize,
+    pub(crate) gone: usize,
+    pub(crate) beyond: usize,
+    /// The source over its active cells the surface reaches.
+    pub(crate) reached: PrismoidGridSummary,
+    /// The triangles the cuts of this trim store, masked cells' too.
+    pub(crate) triangles: usize,
+    /// Where the surface meets the roofs of the cut active cells, in cell
+    /// order, as world segments.
+    pub(crate) roof_contacts: Vec<[DVec3; 2]>,
+    /// Where it meets their floors.
+    pub(crate) floor_contacts: Vec<[DVec3; 2]>,
+    /// The plan area of the active cells over which the surface was taken as
+    /// touching a roof or floor (m2); the volume that could shift is at most
+    /// the allowance times it.
+    pub(crate) touching_area: f64,
+}
+
+/// Why a grid is not trimmed to a surface.
+#[derive(Debug)]
+pub(crate) enum TrimRefusal {
+    /// The surface gives two heights at `count` points, the first at `first`
+    /// in plan.
+    Folded {
+        count: usize,
+        first: DVec2,
+    },
+    Cancelled,
+    /// The trimmed grid failed [`PrismoidGrid::check`].
+    Malformed(anyhow::Error),
+    /// The cuts would hold more than `budget` triangles.
+    TooLarge {
+        budget: usize,
+    },
+}
+
+/// A prismoid grid as one closed mesh, with the line round its roof and floor
+/// and its lattice lines.
 pub(crate) struct PrismoidMesh {
     pub(crate) vertices: Vec<mesh_data::Vertex>,
     pub(crate) faces: Vec<[u32; 3]>,
     pub(crate) outline: Vec<[u32; 2]>,
+    pub(crate) lattice: Vec<[u32; 2]>,
+    /// The active cells sharing each `lattice` line, `u32::MAX` unused.
+    pub(crate) lattice_cells: Vec<[u32; 4]>,
 }
 
 /// Where a vertical plane crosses one active prismoid: the cell, the span of
@@ -1361,10 +2809,11 @@ fn texel_fit(cells: usize, max_side: u32, extra: usize) -> (usize, usize) {
 }
 
 /// The map from world XY to texture coordinates for the steps and texel
-/// counts `texel_fit` gave, the lattice origin `offset` texels in.
-fn texel_world_to_uv(lattice: &Lattice, (column_step, width): (usize, usize), (row_step, height): (usize, usize), offset: f64) -> [f64; 6] {
+/// counts `texel_fit` gave, a step being `parts`th of a cell, the lattice
+/// origin `offset` texels in.
+fn texel_world_to_uv(lattice: &Lattice, (column_step, width): (usize, usize), (row_step, height): (usize, usize), parts: usize, offset: f64) -> [f64; 6] {
     let along = |axis: DVec2, size: f64, step: usize, count: usize| {
-        let (spacing, count) = (size * step as f64, count as f64);
+        let (spacing, count) = (size / parts as f64 * step as f64, count as f64);
         [
             axis.x / (spacing * count),
             axis.y / (spacing * count),
@@ -1514,6 +2963,10 @@ pub(crate) struct OpenPrismoidGrid {
     pub(crate) color_by: PrismoidColorBy,
     /// `None` for a grid built on its own.
     pub(crate) stratum: Option<Stratum>,
+    /// `None` for a grid built before records were kept.
+    pub(crate) built_from: Option<BuildRecord>,
+    /// Drawn as a shaded body rather than as its lattice lines.
+    pub(crate) shaded: bool,
 }
 
 impl OpenPrismoidGrid {
@@ -1536,6 +2989,8 @@ pub(crate) struct LoadedPrismoidGrid {
     pub(crate) summary: PrismoidGridSummary,
     pub(crate) color_by: PrismoidColorBy,
     pub(crate) stratum: Option<Stratum>,
+    pub(crate) built_from: Option<BuildRecord>,
+    pub(crate) shaded: bool,
 }
 
 /// How a node's roof and floor stand, from their heights (NaN where
@@ -1620,7 +3075,7 @@ pub(crate) struct AddedValues {
 }
 
 /// What two prismoid grids are compared by.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum Quantity {
     /// A cell's box height, the inspector's mean thickness.
     VerticalThickness,
@@ -1688,7 +3143,10 @@ const RESERVED_NAMES: [&str; 4] = ["volume", "vertical_thickness", "prismoid_gri
 /// The derived block model's columns holding each block's prismoid: roof,
 /// then floor RL at corners a, b, c, d, anticlockwise from above with a at
 /// the lattice's lowest `u` and `v`; prisms abc and acd split on the a-c
-/// diagonal, as [`PrismoidGrid::closed_mesh`] draws them.
+/// diagonal, as [`PrismoidGrid::closed_mesh`] draws them. A block of a
+/// prismoid a trim cut holds its box: the kept roof's and floor's means at
+/// all four corners, as four corners cannot hold a cut shape (the cut shape
+/// stays in the grid), so the two prisms hold the block's volume.
 pub(crate) const CORNER_HEIGHT_COLUMNS: [&str; 8] = ["roof_a", "roof_b", "roof_c", "roof_d", "floor_a", "floor_b", "floor_c", "floor_d"];
 
 /// Whether `value` is a whole number, zero included, within `NODE_TOLERANCE`.
@@ -1973,4 +3431,753 @@ pub(crate) fn check_difference_name(held: &[(&str, CellValueRole)], other: &str,
         role: CellValueRole::Quality,
     };
     check_marks(held, &[mark])
+}
+
+/// A surface a grid was built from: its name for the reader, its geometry
+/// token to find it again after a rename, a reopen or a merge.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct SourceStamp {
+    pub(crate) name: String,
+    pub(crate) geometry: GeometryVersion,
+}
+
+/// Where one of a grid's values came from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ValueSource {
+    pub(crate) value: String,
+    pub(crate) from: ValueFrom,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) enum ValueFrom {
+    /// Read from a quality surface, as the grid's density when `density`.
+    Surface { surface: SourceStamp, density: bool },
+    /// A difference against the grid of this name, by `of`; `None` in a
+    /// record written before it was kept.
+    Difference {
+        other: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        of: Option<Quantity>,
+    },
+}
+
+/// What a prismoid grid was built from and when, as it stood then.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct BuildRecord {
+    pub(crate) roof: SourceStamp,
+    pub(crate) floor: SourceStamp,
+    /// The surfaces' node spacing, metres.
+    pub(crate) spacing: f64,
+    /// Surface nodes to a cell side.
+    pub(crate) step: NonZeroUsize,
+    pub(crate) envelope: Option<ModelEnvelope>,
+    /// RFC 3339, local time with its offset.
+    pub(crate) built: String,
+    /// The application and its version, as a saved file names them.
+    pub(crate) application: String,
+    #[serde(default)]
+    pub(crate) values: Vec<ValueSource>,
+    /// The correction records bearing on the grid at the build, one print
+    /// per drill-hole set read; `None` in a record written before prints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) holes: Option<Vec<SetPrint>>,
+}
+
+impl BuildRecord {
+    /// A record dated now, holding no values yet.
+    pub(crate) fn now(roof: SourceStamp, floor: SourceStamp, spacing: f64, step: NonZeroUsize, envelope: Option<ModelEnvelope>, holes: Vec<SetPrint>) -> Self {
+        Self {
+            roof,
+            floor,
+            spacing,
+            step,
+            envelope,
+            built: chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+            application: format!("Incline {}", env!("CARGO_PKG_VERSION")),
+            values: Vec::new(),
+            holes: Some(holes),
+        }
+    }
+
+    /// Note where `sources` came from, each taking the place of a held
+    /// entry of the same value name, as values are merged.
+    pub(crate) fn note_values(&mut self, sources: Vec<ValueSource>) {
+        for source in sources {
+            match self.values.iter_mut().find(|held| same_quality_name(&held.value, &source.value)) {
+                Some(held) => *held = source,
+                None => self.values.push(source),
+            }
+        }
+    }
+}
+
+/// The correction records of one drill-hole set whose holes meet a grid's
+/// plan rectangle: how many, and one hash over them in any order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SetPrint {
+    pub(crate) set: String,
+    pub(crate) count: usize,
+    /// Hex, so a reader without 64-bit integers keeps it whole.
+    pub(crate) print: String,
+}
+
+/// A source of a grid that has moved since the grid was built.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Moved {
+    /// Drill holes inside the grid whose records changed, those dated after
+    /// the build counted, with the latest date as written.
+    Holes { count: usize, latest: String },
+    /// Records inside the grid changed with none dated after the build: an
+    /// earlier correction undone, or one undone before the build redone.
+    HoleRecords,
+    /// A surface of the recorded name holding other geometry.
+    Surface(String),
+    /// The model envelope is not the one the grid was built in.
+    Envelope,
+}
+
+/// A recorded source the project no longer holds.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Gone {
+    Surface(String),
+    /// No grid of this name: a difference names its other grid only.
+    Grid(String),
+}
+
+/// What has become of a grid's recorded sources since its build.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Staleness {
+    pub(crate) moved: Vec<Moved>,
+    pub(crate) gone: Vec<Gone>,
+}
+
+/// The project a grid's sources are looked for in: every surface by name
+/// and geometry token, loaded or not, the loaded drill-hole sets' records,
+/// every grid's name and the model envelope.
+pub(crate) struct ProjectSources<'a> {
+    pub(crate) surfaces: Vec<(&'a str, GeometryVersion)>,
+    pub(crate) drill_holes: Vec<HoleRecords<'a>>,
+    pub(crate) grids: Vec<&'a str>,
+    pub(crate) envelope: Option<ModelEnvelope>,
+}
+
+/// One loaded drill-hole set's correction records, each with its hole's
+/// box in plan, worked out once for every grid checked against them.
+pub(crate) struct HoleRecords<'a> {
+    pub(crate) set: &'a str,
+    pub(crate) records: Vec<HoleRecord<'a>>,
+}
+
+pub(crate) struct HoleRecord<'a> {
+    /// The hole's index in its set.
+    pub(crate) hole: usize,
+    /// Least and greatest corner of the hole's box in plan.
+    pub(crate) plan: (DVec2, DVec2),
+    pub(crate) date: &'a str,
+    pub(crate) when: Option<chrono::DateTime<chrono::FixedOffset>>,
+    correction: &'a Correction,
+    print: std::cell::OnceCell<u64>,
+}
+
+impl<'a> HoleRecords<'a> {
+    /// The records of `dataset`, named `set`, on holes it still holds.
+    pub(crate) fn of(set: &'a str, dataset: &'a DrillHoleDataset) -> Self {
+        let holes: HashMap<&str, usize> = dataset.holes.iter().enumerate().map(|(index, hole)| (hole.dhid.as_str(), index)).collect();
+        let records = dataset
+            .corrections
+            .iter()
+            .filter_map(|correction| {
+                let hole = *holes.get(correction.hole.as_str())?;
+                let (min, max) = dataset.hole_box(hole)?;
+                Some(HoleRecord {
+                    hole,
+                    plan: (min.truncate(), max.truncate()),
+                    date: &correction.date,
+                    when: chrono::DateTime::parse_from_rfc3339(&correction.date).ok(),
+                    correction,
+                    print: std::cell::OnceCell::new(),
+                })
+            })
+            .collect();
+        Self { set, records }
+    }
+}
+
+impl HoleRecord<'_> {
+    /// A hash of what the record changes, the same on every target and
+    /// after a save and reopen: FNV-1a (Fowler, Noll and Vo) over the JSON
+    /// of its hole, interval, kind, field, values, date and rows, worked
+    /// out on first use.
+    fn print(&self) -> u64 {
+        *self.print.get_or_init(|| {
+            let record = self.correction;
+            let fields = (
+                &record.hole,
+                record.logged_from.to_bits(),
+                record.logged_to.to_bits(),
+                record.kind,
+                &record.field,
+                &record.before,
+                &record.after,
+                &record.date,
+                &record.row,
+                &record.removed,
+            );
+            fnv(&serde_json::to_vec(&fields).unwrap_or_default())
+        })
+    }
+}
+
+fn fnv(bytes: &[u8]) -> u64 {
+    bytes
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3))
+}
+
+/// The print of a set's records bearing on a grid.
+fn set_print(set: &str, records: &[&HoleRecord<'_>]) -> SetPrint {
+    let mut prints: Vec<u64> = records.iter().map(|record| record.print()).collect();
+    prints.sort_unstable();
+    let bytes: Vec<u8> = prints.iter().flat_map(|print| print.to_le_bytes()).collect();
+    SetPrint {
+        set: set.to_owned(),
+        count: prints.len(),
+        print: format!("{:016x}", fnv(&bytes)),
+    }
+}
+
+/// The print, per loaded set, of the correction records whose hole meets a
+/// grid's plan rectangle: kept on the record at the build.
+pub(crate) fn hole_prints(lattice: &Lattice, holes: &[HoleRecords<'_>]) -> Vec<SetPrint> {
+    holes.iter().map(|set| set_print(set.set, &records_inside(lattice, set))).collect()
+}
+
+fn records_inside<'s, 'a>(lattice: &Lattice, set: &'s HoleRecords<'a>) -> Vec<&'s HoleRecord<'a>> {
+    set.records.iter().filter(|record| meets(lattice, record.plan)).collect()
+}
+
+/// The present name of the surface holding `stamp`'s token, else the
+/// recorded one.
+pub(crate) fn present_name<'s>(stamp: &'s SourceStamp, project: &ProjectSources<'s>) -> &'s str {
+    project
+        .surfaces
+        .iter()
+        .find(|(_, geometry)| *geometry == stamp.geometry)
+        .map_or(stamp.name.as_str(), |(name, _)| name)
+}
+
+/// Which of `record`'s sources have moved since the build of a grid on
+/// `lattice`, and which are gone. A surface is found by its token, else
+/// by its name. The records of holes whose box meets the grid's plan
+/// rectangle have moved when their print differs from the one kept at the
+/// build, whatever they corrected; a set without a kept print, or a record
+/// written before prints, falls back to records dated after the build (an
+/// unreadable date counts as after). The dated records word the line.
+pub(crate) fn staleness(record: &BuildRecord, lattice: &Lattice, project: &ProjectSources<'_>) -> Staleness {
+    let mut found = Staleness::default();
+    let built = chrono::DateTime::parse_from_rfc3339(&record.built).ok();
+    let (mut holes, mut latest, mut changed) = (HashSet::new(), None, false);
+    for (index, set) in project.drill_holes.iter().enumerate() {
+        let inside = records_inside(lattice, set);
+        let later: Vec<_> = inside.iter().filter(|held| built.zip(held.when).is_none_or(|(built, when)| when > built)).collect();
+        let kept = record.holes.as_ref().and_then(|prints| prints.iter().find(|print| print.set == set.set));
+        let moved = match kept {
+            Some(kept) => *kept != set_print(set.set, &inside),
+            None => !later.is_empty(),
+        };
+        if !moved {
+            continue;
+        }
+        changed = true;
+        for held in later {
+            holes.insert((index, held.hole));
+            if latest.is_none_or(|(when, _)| held.when > when) {
+                latest = Some((held.when, held.date));
+            }
+        }
+    }
+    if changed {
+        found.moved.push(match latest {
+            Some((_, latest)) => Moved::Holes {
+                count: holes.len(),
+                latest: latest.to_owned(),
+            },
+            None => Moved::HoleRecords,
+        });
+    }
+    let surfaces = [&record.roof, &record.floor].into_iter().chain(record.values.iter().filter_map(|value| match &value.from {
+        ValueFrom::Surface { surface, .. } => Some(surface),
+        ValueFrom::Difference { .. } => None,
+    }));
+    for stamp in surfaces {
+        if project.surfaces.iter().any(|(_, geometry)| *geometry == stamp.geometry) {
+            continue;
+        }
+        if project.surfaces.iter().any(|(name, _)| *name == stamp.name) {
+            found.moved.push(Moved::Surface(stamp.name.clone()));
+        } else {
+            found.gone.push(Gone::Surface(stamp.name.clone()));
+        }
+    }
+    if record.envelope != project.envelope {
+        found.moved.push(Moved::Envelope);
+    }
+    for value in &record.values {
+        if let ValueFrom::Difference { other, .. } = &value.from
+            && !project.grids.contains(&other.as_str())
+        {
+            found.gone.push(Gone::Grid(other.clone()));
+        }
+    }
+    found
+}
+
+/// Whether a box in plan, least and greatest corner, meets the lattice's
+/// own rectangle, turned as the lattice is: the two overlap along each
+/// side's normal.
+fn meets(lattice: &Lattice, (low, high): (DVec2, DVec2)) -> bool {
+    let (width, length) = (lattice.u_sizes.iter().sum::<f64>(), lattice.v_sizes.iter().sum::<f64>());
+    let rectangle = [DVec2::ZERO, lattice.u * width, lattice.u * width + lattice.v * length, lattice.v * length].map(|offset| lattice.origin + offset);
+    let corners = [low, DVec2::new(high.x, low.y), high, DVec2::new(low.x, high.y)];
+    let span = |points: &[DVec2; 4], axis: DVec2| {
+        points
+            .iter()
+            .map(|point| point.dot(axis))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(least, most), along| (least.min(along), most.max(along)))
+    };
+    [DVec2::X, DVec2::Y, lattice.u.perp(), lattice.v.perp()].into_iter().all(|axis| {
+        let ((a_least, a_most), (b_least, b_most)) = (span(&rectangle, axis), span(&corners, axis));
+        a_least <= b_most && b_least <= a_most
+    })
+}
+
+/// `∫ max(0, L - h) dA` over a triangle of `area` on which `L` runs linearly
+/// between `values` at its corners: the volume of `L` above the level `h`.
+/// Above the lowest corner the part of the triangle where `L > h` is itself
+/// a triangle at the highest corner, over which `L - h` is linear and zero
+/// at two corners; each branch divides only by positive numbers.
+fn above_integral(area: f64, values: [f64; 3], h: f64) -> f64 {
+    let mut sorted = values;
+    sorted.sort_by(f64::total_cmp);
+    let [low, middle, high] = sorted;
+    let mean = (low + middle + high) / 3.0;
+    if h <= low {
+        area * (mean - h)
+    } else if h <= middle {
+        let under = h - low;
+        area * (mean - h) + area * under * under * under / (3.0 * (middle - low) * (high - low))
+    } else if h < high {
+        let over = high - h;
+        area * over * over * over / (3.0 * (high - low) * (high - middle))
+    } else {
+        0.0
+    }
+}
+
+impl PrismoidGrid {
+    /// How much of one active prismoid lies in each of `layers` horizontal
+    /// layers `thickness` thick upward from `base`, exactly: `add(layer,
+    /// volume)` upward for each layer it reaches. The body is the two
+    /// triangular prisms [`Self::closed_mesh`] draws, and its volume above a
+    /// level is the roof's [`above_integral`] less the floor's. A cut
+    /// prismoid sums its cut triangles the same way. Ground below the base
+    /// or above the last layer is left out.
+    fn layer_volumes(&self, cell: usize, stretch: f64, base: f64, thickness: f64, layers: usize, mut add: impl FnMut(usize, f64)) {
+        let lattice = &self.lattice;
+        let columns = lattice.columns();
+        let area = lattice.u_sizes[cell % columns] * lattice.v_sizes[cell / columns] * stretch / 2.0;
+        let [a, b, c, d] = self.cell_corners(cell);
+        let triangles = [[a, b, c], [a, c, d]];
+        let cut = self.cut.triangles_of(cell);
+        let above = |level: f64| match self.cut.triangles_of(cell) {
+            Some(pieces) => pieces
+                .map(|[p, q, r]| {
+                    let area = (q.plan - p.plan).perp_dot(r.plan - p.plan).abs() / 2.0 * stretch;
+                    above_integral(area, [p.roof, q.roof, r.roof], level) - above_integral(area, [p.floor, q.floor, r.floor], level)
+                })
+                .sum::<f64>(),
+            None => {
+                let [one, two] = triangles
+                    .map(|corners| above_integral(area, corners.map(|corner| self.roof[corner]), level) - above_integral(area, corners.map(|corner| self.floor[corner]), level));
+                one + two
+            }
+        };
+        let (low, high) = match cut {
+            Some(pieces) => {
+                let mut range = (f64::INFINITY, f64::NEG_INFINITY);
+                for point in pieces.flatten() {
+                    range = (range.0.min(point.floor), range.1.max(point.roof));
+                }
+                if range.0 > range.1 {
+                    return;
+                }
+                range
+            }
+            None => (
+                [a, b, c, d].map(|corner| self.floor[corner]).into_iter().fold(f64::INFINITY, f64::min),
+                [a, b, c, d].map(|corner| self.roof[corner]).into_iter().fold(f64::NEG_INFINITY, f64::max),
+            ),
+        };
+        // A layer either side of the division's rounding, then only the
+        // layers the body reaches.
+        let first = (((low - base) / thickness).floor().max(0.0) as usize).saturating_sub(1);
+        let last = (((high - base) / thickness).ceil().max(0.0) as usize).saturating_add(1).min(layers);
+        let mut below = above(base + first as f64 * thickness);
+        for layer in first..last {
+            let (bottom, top) = (base + layer as f64 * thickness, base + (layer + 1) as f64 * thickness);
+            let over = above(top);
+            let volume = below - over;
+            if top > low && bottom < high && volume > 0.0 {
+                add(layer, volume);
+            }
+            below = over;
+        }
+    }
+}
+
+/// What [`regular_boxes`] measured: the box lattice and, for each box
+/// holding modelled ground, its place and numbers.
+#[derive(Clone, Debug)]
+pub(crate) struct RegularBoxes {
+    /// Boxes along x, y and z, by Leo's round-up rule.
+    pub(crate) dims: [usize; 3],
+    /// The categories in the order first met.
+    pub(crate) labels: Vec<String>,
+    /// The qualities, matched by `same_quality_name` and named as first met.
+    pub(crate) qualities: Vec<String>,
+    /// Each written box's (column, row, layer), x fastest, then z, then y.
+    pub(crate) at: Vec<[usize; 3]>,
+    /// Per written box: modelled volume, mass, each label's volume, each
+    /// quality's mean.
+    records: Vec<f64>,
+}
+
+impl RegularBoxes {
+    fn record(&self, index: usize) -> &[f64] {
+        let width = 2 + self.labels.len() + self.qualities.len();
+        &self.records[index * width..(index + 1) * width]
+    }
+
+    /// Modelled cubic metres in the box.
+    pub(crate) fn volume(&self, index: usize) -> f64 {
+        self.record(index)[0]
+    }
+
+    /// Tonnes in the box; NaN where some of its ground has no density.
+    pub(crate) fn mass(&self, index: usize) -> f64 {
+        self.record(index)[1]
+    }
+
+    /// Cubic metres of each label in the box, in `labels` order.
+    pub(crate) fn label_volumes(&self, index: usize) -> &[f64] {
+        &self.record(index)[2..2 + self.labels.len()]
+    }
+
+    /// Each quality's mean over the ground carrying it, by tonnes where the
+    /// box's mass is known, else by volume, of the values as they are, signs
+    /// kept (a difference is signed); NaN where no ground carries it.
+    pub(crate) fn quality_means(&self, index: usize) -> &[f64] {
+        &self.record(index)[2 + self.labels.len()..]
+    }
+}
+
+/// Why [`regular_boxes`] measured nothing.
+#[derive(Debug)]
+pub(crate) enum RegularRefusal {
+    /// Leo's grid rule refuses the envelope and block size.
+    Grid,
+    /// The grid at this position is not regular on the envelope's lattice.
+    OffLattice(usize),
+    /// The block's plan size is no whole multiple of this grid's cells.
+    NotMultiple(usize),
+    /// Two grids, by position, give one quality, named as first met, in two
+    /// units: `first` on `first_grid`, `second` on `second_grid`.
+    UnitsDiffer {
+        quality: String,
+        first: String,
+        first_grid: usize,
+        second: String,
+        second_grid: usize,
+    },
+    Cancelled,
+}
+
+/// One grid as [`regular_boxes`] reads it.
+struct RegularSource<'a> {
+    grid: &'a PrismoidGrid,
+    stretch: f64,
+    label: usize,
+    /// The grid's first cell, in cells from the envelope's corner.
+    offset: [i64; 2],
+    /// Cells along a block's x and y.
+    per_block: [i64; 2],
+    density: Option<&'a CellValues>,
+    /// Each quality with its place in the merged list.
+    qualities: Vec<(&'a CellValues, usize)>,
+}
+
+/// The corners of the box lattice for cubes of `size` over `envelope`: x
+/// and y at its plan corners, z moved outward from its base and top RL to
+/// whole multiples of `size` from RL 0, a ratio within `NODE_TOLERANCE` of a
+/// whole number taken as it.
+pub(crate) fn regular_frame(envelope: &ModelEnvelope, size: f64) -> (DVec3, DVec3) {
+    let snap = |rl: f64, outward: fn(f64) -> f64| {
+        let ratio = rl / size;
+        (if is_whole_or_zero(ratio) { ratio.round() } else { outward(ratio) }) * size
+    };
+    let (lower, upper) = (envelope.lower(), envelope.upper());
+    (lower.with_z(snap(lower.z, f64::floor)), upper.with_z(snap(upper.z, f64::ceil)))
+}
+
+/// Cubes of `size` laid across `envelope` from its plan corner, in layers
+/// cut at whole multiples of `size` from RL 0 by [`regular_frame`], and how
+/// much of each active prismoid of `grids`, each with its category, lies in
+/// each, exactly. A box holds its volume, its mass where all of its
+/// ground has a density above 0, each label's volume and each quality's
+/// mean; only boxes holding more than `1e-9` of their volume in modelled
+/// ground are kept, and a part under that share counts as rounding for the
+/// density too. Qualities of one name must agree in unit where both give
+/// one. Every grid must be regular on the envelope's lattice with `size` a
+/// whole multiple of its cells, so a cell lies in one column of
+/// boxes; the caller checks [`PrismoidGrid::fits`] first, and a cell off the
+/// box lattice is skipped. Box rows run side by side; each adds grids in
+/// order, cells in cell order, layers upward, so the numbers do not depend
+/// on the threads. A roof within the envelope's tolerance above its top RL
+/// may leave a sliver above the last layer, out of every box.
+pub(crate) fn regular_boxes(grids: &[(&PrismoidGrid, &str)], envelope: &ModelEnvelope, size: f64, cancel: &CancelFlag, progress: &Phase) -> Result<RegularBoxes, RegularRefusal> {
+    use rayon::prelude::*;
+    let (lower, upper) = regular_frame(envelope, size);
+    let size = DVec3::splat(size);
+    let dims = crate::model::kriging::KrigingGrid { lower, upper, cell: size }
+        .dimensions()
+        .map_err(|_| RegularRefusal::Grid)?;
+    let [columns, rows, layers] = dims;
+    let mut labels: Vec<String> = Vec::new();
+    let mut slots = ValueSlots::default();
+    let mut sources = Vec::with_capacity(grids.len());
+    for (index, (grid, category)) in grids.iter().enumerate() {
+        let lattice = &grid.lattice;
+        let (Some(&cell_x), Some(&cell_y)) = (lattice.u_sizes.first(), lattice.v_sizes.first()) else {
+            return Err(RegularRefusal::OffLattice(index));
+        };
+        let corner = Lattice {
+            origin: lower.truncate(),
+            u: DVec2::X,
+            v: DVec2::Y,
+            u_sizes: vec![cell_x],
+            v_sizes: vec![cell_y],
+        };
+        let (offset_x, offset_y) = lattice.offset_to(&corner).ok_or(RegularRefusal::OffLattice(index))?;
+        let per_block = [size.x / cell_x, size.y / cell_y];
+        if !per_block.into_iter().all(is_whole) {
+            return Err(RegularRefusal::NotMultiple(index));
+        }
+        let label = match labels.iter().position(|label| label == category) {
+            Some(label) => label,
+            None => {
+                labels.push((*category).to_owned());
+                labels.len() - 1
+            }
+        };
+        let mut held = Vec::new();
+        for values in grid.cell_values.iter().filter(|values| values.role == CellValueRole::Quality) {
+            if let Some(merged) = slots.slot(values, index)? {
+                held.push((values, merged));
+            }
+        }
+        let density = grid.cell_values.iter().find(|values| values.role == CellValueRole::Density);
+        if let Some(values) = density {
+            slots.slot(values, index)?;
+        }
+        sources.push(RegularSource {
+            grid,
+            stretch: grid.stretch(),
+            label,
+            offset: [offset_x, offset_y],
+            per_block: per_block.map(|cells| cells.round() as i64),
+            density,
+            qualities: held,
+        });
+    }
+    let qualities = slots.quality_names();
+    // Per box: volume, mass, volume without a density, each label's volume,
+    // then per quality its sums of volume times value, volume, mass times
+    // value and mass.
+    let (label_count, quality_count) = (labels.len(), qualities.len());
+    let stride = 3 + label_count + 4 * quality_count;
+    let width = 2 + label_count + quality_count;
+    let whole = size.x * size.y * size.z;
+    let sliver = 1e-9 * whole;
+    let finished = AtomicU64::new(0);
+    // The grid's cell rows inside a box row.
+    let cell_rows = |source: &RegularSource<'_>, row: usize| {
+        let ([_, per_y], [_, offset_y]) = (source.per_block, source.offset);
+        (row as i64 * per_y - offset_y).max(0)..((row as i64 + 1) * per_y - offset_y).min(source.grid.lattice.rows() as i64)
+    };
+    let measured: Vec<_> = (0..rows)
+        .into_par_iter()
+        .map(|row| {
+            if cancel.is_cancelled() {
+                return None;
+            }
+            if sources.iter().all(|source| cell_rows(source, row).is_empty()) {
+                return Some((Vec::new(), Vec::new()));
+            }
+            let mut sums = vec![0.0; columns * layers * stride];
+            for source in &sources {
+                let grid = source.grid;
+                let cell_columns = grid.lattice.columns() as i64;
+                let [per_x, _] = source.per_block;
+                let [offset_x, _] = source.offset;
+                for cell_row in cell_rows(source, row) {
+                    for cell_column in 0..cell_columns {
+                        let cell = (cell_row * cell_columns + cell_column) as usize;
+                        let column = (cell_column + offset_x).div_euclid(per_x);
+                        if !grid.active[cell] || !(0..columns as i64).contains(&column) {
+                            continue;
+                        }
+                        // As the grid's own summary weighs a cell, a density at
+                        // or below 0 is none; values keep their sign, as the
+                        // derived model of one grid carries them.
+                        let density = source.density.and_then(|values| values.values[cell]).filter(|value| value.is_finite() && *value > 0.0);
+                        grid.layer_volumes(cell, source.stretch, lower.z, size.z, layers, |layer, volume| {
+                            let at = (layer * columns + column as usize) * stride;
+                            let sum = &mut sums[at..at + stride];
+                            sum[0] += volume;
+                            match density {
+                                Some(density) => sum[1] += volume * density,
+                                None => sum[2] += volume,
+                            }
+                            sum[3 + source.label] += volume;
+                            for (values, merged) in &source.qualities {
+                                let Some(value) = values.values[cell].filter(|value| value.is_finite()) else {
+                                    continue;
+                                };
+                                let at = 3 + label_count + 4 * merged;
+                                sum[at] += volume * value;
+                                sum[at + 1] += volume;
+                                if let Some(density) = density {
+                                    sum[at + 2] += volume * density * value;
+                                    sum[at + 3] += volume * density;
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+            let (mut at, mut records) = (Vec::new(), Vec::new());
+            for layer in 0..layers {
+                for column in 0..columns {
+                    let sum = &sums[(layer * columns + column) * stride..][..stride];
+                    if sum[0] <= sliver {
+                        continue;
+                    }
+                    let known = sum[2] <= sliver;
+                    at.push([column, row, layer]);
+                    records.push(sum[0]);
+                    records.push(if known { sum[1] } else { f64::NAN });
+                    records.extend_from_slice(&sum[3..3 + label_count]);
+                    for quality in 0..quality_count {
+                        let sums = &sum[3 + label_count + 4 * quality..][..4];
+                        let (weighted, weight) = if known { (sums[2], sums[3]) } else { (sums[0], sums[1]) };
+                        records.push(if weight > 0.0 { weighted / weight } else { f64::NAN });
+                    }
+                }
+            }
+            progress.set_items(finished.fetch_add(1, Ordering::Relaxed) + 1, rows as u64);
+            Some((at, records))
+        })
+        .collect();
+    // Rows joined in order, each freed as it is taken.
+    let count = measured.iter().map(|row| row.as_ref().map_or(0, |(at, _)| at.len())).sum::<usize>();
+    let mut at = Vec::with_capacity(count);
+    let mut records = Vec::with_capacity(count * width);
+    for row in measured {
+        let (row_at, row_records) = row.ok_or(RegularRefusal::Cancelled)?;
+        at.extend(row_at);
+        records.extend(row_records);
+    }
+    Ok(RegularBoxes {
+        dims,
+        labels,
+        qualities,
+        at,
+        records,
+    })
+}
+
+/// Several grids' values as one block model's columns: qualities merged by
+/// [`same_quality_name`] and named as first met, every grid's density in
+/// one. One name may carry one unit only, a blank unit agreeing with any.
+#[derive(Default)]
+pub(crate) struct ValueSlots<'a> {
+    /// Each quality's name as first met, its first unit given and that
+    /// unit's grid, blank until one is.
+    qualities: Vec<(&'a str, &'a str, usize)>,
+    /// The same for the first density met.
+    density: Option<(&'a str, &'a str, usize)>,
+}
+
+impl<'a> ValueSlots<'a> {
+    /// The merged quality `values` of the grid at position `index` fill,
+    /// `None` for its density; refused when its unit differs from the one
+    /// given first for that name.
+    pub(crate) fn slot(&mut self, values: &'a CellValues, index: usize) -> Result<Option<usize>, RegularRefusal> {
+        let slot = match values.role {
+            CellValueRole::Density => None,
+            CellValueRole::Quality => Some(match self.qualities.iter().position(|(name, _, _)| same_quality_name(name, &values.name)) {
+                Some(slot) => slot,
+                None => {
+                    self.qualities.push((values.name.as_str(), "", index));
+                    self.qualities.len() - 1
+                }
+            }),
+        };
+        let held = match slot {
+            Some(slot) => &mut self.qualities[slot],
+            None => self.density.get_or_insert((values.name.as_str(), "", index)),
+        };
+        let unit = values.unit.trim();
+        if held.1.is_empty() {
+            (held.1, held.2) = (unit, index);
+        } else if !unit.is_empty() && unit != held.1 {
+            return Err(RegularRefusal::UnitsDiffer {
+                quality: held.0.to_owned(),
+                first: held.1.to_owned(),
+                first_grid: held.2,
+                second: unit.to_owned(),
+                second_grid: index,
+            });
+        }
+        Ok(slot)
+    }
+
+    /// Each merged quality's name, by slot.
+    pub(crate) fn quality_names(&self) -> Vec<String> {
+        self.qualities.iter().map(|(name, _, _)| (*name).to_owned()).collect()
+    }
+}
+
+/// How many `blocks`, each its plan cell on one lattice, bottom and top,
+/// reach below the top of another block in their cell: taken bottom up, a
+/// block counts when its bottom lies below the highest top before it by
+/// more than `1e-9` of its own height, so two blocks sharing a horizon do
+/// not count.
+pub(crate) fn stacked_overlaps(mut blocks: Vec<([i64; 2], f64, f64)>) -> usize {
+    blocks.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    let mut count = 0;
+    let mut highest: Option<([i64; 2], f64)> = None;
+    for (cell, bottom, top) in blocks {
+        let reach = match highest {
+            Some((held, reach)) if held == cell => {
+                if reach - bottom > 1e-9 * (top - bottom) {
+                    count += 1;
+                }
+                reach.max(top)
+            }
+            _ => top,
+        };
+        highest = Some((cell, reach));
+    }
+    count
 }

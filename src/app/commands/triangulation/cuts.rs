@@ -1250,6 +1250,34 @@ impl FaceClipper<'_> {
     }
 }
 
+/// Each face of `mesh` over `target` in plan, faces upright in plan (no more
+/// plan area than `upright`) aside, with the exact overlap of the two:
+/// [`FaceClipper::clip`]'s loop without its cut, for callers that cut
+/// against the face themselves.
+pub(crate) fn for_each_plan_overlap(
+    target: [mesh_data::Vertex; 3],
+    mesh: &mesh_data::Triangulation,
+    spatial: &TriangleBvh,
+    upright: f64,
+    stack: &mut Vec<usize>,
+    overlap: &mut Vec<glam::DVec3>,
+    mut visit: impl FnMut([mesh_data::Vertex; 3], &[glam::DVec3]),
+) {
+    let bounds = triangle_xy_bounds(target);
+    let vertices = mesh.vertices();
+    spatial.for_each_xy_bounds_candidate_index_with_stack(bounds.0, bounds.1, stack, |face| {
+        let Some(indices) = mesh.face_vertex_indices(face) else { return };
+        let ground = indices.map(|index| vertices[index]);
+        if triangle_xy_area(ground).abs() <= upright {
+            return;
+        }
+        clip_target_triangle_to_reference_xy_exact_into(target, ground, overlap);
+        if overlap.len() >= 3 {
+            visit(ground, overlap);
+        }
+    });
+}
+
 /// The part of `polyline` on `side` of the reference, appended to `output`.
 /// Where a sheet moved `offset` off the reference stops, it lies `offset`
 /// from the reference, and the reference's own sheet stops at the same line
@@ -2405,7 +2433,7 @@ const REPAIR_STEP: f64 = 0.1;
 /// Two overlapping reference triangles this close in height are one surface.
 const REFERENCE_COINCIDENT_Z_TOLERANCE: f64 = 1.0e-3;
 
-pub(super) fn reference_xy_overlap_area_tolerance(reference: &mesh_data::Triangulation) -> f64 {
+pub(crate) fn reference_xy_overlap_area_tolerance(reference: &mesh_data::Triangulation) -> f64 {
     let bounds = reference.bounds();
     let dx = bounds.max.x - bounds.min.x;
     let dy = bounds.max.y - bounds.min.y;
