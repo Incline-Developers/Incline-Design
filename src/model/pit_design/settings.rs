@@ -66,6 +66,8 @@ pub(crate) struct RampSettings {
     pub(crate) bands: Vec<RampBand>,
     /// How far it runs level where it leaves the pit.
     pub(crate) exit_flat: f64,
+    /// How far each stretch runs level where it leaves its bench's berm.
+    pub(crate) junction_flat: f64,
 }
 
 impl Default for RampSettings {
@@ -82,6 +84,7 @@ impl Default for RampSettings {
             to: None,
             bands: Vec::new(),
             exit_flat: 0.0,
+            junction_flat: 0.0,
         }
     }
 }
@@ -97,6 +100,7 @@ impl RampSettings {
             to: self.to,
             bands: self.bands.clone(),
             exit_flat: self.exit_flat,
+            junction_flat: self.junction_flat,
             start: self.start.unwrap_or(default_start),
             climbs_clockwise: self.climbs_clockwise,
             layout: if self.switchback {

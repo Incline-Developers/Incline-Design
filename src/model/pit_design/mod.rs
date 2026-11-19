@@ -106,6 +106,10 @@ pub(crate) struct RampSpec {
     /// up, before it climbs out onto the last crest; at its first bench,
     /// building down, where it starts from the crest.
     pub(crate) exit_flat: f64,
+    /// How far each stretch runs level where it leaves its bench's berm, so
+    /// the berm is reached from the road on the flat: at least this, or what
+    /// its band asks if more.
+    pub(crate) junction_flat: f64,
 }
 
 /// A band of RL whose benches' stretches of road are laid otherwise: as
@@ -391,6 +395,7 @@ impl Spec {
             }
             let length = |value: f64| value.is_finite() && value >= 0.0;
             if !length(ramp.exit_flat)
+                || !length(ramp.junction_flat)
                 || !ramp
                     .bands
                     .iter()
@@ -1566,7 +1571,7 @@ impl Builder<'_> {
             Direction::Down => (exit, 0.0),
         };
         let width = band.and_then(|band| band.width).unwrap_or(ramp_spec.width);
-        let base_flat = band.and_then(|band| band.flat).unwrap_or(0.0) + before;
+        let base_flat = band.and_then(|band| band.flat).unwrap_or(0.0).max(ramp_spec.junction_flat) + before;
         // Laid along the start ring, the ring the ramps carrying on have
         // made, as from a bench with no berm.
         let start;

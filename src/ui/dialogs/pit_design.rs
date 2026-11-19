@@ -821,6 +821,12 @@ fn draw_ramp_extent(ui: &mut egui::Ui, ramp: &mut RampSettings, (base_rl, sign, 
         .suffix(" m")
         .help_text(tr!("pit-design-ramp-exit-flat-help"))
         .show(ui);
+    MenuFieldF64::new(tr!("pit-design-ramp-junction-flat"), &mut ramp.junction_flat, 0.0..=10000.0)
+        .width(FIELD_WIDTH)
+        .speed(0.5)
+        .suffix(" m")
+        .help_text(tr!("pit-design-ramp-junction-flat-help"))
+        .show(ui);
 
     let width = ramp.width;
     let mut remove = None;

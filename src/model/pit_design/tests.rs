@@ -78,6 +78,7 @@ fn with_ramp(direction: Direction, layout: Layout, start: DVec2, clockwise: bool
             to: None,
             bands: Vec::new(),
             exit_flat: 0.0,
+            junction_flat: 0.0,
         }],
         stop,
     }
@@ -997,4 +998,24 @@ fn two_ramps_down_and_with_a_switchback() {
         design.report.iter().flat_map(|bench| &bench.ramps).any(|road| road.ramp == 1 && road.switchback),
         "the second ramp turns back"
     );
+}
+
+#[test]
+fn every_stretch_leaves_its_berm_on_the_flat_asked() {
+    for kind in ["rect", "circle", "ell"] {
+        let mut spec = super::tests::spec(Direction::Up, Layout::Spiral, outline(kind)[0], false, Stop::Benches(6));
+        spec.ramps[0].junction_flat = 15.0;
+        let design = built(kind, 100.0, &spec, None);
+        let name = format!("{kind} with 15 m junction flats");
+        assert_eq!(design.end, End::Complete, "{name}: {} benches", design.benches);
+        assert_ramps_sound(&name, &design, &spec.ramps);
+        for bench in &design.report {
+            assert!(
+                bench.ramp().unwrap().flat >= 15.0,
+                "{name}: at RL {} a {:.1} m flat",
+                bench.elevation,
+                bench.ramp().unwrap().flat
+            );
+        }
+    }
 }
