@@ -103,7 +103,7 @@ use super::{
         BlendGradeTarget, BlendInput, BlendPile, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, LOOKAHEAD_DAYS, OutletIndex, REST_RECEIPT_T, attribute_reclaim,
         authored_tasks, interval_rate, task_active, task_authorises,
     },
-    lp::{Col, LinearProgram, WarmStarts},
+    lp::{Col, LinearProgram, WarmRole, WarmStarts},
     plan::PlanTargets,
     replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow, ReplayReport, replay_cancellable},
 };
@@ -1324,6 +1324,7 @@ impl<'a> State<'a> {
         // is left to building instead, so the hour is not lost to nothing.
         self.blocked = self.exclusive_draws(&topology, interval);
         self.building.clear();
+        self.warm.borrow_mut().role = WarmRole::Opening;
         let plan = self.solve(interval, &topology)?;
         let plan = self.reopen_idle(interval, &topology, plan)?;
         let mut plan = self.settle(interval, &mut topology, plan)?;
@@ -1777,6 +1778,7 @@ impl<'a> State<'a> {
                 ..interval
             };
             self.now_h = start;
+            self.warm.borrow_mut().role = WarmRole::Part;
             let solved = match self
                 .solve(part, &topo)
                 .and_then(|found| self.reopen_idle(part, &topo, found))
@@ -1853,6 +1855,7 @@ impl<'a> State<'a> {
                 pins: Vec::new(),
                 spent: Vec::new(),
             };
+            self.warm.borrow_mut().role = WarmRole::Rest;
             let probe = match self
                 .solve(rest, &topo)
                 .and_then(|found| self.reopen_idle(rest, &topo, found))
