@@ -251,7 +251,6 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
             if let Some(working) = draft.working.as_mut() {
                 MenuFieldText::new(tr!("pit-design-name"), &mut working.name).width(FIELD_WIDTH).show(ui);
             }
-            draw_steps(ui, draft, commands);
             // The step's settings and what they come to scroll between the
             // name and the actions, which stay in view.
             egui::ScrollArea::vertical()
@@ -323,22 +322,6 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
     // A field is mid-edit while the pointer is down on it or text is being
     // typed into it; until then the copy waits to be written.
     draft.settled = !ui.ctx().input(|input| input.pointer.any_down()) && ui.ctx().memory(|memory| memory.focused().is_none());
-}
-
-/// The steps, Benches and Ramp, the one the panel is on held down: a
-/// click goes to either.
-fn draw_steps(ui: &mut egui::Ui, draft: &PitDesignDraft, commands: &mut Vec<UiCommand>) {
-    MenuField::new(String::new()).show(ui, |ui, row_height, _| {
-        ui.allocate_ui_with_layout(egui::vec2(FIELD_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            for (stage, label) in [(PitStage::Benches, tr!("pit-design-step-benches")), (PitStage::Ramp, tr!("pit-design-step-ramp"))] {
-                let width = menu::natural_button_width(ui, &label, 60.0);
-                if ui.add(MenuButton::new(label).min_width(width).selected(draft.stage == stage)).clicked() && draft.stage != stage {
-                    commands.push(UiCommand::PitDesignStage(stage));
-                }
-            }
-        })
-        .response
-    });
 }
 
 /// The design's scenarios: which is active, its name, and copy and remove.
