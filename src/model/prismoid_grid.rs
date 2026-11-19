@@ -1006,6 +1006,68 @@ impl PrismoidGrid {
         Some(segments)
     }
 
+    /// The lines where a trim left a cell's kept part ending inside it: the
+    /// edges of its stored triangles that only one triangle uses and that no
+    /// other such edge lies over in plan (a step between two kept parts, as
+    /// the touching allowance leaves, is no end). An edge on a side of the
+    /// cell counts only where the kept part has no thickness, as
+    /// [`Self::cut_side`] draws the rest. Empty when the cell is not cut.
+    fn cut_lines(&self, cell: usize, u_edges: &[f64], v_edges: &[f64]) -> Vec<[CutPoint; 2]> {
+        const NONE: f64 = 1e-9;
+        let Some(index) = self.cut.cell_index(cell) else {
+            return Vec::new();
+        };
+        let columns = self.lattice.columns();
+        let (column, row) = (cell % columns, cell / columns);
+        let slack = crate::model::kernel::XY_TOL;
+        let on = |value: f64, edge: f64| (value - edge).abs() <= slack;
+        let on_side = |[one, other]: [DVec2; 2]| {
+            let (xs, ys) = ([u_edges[column], u_edges[column + 1]], [v_edges[row], v_edges[row + 1]]);
+            xs.iter().any(|x| on(one.x, *x) && on(other.x, *x)) || ys.iter().any(|y| on(one.y, *y) && on(other.y, *y))
+        };
+        let point = |at: u32| self.cut.points[at as usize];
+        // Every edge by its two points, sorted, so an edge two triangles
+        // share sits twice in a row.
+        let mut edges: Vec<[u32; 2]> = self
+            .cut
+            .indices_at(index)
+            .iter()
+            .flat_map(|triangle| [(0, 1), (1, 2), (2, 0)].map(|(one, other)| [triangle[one].min(triangle[other]), triangle[one].max(triangle[other])]))
+            .collect();
+        edges.sort_unstable();
+        let once = edges.chunk_by(|one, other| one == other).filter(|run| run.len() == 1).map(|run| run[0]);
+        // Each of those by where it lies in plan, ends in either order.
+        let key = |at: u32| {
+            let plan = point(at).plan;
+            ((plan.x / slack).round() as i64, (plan.y / slack).round() as i64)
+        };
+        let mut placed: Vec<((_, _), [u32; 2])> = once
+            .map(|edge| {
+                let (one, other) = (key(edge[0]), key(edge[1]));
+                ((one.min(other), one.max(other)), edge)
+            })
+            .collect();
+        placed.sort_unstable();
+        placed
+            .chunk_by(|one, other| one.0 == other.0)
+            .filter(|run| run.len() == 1)
+            .map(|run| run[0].1.map(point))
+            .filter(|ends| !on_side(ends.map(|end| end.plan)) || ends.iter().all(|end| end.roof - end.floor <= NONE))
+            .collect()
+    }
+
+    /// A cut line's roof and floor in the world, one stroke where the two
+    /// meet along the whole line.
+    fn cut_line_strokes(&self, line: [CutPoint; 2]) -> Vec<[DVec3; 2]> {
+        const NONE: f64 = 1e-9;
+        let at = |height: fn(&CutPoint) -> f64| line.map(|end| self.lattice.to_world(end.plan).extend(height(&end)));
+        let mut strokes = vec![at(|end| end.roof)];
+        if line.iter().any(|end| end.roof - end.floor > NONE) {
+            strokes.push(at(|end| end.floor));
+        }
+        strokes
+    }
+
     /// The vertical walls along every edge of an active cell whose neighbour
     /// is inactive or off the lattice, two outward-facing triangles each; on
     /// a cut cell, one wall per segment of the cut's boundary on that edge,
@@ -1067,7 +1129,7 @@ impl PrismoidGrid {
     /// mask in cell order, and each side of a selected cell whose neighbour
     /// is not selected (or is off the lattice) gives one roof and one floor
     /// segment; a cut cell's sides follow its cut, as [`Self::outline_walls`]
-    /// does.
+    /// does, and its cut lines are drawn as well.
     pub(crate) fn selection_outline(&self, cells: &[bool]) -> Vec<[DVec3; 2]> {
         let lattice = &self.lattice;
         let (columns, rows) = (lattice.columns(), lattice.rows());
@@ -1104,6 +1166,9 @@ impl PrismoidGrid {
                     let [from, to] = [from, to].map(|(corner_column, corner_row)| corner_row * (columns + 1) + corner_column);
                     segments.push([corners[from].extend(self.roof[from]), corners[to].extend(self.roof[to])]);
                     segments.push([corners[from].extend(self.floor[from]), corners[to].extend(self.floor[to])]);
+                }
+                for line in self.cut_lines(row * columns + column, &u_edges, &v_edges) {
+                    segments.extend(self.cut_line_strokes(line));
                 }
             }
         }
@@ -1174,6 +1239,9 @@ impl PrismoidGrid {
         let (u_edges, v_edges) = (edges(&self.lattice.u_sizes), edges(&self.lattice.v_sizes));
         let mut lattice = Vec::new();
         let mut lattice_cells: Vec<[u32; 4]> = Vec::new();
+        // The strokes along the lines trims cut inside cells, which the
+        // outline below draws too.
+        let mut cut_strokes: Vec<[u32; 2]> = Vec::new();
         let rows = self.lattice.rows();
         for (cell, _) in self.active.iter().enumerate().filter(|(_, active)| **active) {
             let (column, row) = (cell % columns, cell / columns);
@@ -1220,6 +1288,15 @@ impl PrismoidGrid {
                     lattice_cells.push(side_cells[side]);
                 }
             }
+            for line in self.cut_lines(cell, &u_edges, &v_edges) {
+                for stroke in self.cut_line_strokes(line) {
+                    let first = vertices.len() as u32;
+                    vertices.extend(stroke.map(mesh_vertex));
+                    lattice.push([first, first + 1]);
+                    lattice_cells.push([cell as u32, UNSET, UNSET, UNSET]);
+                    cut_strokes.push([first, first + 1]);
+                }
+            }
             for corner in [a, a + 1, d + 1, d] {
                 if !std::mem::replace(&mut seen[corner], true) && !flat(corner) {
                     let roof = place(&mut vertices, &mut roof_at, &self.roof, corner);
@@ -1254,12 +1331,14 @@ impl PrismoidGrid {
                 .map(|face| face.map(|index| index + offset)),
         );
         // Each wall quad runs from-roof, from-floor, to-roof, to-floor.
-        let outline = (0..walls.len() as u32 / 4)
+        let mut outline: Vec<[u32; 2]> = (0..walls.len() as u32 / 4)
             .flat_map(|quad| {
                 let first = offset + 4 * quad;
                 [[first, first + 2], [first + 1, first + 3]]
             })
             .collect();
+        // The rim also runs along every line a trim cut inside a cell.
+        outline.extend(cut_strokes);
         Some(PrismoidMesh {
             vertices,
             faces,
