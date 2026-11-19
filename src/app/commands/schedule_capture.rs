@@ -420,6 +420,122 @@ fn calendar_field(field: &str) -> String {
 /// its area.
 const SCHEDULE_PATTERN_HOLES: usize = 4 * crate::model::drill_hole::MAX_PATTERN_HOLES;
 
+/// What a blast's place among the dig blocks is, in plan: the blocks it
+/// holds, those over it near enough to keep it from being clear (in a
+/// higher bench, within the buffer, and with no buffer over the blast
+/// itself), and where its holes go. Only the solids and the drill and blast
+/// settings move it, so it is kept between runs; see [`blast_geometry`].
+struct BlastGeometry {
+    members: Vec<usize>,
+    over: Vec<usize>,
+    pattern: crate::model::schedule::DrillPattern,
+    collars: Vec<glam::DVec2>,
+}
+
+/// The last [`BlastGeometry`] worked out: for the planning snapshot it was
+/// worked out on, while that is still held, and the buffer it used.
+type HeldGeometry = (std::sync::Weak<PlanningSnapshot>, u64, Arc<Vec<BlastGeometry>>);
+static BLAST_GEOMETRY: std::sync::Mutex<Option<HeldGeometry>> = std::sync::Mutex::new(None);
+
+/// Each blast's [`BlastGeometry`], as the last run worked it out when the
+/// solids, the buffer and the patterns are as they were - a schedule edit
+/// moves none of them - or worked out afresh, the blasts side by side.
+fn blast_geometry(snapshot: &Arc<PlanningSnapshot>, config: &crate::model::schedule::DrillBlastConfig, cancel: &CancelFlag) -> Option<Arc<Vec<BlastGeometry>>> {
+    use rayon::prelude::*;
+
+    use crate::model::drill_hole::{DrillPatternLayout, generate_pattern_collars};
+    let pattern_of = |record: &crate::app::commands::solids_view::BlastRecord| {
+        config
+            .patterns
+            .iter()
+            .find(|entry| record.holds(&entry.blast))
+            .map_or(config.pattern, |entry| entry.pattern)
+    };
+    let buffer = config.buffer_m.to_bits();
+    {
+        let held = BLAST_GEOMETRY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((of, at, geometry)) = held.as_ref()
+            && of.upgrade().is_some_and(|of| Arc::ptr_eq(&of, snapshot))
+            && *at == buffer
+            && geometry.iter().zip(&snapshot.blasts).all(|(found, record)| found.pattern == pattern_of(record))
+        {
+            return Some(Arc::clone(geometry));
+        }
+    }
+    // Plan bounds, once: a block whose box is further than the buffer from a
+    // blast's box is further from the blast itself, so the exact gap is only
+    // measured for the few near enough.
+    let bounds = |face: &crate::model::arrangement::Face| {
+        face.first().map_or((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |ring| {
+            ring.iter()
+                .fold((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |(lo, hi), point| (lo.min(*point), hi.max(*point)))
+        })
+    };
+    let block_bounds: Vec<_> = snapshot.blocks.iter().map(|block| bounds(&block.ground)).collect();
+    let measured: Vec<Option<BlastGeometry>> = snapshot
+        .blasts
+        .par_iter()
+        .map(|record| {
+            if cancel.is_cancelled() {
+                return None;
+            }
+            let (blast_lo, blast_hi) = bounds(&record.face);
+            let reach = config.buffer_m + 1e-9;
+            let near = |(lo, hi): (glam::DVec2, glam::DVec2)| {
+                let gap = (blast_lo - hi).max(lo - blast_hi).max(glam::DVec2::ZERO);
+                gap.x <= reach && gap.y <= reach
+            };
+            let pattern = pattern_of(record);
+            let outer: Vec<glam::DVec3> = record
+                .face
+                .first()
+                .map_or_else(Vec::new, |ring| ring.iter().map(|point| point.extend(record.bench.top)).collect());
+            let layout = if pattern.staggered { DrillPatternLayout::Staggered } else { DrillPatternLayout::Square };
+            // Collars are laid out for Animate to draw. A blast too big or too
+            // odd in shape for that is counted by its area instead: a schedule
+            // needs how much drilling there is, not where each hole goes.
+            let collars: Vec<glam::DVec2> = generate_pattern_collars(&outer, pattern.burden_m, pattern.spacing_m, 0.0, glam::DVec2::ZERO, layout, SCHEDULE_PATTERN_HOLES)
+                .map(|collars| {
+                    collars
+                        .into_iter()
+                        .map(|collar| collar.truncate())
+                        .filter(|collar| crate::model::arrangement::point_in_face(&record.face, *collar))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut members = Vec::new();
+            let mut over = Vec::new();
+            for (position, block) in snapshot.blocks.iter().enumerate() {
+                let in_blast = block.solid == record.solid
+                    && block.blast.is_some_and(|blast| {
+                        (blast.bench_base() - record.bench.base).abs() < 1e-6 && crate::model::arrangement::point_in_face(&record.face, glam::DVec2::from(blast.anchor()))
+                    });
+                if in_blast {
+                    members.push(position);
+                    continue;
+                }
+                // Ground in a higher bench, within the buffer in plan.
+                if block.flitch.base < record.bench.top - 1e-6 {
+                    continue;
+                }
+                if !near(block_bounds[position]) || !plan_within(&block.ground, &record.face, reach) {
+                    continue;
+                }
+                // With no buffer, only ground over the blast itself holds it:
+                // ground that merely shares an edge with it does not.
+                if config.buffer_m <= 0.0 && crate::model::arrangement::overlap_area(&block.ground, &record.face) <= SHARED_GROUND_M2 {
+                    continue;
+                }
+                over.push(position);
+            }
+            Some(BlastGeometry { members, over, pattern, collars })
+        })
+        .collect();
+    let geometry = Arc::new(measured.into_iter().collect::<Option<Vec<_>>>()?);
+    *BLAST_GEOMETRY.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((Arc::downgrade(snapshot), buffer, Arc::clone(&geometry)));
+    Some(geometry)
+}
+
 /// The drill and blast chain: every blast of the run, how much of each step
 /// it needs and what must be dug before it is clear, and the dozers, drills
 /// and MPUs working the blast bars.
@@ -438,12 +554,9 @@ fn capture_drill_blast(
 ) -> Option<crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput> {
     use rayon::prelude::*;
 
-    use crate::model::{
-        drill_hole::{DrillPatternLayout, generate_pattern_collars},
-        schedule::{
-            MachineKind,
-            optimisation::blended::drill_blast::{BlastAgent, BlastJob, BlastTask, DrillBlastInput},
-        },
+    use crate::model::schedule::{
+        MachineKind,
+        optimisation::blended::drill_blast::{BlastAgent, BlastJob, BlastTask, DrillBlastInput},
     };
     let plan = &source.plan;
     let config = plan.drill_blast();
@@ -466,55 +579,19 @@ fn capture_drill_blast(
             empty_cleared_by.entry(position).or_insert(previous);
         }
     }
-    // Plan bounds, once: a block whose box is further than the buffer from a
-    // blast's box is further from the blast itself, so the exact gap is only
-    // measured for the few near enough.
-    let bounds = |face: &crate::model::arrangement::Face| {
-        face.first().map_or((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |ring| {
-            ring.iter()
-                .fold((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |(lo, hi), point| (lo.min(*point), hi.max(*point)))
-        })
-    };
-    let block_bounds: Vec<_> = snapshot.blocks.iter().map(|block| bounds(&block.ground)).collect();
-    // Each blast is measured on its own, so they are measured side by side
-    // and gathered in order.
+    let geometry = blast_geometry(&source.snapshot, config, cancel)?;
     let measured: Vec<Option<(BlastJob, CapturedBlast, bool)>> = snapshot
         .blasts
         .par_iter()
-        .map(|record| {
+        .zip(geometry.par_iter())
+        .map(|(record, shape)| {
             if cancel.is_cancelled() {
                 return None;
             }
-            let (blast_lo, blast_hi) = bounds(&record.face);
-            let reach = config.buffer_m + 1e-9;
-            let near = |(lo, hi): (glam::DVec2, glam::DVec2)| {
-                let gap = (blast_lo - hi).max(lo - blast_hi).max(glam::DVec2::ZERO);
-                gap.x <= reach && gap.y <= reach
-            };
             let reference = record.reference();
-            let pattern = config
-                .patterns
-                .iter()
-                .find(|entry| record.holds(&entry.blast))
-                .map_or(config.pattern, |entry| entry.pattern);
+            let pattern = shape.pattern;
             let depth = (record.bench.top - record.bench.base) + pattern.subdrill_m;
-            let outer: Vec<glam::DVec3> = record
-                .face
-                .first()
-                .map_or_else(Vec::new, |ring| ring.iter().map(|point| point.extend(record.bench.top)).collect());
-            let layout = if pattern.staggered { DrillPatternLayout::Staggered } else { DrillPatternLayout::Square };
-            // Collars are laid out for Animate to draw. A blast too big or too
-            // odd in shape for that is counted by its area instead: a schedule
-            // needs how much drilling there is, not where each hole goes.
-            let collars: Vec<glam::DVec2> = generate_pattern_collars(&outer, pattern.burden_m, pattern.spacing_m, 0.0, glam::DVec2::ZERO, layout, SCHEDULE_PATTERN_HOLES)
-                .map(|collars| {
-                    collars
-                        .into_iter()
-                        .map(|collar| collar.truncate())
-                        .filter(|collar| crate::model::arrangement::point_in_face(&record.face, *collar))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let collars = shape.collars.clone();
             let holes = if collars.is_empty() {
                 (record.area / (pattern.burden_m * pattern.spacing_m)).ceil().max(f64::from(record.area > 0.0))
             } else {
@@ -527,32 +604,14 @@ fn capture_drill_blast(
                 .iter()
                 .find(|entry| record.holds(&entry.blast))
                 .map_or(crate::model::schedule::BlastStage::NotStarted, |entry| entry.stage);
-            let mut releases = Vec::new();
+            let releases: Vec<GroundId> = shape.members.iter().filter_map(|position| block_ground.get(position).copied()).collect();
             let mut above = Vec::new();
             let mut blocked = false;
-            for (position, block) in snapshot.blocks.iter().enumerate() {
-                let in_blast = block.solid == record.solid
-                    && block.blast.is_some_and(|blast| {
-                        (blast.bench_base() - record.bench.base).abs() < 1e-6 && crate::model::arrangement::point_in_face(&record.face, glam::DVec2::from(blast.anchor()))
-                    });
-                if in_blast {
-                    if let Some(ground) = block_ground.get(&position) {
-                        releases.push(*ground);
-                    }
-                    continue;
-                }
-                // Ground in a higher bench, within the buffer in plan. Ground
-                // excluded from mining is treated as never having been there, so
-                // it holds nothing up; `snapshot.excluded` is passed over whole.
-                if block.flitch.base < record.bench.top - 1e-6 {
-                    continue;
-                }
-                if !near(block_bounds[position]) || !plan_within(&block.ground, &record.face, reach) || excluded(block, &source.exclusions) {
-                    continue;
-                }
-                // With no buffer, only ground over the blast itself holds it:
-                // ground that merely shares an edge with it does not.
-                if config.buffer_m <= 0.0 && crate::model::arrangement::overlap_area(&block.ground, &record.face) <= SHARED_GROUND_M2 {
+            for &position in &shape.over {
+                // Ground excluded from mining is treated as never having been
+                // there, so it holds nothing up; `snapshot.excluded` is passed
+                // over whole.
+                if excluded(&snapshot.blocks[position], &source.exclusions) {
                     continue;
                 }
                 match (block_ground.get(&position), empty_cleared_by.get(&position)) {
@@ -3304,6 +3363,56 @@ fn measured(value: f64) -> u32 {
 /// is no input a separate list could forget. The project identities that
 /// produced it are folded in beside, so two projects that happen to build the
 /// same model are still two runs.
+/// The drill and blast chain, for [`stable_fingerprint`]: every field the
+/// chain reads, the numbers by their bits. The windows and a fixed timeline,
+/// few and seldom present as a model is built, go through their serialised
+/// form.
+fn hash_drill_blast(input: Option<&crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput>, hasher: &mut WidthFreeHasher) {
+    let Some(input) = input else {
+        0u8.hash(hasher);
+        return;
+    };
+    1u8.hash(hasher);
+    input.blasts.len().hash(hasher);
+    for blast in &input.blasts {
+        for quantity in blast.quantity {
+            quantity.to_bits().hash(hasher);
+        }
+        blast.stage.hash(hasher);
+        blast.releases.len().hash(hasher);
+        for ground in &blast.releases {
+            ground.0.hash(hasher);
+        }
+        blast.above.len().hash(hasher);
+        for ground in &blast.above {
+            ground.0.hash(hasher);
+        }
+        blast.never_clear.hash(hasher);
+        blast.gate.hash(hasher);
+    }
+    input.agents.len().hash(hasher);
+    for agent in &input.agents {
+        agent.activity.hash(hasher);
+        agent.rates.len().hash(hasher);
+        for rate in &agent.rates {
+            rate.to_bits().hash(hasher);
+        }
+    }
+    input.tasks.len().hash(hasher);
+    for task in &input.tasks {
+        task.agent.hash(hasher);
+        task.priority.hash(hasher);
+        task.start_h.to_bits().hash(hasher);
+        task.end_h.to_bits().hash(hasher);
+        task.sequence.hash(hasher);
+        task.delay.hash(hasher);
+        task.follow.hash(hasher);
+    }
+    input.window_end_h.to_bits().hash(hasher);
+    serde_json::to_string(&input.windows).unwrap_or_default().hash(hasher);
+    serde_json::to_string(&input.fixed).unwrap_or_default().hash(hasher);
+}
+
 fn stable_fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
     let mut hasher = WidthFreeHasher::default();
     source.tonnage_field.0.hash(&mut hasher);
@@ -3311,7 +3420,7 @@ fn stable_fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
     // The model itself. `BlendInput` derives `PartialEq` over exactly the
     // fields the solvers read, and every one of them is walked here.
     input.segments_per_interval.hash(&mut hasher);
-    serde_json::to_string(&input.drill_blast).unwrap_or_default().hash(&mut hasher);
+    hash_drill_blast(input.drill_blast.as_ref(), &mut hasher);
     for area in &input.loader_areas {
         area.loaders.hash(&mut hasher);
         for ground in &area.ground {
