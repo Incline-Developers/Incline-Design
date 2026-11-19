@@ -456,6 +456,7 @@ pub(crate) enum MenuRow {
     TrimTopology,
     CutTopologyByPitShell,
     MergeShellIntoTopology,
+    JoinSurfaces,
     BuildSolidFromSurfaces,
     GenerateContours,
     Simplify,
@@ -537,7 +538,12 @@ const PRODUCTION_MENUS: &[WorkspaceMenu] = &[
         title: MenuTitle::Triangulation,
         groups: &[
             rows(&[MenuRow::ClipSurfaceByPolyline, MenuRow::SliceSurfaceByZ, MenuRow::TrimTopology]),
-            rows(&[MenuRow::CutTopologyByPitShell, MenuRow::MergeShellIntoTopology, MenuRow::BuildSolidFromSurfaces]),
+            rows(&[
+                MenuRow::CutTopologyByPitShell,
+                MenuRow::MergeShellIntoTopology,
+                MenuRow::JoinSurfaces,
+                MenuRow::BuildSolidFromSurfaces,
+            ]),
             rows(&[MenuRow::Simplify]),
             rows(&[MenuRow::GenerateContours]),
             rows(&[MenuRow::SimulateWater]),
@@ -635,6 +641,7 @@ impl MenuRow {
             Self::TrimTopology => tr!("common-trim-topology"),
             Self::CutTopologyByPitShell => tr!("common-cut-topology-pit-shell"),
             Self::MergeShellIntoTopology => tr!("common-merge-shell-into-topology-ellipsis"),
+            Self::JoinSurfaces => tr!("tri-join-surfaces-ellipsis"),
             Self::BuildSolidFromSurfaces => tr!("menu-build-solid-surfaces"),
             Self::GenerateContours => tr!("common-generate-contour-lines"),
             Self::Simplify => tr!("simplify-menu"),
@@ -664,6 +671,7 @@ impl MenuRow {
             Self::TrimTopology => UiCommand::OpenCutTriangulationBySurface,
             Self::CutTopologyByPitShell => UiCommand::OpenCutTopologyByPitShell,
             Self::MergeShellIntoTopology => UiCommand::OpenIncludeSolidInTopology,
+            Self::JoinSurfaces => UiCommand::OpenJoinSurfaces,
             Self::BuildSolidFromSurfaces => UiCommand::OpenBuildSolidFromSurfaces,
             Self::GenerateContours => UiCommand::OpenContourTriangulation,
             Self::Simplify => UiCommand::OpenSimplifyTriangulation,
@@ -693,9 +701,13 @@ impl MenuRow {
             // has nothing to cross.
             Self::InsertAtIntersection | Self::InsertAtElevation | Self::SetAxis(_) | Self::CreateTriangulation | Self::ReferencePoints | Self::ReferenceSurface => true,
             // The tools taking two surfaces pick both in their dialog.
-            Self::TrimTopology | Self::CutTopologyByPitShell | Self::MergeShellIntoTopology | Self::BuildSolidFromSurfaces | Self::PitOptimization | Self::SurveyDefinitions => {
-                true
-            }
+            Self::TrimTopology
+            | Self::CutTopologyByPitShell
+            | Self::MergeShellIntoTopology
+            | Self::JoinSurfaces
+            | Self::BuildSolidFromSurfaces
+            | Self::PitOptimization
+            | Self::SurveyDefinitions => true,
             Self::UndrapeAllRasters => project.raster_textures.iter().any(|raster| raster.is_draped),
             // These work on one named item, which their dialog lists: the
             // selection only saves choosing it there.
@@ -727,6 +739,7 @@ impl MenuRow {
             Self::TrimTopology => "ws-menubar-triangulation-trim-topology",
             Self::CutTopologyByPitShell => "ws-menubar-triangulation-cut-by-pit-shell",
             Self::MergeShellIntoTopology => "ws-menubar-triangulation-merge-shell",
+            Self::JoinSurfaces => "ws-menubar-triangulation-join-surfaces",
             Self::BuildSolidFromSurfaces => "ws-menubar-triangulation-build-solid",
             Self::GenerateContours => "ws-menubar-triangulation-contours",
             Self::Simplify => "ws-menubar-triangulation-simplify",

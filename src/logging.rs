@@ -29,6 +29,8 @@ thread_local! {
     static ACTIVE_REPORT: Cell<Option<ConsoleEntryId>> = const { Cell::new(None) };
     static PANIC_HOOK_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_REPORT: RefCell<Option<DeferredReport>> = const { RefCell::new(None) };
+    /// What this thread has logged since [`capturing`] began, while it runs.
+    static CAPTURED: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
 }
 
 /// An activity that has not reported anything yet, and so has no row.
@@ -272,8 +274,13 @@ fn append_record(message: String, severity: ConsoleSeverity, target: Option<&str
     with_runtime_log(|log| {
         if let Some(id) = active {
             log.update(id, |entry| {
+                // The row sums up its most severe news: a warning is not
+                // buried under the routine line logged after it, so the row
+                // says what its icon warns of.
+                if severity.rank() >= entry.severity.rank() {
+                    entry.summary = concise(message.lines().next().unwrap_or_default());
+                }
                 entry.severity = entry.severity.escalate(severity);
-                entry.summary = concise(message.lines().next().unwrap_or_default());
                 entry.details.push(message);
             });
         } else {
@@ -732,6 +739,22 @@ pub(crate) fn set_console_scope(scope: u32) {
     with_runtime_log(|log| log.set_scope(scope));
 }
 
+/// Run `operation`, and return what it logged on this thread along with its
+/// result: the lines a background job's apply step wrote, say, for the MCP
+/// server to tell the AI what the job did. Logged as ever too.
+pub(crate) fn capturing<T>(operation: impl FnOnce() -> T) -> (T, Vec<String>) {
+    let outer = CAPTURED.with(|captured| captured.replace(Some(Vec::new())));
+    let result = operation();
+    let lines = CAPTURED.with(|captured| captured.replace(outer)).unwrap_or_default();
+    // A capture around this one sees these lines too.
+    CAPTURED.with(|captured| {
+        if let Some(outer) = captured.borrow_mut().as_mut() {
+            outer.extend(lines.iter().cloned());
+        }
+    });
+    (result, lines)
+}
+
 /// Immutable revision-cached data for the UI.
 pub(crate) fn console_snapshot() -> ConsoleSnapshot {
     with_runtime_log(|log| (log.revision, log.snapshot()))
@@ -739,6 +762,11 @@ pub(crate) fn console_snapshot() -> ConsoleSnapshot {
 
 pub(crate) fn log_to_distributor(args: fmt::Arguments<'_>, severity: ConsoleSeverity, target: &'static str) {
     let message = format!("{args}");
+    CAPTURED.with(|captured| {
+        if let Some(lines) = captured.borrow_mut().as_mut() {
+            lines.push(message.clone());
+        }
+    });
 
     #[cfg(not(target_arch = "wasm32"))]
     match (severity, ACTIVE_REPORT.get().map(|id| id.0)) {

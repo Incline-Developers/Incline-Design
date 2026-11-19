@@ -437,6 +437,7 @@ impl EditorState {
             || self.is_water_run()
             || self.point_cloud_tin_open
             || self.point_cloud_join_open
+            || self.tri_join_open
             || self.point_cloud_classify_open
             || self.block_model_create_open
             || self.ore_triangulation_open
@@ -2895,6 +2896,14 @@ pub(crate) struct EditorState {
     /// Hide and unload the source topology and solid once the merge completes.
     pub(crate) tri_include_solid_hide_old: bool,
 
+    // Join Surfaces
+    pub(crate) tri_join_open: bool,
+    /// The surfaces ticked, in the order ticked.
+    pub(crate) tri_join_sources: Vec<TriangulationId>,
+    pub(crate) tri_join_name_input: String,
+    /// Unload the surfaces joined once the joined one is in.
+    pub(crate) tri_join_unload_sources: bool,
+
     // Contour Generation
     pub(crate) tri_contour_open: bool,
     pub(crate) tri_contour_tri_id: Option<TriangulationId>,
@@ -3735,6 +3744,7 @@ impl EditorState {
             || self.tri_solid_open
             || self.tri_cut_pitshell_open
             || self.tri_include_solid_open
+            || self.tri_join_open
             || self.tri_contour_open
             || self.point_cloud_tin_open
             || self.point_cloud_join_open
@@ -4515,6 +4525,10 @@ impl EditorState {
             tri_include_solid_name_auto: true,
             tri_include_solid_save_as_two: false,
             tri_include_solid_hide_old: true,
+            tri_join_open: false,
+            tri_join_sources: Vec::new(),
+            tri_join_name_input: String::new(),
+            tri_join_unload_sources: true,
             tri_contour_open: false,
             tri_contour_tri_id: None,
             tri_contour_major_interval_input: 10.0,
@@ -6351,6 +6365,15 @@ pub(crate) enum UiCommand {
         save_as_two: bool,
         hide_old: bool,
     },
+    /// Open the Join Surfaces dialog on the selected surfaces.
+    OpenJoinSurfaces,
+    /// Join surfaces into one new surface, sharing the points where they meet.
+    ExecuteJoinSurfaces {
+        surface_ids: Vec<TriangulationId>,
+        name: String,
+        /// Unload the surfaces joined, in the same undo step.
+        unload_sources: bool,
+    },
     /// Open the "Generate Contour Lines" dialog.
     OpenContourTriangulation,
     Undo,
@@ -6495,6 +6518,7 @@ impl UiCommand {
             | Self::OpenBuildSolidFromSurfaces
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
+            | Self::OpenJoinSurfaces
             | Self::OpenContourTriangulation
             | Self::SetBlockModelColorTransfer { .. }
             | Self::ResetBlockModelColorTransfer { .. }
@@ -6947,6 +6971,10 @@ impl UiCommand {
             Self::ExecuteBuildSolidFromSurfaces { name, .. } => report(tr!("tri-build-solid-surfaces"), name.clone()),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),
             Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!("common-merge-shell-into-topology"), name.clone()),
+            Self::ExecuteJoinSurfaces { surface_ids, name, .. } => report(
+                tr!("tri-join-surfaces"),
+                tr!("state-name-count-surfaces", name = name.to_string(), count = surface_ids.len().to_string()),
+            ),
             Self::RunWaterSimulation { settings, .. } => report(
                 tr!("water-simulate"),
                 tr!("water-run-summary", rain = settings.rain_mm.to_string(), hours = settings.rain_hours.to_string()),

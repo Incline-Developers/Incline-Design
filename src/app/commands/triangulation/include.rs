@@ -68,6 +68,10 @@ impl<'a> App<'a> {
                     }
                 }
 
+                // The fragments either side of the cut each carry their own
+                // points: shared again, each part is one surface.
+                let (vertices, faces) = crate::model::triangulation::shared_cut_mesh(vertices, faces);
+                let (shape_vertices, shape_faces) = crate::model::triangulation::shared_cut_mesh(shape_vertices, shape_faces);
                 let topology_edges = triangle_edge_list(&faces);
                 let topology = session::build_generated_triangulation(component_name(&name, &tr!("tri-topology")), vertices, faces, TriSurfaceType::Surface, |_| topology_edges)?;
                 let shape_edges = triangle_edge_list(&shape_faces);
@@ -80,6 +84,9 @@ impl<'a> App<'a> {
                 )?;
                 vec![topology, shape]
             } else {
+                // The topography, its fragments and the shape meet point for
+                // point along the seam; shared, they are one surface.
+                let (vertices, faces) = crate::model::triangulation::shared_cut_mesh(vertices, faces);
                 let edges = triangle_edge_list(&faces);
                 vec![session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, |_| edges)?]
             };

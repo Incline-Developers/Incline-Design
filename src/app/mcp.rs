@@ -20,23 +20,39 @@ use crate::{mcp, ui::state::McpStatus};
 #[cfg(not(target_arch = "wasm32"))]
 const PROTOCOL_VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-/// What the server tells a client about itself when it connects.
+/// What the server tells a client about itself when it connects, from the
+/// user's window: [`WINDOW_INTRODUCTION`] then [`INSTRUCTIONS`].
 #[cfg(not(target_arch = "wasm32"))]
-const INSTRUCTIONS: &str = "This server is Incline Design, a mine design application, with the user's project open in it. \
-Its tools read what the project holds (surfaces, block models, drillholes, point clouds, rasters, design layers and their \
+const WINDOW_INTRODUCTION: &str = "This server is Incline Design, a mine design application, with the user's project open in \
+its window: what you change, they see, and can undo there. ";
+
+/// The same for `incline-design mcp --headless`: an Incline of the client's
+/// own, which the user does not see.
+#[cfg(not(target_arch = "wasm32"))]
+const HEADLESS_INTRODUCTION: &str = "This server is Incline Design, a mine design application, running headless: a private \
+instance with no window, for this client alone. The user does not see it, and nothing done here touches the project they \
+have open; it starts with an empty Untitled project, so open_project or new_project first. get_project's mode says \
+headless. There is no selection to read and no window to show anything in, so get_selection is always empty and \
+show_in_window is refused; render_view draws pictures as ever. open_project and new_project fail rather than ask when \
+the open project has unsaved changes: save it or pass discard_changes. ";
+
+/// What both say after their introduction.
+#[cfg(not(target_arch = "wasm32"))]
+const INSTRUCTIONS: &str = "Its tools read what the project holds (surfaces, block models, drillholes, point clouds, rasters, design layers and their \
 objects, the Planning setup, optimisation and schedules), show and look at it in the viewport, and change it the way the \
 window's own controls do: drawing and editing designs, building and cutting surfaces, estimating block models, reserving, \
 optimising, scheduling, drill and blast, and importing and exporting files. Ids are the numbers get_project and the other \
 get_ tools report. The tools listed cover reading, looking, editing, files and items; load_tools adds the groups for \
 design, surfaces, display, planning, schedule, blasting and survey work when they are needed. Long work runs in the \
-background and returns once started: get_tasks follows it and can wait for it, and get_activity says if it failed. \
-A call made with a progress token is answered only once the work it started is done instead, with progress notifications \
-meanwhile. checkpoint names a point in the undo history and rollback goes back to it, to try something and back it out \
+background and returns once started with its task ids: get_tasks follows it, can wait for it, and says what each \
+finished task made (kind, id and name) or why it failed. A call made with a progress token is answered only once the work \
+it started is done instead, with the same, and progress notifications meanwhile. checkpoint names a point in the undo history and rollback goes back to it, to try something and back it out \
 whole. Setups kept as JSON (solids' plans, scenarios, the schedule) are read whole and changed with \
-JSON merge patches. Changes are made in the open window and can be undone there; render_view draws a picture of the result.\n\n\
+JSON merge patches. Every change is a step in the undo history; render_view draws a picture of the result.\n\n\
 Looking and showing: render_view takes the whole view as arguments and draws it on its own, so looking never moves the \
-user's camera or selection. The window is the user's: get_selection reads what they have selected, to work on it, and \
-show_in_window is the only tool that changes their view or selection, for when they have asked to be shown something.\n\n\
+user's camera or selection; it says where the picture is in the world, and draws a labelled coordinate grid on a plan view. \
+The window is the user's: get_selection reads what they have selected, to work on it, and show_in_window is the only tool \
+that changes their view or selection, for when they have asked to be shown something.\n\n\
 Working well with large projects: surfaces can run to tens of millions of triangles, and memory is the limit. Every change, \
 deleted and replaced items included, is kept for undo until the project is saved; saving clears that history and frees it. \
 So save after each heavy step (building, trimming or cutting a surface, deleting big items), and unload what the next step \
@@ -44,9 +60,10 @@ does not need with set_loaded, or pass unload_source where a tool offers it; get
 open_project asks the user in the window when the open project has unsaved changes (unless told to discard them), and \
 nothing can be saved until they answer, so save first and never reopen the open file to reload it. save_project with a path is Save As: the project then \
 lives at that path, which keeps the user's own file untouched while you work.\n\n\
-Designing: sample_surface reads the ground's RL at points, to fit a design to it before drawing. A terrain surface is \
-single-valued, so its breaklines must not cross in plan at different RLs; when triangulate fails, get_activity names the \
-two edges that conflict.";
+Designing: sample_surface reads the ground's RL at points or over a grid, to fit a design to it before drawing. A terrain \
+surface is single-valued, so its breaklines must not cross in plan at different RLs; when triangulate fails it lists every \
+place they do. Setting a pit or dump into a topography is include_solid_in_topography, in one step; join_surfaces joins \
+surfaces that already meet edge to edge.";
 
 impl App<'_> {
     /// Hand the event loop to the MCP server to wake it with, and start the
@@ -182,7 +199,7 @@ impl App<'_> {
         let result = match request["method"].as_str().unwrap_or_default() {
             "initialize" => {
                 self.reset_mcp_tool_groups();
-                Ok(initialize(params))
+                Ok(initialize(params, self.headless))
             }
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": self.mcp_listed_tools() })),
@@ -202,13 +219,13 @@ impl App<'_> {
 /// The answer to `initialize`: the protocol version the client asked for if
 /// this server speaks it, else the newest it does.
 #[cfg(not(target_arch = "wasm32"))]
-fn initialize(params: &Value) -> Value {
+fn initialize(params: &Value, headless: bool) -> Value {
     let asked = params["protocolVersion"].as_str().unwrap_or_default();
     let version = PROTOCOL_VERSIONS.iter().find(|version| **version == asked).copied().unwrap_or(PROTOCOL_VERSIONS[0]);
     json!({
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": true } },
         "serverInfo": { "name": "incline-design", "title": crate::APP_NAME, "version": crate::APP_RELEASE },
-        "instructions": INSTRUCTIONS,
+        "instructions": format!("{}{INSTRUCTIONS}", if headless { HEADLESS_INTRODUCTION } else { WINDOW_INTRODUCTION }),
     })
 }

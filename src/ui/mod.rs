@@ -1810,6 +1810,10 @@ fn draw_global_dialogs(
         dialogs::triangulation::draw_include_solid_dialog(root_ui, editor, project, commands);
     }
 
+    if editor.tri_join_open {
+        dialogs::triangulation::draw_join_surfaces_dialog(root_ui, editor, project, commands);
+    }
+
     if editor.tri_contour_open {
         dialogs::triangulation::draw_contour_dialog(root_ui, editor, project, commands);
     }

@@ -39,6 +39,7 @@ mod groups;
 mod items;
 mod jobs;
 mod objects;
+mod plan_grid;
 mod planning;
 mod production;
 mod progress;

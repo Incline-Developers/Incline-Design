@@ -34,6 +34,33 @@ use std::sync::{
 use std::sync::{Mutex, OnceLock};
 
 use super::App;
+
+/// How many finished jobs' outcomes are kept.
+const JOB_OUTCOMES_KEPT: usize = 32;
+
+/// Something a job's apply step added to the project.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MadeItem {
+    Item(crate::model::ItemRef),
+    Layer(crate::model::LayerId),
+}
+
+/// How a reported job went, for the MCP server to tell the AI without it
+/// piecing it together from the tasks, the activity log and the project.
+#[derive(Debug)]
+pub(crate) struct JobOutcome {
+    pub(crate) ticket: crate::app::BackgroundTaskTicket,
+    /// Its task label, without the trailing ellipsis.
+    pub(crate) label: String,
+    /// Why it failed, if it did: its own error, or why its result was
+    /// thrown away. `None` when it did its work, or was cancelled.
+    pub(crate) error: Option<String>,
+    /// What it added, in the order the project lists them.
+    pub(crate) made: Vec<MadeItem>,
+    /// What it logged as it landed, when it did its work: what it made and
+    /// anything to know about it.
+    pub(crate) log: Vec<String>,
+}
 use crate::{
     i18n::tr,
     model::{progress::Progress, triangulation::TriangulationId},
@@ -438,8 +465,11 @@ impl<'a> App<'a> {
             let mut poll_once = || match rx.try_recv() {
                 Ok(result) => {
                     if !app.job_dependencies_are_current(&poll_keys) {
-                        crate::userspace_log!("{}", tr!("jobs-discarded-stale-result", poll_label = poll_label.clone().to_string()));
+                        let message = tr!("jobs-discarded-stale-result", poll_label = poll_label.clone().to_string());
+                        crate::userspace_log!("{message}");
+                        app.settled_job_error = Some(message);
                     } else if let Some(apply) = apply.take() {
+                        app.settled_job_error = result.as_ref().err().filter(|error| !error.is::<Cancelled>()).map(|error| format!("{error:#}"));
                         apply(app, result);
                     }
                     true
@@ -450,7 +480,9 @@ impl<'a> App<'a> {
                 // must be visible rather than quietly treated as done.
                 Err(mpsc::TryRecvError::Disconnected) => {
                     if !poll_cancel.is_cancelled() {
-                        crate::userspace_error!("{}", tr!("jobs-background-task-poll-label-ended", poll_label = poll_label.clone().to_string()));
+                        let message = tr!("jobs-background-task-poll-label-ended", poll_label = poll_label.clone().to_string());
+                        crate::userspace_error!("{message}");
+                        app.settled_job_error = Some(message);
                     }
                     true
                 }
@@ -517,7 +549,12 @@ impl<'a> App<'a> {
             };
             let mut job = self.pending_jobs.remove(index);
             self.applied_job_needs_gpu = false;
-            if (job.poll)(self) {
+            self.settled_job_error = None;
+            let items_before = self.item_inventory();
+            let (settled, log) = crate::logging::capturing(|| (job.poll)(self));
+            if settled {
+                let error = self.settled_job_error.take();
+                self.record_job_outcome(job.ticket, &items_before, error, log);
                 residency_settled |= job
                     .keys
                     .iter()
@@ -544,6 +581,37 @@ impl<'a> App<'a> {
         }
         // The status bar is driven from the ticket registry (see
         // `App::refresh_status_message`), which each job joined when it began.
+    }
+
+    /// Every item and design layer in the project, to tell what a job's
+    /// apply step added.
+    fn item_inventory(&self) -> Vec<MadeItem> {
+        use crate::model::ItemRef;
+        let mut items: Vec<MadeItem> = self.triangulations.iter().map(|item| MadeItem::Item(ItemRef::Triangulation(item.id))).collect();
+        items.extend(self.block_models.iter().map(|item| MadeItem::Item(ItemRef::BlockModel(item.id))));
+        items.extend(self.drill_holes.iter().map(|item| MadeItem::Item(ItemRef::DrillHole(item.id))));
+        items.extend(self.point_clouds.iter().map(|item| MadeItem::Item(ItemRef::PointCloud(item.id))));
+        items.extend(self.raster_textures.iter().map(|item| MadeItem::Item(ItemRef::Raster(item.id))));
+        if let Some(document) = self.workspace.active_document() {
+            items.extend(document.layers().iter().map(|layer| MadeItem::Layer(layer.id)));
+        }
+        items
+    }
+
+    /// Keep how a reported job went: what it added beyond `before`, and why
+    /// it failed if it did. A quiet job is not kept: nothing asked for it.
+    fn record_job_outcome(&mut self, ticket: crate::app::BackgroundTaskTicket, before: &[MadeItem], error: Option<String>, log: Vec<String>) {
+        let Some(task) = self.background_tasks.reported.iter().find(|task| task.ticket == ticket) else {
+            return;
+        };
+        let label = task.label.trim_end_matches(['.', '…', ' ']).to_owned();
+        let made = self.item_inventory().into_iter().filter(|item| !before.contains(item)).collect();
+        // A failure is said by its error; what it logged then only says it again.
+        let log = if error.is_some() { Vec::new() } else { log };
+        self.job_outcomes.push_back(JobOutcome { ticket, label, error, made, log });
+        while self.job_outcomes.len() > JOB_OUTCOMES_KEPT {
+            self.job_outcomes.pop_front();
+        }
     }
 
     /// Cancel in-flight jobs where any dependency key matches `pred`: their

@@ -319,6 +319,123 @@ pub(crate) fn weld_identical_points(vertices: Vec<mesh_data::Vertex>, mut faces:
     (kept, faces)
 }
 
+/// How close two of a cut's points must be to be one. Where two pieces meet,
+/// each works out the points on their shared edge for itself, and rounding
+/// leaves the two copies a few billionths of a metre apart: far closer than
+/// this, which is far closer than any two points a cut means to keep apart.
+const CUT_WELD: f64 = 1.0e-7;
+
+/// A cut's pieces as one mesh that shares its points, so pieces that meet
+/// are joined rather than leaving a hairline crack between them: see
+/// [`join_near_points`] and [`drop_collapsed_faces`]. Nothing about the
+/// geometry changes.
+pub(crate) fn shared_cut_mesh(vertices: Vec<mesh_data::Vertex>, faces: Vec<[u32; 3]>) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>) {
+    let (vertices, faces) = join_near_points(vertices, faces);
+    drop_collapsed_faces(vertices, faces)
+}
+
+/// One vertex for each set of points within [`CUT_WELD`] of each other:
+/// bit-identical points welded ([`weld_identical_points`]), then near ones.
+/// The faces keep their order, renumbered onto the points kept; some may
+/// now repeat a corner, which [`drop_collapsed_faces`] leaves out.
+pub(crate) fn join_near_points(vertices: Vec<mesh_data::Vertex>, faces: Vec<[u32; 3]>) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>) {
+    let (vertices, mut faces) = weld_identical_points(vertices, faces);
+    let joined = near_points(&vertices, CUT_WELD);
+    for face in &mut faces {
+        *face = face.map(|index| joined[index as usize]);
+    }
+    (vertices, faces)
+}
+
+/// The faces a weld folded onto a line or a point left out, and the points
+/// no face uses dropped, the rest kept in order.
+pub(crate) fn drop_collapsed_faces(vertices: Vec<mesh_data::Vertex>, mut faces: Vec<[u32; 3]>) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>) {
+    faces.retain(|[a, b, c]| a != b && b != c && c != a);
+    let mut renumbered = vec![u32::MAX; vertices.len()];
+    for index in faces.iter().flatten() {
+        renumbered[*index as usize] = 0;
+    }
+    let mut kept = Vec::with_capacity(vertices.len());
+    for (index, vertex) in vertices.into_iter().enumerate() {
+        if renumbered[index] == 0 {
+            renumbered[index] = kept.len() as u32;
+            kept.push(vertex);
+        }
+    }
+    kept.shrink_to_fit();
+    for face in &mut faces {
+        *face = face.map(|index| renumbered[index as usize]);
+    }
+    faces.shrink_to_fit();
+    (kept, faces)
+}
+
+/// For each point, the first point within `reach` of it (itself if none):
+/// the earliest in order stands for the points near it, so the answer does
+/// not depend on anything but the points.
+///
+/// Points go in cells far wider than `reach`, so a point need only look in
+/// its neighbours' cells along the axes it lies within `reach` of a cell wall
+/// on, which for nearly every point is none: one lookup each.
+fn near_points(vertices: &[mesh_data::Vertex], reach: f64) -> Vec<u32> {
+    const CELLS_PER_REACH: f64 = 100.0;
+    let cell = reach * CELLS_PER_REACH;
+    let reach_squared = reach * reach;
+    // Each cell's latest point, and each point the one before it in its
+    // cell: a list per cell without a vector per cell.
+    let mut latest: std::collections::HashMap<[i64; 3], u32, foldhash::fast::FixedState> = std::collections::HashMap::default();
+    latest.reserve(vertices.len());
+    let mut before = vec![u32::MAX; vertices.len()];
+    let mut joined = Vec::with_capacity(vertices.len());
+    for (index, vertex) in vertices.iter().enumerate() {
+        let point = [vertex.x, vertex.y, vertex.z];
+        let scaled = point.map(|value| value / cell);
+        let home = scaled.map(|value| value.floor() as i64);
+        // The way to the nearer neighbour along each axis, if within reach.
+        let lean = std::array::from_fn::<i64, 3, _>(|axis| {
+            let along = scaled[axis] - home[axis] as f64;
+            if along * cell <= reach {
+                -1
+            } else if (1.0 - along) * cell <= reach {
+                1
+            } else {
+                0
+            }
+        });
+        let mut found = None;
+        'cells: for step in 0..8u8 {
+            let mut key = home;
+            for axis in 0..3 {
+                if step & (1 << axis) != 0 {
+                    if lean[axis] == 0 {
+                        continue 'cells;
+                    }
+                    key[axis] += lean[axis];
+                }
+            }
+            let mut other = latest.get(&key).copied().unwrap_or(u32::MAX);
+            while other != u32::MAX {
+                let other_vertex = vertices[other as usize];
+                let distance_squared = (other_vertex.x - vertex.x).powi(2) + (other_vertex.y - vertex.y).powi(2) + (other_vertex.z - vertex.z).powi(2);
+                if distance_squared <= reach_squared && found.is_none_or(|earliest| other < earliest) {
+                    found = Some(other);
+                }
+                other = before[other as usize];
+            }
+        }
+        match found {
+            Some(earliest) => joined.push(earliest),
+            None => {
+                if let Some(previous) = latest.insert(home, index as u32) {
+                    before[index] = previous;
+                }
+                joined.push(index as u32);
+            }
+        }
+    }
+    joined
+}
+
 pub(crate) fn unique_edges(mesh: &mesh_data::Triangulation) -> Vec<[u32; 2]> {
     use rayon::prelude::*;
 

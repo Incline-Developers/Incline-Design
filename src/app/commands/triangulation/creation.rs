@@ -20,14 +20,73 @@ impl std::fmt::Display for DegenerateOpenBoundary {
 
 impl std::error::Error for DegenerateOpenBoundary {}
 
-/// Exact pair of input edges responsible for a breakline intersection error.
-/// `message` remains byte-for-byte the text produced before diagnostics were
-/// added; the geometry is metadata for the failure overlay only.
+/// The pairs of input edges responsible for a breakline intersection error:
+/// every pair found, so the overlay shows them all at once. The geometry is
+/// metadata for the failure overlay only; `message` says it in words.
 #[derive(Debug)]
 struct BreaklineConflictFailure {
     message: String,
-    edges: [[glam::DVec3; 2]; 2],
+    edges: Vec<[[glam::DVec3; 2]; 2]>,
     kind: BreaklineConflictKind,
+}
+
+/// How many conflicts a failure lists in words; the overlay shows them all.
+const CONFLICTS_LISTED: usize = 10;
+
+/// Two breakline edges that cross, touch or overlap in plan at different
+/// elevations.
+struct ElevationConflict {
+    /// (path, edge) of each, the first the lower.
+    first: (usize, usize),
+    second: (usize, usize),
+    edges: [[glam::DVec3; 2]; 2],
+    detail: String,
+}
+
+/// The failure for `conflicts`, at least one: a single one said as it always
+/// was, more counted and the first [`CONFLICTS_LISTED`] listed.
+fn elevation_conflict_failure(conflicts: &[ElevationConflict]) -> anyhow::Error {
+    let describe = |conflict: &ElevationConflict| {
+        let [[a, b], [c, d]] = conflict.edges;
+        tr!(
+            "err-tri-breakline-elevation-conflict-item",
+            path_index = conflict.first.0.to_string(),
+            edge_index = conflict.first.1.to_string(),
+            a = format!("{a:.3}"),
+            b = format!("{b:.3}"),
+            other_path_index = conflict.second.0.to_string(),
+            other_edge_index = conflict.second.1.to_string(),
+            c = format!("{c:.3}"),
+            d = format!("{d:.3}"),
+            detail = conflict.detail.clone()
+        )
+    };
+    let message = if let [conflict] = conflicts {
+        let [[a, b], [c, d]] = conflict.edges;
+        tr!(
+            "err-tri-breakline-edges-conflicting-elevations",
+            path_index = conflict.first.0.to_string(),
+            edge_index = conflict.first.1.to_string(),
+            a = format!("{a:.3}"),
+            b = format!("{b:.3}"),
+            other_path_index = conflict.second.0.to_string(),
+            other_edge_index = conflict.second.1.to_string(),
+            c = format!("{c:.3}"),
+            d = format!("{d:.3}"),
+            detail = conflict.detail.clone()
+        )
+    } else {
+        let mut list: Vec<String> = conflicts.iter().take(CONFLICTS_LISTED).map(describe).collect();
+        if conflicts.len() > CONFLICTS_LISTED {
+            list.push(tr!("err-tri-breakline-elevation-conflicts-more", count = (conflicts.len() - CONFLICTS_LISTED).to_string()));
+        }
+        format!("{}\n{}", tr!("err-tri-breakline-elevation-conflicts", count = conflicts.len().to_string()), list.join("\n"))
+    };
+    anyhow::Error::new(BreaklineConflictFailure {
+        message,
+        edges: conflicts.iter().map(|conflict| conflict.edges).collect(),
+        kind: BreaklineConflictKind::ConflictingElevation,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,7 +174,15 @@ fn diagnostic_from_creation_error(error: &anyhow::Error) -> TriCreateDiagnostic 
     if let Some(failure) = error.downcast_ref::<DegenerateOpenBoundary>() {
         diagnostic_for_degenerate_ring(&failure.ring)
     } else if let Some(failure) = error.downcast_ref::<BreaklineConflictFailure>() {
-        diagnostic_for_conflicting_edges(failure.edges[0], failure.edges[1])
+        let mut diagnostic = TriCreateDiagnostic::default();
+        for [first, second] in &failure.edges {
+            let pair = diagnostic_for_conflicting_edges(*first, *second);
+            diagnostic.segments_world.extend(pair.segments_world);
+            for marker in pair.markers_world {
+                push_unique_marker(&mut diagnostic.markers_world, marker);
+            }
+        }
+        diagnostic
     } else {
         TriCreateDiagnostic::default()
     }
@@ -238,7 +305,7 @@ impl<'a> App<'a> {
         let mut paths = Vec::new();
         let mut rejected = 0usize;
         for id in object_ids {
-            let Some(obj) = self.scene_document.get_object(*id) else {
+            let Some(obj) = self.operand_object(*id) else {
                 continue;
             };
             if !matches!(obj, Object::Polyline { .. }) {
@@ -806,37 +873,35 @@ impl BreaklineEdgeGrid {
     }
 }
 
-fn validate_breakline_edge_z(paths: &[BreaklineRef<'_>], grid: &BreaklineEdgeGrid, path_index: usize, edge_index: usize) -> Result<()> {
-    let (a, b) = breakline_edge(paths[path_index], edge_index);
+/// Every pair of breakline edges that cross, touch or overlap in plan at
+/// different elevations, each pair once, in path order: all of them, so the
+/// failure can show every place to fix rather than one at a time.
+fn breakline_elevation_conflicts(paths: &[BreaklineRef<'_>], grid: &BreaklineEdgeGrid) -> Vec<ElevationConflict> {
+    use rayon::prelude::*;
 
-    // Only edges whose padded boxes meet can cross, touch or overlap, which
-    // is all `conflicting_z_detail` reports.
-    for (other_path_index, other_edge_index) in grid.near(a, b) {
-        if other_path_index == path_index && other_edge_index == edge_index {
-            continue;
-        }
-        let (c, d) = breakline_edge(paths[other_path_index], other_edge_index);
-        if let Some(detail) = conflicting_z_detail(a, b, c, d) {
-            return Err(anyhow::Error::new(BreaklineConflictFailure {
-                message: tr!(
-                    "err-tri-breakline-edges-conflicting-elevations",
-                    path_index = path_index.to_string(),
-                    edge_index = edge_index.to_string(),
-                    a = format!("{a:.3}"),
-                    b = format!("{b:.3}"),
-                    other_path_index = other_path_index.to_string(),
-                    other_edge_index = other_edge_index.to_string(),
-                    c = format!("{c:.3}"),
-                    d = format!("{d:.3}"),
-                    detail = detail
-                ),
-                edges: [[a, b], [c, d]],
-                kind: BreaklineConflictKind::ConflictingElevation,
-            }));
-        }
-    }
-
-    Ok(())
+    let edges: Vec<(usize, usize)> = paths
+        .iter()
+        .enumerate()
+        .flat_map(|(path_index, path)| (0..breakline_edge_count(*path)).map(move |edge_index| (path_index, edge_index)))
+        .collect();
+    edges
+        .par_iter()
+        .flat_map_iter(|&(path_index, edge_index)| {
+            let (a, b) = breakline_edge(paths[path_index], edge_index);
+            // Only edges whose padded boxes meet can cross, touch or overlap,
+            // which is all `conflicting_z_detail` reports. Each pair is
+            // checked from its lower edge only.
+            grid.near(a, b).into_iter().filter(move |&other| other > (path_index, edge_index)).filter_map(move |other| {
+                let (c, d) = breakline_edge(paths[other.0], other.1);
+                conflicting_z_detail(a, b, c, d).map(|detail| ElevationConflict {
+                    first: (path_index, edge_index),
+                    second: other,
+                    edges: [[a, b], [c, d]],
+                    detail,
+                })
+            })
+        })
+        .collect()
 }
 
 fn interpolate_z_on_edge(a: glam::DVec3, b: glam::DVec3, point: glam::DVec2) -> f64 {
@@ -971,7 +1036,12 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
         userspace_warn!("{}", tr!("cmd-creation-generate-upper-surface-ignored-count", count = ignored_edges.len().to_string()));
     }
 
-    let edge_grid = BreaklineEdgeGrid::new(if upper_surface { &[] } else { &paths });
+    if !upper_surface {
+        let conflicts = breakline_elevation_conflicts(&paths, &BreaklineEdgeGrid::new(&paths));
+        if !conflicts.is_empty() {
+            return Err(elevation_conflict_failure(&conflicts));
+        }
+    }
     let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::new();
     let mut handle_z: HashMap<usize, f64> = HashMap::new();
 
@@ -1024,9 +1094,6 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
             if a == b {
                 continue;
             }
-            if !upper_surface {
-                validate_breakline_edge_z(&paths, &edge_grid, path_index, i)?;
-            }
 
             let (edge_start, edge_end) = breakline_edge(path, i);
             // A panic here is spade failing to split a near-degenerate
@@ -1039,7 +1106,7 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
                 if let Some(edges) = conflicting_edges {
                     return Err(anyhow::Error::new(BreaklineConflictFailure {
                         message,
-                        edges,
+                        edges: vec![edges],
                         kind: BreaklineConflictKind::Geometric,
                     }));
                 }
@@ -1338,25 +1405,20 @@ pub(super) fn cdt_fill_ring(ring: &[glam::DVec3], flip_winding: bool) -> Result<
 }
 
 fn validate_single_ring_crossing_z(ring: &[glam::DVec3]) -> Result<()> {
-    for edge_index in 0..ring.len() {
-        let a = ring[edge_index];
-        let b = ring[(edge_index + 1) % ring.len()];
-        for other_edge_index in edge_index + 1..ring.len() {
-            let c = ring[other_edge_index];
-            let d = ring[(other_edge_index + 1) % ring.len()];
-            if let Some(detail) = conflicting_z_detail(a, b, c, d) {
-                return Err(anyhow::Error::new(BreaklineConflictFailure {
-                    message: tr!(
-                        "err-tri-polyline-edges-conflicting-elevations",
-                        edge_index = edge_index.to_string(),
-                        other_edge_index = other_edge_index.to_string(),
-                        detail = detail
-                    ),
-                    edges: [[a, b], [c, d]],
-                    kind: BreaklineConflictKind::ConflictingElevation,
-                }));
-            }
-        }
+    let path: BreaklineRef<'_> = (ring, true);
+    let conflicts = breakline_elevation_conflicts(&[path], &BreaklineEdgeGrid::new(&[path]));
+    match conflicts.as_slice() {
+        [] => Ok(()),
+        [conflict] => Err(anyhow::Error::new(BreaklineConflictFailure {
+            message: tr!(
+                "err-tri-polyline-edges-conflicting-elevations",
+                edge_index = conflict.first.1.to_string(),
+                other_edge_index = conflict.second.1.to_string(),
+                detail = conflict.detail.clone()
+            ),
+            edges: vec![conflict.edges],
+            kind: BreaklineConflictKind::ConflictingElevation,
+        })),
+        _ => Err(elevation_conflict_failure(&conflicts)),
     }
-    Ok(())
 }

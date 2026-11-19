@@ -129,6 +129,9 @@ pub(crate) struct ViewportPixels {
     pub(crate) rgba: Vec<u8>,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    /// World to clip space as the picture was drawn, vertical exaggeration
+    /// included: what tells where in the world each pixel is.
+    pub(crate) view_proj: glam::DMat4,
 }
 
 /// How [`Graphics::render_view`] looks at the scene. The whole view is in
@@ -190,6 +193,7 @@ impl Graphics<'_> {
         let section = self.slice_view.take();
         target.swap_into(self);
         let pixels = self.draw_requested_view(request, content, &target.view, &target.texture);
+        let view_proj = self.view_proj();
         target.swap_into(self);
         self.camera = window_camera;
         self.slice_view = section;
@@ -198,7 +202,7 @@ impl Graphics<'_> {
         // selection, which the shared GPU caches were just restyled away from.
         self.scene_cache_key = None;
         self.request_redraw();
-        pixels.map(|rgba| ViewportPixels { rgba, width, height })
+        pixels.map(|rgba| ViewportPixels { rgba, width, height, view_proj })
     }
 
     fn draw_requested_view(&mut self, request: &ViewRequest, content: frame::SceneContent<'_>, view: &wgpu::TextureView, texture: &wgpu::Texture) -> Result<Vec<u8>, String> {

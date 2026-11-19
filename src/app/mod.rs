@@ -710,6 +710,12 @@ pub(crate) struct App<'a> {
     /// Heavy compute jobs (include/cut/create) running on background threads;
     /// drained by `poll_jobs` each frame.
     pending_jobs: Vec<jobs::BackgroundJob<'a>>,
+    /// How the last few reported jobs went, newest last, for the MCP server
+    /// to tell the AI what its work made or why it failed (`JobOutcome`).
+    job_outcomes: std::collections::VecDeque<jobs::JobOutcome>,
+    /// Why the job `poll_jobs` is settling failed: set by its poll step,
+    /// taken by `poll_jobs`, as `applied_job_needs_gpu` is.
+    settled_job_error: Option<String>,
     /// Set by a job's apply step that handed the renderer new geometry to
     /// upload; read and cleared by `poll_jobs`, which keeps that job's busy
     /// state until the GPU upload finishes instead of settling it early.
@@ -915,6 +921,8 @@ impl<'a> Default for App<'a> {
             project_asset_baseline: SaveToken::default(),
             pending_saves: Vec::new(),
             pending_jobs: Vec::new(),
+            job_outcomes: std::collections::VecDeque::new(),
+            settled_job_error: None,
             applied_job_needs_gpu: false,
             #[cfg(target_arch = "wasm32")]
             web_import_files: None,

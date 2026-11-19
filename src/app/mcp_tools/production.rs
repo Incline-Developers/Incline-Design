@@ -183,12 +183,13 @@ pub(super) fn definitions() -> Vec<Value> {
         tool(
             "add_haul_road",
             "Add a haul road",
-            "Add one road to the haul network through points, as drawing it in Setup's Road Network step does. Each end joins the node already within the network's join tolerance of it (and stays on it, draped or not), or becomes a new node; the points between are the road's shape. drape lays it on a surface (a design or the topography) instead of the RLs given, with a point every drape_spacing metres. at_end makes its last end where trucks dump at or reclaim from a destination. One undo step. Returns the roads' ids (one, or one per piece with node_every_m), its nodes, its length and its steepest grade (rise over run), to hold against the trucks' maximum_grade. get_schedule_status's haulage step says which dig blocks still reach no road.",
+            "Add one road to the haul network through points, as drawing it in Setup's Road Network step does. Each end joins the node already within the network's join tolerance of it (and stays on it, draped or not), or becomes a new node; the points between are the road's shape. drape lays it on a surface (a design or the topography) instead of the RLs given, with a point every drape_spacing metres. at_end makes its last end where trucks dump at or reclaim from a destination. One undo step. Returns the roads' ids (one, or one per piece with node_every_m), its nodes, its length, and its steepest grade (rise over run) with where it is, to hold against the trucks' maximum_grade. Draped on raw ground, windrows and small steps show as short steep pitches no road would have: drape_smoothing_m evens them out as a built road would. delete_haul_roads takes a road out again. get_schedule_status's haulage step says which dig blocks still reach no road.",
             json!({
                 "points": { "type": "array", "minItems": 2, "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }, "description": "[x, y, z] along the road, first end to last." },
                 "name": { "type": "string" },
                 "drape": { "type": "integer", "minimum": 0, "description": "A surface to lay the road on. It must be loaded." },
                 "drape_spacing": { "type": "number", "exclusiveMinimum": 0, "description": "With drape: the most metres between points. 10 if left out." },
+                "drape_smoothing_m": { "type": "number", "minimum": 0, "description": "With drape: each point's RL becomes the surface's average over this many metres of road centred on it, as cut and fill would even it, so the grade follows the lie of the ground rather than every bump in it. 0 (the surface's RL exactly) if left out; about 50 suits raw ground." },
                 "speed_limit_kph": { "type": "number", "exclusiveMinimum": 0 },
                 "node_every_m": { "type": "number", "exclusiveMinimum": 0, "description": "Split the road into pieces about this long, with a node at each join. Dig blocks join the network at nodes, so a ramp past several benches needs them along it. Nodes at its ends only if left out." },
                 "at_end": {
@@ -202,6 +203,16 @@ pub(super) fn definitions() -> Vec<Value> {
                 },
             }),
             &["points"],
+            false,
+        ),
+        tool(
+            "delete_haul_roads",
+            "Delete haul roads",
+            "Take roads out of the haul network, as deleting them in Setup's Road Network step does. A node left with no road and no destination role goes with them. One undo step. get_schedule_setup lists the roads.",
+            json!({
+                "roads": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0 }, "description": "The roads' ids." },
+            }),
+            &["roads"],
             false,
         ),
         tool(
@@ -264,6 +275,7 @@ impl App<'_> {
             "set_bar_dig_blocks" => self.mcp_set_bar_dig_blocks(arguments),
             "edit_schedule_item" => self.mcp_edit_schedule_item(arguments),
             "add_haul_road" => self.mcp_add_haul_road(arguments),
+            "delete_haul_roads" => self.mcp_delete_haul_roads(arguments),
             "get_schedule_status" => self.mcp_schedule_status(),
             "set_schedule_setup" => self.mcp_set_schedule_setup(arguments),
             "run_schedule" => self.mcp_run_schedule(arguments),
@@ -596,6 +608,11 @@ impl App<'_> {
                 point.z = crate::app::commands::drawing::drape::uppermost_topology_z(*point, &[surface])
                     .ok_or_else(|| format!("The road leaves the surface {} at ({:.1}, {:.1}).", surface.name, point.x, point.y))?;
             }
+            match arguments["drape_smoothing_m"].as_f64() {
+                None => {}
+                Some(length) if length >= 0.0 => smooth_profile(&mut draped, length),
+                Some(_) => return Err("drape_smoothing_m is 0 or more.".to_owned()),
+            }
             points = draped;
         }
         if let Some(node) = joined_first {
@@ -723,13 +740,23 @@ impl App<'_> {
             .chain(std::iter::once(after.nodes.iter().find(|node| node.id == to).map_or(last, |node| node.pos)))
             .collect();
         let length: f64 = shape.windows(2).map(|pair| pair[0].distance(pair[1])).sum();
-        let steepest = shape
-            .windows(2)
-            .filter_map(|pair| {
-                let run = pair[0].truncate().distance(pair[1].truncate());
-                (run > 1e-9).then(|| (pair[1].z - pair[0].z).abs() / run)
-            })
-            .fold(0.0, f64::max);
+        // The steepest stretch, and how far along the road it starts.
+        let mut chainage = 0.0;
+        let mut steepest: Option<(f64, usize, f64)> = None;
+        for (index, pair) in shape.windows(2).enumerate() {
+            let run = pair[0].truncate().distance(pair[1].truncate());
+            if run > 1e-9 {
+                let grade = (pair[1].z - pair[0].z).abs() / run;
+                if steepest.is_none_or(|(most, ..)| grade > most) {
+                    steepest = Some((grade, index, chainage));
+                }
+            }
+            chainage += pair[0].distance(pair[1]);
+        }
+        let round = |value: f64| (value * 1000.0).round() / 1000.0;
+        let corner = |point: DVec3| [round(point.x), round(point.y), round(point.z)];
+        let steepest_at = steepest.map(|(_, index, chainage)| json!({ "from": corner(shape[index]), "to": corner(shape[index + 1]), "chainage_m": round(chainage) }));
+        let steepest = steepest.map_or(0.0, |(grade, ..)| grade);
         self.execute_job_edit(Command::SetHaulNetwork {
             before: Box::new(before),
             after: Box::new(after),
@@ -740,8 +767,39 @@ impl App<'_> {
         Ok(json!({
             "roads": roads.iter().map(|road| road.0).collect::<Vec<_>>(),
             "nodes": nodes.iter().map(|node| node.0).collect::<Vec<_>>(),
-            "length_m": length,
-            "steepest_grade": steepest,
+            "length_m": round(length),
+            "steepest_grade": (steepest * 10_000.0).round() / 10_000.0,
+            "steepest_at": steepest_at,
+        }))
+    }
+
+    fn mcp_delete_haul_roads(&mut self, arguments: &Value) -> Result<Value, String> {
+        use crate::{model::haulage::RoadId, ui::state::HaulEdit};
+
+        let project = self.workspace.active_project().ok_or("No project is open.")?;
+        let network = project.project.document.haulage();
+        let roads: Vec<RoadId> = arguments["roads"]
+            .as_array()
+            .ok_or("delete_haul_roads needs the roads' ids.")?
+            .iter()
+            .map(|id| {
+                let id = id.as_u64().ok_or("Road ids are whole numbers.")?;
+                network
+                    .roads
+                    .iter()
+                    .find(|road| road.id.0 == id)
+                    .map(|road| road.id)
+                    .ok_or_else(|| format!("There is no road with id {id}. get_schedule_setup lists them."))
+            })
+            .collect::<Result<_, String>>()?;
+        let nodes_before = network.nodes.len();
+        let runtime = project.runtime_id;
+        self.edit_haulage(runtime, HaulEdit::Many(roads.iter().map(|road| HaulEdit::DeleteRoad(*road)).collect()))
+            .map_err(|error| format!("{error:#}"))?;
+        let nodes_after = self.workspace.active_document().map_or(0, |document| document.haulage().nodes.len());
+        Ok(json!({
+            "deleted": roads.iter().map(|road| road.0).collect::<Vec<_>>(),
+            "nodes_removed": nodes_before.saturating_sub(nodes_after),
         }))
     }
 
@@ -1162,4 +1220,53 @@ fn report_tables(text: &str, wanted: Option<&[&str]>) -> Result<Value, String> {
         tables.insert(title.to_owned(), json!({ "columns": columns, "rows": rows }));
     }
     Ok(Value::Object(tables))
+}
+
+/// Even out `points`' RLs, as cut and fill would: each point's RL becomes the
+/// profile's average over `length` of road centred on it, measured along the
+/// road in plan. Near an end the window narrows evenly to stay on the road,
+/// down to nothing at the end itself, which keeps its own RL where the road
+/// meets what it joins: so the road eases into it rather than stepping.
+fn smooth_profile(points: &mut [glam::DVec3], length: f64) {
+    if length <= 0.0 || points.len() < 3 {
+        return;
+    }
+    // How far along each point is, and the area under the profile up to it.
+    let mut along = vec![0.0; points.len()];
+    let mut area = vec![0.0; points.len()];
+    for index in 1..points.len() {
+        let run = points[index - 1].truncate().distance(points[index].truncate());
+        along[index] = along[index - 1] + run;
+        area[index] = area[index - 1] + run * (points[index - 1].z + points[index].z) / 2.0;
+    }
+    let total = along[along.len() - 1];
+    // The area under the profile up to `at`.
+    let area_to = |at: f64| {
+        let at = at.clamp(0.0, total);
+        let index = along.partition_point(|distance| *distance <= at).clamp(1, along.len() - 1);
+        let (start, end) = (along[index - 1], along[index]);
+        let run = end - start;
+        let z_start = points[index - 1].z;
+        let z_at = if run > 0.0 {
+            z_start + (points[index].z - z_start) * (at - start) / run
+        } else {
+            z_start
+        };
+        area[index - 1] + (at - start) * (z_start + z_at) / 2.0
+    };
+    let half = length / 2.0;
+    let smoothed: Vec<f64> = (1..points.len() - 1)
+        .map(|index| {
+            let reach = half.min(along[index]).min(total - along[index]);
+            let (low, high) = (along[index] - reach, along[index] + reach);
+            if high - low <= 1e-9 {
+                points[index].z
+            } else {
+                (area_to(high) - area_to(low)) / (high - low)
+            }
+        })
+        .collect();
+    for (index, z) in (1..points.len() - 1).zip(smoothed) {
+        points[index].z = z;
+    }
 }

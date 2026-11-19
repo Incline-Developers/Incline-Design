@@ -39,7 +39,7 @@ fn starts(name: &str, title: &str, description: &str, properties: Value, require
     json!({
         "name": name,
         "title": title,
-        "description": format!("{description} Runs in the background: returns once started, and get_tasks follows it (and can wait for it). The result lands as one undo step; get_project lists it, and get_activity says if it failed."),
+        "description": format!("{description} Runs in the background: returns once started with its task ids, and get_tasks follows it (and can wait for it), then says what it made or why it failed. A call made with a progress token is answered once it is done, with the same. The result lands as one undo step."),
         "inputSchema": { "type": "object", "properties": properties, "required": required, "additionalProperties": false },
         "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
     })
@@ -50,7 +50,7 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "get_tasks",
             "title": "Get tasks",
-            "description": "List the work Incline Design is doing in the background (loading, building surfaces, optimisation and the rest) with how far along each is, and the last few tasks that finished. Give wait_seconds to wait until nothing is running, or that long, before answering. A finished task may have failed: get_activity says.",
+            "description": "List the work Incline Design is doing in the background (loading, building surfaces, optimisation and the rest) with how far along each is, and the last few tasks that finished, each with what it made (kind, id and name) or why it failed. Give wait_seconds to wait until nothing is running, or that long, before answering.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -63,11 +63,13 @@ pub(super) fn definitions() -> Vec<Value> {
         starts(
             "triangulate",
             "Triangulate design objects",
-            "Build a surface from design polylines and points, as Create Triangulation does: the objects are the surface's breaklines and spot heights. solid makes a closed solid from closed polylines (a stack of outlines) instead of an open surface.",
+            "Build a surface from design polylines and points, as Create Triangulation does: the objects are the surface's breaklines and spot heights, on hidden layers too. solid makes a closed solid from closed polylines (a stack of outlines) instead of an open surface. A surface is single-valued, so breaklines must not cross in plan at different elevations: if they do, it fails listing every place they do. Then fix the strings, or build with upper_surface; and where strings' ends only nearly meet, weld joins them.",
             json!({
                 "objects": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0 }, "description": "Ids of the design objects to build from." },
                 "name": name("surface"),
                 "solid": { "type": "boolean", "description": "Build a closed solid rather than an open surface. False if left out." },
+                "weld": { "type": "boolean", "description": format!("Join breakline points within {} of each other in plan and elevation first, as the failure dialog's Weld & Retry does: for strings digitised separately whose ends only nearly meet. The source polylines are unchanged. False if left out.", length(crate::app::commands::triangulation::COARSE_WELD_TOL)) },
+                "upper_surface": { "type": "boolean", "description": "Where breaklines cross in plan at different elevations, keep the upper one and leave out the lower one's edges, as the failure dialog's Generate Upper Surface does: for a crest above a toe, or a ramp over a bench. Not for a solid. False if left out." },
             }),
             &["objects", "name"],
         ),
@@ -118,7 +120,7 @@ pub(super) fn definitions() -> Vec<Value> {
         starts(
             "trim_surface",
             "Trim a surface to a topography",
-            "Trim a surface where it passes above or below a topography, as Trim to Topology does, keeping the rest as a new surface.",
+            "Trim a design surface to a topography, as Trim to Topography does: the part of it on the kept side of the topography becomes a new surface. Only where the topography lies under or over it is it kept: any part beyond the topography's footprint in plan is left out. To cut a topography back to where a pit or design meets it, use cut_topography_by_pit.",
             json!({
                 "surface": surface("The surface to trim."),
                 "topography": surface("The surface it is trimmed against."),
@@ -156,7 +158,7 @@ pub(super) fn definitions() -> Vec<Value> {
         starts(
             "cut_topography_by_pit",
             "Cut a topography to a pit shell",
-            "Trim a topography to where it lies outside a pit shell's footprint, as Cut Topology to Pit Shell does, ready to merge the pit in.",
+            "Cut a topography back to where a pit shell or pit design does not dig into it, as Cut Topography to Pit Shell does: the topography is kept under parts of the shell that stand above the ground. With the pit design trimmed to the topography (trim_surface, keep below), join_surfaces joins the two into one landform; include_solid_in_topography does all of that in one step.",
             json!({
                 "topography": surface("The topography to cut."),
                 "pit": surface("The pit shell."),
@@ -168,15 +170,26 @@ pub(super) fn definitions() -> Vec<Value> {
         starts(
             "include_solid_in_topography",
             "Merge a pit or stockpile into a topography",
-            "Replace the part of a topography a pit or stockpile solid covers with the solid's own surface, as Include Pit/Stockpile Solid does, giving the topography with the pit dug or the stockpile placed.",
+            "Set a pit or a dump into a topography, as Merge Shell into Topography does: where it digs into the ground (a pit) or stands on it (a dump or stockpile), the topography is replaced by its surface, giving the landform with the pit dug or the dump placed, in one step. Whether it is a pit or a dump is worked out from its shape.",
             json!({
                 "topography": surface("The topography."),
-                "solid": surface("The pit or stockpile solid."),
+                "solid": surface("The pit or dump: an open design surface such as a pit design, or a closed solid."),
                 "name": name("surface"),
                 "as_two": { "type": "boolean", "description": "Keep the result as two surfaces, the trimmed topography and the shell, rather than one. False if left out." },
                 "hide_old": { "type": "boolean", "description": "Hide the topography and solid it was made from. True if left out." },
             }),
             &["topography", "solid", "name"],
+        ),
+        starts(
+            "join_surfaces",
+            "Join surfaces into one",
+            "Join surfaces into one new surface, as Join Surfaces does: where they meet edge to edge, as a topography cut by cut_topography_by_pit and a design trimmed to it by trim_surface do, the points they share are joined, so the result is one continuous surface. The result says how far they meet. Surfaces that overlap in plan are joined as they are, two layers deep there, and the overlap is reported; to set a pit or dump into a topography, use include_solid_in_topography.",
+            json!({
+                "surfaces": { "type": "array", "minItems": 2, "items": { "type": "integer", "minimum": 0 }, "description": "The surfaces to join, each loaded." },
+                "name": name("surface"),
+                "unload_sources": { "type": "boolean", "description": "Unload the surfaces joined once the result is in, to save memory. False if left out." },
+            }),
+            &["surfaces", "name"],
         ),
         starts(
             "surface_point_cloud",
@@ -279,6 +292,30 @@ impl App<'_> {
                     hide_old: arguments["hide_old"].as_bool().unwrap_or(true),
                 })
             })(),
+            "join_surfaces" => (|| {
+                let surface_ids = arguments["surfaces"]
+                    .as_array()
+                    .ok_or("join_surfaces needs a list of surface ids.")?
+                    .iter()
+                    .map(|id| {
+                        let id = id.as_u64().ok_or("Surface ids are whole numbers.")?;
+                        let surface = self
+                            .triangulations
+                            .iter()
+                            .find(|surface| surface.id.0 == id)
+                            .ok_or_else(|| format!("There is no surface with id {id}. get_project lists them."))?;
+                        if !surface.state.loaded || surface.state.deferred.is_some() {
+                            return Err(format!("The surface {} ({id}) is not loaded. Load it with set_loaded first.", surface.name));
+                        }
+                        Ok(surface.id)
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok(UiCommand::ExecuteJoinSurfaces {
+                    surface_ids,
+                    name: required_name(arguments)?,
+                    unload_sources: arguments["unload_sources"].as_bool().unwrap_or(false),
+                })
+            })(),
             "surface_point_cloud" => self.mcp_surface_point_cloud(arguments),
             "classify_point_clouds" => self.mcp_classify_point_clouds(arguments),
             "join_point_clouds" => self.mcp_join_point_clouds(arguments),
@@ -287,15 +324,27 @@ impl App<'_> {
             _ => return None,
         };
         Some(match command {
-            Ok(command) => match self.handle_reported_ui_command(command) {
-                Ok(()) => ok(&json!({ "started": name, "running": self.mcp_tasks()["running"] })),
-                Err(error) => failed(format!("{error:#}")),
-            },
+            Ok(command) => {
+                let before = self.running_task_tickets();
+                match self.handle_reported_ui_command(command) {
+                    Ok(()) => {
+                        let tasks: Vec<Value> = self
+                            .background_tasks
+                            .reported
+                            .iter()
+                            .filter(|task| !before.contains(&task.ticket))
+                            .map(|task| json!({ "id": task.ticket.0, "task": task_label(&task.label) }))
+                            .collect();
+                        ok(&json!({ "started": name, "tasks": tasks }))
+                    }
+                    Err(error) => failed(format!("{error:#}")),
+                }
+            }
             Err(error) => failed(error),
         })
     }
 
-    /// What is running, and what finished last.
+    /// What is running, and what finished last with how it went.
     pub(super) fn mcp_tasks(&self) -> Value {
         let running: Vec<Value> = self
             .background_tasks
@@ -304,7 +353,8 @@ impl App<'_> {
             .map(|task| {
                 let progress = task.progress.snapshot();
                 json!({
-                    "task": task.label.trim_end_matches(['.', '…', ' ']),
+                    "id": task.ticket.0,
+                    "task": task_label(&task.label),
                     "seconds": task.started.elapsed().as_secs_f64().round(),
                     "fraction_done": progress.as_ref().map(|progress| progress.fraction),
                     "items": progress.and_then(|progress| progress.units),
@@ -316,9 +366,48 @@ impl App<'_> {
             .task_history
             .iter()
             .take(FINISHED_LISTED)
-            .map(|task| json!({ "task": task.text, "seconds": task.duration.as_secs_f64() }))
+            .map(|task| {
+                let mut entry = json!({ "id": task.ticket, "task": task.text, "seconds": (task.duration.as_secs_f64() * 10.0).round() / 10.0 });
+                if let Some(outcome) = self.job_outcomes.iter().find(|outcome| outcome.ticket.0 == task.ticket) {
+                    self.mcp_describe_outcome(outcome, &mut entry);
+                }
+                entry
+            })
             .collect();
         json!({ "running": running, "finished_newest_first": finished })
+    }
+
+    /// Add how a finished job went to its entry: `failed` with why, or
+    /// `made` with what it added, if anything.
+    pub(super) fn mcp_describe_outcome(&self, outcome: &crate::app::jobs::JobOutcome, entry: &mut Value) {
+        if let Some(error) = &outcome.error {
+            entry["failed"] = json!(super::plain(error));
+        }
+        if !outcome.made.is_empty() {
+            entry["made"] = outcome.made.iter().map(|made| self.mcp_made_item(*made)).collect();
+        }
+        if !outcome.log.is_empty() {
+            entry["log"] = outcome.log.iter().map(|line| super::plain(line)).collect();
+        }
+    }
+
+    /// Something a job added, as `{kind, id, name}` in get_project's terms.
+    fn mcp_made_item(&self, made: crate::app::jobs::MadeItem) -> Value {
+        use crate::{app::jobs::MadeItem, model::ItemRef};
+        let named = |name: Option<&String>| name.cloned().unwrap_or_default();
+        let (kind, id, name) = match made {
+            MadeItem::Item(ItemRef::Triangulation(id)) => ("surface", id.0, named(self.triangulations.iter().find(|item| item.id == id).map(|item| &item.name))),
+            MadeItem::Item(ItemRef::BlockModel(id)) => ("block_model", id.0, named(self.block_models.iter().find(|item| item.id == id).map(|item| &item.name))),
+            MadeItem::Item(ItemRef::DrillHole(id)) => ("drillholes", id.0, named(self.drill_holes.iter().find(|item| item.id == id).map(|item| &item.name))),
+            MadeItem::Item(ItemRef::PointCloud(id)) => ("point_cloud", id.0, named(self.point_clouds.iter().find(|item| item.id == id).map(|item| &item.name))),
+            MadeItem::Item(ItemRef::Raster(id)) => ("raster", id.0, named(self.raster_textures.iter().find(|item| item.id == id).map(|item| &item.name))),
+            MadeItem::Layer(id) => (
+                "design_layer",
+                id.0,
+                named(self.workspace.active_document().and_then(|document| document.layer(id)).map(|layer| &layer.name)),
+            ),
+        };
+        json!({ "kind": kind, "id": id, "name": name })
     }
 
     /// The id of a surface that is in the project.
@@ -343,13 +432,27 @@ impl App<'_> {
         if let Some(missing) = ids.iter().find(|id| document.get_object(**id).is_none()) {
             return Err(format!("There is no design object with id {} in a loaded layer.", missing.0));
         }
-        Ok(UiCommand::ExecuteCreateTriangulation {
-            name: required_name(arguments)?,
-            object_ids: ids,
-            surface_type: if arguments["solid"].as_bool().unwrap_or(false) {
-                TriSurfaceType::SolidClosed
-            } else {
-                TriSurfaceType::Surface
+        let name = required_name(arguments)?;
+        let solid = arguments["solid"].as_bool().unwrap_or(false);
+        let surface_type = if solid { TriSurfaceType::SolidClosed } else { TriSurfaceType::Surface };
+        let coarse_weld = arguments["weld"].as_bool().unwrap_or(false);
+        Ok(match arguments["upper_surface"].as_bool().unwrap_or(false) {
+            true if solid => return Err("upper_surface is for an open surface, not a solid.".to_owned()),
+            true => UiCommand::ExecuteCreateTriangulationUpperSurface {
+                name,
+                object_ids: ids,
+                surface_type,
+                coarse_weld,
+            },
+            false if coarse_weld => UiCommand::ExecuteCreateTriangulationWithWeld {
+                name,
+                object_ids: ids,
+                surface_type,
+            },
+            false => UiCommand::ExecuteCreateTriangulation {
+                name,
+                object_ids: ids,
+                surface_type,
             },
         })
     }
@@ -638,6 +741,20 @@ impl App<'_> {
             name: required_name(arguments)?,
         })
     }
+}
+
+/// A length in metres as a description says it: 0.05 as "5 cm".
+fn length(metres: f64) -> String {
+    if metres < 1.0 {
+        format!("{} cm", (metres * 100.0).round())
+    } else {
+        format!("{metres} m")
+    }
+}
+
+/// A task's label as the AI reads it: without the trailing ellipsis.
+pub(super) fn task_label(label: &str) -> &str {
+    label.trim_end_matches(['.', '…', ' '])
 }
 
 /// A new item's name, from the arguments.

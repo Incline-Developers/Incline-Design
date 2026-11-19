@@ -1579,6 +1579,21 @@ impl<'a> App<'a> {
                 }
                 result
             }
+            UiCommand::OpenJoinSurfaces => {
+                self.open_join_surfaces();
+                Ok(())
+            }
+            UiCommand::ExecuteJoinSurfaces {
+                surface_ids,
+                name,
+                unload_sources,
+            } => {
+                let result = self.join_surfaces(surface_ids, name, unload_sources);
+                if result.is_ok() {
+                    self.editor.tri_join_open = false;
+                }
+                result
+            }
             UiCommand::OpenContourTriangulation => {
                 self.open_contour_surface();
                 Ok(())

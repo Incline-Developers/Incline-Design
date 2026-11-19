@@ -46,7 +46,7 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "get_project",
             "title": "Get project",
-            "description": "Describe the project open in Incline Design: its name and file, whether it has unsaved changes, how much of the computer's memory is in use, and every item in it with its id: surfaces (triangulations, with their triangle counts when loaded), block models (block and variable counts, extents), drillhole collections (hole and field counts), point clouds, rasters, and design layers. Whether each is loaded and whether it is hidden, and the explorer folder it is filed in (folders lists them by section). Coordinates are in the project's own units, usually metres, with Z up.",
+            "description": "Describe the project open in Incline Design: whether this Incline is the user's window or a headless one of this client's own (mode), its name and file, whether it has unsaved changes, how much of the computer's memory is in use, and every item in it with its id: surfaces (triangulations, with their triangle counts when loaded), block models (block and variable counts, extents), drillhole collections (hole and field counts), point clouds, rasters, and design layers. Whether each is loaded and whether it is hidden, and the explorer folder it is filed in (folders lists them by section). Coordinates are in the project's own units, usually metres, with Z up.",
             "inputSchema": no_arguments(),
             "annotations": { "readOnlyHint": true },
         }),
@@ -116,14 +116,25 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "sample_surface",
             "title": "Sample surfaces",
-            "description": "Read the RL of surfaces at points seen from above: for each [x, y], the z of the uppermost of the given surfaces there, or null where none of them is. Useful for fitting a design to the ground. The surfaces must be loaded; set_visibility loads them.",
+            "description": "Read the RL of surfaces seen from above: the z of the uppermost of the given surfaces at each point, or null where none of them is. Give points for a list of places, or grid for a regular grid over an area, answered as rows of RLs, south to north, each row west to east. Useful for fitting a design to the ground. RLs are rounded to the millimetre. The surfaces must be loaded; set_loaded loads them.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "surfaces": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0 }, "description": "Surface ids." },
                     "points": { "type": "array", "minItems": 1, "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "[x, y] pairs in the project's units." },
+                    "grid": {
+                        "type": "object",
+                        "description": "A grid in place of points: from min to max in plan, every spacing, its first point at min. A large grid makes a long answer: 100 by 100 is 10 000 RLs.",
+                        "properties": {
+                            "min": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, y] of the south-west corner." },
+                            "max": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, y] of the north-east corner." },
+                            "spacing": { "type": "number", "exclusiveMinimum": 0, "description": "Distance between points, east and north." },
+                        },
+                        "required": ["min", "max", "spacing"],
+                        "additionalProperties": false,
+                    },
                 },
-                "required": ["surfaces", "points"],
+                "required": ["surfaces"],
                 "additionalProperties": false,
             },
             "annotations": { "readOnlyHint": true },
@@ -202,6 +213,9 @@ impl App<'_> {
             })
             .unwrap_or_default();
         json!({
+            // Headless is a private Incline the user does not see; window is
+            // theirs, open in front of them.
+            "mode": if self.headless { "headless" } else { "window" },
             "name": project.map(|project| project.name.clone()),
             "file": project.and_then(|project| project.path.as_ref()).map(|path| path.display().to_string()),
             "unsaved_changes": project.is_some_and(|project| project.dirty),
@@ -410,14 +424,36 @@ impl App<'_> {
             }
             surfaces.push(surface);
         }
-        let points = arguments["points"].as_array().ok_or("sample_surface needs a list of [x, y] points.")?;
+        let rl = |x: f64, y: f64| crate::app::commands::drawing::drape::uppermost_topology_z(DVec3::new(x, y, 0.0), &surfaces).map(|z| (z * 1000.0).round() / 1000.0);
+        if !arguments["grid"].is_null() {
+            let grid = &arguments["grid"];
+            let corner = |key: &str| match (grid[key][0].as_f64(), grid[key][1].as_f64()) {
+                (Some(x), Some(y)) => Ok(glam::DVec2::new(x, y)),
+                _ => Err(format!("grid.{key} is [x, y].")),
+            };
+            let (min, max) = (corner("min")?, corner("max")?);
+            let spacing = grid["spacing"].as_f64().filter(|spacing| *spacing > 0.0).ok_or("grid.spacing must be above 0.")?;
+            if max.x < min.x || max.y < min.y {
+                return Err("grid.max must be north-east of grid.min.".to_owned());
+            }
+            // Every spacing from min, up to max: a point a hair short of max
+            // through rounding still counts.
+            let count = |span: f64| (span / spacing + 1.0e-9).floor() as usize + 1;
+            let (columns, rows) = (count(max.x - min.x), count(max.y - min.y));
+            let rls: Vec<Vec<Option<f64>>> = (0..rows)
+                .into_par_iter()
+                .map(|row| (0..columns).map(|column| rl(min.x + column as f64 * spacing, min.y + row as f64 * spacing)).collect())
+                .collect();
+            return Ok(json!({ "origin": [min.x, min.y], "spacing": spacing, "columns": columns, "rows": rows, "rls": rls }));
+        }
+        let points = arguments["points"].as_array().ok_or("sample_surface needs points, or a grid.")?;
         let rls = points
             .iter()
             .map(|point| {
                 let (Some(x), Some(y)) = (point[0].as_f64(), point[1].as_f64()) else {
                     return Err("Each point is [x, y].".to_owned());
                 };
-                Ok(crate::app::commands::drawing::drape::uppermost_topology_z(DVec3::new(x, y, 0.0), &surfaces))
+                Ok(rl(x, y))
             })
             .collect::<Result<Vec<_>, String>>()?;
         Ok(json!({ "rls": rls }))

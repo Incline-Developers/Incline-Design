@@ -21,7 +21,7 @@ impl<'a> App<'a> {
             (tri.mesh.clone(), tri.name.clone())
         };
 
-        let poly_verts: Vec<glam::DVec3> = match self.scene_document.get_object(polyline_id).and_then(Object::closed_boundary) {
+        let poly_verts: Vec<glam::DVec3> = match self.operand_object(polyline_id).and_then(Object::closed_boundary) {
             Some(points) => points,
             None => anyhow::bail!(tr!("err-tri-not-closed-polyline-or-circle")),
         };
@@ -44,6 +44,7 @@ impl<'a> App<'a> {
                     TriPolylineClipMode::KeepOutside => tr!("err-tri-no-surface-outside-polyline"),
                 });
             }
+            let (new_verts, new_faces) = crate::model::triangulation::shared_cut_mesh(new_verts, new_faces);
             let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, |_| Vec::new())?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
@@ -106,6 +107,7 @@ impl<'a> App<'a> {
             if new_faces.is_empty() {
                 anyhow::bail!(tr!("err-tri-no-topography-outside-pit-shell"));
             }
+            let (new_verts, new_faces) = crate::model::triangulation::shared_cut_mesh(new_verts, new_faces);
             let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, |_| Vec::new())?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
@@ -167,6 +169,7 @@ impl<'a> App<'a> {
             if new_faces.is_empty() {
                 anyhow::bail!(tr!("err-tri-no-geometry-in-elevation-range"));
             }
+            let (new_verts, new_faces) = crate::model::triangulation::shared_cut_mesh(new_verts, new_faces);
             let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, |_| Vec::new())?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
@@ -230,6 +233,7 @@ impl<'a> App<'a> {
                 let retained = side.retained_relation();
                 anyhow::bail!(tr!("err-tri-no-surface-relative-topography", retained = retained));
             }
+            let (new_vertices, new_faces) = crate::model::triangulation::shared_cut_mesh(new_vertices, new_faces);
             let generated = session::build_generated_triangulation(name, new_vertices, new_faces, TriSurfaceType::Surface, |_| Vec::new())?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
@@ -436,7 +440,7 @@ fn clip_polyline_by_xy_edge_exact(polyline: &[glam::DVec3], edge_a: glam::DVec2,
 /// two small buffers rather than a vector per edge; the arithmetic is
 /// [`clip_polyline_by_xy_edge_exact`]'s, step for step, so the pieces are the
 /// same to the bit.
-fn clip_target_triangle_to_reference_xy_exact_into(target: [mesh_data::Vertex; 3], reference: [mesh_data::Vertex; 3], output: &mut Vec<glam::DVec3>) {
+pub(super) fn clip_target_triangle_to_reference_xy_exact_into(target: [mesh_data::Vertex; 3], reference: [mesh_data::Vertex; 3], output: &mut Vec<glam::DVec3>) {
     /// A triangle cut by three half-planes has at most six corners; the rest
     /// is room for rounding to add a crossing or two.
     const ROOM: usize = 12;

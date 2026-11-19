@@ -59,7 +59,7 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "render_view",
             "title": "Look at the project",
-            "description": "Draw a picture of the project's 3D scene from a view given entirely by the arguments, to see what it looks like or what a change did. It is drawn on its own: the user's window, camera and selection are not touched, and the same arguments give the same picture. With no arguments it frames everything shown, looking north-north-east and down at 40 degrees. Only loaded items can be drawn (set_loaded loads one).",
+            "description": "Draw a picture of the project's 3D scene from a view given entirely by the arguments, to see what it looks like or what a change did. It is drawn on its own: the user's window, camera and selection are not touched, and the same arguments give the same picture. With no arguments it frames everything shown, looking north-north-east and down at 40 degrees. Only loaded items can be drawn (set_loaded loads one). The answer says where the picture is in the world: world_to_pixel takes [x, y, z, 1] to [u, v, w], the pixel being (u / w, v / w) from the top left corner; a plan view also gives the eastings and northings of its edges and the project units (usually metres) per pixel. grid draws a labelled coordinate grid on a plan view, to read positions off it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -98,6 +98,7 @@ pub(super) fn definitions() -> Vec<Value> {
                     "hide": items_schema("Leave these out of the picture."),
                     "highlight": items_schema("Draw these as selected, to pick them out."),
                     "width": { "type": "integer", "minimum": MIN_SIZE, "maximum": MAX_SIZE, "description": format!("The picture's width in pixels. {DEFAULT_SIZE} if neither size is given; the other side follows a 16:10 shape (the window's for view window) when only one is.") },
+                    "grid": { "type": ["boolean", "number"], "description": "Plan view only: draw grid lines labelled with their eastings and northings, true for a spacing to suit the picture or a number for the spacing in the project's units. None if left out." },
                     "height": { "type": "integer", "minimum": MIN_SIZE, "maximum": MAX_SIZE },
                 },
                 "additionalProperties": false,
@@ -201,6 +202,12 @@ impl App<'_> {
 
     fn mcp_render_view(&mut self, arguments: &Value) -> Result<Value, String> {
         let named = arguments["view"].as_str();
+        let grid = match &arguments["grid"] {
+            Value::Null | Value::Bool(false) => None,
+            _ if named != Some("plan") => return Err("grid is drawn on a plan view: give view plan with it.".to_owned()),
+            Value::Bool(true) => Some(None),
+            value => Some(Some(value.as_f64().filter(|spacing| *spacing > 0.0).ok_or("grid is true, or a spacing above 0.")?)),
+        };
         let aim = self.mcp_view_aim(arguments)?;
         let window = matches!(aim, ViewAim::Window);
         let size = self.mcp_view_size(arguments, window)?;
@@ -210,7 +217,11 @@ impl App<'_> {
             size,
         };
         let mut filter = self.mcp_scene_filter(arguments, window)?;
-        let pixels = self.draw_mcp_view(&request, &mut filter)?;
+        let mut pixels = self.draw_mcp_view(&request, &mut filter)?;
+        let placement = placement(&pixels, named == Some("plan") && !request.perspective);
+        if let (Some(spacing), Some(plan)) = (grid, placement.plan) {
+            super::plan_grid::draw(&mut pixels, plan, spacing);
+        }
         let described = match (&request.aim, named) {
             (ViewAim::Section { width, .. }, _) => format!("a section {width} thick"),
             (ViewAim::Window, _) => "the user's view".to_owned(),
@@ -220,7 +231,7 @@ impl App<'_> {
                 format!("a view looking towards {azimuth:.0} degrees, {elevation:.0} degrees down")
             }
         };
-        picture(&pixels, &described)
+        picture(&pixels, &described, &placement)
     }
 
     /// The picture's size: as asked, or the default shape round what was.
@@ -438,7 +449,7 @@ impl App<'_> {
 
     fn mcp_show_in_window(&mut self, arguments: &Value) -> Result<Value, String> {
         if self.headless {
-            return Err("This Incline has no window (it was started with mcp --headless), so there is nothing to show the user.".to_owned());
+            return Err("This Incline has no window (it was started with mcp --headless), so there is nothing to show the user. render_view draws a picture instead.".to_owned());
         }
         let mut done = serde_json::Map::new();
         if arguments["workspace"].is_string() || arguments["page"].is_string() || arguments["schedule_hours"].is_number() {
@@ -651,8 +662,57 @@ fn view_direction(named: Option<&str>, arguments: &Value) -> Result<(DVec3, DVec
     Ok((forward, up))
 }
 
-/// `pixels` as an MCP image result, with a line saying what it shows.
-fn picture(pixels: &ViewportPixels, described: &str) -> Result<Value, String> {
+/// Where a picture is in the world.
+struct Placement {
+    /// Rows taking [x, y, z, 1] to [u, v, w], the pixel being (u / w, v / w)
+    /// from the top left corner.
+    world_to_pixel: [[f64; 4]; 3],
+    /// For a plan view, its edges.
+    plan: Option<super::plan_grid::PlanEdges>,
+}
+
+/// Where `pixels` is in the world, from the camera it was drawn with; `plan`
+/// for a plan view, north up, whose edges are worked out too.
+fn placement(pixels: &ViewportPixels, plan: bool) -> Placement {
+    let (width, height) = (f64::from(pixels.width), f64::from(pixels.height));
+    let matrix = pixels.view_proj;
+    let row = |index: usize| matrix.row(index).to_array();
+    let (x, y, w) = (row(0), row(1), row(3));
+    // pixel x = (ndc x + 1) / 2 * width, pixel y = (1 - ndc y) / 2 * height,
+    // ndc being clip / w: so u, v and w are linear in the clip coordinates.
+    let mut world_to_pixel = [
+        std::array::from_fn(|column| 0.5 * width * (x[column] + w[column])),
+        std::array::from_fn(|column| 0.5 * height * (w[column] - y[column])),
+        w,
+    ];
+    // An orthographic view has w the same everywhere: scaled to one, u and v
+    // are the pixel itself.
+    let constant_w = w[0] == 0.0 && w[1] == 0.0 && w[2] == 0.0 && w[3] != 0.0;
+    if constant_w {
+        let scale = 1.0 / w[3];
+        for row in &mut world_to_pixel {
+            for value in row.iter_mut() {
+                *value *= scale;
+            }
+        }
+    }
+    let plan = (plan && constant_w).then(|| {
+        // Straight down and north up: u depends on x alone, v on y alone.
+        let [ux, _, _, u0] = world_to_pixel[0];
+        let [_, vy, _, v0] = world_to_pixel[1];
+        super::plan_grid::PlanEdges {
+            west: -u0 / ux,
+            east: (width - u0) / ux,
+            north: -v0 / vy,
+            south: (height - v0) / vy,
+        }
+    });
+    Placement { world_to_pixel, plan }
+}
+
+/// `pixels` as an MCP image result, with a line saying what it shows and
+/// where it is in the world.
+fn picture(pixels: &ViewportPixels, described: &str, placement: &Placement) -> Result<Value, String> {
     use base64::Engine;
 
     let mut rgba = pixels.rgba.clone();
@@ -666,7 +726,34 @@ fn picture(pixels: &ViewportPixels, described: &str) -> Result<Value, String> {
         "content": [
             { "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(png), "mimeType": "image/png" },
             { "type": "text", "text": format!("{described}, {} by {} pixels.", pixels.width, pixels.height) },
+            { "type": "text", "text": serde_json::to_string(&placement_json(pixels, placement)).unwrap_or_default() },
         ],
         "isError": false,
     }))
+}
+
+/// Where a picture is in the world, as the AI reads it.
+fn placement_json(pixels: &ViewportPixels, placement: &Placement) -> Value {
+    let round = |value: f64| {
+        if value == 0.0 {
+            return 0.0;
+        }
+        // Nine significant figures keep a pixel's worth at any coordinate.
+        let digits = 9 - value.abs().log10().ceil() as i32;
+        let scale = 10f64.powi(digits);
+        (value * scale).round() / scale
+    };
+    let mut value = json!({
+        "world_to_pixel": placement.world_to_pixel.map(|row| row.map(round)),
+    });
+    if let Some(plan) = placement.plan {
+        value["plan"] = json!({
+            "west": round(plan.west),
+            "east": round(plan.east),
+            "south": round(plan.south),
+            "north": round(plan.north),
+            "units_per_pixel": round((plan.east - plan.west) / f64::from(pixels.width)),
+        });
+    }
+    value
 }

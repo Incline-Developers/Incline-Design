@@ -37,6 +37,9 @@ pub(crate) struct PendingWait {
     until: Option<Instant>,
     /// Tasks already running when the call came, which it does not wait for.
     before: HashSet<BackgroundTaskTicket>,
+    /// The first ticket the call's own work could have: tasks from it on,
+    /// not in `before`, are what it tells the outcome of.
+    since: u64,
     /// The tool's answer, given once the work is done; `None` answers with
     /// the tasks, as `get_tasks` does.
     result: Option<Value>,
@@ -93,16 +96,19 @@ impl App<'_> {
         let calculation_since = (call.request["params"]["name"] == "run_schedule"
             && matches!(call.request["params"]["arguments"]["what"].as_str(), Some("period" | "all" | "improve")))
         .then_some(self.mcp_schedule_serial_asked);
-        let started = self.running_task_tickets().difference(&before).next().is_some() || (pipelines && self.pipelines_busy());
+        let first_started = self.running_task_tickets().difference(&before).map(|ticket| ticket.0).min();
+        let started = first_started.is_some() || (pipelines && self.pipelines_busy());
         let held = call.request["method"] == "tools/call" && call.progress_token().is_some() && started && result["result"]["isError"] != true;
         if !held {
             call.reply(result);
             return;
         }
+        let since = first_started.unwrap_or(self.background_tasks.next_ticket);
         self.mcp_waits.push(PendingWait {
             call,
             until: None,
             before,
+            since,
             result: Some(result),
             told: None,
             pipelines,
@@ -121,6 +127,7 @@ impl App<'_> {
             call,
             until: Some(until),
             before: HashSet::new(),
+            since: 0,
             result: None,
             told: None,
             pipelines: false,
@@ -262,7 +269,25 @@ impl App<'_> {
             Some(mut response) => {
                 // Whatever went wrong in the work is in the log; it goes in
                 // the answer, as it does for any call.
-                let notes: Vec<String> = self.mcp_new_warnings().into_iter().collect();
+                let notes: Vec<String> = self.mcp_new_warnings().iter().map(|note| super::plain(note)).collect();
+                // What the work made or why it failed, task by task.
+                let finished: Vec<Value> = self
+                    .job_outcomes
+                    .iter()
+                    .filter(|outcome| outcome.ticket.0 >= wait.since && !wait.before.contains(&outcome.ticket))
+                    .map(|outcome| {
+                        let mut entry = json!({ "id": outcome.ticket.0, "task": outcome.label });
+                        self.mcp_describe_outcome(outcome, &mut entry);
+                        entry
+                    })
+                    .collect();
+                // Nothing it started did its work: the call failed, and why
+                // is the answer.
+                let failures: Vec<String> = finished
+                    .iter()
+                    .filter_map(|entry| Some(format!("{} failed: {}", entry["task"].as_str()?, entry["failed"].as_str()?)))
+                    .collect();
+                let problem = problem.or_else(|| (!failures.is_empty() && failures.len() == finished.len()).then(|| failures.join("\n")));
                 if let Some(problem) = problem {
                     // The work failed: its reason is the answer, not the
                     // result the call gave as the work started.
@@ -270,7 +295,15 @@ impl App<'_> {
                     response["result"]["content"] = json!([{ "type": "text", "text": problem }]);
                     response["result"].as_object_mut().map(|result| result.remove("structuredContent"));
                 } else if let Some(content) = response["result"]["content"].as_array_mut() {
-                    content.push(json!({ "type": "text", "text": "The work it started has finished." }));
+                    let text = if finished.is_empty() {
+                        "The work it started has finished.".to_owned()
+                    } else {
+                        format!(
+                            "The work it started has finished:\n{}",
+                            serde_json::to_string_pretty(&json!({ "finished": finished })).unwrap_or_default()
+                        )
+                    };
+                    content.push(json!({ "type": "text", "text": text }));
                 }
                 if let Some(content) = response["result"]["content"].as_array_mut() {
                     content.extend(notes.into_iter().map(|text| json!({ "type": "text", "text": text })));
