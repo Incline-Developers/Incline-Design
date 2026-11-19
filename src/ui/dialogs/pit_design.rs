@@ -694,6 +694,42 @@ fn draw_slope_rules(ui: &mut egui::Ui, settings: &mut PitDesignSettings, picking
     }
 }
 
+/// A list of numbers typed into one field, such as RLs: what is typed stays
+/// as it is while it still reads as the list held, so a half-typed list is
+/// not rewritten under the cursor. Values `accept` refuses leave the list
+/// as it was.
+fn number_list_field(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    (label, hint, help): (String, String, String),
+    values: &mut Vec<f64>,
+    accept: impl Fn(f64) -> bool,
+) {
+    let typed_id = egui::Id::unique(id);
+    let held = values.clone();
+    let mut text = ui
+        .data(|data| data.get_temp::<(String, Vec<f64>)>(typed_id))
+        .filter(|(_, read)| *read == held)
+        .map_or_else(|| held.iter().map(|value| format!("{value}")).collect::<Vec<_>>().join(", "), |(text, _)| text);
+    let response = MenuFieldText::new(label, &mut text).width(FIELD_WIDTH).hint_text(hint).help_text(help).show(ui);
+    if response.changed() {
+        let read: Option<Vec<f64>> = text
+            .split([',', ' ', ';'])
+            .filter(|part| !part.trim().is_empty())
+            .map(|part| part.trim().parse::<f64>().ok().filter(|value| accept(*value)))
+            .collect();
+        match read {
+            Some(read) => {
+                values.clone_from(&read);
+                ui.data_mut(|data| data.insert_temp(typed_id, (text, read)));
+            }
+            None => {
+                ui.data_mut(|data| data.insert_temp(typed_id, (text, held)));
+            }
+        }
+    }
+}
+
 /// The ramp's settings, for a pit that has one: where it starts, its
 /// width and gradient, which way it climbs, and how it turns.
 fn draw_ramp_settings(ui: &mut egui::Ui, ramp: &mut RampSettings, commands: &mut Vec<UiCommand>, index: usize, (base_rl, sign, height): (f64, f64, f64)) {
@@ -756,16 +792,33 @@ fn draw_ramp_settings(ui: &mut egui::Ui, ramp: &mut RampSettings, commands: &mut
     .help_text(tr!("pit-design-layout-help"))
     .show(ui);
     if ramp.switchback {
-        MenuFieldU32::new(tr!("pit-design-switchback-every"), &mut ramp.switchback_every, 1..=u32::MAX)
+        MenuFieldU32::new(tr!("pit-design-switchback-every"), &mut ramp.switchback_every, 0..=u32::MAX)
             .width(FIELD_WIDTH)
             .help_text(tr!("pit-design-switchback-every-help"))
             .show(ui);
+        number_list_field(
+            ui,
+            ("pit_design_turns_at", index),
+            (tr!("pit-design-turns-at"), tr!("pit-design-turns-at-hint"), tr!("pit-design-turns-at-help")),
+            &mut ramp.turns_at,
+            f64::is_finite,
+        );
         MenuFieldF64::new(tr!("pit-design-inside-radius"), &mut ramp.inside_radius, 0.0..=10000.0)
             .width(FIELD_WIDTH)
             .speed(0.5)
             .suffix(" m")
             .help_text(tr!("pit-design-inside-radius-help"))
             .show(ui);
+        MenuFieldF64::new(tr!("pit-design-turn-widening"), &mut ramp.turn_widening, 0.0..=1000.0)
+            .width(FIELD_WIDTH)
+            .speed(0.1)
+            .suffix(" m")
+            .help_text(tr!("pit-design-turn-widening-help"))
+            .show(ui);
+        // Turning only at RLs, with none given, it never turns.
+        if ramp.switchback_every == 0 && ramp.turns_at.is_empty() {
+            menu::menu_note(ui, tr!("pit-design-turns-none"));
+        }
     }
     if menu::menu_section_folding(ui, "pit_design_ramp_extent", tr!("pit-design-ramp-extent-section")) {
         draw_ramp_extent(ui, ramp, (base_rl, sign, height));
@@ -898,6 +951,17 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
                 ui.colored_label(warning, ended);
             } else {
                 read_only_row(ui, &tr!("pit-design-ended"), &ended);
+            }
+            // Turns put off from where they were asked, for want of room.
+            for bench in &design.report {
+                for road in bench.ramps.iter().filter(|road| road.switchback) {
+                    if let Some(asked) = road.turn_moved_from {
+                        ui.colored_label(
+                            warning,
+                            tr!("pit-design-turn-moved", asked = format!("{asked:.1}"), made = format!("{:.1}", bench.elevation)),
+                        );
+                    }
+                }
             }
             if let Some(blocked) = design.blocked_ramp.filter(|_| settings.ramps.len() > 1) {
                 ui.colored_label(warning, tr!("pit-design-ramp-blocked", number = (blocked + 1).to_string()));
@@ -1077,7 +1141,21 @@ fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSett
                     } else {
                         ui.label(width);
                     }
-                    ui.label(if road.switchback { tr!("pit-design-table-turned") } else { String::new() });
+                    match (road.switchback, road.turn_moved_from) {
+                        (true, Some(asked)) => {
+                            ui.colored_label(warning, tr!("pit-design-table-turned")).hint(tr!(
+                                "pit-design-turn-moved",
+                                asked = format!("{asked:.1}"),
+                                made = format!("{:.1}", bench.elevation)
+                            ));
+                        }
+                        (true, None) => {
+                            ui.label(tr!("pit-design-table-turned"));
+                        }
+                        _ => {
+                            ui.label("");
+                        }
+                    }
                     ui.end_row();
                 }
             }

@@ -54,9 +54,14 @@ pub(crate) struct RampSettings {
     pub(crate) start: Option<DVec2>,
     pub(crate) climbs_clockwise: bool,
     pub(crate) switchback: bool,
-    /// Benches climbed between turns.
+    /// Benches climbed between turns: none, turning only at `turns_at`, at
+    /// 0.
     pub(crate) switchback_every: u32,
+    /// RLs it turns back at, as well as every so many benches.
+    pub(crate) turns_at: Vec<f64>,
     pub(crate) inside_radius: f64,
+    /// How much wider than its width the road is round the middle of a turn.
+    pub(crate) turn_widening: f64,
     /// The RLs it begins and ends at, the way the design is built; the
     /// whole pit where none is given.
     pub(crate) from: Option<f64>,
@@ -79,7 +84,9 @@ impl Default for RampSettings {
             climbs_clockwise: false,
             switchback: false,
             switchback_every: 3,
+            turns_at: Vec::new(),
             inside_radius: 15.0,
+            turn_widening: 0.0,
             from: None,
             to: None,
             bands: Vec::new(),
@@ -101,12 +108,14 @@ impl RampSettings {
             bands: self.bands.clone(),
             exit_flat: self.exit_flat,
             junction_flat: self.junction_flat,
+            turns_at: if self.switchback { self.turns_at.clone() } else { Vec::new() },
             start: self.start.unwrap_or(default_start),
             climbs_clockwise: self.climbs_clockwise,
             layout: if self.switchback {
                 Layout::Switchback {
                     every: self.switchback_every,
                     inside_radius: self.inside_radius,
+                    widening: self.turn_widening,
                 }
             } else {
                 Layout::Spiral

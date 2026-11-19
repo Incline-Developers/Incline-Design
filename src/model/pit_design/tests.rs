@@ -79,6 +79,7 @@ fn with_ramp(direction: Direction, layout: Layout, start: DVec2, clockwise: bool
             bands: Vec::new(),
             exit_flat: 0.0,
             junction_flat: 0.0,
+            turns_at: Vec::new(),
         }],
         stop,
     }
@@ -236,7 +237,11 @@ fn spirals_up_are_sound_and_complete() {
 fn switchbacks_up_turn_back_and_are_sound() {
     for (kind, ramp) in ["rect", "circle", "floor"].into_iter().flat_map(|kind| RAMPS.map(|ramp| (kind, ramp))) {
         let start = outline(kind)[0];
-        let layout = Layout::Switchback { every: 3, inside_radius: 15.0 };
+        let layout = Layout::Switchback {
+            every: 3,
+            inside_radius: 15.0,
+            widening: 0.0,
+        };
         let spec = with_ramp(Direction::Up, layout, start, false, Stop::Benches(10), ramp);
         let design = built(kind, 100.0, &spec, None);
         assert_sound(&format!("{kind} switchback, gradient and berm {ramp:?}"), &design, &spec.ramps[0]);
@@ -585,7 +590,17 @@ fn walls_cut_otherwise_still_make_sound_designs() {
     // take both at once round a tight curve, where the walls widen fastest.
     let rules = [("sectors", true, false), ("a region", false, true), ("both", true, true)];
     for kind in ["rect", "circle", "ell", "floor", "star"] {
-        for (layout, every) in [(Layout::Spiral, true), (Layout::Switchback { every: 2, inside_radius: 15.0 }, false)] {
+        for (layout, every) in [
+            (Layout::Spiral, true),
+            (
+                Layout::Switchback {
+                    every: 2,
+                    inside_radius: 15.0,
+                    widening: 0.0,
+                },
+                false,
+            ),
+        ] {
             for (what, with_sectors, with_region) in rules {
                 if !every && !matches!(kind, "rect" | "ell") {
                     continue;
@@ -721,7 +736,14 @@ fn conditioned_rings_are_lighter_and_no_steeper() {
         for (direction, layout) in [
             (Direction::Up, Layout::Spiral),
             (Direction::Down, Layout::Spiral),
-            (Direction::Up, Layout::Switchback { every: 2, inside_radius: 15.0 }),
+            (
+                Direction::Up,
+                Layout::Switchback {
+                    every: 2,
+                    inside_radius: 15.0,
+                    widening: 0.0,
+                },
+            ),
         ] {
             let mut spec = with_ramp(direction, layout, outline(kind)[0], false, Stop::Benches(8), RAMPS[0]);
             spec.wall_radius = 30.0;
@@ -986,7 +1008,11 @@ fn two_ramps_down_and_with_a_switchback() {
     let mut spec = super::tests::spec(Direction::Up, Layout::Spiral, DVec2::new(150.0, 0.0), false, Stop::Benches(6));
     let mut second = spec.ramps[0].clone();
     second.start = DVec2::new(250.0, 250.0);
-    second.layout = Layout::Switchback { every: 2, inside_radius: 15.0 };
+    second.layout = Layout::Switchback {
+        every: 2,
+        inside_radius: 15.0,
+        widening: 0.0,
+    };
     spec.ramps.push(second);
     let design = built("rect", 100.0, &spec, None);
     assert!(design.benches >= 3, "{} benches, ended {:?}, blocked {:?}", design.benches, design.end, design.blocked_ramp);
@@ -1018,4 +1044,98 @@ fn every_stretch_leaves_its_berm_on_the_flat_asked() {
             );
         }
     }
+}
+
+/// The benches a design's first ramp turns back on, with where each turn
+/// was asked if it was put off.
+fn turns(design: &Design) -> Vec<(f64, Option<f64>)> {
+    design
+        .report
+        .iter()
+        .filter_map(|bench| bench.ramp().filter(|road| road.switchback).map(|road| (bench.elevation, road.turn_moved_from)))
+        .collect()
+}
+
+/// The plan area of a design's toes, all told.
+fn toe_area(design: &Design) -> f64 {
+    design
+        .strings
+        .iter()
+        .filter(|string| string.closed && string.kind == StringKind::Toe)
+        .map(|string| super::ring::signed_area(&string.points.iter().map(|point| point.truncate()).collect::<Vec<_>>()))
+        .sum()
+}
+
+#[test]
+fn switchbacks_turn_where_asked_and_say_where_they_could_not() {
+    // At RLs 130 and 175, and only there; wider round the turn, the pads
+    // are bigger.
+    for (kind, start) in [("rect", DVec2::new(150.0, 0.0)), ("ell", DVec2::new(250.0, 0.0)), ("circle", outline("circle")[0])] {
+        let mut areas = Vec::new();
+        for widening in [0.0, 8.0] {
+            let mut spec = super::tests::spec(
+                Direction::Up,
+                Layout::Switchback {
+                    every: 0,
+                    inside_radius: 15.0,
+                    widening,
+                },
+                start,
+                false,
+                Stop::Benches(7),
+            );
+            spec.ramps[0].turns_at = vec![130.0, 175.0];
+            let design = built(kind, 100.0, &spec, None);
+            let name = format!("{kind}, turns widened {widening} m");
+            assert_eq!(design.end, End::Complete, "{name}");
+            assert_ramps_sound(&name, &design, &spec.ramps);
+            assert_eq!(turns(&design), [(130.0, None), (175.0, None)], "{name}");
+            areas.push(toe_area(&design));
+        }
+        assert!(areas[1] > areas[0] + 1000.0, "{kind}: widened turns take more room: {areas:?}");
+    }
+
+    // Where a turn will not fit at its RL it is made on the next bench that
+    // has room, and says so: every turn asked is made, in turn.
+    let mut spec = super::tests::spec(
+        Direction::Up,
+        Layout::Switchback {
+            every: 0,
+            inside_radius: 30.0,
+            widening: 10.0,
+        },
+        outline("star")[0],
+        false,
+        Stop::Benches(7),
+    );
+    spec.ramps[0].turns_at = vec![115.0, 130.0, 145.0];
+    let design = built("star", 100.0, &spec, None);
+    assert_ramps_sound("star with three turns", &design, &spec.ramps);
+    let made = turns(&design);
+    assert_eq!(made.len(), 3, "{made:?}");
+    for ((at, moved), asked) in made.iter().zip([115.0, 130.0, 145.0]) {
+        assert!(*at >= asked, "the turn asked at {asked} made at {at}");
+        assert_eq!(*moved, (*at > asked).then_some(asked), "the turn asked at {asked} made at {at}");
+    }
+    assert!(made.iter().any(|(_, moved)| moved.is_some()), "{made:?}: some turn had to move here");
+
+    // A switchback with neither a spacing nor an RL to turn at is refused.
+    let points: Vec<DVec3> = outline("rect").iter().map(|point| point.extend(100.0)).collect();
+    let spec = super::tests::spec(
+        Direction::Up,
+        Layout::Switchback {
+            every: 0,
+            inside_radius: 15.0,
+            widening: 0.0,
+        },
+        outline("rect")[0],
+        false,
+        Stop::Benches(3),
+    );
+    assert_eq!(design_from(&points, &spec), Some(Problem::Switchback));
+}
+
+/// Why a design from `points` cannot be made, if it cannot.
+fn design_from(points: &[DVec3], spec: &Spec) -> Option<Problem> {
+    design(&Base::from_points(points).unwrap(), spec, None, &|| false).err()
 }

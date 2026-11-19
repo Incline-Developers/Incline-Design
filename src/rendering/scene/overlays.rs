@@ -325,11 +325,18 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         draw_screen_cross(&mut overlay, hover, 20.0, 8.0, [0.05, 0.35, 0.1, 1.0]);
         draw_screen_cross(&mut overlay, hover, 18.0, 4.0, [0.95, 0.95, 0.95, 1.0]);
     }
-    // Where each of Pit Design's ramps leaves its string.
+    // Where each of Pit Design's ramps leaves its string, and where each
+    // turns back.
     if let Some(preview) = editor.pit_design.as_ref().and_then(|draft| draft.preview.as_ref()) {
         for start in &preview.ramp_starts {
             draw_screen_cross(&mut overlay, *start, 20.0, 8.0, [0.05, 0.35, 0.1, 1.0]);
             draw_screen_cross(&mut overlay, *start, 18.0, 4.0, [0.45, 0.9, 0.5, 1.0]);
+        }
+        if let Ok(design) = &preview.design {
+            for turn in design.report.iter().flat_map(|bench| &bench.ramps).filter_map(|road| road.turn_at) {
+                draw_screen_cross(&mut overlay, turn, 16.0, 7.0, [0.05, 0.2, 0.4, 1.0]);
+                draw_screen_cross(&mut overlay, turn, 14.0, 3.5, [0.55, 0.8, 1.0, 1.0]);
+            }
         }
     }
     // The directional shells' starting point already picked, shown while it is picked again.
