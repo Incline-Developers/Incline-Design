@@ -1702,15 +1702,19 @@ impl<'a> State<'a> {
         hours
     }
 
-    /// When the first automatic loader of a one-segment `plan` over `part`
-    /// digs out every block its bar holds with time to spare, and more of
-    /// its sequence it could start: then the interval is split there.
+    /// When the first loader of a one-segment `plan` over `part` digs out
+    /// every block its dig bar holds with time to spare, and has more to do:
+    /// an automatic bar more of its sequence it could start, a dig bar more
+    /// of its sequence or another bar open. The interval is split there, and
+    /// the next part chooses its bar afresh.
     fn runs_out(&self, part: Interval, topology: &Topology, plan: &Plan) -> Option<f64> {
         let input = self.input;
         let length = part.duration_h();
         let mut earliest: Option<f64> = None;
         for bar in &topology.segments[0] {
-            if input.tasks[bar.task].lookahead_t <= 0.0 || bar.blocks.is_empty() {
+            let task = &input.tasks[bar.task];
+            let TaskKind::Dig { sequence } = &task.kind else { continue };
+            if bar.blocks.is_empty() {
                 continue;
             }
             if !bar
@@ -1722,6 +1726,17 @@ impl<'a> State<'a> {
             }
             let hours = self.worked_hours(bar.loader, plan, 0, part);
             if hours >= length * (1.0 - PART_SPARE) {
+                continue;
+            }
+            if task.lookahead_t <= 0.0 {
+                let last = bar.blocks.iter().filter_map(|block| sequence.iter().position(|at| at == block)).max();
+                let goes_on = last.is_some_and(|last| last + 1 < sequence.len());
+                let other = authored_tasks(input, bar.loader)
+                    .into_iter()
+                    .any(|other| other != bar.task && task_active(&input.tasks[other], part));
+                if goes_on || other {
+                    earliest = Some(earliest.map_or(hours, |at: f64| at.min(hours)));
+                }
                 continue;
             }
             let mut more = false;
@@ -1740,8 +1755,8 @@ impl<'a> State<'a> {
         earliest.map(|hours| part.start_h + hours.max(PART_LEAST * length)).filter(|end| *end < part.end_h - 1e-9)
     }
 
-    /// Solve `interval` in parts, one after another, where automatic
-    /// loaders run out of the ground they were given: each part is solved
+    /// Solve `interval` in parts, one after another, where loaders run out
+    /// of the ground they were given (see [`Self::runs_out`]): each part is solved
     /// alone over its own hours, on the ground the parts before left, with
     /// every loader's bar chosen afresh as it opens and the room the parts
     /// before used taken off; gates whose ground above is gone are cleared
@@ -1778,6 +1793,18 @@ impl<'a> State<'a> {
                 ..interval
             };
             self.now_h = start;
+            // What a program over more hours than the part's pinned finished
+            // by their end, and the caps it spent, need not be by the part's:
+            // a dig bar digs its blocks in order, all but its last held
+            // finished, so it starts the part from its current block and
+            // opens the next as the part's own settle finds it dug.
+            topo.pins.clear();
+            topo.spent.clear();
+            for bar in topo.segments.iter_mut().flatten() {
+                if input.tasks[bar.task].lookahead_t <= 0.0 {
+                    bar.blocks.truncate(1);
+                }
+            }
             self.warm.borrow_mut().role = WarmRole::Part;
             let solved = match self
                 .solve(part, &topo)
