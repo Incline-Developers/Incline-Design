@@ -2684,7 +2684,17 @@ impl<'a> State<'a> {
             let fraction = self.outlets.share(block, MaterialId(material));
             let target = fraction * extracted.get(&(loader, block, segment)).copied().unwrap_or(0.0);
             let total: f64 = entries.iter().map(|(_, tonnes)| tonnes).sum();
-            if target <= 0.0 || total <= 0.0 {
+            if target <= 0.0 {
+                continue;
+            }
+            // A material the program sent nowhere, its share too small for
+            // the solver to tell from nothing, still leaves with the rest of
+            // the block: on its first route, so every share is dug in
+            // proportion.
+            if total <= 0.0 {
+                if target > FINISHED_T {
+                    rows.push((entries[0].0, segment, target));
+                }
                 continue;
             }
             rows.extend(
