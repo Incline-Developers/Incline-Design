@@ -5709,6 +5709,35 @@ pit-design-zone-to = To RL
 pit-design-zone-remove = Remove zone
 pit-design-zone-add = Add zone
 pit-design-zone-add-help = A band of RL whose benches are cut with their own height, face angle and berm width, such as weathered rock near the surface. A bench takes the zone it starts in; where zones overlap, the lower one in the list counts.
+pit-design-slopes-section = Slope rules
+pit-design-inter-ramp = Inter-ramp target
+pit-design-inter-ramp-help = The inter-ramp angle the walls should come to, between passes of the ramp, to check the design against. 0 for none. A sector's own target counts for the walls it holds.
+pit-design-sector = Sector { $number }
+pit-design-sector-bearing = Facing
+pit-design-sector-bearing-help = The bearing the walls face, as their dip direction: the pit's north wall faces south, 180°. Walls facing between two sectors take values between theirs.
+pit-design-sector-remove = Remove sector
+pit-design-sector-add = Add sector
+pit-design-sector-add-help = Cut the walls by the way they face, as a geotechnical design gives slopes by wall orientation. With sectors, they replace the design's face angle and berm width; a zone's values and a region's still count over them.
+pit-design-region = Region { $number }
+pit-design-region-remove = Remove region
+pit-design-region-add = Add region
+pit-design-region-add-help = Cut the walls inside a closed polyline otherwise, such as a fault zone or weaker rock on one side of the pit. A region's values count over everything else, blending in across its edge.
+pit-design-region-picking = Click a closed polyline in the viewport. Its outline bounds the new region.
+pit-design-region-prompt = Click a closed polyline to bound the slope region.
+pit-design-blend = Blend distance
+pit-design-blend-help = How far across a region's edge its values blend into those round it, half inside and half out. 0 for a sharp change.
+pit-design-walls-table = Inter-ramp angles
+pit-design-walls-facing = Facing
+pit-design-walls-designed = Designed
+pit-design-walls-achieved = Achieved
+pit-design-walls-steepest = Steepest
+pit-design-walls-target = Target
+pit-design-walls-too-steep-hint = Steeper on average than the target, or than the benches were cut to make.
+pit-design-walls-too-steep =
+    { $count ->
+        [one] The walls facing one way come out steeper than they should.
+       *[other] The walls facing { $count } ways come out steeper than they should.
+    }
 pit-design-stop-section = Stop
 pit-design-stop = Stop
 pit-design-stop-help = Where the design ends: after a number of benches, at an RL (the last bench cut short to meet it), or where a whole bench stands clear of the topography.
@@ -5759,6 +5788,8 @@ pit-design-problem-bench-height = The bench height must be above 0.
 pit-design-problem-face-angle = The face angle must be between 0° and 90°.
 pit-design-problem-berm-width = The berm width cannot be below 0.
 pit-design-problem-zone = A zone's From and To RLs must differ.
+pit-design-problem-sector = A slope sector needs a bearing, a face angle between 0° and 90°, and a berm width of 0 or more.
+pit-design-problem-region = A slope region needs an outline of at least three points, a face angle between 0° and 90°, and a berm width of 0 or more.
 pit-design-problem-ramp-width = The ramp's width must be above 0.
 pit-design-problem-ramp-gradient = The ramp's gradient must be above 0.
 pit-design-problem-switchback = A switchback needs at least one bench between turns.

@@ -1413,6 +1413,10 @@ impl<'a> App<'a> {
                 self.begin_pit_ramp_start_pick();
                 Ok(())
             }
+            UiCommand::BeginPitRegionPick => {
+                self.begin_pit_region_pick();
+                Ok(())
+            }
             UiCommand::OpenObjectEditDialog(id) => {
                 self.open_object_edit_dialog(id);
                 Ok(())

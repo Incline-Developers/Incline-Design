@@ -5,7 +5,10 @@
 
 use glam::{DVec2, DVec3};
 
-use super::{Base, BenchRules, Design, DesignString, Direction, End, Kind, Layout, Problem, RampSpec, Spec, Stop, StringKind, Zone, design};
+use super::{
+    Base, BenchRules, Design, DesignString, Direction, End, Kind, Layout, Problem, RampSpec, Spec, Stop, StringKind, Zone, design,
+    walls::{Region, Sector},
+};
 
 /// Outlines in plan: a rectangle, a circle, an L, a star, a hand-drawn floor
 /// with a re-entrant corner, and a big crest.
@@ -368,6 +371,7 @@ fn varied() -> BenchRules {
             berm_width: Some(12.0),
             ..Zone::default()
         }],
+        ..BenchRules::default()
     }
 }
 
@@ -381,7 +385,15 @@ fn bench_rules_land_on_the_right_benches() {
     flat.wall_radius = 0.0;
     flat.rules = varied();
     let plain = built("rect", 100.0, &flat, None);
-    let rows: Vec<(f64, f64, f64, f64)> = plain.report.iter().map(|bench| (bench.elevation, bench.height, bench.face_angle, bench.berm)).collect();
+    let rows: Vec<(f64, f64, f64, f64)> = plain
+        .report
+        .iter()
+        .map(|bench| {
+            assert_eq!(bench.face_angle[0], bench.face_angle[1], "every wall of a bench alike");
+            assert_eq!(bench.berm[0], bench.berm[1], "every berm of a bench alike");
+            (bench.elevation, bench.height, bench.face_angle[0], bench.berm[0])
+        })
+        .collect();
     assert_eq!(
         rows,
         vec![
@@ -399,10 +411,10 @@ fn bench_rules_land_on_the_right_benches() {
     let rings: Vec<&DesignString> = plain.strings.iter().filter(|string| string.closed).collect();
     let mut gaps = Vec::new();
     for bench in &plain.report {
-        if bench.berm > 0.0 {
-            gaps.push(bench.berm);
+        if bench.berm[0] > 0.0 {
+            gaps.push(bench.berm[0]);
         }
-        gaps.push(bench.height / bench.face_angle.to_radians().tan());
+        gaps.push(bench.height / bench.face_angle[0].to_radians().tan());
     }
     assert_eq!(rings.len(), gaps.len() + 1);
     for (pair, gap) in rings.windows(2).zip(&gaps) {
@@ -443,7 +455,198 @@ fn bench_rules_land_on_the_right_benches() {
     let dump = built("crest", 300.0, &dumped, None);
     for bench in &dump.report {
         let expected = if (330.0..360.0).contains(&bench.elevation) { 40.0 } else { 65.0 };
-        assert_eq!(bench.face_angle, expected, "the lift from RL {}", bench.elevation);
+        assert_eq!(bench.face_angle, [expected; 2], "the lift from RL {}", bench.elevation);
     }
-    assert!(dump.report.iter().any(|bench| bench.face_angle == 40.0));
+    assert!(dump.report.iter().any(|bench| bench.face_angle[0] == 40.0));
+}
+
+/// Walls facing north cut at 70° with 6 m berms, walls facing south at 45°
+/// with 15 m berms, those between blended round the compass.
+fn sectors() -> Vec<Sector> {
+    vec![
+        Sector {
+            bearing: 0.0,
+            face_angle: 70.0,
+            berm_width: 6.0,
+            inter_ramp: None,
+        },
+        Sector {
+            bearing: 180.0,
+            face_angle: 45.0,
+            berm_width: 15.0,
+            inter_ramp: None,
+        },
+    ]
+}
+
+/// Everything east of x = 250 cut at 40° with 20 m berms, blended over 40 m.
+fn east_region() -> Region {
+    Region {
+        outline: vec![DVec2::new(250.0, -400.0), DVec2::new(900.0, -400.0), DVec2::new(900.0, 900.0), DVec2::new(250.0, 900.0)],
+        face_angle: Some(40.0),
+        berm_width: Some(20.0),
+    }
+}
+
+/// How far apart two rings stand at `point` on the first.
+fn apart_at(first: &DesignString, second: &DesignString, point: DVec2) -> f64 {
+    let plan = |string: &DesignString| string.points.iter().map(|point| point.truncate()).collect::<Vec<DVec2>>();
+    debug_assert!(crate::model::pit_design::ring::nearest(&plan(first), point).1 < 0.01, "{point} is on the first ring");
+    crate::model::pit_design::ring::nearest(&plan(second), point).1
+}
+
+#[test]
+fn walls_take_their_sector_and_region() {
+    let run = |angle: f64| 15.0 / f64::to_radians(angle).tan();
+    let mut flat = spec(Direction::Up, Layout::Spiral, outline("rect")[0], false, Stop::Benches(3));
+    flat.ramp = None;
+    flat.wall_radius = 0.0;
+    flat.rules.sectors = sectors();
+    let design = built("rect", 100.0, &flat, None);
+    let rings: Vec<&DesignString> = design.strings.iter().filter(|string| string.closed).collect();
+    // The first bench's face: the south wall faces north, the north wall
+    // south, the east wall east, half way between round the compass.
+    for (point, angle) in [(DVec2::new(200.0, 0.0), 70.0), (DVec2::new(200.0, 250.0), 45.0), (DVec2::new(400.0, 125.0), 57.5)] {
+        let apart = apart_at(rings[0], rings[1], point);
+        assert!((apart - run(angle)).abs() < 0.01, "at {point}: {apart:.3} m, not {:.3}", run(angle));
+    }
+    // The second bench's berm, from the first's crest.
+    let crest = |point: DVec2, angle: f64| point + DVec2::new(0.0, if point.y < 100.0 { -1.0 } else { 1.0 }) * run(angle);
+    for (point, angle, berm) in [(DVec2::new(200.0, 0.0), 70.0, 6.0), (DVec2::new(200.0, 250.0), 45.0, 15.0)] {
+        let apart = apart_at(rings[1], rings[2], crest(point, angle));
+        assert!((apart - berm).abs() < 0.01, "berm at {point}: {apart:.3} m, not {berm}");
+    }
+    assert_eq!(design.report[0].face_angle, [45.0, 70.0]);
+    assert_eq!(design.report[1].berm, [6.0, 15.0]);
+
+    // A region takes over east of x = 250, blending in across 40 m: along
+    // the south wall the face's run goes smoothly from the sector's to the
+    // region's.
+    flat.rules.regions = vec![east_region()];
+    flat.rules.blend = 40.0;
+    let design = built("rect", 100.0, &flat, None);
+    let rings: Vec<&DesignString> = design.strings.iter().filter(|string| string.closed).collect();
+    let runs: Vec<f64> = (0..=40).map(|step| apart_at(rings[0], rings[1], DVec2::new(150.0 + 5.0 * f64::from(step), 0.0))).collect();
+    assert!((runs[0] - run(70.0)).abs() < 0.01, "west of the region: {:.3}", runs[0]);
+    assert!((runs[40] - run(40.0)).abs() < 0.01, "inside it: {:.3}", runs[40]);
+    // The angle blends evenly, 30° over 40 m; the run it makes grows
+    // fastest at the flattest angle, 40°, where 5 m along adds
+    // 5 × 0.75° × 15 / sin² 40° in radians.
+    let most = 5.0 * 0.75_f64.to_radians() * 15.0 / 40.0_f64.to_radians().sin().powi(2);
+    let steepest = runs.windows(2).map(|pair| (pair[1] - pair[0]).abs()).fold(0.0, f64::max);
+    assert!(steepest <= most * 1.05, "the run jumps {steepest:.3} m in 5 m, more than {most:.3}");
+    assert!(runs.windows(2).all(|pair| pair[1] >= pair[0] - 1.0e-6), "and only widens into the region");
+
+    // A dump's walls face out: its north wall faces north.
+    let mut dumped = flat.clone();
+    dumped.kind = Kind::Dump;
+    dumped.rules.regions.clear();
+    let dump = built("rect", 300.0, &dumped, None);
+    let rings: Vec<&DesignString> = dump.strings.iter().filter(|string| string.closed).collect();
+    for (point, angle) in [(DVec2::new(200.0, 0.0), 45.0), (DVec2::new(200.0, 250.0), 70.0)] {
+        let apart = apart_at(rings[0], rings[1], point);
+        assert!((apart - run(angle)).abs() < 0.01, "dump at {point}: {apart:.3} m, not {:.3}", run(angle));
+    }
+}
+
+#[test]
+fn walls_cut_otherwise_still_make_sound_designs() {
+    // Walls varying by the way they face, by where they stand, or both:
+    // built up, every design is sound, and complete but for the two that
+    // take both at once round a tight curve, where the walls widen fastest.
+    let rules = [("sectors", true, false), ("a region", false, true), ("both", true, true)];
+    for kind in ["rect", "circle", "ell", "floor", "star"] {
+        for (layout, every) in [(Layout::Spiral, true), (Layout::Switchback { every: 2, inside_radius: 15.0 }, false)] {
+            for (what, with_sectors, with_region) in rules {
+                if !every && !matches!(kind, "rect" | "ell") {
+                    continue;
+                }
+                let mut spec = with_ramp(Direction::Up, layout, outline(kind)[0], false, Stop::Benches(8), RAMPS[0]);
+                if with_sectors {
+                    spec.rules.sectors = sectors();
+                }
+                if with_region {
+                    spec.rules.regions = vec![east_region()];
+                }
+                let design = built(kind, 100.0, &spec, None);
+                let name = format!("{kind} up {layout:?} with {what}");
+                assert_sound(&name, &design, spec.ramp.as_ref().unwrap());
+                if !(what == "both" && matches!(kind, "circle" | "floor")) {
+                    assert_eq!(design.end, End::Complete, "{name}: {} benches", design.benches);
+                }
+            }
+        }
+    }
+    // Built down, a pit narrows bench by bench, and the faster its walls
+    // widen the sooner the ramp runs out of ring: sound as far as it goes.
+    for kind in ["rect", "circle", "star"] {
+        for (what, with_sectors, with_region) in rules {
+            let mut spec = with_ramp(Direction::Down, Layout::Spiral, outline(kind)[0], false, Stop::Benches(8), RAMPS[0]);
+            if with_sectors {
+                spec.rules.sectors = sectors();
+            }
+            if with_region {
+                spec.rules.regions = vec![east_region()];
+            }
+            let design = built(kind, 300.0, &spec, None);
+            let name = format!("{kind} down with {what}");
+            assert_sound(&name, &design, spec.ramp.as_ref().unwrap());
+            assert!(design.benches >= 2, "{name}: {} benches", design.benches);
+        }
+    }
+}
+
+#[test]
+fn walls_come_out_no_steeper_than_cut() {
+    for kind in ["rect", "circle", "ell", "star", "floor"] {
+        for with_sectors in [false, true] {
+            for direction in [Direction::Up, Direction::Down] {
+                let mut spec = with_ramp(direction, Layout::Spiral, outline(kind)[0], false, Stop::Benches(8), RAMPS[0]);
+                if with_sectors {
+                    spec.rules.sectors = sectors();
+                }
+                let elevation = if direction == Direction::Up { 100.0 } else { 300.0 };
+                let design = built(kind, elevation, &spec, None);
+                let name = format!("{kind} {direction:?}, sectors {with_sectors}");
+                let measured: u32 = design.walls.iter().map(|wall| wall.samples).sum();
+                assert!(measured >= 15, "{name}: measured at only {measured} places");
+                for wall in &design.walls {
+                    // Walls cut alike come out as cut; walls that vary, as near
+                    // as the report itself calls sound.
+                    assert!(
+                        wall.over_cut <= if with_sectors { super::walls::STEEPER_BY } else { 0.2 },
+                        "{name}: the walls facing {} come out {:.2}° steeper than cut on average",
+                        wall.bearing,
+                        wall.over_cut
+                    );
+                    assert!(!wall.too_steep(), "{name}: the walls facing {} are too steep", wall.bearing);
+                }
+            }
+        }
+    }
+    // Against a target: the walls are checked on average.
+    let mut spec = with_ramp(Direction::Up, Layout::Spiral, outline("rect")[0], false, Stop::Benches(8), RAMPS[0]);
+    spec.rules.inter_ramp = Some(40.0);
+    let design = built("rect", 100.0, &spec, None);
+    assert!(
+        design.walls.iter().all(|wall| wall.target == Some(40.0) && wall.too_steep()),
+        "walls near 47° are too steep for 40°"
+    );
+    spec.rules.inter_ramp = Some(60.0);
+    let design = built("rect", 100.0, &spec, None);
+    assert!(design.walls.iter().all(|wall| !wall.too_steep()), "and not for 60°");
+    // A sector's own target counts for its walls.
+    spec.rules.sectors = sectors();
+    spec.rules.sectors[1].inter_ramp = Some(30.0);
+    let design = built("rect", 100.0, &spec, None);
+    let south_facing = design.walls.iter().find(|wall| wall.bearing == 180.0).expect("the north wall measured");
+    assert_eq!(south_facing.target, Some(30.0));
+    assert!(south_facing.too_steep());
+    assert!(
+        design
+            .walls
+            .iter()
+            .filter(|wall| wall.bearing == 0.0)
+            .all(|wall| wall.target == Some(60.0) && !wall.too_steep())
+    );
 }

@@ -6210,6 +6210,9 @@ pub(crate) enum UiCommand {
     ExplodePitDesign(ObjectId),
     /// Wait for a click on Pit Design's string where its ramp starts.
     BeginPitRampStartPick,
+    /// Wait for a click on a closed polyline, a new Pit Design slope
+    /// region's outline.
+    BeginPitRegionPick,
     /// Insert vertices where selected polylines cross an elevation.
     InsertPointsAtElevation {
         object_ids: Vec<ObjectId>,
@@ -6469,6 +6472,7 @@ impl UiCommand {
             | Self::FinishPitDesign
             | Self::PitDesignStage(_)
             | Self::BeginPitRampStartPick
+            | Self::BeginPitRegionPick
             | Self::OpenObjectEditDialog(_)
             | Self::OpenPointCloudTin
             | Self::OpenPointCloudJoin

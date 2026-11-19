@@ -19,6 +19,7 @@ use crate::{
             Design, Direction, End, Kind, Problem, Zone,
             object::PitObject,
             settings::{PitDesignSettings, StopMode},
+            walls::{Sector, WallReport},
         },
         triangulation::{GeometryVersion, TriangulationId},
     },
@@ -107,6 +108,9 @@ pub(crate) struct PitDesignDraft {
     /// The viewport is waiting for a click on the string where the ramp
     /// starts.
     pub(crate) picking_ramp_start: bool,
+    /// The viewport is waiting for a click on a closed polyline, the outline
+    /// of a new slope region.
+    pub(crate) picking_region: bool,
     /// The last preview worked out, and what from.
     pub(crate) preview: Option<Preview>,
     pub(crate) built_for: Option<PreviewKey>,
@@ -178,6 +182,8 @@ pub(crate) fn problem_text(problem: Problem) -> String {
         Problem::FaceAngle => tr!("pit-design-problem-face-angle"),
         Problem::BermWidth => tr!("pit-design-problem-berm-width"),
         Problem::Zone => tr!("pit-design-problem-zone"),
+        Problem::Sector => tr!("pit-design-problem-sector"),
+        Problem::Region => tr!("pit-design-problem-region"),
         Problem::RampWidth => tr!("pit-design-problem-ramp-width"),
         Problem::RampGradient => tr!("pit-design-problem-ramp-gradient"),
         Problem::Switchback => tr!("pit-design-problem-switchback"),
@@ -273,13 +279,14 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                 .show(ui, |ui| {
                     let stage = draft.stage;
                     let picking = draft.picking_ramp_start;
+                    let picking_region = draft.picking_region;
                     let Some(working) = draft.working.as_mut() else {
                         return;
                     };
                     match stage {
                         PitStage::Benches => {
                             let base_rl = draft.built_for.as_ref().and_then(|key| key.verts.first()).map_or(0.0, |vertex| vertex.pos.z);
-                            draw_bench_settings(ui, &mut working.settings, project, base_rl);
+                            draw_bench_settings(ui, &mut working.settings, project, (base_rl, picking_region), commands);
                         }
                         PitStage::Ramp => {
                             menu::menu_section(ui, tr!("pit-design-ramp-section"));
@@ -338,7 +345,7 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
 
 /// The pit's benches and where it stops. `base_rl` is the string's, where a
 /// new zone starts.
-fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &UiProjectView, base_rl: f64) {
+fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &UiProjectView, (base_rl, picking_region): (f64, bool), commands: &mut Vec<UiCommand>) {
     let chosen = kind_label(settings.kind);
     MenuFieldCombo::new(
         "pit_design_kind",
@@ -387,6 +394,9 @@ fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, proj
         .show(ui);
     if menu::menu_section_folding(ui, "pit_design_bench_rules", tr!("pit-design-rules-section")) {
         draw_bench_rules(ui, settings, base_rl);
+    }
+    if menu::menu_section_folding(ui, "pit_design_slope_rules", tr!("pit-design-slopes-section")) {
+        draw_slope_rules(ui, settings, picking_region, commands);
     }
 
     menu::menu_section(ui, tr!("pit-design-stop-section"));
@@ -540,6 +550,118 @@ fn draw_bench_rules(ui: &mut egui::Ui, settings: &mut PitDesignSettings, base_rl
     }
 }
 
+/// How the walls vary round the pit: by the way they face (sectors), by
+/// where they stand (regions), and the inter-ramp angle they are checked
+/// against.
+fn draw_slope_rules(ui: &mut egui::Ui, settings: &mut PitDesignSettings, picking_region: bool, commands: &mut Vec<UiCommand>) {
+    let (face_angle, berm_width) = (settings.face_angle, settings.berm_width);
+    let rules = &mut settings.bench_rules;
+    // An angle of 0 asks for nothing.
+    let mut target = rules.inter_ramp.unwrap_or(0.0);
+    if MenuFieldF64::new(tr!("pit-design-inter-ramp"), &mut target, 0.0..=89.0)
+        .width(FIELD_WIDTH)
+        .speed(0.5)
+        .suffix("°")
+        .help_text(tr!("pit-design-inter-ramp-help"))
+        .show(ui)
+        .changed()
+    {
+        rules.inter_ramp = (target > 0.0).then_some(target);
+    }
+
+    let mut remove = None;
+    for (index, sector) in rules.sectors.iter_mut().enumerate() {
+        ui.push_id(("pit_design_sector", index), |ui| {
+            menu::menu_section(ui, tr!("pit-design-sector", number = (index + 1).to_string()));
+            MenuFieldF64::new(tr!("pit-design-sector-bearing"), &mut sector.bearing, 0.0..=360.0)
+                .width(FIELD_WIDTH)
+                .speed(1.0)
+                .suffix("°")
+                .help_text(tr!("pit-design-sector-bearing-help"))
+                .show(ui);
+            MenuFieldF64::new(tr!("pit-design-face-angle"), &mut sector.face_angle, 1.0..=89.0)
+                .width(FIELD_WIDTH)
+                .speed(0.5)
+                .suffix("°")
+                .show(ui);
+            MenuFieldF64::new(tr!("pit-design-berm-width"), &mut sector.berm_width, 0.0..=1000.0)
+                .width(FIELD_WIDTH)
+                .speed(0.1)
+                .suffix(" m")
+                .show(ui);
+            let mut target = sector.inter_ramp.unwrap_or(0.0);
+            if MenuFieldF64::new(tr!("pit-design-inter-ramp"), &mut target, 0.0..=89.0)
+                .width(FIELD_WIDTH)
+                .speed(0.5)
+                .suffix("°")
+                .show(ui)
+                .changed()
+            {
+                sector.inter_ramp = (target > 0.0).then_some(target);
+            }
+            if button_row(ui, String::new(), String::new(), &[(tr!("pit-design-sector-remove"), true)]).is_some() {
+                remove = Some(index);
+            }
+        });
+    }
+    if let Some(index) = remove {
+        rules.sectors.remove(index);
+    }
+    if button_row(ui, String::new(), tr!("pit-design-sector-add-help"), &[(tr!("pit-design-sector-add"), true)]).is_some() {
+        // A quarter turn on from the last, cut as the design is.
+        let bearing = rules.sectors.last().map_or(0.0, |sector| (sector.bearing + 90.0).rem_euclid(360.0));
+        rules.sectors.push(Sector {
+            bearing,
+            face_angle,
+            berm_width,
+            inter_ramp: None,
+        });
+    }
+
+    let mut remove = None;
+    for (index, region) in rules.regions.iter_mut().enumerate() {
+        ui.push_id(("pit_design_region", index), |ui| {
+            menu::menu_section(ui, tr!("pit-design-region", number = (index + 1).to_string()));
+            // A value the region leaves alone shows the design's, and becomes
+            // the region's own once changed.
+            for (label, value, design, range, speed, suffix) in [
+                (tr!("pit-design-face-angle"), &mut region.face_angle, face_angle, 1.0..=89.0, 0.5, "°"),
+                (tr!("pit-design-berm-width"), &mut region.berm_width, berm_width, 0.0..=1000.0, 0.1, " m"),
+            ] {
+                let mut shown = value.unwrap_or(design);
+                if MenuFieldF64::new(label, &mut shown, range)
+                    .width(FIELD_WIDTH)
+                    .speed(speed)
+                    .suffix(suffix)
+                    .show(ui)
+                    .changed()
+                {
+                    *value = Some(shown);
+                }
+            }
+            if button_row(ui, String::new(), String::new(), &[(tr!("pit-design-region-remove"), true)]).is_some() {
+                remove = Some(index);
+            }
+        });
+    }
+    if let Some(index) = remove {
+        rules.regions.remove(index);
+    }
+    if !rules.regions.is_empty() {
+        MenuFieldF64::new(tr!("pit-design-blend"), &mut rules.blend, 0.0..=1000.0)
+            .width(FIELD_WIDTH)
+            .speed(0.5)
+            .suffix(" m")
+            .help_text(tr!("pit-design-blend-help"))
+            .show(ui);
+    }
+    if picking_region {
+        menu::menu_note(ui, tr!("pit-design-region-picking"));
+    } else if button_row(ui, String::new(), tr!("pit-design-region-add-help"), &[(tr!("pit-design-region-add"), true)]).is_some() {
+        commands.push(UiCommand::BeginPitRegionPick);
+    }
+}
+
 /// The ramp's settings, for a pit that has one: where it starts, its
 /// width and gradient, which way it climbs, and how it turns.
 fn draw_ramp_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, commands: &mut Vec<UiCommand>) {
@@ -658,8 +780,15 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
                 if flatter > 0 {
                     ui.colored_label(warning, tr!("pit-design-flatter", count = flatter));
                 }
+                let steep = design.walls.iter().filter(|wall| wall.too_steep()).count();
+                if steep > 0 {
+                    ui.colored_label(warning, tr!("pit-design-walls-too-steep", count = steep));
+                }
                 if menu::menu_section_folding(ui, "pit_design_bench_table", tr!("pit-design-bench-table")) {
                     draw_bench_table(ui, design, settings);
+                }
+                if !design.walls.is_empty() && menu::menu_section_folding(ui, "pit_design_walls_table", tr!("pit-design-walls-table")) {
+                    draw_walls_table(ui, &design.walls);
                 }
             }
             if preview.base_unevenness > 0.01 {
@@ -682,6 +811,46 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
 /// Each bench as built: its RL, its ramp's grade, flat and narrowest width,
 /// and whether it turned back; what falls short of the settings in the
 /// warning colour.
+/// What the walls come to between ramps, facing each way: the angle their
+/// benches were cut to make, what they make on average and at the steepest,
+/// and the target, those too steep picked out.
+fn draw_walls_table(ui: &mut egui::Ui, walls: &[WallReport]) {
+    let warning = ui.visuals().warn_fg_color;
+    let weak = ui.visuals().weak_text_color();
+    egui::Grid::new("pit_design_walls").striped(true).num_columns(5).spacing([12.0, 2.0]).show(ui, |ui| {
+        for heading in [
+            tr!("pit-design-walls-facing"),
+            tr!("pit-design-walls-designed"),
+            tr!("pit-design-walls-achieved"),
+            tr!("pit-design-walls-steepest"),
+            tr!("pit-design-walls-target"),
+        ] {
+            ui.label(egui::RichText::new(heading).color(weak).small());
+        }
+        ui.end_row();
+        for wall in walls {
+            ui.label(format!("{:.0}°", wall.bearing));
+            ui.label(format!("{:.1}°", wall.designed));
+            let achieved = format!("{:.1}°", wall.achieved);
+            if wall.too_steep() {
+                ui.colored_label(warning, achieved).hint(tr!("pit-design-walls-too-steep-hint"));
+            } else {
+                ui.label(achieved);
+            }
+            ui.label(format!("{:.1}°", wall.steepest));
+            ui.label(wall.target.map_or_else(String::new, |target| format!("{target:.1}°")));
+            ui.end_row();
+        }
+    });
+}
+
+/// A value that may vary round the pit, to `decimals` places: one number
+/// where it does not, its least and greatest where it does.
+fn span([low, high]: [f64; 2], decimals: usize, unit: &str) -> String {
+    let (low, high) = (format!("{low:.decimals$}"), format!("{high:.decimals$}"));
+    if low == high { format!("{low}{unit}") } else { format!("{low}–{high}{unit}") }
+}
+
 fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSettings) {
     let warning = ui.visuals().warn_fg_color;
     let weak = ui.visuals().weak_text_color();
@@ -690,8 +859,11 @@ fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSett
     // differ in them.
     // (The first bench has no berm before it, so berms are compared from the
     // second on.)
-    let faces_vary = design.report.windows(2).any(|pair| pair[0].face_angle != pair[1].face_angle);
-    let berms_vary = design.report.get(1..).is_some_and(|after| after.windows(2).any(|pair| pair[0].berm != pair[1].berm));
+    let faces_vary = design.report.windows(2).any(|pair| pair[0].face_angle != pair[1].face_angle) || design.report.iter().any(|bench| bench.face_angle[0] != bench.face_angle[1]);
+    let berms_vary = design
+        .report
+        .get(1..)
+        .is_some_and(|after| after.windows(2).any(|pair| pair[0].berm != pair[1].berm) || after.iter().any(|bench| bench.berm[0] != bench.berm[1]));
     let varies = faces_vary || berms_vary;
     let columns = if varies { 7 } else { 5 };
     egui::Grid::new("pit_design_benches")
@@ -717,8 +889,8 @@ fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSett
                 let top = bench.elevation + settings.direction.sign() * bench.height;
                 ui.label(format!("{:.1}–{top:.1}", bench.elevation));
                 if varies {
-                    ui.label(format!("{:.0}°", bench.face_angle));
-                    ui.label(format!("{:.1} m", bench.berm));
+                    ui.label(span(bench.face_angle, 0, "°"));
+                    ui.label(span(bench.berm, 1, " m"));
                 }
                 match bench.ramp {
                     Some(road) => {

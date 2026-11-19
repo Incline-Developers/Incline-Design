@@ -564,6 +564,9 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     if editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start) {
         return Some(ViewportMessage::text(tr!("pit-design-ramp-start-prompt")).minor(tr!("ui-esc-cancels")));
     }
+    if editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region) {
+        return Some(ViewportMessage::text(tr!("pit-design-region-prompt")).minor(tr!("ui-esc-cancels")));
+    }
     if editor.optimization.start_pick.is_some() {
         return Some(ViewportMessage::text(tr!("opt-pick-prompt")).minor(tr!("ui-esc-cancels")));
     }

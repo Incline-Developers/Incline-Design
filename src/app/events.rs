@@ -170,7 +170,7 @@ impl<'a> App<'a> {
             let canvas_pick_mode_active = self.editor.triangulation_pick_target.is_some()
                 || self.editor.optimization.start_pick.is_some()
                 || self.editor.drill_pattern_awaiting_shape_pick
-                || self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start);
+                || self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start || draft.picking_region);
             let suppress_view_mode_canvas_click = self.editor.view_mode_owns_canvas_click() && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
             if !suppress_view_mode_canvas_click || canvas_pick_mode_active {
                 self.handle_mouse_press(&event);
@@ -601,7 +601,8 @@ impl<'a> App<'a> {
                             || self.editor.relimit_confirming_end
                             || self.editor.triangulation_pick_target.is_some()
                             || self.editor.optimization.start_pick.is_some()
-                            || self.editor.drill_pattern_awaiting_shape_pick);
+                            || self.editor.drill_pattern_awaiting_shape_pick
+                            || self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region));
                     if hover_pick_due {
                         self.last_snap_poll_instant = Some(now);
                     }
@@ -703,7 +704,10 @@ impl<'a> App<'a> {
                     if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start) {
                         self.update_pit_ramp_hover();
                     }
-                    if (self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick)
+                    if (self.editor.triangulation_pick_target.is_some()
+                        || self.editor.optimization.start_pick.is_some()
+                        || self.editor.drill_pattern_awaiting_shape_pick
+                        || self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region))
                         && hover_pick_due
                     {
                         self.update_viewport_field_pick_hover();
@@ -776,6 +780,11 @@ impl<'a> App<'a> {
             if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start) {
                 self.editor.canvas_context_menu_open = false;
                 self.pick_pit_ramp_start_at_cursor();
+                return;
+            }
+            if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region) {
+                self.editor.canvas_context_menu_open = false;
+                self.pick_pit_region_at_cursor();
                 return;
             }
             if self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick {
@@ -1431,6 +1440,8 @@ impl<'a> App<'a> {
                     self.cancel_text_edit();
                 } else if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp_start) {
                     self.cancel_pit_ramp_start_pick();
+                } else if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region) {
+                    self.cancel_pit_region_pick();
                 } else if self.editor.optimization.start_pick.is_some() {
                     self.cancel_shell_start_pick();
                 } else if self.editor.triangulation_pick_target.is_some() {

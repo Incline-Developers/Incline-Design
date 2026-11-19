@@ -84,8 +84,17 @@ fn along_road(parameter: f64, from: f64, direction: f64, count: usize) -> f64 {
 pub(crate) struct Lay {
     /// Out from the ring (1) or in (-1).
     pub(crate) side: f64,
-    /// How far the road moves across over the stretch: a face and a berm.
+    /// How far the road moves across over the stretch where it leaves: a
+    /// face and a berm. What leans its edges off the ring.
     pub(crate) drift: f64,
+    /// Whether the walls vary along the stretch, so it drifts across faster
+    /// in some places than others: its far edge is then its near edge set
+    /// off square, rather than the ring set off further, which would fold
+    /// where the ring bends.
+    pub(crate) varies: bool,
+    /// Where the far edge starts, where the walls vary: where the last
+    /// stretch's far edge arrived.
+    pub(crate) far_start: Option<DVec2>,
     pub(crate) width: f64,
     /// The plan length (along its steeper edge) it climbs the bench over.
     pub(crate) climb_length: f64,
@@ -112,16 +121,18 @@ pub(crate) enum NoRoom {
 }
 
 /// Lay a stretch along `ring` from `from`, running `direction`, climbing
-/// over `lay.climb_length` of its steeper edge. `extra` moves the road out
-/// further at each point by an amount of its own given how far up the
-/// stretch it is there (a switchback's island, which keeps the road clear of
-/// the one below until it has drifted far enough of its own accord).
-pub(crate) fn lay(ring: &[DVec2], from: f64, direction: f64, lay: Lay, extra: &dyn Fn(f64) -> f64) -> Result<Stretch, NoRoom> {
+/// over `lay.climb_length` of its steeper edge. `reach` says how far out
+/// from the ring the road's near edge is at each point, given how far up the
+/// stretch it is there and the ring's parameter: its drift so far across the
+/// bench, as wide there as the walls are cut, and anything of its own (a
+/// switchback's island, which keeps the road clear of the one below until
+/// it has drifted far enough of its own accord).
+pub(crate) fn lay(ring: &[DVec2], from: f64, direction: f64, lay: Lay, reach: &dyn Fn(f64, f64) -> f64) -> Result<Stretch, NoRoom> {
     let arcs = ring::arcs(ring);
     let around = arcs[ring.len()];
     // No stretch takes the whole way round: it would meet its own start.
     let longest = around * 0.9;
-    let attempt = |run: f64| build(ring, &arcs, from, direction, run, lay, extra);
+    let attempt = |run: f64| build(ring, &arcs, from, direction, run, lay, reach);
     let wanted = lay.climb_length + lay.flat;
     let close_enough = wanted * 1.0e-4;
     // The climb rises with the run, nearly in proportion to it: round a
@@ -174,7 +185,7 @@ fn stretch_length(stretch: &Stretch) -> f64 {
 }
 
 /// Lay a stretch `run` along the ring from `from`.
-fn build(ring: &[DVec2], arcs: &[f64], from: f64, direction: f64, run: f64, lay: Lay, extra: &dyn Fn(f64) -> f64) -> Stretch {
+fn build(ring: &[DVec2], arcs: &[f64], from: f64, direction: f64, run: f64, lay: Lay, reach: &dyn Fn(f64, f64) -> f64) -> Stretch {
     let count = ring.len();
     let start_arc = ring::arc_at(arcs, from);
     // Stations: the start, every ring point passed, the end, and enough in
@@ -208,12 +219,15 @@ fn build(ring: &[DVec2], arcs: &[f64], from: f64, direction: f64, run: f64, lay:
     // square across.
     let across = lay.width * (1.0 + (lay.drift / lay.climb_length).powi(2)).sqrt();
     for _ in 0..3 {
-        let near_distance: Vec<f64> = climbed.iter().map(|&t| lay.side * (t * lay.drift + extra(t))).collect();
-        let far_distance: Vec<f64> = near_distance.iter().map(|distance| distance + lay.side * across).collect();
-        edges = RoadEdges {
-            near: offset_open(ring, &parameters, direction, &near_distance),
-            far: offset_open(ring, &parameters, direction, &far_distance),
+        let near_distance: Vec<f64> = climbed.iter().zip(&parameters).map(|(&t, &parameter)| lay.side * reach(t, parameter)).collect();
+        let near = offset_open(ring, &parameters, direction, &near_distance);
+        let far = if lay.varies {
+            beside(&near, lay.width, lay.side * direction > 0.0, (from, direction, count), lay.far_start)
+        } else {
+            let far_distance: Vec<f64> = near_distance.iter().map(|distance| distance + lay.side * across).collect();
+            offset_open(ring, &parameters, direction, &far_distance)
         };
+        edges = RoadEdges { near, far };
         let near = chain_lengths(&edges.near, &parameters, direction, count);
         let far = chain_lengths(&edges.far, &parameters, direction, count);
         let steps: Vec<f64> = near.iter().zip(&far).map(|(a, b)| a.min(*b)).collect();
@@ -270,6 +284,88 @@ fn build(ring: &[DVec2], arcs: &[f64], from: f64, direction: f64, run: f64, lay:
         across,
     }
 }
+
+/// A road's far edge beside its near edge where the walls vary: the near
+/// edge set off square by the road's `width`, out from the ring (`side`;
+/// to the near edge's right where `right`), so it is its width across however
+/// the near edge turns to cross the bench. Each point takes the ring
+/// parameter of the place on the near edge it stands off from (round a ring
+/// of `count` points). Where it carries on from the stretch before, it
+/// starts where the last far edge arrived (`start`) and eases on to its
+/// own line over a road's width along.
+fn beside(near: &[(DVec2, f64)], width: f64, right: bool, (from, direction, count): (f64, f64, usize), start: Option<DVec2>) -> Vec<(DVec2, f64)> {
+    let points: Vec<DVec2> = near.iter().map(|point| point.0).collect();
+    let around = count as f64;
+    // The far edge runs along the near one, so each point is looked for
+    // near where the last was found; the run along the near edge to it is
+    // what the ease from the handover goes by.
+    let mut runs = vec![0.0; near.len()];
+    for index in 1..near.len() {
+        runs[index] = runs[index - 1] + near[index].0.distance(near[index - 1].0);
+    }
+    let mut found: usize = 0;
+    let segments = near.len().saturating_sub(1);
+    let mut far: Vec<(DVec2, f64, f64)> = offset_chain(&points, &vec![width; points.len()], right)
+        .into_iter()
+        .map(|point| {
+            let mut best = (f64::INFINITY, near.first().map_or(0.0, |first| first.1), 0.0);
+            let window = found.saturating_sub(BESIDE_BACK)..(found + BESIDE_AHEAD).min(segments);
+            for range in [window, 0..segments] {
+                for index in range {
+                    let (a, b) = (near[index], near[index + 1]);
+                    let (foot, t) = kernel::project_onto_segment(point, a.0, b.0);
+                    let distance = foot.distance(point);
+                    if distance < best.0 {
+                        found = index;
+                        // Between the two sources the short way round the ring.
+                        let (from, mut to) = (a.1, b.1);
+                        if to - from > around * 0.5 {
+                            to -= around;
+                        } else if from - to > around * 0.5 {
+                            to += around;
+                        }
+                        let t = t.clamp(0.0, 1.0);
+                        best = (distance, (from + (to - from) * t).rem_euclid(around), runs[index] + (runs[index + 1] - runs[index]) * t);
+                    }
+                }
+                // Square off the near edge, it stands its width away: found.
+                if best.0 <= width * 1.5 {
+                    break;
+                }
+            }
+            (point, best.1, best.2)
+        })
+        .collect();
+    if let (Some(start), Some(first)) = (start, far.first()) {
+        let shift = start - first.0;
+        for point in &mut far {
+            let share = 1.0 - point.2 / width;
+            if share <= 0.0 {
+                break;
+            }
+            point.0 += shift * share;
+        }
+    }
+    // Each point's place on the ring never goes back the way the road came:
+    // where the far edge cuts across inside a bend, the places it stands
+    // off from would, and its climb be shared out wrong.
+    let mut furthest = f64::NEG_INFINITY;
+    let mut far: Vec<(DVec2, f64)> = without_reversals(remove_loops(far.into_iter().map(|(point, source, _)| (point, source)).collect()));
+    for point in &mut far {
+        let along = along_road(point.1, from, direction, count);
+        if along < furthest {
+            point.1 = (from + direction * furthest).rem_euclid(around);
+        } else {
+            furthest = along;
+        }
+    }
+    far
+}
+
+/// How far back and ahead along the near edge a point of the far edge is
+/// first looked for, from where the last one was found.
+const BESIDE_BACK: usize = 8;
+const BESIDE_AHEAD: usize = 32;
 
 /// The length of a chain between each pair of stations: the chain's length
 /// so far, as a function of how far along the ring its points were set off

@@ -155,7 +155,10 @@ impl<'a> App<'a> {
     /// viewport pickers. Work is invoked at the existing bounded hover-poll
     /// rate, and geometry is invalidated only when the candidate changes.
     pub(crate) fn update_viewport_field_pick_hover(&mut self) {
-        let boundary_picker = self.editor.triangulation_pick_target.is_some_and(TriangulationPickTarget::picks_boundary);
+        // A Pit Design slope region's outline is any closed polyline, as a
+        // boundary is.
+        let boundary_picker =
+            self.editor.triangulation_pick_target.is_some_and(TriangulationPickTarget::picks_boundary) || self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region);
         if self.editor.triangulation_pick_target.is_some() && !boundary_picker {
             let hovered = self
                 .graphics

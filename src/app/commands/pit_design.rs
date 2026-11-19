@@ -751,6 +751,60 @@ impl App<'_> {
         self.invalidate_overlay();
     }
 
+    /// Wait for a click on a closed polyline, the outline of a new slope
+    /// region. Picking the ramp's start gives way to it.
+    pub(crate) fn begin_pit_region_pick(&mut self) {
+        if let Some(draft) = self.editor.pit_design.as_mut()
+            && draft.object_id().is_some()
+        {
+            draft.picking_ramp_start = false;
+            draft.ramp_hover = None;
+            draft.picking_region = true;
+            self.invalidate_overlay();
+        }
+    }
+
+    pub(crate) fn cancel_pit_region_pick(&mut self) {
+        if let Some(draft) = self.editor.pit_design.as_mut() {
+            draft.picking_region = false;
+        }
+        self.editor.tool_highlight_id = None;
+        self.editor.viewport_pick_hover_label = None;
+        self.invalidate_geometry();
+    }
+
+    /// A click while picking a slope region: a closed polyline (or circle)
+    /// of the project under the cursor, other than the pit itself, becomes
+    /// a new region's outline, cut as the design is until changed.
+    pub(crate) fn pick_pit_region_at_cursor(&mut self) {
+        let Some(pit) = self.editor.pit_design.as_ref().and_then(PitDesignDraft::object_id) else {
+            return;
+        };
+        let frozen = &self.editor.pick_frozen;
+        let active = self.active_project_object_ids();
+        let Some((crate::model::SceneEntityId::Object(id), _)) = self
+            .graphics
+            .as_ref()
+            .and_then(|graphics| graphics.pick_at_cursor(crate::app::PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, frozen, self.editor.xray_enabled))
+        else {
+            return;
+        };
+        if id == pit || !active.contains(&id) {
+            return;
+        }
+        let Some(outline) = self.scene_document.get_object(id).and_then(Object::closed_boundary) else {
+            return;
+        };
+        if let Some(working) = self.editor.pit_design.as_mut().and_then(|draft| draft.working.as_mut()) {
+            working.settings.bench_rules.regions.push(crate::model::pit_design::walls::Region {
+                outline: outline.iter().map(|point| point.truncate()).collect(),
+                ..Default::default()
+            });
+        }
+        self.cancel_pit_region_pick();
+        self.update_pit_design_preview();
+    }
+
     /// Work a design out here and now, as the preview does in the
     /// background: for the MCP server.
     pub(crate) fn design_pit_now(&self, verts: &[PolyVertex], settings: &PitDesignSettings) -> Result<Preview, NoDesign> {

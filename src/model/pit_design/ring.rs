@@ -186,11 +186,27 @@ struct Piece {
 /// where positive. Returns the simple rings that result, anticlockwise and
 /// largest first: none when the offset leaves no room.
 pub(crate) fn offset(ring: &[DVec2], distances: &[EdgeOffset]) -> Vec<Vec<DVec2>> {
+    offset_joined(ring, distances, false)
+}
+
+/// [`offset`] for distances that change along the ring, from point to
+/// point, as a pit's walls do where they are cut differently round it: at a
+/// gentle bend, where the two edges' distances agree, the point is moved
+/// out by its own distance square to the bend (its mitre), rather than the
+/// two edges joined as parallel offsets are. Edges set off further at one
+/// end than the other lean, and the usual join between two leaning edges
+/// can double back on itself, or where they cross, wander off the point
+/// they stand for, a little more each time the ring is set off again.
+pub(crate) fn offset_varying(ring: &[DVec2], distances: &[EdgeOffset]) -> Vec<Vec<DVec2>> {
+    offset_joined(ring, distances, true)
+}
+
+fn offset_joined(ring: &[DVec2], distances: &[EdgeOffset], meet: bool) -> Vec<Vec<DVec2>> {
     let count = ring.len();
     if count < 3 || distances.len() != count {
         return Vec::new();
     }
-    let pieces = raw_offset(ring, distances);
+    let pieces = raw_offset(ring, distances, meet);
     if pieces.len() < 3 {
         return Vec::new();
     }
@@ -203,34 +219,61 @@ pub(crate) fn offset(ring: &[DVec2], distances: &[EdgeOffset]) -> Vec<Vec<DVec2>
     rings
 }
 
-/// The offset edges joined round the ring, crossings and all.
-fn raw_offset(ring: &[DVec2], distances: &[EdgeOffset]) -> Vec<Piece> {
+/// The offset edges joined round the ring, crossings and all: at gentle
+/// bends where the distances agree, meeting in one point where `meet`.
+fn raw_offset(ring: &[DVec2], distances: &[EdgeOffset], meet: bool) -> Vec<Piece> {
     let count = ring.len();
     let mut points: Vec<DVec2> = Vec::with_capacity(count * 3);
-    let mut push = |point: DVec2| {
+    let push = |points: &mut Vec<DVec2>, point: DVec2| {
         if points.last().is_none_or(|last: &DVec2| last.distance(point) > SAME_POINT * 0.1) {
             points.push(point);
         }
     };
+    // Whether the first corner's two offsets met in one point, so the last
+    // edge's end there is not wanted.
+    let mut first_met = None;
     for index in 0..count {
         let previous = (index + count - 1) % count;
         let corner = ring[index];
         let (normal_in, normal_out) = (outward(ring, previous), outward(ring, index));
         let (distance_in, distance_out) = (distances[previous].end, distances[index].start);
+        if meet && (distance_in - distance_out).abs() <= SAME_POINT {
+            let (along_in, along_out) = (direction(ring, previous), direction(ring, index));
+            let turn = along_in.perp_dot(along_out).atan2(along_in.dot(along_out));
+            if turn.abs() <= MEET_TURN {
+                let in_end = corner + normal_in * distance_in;
+                let out_end = ring[(index + 1) % count] + normal_out * distances[index].end;
+                let point = corner + (normal_in + normal_out).normalize_or(normal_out) * distance_out / (turn * 0.5).cos();
+                // The edge before ends here rather than at its own end.
+                if index == 0 {
+                    first_met = Some(in_end);
+                } else if points.last().is_some_and(|last| last.distance(in_end) <= SAME_POINT) {
+                    points.pop();
+                }
+                push(&mut points, point);
+                push(&mut points, out_end);
+                continue;
+            }
+        }
         // The join at this corner, from where the edge before ends to where
         // this one starts. Where their distances differ, the larger steps
         // straight back along its own normal to the smaller first (or after).
         let common = if distance_in.abs() <= distance_out.abs() { distance_in } else { distance_out };
         let stepped = (distance_in - distance_out).abs() > SAME_POINT;
         if stepped && distance_in.abs() > distance_out.abs() {
-            push(corner + normal_in * common);
+            push(&mut points, corner + normal_in * common);
         }
-        corner_join(ring, distances, previous, index, common, &mut push);
+        corner_join(ring, distances, previous, index, common, &mut |point| push(&mut points, point));
         if stepped && distance_out.abs() > distance_in.abs() {
-            push(corner + normal_out * common);
+            push(&mut points, corner + normal_out * common);
         }
-        push(corner + normal_out * distance_out);
-        push(ring[(index + 1) % count] + normal_out * distances[index].end);
+        push(&mut points, corner + normal_out * distance_out);
+        push(&mut points, ring[(index + 1) % count] + normal_out * distances[index].end);
+    }
+    if let Some(end) = first_met
+        && points.last().is_some_and(|last| last.distance(end) <= SAME_POINT)
+    {
+        points.pop();
     }
     let total = points.len();
     (0..total)
@@ -548,6 +591,44 @@ pub(crate) fn cleaned(mut ring: Vec<DVec2>) -> Vec<DVec2> {
     }
     ring
 }
+
+/// The sharpest bend at which [`offset_varying`]'s two offsets meet in one
+/// point.
+const MEET_TURN: f64 = std::f64::consts::PI / 6.0;
+
+/// A ring with its folds taken out: where it turns back on itself by more
+/// than [`FOLD_TURN`] beside an edge shorter than `shortest`, the point it
+/// turns at goes. An offset whose distance changes quickly along it can
+/// leave such a fold where two edges leaning differently are joined, a
+/// zig-zag a few centimetres across that the next offset could not follow.
+pub(crate) fn without_folds(mut ring: Vec<DVec2>, shortest: f64) -> Vec<DVec2> {
+    let mut index = 0;
+    let mut unchanged = 0;
+    while ring.len() > 3 && unchanged < ring.len() {
+        let count = ring.len();
+        let at = index % count;
+        let (before, here, after) = (ring[(at + count - 1) % count], ring[at], ring[(at + 1) % count]);
+        let folded = match ((here - before).try_normalize(), (after - here).try_normalize()) {
+            (Some(along_in), Some(along_out)) => {
+                along_in.perp_dot(along_out).atan2(along_in.dot(along_out)).abs() > FOLD_TURN && (here.distance(before) < shortest || here.distance(after) < shortest)
+            }
+            _ => true,
+        };
+        if folded {
+            ring.remove(at);
+            index = (at + ring.len() - 1) % ring.len();
+            unchanged = 0;
+        } else {
+            index = (at + 1) % count;
+            unchanged += 1;
+        }
+    }
+    ring
+}
+
+/// A ring turning back on itself by more than this at a point is folded
+/// there.
+const FOLD_TURN: f64 = std::f64::consts::PI * 5.0 / 6.0;
 
 /// Round each corner of a ring that the next offset `side` would close
 /// (a nose of rock jutting into the pit building out, a corner of the pit

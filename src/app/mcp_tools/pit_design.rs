@@ -19,7 +19,7 @@ use crate::{
     ui::dialogs::pit_design::{NoDesign, end_text, no_design_text, problem_text},
 };
 
-const SETTINGS_DESCRIPTION: &str = "A pit design's settings: kind (pit, cut into the ground, or dump, a dump or stockpile built on it); direction (a pit up from its floor's toe or down from its crest, a dump up from its toe stepping in or down from its top stepping out); bench_height; face_angle (degrees from horizontal); berm_width; bench_rules (height_cycle, a list of heights the benches take in turn; catch_every and catch_width, a berm that wide every that many benches; zones, bands of RL from..to whose benches take their own height, face_angle and berm_width, a bench taking the zone it starts in and the last listed winning); wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id: a pit built up daylights against it, a dump built down meets it); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius). Its surface is made with triangulate, which takes a pit design as every string it draws.";
+const SETTINGS_DESCRIPTION: &str = "A pit design's settings: kind (pit, cut into the ground, or dump, a dump or stockpile built on it); direction (a pit up from its floor's toe or down from its crest, a dump up from its toe stepping in or down from its top stepping out); bench_height; face_angle (degrees from horizontal); berm_width; bench_rules (height_cycle, a list of heights the benches take in turn; catch_every and catch_width, a berm that wide every that many benches; zones, bands of RL from..to whose benches take their own height, face_angle and berm_width, a bench taking the zone it starts in and the last listed winning; sectors, each a bearing the walls face (dip direction, degrees from north) with its face_angle, berm_width and optional inter_ramp target, interpolated round the compass; regions, each an outline ([x, y] points) whose walls take its face_angle and berm_width, blending over blend metres across its edge; inter_ramp, a target to check the walls against; a region counts over a zone, a zone over a sector, a sector over the design); wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id: a pit built up daylights against it, a dump built down meets it); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius). Its surface is made with triangulate, which takes a pit design as every string it draws.";
 
 pub(super) fn definitions() -> Vec<Value> {
     vec![
@@ -86,6 +86,37 @@ pub(super) fn definitions() -> Vec<Value> {
                             "height_cycle": { "type": "array", "items": { "type": "number", "exclusiveMinimum": 0 }, "description": "Heights the benches take in turn from the string, over and over, in place of bench_height." },
                             "catch_every": { "type": "integer", "minimum": 0, "description": "Every this many benches, the berm is catch_width wide instead. 0 for none." },
                             "catch_width": { "type": "number", "minimum": 0, "description": "0 leaves no berm there." },
+                            "sectors": {
+                                "type": "array",
+                                "description": "The walls cut by the way they face, interpolated round the compass between sectors. They replace face_angle and berm_width; zones and regions count over them.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "bearing": { "type": "number", "description": "The bearing the walls face, as their dip direction, in degrees from north: the north wall faces 180." },
+                                        "face_angle": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 90 },
+                                        "berm_width": { "type": "number", "minimum": 0 },
+                                        "inter_ramp": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 90, "description": "The inter-ramp angle these walls should come to." },
+                                    },
+                                    "required": ["bearing", "face_angle", "berm_width"],
+                                    "additionalProperties": false,
+                                },
+                            },
+                            "regions": {
+                                "type": "array",
+                                "description": "Areas whose walls are cut otherwise, over everything else.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "outline": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "minItems": 3, "description": "[x, y] points, closed." },
+                                        "face_angle": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 90 },
+                                        "berm_width": { "type": "number", "minimum": 0 },
+                                    },
+                                    "required": ["outline"],
+                                    "additionalProperties": false,
+                                },
+                            },
+                            "blend": { "type": "number", "minimum": 0, "description": "How far across a region's edge its values blend in. 20 if left out." },
+                            "inter_ramp": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 90, "description": "The inter-ramp angle the walls should come to, where a sector sets none." },
                             "zones": {
                                 "type": "array",
                                 "description": "Bands of RL whose benches are cut otherwise. A bench takes the zone it starts in; where zones overlap, the last listed counts.",
@@ -222,12 +253,21 @@ fn summary(design: &Design) -> Value {
         "ramp_exit": design.ramp_exit.map(|exit| [round(exit.x), round(exit.y), round(exit.z)]),
         "ramp_start_moved": (design.ramp_start_moved > 0.0).then(|| round(design.ramp_start_moved)),
         "strings": design.strings.len(),
+        "walls": design.walls.iter().map(|wall| json!({
+            "facing": round(wall.bearing),
+            "designed": round(wall.designed),
+            "achieved": round(wall.achieved),
+            "steepest": round(wall.steepest),
+            "target": wall.target.map(round),
+            "too_steep": wall.too_steep(),
+            "samples": wall.samples,
+        })).collect::<Vec<_>>(),
         "bench_report": design.report.iter().map(|bench| {
             let mut row = json!({
                 "rl": round(bench.elevation),
                 "height": round(bench.height),
-                "face_angle": round(bench.face_angle),
-                "berm": round(bench.berm),
+                "face_angle": span(bench.face_angle),
+                "berm": span(bench.berm),
                 "area": bench.area.round(),
             });
             if let Some(road) = bench.ramp {
@@ -417,5 +457,16 @@ impl App<'_> {
         self.make_pit_design(string, arguments["name"].as_str().map(str::to_owned), Some(settings))
             .map_err(|error| format!("{error:#}"))?;
         Ok(json!({ "design": string.0, "comes_to": comes_to(&design) }))
+    }
+}
+
+/// A value that may vary round the pit: one number where it does not, its
+/// least and greatest where it does.
+fn span([low, high]: [f64; 2]) -> Value {
+    let round = |value: f64| (value * 100.0).round() / 100.0;
+    if (high - low).abs() < 0.005 {
+        json!(round(low))
+    } else {
+        json!([round(low), round(high)])
     }
 }
