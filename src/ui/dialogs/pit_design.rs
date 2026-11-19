@@ -815,6 +815,13 @@ fn draw_ramp_settings(ui: &mut egui::Ui, ramp: &mut RampSettings, commands: &mut
             .suffix(" m")
             .help_text(tr!("pit-design-turn-widening-help"))
             .show(ui);
+        let steepest = ramp.gradient;
+        MenuFieldF64::new(tr!("pit-design-turn-grade"), &mut ramp.turn_grade, 0.0..=steepest)
+            .width(FIELD_WIDTH)
+            .speed(0.1)
+            .suffix(" %")
+            .help_text(tr!("pit-design-turn-grade-help"))
+            .show(ui);
         // Turning only at RLs, with none given, it never turns.
         if ramp.switchback_every == 0 && ramp.turns_at.is_empty() {
             menu::menu_note(ui, tr!("pit-design-turns-none"));

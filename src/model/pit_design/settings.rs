@@ -62,6 +62,9 @@ pub(crate) struct RampSettings {
     pub(crate) inside_radius: f64,
     /// How much wider than its width the road is round the middle of a turn.
     pub(crate) turn_widening: f64,
+    /// The grade its inside edge climbs at round a turn, as a percentage: 0
+    /// for a level turn.
+    pub(crate) turn_grade: f64,
     /// The RLs it begins and ends at, the way the design is built; the
     /// whole pit where none is given.
     pub(crate) from: Option<f64>,
@@ -87,6 +90,7 @@ impl Default for RampSettings {
             turns_at: Vec::new(),
             inside_radius: 15.0,
             turn_widening: 0.0,
+            turn_grade: 0.0,
             from: None,
             to: None,
             bands: Vec::new(),
@@ -116,6 +120,7 @@ impl RampSettings {
                     every: self.switchback_every,
                     inside_radius: self.inside_radius,
                     widening: self.turn_widening,
+                    grade: self.turn_grade / 100.0,
                 }
             } else {
                 Layout::Spiral

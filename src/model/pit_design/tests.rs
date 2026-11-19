@@ -241,6 +241,7 @@ fn switchbacks_up_turn_back_and_are_sound() {
             every: 3,
             inside_radius: 15.0,
             widening: 0.0,
+            grade: 0.0,
         };
         let spec = with_ramp(Direction::Up, layout, start, false, Stop::Benches(10), ramp);
         let design = built(kind, 100.0, &spec, None);
@@ -597,6 +598,7 @@ fn walls_cut_otherwise_still_make_sound_designs() {
                     every: 2,
                     inside_radius: 15.0,
                     widening: 0.0,
+                    grade: 0.0,
                 },
                 false,
             ),
@@ -742,6 +744,7 @@ fn conditioned_rings_are_lighter_and_no_steeper() {
                     every: 2,
                     inside_radius: 15.0,
                     widening: 0.0,
+                    grade: 0.0,
                 },
             ),
         ] {
@@ -1012,6 +1015,7 @@ fn two_ramps_down_and_with_a_switchback() {
         every: 2,
         inside_radius: 15.0,
         widening: 0.0,
+        grade: 0.0,
     };
     spec.ramps.push(second);
     let design = built("rect", 100.0, &spec, None);
@@ -1079,6 +1083,7 @@ fn switchbacks_turn_where_asked_and_say_where_they_could_not() {
                     every: 0,
                     inside_radius: 15.0,
                     widening,
+                    grade: 0.0,
                 },
                 start,
                 false,
@@ -1103,6 +1108,7 @@ fn switchbacks_turn_where_asked_and_say_where_they_could_not() {
             every: 0,
             inside_radius: 30.0,
             widening: 10.0,
+            grade: 0.0,
         },
         outline("star")[0],
         false,
@@ -1127,6 +1133,7 @@ fn switchbacks_turn_where_asked_and_say_where_they_could_not() {
             every: 0,
             inside_radius: 15.0,
             widening: 0.0,
+            grade: 0.0,
         },
         outline("rect")[0],
         false,
@@ -1138,4 +1145,58 @@ fn switchbacks_turn_where_asked_and_say_where_they_could_not() {
 /// Why a design from `points` cannot be made, if it cannot.
 fn design_from(points: &[DVec3], spec: &Spec) -> Option<Problem> {
     design(&Base::from_points(points).unwrap(), spec, None, &|| false).err()
+}
+
+#[test]
+fn switchbacks_climb_round_their_turns() {
+    // Up every outline, a turn every two benches, widened, climbing at 7.5%
+    // round its inside edge on a 10% ramp: as sound as level turns, the
+    // stretch after each climbing what is left, and the ramp the shorter.
+    let rise = std::f64::consts::PI * 15.0 * 0.075;
+    for kind in ["rect", "circle", "ell", "floor", "star"] {
+        let mut lengths = Vec::new();
+        for grade in [0.0, 0.075] {
+            let layout = Layout::Switchback {
+                every: 2,
+                inside_radius: 15.0,
+                widening: 5.0,
+                grade,
+            };
+            let spec = spec(Direction::Up, layout, outline(kind)[0], false, Stop::Benches(7));
+            let design = built(kind, 100.0, &spec, None);
+            let name = format!("{kind} turning at {grade}");
+            assert_eq!(design.end, End::Complete, "{name}");
+            assert_ramps_sound(&name, &design, &spec.ramps);
+            let rises: Vec<f64> = design
+                .report
+                .iter()
+                .flat_map(|bench| &bench.ramps)
+                .filter(|road| road.switchback)
+                .map(|road| road.turn_rise)
+                .collect();
+            assert!(rises.len() >= 2, "{name}: {rises:?}");
+            for turn in &rises {
+                if grade == 0.0 {
+                    assert_eq!(*turn, 0.0, "{name}: a level turn climbs nothing");
+                } else {
+                    assert!(*turn > rise * 0.5 && *turn <= rise + 1.0e-9, "{name}: a turn climbs {turn:.2} m");
+                }
+            }
+            lengths.push(design.ramp_length);
+        }
+        assert!(lengths[1] < lengths[0], "{kind}: climbing round its turns, the ramp is shorter: {lengths:?}");
+    }
+    // And down from a crest.
+    for (kind, start) in [("crest", outline("crest")[1]), ("circle", outline("circle")[0])] {
+        let layout = Layout::Switchback {
+            every: 2,
+            inside_radius: 15.0,
+            widening: 5.0,
+            grade: 0.075,
+        };
+        let spec = spec(Direction::Down, layout, start, false, Stop::Benches(6));
+        let design = built(kind, 300.0, &spec, None);
+        assert_ramps_sound(&format!("{kind} down, climbing round its turns"), &design, &spec.ramps);
+        assert!(design.report.iter().flat_map(|bench| &bench.ramps).any(|road| road.turn_rise > 0.0));
+    }
 }

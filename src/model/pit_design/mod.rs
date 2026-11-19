@@ -80,11 +80,14 @@ impl Direction {
 pub(crate) enum Layout {
     /// On round the wall the way it was going.
     Spiral,
-    /// Back the way it came, on a flat pad, every `every` benches (or only
-    /// at the RLs its ramp asks, at 0); the road's inside edge turns no
-    /// tighter than `inside_radius`, and the road is `widening` wider round
-    /// the middle of the turn than its width, for the trucks to make it.
-    Switchback { every: u32, inside_radius: f64, widening: f64 },
+    /// Back the way it came, every `every` benches (or only at the RLs its
+    /// ramp asks, at 0); the road's inside edge turns no tighter than
+    /// `inside_radius`, and the road is `widening` wider round the middle of
+    /// the turn than its width, for the trucks to make it. Level on a pad
+    /// at the bench's start at a `grade` of 0; otherwise climbing round the
+    /// turn, its inside edge at that grade, the stretch after it climbing
+    /// what is left.
+    Switchback { every: u32, inside_radius: f64, widening: f64, grade: f64 },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -415,10 +418,16 @@ impl Spec {
             if !positive(ramp.gradient) {
                 return Some(Problem::RampGradient);
             }
-            if let Layout::Switchback { every, inside_radius, widening } = ramp.layout
+            if let Layout::Switchback {
+                every,
+                inside_radius,
+                widening,
+                grade,
+            } = ramp.layout
                 && ((every == 0 && ramp.turns_at.is_empty())
                     || !(inside_radius.is_finite() && inside_radius >= 0.0)
                     || !(widening.is_finite() && widening >= 0.0)
+                    || !(grade.is_finite() && grade >= 0.0 && grade <= ramp.gradient)
                     || !ramp.turns_at.iter().all(|rl| rl.is_finite()))
             {
                 return Some(Problem::Switchback);
@@ -577,6 +586,10 @@ pub(crate) struct RampReport {
     /// Where it turned back, if it did: the middle of the turn, on its pad.
     #[serde(default)]
     pub(crate) turn_at: Option<DVec3>,
+    /// How far it climbed round the turn it turned back on: none on a level
+    /// pad.
+    #[serde(default)]
+    pub(crate) turn_rise: f64,
 }
 
 /// Why a design ended where it did.
@@ -787,6 +800,34 @@ struct Turn {
     /// arriving far edge ended, across the road leaving, and back round the
     /// outside of the turn to where the arriving near edge ended.
     pad: Vec<DVec2>,
+    /// How far it climbs round the turn: none on a level pad.
+    lift: f64,
+}
+
+impl Turn {
+    /// A chain of the turn at its heights, climbing `lift` from `elevation`
+    /// along it the way `sign` says.
+    fn at_height(&self, chain: &[DVec2], elevation: f64, sign: f64) -> Vec<DVec3> {
+        let total: f64 = chain.windows(2).map(|pair| pair[0].distance(pair[1])).sum();
+        let mut run = 0.0;
+        chain
+            .iter()
+            .enumerate()
+            .map(|(index, point)| {
+                if index > 0 {
+                    run += point.distance(chain[index - 1]);
+                }
+                let share = if total > 0.0 { run / total } else { 0.0 };
+                point.extend(elevation + sign * self.lift * share)
+            })
+            .collect()
+    }
+}
+
+/// The height a stretch of road `height` high is at, `climbed` of the way
+/// up it, after a turn that climbed `lift` of it.
+fn stretch_height(elevation: f64, sign: f64, height: f64, lift: f64, climbed: f64) -> f64 {
+    elevation + sign * (lift + (height - lift) * climbed)
 }
 
 /// The ground's RL at a point, for daylighting.
@@ -1545,6 +1586,7 @@ impl Builder<'_> {
                 flat: laid.flat,
                 lengthened: laid.lengthened,
                 switchback: laid.turn.is_some(),
+                turn_rise: laid.turn.as_ref().map_or(0.0, |turn| turn.lift),
                 turn_at: laid
                     .turn
                     .as_ref()
@@ -1556,7 +1598,7 @@ impl Builder<'_> {
                     (Some(due), Some(ramp)) if laid.turn.is_some() && (due - elevation).abs() > 1.0e-6 => Some(asked_turn(ramp, &on.cursor, elevation, sign).unwrap_or(due)),
                     _ => None,
                 },
-                ..measure_road(&near, &far, height)
+                ..measure_road(&near, &far, height - laid.turn.as_ref().map_or(0.0, |turn| turn.lift))
             });
             let (Some(near_end), Some(far_end)) = (laid.stretch.edges.near.last(), laid.stretch.edges.far.last()) else {
                 return Err(End::OutOfRoom);
@@ -1647,7 +1689,9 @@ impl Builder<'_> {
         // the ramp carries on round for another bench and tries again on
         // the next.
         let turn = match ramp_spec.layout {
-            Layout::Switchback { inside_radius, widening, .. } if cursor.handover.is_some() && turn_due(ramp_spec, &cursor, elevation, sign) => Some((inside_radius, widening)),
+            Layout::Switchback {
+                inside_radius, widening, grade, ..
+            } if cursor.handover.is_some() && turn_due(ramp_spec, &cursor, elevation, sign) => Some((inside_radius, widening, grade)),
             _ => None,
         };
         let mut last = End::OutOfRoom;
@@ -1763,7 +1807,7 @@ impl Builder<'_> {
         along: &[DVec2],
         cursor: RampCursor,
         lay: Lay,
-        turn: Option<(f64, f64)>,
+        turn: Option<(f64, f64, f64)>,
         walls: &walls::Walls<'_>,
         lay_walls: &walls::Walls<'_>,
         elevation: f64,
@@ -1772,8 +1816,8 @@ impl Builder<'_> {
         gradient: f64,
     ) -> Result<(Laid, Vec<DVec2>, Vec<DVec2>), End> {
         let (stretch, turn, moved) = match (turn, cursor.handover) {
-            (Some((radius, widening)), Some(handover)) => {
-                let (stretch, turn) = turn_back(along, cursor, handover, lay, (radius, widening), lay_walls)?;
+            (Some((radius, widening, grade)), Some(handover)) => {
+                let (stretch, turn) = turn_back(along, cursor, handover, lay, (radius, widening, grade), (walls.height, gradient), lay_walls)?;
                 (stretch, Some(turn), 0.0)
             }
             _ => {
@@ -1813,16 +1857,18 @@ impl Builder<'_> {
         }
         for laid in laid {
             let stretch = &laid.stretch;
+            let lift = laid.turn.as_ref().map_or(0.0, |turn| turn.lift);
             for edge in [&stretch.edges.near, &stretch.edges.far] {
                 let points: Vec<DVec3> = edge
                     .iter()
-                    .map(|(point, source)| point.extend(elevation + self.sign * height * stretch.climbed_at(*source).unwrap_or(1.0)))
+                    .map(|(point, source)| point.extend(stretch_height(elevation, self.sign, height, lift, stretch.climbed_at(*source).unwrap_or(1.0))))
                     .collect();
                 candidate.extend(points.windows(2).map(|pair| (pair[0], pair[1])));
             }
             if let Some(turn) = &laid.turn {
                 for edge in [&turn.inner, &turn.outer] {
-                    candidate.extend(edge.windows(2).map(|pair| (pair[0].extend(elevation), pair[1].extend(elevation))));
+                    let points = turn.at_height(edge, elevation, self.sign);
+                    candidate.extend(points.windows(2).map(|pair| (pair[0], pair[1])));
                 }
             }
         }
@@ -1834,10 +1880,12 @@ impl Builder<'_> {
     fn lay_road(&mut self, index: usize, stretch: &Stretch, turn: Option<&Turn>, elevation: f64, height: f64) -> (Vec<DVec3>, Vec<DVec3>) {
         let road = &mut self.roads[index];
         let mut ramp_length = 0.0;
+        let lift = turn.map_or(0.0, |turn| turn.lift);
         if let Some(turn) = turn {
-            // The pad, level: each edge of the road arriving runs on round
-            // the turn, the near one the outside of it.
-            let level = |points: &[DVec2]| -> Vec<DVec3> { points.iter().map(|point| point.extend(elevation)).collect() };
+            // Round the turn, level on its pad or climbing: each edge of the
+            // road arriving runs on round the turn, the near one the outside
+            // of it.
+            let level = |points: &[DVec2]| -> Vec<DVec3> { turn.at_height(points, elevation, self.sign) };
             let (outer, inner) = (level(&turn.outer), level(&turn.inner));
             let near_on_left = road.left.last().zip(outer.first()).is_some_and(|(left, start)| left.distance(*start) <= HANDOVER_GAP);
             let (left, right) = if near_on_left { (outer, inner) } else { (inner, outer) };
@@ -1850,11 +1898,11 @@ impl Builder<'_> {
             ramp_length += turn.centre.windows(2).map(|pair| pair[0].distance(pair[1])).sum::<f64>();
             join(&mut road.centreline, centre);
         }
-        let rise = self.sign * height;
+        let sign = self.sign;
         let at_height = |chain: &[(DVec2, f64)]| -> Vec<DVec3> {
             chain
                 .iter()
-                .map(|(point, source)| DVec3::new(point.x, point.y, elevation + rise * stretch.climbed_at(*source).unwrap_or(1.0)))
+                .map(|(point, source)| point.extend(stretch_height(elevation, sign, height, lift, stretch.climbed_at(*source).unwrap_or(1.0))))
                 .collect()
         };
         let (near, far) = (at_height(&stretch.edges.near), at_height(&stretch.edges.far));
@@ -1875,7 +1923,7 @@ impl Builder<'_> {
                 let near = point_by_source(&stretch.edges.near, *parameter, stretch.count);
                 let far = point_by_source(&stretch.edges.far, *parameter, stretch.count);
                 let middle = near.lerp(far, 0.5);
-                DVec3::new(middle.x, middle.y, elevation + rise * climbed)
+                middle.extend(stretch_height(elevation, sign, height, lift, *climbed))
             })
             .collect();
         ramp_length += centre.windows(2).map(|pair| pair[0].truncate().distance(pair[1].truncate())).sum::<f64>();
@@ -1935,6 +1983,7 @@ fn measure_road(near: &[DVec3], far: &[DVec3], height: f64) -> RampReport {
         switchback: false,
         turn_moved_from: None,
         turn_at: None,
+        turn_rise: 0.0,
     }
 }
 
@@ -2077,7 +2126,16 @@ fn lay_stretch(from: &[DVec2], cursor: RampCursor, lay: Lay, walls: &walls::Wall
 /// the ring, clear of the road below it, and comes in to its usual line by
 /// the time it arrives: the island between the two roads narrows to
 /// nothing.
-fn turn_back(from: &[DVec2], cursor: RampCursor, handover: DVec2, lay: Lay, (radius, widening): (f64, f64), walls: &walls::Walls<'_>) -> Result<(Stretch, Turn), End> {
+#[allow(clippy::too_many_arguments)]
+fn turn_back(
+    from: &[DVec2],
+    cursor: RampCursor,
+    handover: DVec2,
+    lay: Lay,
+    (radius, widening, grade): (f64, f64, f64),
+    (height, gradient): (f64, f64),
+    walls: &walls::Walls<'_>,
+) -> Result<(Stretch, Turn), End> {
     let near_end = ring::point_at(from, cursor.at);
     let across = (handover - near_end).try_normalize().ok_or(End::OutOfRoom)?;
     // Which way the road was heading as it arrived, square to the step
@@ -2086,38 +2144,83 @@ fn turn_back(from: &[DVec2], cursor: RampCursor, handover: DVec2, lay: Lay, (rad
     let reach = 2.0 * radius;
     let back_at = ring::nearest(from, handover).0;
     let drift = drift_along(from, walls);
-    // Turned back across its pad, it starts its own width out.
-    let lay = Lay { start_across: None, ..lay };
-    let stretch = road::lay(from, back_at, -cursor.direction, lay, &|climbed, parameter| {
-        climbed * drift(parameter) + reach * (1.0 - climbed)
-    })
-    .map_err(|_| End::RampTooLong)?;
-    let (Some(leave_near), Some(leave_far)) = (stretch.edges.near.first(), stretch.edges.far.first()) else {
-        return Err(End::OutOfRoom);
+    // Climbing round the turn, its inside edge at `grade` over half a
+    // circle, and no more than most of the bench: the stretch after it
+    // climbs what is left. Laid, the inside edge is measured, and where it
+    // is shorter the turn climbs less, never steeper than asked.
+    let mut lift = if grade > 0.0 {
+        (std::f64::consts::PI * radius * grade).min(height * MOST_TURN_LIFT)
+    } else {
+        0.0
     };
-    let centre = handover + across * radius;
-    // Wider round the middle of the turn, on the outside.
-    let inner = half_turn(handover, leave_near.0, centre, along, 0.0);
-    let outer = half_turn(near_end, leave_far.0, centre, along, widening);
-    let middle = half_turn(near_end.lerp(handover, 0.5), leave_near.0.lerp(leave_far.0, 0.5), centre, along, widening * 0.5);
-    let mut pad = vec![handover, leave_near.0];
-    pad.extend(outer.iter().rev().copied());
-    pad.dedup_by(|a, b| a.distance(*b) <= ring::SAME_POINT);
-    Ok((
-        stretch,
-        Turn {
-            inner,
-            outer,
-            centre: middle,
-            pad,
-        },
-    ))
+    for _ in 0..TURN_ROUNDS {
+        // Turned back across its pad, it starts its own width out.
+        let lay = Lay {
+            start_across: None,
+            climb_length: lay.climb_length - lift / gradient,
+            ..lay
+        };
+        let stretch = road::lay(from, back_at, -cursor.direction, lay, &|climbed, parameter| {
+            climbed * drift(parameter) + reach * (1.0 - climbed)
+        })
+        .map_err(|_| End::RampTooLong)?;
+        let (Some(leave_near), Some(leave_far)) = (stretch.edges.near.first(), stretch.edges.far.first()) else {
+            return Err(End::OutOfRoom);
+        };
+        let centre = handover + across * radius;
+        // Wider round the middle of the turn, on the outside.
+        let inner = half_turn(handover, leave_near.0, centre, along, 0.0);
+        let outer = half_turn(near_end, leave_far.0, centre, along, widening);
+        let middle = half_turn(near_end.lerp(handover, 0.5), leave_near.0.lerp(leave_far.0, 0.5), centre, along, widening * 0.5);
+        let inside: f64 = inner.windows(2).map(|pair| pair[0].distance(pair[1])).sum();
+        if grade > 0.0 && inside * grade < lift - 1.0e-6 {
+            lift = inside * grade;
+            continue;
+        }
+        let mut pad = vec![handover, leave_near.0];
+        pad.extend(outer.iter().rev().copied());
+        pad.dedup_by(|a, b| a.distance(*b) <= ring::SAME_POINT);
+        return Ok((
+            stretch,
+            Turn {
+                inner,
+                outer,
+                centre: middle,
+                pad,
+                lift,
+            },
+        ));
+    }
+    Err(End::OutOfRoom)
 }
+
+/// The most of a bench a turn climbs: the stretch after it climbs the rest.
+const MOST_TURN_LIFT: f64 = 0.75;
+
+/// How many times a climbing turn is laid, its climb lowered to what its
+/// inside edge allows.
+const TURN_ROUNDS: usize = 3;
+
+/// How much of a turn's widening it has `t` of the way round its outside:
+/// none until it has left the crest it set out along (where widening would
+/// put the road out over the bench below), then easing out and back to
+/// none where it rejoins the wall.
+fn widened(t: f64) -> f64 {
+    if t <= WIDEN_FROM {
+        0.0
+    } else {
+        (std::f64::consts::PI * (t - WIDEN_FROM) / (1.0 - WIDEN_FROM)).sin()
+    }
+}
+
+/// How far round a turn's outside its widening starts.
+const WIDEN_FROM: f64 = 0.25;
 
 /// Half a turn round `centre` from `from` to `to`, bulging the way `ahead`
 /// points: both ends included, and between them points whose chords touch
-/// the circle (its radius going evenly from one end's to the other's), so
-/// the road is nowhere narrower round it than at its ends.
+/// the circle (its radius going evenly from one end's to the other's, and
+/// `bulge` more round the middle as [`widened`] says), so the road is
+/// nowhere narrower round it than at its ends.
 fn half_turn(from: DVec2, to: DVec2, centre: DVec2, ahead: DVec2, bulge: f64) -> Vec<DVec2> {
     let (start, end) = (from - centre, to - centre);
     let (start_radius, end_radius) = (start.length(), end.length());
@@ -2133,7 +2236,7 @@ fn half_turn(from: DVec2, to: DVec2, centre: DVec2, ahead: DVec2, bulge: f64) ->
     let mut points = vec![from];
     for step in 1..steps {
         let t = step as f64 / steps as f64;
-        let radius = (start_radius + (end_radius - start_radius) * t + bulge * (std::f64::consts::PI * t).sin()) / half_step.cos();
+        let radius = (start_radius + (end_radius - start_radius) * t + bulge * widened(t)) / half_step.cos();
         points.push(centre + DVec2::from_angle(start_angle + sweep * t) * radius);
     }
     points.push(to);
@@ -2252,6 +2355,20 @@ fn start_ring(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, placed: &[P
             .iter()
             .flat_map(|placed| placed.stretch.stations.iter().map(|(parameter, _)| *parameter))
             .collect();
+        // A turn climbing round leaves no berm beside it: it starts on the
+        // berm's level and rises off it, as a road does. The ring is cut
+        // where each point of it stands square to the ring, so the berm
+        // goes beside it alone.
+        let climbing: Vec<&Turn> = along_from
+            .iter()
+            .filter_map(|placed| match placed.join {
+                Join::TurnsBack(turn) if turn.lift > 0.0 => Some(turn),
+                _ => None,
+            })
+            .collect();
+        for turn in &climbing {
+            cuts.extend(turn.inner.iter().chain(&turn.outer).map(|point| ring::nearest(from, *point).0));
+        }
         cuts.extend(walls.splits(from).into_iter().filter(|parameter| !steps.contains(&(parameter.floor() as usize))));
         let (split, at) = ring::with_points_at(from, &cuts);
         let facings = walls.facings(&split);
@@ -2263,6 +2380,13 @@ fn start_ring(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, placed: &[P
                 };
                 if handovers.iter().any(|(pushed, start)| is(*pushed, *start)) {
                     return EdgeOffset::even(0.0);
+                }
+                if !climbing.is_empty() {
+                    let middle = split[index].lerp(split[next], 0.5);
+                    let clear = walls.berm_at(middle, facings[index]) + walls.face_at(middle, facings[index]);
+                    if climbing.iter().any(|turn| beside_turn(turn, middle, clear)) {
+                        return EdgeOffset::even(0.0);
+                    }
                 }
                 let middle = middle_parameter(at[index], at[next], count);
                 // Each point takes the way its wall faces as
@@ -2293,7 +2417,9 @@ fn start_ring(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, placed: &[P
     // round it.
     let mut start_ring = start_ring;
     for placed in &along_from {
-        if let Join::TurnsBack(turn) = placed.join {
+        if let Join::TurnsBack(turn) = placed.join
+            && turn.lift == 0.0
+        {
             start_ring = with_pad(&start_ring, &turn.pad).ok_or(End::OutOfRoom)?;
         }
     }
@@ -2385,7 +2511,8 @@ fn end_beside(
 ) -> Result<Vec<DVec2>, End> {
     match placed.join {
         Join::Begins => beside_new_ramp(start_ring, placed.stretch, walls, sign).ok_or(End::OutOfRoom),
-        _ => spliced(&plain()?, placed.stretch, from, walls, sign).ok_or(End::OutOfRoom),
+        Join::TurnsBack(turn) if turn.lift > 0.0 => spliced(&plain()?, placed.stretch, from, walls, sign, Some(turn)).ok_or(End::OutOfRoom),
+        _ => spliced(&plain()?, placed.stretch, from, walls, sign, None).ok_or(End::OutOfRoom),
     }
 }
 
@@ -2466,18 +2593,47 @@ fn segment_gap(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> f64 {
 /// where it carries on from the stretch before, the far edge's offset runs
 /// back until it meets the wall behind, the end of the berm the road takes
 /// over, benched back like any other wall.
-fn spliced(plain: &[DVec2], stretch: &Stretch, from: &[DVec2], walls: &walls::Walls<'_>, sign: f64) -> Option<Vec<DVec2>> {
+fn spliced(plain: &[DVec2], stretch: &Stretch, from: &[DVec2], walls: &walls::Walls<'_>, sign: f64, turn: Option<&Turn>) -> Option<Vec<DVec2>> {
     let direction = stretch.direction;
-    let far: Vec<DVec2> = stretch.edges.far.iter().map(|point| point.0).collect();
+    let mut far: Vec<DVec2> = stretch.edges.far.iter().map(|point| point.0).collect();
     // The face above each point of the far edge is cut as the wall it was
     // set off from.
     let on_from = walls.on(from);
-    let left_of_face: Vec<f64> = stretch
-        .edges
-        .far
-        .iter()
-        .map(|(_, source)| on_from.face(*source) * (1.0 - stretch.climbed_at(*source).unwrap_or(1.0)))
-        .collect();
+    let mut left_of_face: Vec<f64> = match turn {
+        None => stretch
+            .edges
+            .far
+            .iter()
+            .map(|(_, source)| on_from.face(*source) * (1.0 - stretch.climbed_at(*source).unwrap_or(1.0)))
+            .collect(),
+        // After a turn that climbed, the road started that much up the face.
+        Some(turn) => {
+            let height = walls.height;
+            stretch
+                .edges
+                .far
+                .iter()
+                .map(|(_, source)| {
+                    let up = (turn.lift + (height - turn.lift) * stretch.climbed_at(*source).unwrap_or(1.0)) / height;
+                    on_from.face(*source) * (1.0 - up)
+                })
+                .collect()
+        }
+    };
+    // Round a turn that climbed, the face above its outside edge comes to
+    // where the crest goes round it, shorter the further round it has
+    // climbed: the outside edge first, then the far edge on from it.
+    if let Some(turn) = turn {
+        let face = stretch.edges.far.first().map_or(0.0, |(_, source)| on_from.face(*source));
+        let raised = turn.at_height(&turn.outer, 0.0, 1.0);
+        let count = raised.len().saturating_sub(1);
+        let mut chain: Vec<DVec2> = turn.outer[..count].to_vec();
+        let mut left: Vec<f64> = raised[..count].iter().map(|point| face * (1.0 - point.z / walls.height)).collect();
+        chain.append(&mut far);
+        left.append(&mut left_of_face);
+        far = chain;
+        left_of_face = left;
+    }
     let above = road::offset_chain(&far, &left_of_face, sign * direction > 0.0);
     let near_end = stretch.edges.near.last()?.0;
     if above.len() < 2 {
@@ -2604,6 +2760,14 @@ fn beside_new_ramp(start_ring: &[DVec2], stretch: &Stretch, walls: &walls::Walls
         last = Some(ring);
     }
     last
+}
+
+/// Whether `point` stands within `clear` of a turn's edges.
+fn beside_turn(turn: &Turn, point: DVec2, clear: f64) -> bool {
+    [&turn.inner, &turn.outer].into_iter().any(|edge| {
+        edge.windows(2)
+            .any(|pair| crate::model::kernel::project_onto_segment(point, pair[0], pair[1]).0.distance(point) < clear)
+    })
 }
 
 /// The least share of a face's run the head wall's top stands back from
