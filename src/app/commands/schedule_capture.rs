@@ -2135,11 +2135,9 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
     }
     let spec = HorizonSpec {
         end_h: horizon_h,
-        regular_step_h: if plan.drill_blast().enabled {
-            experiment.interval_h.min(1.0)
-        } else {
-            experiment.interval_h
-        },
+        // The step the scenario asks for. Firing windows and every rate
+        // change are boundaries of their own, so a longer step keeps them.
+        regular_step_h: experiment.interval_h,
         // Not read by the blended model, which has no parcels; a positive
         // value is required only so the shared interval builder validates.
         parcel_target_t: 1.0,
