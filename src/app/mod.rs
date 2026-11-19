@@ -569,11 +569,8 @@ pub(crate) struct App<'a> {
     /// was stopped) for, so one that cannot succeed is not retried until
     /// something changes. See [`Self::auto_recalculate_schedule`].
     pub(crate) schedule_auto_attempted: Option<u64>,
-    /// The inputs last seen while waiting for edits to settle, and since when.
-    pub(crate) schedule_auto_settle: Option<(u64, Instant)>,
-    /// When the settled inputs are due a recalculation, so the event loop
-    /// wakes for it with no further input.
-    pub(crate) schedule_auto_deadline: Option<Instant>,
+    /// The inputs a recalculation is due for, while one has yet to start.
+    pub(crate) schedule_auto_settle: Option<u64>,
     /// Whether the Schedule Setup run in progress was asked for, and so may
     /// bring the Solids run up to date - Reserving included. A recalculation
     /// Auto started may not: it only reports that Solids needs running.
@@ -792,7 +789,6 @@ impl<'a> Default for App<'a> {
             schedule_run_serial: 0,
             schedule_auto_attempted: None,
             schedule_auto_settle: None,
-            schedule_auto_deadline: None,
             schedule_setup_runs_solids: false,
             planning_auto_attempted: None,
             planning_auto_settle: None,
@@ -2736,13 +2732,6 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         if resize_settle_deadline.is_some_and(|deadline| deadline <= now) {
             self.redraw_requested = true;
         }
-        // A schedule recalculation waits for edits to settle and then needs a
-        // frame to start in: asked for here, before the frame request below,
-        // or the loop goes back to sleep with the frame still owed.
-        if self.schedule_auto_deadline.is_some_and(|deadline| deadline <= now) {
-            self.schedule_auto_deadline = None;
-            self.redraw_requested = true;
-        }
         if self.planning_auto_deadline.is_some_and(|deadline| deadline <= now) {
             self.planning_auto_deadline = None;
             self.redraw_requested = true;
@@ -2794,7 +2783,6 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             .into_iter()
             .chain(self.slice_surface_retry_deadline)
             .chain(resize_settle_deadline)
-            .chain(self.schedule_auto_deadline)
             .chain(self.planning_auto_deadline)
             .chain(self.haulage_auto_deadline)
             .chain(self.scanned_model_kept_until)

@@ -9,8 +9,9 @@
 //! # Recalculation
 //!
 //! The hourly schedule takes a fraction of a second, so with Auto on (the
-//! default) an edit is followed, once edits have settled for
-//! [`AUTO_SETTLE`], by a run of its own ([`ScheduleRunMode::Auto`]). It
+//! default) an edit is followed at once by a run of its own
+//! ([`ScheduleRunMode::Auto`]); an edit while it runs retires it for
+//! another. It
 //! covers the horizon the held result did, says nothing in the console, and
 //! is tried once per set of inputs: one that is refused, fails or is stopped
 //! by the user is not retried until something changes. Improve - the
@@ -97,10 +98,6 @@ pub(crate) enum ScheduleRunMode {
     /// it follows the end wherever it has moved. Quiet in the console.
     Auto,
 }
-
-/// How long the schedule has to stay unedited before it is recalculated on
-/// its own, so a burst of edits costs one run rather than one each.
-const AUTO_SETTLE: std::time::Duration = std::time::Duration::from_millis(350);
 
 /// A run in flight.
 #[derive(Debug)]
@@ -934,7 +931,6 @@ impl crate::app::App<'_> {
     /// that cannot succeed, or a run the user stopped, is not retried until
     /// something changes.
     pub(crate) fn auto_recalculate_schedule(&mut self) {
-        self.schedule_auto_deadline = None;
         // A run that waited on a Setup step starts once none is running.
         if let Some((runtime, mode)) = self.schedule_run_waiting
             && self.pending_schedule_run.is_none()
@@ -963,19 +959,16 @@ impl crate::app::App<'_> {
         if self.schedule_auto_attempted == Some(key) {
             return;
         }
-        let now = web_time::Instant::now();
-        let since = match self.schedule_auto_settle {
-            Some((seen, since)) if seen == key => since,
-            _ => {
-                self.schedule_auto_settle = Some((key, now));
-                // The pages were mirrored before this frame knew a
-                // recalculation was coming; mirror them again now.
-                self.redraw_requested = true;
-                now
-            }
-        };
-        if now < since + AUTO_SETTLE && self.editing_near(since, AUTO_SETTLE) {
-            self.schedule_auto_deadline = Some(since + AUTO_SETTLE);
+        if self.schedule_auto_settle != Some(key) {
+            self.schedule_auto_settle = Some(key);
+            // The pages were mirrored before this frame knew a
+            // recalculation was coming; mirror them again now.
+            self.redraw_requested = true;
+        }
+        // Not while a drag is still committing edits; the frame its end
+        // draws starts the run. An edit after that retires the run and
+        // starts another (`advance_schedule_calculation`).
+        if self.ui_pointer_gesture_active {
             return;
         }
         self.schedule_auto_settle = None;
