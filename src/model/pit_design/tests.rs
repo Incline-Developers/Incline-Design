@@ -5,7 +5,7 @@
 
 use glam::{DVec2, DVec3};
 
-use super::{Base, Design, DesignString, Direction, End, Kind, Layout, Problem, RampSpec, Spec, Stop, StringKind, design};
+use super::{Base, BenchRules, Design, DesignString, Direction, End, Kind, Layout, Problem, RampSpec, Spec, Stop, StringKind, Zone, design};
 
 /// Outlines in plan: a rectangle, a circle, an L, a star, a hand-drawn floor
 /// with a re-entrant corner, and a big crest.
@@ -63,6 +63,7 @@ fn with_ramp(direction: Direction, layout: Layout, start: DVec2, clockwise: bool
         bench_height: 15.0,
         face_angle: 65.0,
         berm_width,
+        rules: BenchRules::default(),
         wall_radius: 30.0,
         ramp: Some(RampSpec {
             width: 28.0,
@@ -289,6 +290,19 @@ fn settings_that_make_no_design_say_why() {
     let mut steep = spec(Direction::Up, Layout::Spiral, start, false, Stop::Benches(3));
     steep.face_angle = 90.0;
     assert_eq!(problem(steep), Some(Problem::FaceAngle));
+    let mut zoned = spec(Direction::Up, Layout::Spiral, start, false, Stop::Benches(3));
+    zoned.rules.zones.push(Zone {
+        from: 120.0,
+        to: 120.0,
+        ..Zone::default()
+    });
+    assert_eq!(problem(zoned.clone()), Some(Problem::Zone));
+    zoned.rules.zones[0].to = 140.0;
+    zoned.rules.zones[0].face_angle = Some(95.0);
+    assert_eq!(problem(zoned.clone()), Some(Problem::FaceAngle));
+    zoned.rules.zones[0].face_angle = None;
+    zoned.rules.height_cycle = vec![10.0, 0.0];
+    assert_eq!(problem(zoned), Some(Problem::BenchHeight));
 }
 
 #[test]
@@ -337,4 +351,99 @@ fn dumps_build_up_stepping_in_and_down_to_the_ground() {
     spec.kind = Kind::Dump;
     let points: Vec<DVec3> = outline("rect").iter().map(|point| point.extend(300.0)).collect();
     assert_eq!(design(&Base::from_points(&points).unwrap(), &spec, None, &|| false).err(), Some(Problem::DaylightDumpUp));
+}
+
+/// Rules that vary every sort of thing: heights 10, 10, 15 in turn, a catch
+/// berm 20 wide every third bench, and between RL 130 and 160 faces of 50°
+/// and berms of 12.
+fn varied() -> BenchRules {
+    BenchRules {
+        height_cycle: vec![10.0, 10.0, 15.0],
+        catch_every: 3,
+        catch_width: 20.0,
+        zones: vec![Zone {
+            from: 130.0,
+            to: 160.0,
+            face_angle: Some(50.0),
+            berm_width: Some(12.0),
+            ..Zone::default()
+        }],
+    }
+}
+
+#[test]
+fn bench_rules_land_on_the_right_benches() {
+    // Up from RL 100: the benches start at 100, 110, 120, 135, 145, 155,
+    // 170 and 180. The catch berms come before the fourth and seventh; the
+    // zone holds the three starting between 130 and 160.
+    let mut flat = spec(Direction::Up, Layout::Spiral, outline("rect")[0], false, Stop::Benches(8));
+    flat.ramp = None;
+    flat.wall_radius = 0.0;
+    flat.rules = varied();
+    let plain = built("rect", 100.0, &flat, None);
+    let rows: Vec<(f64, f64, f64, f64)> = plain.report.iter().map(|bench| (bench.elevation, bench.height, bench.face_angle, bench.berm)).collect();
+    assert_eq!(
+        rows,
+        vec![
+            (100.0, 10.0, 65.0, 0.0),
+            (110.0, 10.0, 65.0, 8.0),
+            (120.0, 15.0, 65.0, 8.0),
+            (135.0, 10.0, 50.0, 20.0),
+            (145.0, 10.0, 50.0, 12.0),
+            (155.0, 15.0, 50.0, 12.0),
+            (170.0, 10.0, 65.0, 20.0),
+            (180.0, 10.0, 65.0, 8.0),
+        ]
+    );
+    // And the rings stand that far apart: each berm, then each face's run.
+    let rings: Vec<&DesignString> = plain.strings.iter().filter(|string| string.closed).collect();
+    let mut gaps = Vec::new();
+    for bench in &plain.report {
+        if bench.berm > 0.0 {
+            gaps.push(bench.berm);
+        }
+        gaps.push(bench.height / bench.face_angle.to_radians().tan());
+    }
+    assert_eq!(rings.len(), gaps.len() + 1);
+    for (pair, gap) in rings.windows(2).zip(&gaps) {
+        // Measured both ways: a ring's corners stand further off than its
+        // sides, which may have no points of their own along them.
+        let plan = |string: &DesignString| string.points.iter().map(|point| point.truncate()).collect::<Vec<DVec2>>();
+        let (inner, outer) = (plan(pair[0]), plan(pair[1]));
+        let from = |points: &[DVec2], ring: &[DVec2]| {
+            points
+                .iter()
+                .map(|point| crate::model::pit_design::ring::nearest(ring, *point).1)
+                .fold(f64::INFINITY, f64::min)
+        };
+        let apart = from(&outer, &inner).min(from(&inner, &outer));
+        assert!((apart - gap).abs() < 0.01, "rings {apart:.3} m apart, not {gap:.3}");
+    }
+
+    // With a ramp, as sound as any design.
+    for kind in ["rect", "ell", "floor"] {
+        let mut ramped = spec(Direction::Up, Layout::Spiral, outline(kind)[0], false, Stop::Benches(8));
+        ramped.rules = varied();
+        let design = built(kind, 100.0, &ramped, None);
+        assert_sound(&format!("{kind} with bench rules"), &design, ramped.ramp.as_ref().unwrap());
+    }
+
+    // A dump built up takes its zones by their RLs too.
+    let mut dumped = spec(Direction::Up, Layout::Spiral, outline("crest")[2], false, Stop::Benches(6));
+    dumped.kind = Kind::Dump;
+    dumped.rules = BenchRules {
+        zones: vec![Zone {
+            from: 330.0,
+            to: 360.0,
+            face_angle: Some(40.0),
+            ..Zone::default()
+        }],
+        ..BenchRules::default()
+    };
+    let dump = built("crest", 300.0, &dumped, None);
+    for bench in &dump.report {
+        let expected = if (330.0..360.0).contains(&bench.elevation) { 40.0 } else { 65.0 };
+        assert_eq!(bench.face_angle, expected, "the lift from RL {}", bench.elevation);
+    }
+    assert!(dump.report.iter().any(|bench| bench.face_angle == 40.0));
 }

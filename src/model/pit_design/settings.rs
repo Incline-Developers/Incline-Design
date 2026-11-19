@@ -4,7 +4,7 @@
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
-use super::{Direction, Kind, Layout, RampSpec, Spec, Stop};
+use super::{BenchRules, Direction, Kind, Layout, RampSpec, Spec, Stop};
 use crate::model::triangulation::TriangulationId;
 
 /// Where a design stops, as its settings say.
@@ -28,6 +28,9 @@ pub(crate) struct PitDesignSettings {
     /// Degrees from horizontal.
     pub(crate) face_angle: f64,
     pub(crate) berm_width: f64,
+    /// How the benches vary from one to the next: a cycle of heights, catch
+    /// berms, and bands of RL cut otherwise.
+    pub(crate) bench_rules: BenchRules,
     pub(crate) wall_radius: f64,
     pub(crate) ramp: bool,
     pub(crate) ramp_width: f64,
@@ -56,6 +59,7 @@ impl Default for PitDesignSettings {
             bench_height: 15.0,
             face_angle: 70.0,
             berm_width: 8.0,
+            bench_rules: BenchRules::default(),
             wall_radius: 15.0,
             ramp: true,
             ramp_width: 25.0,
@@ -83,6 +87,7 @@ impl PitDesignSettings {
             bench_height: self.bench_height,
             face_angle: self.face_angle,
             berm_width: self.berm_width,
+            rules: self.bench_rules.clone(),
             wall_radius: self.wall_radius,
             ramp: self.ramp.then(|| RampSpec {
                 width: self.ramp_width,

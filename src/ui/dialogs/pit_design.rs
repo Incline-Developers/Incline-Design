@@ -16,7 +16,7 @@ use crate::{
     model::{
         ObjectId, PolyVertex,
         pit_design::{
-            Design, Direction, End, Kind, Problem,
+            Design, Direction, End, Kind, Problem, Zone,
             object::PitObject,
             settings::{PitDesignSettings, StopMode},
         },
@@ -177,6 +177,7 @@ pub(crate) fn problem_text(problem: Problem) -> String {
         Problem::BenchHeight => tr!("pit-design-problem-bench-height"),
         Problem::FaceAngle => tr!("pit-design-problem-face-angle"),
         Problem::BermWidth => tr!("pit-design-problem-berm-width"),
+        Problem::Zone => tr!("pit-design-problem-zone"),
         Problem::RampWidth => tr!("pit-design-problem-ramp-width"),
         Problem::RampGradient => tr!("pit-design-problem-ramp-gradient"),
         Problem::Switchback => tr!("pit-design-problem-switchback"),
@@ -277,7 +278,8 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                     };
                     match stage {
                         PitStage::Benches => {
-                            draw_bench_settings(ui, &mut working.settings, project);
+                            let base_rl = draft.built_for.as_ref().and_then(|key| key.verts.first()).map_or(0.0, |vertex| vertex.pos.z);
+                            draw_bench_settings(ui, &mut working.settings, project, base_rl);
                         }
                         PitStage::Ramp => {
                             menu::menu_section(ui, tr!("pit-design-ramp-section"));
@@ -334,8 +336,9 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
     draft.settled = !ui.ctx().input(|input| input.pointer.any_down()) && ui.ctx().memory(|memory| memory.focused().is_none());
 }
 
-/// The pit's benches and where it stops.
-fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &UiProjectView) {
+/// The pit's benches and where it stops. `base_rl` is the string's, where a
+/// new zone starts.
+fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &UiProjectView, base_rl: f64) {
     let chosen = kind_label(settings.kind);
     MenuFieldCombo::new(
         "pit_design_kind",
@@ -382,6 +385,9 @@ fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, proj
         .suffix(" m")
         .help_text(tr!("pit-design-wall-radius-help"))
         .show(ui);
+    if menu::menu_section_folding(ui, "pit_design_bench_rules", tr!("pit-design-rules-section")) {
+        draw_bench_rules(ui, settings, base_rl);
+    }
 
     menu::menu_section(ui, tr!("pit-design-stop-section"));
     // Only a pit built up, or a dump built down, meets the ground.
@@ -434,6 +440,103 @@ fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, proj
             .help_text(tr!("pit-design-topography-help"))
             .show(ui);
         }
+    }
+}
+
+/// How the benches vary: a cycle of heights, catch berms, and bands of RL
+/// cut otherwise.
+fn draw_bench_rules(ui: &mut egui::Ui, settings: &mut PitDesignSettings, base_rl: f64) {
+    // The cycle is typed as a list. What is typed stays as it is while it
+    // still reads as the cycle the settings hold, so a half-typed list is
+    // not rewritten under the cursor.
+    let typed_id = egui::Id::unique("pit_design_height_cycle");
+    let cycle = settings.bench_rules.height_cycle.clone();
+    let mut text = ui
+        .data(|data| data.get_temp::<(String, Vec<f64>)>(typed_id))
+        .filter(|(_, read)| *read == cycle)
+        .map_or_else(|| cycle.iter().map(|height| format!("{height}")).collect::<Vec<_>>().join(", "), |(text, _)| text);
+    let response = MenuFieldText::new(tr!("pit-design-height-cycle"), &mut text)
+        .width(FIELD_WIDTH)
+        .hint_text(tr!("pit-design-height-cycle-hint"))
+        .help_text(tr!("pit-design-height-cycle-help"))
+        .show(ui);
+    if response.changed() {
+        let read: Option<Vec<f64>> = text
+            .split([',', ' ', ';'])
+            .filter(|part| !part.trim().is_empty())
+            .map(|part| part.trim().parse::<f64>().ok().filter(|height| height.is_finite() && *height > 0.0))
+            .collect();
+        if let Some(read) = read {
+            settings.bench_rules.height_cycle.clone_from(&read);
+            ui.data_mut(|data| data.insert_temp(typed_id, (text, read)));
+        } else {
+            ui.data_mut(|data| data.insert_temp(typed_id, (text, cycle)));
+        }
+    }
+    let rules = &mut settings.bench_rules;
+    MenuFieldU32::new(tr!("pit-design-catch-every"), &mut rules.catch_every, 0..=u32::MAX)
+        .width(FIELD_WIDTH)
+        .help_text(tr!("pit-design-catch-every-help"))
+        .show(ui);
+    if rules.catch_every > 0 {
+        MenuFieldF64::new(tr!("pit-design-catch-width"), &mut rules.catch_width, 0.0..=1000.0)
+            .width(FIELD_WIDTH)
+            .speed(0.1)
+            .suffix(" m")
+            .show(ui);
+    }
+
+    let sign = settings.direction.sign();
+    let (height, face_angle, berm_width) = (settings.bench_height, settings.face_angle, settings.berm_width);
+    let mut remove = None;
+    for (index, zone) in settings.bench_rules.zones.iter_mut().enumerate() {
+        ui.push_id(("pit_design_zone", index), |ui| {
+            menu::menu_section(ui, tr!("pit-design-zone", number = (index + 1).to_string()));
+            MenuFieldF64::new(tr!("pit-design-zone-from"), &mut zone.from, f64::MIN..=f64::MAX)
+                .width(FIELD_WIDTH)
+                .speed(0.5)
+                .suffix(" m")
+                .show(ui);
+            MenuFieldF64::new(tr!("pit-design-zone-to"), &mut zone.to, f64::MIN..=f64::MAX)
+                .width(FIELD_WIDTH)
+                .speed(0.5)
+                .suffix(" m")
+                .show(ui);
+            // A value the zone leaves to the design shows the design's, and
+            // becomes the zone's own once changed.
+            for (label, value, design, range, speed, suffix) in [
+                (tr!("pit-design-bench-height"), &mut zone.height, height, 0.1..=1000.0, 0.1, " m"),
+                (tr!("pit-design-face-angle"), &mut zone.face_angle, face_angle, 1.0..=89.0, 0.5, "°"),
+                (tr!("pit-design-berm-width"), &mut zone.berm_width, berm_width, 0.0..=1000.0, 0.1, " m"),
+            ] {
+                let mut shown = value.unwrap_or(design);
+                if MenuFieldF64::new(label, &mut shown, range)
+                    .width(FIELD_WIDTH)
+                    .speed(speed)
+                    .suffix(suffix)
+                    .show(ui)
+                    .changed()
+                {
+                    *value = Some(shown);
+                }
+            }
+            if button_row(ui, String::new(), String::new(), &[(tr!("pit-design-zone-remove"), true)]).is_some() {
+                remove = Some(index);
+            }
+        });
+    }
+    if let Some(index) = remove {
+        settings.bench_rules.zones.remove(index);
+    }
+    if button_row(ui, String::new(), tr!("pit-design-zone-add-help"), &[(tr!("pit-design-zone-add"), true)]).is_some() {
+        // A new zone takes the next two benches' worth of RL from the end of
+        // the last, or from the string.
+        let from = settings.bench_rules.zones.last().map_or(base_rl, |zone| zone.to);
+        settings.bench_rules.zones.push(Zone {
+            from,
+            to: from + sign * 2.0 * height,
+            ..Zone::default()
+        });
     }
 }
 
@@ -583,46 +686,66 @@ fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSett
     let warning = ui.visuals().warn_fg_color;
     let weak = ui.visuals().weak_text_color();
     let gradient = settings.ramp_gradient / 100.0;
-    egui::Grid::new("pit_design_benches").striped(true).num_columns(5).spacing([12.0, 2.0]).show(ui, |ui| {
-        for heading in [
-            tr!("pit-design-table-rl"),
-            tr!("pit-design-table-grade"),
-            tr!("pit-design-table-flat"),
-            tr!("pit-design-table-width"),
-            tr!("pit-design-table-turn"),
-        ] {
-            ui.label(egui::RichText::new(heading).color(weak).small());
-        }
-        ui.end_row();
-        for bench in &design.report {
-            let top = bench.elevation + settings.direction.sign() * bench.height;
-            ui.label(format!("{:.1}–{top:.1}", bench.elevation));
-            match bench.ramp {
-                Some(road) => {
-                    let grade = format!("{:.1} %", road.steepest * 100.0);
-                    if road.lengthened > 0.0 || road.steepest < gradient - 0.005 {
-                        ui.colored_label(warning, grade)
-                            .hint(tr!("pit-design-table-flatter-hint", length = format!("{:.0}", road.lengthened)));
-                    } else {
-                        ui.label(grade);
-                    }
-                    ui.label(if road.flat > 0.0 { format!("{:.0} m", road.flat) } else { String::new() });
-                    let width = format!("{:.1} m", road.narrowest);
-                    if road.narrowest < settings.ramp_width * 0.99 {
-                        ui.colored_label(warning, width)
-                            .hint(tr!("pit-design-table-narrow-hint", width = format!("{:.1}", settings.ramp_width)));
-                    } else {
-                        ui.label(width);
-                    }
-                    ui.label(if road.switchback { tr!("pit-design-table-turned") } else { String::new() });
-                }
-                None => {
-                    for _ in 0..4 {
-                        ui.label("");
-                    }
-                }
+    // The face and berm get columns of their own only where the benches
+    // differ in them.
+    // (The first bench has no berm before it, so berms are compared from the
+    // second on.)
+    let faces_vary = design.report.windows(2).any(|pair| pair[0].face_angle != pair[1].face_angle);
+    let berms_vary = design.report.get(1..).is_some_and(|after| after.windows(2).any(|pair| pair[0].berm != pair[1].berm));
+    let varies = faces_vary || berms_vary;
+    let columns = if varies { 7 } else { 5 };
+    egui::Grid::new("pit_design_benches")
+        .striped(true)
+        .num_columns(columns)
+        .spacing([12.0, 2.0])
+        .show(ui, |ui| {
+            let mut headings = vec![tr!("pit-design-table-rl")];
+            if varies {
+                headings.extend([tr!("pit-design-table-face"), tr!("pit-design-table-berm")]);
+            }
+            headings.extend([
+                tr!("pit-design-table-grade"),
+                tr!("pit-design-table-flat"),
+                tr!("pit-design-table-width"),
+                tr!("pit-design-table-turn"),
+            ]);
+            for heading in headings {
+                ui.label(egui::RichText::new(heading).color(weak).small());
             }
             ui.end_row();
-        }
-    });
+            for bench in &design.report {
+                let top = bench.elevation + settings.direction.sign() * bench.height;
+                ui.label(format!("{:.1}–{top:.1}", bench.elevation));
+                if varies {
+                    ui.label(format!("{:.0}°", bench.face_angle));
+                    ui.label(format!("{:.1} m", bench.berm));
+                }
+                match bench.ramp {
+                    Some(road) => {
+                        let grade = format!("{:.1} %", road.steepest * 100.0);
+                        if road.lengthened > 0.0 || road.steepest < gradient - 0.005 {
+                            ui.colored_label(warning, grade)
+                                .hint(tr!("pit-design-table-flatter-hint", length = format!("{:.0}", road.lengthened)));
+                        } else {
+                            ui.label(grade);
+                        }
+                        ui.label(if road.flat > 0.0 { format!("{:.0} m", road.flat) } else { String::new() });
+                        let width = format!("{:.1} m", road.narrowest);
+                        if road.narrowest < settings.ramp_width * 0.99 {
+                            ui.colored_label(warning, width)
+                                .hint(tr!("pit-design-table-narrow-hint", width = format!("{:.1}", settings.ramp_width)));
+                        } else {
+                            ui.label(width);
+                        }
+                        ui.label(if road.switchback { tr!("pit-design-table-turned") } else { String::new() });
+                    }
+                    None => {
+                        for _ in 0..4 {
+                            ui.label("");
+                        }
+                    }
+                }
+                ui.end_row();
+            }
+        });
 }

@@ -107,7 +107,89 @@ pub(crate) enum Stop {
     Daylight,
 }
 
+/// How the benches vary from one to the next, beyond the design's own
+/// height, face angle and berm width.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct BenchRules {
+    /// Heights the benches take in turn from the base string, over and over:
+    /// 10, 10, 15 makes every third bench 15 high. None gives every bench
+    /// the design's height.
+    pub(crate) height_cycle: Vec<f64>,
+    /// Every this many benches, the berm is `catch_width` wide instead of
+    /// the design's: a catch berm, or with no width, no berm at all. None
+    /// at 0.
+    pub(crate) catch_every: u32,
+    pub(crate) catch_width: f64,
+    /// Bands of RL whose benches are cut otherwise, where the rock calls for
+    /// it. Where bands overlap, the one listed last counts.
+    pub(crate) zones: Vec<Zone>,
+}
+
+/// A band of RL whose benches are cut otherwise than the design's: each
+/// value given replaces the design's own for the benches that start in it,
+/// and the berms on its levels.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct Zone {
+    pub(crate) from: f64,
+    pub(crate) to: f64,
+    pub(crate) height: Option<f64>,
+    /// Degrees from horizontal.
+    pub(crate) face_angle: Option<f64>,
+    pub(crate) berm_width: Option<f64>,
+}
+
+impl Default for Zone {
+    fn default() -> Self {
+        Self {
+            from: 0.0,
+            to: 0.0,
+            height: None,
+            face_angle: None,
+            berm_width: None,
+        }
+    }
+}
+
+impl Zone {
+    /// Whether a bench starting at `elevation`, built the way `sign` says,
+    /// starts in the band: a bench starting on one of its edges is in it if
+    /// it is built into it.
+    fn holds(&self, elevation: f64, sign: f64) -> bool {
+        let (low, high) = (self.from.min(self.to), self.from.max(self.to));
+        let into = elevation + sign * 1.0e-6;
+        into > low && into < high
+    }
+}
+
+impl BenchRules {
+    /// The same rules for heights turned over, as a dump is designed.
+    fn turned_over(&self) -> Self {
+        Self {
+            zones: self
+                .zones
+                .iter()
+                .map(|zone| Zone {
+                    from: -zone.to,
+                    to: -zone.from,
+                    ..*zone
+                })
+                .collect(),
+            ..self.clone()
+        }
+    }
+}
+
+/// How one bench is cut: its height and its face's horizontal run.
 #[derive(Clone, Copy, Debug, PartialEq)]
+struct Cut {
+    height: f64,
+    face_angle: f64,
+    berm: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Spec {
     pub(crate) kind: Kind,
     pub(crate) direction: Direction,
@@ -115,6 +197,7 @@ pub(crate) struct Spec {
     /// Bench face angle from horizontal, in degrees.
     pub(crate) face_angle: f64,
     pub(crate) berm_width: f64,
+    pub(crate) rules: BenchRules,
     /// The tightest a wall may turn where the design would otherwise leave
     /// a sharp nose of rock (building up) or a sharp corner of pit (building
     /// down); also what keeps the ramp from turning tighter than its walls.
@@ -136,6 +219,21 @@ impl Spec {
         if !(self.berm_width.is_finite() && self.berm_width >= 0.0) {
             return Some(Problem::BermWidth);
         }
+        let rules = &self.rules;
+        let angle = |value: f64| value.is_finite() && value > 0.0 && value < 90.0;
+        let width = |value: f64| value.is_finite() && value >= 0.0;
+        if !rules.height_cycle.iter().all(|height| positive(*height)) || !rules.zones.iter().all(|zone| zone.height.is_none_or(positive)) {
+            return Some(Problem::BenchHeight);
+        }
+        if !rules.zones.iter().all(|zone| zone.face_angle.is_none_or(angle)) {
+            return Some(Problem::FaceAngle);
+        }
+        if !width(rules.catch_width) || !rules.zones.iter().all(|zone| zone.berm_width.is_none_or(width)) {
+            return Some(Problem::BermWidth);
+        }
+        if !rules.zones.iter().all(|zone| zone.from.is_finite() && zone.to.is_finite() && zone.from != zone.to) {
+            return Some(Problem::Zone);
+        }
         if let Some(ramp) = self.ramp {
             if !positive(ramp.width) {
                 return Some(Problem::RampWidth);
@@ -156,10 +254,37 @@ impl Spec {
         }
     }
 
-    /// The horizontal run of a face `height` high.
-    fn face_run(&self, height: f64) -> f64 {
-        height / self.face_angle.to_radians().tan()
+    /// The band of RL a bench starting at `elevation` is cut by, if any.
+    fn zone(&self, elevation: f64) -> Option<&Zone> {
+        let sign = self.direction.sign();
+        self.rules.zones.iter().rev().find(|zone| zone.holds(elevation, sign))
     }
+
+    /// How bench `index`, counting from the base string, is cut where it
+    /// starts at `elevation`: its height before any stop cuts it short, its
+    /// face angle, and the berm left before it (none before the first).
+    fn cut(&self, index: u32, elevation: f64) -> Cut {
+        let zone = self.zone(elevation);
+        let cycled = match self.rules.height_cycle.as_slice() {
+            [] => self.bench_height,
+            cycle => cycle[index as usize % cycle.len()],
+        };
+        let catch = self.rules.catch_every > 0 && index > 0 && index.is_multiple_of(self.rules.catch_every);
+        Cut {
+            height: zone.and_then(|zone| zone.height).unwrap_or(cycled),
+            face_angle: zone.and_then(|zone| zone.face_angle).unwrap_or(self.face_angle),
+            berm: match (index, catch) {
+                (0, _) => 0.0,
+                (_, true) => self.rules.catch_width,
+                (_, false) => zone.and_then(|zone| zone.berm_width).unwrap_or(self.berm_width),
+            },
+        }
+    }
+}
+
+/// The horizontal run of a face `height` high at `face_angle` degrees.
+fn face_run(height: f64, face_angle: f64) -> f64 {
+    height / face_angle.to_radians().tan()
 }
 
 /// Why settings cannot make a design.
@@ -167,6 +292,8 @@ impl Spec {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Problem {
     BenchHeight,
+    /// A band of RL with no height to it.
+    Zone,
     FaceAngle,
     BermWidth,
     RampWidth,
@@ -216,6 +343,10 @@ pub(crate) struct BenchReport {
     /// The RL it starts from.
     pub(crate) elevation: f64,
     pub(crate) height: f64,
+    /// Its face angle, in degrees.
+    pub(crate) face_angle: f64,
+    /// The berm left before it, at its starting RL.
+    pub(crate) berm: f64,
     /// The plan area inside the ring it ends on.
     pub(crate) area: f64,
     pub(crate) ramp: Option<RampReport>,
@@ -435,7 +566,8 @@ fn design_dump(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
             Stop::Elevation(elevation) => Stop::Elevation(-elevation),
             stop => stop,
         },
-        ..*spec
+        rules: spec.rules.turned_over(),
+        ..spec.clone()
     };
     let base = Base {
         ring: base.ring.clone(),
@@ -523,14 +655,14 @@ fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
         if cancelled() {
             break End::Complete;
         }
-        let Some(height) = state.next_height() else {
+        let Some(cut) = state.next_cut() else {
             break End::Complete;
         };
         let snapshot = state.clone();
-        match state.builder.bench(&state.current, state.elevation, height, state.berm(), state.ramp, None) {
+        match state.builder.bench(&state.current, state.elevation, cut, state.ramp, None) {
             Ok(bench) => {
                 let added = bench.added;
-                state.advance(bench, height);
+                state.advance(bench, cut);
                 remember(&mut history, snapshot, added);
             }
             Err(End::OutOfRoom) if !cancelled() => match (1..=history.len()).find_map(|depth| relaid(&history, depth, state.benches)) {
@@ -607,30 +739,33 @@ struct State<'a> {
 }
 
 impl State<'_> {
-    /// How high the next bench is, or `None` if the design is complete.
-    fn next_height(&self) -> Option<f64> {
+    /// How the next bench is cut, or `None` if the design is complete: the
+    /// last bench before a stop RL is cut short to meet it.
+    fn next_cut(&self) -> Option<Cut> {
         let spec = self.builder.spec;
+        let cut = spec.cut(self.benches, self.elevation);
         match spec.stop {
             Stop::Benches(count) if self.benches >= count => None,
             Stop::Elevation(stop) => {
                 let left = (stop - self.elevation) * self.builder.sign;
-                (left > 1.0e-6).then(|| left.min(spec.bench_height))
+                (left > 1.0e-6).then(|| Cut {
+                    height: left.min(cut.height),
+                    ..cut
+                })
             }
-            _ => Some(spec.bench_height),
+            _ => Some(cut),
         }
     }
 
-    /// The berm the next bench leaves first: none before the first.
-    fn berm(&self) -> f64 {
-        if self.benches == 0 { 0.0 } else { self.builder.spec.berm_width }
-    }
-
-    /// Take a bench built `height` high from where the design stands.
-    fn advance(&mut self, bench: Bench, height: f64) {
+    /// Take a bench built as `cut` says from where the design stands.
+    fn advance(&mut self, bench: Bench, cut: Cut) {
+        let height = cut.height;
         self.volume += frustum(ring::signed_area(&self.current), ring::signed_area(&bench.end), height);
         self.report.push(BenchReport {
             elevation: self.elevation,
             height,
+            face_angle: cut.face_angle,
+            berm: cut.berm,
             area: ring::signed_area(&bench.end),
             ramp: bench.ramp,
         });
@@ -674,24 +809,24 @@ fn relaid<'a>(history: &[(State<'a>, Option<Added>)], depth: usize, benches: u32
     for _ in 0..RELAYS {
         let mut trial = before.clone();
         let mut rebuilt = history[..history.len() - depth].to_vec();
-        let height = trial.next_height()?;
+        let cut = trial.next_cut()?;
         let snapshot = trial.clone();
-        let bench = trial.builder.bench(&trial.current, trial.elevation, height, trial.berm(), trial.ramp, Some(after)).ok()?;
+        let bench = trial.builder.bench(&trial.current, trial.elevation, cut, trial.ramp, Some(after)).ok()?;
         after = bench.added?;
-        trial.advance(bench, height);
+        trial.advance(bench, cut);
         remember(&mut rebuilt, snapshot, Some(after));
         let built = loop {
             if trial.benches > benches {
                 break true;
             }
-            let Some(height) = trial.next_height() else {
+            let Some(cut) = trial.next_cut() else {
                 break true;
             };
             let snapshot = trial.clone();
-            match trial.builder.bench(&trial.current, trial.elevation, height, trial.berm(), trial.ramp, None) {
+            match trial.builder.bench(&trial.current, trial.elevation, cut, trial.ramp, None) {
                 Ok(bench) => {
                     let added = bench.added;
-                    trial.advance(bench, height);
+                    trial.advance(bench, cut);
                     remember(&mut rebuilt, snapshot, added);
                 }
                 Err(_) => break false,
@@ -820,8 +955,8 @@ const START_STEP: f64 = 2.0;
 const MEETS: f64 = 1.0e-3;
 
 impl Builder<'_> {
-    /// Build one bench `height` high from the ring `from` at `elevation`,
-    /// after a berm `berm` wide.
+    /// Build one bench from the ring `from` at `elevation`, cut as `cut`
+    /// says: its height, its face, and the berm it leaves first.
     ///
     /// Where the ramp's stretch would leave the bench unsound (its handover
     /// crowding a corner, say), the stretch is laid a little longer, a hair
@@ -829,10 +964,11 @@ impl Builder<'_> {
     ///
     /// With `after`, only additions after it are tried: the bench is being
     /// laid again because the one after it would not build.
-    fn bench(&mut self, from: &[DVec2], elevation: f64, height: f64, berm: f64, ramp: Option<RampCursor>, after: Option<Added>) -> Result<Bench, End> {
+    fn bench(&mut self, from: &[DVec2], elevation: f64, cut: Cut, ramp: Option<RampCursor>, after: Option<Added>) -> Result<Bench, End> {
         let spec = self.spec;
         let sign = self.sign;
-        let face = spec.face_run(height);
+        let Cut { height, face_angle, berm } = cut;
+        let face = face_run(height, face_angle);
         let (laid, start_ring, end_ring) = match (ramp, spec.ramp) {
             (Some(cursor), Some(ramp_spec)) => {
                 // Time for a switchback: tried first, and where it will not
@@ -1180,11 +1316,17 @@ fn lay_stretch(from: &[DVec2], cursor: RampCursor, lay: Lay) -> Result<(Stretch,
     if let Some(handover) = cursor.handover {
         let mut stretch = road::lay(from, cursor.at, cursor.direction, lay, &|_| 0.0).map_err(|_| End::RampTooLong)?;
         // It starts exactly where the last one arrived: laid off the ring's
-        // corner there, its far edge can start a little to one side.
-        if let Some(first) = stretch.edges.far.first_mut()
-            && first.0.distance(handover) <= HANDOVER_GAP
+        // corner there, or a little wider or narrower square across than
+        // the last where the benches are cut differently, its far edge can
+        // start a little to one side. The step across to it is level, set
+        // off from the same point of the ring as the edge's start, so it
+        // takes nothing from the climb: moving the start itself would
+        // shorten the first piece and steepen it.
+        if let Some(&(first, source)) = stretch.edges.far.first()
+            && first.distance(handover) <= HANDOVER_GAP
+            && first.distance(handover) > MEETS
         {
-            first.0 = handover;
+            stretch.edges.far.insert(0, (handover, source));
         }
         return Ok((stretch, 0.0));
     }

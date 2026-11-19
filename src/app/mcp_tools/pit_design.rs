@@ -19,7 +19,7 @@ use crate::{
     ui::dialogs::pit_design::{NoDesign, end_text, no_design_text, problem_text},
 };
 
-const SETTINGS_DESCRIPTION: &str = "A pit design's settings: kind (pit, cut into the ground, or dump, a dump or stockpile built on it); direction (a pit up from its floor's toe or down from its crest, a dump up from its toe stepping in or down from its top stepping out); bench_height; face_angle (degrees from horizontal); berm_width; wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id: a pit built up daylights against it, a dump built down meets it); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius). Its surface is made with triangulate, which takes a pit design as every string it draws.";
+const SETTINGS_DESCRIPTION: &str = "A pit design's settings: kind (pit, cut into the ground, or dump, a dump or stockpile built on it); direction (a pit up from its floor's toe or down from its crest, a dump up from its toe stepping in or down from its top stepping out); bench_height; face_angle (degrees from horizontal); berm_width; bench_rules (height_cycle, a list of heights the benches take in turn; catch_every and catch_width, a berm that wide every that many benches; zones, bands of RL from..to whose benches take their own height, face_angle and berm_width, a bench taking the zone it starts in and the last listed winning); wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id: a pit built up daylights against it, a dump built down meets it); ramp (true or false) with ramp_width, ramp_gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), ramp_start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches round inside_radius). Its surface is made with triangulate, which takes a pit design as every string it draws.";
 
 pub(super) fn definitions() -> Vec<Value> {
     vec![
@@ -79,6 +79,32 @@ pub(super) fn definitions() -> Vec<Value> {
                     "face_angle": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 90, "description": "Degrees from horizontal." },
                     "berm_width": { "type": "number", "minimum": 0 },
                     "wall_radius": { "type": "number", "minimum": 0, "description": "The tightest the walls turn: sharp corners are rounded to it. 0 if left out." },
+                    "bench_rules": {
+                        "type": "object",
+                        "description": "How the benches vary. None if left out.",
+                        "properties": {
+                            "height_cycle": { "type": "array", "items": { "type": "number", "exclusiveMinimum": 0 }, "description": "Heights the benches take in turn from the string, over and over, in place of bench_height." },
+                            "catch_every": { "type": "integer", "minimum": 0, "description": "Every this many benches, the berm is catch_width wide instead. 0 for none." },
+                            "catch_width": { "type": "number", "minimum": 0, "description": "0 leaves no berm there." },
+                            "zones": {
+                                "type": "array",
+                                "description": "Bands of RL whose benches are cut otherwise. A bench takes the zone it starts in; where zones overlap, the last listed counts.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "from": { "type": "number" },
+                                        "to": { "type": "number" },
+                                        "height": { "type": "number", "exclusiveMinimum": 0 },
+                                        "face_angle": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 90 },
+                                        "berm_width": { "type": "number", "minimum": 0 },
+                                    },
+                                    "required": ["from", "to"],
+                                    "additionalProperties": false,
+                                },
+                            },
+                        },
+                        "additionalProperties": false,
+                    },
                     "benches": { "type": "integer", "minimum": 1, "description": "Stop after this many benches." },
                     "stop_rl": { "type": "number", "description": "Stop at this RL, the last bench cut short to meet it." },
                     "daylight": { "type": "integer", "minimum": 0, "description": "A loaded topography surface: a pit built up until a whole bench stands clear of it, or a dump built down until a whole lift meets it." },
@@ -125,6 +151,10 @@ fn one_call_settings(arguments: &Value) -> Result<PitDesignSettings, String> {
         face_angle: number("face_angle")?,
         berm_width: number("berm_width")?,
         wall_radius: arguments["wall_radius"].as_f64().unwrap_or(0.0),
+        bench_rules: match &arguments["bench_rules"] {
+            Value::Null => crate::model::pit_design::BenchRules::default(),
+            rules => serde_json::from_value(rules.clone()).map_err(|error| format!("bench_rules: {error}"))?,
+        },
         ramp: false,
         ..PitDesignSettings::default()
     };
@@ -193,7 +223,13 @@ fn summary(design: &Design) -> Value {
         "ramp_start_moved": (design.ramp_start_moved > 0.0).then(|| round(design.ramp_start_moved)),
         "strings": design.strings.len(),
         "bench_report": design.report.iter().map(|bench| {
-            let mut row = json!({ "rl": round(bench.elevation), "height": round(bench.height), "area": bench.area.round() });
+            let mut row = json!({
+                "rl": round(bench.elevation),
+                "height": round(bench.height),
+                "face_angle": round(bench.face_angle),
+                "berm": round(bench.berm),
+                "area": bench.area.round(),
+            });
             if let Some(road) = bench.ramp {
                 row["ramp"] = json!({
                     "grade_percent": round(road.steepest * 100.0),
