@@ -196,3 +196,36 @@ fn draws_and_explodes_as_its_strings() {
     }
     assert!(polylines.iter().all(|polyline| polyline.id() == object.id() && polyline.layer() == object.layer()));
 }
+
+#[test]
+fn rounds_corners_into_arcs() {
+    use super::object::{base_points, rounded_corners};
+    let square: Vec<DVec3> = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
+        .into_iter()
+        .map(|(x, y)| DVec3::new(x, y, 50.0))
+        .collect();
+    let area = |points: &[DVec3]| {
+        (0..points.len())
+            .map(|i| points[i].truncate().perp_dot(points[(i + 1) % points.len()].truncate()))
+            .sum::<f64>()
+            * 0.5
+    };
+    for (points, sign) in [(square.clone(), 1.0), (square.iter().rev().copied().collect::<Vec<_>>(), -1.0)] {
+        let verts = rounded_corners(&points, 10.0);
+        assert_eq!(verts.len(), 8, "each corner becomes the two ends of its arc");
+        // Exact arcs, followed finely: the square less four corners' worth of
+        // a radius-10 square that is not quarter circle.
+        let fine = crate::model::geometry::tessellate_polyline_bulges(&verts, true);
+        let expected = 100.0 * 100.0 - (4.0 - std::f64::consts::PI) * 100.0;
+        assert!((area(&fine) * sign - expected).abs() < 1.0, "the arcs bulge outward, as a rounded corner does: {} vs {expected}", area(&fine) * sign);
+        // The engine's points follow the same arcs, coarser.
+        let coarse = base_points(&verts);
+        assert!(coarse.len() < fine.len() / 4);
+        assert!((area(&coarse) * sign - expected).abs() < 15.0);
+        assert!(coarse.iter().all(|point| point.z == 50.0));
+    }
+    // A corner tighter than its edges allow is rounded as far as they do.
+    let thin: Vec<DVec3> = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)].into_iter().map(|(x, y)| DVec3::new(x, y, 0.0)).collect();
+    let verts = rounded_corners(&thin, 100.0);
+    assert!(verts.iter().all(|vertex| vertex.pos.is_finite() && vertex.bulge.is_finite()));
+}

@@ -1405,6 +1405,10 @@ impl<'a> App<'a> {
                 self.open_pit_design();
                 Ok(())
             }
+            UiCommand::FinishPitDesign => {
+                self.finish_pit_editing();
+                Ok(())
+            }
             UiCommand::BuildPitSurface(id) => self.build_pit_surface(id),
             UiCommand::ExplodePitDesign(id) => self.explode_pit_design(id).map(|_| ()),
             UiCommand::BeginPitRampStartPick => {

@@ -24,7 +24,7 @@ use crate::{
     },
     ui::{
         elements::properties::read_only_row,
-        state::{ActiveTool, EditorState, UiCommand, UiProjectView},
+        state::{EditorState, UiCommand, UiProjectView},
         widgets::{
             hint::Hint,
             menu::{self, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
@@ -209,6 +209,24 @@ fn button_row(ui: &mut egui::Ui, label: String, help: String, buttons: &[(String
 /// open in it: its name, scenarios and settings, its surface, and what it
 /// comes to.
 pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
+    // Drawing the string: how its corners are made.
+    if editor.pit_drawing() {
+        ViewportDockPanel::new("pit_design_panel", tr!("pit-design-title"), viewport_rect)
+            .min_width(300.0)
+            .help_text(tr!("pit-design-draw-help"))
+            .show(ui.ctx(), |ui| {
+                MenuFieldBool::new(tr!("pit-design-round-corners"), &mut editor.pit_round_corners)
+                    .help_text(tr!("pit-design-round-corners-help"))
+                    .show(ui);
+                if editor.pit_round_corners {
+                    MenuFieldF64::new(tr!("pit-design-corner-radius"), &mut editor.pit_corner_radius, 0.1..=10000.0)
+                        .speed(0.5)
+                        .suffix(" m")
+                        .show(ui);
+                }
+            });
+        return;
+    }
     let Some(draft) = editor.pit_design.as_mut() else {
         return;
     };
@@ -258,8 +276,8 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
 
             ui.add_space(4.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(MenuButton::new(tr!("pit-design-done")).primary()).clicked() {
-                    commands.push(UiCommand::SetActiveTool(ActiveTool::None));
+                if ui.add(MenuButton::new(tr!("pit-design-done")).primary()).hint(tr!("pit-design-done-help")).clicked() {
+                    commands.push(UiCommand::FinishPitDesign);
                 }
                 if ui.add(MenuButton::new(tr!("pit-design-explode"))).hint(tr!("pit-design-explode-help")).clicked() {
                     commands.push(UiCommand::ExplodePitDesign(id));

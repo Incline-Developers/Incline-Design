@@ -236,3 +236,76 @@ pub(crate) fn inputs_key(verts: &[PolyVertex], settings: &PitDesignSettings) -> 
     mix(&serde_json::to_vec(settings).unwrap_or_default());
     hash
 }
+
+/// The string a pit design is worked out from, as points: arcs followed at
+/// the engine's own step round a bend, so a rounded toe gives the benches no
+/// more points than they would make rounding it themselves.
+pub(crate) fn base_points(verts: &[PolyVertex]) -> Vec<DVec3> {
+    let count = verts.len();
+    let mut points = Vec::with_capacity(count);
+    for index in 0..count {
+        let (start, end) = (verts[index], verts[(index + 1) % count].pos);
+        points.push(start.pos);
+        let sweep = 4.0 * start.bulge.atan();
+        let steps = (sweep.abs() / super::ring::ARC_STEP).ceil() as usize;
+        if steps < 2 {
+            continue;
+        }
+        let (a, b) = (start.pos.truncate(), end.truncate());
+        let chord = b - a;
+        let length = chord.length();
+        if length <= f64::EPSILON {
+            continue;
+        }
+        // The arc's centre, left of the chord for a positive bulge.
+        let sagitta_ratio = (1.0 - start.bulge * start.bulge) / (4.0 * start.bulge);
+        let centre = a.lerp(b, 0.5) + chord.perp() * sagitta_ratio;
+        let from = (a - centre).to_angle();
+        let radius = (a - centre).length();
+        for step in 1..steps {
+            let t = step as f64 / steps as f64;
+            let point = centre + glam::DVec2::from_angle(from + sweep * t) * radius;
+            points.push(point.extend(start.pos.z + (end.z - start.pos.z) * t));
+        }
+    }
+    points
+}
+
+/// A closed string through `points` with each corner rounded to an arc of
+/// `radius`, or as large an arc as its two edges leave room for: each corner
+/// becomes the arc's two ends, the first carrying its bulge. Corners all but
+/// straight are left as they are.
+pub(crate) fn rounded_corners(points: &[DVec3], radius: f64) -> Vec<PolyVertex> {
+    let count = points.len();
+    if count < 3 || radius <= 0.0 {
+        return points.iter().copied().map(PolyVertex::straight).collect();
+    }
+    let mut verts = Vec::with_capacity(count * 2);
+    for index in 0..count {
+        let (before, corner, after) = (points[(index + count - 1) % count], points[index], points[(index + 1) % count]);
+        let (back, ahead) = ((before - corner).truncate(), (after - corner).truncate());
+        let (back_length, ahead_length) = (back.length(), ahead.length());
+        if back_length <= f64::EPSILON || ahead_length <= f64::EPSILON {
+            verts.push(PolyVertex::straight(corner));
+            continue;
+        }
+        let (u, v) = (back / back_length, ahead / ahead_length);
+        let opening = u.dot(v).clamp(-1.0, 1.0).acos();
+        // The turn the arc makes, and whether to the left.
+        let turn = std::f64::consts::PI - opening;
+        if turn < 1.0e-3 || opening < 1.0e-6 {
+            verts.push(PolyVertex::straight(corner));
+            continue;
+        }
+        // Each edge gives half its length at most, so neighbouring arcs meet
+        // and never cross.
+        let reach = (radius / (opening * 0.5).tan()).min(back_length * 0.5).min(ahead_length * 0.5);
+        let left = (-u).perp_dot(v) > 0.0;
+        let entry = corner + (before - corner) * (reach / back_length);
+        let exit = corner + (after - corner) * (reach / ahead_length);
+        let bulge = (turn / 4.0).tan() * if left { 1.0 } else { -1.0 };
+        verts.push(PolyVertex { pos: entry, bulge });
+        verts.push(PolyVertex::straight(exit));
+    }
+    verts
+}

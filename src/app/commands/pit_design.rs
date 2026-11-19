@@ -26,10 +26,9 @@ use crate::{
     model::{
         Command, Object, ObjectId, OpenItem, PolyVertex, SceneEntityId, SectionKind,
         formats::mesh_data,
-        geometry::tessellate_polyline_bulges,
         pit_design::{
             self, Base, Design,
-            object::{Derived, Outcome, PitObject, SurfaceLink, inputs_key},
+            object::{Derived, Outcome, PitObject, SurfaceLink, base_points, inputs_key},
             settings::PitDesignSettings,
         },
         spatial::TriangleBvh,
@@ -65,7 +64,7 @@ impl Ground {
 /// Work a design out on a worker: the string, its settings, and the ground
 /// to daylight against.
 fn design_on_worker(verts: &[PolyVertex], settings: &PitDesignSettings, ground: Option<&Ground>, cancel: &CancelFlag) -> Result<Preview> {
-    let points = tessellate_polyline_bulges(verts, true);
+    let points = base_points(verts);
     let Some(base) = Base::from_points(&points) else {
         return Ok(Preview {
             design: Err(NoDesign::NotClosed),
@@ -189,6 +188,11 @@ impl App<'_> {
         if self.editor.active_tool != ActiveTool::PitDesign {
             self.set_active_tool_from_toolbar(ActiveTool::PitDesign);
         }
+        // Editing a pit, or making one of a polyline already drawn, needs no
+        // layer to draw on: only drawing a new string does.
+        if self.editor.active_tool != ActiveTool::PitDesign && selected.is_some() && self.active_layer().is_none() && !self.editor.text_editing_enabled && !self.editor.slice_mode_enabled {
+            self.editor.active_tool = ActiveTool::PitDesign;
+        }
         if self.editor.active_tool != ActiveTool::PitDesign {
             return;
         }
@@ -198,35 +202,72 @@ impl App<'_> {
         self.invalidate_overlay();
     }
 
-    /// A click with the Pit Design tool: on a pit design, it opens in the
-    /// panel; on a closed polyline, that becomes a pit design and opens.
-    pub(crate) fn pick_pit_design_at_cursor(&mut self) {
-        match self.pick_under_cursor() {
-            Some((SceneEntityId::Object(id), _)) if self.is_pit_target(id) => self.open_pit_design_target(id),
-            // With a design open, a click elsewhere leaves it as it is.
-            _ if self.editor.pit_design.as_ref().and_then(PitDesignDraft::object_id).is_some() => {}
-            _ => userspace_warn!("{}", tr!("pit-design-pick-prompt")),
+    /// Close the string drawn with Pit Design into a new pit design on the
+    /// active layer, its corners rounded if the panel says so, and open it in
+    /// the panel: one undo step.
+    pub(crate) fn finish_pit_string(&mut self) {
+        let mut points = std::mem::take(&mut self.editor.pending_stroke);
+        // Clicking the first vertex to close records it a second time.
+        if points.len() >= 2 && points.first().zip(points.last()).is_some_and(|(first, last)| first.distance_squared(*last) <= 1.0e-16) {
+            points.pop();
         }
-    }
-
-    /// Light up the pit design or closed polyline under the cursor, which a
-    /// click would open.
-    pub(crate) fn update_pit_design_hover(&mut self) {
-        let hovered = match self.pick_under_cursor() {
-            Some((SceneEntityId::Object(id), _)) if self.is_pit_target(id) => Some(id),
-            _ => None,
+        self.invalidate_geometry();
+        if points.len() < 3 {
+            return;
+        }
+        let Some(layer) = self.active_layer() else {
+            return;
         };
-        if hovered != self.editor.tool_highlight_id {
-            self.editor.tool_highlight_id = hovered;
-            self.invalidate_geometry();
+        let verts = if self.editor.pit_round_corners {
+            crate::model::pit_design::object::rounded_corners(&points, self.editor.pit_corner_radius)
+        } else {
+            points.iter().copied().map(PolyVertex::straight).collect()
+        };
+        let Some(project) = self.workspace.active_project_mut() else {
+            return;
+        };
+        let id = project.project.document.allocate_object_id();
+        let object = Object::PitDesign {
+            id,
+            layer,
+            verts,
+            color: crate::model::ObjectColor::Fixed(self.editor.tool_line_color),
+            line_weight: self.editor.tool_line_weight,
+            pit: Box::new(self.new_pit(&points, None, None)),
+        };
+        let mut object = object;
+        if let Object::PitDesign { verts, pit, .. } = &mut object {
+            self.work_out_now(verts, pit);
         }
+        self.execute_edit(Command::AddObject(object));
+        self.open_pit_design_on(id);
+        self.invalidate_geometry();
     }
 
-    /// Whether `id` is something the Pit Design tool opens: a pit design, or
-    /// a closed polyline to make one.
-    fn is_pit_target(&self, id: ObjectId) -> bool {
-        self.operand_object(id)
-            .is_some_and(|object| matches!(object, Object::PitDesign { .. }) || (matches!(object, Object::Polyline { .. }) && object.encloses_area()))
+    /// Done with the pit in the panel: what it was editing is kept, and the
+    /// tool waits for the next string.
+    pub(crate) fn finish_pit_editing(&mut self) {
+        self.flush_pit_design_draft();
+        if let Some(settings) = self.editor.pit_design.as_ref().and_then(|draft| draft.working.as_ref()).map(PitObject::settings) {
+            self.editor.pit_last_settings = Some(settings);
+        }
+        self.cancel_jobs(|key| matches!(key, JobKey::PitDesignPreview(_)));
+        self.editor.pit_design = Some(PitDesignDraft::default());
+        self.invalidate_overlay();
+    }
+
+    /// Escape with Pit Design: a string being drawn is dropped, a pit being
+    /// edited is finished, and with neither the tool is put down.
+    pub(crate) fn escape_pit_design(&mut self) {
+        if !self.editor.pending_stroke.is_empty() {
+            self.editor.pending_stroke.clear();
+            self.invalidate_geometry();
+        } else if !self.editor.pit_drawing() {
+            self.finish_pit_editing();
+        } else {
+            self.close_pit_design();
+            self.editor.active_tool = ActiveTool::None;
+        }
     }
 
     /// Open `id` in the panel, making a pit design of it first if it is a
@@ -278,39 +319,9 @@ impl App<'_> {
         else {
             return Err(anyhow!(tr!("pit-design-problem-string")));
         };
-        let carried = settings.is_none();
-        let mut settings = settings.unwrap_or_else(|| {
-            self.editor
-                .pit_design
-                .as_ref()
-                .and_then(|draft| draft.working.as_ref())
-                .map(PitObject::settings)
-                .unwrap_or_else(|| PitDesignSettings {
-                    // The topography most projects have is the obvious ground
-                    // to daylight against.
-                    topography: self.triangulations.iter().find(|surface| surface.state.loaded).map(|surface| surface.id),
-                    ..PitDesignSettings::default()
-                })
-        });
-        if carried {
-            settings.ramp_start = None;
-            // A stop RL a few benches on from the string, as a start.
-            let level = verts.iter().map(|vertex| vertex.pos.z).sum::<f64>() / verts.len().max(1) as f64;
-            settings.stop_elevation = level + settings.direction.sign() * settings.bench_height * f64::from(settings.benches.max(1));
-        }
-        let name = name.unwrap_or_else(|| {
-            let names: Vec<String> = self
-                .workspace
-                .active_document()
-                .map(|document| document.objects().iter().filter_map(pit_parts).map(|(_, pit)| pit.name.clone()).collect())
-                .unwrap_or_default();
-            crate::model::project::unique_item_name(tr!("pit-design-default-name"), names.iter().map(String::as_str))
-        });
-        let mut pit = PitObject::new(name, tr!("pit-design-scenario-default"), settings.clone());
-        let ground = if settings.daylights() { self.pit_design_ground(settings.topography).ok() } else { None };
-        if let Ok(preview) = design_on_worker(&verts, &settings, ground.as_ref(), &CancelFlag::default()) {
-            pit.derived = derived_from(&verts, &settings, ground.as_ref().map(|ground| ground.version), &preview.design);
-        }
+        let points: Vec<_> = verts.iter().map(|vertex| vertex.pos).collect();
+        let mut pit = self.new_pit(&points, name, settings);
+        self.work_out_now(&verts, &mut pit);
         let after = Object::PitDesign {
             id: string,
             layer,
@@ -322,6 +333,51 @@ impl App<'_> {
         self.execute_edit(Command::Replace { before, after });
         self.invalidate_geometry();
         Ok(())
+    }
+
+    /// What a new pit design of the string through `points` is designed
+    /// with: named `name` or numbered, with `settings` or else those of the
+    /// design last open (or the usual ones), its ramp starting where the
+    /// string does and its stop RL a few benches on.
+    fn new_pit(&self, points: &[glam::DVec3], name: Option<String>, settings: Option<PitDesignSettings>) -> PitObject {
+        let carried = settings.is_none();
+        let mut settings = settings.unwrap_or_else(|| {
+            self.editor
+                .pit_design
+                .as_ref()
+                .and_then(|draft| draft.working.as_ref())
+                .map(PitObject::settings)
+                .or_else(|| self.editor.pit_last_settings.clone())
+                .unwrap_or_else(|| PitDesignSettings {
+                    // The topography most projects have is the obvious ground
+                    // to daylight against.
+                    topography: self.triangulations.iter().find(|surface| surface.state.loaded).map(|surface| surface.id),
+                    ..PitDesignSettings::default()
+                })
+        });
+        if carried {
+            settings.ramp_start = None;
+            let level = points.iter().map(|point| point.z).sum::<f64>() / points.len().max(1) as f64;
+            settings.stop_elevation = level + settings.direction.sign() * settings.bench_height * f64::from(settings.benches.max(1));
+        }
+        let name = name.unwrap_or_else(|| {
+            let names: Vec<String> = self
+                .workspace
+                .active_document()
+                .map(|document| document.objects().iter().filter_map(pit_parts).map(|(_, pit)| pit.name.clone()).collect())
+                .unwrap_or_default();
+            crate::model::project::unique_item_name(tr!("pit-design-default-name"), names.iter().map(String::as_str))
+        });
+        PitObject::new(name, tr!("pit-design-scenario-default"), settings)
+    }
+
+    /// Work `pit`'s design out here and now, so a new one draws at once.
+    fn work_out_now(&self, verts: &[PolyVertex], pit: &mut PitObject) {
+        let settings = pit.settings();
+        let ground = if settings.daylights() { self.pit_design_ground(settings.topography).ok() } else { None };
+        if let Ok(preview) = design_on_worker(verts, &settings, ground.as_ref(), &CancelFlag::default()) {
+            pit.derived = derived_from(verts, &settings, ground.as_ref().map(|ground| ground.version), &preview.design);
+        }
     }
 
     /// Write the window's copy into the project now, settled or not, with
@@ -433,6 +489,10 @@ impl App<'_> {
     /// the tool is being put down.
     pub(crate) fn close_pit_design(&mut self) {
         self.flush_pit_design_draft();
+        if let Some(settings) = self.editor.pit_design.as_ref().and_then(|draft| draft.working.as_ref()).map(PitObject::settings) {
+            self.editor.pit_last_settings = Some(settings);
+        }
+        self.editor.pending_stroke.clear();
         self.editor.pit_design = None;
         if self.editor.tool_highlight_id.take().is_some() {
             self.invalidate_geometry();

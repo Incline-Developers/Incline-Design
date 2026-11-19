@@ -2473,6 +2473,13 @@ pub(crate) struct EditorState {
     /// project looked like when last checked for any that need it.
     pub(crate) pit_refreshes: std::collections::HashMap<ObjectId, u64>,
     pub(crate) pit_refresh_checked: Option<u64>,
+    /// Whether the string drawn with Pit Design has its corners rounded to
+    /// arcs of `pit_corner_radius` when it closes.
+    pub(crate) pit_round_corners: bool,
+    pub(crate) pit_corner_radius: f64,
+    /// The settings of the pit last edited, which the next one drawn starts
+    /// with.
+    pub(crate) pit_last_settings: Option<crate::model::pit_design::settings::PitDesignSettings>,
     /// The "Edit Object" dialog, holding a working copy of one design object
     /// until Apply or OK hands it back to the document.
     pub(crate) object_edit_dialog: Option<crate::ui::dialogs::object_edit::ObjectEditDialog>,
@@ -3588,10 +3595,21 @@ impl OmfExportSelection {
 }
 
 impl EditorState {
+    /// Pit Design is drawing the string of a new pit, rather than editing
+    /// one in its panel.
+    pub(crate) fn pit_drawing(&self) -> bool {
+        self.active_tool == ActiveTool::PitDesign && self.pit_design.as_ref().is_none_or(|draft| draft.object_id().is_none())
+    }
+
+    /// A closed string is being drawn: a polyline, or a pit's toe or crest.
+    pub(crate) fn draws_closed_stroke(&self) -> bool {
+        self.active_tool == ActiveTool::MakePoly || self.pit_drawing()
+    }
+
     /// The cursor sits on the first vertex of the polyline being drawn, so a
     /// click there closes it.
     pub(crate) fn poly_close_hovered(&self) -> bool {
-        self.active_tool == ActiveTool::MakePoly
+        self.draws_closed_stroke()
             && !self.poly_finish_dialog
             && self.pending_stroke.len() >= 2
             && self
@@ -4328,6 +4346,9 @@ impl EditorState {
             pit_design: None,
             pit_refreshes: std::collections::HashMap::new(),
             pit_refresh_checked: None,
+            pit_round_corners: true,
+            pit_corner_radius: 15.0,
+            pit_last_settings: None,
             object_edit_dialog: None,
             xray_enabled: false,
             cinematic_enabled: false,
@@ -5112,7 +5133,7 @@ impl ActiveTool {
     pub(crate) fn requires_active_layer(self) -> bool {
         matches!(
             self,
-            Self::MakePoint | Self::MakeLine | Self::MakePoly | Self::MakeCircle | Self::MakeText | Self::FuseIntoPolyline
+            Self::MakePoint | Self::MakeLine | Self::MakePoly | Self::MakeCircle | Self::MakeText | Self::FuseIntoPolyline | Self::PitDesign
         )
     }
 
@@ -5157,6 +5178,7 @@ impl ActiveTool {
                 | Self::MakePoly
                 | Self::MakeCircle
                 | Self::MakeText
+                | Self::PitDesign
                 | Self::MeasureDistance
                 | Self::MeasureBatterAngle
                 | Self::VerticalSlice
@@ -6269,6 +6291,8 @@ pub(crate) enum UiCommand {
     /// Take up the Pit Design tool: on the pit design selected, or on a
     /// closed polyline selected, which becomes one.
     OpenPitDesign,
+    /// Done with the pit in Pit Design's panel: ready to draw the next.
+    FinishPitDesign,
     /// Build a pit design object's surface.
     BuildPitSurface(ObjectId),
     /// Turn a pit design object into polylines.
@@ -6533,6 +6557,7 @@ impl UiCommand {
             | Self::OpenMoveToAxisDialog(_)
             | Self::OpenInsertPointAtElevationDialog
             | Self::OpenPitDesign
+            | Self::FinishPitDesign
             | Self::BeginPitRampStartPick
             | Self::OpenObjectEditDialog(_)
             | Self::OpenPointCloudTin

@@ -420,7 +420,7 @@ impl<'a> App<'a> {
                                     self.update_pit_design_preview();
                                 }
                                 // Clear in-progress stroke when switching away from drawing tools.
-                                if !matches!(self.editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly) && !self.editor.pending_stroke.is_empty() {
+                                if !matches!(self.editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly | ActiveTool::PitDesign) && !self.editor.pending_stroke.is_empty() {
                                     self.editor.pending_stroke.clear();
                                     self.invalidate_overlay();
                                 }
@@ -705,9 +705,6 @@ impl<'a> App<'a> {
                     if self.editor.active_tool == ActiveTool::ExplodePolyline && hover_pick_due {
                         self.update_explode_hover();
                     }
-                    if self.editor.active_tool == ActiveTool::PitDesign && hover_pick_due {
-                        self.update_pit_design_hover();
-                    }
                     if (self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick)
                         && hover_pick_due
                     {
@@ -891,7 +888,7 @@ impl<'a> App<'a> {
                 ActiveTool::BatterBermOffset if !self.editor.batter_berm_dialog_open => {
                     self.pick_batter_berm_target();
                 }
-                ActiveTool::PitDesign => self.pick_pit_design_at_cursor(),
+                ActiveTool::PitDesign if self.editor.pit_drawing() => self.place_stroke_point(),
                 _ => {}
             }
         }
@@ -1072,7 +1069,7 @@ impl<'a> App<'a> {
                 // put the run down, without the canvas menu over the pattern.
                 self.end_tie_chain();
                 self.redraw_requested = true;
-            } else if is_quick_press && matches!(self.editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly | ActiveTool::MakeCircle) {
+            } else if is_quick_press && matches!(self.editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly | ActiveTool::MakeCircle | ActiveTool::PitDesign) {
                 self.try_finish_tool();
                 self.redraw_requested = true;
             } else if is_quick_press && self.editor.active_tool != ActiveTool::None {
@@ -1478,8 +1475,7 @@ impl<'a> App<'a> {
                     self.editor.active_tool = ActiveTool::None;
                     self.invalidate_geometry();
                 } else if self.editor.active_tool == ActiveTool::PitDesign {
-                    self.close_pit_design();
-                    self.editor.active_tool = ActiveTool::None;
+                    self.escape_pit_design();
                 } else if self.editor.active_tool == ActiveTool::BatterBermOffset || self.editor.batter_berm_dialog_open || self.editor.batter_berm_target_id.is_some() {
                     self.cancel_batter_berm();
                 } else if self.editor.active_tool == ActiveTool::MakeCircle {
@@ -1643,8 +1639,7 @@ impl<'a> App<'a> {
         } else if self.editor.active_tool == ActiveTool::Bezier {
             self.cancel_bezier();
         } else if self.editor.active_tool == ActiveTool::PitDesign {
-            self.close_pit_design();
-            self.editor.active_tool = ActiveTool::None;
+            self.escape_pit_design();
         } else if self.editor.active_tool == ActiveTool::BatterBermOffset || self.editor.batter_berm_dialog_open || self.editor.batter_berm_target_id.is_some() {
             self.cancel_batter_berm();
         } else if self.editor.active_tool == ActiveTool::MeasureBatterAngle {

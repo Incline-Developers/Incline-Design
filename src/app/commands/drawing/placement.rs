@@ -126,7 +126,7 @@ impl<'a> App<'a> {
     /// a few pixels of it and closing there would make a polygon: the cursor
     /// snaps onto it, whatever the snap mode, so the click lands exactly there.
     pub(crate) fn poly_close_target(&self) -> Option<glam::DVec3> {
-        if self.editor.active_tool != ActiveTool::MakePoly || self.editor.poly_finish_dialog || self.editor.pending_stroke.len() < 2 {
+        if !self.editor.draws_closed_stroke() || self.editor.poly_finish_dialog || self.editor.pending_stroke.len() < 2 {
             return None;
         }
         let first = *self.editor.pending_stroke.first()?;
@@ -199,8 +199,13 @@ impl<'a> App<'a> {
         );
     }
 
-    /// Finish an in-progress MakePoly stroke as a closed polyline.
+    /// Finish an in-progress MakePoly stroke as a closed polyline, or Pit
+    /// Design's as a pit's string.
     pub(crate) fn finish_poly_closed(&mut self) {
+        if self.editor.pit_drawing() {
+            self.finish_pit_string();
+            return;
+        }
         if self.editor.active_tool != ActiveTool::MakePoly {
             return;
         }
@@ -317,6 +322,18 @@ impl<'a> App<'a> {
             ActiveTool::MakePoly => {
                 self.editor.active_tool = ActiveTool::None;
                 self.invalidate_geometry();
+            }
+            // A pit's string closes on Enter; with none drawn, Enter finishes
+            // the pit being edited, and then puts the tool down.
+            ActiveTool::PitDesign if self.editor.pit_drawing() && self.editor.pending_stroke.len() >= 3 => self.finish_pit_string(),
+            ActiveTool::PitDesign if !self.editor.pending_stroke.is_empty() => {
+                self.editor.pending_stroke.clear();
+                self.invalidate_geometry();
+            }
+            ActiveTool::PitDesign if !self.editor.pit_drawing() => self.finish_pit_editing(),
+            ActiveTool::PitDesign => {
+                self.editor.active_tool = ActiveTool::None;
+                self.close_pit_design();
             }
             ActiveTool::MakeLine => {
                 if self.editor.pending_stroke.is_empty() {

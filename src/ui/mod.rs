@@ -650,7 +650,10 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::Bezier if editor.bezier_selected_verts[1].is_none() => ViewportMessage::text(tr!("ui-click-second-vertex")),
         ActiveTool::ExplodePolyline => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline")),
-        ActiveTool::PitDesign if editor.pit_design.as_ref().is_none_or(|draft| draft.object_id().is_none()) => ViewportMessage::text(tr!("pit-design-pick-prompt")),
+        ActiveTool::PitDesign if editor.pit_drawing() && editor.pending_stroke.len() >= 3 => {
+            ViewportMessage::text(tr!("pit-design-draw-close")).minor(tr!("pit-design-draw-close-minor"))
+        }
+        ActiveTool::PitDesign if editor.pit_drawing() => ViewportMessage::text(tr!("pit-design-draw-prompt")),
         ActiveTool::DeletePoints => ViewportMessage::text(tr!("ui-select-point")),
         ActiveTool::Hide => ViewportMessage::text(tr!("ui-select-designs-to-hide")),
         _ => return None,
