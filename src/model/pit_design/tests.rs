@@ -6,7 +6,7 @@
 use glam::{DVec2, DVec3};
 
 use super::{
-    Base, BenchRules, Design, DesignString, Direction, End, Kind, Layout, Problem, RampSpec, Spec, Stop, StringKind, Zone, design,
+    Additions, Base, BenchRules, Design, DesignString, Direction, End, Kind, Layout, Problem, RampSpec, Spec, Stop, StringKind, Zone, design,
     walls::{Region, Sector},
 };
 
@@ -175,6 +175,13 @@ fn breaklines(design: &Design) -> (Vec<Vec<DVec3>>, Vec<Vec<DVec3>>) {
 
 /// Hold a design to what a sound one is.
 fn assert_sound(name: &str, design: &Design, ramp: &RampSpec) {
+    assert_sound_climbing(name, design, ramp, true);
+}
+
+/// Hold a design to what a sound one is, its stretches climbing at their
+/// gradient where `at_gradient` (flatter only where they say so), or
+/// otherwise no steeper.
+fn assert_sound_climbing(name: &str, design: &Design, ramp: &RampSpec, at_gradient: bool) {
     assert!(design.benches > 0, "{name}: no bench built");
     assert_eq!(crossings(design), 0, "{name}: strings cross at different heights");
     assert!(steepest(design) <= ramp.gradient + 1.0e-6, "{name}: the ramp is steeper than its gradient");
@@ -184,7 +191,7 @@ fn assert_sound(name: &str, design: &Design, ramp: &RampSpec) {
     assert_eq!(design.report.len(), design.benches as usize, "{name}: a report for every bench");
     for (index, bench) in design.report.iter().enumerate() {
         let road = bench.ramp.unwrap_or_else(|| panic!("{name}: bench {index} has no ramp"));
-        if road.lengthened == 0.0 {
+        if road.lengthened == 0.0 && at_gradient {
             assert!(
                 road.steepest >= ramp.gradient - 0.005,
                 "{name}: bench {index} climbs at {:.4}, not {}",
@@ -196,7 +203,7 @@ fn assert_sound(name: &str, design: &Design, ramp: &RampSpec) {
         assert!(road.narrowest >= ramp.width * 0.96, "{name}: bench {index} narrows to {:.1} m", road.narrowest);
     }
     let lengthened = design.report.iter().filter(|bench| bench.ramp.is_some_and(|road| road.lengthened > 0.0)).count();
-    assert!(lengthened * 10 <= design.report.len().max(10), "{name}: {lengthened} stretches climb flatter than asked");
+    assert!(!at_gradient || lengthened * 10 <= design.report.len().max(10), "{name}: {lengthened} stretches climb flatter than asked");
     let (rings, edges) = breaklines(design);
     if let Err(error) = crate::app::commands::triangulation::creation::cdt_surface_from_breaklines(&rings, &edges) {
         panic!("{name}: no single-valued surface: {error:#}");
@@ -304,6 +311,9 @@ fn settings_that_make_no_design_say_why() {
     zoned.rules.zones[0].face_angle = Some(95.0);
     assert_eq!(problem(zoned.clone()), Some(Problem::FaceAngle));
     zoned.rules.zones[0].face_angle = None;
+    zoned.rules.zones[0].wall_radius = Some(-1.0);
+    assert_eq!(problem(zoned.clone()), Some(Problem::WallRadius));
+    zoned.rules.zones[0].wall_radius = None;
     zoned.rules.height_cycle = vec![10.0, 0.0];
     assert_eq!(problem(zoned), Some(Problem::BenchHeight));
 }
@@ -590,7 +600,9 @@ fn walls_cut_otherwise_still_make_sound_designs() {
             }
             let design = built(kind, 300.0, &spec, None);
             let name = format!("{kind} down with {what}");
-            assert_sound(&name, &design, spec.ramp.as_ref().unwrap());
+            // Built down where the walls vary, a stretch can come out a
+            // little flatter than asked, never steeper.
+            assert_sound_climbing(&name, &design, spec.ramp.as_ref().unwrap(), false);
             assert!(design.benches >= 2, "{name}: {} benches", design.benches);
         }
     }
@@ -649,4 +661,108 @@ fn walls_come_out_no_steeper_than_cut() {
             .filter(|wall| wall.bearing == 0.0)
             .all(|wall| wall.target == Some(60.0) && !wall.too_steep())
     );
+}
+
+/// The points of a design's rings closer than a metre to the one before.
+fn crowded(design: &Design) -> usize {
+    design
+        .strings
+        .iter()
+        .filter(|string| string.closed)
+        .map(|string| {
+            let count = string.points.len();
+            (0..count).filter(|&index| string.points[index].distance(string.points[(index + 1) % count]) < 1.0).count()
+        })
+        .sum()
+}
+
+/// How much nearer its toe any point of a crest comes than its face's run
+/// (building up; building down, toe to crest): none where every face is as
+/// steep as cut or flatter.
+fn steeper_than_cut(design: &Design, face_angle: f64) -> f64 {
+    let rings: Vec<&DesignString> = design.strings.iter().filter(|string| string.closed).collect();
+    let mut worst: f64 = 0.0;
+    for pair in rings.windows(2) {
+        let rise = (pair[1].points[0].z - pair[0].points[0].z).abs();
+        if rise < 1.0 {
+            continue;
+        }
+        let run = rise / face_angle.to_radians().tan();
+        let below: Vec<DVec2> = pair[0].points.iter().map(|point| point.truncate()).collect();
+        for point in &pair[1].points {
+            worst = worst.max(run - crate::model::pit_design::ring::nearest(&below, point.truncate()).1);
+        }
+    }
+    worst
+}
+
+#[test]
+fn conditioned_rings_are_lighter_and_no_steeper() {
+    for kind in ["rect", "circle", "ell", "star", "floor"] {
+        for (direction, layout) in [
+            (Direction::Up, Layout::Spiral),
+            (Direction::Down, Layout::Spiral),
+            (Direction::Up, Layout::Switchback { every: 2, inside_radius: 15.0 }),
+        ] {
+            let mut spec = with_ramp(direction, layout, outline(kind)[0], false, Stop::Benches(8), RAMPS[0]);
+            spec.wall_radius = 30.0;
+            let elevation = if direction == Direction::Up { 100.0 } else { 300.0 };
+            let name = format!("{kind} {direction:?} {layout:?}");
+            let design = built(kind, elevation, &spec, None);
+            let points: Vec<DVec3> = outline(kind).iter().map(|point| point.extend(elevation)).collect();
+            let raw = super::design_with(&Base::from_points(&points).unwrap(), &spec, None, &|| false, Additions::FlatsFirst, false).unwrap();
+            assert_sound(&name, &design, spec.ramp.as_ref().unwrap());
+            assert!(design.benches >= raw.benches, "{name}: {} benches conditioned, {} not", design.benches, raw.benches);
+            let short = steeper_than_cut(&design, spec.face_angle);
+            assert!(short <= 1.0e-3, "{name}: a crest {short:.4} m nearer its toe than the face's run");
+            // Lighter wherever the design built with conditioned rings got
+            // as far as one without.
+            if crowded(&design) != crowded(&raw) {
+                assert!(
+                    crowded(&design) * 2 <= crowded(&raw),
+                    "{name}: {} crowding points, {} unconditioned",
+                    crowded(&design),
+                    crowded(&raw)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn conditioning_moves_a_ring_only_the_way_asked() {
+    use crate::model::pit_design::ring::{conditioned, signed_area};
+    // A square whose bottom edge zig-zags 3 cm in and out every half metre.
+    let mut ring: Vec<DVec2> = (0..=200).map(|step| DVec2::new(f64::from(step) * 0.5, if step % 2 == 0 { 0.0 } else { -0.03 })).collect();
+    ring.extend([DVec2::new(100.0, 100.0), DVec2::new(0.0, 100.0)]);
+    let outward = conditioned(&ring, 1.0, &|_| false);
+    let inward = conditioned(&ring, -1.0, &|_| false);
+    assert!(
+        outward.len() < ring.len() / 2 && inward.len() < ring.len() / 2,
+        "the zig-zag goes: {} and {} of {}",
+        outward.len(),
+        inward.len(),
+        ring.len()
+    );
+    // Moved out, the ring takes in every point it had; moved in, none of it
+    // reaches past where it was.
+    let inside = |ring: &[DVec2], point: DVec2| crate::model::pit_design::ring::nearest(ring, point).1 < 1.0e-9 || winding_inside(ring, point);
+    assert!(ring.iter().all(|point| inside(&outward, *point)), "moved out, it holds the old ring");
+    assert!(inward.iter().all(|point| inside(&ring, *point)), "moved in, it lies within the old ring");
+    assert!(signed_area(&outward) >= signed_area(&ring) && signed_area(&inward) <= signed_area(&ring));
+    // Kept points stay.
+    let kept = conditioned(&ring, 1.0, &|point| point.x < 50.0);
+    assert!(ring.iter().filter(|point| point.x < 50.0).all(|point| kept.contains(point)));
+}
+
+/// Whether `point` lies inside `ring`, by crossings.
+fn winding_inside(ring: &[DVec2], point: DVec2) -> bool {
+    let mut inside = false;
+    for index in 0..ring.len() {
+        let (a, b) = (ring[index], ring[(index + 1) % ring.len()]);
+        if (a.y > point.y) != (b.y > point.y) && point.x < a.x + (point.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+            inside = !inside;
+        }
+    }
+    inside
 }

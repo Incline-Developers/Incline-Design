@@ -5101,6 +5101,7 @@ pit-design-round-corners = Arrotonda gli angoli
 pit-design-round-corners-help = Arrotonda ogni angolo della linea in un arco, come si scava un piede o una cresta. Gli archi fanno parte della linea, e i suoi vertici restano pochi e modificabili.
 pit-design-corner-radius = Raggio d'angolo
 pit-design-done-help = Termina questa fossa e chiudi lo strumento. Esc fa lo stesso.
+pit-design-problem-wall-radius = Il raggio della parete non può essere inferiore a 0.
 pit-design-problem-sector = Un settore di scarpata richiede un orientamento, un angolo della parete tra 0° e 90° e una larghezza della berma di 0 o più.
 pit-design-problem-region = Una regione di scarpata richiede un contorno di almeno tre punti, un angolo della parete tra 0° e 90° e una larghezza della berma di 0 o più.
 pit-design-slopes-section = Regole delle scarpate

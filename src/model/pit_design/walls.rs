@@ -174,6 +174,8 @@ pub(crate) struct Walls<'a> {
     /// The berm every wall leaves, whatever its own: none before the first
     /// bench, a catch berm's width on a catch bench.
     pub(crate) fixed_berm: Option<f64>,
+    /// The tightest the walls may turn: the design's, or the zone's.
+    pub(crate) wall_radius: f64,
 }
 
 impl Walls<'_> {

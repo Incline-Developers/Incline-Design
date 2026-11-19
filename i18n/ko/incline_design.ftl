@@ -5093,6 +5093,7 @@ pit-design-round-corners = 모서리 둥글게
 pit-design-round-corners-help = 법면 끝이나 어깨를 채굴하듯 선의 각 모서리를 호로 둥글게 합니다. 호는 선의 일부이며 꼭짓점은 적고 편집하기 쉽게 유지됩니다.
 pit-design-corner-radius = 모서리 반경
 pit-design-done-help = 이 피트를 마치고 도구를 내려놓습니다. Escape도 같습니다.
+pit-design-problem-wall-radius = 벽 반경은 0보다 작을 수 없습니다.
 pit-design-problem-sector = 사면 섹터에는 방향, 0°~90°의 사면 각도, 0 이상의 소단 폭이 필요합니다.
 pit-design-problem-region = 사면 영역에는 3개 이상의 점으로 된 윤곽, 0°~90°의 사면 각도, 0 이상의 소단 폭이 필요합니다.
 pit-design-slopes-section = 사면 규칙

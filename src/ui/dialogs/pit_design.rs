@@ -182,6 +182,7 @@ pub(crate) fn problem_text(problem: Problem) -> String {
         Problem::FaceAngle => tr!("pit-design-problem-face-angle"),
         Problem::BermWidth => tr!("pit-design-problem-berm-width"),
         Problem::Zone => tr!("pit-design-problem-zone"),
+        Problem::WallRadius => tr!("pit-design-problem-wall-radius"),
         Problem::Sector => tr!("pit-design-problem-sector"),
         Problem::Region => tr!("pit-design-problem-region"),
         Problem::RampWidth => tr!("pit-design-problem-ramp-width"),
@@ -497,7 +498,7 @@ fn draw_bench_rules(ui: &mut egui::Ui, settings: &mut PitDesignSettings, base_rl
     }
 
     let sign = settings.direction.sign();
-    let (height, face_angle, berm_width) = (settings.bench_height, settings.face_angle, settings.berm_width);
+    let (height, face_angle, berm_width, wall_radius) = (settings.bench_height, settings.face_angle, settings.berm_width, settings.wall_radius);
     let mut remove = None;
     for (index, zone) in settings.bench_rules.zones.iter_mut().enumerate() {
         ui.push_id(("pit_design_zone", index), |ui| {
@@ -518,6 +519,7 @@ fn draw_bench_rules(ui: &mut egui::Ui, settings: &mut PitDesignSettings, base_rl
                 (tr!("pit-design-bench-height"), &mut zone.height, height, 0.1..=1000.0, 0.1, " m"),
                 (tr!("pit-design-face-angle"), &mut zone.face_angle, face_angle, 1.0..=89.0, 0.5, "°"),
                 (tr!("pit-design-berm-width"), &mut zone.berm_width, berm_width, 0.0..=1000.0, 0.1, " m"),
+                (tr!("pit-design-wall-radius"), &mut zone.wall_radius, wall_radius, 0.0..=10000.0, 0.5, " m"),
             ] {
                 let mut shown = value.unwrap_or(design);
                 if MenuFieldF64::new(label, &mut shown, range)

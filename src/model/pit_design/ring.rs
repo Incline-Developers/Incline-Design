@@ -592,6 +592,83 @@ pub(crate) fn cleaned(mut ring: Vec<DVec2>) -> Vec<DVec2> {
     ring
 }
 
+/// A ring conditioned: with points that barely bend it (less than
+/// [`CONDITION_HEIGHT`] off the line between their neighbours), or that
+/// crowd their neighbours (closer than [`CONDITION_SPACING`]) and bend it
+/// little, taken out, round after round, but only where the line left in a
+/// point's place moves the ring `toward` (outward where positive, inward
+/// where negative), or not at all. Set off toward the waste side of a
+/// face, the face only comes out flatter. Points `keep` says to keep stay.
+pub(crate) fn conditioned(ring: &[DVec2], toward: f64, keep: &dyn Fn(DVec2) -> bool) -> Vec<DVec2> {
+    let mut points = ring.to_vec();
+    for _ in 0..CONDITION_ROUNDS {
+        let mut changed = false;
+        let mut index = 0;
+        while index < points.len() && points.len() > 3 {
+            let count = points.len();
+            let (a, b, c) = (points[(index + count - 1) % count], points[index], points[(index + 1) % count]);
+            let chord = c - a;
+            let length = chord.length();
+            // How far out of the line between its neighbours the point
+            // stands: the ring moves the other way where it goes.
+            let out = if length > SAME_POINT { -(chord.perp_dot(b - a) / length) } else { 0.0 };
+            let height = out.abs();
+            let crowded = a.distance(b) < CONDITION_SPACING || b.distance(c) < CONDITION_SPACING;
+            let small = height < CONDITION_HEIGHT || (crowded && height < CONDITION_CROWDED_HEIGHT);
+            if small && out * toward <= CONDITION_SLACK && !keep(b) {
+                points.remove(index);
+                changed = true;
+                continue;
+            }
+            index += 1;
+        }
+        if !changed {
+            break;
+        }
+    }
+    points
+}
+
+/// A ring with the points that do not bend it at all (within
+/// [`CONDITION_SLACK`] of the line between their neighbours) taken out:
+/// the same ring, in fewer points.
+pub(crate) fn without_straight_points(ring: &[DVec2]) -> Vec<DVec2> {
+    let mut points = ring.to_vec();
+    let mut index = 0;
+    while index < points.len() && points.len() > 3 {
+        let count = points.len();
+        let (a, b, c) = (points[(index + count - 1) % count], points[index], points[(index + 1) % count]);
+        let chord = c - a;
+        let length = chord.length();
+        let on_line = length > SAME_POINT && (chord.perp_dot(b - a) / length).abs() <= CONDITION_SLACK && (b - a).dot(chord) > 0.0 && (c - b).dot(chord) > 0.0;
+        if on_line {
+            points.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+    points
+}
+
+/// Points of a ring closer together than this crowd each other.
+const CONDITION_SPACING: f64 = 1.0;
+
+/// A point nearer than this to the line between its neighbours barely bends
+/// the ring. An arc rounding a corner 15 m out stands further off.
+const CONDITION_HEIGHT: f64 = 0.05;
+
+/// A point crowding its neighbours goes if it stands no further than this
+/// off the line between them: further, it is the ring's shape (the arc
+/// rounding a tight corner, say), and taking it out would sharpen the ring.
+const CONDITION_CROWDED_HEIGHT: f64 = 0.2;
+
+/// How far the wrong way a ring may move in conditioning it, and how far
+/// off the line a point may stand and still be on it: rounding.
+const CONDITION_SLACK: f64 = 1.0e-6;
+
+/// How many times a ring is gone round in conditioning it.
+const CONDITION_ROUNDS: usize = 4;
+
 /// The sharpest bend at which [`offset_varying`]'s two offsets meet in one
 /// point.
 const MEET_TURN: f64 = std::f64::consts::PI / 6.0;

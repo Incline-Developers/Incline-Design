@@ -5091,6 +5091,7 @@ pit-design-round-corners = Zungusha pembe
 pit-design-round-corners-help = Huzungusha kila pembe ya mstari kuwa tao, kama mguu au ukingo unavyochimbwa. Matao ni sehemu ya mstari, na vipeo vyake hubaki vichache na vinavyoharirika.
 pit-design-corner-radius = Nusukipenyo cha pembe
 pit-design-done-help = Maliza shimo hili na uweke zana chini. Escape hufanya vivyo hivyo.
+pit-design-problem-wall-radius = Nusu kipenyo cha ukuta hakiwezi kuwa chini ya 0.
 pit-design-problem-sector = Sekta ya mteremko inahitaji mwelekeo, pembe ya uso kati ya 0° na 90°, na upana wa lundo la kinga wa 0 au zaidi.
 pit-design-problem-region = Eneo la mteremko linahitaji mpaka wa angalau nukta tatu, pembe ya uso kati ya 0° na 90°, na upana wa lundo la kinga wa 0 au zaidi.
 pit-design-slopes-section = Kanuni za miteremko

@@ -5100,6 +5100,7 @@ pit-design-round-corners = Ecken abrunden
 pit-design-round-corners-help = Rundet jede Ecke der Linie zu einem Bogen ab, wie ein Böschungsfuß oder eine Böschungskante abgebaut wird. Die Bögen gehören zur Linie, und ihre Stützpunkte bleiben wenige und bearbeitbar.
 pit-design-corner-radius = Eckenradius
 pit-design-done-help = Diese Grube abschließen und das Werkzeug ablegen. Escape tut dasselbe.
+pit-design-problem-wall-radius = Der Wandradius darf nicht unter 0 liegen.
 pit-design-problem-sector = Ein Böschungssektor braucht eine Richtung, einen Böschungswinkel zwischen 0° und 90° und eine Bermenbreite von 0 oder mehr.
 pit-design-problem-region = Ein Böschungsbereich braucht einen Umriss aus mindestens drei Punkten, einen Böschungswinkel zwischen 0° und 90° und eine Bermenbreite von 0 oder mehr.
 pit-design-slopes-section = Böschungsregeln

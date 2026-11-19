@@ -5059,6 +5059,7 @@ pit-design-round-corners = Bulatkan sudut
 pit-design-round-corners-help = Membulatkan setiap sudut garis menjadi busur, seperti kaki atau puncak ditambang. Busur adalah bagian garis, dan simpulnya tetap sedikit dan dapat disunting.
 pit-design-corner-radius = Jari-jari sudut
 pit-design-done-help = Selesaikan pit ini dan letakkan alatnya. Escape melakukan hal yang sama.
+pit-design-problem-wall-radius = Jari-jari dinding tidak boleh kurang dari 0.
 pit-design-problem-sector = Sektor lereng memerlukan arah, sudut muka antara 0° dan 90°, serta lebar berm 0 atau lebih.
 pit-design-problem-region = Wilayah lereng memerlukan batas minimal tiga titik, sudut muka antara 0° dan 90°, serta lebar berm 0 atau lebih.
 pit-design-slopes-section = Aturan lereng

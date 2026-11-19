@@ -5101,6 +5101,7 @@ pit-design-round-corners = Köşeleri yuvarla
 pit-design-round-corners-help = Çizginin her köşesini, bir topuk ya da kret kazıldığı gibi bir yaya yuvarlar. Yaylar çizginin parçasıdır ve köşe noktaları az ve düzenlenebilir kalır.
 pit-design-corner-radius = Köşe yarıçapı
 pit-design-done-help = Bu ocağı bitirin ve aracı bırakın. Escape de aynısını yapar.
+pit-design-problem-wall-radius = Duvar yarıçapı 0'dan küçük olamaz.
 pit-design-problem-sector = Bir şev sektörünün bir yönü, 0° ile 90° arasında bir şev açısı ve 0 veya daha fazla berm genişliği olmalıdır.
 pit-design-problem-region = Bir şev bölgesinin en az üç noktalı bir sınırı, 0° ile 90° arasında bir şev açısı ve 0 veya daha fazla berm genişliği olmalıdır.
 pit-design-slopes-section = Şev kuralları

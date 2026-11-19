@@ -5101,6 +5101,7 @@ pit-design-round-corners = تدوير الزوايا
 pit-design-round-corners-help = يدوّر كل زاوية من الخط إلى قوس، كما يُحفر القدم أو الحافة. الأقواس جزء من الخط، وتبقى رؤوسه قليلة وقابلة للتحرير.
 pit-design-corner-radius = نصف قطر الزاوية
 pit-design-done-help = أنهِ هذه الحفرة وأغلق الأداة. مفتاح Escape يفعل الشيء نفسه.
+pit-design-problem-wall-radius = لا يمكن أن يقل نصف قطر الجدار عن 0.
 pit-design-problem-sector = يحتاج قطاع المنحدرات إلى اتجاه، وزاوية واجهة بين 0° و90°، وعرض حاجز أمان 0 أو أكثر.
 pit-design-problem-region = تحتاج منطقة المنحدرات إلى حدّ من ثلاث نقاط على الأقل، وزاوية واجهة بين 0° و90°، وعرض حاجز أمان 0 أو أكثر.
 pit-design-slopes-section = قواعد المنحدرات

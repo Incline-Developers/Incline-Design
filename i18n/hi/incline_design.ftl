@@ -5059,6 +5059,7 @@ pit-design-round-corners = कोने गोल करें
 pit-design-round-corners-help = रेखा के हर कोने को चाप में गोल करता है, जैसे पाद या शिखर खनन होता है। चाप रेखा का हिस्सा हैं, और उसके शीर्ष कम व संपादन योग्य रहते हैं।
 pit-design-corner-radius = कोने की त्रिज्या
 pit-design-done-help = यह पिट पूरा करें और टूल बंद करें। Escape भी यही करता है।
+pit-design-problem-wall-radius = दीवार त्रिज्या 0 से कम नहीं हो सकती।
 pit-design-problem-sector = ढलान सेक्टर को एक दिशा, 0° से 90° के बीच फेस कोण और 0 या अधिक बर्म चौड़ाई चाहिए।
 pit-design-problem-region = ढलान क्षेत्र को कम से कम तीन बिंदुओं की रूपरेखा, 0° से 90° के बीच फेस कोण और 0 या अधिक बर्म चौड़ाई चाहिए।
 pit-design-slopes-section = ढलान नियम

@@ -5187,6 +5187,7 @@ pit-design-round-corners = Zaokrąglij narożniki
 pit-design-round-corners-help = Zaokrągla każdy narożnik linii łukiem, tak jak urabia się stopę lub krawędź. Łuki są częścią linii, a jej wierzchołków zostaje niewiele i można je edytować.
 pit-design-corner-radius = Promień narożnika
 pit-design-done-help = Zakończ to wyrobisko i odłóż narzędzie. Escape robi to samo.
+pit-design-problem-wall-radius = Promień ściany nie może być mniejszy niż 0.
 pit-design-problem-sector = Sektor skarp potrzebuje kierunku, kąta skarpy między 0° a 90° i szerokości bermy 0 lub więcej.
 pit-design-problem-region = Obszar skarp potrzebuje obrysu z co najmniej trzech punktów, kąta skarpy między 0° a 90° i szerokości bermy 0 lub więcej.
 pit-design-slopes-section = Reguły skarp

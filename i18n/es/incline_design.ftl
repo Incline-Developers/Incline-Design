@@ -5057,6 +5057,7 @@ pit-design-round-corners = Redondear esquinas
 pit-design-round-corners-help = Redondea cada esquina de la línea en un arco, como se explota un pie o una cresta. Los arcos forman parte de la línea, y sus vértices siguen siendo pocos y editables.
 pit-design-corner-radius = Radio de esquina
 pit-design-done-help = Terminar este rajo y dejar la herramienta. Escape hace lo mismo.
+pit-design-problem-wall-radius = El radio de pared no puede ser menor que 0.
 pit-design-problem-sector = Un sector de talud necesita un rumbo, un ángulo de cara entre 0° y 90° y un ancho de berma de 0 o más.
 pit-design-problem-region = Una región de talud necesita un contorno de al menos tres puntos, un ángulo de cara entre 0° y 90° y un ancho de berma de 0 o más.
 pit-design-slopes-section = Reglas de taludes

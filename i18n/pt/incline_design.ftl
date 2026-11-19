@@ -5057,6 +5057,7 @@ pit-design-round-corners = Arredondar cantos
 pit-design-round-corners-help = Arredonda cada canto da linha num arco, como se escava um pé ou uma crista. Os arcos fazem parte da linha, e os seus vértices continuam poucos e editáveis.
 pit-design-corner-radius = Raio de canto
 pit-design-done-help = Terminar esta cava e largar a ferramenta. Esc faz o mesmo.
+pit-design-problem-wall-radius = O raio da parede não pode ser inferior a 0.
 pit-design-problem-sector = Um setor de talude precisa de um rumo, um ângulo de face entre 0° e 90° e uma largura de berma de 0 ou mais.
 pit-design-problem-region = Uma região de talude precisa de um contorno de pelo menos três pontos, um ângulo de face entre 0° e 90° e uma largura de berma de 0 ou mais.
 pit-design-slopes-section = Regras de taludes

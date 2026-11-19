@@ -165,6 +165,8 @@ pub(crate) struct Zone {
     /// Degrees from horizontal.
     pub(crate) face_angle: Option<f64>,
     pub(crate) berm_width: Option<f64>,
+    /// The tightest its walls may turn.
+    pub(crate) wall_radius: Option<f64>,
 }
 
 impl Default for Zone {
@@ -175,6 +177,7 @@ impl Default for Zone {
             height: None,
             face_angle: None,
             berm_width: None,
+            wall_radius: None,
         }
     }
 }
@@ -226,6 +229,8 @@ struct Cut {
     zone_face: Option<f64>,
     zone_berm: Option<f64>,
     fixed_berm: Option<f64>,
+    /// The tightest its walls may turn.
+    wall_radius: f64,
 }
 
 impl Cut {
@@ -236,6 +241,7 @@ impl Cut {
             zone_face: self.zone_face,
             zone_berm: self.zone_berm,
             fixed_berm: self.fixed_berm,
+            wall_radius: self.wall_radius,
         }
     }
 }
@@ -270,11 +276,17 @@ impl Spec {
         if !(self.berm_width.is_finite() && self.berm_width >= 0.0) {
             return Some(Problem::BermWidth);
         }
+        if !(self.wall_radius.is_finite() && self.wall_radius >= 0.0) {
+            return Some(Problem::WallRadius);
+        }
         let rules = &self.rules;
         let angle = |value: f64| value.is_finite() && value > 0.0 && value < 90.0;
         let width = |value: f64| value.is_finite() && value >= 0.0;
         if !rules.height_cycle.iter().all(|height| positive(*height)) || !rules.zones.iter().all(|zone| zone.height.is_none_or(positive)) {
             return Some(Problem::BenchHeight);
+        }
+        if !rules.zones.iter().all(|zone| zone.wall_radius.is_none_or(width)) {
+            return Some(Problem::WallRadius);
         }
         if !rules.zones.iter().all(|zone| zone.face_angle.is_none_or(angle)) {
             return Some(Problem::FaceAngle);
@@ -340,6 +352,7 @@ impl Spec {
             height: zone.and_then(|zone| zone.height).unwrap_or(cycled),
             zone_face: zone.and_then(|zone| zone.face_angle),
             zone_berm: zone.and_then(|zone| zone.berm_width),
+            wall_radius: zone.and_then(|zone| zone.wall_radius).unwrap_or(self.wall_radius),
             fixed_berm: match (index, catch) {
                 (0, _) => Some(0.0),
                 (_, true) => Some(self.rules.catch_width),
@@ -361,6 +374,8 @@ pub(crate) enum Problem {
     BenchHeight,
     /// A band of RL with no height to it.
     Zone,
+    /// A wall radius below 0.
+    WallRadius,
     /// A slope sector's values cannot cut a wall.
     Sector,
     /// A slope region with no outline, or values that cannot cut a wall.
@@ -664,16 +679,27 @@ fn design_dump(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
 
 /// A pit, cut into the ground.
 fn design_pit(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &dyn Fn() -> bool) -> Result<Design, Problem> {
-    let flats = design_with(base, spec, ground, cancelled, Additions::FlatsFirst)?;
     // A ramp kept to its gradient by flats can come to a bench with no room
     // where one climbing a little flatter would have found it, the benches
-    // before having put it somewhere else: the design that gets further is
-    // the one given, flats first where both get as far.
-    if flats.end != End::OutOfRoom || spec.ramp.is_none() || cancelled() {
-        return Ok(flats);
+    // before having put it somewhere else; and conditioned rings, a hair
+    // different, can put it somewhere with no way on where rings left as
+    // they were would not. Where a design runs out of room, the others are
+    // tried in turn: the one that gets furthest is given, the first of
+    // those that get as far.
+    let mut best = design_with(base, spec, ground, cancelled, Additions::FlatsFirst, true)?;
+    for (additions, condition) in [(Additions::LongerOnly, true), (Additions::FlatsFirst, false), (Additions::LongerOnly, false)] {
+        if best.end != End::OutOfRoom || cancelled() {
+            break;
+        }
+        if additions == Additions::LongerOnly && spec.ramp.is_none() {
+            continue;
+        }
+        let other = design_with(base, spec, ground, cancelled, additions, condition)?;
+        if other.benches > best.benches {
+            best = other;
+        }
     }
-    let longer = design_with(base, spec, ground, cancelled, Additions::LongerOnly)?;
-    Ok(if longer.benches > flats.benches { longer } else { flats })
+    Ok(best)
 }
 
 /// What a stretch may have added to it to leave its bench sound.
@@ -686,7 +712,9 @@ enum Additions {
     LongerOnly,
 }
 
-fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &dyn Fn() -> bool, additions: Additions) -> Result<Design, Problem> {
+/// A design built with only `additions` to its stretches, its end rings
+/// conditioned where `condition` says.
+fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &dyn Fn() -> bool, additions: Additions, condition: bool) -> Result<Design, Problem> {
     if let Some(problem) = spec.problem() {
         return Err(problem);
     }
@@ -702,6 +730,7 @@ fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
             spec,
             sign,
             additions,
+            condition,
             strings: vec![level_string(spec, &start, base.elevation, true)],
             left: Vec::new(),
             right: Vec::new(),
@@ -802,9 +831,25 @@ fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
         dump: false,
         walls: Vec::new(),
     };
+    without_straight_points(&mut design.strings);
     design.walls = inter_ramp(spec, &base.ring, &design);
     Ok(design)
 }
+
+/// A finished design's rings with the points that do not bend them taken
+/// out (see [`ring::without_straight_points`]): the same rings, lighter.
+/// The string the design starts from is the user's own, and stays.
+fn without_straight_points(strings: &mut [DesignString]) {
+    for string in strings.iter_mut().filter(|string| string.closed).skip(1) {
+        let z = string.points.first().map_or(0.0, |point| point.z);
+        let plan: Vec<DVec2> = string.points.iter().map(|point| point.truncate()).collect();
+        string.points = ring::without_straight_points(&plan).into_iter().map(|point| point.extend(z)).collect();
+    }
+}
+
+/// How near its road a bench's end ring is left as it is in conditioning
+/// it.
+const CONDITION_CLEAR: f64 = 2.0;
 
 /// How far apart round the string the walls' inter-ramp angle is measured.
 const INTER_RAMP_STEP: f64 = 10.0;
@@ -1086,6 +1131,8 @@ struct Builder<'a> {
     spec: &'a Spec,
     sign: f64,
     additions: Additions,
+    /// Whether its end rings are conditioned.
+    condition: bool,
     strings: Vec<DesignString>,
     /// The ramp's edges, left and right of the way it is built, and its
     /// centreline, joined up bench to bench.
@@ -1258,6 +1305,11 @@ impl Builder<'_> {
                 (None, start_ring, end_ring)
             }
         };
+        let end_ring = if self.condition {
+            self.conditioned(start_ring.as_slice(), end_ring, laid.as_ref(), elevation, height)
+        } else {
+            end_ring
+        };
 
         let end_elevation = elevation + sign * height;
         // With no berm the bench starts on the ring the last one ended on,
@@ -1312,6 +1364,39 @@ impl Builder<'_> {
             ramp: ramp_report,
             added,
         })
+    }
+
+    /// A bench's end ring conditioned (see [`ring::conditioned`]): moved
+    /// only toward the waste side of its face, so the face only comes out
+    /// flatter, and left alone within [`CONDITION_CLEAR`] of its road. The
+    /// next bench is set off from it, so its berm is as wide as asked. Where
+    /// the conditioned ring would not be as sound as the bench was, it stays
+    /// as it was.
+    fn conditioned(&self, start_ring: &[DVec2], end_ring: Vec<DVec2>, laid: Option<&Laid>, elevation: f64, height: f64) -> Vec<DVec2> {
+        let mut road: Vec<(DVec2, DVec2)> = Vec::new();
+        if let Some(laid) = laid {
+            for edge in [&laid.stretch.edges.near, &laid.stretch.edges.far] {
+                road.extend(edge.windows(2).map(|pair| (pair[0].0, pair[1].0)));
+            }
+            if let Some(turn) = &laid.turn {
+                for chain in [&turn.inner, &turn.outer, &turn.pad] {
+                    road.extend(chain.windows(2).map(|pair| (pair[0], pair[1])));
+                }
+            }
+        }
+        let keep = |point: DVec2| {
+            road.iter()
+                .any(|(a, b)| crate::model::kernel::project_onto_segment(point, *a, *b).0.distance(point) < CONDITION_CLEAR)
+        };
+        // Building up the waste side of a crest is out from the pit, and
+        // building down, of a toe, in.
+        let end = ring::conditioned(&end_ring, self.sign, &keep);
+        let stretch = laid.map(|laid| &laid.stretch);
+        let sound = !unsound(start_ring, &end, stretch) && stretch.is_none_or(|stretch| !crowded_handover(&end, stretch) && arrives_on(&end, stretch));
+        if sound && let Ok((_, end)) = self.clear_of_built((start_ring.to_vec(), end), stretch, laid.and_then(|laid| laid.turn.as_ref()), elevation, height) {
+            return end;
+        }
+        end_ring
     }
 
     /// One try at a bench's stretch of ramp and its rings: carried on from
@@ -1813,7 +1898,7 @@ fn rings(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, stretch: Option<
     let keep: Vec<DVec2> = stretch
         .and_then(|(stretch, _)| Some(vec![stretch.edges.near.last()?.0, stretch.edges.far.last()?.0]))
         .unwrap_or_default();
-    let end_ring = ring::filleted(&end_ring, spec.wall_radius, sign, &keep);
+    let end_ring = ring::filleted(&end_ring, walls.wall_radius, sign, &keep);
     let sound = !unsound(&start_ring, &end_ring, stretch.map(|(stretch, _)| stretch))
         && stretch.is_none_or(|(stretch, join)| {
             !crowded_handover(&end_ring, stretch)

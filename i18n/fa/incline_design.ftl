@@ -5059,6 +5059,7 @@ pit-design-round-corners = گرد کردن گوشه‌ها
 pit-design-round-corners-help = هر گوشهٔ خط را به یک کمان گرد می‌کند، همان‌گونه که پا یا تاج استخراج می‌شود. کمان‌ها بخشی از خط‌اند و رأس‌های آن کم و ویرایش‌پذیر می‌مانند.
 pit-design-corner-radius = شعاع گوشه
 pit-design-done-help = این پیت را تمام کنید و ابزار را کنار بگذارید. Escape هم همین کار را می‌کند.
+pit-design-problem-wall-radius = شعاع دیواره نمی‌تواند کمتر از 0 باشد.
 pit-design-problem-sector = هر بخش شیب به یک جهت، زاویه سینه بین 0° و 90° و عرض برم 0 یا بیشتر نیاز دارد.
 pit-design-problem-region = هر ناحیه شیب به یک مرز با دست‌کم سه نقطه، زاویه سینه بین 0° و 90° و عرض برم 0 یا بیشتر نیاز دارد.
 pit-design-slopes-section = قواعد شیب

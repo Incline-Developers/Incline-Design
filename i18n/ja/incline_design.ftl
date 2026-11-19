@@ -5088,6 +5088,7 @@ pit-design-round-corners = 角を丸める
 pit-design-round-corners-help = ラインの各角を、法尻や法肩を採掘するように円弧で丸めます。円弧はラインの一部で、頂点は少なく編集しやすいままです。
 pit-design-corner-radius = 角の半径
 pit-design-done-help = このピットを終えてツールを終了します。Escape でも同じです。
+pit-design-problem-wall-radius = 壁の半径は0未満にできません。
 pit-design-problem-sector = 斜面セクターには方位、0°〜90°の法面角度、0以上のバーム幅が必要です。
 pit-design-problem-region = 斜面領域には3点以上の輪郭、0°〜90°の法面角度、0以上のバーム幅が必要です。
 pit-design-slopes-section = 斜面規則

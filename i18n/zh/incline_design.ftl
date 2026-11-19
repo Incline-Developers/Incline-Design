@@ -5059,6 +5059,7 @@ pit-design-round-corners = 圆角
 pit-design-round-corners-help = 像开采坡脚或坡顶那样，将线条的每个角倒成圆弧。圆弧是线条的一部分，其顶点仍然少而易于编辑。
 pit-design-corner-radius = 圆角半径
 pit-design-done-help = 完成此采坑并收起工具。Escape 也可以。
+pit-design-problem-wall-radius = 坡壁半径不能小于 0。
 pit-design-problem-sector = 边坡扇区需要方位、0° 到 90° 之间的坡面角和不小于 0 的平台宽度。
 pit-design-problem-region = 边坡区域需要至少三个点的轮廓、0° 到 90° 之间的坡面角和不小于 0 的平台宽度。
 pit-design-slopes-section = 边坡规则

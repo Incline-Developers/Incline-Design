@@ -5060,6 +5060,7 @@ pit-design-round-corners = Arrondir les angles
 pit-design-round-corners-help = Arrondit chaque angle de la ligne en arc, comme un pied ou une crête est exploité. Les arcs font partie de la ligne, et ses sommets restent peu nombreux et modifiables.
 pit-design-corner-radius = Rayon d’angle
 pit-design-done-help = Terminer cette fosse et poser l’outil. Échap fait de même.
+pit-design-problem-wall-radius = Le rayon de paroi ne peut pas être inférieur à 0.
 pit-design-problem-sector = Un secteur de talus doit avoir une orientation, un angle de front entre 0° et 90° et une largeur de banquette de 0 ou plus.
 pit-design-problem-region = Une région de talus doit avoir un contour d’au moins trois points, un angle de front entre 0° et 90° et une largeur de banquette de 0 ou plus.
 pit-design-slopes-section = Règles de talus

@@ -5788,6 +5788,7 @@ pit-design-problem-bench-height = The bench height must be above 0.
 pit-design-problem-face-angle = The face angle must be between 0° and 90°.
 pit-design-problem-berm-width = The berm width cannot be below 0.
 pit-design-problem-zone = A zone's From and To RLs must differ.
+pit-design-problem-wall-radius = The wall radius cannot be below 0.
 pit-design-problem-sector = A slope sector needs a bearing, a face angle between 0° and 90°, and a berm width of 0 or more.
 pit-design-problem-region = A slope region needs an outline of at least three points, a face angle between 0° and 90°, and a berm width of 0 or more.
 pit-design-problem-ramp-width = The ramp's width must be above 0.

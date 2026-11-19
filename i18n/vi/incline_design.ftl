@@ -5087,6 +5087,7 @@ pit-design-round-corners = Bo tròn góc
 pit-design-round-corners-help = Bo mỗi góc của đường thành một cung, như khi khai thác chân hoặc mép tầng. Các cung là một phần của đường, và các đỉnh của nó vẫn ít và dễ chỉnh sửa.
 pit-design-corner-radius = Bán kính góc
 pit-design-done-help = Kết thúc moong này và đóng công cụ. Escape cũng làm như vậy.
+pit-design-problem-wall-radius = Bán kính vách không được nhỏ hơn 0.
 pit-design-problem-sector = Mỗi cung sườn cần một hướng, góc sườn tầng từ 0° đến 90° và chiều rộng cơ từ 0 trở lên.
 pit-design-problem-region = Mỗi vùng sườn cần đường bao ít nhất ba điểm, góc sườn tầng từ 0° đến 90° và chiều rộng cơ từ 0 trở lên.
 pit-design-slopes-section = Quy tắc sườn
