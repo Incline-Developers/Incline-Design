@@ -20,7 +20,7 @@
     <text x="124" y="62">Import Drillhole CSV Bundle</text>
   </g>
   <g font-family="sans-serif" font-size="13" fill="#000">
-    <text x="20" y="62">Drill Holes</text>
+    <text x="20" y="62">Drillholes</text>
     <text x="22" y="93">Mapped CSV</text>
     <text x="22" y="109">bundle (.csv)</text>
     <text x="124" y="92">CSV files</text>

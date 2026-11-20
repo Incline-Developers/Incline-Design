@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 250" width="540" height="250" role="img" aria-label="Any workspace, Export window, Mapped CSV bundle (.csv) chosen under Drill Holes: Dataset S-collars + 1 files, the note about three files, Export button.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 250" width="540" height="250" role="img" aria-label="Any workspace, Export window, Mapped CSV bundle (.csv) chosen under Drillholes: Dataset S-collars + 1 files, the note about three files, Export button.">
   <g stroke="#000" stroke-width="1" fill="#fff">
     <rect x="10" y="10" width="520" height="230"/>
     <line x1="10" y1="42" x2="530" y2="42"/>
@@ -13,7 +13,7 @@
     <text x="150" y="70">Export CSV Drillholes</text>
   </g>
   <g font-family="sans-serif" font-size="13" fill="#000">
-    <text x="30" y="72">Drill Holes</text>
+    <text x="30" y="72">Drillholes</text>
     <text x="29" y="103">Mapped CSV</text>
     <text x="29" y="119">bundle (.csv)</text>
     <text x="150" y="99">Dataset:</text>

@@ -22,6 +22,8 @@ This page covers what a control string is, drawing strings, cleaning them and dr
 
 Where this fits: these tools serve [Modelling](../README.md#modelling), in the Publish Model stage of the geologist's life cycle: its step 2, strings that interpolate the surface between the holes, and the cleaning of step 3. The strings are drawn and cleaned before the first surface is built, and they carry the geologist's interpretation into the published model. Next in the flow: [String Vertices](../string-vertices/README.md).
 
+Why draw strings at all? Before computers, a geologist drew cross sections by hand, in coloured pen on paper, from a road cutting, a hillside or a highwall. Those drawings were how geology was conveyed: what the ground is doing, and how it came to be that way. A control string is that drawing, made on the computer. Each string is a line of your interpretation, and a set of them, section by section, turns scattered holes into a model of the ground in three dimensions. A section is two dimensions, so anyone who can read one can draw what they see on it, and the sections together make the model. The drawing is done with CAD tools, so this page and the next teach a little CAD: only as much as drawing a section needs.
+
 A control string is an open line you draw where you know, or have decided, where a seam surface runs: along a roof you traced from the holes, along a subcrop, along a fault trace. The surface you build later passes through the strings, so the strings interpolate it between the holes. A string has a height on every vertex. A pick at a hole is the stronger evidence: it was measured from the hole's log and downhole geophysics, where most strings are interpreted. Where a string and a pick sit at the same place in plan, **Build Surface** uses the string's height and reports the pick it overrode and by how much, so check every override against the hole: a string should only win where an observation stands behind it. Two strings that cross in plan should agree in height where they cross, as the surface cannot be at two heights at one place.
 
 Strings of one layer are used together, so keep the strings of one surface on one layer, and one surface per layer. A closed string is the extent: the deposit, or the area being mined. **Build Surface** takes at most one, selected with the points, and shows it on its own **Extent** line.
@@ -36,9 +38,7 @@ The Geology workspace has a menu called **Geology Design**. It groups the string
 
 **Draw**, **Edit** and **Surface** are on this page. **Join and Split** and **Vertices** are on [String Vertices](../string-vertices/README.md).
 
-Each example draws its own strings. Before each one, delete the strings of the examples before it, unless its steps say to use them, so a click finds the string the example names.
-
-The string tools below are in the Geology workspace only, except **Clean Strings**, which the **Design** menu of the Production workspace also carries. The plain drawing tools are in the same menu and are not described here: **Create Point**, **Create Line**, **Create Polyline**, **Create Circle**, **Create Text**, **Move Design**, **Set X...**, **Set Y...**, **Set Z...**, **Offset**, **Relimit Line**, **Bezier Polyline**, **Chamfer Polyline Corners**, **Fuse Polylines**, **Split Polyline At Points**, **Explode Polyline to Lines**, **Delete Points**, **Insert Points at Crossings**, **Insert Points at Elevation...**, **Drape to Topology**, **Create Triangulation**, **Strike and Dip**, and **Measure Distance**. Only the segment readout **Measure Distance** shows in Geology has a section, on [String Vertices](../string-vertices/README.md#14-measure-distance-segment-readout).
+The string tools below are in the Geology workspace only, except **Clean Strings**, which the **Design** menu of the Production workspace also carries. The plain drawing tools are in the same menu and are not described here: **Create Point**, **Create Line**, **Create Polyline**, **Create Circle**, **Create Text**, **Move Design**, **Set X...**, **Set Y...**, **Set Z...**, **Offset**, **Trim/Extend Line**, **Bezier Polyline**, **Chamfer Polyline Corners**, **Join Polylines**, **Split Polyline At Points**, **Explode Polyline to Lines**, **Delete Points**, **Insert Points at Crossings**, **Insert Points at Elevation...**, **Drape to Topography**, **Create Triangulation**, **Strike and Dip**, and **Measure Distance**. Only the segment readout **Measure Distance** shows in Geology has a section, on [String Vertices](../string-vertices/README.md#14-measure-distance-segment-readout).
 
 Tools that work in the plane of a section are on the [sections page](../sections/README.md).
 
@@ -60,19 +60,14 @@ A string drawn by hand picks up small flaws: a point clicked twice, a spike, a s
 ### Before you start
 Select one or more open strings (closed lines are not taken); they are cleaned at once. The entry is always enabled. With no open string selected it opens the **Pick from View** prompt "Select the open polylines to clean."; **Done** stays disabled until at least one is picked, then the tool runs. A project must be open. Each layer is cleaned on its own, so strings are never compared with another layer's. Strings are numbered from 1 among the selected strings of each layer, in the order they were made, and the console uses those numbers. **Clean this string** on a ring cleans one string, so it reports it as String 1.
 ### Steps
-Set-up: the S1 to S3 set loaded as in [Import drill holes](../drill-holes/README.md#2-import-drill-holes). Make a layer called `Seam A roof` and draw three open polylines on it, in this order, with two vertices each. Set the vertices (X, Y, RL) in the object's vertex table:
-
-- String 1: (1000, 1100, 79.0) to (1200, 1100, 77.0).
-- String 2: (1100, 1000, 78.4) to (1100, 1200, 78.4).
-- String 3: (1050, 1000, 81.5) to (1050, 1200, 81.5).
-
-1. Select the three strings.
+1. Select the open strings to clean. They may be on more than one layer.
 2. Choose **Geology Design > Edit > Clean Strings**.
-3. Open the console and click the **Clean Strings** row to read its lines. Strings 1 and 2 cross at (1100, 1100), where string 1 is at 78.00 and string 2 at 78.40. They miss by 0.40 m, so they are joined at the halfway height:
-   - "Layer Seam A roof: 3 string(s)"
+3. Open the console and click the **Clean Strings** row to read its lines. The run starts with "Cleaning strings:" and the count of strings and layers it took. Each layer with a change has a line "Layer" with its name and count of strings, then one line for each change. Strings that cross in plan and miss each other by 0.5 m or less in height there are joined at the halfway height, for example:
+   - "Layer Roof: 3 string(s)"
    - "Strings 1 and 2: joined at the halfway height 78.20 at (1100.000, 1100.000), they missed by 0.40 m"
-4. Strings 1 and 3 cross at (1050, 1100), where string 1 is at 78.50 and string 3 at 81.50. A shared vertex goes in, the heights stay as they are, and a ring is drawn at the place. The console says "Strings 1 and 3: shared vertex put in at (1050.000, 1100.000), they miss by 3.00 m". It then warns, under the layer line again: "For Join all at halfway: strings 1 and 3 miss by 3.00 m at (1050.000, 1100.000)", "Build Surface's checks still refuse layer Seam A roof: 1 place(s) ringed" and "Build Surface would leave out string(s) 3 of layer Seam A roof and build from the rest". Those two lines do not count the joins **Build Surface** makes in its own copy: a build joins this 3 m miss itself and uses all three strings. The run ends with "Cleaning strings: finished, 3 edit(s), 1 place(s) ringed". As the run warned, an alert titled **Clean Strings** opens too, and its **Details** hold the same lines. The whole run is one undo step.
-5. Decide the ring yourself. If the two strings are one horizon, right click the ring and choose **Join here at halfway**, or right click anywhere on the canvas and choose **Join all at halfway** to join every ring that misses by 5 m or less, except rings on a hidden or locked string. They join at the mean height: "Strings 1 and 3: joined at the halfway height 80.00 at (1050.000, 1100.000), they missed by 3.00 m". If they are two blocks, leave it.
+4. Where crossing strings miss by more than 0.5 m, a shared vertex goes into each, the heights stay as they are, and a ring is drawn at the place. The console says, for example, "Strings 1 and 3: shared vertex put in at (1050.000, 1100.000), they miss by 3.00 m".
+5. Read what is left for you. When anything is, the run warns, with each layer line again above its own lines: "For Join all at halfway:" for a crossing that misses by more than 0.5 m and up to 5 m, and "For hand fixing:" for the other flaws listed under What it refuses and why. For each layer it then says "Build Surface's checks pass on layer" and the layer's name, or "Build Surface's checks still refuse layer" with the name and the count of places ringed, and "Build Surface would leave out string(s)" with their numbers when a build would leave strings out and build from the rest. Those lines do not count the joins **Build Surface** makes in its own copy: a build joins every crossing that misses by 5 m or less itself, so it can use a string these lines say it would leave out. The run ends with "Cleaning strings: finished," and the counts of edits and of places ringed. When the run warned, an alert titled **Clean Strings** opens too, and it lists the same lines. The whole run is one undo step.
+6. Decide each ring yourself. If the strings are one horizon, right click the ring and choose **Join here at halfway**, or right click anywhere on the canvas and choose **Join all at halfway** to join every ring that misses by 5 m or less, except rings on a hidden or locked string. They join at the mean height, and the console says, for example, "Strings 1 and 3: joined at the halfway height 80.00 at (1050.000, 1100.000), they missed by 3.00 m". If they are two blocks, leave it.
 
 ![Geology workspace, plan view, the three strings of layer Seam A roof selected after the run: a ring on the crossing of strings 1 and 3, none on strings 1 and 2.](images/01-clean-strings-ring-plan.svg)
 
@@ -102,7 +97,7 @@ Set-up: the S1 to S3 set loaded as in [Import drill holes](../drill-holes/README
 - "Nothing to clean in the selected strings": the run found nothing to change. When nothing in the selection was an open string, the same line is a warning.
 - "String 4 left as drawn: it has arcs" and "String 4 left as drawn: it has non-finite coordinates": that string is skipped, the number is the object's own.
 - Flaws it does not change are listed as "For hand fixing: ..." warnings and ringed: a string with fewer than two distinct vertices, one that ends where it starts, turns back or crosses itself, two points at one place and far apart in height, strings running along each other, strings that pass close without meeting, and strings missing by more than 5 m. Strings missing by more than 0.5 m and up to 5 m get "For Join all at halfway: ..." instead. "For hand fixing: Build Surface still refuses ..." has no place, so it is listed but not ringed.
-- After the list, either "Build Surface's checks pass on layer Seam A roof" or "Build Surface's checks still refuse layer Seam A roof: 1 place(s) ringed". A string that misses at least two others by more than 5 m each, all above or all below them by about the same amount, is named as the likely one to fix.
+- After the list, for each layer, either "Build Surface's checks pass on layer" with the layer's name, or "Build Surface's checks still refuse layer" with the name and the count of places ringed, for example "Build Surface's checks still refuse layer Roof: 1 place(s) ringed". A string that misses at least two others by more than 5 m each, all above or all below them by about the same amount, is named as the likely one to fix.
 - A ring offers only the rows its strings allow: see Rings and the ring menu, under Steps above.
 ### Related tools
 - [Split at Crossings](../string-vertices/README.md#2-split-at-crossings), [Remove Between Crossings](../string-vertices/README.md#3-remove-between-crossings)
@@ -121,9 +116,9 @@ Geology workspace: **Geology Design > Draw > Remove Last Vertex**. The Backspace
 ### Before you start
 Make a layer active, choose **Create Polyline** and place at least one vertex. On **Create Line** each segment is saved as it is drawn, so this deletes the segment just saved, as one undo step, and you draw on from its start.
 ### Steps
-1. Choose **Geology Design > Draw > Create Polyline** and click three points in plan, near (1000, 1100), (1100, 1100) and (1200, 1100).
-2. Choose **Geology Design > Draw > Remove Last Vertex**. The third vertex goes. The string being drawn has two vertices and ends at the second.
-3. Click a new third point, press Enter and choose **Open**. The string is saved with the vertices you see.
+1. Choose **Geology Design > Draw > Create Polyline** and click the vertices of the string.
+2. Choose **Geology Design > Draw > Remove Last Vertex**, or press Backspace. The last vertex placed goes, and the string being drawn ends at the vertex before it. Each further use takes back one more.
+3. Click on from there, press Enter and choose **Open** or **Closed**. The string is saved with the vertices you see. A string of two vertices is saved open at once, with no menu.
 
 ![Geology workspace, plan view, a string being drawn with its third vertex, near (1200, 1100), taken back so two vertices remain, near (1000, 1100) and (1100, 1100).](images/03-remove-last-vertex-plan.svg)
 ### Options and defaults
@@ -146,8 +141,11 @@ Geology workspace: **Geology Design > Draw > Next Vertex...**
 ### Before you start
 Make a layer active and choose **Create Polyline** or **Create Line** first. The entry is greyed for any other tool. The panel starts at the string's last vertex, or at the cursor before there is one. It closes when you change to a tool that does not draw strings.
 ### Steps
-1. Choose **Create Polyline**, then **Geology Design > Draw > Next Vertex...** In the **Next Vertex** panel type **X** 1000, **Y** 1100, **Z** 79 and click **Add Vertex**. The first vertex is (1000, 1100, 79).
-2. Under **From the last vertex** set **Bearing** 90, **Distance** 100, **Dip** 0 and click that group's **Add Vertex**. The second vertex is (1100, 1100, 79). Type **X** 1200, **Y** 1100, **Z** 77 in the top fields and click the top **Add Vertex** for the third. Click **Close**, press Enter and choose **Open**.
+1. Choose **Create Polyline** or **Create Line**, then **Geology Design > Draw > Next Vertex...**
+2. To place a vertex at a known point, type its **X**, **Y** and **Z** in the top fields of the **Next Vertex** panel and click the top **Add Vertex**.
+3. To step from the last vertex, set **Bearing**, **Distance** and **Dip** under **From the last vertex** and click that group's **Add Vertex**. For example, from (1000, 1100, 79), **Bearing** 90, **Distance** 100 and **Dip** 0 add (1100, 1100, 79).
+4. Go on adding vertices, by either group or by clicking. After each one the top fields show the string's new last vertex.
+5. Click **Close** and finish the string as usual: on **Create Polyline**, press Enter and choose **Open** or **Closed**. Enter in a field of the panel adds a vertex from that group, as its **Add Vertex** does, and never finishes the string.
 
 ![Geology workspace, the Next Vertex panel with X 1200, Y 1100, Z 77 typed above, and Bearing 90, Distance 100, Dip 0 under From the last vertex, each group with its Add Vertex button.](images/04-next-vertex-panel.svg)
 ### Options and defaults
@@ -172,9 +170,10 @@ Geology workspace: **Geology Design > Draw > Copy Along a String**
 ### Before you start
 Locked strings can be copied from. Hidden strings cannot. If no polyline is being drawn, the entry starts one with the **Create Polyline** tool, so the copied run begins the new string. A layer must be active.
 ### Steps
-1. Choose **Create Polyline** and add (1000, 1200, 80) with **Next Vertex**, then close the panel. Have the string of section 4 on the layer.
-2. Choose **Geology Design > Draw > Copy Along a String**. The banner reads "Click the vertex where the copy starts", with "Esc cancels". Click vertex 2 of that string, (1100, 1100, 79).
-3. The banner reads "Click the vertex where the copy ends, on the same string". Click vertex 3, (1200, 1100, 77). The console says "Copied 2 vertices along the string". The polyline being drawn has three vertices, (1000, 1200, 80), (1100, 1100, 79) and (1200, 1100, 77), and you can go on drawing. Press Enter, choose **Open**, then delete the copy before the next example.
+1. Optionally choose **Create Polyline** and place the vertices that come before the copied run.
+2. Choose **Geology Design > Draw > Copy Along a String**. The banner reads "Click the vertex where the copy starts", with "Esc cancels". Click the vertex of the existing string where the run starts.
+3. The banner reads "Click the vertex where the copy ends, on the same string". Click the vertex where the run ends. The run, both clicked vertices included, is added to the polyline being drawn in the order you clicked them, with the heights it has on that string. An arc is copied as points along it. An open string is copied back along itself when the end vertex comes before the start; on a closed string the run goes the shorter way round. A vertex already at the end of the polyline being drawn is not added twice, and a run that comes back to the polyline's first vertex closes the polyline there. On a section the run is moved onto the section's plane.
+4. The console gives the count of vertices added, for example "Copied 2 vertices along the string". Go on drawing, then press Enter and choose **Open** or **Closed**.
 
 ![Geology workspace, plan view, a new string starting at (1000, 1200, 80) that follows vertices 2 and 3 of an existing string, at (1100, 1100, 79) and (1200, 1100, 77).](images/05-copy-along-string-plan.svg)
 ### Options and defaults
@@ -197,9 +196,9 @@ Geology workspace: **Geology Design > Draw > Carry On a String**
 ### Before you start
 Pick an open string on an unlocked layer. Nothing may be half drawn. Locked and hidden strings are not picked. Esc before the pick drops the request.
 ### Steps
-1. Choose **Carry On a String**. The banner reads "Click near the end of a string". Click the section 4 string near its right end, (1200, 1100, 77). The end nearer the click starts the line.
-2. Choose **Geology Design > Draw > Next Vertex...**, set **Bearing** 90, **Distance** 100, **Dip** 0, click **Add Vertex** under **From the last vertex** and **Close** the panel. The new point is (1300, 1100, 77).
-3. Press Enter. With one new point the string is finished open at once. The same string has four vertices, (1000, 1100, 79), (1100, 1100, 79), (1200, 1100, 77) and (1300, 1100, 77). One undo takes the new vertex off.
+1. Choose **Geology Design > Draw > Carry On a String**. The banner reads "Click near the end of a string". Click the string near the end to carry on from. The end nearer the click starts the line.
+2. Add the new vertices by clicking, or with **Geology Design > Draw > Next Vertex...**
+3. Press Enter. With one new point the string is finished open at once; with more, choose **Open** or **Closed**. The new vertices join the same string. Carried on from its last vertex they follow it; carried on from its first they go in front of it, so the string keeps its direction. **Closed** joins the far end to the last point drawn. One undo takes the new vertices off.
 
 ![Geology workspace, plan view, a string with four vertices after Carry On a String: the new last vertex at (1300, 1100, 77) added to the former end at (1200, 1100, 77).](images/06-carry-on-string-plan.svg)
 ### Options and defaults
@@ -223,9 +222,9 @@ Geology workspace: **Geology Design > Draw > Redraw Between Vertices**
 ### Before you start
 Pick a vertex of a string on an unlocked layer. Closed strings are taken too, and a closed string is redrawn the shorter way round. Nothing may be half drawn. Esc before the first pick drops the request.
 ### Steps
-1. Take the four-vertex string of section 6. Choose **Redraw Between Vertices**. The banner reads "Click the vertex where the redraw starts". Click vertex 2, (1100, 1100, 79).
-2. The banner reads "Draw the new part, then click the vertex where it ends". Choose **Geology Design > Draw > Next Vertex...**, type **X** 1200, **Y** 1150, **Z** 78, click the top **Add Vertex** and **Close** the panel.
-3. Click vertex 4, (1300, 1100, 77). The console says "Redrew 1 vertices". Vertex 3 is gone and the string runs (1000, 1100, 79), (1100, 1100, 79), (1200, 1150, 78), (1300, 1100, 77). One undo puts it back.
+1. Choose **Geology Design > Draw > Redraw Between Vertices**. The banner reads "Click the vertex where the redraw starts". Click the vertex of the string where the new part starts.
+2. The banner reads "Draw the new part, then click the vertex where it ends". Place the new points by clicking, or with **Geology Design > Draw > Next Vertex...**
+3. Click the vertex of the same string where the new part ends. The vertices between the two clicked vertices go, and the points you drew take their place; the two clicked vertices stay. The console gives the count of points drawn, for example "Redrew 1 vertices". One undo puts the string back.
 
 ![Geology workspace, plan view, a string redrawn between vertices 2 and 4: the former run through (1200, 1100) replaced by a run through (1200, 1150, 78).](images/07-redraw-run-plan.svg)
 ### Options and defaults
@@ -247,11 +246,11 @@ The vertex table numbers a string's vertices from its first. Reversing lets you 
 ### Where it is
 Geology workspace: **Geology Design > Edit > Reverse String Direction**. The left toolbar in the Geology workspace has a button with the tooltip *Reverse String Direction*.
 ### Before you start
-Select one or more strings, open or closed, and the tool runs at once. The entry and the button are always enabled; with no polyline selected they open the **Pick from View** prompt "Select the polylines to reverse.", and **Done** stays disabled until at least one is picked, then the tool runs. Strings that are hidden, on a locked layer or frozen are left alone. For the example, on the layer `Seam A roof` draw one open string and set its vertices in the vertex table as X, Y and RL: 1 (1000, 1100, 79.0), 2 (1100, 1100, 78.0), 3 (1200, 1100, 77.0).
+Select one or more strings, open or closed, and the tool runs at once. The entry and the button are always enabled; with no polyline selected they open the **Pick from View** prompt "Select the polylines to reverse.", and **Done** stays disabled until at least one is picked, then the tool runs. Strings that are hidden, on a locked layer or frozen are left alone.
 ### Steps
-1. Select the string and choose **Geology Design > Edit > Reverse String Direction**.
-2. Open the vertex table. Row 1 is now (1200, 1100, 77.0), row 2 is (1100, 1100, 78.0) and row 3 is (1000, 1100, 79.0). The line on the canvas has not moved.
-3. Read the console: "Reversed 1 string(s)". The run is one undo step, however many strings were selected.
+1. Select the strings and choose **Geology Design > Edit > Reverse String Direction**, or click the toolbar button.
+2. Open the vertex table. The rows run the other way: the former last vertex is row 1 and the former first vertex is the last row. The line on the canvas has not moved.
+3. Read the console: "Reversed" with the count of strings turned round, for example "Reversed 2 string(s)". The run is one undo step, however many strings were selected.
 
 ![Geology workspace, plan view, one string from (1000, 1100, 79.0) to (1200, 1100, 77.0): vertex numbers 1, 2, 3 run from the west end before, and from the east end after Reverse String Direction.](images/08-reverse-string-direction-plan.svg)
 ### Options and defaults
@@ -268,22 +267,22 @@ None.
 ### What it does
 Lays the selected strings on the selected surface, adding a vertex wherever a string crosses a triangle edge, so each string follows the surface between its vertices.
 ### Why a geologist uses it
-**Drape to Topology** moves only the vertices a string has, so a long span stays a straight line between two draped heights while the surface bends under it. This one lays the string on the surface along its whole length.
+**Drape to Topography** moves only the vertices a string has, so a long span stays a straight line between two draped heights while the surface bends under it. This one lays the string on the surface along its whole length.
 ### Where it is
 Geology workspace: **Geology Design > Surface > Drape Following Triangles**.
 ### Before you start
-A surface must be loaded in the project, so this section comes after **Build Surface** in the flow: come back to it once you have a surface. Arming the tool clears the selection, so choose the strings and then the surface after you arm it. For the example, build the surface as on the [surfaces page](../surfaces/README.md#3-build-surface) from the three points of `A Roof points` only, and type `A Roof plane` in **Output name**, as the [thickness page](../thickness/README.md#1-concepts) does. With three points it is the plane RL = 80 - 0.02 x (X - 1000). On `Seam A roof` draw one string from (1060, 1040, 70.0) to (1140, 1100, 70.0).
+A surface must be loaded in the project: any loaded triangulation, for example one made by [Build Surface](../surfaces/README.md#3-build-surface). Arming the tool clears the selection, so choose the strings and then the surface after you arm it.
 ### Steps
-1. Choose **Geology Design > Surface > Drape Following Triangles**. The banner reads "Select designs" and "Strings will follow the surface between their vertices". Click the string. A panel titled **Drape to Topology** shows "1 selected". Press **Confirm Selection** or Enter.
-2. The banner reads "Select topologies". Click the surface `A Roof plane`, then **Confirm Selection**. With more than one surface selected, each place takes the uppermost.
-3. The string now has many more vertices, one at each triangle edge it crosses. Every vertex sits on the plane, so the ends read (1060, 1040, 78.8) and (1140, 1100, 77.2). The console line "Draped ... vertices; ... changed elevation" gives one count twice: the two ends plus every vertex added, as each changed height. The tool is put down and the string is selected. One undo restores it.
+1. Choose **Geology Design > Surface > Drape Following Triangles**. The banner reads "Select designs" and "Strings will follow the surface between their vertices". Select the strings. A panel titled **Drape to Topography** shows how many are selected, for example "1 selected". Press **Confirm Selection** or Enter.
+2. The banner reads "Select topographies", still with "Strings will follow the surface between their vertices". Click the surface, then **Confirm Selection**. With more than one surface selected, each place takes the uppermost.
+3. Each string gains a vertex at every triangle edge it crosses in plan, and every vertex over the surface takes the surface's height there. The console line "Draped" gives two counts: the vertices that lie over the surface, added ones included, then those whose height changed, for example "Draped 12 vertices; 12 changed elevation". The tool is put down and the strings are selected. One undo restores them.
 
 ![Geology workspace, plan view, a string from (1060, 1040) to (1140, 1100) over the roof surface of S1 to S3: its ends go from RL 70.0 to 78.8 and 77.2, with new vertices between them.](images/09-drape-following-triangles-plan.svg)
 ### Options and defaults
 None.
 ### What it refuses and why
-- **Confirm Selection** is greyed with nothing selected. Enter then warns "Select one or more design objects to drape" or "Select one or more topologies to drape onto". Esc cancels the tool. A circle cannot be selected.
-- Console "None of the selected design vertices intersect the selected topologies": no vertex lies over the surface, so nothing changes.
+- **Confirm Selection** is greyed with nothing selected. Enter then warns "Select one or more design objects to drape" or "Select one or more topographies to drape onto". Esc cancels the tool. A circle cannot be selected.
+- Console "None of the selected design vertices intersect the selected topographies": no vertex lies over the surface, so nothing changes.
 - A vertex outside the surface stays as drawn. A span with a bulge gets no added vertices.
 ### Related tools
 [Build Surface](../surfaces/README.md#3-build-surface), [Thin Strings](../string-vertices/README.md#11-thin-strings)

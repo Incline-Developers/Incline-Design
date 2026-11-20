@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 250" width="540" height="250" role="img" aria-label="Geology workspace, plan view: three loaded holes S1, S2 and S3 at their collars, dataset listed under Drill Holes in the explorer.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 250" width="540" height="250" role="img" aria-label="Geology workspace, plan view: three loaded holes S1, S2 and S3 at their collars, dataset listed under Drillholes in the explorer.">
   <g stroke="#000" stroke-width="1" fill="#fff">
     <rect x="10" y="10" width="150" height="230"/>
     <rect x="170" y="10" width="360" height="230"/>
@@ -11,7 +11,7 @@
     <path d="M505 31 l-3 6 l6 0 z" fill="#000"/>
   </g>
   <g font-family="sans-serif" font-size="15" fill="#000">
-    <text x="20" y="34">Drill Holes</text>
+    <text x="20" y="34">Drillholes</text>
     <text x="262" y="204">S1</text>
     <text x="402" y="204">S2</text>
     <text x="332" y="64">S3</text>
