@@ -212,9 +212,10 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
             ));
         }
         response.hint(tr!("experiment-interval-help"));
-        let response = rows.field(
+        let response = rows.field_with_hint(
             &tr!("experiment-solve-seconds"),
             &mut draft.solve_seconds,
+            &tr!("experiment-solve-seconds-none"),
             solve_seconds.is_none().then_some(invalid.as_str()),
         );
         let limit_committed = response.lost_focus();

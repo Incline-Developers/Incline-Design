@@ -2628,6 +2628,7 @@ experiment-plan-stop-iterations-unit = iterations
 experiment-plan-stop-help = When the plan that orders the ground automatic bars dig stops refining it: at the first iteration that adds less than this share of its value, after this many iterations, or after this many seconds. Improvement and Iterations give the same order every time for the same project; a time limit gives whatever the computer reached in it.
 experiment-interval-help = The interval sets how finely the calendar is split and when stockpile receipts become reclaimable. It is not a limit of one dig block per interval: a loader may work through several sources inside one interval.
 experiment-solve-seconds = Solve time limit (s)
+experiment-solve-seconds-none = No limit
 experiment-solve-seconds-help = How long Improve may search. Leave it empty for no limit: Improve then runs until it stops finding better schedules, and Stop and keep best ends it sooner.
 experiment-relative-gap = Relative gap target (%)
 experiment-grades = Grades carried
