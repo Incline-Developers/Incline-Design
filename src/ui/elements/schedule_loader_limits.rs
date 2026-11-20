@@ -17,7 +17,7 @@ use crate::{
         state::{ScheduleEdit, SourceScopeView, UiCommand},
         widgets::{
             context_menu::{ChecklistRow, ContextMenuAction, Tick, checklist_popup, context_menu_popup},
-            data_grid::{DataGrid, GridRow, PropertyTable, grid_add_action_row, grid_cell_number, grid_choice_row, grid_named_row, grid_row, grid_select_row},
+            data_grid::{DataGrid, GridRow, PropertyTable, grid_add_action_row, grid_cell_entry, grid_choice_row, grid_named_row, grid_row, grid_select_row},
             hint::Hint,
             menu,
         },
@@ -137,7 +137,7 @@ pub(crate) fn draw_rule_editor(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut
 
             let (cell, row) = grid_named_row(ui, &tr!("loader-limit-loaders"), 0);
             let mut loaders = f64::from(rule.loaders);
-            if cell.is_positive() && grid_cell_number(ui, ("schedule_loader_limit_loaders", rule.id.0), cell, &mut loaders, "") && loaders.is_finite() {
+            if cell.is_positive() && grid_cell_entry(ui, ("schedule_loader_limit_loaders", rule.id.0), cell, &mut loaders, "") && loaders.is_finite() {
                 changed.loaders = loaders.round().clamp(0.0, f64::from(u32::MAX)) as u32;
             }
             row.hint(tr!("loader-limit-loaders-hint"));
