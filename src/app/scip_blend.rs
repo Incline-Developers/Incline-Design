@@ -111,12 +111,16 @@ pub(crate) fn improve(
     // first schedule needed, and one more, not by the cap the dispatch
     // worked under: on a ten-year mine the dispatch used three of 24, and
     // every whole-horizon program carried all 24.
+    // Fewer switches only narrow the schedules the exact model holds, so its
+    // bounds then hold for those alone (see `conditional` below).
+    let mut capped = false;
     if let DayByDay::Seed(found) = &attempt {
         let needed = segments_in_use(&found.solution) + 1;
         if needed < out.input.segments_per_interval {
             let mut input = (*out.input).clone();
             input.segments_per_interval = needed;
             out.input = Arc::new(input);
+            capped = true;
         }
     }
     // Whether the whole-horizon model is small enough to build: past that,
@@ -165,11 +169,13 @@ pub(crate) fn improve(
         relaxation = RelaxationJob::start(&out.input, options.time_limit, cancel, out.identity.run_id);
     }
     // The exact model and its relaxation hold the first schedule's blast
-    // timeline. Where blasts can still move, which the search may do, their
-    // bounds hold only for schedules on that timeline: they may stop the
-    // whole-horizon solve on it, but only the search's bound, which allows
-    // each blast its earliest release, is published or ends the run.
-    let conditional = out.input.drill_blast.as_ref().is_some_and(|chain| chain.fixed.is_some() && chain.movable());
+    // timeline, and as many switches an interval as it used and one more.
+    // Where blasts can still move, which the search may do, or a schedule
+    // could switch more often, their bounds hold only for the schedules they
+    // allow: they may stop the whole-horizon solve, but only the search's
+    // bound, which allows each blast its earliest release and reads no
+    // switches, is published or ends the run.
+    let conditional = capped || out.input.drill_blast.as_ref().is_some_and(|chain| chain.fixed.is_some() && chain.movable());
     match attempt {
         DayByDay::Seed(found) if options.first_schedule_only => {
             adopt_seed(&mut out, *found, None, None, DayByDayRole::Only);
@@ -572,8 +578,9 @@ pub(crate) fn improve(
     let proved = global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound, conditional);
     let mut termination = classify_status(report.status, true);
     if conditional {
-        // SCIP's bound checked its incumbent on the timeline they share; it
-        // says nothing of schedules that move blasts.
+        // SCIP's bound checked its incumbent on the timeline and switches
+        // they share; it says nothing of schedules that move blasts or
+        // switch more often.
         out.primary_bound = None;
         out.primary_gap = None;
         if termination == SolveTermination::Optimal {
