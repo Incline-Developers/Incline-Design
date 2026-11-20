@@ -29,6 +29,7 @@ impl<'a> App<'a> {
             ItemRef::DrillHole(id) => self.drill_holes.iter().find(|item| item.id == id).map(|item| &item.state),
             ItemRef::PointCloud(id) => self.point_clouds.iter().find(|item| item.id == id).map(|item| &item.state),
             ItemRef::Raster(id) => self.raster_textures.iter().find(|item| item.id == id).map(|item| &item.state),
+            ItemRef::PrismoidGrid(id) => self.prismoid_grids.iter().find(|item| item.id == id).map(|item| &item.state),
         }
     }
 
@@ -40,8 +41,14 @@ impl<'a> App<'a> {
         let rasters = self.raster_textures.iter().map(|item| ItemRef::Raster(item.id));
         let point_clouds = self.point_clouds.iter().map(|item| ItemRef::PointCloud(item.id));
         let block_models = self.block_models.iter().map(|item| ItemRef::BlockModel(item.id));
+        let prismoid_grids = self.prismoid_grids.iter().map(|item| ItemRef::PrismoidGrid(item.id));
         let drill_holes = self.drill_holes.iter().map(|item| ItemRef::DrillHole(item.id));
-        triangulations.chain(rasters).chain(point_clouds).chain(block_models).chain(drill_holes)
+        triangulations
+            .chain(rasters)
+            .chain(point_clouds)
+            .chain(block_models)
+            .chain(prismoid_grids)
+            .chain(drill_holes)
     }
 
     fn clone_project_item(&self, item: ItemRef) -> Option<OpenItem> {
@@ -55,6 +62,11 @@ impl<'a> App<'a> {
             ItemRef::DrillHole(id) => self.drill_holes.iter().find(|item| item.id == id).map(|item| OpenItem::DrillHole(Box::new(item.clone()))),
             ItemRef::PointCloud(id) => self.point_clouds.iter().find(|item| item.id == id).map(|item| OpenItem::PointCloud(Box::new(item.clone()))),
             ItemRef::Raster(id) => self.raster_textures.iter().find(|item| item.id == id).map(|item| OpenItem::Raster(Box::new(item.clone()))),
+            ItemRef::PrismoidGrid(id) => self
+                .prismoid_grids
+                .iter()
+                .find(|item| item.id == id)
+                .map(|item| OpenItem::PrismoidGrid(Box::new(item.clone()))),
         }
     }
 
@@ -100,6 +112,12 @@ impl<'a> App<'a> {
             }
             OpenItem::Raster(mut item) => {
                 if let Some(target) = self.raster_textures.iter_mut().find(|target| target.id == item.id) {
+                    preserve_state(&target.state, &mut item.state);
+                    *target = *item;
+                }
+            }
+            OpenItem::PrismoidGrid(mut item) => {
+                if let Some(target) = self.prismoid_grids.iter_mut().find(|target| target.id == item.id) {
                     preserve_state(&target.state, &mut item.state);
                     *target = *item;
                 }

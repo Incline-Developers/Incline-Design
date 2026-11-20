@@ -150,7 +150,7 @@ impl<'a> App<'a> {
             // Squared up first, so the fit measures the section as it will be seen.
             graphics.zoom_to_extents(
                 &self.scene_document,
-                &self.triangulations,
+                crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,
@@ -237,12 +237,13 @@ impl<'a> App<'a> {
             return;
         };
         let slab = graphics.section_slab();
-        let key = section_surface_lines_key(&self.editor, slab, &self.triangulations);
+        let scene = crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene);
+        let key = section_surface_lines_key(&self.editor, slab, scene);
         if key != self.section_surface_lines_key {
             self.section_surface_lines_key = key;
             let mut surfaces = Vec::new();
             if let (Some(_), Some(slab)) = (key, slab) {
-                for triangulation in shown_surfaces(&self.editor, &self.triangulations) {
+                for triangulation in shown_surfaces(&self.editor, scene) {
                     let lines = crate::app::commands::triangulation::section_surface_lines(&triangulation.mesh, &triangulation.spatial, &slab);
                     surfaces.push(SurfaceLines {
                         lines,
@@ -253,7 +254,7 @@ impl<'a> App<'a> {
             self.section_surface_colors = surfaces.iter().map(|surface| surface.color).collect();
             graphics.set_section_surface_lines(surfaces);
         } else if key.is_some() {
-            let shown = || shown_surfaces(&self.editor, &self.triangulations).map(surface_line_color);
+            let shown = || shown_surfaces(&self.editor, scene).map(surface_line_color);
             if !shown().eq(self.section_surface_colors.iter().copied()) {
                 self.section_surface_colors = shown().collect();
                 graphics.recolor_section_surface_lines(self.section_surface_colors.iter().copied());
@@ -321,6 +322,7 @@ fn section_lines_layer(document: &mut Document, surfaces: &[SurfaceLines]) -> Op
         elevation: 0.0,
         folder: None,
         section: SectionKind::natural_layer(),
+        quality: None,
     };
     let objects = surfaces
         .iter()
@@ -361,16 +363,22 @@ pub(crate) fn section_surface_lines_key(editor: &EditorState, slab: Option<Secti
     }
     let slab = slab?;
     let mut hasher = DefaultHasher::new();
-    for value in slab.normal.to_array() {
-        value.to_bits().hash(&mut hasher);
-    }
-    // Where the plane lies, to the micrometre, not where on it the section is
-    // centred: a pan along the plane keeps the lines.
-    ((slab.point.dot(slab.normal) * 1.0e6).round() as i64).hash(&mut hasher);
+    hash_section_plane(&slab, &mut hasher);
     for triangulation in shown_surfaces(editor, triangulations) {
         triangulation.id.hash(&mut hasher);
         triangulation.state.revision().hash(&mut hasher);
         (std::sync::Arc::as_ptr(&triangulation.mesh) as usize).hash(&mut hasher);
     }
     Some(hasher.finish())
+}
+
+/// The section's plane into `hasher`: its normal, and where it lies to the
+/// micrometre, not where on it the section is centred, so a pan along the
+/// plane keeps what was cut.
+pub(crate) fn hash_section_plane(slab: &SectionSlab, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    for value in slab.normal.to_array() {
+        value.to_bits().hash(hasher);
+    }
+    ((slab.point.dot(slab.normal) * 1.0e6).round() as i64).hash(hasher);
 }

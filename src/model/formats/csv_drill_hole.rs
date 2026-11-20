@@ -579,7 +579,7 @@ impl Sample<'_> {
 }
 
 /// Drops a repair marker's two hex digits, keeping the mark to show the damage.
-fn strip_repair_marks(text: &str) -> String {
+pub(crate) fn strip_repair_marks(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text.chars();
     while let Some(character) = rest.next() {
@@ -595,7 +595,7 @@ fn strip_repair_marks(text: &str) -> String {
 }
 
 /// The repair marker and its two hex digits are dropped as one unit.
-fn normalize_header(header: &str) -> String {
+pub(crate) fn normalize_header(header: &str) -> String {
     let mut out = String::with_capacity(header.len());
     let mut rest = header.chars();
     while let Some(character) = rest.next() {
@@ -1722,7 +1722,7 @@ pub(super) fn repair_utf8(bytes: &[u8], budget: usize) -> Option<(Vec<u8>, usize
 /// Old exports carry stray bytes from whatever encoding the logger used; one
 /// must not cost the file, so they are repaired, up to a tenth of the text:
 /// past that it is a legacy encoding, or not text at all.
-fn decode_text(bytes: &[u8]) -> Result<(std::borrow::Cow<'_, [u8]>, usize), CsvDrillError> {
+pub(crate) fn decode_text(bytes: &[u8]) -> Result<(std::borrow::Cow<'_, [u8]>, usize), CsvDrillError> {
     let bytes = decode_entry(bytes)?;
     if std::str::from_utf8(bytes).is_ok() {
         return Ok((std::borrow::Cow::Borrowed(bytes), 0));

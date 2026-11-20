@@ -13,24 +13,27 @@ use crate::{
         formats::mesh_data,
         triangulation::{LoadedTriangulation, OpenTriangulation, TriangulationId},
     },
-    ui::state::{ContourOutputLayer, TriLowerCut, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriUpperCut},
+    ui::state::{ContourOutputLayer, MergeKeep, TriLowerCut, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriUpperCut},
     userspace_log, userspace_warn,
 };
 
 // Linear-space value; displays as sRGB 1.0 (255) white.
 const DEFAULT_TRIANGULATION_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
+mod clean;
 mod contours;
 mod creation;
 pub(crate) mod cuts;
+mod difference;
 mod geometry;
 mod include;
 mod point_cloud_tin;
 pub(crate) mod reference_surface;
 pub(crate) mod session;
+mod smooth;
 pub(crate) mod solid_between;
 
-pub(crate) use contours::section_surface_lines;
+pub(crate) use contours::{CONTOUR_LABEL_HEIGHT, chain_contour_segments, contour_point_key, section_surface_lines};
 pub(crate) use cuts::seam_targets;
 use geometry::*;
 pub(crate) use point_cloud_tin::{TerrainBudget, TerrainSampler, TerrainTinParams, estimate_terrain_tin_memory_bytes, terrain_budget_target};

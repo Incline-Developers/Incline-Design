@@ -33,6 +33,7 @@ mod hygiene;
 mod leave_out;
 
 pub(crate) use check::{Problem, ProblemKind};
+pub(crate) use crossings::Meeting;
 pub(crate) use leave_out::{LeftOut, NotLeftOut, leave_out};
 
 /// How far apart, in metres, the heights of consecutive points within the
@@ -135,9 +136,12 @@ pub(crate) struct LayerClean {
     pub(crate) changes: Vec<Change>,
     /// What is still in the way of a build, by place in `pieces`.
     pub(crate) problems: Vec<Problem>,
-    /// Build Surface's own checks run on the cleaned strings exactly as the
-    /// build runs them: `None` when they pass, else the build's refusal.
+    /// Build Surface's own checks run on the copy the build makes of the
+    /// cleaned strings, exactly as the build runs them: `None` when they
+    /// pass, else the build's refusal.
     pub(crate) refusal: Option<String>,
+    /// How many crossings that copy joins.
+    pub(crate) build_joins: usize,
     /// The strings on one side of every string they miss by more than
     /// [`JOIN_ON_REQUEST`], by place in `pieces`.
     pub(crate) odd_ones: Vec<OddOneOut>,
@@ -145,12 +149,14 @@ pub(crate) struct LayerClean {
     /// place in `pieces`, in the order it would choose them; empty when it
     /// would leave none out or would still refuse.
     pub(crate) left_out: Vec<usize>,
+    /// Every place the cleaned strings meet, by place in `pieces`.
+    pub(crate) meetings: Vec<Meeting>,
 }
 
 /// The strings [`leave_out`] would leave out of `strings`, by place,
-/// ties to the earlier place; none when it cannot choose.
-fn would_leave_out(strings: &[Vec<DVec3>], problems: &[Problem], cancelled: &dyn Fn() -> bool) -> Result<Vec<usize>, Cancelled> {
-    match leave_out(strings, problems, &[], cancelled) {
+/// ties to the lower key; none when it cannot choose.
+fn would_leave_out(strings: &[Vec<DVec3>], problems: &[Problem], keys: &[u64], cancelled: &dyn Fn() -> bool) -> Result<Vec<usize>, Cancelled> {
+    match leave_out(strings, problems, keys, cancelled) {
         Ok(left) => Ok(left.iter().map(|left| left.piece).collect()),
         Err(NotLeftOut::Cancelled) => Err(Cancelled),
         Err(_) => Ok(Vec::new()),
@@ -162,16 +168,43 @@ fn would_leave_out(strings: &[Vec<DVec3>], problems: &[Problem], cancelled: &dyn
 /// `Err` once `cancelled` says so.
 pub(crate) fn clean_layer(strings: &[Vec<DVec3>], cancelled: &dyn Fn() -> bool) -> Result<LayerClean, Cancelled> {
     let (pieces, changes) = clean_steps(strings, cancelled)?;
-    let strings: Vec<Vec<DVec3>> = pieces.iter().map(|piece| piece.verts.clone()).collect();
-    let problems = check::problems(&strings, cancelled)?;
-    let refusal = check::build_refusal(&strings, cancelled)?;
+    let cleaned: Vec<Vec<DVec3>> = pieces.iter().map(|piece| piece.verts.clone()).collect();
+    let problems = check::problems(&cleaned, cancelled)?;
+    // Judged on the copy Build Surface makes of the result, keyed as the
+    // document will hold the pieces: a source's first piece keeps its id,
+    // the rest take fresh ones after every source's, in piece order.
+    let mut fresh = strings.len() as u64;
+    let mut seen = vec![false; strings.len()];
+    let keys: Vec<u64> = pieces
+        .iter()
+        .map(|piece| {
+            if std::mem::replace(&mut seen[piece.source], true) {
+                fresh += 1;
+                fresh - 1
+            } else {
+                piece.source as u64
+            }
+        })
+        .collect();
+    let copy = clean_copy(&cleaned, &[], &keys, cancelled)?;
+    let built = build_strings(&copy);
+    let refusal = check::build_refusal(&built, cancelled)?;
+    let mut left_out = Vec::new();
+    if refusal.is_some() {
+        let copy_keys: Vec<u64> = copy.pieces.iter().map(|piece| keys[piece.source]).collect();
+        let copy_problems = check::problems(&built, cancelled)?;
+        for piece in would_leave_out(&built, &copy_problems, &copy_keys, cancelled)? {
+            let result = copy.pieces[piece].source;
+            if !left_out.contains(&result) {
+                left_out.push(result);
+            }
+        }
+    }
     Ok(LayerClean {
-        odd_ones: odd_ones_out(&strings, &problems, cancelled)?,
-        left_out: if refusal.is_some() {
-            would_leave_out(&strings, &problems, cancelled)?
-        } else {
-            Vec::new()
-        },
+        odd_ones: odd_ones_out(&cleaned, &problems, cancelled)?,
+        left_out,
+        build_joins: copy.changes.iter().filter(|change| matches!(change.kind, ChangeKind::Joined { .. })).count(),
+        meetings: crossings::meetings(&pieces, cancelled)?,
         problems,
         refusal,
         pieces,
@@ -217,6 +250,8 @@ pub(crate) struct LayerJoin {
     pub(crate) odd_ones: Vec<OddOneOut>,
     /// As [`LayerClean::left_out`].
     pub(crate) left_out: Vec<usize>,
+    /// As [`LayerClean::meetings`].
+    pub(crate) meetings: Vec<Meeting>,
 }
 
 /// Join at the halfway height every crossing between the strings within
@@ -231,7 +266,8 @@ pub(crate) fn join_layer(strings: &[Vec<DVec3>], at: &[DVec2], cancelled: &dyn F
     let problems = check::problems(&strings, cancelled)?;
     Ok(LayerJoin {
         odd_ones: odd_ones_out(&strings, &problems, cancelled)?,
-        left_out: would_leave_out(&strings, &problems, cancelled)?,
+        left_out: would_leave_out(&strings, &problems, &[], cancelled)?,
+        meetings: crossings::meetings(&pieces, cancelled)?,
         problems,
         pieces,
         changes,
@@ -320,11 +356,51 @@ pub(crate) fn clean_copy(strings: &[Vec<DVec3>], layers: &[u64], keys: &[u64], c
     Ok(copy)
 }
 
+/// The strings Build Surface reads off its cleaned copy: each piece with a
+/// point repeating the one before it dropped.
+pub(crate) fn build_strings(copy: &CopyClean) -> Vec<Vec<DVec3>> {
+    copy.pieces
+        .iter()
+        .map(|piece| {
+            let mut string = piece.verts.clone();
+            string.dedup();
+            string
+        })
+        .collect()
+}
+
 /// Everything Build Surface's checks find in `strings`, each place once, as
 /// step 5 finds it: the strings are only read. The crossings come first,
 /// biggest miss first. `Err` once `cancelled` says so.
 pub(crate) fn problems(strings: &[Vec<DVec3>], cancelled: &dyn Fn() -> bool) -> Result<Vec<Problem>, Cancelled> {
     check::problems(strings, cancelled)
+}
+
+/// Every place two strings or more of `strings` meet, by place, as Join at
+/// halfway finds them. `Err` once `cancelled` says so.
+pub(crate) fn meetings(strings: &[Vec<DVec3>], cancelled: &dyn Fn() -> bool) -> Result<Vec<Meeting>, Cancelled> {
+    let pieces: Vec<Piece> = strings.iter().enumerate().map(|(source, verts)| Piece { source, verts: verts.clone() }).collect();
+    crossings::meetings(&pieces, cancelled)
+}
+
+/// The meeting of `meetings` a crossing problem is part of: among those
+/// holding its place, the nearest of those its strings all meet at, else
+/// the nearest.
+pub(crate) fn meeting_of<'a>(meetings: &'a [Meeting], problem: &Problem) -> Option<&'a Meeting> {
+    let at = problem.at.truncate();
+    let nearest = |one: &&Meeting, other: &&Meeting| one.at.distance(at).total_cmp(&other.at.distance(at));
+    let holding = || meetings.iter().filter(|meeting| meeting.holds(at));
+    holding()
+        .filter(|meeting| problem.sides.iter().all(|side| meeting.pieces.contains(&side.piece)))
+        .min_by(nearest)
+        .or_else(|| holding().min_by(nearest))
+}
+
+/// How far apart Join at halfway finds the heights at a crossing problem
+/// missing by `miss`: those of every string of its meeting when
+/// [`meeting_of`] finds one, else the crossing's own.
+pub(crate) fn meeting_miss(meetings: &[Meeting], problem: &Problem, miss: f64) -> f64 {
+    meeting_of(meetings, problem).map_or(miss, |meeting| meeting.miss)
 }
 
 /// A string that sits on one side of every string it misses by more than

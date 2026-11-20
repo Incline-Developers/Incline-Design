@@ -159,7 +159,7 @@ pub(crate) fn seam_grid(reference: &GridSurface, side: ReferenceSide, samples: &
         .zip(found.par_chunks_mut(CANCEL_STRIDE))
         .try_for_each(|(vertices, found)| -> Result<()> {
             if cancel.is_cancelled() {
-                anyhow::bail!("{}", tr!("common-cancelled"));
+                anyhow::bail!(crate::app::jobs::Cancelled);
             }
             for (vertex, found) in vertices.iter_mut().zip(found.iter_mut()) {
                 let at = DVec2::new(vertex.x, vertex.y);

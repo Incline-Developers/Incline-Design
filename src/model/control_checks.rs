@@ -70,9 +70,7 @@ const CANCEL_POLL_STEPS: usize = 4096;
 
 /// Stop the build once the job it runs in has been cancelled.
 pub(crate) fn stop_if_cancelled(cancelled: &dyn Fn() -> bool) -> Result<()> {
-    if cancelled() {
-        anyhow::bail!("{}", tr!("common-cancelled"));
-    }
+    anyhow::ensure!(!cancelled(), crate::app::jobs::Cancelled);
     Ok(())
 }
 

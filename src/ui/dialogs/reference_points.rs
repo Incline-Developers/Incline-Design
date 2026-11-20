@@ -153,8 +153,23 @@ pub(crate) fn logged_codes<'a>(holes: impl Iterator<Item = &'a DrillHole>, field
 /// codes the tool's holes log in the field chosen; a field changed here
 /// clears the section until they are read for the new one.
 pub(crate) fn seam_controls(ui: &mut egui::Ui, id: &str, involved: &[&OpenDrillHoleDataset], categories: &[String], seam: &mut SeamChoice) {
-    // Every categorical field the datasets carry, named once where two
-    // datasets log the same one.
+    if seam_value_controls(ui, id, involved, categories, seam, true) {
+        return;
+    }
+    let side_label = seam.side.label();
+    MenuFieldCombo::new(
+        (id, "side"),
+        tr!("reference-points-side"),
+        &mut seam.side,
+        side_label,
+        ReferenceSide::ALL.iter().map(|side| (*side, side.label().into())),
+    )
+    .show(ui);
+}
+
+/// Every categorical field the datasets carry, named once where two
+/// datasets log the same one.
+pub(crate) fn categorical_fields<'a>(involved: &[&'a OpenDrillHoleDataset]) -> Vec<&'a DrillField> {
     let mut fields: Vec<&DrillField> = Vec::new();
     for dataset in involved {
         for field in dataset.dataset.fields.iter().filter(|field| matches!(field.kind, DrillFieldKind::Categorical { .. })) {
@@ -163,6 +178,35 @@ pub(crate) fn seam_controls(ui: &mut egui::Ui, id: &str, involved: &[&OpenDrillH
             }
         }
     }
+    fields
+}
+
+/// The working sections on `field` named on the datasets, once each, that
+/// hold a code among `categories`.
+pub(crate) fn logged_sections<'a>(involved: &[&'a OpenDrillHoleDataset], field: &str, categories: &[String]) -> Vec<&'a str> {
+    let mut sections: Vec<&str> = Vec::new();
+    for section in involved.iter().flat_map(|dataset| dataset.color.working_sections.iter()) {
+        if section.field == field && section.codes.iter().any(|code| categories.contains(code)) && !sections.contains(&section.name.as_str()) {
+            sections.push(section.name.as_str());
+        }
+    }
+    sections
+}
+
+/// The section, else the code, named exactly `name`, as the seam controls
+/// list them; `None` without an exact match.
+pub(crate) fn seam_preset(name: &str, sections: &[&str], codes: &[String]) -> Option<ReferenceTarget> {
+    if sections.contains(&name) {
+        return Some(ReferenceTarget::Section(name.to_owned()));
+    }
+    codes.iter().any(|code| code == name).then(|| ReferenceTarget::Code(name.to_owned()))
+}
+
+/// The field and section half of [`seam_controls`]. With `fill_first` a
+/// choice that is not valid becomes the first section or code; without it,
+/// none until the user picks. Whether the field changed this frame.
+pub(crate) fn seam_value_controls(ui: &mut egui::Ui, id: &str, involved: &[&OpenDrillHoleDataset], categories: &[String], seam: &mut SeamChoice, fill_first: bool) -> bool {
+    let fields = categorical_fields(involved);
     // The geologist names the categorical field that carries the working
     // section.
     if !seam.field.as_deref().is_some_and(|key| fields.iter().any(|field| field.key == key)) {
@@ -186,19 +230,12 @@ pub(crate) fn seam_controls(ui: &mut egui::Ui, id: &str, involved: &[&OpenDrillH
     .changed()
     {
         seam.value = None;
-        return;
+        return true;
     }
     let logged = |code: &str| categories.iter().any(|category| category == code);
     // Working sections named on the datasets come first: one of them picks
     // its codes as one run. Only those the holes log show.
-    let mut sections: Vec<&str> = Vec::new();
-    if let Some(key) = seam.field.as_deref() {
-        for section in involved.iter().flat_map(|dataset| dataset.color.working_sections.iter()) {
-            if section.field == key && section.codes.iter().any(|code| logged(code)) && !sections.contains(&section.name.as_str()) {
-                sections.push(section.name.as_str());
-            }
-        }
-    }
+    let sections = seam.field.as_deref().map(|key| logged_sections(involved, key, categories)).unwrap_or_default();
     // A section and a code may share a name across datasets; the choice
     // says which it is, so the two never stand for each other.
     let known = |target: &ReferenceTarget| match target {
@@ -209,9 +246,9 @@ pub(crate) fn seam_controls(ui: &mut egui::Ui, id: &str, involved: &[&OpenDrillH
         seam.value = sections
             .first()
             .map(|name| ReferenceTarget::Section((*name).to_owned()))
-            .or_else(|| categories.first().map(|code| ReferenceTarget::Code(code.clone())));
+            .or_else(|| categories.first().map(|code| ReferenceTarget::Code(code.clone())))
+            .filter(|_| fill_first);
     }
-    let value_label = seam.value.as_ref().map_or_else(|| tr!("reference-points-no-values"), ReferenceTarget::label);
     let options = sections
         .iter()
         .map(|name| ReferenceTarget::Section((*name).to_owned()))
@@ -221,15 +258,11 @@ pub(crate) fn seam_controls(ui: &mut egui::Ui, id: &str, involved: &[&OpenDrillH
             (Some(target), label)
         })
         .collect::<Vec<_>>();
+    let value_label = match &seam.value {
+        Some(target) => target.label(),
+        None if options.is_empty() => tr!("reference-points-no-values"),
+        None => String::new(),
+    };
     MenuFieldCombo::new((id, "value"), tr!("reference-points-working-section"), &mut seam.value, value_label, options).show(ui);
-
-    let side_label = seam.side.label();
-    MenuFieldCombo::new(
-        (id, "side"),
-        tr!("reference-points-side"),
-        &mut seam.side,
-        side_label,
-        ReferenceSide::ALL.iter().map(|side| (*side, side.label().into())),
-    )
-    .show(ui);
+    false
 }

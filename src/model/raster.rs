@@ -48,6 +48,9 @@ pub(crate) struct OpenRasterTexture {
     pub(crate) world_to_uv: [f64; 6],
     pub(crate) projection: String,
     pub(crate) driver_name: String,
+    /// Runtime only: draw each texel as a block, for maps of one value per
+    /// cell.
+    pub(crate) nearest: bool,
 }
 
 /// Build a bounded render preview from retained full-resolution RGBA pixels.

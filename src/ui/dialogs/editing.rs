@@ -73,6 +73,7 @@ fn canvas_context_menu_title(editor: &EditorState, document: &Document) -> Strin
             SceneEntityId::DrillHole(_) => (tr!("edit-drill-hole"), false),
             SceneEntityId::PointCloud(_) => (tr!("ws-menubar-point-cloud"), false),
             SceneEntityId::Raster(_) => (tr!("ws-menubar-raster"), false),
+            SceneEntityId::PrismoidGrid(_) => (tr!("common-prismoid-grid"), false),
             SceneEntityId::HaulRoad(_) => (tr!("haul-road"), false),
             SceneEntityId::HaulNode(_) => (tr!("haul-node"), false),
         };
@@ -178,7 +179,19 @@ pub(crate) fn draw_right_click_context(
             && let Some(ring) = editor.string_rings.get(index).cloned()
         {
             let editable = |id| editor.ringed_string_editable(id);
-            if ring.joinable() && ring.sides.iter().all(|&(id, _)| editable(id)) && ContextMenuAction::new(tr!("cmd-string-clean-join-here-at-halfway")).show(ui).clicked() {
+            let joined = ring.join_strings();
+            // Where more than two strings meet, the row names every one.
+            let join_label = match ring.join_numbers(&editor.string_numbers) {
+                Some(numbers) => {
+                    let numbers: Vec<String> = numbers.iter().map(usize::to_string).collect();
+                    tr!(
+                        "cmd-string-clean-join-strings-here-at-halfway",
+                        strings = crate::app::commands::string_clean::word_list(&numbers)
+                    )
+                }
+                None => tr!("cmd-string-clean-join-here-at-halfway"),
+            };
+            if ring.joinable() && joined.iter().all(|&id| editable(id)) && ContextMenuAction::new(join_label).show(ui).clicked() {
                 commands.push(UiCommand::JoinHereAtHalfway(index));
                 commands.push(UiCommand::CloseCanvasContextMenu);
             }
@@ -187,11 +200,21 @@ pub(crate) fn draw_right_click_context(
                     continue;
                 };
                 let number = (vertex + 1).to_string();
-                if editable(id) && ContextMenuAction::new(tr!("edit-delete-vertex-number", number = number.clone())).show(ui).clicked() {
+                let (delete, show) = match ring.side_number(&editor.string_numbers, id) {
+                    Some(string) => (
+                        tr!("edit-delete-string-vertex-number", number = number.clone(), string = string.to_string()),
+                        tr!("edit-show-string-vertex-number-in-table", number = number, string = string.to_string()),
+                    ),
+                    None => (
+                        tr!("edit-delete-vertex-number", number = number.clone()),
+                        tr!("edit-show-vertex-number-in-table", number = number),
+                    ),
+                };
+                if editable(id) && ContextMenuAction::new(delete).show(ui).clicked() {
                     commands.push(UiCommand::DeleteRingVertex { id, vertex });
                     commands.push(UiCommand::CloseCanvasContextMenu);
                 }
-                if ContextMenuAction::new(tr!("edit-show-vertex-number-in-table", number = number)).show(ui).clicked() {
+                if ContextMenuAction::new(show).show(ui).clicked() {
                     commands.push(UiCommand::ShowObjectVertex { id, row: vertex });
                     commands.push(UiCommand::CloseCanvasContextMenu);
                 }
@@ -318,6 +341,9 @@ fn draw_recent_function_rows(ui: &mut egui::Ui, editor: &EditorState, project: &
         let mut action = ContextMenuAction::new(row.path()).enabled(row.enabled(project) && row.ready(editor));
         if let Some(checked) = row.checked(editor) {
             action = action.checked(checked);
+        }
+        if let Some(icon) = row.icon(ui) {
+            action = action.icon(icon);
         }
         if action.show(ui).clicked() {
             commands.push(row.command());
@@ -537,6 +563,10 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
 /// Thin Strings: a tolerance typed or slid, the strings as they would be
 /// drawn over the scene, Apply to keep it. Nothing changes until Apply.
 pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(dialog) = editor.thin_strings_dialog.as_mut() else {
         return;
     };
@@ -552,6 +582,15 @@ pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
         .min_width(280.0)
         .max_width(320.0)
         .show(ui.ctx(), |ui| {
+            if menu::picked_selection_field(
+                ui,
+                tr!("context-polylines"),
+                tr!("ui-selected-polylines", count = object_count.to_string()),
+                tr!("edit-thin-polylines-help"),
+                PICKED_FIELD_WIDTH,
+            ) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::Thin));
+            }
             MenuFieldF64::new(tr!("edit-thin-tolerance"), &mut tolerance, 0.0..=f64::MAX)
                 .help_text(tr!("edit-thin-tolerance-help"))
                 .speed(0.01)
@@ -587,7 +626,6 @@ pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                     close = true;
                 }
             });
-            ui.label(tr!("ui-selected-polylines", count = object_count));
         });
 
     if tolerance.is_finite() && tolerance != dialog.tolerance {
@@ -606,6 +644,10 @@ pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
 }
 
 pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(dialog) = editor.insert_point_at_spacing_dialog.as_mut() else {
         return;
     };
@@ -621,6 +663,15 @@ pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mu
         .min_width(280.0)
         .max_width(300.0)
         .show(ui.ctx(), |ui| {
+            if menu::picked_selection_field(
+                ui,
+                tr!("context-polylines"),
+                tr!("ui-selected-polylines", count = object_count.to_string()),
+                tr!("pick-selection-polylines-help"),
+                PICKED_FIELD_WIDTH,
+            ) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::InsertAtSpacing));
+            }
             MenuFieldF64::new(tr!("edit-spacing"), &mut dialog.spacing, 0.001..=f64::MAX)
                 .help_text(tr!("edit-spacing-help"))
                 .width(120.0)
@@ -639,7 +690,6 @@ pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mu
                     close = true;
                 }
             });
-            ui.label(tr!("ui-selected-polylines", count = object_count.to_string()));
         });
 
     // The run closes the dialog only when it succeeds, so a refused spacing
@@ -656,6 +706,10 @@ pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mu
 
 /// Smooth Strings: a tolerance typed, Apply to round the corners.
 pub(crate) fn draw_smooth_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(dialog) = editor.smooth_strings_dialog.as_mut() else {
         return;
     };
@@ -671,6 +725,15 @@ pub(crate) fn draw_smooth_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorS
         .min_width(280.0)
         .max_width(300.0)
         .show(ui.ctx(), |ui| {
+            if menu::picked_selection_field(
+                ui,
+                tr!("context-polylines"),
+                tr!("ui-selected-polylines", count = object_count.to_string()),
+                tr!("edit-smooth-polylines-help"),
+                PICKED_FIELD_WIDTH,
+            ) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::Smooth));
+            }
             MenuFieldF64::new(tr!("edit-smooth-tolerance"), &mut dialog.tolerance, 0.001..=f64::MAX)
                 .help_text(tr!("edit-smooth-tolerance-help"))
                 .width(120.0)
@@ -689,7 +752,6 @@ pub(crate) fn draw_smooth_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                     close = true;
                 }
             });
-            ui.label(tr!("ui-selected-polylines", count = object_count.to_string()));
         });
 
     // The run closes the dialog only when it succeeds, so a refused

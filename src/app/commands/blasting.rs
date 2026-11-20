@@ -329,6 +329,7 @@ impl crate::app::App<'_> {
             elevation: band.top as f32,
             folder: None,
             section: crate::model::SectionKind::natural_layer(),
+            quality: None,
         });
         self.update_solid(solid, SolidEdit::Blasting(plan));
         self.editor.blasting_outlines_key = None;

@@ -889,7 +889,12 @@ fn draw_ui(
             elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, setup_group)
         };
         dialogs::about::draw_about_dialog(root_ui, editor);
-        elements::properties::draw_preferences(root_ui, editor, project.has_active_project.then_some(&project.modelling), commands);
+        elements::properties::draw_preferences(
+            root_ui,
+            editor,
+            project.has_active_project.then_some((project.active_session, &project.modelling)),
+            commands,
+        );
         if editor.renaming_item.is_some() {
             dialogs::editing::draw_rename_dialog(root_ui, commands, editor);
         }
@@ -1360,12 +1365,18 @@ fn draw_ui(
     dialogs::editing::draw_smooth_strings_dialog(root_ui, editor, commands);
     dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
-    elements::properties::draw_preferences(root_ui, editor, project.has_active_project.then_some(&project.modelling), commands);
+    elements::properties::draw_preferences(
+        root_ui,
+        editor,
+        project.has_active_project.then_some((project.active_session, &project.modelling)),
+        commands,
+    );
     // Laid out before the block-model card, which decides whether it keeps
     // its place along the bottom edge; drawn below, with the other overlays.
     let world_per_point = frame_context.world_per_physical_pixel.map(|scale| scale * f64::from(root_ui.ctx().pixels_per_point()));
     let scale_bar = widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).layout(root_ui.ctx(), world_per_point, editor.renderer_background_color);
     let scale_bar_shown = elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect, scale_bar.as_ref().map(|bar| bar.rect()));
+    elements::properties::draw_prismoid_grid_legend(root_ui, editor, project, block_models, commands, canvas_rect);
 
     // --- Canvas right-click context menu ---
     if editor.canvas_context_menu_open
@@ -1739,9 +1750,11 @@ fn draw_global_dialogs(
     dialogs::drill_hole::draw_interval_delete_dialog(root_ui, editor, drill_holes, commands);
     dialogs::reference_points::draw_reference_points_dialog(root_ui, editor, drill_holes, commands);
     dialogs::reference_surface::draw_reference_surface_dialog(root_ui, editor, project, commands);
-    dialogs::thickness_points::draw_thickness_points_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::thickness_points::draw_thickness_points_dialog(root_ui, editor, drill_holes, project, commands);
     dialogs::thickness_points::draw_thickness_table(root_ui, editor);
-    dialogs::thickness_points::draw_seam_surface_dialog(root_ui, editor, commands);
+    dialogs::thickness_points::draw_hole_misfit_dialog(root_ui, editor, drill_holes, project, commands);
+    dialogs::thickness_points::draw_hole_misfit_table(root_ui, editor);
+    dialogs::thickness_points::draw_seam_surface_dialog(root_ui, editor, project, commands);
     dialogs::thickness_points::draw_seam_table(root_ui, editor);
     geometry_dirty |= dialogs::drill_pattern::draw_drill_pattern_dialog(root_ui, editor, document, commands);
     dialogs::charging::draw_charge_product_dialog(root_ui, editor, commands);
@@ -1827,8 +1840,40 @@ fn draw_global_dialogs(
         dialogs::triangulation::draw_cut_surface_dialog(root_ui, editor, project, commands);
     }
 
+    if editor.tri_prismoid_trim_open {
+        dialogs::triangulation::draw_trim_prismoid_grids_dialog(root_ui, editor, project, commands);
+    }
+
     if editor.tri_cut_to_open {
         dialogs::triangulation::draw_cut_to_surface_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_prismoid_open {
+        dialogs::triangulation::draw_build_prismoid_grid_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_strata_open {
+        dialogs::triangulation::draw_build_strata_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_prismoid_qualities_open {
+        dialogs::triangulation::draw_add_prismoid_qualities_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_prismoid_surface_open {
+        dialogs::triangulation::draw_prismoid_grid_surface_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_prismoid_difference_open {
+        dialogs::triangulation::draw_difference_prismoid_grids_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_prismoid_mask_open {
+        dialogs::triangulation::draw_mask_prismoid_grid_dialog(root_ui, editor, document, project, commands);
+    }
+
+    if editor.tri_prismoid_block_open {
+        dialogs::triangulation::draw_prismoid_block_model_dialog(root_ui, editor, project, commands);
     }
 
     if editor.tri_solid_open {
@@ -1841,6 +1886,22 @@ fn draw_global_dialogs(
 
     if editor.tri_include_solid_open {
         dialogs::triangulation::draw_include_solid_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_difference_open {
+        dialogs::triangulation::draw_difference_surfaces_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_merge_open {
+        dialogs::triangulation::draw_merge_surfaces_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_clean_open {
+        dialogs::triangulation::draw_clean_surface_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_smooth_open {
+        dialogs::triangulation::draw_smooth_surface_dialog(root_ui, editor, project, commands);
     }
 
     if editor.tri_contour_open {
@@ -1866,6 +1927,9 @@ fn draw_global_dialogs(
     widgets::toast::draw_toasts(root_ui.ctx(), &mut editor.toasts);
     if editor.ore_triangulation_open {
         elements::block_model::draw_ore_triangulation_dialog(root_ui, editor, block_models, commands);
+    }
+    if editor.regular_block_model_open {
+        elements::block_model::draw_create_regular_block_model_dialog(root_ui, editor, project, commands);
     }
 
     // import export menus

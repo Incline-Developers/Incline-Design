@@ -891,7 +891,9 @@ fn ray_box(origin: DVec3, direction: DVec3, min: DVec3, max: DVec3, limit: f64) 
     true
 }
 
-fn ray_triangle(origin: DVec3, direction: DVec3, triangle: [DVec3; 3]) -> Option<f64> {
+/// How far along the ray from `origin` it meets `triangle`, either face;
+/// `None` when it misses or runs edge on.
+pub(crate) fn ray_triangle(origin: DVec3, direction: DVec3, triangle: [DVec3; 3]) -> Option<f64> {
     let edge1 = triangle[1] - triangle[0];
     let edge2 = triangle[2] - triangle[0];
     let p = direction.cross(edge2);

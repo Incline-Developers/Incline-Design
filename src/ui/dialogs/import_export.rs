@@ -10,13 +10,14 @@ use crate::{
             MeshFormat,
             csv_block_model::{CsvColumnRole, FixedDimension, validate_mapping},
             csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileMapping, CsvDrillFileRole, CsvDrillPreview, FileShape, WORKSHEET_HEADER, bundle_anchor},
+            csv_quality_points::{QualityColumnRole, QualityShape},
         },
         triangulation::TriangulationId,
     },
     ui::{
         elements::properties::read_only_row,
         fonts::bold,
-        state::{DataMenu, EditorState, OmfExportSection, UiCommand, UiProjectView},
+        state::{DataMenu, EditorState, OmfExportSection, UiCommand, UiProjectView, Workspace},
         widgets::{
             data_table::DataTable,
             explorer::{ExplorerEntry, ExplorerHeader, explorer_note, row_height, stripe_bands},
@@ -112,7 +113,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
     if !editor.show_import {
         return;
     }
-    if !is_import_menu(editor.data_menu) {
+    if !is_import_menu(editor.data_menu, editor.active_workspace) {
         editor.data_menu = DataMenu::Omf;
     }
 
@@ -232,6 +233,9 @@ fn draw_import_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
             .default_open(false)
             .show(ui, |ui| {
                 draw_entry(ui, editor, &tr!("io-drawing-exchange-format-dxf"), DataMenu::Dxf);
+                if editor.active_workspace == Workspace::Geology {
+                    draw_entry(ui, editor, &tr!("io-quality-points-csv"), DataMenu::QualityPoints);
+                }
             });
         ExplorerHeader::new(egui::Id::unique("import_triangulations_section"), tr!("common-triangulations"))
             .default_open(false)
@@ -306,6 +310,7 @@ fn draw_import_details(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
         DataMenu::CsvBlockModel => draw_import_csv_block_model(ui, editor, commands),
         DataMenu::Geotiff => draw_import_mesh(ui, editor, commands, &tr!("io-import-geotiff")),
         DataMenu::CsvDrillHole => draw_import_csv_drill_holes(ui, editor, commands),
+        DataMenu::QualityPoints => draw_import_quality_points(ui, editor, commands),
         DataMenu::CorrectionsWorksheet | DataMenu::None => {}
     });
 }
@@ -379,6 +384,14 @@ fn draw_export_omf(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProj
             &mut selection.block_models,
             project.block_models.iter().map(|entry| (entry.id, entry.name.clone())).collect(),
             &tr!("common-no-block-models"),
+        );
+        checklist_section(
+            ui,
+            "omf_export_prismoid_grids",
+            &tr!("common-prismoid-grids"),
+            &mut selection.prismoid_grids,
+            project.prismoid_grids.iter().map(|entry| (entry.id, entry.name.clone())).collect(),
+            &tr!("explorer-no-prismoid-grids"),
         );
         checklist_section(
             ui,
@@ -539,6 +552,54 @@ fn draw_import_csv_block_model(ui: &mut egui::Ui, editor: &mut EditorState, comm
     if let Err(error) = validate_mapping(&preview.mapping, preview.headers.len()) {
         ui.colored_label(ui.visuals().error_fg_color, error.to_string());
     }
+}
+
+fn draw_import_quality_points(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    ui.heading(tr!("io-import-quality-points"));
+    ui.small(tr!("io-quality-points-help"));
+    draw_import_source_picker(ui, editor, commands, tr!("io-quality-points-file"), tr!("io-no-csv-chosen"));
+    if selected_import_source_paths(editor).is_empty() {
+        return;
+    }
+    if let Some(error) = &editor.import_csv_error {
+        ui.colored_label(ui.visuals().error_fg_color, error);
+    }
+    let Some(preview) = editor.import_quality_preview.as_mut() else {
+        return;
+    };
+
+    menu::menu_section(ui, tr!("io-column-mapping"));
+    match preview.mapping.shape() {
+        Some(QualityShape::Wide { columns }) => ui.weak(tr!("io-quality-points-wide", count = columns.to_string())),
+        Some(QualityShape::Long) => ui.weak(tr!("io-quality-points-long")),
+        None => ui.colored_label(ui.visuals().error_fg_color, tr!("io-quality-points-needs")),
+    };
+    let long = preview.mapping.roles.contains(&QualityColumnRole::Quality);
+    egui::ScrollArea::both().auto_shrink([false, false]).max_height(ui.available_height()).show(ui, |ui| {
+        egui::Grid::new("quality_points_preview").striped(true).min_col_width(110.0).show(ui, |ui| {
+            for (column, header) in preview.headers.iter().enumerate() {
+                ui.vertical(|ui| {
+                    ui.strong(if header.is_empty() { tr!("io-blank-header") } else { header.to_string() });
+                    let selected = &mut preview.mapping.roles[column];
+                    egui::ComboBox::from_id_salt(("quality_column_role", column))
+                        .selected_text(selected.label(long))
+                        .width(105.0)
+                        .show_ui(ui, |ui| {
+                            for role in QualityColumnRole::ALL {
+                                ui.selectable_value(selected, role, role.label(long));
+                            }
+                        });
+                });
+            }
+            ui.end_row();
+            for row in &preview.rows {
+                for column in 0..preview.headers.len() {
+                    ui.label(row.get(column).map(String::as_str).unwrap_or(""));
+                }
+                ui.end_row();
+            }
+        });
+    });
 }
 
 fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
@@ -914,6 +975,10 @@ fn reset_import_defaults(editor: &mut EditorState, _project: &UiProjectView) {
             editor.import_drill_csv.clear();
             editor.import_csv_error = None;
         }
+        DataMenu::QualityPoints => {
+            editor.import_quality_preview = None;
+            editor.import_csv_error = None;
+        }
         _ => {}
     }
 }
@@ -1048,6 +1113,15 @@ fn import_command(editor: &EditorState) -> Option<UiCommand> {
                 browser_path: None,
             }))
         }
+        DataMenu::QualityPoints => {
+            let path = source_paths.first()?.clone();
+            let preview = editor.import_quality_preview.as_ref()?;
+            preview.mapping.shape()?;
+            Some(UiCommand::ImportQualityPoints {
+                path,
+                mapping: preview.mapping.clone(),
+            })
+        }
         DataMenu::CsvDrillHole | DataMenu::CorrectionsWorksheet | DataMenu::None => None,
     }
 }
@@ -1081,7 +1155,11 @@ fn mesh_format(data_menu: DataMenu) -> Option<MeshFormat> {
     }
 }
 
-fn is_import_menu(data_menu: DataMenu) -> bool {
+/// Quality points belong to the Geology workspace alone.
+fn is_import_menu(data_menu: DataMenu, workspace: Workspace) -> bool {
+    if data_menu == DataMenu::QualityPoints {
+        return workspace == Workspace::Geology;
+    }
     matches!(
         data_menu,
         DataMenu::Omf

@@ -41,5 +41,27 @@ fn document_styled_color(color: vec4<f32>, flags: u32) -> vec4<f32> {
     return color;
 }
 
+// Whole-draw styling from the pass word (y flags: 1 tint toward the selection
+// colour by the f32 share in z, 2 glow, 4 translucent), used by the prismoid wires.
+fn document_pass_color(color: vec4<f32>) -> vec4<f32> {
+    let mode = document_style_pass.y;
+    var out = color;
+    if (mode & 1u) != 0u {
+        out = vec4<f32>(mix(out.rgb, SELECTION_COLOR.rgb, bitcast<f32>(document_style_pass.z)), out.a);
+    }
+    if (mode & 2u) != 0u {
+        out = vec4<f32>(SELECTION_COLOR.rgb, SELECTION_COLOR.a * TRANSLUCENT_ALPHA * out.a);
+    }
+    if (mode & 4u) != 0u {
+        out.a *= TRANSLUCENT_ALPHA;
+    }
+    return out;
+}
+
+// Pixels the glow pass widens a stroke by on each side (f32 bits in the pass word's w).
+fn document_pass_widening() -> f32 {
+    return select(0.0, bitcast<f32>(document_style_pass.w), (document_style_pass.y & 2u) != 0u);
+}
+
 // A clip position outside the view volume: every triangle made of it is culled.
 const CULLED_POSITION: vec4<f32> = vec4<f32>(2.0, 2.0, 2.0, 1.0);

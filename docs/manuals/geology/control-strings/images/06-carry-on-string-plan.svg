@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 220" width="540" height="220" role="img" aria-label="Geology workspace, plan view, a string with four vertices after Carry On a String: the new last vertex at (1300, 1100, 77) added to the former end at (1200, 1100, 77).">
+  <polyline points="40,120 190,120 340,120" fill="none" stroke="#000" stroke-width="1"/>
+  <line x1="340" y1="120" x2="490" y2="120" stroke="#d9622b" stroke-width="3"/>
+  <g fill="#000"><circle cx="40" cy="120" r="3"/><circle cx="190" cy="120" r="3"/><circle cx="340" cy="120" r="3"/></g>
+  <g fill="#d9622b"><circle cx="490" cy="120" r="3"/></g>
+  <line x1="505" y1="52" x2="505" y2="24" stroke="#000" stroke-width="1"/>
+  <path d="M505 23 l-3 6 l6 0 z" fill="#000"/>
+  <g font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">
+    <text x="505" y="14" font-size="13">N</text>
+    <text x="40" y="148" text-anchor="start">(1000, 1100, 79)</text>
+    <text x="190" y="170">(1100, 1100, 79)</text>
+    <text x="340" y="148">(1200, 1100, 77)</text>
+    <text x="470" y="170">(1300, 1100, 77)</text>
+  </g>
+</svg>

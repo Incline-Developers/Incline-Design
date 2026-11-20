@@ -328,17 +328,16 @@ impl<'a> App<'a> {
         nearest_edge_point(verts, closed, cursor, reach, &graphics.view_proj(), graphics.screen_size_pub(), graphics.section_slab())
     }
 
-    /// Open on every selected string the canvas may edit, as Thin Strings does.
+    /// Open on every selected string the canvas may edit, or point the open
+    /// dialog at them keeping its spacing, as Thin Strings does.
     pub(crate) fn open_insert_point_at_spacing_dialog(&mut self) {
         let object_ids: Vec<ObjectId> = self.editable_polyline_sources(self.selected_polylines()).into_iter().map(|(id, _, _)| id).collect();
-        if object_ids.is_empty() {
-            userspace_warn!("{}", tr!("cmd-insert-point-select-one-more-polylines-spacing"));
-            return;
-        }
-        self.editor.insert_point_at_spacing_dialog = Some(crate::ui::dialogs::InsertPointAtSpacingDialog {
-            object_ids,
-            spacing: self.editor.insert_point_spacing,
-        });
+        let spacing = self
+            .editor
+            .insert_point_at_spacing_dialog
+            .as_ref()
+            .map_or(self.editor.insert_point_spacing, |dialog| dialog.spacing);
+        self.editor.insert_point_at_spacing_dialog = Some(crate::ui::dialogs::InsertPointAtSpacingDialog { object_ids, spacing });
     }
 
     /// Only an error, a spacing that is not positive or one over the budget,
