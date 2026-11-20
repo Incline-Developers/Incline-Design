@@ -1,6 +1,6 @@
 //! Bottom status bar: app identity, selected count, cursor coords and, at the
-//! far right, the frame rate, memory in use and the language picker. Task progress belongs to the
-//! bottom toolbar - see `widgets::progress`.
+//! far right, the background task's progress (`widgets::progress`), the CPU
+//! and memory in use, the frame rate and the language picker.
 
 use thousands::Separable;
 
@@ -78,7 +78,8 @@ fn draw_language_picker(ui: &mut egui::Ui, editor: &EditorState, commands: &mut 
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     if ui.is_rect_visible(rect) {
         if response.hovered() {
-            ui.painter().rect_filled(rect, GROUP_CORNER_RADIUS, ui.visuals().widgets.hovered.bg_fill);
+            let fill = rect.expand2(egui::vec2(0.0, progress::HOVER_FILL_PAD));
+            ui.painter().rect_filled(fill, GROUP_CORNER_RADIUS, ui.visuals().widgets.hovered.bg_fill);
         }
         let icon_rect = egui::Align2::RIGHT_CENTER.align_size_within_rect(egui::Vec2::splat(LANGUAGE_ICON_SIZE), rect.shrink2(egui::vec2(LANGUAGE_PADDING, 0.0)));
         egui::Image::new(themed_icon!(ui, "language.svg"))
@@ -206,9 +207,11 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
     // The other bar that spans the window rather than sitting in a region, and
     // dressed the same way: the gap's colour, and no separator line.
     let frame = crate::ui::chrome::window_bar_frame(ui);
+    // Room above and below the row for the buttons' hover fills.
+    let pad = progress::HOVER_FILL_PAD as i8;
     let frame = frame.inner_margin(egui::Margin {
-        top: frame.inner_margin.top - CONTENT_RAISE,
-        bottom: frame.inner_margin.bottom + CONTENT_RAISE,
+        top: frame.inner_margin.top - CONTENT_RAISE + pad,
+        bottom: frame.inner_margin.bottom + CONTENT_RAISE + pad,
         ..frame.inner_margin
     });
     egui::Panel::bottom("status_bar")
@@ -242,6 +245,15 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                     if !editor.cpu_usage.is_empty() {
                         separator(ui);
                         draw_cpu_usage(ui, editor);
+                    }
+                    // The background task, left of the machine's readouts: it
+                    // takes what room the bar has left, its label first to go.
+                    if progress::has_task(editor) {
+                        separator(ui);
+                        // Its padding is part of its hover fill, given back as
+                        // the language picker's is.
+                        ui.add_space(-progress::READOUT_PADDING);
+                        progress::draw_task_progress(ui, editor);
                     }
                 });
             });

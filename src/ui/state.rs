@@ -382,24 +382,11 @@ impl EditorState {
         self.is_planning_view(PlanningView::Reserves)
     }
 
-    /// Set (or clear) the status-bar message. Whenever the displayed task
-    /// changes, the outgoing one is remembered as `last_finished_task` so the
-    /// idle bar keeps reading "<task>: Finished" at 100%.
-    pub(crate) fn set_status_message(&mut self, message: Option<StatusBarMessage>) {
-        if let Some(previous) = &self.status_message
-            && message.as_ref().is_none_or(|next| next.text != previous.text)
-        {
-            self.last_finished_task = Some(FinishedTask {
-                // Labels are written as "Generating contours…"; drop the trailing
-                // ellipsis so the idle text isn't "Generating contours…: Finished".
-                text: previous.text.trim_end_matches(['.', '…', ' ']).to_owned(),
-                // Progress reports are throttled, so the last one received can
-                // be short of the total even though the task ran to completion.
-                // Only the total is kept; the idle bar shows it as "y of y".
-                total_units: previous.units.map(|(_done, total)| total),
-            });
-        }
-        self.status_message = message;
+    /// Remember a reported task that ran to completion, newest first, keeping
+    /// the last [`TASK_HISTORY_LEN`] for the status bar's list.
+    pub(crate) fn record_finished_task(&mut self, task: FinishedTask) {
+        self.task_history.push_front(task);
+        self.task_history.truncate(TASK_HISTORY_LEN);
     }
 
     /// Drop everything selected, in every workspace's terms: whole scene
@@ -444,6 +431,9 @@ impl EditorState {
             || self.tri_cut_poly_open
             || self.tri_cut_z_open
             || self.tri_contour_open
+            || self.water_dialog.open
+            || self.simplify_dialog.open
+            || self.is_water_run()
             || self.point_cloud_tin_open
             || self.point_cloud_join_open
             || self.point_cloud_classify_open
@@ -1190,6 +1180,10 @@ pub(crate) enum TriangulationPickTarget {
     SliceSurface,
     /// The surface contour lines are generated from.
     ContourSurface,
+    /// The surface Rain Simulation rains on.
+    WaterSurface,
+    /// The surface Simplify thins.
+    SimplifySurface,
 }
 
 /// What a tool works on, chosen in its dialog. The app derives what follows
@@ -1200,6 +1194,8 @@ pub(crate) enum ToolSubject {
     ClipSurface(TriangulationId),
     SliceSurface(TriangulationId),
     ContourSurface(TriangulationId),
+    WaterSurface(TriangulationId),
+    SimplifySurface(TriangulationId),
     OreBlockModel(BlockModelId),
     /// The whole collection: a subset of its holes comes only from holes
     /// picked in the viewport before the dialog opened.
@@ -1216,7 +1212,7 @@ impl TriangulationPickTarget {
             Self::IncludeShape => tr!("state-click-pit-stockpile-solid-viewport"),
             Self::SolidDesign => tr!("state-click-design-surface-viewport"),
             Self::SolidTopography => tr!("state-click-topography-viewport"),
-            Self::TrimSurface | Self::ClipSurface | Self::SliceSurface | Self::ContourSurface => tr!("state-click-surface-viewport"),
+            Self::TrimSurface | Self::ClipSurface | Self::SliceSurface | Self::ContourSurface | Self::WaterSurface | Self::SimplifySurface => tr!("state-click-surface-viewport"),
             Self::ClipBoundary => tr!("state-click-closed-polyline-viewport"),
         }
     }
@@ -1494,6 +1490,8 @@ pub(crate) struct FuseSegment {
 /// without per-task plumbing.
 #[derive(Clone, Debug)]
 pub(crate) struct StatusBarMessage {
+    /// The task's ticket, which is what follows it from frame to frame.
+    pub(crate) ticket: u64,
     pub(crate) text: String,
     /// `Some(f)` in `0.0..=1.0` fills the bar to that fraction and labels it
     /// with the percentage; `None` is indeterminate (marquee, no percentage).
@@ -1501,16 +1499,41 @@ pub(crate) struct StatusBarMessage {
     /// `Some((done, total))` when the task counts discrete items (mesh
     /// vertices/faces), appending "(x of y)" to the percentage.
     pub(crate) units: Option<(u64, u64)>,
+    /// When the task began, for the time it has been running.
+    pub(crate) started: web_time::Instant,
 }
 
-/// The most recent task to leave the status bar. Retained so the bar stays
-/// visible at 100% once a task ends, instead of blanking out.
+/// How many finished tasks the status bar's list keeps.
+pub(crate) const TASK_HISTORY_LEN: usize = 10;
+
+/// A reported task that ran to completion. The newest is what the idle bar
+/// shows at 100%; the last few are listed when the readout is clicked.
 #[derive(Clone, Debug)]
 pub(crate) struct FinishedTask {
+    /// The ticket it ran under, matching its [`StatusBarMessage::ticket`].
+    pub(crate) ticket: u64,
     /// Task label without its trailing ellipsis, e.g. "Generating contours".
     pub(crate) text: String,
     /// Item count the task worked through, shown as "(y of y)" when known.
     pub(crate) total_units: Option<u64>,
+    /// How long it ran.
+    pub(crate) duration: std::time::Duration,
+}
+
+impl FinishedTask {
+    pub(crate) fn new(ticket: u64, label: &str, units: Option<(u64, u64)>, duration: std::time::Duration) -> Self {
+        Self {
+            ticket,
+            // Labels are written as "Generating contours…"; drop the trailing
+            // ellipsis so the idle text isn't "Generating contours…: Finished".
+            text: label.trim_end_matches(['.', '…', ' ']).to_owned(),
+            // Progress reports are throttled, so the last one received can be
+            // short of the total even though the task ran to completion. Only
+            // the total is kept; the idle bar shows it as "y of y".
+            total_units: units.map(|(_done, total)| total),
+            duration,
+        }
+    }
 }
 
 /// The plane through the three picked points, as the Strike and Dip tool
@@ -2244,15 +2267,15 @@ pub(crate) struct EditorState {
     /// egui-winit's icon cache and strand whatever the pointer is showing -
     /// including the hidden cursor the viewport draws its own crosshair over.
     pub(crate) background_busy: bool,
-    /// Transient status-bar message from a background task (e.g. "Saving to …").
-    /// `None` means idle; the field is updated from `poll_saves` / `poll_jobs`
-    /// each frame. Set it through [`EditorState::set_status_message`] so the
-    /// idle bar can name the task that just ended.
-    pub(crate) status_message: Option<StatusBarMessage>,
-    /// The most recent task to leave the status bar, shown as "…: Finished" at
-    /// 100% while idle. `None` until the first task completes - the progress bar
-    /// is hidden entirely until then.
-    pub(crate) last_finished_task: Option<FinishedTask>,
+    /// Reported background tasks still running (e.g. "Saving to …"), oldest
+    /// first, refreshed each frame by `App::refresh_status_message`. Empty
+    /// means idle.
+    pub(crate) status_tasks: Vec<StatusBarMessage>,
+    /// The last few reported tasks to finish, newest first (see
+    /// [`EditorState::record_finished_task`]). The newest is shown as
+    /// "…: Finished" at 100% while idle; until one finishes, and with nothing
+    /// running, the readout is not drawn at all.
+    pub(crate) task_history: std::collections::VecDeque<FinishedTask>,
     pub(crate) active_tool: ActiveTool,
     /// Shared cursor mode, selected from the Production workspace's toolbar
     /// and used in every workspace.
@@ -3032,6 +3055,9 @@ pub(crate) struct EditorState {
     pub(crate) active_property_tab: PropertyTab,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
+    pub(crate) water_dialog: WaterDialog,
+    pub(crate) simplify_dialog: SimplifyDialog,
+    pub(crate) water: WaterView,
     /// The Planning tab showing.
     pub(crate) planning_view: PlanningView,
     /// Which group's step Setup has open. Each group remembers its own step.
@@ -4165,8 +4191,8 @@ impl EditorState {
             fly_near_clip_limit: crate::app::io::default_fly_near_clip_limit(),
             fly_max_clip_span: crate::app::io::default_fly_max_clip_span(),
             background_busy: false,
-            status_message: None,
-            last_finished_task: None,
+            status_tasks: Vec::new(),
+            task_history: std::collections::VecDeque::new(),
             active_tool: ActiveTool::None,
             cursor_mode: CursorMode::Select,
             tool_line_color: [1.0, 1.0, 1.0, 1.0],
@@ -4570,6 +4596,9 @@ impl EditorState {
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Interface,
             active_workspace: Workspace::Production,
+            water_dialog: Default::default(),
+            simplify_dialog: Default::default(),
+            water: Default::default(),
             planning_view: PlanningView::Setup,
             setup_group: SetupGroup::Solids,
             haulage_setup_step: HaulageStep::Network,
@@ -5774,6 +5803,26 @@ pub(crate) enum UiCommand {
     NoteRecentFunction(MenuRow),
     /// Point an open tool at the item chosen in its dialog.
     SetToolSubject(ToolSubject),
+    /// Open the Rain Simulation dialog.
+    OpenWaterSimulation,
+    /// Run a storm over a surface, in a tab of its own.
+    RunWaterSimulation {
+        surface: TriangulationId,
+        settings: crate::model::water::WaterSettings,
+    },
+    /// Open the Simplify dialog.
+    OpenSimplifyTriangulation,
+    /// Thin a surface to fewer triangles, as a new surface.
+    SimplifyTriangulation {
+        surface: TriangulationId,
+        /// The share of the triangles to stop at, 0 to 1.
+        keep: f64,
+        max_deviation: Option<f64>,
+        name: String,
+        unload_source: bool,
+    },
+    /// Close a water run's tab, which discards the run.
+    CloseWaterRun(u64),
     /// Hide a tool's dialog and select its input in the viewport.
     BeginSelectionPick(SelectionPickTool),
     /// Hand the picked selection to the tool.
@@ -6288,6 +6337,9 @@ impl UiCommand {
             | Self::CloseCanvasContextMenu
             | Self::NoteRecentFunction(_)
             | Self::SetToolSubject(_)
+            | Self::OpenWaterSimulation
+            | Self::OpenSimplifyTriangulation
+            | Self::CloseWaterRun(_)
             | Self::BeginSelectionPick(_)
             | Self::FinishSelectionPick
             | Self::CancelSelectionPick
@@ -6811,6 +6863,11 @@ impl UiCommand {
             Self::ExecuteBuildSolidFromSurfaces { name, .. } => report(tr!("tri-build-solid-surfaces"), name.clone()),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),
             Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!("common-merge-shell-into-topology"), name.clone()),
+            Self::RunWaterSimulation { settings, .. } => report(
+                tr!("water-simulate"),
+                tr!("water-run-summary", rain = settings.rain_mm.to_string(), hours = settings.rain_hours.to_string()),
+            ),
+            Self::SimplifyTriangulation { name, .. } => report(tr!("simplify-title"), name.clone()),
             Self::Undo => report(tr!("common-undo"), tr!("state-previous-edit")),
             Self::Redo => report(tr!("common-redo"), tr!("state-next-edit")),
             Self::ExecuteContourTriangulation {
@@ -7177,6 +7234,19 @@ impl EditorState {
 }
 
 impl EditorState {
+    /// Whether a water run's tab is the open one: the viewport then shows
+    /// the run, not the project.
+    pub(crate) fn is_water_run(&self) -> bool {
+        self.water
+            .open
+            .is_some_and(|id| self.water.tabs.iter().any(|tab| tab.id == id && tab.workspace == self.active_workspace))
+    }
+
+    /// Whether the open workspace has water runs, and so their tab row.
+    pub(crate) fn has_water_tabs(&self) -> bool {
+        self.active_workspace != Workspace::Planning && self.water.tabs.iter().any(|tab| tab.workspace == self.active_workspace)
+    }
+
     /// A workspace with menus keeps a recent functions list of their rows.
     pub(crate) fn keeps_recent_functions(&self) -> bool {
         !workspace_menus(self.active_workspace).is_empty()
@@ -7911,6 +7981,115 @@ impl Workspace {
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
     }
+}
+
+/// Simplify's dialog: the surface to thin and how far.
+#[derive(Clone, Debug)]
+pub(crate) struct SimplifyDialog {
+    pub(crate) open: bool,
+    pub(crate) surface: Option<TriangulationId>,
+    /// The chosen surface's triangles, for the dialog's note.
+    pub(crate) faces: usize,
+    pub(crate) keep_percent: f64,
+    /// Whether the surface may only be moved so far, and how far.
+    pub(crate) limit_deviation: bool,
+    pub(crate) max_deviation: f64,
+    pub(crate) name: String,
+    pub(crate) unload_source: bool,
+}
+
+impl Default for SimplifyDialog {
+    fn default() -> Self {
+        Self {
+            open: false,
+            surface: None,
+            faces: 0,
+            keep_percent: 10.0,
+            limit_deviation: true,
+            max_deviation: 0.25,
+            name: String::new(),
+            unload_source: true,
+        }
+    }
+}
+
+/// Rain Simulation's dialog: the surface and the storm to run over it.
+#[derive(Clone, Debug)]
+pub(crate) struct WaterDialog {
+    pub(crate) open: bool,
+    pub(crate) surface: Option<TriangulationId>,
+    pub(crate) settings: crate::model::water::WaterSettings,
+    /// Whether long triangle sides are split, and the length they are split
+    /// down to.
+    pub(crate) subdivide: bool,
+    pub(crate) subdivide_m: f64,
+}
+
+impl Default for WaterDialog {
+    fn default() -> Self {
+        Self {
+            open: false,
+            surface: None,
+            settings: Default::default(),
+            subdivide: false,
+            subdivide_m: 10.0,
+        }
+    }
+}
+
+/// One open water run's tab, in the row under the viewport bar of the
+/// workspace the run was started from.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct WaterTab {
+    pub(crate) id: u64,
+    pub(crate) title: String,
+    pub(crate) workspace: Workspace,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum WaterRunStatus {
+    /// Still running, with how far it has got once it knows.
+    Running(Option<f32>),
+    Failed(String),
+    Ready,
+}
+
+/// The open water run, as its tab shows it. Mirrored from the app.
+#[derive(Clone, Debug)]
+pub(crate) struct WaterShown {
+    pub(crate) settings: crate::model::water::WaterSettings,
+    pub(crate) status: WaterRunStatus,
+    /// The instant of the run the viewport is showing, seconds in.
+    pub(crate) instant_s: Option<f64>,
+    /// How far into the run has been worked out so far, seconds: as far as
+    /// the timeline can be taken while the rest is still running.
+    pub(crate) loaded_s: f64,
+}
+
+/// The water runs' tabs and what the open one shows. Session-only: a run is
+/// gone once its tab is closed.
+#[derive(Default)]
+pub(crate) struct WaterView {
+    /// Mirrored from the app, in the order the runs were started.
+    pub(crate) tabs: Vec<WaterTab>,
+    /// The run whose tab is open in its workspace's row, or `None` while the
+    /// workspace's own tab is. Kept while another workspace is up, so coming
+    /// back finds the run still open.
+    pub(crate) open: Option<u64>,
+    /// The instant shown, seconds into the run.
+    pub(crate) time_s: f64,
+    pub(crate) playing: bool,
+    /// The UI clock at the last frame playback moved the cursor.
+    pub(crate) play_clock: Option<f64>,
+    pub(crate) shown: Option<WaterShown>,
+    /// The water the viewport draws: the open run's between the two kept
+    /// instants either side of the cursor. Built by the app when those
+    /// change.
+    pub(crate) mesh: Option<std::sync::Arc<crate::rendering::water::WaterMesh>>,
+    /// How far the cursor is from the earlier of the two to the later.
+    pub(crate) blend: f32,
+    /// Whether rain is falling at the cursor.
+    pub(crate) raining: bool,
 }
 
 /// The groups of Setup's one step list, in the order they run: each is a
