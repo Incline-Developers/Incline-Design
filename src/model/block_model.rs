@@ -1198,6 +1198,51 @@ pub(crate) fn reserve_name_key(name: &str) -> String {
     .to_owned()
 }
 
+/// The unit a field or column name states, which [`reserve_name_key`]
+/// drops: `Cu %` is a percentage, `CU_PPM` parts per million, `density_kg_m3`
+/// kilograms a cubic metre. A name stating none takes its meaning's own, where
+/// it has one: tonnes for `tonnes`, tonnes a cubic metre for `density`;
+/// otherwise `None`, which any unit matches.
+pub(crate) fn reserve_name_unit(name: &str) -> Option<&'static str> {
+    let lower = name.to_lowercase().replace('%', " pct ");
+    let tokens: Vec<&str> = lower.split(|ch: char| !ch.is_ascii_alphanumeric()).filter(|token| !token.is_empty()).collect();
+    let has = |token: &str| tokens.contains(&token);
+    let stated = if has("pct") || has("percent") {
+        Some("%")
+    } else if has("ppm") {
+        Some("ppm")
+    } else if has("ppb") {
+        Some("ppb")
+    } else if has("kgm3") || (has("kg") && has("m3")) {
+        Some("kg/m3")
+    } else if has("tm3") || (has("t") && has("m3")) {
+        Some("t/m3")
+    } else if has("gpt") || has("gt") || (has("g") && has("t")) {
+        Some("g/t")
+    } else if has("opt") || (has("oz") && has("t")) {
+        Some("oz/t")
+    } else if has("kg") && tokens.len() > 1 {
+        Some("kg")
+    } else {
+        None
+    };
+    stated.or_else(|| match reserve_name_key(name).as_str() {
+        "tonnes" => Some("t"),
+        "density" => Some("t/m3"),
+        _ => None,
+    })
+}
+
+/// Whether a field and a column of the same meaning hold it in the same
+/// unit, as far as their names say: a column of another unit would be read
+/// at the wrong scale (10,000 ppm as 10,000 %).
+pub(crate) fn reserve_units_agree(field: &str, column: &str) -> bool {
+    match (reserve_name_unit(field), reserve_name_unit(column)) {
+        (Some(field), Some(column)) => field == column,
+        _ => true,
+    }
+}
+
 /// Each block's volume in cubic metres, which a volume-averaged field is
 /// weighted by. `None` when the geometry does not match the model.
 pub(crate) fn block_volumes<'a>(model: &BlockModelData, blocks: &'a BlockBoundsSource) -> Option<BlockValues<'a>> {

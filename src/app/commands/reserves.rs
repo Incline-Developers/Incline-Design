@@ -22,14 +22,16 @@ impl crate::app::App<'_> {
     }
 
     /// Map each field that a block model has not mapped onto that model's
-    /// column of the same name, or failing that of the same meaning (see
-    /// [`crate::model::block_model::reserve_name_key`]), when the column is
-    /// the field's kind: a category for a Category field, a number
+    /// column of the same name, or failing that of the same meaning and unit
+    /// (see [`crate::model::block_model::reserve_name_key`] and
+    /// [`crate::model::block_model::reserve_units_agree`]), when the column
+    /// is the field's kind: a category for a Category field, a number
     /// otherwise. A summed tonnes field a model has no column for is its
-    /// density times each block's volume. A field already mapped, to
-    /// anything, is left alone. `only` limits it to one model.
+    /// density in tonnes a cubic metre times each block's volume. A field
+    /// already mapped, to anything, is left alone. `only` limits it to one
+    /// model.
     pub(crate) fn auto_map_reserve_columns(&mut self, only: Option<BlockModelId>) {
-        use crate::model::block_model::{ReserveFieldMapping, ReserveMappingSource, reserve_name_key};
+        use crate::model::block_model::{ReserveFieldMapping, ReserveMappingSource, reserve_name_key, reserve_name_unit, reserve_units_agree};
         let Some(document) = self.workspace.active_document() else {
             return;
         };
@@ -47,11 +49,14 @@ impl crate::app::App<'_> {
                 let key = reserve_name_key(name);
                 let source = if columns.contains(name) {
                     ReserveMappingSource::Column(name.clone())
-                } else if let Some(column) = columns.iter().find(|column| reserve_name_key(column) == key) {
+                } else if let Some(column) = columns.iter().find(|column| reserve_name_key(column) == key && reserve_units_agree(name, column)) {
                     ReserveMappingSource::Column(column.clone())
                 } else if key == "tonnes"
                     && *aggregation == ReserveAggregation::Sum
-                    && let Some(density) = numeric.iter().find(|column| reserve_name_key(column) == "density")
+                    && reserve_name_unit(name) == Some("t")
+                    && let Some(density) = numeric
+                        .iter()
+                        .find(|column| reserve_name_key(column) == "density" && reserve_name_unit(column) == Some("t/m3"))
                 {
                     ReserveMappingSource::PerVolume(density.clone())
                 } else {
