@@ -249,6 +249,13 @@ pub(crate) fn plan(input: &BlendInput, groups: &Groups, schedule: &BlendSolution
         return Reserve::default();
     };
     let held = Duration::from_secs_f64((2.0 * (2.1e-4 * columns - 8.0)).max(6.0) + REPLAY_S);
+    // The judgement has a margin, so one judged a little over may still
+    // finish in the time there is; one judged far over is not started:
+    // stopped at the deadline it keeps nothing, and on the largest worlds
+    // it held 18 GB doing so.
+    if held > 2 * most {
+        return Reserve::default();
+    }
     Reserve {
         time: held.min(most),
         program: Program::Held,
