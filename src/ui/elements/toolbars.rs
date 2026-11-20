@@ -555,7 +555,13 @@ pub(crate) fn cursor_mode_button(
     side: f32,
 ) -> egui::Response {
     let selected = editor.cursor_mode == mode;
-    let response = ui.add(ToolbarButton::new(icon, tooltip).id_salt(("cursor_mode", tooltip)).button_side(side).selected(selected));
+    // Pit Design draws level: only the regular cursor while it is up.
+    let held = editor.cursor_modes_held() && mode != CursorMode::Select;
+    let response = ui.add_enabled(
+        !held,
+        ToolbarButton::new(icon, tooltip).id_salt(("cursor_mode", tooltip)).button_side(side).selected(selected),
+    );
+    let response = if held { response.disabled_hint(tr!("pit-design-cursor-held")) } else { response };
 
     if response.clicked() {
         editor.cursor_mode = mode;

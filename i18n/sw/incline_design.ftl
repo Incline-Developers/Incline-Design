@@ -5202,6 +5202,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - chagua muundo wa shimo au mstari-mingi uliofungwa, au unda tabaka la kuchorea
+pit-design-cursor-held = Muundo wa shimo huchora mistari yake sawa kwenye RL yake, kwa hivyo haunasi kitu chochote ukiwa umewashwa.
 pit-design-gone = Usanifu huo wa shimo haupo tena kwenye mradi.
 pit-design-name = Jina
 pit-design-flatter =

@@ -5198,6 +5198,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - ピット設計か閉じたポリラインを選択するか、描画するレイヤーを作成してください
+pit-design-cursor-held = ピット設計は線をその RL に水平に描くため、使用中は何にもスナップしません。
 pit-design-gone = そのピット設計はもうプロジェクトにありません。
 pit-design-name = 名前
 pit-design-flatter =

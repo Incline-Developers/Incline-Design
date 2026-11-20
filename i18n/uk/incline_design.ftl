@@ -5282,6 +5282,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - виберіть проєкт кар'єру або замкнену полілінію чи створіть шар для малювання
+pit-design-cursor-held = Проєкт кар'єру малює лінії горизонтально на їхній позначці, тож поки він активний, прив'язку вимкнено.
 pit-design-gone = Цього проєкту кар'єру більше немає в проєкті.
 pit-design-name = Назва
 pit-design-flatter =

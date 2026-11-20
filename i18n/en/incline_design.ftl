@@ -5842,6 +5842,7 @@ pit-design-explode = Explode
 pit-design-kind = Pit Design
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - select a pit design or closed polyline, or make a layer to draw on
+pit-design-cursor-held = Pit Design draws its strings level at their RL, so it snaps to nothing while it is up.
 pit-design-gone = That pit design is no longer in the project.
 pit-design-draw-prompt = Click the string to design from, point by point: a pit's floor or crest, or a dump's toe or top.
 pit-design-draw-close = Click the first point, or press Enter, to close the string.

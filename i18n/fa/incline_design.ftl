@@ -5169,6 +5169,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - یک طرح پیت یا چندخط بسته انتخاب کنید، یا لایه‌ای برای ترسیم بسازید
+pit-design-cursor-held = طرح پیت خطوطش را تراز در ترازشان می‌کشد، پس تا وقتی فعال است به چیزی نمی‌چسبد.
 pit-design-gone = آن طراحی پیت دیگر در پروژه نیست.
 pit-design-name = نام
 pit-design-flatter =

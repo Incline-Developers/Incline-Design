@@ -5216,6 +5216,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - حدد تصميم حفرة أو خطًا متعددًا مغلقًا، أو أنشئ طبقة للرسم عليها
+pit-design-cursor-held = يرسم تصميم الحفرة خطوطه أفقية عند منسوبها، فلا يلتقط شيئًا ما دام قيد العمل.
 pit-design-gone = لم يعد تصميم الحفرة هذا في المشروع.
 pit-design-name = الاسم
 pit-design-flatter =

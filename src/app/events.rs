@@ -753,6 +753,9 @@ impl<'a> App<'a> {
             return false;
         };
 
+        if self.editor.cursor_modes_held() {
+            return false;
+        }
         self.editor.cursor_mode = match button {
             MouseButton::Forward => self.editor.cursor_mode.next(),
             MouseButton::Back => self.editor.cursor_mode.previous(),
@@ -2088,6 +2091,7 @@ impl App<'_> {
         self.sync_animation_frame();
         self.sync_water();
         self.sync_page_locks();
+        self.hold_pit_cursor_mode();
         self.refresh_pit_designs();
         self.refresh_pit_evaluations();
     }

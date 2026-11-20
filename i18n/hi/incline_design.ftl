@@ -5170,6 +5170,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - कोई पिट डिज़ाइन या बंद पॉलीलाइन चुनें, या बनाने के लिए एक लेयर बनाएँ
+pit-design-cursor-held = पिट डिज़ाइन अपनी रेखाएँ उनके RL पर समतल खींचता है, इसलिए चालू रहते यह किसी चीज़ पर स्नैप नहीं करता।
 pit-design-gone = वह पिट डिज़ाइन अब प्रोजेक्ट में नहीं है।
 pit-design-name = नाम
 pit-design-flatter =

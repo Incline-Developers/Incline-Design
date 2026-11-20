@@ -5211,6 +5211,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - bir ocak tasarımı veya kapalı çoklu çizgi seçin ya da çizim için bir katman oluşturun
+pit-design-cursor-held = Ocak tasarımı çizgilerini kotlarında düz çizer, bu yüzden açıkken hiçbir şeye yapışmaz.
 pit-design-gone = Bu ocak tasarımı artık projede değil.
 pit-design-name = Ad
 pit-design-flatter =

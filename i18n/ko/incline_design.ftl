@@ -5203,6 +5203,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - 피트 설계나 닫힌 폴리라인을 선택하거나 그릴 레이어를 만드세요
+pit-design-cursor-held = 피트 설계는 선을 해당 RL에 수평으로 그리므로, 사용하는 동안에는 아무것에도 스냅하지 않습니다.
 pit-design-gone = 그 피트 설계는 더 이상 프로젝트에 없습니다.
 pit-design-name = 이름
 pit-design-flatter =

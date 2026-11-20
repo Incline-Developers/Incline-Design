@@ -5168,6 +5168,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - selecione um projeto de cava ou uma polilinha fechada, ou crie uma camada para desenhar
+pit-design-cursor-held = O projeto de cava desenha as suas linhas niveladas na sua cota, por isso não se ajusta a nada enquanto está ativo.
 pit-design-gone = Esse projeto de cava já não está no projeto.
 pit-design-name = Nome
 pit-design-flatter =

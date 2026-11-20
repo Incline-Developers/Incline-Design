@@ -5171,6 +5171,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - sélectionnez une conception de fosse ou une polyligne fermée, ou créez un calque où dessiner
+pit-design-cursor-held = La conception de fosse trace ses lignes de niveau à leur cote : elle ne s'accroche à rien tant qu'elle est active.
 pit-design-gone = Cette conception de fosse n’est plus dans le projet.
 pit-design-name = Nom
 pit-design-flatter =

@@ -5197,6 +5197,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - chọn một thiết kế moong hoặc đường đa tuyến khép kín, hoặc tạo lớp để vẽ
+pit-design-cursor-held = Thiết kế moong vẽ các đường nằm ngang ở cao độ của chúng, nên không bắt điểm vào gì khi đang bật.
 pit-design-gone = Thiết kế moong đó không còn trong dự án.
 pit-design-name = Tên
 pit-design-flatter =

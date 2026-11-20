@@ -5168,6 +5168,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - seleccione un diseño de tajo o una polilínea cerrada, o cree una capa en la que dibujar
+pit-design-cursor-held = Diseño de tajo dibuja sus líneas a nivel en su cota, así que no se ajusta a nada mientras está activo.
 pit-design-gone = Ese diseño de rajo ya no está en el proyecto.
 pit-design-name = Nombre
 pit-design-flatter =

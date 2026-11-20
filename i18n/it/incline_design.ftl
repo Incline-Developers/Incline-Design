@@ -5212,6 +5212,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - seleziona un progetto di fossa o una polilinea chiusa, o crea un livello su cui disegnare
+pit-design-cursor-held = Progetto fossa disegna le sue linee in piano alla loro quota, quindi non si aggancia a nulla finché è attivo.
 pit-design-gone = Quel progetto della fossa non è più nel progetto.
 pit-design-name = Nome
 pit-design-flatter =

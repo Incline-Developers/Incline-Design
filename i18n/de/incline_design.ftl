@@ -5211,6 +5211,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - einen Grubenentwurf oder eine geschlossene Polylinie wählen oder eine Ebene zum Zeichnen anlegen
+pit-design-cursor-held = Pit Design zeichnet seine Linien eben auf ihrer Höhe und rastet daher nirgends ein, solange es aktiv ist.
 pit-design-gone = Dieser Grubenentwurf ist nicht mehr im Projekt.
 pit-design-name = Name
 pit-design-flatter =

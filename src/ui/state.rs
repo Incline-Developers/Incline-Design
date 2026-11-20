@@ -2451,6 +2451,10 @@ pub(crate) struct EditorState {
     /// project looked like when last checked for any that need it.
     pub(crate) pit_refreshes: std::collections::HashMap<ObjectId, u64>,
     pub(crate) pit_refresh_checked: Option<u64>,
+    /// The cursor mode Pit Design put aside while it is up, to give back
+    /// when it is put down: its strings are drawn level, so it snaps to
+    /// nothing.
+    pub(crate) pit_held_cursor_mode: Option<CursorMode>,
     /// The same for measuring them.
     pub(crate) pit_evaluations: std::collections::HashMap<ObjectId, u64>,
     pub(crate) pit_evaluation_checked: Option<u64>,
@@ -3631,6 +3635,12 @@ impl EditorState {
     /// Whether a snap mode is up. The section snaps as the plan does: its
     /// targets are the ones inside the slab, and off them the cursor falls
     /// back to the section plane like any unsnapped pick.
+    /// Whether the cursor modes are held at Regular: while Pit Design is up,
+    /// which draws its strings level at their RL.
+    pub(crate) fn cursor_modes_held(&self) -> bool {
+        self.active_tool == ActiveTool::PitDesign
+    }
+
     pub(crate) fn snapping_active(&self) -> bool {
         self.cursor_mode.snaps()
     }
@@ -4287,6 +4297,7 @@ impl EditorState {
             pit_design: None,
             pit_refreshes: std::collections::HashMap::new(),
             pit_refresh_checked: None,
+            pit_held_cursor_mode: None,
             pit_evaluations: std::collections::HashMap::new(),
             pit_evaluation_checked: None,
             pit_round_corners: true,

@@ -5169,6 +5169,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - 请选择采坑设计或闭合多段线，或新建用于绘制的图层
+pit-design-cursor-held = 采坑设计将线水平绘制在其标高上，因此启用时不吸附任何对象。
 pit-design-gone = 该采坑设计已不在项目中。
 pit-design-name = 名称
 pit-design-flatter =

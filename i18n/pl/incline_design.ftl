@@ -5300,6 +5300,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - zaznacz projekt wyrobiska lub zamkniętą polilinię albo utwórz warstwę do rysowania
+pit-design-cursor-held = Projekt wyrobiska rysuje linie poziomo na ich rzędnej, więc nie przyciąga do niczego, póki jest aktywny.
 pit-design-gone = Tego projektu wyrobiska nie ma już w projekcie.
 pit-design-name = Nazwa
 pit-design-flatter =

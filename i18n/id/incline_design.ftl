@@ -5169,6 +5169,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - pilih desain pit atau polilinier tertutup, atau buat lapisan untuk menggambar
+pit-design-cursor-held = Desain pit menggambar garisnya datar pada RL-nya, jadi tidak menempel ke apa pun selama aktif.
 pit-design-gone = Desain pit itu tidak lagi ada di proyek.
 pit-design-name = Nama
 pit-design-flatter =

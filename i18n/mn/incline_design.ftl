@@ -5221,6 +5221,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - уурхайн төсөл эсвэл битүү полишугам сонгох, эсвэл зурах давхарга үүсгэнэ үү
+pit-design-cursor-held = Уурхайн төсөл шугамуудаа RL дээрээ тэгш зурдаг тул идэвхтэй үед юунд ч наалдахгүй.
 pit-design-gone = Тэр уурхайн төсөл төсөлд байхаа больсон.
 pit-design-name = Нэр
 pit-design-flatter =

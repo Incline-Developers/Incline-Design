@@ -5553,6 +5553,7 @@ pit-design-exploded =
     }
 pit-design-default-name = { $kind } { $number }
 pit-design-tool-needs = { $tool } - выберите проект карьера или замкнутую полилинию либо создайте слой для рисования
+pit-design-cursor-held = Проект карьера рисует линии горизонтально на их отметке, поэтому, пока он активен, привязка отключена.
 pit-design-gone = Этого проекта карьера больше нет в проекте.
 pit-design-name = Имя
 pit-design-flatter =

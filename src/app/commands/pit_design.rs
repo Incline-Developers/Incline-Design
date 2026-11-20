@@ -182,6 +182,28 @@ impl App<'_> {
         }
     }
 
+    /// While Pit Design is up, the cursor is the regular one, the mode it
+    /// replaced put aside; once the tool is down, that mode is back. Its
+    /// strings are drawn level at their RL, which a snap would pull off.
+    pub(crate) fn hold_pit_cursor_mode(&mut self) {
+        use crate::ui::state::CursorMode;
+        let editor = &mut self.editor;
+        match (editor.cursor_modes_held(), editor.pit_held_cursor_mode) {
+            (true, None) => {
+                editor.pit_held_cursor_mode = Some(editor.cursor_mode);
+                editor.cursor_mode = CursorMode::Select;
+                editor.cursor_snapped = false;
+                self.redraw_requested = true;
+            }
+            (false, Some(mode)) => {
+                editor.cursor_mode = mode;
+                editor.pit_held_cursor_mode = None;
+                self.redraw_requested = true;
+            }
+            _ => {}
+        }
+    }
+
     /// Open the selected pit design, or closed polyline that could become
     /// one, in the tool's panel: the tool is up.
     pub(crate) fn open_selected_pit(&mut self) {
