@@ -548,6 +548,10 @@ pub(crate) struct App<'a> {
         crate::model::schedule::scenarios::ScenarioId,
         std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>,
     )>,
+    /// The long-term plans this session's runs started from, newest last,
+    /// by project runtime: a run over the same problem as one of them - an
+    /// edit undone - deals its order again, so it calculates what it did.
+    pub(crate) schedule_plan_memories: Vec<(u32, std::sync::Arc<crate::model::schedule::optimisation::longterm::PlanMemory>)>,
     /// A run asked for while a Setup step was still running, by project
     /// runtime: started once none is.
     pub(crate) schedule_run_waiting: Option<(u32, crate::app::schedule_run::ScheduleRunMode)>,
@@ -795,6 +799,7 @@ impl<'a> Default for App<'a> {
             planning_entry_step: None,
             schedule_calculation: None,
             schedule_scenario_results: Vec::new(),
+            schedule_plan_memories: Vec::new(),
             followed_scenario: None,
             schedule_run_waiting: None,
             schedule_reached_end: false,

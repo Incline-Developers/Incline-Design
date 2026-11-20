@@ -93,6 +93,8 @@ pub(crate) struct PlanRequest<'a> {
     pub(crate) stable: &'a BTreeMap<GroundId, u64>,
     /// What the last plan over this mine left: see [`PlanMemory`].
     pub(crate) memory: Option<&'a PlanMemory>,
+    /// Earlier plans, any of which over the same problem answers it too.
+    pub(crate) earlier: &'a [std::sync::Arc<PlanMemory>],
     /// The ground a bar limited to some pits, benches or flitches may take,
     /// by its task; a task not named takes any.
     pub(crate) allowed: &'a BTreeMap<TaskId, BTreeSet<GroundId>>,
@@ -1063,7 +1065,12 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         }
         hasher.finish()
     };
-    if let Some(memory) = request.memory.filter(|memory| memory.key == problem && memory.order.len() == count) {
+    if let Some(memory) = request
+        .memory
+        .into_iter()
+        .chain(request.earlier.iter().map(|memory| &**memory))
+        .find(|memory| memory.key == problem && memory.order.len() == count)
+    {
         return Some((
             memory.order.clone(),
             PlanSummary {

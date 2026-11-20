@@ -231,6 +231,9 @@ pub(crate) struct SavedHint {
     /// What the last plan over this scenario left, saved or not: the plan
     /// starts from it.
     pub(crate) memory: Option<Arc<crate::model::schedule::optimisation::longterm::PlanMemory>>,
+    /// Earlier plans of this session, one of which may be over the same
+    /// problem.
+    pub(crate) earlier: Vec<Arc<crate::model::schedule::optimisation::longterm::PlanMemory>>,
     /// The run only shows the saved schedule, never calculates: once its
     /// order is not the one saved, the capture stops there.
     pub(crate) restore_only: bool,
@@ -2747,6 +2750,7 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
             stop: experiment.plan_stop,
             stable: &stable,
             memory: saved.and_then(|hint| hint.memory.as_deref()),
+            earlier: saved.map_or(&[], |hint| hint.earlier.as_slice()),
             allowed: &allowed,
         };
         // The model the order is dealt over, and what the plan reads beside

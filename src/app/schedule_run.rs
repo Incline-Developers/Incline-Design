@@ -636,6 +636,24 @@ impl crate::app::App<'_> {
             .and_then(|held| held.saved.clone())
             .or_else(|| self.workspace.active_document().and_then(|document| document.saved_schedule().cloned()))
             .and_then(|held| held.auto_order.as_ref().and_then(|order| order.memory.clone()));
+        // Kept for a run over the same problem later: an edit undone.
+        let runtime_id = self.workspace.active_project().map(|project| project.runtime_id);
+        if let (Some(runtime_id), Some(memory)) = (runtime_id, memory.as_ref())
+            && !self.schedule_plan_memories.iter().any(|(_, kept)| std::sync::Arc::ptr_eq(kept, memory))
+        {
+            /// Plans kept, at most.
+            const KEPT: usize = 16;
+            self.schedule_plan_memories.push((runtime_id, memory.clone()));
+            if self.schedule_plan_memories.len() > KEPT {
+                self.schedule_plan_memories.remove(0);
+            }
+        }
+        let earlier: Vec<_> = self
+            .schedule_plan_memories
+            .iter()
+            .filter(|(at, _)| Some(*at) == runtime_id)
+            .map(|(_, memory)| memory.clone())
+            .collect();
         // Improve works on the schedule shown, when it answers the project:
         // its order is dealt again rather than planned, and the search starts
         // from it rather than from a dispatch of its own.
@@ -654,12 +672,14 @@ impl crate::app::App<'_> {
                 fingerprint: Some(saved.fingerprint),
                 auto_order: saved.auto_order.clone(),
                 memory,
+                earlier,
                 restore_only,
             }),
             None => memory.map(|memory| schedule_capture::SavedHint {
                 fingerprint: None,
                 auto_order: None,
                 memory: Some(memory),
+                earlier,
                 restore_only,
             }),
         };
