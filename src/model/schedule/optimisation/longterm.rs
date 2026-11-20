@@ -2378,9 +2378,9 @@ fn deal(input: &mut BlendInput, request: &PlanRequest<'_>, blocks: &[Block], ord
 }
 
 /// A dispatched schedule's value discounted at `rate` a year, as the plan
-/// values ground: each movement's value and each day's grade penalty at
-/// the discount of its time, and whatever else the replay counted - pile
-/// values that hang on a blend - at the movements' average discount.
+/// values ground: each movement's value, each day's grade penalty and each
+/// payment a reclaimed blend earned at the discount of its time, and
+/// whatever else the replay counted, which should be nothing, undiscounted.
 pub(crate) fn discounted_value(input: &BlendInput, solution: &super::blended::replay::BlendSolution, replay: &super::blended::replay::ReplayReport, rate: f64) -> f64 {
     let factor = |hour: f64| (1.0 + rate.max(0.0)).powf(-hour / YEAR_H);
     let (mut plain, mut discounted) = (0.0, 0.0);
@@ -2399,7 +2399,12 @@ pub(crate) fn discounted_value(input: &BlendInput, solution: &super::blended::re
         penalty += cost;
         penalty_discounted += cost * factor((f64::from(day) + 0.5) * 24.0);
     }
-    let average = if plain.abs() > 1e-9 { discounted / plain } else { 1.0 };
-    let rest = replay.replayed_objective - plain + penalty;
-    discounted - penalty_discounted + rest * average
+    let (mut earned, mut earned_discounted) = (0.0, 0.0);
+    for (&k, &value) in &replay.conditional_earned {
+        let Some(interval) = input.intervals.get(k) else { continue };
+        earned += value;
+        earned_discounted += value * factor(0.5 * (interval.start_h + interval.end_h));
+    }
+    let rest = replay.replayed_objective - plain + penalty - earned;
+    discounted - penalty_discounted + earned_discounted + rest
 }

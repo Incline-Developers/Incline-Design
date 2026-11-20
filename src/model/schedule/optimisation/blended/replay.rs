@@ -150,6 +150,10 @@ pub(crate) struct ReplayReport {
     pub(crate) max_relative_residual: f64,
     /// Objective recomputed from the published rows.
     pub(crate) replayed_objective: f64,
+    /// What it holds of payments a reclaimed blend earned, by the interval
+    /// each was earned in: the long-term plan discounts each at its own
+    /// time.
+    pub(crate) conditional_earned: BTreeMap<usize, f64>,
     /// Replayed minus reported.
     pub(crate) objective_difference: f64,
     /// Material delivered below a grade boundary by an amount small enough to
@@ -1818,6 +1822,7 @@ fn replay_pile(
             for payment in checker.input.conditional_values.iter().filter(|entry| entry.candidate == row.candidate) {
                 if payment.holds(row_blend(row)) {
                     checker.report.replayed_objective += row.tonnes_t * payment.value_per_tonne;
+                    *checker.report.conditional_earned.entry(k).or_default() += row.tonnes_t * payment.value_per_tonne;
                 }
                 // The model's `M` for this payment's rows is the loader's rate
                 // over the interval; see `formulate`.
