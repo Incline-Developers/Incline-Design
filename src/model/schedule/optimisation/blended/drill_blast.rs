@@ -623,7 +623,9 @@ impl<'a> Chain<'a> {
         }
         let now = interval.start_h;
         let check: Vec<usize> = match self.dug.replace(Vec::new()) {
-            None => (0..input.blasts.len()).filter(|&blast| self.events[blast].cleared_h.is_none() && !input.blasts[blast].never_clear).collect(),
+            None => (0..input.blasts.len())
+                .filter(|&blast| self.events[blast].cleared_h.is_none() && !input.blasts[blast].never_clear)
+                .collect(),
             Some(dug) => dug.iter().filter_map(|ground| self.waiting.remove(ground)).flatten().collect(),
         };
         for blast in check {
