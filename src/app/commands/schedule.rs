@@ -1021,6 +1021,11 @@ impl crate::app::App<'_> {
         if left > 0 {
             crate::userspace_log!("{}", tr!("auto-bar-convert-left-unworked", count = left));
         }
+        // Every block left to the automatic bars: a dig bar of none would only
+        // ask for blocks.
+        if members.is_empty() {
+            return;
+        }
         match (until, into) {
             (Some(at_h), Some(scenario)) => self.edit_schedule(|plan| {
                 let held = plan.bar(bar).ok_or(crate::model::schedule::ScheduleError::UnknownBar)?;
