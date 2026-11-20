@@ -461,10 +461,39 @@ impl App<'_> {
             fresh: pit.is_fresh(verts, ground),
             waiting: self.pit_evaluation_waiting(id),
             fields: self.workspace.active_document().map(|document| document.reserve_fields().to_vec()).unwrap_or_default(),
+            designs: self.compared_pit_designs(id),
         };
         if let Some(draft) = self.editor.pit_design.as_mut() {
             draft.facts = facts;
         }
+    }
+
+    /// Every pit design in the project as last measured, the one open
+    /// first, the rest in the order they were made.
+    fn compared_pit_designs(&self, open: ObjectId) -> Vec<crate::ui::dialogs::pit_design::ComparedDesign> {
+        let Some(document) = self.workspace.active_document() else {
+            return Vec::new();
+        };
+        let mut designs: Vec<crate::ui::dialogs::pit_design::ComparedDesign> = document
+            .objects()
+            .iter()
+            .filter_map(|object| {
+                let (_, pit) = pit_parts(object)?;
+                let evaluation = pit.evaluation.as_ref().filter(|evaluation| evaluation.problem.is_none());
+                Some(crate::ui::dialogs::pit_design::ComparedDesign {
+                    id: object.id(),
+                    name: pit.name.clone(),
+                    total: evaluation.map(|evaluation| evaluation.total.clone()),
+                    shell: evaluation.and_then(|evaluation| evaluation.shell.clone()),
+                    current: self.pit_evaluation_waiting(object.id()).is_none(),
+                })
+            })
+            .collect();
+        if let Some(index) = designs.iter().position(|design| design.id == open) {
+            let this = designs.remove(index);
+            designs.insert(0, this);
+        }
+        designs
     }
 
     /// Put the panel away, with what it was editing written to the object:

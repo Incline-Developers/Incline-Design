@@ -2536,7 +2536,7 @@ fn prepare_reference_surface(reference: &mesh_data::Triangulation, xy_area_toler
     })
 }
 
-pub(super) fn triangle_xy_bounds(triangle: [mesh_data::Vertex; 3]) -> (glam::DVec2, glam::DVec2) {
+pub(crate) fn triangle_xy_bounds(triangle: [mesh_data::Vertex; 3]) -> (glam::DVec2, glam::DVec2) {
     let mut min = glam::DVec2::splat(f64::INFINITY);
     let mut max = glam::DVec2::splat(f64::NEG_INFINITY);
     for point in triangle {

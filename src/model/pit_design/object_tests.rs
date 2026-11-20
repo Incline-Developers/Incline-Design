@@ -93,7 +93,16 @@ fn saves_and_reads_back_whole() {
             key: 42,
             problem: None,
             total: figures.clone(),
-            benches: vec![BenchFigures { base: 100.0, top: 115.0, figures }],
+            benches: vec![BenchFigures {
+                base: 100.0,
+                top: 115.0,
+                figures: figures.clone(),
+            }],
+            shell: Some(super::evaluation::ShellFigures {
+                gained: figures.clone(),
+                left: figures,
+                problem: None,
+            }),
         });
     }
     let json = serde_json::to_string(&object).expect("an object serialises");

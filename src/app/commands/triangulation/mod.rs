@@ -24,7 +24,7 @@ mod contours;
 pub(crate) mod creation;
 pub(crate) mod cuts;
 mod geometry;
-mod include;
+pub(crate) mod include;
 mod join;
 mod point_cloud_tin;
 pub(crate) mod reference_surface;

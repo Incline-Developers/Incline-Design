@@ -57,6 +57,21 @@ pub(crate) struct Evaluation {
     /// Each bench, bottom up: the ground between two of its RLs.
     #[serde(default)]
     pub(crate) benches: Vec<BenchFigures>,
+    /// What it comes to against the shell chosen, where one is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) shell: Option<ShellFigures>,
+}
+
+/// A design set against an optimisation shell: the ground it takes beyond
+/// the shell, and the ground inside the shell it leaves.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ShellFigures {
+    pub(crate) gained: Figures,
+    pub(crate) left: Figures,
+    /// Why the shell could not be set against it, where it could not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) problem: Option<String>,
 }
 
 impl Evaluation {
@@ -67,6 +82,7 @@ impl Evaluation {
             problem: Some(problem),
             total: Figures::default(),
             benches: Vec::new(),
+            shell: None,
         }
     }
 }

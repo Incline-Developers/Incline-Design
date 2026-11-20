@@ -479,7 +479,7 @@ fn build_solid_local(
 }
 
 /// Why there is no solid: the surfaces enclose nothing on the wanted side.
-fn no_volume(region: SolidRegion) -> String {
+pub(crate) fn no_volume(region: SolidRegion) -> String {
     match region {
         SolidRegion::Cut => tr!("tri-solid-no-volume-cut"),
         SolidRegion::Fill => tr!("tri-solid-no-volume-fill"),

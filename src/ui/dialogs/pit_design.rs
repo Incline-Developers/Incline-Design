@@ -19,7 +19,7 @@ use crate::{
         pit_design::{
             Design, Direction, End, Kind, Problem, RampBand, Zone,
             checks::{Check, Flag},
-            evaluation::{Evaluation, Figures, Waiting},
+            evaluation::{Evaluation, Figures, ShellFigures, Waiting},
             object::PitObject,
             settings::{PitDesignSettings, RampSettings, StopMode},
             walls::{Sector, WallReport},
@@ -83,6 +83,19 @@ pub(crate) struct DraftFacts {
     pub(crate) waiting: Option<Waiting>,
     /// The project's reserve fields, which its measure is in.
     pub(crate) fields: Vec<ReserveField>,
+    /// Every pit design in the project, as last measured, to compare.
+    pub(crate) designs: Vec<ComparedDesign>,
+}
+
+/// One pit design's measure, beside the others'.
+#[derive(Clone, Debug)]
+pub(crate) struct ComparedDesign {
+    pub(crate) id: ObjectId,
+    pub(crate) name: String,
+    pub(crate) total: Option<Figures>,
+    pub(crate) shell: Option<ShellFigures>,
+    /// Whether its measure is what it comes to now.
+    pub(crate) current: bool,
 }
 
 /// The steps the Pit Design tool takes a pit through once its string is
@@ -1125,6 +1138,25 @@ fn draw_evaluation(ui: &mut egui::Ui, working: &mut PitObject, facts: &DraftFact
     .width(FIELD_WIDTH)
     .help_text(tr!("pit-design-block-model-help"))
     .show(ui);
+    // An optimisation shell to set a pit against.
+    if settings.kind == Kind::Pit {
+        let surfaces: Vec<(TriangulationId, &str)> = project.triangulations.iter().map(|entry| (entry.id, entry.name.as_str())).collect();
+        let chosen = settings
+            .evaluation
+            .shell
+            .and_then(|id| surfaces.iter().find(|(surface, _)| *surface == id).map(|(_, name)| (*name).to_owned()))
+            .unwrap_or_else(|| tr!("pit-design-block-model-none"));
+        MenuFieldCombo::new(
+            "pit_design_shell",
+            tr!("pit-design-shell"),
+            &mut settings.evaluation.shell,
+            chosen,
+            std::iter::once((None, tr!("pit-design-block-model-none").into())).chain(surfaces.iter().map(|(id, name)| (Some(*id), (*name).into()))),
+        )
+        .width(FIELD_WIDTH)
+        .help_text(tr!("pit-design-shell-help"))
+        .show(ui);
+    }
     let warning = ui.visuals().warn_fg_color;
     match &facts.waiting {
         Some(Waiting::Design) => menu::menu_note(ui, tr!("pit-design-designing")),
@@ -1146,6 +1178,117 @@ fn draw_evaluation(ui: &mut egui::Ui, working: &mut PitObject, facts: &DraftFact
         ui.colored_label(warning, tr!("pit-design-evaluation-short"));
     }
     draw_figures(ui, evaluation, &facts.fields);
+    if let Some(shell) = &evaluation.shell {
+        draw_against_shell(ui, shell, &facts.fields);
+    }
+    draw_comparison(ui, facts, working.design().is_some());
+}
+
+/// The numeric reserve fields: those a figure is given for.
+fn numeric_fields(fields: &[ReserveField]) -> Vec<&ReserveField> {
+    fields.iter().filter(|field| field.aggregation != ReserveAggregation::Category).collect()
+}
+
+/// A small heading over a table's column.
+fn column_heading(ui: &mut egui::Ui, text: String) {
+    let weak = ui.visuals().weak_text_color();
+    ui.label(egui::RichText::new(text).color(weak).small());
+}
+
+/// What the design takes beyond the shell and leaves inside it, and the
+/// difference, where a difference means something: of the volume and the
+/// summed fields, not of an average.
+fn draw_against_shell(ui: &mut egui::Ui, shell: &ShellFigures, fields: &[ReserveField]) {
+    menu::menu_note(ui, tr!("pit-design-shell-against"));
+    if let Some(problem) = &shell.problem {
+        ui.colored_label(ui.visuals().warn_fg_color, tr!("pit-design-shell-failed", reason = problem.clone()));
+        return;
+    }
+    let numeric = numeric_fields(fields);
+    let value = |figures: &Figures, field: &ReserveField| figures.measured.as_ref().and_then(|measured| measured.value(field.id));
+    egui::ScrollArea::horizontal().id_salt("pit_design_against_shell").show(ui, |ui| {
+        egui::Grid::new("pit_design_against_shell_grid").striped(true).spacing([12.0, 2.0]).show(ui, |ui| {
+            column_heading(ui, String::new());
+            column_heading(ui, tr!("pit-design-evaluation-volume"));
+            for field in &numeric {
+                column_heading(ui, field.name.clone());
+            }
+            ui.end_row();
+            for (label, figures) in [(tr!("pit-design-shell-gained"), &shell.gained), (tr!("pit-design-shell-left"), &shell.left)] {
+                ui.label(label);
+                ui.label(quantity(Some(figures.volume)));
+                for field in &numeric {
+                    ui.label(quantity(value(figures, field)));
+                }
+                ui.end_row();
+            }
+            ui.label(tr!("pit-design-shell-net"));
+            ui.label(quantity(Some(shell.gained.volume - shell.left.volume)));
+            for field in &numeric {
+                let net = match field.aggregation {
+                    ReserveAggregation::Sum => value(&shell.gained, field).zip(value(&shell.left, field)).map(|(gained, left)| gained - left),
+                    _ => None,
+                };
+                ui.label(net.map_or_else(String::new, |net| quantity(Some(net))));
+            }
+            ui.end_row();
+        });
+    });
+}
+
+/// Every pit design in the project measured, side by side: this one picked
+/// out, any not measured as it stands now dimmed.
+fn draw_comparison(ui: &mut egui::Ui, facts: &DraftFacts, designed: bool) {
+    let measured: Vec<&ComparedDesign> = facts.designs.iter().filter(|design| design.total.is_some()).collect();
+    if measured.len() < 2 || !designed {
+        return;
+    }
+    menu::menu_note(ui, tr!("pit-design-compare"));
+    let numeric = numeric_fields(&facts.fields);
+    let shells = measured.iter().any(|design| design.shell.as_ref().is_some_and(|shell| shell.problem.is_none()));
+    let weak = ui.visuals().weak_text_color();
+    egui::ScrollArea::horizontal().id_salt("pit_design_compare").show(ui, |ui| {
+        egui::Grid::new("pit_design_compare_grid").striped(true).spacing([12.0, 2.0]).show(ui, |ui| {
+            column_heading(ui, tr!("pit-design-name"));
+            column_heading(ui, tr!("pit-design-evaluation-volume"));
+            for field in &numeric {
+                column_heading(ui, field.name.clone());
+            }
+            if shells {
+                column_heading(ui, tr!("pit-design-shell-gained"));
+                column_heading(ui, tr!("pit-design-shell-left"));
+            }
+            ui.end_row();
+            for design in measured {
+                let this = facts.designs.first().is_some_and(|first| first.id == design.id);
+                let text = |text: String| {
+                    let text = egui::RichText::new(text);
+                    match (this, design.current) {
+                        (true, _) => text.strong(),
+                        (false, false) => text.color(weak),
+                        (false, true) => text,
+                    }
+                };
+                let name = ui.label(text(design.name.clone()));
+                if !design.current {
+                    name.hint(tr!("pit-design-compare-stale"));
+                }
+                let total = design.total.as_ref();
+                ui.label(text(quantity(total.map(|total| total.volume))));
+                for field in &numeric {
+                    ui.label(text(quantity(
+                        total.and_then(|total| total.measured.as_ref()).and_then(|measured| measured.value(field.id)),
+                    )));
+                }
+                if shells {
+                    let shell = design.shell.as_ref().filter(|shell| shell.problem.is_none());
+                    ui.label(text(shell.map_or_else(String::new, |shell| quantity(Some(shell.gained.volume)))));
+                    ui.label(text(shell.map_or_else(String::new, |shell| quantity(Some(shell.left.volume)))));
+                }
+                ui.end_row();
+            }
+        });
+    });
 }
 
 /// A measure's figures: the whole design's, its materials' and its
