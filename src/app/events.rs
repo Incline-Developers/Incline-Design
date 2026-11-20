@@ -704,6 +704,9 @@ impl<'a> App<'a> {
                     if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp.is_some()) {
                         self.update_pit_ramp_hover();
                     }
+                    if self.editor.pit_design.is_some() {
+                        self.update_pit_flag_hover();
+                    }
                     if (self.editor.triangulation_pick_target.is_some()
                         || self.editor.optimization.start_pick.is_some()
                         || self.editor.drill_pattern_awaiting_shape_pick

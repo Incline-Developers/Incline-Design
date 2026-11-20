@@ -11,6 +11,7 @@ use crate::{
         Object, ObjectId,
         pit_design::{
             Design, End,
+            checks::Check,
             object::{Outcome, PitObject},
             settings::{PitDesignSettings, RampSettings, StopMode},
         },
@@ -19,14 +20,14 @@ use crate::{
     ui::dialogs::pit_design::{NoDesign, end_text, no_design_text, problem_text},
 };
 
-const SETTINGS_DESCRIPTION: &str = "A pit design's settings: kind (pit, cut into the ground, or dump, a dump or stockpile built on it); direction (a pit up from its floor's toe or down from its crest, a dump up from its toe stepping in or down from its top stepping out); bench_height; face_angle (degrees from horizontal); berm_width; bench_rules (height_cycle, a list of heights the benches take in turn; catch_every and catch_width, a berm that wide every that many benches; zones, bands of RL from..to whose benches take their own height, face_angle, berm_width and wall_radius, a bench taking the zone it starts in and the last listed winning; sectors, each a bearing the walls face (dip direction, degrees from north) with its face_angle, berm_width and optional inter_ramp target, interpolated round the compass; regions, each an outline ([x, y] points) whose walls take its face_angle and berm_width, blending over blend metres across its edge; inter_ramp, a target to check the walls against; a region counts over a zone, a zone over a sector, a sector over the design); wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id: a pit built up daylights against it, a dump built down meets it); ramps, a list (empty for none), each with width, gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, switchback (true turns back every switchback_every benches, or at 0 only at turns_at RLs, round inside_radius, turn_widening wider round the turn, climbing at turn_grade round it or level at 0), from and to (RLs it begins and ends at, the way the design is built; null for the whole pit), exit_flat (a level run where it leaves the pit), junction_flat (a level run where each stretch leaves its berm), bands (bands of RL from..to whose stretches take their own width and/or a flat before they climb; a change of width tapers over five times the change); two ramps on one bench keep a road's width apart. Its surface is made with triangulate, which takes a pit design as every string it draws.";
+const SETTINGS_DESCRIPTION: &str = "A pit design's settings: kind (pit, cut into the ground, or dump, a dump or stockpile built on it); direction (a pit up from its floor's toe or down from its crest, a dump up from its toe stepping in or down from its top stepping out); bench_height; face_angle (degrees from horizontal); berm_width; bench_rules (height_cycle, a list of heights the benches take in turn; catch_every and catch_width, a berm that wide every that many benches; zones, bands of RL from..to whose benches take their own height, face_angle, berm_width and wall_radius, a bench taking the zone it starts in and the last listed winning; sectors, each a bearing the walls face (dip direction, degrees from north) with its face_angle, berm_width and optional inter_ramp target, interpolated round the compass; regions, each an outline ([x, y] points) whose walls take its face_angle and berm_width, blending over blend metres across its edge; inter_ramp, a target to check the walls against; a region counts over a zone, a zone over a sector, a sector over the design); wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id: a pit built up daylights against it, a dump built down meets it); ramps, a list (empty for none), each with width, gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, inside_radius (the tightest the road's inside edge should turn, checked all along it), switchback (true turns back every switchback_every benches, or at 0 only at turns_at RLs, round inside_radius, turn_widening wider round the turn, climbing at turn_grade round it or level at 0), from and to (RLs it begins and ends at, the way the design is built; null for the whole pit), exit_flat (a level run where it leaves the pit), junction_flat (a level run where each stretch leaves its berm), bands (bands of RL from..to whose stretches take their own width and/or a flat before they climb; a change of width tapers over five times the change); two ramps on one bench keep a road's width apart. Its surface is made with triangulate, which takes a pit design as every string it draws.";
 
 pub(super) fn definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "get_pit_designs",
             "title": "Read the pit designs",
-            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). Without design: a summary of each. With design (its object id): that one whole, its settings and what they come to included, which set_pit_design takes back.",
+            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). Without design: a summary of each. With design (its object id): that one whole, its settings and what they come to included, which set_pit_design takes back. What it comes to lists its checks: each place it falls short of its settings (the ramp steeper, flatter or narrower than asked or turning tighter than inside_radius, a berm narrower, a bench face steeper, or walls steeper between ramps than their target), at its worst point, with the bench (its place in bench_report) and ramp it is on, its value, what was asked and how far along it runs.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "design": { "type": "integer", "minimum": 0 } },
@@ -149,7 +150,7 @@ pub(super) fn definitions() -> Vec<Value> {
                             "start": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, y] near where it leaves the string. The string's first point if left out." },
                             "clockwise": { "type": "boolean", "description": "Climb clockwise seen from above. False if left out." },
                             "switchback_every": { "type": "integer", "minimum": 1, "description": "Turn back every this many benches. A spiral if left out." },
-                            "inside_radius": { "type": "number", "minimum": 0, "description": "The tightest the road's inside edge turns on a switchback. 15 if left out." },
+                            "inside_radius": { "type": "number", "minimum": 0, "description": "The tightest the road's inside edge should turn: what a switchback turns round, and what the whole road is checked against. 15 if left out." },
                             "turns_at": { "type": "array", "items": { "type": "number" }, "description": "RLs it switches back at: on the first bench starting at or past each, or the next that has room. With or without switchback_every." },
                             "turn_widening": { "type": "number", "minimum": 0, "description": "How much wider than its width the road is round the middle of a switchback. 0 if left out." },
                             "turn_grade": { "type": "number", "minimum": 0, "description": "The grade, as a percentage, a switchback's inside edge climbs at round the turn, the stretch after it climbing what is left: usually 2 to 3 less than gradient. 0 (a level turn on a pad) if left out." },
@@ -185,7 +186,7 @@ pub(super) fn definitions() -> Vec<Value> {
                             "start": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, y] near where it leaves the string. The string's first point if left out." },
                             "clockwise": { "type": "boolean", "description": "Climb clockwise seen from above. False if left out." },
                             "switchback_every": { "type": "integer", "minimum": 1, "description": "Turn back every this many benches. A spiral if left out." },
-                            "inside_radius": { "type": "number", "minimum": 0, "description": "The tightest the road's inside edge turns on a switchback. 15 if left out." },
+                            "inside_radius": { "type": "number", "minimum": 0, "description": "The tightest the road's inside edge should turn: what a switchback turns round, and what the whole road is checked against. 15 if left out." },
                             "turns_at": { "type": "array", "items": { "type": "number" }, "description": "RLs it switches back at: on the first bench starting at or past each, or the next that has room. With or without switchback_every." },
                             "turn_widening": { "type": "number", "minimum": 0, "description": "How much wider than its width the road is round the middle of a switchback. 0 if left out." },
                             "turn_grade": { "type": "number", "minimum": 0, "description": "The grade, as a percentage, a switchback's inside edge climbs at round the turn, the stretch after it climbing what is left: usually 2 to 3 less than gradient. 0 (a level turn on a pad) if left out." },
@@ -323,6 +324,20 @@ fn end_name(end: End) -> &'static str {
     }
 }
 
+/// What a check is called in what MCP reports: what falls short, with its
+/// figures in the units it says.
+fn check_name(check: Check) -> &'static str {
+    match check {
+        Check::Steep => "ramp_steeper_percent",
+        Check::Flatter => "ramp_flatter_percent",
+        Check::Narrow => "ramp_narrower_m",
+        Check::Tight => "ramp_turns_tighter_m",
+        Check::Berm => "berm_narrower_m",
+        Check::Face => "face_steeper_degrees",
+        Check::InterRamp => "walls_steeper_degrees",
+    }
+}
+
 /// What a design comes to.
 fn summary(design: &Design) -> Value {
     let round = |value: f64| (value * 100.0).round() / 100.0;
@@ -348,6 +363,22 @@ fn summary(design: &Design) -> Value {
             "too_steep": wall.too_steep(),
             "samples": wall.samples,
         })).collect::<Vec<_>>(),
+        "checks": design.flags.iter().map(|flag| {
+            // A grade as a percentage, as the settings give it.
+            let figure = |value: f64| match flag.check {
+                Check::Steep | Check::Flatter => round(value * 100.0),
+                _ => round(value),
+            };
+            json!({
+                "check": check_name(flag.check),
+                "at": [round(flag.at.x), round(flag.at.y), round(flag.at.z)],
+                "bench": flag.bench,
+                "ramp": flag.ramp,
+                "value": figure(flag.value),
+                "asked": figure(flag.asked),
+                "length": round(flag.length),
+            })
+        }).collect::<Vec<_>>(),
         "bench_report": design.report.iter().map(|bench| {
             let mut row = json!({
                 "rl": round(bench.elevation),

@@ -5066,7 +5066,7 @@ pit-design-switchback = Zikzak
 pit-design-switchback-every = Dönüşler arası basamak
 pit-design-switchback-every-help = Rampanın geri dönmeden önce kaç basamak tırmandığı; yalnızca verilen RL'lerde dönmek için 0. Dönüş sığmayan yerde rampa bir basamak daha gider ve orada döner.
 pit-design-inside-radius = İç yarıçap
-pit-design-inside-radius-help = Zikzakta yolun iç kenarının yapabileceği en dar dönüş.
+pit-design-inside-radius-help = Yolun iç kenarının dönmesi gereken en dar yarıçap: bir virajın döndüğü yarıçap ve tüm yolun denetlendiği değer.
 pit-design-result-section = Tasarım
 pit-design-designing = Tasarlanıyor...
 pit-design-benches-built = Basamaklar
@@ -5226,3 +5226,24 @@ pit-design-table-turn = Dönüş
 pit-design-table-turned = Zikzak
 pit-design-table-flatter-hint = Eğimin istediğinden { $length } m daha uzun yükselir, bu yüzden daha yatıktır: önündeki hiçbir düz kesim basamağı sağlam bırakmadı.
 pit-design-table-narrow-hint = Duvarın bir dönüşünde bağlandığı yerde istenen { $width } m'den daha dar.
+pit-design-checks = Denetimler
+pit-design-checks-pass = Tüm denetimler geçti: rampanın eğimi, genişliği ve dönüşleri ile bermeler ve şevler istendiği gibi.
+pit-design-checks-count =
+    { $count ->
+        [one] Bir yer ayarları karşılamıyor.
+       *[other] { $count } yer ayarları karşılamıyor.
+    }
+pit-design-checks-what = Denetim
+pit-design-checks-is = Sonuç
+pit-design-checks-asked = İstenen
+pit-design-checks-help = Görünümde bulmak için bir denetimin üzerine gelin veya oraya gitmek için tıklayın.
+pit-design-check-steep = Rampa çok dik
+pit-design-check-flatter = Rampa daha yatık
+pit-design-check-narrow = Rampa çok dar
+pit-design-check-tight = Rampa çok keskin dönüyor
+pit-design-check-berm = Berme çok dar
+pit-design-check-face = Şev çok dik
+pit-design-check-inter-ramp = Duvarlar çok dik
+pit-design-flag = { $check }: { $asked } istenen yerde { $value }, { $rl } kotunda.
+pit-design-flag-along = { $length } m boyunca.
+pit-design-table-steeper-hint = İstenen % { $grade } değerinden dik.

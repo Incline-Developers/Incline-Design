@@ -5053,7 +5053,7 @@ pit-design-switchback = スイッチバック
 pit-design-switchback-every = 折り返し間のベンチ数
 pit-design-switchback-every-help = 折り返す前にランプが登るベンチ数。指定した RL だけで折り返すなら0。折り返しが収まらない所では、ランプはもう1ベンチ進んでそこで折り返します。
 pit-design-inside-radius = 内側半径
-pit-design-inside-radius-help = スイッチバックで道路の内側の縁が曲がれる最も小さい半径。
+pit-design-inside-radius-help = 道路の内側の縁が曲がってよい最小の半径: スイッチバックの回転半径であり、道路全体の検査基準です。
 pit-design-result-section = 設計
 pit-design-designing = 設計中...
 pit-design-benches-built = ベンチ
@@ -5213,3 +5213,24 @@ pit-design-table-turn = 折返し
 pit-design-table-turned = スイッチバック
 pit-design-table-flatter-hint = 勾配が求めるより { $length } m 長く登るため、緩くなっています。手前の水平区間ではベンチを健全にできませんでした。
 pit-design-table-narrow-hint = 壁の曲がり目で引き継ぐ箇所で、指定の { $width } m より狭くなっています。
+pit-design-checks = チェック
+pit-design-checks-pass = すべてのチェックに合格: ランプの勾配・幅・カーブ、およびバームと法面は指定どおりです。
+pit-design-checks-count =
+    { $count ->
+        [one] 設定を満たさない箇所が1か所あります。
+       *[other] 設定を満たさない箇所が { $count } か所あります。
+    }
+pit-design-checks-what = チェック
+pit-design-checks-is = 結果
+pit-design-checks-asked = 指定
+pit-design-checks-help = チェックにポインターを合わせるとビューで位置がわかり、クリックするとそこへ移動します。
+pit-design-check-steep = ランプが急すぎる
+pit-design-check-flatter = ランプが緩い
+pit-design-check-narrow = ランプが狭すぎる
+pit-design-check-tight = ランプのカーブがきつすぎる
+pit-design-check-berm = バームが狭すぎる
+pit-design-check-face = 法面が急すぎる
+pit-design-check-inter-ramp = 壁が急すぎる
+pit-design-flag = { $check }: 指定 { $asked } に対して { $value }、RL { $rl }。
+pit-design-flag-along = { $length } m にわたって。
+pit-design-table-steeper-hint = 指定の { $grade } % より急です。

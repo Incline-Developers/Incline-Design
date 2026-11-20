@@ -6214,6 +6214,12 @@ pub(crate) enum UiCommand {
     /// Wait for a click on a closed polyline, a new Pit Design slope
     /// region's outline.
     BeginPitRegionPick,
+    /// What the pointer rests on in Pit Design's checks and bench table,
+    /// for the viewport to pick out.
+    PitDesignHover(crate::ui::dialogs::pit_design::PitHover),
+    /// Turn the view to one of Pit Design's flags, by its place in the
+    /// preview's design.
+    FramePitFlag(usize),
     /// Insert vertices where selected polylines cross an elevation.
     InsertPointsAtElevation {
         object_ids: Vec<ObjectId>,
@@ -6474,6 +6480,8 @@ impl UiCommand {
             | Self::PitDesignStage(_)
             | Self::BeginPitRampStartPick(_)
             | Self::BeginPitRegionPick
+            | Self::PitDesignHover(_)
+            | Self::FramePitFlag(_)
             | Self::OpenObjectEditDialog(_)
             | Self::OpenPointCloudTin
             | Self::OpenPointCloudJoin

@@ -5778,7 +5778,7 @@ pit-design-turn-grade-help = The grade the road's inside edge climbs at round a 
 pit-design-turns-none = With no benches between turns and no RLs to turn at, the ramp never turns back.
 pit-design-turn-moved = The turn asked at RL { $asked } was made at RL { $made }: there was no room for it sooner.
 pit-design-inside-radius = Inside radius
-pit-design-inside-radius-help = The tightest the inside edge of the road turns on a switchback.
+pit-design-inside-radius-help = The tightest the inside edge of the road should turn: what a switchback turns round, and what the whole road is checked against.
 pit-design-ramp-extent-section = Ramp extent
 pit-design-ramp-begins = Begins
 pit-design-ramp-begins-help = Where the ramp begins: at the string, or at the bench that starts at an RL the way the design is built.
@@ -5885,3 +5885,24 @@ pit-design-table-berm = Berm
 pit-design-table-turned = Switchback
 pit-design-table-flatter-hint = Climbs over { $length } m more than the gradient asks, so it is flatter: no level stretch before it left the bench sound.
 pit-design-table-narrow-hint = Narrower than the { $width } m asked for, where it hands over at a turn of the wall.
+pit-design-checks = Checks
+pit-design-checks-pass = Every check passes: the ramp's grade, width and turns, and the berms and faces, are as asked.
+pit-design-checks-count =
+    { $count ->
+        [one] One place falls short of the settings.
+       *[other] { $count } places fall short of the settings.
+    }
+pit-design-checks-what = Check
+pit-design-checks-is = Comes to
+pit-design-checks-asked = Asked
+pit-design-checks-help = Hover over a check to find it in the view, or click it to go there.
+pit-design-check-steep = Ramp too steep
+pit-design-check-flatter = Ramp flatter
+pit-design-check-narrow = Ramp too narrow
+pit-design-check-tight = Ramp turns too tight
+pit-design-check-berm = Berm too narrow
+pit-design-check-face = Face too steep
+pit-design-check-inter-ramp = Walls too steep
+pit-design-flag = { $check }: { $value } where { $asked } was asked, at RL { $rl }.
+pit-design-flag-along = Over { $length } m.
+pit-design-table-steeper-hint = Steeper than the { $grade } % asked for.

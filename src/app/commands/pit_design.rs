@@ -709,6 +709,62 @@ impl App<'_> {
         }
     }
 
+    /// The flags of the design the panel shows: its preview's.
+    fn pit_flags(&self) -> &[crate::model::pit_design::checks::Flag] {
+        self.editor
+            .pit_design
+            .as_ref()
+            .and_then(|draft| draft.preview.as_ref())
+            .and_then(|preview| preview.design.as_ref().ok())
+            .map_or(&[], |design| design.flags.as_slice())
+    }
+
+    /// What the pointer rests on in the panel, for the viewport to pick
+    /// out.
+    pub(crate) fn set_pit_design_hover(&mut self, hover: crate::ui::dialogs::pit_design::PitHover) {
+        if let Some(draft) = self.editor.pit_design.as_mut()
+            && draft.hover != hover
+        {
+            draft.hover = hover;
+            self.invalidate_overlay();
+        }
+    }
+
+    /// Turn the view to flag `index`, with the ground round it.
+    pub(crate) fn frame_pit_flag(&mut self, index: usize) {
+        let Some(at) = self.pit_flags().get(index).map(|flag| flag.at) else {
+            return;
+        };
+        self.frame_haul(at, at);
+    }
+
+    /// Which flag is under the pointer in the viewport, if any.
+    pub(crate) fn update_pit_flag_hover(&mut self) {
+        let under = (|| {
+            let graphics = self.graphics.as_ref()?;
+            let cursor = graphics.window_to_viewport_px(self.editor.cursor_screen_px?);
+            let (view_proj, screen) = (graphics.view_proj(), graphics.screen_size_pub());
+            let reach = f64::from(crate::app::PICK_THRESHOLD_PX * 2.0);
+            self.pit_flags()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, flag)| {
+                    let at = crate::rendering::pick::world_to_screen(&view_proj, flag.at, screen)?;
+                    Some((index, at.distance(glam::DVec2::new(f64::from(cursor.0), f64::from(cursor.1)))))
+                })
+                .filter(|(_, distance)| *distance <= reach)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(index, _)| index)
+        })();
+        if let Some(draft) = self.editor.pit_design.as_mut()
+            && draft.flag_under_cursor != under
+        {
+            draft.flag_under_cursor = under;
+            self.invalidate_overlay();
+            self.redraw_requested = true;
+        }
+    }
+
     /// Wait for a click on the string where ramp `index` starts: a new
     /// ramp, where it is one past the last.
     pub(crate) fn begin_pit_ramp_start_pick(&mut self, index: usize) {

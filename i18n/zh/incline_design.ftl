@@ -5024,7 +5024,7 @@ pit-design-switchback = 之字形
 pit-design-switchback-every = 折返间隔台阶数
 pit-design-switchback-every-help = 坡道折返前爬升的台阶数；为 0 时只在给定的 RL 处折返。折返放不下时，坡道再走一个台阶并在那里折返。
 pit-design-inside-radius = 内侧半径
-pit-design-inside-radius-help = 之字形坡道内侧边缘的最小转弯半径。
+pit-design-inside-radius-help = 道路内侧边缘允许的最小转弯半径：即回头弯的转弯半径，也是检查整条道路所用的标准。
 pit-design-result-section = 设计
 pit-design-designing = 正在设计...
 pit-design-benches-built = 台阶
@@ -5184,3 +5184,24 @@ pit-design-table-turn = 回头
 pit-design-table-turned = 之字形
 pit-design-table-flatter-hint = 爬升比坡度要求多出 { $length } m，因此更缓：其前方的任何平路段都无法使台阶稳固。
 pit-design-table-narrow-hint = 在墙体转弯处衔接的位置，比要求的 { $width } m 窄。
+pit-design-checks = 检查
+pit-design-checks-pass = 全部检查通过：坡道的坡度、宽度和转弯，以及平台和台阶坡面均符合要求。
+pit-design-checks-count =
+    { $count ->
+        [one] 有一处未达到设置。
+       *[other] 有 { $count } 处未达到设置。
+    }
+pit-design-checks-what = 检查
+pit-design-checks-is = 结果
+pit-design-checks-asked = 要求
+pit-design-checks-help = 将指针悬停在检查项上可在视图中找到它，单击可转到该处。
+pit-design-check-steep = 坡道过陡
+pit-design-check-flatter = 坡道偏缓
+pit-design-check-narrow = 坡道过窄
+pit-design-check-tight = 坡道转弯过急
+pit-design-check-berm = 平台过窄
+pit-design-check-face = 坡面过陡
+pit-design-check-inter-ramp = 边坡过陡
+pit-design-flag = { $check }：{ $value }，要求 { $asked }，位于标高 { $rl }。
+pit-design-flag-along = 长 { $length } 米。
+pit-design-table-steeper-hint = 比要求的 { $grade } % 更陡。

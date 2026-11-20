@@ -5024,7 +5024,7 @@ pit-design-switchback = स्विचबैक
 pit-design-switchback-every = मोड़ों के बीच बेंच
 pit-design-switchback-every-help = रैंप पलटने से पहले कितनी बेंचें चढ़ता है; केवल दिए गए RL पर पलटने के लिए 0। जहाँ मोड़ नहीं समाता, रैंप एक बेंच और चलता है और वहाँ पलटता है।
 pit-design-inside-radius = भीतरी त्रिज्या
-pit-design-inside-radius-help = स्विचबैक पर सड़क के भीतरी किनारे का सबसे तंग मोड़।
+pit-design-inside-radius-help = सड़क का भीतरी किनारा जितना सबसे तीखा मुड़ना चाहिए: स्विचबैक की त्रिज्या, और पूरी सड़क इसी से जाँची जाती है।
 pit-design-result-section = डिज़ाइन
 pit-design-designing = डिज़ाइन हो रहा है...
 pit-design-benches-built = बेंच
@@ -5187,3 +5187,24 @@ pit-design-table-turn = मोड़
 pit-design-table-turned = स्विचबैक
 pit-design-table-flatter-hint = ढलान की माँग से { $length } मी अधिक में चढ़ती है, इसलिए कम ढलवाँ है: इसके पहले कोई समतल खंड बेंच को सुदृढ़ नहीं छोड़ता था।
 pit-design-table-narrow-hint = माँगी गई { $width } मी से संकरी, जहाँ यह दीवार के मोड़ पर जुड़ती है।
+pit-design-checks = जाँचें
+pit-design-checks-pass = सभी जाँचें पास: रैम्प का ढाल, चौड़ाई और मोड़, तथा बर्म और फेस, जैसा माँगा गया वैसे हैं।
+pit-design-checks-count =
+    { $count ->
+        [one] एक जगह सेटिंग्स से कम पड़ती है।
+       *[other] { $count } जगहें सेटिंग्स से कम पड़ती हैं।
+    }
+pit-design-checks-what = जाँच
+pit-design-checks-is = परिणाम
+pit-design-checks-asked = माँगा गया
+pit-design-checks-help = किसी जाँच को दृश्य में खोजने के लिए उस पर पॉइंटर रखें, या वहाँ जाने के लिए क्लिक करें।
+pit-design-check-steep = रैम्प बहुत खड़ा
+pit-design-check-flatter = रैम्प कम ढलवाँ
+pit-design-check-narrow = रैम्प बहुत संकरा
+pit-design-check-tight = रैम्प बहुत तीखा मुड़ता है
+pit-design-check-berm = बर्म बहुत संकरा
+pit-design-check-face = फेस बहुत खड़ा
+pit-design-check-inter-ramp = दीवारें बहुत खड़ी
+pit-design-flag = { $check }: { $value } जहाँ { $asked } माँगा गया था, RL { $rl } पर।
+pit-design-flag-along = { $length } मी तक।
+pit-design-table-steeper-hint = माँगे गए { $grade } % से अधिक खड़ा।

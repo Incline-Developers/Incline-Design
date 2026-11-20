@@ -17,6 +17,7 @@ use crate::{
         ObjectId, PolyVertex,
         pit_design::{
             Design, Direction, End, Kind, Problem, RampBand, Zone,
+            checks::{Check, Flag},
             object::PitObject,
             settings::{PitDesignSettings, RampSettings, StopMode},
             walls::{Sector, WallReport},
@@ -87,6 +88,14 @@ pub(crate) enum PitStage {
     Ramp,
 }
 
+/// What the pointer rests on in the panel's checks and bench table: a
+/// bench, or one of the design's flags, for the viewport to pick out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PitHover {
+    pub(crate) bench: Option<usize>,
+    pub(crate) flag: Option<usize>,
+}
+
 /// The panel's state.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PitDesignDraft {
@@ -117,6 +126,11 @@ pub(crate) struct PitDesignDraft {
     /// The preview being worked out, by its job's token.
     pub(crate) building: Option<(u64, PreviewKey)>,
     pub(crate) next_token: u64,
+    /// What the pointer rests on in the panel.
+    pub(crate) hover: PitHover,
+    /// The flag under the pointer in the viewport, by its place in the
+    /// preview's design.
+    pub(crate) flag_under_cursor: Option<usize>,
 }
 
 impl PitDesignDraft {
@@ -339,7 +353,10 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                     }
                     menu::menu_section(ui, tr!("pit-design-result-section"));
                     let settings = working.settings();
-                    draw_result(ui, draft, &settings);
+                    let hover = draw_result(ui, draft, &settings, commands);
+                    if hover != draft.hover {
+                        commands.push(UiCommand::PitDesignHover(hover));
+                    }
                 });
 
             ui.add_space(4.0);
@@ -369,6 +386,15 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                 }
             });
         });
+    // The flag under the pointer in the viewport, said beside it.
+    if let Some(flag) = draft
+        .flag_under_cursor
+        .and_then(|index| draft.preview.as_ref()?.design.as_ref().ok()?.flags.get(index))
+        .filter(|_| ui.ctx().pointer_hover_pos().is_some_and(|pointer| viewport_rect.contains(pointer)) && !ui.ctx().egui_wants_pointer_input())
+    {
+        let settings = draft.working.as_ref().map(PitObject::settings).unwrap_or_default();
+        crate::ui::widgets::hint::hint_at_pointer(ui.ctx(), egui::Id::unique("pit_design_flag_hint"), flag_text(flag, &settings));
+    }
     // A field is mid-edit while the pointer is down on it or text is being
     // typed into it; until then the copy waits to be written.
     draft.settled = !ui.ctx().input(|input| input.pointer.any_down()) && ui.ctx().memory(|memory| memory.focused().is_none());
@@ -779,6 +805,14 @@ fn draw_ramp_settings(ui: &mut egui::Ui, ramp: &mut RampSettings, commands: &mut
     .width(FIELD_WIDTH)
     .help_text(tr!("pit-design-climbs-help"))
     .show(ui);
+    // The tightest the road should turn: what a switchback turns round, and
+    // what the whole road is checked against, either way.
+    MenuFieldF64::new(tr!("pit-design-inside-radius"), &mut ramp.inside_radius, 0.0..=10000.0)
+        .width(FIELD_WIDTH)
+        .speed(0.5)
+        .suffix(" m")
+        .help_text(tr!("pit-design-inside-radius-help"))
+        .show(ui);
     let layout_label = |switchback: bool| if switchback { tr!("pit-design-switchback") } else { tr!("pit-design-spiral") };
     let chosen = layout_label(ramp.switchback);
     MenuFieldCombo::new(
@@ -803,12 +837,6 @@ fn draw_ramp_settings(ui: &mut egui::Ui, ramp: &mut RampSettings, commands: &mut
             &mut ramp.turns_at,
             f64::is_finite,
         );
-        MenuFieldF64::new(tr!("pit-design-inside-radius"), &mut ramp.inside_radius, 0.0..=10000.0)
-            .width(FIELD_WIDTH)
-            .speed(0.5)
-            .suffix(" m")
-            .help_text(tr!("pit-design-inside-radius-help"))
-            .show(ui);
         MenuFieldF64::new(tr!("pit-design-turn-widening"), &mut ramp.turn_widening, 0.0..=1000.0)
             .width(FIELD_WIDTH)
             .speed(0.1)
@@ -934,13 +962,15 @@ fn draw_ramp_extent(ui: &mut egui::Ui, ramp: &mut RampSettings, (base_rl, sign, 
     }
 }
 
-/// What the settings come to: the design's figures, or why there is none.
-fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSettings) {
+/// What the settings come to: the design's figures, or why there is none;
+/// and what the pointer rests on among them.
+fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSettings, commands: &mut Vec<UiCommand>) -> PitHover {
     let ramp = !settings.ramps.is_empty();
     let warning = ui.visuals().warn_fg_color;
+    let mut hover = PitHover::default();
     let Some(preview) = draft.preview.as_ref() else {
         menu::menu_note(ui, tr!("pit-design-designing"));
-        return;
+        return hover;
     };
     match &preview.design {
         Err(reason) => {
@@ -995,8 +1025,18 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
                 if steep > 0 {
                     ui.colored_label(warning, tr!("pit-design-walls-too-steep", count = steep));
                 }
+            }
+            if design.flags.is_empty() {
+                menu::menu_note(ui, tr!("pit-design-checks-pass"));
+            } else {
+                ui.colored_label(warning, tr!("pit-design-checks-count", count = design.flags.len()));
+                if menu::menu_section_folding(ui, "pit_design_checks", tr!("pit-design-checks")) {
+                    draw_checks(ui, design, settings, draft.hover, &mut hover, commands);
+                }
+            }
+            if ramp {
                 if menu::menu_section_folding(ui, "pit_design_bench_table", tr!("pit-design-bench-table")) {
-                    draw_bench_table(ui, design, settings);
+                    draw_bench_table(ui, design, settings, &mut hover);
                 }
                 if !design.walls.is_empty() && menu::menu_section_folding(ui, "pit_design_walls_table", tr!("pit-design-walls-table")) {
                     draw_walls_table(ui, &design.walls);
@@ -1017,6 +1057,84 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
     if draft.building.is_some() {
         menu::menu_note(ui, tr!("pit-design-designing"));
     }
+    hover
+}
+
+/// What a check is called.
+pub(crate) fn check_label(check: Check) -> String {
+    match check {
+        Check::Steep => tr!("pit-design-check-steep"),
+        Check::Flatter => tr!("pit-design-check-flatter"),
+        Check::Narrow => tr!("pit-design-check-narrow"),
+        Check::Tight => tr!("pit-design-check-tight"),
+        Check::Berm => tr!("pit-design-check-berm"),
+        Check::Face => tr!("pit-design-check-face"),
+        Check::InterRamp => tr!("pit-design-check-inter-ramp"),
+    }
+}
+
+/// A flag's figure, or what was asked, as the check measures it.
+pub(crate) fn flag_figure(check: Check, value: f64) -> String {
+    match check {
+        Check::Steep | Check::Flatter => format!("{:.1} %", value * 100.0),
+        Check::Narrow | Check::Tight | Check::Berm => format!("{value:.1} m"),
+        Check::Face | Check::InterRamp => format!("{value:.1}°"),
+    }
+}
+
+/// A flag said whole: what falls short, by how much, and where.
+pub(crate) fn flag_text(flag: &Flag, settings: &PitDesignSettings) -> String {
+    let mut text = tr!(
+        "pit-design-flag",
+        check = check_label(flag.check),
+        value = flag_figure(flag.check, flag.value),
+        asked = flag_figure(flag.check, flag.asked),
+        rl = format!("{:.1}", flag.at.z)
+    );
+    if let Some(ramp) = flag.ramp.filter(|_| settings.ramps.len() > 1) {
+        text = format!("{text}\n{}", tr!("pit-design-ramp-numbered", number = (ramp + 1).to_string()));
+    }
+    if flag.length > 0.5 {
+        text = format!("{text}\n{}", tr!("pit-design-flag-along", length = format!("{:.0}", flag.length)));
+    }
+    text
+}
+
+/// Each place the design falls short, by bench: hovered, it is picked out
+/// in the viewport; clicked, the view goes to it.
+fn draw_checks(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSettings, shown: PitHover, hover: &mut PitHover, commands: &mut Vec<UiCommand>) {
+    let weak = ui.visuals().weak_text_color();
+    let mut order: Vec<usize> = (0..design.flags.len()).collect();
+    order.sort_by(|a, b| design.flags[*a].bench.cmp(&design.flags[*b].bench).then(a.cmp(b)));
+    egui::Grid::new("pit_design_checks_grid").striped(true).num_columns(4).spacing([12.0, 2.0]).show(ui, |ui| {
+        for heading in [
+            tr!("pit-design-table-rl"),
+            tr!("pit-design-checks-what"),
+            tr!("pit-design-checks-is"),
+            tr!("pit-design-checks-asked"),
+        ] {
+            ui.label(egui::RichText::new(heading).color(weak).small());
+        }
+        ui.end_row();
+        for index in order {
+            let flag = &design.flags[index];
+            let top = ui.cursor().min.y;
+            ui.label(format!("{:.1}", flag.at.z));
+            let lit = shown.flag == Some(index) || shown.bench == Some(flag.bench);
+            let name = ui.selectable_label(lit, check_label(flag.check)).hint(flag_text(flag, settings));
+            if name.clicked() {
+                commands.push(UiCommand::FramePitFlag(index));
+            }
+            ui.colored_label(ui.visuals().warn_fg_color, flag_figure(flag.check, flag.value));
+            ui.label(flag_figure(flag.check, flag.asked));
+            ui.end_row();
+            let row = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().min.y);
+            if ui.rect_contains_pointer(row) {
+                hover.flag = Some(index);
+            }
+        }
+    });
+    menu::menu_note(ui, tr!("pit-design-checks-help"));
 }
 
 /// Each bench as built: its RL, its ramp's grade, flat and narrowest width,
@@ -1062,7 +1180,7 @@ fn span([low, high]: [f64; 2], decimals: usize, unit: &str) -> String {
     if low == high { format!("{low}{unit}") } else { format!("{low}–{high}{unit}") }
 }
 
-fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSettings) {
+fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSettings, hover: &mut PitHover) {
     let warning = ui.visuals().warn_fg_color;
     let weak = ui.visuals().weak_text_color();
     let sign = settings.direction.sign();
@@ -1077,7 +1195,8 @@ fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSett
         .get(1..)
         .is_some_and(|after| after.windows(2).any(|pair| pair[0].berm != pair[1].berm) || after.iter().any(|bench| bench.berm[0] != bench.berm[1]));
     let varies = faces_vary || berms_vary;
-    let columns = 5 + if varies { 2 } else { 0 } + usize::from(several);
+    let flagged = !design.flags.is_empty();
+    let columns = 5 + if varies { 2 } else { 0 } + usize::from(several) + usize::from(flagged);
     egui::Grid::new("pit_design_benches")
         .striped(true)
         .num_columns(columns)
@@ -1096,6 +1215,9 @@ fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSett
                 tr!("pit-design-table-width"),
                 tr!("pit-design-table-turn"),
             ]);
+            if flagged {
+                headings.push(tr!("pit-design-checks"));
+            }
             for heading in headings {
                 ui.label(egui::RichText::new(heading).color(weak).small());
             }
@@ -1105,6 +1227,20 @@ fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSett
                 // A row for each ramp's stretch on the bench, or one for a
                 // bench with none; the bench's own columns on the first.
                 let roads: Vec<Option<&crate::model::pit_design::RampReport>> = if bench.ramps.is_empty() { vec![None] } else { bench.ramps.iter().map(Some).collect() };
+                let row_top = ui.cursor().min.y;
+                // The bench's flags, said in its last column on its first row.
+                let flags: Vec<&Flag> = design.flags.iter().filter(|flag| flag.bench == number).collect();
+                let checks_cell = |ui: &mut egui::Ui, row: usize| {
+                    if !flagged {
+                        return;
+                    }
+                    if row > 0 || flags.is_empty() {
+                        ui.label("");
+                        return;
+                    }
+                    let text = flags.iter().map(|flag| flag_text(flag, settings)).collect::<Vec<_>>().join("\n\n");
+                    ui.colored_label(warning, flags.len().to_string()).hint(text);
+                };
                 for (row, road) in roads.into_iter().enumerate() {
                     if row == 0 {
                         ui.label(format!("{:.1}–{top:.1}", bench.elevation));
@@ -1124,12 +1260,17 @@ fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSett
                         for _ in 0..4 {
                             ui.label("");
                         }
+                        checks_cell(ui, row);
                         ui.end_row();
                         continue;
                     };
                     let gradient = ramp.gradient / 100.0;
                     let grade = format!("{:.1} %", road.steepest * 100.0);
-                    if road.lengthened > 0.0 || road.steepest < gradient - 0.005 {
+                    let tolerance = crate::model::pit_design::checks::GRADE_TOLERANCE;
+                    if road.steepest > gradient + tolerance {
+                        ui.colored_label(warning, grade)
+                            .hint(tr!("pit-design-table-steeper-hint", grade = format!("{:.1}", ramp.gradient)));
+                    } else if road.lengthened > 0.0 || road.steepest < gradient - tolerance {
                         ui.colored_label(warning, grade)
                             .hint(tr!("pit-design-table-flatter-hint", length = format!("{:.0}", road.lengthened)));
                     } else {
@@ -1138,12 +1279,9 @@ fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSett
                     ui.label(if road.flat > 0.0 { format!("{:.0} m", road.flat) } else { String::new() });
                     // As wide as its band asks, or narrowing from the last
                     // bench's width as it tapers to this one's.
-                    let spec = ramp.spec(DVec2::ZERO);
-                    let width_at = |elevation: f64| spec.band(elevation, sign).and_then(|band| band.width).unwrap_or(ramp.width);
-                    let previous = number.checked_sub(1).map(|before| design.report[before].elevation);
-                    let wanted = previous.map_or(width_at(bench.elevation), |before| width_at(bench.elevation).min(width_at(before)));
+                    let wanted = crate::model::pit_design::checks::wanted_width(&ramp.spec(DVec2::ZERO), design, number, sign);
                     let width = format!("{:.1} m", road.narrowest);
-                    if road.narrowest < wanted * 0.99 {
+                    if road.narrowest < wanted * (1.0 - crate::model::pit_design::checks::WIDTH_TOLERANCE) {
                         ui.colored_label(warning, width).hint(tr!("pit-design-table-narrow-hint", width = format!("{wanted:.1}")));
                     } else {
                         ui.label(width);
@@ -1163,7 +1301,12 @@ fn draw_bench_table(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSett
                             ui.label("");
                         }
                     }
+                    checks_cell(ui, row);
                     ui.end_row();
+                }
+                let rows = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), row_top..=ui.cursor().min.y);
+                if ui.rect_contains_pointer(rows) {
+                    hover.bench = Some(number);
                 }
             }
         });

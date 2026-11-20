@@ -1417,6 +1417,14 @@ impl<'a> App<'a> {
                 self.begin_pit_region_pick();
                 Ok(())
             }
+            UiCommand::PitDesignHover(hover) => {
+                self.set_pit_design_hover(hover);
+                Ok(())
+            }
+            UiCommand::FramePitFlag(index) => {
+                self.frame_pit_flag(index);
+                Ok(())
+            }
             UiCommand::OpenObjectEditDialog(id) => {
                 self.open_object_edit_dialog(id);
                 Ok(())

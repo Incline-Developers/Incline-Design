@@ -115,6 +115,7 @@ impl RampSettings {
             turns_at: if self.switchback { self.turns_at.clone() } else { Vec::new() },
             start: self.start.unwrap_or(default_start),
             climbs_clockwise: self.climbs_clockwise,
+            turning_radius: self.inside_radius,
             layout: if self.switchback {
                 Layout::Switchback {
                     every: self.switchback_every,

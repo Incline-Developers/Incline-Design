@@ -5075,7 +5075,7 @@ pit-design-switchback = Зигзаг
 pit-design-switchback-every = Эргэлт хоорондын уступ
 pit-design-switchback-every-help = Рамп буцаж эргэхээсээ өмнө хэдэн уступ өгсөх; зөвхөн өгсөн RL-үүдэд эргэхийн тулд 0. Эргэлт багтахгүй газар рамп нэг уступ цааш явж тэнд эргэнэ.
 pit-design-inside-radius = Дотоод радиус
-pit-design-inside-radius-help = Зигзаг дээр замын дотоод ирмэгийн хамгийн хурц эргэлт.
+pit-design-inside-radius-help = Замын дотор ирмэгийн эргэх ёстой хамгийн бага радиус: эргэх тохойн радиус, мөн бүх замыг шалгах хэмжээ.
 pit-design-result-section = Төсөл
 pit-design-designing = Төлөвлөж байна...
 pit-design-benches-built = Уступууд
@@ -5238,3 +5238,24 @@ pit-design-table-turn = Эргэлт
 pit-design-table-turned = Зигзаг
 pit-design-table-flatter-hint = Налуугийн шаардлагаас { $length } м илүү урт өгсдөг тул илүү намхан: өмнөх ямар ч тэгш хэсэг уступыг тогтвортой болгосонгүй.
 pit-design-table-narrow-hint = Хананы эргэлтэд залгах газар шаардсан { $width } м-ээс нарийн.
+pit-design-checks = Шалгалт
+pit-design-checks-pass = Бүх шалгалт давлаа: налуу замын налуу, өргөн, эргэлт болон бермүүд, налуу хана хүссэнээр байна.
+pit-design-checks-count =
+    { $count ->
+        [one] Нэг газар тохиргоог хангахгүй байна.
+       *[other] { $count } газар тохиргоог хангахгүй байна.
+    }
+pit-design-checks-what = Шалгалт
+pit-design-checks-is = Гарсан
+pit-design-checks-asked = Хүссэн
+pit-design-checks-help = Харагдацаас олохын тулд шалгалт дээр заагчаа аваачих, эсвэл тийш очихын тулд дарна уу.
+pit-design-check-steep = Налуу зам хэт эгц
+pit-design-check-flatter = Налуу зам зөөлөн
+pit-design-check-narrow = Налуу зам хэт нарийн
+pit-design-check-tight = Налуу зам хэт огцом эргэнэ
+pit-design-check-berm = Берм хэт нарийн
+pit-design-check-face = Нүүр хэт эгц
+pit-design-check-inter-ramp = Хана хэт эгц
+pit-design-flag = { $check }: { $asked } хүссэн газар { $value }, RL { $rl }-д.
+pit-design-flag-along = { $length } м үргэлжилнэ.
+pit-design-table-steeper-hint = Хүссэн { $grade } %-иас эгц.

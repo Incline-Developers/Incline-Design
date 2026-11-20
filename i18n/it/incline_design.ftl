@@ -5066,7 +5066,7 @@ pit-design-switchback = Tornante
 pit-design-switchback-every = Gradini tra i tornanti
 pit-design-switchback-every-help = Quanti gradini sale la rampa prima di invertire; 0 per invertire solo alle quote date. Dove un tornante non ci sta, la rampa prosegue un gradino in più e inverte lì.
 pit-design-inside-radius = Raggio interno
-pit-design-inside-radius-help = La curva più stretta del bordo interno della strada in un tornante.
+pit-design-inside-radius-help = La curva più stretta che il bordo interno della strada deve fare: il raggio di un tornante, e il valore con cui si controlla tutta la strada.
 pit-design-result-section = Progetto
 pit-design-designing = Progettazione in corso...
 pit-design-benches-built = Gradini
@@ -5229,3 +5229,24 @@ pit-design-table-turn = Svolta
 pit-design-table-turned = Tornante
 pit-design-table-flatter-hint = Sale su { $length } m in più di quanto chiede la pendenza, quindi è meno ripida: nessun tratto in piano prima lasciava il gradino stabile.
 pit-design-table-narrow-hint = Più stretta dei { $width } m richiesti, dove si raccorda a una curva della parete.
+pit-design-checks = Controlli
+pit-design-checks-pass = Tutti i controlli superati: pendenza, larghezza e curve della rampa, berme e scarpate sono come richiesto.
+pit-design-checks-count =
+    { $count ->
+        [one] Un punto non rispetta le impostazioni.
+       *[other] { $count } punti non rispettano le impostazioni.
+    }
+pit-design-checks-what = Controllo
+pit-design-checks-is = Risulta
+pit-design-checks-asked = Richiesto
+pit-design-checks-help = Passa il puntatore su un controllo per trovarlo nella vista, o fai clic per andarci.
+pit-design-check-steep = Rampa troppo ripida
+pit-design-check-flatter = Rampa più dolce
+pit-design-check-narrow = Rampa troppo stretta
+pit-design-check-tight = Rampa curva troppo stretta
+pit-design-check-berm = Berma troppo stretta
+pit-design-check-face = Scarpata troppo ripida
+pit-design-check-inter-ramp = Pareti troppo ripide
+pit-design-flag = { $check }: { $value } dove era richiesto { $asked }, a quota { $rl }.
+pit-design-flag-along = Per { $length } m.
+pit-design-table-steeper-hint = Più ripida del { $grade } % richiesto.

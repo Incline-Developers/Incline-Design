@@ -5022,7 +5022,7 @@ pit-design-switchback = Ziguezague
 pit-design-switchback-every = Bancadas entre curvas
 pit-design-switchback-every-help = Quantas bancadas a rampa sobe antes de inverter; 0 para inverter só nas cotas dadas. Onde uma inversão não cabe, a rampa segue mais uma bancada e inverte aí.
 pit-design-inside-radius = Raio interno
-pit-design-inside-radius-help = A curva mais fechada da borda interna da estrada num ziguezague.
+pit-design-inside-radius-help = A curva mais fechada que a borda interna da estrada deve fazer: o raio de um retorno, e o valor contra o qual toda a estrada é verificada.
 pit-design-result-section = Projeto
 pit-design-designing = A projetar...
 pit-design-benches-built = Bancadas
@@ -5185,3 +5185,24 @@ pit-design-table-turn = Volta
 pit-design-table-turned = Ziguezague
 pit-design-table-flatter-hint = Sobe ao longo de mais { $length } m do que a inclinação pede, por isso é menos inclinada: nenhum troço nivelado antes dela deixou a bancada estável.
 pit-design-table-narrow-hint = Mais estreita do que os { $width } m pedidos, onde liga numa curva do talude.
+pit-design-checks = Verificações
+pit-design-checks-pass = Todas as verificações passam: a inclinação, a largura e as curvas da rampa, e as bermas e os taludes, estão como pedido.
+pit-design-checks-count =
+    { $count ->
+        [one] Um local não cumpre as configurações.
+       *[other] { $count } locais não cumprem as configurações.
+    }
+pit-design-checks-what = Verificação
+pit-design-checks-is = Resulta
+pit-design-checks-asked = Pedido
+pit-design-checks-help = Passe o ponteiro sobre uma verificação para a encontrar na vista, ou clique para ir até lá.
+pit-design-check-steep = Rampa íngreme demais
+pit-design-check-flatter = Rampa mais suave
+pit-design-check-narrow = Rampa estreita demais
+pit-design-check-tight = Rampa com curva fechada demais
+pit-design-check-berm = Berma estreita demais
+pit-design-check-face = Talude íngreme demais
+pit-design-check-inter-ramp = Paredes íngremes demais
+pit-design-flag = { $check }: { $value } onde se pediu { $asked }, na cota { $rl }.
+pit-design-flag-along = Ao longo de { $length } m.
+pit-design-table-steeper-hint = Mais íngreme que os { $grade } % pedidos.

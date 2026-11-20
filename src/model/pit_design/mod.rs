@@ -18,6 +18,7 @@
 //! Places on a ring are found again on the next by where each point of the
 //! next was offset from (`ring::Ring::sources`).
 
+pub(crate) mod checks;
 pub(crate) mod object;
 #[cfg(test)]
 mod object_tests;
@@ -119,6 +120,10 @@ pub(crate) struct RampSpec {
     /// starting at or past each, the way the design is built, where a turn
     /// fits there; on the next that has room where not.
     pub(crate) turns_at: Vec<f64>,
+    /// The tightest its inside edge should turn anywhere, for the trucks:
+    /// what a switchback turns round, and what the road is checked against
+    /// everywhere else.
+    pub(crate) turning_radius: f64,
 }
 
 /// A band of RL whose benches' stretches of road are laid otherwise: as
@@ -590,6 +595,22 @@ pub(crate) struct RampReport {
     /// pad.
     #[serde(default)]
     pub(crate) turn_rise: f64,
+    /// Where its steepest metre is: the middle of it, on the edge it is on.
+    #[serde(default)]
+    pub(crate) steepest_at: Option<DVec3>,
+    /// Where it is narrowest: half way across it there.
+    #[serde(default)]
+    pub(crate) narrowest_at: Option<DVec3>,
+    /// Half way along it, on its near edge.
+    #[serde(default)]
+    pub(crate) middle: Option<DVec3>,
+}
+
+impl RampReport {
+    /// Every place it names, to move or turn over with the design.
+    fn places_mut(&mut self) -> impl Iterator<Item = &mut DVec3> {
+        [&mut self.turn_at, &mut self.steepest_at, &mut self.narrowest_at, &mut self.middle].into_iter().flatten()
+    }
 }
 
 /// Why a design ended where it did.
@@ -641,6 +662,9 @@ pub(crate) struct Design {
     /// it.
     #[serde(default)]
     pub(crate) blocked_ramp: Option<usize>,
+    /// Where it falls short of what was asked, each place once.
+    #[serde(default)]
+    pub(crate) flags: Vec<checks::Flag>,
 }
 
 impl Design {
@@ -664,12 +688,20 @@ impl Design {
             bench.elevation = -bench.elevation;
             for road in &mut bench.ramps {
                 road.turn_moved_from = road.turn_moved_from.map(|rl| -rl);
-                road.turn_at = road.turn_at.map(|point| DVec3::new(point.x, point.y, -point.z));
+                for place in road.places_mut() {
+                    place.z = -place.z;
+                }
             }
         }
         // A dump's walls face out, where the pit it was designed as faces in.
         for wall in &mut self.walls {
             wall.bearing = (wall.bearing + 180.0).rem_euclid(360.0);
+            if let Some(place) = &mut wall.steepest_at {
+                place.z = -place.z;
+            }
+        }
+        for flag in &mut self.flags {
+            flag.at.z = -flag.at.z;
         }
         self.ramp_exit = self.ramp_exit.map(|exit| DVec3::new(exit.x, exit.y, -exit.z));
         for exit in self.ramp_exits.iter_mut().flatten() {
@@ -694,8 +726,16 @@ impl Design {
             bench.elevation += delta.z;
             for road in &mut bench.ramps {
                 road.turn_moved_from = road.turn_moved_from.map(|rl| rl + delta.z);
-                road.turn_at = road.turn_at.map(|point| point + delta);
+                for place in road.places_mut() {
+                    *place += delta;
+                }
             }
+        }
+        for place in moved.walls.iter_mut().filter_map(|wall| wall.steepest_at.as_mut()) {
+            *place += delta;
+        }
+        for flag in &mut moved.flags {
+            flag.at += delta;
         }
         moved.ramp_exit = moved.ramp_exit.map(|exit| exit + delta);
         for exit in moved.ramp_exits.iter_mut().flatten() {
@@ -1006,14 +1046,18 @@ fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
             Direction::Down => road.centreline.first().copied(),
         })
         .collect();
-    for road in roads {
+    for road in &roads {
         for (points, kind) in [
-            (road.left, StringKind::RampEdge),
-            (road.right, StringKind::RampEdge),
-            (road.centreline, StringKind::RampCentreline),
+            (&road.left, StringKind::RampEdge),
+            (&road.right, StringKind::RampEdge),
+            (&road.centreline, StringKind::RampCentreline),
         ] {
             if points.len() >= 2 {
-                strings.push(DesignString { kind, points, closed: false });
+                strings.push(DesignString {
+                    kind,
+                    points: points.clone(),
+                    closed: false,
+                });
             }
         }
     }
@@ -1031,9 +1075,11 @@ fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
         volume,
         dump: false,
         walls: Vec::new(),
+        flags: Vec::new(),
     };
     without_straight_points(&mut design.strings);
     design.walls = inter_ramp(spec, &base.ring, &design);
+    design.flags = checks::flags(spec, &design, &roads);
     Ok(design)
 }
 
@@ -1105,6 +1151,7 @@ fn inter_ramp(spec: &Spec, base: &[DVec2], design: &Design) -> Vec<walls::WallRe
     let rings: Vec<(StringKind, Vec<(DVec3, DVec3)>)> = design.strings.iter().filter(|string| string.closed).map(|string| (string.kind, segments(string))).collect();
     let road: Vec<(DVec3, DVec3)> = design.strings.iter().filter(|string| string.kind == StringKind::RampEdge).flat_map(segments).collect();
     let mut sums = vec![(0_u32, 0.0, 0.0, f64::NEG_INFINITY); bins.len()];
+    let mut steepest_at: Vec<Option<DVec3>> = vec![None; bins.len()];
     let count = base.len();
     // The way the walls face, as the benches were cut to it.
     let first_walls = cuts.first().map(|cut| cut.walls(spec));
@@ -1176,6 +1223,9 @@ fn inter_ramp(spec: &Spec, base: &[DVec2], design: &Design) -> Vec<walls::WallRe
                 let achieved = rise.atan2(far - near).to_degrees();
                 let designed = rise.atan2(across).to_degrees();
                 let sum = &mut sums[bin];
+                if achieved > sum.3 {
+                    steepest_at[bin] = Some(middle.extend((low + high) * 0.5));
+                }
                 *sum = (sum.0 + 1, sum.1 + designed, sum.2 + achieved, sum.3.max(achieved));
             }
         }
@@ -1183,8 +1233,9 @@ fn inter_ramp(spec: &Spec, base: &[DVec2], design: &Design) -> Vec<walls::WallRe
     bins.iter()
         .zip(&targets)
         .zip(sums)
-        .filter(|(_, (samples, ..))| *samples > 0)
-        .map(|((bearing, target), (samples, designed, achieved, steepest))| walls::WallReport {
+        .zip(steepest_at)
+        .filter(|((_, (samples, ..)), _)| *samples > 0)
+        .map(|(((bearing, target), (samples, designed, achieved, steepest)), steepest_at)| walls::WallReport {
             bearing: *bearing,
             samples,
             designed: designed / f64::from(samples),
@@ -1192,6 +1243,7 @@ fn inter_ramp(spec: &Spec, base: &[DVec2], design: &Design) -> Vec<walls::WallRe
             steepest,
             over_cut: (achieved - designed) / f64::from(samples),
             target: *target,
+            steepest_at,
         })
         .collect()
 }
@@ -1946,6 +1998,7 @@ fn measure_road(near: &[DVec3], far: &[DVec3], height: f64) -> RampReport {
     let shorter = run(near).min(run(far));
     let grade = if shorter > 0.0 { height / shorter } else { 0.0 };
     let mut steepest: f64 = 0.0;
+    let mut steepest_at = None;
     for edge in [near, far] {
         let Some(&first) = edge.first() else {
             continue;
@@ -1954,30 +2007,38 @@ fn measure_road(near: &[DVec3], far: &[DVec3], height: f64) -> RampReport {
         for pair in edge.windows(2) {
             run += pair[0].truncate().distance(pair[1].truncate());
             if run >= 1.0 {
-                steepest = steepest.max((pair[1].z - anchor.z).abs() / run);
+                let slope = (pair[1].z - anchor.z).abs() / run;
+                if slope > steepest {
+                    steepest_at = Some(anchor.lerp(pair[1], 0.5));
+                }
+                steepest = steepest.max(slope);
                 anchor = pair[1];
                 run = 0.0;
             }
         }
     }
     let mut narrowest = f64::INFINITY;
+    let mut narrowest_at = None;
     for point in near {
         let nearest = far
             .windows(2)
             .filter(|pair| point.z >= pair[0].z.min(pair[1].z) - SAME_HEIGHT && point.z <= pair[0].z.max(pair[1].z) + SAME_HEIGHT)
-            .map(|pair| {
-                crate::model::kernel::project_onto_segment(point.truncate(), pair[0].truncate(), pair[1].truncate())
-                    .0
-                    .distance(point.truncate())
-            })
-            .fold(f64::INFINITY, f64::min);
-        narrowest = narrowest.min(nearest);
+            .map(|pair| crate::model::kernel::project_onto_segment(point.truncate(), pair[0].truncate(), pair[1].truncate()).0)
+            .map(|across| (across.distance(point.truncate()), across))
+            .fold((f64::INFINITY, DVec2::ZERO), |best, next| if next.0 < best.0 { next } else { best });
+        if nearest.0 < narrowest {
+            narrowest_at = Some(point.truncate().lerp(nearest.1, 0.5).extend(point.z));
+        }
+        narrowest = narrowest.min(nearest.0);
     }
     RampReport {
         ramp: 0,
         grade,
         steepest,
         narrowest: if narrowest.is_finite() { narrowest } else { 0.0 },
+        steepest_at,
+        narrowest_at,
+        middle: checks::half_way(near),
         flat: 0.0,
         lengthened: 0.0,
         switchback: false,

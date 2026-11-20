@@ -5024,7 +5024,7 @@ pit-design-switchback = زیگزاگ
 pit-design-switchback-every = پله‌ها میان دورها
 pit-design-switchback-every-help = رمپ چند پله بالا می‌رود تا برگردد؛ 0 برای برگشتن فقط در ترازهای داده‌شده. جایی که برگشت جا نشود، رمپ یک پله دیگر می‌رود و آنجا برمی‌گردد.
 pit-design-inside-radius = شعاع داخلی
-pit-design-inside-radius-help = تندترین پیچ لبه داخلی جاده در زیگزاگ.
+pit-design-inside-radius-help = تندترین پیچی که لبه داخلی جاده باید بگیرد: شعاع پیچ برگشتی، و آنچه کل جاده با آن بررسی می‌شود.
 pit-design-result-section = طراحی
 pit-design-designing = در حال طراحی...
 pit-design-benches-built = پله‌ها
@@ -5184,3 +5184,24 @@ pit-design-table-turn = دور
 pit-design-table-turned = زیگزاگ
 pit-design-table-flatter-hint = { $length } متر بیش از آنچه شیب می‌خواهد بالا می‌رود، پس کم‌شیب‌تر است: هیچ بخش همواری پیش از آن پله را پایدار نکرد.
 pit-design-table-narrow-hint = باریک‌تر از { $width } متر خواسته‌شده، جایی که در پیچ دیواره تحویل می‌دهد.
+pit-design-checks = بررسی‌ها
+pit-design-checks-pass = همه بررسی‌ها گذشت: شیب، عرض و پیچ‌های رمپ، و برم‌ها و دیواره‌ها همان‌طورند که خواسته شده.
+pit-design-checks-count =
+    { $count ->
+        [one] یک جا با تنظیمات نمی‌خواند.
+       *[other] { $count } جا با تنظیمات نمی‌خوانند.
+    }
+pit-design-checks-what = بررسی
+pit-design-checks-is = مقدار
+pit-design-checks-asked = خواسته
+pit-design-checks-help = نشانگر را روی یک بررسی ببرید تا آن را در نما بیابید، یا کلیک کنید تا به آنجا بروید.
+pit-design-check-steep = رمپ بیش از حد شیب‌دار
+pit-design-check-flatter = رمپ کم‌شیب‌تر
+pit-design-check-narrow = رمپ بیش از حد باریک
+pit-design-check-tight = پیچ رمپ بیش از حد تند
+pit-design-check-berm = برم بیش از حد باریک
+pit-design-check-face = دیواره بیش از حد شیب‌دار
+pit-design-check-inter-ramp = دیواره‌ها بیش از حد شیب‌دار
+pit-design-flag = { $check }: { $value } جایی که { $asked } خواسته شده بود، در تراز { $rl }.
+pit-design-flag-along = در طول { $length } متر.
+pit-design-table-steeper-hint = شیب‌دارتر از { $grade } درصد خواسته‌شده.

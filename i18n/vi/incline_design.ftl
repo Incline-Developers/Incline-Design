@@ -5052,7 +5052,7 @@ pit-design-switchback = Chữ chi
 pit-design-switchback-every = Số tầng giữa các lần quay đầu
 pit-design-switchback-every-help = Đường dốc leo bao nhiêu tầng trước khi quay đầu; 0 để chỉ quay ở các cao độ đã cho. Nơi vòng quay không vừa, đường dốc đi thêm một tầng và quay ở đó.
 pit-design-inside-radius = Bán kính trong
-pit-design-inside-radius-help = Độ cong gắt nhất của mép trong đường trên khúc chữ chi.
+pit-design-inside-radius-help = Bán kính nhỏ nhất mà mép trong của đường được phép cua: bán kính của khúc cua gấp, và mức để kiểm tra toàn bộ con đường.
 pit-design-result-section = Thiết kế
 pit-design-designing = Đang thiết kế...
 pit-design-benches-built = Tầng
@@ -5212,3 +5212,24 @@ pit-design-table-turn = Quay đầu
 pit-design-table-turned = Chữ chi
 pit-design-table-flatter-hint = Lên dốc dài hơn { $length } m so với độ dốc yêu cầu, nên thoải hơn: không đoạn phẳng nào trước nó giữ được tầng ổn định.
 pit-design-table-narrow-hint = Hẹp hơn { $width } m yêu cầu, ở nơi nó nối tiếp tại chỗ ngoặt của vách.
+pit-design-checks = Kiểm tra
+pit-design-checks-pass = Mọi kiểm tra đều đạt: độ dốc, bề rộng và khúc cua của đường dốc, cùng các bờ và mái, đều như yêu cầu.
+pit-design-checks-count =
+    { $count ->
+        [one] Một chỗ không đạt cài đặt.
+       *[other] { $count } chỗ không đạt cài đặt.
+    }
+pit-design-checks-what = Kiểm tra
+pit-design-checks-is = Đạt được
+pit-design-checks-asked = Yêu cầu
+pit-design-checks-help = Rê con trỏ lên một kiểm tra để tìm nó trong khung nhìn, hoặc nhấp để đến đó.
+pit-design-check-steep = Đường dốc quá dốc
+pit-design-check-flatter = Đường dốc thoải hơn
+pit-design-check-narrow = Đường dốc quá hẹp
+pit-design-check-tight = Đường dốc cua quá gắt
+pit-design-check-berm = Bờ quá hẹp
+pit-design-check-face = Mái quá dốc
+pit-design-check-inter-ramp = Tường quá dốc
+pit-design-flag = { $check }: { $value } trong khi yêu cầu { $asked }, tại cao độ { $rl }.
+pit-design-flag-along = Dài { $length } m.
+pit-design-table-steeper-hint = Dốc hơn { $grade } % yêu cầu.

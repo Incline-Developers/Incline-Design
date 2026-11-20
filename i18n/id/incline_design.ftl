@@ -5024,7 +5024,7 @@ pit-design-switchback = Switchback
 pit-design-switchback-every = Jenjang antar belokan
 pit-design-switchback-every-help = Berapa jenjang ramp naik sebelum berbalik; 0 untuk berbalik hanya di RL yang diberikan. Bila belokan tidak muat, ramp terus satu jenjang lagi dan berbalik di sana.
 pit-design-inside-radius = Jari-jari dalam
-pit-design-inside-radius-help = Belokan paling tajam tepi dalam jalan pada switchback.
+pit-design-inside-radius-help = Belokan tertajam yang boleh dibuat tepi dalam jalan: jari-jari tikungan balik, dan acuan pemeriksaan seluruh jalan.
 pit-design-result-section = Desain
 pit-design-designing = Mendesain...
 pit-design-benches-built = Jenjang
@@ -5184,3 +5184,24 @@ pit-design-table-turn = Belokan
 pit-design-table-turned = Switchback
 pit-design-table-flatter-hint = Menanjak sepanjang { $length } m lebih dari yang diminta kemiringan, jadi lebih landai: tidak ada bagian datar sebelumnya yang membuat jenjang stabil.
 pit-design-table-narrow-hint = Lebih sempit dari { $width } m yang diminta, tempat ia bersambung di tikungan dinding.
+pit-design-checks = Pemeriksaan
+pit-design-checks-pass = Semua pemeriksaan lolos: kemiringan, lebar, dan tikungan ramp, serta berm dan lereng, sesuai yang diminta.
+pit-design-checks-count =
+    { $count ->
+        [one] Satu tempat tidak memenuhi pengaturan.
+       *[other] { $count } tempat tidak memenuhi pengaturan.
+    }
+pit-design-checks-what = Pemeriksaan
+pit-design-checks-is = Hasil
+pit-design-checks-asked = Diminta
+pit-design-checks-help = Arahkan penunjuk ke pemeriksaan untuk menemukannya di tampilan, atau klik untuk ke sana.
+pit-design-check-steep = Ramp terlalu curam
+pit-design-check-flatter = Ramp lebih landai
+pit-design-check-narrow = Ramp terlalu sempit
+pit-design-check-tight = Ramp berbelok terlalu tajam
+pit-design-check-berm = Berm terlalu sempit
+pit-design-check-face = Lereng terlalu curam
+pit-design-check-inter-ramp = Dinding terlalu curam
+pit-design-flag = { $check }: { $value } padahal diminta { $asked }, di RL { $rl }.
+pit-design-flag-along = Sepanjang { $length } m.
+pit-design-table-steeper-hint = Lebih curam dari { $grade } % yang diminta.

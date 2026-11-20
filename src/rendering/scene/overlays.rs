@@ -32,6 +32,10 @@ const BLAST_OUTLINE_WIDTH: f32 = 2.5;
 /// back, but grey against the live outlines around it.
 const EXCLUDED_OUTLINE_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 0.9];
 
+/// Pit Design's flags, where a design falls short of its settings: amber,
+/// as warnings are.
+const PIT_FLAG_COLOR: [f32; 4] = [1.0, 0.62, 0.1, 1.0];
+
 /// The Road Network's selected dig block, and the line to where it joins
 /// the roads: the selection orange the rest of the scene uses.
 pub(crate) const HAUL_SELECTED_BLOCK: [f32; 4] = [1.0, 0.7, 0.1, 1.0];
@@ -336,6 +340,15 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
             for turn in design.report.iter().flat_map(|bench| &bench.ramps).filter_map(|road| road.turn_at) {
                 draw_screen_cross(&mut overlay, turn, 16.0, 7.0, [0.05, 0.2, 0.4, 1.0]);
                 draw_screen_cross(&mut overlay, turn, 14.0, 3.5, [0.55, 0.8, 1.0, 1.0]);
+            }
+            // Where it falls short of its settings: amber dots, larger where
+            // the panel or the pointer points at them.
+            let draft = editor.pit_design.as_ref();
+            let hover = draft.map(|draft| draft.hover).unwrap_or_default();
+            let under = draft.and_then(|draft| draft.flag_under_cursor);
+            for (index, flag) in design.flags.iter().enumerate() {
+                let lit = hover.flag == Some(index) || hover.bench == Some(flag.bench) || under == Some(index);
+                draw_screen_point_marker_sized(&mut overlay, flag.at, if lit { 18.0 } else { 12.0 }, PIT_FLAG_COLOR);
             }
         }
     }

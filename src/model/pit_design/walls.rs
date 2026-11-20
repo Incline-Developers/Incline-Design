@@ -58,6 +58,9 @@ pub(crate) struct WallReport {
     pub(crate) over_cut: f64,
     /// The angle asked for, if one was.
     pub(crate) target: Option<f64>,
+    /// Where they come out steepest: half way up and across that stack.
+    #[serde(default)]
+    pub(crate) steepest_at: Option<glam::DVec3>,
 }
 
 impl WallReport {

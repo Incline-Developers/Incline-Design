@@ -5058,7 +5058,7 @@ pit-design-switchback = 스위치백
 pit-design-switchback-every = 회전 간 벤치 수
 pit-design-switchback-every-help = 램프가 되돌아가기 전에 오르는 벤치 수. 지정한 RL에서만 되돌아가려면 0. 회차가 들어가지 않는 곳에서는 램프가 한 벤치 더 가서 그곳에서 되돌아갑니다.
 pit-design-inside-radius = 안쪽 반경
-pit-design-inside-radius-help = 스위치백에서 도로 안쪽 가장자리가 돌 수 있는 가장 작은 반경입니다.
+pit-design-inside-radius-help = 도로 안쪽 가장자리가 돌아야 할 가장 작은 반경: 스위치백의 회전 반경이자 도로 전체를 검사하는 기준입니다.
 pit-design-result-section = 설계
 pit-design-designing = 설계 중...
 pit-design-benches-built = 벤치
@@ -5218,3 +5218,24 @@ pit-design-table-turn = 회차
 pit-design-table-turned = 스위치백
 pit-design-table-flatter-hint = 경사가 요구하는 것보다 { $length } m 더 길게 오르므로 더 완만합니다. 앞의 어떤 평탄 구간도 벤치를 안정되게 하지 못했습니다.
 pit-design-table-narrow-hint = 벽의 굽은 곳에서 이어지는 부분이 지정한 { $width } m보다 좁습니다.
+pit-design-checks = 검사
+pit-design-checks-pass = 모든 검사 통과: 램프의 경사, 폭, 회전과 소단 및 사면이 요청대로입니다.
+pit-design-checks-count =
+    { $count ->
+        [one] 한 곳이 설정에 미치지 못합니다.
+       *[other] { $count }곳이 설정에 미치지 못합니다.
+    }
+pit-design-checks-what = 검사
+pit-design-checks-is = 결과
+pit-design-checks-asked = 요청
+pit-design-checks-help = 검사 위에 포인터를 올리면 뷰에서 찾을 수 있고, 클릭하면 그곳으로 이동합니다.
+pit-design-check-steep = 램프가 너무 가파름
+pit-design-check-flatter = 램프가 더 완만함
+pit-design-check-narrow = 램프가 너무 좁음
+pit-design-check-tight = 램프 회전이 너무 급함
+pit-design-check-berm = 소단이 너무 좁음
+pit-design-check-face = 사면이 너무 가파름
+pit-design-check-inter-ramp = 벽이 너무 가파름
+pit-design-flag = { $check }: { $asked } 요청 위치에서 { $value }, RL { $rl }.
+pit-design-flag-along = { $length } m에 걸쳐.
+pit-design-table-steeper-hint = 요청한 { $grade } %보다 가파릅니다.

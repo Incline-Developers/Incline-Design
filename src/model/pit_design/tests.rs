@@ -80,6 +80,7 @@ fn with_ramp(direction: Direction, layout: Layout, start: DVec2, clockwise: bool
             exit_flat: 0.0,
             junction_flat: 0.0,
             turns_at: Vec::new(),
+            turning_radius: 15.0,
         }],
         stop,
     }
@@ -1198,5 +1199,104 @@ fn switchbacks_climb_round_their_turns() {
         let design = built(kind, 300.0, &spec, None);
         assert_ramps_sound(&format!("{kind} down, climbing round its turns"), &design, &spec.ramps);
         assert!(design.report.iter().flat_map(|bench| &bench.ramps).any(|road| road.turn_rise > 0.0));
+    }
+}
+
+#[test]
+fn a_sound_design_raises_no_flags() {
+    let start = outline("circle")[0];
+    let spec = with_ramp(Direction::Up, Layout::Spiral, start, false, Stop::Benches(10), RAMPS[2]);
+    let design = built("circle", 100.0, &spec, None);
+    assert!(design.flags.is_empty(), "flags on a sound circle: {:?}", design.flags);
+    let mut no_ramp = spec;
+    no_ramp.ramps.clear();
+    let design = built("floor", 100.0, &no_ramp, None);
+    assert!(design.flags.is_empty(), "flags on a floor with no ramp: {:?}", design.flags);
+}
+
+#[test]
+fn checks_find_what_falls_short_and_where() {
+    use super::checks::{Check, flags};
+    let start = outline("rect")[0];
+    let spec = with_ramp(Direction::Up, Layout::Spiral, start, false, Stop::Benches(6), RAMPS[2]);
+    let design = built("rect", 100.0, &spec, None);
+    // Asked for more than it was built to: a gentler road, wider berms and
+    // flatter faces fall short everywhere.
+    let mut stricter = spec.clone();
+    stricter.ramps[0].gradient = 0.10;
+    stricter.berm_width = 13.0;
+    stricter.face_angle = 55.0;
+    let found = flags(&stricter, &design, &[]);
+    let count = |check: Check| found.iter().filter(|flag| flag.check == check).count();
+    let stretches = design.report.iter().filter(|bench| !bench.ramps.is_empty()).count();
+    assert_eq!(count(Check::Steep), stretches, "every stretch steeper than 10 %");
+    assert_eq!(count(Check::Face), design.report.len(), "every face steeper than 55°");
+    assert_eq!(count(Check::Berm), design.report.len() - 1, "every berm after the first narrower than 13 m");
+    for flag in &found {
+        let bench = &design.report[flag.bench];
+        let (low, high) = (bench.elevation, bench.elevation + bench.height);
+        assert!(flag.at.z >= low - 1.0e-6 && flag.at.z <= high + 1.0e-6, "{flag:?} off its bench {low}..{high}");
+        match flag.check {
+            Check::Steep => assert!(flag.value > 0.10 && (flag.asked - 0.10).abs() < 1.0e-12, "{flag:?}"),
+            // With no road to leave out, its worst is where the road takes
+            // the berm.
+            Check::Berm => assert!(flag.value < 13.0 && flag.length > 100.0, "{flag:?}"),
+            Check::Face => assert!(flag.value > 56.0 && flag.asked == 55.0 && flag.length > 100.0, "{flag:?}"),
+            _ => {}
+        }
+    }
+    // A road narrower than asked, where it is narrowest.
+    let mut wider = spec.clone();
+    wider.ramps[0].width = 32.0;
+    let narrow: Vec<_> = flags(&wider, &design, &[]).into_iter().filter(|flag| flag.check == Check::Narrow).collect();
+    assert_eq!(narrow.len(), stretches);
+    for flag in &narrow {
+        let road = design.report[flag.bench].ramps[0];
+        assert_eq!(flag.value, road.narrowest);
+        assert_eq!(Some(flag.at), road.narrowest_at);
+    }
+}
+
+#[test]
+fn a_ramp_round_sharp_tips_turns_too_tight_there() {
+    use super::checks::Check;
+    let start = outline("star")[0];
+    let spec = with_ramp(Direction::Up, Layout::Spiral, start, false, Stop::Benches(10), RAMPS[0]);
+    let design = built("star", 100.0, &spec, None);
+    let tight: Vec<_> = design.flags.iter().filter(|flag| flag.check == Check::Tight).collect();
+    assert!(!tight.is_empty(), "the road rounds the star's tips");
+    let centreline = design.strings.iter().find(|string| string.kind == StringKind::RampCentreline).unwrap();
+    let tips: Vec<DVec2> = outline("star").into_iter().step_by(2).collect();
+    for flag in tight {
+        assert!(flag.value < flag.asked && flag.asked == 15.0, "{flag:?}");
+        assert!(centreline.points.contains(&flag.at), "{flag:?} is on the road's middle");
+        let bearing = flag.at.truncate().to_angle();
+        assert!(
+            tips.iter()
+                .any(|tip| (tip.to_angle() - bearing + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI < 0.2),
+            "{flag:?} is at a tip"
+        );
+    }
+}
+
+#[test]
+fn flags_move_and_turn_over_with_their_design() {
+    let start = outline("floor")[0];
+    let spec = with_ramp(Direction::Up, Layout::Spiral, start, false, Stop::Benches(6), RAMPS[0]);
+    let design = built("floor", 100.0, &spec, None);
+    assert!(!design.flags.is_empty(), "the floor's corners turn the road tight");
+    let delta = DVec3::new(10.0, -5.0, 3.0);
+    let moved = design.translated(delta);
+    for (flag, after) in design.flags.iter().zip(&moved.flags) {
+        assert_eq!(after.at, flag.at + delta);
+    }
+    let dump = Spec { kind: Kind::Dump, ..spec };
+    let design = built("floor", 100.0, &dump, None);
+    let (low, high) = (
+        design.levels.iter().copied().fold(f64::INFINITY, f64::min),
+        design.levels.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+    );
+    for flag in &design.flags {
+        assert!(flag.at.z >= low - 1.0e-6 && flag.at.z <= high + 1.0e-6, "{flag:?} outside the dump's {low}..{high}");
     }
 }

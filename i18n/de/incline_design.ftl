@@ -5065,7 +5065,7 @@ pit-design-switchback = Serpentine
 pit-design-switchback-every = Strossen zwischen Wenden
 pit-design-switchback-every-help = Wie viele Strossen die Rampe steigt, bevor sie wendet; 0, um nur an den angegebenen RLs zu wenden. Wo eine Wende nicht passt, fährt die Rampe eine Strosse weiter und wendet dort.
 pit-design-inside-radius = Innenradius
-pit-design-inside-radius-help = Die engste Krümmung der Innenkante der Straße in einer Serpentine.
+pit-design-inside-radius-help = Der engste Radius, den die Innenkante der Straße fahren soll: der Radius einer Spitzkehre, und woran die ganze Straße geprüft wird.
 pit-design-result-section = Entwurf
 pit-design-designing = Wird entworfen...
 pit-design-benches-built = Strossen
@@ -5228,3 +5228,24 @@ pit-design-table-turn = Wende
 pit-design-table-turned = Serpentine
 pit-design-table-flatter-hint = Steigt auf { $length } m mehr, als die Steigung verlangt, und ist daher flacher: kein ebenes Stück davor ließ die Strosse standsicher.
 pit-design-table-narrow-hint = Schmaler als die verlangten { $width } m, wo sie an einer Biegung der Wand übergibt.
+pit-design-checks = Prüfungen
+pit-design-checks-pass = Alle Prüfungen bestanden: Steigung, Breite und Kurven der Rampe sowie Bermen und Böschungen entsprechen den Vorgaben.
+pit-design-checks-count =
+    { $count ->
+        [one] Eine Stelle erfüllt die Einstellungen nicht.
+       *[other] { $count } Stellen erfüllen die Einstellungen nicht.
+    }
+pit-design-checks-what = Prüfung
+pit-design-checks-is = Ergibt
+pit-design-checks-asked = Vorgabe
+pit-design-checks-help = Bewegen Sie den Zeiger über eine Prüfung, um sie in der Ansicht zu finden, oder klicken Sie, um dorthin zu gehen.
+pit-design-check-steep = Rampe zu steil
+pit-design-check-flatter = Rampe flacher
+pit-design-check-narrow = Rampe zu schmal
+pit-design-check-tight = Rampe zu enge Kurve
+pit-design-check-berm = Berme zu schmal
+pit-design-check-face = Böschung zu steil
+pit-design-check-inter-ramp = Wände zu steil
+pit-design-flag = { $check }: { $value }, vorgegeben { $asked }, auf RL { $rl }.
+pit-design-flag-along = Über { $length } m.
+pit-design-table-steeper-hint = Steiler als die vorgegebenen { $grade } %.

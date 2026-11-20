@@ -5025,7 +5025,7 @@ pit-design-switchback = Lacet
 pit-design-switchback-every = Gradins entre virages
 pit-design-switchback-every-help = Combien de gradins la rampe monte avant de faire demi-tour ; 0 pour ne tourner qu’aux cotes données. Là où un virage ne tient pas, la rampe continue un gradin de plus et tourne là.
 pit-design-inside-radius = Rayon intérieur
-pit-design-inside-radius-help = Le virage le plus serré du bord intérieur de la route dans un lacet.
+pit-design-inside-radius-help = Le virage le plus serré que doit prendre le bord intérieur de la route : le rayon d'un lacet, et la valeur à laquelle toute la route est contrôlée.
 pit-design-result-section = Conception
 pit-design-designing = Conception en cours...
 pit-design-benches-built = Gradins
@@ -5188,3 +5188,24 @@ pit-design-table-turn = Virage
 pit-design-table-turned = Lacet
 pit-design-table-flatter-hint = Monte sur { $length } m de plus que la pente ne le demande, donc moins raide : aucun palier avant lui ne laissait le gradin stable.
 pit-design-table-narrow-hint = Plus étroite que les { $width } m demandés, là où elle se raccorde à un virage du talus.
+pit-design-checks = Contrôles
+pit-design-checks-pass = Tous les contrôles sont respectés : la pente, la largeur et les virages de la rampe, ainsi que les bermes et les talus, sont conformes.
+pit-design-checks-count =
+    { $count ->
+        [one] Un endroit ne respecte pas les paramètres.
+       *[other] { $count } endroits ne respectent pas les paramètres.
+    }
+pit-design-checks-what = Contrôle
+pit-design-checks-is = Obtenu
+pit-design-checks-asked = Demandé
+pit-design-checks-help = Survolez un contrôle pour le trouver dans la vue, ou cliquez pour y aller.
+pit-design-check-steep = Rampe trop raide
+pit-design-check-flatter = Rampe moins raide
+pit-design-check-narrow = Rampe trop étroite
+pit-design-check-tight = Rampe trop serrée
+pit-design-check-berm = Berme trop étroite
+pit-design-check-face = Talus trop raide
+pit-design-check-inter-ramp = Parois trop raides
+pit-design-flag = { $check } : { $value } pour { $asked } demandé, à la cote { $rl }.
+pit-design-flag-along = Sur { $length } m.
+pit-design-table-steeper-hint = Plus raide que les { $grade } % demandés.

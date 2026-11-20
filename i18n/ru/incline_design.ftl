@@ -5405,7 +5405,7 @@ pit-design-switchback = Серпантин
 pit-design-switchback-every = Уступов между разворотами
 pit-design-switchback-every-help = Сколько уступов съезд поднимается до разворота; 0, чтобы разворачиваться только на заданных отметках. Где разворот не помещается, съезд идёт ещё один уступ и разворачивается там.
 pit-design-inside-radius = Внутренний радиус
-pit-design-inside-radius-help = Наименьший радиус поворота внутренней кромки дороги на серпантине.
+pit-design-inside-radius-help = Наименьший радиус, по которому должна поворачивать внутренняя кромка дороги: радиус серпантина и то, с чем сверяется вся дорога.
 pit-design-result-section = Проект
 pit-design-designing = Проектирование...
 pit-design-benches-built = Уступы
@@ -5574,3 +5574,24 @@ pit-design-table-turn = Разворот
 pit-design-table-turned = Серпантин
 pit-design-table-flatter-hint = Поднимается на { $length } м длиннее, чем требует уклон, поэтому положе: никакой горизонтальный участок перед ним не делал уступ устойчивым.
 pit-design-table-narrow-hint = Уже заданных { $width } м там, где съезд переходит на повороте борта.
+pit-design-checks = Проверки
+pit-design-checks-pass = Все проверки пройдены: уклон, ширина и повороты съезда, а также бермы и откосы соответствуют заданным.
+pit-design-checks-count =
+    { $count ->
+        [one] Одно место не соответствует настройкам.
+       *[other] Мест, не соответствующих настройкам: { $count }.
+    }
+pit-design-checks-what = Проверка
+pit-design-checks-is = Получено
+pit-design-checks-asked = Задано
+pit-design-checks-help = Наведите указатель на проверку, чтобы найти её в виде, или щёлкните, чтобы перейти к ней.
+pit-design-check-steep = Съезд слишком крутой
+pit-design-check-flatter = Съезд положе
+pit-design-check-narrow = Съезд слишком узкий
+pit-design-check-tight = Съезд поворачивает слишком круто
+pit-design-check-berm = Берма слишком узкая
+pit-design-check-face = Откос слишком крутой
+pit-design-check-inter-ramp = Борта слишком крутые
+pit-design-flag = { $check }: { $value } при заданном { $asked }, на отметке { $rl }.
+pit-design-flag-along = На протяжении { $length } м.
+pit-design-table-steeper-hint = Круче заданных { $grade } %.

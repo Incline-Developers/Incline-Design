@@ -5066,7 +5066,7 @@ pit-design-switchback = متعرج
 pit-design-switchback-every = المصاطب بين الانعطافات
 pit-design-switchback-every-help = عدد المصاطب التي يصعدها المنحدر قبل أن ينعطف عائدًا؛ 0 للانعطاف عند المناسيب المعطاة فقط. وحيث لا يتسع الانعطاف، يمضي المنحدر مصطبة أخرى وينعطف هناك.
 pit-design-inside-radius = نصف القطر الداخلي
-pit-design-inside-radius-help = أضيق انعطاف للحافة الداخلية للطريق في المتعرج.
+pit-design-inside-radius-help = أضيق انعطاف ينبغي أن تنعطفه الحافة الداخلية للطريق: نصف قطر المنعطف المتعرج، وما يُفحص به الطريق كله.
 pit-design-result-section = التصميم
 pit-design-designing = جارٍ التصميم...
 pit-design-benches-built = المصاطب
@@ -5241,3 +5241,24 @@ pit-design-table-turn = الالتفاف
 pit-design-table-turned = متعرج
 pit-design-table-flatter-hint = يصعد على مسافة أطول بـ { $length } م مما يطلبه الميل، فهو أقل ميلًا: لم يجعل أي مقطع مستوٍ قبله المصطبة سليمة.
 pit-design-table-narrow-hint = أضيق من { $width } م المطلوبة، حيث يتصل عند منعطف في الجدار.
+pit-design-checks = الفحوص
+pit-design-checks-pass = اجتازت كل الفحوص: ميل المنحدر وعرضه ومنعطفاته، والمصاطب والوجوه، كما طُلب.
+pit-design-checks-count =
+    { $count ->
+        [one] موضع واحد لا يفي بالإعدادات.
+       *[other] { $count } مواضع لا تفي بالإعدادات.
+    }
+pit-design-checks-what = الفحص
+pit-design-checks-is = القيمة
+pit-design-checks-asked = المطلوب
+pit-design-checks-help = مرّر المؤشر فوق فحص لتجده في العرض، أو انقر للانتقال إليه.
+pit-design-check-steep = المنحدر شديد الميل
+pit-design-check-flatter = المنحدر أقل ميلًا
+pit-design-check-narrow = المنحدر ضيق
+pit-design-check-tight = المنحدر ينعطف بحدة
+pit-design-check-berm = المصطبة ضيقة
+pit-design-check-face = الوجه شديد الميل
+pit-design-check-inter-ramp = الجدران شديدة الميل
+pit-design-flag = { $check }: { $value } حيث طُلب { $asked }، عند المنسوب { $rl }.
+pit-design-flag-along = على امتداد { $length } م.
+pit-design-table-steeper-hint = أشد ميلًا من { $grade } % المطلوبة.

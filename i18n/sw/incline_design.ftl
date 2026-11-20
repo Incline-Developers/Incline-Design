@@ -5056,7 +5056,7 @@ pit-design-switchback = Zigizaga
 pit-design-switchback-every = Ngazi kati ya migeuko
 pit-design-switchback-every-help = Ngazi ngapi njia panda hupanda kabla ya kugeuka; 0 kugeuka tu kwenye RL zilizotolewa. Pale kugeuka hakutoshi, njia panda huendelea ngazi moja zaidi na kugeuka hapo.
 pit-design-inside-radius = Nusu kipenyo cha ndani
-pit-design-inside-radius-help = Mpindo mkali zaidi wa ukingo wa ndani wa barabara kwenye zigizaga.
+pit-design-inside-radius-help = Kipenyo kidogo zaidi ambacho ukingo wa ndani wa barabara unapaswa kupinda: kipenyo cha kona ya kurudi, na kipimo cha kukagua barabara nzima.
 pit-design-result-section = Usanifu
 pit-design-designing = Inasanifu...
 pit-design-benches-built = Ngazi
@@ -5219,3 +5219,24 @@ pit-design-table-turn = Mzunguko
 pit-design-table-turned = Zigizaga
 pit-design-table-flatter-hint = Inapanda kwa m { $length } zaidi ya mwinuko unavyotaka, kwa hivyo ni laini zaidi: hakuna sehemu sawa kabla yake iliyoifanya ngazi imara.
 pit-design-table-narrow-hint = Nyembamba kuliko m { $width } zilizoombwa, mahali inapounganika kwenye kona ya ukuta.
+pit-design-checks = Ukaguzi
+pit-design-checks-pass = Ukaguzi wote umepita: mwinuko, upana na kona za njia panda, pamoja na berm na kuta, ni kama ulivyoombwa.
+pit-design-checks-count =
+    { $count ->
+        [one] Mahali pamoja hapatimizi mipangilio.
+       *[other] Mahali { $count } hapatimizi mipangilio.
+    }
+pit-design-checks-what = Ukaguzi
+pit-design-checks-is = Matokeo
+pit-design-checks-asked = Kilichoombwa
+pit-design-checks-help = Weka kiashiria juu ya ukaguzi ili kuupata kwenye mwonekano, au bofya kwenda huko.
+pit-design-check-steep = Njia panda ina mwinuko mkubwa mno
+pit-design-check-flatter = Njia panda ina mwinuko mdogo
+pit-design-check-narrow = Njia panda ni nyembamba mno
+pit-design-check-tight = Njia panda inapinda kwa kasi mno
+pit-design-check-berm = Berm ni nyembamba mno
+pit-design-check-face = Ukuta una mwinuko mkubwa mno
+pit-design-check-inter-ramp = Kuta zina mwinuko mkubwa mno
+pit-design-flag = { $check }: { $value } ambapo { $asked } iliombwa, kwenye RL { $rl }.
+pit-design-flag-along = Kwa urefu wa m { $length }.
+pit-design-table-steeper-hint = Ina mwinuko kuliko { $grade } % iliyoombwa.

@@ -5152,7 +5152,7 @@ pit-design-switchback = Serpentyna
 pit-design-switchback-every = Pięter między zawrotami
 pit-design-switchback-every-help = Ile pięter rampa wznosi się przed nawrotem; 0, by nawracać tylko na podanych rzędnych. Gdzie nawrót się nie mieści, rampa jedzie jeszcze jedno piętro i nawraca tam.
 pit-design-inside-radius = Promień wewnętrzny
-pit-design-inside-radius-help = Najciaśniejszy łuk wewnętrznej krawędzi drogi na serpentynie.
+pit-design-inside-radius-help = Najciaśniejszy łuk, jaki ma pokonywać wewnętrzna krawędź drogi: promień nawrotu i wartość, z którą sprawdzana jest cała droga.
 pit-design-result-section = Projekt
 pit-design-designing = Projektowanie...
 pit-design-benches-built = Piętra
@@ -5321,3 +5321,24 @@ pit-design-table-turn = Zawrót
 pit-design-table-turned = Serpentyna
 pit-design-table-flatter-hint = Wznosi się na { $length } m dłużej, niż wymaga nachylenie, więc jest łagodniejsza: żaden poziomy odcinek przed nią nie czynił piętra stabilnym.
 pit-design-table-narrow-hint = Węższa niż zadane { $width } m tam, gdzie przechodzi na zakręcie skarpy.
+pit-design-checks = Kontrole
+pit-design-checks-pass = Wszystkie kontrole spełnione: nachylenie, szerokość i zakręty rampy oraz półki i skarpy są zgodne z ustawieniami.
+pit-design-checks-count =
+    { $count ->
+        [one] Jedno miejsce nie spełnia ustawień.
+       *[other] Miejsca niespełniające ustawień: { $count }.
+    }
+pit-design-checks-what = Kontrola
+pit-design-checks-is = Wynosi
+pit-design-checks-asked = Zadano
+pit-design-checks-help = Najedź na kontrolę, aby znaleźć ją w widoku, lub kliknij, aby tam przejść.
+pit-design-check-steep = Rampa zbyt stroma
+pit-design-check-flatter = Rampa łagodniejsza
+pit-design-check-narrow = Rampa zbyt wąska
+pit-design-check-tight = Rampa skręca zbyt ciasno
+pit-design-check-berm = Półka zbyt wąska
+pit-design-check-face = Skarpa zbyt stroma
+pit-design-check-inter-ramp = Ściany zbyt strome
+pit-design-flag = { $check }: { $value } przy zadanym { $asked }, na rzędnej { $rl }.
+pit-design-flag-along = Na długości { $length } m.
+pit-design-table-steeper-hint = Bardziej stroma niż zadane { $grade } %.
