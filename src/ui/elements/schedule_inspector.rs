@@ -733,8 +733,10 @@ fn fitted(ui: &egui::Ui, text: String, font: egui::FontId, color: egui::Color32,
 }
 
 fn draw_entry(ui: &mut egui::Ui, entry: &Entry) -> egui::Response {
-    let height =
-        NAME_ROW_H + entry.detail.as_ref().map_or(0.0, |_| DETAIL_ROW_H) + entry.warning.as_ref().map_or(0.0, |_| DETAIL_ROW_H) + entry.meter.map_or(0.0, |_| METER_H + 3.0) + 4.0;
+    // A detail may hold several lines - a block dug and a pile reclaimed in
+    // the same hour - each a row of its own.
+    let rows = |text: &Option<String>| text.as_ref().map_or(0, |text| text.lines().count()) as f32;
+    let height = NAME_ROW_H + (rows(&entry.detail) + rows(&entry.warning)) * DETAIL_ROW_H + entry.meter.map_or(0.0, |_| METER_H + 3.0) + 4.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
     let visuals = ui.visuals();
     if response.hovered() {
@@ -768,8 +770,8 @@ fn draw_entry(ui: &mut egui::Ui, entry: &Entry) -> egui::Response {
         y += METER_H + 3.0;
     }
     for (line, color) in [(&entry.detail, visuals.weak_text_color()), (&entry.warning, visuals.warn_fg_color)] {
-        if let Some(line) = line {
-            let galley = fitted(ui, line.clone(), small.clone(), color, rect.right() - left);
+        for line in line.iter().flat_map(|text| text.lines()) {
+            let galley = fitted(ui, line.to_owned(), small.clone(), color, rect.right() - left);
             ui.painter().galley(egui::pos2(left, y + (DETAIL_ROW_H - galley.size().y) / 2.0), galley, color);
             y += DETAIL_ROW_H;
         }
