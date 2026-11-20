@@ -448,6 +448,24 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent], bar_height: f32) -> V
         };
         row.lanes[lane].stacks[0].push(index);
     }
+    // A lane for each lane the bars of the scenarios this one starts from sit
+    // in, so they are drawn at their own height, as there.
+    for (_, bar) in plan.inherited_bars() {
+        let Some(row) = rows.iter_mut().find(|row| !row.blasting && row.agent.is_some() && row.agent == bar.agent) else {
+            continue;
+        };
+        if let Err(lane) = row.lanes.binary_search_by_key(&bar.priority, |lane| lane.priority) {
+            row.lanes.insert(
+                lane,
+                Lane {
+                    priority: bar.priority,
+                    stacks: vec![Vec::new()],
+                    offset: 0.0,
+                    height: 0.0,
+                },
+            );
+        }
+    }
     let mut top = 0.0;
     for row in &mut rows {
         if row.lanes.is_empty() {
@@ -1327,24 +1345,21 @@ fn draw_inherited(ui: &mut egui::Ui, body: egui::Rect, editor: &EditorState, pla
         if top + row.height < body.top() || top > body.bottom() {
             continue;
         }
-        // Each of its lanes a band of the row, in lane order, as the
-        // scenario it belongs to lays them out.
-        let mut lanes: Vec<u32> = inherited.iter().filter(|(_, bar)| bar.agent == row.agent).map(|(_, bar)| bar.priority).collect();
-        lanes.sort_unstable();
-        lanes.dedup();
-        let band = row.height / lanes.len().max(1) as f32;
+        // In its own lane, which `layout_rows` made for it.
         for (scenario, bar) in inherited.iter().filter(|(_, bar)| bar.agent == row.agent) {
             let (left, right) = BarExtent::of(editor.gantt, bar.window, body).drawn(body);
             if right < body.left() || left > body.right() {
                 continue;
             }
-            let lane = lanes.binary_search(&bar.priority).unwrap_or(0) as f32;
-            let span = egui::Rect::from_min_max(egui::pos2(left, top + lane * band + 1.0), egui::pos2(right, top + (lane + 1.0) * band - 1.0));
+            let Some(lane) = row.lanes.iter().find(|lane| lane.priority == bar.priority) else {
+                continue;
+            };
+            let span = egui::Rect::from_min_max(egui::pos2(left, top + lane.offset + 1.0), egui::pos2(right, top + lane.offset + lane.height - 1.0));
             painter.rect(span, GROUP_CORNER_RADIUS, fill, edge, egui::StrokeKind::Inside);
             let report = editor.schedule_bar_reports.iter().find(|report| report.bar == bar.id);
             let label = bar_label(bar, report, Some(plan));
             let galley = painter.layout_no_wrap(label.clone(), font.clone(), text);
-            if galley.size().x + 8.0 < span.width() {
+            if galley.size().x + 8.0 < span.width() && galley.size().y + 2.0 <= span.height() {
                 painter.galley(egui::pos2(span.left() + 4.0, span.bottom() - galley.size().y - 2.0), galley, text);
             }
             let id = ui.scope_id().with(("gantt_inherited", bar.id.0));
