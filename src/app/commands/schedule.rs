@@ -746,6 +746,10 @@ impl crate::app::App<'_> {
             let (_, _, kept) = self.schedule_scenario_results.remove(position);
             self.hold_schedule(kept);
         }
+        // What Auto last tried was the scenario left's: one opened with the
+        // same inputs - a new scenario starting from it, with no bars of its
+        // own - is calculated all the same.
+        self.schedule_auto_attempted = None;
         self.redraw_requested = true;
     }
 
