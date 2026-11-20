@@ -221,32 +221,50 @@ pub(crate) fn rounded_corners(points: &[DVec3], radius: f64) -> Vec<PolyVertex> 
     if count < 3 || radius <= 0.0 {
         return points.iter().copied().map(PolyVertex::straight).collect();
     }
-    let mut verts = Vec::with_capacity(count * 2);
-    for index in 0..count {
-        let (before, corner, after) = (points[(index + count - 1) % count], points[index], points[(index + 1) % count]);
-        let (back, ahead) = ((before - corner).truncate(), (after - corner).truncate());
-        let (back_length, ahead_length) = (back.length(), ahead.length());
-        if back_length <= f64::EPSILON || ahead_length <= f64::EPSILON {
-            verts.push(PolyVertex::straight(corner));
-            continue;
-        }
-        let (u, v) = (back / back_length, ahead / ahead_length);
-        let opening = u.dot(v).clamp(-1.0, 1.0).acos();
-        // The turn the arc makes, and whether to the left.
-        let turn = std::f64::consts::PI - opening;
-        if turn < 1.0e-3 || opening < 1.0e-6 {
-            verts.push(PolyVertex::straight(corner));
-            continue;
-        }
-        // Each edge gives half its length at most, so neighbouring arcs meet
-        // and never cross.
-        let reach = (radius / (opening * 0.5).tan()).min(back_length * 0.5).min(ahead_length * 0.5);
-        let left = (-u).perp_dot(v) > 0.0;
-        let entry = corner + (before - corner) * (reach / back_length);
-        let exit = corner + (after - corner) * (reach / ahead_length);
-        let bulge = (turn / 4.0).tan() * if left { 1.0 } else { -1.0 };
-        verts.push(PolyVertex { pos: entry, bulge });
-        verts.push(PolyVertex::straight(exit));
+    (0..count)
+        .flat_map(|index| rounded_corner(points[(index + count - 1) % count], points[index], points[(index + 1) % count], radius))
+        .collect()
+}
+
+/// [`rounded_corners`] for a string not yet closed, as it is being drawn:
+/// its corners between its first and last points rounded, those two left
+/// as they are until it closes.
+pub(crate) fn rounded_open(points: &[DVec3], radius: f64) -> Vec<PolyVertex> {
+    let count = points.len();
+    if count < 3 || radius <= 0.0 {
+        return points.iter().copied().map(PolyVertex::straight).collect();
     }
+    let mut verts = vec![PolyVertex::straight(points[0])];
+    for index in 1..count - 1 {
+        verts.extend(rounded_corner(points[index - 1], points[index], points[index + 1], radius));
+    }
+    verts.push(PolyVertex::straight(points[count - 1]));
     verts
+}
+
+/// The corner at `corner`, between edges from `before` and to `after`, as
+/// an arc of `radius` (or as large a one as half of each edge leaves room
+/// for): its two ends, the first carrying its bulge; the corner itself
+/// where it is all but straight.
+fn rounded_corner(before: DVec3, corner: DVec3, after: DVec3, radius: f64) -> Vec<PolyVertex> {
+    let (back, ahead) = ((before - corner).truncate(), (after - corner).truncate());
+    let (back_length, ahead_length) = (back.length(), ahead.length());
+    if back_length <= f64::EPSILON || ahead_length <= f64::EPSILON {
+        return vec![PolyVertex::straight(corner)];
+    }
+    let (u, v) = (back / back_length, ahead / ahead_length);
+    let opening = u.dot(v).clamp(-1.0, 1.0).acos();
+    // The turn the arc makes, and whether to the left.
+    let turn = std::f64::consts::PI - opening;
+    if turn < 1.0e-3 || opening < 1.0e-6 {
+        return vec![PolyVertex::straight(corner)];
+    }
+    // Each edge gives half its length at most, so neighbouring arcs meet
+    // and never cross.
+    let reach = (radius / (opening * 0.5).tan()).min(back_length * 0.5).min(ahead_length * 0.5);
+    let left = (-u).perp_dot(v) > 0.0;
+    let entry = corner + (before - corner) * (reach / back_length);
+    let exit = corner + (after - corner) * (reach / ahead_length);
+    let bulge = (turn / 4.0).tan() * if left { 1.0 } else { -1.0 };
+    vec![PolyVertex { pos: entry, bulge }, PolyVertex::straight(exit)]
 }

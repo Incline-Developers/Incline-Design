@@ -188,8 +188,20 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     overlay.fade_size_m = 0.0;
 
     let stroke_preview = editor.pending_stroke.clone();
-    for pair in stroke_preview.windows(2) {
-        draw_line(&mut overlay, pair[0], pair[1], DOC_LINE_WIDTH, PREVIEW_COLOR);
+    // A pit's string drawn with its corners rounded shows them rounded as it
+    // is drawn, out to the cursor: the string it will be.
+    let rounding_pit = editor.pit_drawing() && editor.pit_round_corners && !stroke_preview.is_empty();
+    if rounding_pit {
+        let mut points = stroke_preview.clone();
+        if let Some(cursor) = editor.cursor_world.filter(|_| !editor.poly_close_hovered() && !editor.poly_finish_dialog) {
+            points.push(cursor);
+        }
+        let verts = crate::model::pit_design::object::rounded_open(&points, editor.pit_corner_radius);
+        tessellate_polyline_stroke(&mut overlay, &verts, false, DOC_LINE_WIDTH, PREVIEW_COLOR);
+    } else {
+        for pair in stroke_preview.windows(2) {
+            draw_line(&mut overlay, pair[0], pair[1], DOC_LINE_WIDTH, PREVIEW_COLOR);
+        }
     }
 
     if editor.is_haulage_page() {
@@ -393,7 +405,7 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
                 }
             }
         }
-    } else if let (Some(&last), Some(cursor)) = (editor.pending_stroke.last(), editor.cursor_world) {
+    } else if !rounding_pit && let (Some(&last), Some(cursor)) = (editor.pending_stroke.last(), editor.cursor_world) {
         draw_line(&mut overlay, last, cursor, DOC_LINE_WIDTH, PREVIEW_COLOR);
     }
 
