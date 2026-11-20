@@ -678,7 +678,11 @@ pub(crate) fn grid_cell_entry(ui: &mut egui::Ui, id: impl std::hash::Hash + std:
 /// [`grid_cell_entry`] for a value that stands but is not used as typed: in
 /// the warning colour, with `note` after its unit saying what is used.
 pub(crate) fn grid_cell_entry_flagged(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, cell: egui::Rect, value: &mut f64, unit: &str, note: Option<&str>) -> bool {
-    let cell = cell.shrink2(egui::vec2(4.0, COLUMN_ROW_EXTRA / 2.0 + 1.0));
+    // A column grid's cell has room to spare around its text; a named row's
+    // value cell, already inset, has next to none, and trimmed as much left
+    // its text too short to show whole.
+    let spare = ((cell.height() - row_height(ui) + 2.0) / 2.0).clamp(0.0, COLUMN_ROW_EXTRA / 2.0 + 1.0);
+    let cell = cell.shrink2(egui::vec2(4.0, spare));
     if !cell.is_positive() {
         return false;
     }
