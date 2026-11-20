@@ -383,27 +383,44 @@ impl SchedulePlan {
     }
 
     /// The plan a calculation reads: the open scenario's, with the bars it
-    /// starts from ahead of its own. They come first on each machine - its
-    /// own bars take the lanes below theirs - so what it starts from is
-    /// worked as it is, and its own bars take what that leaves.
+    /// starts from ahead of its own. Each scenario's bars come after those
+    /// of the one it starts from on each machine, the oldest first - each
+    /// takes the lanes below everything before it - so what it starts from
+    /// is worked as that scenario works it, and its own bars take what that
+    /// leaves.
     pub(crate) fn for_calculation(&self) -> Self {
         let mut plan = self.clone();
-        let inherited: Vec<ScheduleBar> = self.inherited_bars().into_iter().map(|(_, bar)| bar.clone()).collect();
-        if inherited.is_empty() {
+        let bases = self.scenarios.bases(self.scenarios.open);
+        let layers: Vec<&[ScheduleBar]> = bases
+            .iter()
+            .rev()
+            .filter_map(|base| Some(self.scenarios.get(*base)?.stash.as_ref()?.bars.as_slice()))
+            .collect();
+        if layers.iter().all(|layer| layer.is_empty()) {
             return plan;
         }
-        let mut lanes: std::collections::BTreeMap<super::LoaderAgentId, u32> = std::collections::BTreeMap::new();
-        for bar in &inherited {
-            if let Some(agent) = bar.agent {
-                let lane = lanes.entry(agent).or_default();
-                *lane = (*lane).max(bar.priority.saturating_add(1));
+        // The first lane below everything stacked so far, by machine.
+        let mut below: std::collections::BTreeMap<super::LoaderAgentId, u32> = std::collections::BTreeMap::new();
+        let mut stack = |layer: &mut [ScheduleBar]| {
+            for bar in layer.iter_mut() {
+                if let Some(offset) = bar.agent.and_then(|agent| below.get(&agent)) {
+                    bar.priority = bar.priority.saturating_add(*offset);
+                }
             }
-        }
-        for bar in &mut plan.bars {
-            if let Some(below) = bar.agent.and_then(|agent| lanes.get(&agent)) {
-                bar.priority = bar.priority.saturating_add(*below);
+            for bar in layer.iter() {
+                if let Some(agent) = bar.agent {
+                    let lane = below.entry(agent).or_default();
+                    *lane = (*lane).max(bar.priority.saturating_add(1));
+                }
             }
+        };
+        let mut inherited: Vec<ScheduleBar> = Vec::new();
+        for layer in layers {
+            let mut layer = layer.to_vec();
+            stack(&mut layer);
+            inherited.extend(layer);
         }
+        stack(&mut plan.bars);
         plan.bars.splice(0..0, inherited);
         plan
     }
