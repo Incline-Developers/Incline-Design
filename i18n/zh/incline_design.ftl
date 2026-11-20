@@ -5253,6 +5253,25 @@ pit-design-send-planning-failed = 无法将采坑发送到规划：{ $reason }
 pit-design-send-changed = 构建表面期间采坑设计已更改：请重新发送。
 pit-design-sent-planning = 已将 { $design } 连同其表面发送到规划。
 pit-design-report-send-planning = 已将采坑发送到规划
+pit-design-layer-rehab = 复垦后
+pit-design-rehab-bad-settings = 复垦需要介于 0° 与 90° 之间的坡度和有间距的等高线。
+pit-design-rehab-no-top = 排土场在用于重塑的顶部标高处没有截面。
+pit-design-rehab-too-flat = 坡度太缓，无法在该顶部以下容纳排土场的体积：请抬高顶部或加陡坡度。
+pit-design-rehab-no-room = 地形没有给重塑后的排土场留出扩展的空间。
+pit-design-rehab = 复垦
+pit-design-rehab-help = 在保持体积的前提下，将排土场重塑为一直延伸到地形的均匀坡面，顶部不高于要求：即最终留下的地貌。它与排土场一同绘制，并报告其土方量。
+pit-design-rehab-slope = 总体坡度
+pit-design-rehab-slope-help = 重塑后排土场侧面与水平面的夹角。
+pit-design-rehab-limit = 限制顶部
+pit-design-rehab-limit-help = 使重塑后排土场的顶部不高于某一标高：它会铺得更宽以在其下容纳体积。
+pit-design-rehab-top = 顶部标高
+pit-design-rehab-contour = 等高距
+pit-design-rehab-contour-help = 重塑后排土场所绘等高线之间的高差。
+pit-design-rehab-figures = 复垦后
+pit-design-rehab-failed = 无法重塑排土场：{ $reason }
+pit-design-rehab-cut = 从排土场削去
+pit-design-rehab-fill = 在其外堆填
+pit-design-rehab-footprint = 占地面积
 pit-design-sent-roads =
     { $count ->
         [one] 已将 { $design } 的坡道作为 1 条道路发送到运输网络。

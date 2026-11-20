@@ -5256,6 +5256,25 @@ pit-design-send-planning-failed = पिट प्लानिंग में �
 pit-design-send-changed = सतह बनते समय पिट डिज़ाइन बदल गया: फिर से भेजें।
 pit-design-sent-planning = { $design } अपनी सतह के साथ प्लानिंग में भेजा गया।
 pit-design-report-send-planning = पिट प्लानिंग में भेजा गया
+pit-design-layer-rehab = पुनर्वासित
+pit-design-rehab-bad-settings = पुनर्वास के लिए 0° और 90° के बीच ढलान और अंतराल वाली समोच्च रेखाएँ चाहिए।
+pit-design-rehab-no-top = डंप के उस शीर्ष पर कोई खंड नहीं है जहाँ से उसे नया आकार दिया जाता है।
+pit-design-rehab-too-flat = ढलान उस शीर्ष के नीचे डंप का आयतन रखने के लिए बहुत कम है: शीर्ष ऊँचा करें या ढलान बढ़ाएँ।
+pit-design-rehab-no-room = टोपोग्राफी नए आकार के डंप को फैलने की जगह नहीं देती।
+pit-design-rehab = पुनर्वास करें
+pit-design-rehab-help = डंप को उसका आयतन रखते हुए टोपोग्राफी तक एक समान ढलान में नया आकार देता है, शीर्ष माँगे से ऊँचा नहीं: वह भू-आकृति जो बचेगी। यह डंप के साथ दिखता है और उसका मिट्टी का काम बताया जाता है।
+pit-design-rehab-slope = समग्र ढलान
+pit-design-rehab-slope-help = नए आकार के डंप की भुजाओं का क्षैतिज से कोण।
+pit-design-rehab-limit = शीर्ष सीमित करें
+pit-design-rehab-limit-help = नए आकार के डंप का शीर्ष एक RL से नीचे रखें: आयतन नीचे रखने के लिए यह और फैलता है।
+pit-design-rehab-top = शीर्ष RL
+pit-design-rehab-contour = समोच्च अंतराल
+pit-design-rehab-contour-help = नए आकार के डंप की खींची गई समोच्च रेखाओं के बीच ऊँचाई का अंतर।
+pit-design-rehab-figures = पुनर्वासित
+pit-design-rehab-failed = डंप को नया आकार नहीं दिया जा सका: { $reason }
+pit-design-rehab-cut = डंप से काटा
+pit-design-rehab-fill = उसके आगे भरा
+pit-design-rehab-footprint = फ़ुटप्रिंट
 pit-design-sent-roads =
     { $count ->
         [one] { $design } का रैम्प ढुलाई नेटवर्क में एक सड़क के रूप में भेजा गया।

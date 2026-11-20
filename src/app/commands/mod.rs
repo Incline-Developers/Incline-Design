@@ -14,6 +14,7 @@ pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod optimization; // Handles pit optimization's scenario list, editor and scenarios file.
 pub(crate) mod pit_design; // Designs a pit's benches and ramp from a closed string.
 pub(crate) mod pit_evaluation; // Measures what each pit design takes out of the ground.
+pub(crate) mod pit_rehab; // Reshapes a dump into one even slope for its rehabilitation.
 pub(crate) mod pit_send; // Sends a pit design's ramps to the haul network and the pit to Planning.
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.

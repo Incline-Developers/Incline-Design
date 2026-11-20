@@ -5297,6 +5297,25 @@ pit-design-send-planning-failed = Die Grube konnte nicht an die Planung gesendet
 pit-design-send-changed = Der Grubenentwurf hat sich geändert, während seine Oberfläche erstellt wurde: Senden Sie ihn erneut.
 pit-design-sent-planning = { $design } mit seiner Oberfläche an die Planung gesendet.
 pit-design-report-send-planning = Grube an die Planung gesendet
+pit-design-layer-rehab = Rekultiviert
+pit-design-rehab-bad-settings = Eine Rekultivierung braucht eine Neigung zwischen 0° und 90° und Höhenlinien mit Abstand.
+pit-design-rehab-no-top = Die Halde hat keinen Schnitt an der Oberkante, von der aus sie umgeformt wird.
+pit-design-rehab-too-flat = Die Neigung ist zu flach, um das Haldenvolumen unter dieser Oberkante zu fassen: Heben Sie die Oberkante an oder steilen Sie die Neigung auf.
+pit-design-rehab-no-room = Die Topografie lässt der umgeformten Halde keinen Raum, sich auszubreiten.
+pit-design-rehab = Rekultivieren
+pit-design-rehab-help = Formt die Halde bei gleichem Volumen zu einer gleichmäßigen Böschung bis zur Topografie um, ihre Oberkante nicht höher als gewünscht: die Landform, die verbleibt. Sie wird mit der Halde gezeichnet, und ihre Erdarbeiten werden angegeben.
+pit-design-rehab-slope = Gesamtneigung
+pit-design-rehab-slope-help = Der Winkel der Seiten der umgeformten Halde gegen die Horizontale.
+pit-design-rehab-limit = Oberkante begrenzen
+pit-design-rehab-limit-help = Die Oberkante der umgeformten Halde nicht über einer Höhe halten: Sie breitet sich weiter aus, um ihr Volumen darunter zu fassen.
+pit-design-rehab-top = Oberkante
+pit-design-rehab-contour = Höhenlinienabstand
+pit-design-rehab-contour-help = Der Höhenabstand der gezeichneten Höhenlinien der umgeformten Halde.
+pit-design-rehab-figures = Rekultiviert
+pit-design-rehab-failed = Die Halde konnte nicht umgeformt werden: { $reason }
+pit-design-rehab-cut = Von der Halde abgetragen
+pit-design-rehab-fill = Davor aufgetragen
+pit-design-rehab-footprint = Grundfläche
 pit-design-sent-roads =
     { $count ->
         [one] Die Rampe von { $design } wurde als ein Weg ins Transportnetz gesendet.

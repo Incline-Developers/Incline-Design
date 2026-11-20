@@ -302,6 +302,7 @@ fn role_layer_name(kind: crate::model::pit_design::StringKind) -> String {
         StringKind::Toe => crate::i18n::tr!("pit-design-layer-toe"),
         StringKind::RampEdge | StringKind::RampCentreline => crate::i18n::tr!("pit-design-layer-ramp"),
         StringKind::Daylight => crate::i18n::tr!("pit-design-layer-daylight"),
+        StringKind::Rehab => crate::i18n::tr!("pit-design-layer-rehab"),
     }
 }
 

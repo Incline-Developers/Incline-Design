@@ -5643,6 +5643,25 @@ pit-design-send-planning-failed = Не удалось отправить кар�
 pit-design-send-changed = Проект карьера изменился, пока строилась его поверхность: отправьте его снова.
 pit-design-sent-planning = { $design } отправлен в планирование вместе с поверхностью.
 pit-design-report-send-planning = Карьер отправлен в планирование
+pit-design-layer-rehab = Рекультивация
+pit-design-rehab-bad-settings = Для рекультивации нужен уклон от 0° до 90° и горизонтали с шагом.
+pit-design-rehab-no-top = У отвала нет сечения на верхней отметке, от которой его переформировывают.
+pit-design-rehab-too-flat = Уклон слишком пологий, чтобы вместить объём отвала под этой отметкой: поднимите верх или сделайте уклон круче.
+pit-design-rehab-no-room = Топография не оставляет переформированному отвалу места растечься.
+pit-design-rehab = Рекультивировать
+pit-design-rehab-help = Переформировывает отвал с тем же объёмом в один ровный откос до топографии, верх не выше заданного: рельеф, который останется. Он рисуется вместе с отвалом, а объёмы земляных работ приводятся.
+pit-design-rehab-slope = Общий уклон
+pit-design-rehab-slope-help = Угол бортов переформированного отвала к горизонтали.
+pit-design-rehab-limit = Ограничить верх
+pit-design-rehab-limit-help = Держать верх переформированного отвала не выше отметки: он растекается шире, чтобы вместить объём ниже.
+pit-design-rehab-top = Отметка верха
+pit-design-rehab-contour = Шаг горизонталей
+pit-design-rehab-contour-help = Шаг по высоте рисуемых горизонталей переформированного отвала.
+pit-design-rehab-figures = Рекультивация
+pit-design-rehab-failed = Не удалось переформировать отвал: { $reason }
+pit-design-rehab-cut = Срезано с отвала
+pit-design-rehab-fill = Отсыпано за ним
+pit-design-rehab-footprint = Площадь основания
 pit-design-sent-roads =
     { $count ->
         [one] Съезд { $design } отправлен в сеть дорог как одна дорога.

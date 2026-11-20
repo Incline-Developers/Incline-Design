@@ -5307,6 +5307,25 @@ pit-design-send-planning-failed = Уурхайг төлөвлөлт рүү ил�
 pit-design-send-changed = Гадаргуу үүсэх зуур уурхайн төсөл өөрчлөгдсөн: дахин илгээнэ үү.
 pit-design-sent-planning = { $design }-г гадаргуутай нь төлөвлөлт рүү илгээлээ.
 pit-design-report-send-planning = Уурхайг төлөвлөлт рүү илгээлээ
+pit-design-layer-rehab = Нөхөн сэргээсэн
+pit-design-rehab-bad-settings = Нөхөн сэргээлтэд 0°-90°-ын налуу ба зайтай изохипс хэрэгтэй.
+pit-design-rehab-no-top = Овоолго дахин хэлбэржүүлэх оройн түвшинд огтлолгүй байна.
+pit-design-rehab-too-flat = Налуу хэт зөөлөн тул тэр оройн доор овоолгын эзэлхүүнийг багтааж чадахгүй: оройг өндөрсгөх эсвэл налууг эгцлэнэ үү.
+pit-design-rehab-no-room = Топографи дахин хэлбэржсэн овоолгод тэлэх зай үлдээхгүй байна.
+pit-design-rehab = Нөхөн сэргээх
+pit-design-rehab-help = Овоолгыг эзэлхүүнийг нь хадгалан топографи хүртэл нэг жигд налуу болгон хэлбэржүүлж, оройг хүссэнээс өндөргүй байлгана: үлдэх газрын хэлбэр. Овоолготой хамт зурагдаж, шорооны ажил нь мэдээлэгдэнэ.
+pit-design-rehab-slope = Ерөнхий налуу
+pit-design-rehab-slope-help = Дахин хэлбэржсэн овоолгын хажуугийн хэвтээтэй үүсгэх өнцөг.
+pit-design-rehab-limit = Оройг хязгаарлах
+pit-design-rehab-limit-help = Дахин хэлбэржсэн овоолгын оройг тодорхой RL-ээс доош байлгана: эзэлхүүнээ доор нь багтаахын тулд илүү өргөн тэлнэ.
+pit-design-rehab-top = Оройн RL
+pit-design-rehab-contour = Изохипсийн алхам
+pit-design-rehab-contour-help = Дахин хэлбэржсэн овоолгын зурагдах изохипсийн өндрийн зай.
+pit-design-rehab-figures = Нөхөн сэргээсэн
+pit-design-rehab-failed = Овоолгыг дахин хэлбэржүүлж чадсангүй: { $reason }
+pit-design-rehab-cut = Овоолгоос хуулсан
+pit-design-rehab-fill = Гадна нь овоолсон
+pit-design-rehab-footprint = Эзлэх талбай
 pit-design-sent-roads =
     { $count ->
         [one] { $design }-ийн налуу замыг нэг зам болгон тээврийн сүлжээнд илгээлээ.

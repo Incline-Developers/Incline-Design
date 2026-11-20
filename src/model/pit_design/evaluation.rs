@@ -41,6 +41,50 @@ pub(crate) enum Waiting {
     Measuring,
 }
 
+/// How a dump is rehabilitated: reshaped, holding its volume, into one
+/// even slope down to the ground, its top no higher than asked.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RehabSettings {
+    /// The overall slope, in degrees from horizontal.
+    pub(crate) slope: f64,
+    /// The highest RL its top may stand at: the dump's own top if none.
+    pub(crate) top: Option<f64>,
+    /// How far apart in height the reshaped landform's contours are drawn.
+    pub(crate) contour: f64,
+}
+
+impl Default for RehabSettings {
+    fn default() -> Self {
+        Self {
+            slope: 18.0,
+            top: None,
+            contour: 5.0,
+        }
+    }
+}
+
+/// A dump reshaped as its rehabilitation asks, and the earthworks it
+/// takes.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RehabFigures {
+    /// Its contours, from its top down to the ground.
+    pub(crate) strings: Vec<super::DesignString>,
+    /// The RL of its top.
+    pub(crate) top: f64,
+    /// The volume it holds, the dump's own to within a hair.
+    pub(crate) volume: f64,
+    /// Ground taken from the dump as designed, and ground placed beyond it.
+    pub(crate) cut: f64,
+    pub(crate) fill: f64,
+    /// The plan area the dump covers as designed, and reshaped.
+    pub(crate) footprint: [f64; 2],
+    /// Why it could not be reshaped, where it could not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) problem: Option<String>,
+}
+
 /// What a design came to, measured.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -64,6 +108,9 @@ pub(crate) struct Evaluation {
     /// dump's toe on the ground.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) daylight: Vec<super::DesignString>,
+    /// The dump rehabilitated, where its settings ask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) rehab: Option<RehabFigures>,
     /// The fingerprint of the design it was measured for
     /// ([`super::object::Derived::inputs`]), so its daylight line is drawn
     /// only with that design.
@@ -92,6 +139,7 @@ impl Evaluation {
             total: Figures::default(),
             benches: Vec::new(),
             shell: None,
+            rehab: None,
             daylight: Vec::new(),
             design: 0,
         }

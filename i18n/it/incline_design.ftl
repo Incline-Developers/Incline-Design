@@ -5298,6 +5298,25 @@ pit-design-send-planning-failed = Impossibile inviare la fossa alla pianificazio
 pit-design-send-changed = Il progetto di fossa è cambiato mentre se ne costruiva la superficie: invialo di nuovo.
 pit-design-sent-planning = { $design } inviato alla pianificazione, con la sua superficie.
 pit-design-report-send-planning = Fossa inviata alla pianificazione
+pit-design-layer-rehab = Riabilitato
+pit-design-rehab-bad-settings = Una riabilitazione richiede una pendenza tra 0° e 90° e curve di livello distanziate.
+pit-design-rehab-no-top = La discarica non ha sezione alla quota superiore da cui viene rimodellata.
+pit-design-rehab-too-flat = La pendenza è troppo dolce per contenere il volume della discarica sotto quella quota: alza la quota o aumenta la pendenza.
+pit-design-rehab-no-room = La topografia non lascia alla discarica rimodellata spazio per allargarsi.
+pit-design-rehab = Riabilita
+pit-design-rehab-help = Rimodella la discarica, a volume costante, in un'unica pendenza uniforme fino alla topografia, con la cima non più alta del richiesto: la forma che resterà. È disegnata con la discarica e se ne riportano i movimenti terra.
+pit-design-rehab-slope = Pendenza complessiva
+pit-design-rehab-slope-help = L'angolo dei fianchi della discarica rimodellata rispetto all'orizzontale.
+pit-design-rehab-limit = Limita la cima
+pit-design-rehab-limit-help = Tieni la cima della discarica rimodellata sotto una quota: si allarga di più per contenere il suo volume sotto.
+pit-design-rehab-top = Quota della cima
+pit-design-rehab-contour = Equidistanza
+pit-design-rehab-contour-help = La distanza in altezza delle curve di livello disegnate della discarica rimodellata.
+pit-design-rehab-figures = Riabilitato
+pit-design-rehab-failed = Impossibile rimodellare la discarica: { $reason }
+pit-design-rehab-cut = Sterro dalla discarica
+pit-design-rehab-fill = Riporto oltre
+pit-design-rehab-footprint = Impronta
 pit-design-sent-roads =
     { $count ->
         [one] La rampa di { $design } è stata inviata alla rete di trasporto come una pista.

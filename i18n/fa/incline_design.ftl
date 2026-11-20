@@ -5253,6 +5253,25 @@ pit-design-send-planning-failed = پیت به برنامه‌ریزی فرستا
 pit-design-send-changed = طرح پیت هنگام ساخت سطحش تغییر کرد: دوباره بفرستید.
 pit-design-sent-planning = { $design } همراه با سطحش به برنامه‌ریزی فرستاده شد.
 pit-design-report-send-planning = پیت به برنامه‌ریزی فرستاده شد
+pit-design-layer-rehab = بازسازی‌شده
+pit-design-rehab-bad-settings = بازسازی به شیبی بین 0° و 90° و خطوط تراز با فاصله نیاز دارد.
+pit-design-rehab-no-top = دامپ در تراز بالایی که از آن بازشکل‌دهی می‌شود مقطعی ندارد.
+pit-design-rehab-too-flat = شیب برای جای دادن حجم دامپ زیر آن تراز بیش از حد ملایم است: تراز بالا را بالا ببرید یا شیب را تندتر کنید.
+pit-design-rehab-no-room = توپوگرافی برای گسترش دامپ بازشکل‌داده جایی نمی‌گذارد.
+pit-design-rehab = بازسازی
+pit-design-rehab-help = دامپ را با حفظ حجمش به یک شیب یکنواخت تا توپوگرافی بازشکل می‌دهد، با بالایی نه بلندتر از خواسته: پیکره‌ای که باقی می‌ماند. همراه دامپ کشیده می‌شود و عملیات خاکی‌اش گزارش می‌شود.
+pit-design-rehab-slope = شیب کلی
+pit-design-rehab-slope-help = زاویه کناره‌های دامپ بازشکل‌داده نسبت به افق.
+pit-design-rehab-limit = محدود کردن بالا
+pit-design-rehab-limit-help = بالای دامپ بازشکل‌داده را زیر یک تراز نگه دار: برای جای دادن حجمش زیر آن پهن‌تر می‌شود.
+pit-design-rehab-top = تراز بالا
+pit-design-rehab-contour = فاصله خطوط تراز
+pit-design-rehab-contour-help = فاصله ارتفاعی خطوط تراز کشیده‌شده دامپ بازشکل‌داده.
+pit-design-rehab-figures = بازسازی‌شده
+pit-design-rehab-failed = دامپ بازشکل‌دهی نشد: { $reason }
+pit-design-rehab-cut = برداشته از دامپ
+pit-design-rehab-fill = ریخته فراتر از آن
+pit-design-rehab-footprint = ردپا
 pit-design-sent-roads =
     { $count ->
         [one] رمپ { $design } به‌صورت یک جاده به شبکه حمل فرستاده شد.

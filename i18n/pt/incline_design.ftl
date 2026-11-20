@@ -5254,6 +5254,25 @@ pit-design-send-planning-failed = Não foi possível enviar a cava para o Planej
 pit-design-send-changed = O projeto de cava mudou enquanto a sua superfície era construída: envie-o de novo.
 pit-design-sent-planning = { $design } enviado para o Planejamento, com a sua superfície.
 pit-design-report-send-planning = Cava enviada para o Planejamento
+pit-design-layer-rehab = Reabilitado
+pit-design-rehab-bad-settings = Uma reabilitação precisa de um talude entre 0° e 90° e curvas de nível espaçadas.
+pit-design-rehab-no-top = A pilha não tem secção no topo a partir do qual é remodelada.
+pit-design-rehab-too-flat = O talude é suave demais para conter o volume da pilha sob esse topo: suba o topo ou aumente o talude.
+pit-design-rehab-no-room = A topografia não deixa espaço para a pilha remodelada se espalhar.
+pit-design-rehab = Reabilitar
+pit-design-rehab-help = Remodela a pilha, mantendo o seu volume, num único talude uniforme até à topografia, com o topo não mais alto do que o pedido: a forma em que fica. É desenhada com a pilha e os seus movimentos de terra são indicados.
+pit-design-rehab-slope = Talude global
+pit-design-rehab-slope-help = O ângulo dos lados da pilha remodelada em relação à horizontal.
+pit-design-rehab-limit = Limitar o topo
+pit-design-rehab-limit-help = Manter o topo da pilha remodelada abaixo de uma cota: espalha-se mais para conter o seu volume abaixo.
+pit-design-rehab-top = Cota do topo
+pit-design-rehab-contour = Equidistância
+pit-design-rehab-contour-help = A distância em altura entre as curvas de nível desenhadas da pilha remodelada.
+pit-design-rehab-figures = Reabilitado
+pit-design-rehab-failed = Não foi possível remodelar a pilha: { $reason }
+pit-design-rehab-cut = Cortado da pilha
+pit-design-rehab-fill = Colocado além
+pit-design-rehab-footprint = Pegada
 pit-design-sent-roads =
     { $count ->
         [one] A rampa de { $design } foi enviada para a rede de transporte como uma estrada.

@@ -33,7 +33,7 @@ use crate::{
         formats::{block_model_data::BlockModelData, mesh_data},
         pit_design::{
             Design, StringKind,
-            evaluation::{BenchFigures, Evaluation, Figures, Measured, ShellFigures, Waiting},
+            evaluation::{BenchFigures, Evaluation, Figures, Measured, RehabFigures, RehabSettings, ShellFigures, Waiting},
         },
         solid_reserves::{ReserveBand, ReservePartition, ReservePiece, ReserveTotals},
         spatial::TriangleBvh,
@@ -51,6 +51,8 @@ struct Inputs {
     model: Option<ModelInputs>,
     /// The optimisation shell it is set against, if one is chosen.
     shell: Option<Arc<mesh_data::Triangulation>>,
+    /// How a dump is rehabilitated, if it is.
+    rehab: Option<RehabSettings>,
 }
 
 /// The block model a design is measured in, and how.
@@ -71,6 +73,7 @@ struct Plan<'a> {
     model: Option<&'a crate::model::block_model::OpenBlockModel>,
     fields: Vec<ReserveField>,
     shell: Option<&'a crate::model::triangulation::OpenTriangulation>,
+    rehab: Option<RehabSettings>,
 }
 
 impl Plan<'_> {
@@ -88,6 +91,7 @@ impl Plan<'_> {
                 fields: self.fields.clone(),
             }),
             shell: self.shell.map(|shell| shell.mesh.clone()),
+            rehab: self.rehab.clone(),
         }
     }
 }
@@ -175,6 +179,9 @@ impl App<'_> {
             parts.push(serde_json::to_vec(&fields).unwrap_or_default());
             parts.push(serde_json::to_vec(&model.reserve_mapping).unwrap_or_default());
         }
+        if let Some(rehab) = settings.rehab.as_ref().filter(|_| settings.kind == crate::model::pit_design::Kind::Dump) {
+            parts.push(serde_json::to_vec(rehab).unwrap_or_default());
+        }
         let key = fingerprint(&parts.iter().map(Vec::as_slice).collect::<Vec<_>>());
         Ok(Plan {
             key,
@@ -184,6 +191,7 @@ impl App<'_> {
             model,
             fields,
             shell,
+            rehab: settings.rehab.clone().filter(|_| settings.kind == crate::model::pit_design::Kind::Dump),
         })
     }
 
@@ -379,6 +387,26 @@ fn measure(inputs: &Inputs, cancel: &crate::app::jobs::CancelFlag, progress: &cr
     });
     let shell = shell.transpose()?;
     progress.set_fraction(1.0);
+    // A dump reshaped for its rehabilitation, where it asks.
+    let rehab = inputs.rehab.as_ref().filter(|_| design.dump).map(|settings| {
+        match super::pit_rehab::rehabilitate(
+            design,
+            &surface,
+            &solid.mesh,
+            solid.volume,
+            settings,
+            (&inputs.topography, &inputs.topography_spatial),
+            cancel,
+        ) {
+            Ok(figures) => Ok(figures),
+            Err(error) if error.is::<crate::app::jobs::Cancelled>() => Err(error),
+            Err(error) => Ok(RehabFigures {
+                problem: Some(format!("{error:#}")),
+                ..RehabFigures::default()
+            }),
+        }
+    });
+    let rehab = rehab.transpose()?;
     let daylight = daylight_lines(&surface, &inputs.topography, &inputs.topography_spatial);
     Ok(Evaluation {
         key: 0,
@@ -386,6 +414,7 @@ fn measure(inputs: &Inputs, cancel: &crate::app::jobs::CancelFlag, progress: &cr
         total,
         benches,
         shell,
+        rehab,
         daylight,
         design: inputs.design_inputs,
     })
@@ -477,10 +506,10 @@ fn daylight_lines(surface: &mesh_data::Triangulation, ground: &mesh_data::Triang
 /// How far round both the design and the shell the topography is kept to
 /// set them into: well clear of either, so the two landforms are the same
 /// ground at their edges.
-const LANDFORM_MARGIN: f64 = 50.0;
+pub(super) const LANDFORM_MARGIN: f64 = 50.0;
 
 /// The faces of `mesh` within `(min, max)` in plan.
-fn cropped(mesh: &mesh_data::Triangulation, (min, max): (glam::DVec2, glam::DVec2)) -> anyhow::Result<mesh_data::Triangulation> {
+pub(super) fn cropped(mesh: &mesh_data::Triangulation, (min, max): (glam::DVec2, glam::DVec2)) -> anyhow::Result<mesh_data::Triangulation> {
     let vertices = mesh.vertices();
     let mut index_of = vec![u32::MAX; vertices.len()];
     let (mut kept_vertices, mut kept_faces) = (Vec::new(), Vec::new());

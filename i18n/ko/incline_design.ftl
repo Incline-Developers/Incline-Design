@@ -5287,6 +5287,25 @@ pit-design-send-planning-failed = 피트를 계획으로 보낼 수 없습니다
 pit-design-send-changed = 면을 만드는 동안 피트 설계가 바뀌었습니다: 다시 보내세요.
 pit-design-sent-planning = { $design }을(를) 면과 함께 계획으로 보냈습니다.
 pit-design-report-send-planning = 피트를 계획으로 보냈습니다
+pit-design-layer-rehab = 복구됨
+pit-design-rehab-bad-settings = 복구에는 0°에서 90° 사이의 경사와 간격이 있는 등고선이 필요합니다.
+pit-design-rehab-no-top = 적치장에 재성형을 시작할 정상부의 단면이 없습니다.
+pit-design-rehab-too-flat = 그 정상부 아래에 적치장 부피를 담기에는 경사가 너무 완만합니다: 정상부를 높이거나 경사를 급하게 하세요.
+pit-design-rehab-no-room = 지형이 재성형된 적치장이 퍼질 공간을 남기지 않습니다.
+pit-design-rehab = 복구
+pit-design-rehab-help = 적치장을 부피를 유지한 채 지형까지 하나의 고른 사면으로 재성형하며, 정상부는 요청보다 높지 않습니다: 남게 될 지형입니다. 적치장과 함께 그려지고 토공량이 보고됩니다.
+pit-design-rehab-slope = 전체 경사
+pit-design-rehab-slope-help = 재성형된 적치장 측면의 수평에 대한 각도.
+pit-design-rehab-limit = 정상부 제한
+pit-design-rehab-limit-help = 재성형된 적치장의 정상부를 어떤 RL 아래로 유지합니다: 그 아래에 부피를 담으려고 더 넓게 퍼집니다.
+pit-design-rehab-top = 정상부 RL
+pit-design-rehab-contour = 등고선 간격
+pit-design-rehab-contour-help = 재성형된 적치장의 그려지는 등고선 사이 높이 간격.
+pit-design-rehab-figures = 복구됨
+pit-design-rehab-failed = 적치장을 재성형할 수 없습니다: { $reason }
+pit-design-rehab-cut = 적치장에서 절토
+pit-design-rehab-fill = 그 밖으로 성토
+pit-design-rehab-footprint = 점유 면적
 pit-design-sent-roads =
     { $count ->
         [one] { $design }의 램프를 운반 네트워크에 도로 1개로 보냈습니다.

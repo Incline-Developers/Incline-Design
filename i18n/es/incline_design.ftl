@@ -5254,6 +5254,25 @@ pit-design-send-planning-failed = No se pudo enviar el tajo a Planificación: { 
 pit-design-send-changed = El diseño de tajo cambió mientras se construía su superficie: envíelo de nuevo.
 pit-design-sent-planning = { $design } enviado a Planificación, con su superficie.
 pit-design-report-send-planning = Tajo enviado a Planificación
+pit-design-layer-rehab = Rehabilitado
+pit-design-rehab-bad-settings = Una rehabilitación necesita un talud entre 0° y 90° y curvas de nivel separadas.
+pit-design-rehab-no-top = El botadero no tiene sección en la cota superior desde la que se remodela.
+pit-design-rehab-too-flat = El talud es demasiado tendido para contener el volumen del botadero bajo esa cota: suba la cota o aumente el talud.
+pit-design-rehab-no-room = La topografía no deja espacio para que el botadero remodelado se extienda.
+pit-design-rehab = Rehabilitar
+pit-design-rehab-help = Remodela el botadero, manteniendo su volumen, en un único talud uniforme hasta la topografía, con su cima no más alta de lo pedido: la forma en que queda. Se dibuja con el botadero y se informan sus movimientos de tierra.
+pit-design-rehab-slope = Talud global
+pit-design-rehab-slope-help = El ángulo de los lados del botadero remodelado respecto a la horizontal.
+pit-design-rehab-limit = Limitar la cima
+pit-design-rehab-limit-help = Mantener la cima del botadero remodelado bajo una cota: se extiende más para contener su volumen debajo.
+pit-design-rehab-top = Cota superior
+pit-design-rehab-contour = Equidistancia
+pit-design-rehab-contour-help = La separación en altura de las curvas de nivel del botadero remodelado.
+pit-design-rehab-figures = Rehabilitado
+pit-design-rehab-failed = No se pudo remodelar el botadero: { $reason }
+pit-design-rehab-cut = Cortado del botadero
+pit-design-rehab-fill = Colocado más allá
+pit-design-rehab-footprint = Huella
 pit-design-sent-roads =
     { $count ->
         [one] Se envió la rampa de { $design } a la red de transporte como un camino.

@@ -5310,6 +5310,25 @@ pit-design-send-planning-failed = تعذّر إرسال الحفرة إلى ال
 pit-design-send-changed = تغيّر تصميم الحفرة أثناء بناء سطحه: أرسله مجددًا.
 pit-design-sent-planning = أُرسل { $design } إلى التخطيط مع سطحه.
 pit-design-report-send-planning = أُرسلت الحفرة إلى التخطيط
+pit-design-layer-rehab = مُعاد تأهيله
+pit-design-rehab-bad-settings = تحتاج إعادة التأهيل إلى ميل بين 0° و90° وخطوط كنتور متباعدة.
+pit-design-rehab-no-top = ليس للمكب مقطع عند القمة التي يُعاد تشكيله منها.
+pit-design-rehab-too-flat = الميل أقل من أن يسع حجم المكب تحت تلك القمة: ارفع القمة أو زِد الميل.
+pit-design-rehab-no-room = لا تترك الطبوغرافيا للمكب المعاد تشكيله مجالًا للانتشار.
+pit-design-rehab = إعادة التأهيل
+pit-design-rehab-help = يُعيد تشكيل المكب، محافظًا على حجمه، في ميل واحد منتظم حتى الطبوغرافيا، وقمته ليست أعلى مما طُلب: الشكل الذي سيبقى عليه. يُرسم مع المكب وتُذكر أعمال الحفر والردم.
+pit-design-rehab-slope = الميل الإجمالي
+pit-design-rehab-slope-help = زاوية جوانب المكب المعاد تشكيله عن الأفق.
+pit-design-rehab-limit = تحديد القمة
+pit-design-rehab-limit-help = إبقاء قمة المكب المعاد تشكيله تحت منسوب: ينتشر أكثر ليسع حجمه تحته.
+pit-design-rehab-top = منسوب القمة
+pit-design-rehab-contour = فاصل الكنتور
+pit-design-rehab-contour-help = المسافة الرأسية بين خطوط كنتور المكب المعاد تشكيله المرسومة.
+pit-design-rehab-figures = مُعاد تأهيله
+pit-design-rehab-failed = تعذّر إعادة تشكيل المكب: { $reason }
+pit-design-rehab-cut = محفور من المكب
+pit-design-rehab-fill = مردوم خارجه
+pit-design-rehab-footprint = المساحة المشغولة
 pit-design-sent-roads =
     { $count ->
         [one] أُرسل منحدر { $design } إلى شبكة النقل كطريق واحد.

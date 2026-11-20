@@ -520,6 +520,8 @@ pub(crate) enum StringKind {
     RampCentreline,
     /// Where the design meets the topography it is measured against.
     Daylight,
+    /// A contour of a dump reshaped for its rehabilitation.
+    Rehab,
 }
 
 impl StringKind {
@@ -531,6 +533,7 @@ impl StringKind {
             Self::RampEdge => [0.35, 0.80, 0.40, 1.0],
             Self::RampCentreline => [0.62, 0.66, 0.62, 1.0],
             Self::Daylight => [0.95, 0.88, 0.25, 1.0],
+            Self::Rehab => [0.55, 0.85, 0.75, 1.0],
         }
     }
 }

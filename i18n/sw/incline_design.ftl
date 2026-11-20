@@ -5288,6 +5288,25 @@ pit-design-send-planning-failed = Shimo halikuweza kutumwa kwa Upangaji: { $reas
 pit-design-send-changed = Muundo wa shimo ulibadilika wakati uso wake ukijengwa: utume tena.
 pit-design-sent-planning = { $design } limetumwa kwa Upangaji, pamoja na uso wake.
 pit-design-report-send-planning = Shimo limetumwa kwa Upangaji
+pit-design-layer-rehab = Imerekebishwa
+pit-design-rehab-bad-settings = Urekebishaji unahitaji mteremko kati ya 0° na 90° na kontua zenye nafasi.
+pit-design-rehab-no-top = Dampo halina sehemu kwenye kilele kinachoundwa upya kutoka kwake.
+pit-design-rehab-too-flat = Mteremko ni mdogo mno kubeba ujazo wa dampo chini ya kilele hicho: inua kilele au ongeza mteremko.
+pit-design-rehab-no-room = Topografia haiachi nafasi kwa dampo lililoundwa upya kusambaa.
+pit-design-rehab = Rekebisha
+pit-design-rehab-help = Huunda upya dampo, likishika ujazo wake, kuwa mteremko mmoja sawa hadi topografia, kilele chake kisizidi kilichoombwa: umbo la ardhi litakalobaki. Huchorwa pamoja na dampo, na kazi zake za udongo huripotiwa.
+pit-design-rehab-slope = Mteremko wa jumla
+pit-design-rehab-slope-help = Pembe ya pande za dampo lililoundwa upya kutoka mlalo.
+pit-design-rehab-limit = Weka kikomo cha kilele
+pit-design-rehab-limit-help = Weka kilele cha dampo lililoundwa upya chini ya RL fulani: husambaa zaidi kubeba ujazo wake chini yake.
+pit-design-rehab-top = RL ya kilele
+pit-design-rehab-contour = Muda wa kontua
+pit-design-rehab-contour-help = Umbali wa urefu kati ya kontua zinazochorwa za dampo lililoundwa upya.
+pit-design-rehab-figures = Imerekebishwa
+pit-design-rehab-failed = Dampo halikuweza kuundwa upya: { $reason }
+pit-design-rehab-cut = Kilichochimbwa kutoka dampo
+pit-design-rehab-fill = Kilichowekwa nje yake
+pit-design-rehab-footprint = Alama ya eneo
 pit-design-sent-roads =
     { $count ->
         [one] Njia panda ya { $design } imetumwa kwenye mtandao wa usafirishaji kama barabara moja.

@@ -5257,6 +5257,25 @@ pit-design-send-planning-failed = La fosse n'a pas pu être envoyée à la plani
 pit-design-send-changed = La conception de fosse a changé pendant la construction de sa surface : envoyez-la de nouveau.
 pit-design-sent-planning = { $design } envoyée à la planification, avec sa surface.
 pit-design-report-send-planning = Fosse envoyée à la planification
+pit-design-layer-rehab = Réhabilité
+pit-design-rehab-bad-settings = Une réhabilitation demande une pente entre 0° et 90° et des courbes de niveau espacées.
+pit-design-rehab-no-top = La verse n'a pas de section au sommet à partir duquel elle est remodelée.
+pit-design-rehab-too-flat = La pente est trop faible pour contenir le volume de la verse sous ce sommet : relevez le sommet ou raidissez la pente.
+pit-design-rehab-no-room = La topographie ne laisse pas à la verse remodelée la place de s'étendre.
+pit-design-rehab = Réhabiliter
+pit-design-rehab-help = Remodèle la verse, à volume constant, en une seule pente régulière jusqu'à la topographie, son sommet pas plus haut que demandé : le relief qui restera. Il est dessiné avec la verse et ses terrassements sont indiqués.
+pit-design-rehab-slope = Pente globale
+pit-design-rehab-slope-help = L'angle des flancs de la verse remodelée par rapport à l'horizontale.
+pit-design-rehab-limit = Limiter le sommet
+pit-design-rehab-limit-help = Garder le sommet de la verse remodelée sous une cote : elle s'étend davantage pour contenir son volume en dessous.
+pit-design-rehab-top = Cote du sommet
+pit-design-rehab-contour = Équidistance
+pit-design-rehab-contour-help = L'écart en hauteur des courbes de niveau dessinées de la verse remodelée.
+pit-design-rehab-figures = Réhabilité
+pit-design-rehab-failed = La verse n'a pas pu être remodelée : { $reason }
+pit-design-rehab-cut = Déblai sur la verse
+pit-design-rehab-fill = Remblai au-delà
+pit-design-rehab-footprint = Emprise
 pit-design-sent-roads =
     { $count ->
         [one] La rampe de { $design } a été envoyée au réseau de roulage comme une piste.

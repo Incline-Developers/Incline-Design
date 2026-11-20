@@ -683,7 +683,7 @@ pub(crate) fn rebuild_dynamic_scene(input: DynamicSceneBuildInput<'_>) {
             let weight = match string.kind {
                 StringKind::RampEdge => 2.5,
                 StringKind::RampCentreline => 1.0,
-                StringKind::Toe | StringKind::Crest | StringKind::Daylight => 1.5,
+                StringKind::Toe | StringKind::Crest | StringKind::Daylight | StringKind::Rehab => 1.5,
             };
             for pair in string.points.windows(2) {
                 draw_line(&mut draw_ctx, pair[0], pair[1], weight, colour);

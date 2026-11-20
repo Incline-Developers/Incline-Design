@@ -5372,6 +5372,25 @@ pit-design-send-planning-failed = Не вдалося надіслати кар'
 pit-design-send-changed = Проєкт кар'єру змінився, поки будувалася його поверхня: надішліть його знову.
 pit-design-sent-planning = { $design } надіслано до планування разом із поверхнею.
 pit-design-report-send-planning = Кар'єр надіслано до планування
+pit-design-layer-rehab = Рекультивація
+pit-design-rehab-bad-settings = Для рекультивації потрібен ухил від 0° до 90° і горизонталі з кроком.
+pit-design-rehab-no-top = Відвал не має перерізу на верхній позначці, від якої його переформовують.
+pit-design-rehab-too-flat = Ухил надто пологий, щоб умістити об'єм відвалу під цією позначкою: підніміть верх або зробіть ухил крутішим.
+pit-design-rehab-no-room = Топографія не залишає переформованому відвалу місця розтектися.
+pit-design-rehab = Рекультивувати
+pit-design-rehab-help = Переформовує відвал з тим самим об'ємом в один рівний укіс до топографії, верх не вище заданого: рельєф, що залишиться. Він малюється разом із відвалом, а обсяги земляних робіт наводяться.
+pit-design-rehab-slope = Загальний ухил
+pit-design-rehab-slope-help = Кут бортів переформованого відвалу до горизонталі.
+pit-design-rehab-limit = Обмежити верх
+pit-design-rehab-limit-help = Тримати верх переформованого відвалу не вище позначки: він розтікається ширше, щоб умістити об'єм нижче.
+pit-design-rehab-top = Позначка верху
+pit-design-rehab-contour = Крок горизонталей
+pit-design-rehab-contour-help = Крок за висотою намальованих горизонталей переформованого відвалу.
+pit-design-rehab-figures = Рекультивація
+pit-design-rehab-failed = Не вдалося переформувати відвал: { $reason }
+pit-design-rehab-cut = Зрізано з відвалу
+pit-design-rehab-fill = Відсипано за ним
+pit-design-rehab-footprint = Площа основи
 pit-design-sent-roads =
     { $count ->
         [one] З'їзд { $design } надіслано до мережі доріг як одну дорогу.

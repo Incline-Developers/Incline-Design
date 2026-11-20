@@ -5954,6 +5954,25 @@ pit-design-send-planning-failed = The pit could not be sent to Planning: { $reas
 pit-design-send-changed = The pit design changed while its surface was built: send it again.
 pit-design-sent-planning = Sent { $design } to Planning, with its surface.
 pit-design-report-send-planning = Sent the pit to Planning
+pit-design-layer-rehab = Rehabilitated
+pit-design-rehab-bad-settings = A rehabilitation needs a slope between 0° and 90° and contours some height apart.
+pit-design-rehab-no-top = The dump has no section at the top it is reshaped from.
+pit-design-rehab-too-flat = The slope is too flat to hold the dump's volume under that top: raise the top or steepen the slope.
+pit-design-rehab-no-room = The topography leaves the reshaped dump no room to spread.
+pit-design-rehab = Rehabilitate
+pit-design-rehab-help = Reshape the dump, holding its volume, into one even slope down to the topography, its top no higher than asked: the landform it is left as. It is drawn with the dump, and its earthworks are reported.
+pit-design-rehab-slope = Overall slope
+pit-design-rehab-slope-help = The angle the reshaped dump's sides come to, from horizontal.
+pit-design-rehab-limit = Limit the top
+pit-design-rehab-limit-help = Keep the reshaped dump's top no higher than an RL: it spreads wider to hold its volume below.
+pit-design-rehab-top = Top RL
+pit-design-rehab-contour = Contour interval
+pit-design-rehab-contour-help = How far apart in height the reshaped dump's contours are drawn.
+pit-design-rehab-figures = Rehabilitated
+pit-design-rehab-failed = The dump could not be reshaped: { $reason }
+pit-design-rehab-cut = Cut from the dump
+pit-design-rehab-fill = Placed beyond it
+pit-design-rehab-footprint = Footprint
 pit-design-sent-roads =
     { $count ->
         [one] Sent { $design }'s ramp to the haul network as one road.

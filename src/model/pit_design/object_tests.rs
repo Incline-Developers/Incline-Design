@@ -103,6 +103,14 @@ fn saves_and_reads_back_whole() {
                 left: figures,
                 problem: None,
             }),
+            rehab: Some(super::evaluation::RehabFigures {
+                top: 130.0,
+                volume: 1000.0,
+                cut: 10.0,
+                fill: 10.0,
+                footprint: [100.0, 140.0],
+                ..Default::default()
+            }),
             daylight: vec![DesignString {
                 kind: StringKind::Daylight,
                 points: vec![DVec3::new(0.0, 0.0, 120.0), DVec3::new(10.0, 0.0, 121.0)],

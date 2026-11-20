@@ -1411,13 +1411,17 @@ impl Object {
     /// object's own, [`Self::string_geometry`]). Empty for anything else, and
     /// for a design not worked out yet.
     pub(crate) fn pit_strings(&self) -> impl Iterator<Item = &pit_design::DesignString> + Clone {
-        let (designed, daylight) = match self {
+        let (designed, daylight, rehab) = match self {
             // The design's first string is the starting ring, which the
             // object's own string stands for.
-            Object::PitDesign { pit, .. } => (pit.design().map_or(&[][..], |design| design.strings.get(1..).unwrap_or_default()), pit.daylight()),
-            _ => (&[][..], &[][..]),
+            Object::PitDesign { pit, .. } => (
+                pit.design().map_or(&[][..], |design| design.strings.get(1..).unwrap_or_default()),
+                pit.daylight(),
+                pit.rehab_strings(),
+            ),
+            _ => (&[][..], &[][..], &[][..]),
         };
-        designed.iter().chain(daylight)
+        designed.iter().chain(daylight).chain(rehab)
     }
 
     /// A pit design as plain polylines, all with its id and layer: its

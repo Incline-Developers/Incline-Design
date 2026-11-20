@@ -5295,6 +5295,25 @@ pit-design-send-planning-failed = Ocak planlamaya gönderilemedi: { $reason }
 pit-design-send-changed = Ocak tasarımı, yüzeyi oluşturulurken değişti: yeniden gönderin.
 pit-design-sent-planning = { $design } yüzeyiyle birlikte planlamaya gönderildi.
 pit-design-report-send-planning = Ocak planlamaya gönderildi
+pit-design-layer-rehab = Rehabilite edilmiş
+pit-design-rehab-bad-settings = Rehabilitasyon için 0° ile 90° arasında bir şev ve aralıklı eş yükselti eğrileri gerekir.
+pit-design-rehab-no-top = Döküm sahasının yeniden biçimlendirildiği tepe kotunda kesiti yok.
+pit-design-rehab-too-flat = Şev, döküm hacmini bu tepe kotunun altında tutmak için çok yatık: tepeyi yükseltin veya şevi dikleştirin.
+pit-design-rehab-no-room = Topoğrafya yeniden biçimlenen döküm sahasına yayılacak yer bırakmıyor.
+pit-design-rehab = Rehabilite et
+pit-design-rehab-help = Döküm sahasını hacmini koruyarak topoğrafyaya inen tek düzgün bir şeve dönüştürür, tepesi istenenden yüksek olmaz: kalacağı yer şekli. Döküm sahasıyla çizilir ve hafriyatı bildirilir.
+pit-design-rehab-slope = Genel şev
+pit-design-rehab-slope-help = Yeniden biçimlenen döküm sahasının yanlarının yataya göre açısı.
+pit-design-rehab-limit = Tepeyi sınırla
+pit-design-rehab-limit-help = Yeniden biçimlenen döküm sahasının tepesini bir kotun altında tut: hacmini altında tutmak için daha geniş yayılır.
+pit-design-rehab-top = Tepe kotu
+pit-design-rehab-contour = Eş yükselti aralığı
+pit-design-rehab-contour-help = Yeniden biçimlenen döküm sahasının çizilen eş yükselti eğrilerinin yükseklik aralığı.
+pit-design-rehab-figures = Rehabilite edilmiş
+pit-design-rehab-failed = Döküm sahası yeniden biçimlendirilemedi: { $reason }
+pit-design-rehab-cut = Dökümden kazılan
+pit-design-rehab-fill = Ötesine serilen
+pit-design-rehab-footprint = Ayak izi
 pit-design-sent-roads =
     { $count ->
         [one] { $design } rampası taşıma ağına bir yol olarak gönderildi.

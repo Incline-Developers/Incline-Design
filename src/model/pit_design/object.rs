@@ -104,6 +104,15 @@ impl PitObject {
         }
     }
 
+    /// Its rehabilitated landform's contours, as last measured for the design
+    /// it has now: none where it has not been, or is not rehabilitated.
+    pub(crate) fn rehab_strings(&self) -> &[super::DesignString] {
+        match (&self.derived, &self.evaluation) {
+            (Some(derived), Some(evaluation)) if evaluation.design == derived.inputs => evaluation.rehab.as_ref().map_or(&[][..], |rehab| &rehab.strings),
+            _ => &[],
+        }
+    }
+
     /// The design worked out, if it has been and there is one.
     pub(crate) fn design(&self) -> Option<&Design> {
         match &self.derived.as_ref()?.outcome {
@@ -162,6 +171,7 @@ pub(crate) fn inputs_key(verts: &[PolyVertex], settings: &PitDesignSettings) -> 
     // What it is measured against changes nothing designed.
     let designed = PitDesignSettings {
         evaluation: super::evaluation::EvaluationSettings::default(),
+        rehab: None,
         ..settings.clone()
     };
     mix(&serde_json::to_vec(&designed).unwrap_or_default());

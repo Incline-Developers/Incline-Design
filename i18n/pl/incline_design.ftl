@@ -5390,6 +5390,25 @@ pit-design-send-planning-failed = Nie udało się wysłać wyrobiska do planowan
 pit-design-send-changed = Projekt wyrobiska zmienił się podczas budowania jego powierzchni: wyślij go ponownie.
 pit-design-sent-planning = Wysłano { $design } do planowania wraz z powierzchnią.
 pit-design-report-send-planning = Wysłano wyrobisko do planowania
+pit-design-layer-rehab = Zrekultywowane
+pit-design-rehab-bad-settings = Rekultywacja wymaga nachylenia między 0° a 90° i warstwic w odstępach.
+pit-design-rehab-no-top = Zwałowisko nie ma przekroju na wierzchu, od którego jest przekształcane.
+pit-design-rehab-too-flat = Nachylenie jest zbyt łagodne, by zmieścić objętość zwałowiska pod tym wierzchem: podnieś wierzch lub zwiększ nachylenie.
+pit-design-rehab-no-room = Topografia nie zostawia przekształconemu zwałowisku miejsca na rozejście się.
+pit-design-rehab = Rekultywuj
+pit-design-rehab-help = Przekształca zwałowisko, zachowując objętość, w jedno równe nachylenie do topografii, z wierzchem nie wyżej niż zadano: ukształtowanie, które pozostanie. Jest rysowane ze zwałowiskiem, a roboty ziemne są podawane.
+pit-design-rehab-slope = Nachylenie ogólne
+pit-design-rehab-slope-help = Kąt zboczy przekształconego zwałowiska względem poziomu.
+pit-design-rehab-limit = Ogranicz wierzch
+pit-design-rehab-limit-help = Utrzymaj wierzch przekształconego zwałowiska poniżej rzędnej: rozchodzi się szerzej, by zmieścić objętość poniżej.
+pit-design-rehab-top = Rzędna wierzchu
+pit-design-rehab-contour = Cięcie warstwic
+pit-design-rehab-contour-help = Odstęp wysokości rysowanych warstwic przekształconego zwałowiska.
+pit-design-rehab-figures = Zrekultywowane
+pit-design-rehab-failed = Nie udało się przekształcić zwałowiska: { $reason }
+pit-design-rehab-cut = Wykop ze zwałowiska
+pit-design-rehab-fill = Nasyp poza nim
+pit-design-rehab-footprint = Powierzchnia zajęta
 pit-design-sent-roads =
     { $count ->
         [one] Wysłano rampę { $design } do sieci transportowej jako jedną drogę.

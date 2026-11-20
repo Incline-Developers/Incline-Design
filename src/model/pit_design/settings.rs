@@ -44,6 +44,9 @@ pub(crate) struct PitDesignSettings {
     /// What the design is measured against: no part of what it is designed
     /// from.
     pub(crate) evaluation: super::evaluation::EvaluationSettings,
+    /// How a dump is rehabilitated, if it is: worked out with its measure,
+    /// no part of its design.
+    pub(crate) rehab: Option<super::evaluation::RehabSettings>,
 }
 
 /// One ramp of a pit design, as its settings say.
@@ -150,6 +153,7 @@ impl Default for PitDesignSettings {
             stop_elevation: 0.0,
             topography: None,
             evaluation: super::evaluation::EvaluationSettings::default(),
+            rehab: None,
         }
     }
 }

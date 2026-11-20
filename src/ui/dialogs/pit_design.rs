@@ -19,7 +19,7 @@ use crate::{
         pit_design::{
             Design, Direction, End, Kind, Problem, RampBand, Zone,
             checks::{Check, Flag},
-            evaluation::{Evaluation, Figures, ShellFigures, Waiting},
+            evaluation::{Evaluation, Figures, RehabFigures, RehabSettings, ShellFigures, Waiting},
             object::PitObject,
             settings::{PitDesignSettings, RampSettings, StopMode},
             walls::{Sector, WallReport},
@@ -1133,6 +1133,8 @@ fn draw_evaluation(ui: &mut egui::Ui, working: &mut PitObject, facts: &DraftFact
     // Built up short of the ground it could daylight against, its ground
     // above its last ring is measured as though its walls stood straight up.
     let short = working.design().is_some_and(|design| working.settings.can_daylight() && design.end != End::Daylight);
+    // A dump's top, where its rehabilitation's limit starts from.
+    let design_top = working.design().map(|design| design.levels.iter().copied().fold(f64::NEG_INFINITY, f64::max));
     let settings = &mut working.settings;
     // Daylighting, the topography is chosen with where the design stops.
     if !settings.daylights() {
@@ -1187,6 +1189,42 @@ fn draw_evaluation(ui: &mut egui::Ui, working: &mut PitObject, facts: &DraftFact
         .help_text(tr!("pit-design-shell-help"))
         .show(ui);
     }
+    // A dump reshaped for its rehabilitation.
+    if settings.kind == Kind::Dump {
+        let mut on = settings.rehab.is_some();
+        MenuFieldBool::new(tr!("pit-design-rehab"), &mut on).help_text(tr!("pit-design-rehab-help")).show(ui);
+        if on != settings.rehab.is_some() {
+            settings.rehab = on.then(RehabSettings::default);
+        }
+        if let Some(rehab) = settings.rehab.as_mut() {
+            MenuFieldF64::new(tr!("pit-design-rehab-slope"), &mut rehab.slope, 1.0..=60.0)
+                .width(FIELD_WIDTH)
+                .speed(0.1)
+                .suffix("°")
+                .help_text(tr!("pit-design-rehab-slope-help"))
+                .show(ui);
+            let mut limited = rehab.top.is_some();
+            MenuFieldBool::new(tr!("pit-design-rehab-limit"), &mut limited)
+                .help_text(tr!("pit-design-rehab-limit-help"))
+                .show(ui);
+            if limited != rehab.top.is_some() {
+                rehab.top = limited.then(|| design_top.filter(|top| top.is_finite()).unwrap_or_default());
+            }
+            if let Some(top) = rehab.top.as_mut() {
+                MenuFieldF64::new(tr!("pit-design-rehab-top"), top, f64::MIN..=f64::MAX)
+                    .width(FIELD_WIDTH)
+                    .speed(0.5)
+                    .suffix(" m")
+                    .show(ui);
+            }
+            MenuFieldF64::new(tr!("pit-design-rehab-contour"), &mut rehab.contour, 0.5..=100.0)
+                .width(FIELD_WIDTH)
+                .speed(0.1)
+                .suffix(" m")
+                .help_text(tr!("pit-design-rehab-contour-help"))
+                .show(ui);
+        }
+    }
     let warning = ui.visuals().warn_fg_color;
     match &facts.waiting {
         Some(Waiting::Design) => menu::menu_note(ui, tr!("pit-design-designing")),
@@ -1211,7 +1249,30 @@ fn draw_evaluation(ui: &mut egui::Ui, working: &mut PitObject, facts: &DraftFact
     if let Some(shell) = &evaluation.shell {
         draw_against_shell(ui, shell, &facts.fields);
     }
+    if let Some(rehab) = &evaluation.rehab {
+        draw_rehab(ui, rehab);
+    }
     draw_comparison(ui, facts, working.design().is_some());
+}
+
+/// A dump reshaped for its rehabilitation: where its top stands, what it
+/// holds, the earthworks it takes, and how far it spreads.
+fn draw_rehab(ui: &mut egui::Ui, rehab: &RehabFigures) {
+    menu::menu_note(ui, tr!("pit-design-rehab-figures"));
+    if let Some(problem) = &rehab.problem {
+        ui.colored_label(ui.visuals().warn_fg_color, tr!("pit-design-rehab-failed", reason = problem.clone()));
+        return;
+    }
+    read_only_row(ui, &tr!("pit-design-rehab-top"), &format!("{:.1} m", rehab.top));
+    read_only_row(ui, &tr!("pit-design-evaluation-volume"), &format!("{} m³", quantity(Some(rehab.volume))));
+    read_only_row(ui, &tr!("pit-design-rehab-cut"), &format!("{} m³", quantity(Some(rehab.cut))));
+    read_only_row(ui, &tr!("pit-design-rehab-fill"), &format!("{} m³", quantity(Some(rehab.fill))));
+    let [before, after] = rehab.footprint;
+    read_only_row(
+        ui,
+        &tr!("pit-design-rehab-footprint"),
+        &format!("{} m² → {} m²", quantity(Some(before)), quantity(Some(after))),
+    );
 }
 
 /// The numeric reserve fields: those a figure is given for.

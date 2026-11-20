@@ -5282,6 +5282,25 @@ pit-design-send-planning-failed = ピットを計画へ送れませんでした:
 pit-design-send-changed = 面の作成中にピット設計が変わりました: もう一度送ってください。
 pit-design-sent-planning = { $design } を面とともに計画へ送りました。
 pit-design-report-send-planning = ピットを計画へ送りました
+pit-design-layer-rehab = リハビリ後
+pit-design-rehab-bad-settings = リハビリには 0° から 90° の勾配と間隔のある等高線が必要です。
+pit-design-rehab-no-top = 整形の起点となる天端に、ダンプの断面がありません。
+pit-design-rehab-too-flat = この天端の下にダンプの体積を収めるには勾配が緩すぎます: 天端を上げるか勾配を急にしてください。
+pit-design-rehab-no-room = 地形に、整形したダンプが広がる余地がありません。
+pit-design-rehab = リハビリ
+pit-design-rehab-help = ダンプを体積を保ったまま地形まで一様な一つの法面に整形し、天端は指定より高くしません: 残る地形です。ダンプとともに描かれ、土工量が示されます。
+pit-design-rehab-slope = 全体勾配
+pit-design-rehab-slope-help = 整形したダンプの側面の水平からの角度。
+pit-design-rehab-limit = 天端を制限
+pit-design-rehab-limit-help = 整形したダンプの天端をある RL 以下に保ちます: その下に体積を収めるため、より広く広がります。
+pit-design-rehab-top = 天端 RL
+pit-design-rehab-contour = 等高線間隔
+pit-design-rehab-contour-help = 整形したダンプの描かれる等高線の高さ間隔。
+pit-design-rehab-figures = リハビリ後
+pit-design-rehab-failed = ダンプを整形できませんでした: { $reason }
+pit-design-rehab-cut = ダンプからの切土
+pit-design-rehab-fill = その外側への盛土
+pit-design-rehab-footprint = 占有面積
 pit-design-sent-roads =
     { $count ->
         [one] { $design } のランプを運搬ネットワークへ 1 本の道路として送りました。

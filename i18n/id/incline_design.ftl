@@ -5253,6 +5253,25 @@ pit-design-send-planning-failed = Pit tidak dapat dikirim ke Perencanaan: { $rea
 pit-design-send-changed = Desain pit berubah saat permukaannya dibangun: kirim lagi.
 pit-design-sent-planning = { $design } dikirim ke Perencanaan, dengan permukaannya.
 pit-design-report-send-planning = Pit dikirim ke Perencanaan
+pit-design-layer-rehab = Direhabilitasi
+pit-design-rehab-bad-settings = Rehabilitasi memerlukan kemiringan antara 0° dan 90° dan kontur berjarak.
+pit-design-rehab-no-top = Timbunan tidak memiliki penampang di puncak tempat ia dibentuk ulang.
+pit-design-rehab-too-flat = Kemiringan terlalu landai untuk menampung volume timbunan di bawah puncak itu: naikkan puncak atau curamkan kemiringan.
+pit-design-rehab-no-room = Topografi tidak memberi ruang bagi timbunan yang dibentuk ulang untuk menyebar.
+pit-design-rehab = Rehabilitasi
+pit-design-rehab-help = Membentuk ulang timbunan, dengan volume tetap, menjadi satu lereng rata hingga topografi, puncaknya tidak lebih tinggi dari yang diminta: bentang alam yang akan tersisa. Digambar bersama timbunan, dan pekerjaan tanahnya dilaporkan.
+pit-design-rehab-slope = Kemiringan keseluruhan
+pit-design-rehab-slope-help = Sudut sisi timbunan yang dibentuk ulang terhadap horizontal.
+pit-design-rehab-limit = Batasi puncak
+pit-design-rehab-limit-help = Jaga puncak timbunan yang dibentuk ulang di bawah suatu RL: ia menyebar lebih lebar untuk menampung volumenya di bawah.
+pit-design-rehab-top = RL puncak
+pit-design-rehab-contour = Interval kontur
+pit-design-rehab-contour-help = Jarak tinggi kontur timbunan yang dibentuk ulang yang digambar.
+pit-design-rehab-figures = Direhabilitasi
+pit-design-rehab-failed = Timbunan tidak dapat dibentuk ulang: { $reason }
+pit-design-rehab-cut = Digali dari timbunan
+pit-design-rehab-fill = Ditimbun di luarnya
+pit-design-rehab-footprint = Jejak
 pit-design-sent-roads =
     { $count ->
         [one] Ramp { $design } dikirim ke jaringan angkut sebagai satu jalan.

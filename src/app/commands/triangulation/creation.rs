@@ -317,7 +317,7 @@ impl<'a> App<'a> {
             // line lies on the faces they make.
             for string in obj.pit_strings().filter(|string| {
                 use crate::model::pit_design::StringKind;
-                !matches!(string.kind, StringKind::RampCentreline | StringKind::Daylight)
+                !matches!(string.kind, StringKind::RampCentreline | StringKind::Daylight | StringKind::Rehab)
             }) {
                 if string.points.len() >= if string.closed { 3 } else { 2 } {
                     paths.push(BreaklinePath {

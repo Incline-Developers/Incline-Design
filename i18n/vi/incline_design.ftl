@@ -5281,6 +5281,25 @@ pit-design-send-planning-failed = Không gửi được moong sang Lập kế ho
 pit-design-send-changed = Thiết kế moong đã thay đổi trong khi dựng bề mặt: hãy gửi lại.
 pit-design-sent-planning = Đã gửi { $design } sang Lập kế hoạch, kèm bề mặt.
 pit-design-report-send-planning = Đã gửi moong sang Lập kế hoạch
+pit-design-layer-rehab = Đã phục hồi
+pit-design-rehab-bad-settings = Phục hồi cần độ dốc từ 0° đến 90° và đường đồng mức có khoảng cách.
+pit-design-rehab-no-top = Bãi thải không có mặt cắt tại đỉnh dùng để định hình lại.
+pit-design-rehab-too-flat = Độ dốc quá thoải để chứa thể tích bãi thải dưới đỉnh đó: hãy nâng đỉnh hoặc tăng độ dốc.
+pit-design-rehab-no-room = Địa hình không để bãi thải định hình lại chỗ trải rộng.
+pit-design-rehab = Phục hồi
+pit-design-rehab-help = Định hình lại bãi thải, giữ nguyên thể tích, thành một mái dốc đều xuống địa hình, đỉnh không cao hơn yêu cầu: dạng địa hình sẽ còn lại. Nó được vẽ cùng bãi thải và khối lượng đào đắp được báo cáo.
+pit-design-rehab-slope = Độ dốc tổng thể
+pit-design-rehab-slope-help = Góc các sườn của bãi thải định hình lại so với phương ngang.
+pit-design-rehab-limit = Giới hạn đỉnh
+pit-design-rehab-limit-help = Giữ đỉnh bãi thải định hình lại dưới một cao độ: nó trải rộng hơn để chứa thể tích bên dưới.
+pit-design-rehab-top = Cao độ đỉnh
+pit-design-rehab-contour = Khoảng cao đều
+pit-design-rehab-contour-help = Khoảng cách độ cao giữa các đường đồng mức được vẽ của bãi thải định hình lại.
+pit-design-rehab-figures = Đã phục hồi
+pit-design-rehab-failed = Không định hình lại được bãi thải: { $reason }
+pit-design-rehab-cut = Đào từ bãi thải
+pit-design-rehab-fill = Đắp ra ngoài
+pit-design-rehab-footprint = Diện tích chiếm đất
 pit-design-sent-roads =
     { $count ->
         [one] Đã gửi đường dốc của { $design } vào mạng vận tải thành một đường.

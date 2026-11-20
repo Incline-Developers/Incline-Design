@@ -297,6 +297,20 @@ fn mesh_fingerprint(mesh: &mesh_data::Triangulation) -> u64 {
     })
 }
 
+/// The volume enclosed between two surfaces on one side of their crossing,
+/// as [`build_solid_mesh`] builds it, but measured only: neither kept nor
+/// looked up among recent builds, for a search that tries many shapes and
+/// keeps none of them. `None` where there is nothing between them.
+pub(crate) fn measured_volume_between(design: &mesh_data::Triangulation, topography: &mesh_data::Triangulation, region: SolidRegion) -> Result<Option<f64>> {
+    let progress = crate::model::progress::Progress::new();
+    let mut notes = Vec::new();
+    match build_solid_between_surfaces_uncached(design, topography, region, &progress.phase(0.0, 1.0), &mut notes) {
+        Ok((_, faces, volume)) => Ok((!faces.is_empty()).then_some(volume)),
+        Err(error) if error.chain().any(|cause| cause.to_string() == no_volume(region)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 fn build_solid_between_surfaces_uncached(
     design: &mesh_data::Triangulation,
     topography: &mesh_data::Triangulation,
