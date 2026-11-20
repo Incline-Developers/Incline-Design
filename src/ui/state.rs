@@ -9185,7 +9185,8 @@ pub(crate) enum ScheduleEdit {
     /// When the long-term plan stops refining its order.
     SetPlanStop(crate::model::schedule::experiment::PlanStop),
     SetExperimentSolveLimits {
-        seconds: f64,
+        /// None for no limit.
+        seconds: Option<f64>,
         relative_gap: f64,
     },
     SetExperimentGradeUnit {

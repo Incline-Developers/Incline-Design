@@ -31,8 +31,6 @@ use crate::{i18n::tr, model::ReserveFieldId};
 pub(crate) const DEFAULT_END_DAY: u32 = 7;
 /// Default calendar discretisation.
 pub(crate) const DEFAULT_INTERVAL_H: f64 = 1.0;
-/// Default solver wall-clock budget.
-pub(crate) const DEFAULT_SOLVE_SECONDS: f64 = 60.0;
 /// The finest calendar step offered: one minute. Anything finer is noise in
 /// a mine schedule and only multiplies the model.
 pub(crate) const MIN_INTERVAL_H: f64 = 1.0 / 60.0;
@@ -194,8 +192,10 @@ pub(crate) struct ExperimentConfig {
     /// the derived budget and its existing model-size ceiling.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) event_capacity: Option<usize>,
-    /// Solver wall-clock budget. Preparation and replay sit outside it.
-    pub(crate) solve_seconds: f64,
+    /// Solver wall-clock budget; none, and Improve runs until it stops
+    /// finding better schedules or is stopped. Preparation and replay sit
+    /// outside it.
+    pub(crate) solve_seconds: Option<f64>,
     pub(crate) relative_gap: f64,
     /// The yearly rate, as a fraction, at which the plan that orders the
     /// automatic bars' ground discounts later value. Zero weighs a tonne
@@ -218,7 +218,7 @@ impl Default for ExperimentConfig {
             planning_end_day: DEFAULT_END_DAY,
             interval_h: DEFAULT_INTERVAL_H,
             event_capacity: None,
-            solve_seconds: DEFAULT_SOLVE_SECONDS,
+            solve_seconds: None,
             relative_gap: DEFAULT_RELATIVE_GAP,
             discount_rate: DEFAULT_DISCOUNT_RATE,
             plan_stop: PlanStop::default(),
@@ -276,11 +276,12 @@ impl ExperimentConfig {
         Ok(())
     }
 
-    pub(crate) fn set_solve_seconds(&mut self, seconds: f64) -> ScheduleResult {
-        if seconds > MAX_SOLVE_SECONDS {
-            return Err(ScheduleError::InvalidExperimentSetting);
-        }
-        self.solve_seconds = checked_positive(seconds)?;
+    pub(crate) fn set_solve_seconds(&mut self, seconds: Option<f64>) -> ScheduleResult {
+        self.solve_seconds = match seconds {
+            Some(seconds) if seconds > MAX_SOLVE_SECONDS => return Err(ScheduleError::InvalidExperimentSetting),
+            Some(seconds) => Some(checked_positive(seconds)?),
+            None => None,
+        };
         Ok(())
     }
 
@@ -358,7 +359,9 @@ impl ExperimentConfig {
         self.planning_end_day.hash(hasher);
         self.interval_h.to_bits().hash(hasher);
         self.event_capacity.hash(hasher);
-        self.solve_seconds.to_bits().hash(hasher);
+        // No limit hashes as an infinite one, so a limit hashes as it did
+        // when it was always set.
+        self.solve_seconds.unwrap_or(f64::INFINITY).to_bits().hash(hasher);
         self.relative_gap.to_bits().hash(hasher);
         self.discount_rate.to_bits().hash(hasher);
         for (field, unit) in &self.grades {

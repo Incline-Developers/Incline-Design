@@ -618,7 +618,9 @@ impl crate::app::App<'_> {
             let settings = project.project.document.schedule().experiment();
             ScheduleSolveOptions {
                 // Clamped, as a file may carry a limit no setter would accept.
-                time_limit: std::time::Duration::try_from_secs_f64(settings.solve_seconds.min(crate::model::schedule::experiment::MAX_SOLVE_SECONDS)).ok(),
+                time_limit: settings
+                    .solve_seconds
+                    .and_then(|seconds| std::time::Duration::try_from_secs_f64(seconds.min(crate::model::schedule::experiment::MAX_SOLVE_SECONDS)).ok()),
                 relative_gap: Some(settings.relative_gap),
                 // Developer aid: SCIP's own progress log on stdout.
                 diagnostic_logging: std::env::var_os("INCLINE_SCIP_LOG").is_some(),

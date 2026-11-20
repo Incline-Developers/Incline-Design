@@ -49,7 +49,7 @@ fn draft<'a>(editor: &'a mut EditorState, plan: &SchedulePlan) -> &'a mut Schedu
         scale,
         experiment.planning_end_day,
         experiment.interval_h.to_bits(),
-        experiment.solve_seconds.to_bits(),
+        experiment.solve_seconds.unwrap_or(f64::INFINITY).to_bits(),
         experiment.relative_gap.to_bits(),
         experiment.event_capacity,
     );
@@ -58,7 +58,7 @@ fn draft<'a>(editor: &'a mut EditorState, plan: &SchedulePlan) -> &'a mut Schedu
             source,
             end_day: scale.count(experiment.planning_end_day).to_string(),
             interval_h: experiment.interval_h.to_string(),
-            solve_seconds: experiment.solve_seconds.to_string(),
+            solve_seconds: experiment.solve_seconds.map(|seconds| seconds.to_string()).unwrap_or_default(),
             relative_gap: percent_text(experiment.relative_gap),
         });
     }
@@ -180,7 +180,11 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
     let experiment = plan.experiment();
     let draft = draft(editor, plan);
     let interval_h = parse_positive(&draft.interval_h).filter(|hours| *hours >= MIN_INTERVAL_H);
-    let solve_seconds = parse_positive(&draft.solve_seconds).filter(|seconds| *seconds <= MAX_SOLVE_SECONDS);
+    // Left empty, Improve has no limit.
+    let solve_seconds = match draft.solve_seconds.trim() {
+        "" => Some(None),
+        text => parse_positive(text).filter(|seconds| *seconds <= MAX_SOLVE_SECONDS).map(Some),
+    };
     let relative_gap = draft
         .relative_gap
         .trim()
@@ -214,6 +218,7 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
             solve_seconds.is_none().then_some(invalid.as_str()),
         );
         let limit_committed = response.lost_focus();
+        response.hint(tr!("experiment-solve-seconds-help"));
         let response = rows.field(&tr!("experiment-relative-gap"), &mut draft.relative_gap, relative_gap.is_none().then_some(invalid.as_str()));
         if (limit_committed || response.lost_focus())
             && let (Some(seconds), Some(relative_gap)) = (solve_seconds, relative_gap)

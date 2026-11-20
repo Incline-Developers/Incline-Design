@@ -710,8 +710,10 @@ const SEARCH_SHARE: f64 = 0.5;
 /// continued: a continuation's first window needs about that.
 const CONTINUE_MINIMUM: Duration = Duration::from_secs(1);
 
-/// The search's time when the run has no limit.
-const SEARCH_WITHOUT_LIMIT: Duration = Duration::from_secs(600);
+/// The search's time when the run has no limit: the longest limit a run
+/// may set. It ends sooner, once it stops finding better schedules, or when
+/// stopped.
+const SEARCH_WITHOUT_LIMIT: Duration = Duration::from_secs(crate::model::schedule::experiment::MAX_SOLVE_SECONDS as u64);
 
 /// How far the relaxation's optimum is loosened before it is used as a bound:
 /// HiGHS solves the LP to feasibility and optimality tolerances of 1e-7, so
