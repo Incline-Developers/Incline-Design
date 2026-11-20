@@ -5259,3 +5259,7 @@ pit-design-shell-left = シェル内に残る
 pit-design-shell-net = 差
 pit-design-compare = ピット設計の比較
 pit-design-compare-stale = 前回の変更前に測定: 測定基準が読み込まれると再測定されます。
+pit-design-layer-crest = 法肩
+pit-design-layer-toe = 法尻
+pit-design-layer-ramp = ランプ
+pit-design-layer-daylight = 地表交線

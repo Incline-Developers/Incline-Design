@@ -632,7 +632,7 @@ fn object_json(document: &Document, object: &Object) -> Value {
                 "vertices": verts.iter().map(|vertex| point(vertex.pos)).collect::<Vec<_>>(),
                 "line_weight": line_weight,
                 "benches": pit.design().map(|design| design.benches),
-                "strings": object.pit_strings().len(),
+                "strings": object.pit_strings().count(),
                 "note": "A pit design: get_pit_designs reads it whole, set_pit_design changes it.",
             });
             if verts.iter().any(|vertex| vertex.bulge != 0.0) {

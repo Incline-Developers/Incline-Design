@@ -518,6 +518,8 @@ pub(crate) enum StringKind {
     Crest,
     RampEdge,
     RampCentreline,
+    /// Where the design meets the topography it is measured against.
+    Daylight,
 }
 
 impl StringKind {
@@ -528,6 +530,7 @@ impl StringKind {
             Self::Crest => [0.90, 0.35, 0.25, 1.0],
             Self::RampEdge => [0.35, 0.80, 0.40, 1.0],
             Self::RampCentreline => [0.62, 0.66, 0.62, 1.0],
+            Self::Daylight => [0.95, 0.88, 0.25, 1.0],
         }
     }
 }
@@ -669,6 +672,19 @@ pub(crate) struct Design {
 }
 
 impl Design {
+    /// Each ramp's road as a closed outline: along one edge and back along
+    /// the other.
+    pub(crate) fn road_outlines(&self) -> Vec<Vec<DVec3>> {
+        // A road's edges are written one after the other, left then right.
+        let edges: Vec<&DesignString> = self.strings.iter().filter(|string| string.kind == StringKind::RampEdge).collect();
+        edges
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[left, right]| left.points.iter().copied().chain(right.points.iter().rev().copied()).collect())
+            .collect()
+    }
+
     /// The RL of the last ring built.
     pub(crate) fn final_elevation(&self) -> f64 {
         self.levels.last().copied().unwrap_or_default()

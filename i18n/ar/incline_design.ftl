@@ -5287,3 +5287,7 @@ pit-design-shell-left = متروك في الغلاف
 pit-design-shell-net = الفرق
 pit-design-compare = مقارنة تصاميم الحفر
 pit-design-compare-stale = قيس قبل آخر تغيير: يُقاس من جديد حين يُحمَّل ما يُقاس بالنسبة إليه.
+pit-design-layer-crest = الحافة العليا
+pit-design-layer-toe = القدم
+pit-design-layer-ramp = المنحدر
+pit-design-layer-daylight = خط الظهور

@@ -5230,3 +5230,7 @@ pit-design-shell-left = 壳体内留下
 pit-design-shell-net = 差值
 pit-design-compare = 采坑设计对比
 pit-design-compare-stale = 在最近一次更改前测量：测量所依据的对象加载后将重新测量。
+pit-design-layer-crest = 坡顶线
+pit-design-layer-toe = 坡底线
+pit-design-layer-ramp = 坡道
+pit-design-layer-daylight = 地表交线

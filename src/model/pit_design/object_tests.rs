@@ -103,6 +103,12 @@ fn saves_and_reads_back_whole() {
                 left: figures,
                 problem: None,
             }),
+            daylight: vec![DesignString {
+                kind: StringKind::Daylight,
+                points: vec![DVec3::new(0.0, 0.0, 120.0), DVec3::new(10.0, 0.0, 121.0)],
+                closed: false,
+            }],
+            design: 9,
         });
     }
     let json = serde_json::to_string(&object).expect("an object serialises");
@@ -171,9 +177,11 @@ fn draws_and_explodes_as_its_strings() {
     let (verts, pit) = parts(&object);
     let design = pit.design().expect("a design");
     // Its own string stands for the design's first ring.
-    assert_eq!(object.pit_strings(), &design.strings[1..]);
+    assert!(object.pit_strings().eq(&design.strings[1..]));
     let polylines = object.pit_polylines();
-    assert_eq!(polylines.len(), design.strings.len());
+    // And after its strings, its road's outline, closed.
+    assert_eq!(polylines.len(), design.strings.len() + 1);
+    assert!(matches!(polylines.last(), Some(Object::Polyline { closed: true, .. })));
     match &polylines[0] {
         Object::Polyline { verts: first, closed, .. } => {
             assert_eq!(first.as_slice(), verts, "the string comes first, as it was");
@@ -190,6 +198,29 @@ fn draws_and_explodes_as_its_strings() {
         _ => panic!("a polyline"),
     }
     assert!(polylines.iter().all(|polyline| polyline.id() == object.id() && polyline.layer() == object.layer()));
+
+    // Its daylight line draws with the design it was traced for, and only
+    // that one.
+    let line = DesignString {
+        kind: StringKind::Daylight,
+        points: vec![DVec3::new(0.0, 0.0, 120.0), DVec3::new(10.0, 0.0, 121.0)],
+        closed: false,
+    };
+    let mut measured = object.clone();
+    if let Object::PitDesign { pit, .. } = &mut measured {
+        pit.evaluation = Some(super::evaluation::Evaluation {
+            daylight: vec![line.clone()],
+            design: pit.derived.as_ref().map_or(0, |derived| derived.inputs),
+            ..super::evaluation::Evaluation::failed(1, String::new())
+        });
+    }
+    assert_eq!(measured.pit_strings().last(), Some(&line));
+    if let Object::PitDesign { pit, .. } = &mut measured
+        && let Some(derived) = pit.derived.as_mut()
+    {
+        derived.inputs ^= 1;
+    }
+    assert_ne!(measured.pit_strings().last(), Some(&line), "not with a design changed since");
 }
 
 #[test]

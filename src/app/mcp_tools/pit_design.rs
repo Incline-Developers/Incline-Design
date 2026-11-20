@@ -28,7 +28,7 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "get_pit_designs",
             "title": "Read the pit designs",
-            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). Without design: a summary of each. With design (its object id): that one whole, its settings and what they come to included, which set_pit_design takes back, and its evaluation: the volume between it and its topography in all and bench by bench, and with settings.evaluation.block_model, each reserve field's figure in all, by category and by bench, and with settings.evaluation.shell, what it takes beyond the shell (gained) and what of it it leaves (left) (current says whether that is what the design comes to now, or waiting why not). What it comes to lists its checks: each place it falls short of its settings (the ramp steeper, flatter or narrower than asked or turning tighter than inside_radius, a berm narrower, a bench face steeper, or walls steeper between ramps than their target), at its worst point, with the bench (its place in bench_report) and ramp it is on, its value, what was asked and how far along it runs.",
+            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). Without design: a summary of each. With design (its object id): that one whole, its settings and what they come to included, which set_pit_design takes back, and its evaluation: the volume between it and its topography in all and bench by bench, and with settings.evaluation.block_model, each reserve field's figure in all, by category and by bench, and with settings.evaluation.shell, what it takes beyond the shell (gained) and what of it it leaves (left) (current says whether that is what the design comes to now, or waiting why not), and its daylight line, where it meets the topography (drawn with the design, and part of what explode_pit_design gives). What it comes to lists its checks: each place it falls short of its settings (the ramp steeper, flatter or narrower than asked or turning tighter than inside_radius, a berm narrower, a bench face steeper, or walls steeper between ramps than their target), at its worst point, with the bench (its place in bench_report) and ramp it is on, its value, what was asked and how far along it runs.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "design": { "type": "integer", "minimum": 0 } },
@@ -585,9 +585,24 @@ impl App<'_> {
             Some(problem) => json!({ "problem": problem }),
             None => json!({ "gained": figures(&shell.gained), "left": figures(&shell.left) }),
         });
+        // Each string of its daylight line: how long it runs, where it starts.
+        let daylight: Vec<Value> = evaluation
+            .daylight
+            .iter()
+            .map(|string| {
+                let length: f64 = string.points.windows(2).map(|pair| pair[0].truncate().distance(pair[1].truncate())).sum();
+                json!({
+                    "closed": string.closed,
+                    "points": string.points.len(),
+                    "length": round(length),
+                    "from": string.points.first().map(|point| [round(point.x), round(point.y), round(point.z)]),
+                })
+            })
+            .collect();
         json!({
             "current": waiting.is_null(),
             "waiting": waiting,
+            "daylight": daylight,
             "shell": shell,
             "total": figures(&evaluation.total),
             "benches": evaluation.benches.iter().map(|bench| {

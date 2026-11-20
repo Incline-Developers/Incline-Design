@@ -5284,3 +5284,7 @@ pit-design-shell-left = Бүрхүүлд үлдсэн
 pit-design-shell-net = Зөрүү
 pit-design-compare = Уурхайн төслүүдийн харьцуулалт
 pit-design-compare-stale = Сүүлийн өөрчлөлтөөс өмнө хэмжсэн: хэмжих суурь нь ачаалагдмагц дахин хэмжинэ.
+pit-design-layer-crest = Дээд ирмэг
+pit-design-layer-toe = Доод ирмэг
+pit-design-layer-ramp = Налуу зам
+pit-design-layer-daylight = Гадаргуутай огтлолцол

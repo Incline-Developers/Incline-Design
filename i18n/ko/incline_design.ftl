@@ -5264,3 +5264,7 @@ pit-design-shell-left = 셸 안에 남음
 pit-design-shell-net = 차이
 pit-design-compare = 피트 설계 비교
 pit-design-compare-stale = 마지막 변경 전에 측정됨: 측정 기준을 불러오면 다시 측정됩니다.
+pit-design-layer-crest = 상단
+pit-design-layer-toe = 하단
+pit-design-layer-ramp = 램프
+pit-design-layer-daylight = 지표 교선

@@ -5349,3 +5349,7 @@ pit-design-shell-left = Залишено в оболонці
 pit-design-shell-net = Різниця
 pit-design-compare = Порівняння проєктів кар'єрів
 pit-design-compare-stale = Виміряно до останньої зміни: буде виміряно знову, коли завантажиться те, відносно чого він вимірюється.
+pit-design-layer-crest = Бровка
+pit-design-layer-toe = Підошва
+pit-design-layer-ramp = З'їзд
+pit-design-layer-daylight = Лінія виходу

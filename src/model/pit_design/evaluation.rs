@@ -60,6 +60,15 @@ pub(crate) struct Evaluation {
     /// What it comes to against the shell chosen, where one is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) shell: Option<ShellFigures>,
+    /// Where the design meets the topography: its daylight line, or a
+    /// dump's toe on the ground.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) daylight: Vec<super::DesignString>,
+    /// The fingerprint of the design it was measured for
+    /// ([`super::object::Derived::inputs`]), so its daylight line is drawn
+    /// only with that design.
+    #[serde(default)]
+    pub(crate) design: u64,
 }
 
 /// A design set against an optimisation shell: the ground it takes beyond
@@ -83,6 +92,8 @@ impl Evaluation {
             total: Figures::default(),
             benches: Vec::new(),
             shell: None,
+            daylight: Vec::new(),
+            design: 0,
         }
     }
 }

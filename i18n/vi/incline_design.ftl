@@ -5258,3 +5258,7 @@ pit-design-shell-left = Để lại trong vỏ
 pit-design-shell-net = Chênh lệch
 pit-design-compare = So sánh các thiết kế moong
 pit-design-compare-stale = Được đo trước lần thay đổi gần nhất: sẽ được đo lại khi cái dùng để đo được tải.
+pit-design-layer-crest = Mép trên
+pit-design-layer-toe = Chân tầng
+pit-design-layer-ramp = Đường dốc
+pit-design-layer-daylight = Đường giao địa hình

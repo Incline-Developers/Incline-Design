@@ -105,7 +105,7 @@ fn for_each_visible_object_aabb(
                     include(verts_min);
                     include(verts_max);
                 }
-                for point in object.pit_strings().iter().flat_map(|string| &string.points) {
+                for point in object.pit_strings().flat_map(|string| &string.points) {
                     include(*point);
                 }
             }

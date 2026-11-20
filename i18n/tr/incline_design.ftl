@@ -5272,3 +5272,7 @@ pit-design-shell-left = Kabukta bırakılan
 pit-design-shell-net = Fark
 pit-design-compare = Ocak tasarımları karşılaştırması
 pit-design-compare-stale = Son değişikliğinden önce ölçüldü: neye göre ölçüldüğü yüklendiğinde yeniden ölçülür.
+pit-design-layer-crest = Şev üstü
+pit-design-layer-toe = Şev topuğu
+pit-design-layer-ramp = Rampa
+pit-design-layer-daylight = Yüzey kesişimi

@@ -44,7 +44,10 @@ use crate::{
 /// What a design is measured with, ready for a worker.
 struct Inputs {
     design: Design,
+    /// The fingerprint of the design, as its object keeps it.
+    design_inputs: u64,
     topography: Arc<mesh_data::Triangulation>,
+    topography_spatial: Arc<TriangleBvh>,
     model: Option<ModelInputs>,
     /// The optimisation shell it is set against, if one is chosen.
     shell: Option<Arc<mesh_data::Triangulation>>,
@@ -63,6 +66,7 @@ struct ModelInputs {
 struct Plan<'a> {
     key: u64,
     design: &'a Design,
+    design_inputs: u64,
     topography: &'a crate::model::triangulation::OpenTriangulation,
     model: Option<&'a crate::model::block_model::OpenBlockModel>,
     fields: Vec<ReserveField>,
@@ -74,7 +78,9 @@ impl Plan<'_> {
     fn inputs(&self) -> Inputs {
         Inputs {
             design: self.design.clone(),
+            design_inputs: self.design_inputs,
             topography: self.topography.mesh.clone(),
+            topography_spatial: self.topography.spatial.clone(),
             model: self.model.map(|model| ModelInputs {
                 data: model.model.clone(),
                 blocks: model.blocks.clone(),
@@ -173,6 +179,7 @@ impl App<'_> {
         Ok(Plan {
             key,
             design,
+            design_inputs: derived.inputs,
             topography: surface,
             model,
             fields,
@@ -372,13 +379,99 @@ fn measure(inputs: &Inputs, cancel: &crate::app::jobs::CancelFlag, progress: &cr
     });
     let shell = shell.transpose()?;
     progress.set_fraction(1.0);
+    let daylight = daylight_lines(&surface, &inputs.topography, &inputs.topography_spatial);
     Ok(Evaluation {
         key: 0,
         problem: None,
         total,
         benches,
         shell,
+        daylight,
+        design: inputs.design_inputs,
     })
+}
+
+/// Where `surface` meets `ground`: each of its triangles' edges the ground
+/// crosses, at the point it crosses it, chained into strings. The ground is
+/// read at the surface's points, and taken as straight between them across
+/// each triangle.
+fn daylight_lines(surface: &mesh_data::Triangulation, ground: &mesh_data::Triangulation, spatial: &TriangleBvh) -> Vec<crate::model::pit_design::DesignString> {
+    use std::collections::{HashMap, HashSet};
+
+    use glam::DVec3;
+    use rayon::prelude::*;
+    let bounds = ground.bounds();
+    let above = bounds.max.z + ((bounds.max.z - bounds.min.z).abs() * 1.0e-6).max(1.0);
+    let vertices: Vec<DVec3> = surface.vertices().iter().map(|vertex| DVec3::new(vertex.x, vertex.y, vertex.z)).collect();
+    // How far above the ground each point stands; a point on it, a hair
+    // above, so an edge is crossed where it truly goes from one side to the
+    // other.
+    let height: Vec<Option<f64>> = vertices
+        .par_iter()
+        .map(|point| {
+            let inside = point.x >= bounds.min.x && point.x <= bounds.max.x && point.y >= bounds.min.y && point.y <= bounds.max.y;
+            let rl = inside
+                .then(|| spatial.ray_hit(ground, point.truncate().extend(above), -DVec3::Z).map(|hit| hit.z))
+                .flatten()?;
+            let height = point.z - rl;
+            Some(if height.abs() < 1.0e-9 { 1.0e-9 } else { height })
+        })
+        .collect();
+    // Each crossed edge is a point of the line, joined to the other crossed
+    // edge of each triangle it is in.
+    let mut at: HashMap<(u32, u32), DVec3> = HashMap::new();
+    let mut joins: HashMap<(u32, u32), Vec<(u32, u32)>> = HashMap::new();
+    for face in surface.face_vertex_indices_iter() {
+        let corners = face.map(|index| index as u32);
+        let Some(heights) = corners.iter().map(|&index| height[index as usize]).collect::<Option<Vec<f64>>>() else {
+            continue;
+        };
+        let mut crossed = Vec::with_capacity(2);
+        for side in 0..3 {
+            let (a, b) = (side, (side + 1) % 3);
+            if (heights[a] > 0.0) == (heights[b] > 0.0) {
+                continue;
+            }
+            let (from, to) = (corners[a], corners[b]);
+            let key = (from.min(to), from.max(to));
+            let t = heights[a] / (heights[a] - heights[b]);
+            at.entry(key).or_insert_with(|| vertices[from as usize].lerp(vertices[to as usize], t));
+            crossed.push(key);
+        }
+        if let [first, second] = crossed[..] {
+            joins.entry(first).or_default().push(second);
+            joins.entry(second).or_default().push(first);
+        }
+    }
+    // Walked from each end first, then round each loop.
+    let mut seen: HashSet<(u32, u32)> = HashSet::new();
+    let mut lines = Vec::new();
+    let mut starts: Vec<(u32, u32)> = joins.iter().filter(|(_, next)| next.len() == 1).map(|(key, _)| *key).collect();
+    starts.sort_unstable();
+    let mut rest: Vec<(u32, u32)> = joins.keys().copied().collect();
+    rest.sort_unstable();
+    for start in starts.into_iter().chain(rest) {
+        if !seen.insert(start) {
+            continue;
+        }
+        let mut chain = vec![start];
+        let mut current = start;
+        while let Some(next) = joins.get(&current).and_then(|next| next.iter().copied().find(|key| !seen.contains(key))) {
+            seen.insert(next);
+            chain.push(next);
+            current = next;
+        }
+        let closed = chain.len() > 2 && joins.get(&current).is_some_and(|next| next.contains(&start));
+        let points: Vec<DVec3> = chain.iter().filter_map(|key| at.get(key).copied()).collect();
+        if points.len() >= 2 {
+            lines.push(crate::model::pit_design::DesignString {
+                kind: crate::model::pit_design::StringKind::Daylight,
+                points,
+                closed,
+            });
+        }
+    }
+    lines
 }
 
 /// How far round both the design and the shell the topography is kept to

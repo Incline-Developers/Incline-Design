@@ -5620,3 +5620,7 @@ pit-design-shell-left = Оставлено в оболочке
 pit-design-shell-net = Разница
 pit-design-compare = Сравнение проектов карьеров
 pit-design-compare-stale = Измерен до последнего изменения: будет измерен снова, когда загрузится то, относительно чего он измеряется.
+pit-design-layer-crest = Бровка
+pit-design-layer-toe = Подошва
+pit-design-layer-ramp = Съезд
+pit-design-layer-daylight = Линия выхода

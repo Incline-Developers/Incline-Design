@@ -5233,3 +5233,7 @@ pit-design-shell-left = शेल में छोड़ा गया
 pit-design-shell-net = अंतर
 pit-design-compare = पिट डिज़ाइनों की तुलना
 pit-design-compare-stale = पिछले बदलाव से पहले मापा गया: जिसके सापेक्ष मापा जाता है उसके लोड होते ही फिर से मापा जाएगा।
+pit-design-layer-crest = क्रेस्ट
+pit-design-layer-toe = टो
+pit-design-layer-ramp = रैम्प
+pit-design-layer-daylight = डेलाइट

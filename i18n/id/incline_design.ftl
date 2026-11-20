@@ -5230,3 +5230,7 @@ pit-design-shell-left = Tertinggal di cangkang
 pit-design-shell-net = Selisih
 pit-design-compare = Perbandingan desain pit
 pit-design-compare-stale = Diukur sebelum perubahan terakhirnya: diukur ulang setelah acuan pengukurannya dimuat.
+pit-design-layer-crest = Puncak
+pit-design-layer-toe = Kaki
+pit-design-layer-ramp = Ramp
+pit-design-layer-daylight = Garis daylight

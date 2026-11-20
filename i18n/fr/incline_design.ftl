@@ -5234,3 +5234,7 @@ pit-design-shell-left = Laissé dans l'enveloppe
 pit-design-shell-net = Différence
 pit-design-compare = Conceptions de fosse comparées
 pit-design-compare-stale = Mesurée avant sa dernière modification : elle sera mesurée de nouveau une fois chargé ce par rapport à quoi elle est mesurée.
+pit-design-layer-crest = Crête
+pit-design-layer-toe = Pied
+pit-design-layer-ramp = Rampe
+pit-design-layer-daylight = Ligne de jour

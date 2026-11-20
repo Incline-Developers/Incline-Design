@@ -174,11 +174,25 @@ fn add_object_to_drawing(document: &Document, object: &Object, drawing: &mut Dra
     let object_color = object.color();
 
     match object {
-        // Other programs see a pit design as what it draws: its string and
-        // its benches' strings, as polylines.
-        Object::PitDesign { .. } => {
-            for polyline in object.pit_polylines() {
-                add_object_to_drawing(document, &polyline, drawing);
+        // Other programs see a pit design as what it draws, as polylines: its
+        // string on its own layer, and its benches', ramp's and daylight
+        // line's each on a layer for what they are, named after the design.
+        Object::PitDesign { pit, .. } => {
+            for (kind, polyline) in object.pit_polylines_by_role() {
+                let Some(kind) = kind else {
+                    add_object_to_drawing(document, &polyline, drawing);
+                    continue;
+                };
+                let name = format!("{} {}", pit.name, role_layer_name(kind));
+                if drawing.layers().all(|layer| layer.name != name) {
+                    drawing.add_layer(dxf::tables::Layer {
+                        name: name.clone(),
+                        color: Color::from_index(nearest_aci(kind.colour())),
+                        is_layer_on: layer.loaded,
+                        ..Default::default()
+                    });
+                }
+                add_polyline_on_layer(&polyline, name, drawing);
             }
         }
         Object::Point { pos, .. } => {
@@ -200,47 +214,7 @@ fn add_object_to_drawing(document: &Document, object: &Object, drawing: &mut Dra
             apply_object_color(&mut entity.common, object_color);
             drawing.add_entity(entity);
         }
-        Object::Polyline { verts, closed, .. } => {
-            if verts.len() < 2 {
-                return;
-            }
-            let z0 = verts[0].pos.z;
-            let is_flat = verts.iter().all(|v| (v.pos.z - z0).abs() < 1e-9);
-            if is_flat {
-                let mut poly = LwPolyline {
-                    vertices: verts.iter().map(lw_vertex_from_poly_vertex).collect(),
-                    ..Default::default()
-                };
-                poly.set_is_closed(*closed);
-                let mut entity = Entity::new(EntityType::LwPolyline(poly));
-                entity.common.layer = layer_name;
-                apply_object_color(&mut entity.common, object_color);
-                entity.common.elevation = z0;
-                drawing.add_entity(entity);
-            } else {
-                let mut poly = DxfPolyline::default();
-                poly.set_is_3d_polyline(true);
-                poly.set_is_closed(*closed);
-                let positions: Vec<_> = if verts.iter().any(|vertex| vertex.bulge.abs() > f64::EPSILON) {
-                    crate::model::geometry::tessellate_polyline_bulges(verts, *closed)
-                } else {
-                    verts.iter().map(|vertex| vertex.pos).collect()
-                };
-                for pos in positions {
-                    let mut vertex = DxfVertex {
-                        location: Point::new(pos.x, pos.y, pos.z),
-                        bulge: 0.0,
-                        ..Default::default()
-                    };
-                    vertex.set_is_3d_polyline_vertex(true);
-                    poly.add_vertex(drawing, vertex);
-                }
-                let mut entity = Entity::new(EntityType::Polyline(poly));
-                entity.common.layer = layer_name;
-                apply_object_color(&mut entity.common, object_color);
-                drawing.add_entity(entity);
-            }
-        }
+        Object::Polyline { .. } => add_polyline_on_layer(object, layer_name, drawing),
         Object::Text {
             pos, content, height, rotation, ..
         } => {
@@ -270,6 +244,65 @@ fn lw_vertex_from_poly_vertex(vertex: &PolyVertex) -> LwPolylineVertex {
 
 fn point_from_vec3(pos: glam::DVec3) -> Point {
     Point::new(pos.x, pos.y, pos.z)
+}
+
+/// A polyline on the layer named `layer_name`, flat as a lightweight
+/// polyline, or else as a 3D one.
+fn add_polyline_on_layer(object: &Object, layer_name: String, drawing: &mut Drawing) {
+    let Object::Polyline { verts, closed, .. } = object else {
+        return;
+    };
+    let object_color = object.color();
+    if verts.len() < 2 {
+        return;
+    }
+    let z0 = verts[0].pos.z;
+    let is_flat = verts.iter().all(|v| (v.pos.z - z0).abs() < 1e-9);
+    if is_flat {
+        let mut poly = LwPolyline {
+            vertices: verts.iter().map(lw_vertex_from_poly_vertex).collect(),
+            ..Default::default()
+        };
+        poly.set_is_closed(*closed);
+        let mut entity = Entity::new(EntityType::LwPolyline(poly));
+        entity.common.layer = layer_name;
+        apply_object_color(&mut entity.common, object_color);
+        entity.common.elevation = z0;
+        drawing.add_entity(entity);
+    } else {
+        let mut poly = DxfPolyline::default();
+        poly.set_is_3d_polyline(true);
+        poly.set_is_closed(*closed);
+        let positions: Vec<_> = if verts.iter().any(|vertex| vertex.bulge.abs() > f64::EPSILON) {
+            crate::model::geometry::tessellate_polyline_bulges(verts, *closed)
+        } else {
+            verts.iter().map(|vertex| vertex.pos).collect()
+        };
+        for pos in positions {
+            let mut vertex = DxfVertex {
+                location: Point::new(pos.x, pos.y, pos.z),
+                bulge: 0.0,
+                ..Default::default()
+            };
+            vertex.set_is_3d_polyline_vertex(true);
+            poly.add_vertex(drawing, vertex);
+        }
+        let mut entity = Entity::new(EntityType::Polyline(poly));
+        entity.common.layer = layer_name;
+        apply_object_color(&mut entity.common, object_color);
+        drawing.add_entity(entity);
+    }
+}
+
+/// What a pit design's strings of `kind` are called, as a layer of their own.
+fn role_layer_name(kind: crate::model::pit_design::StringKind) -> String {
+    use crate::model::pit_design::StringKind;
+    match kind {
+        StringKind::Crest => crate::i18n::tr!("pit-design-layer-crest"),
+        StringKind::Toe => crate::i18n::tr!("pit-design-layer-toe"),
+        StringKind::RampEdge | StringKind::RampCentreline => crate::i18n::tr!("pit-design-layer-ramp"),
+        StringKind::Daylight => crate::i18n::tr!("pit-design-layer-daylight"),
+    }
 }
 
 fn apply_object_color(common: &mut dxf::entities::EntityCommon, color: ObjectColor) {

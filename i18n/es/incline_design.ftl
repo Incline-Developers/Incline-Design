@@ -5231,3 +5231,7 @@ pit-design-shell-left = Dejado en la envolvente
 pit-design-shell-net = Diferencia
 pit-design-compare = Diseños de tajo comparados
 pit-design-compare-stale = Medido antes de su último cambio: se vuelve a medir cuando se cargue aquello contra lo que se mide.
+pit-design-layer-crest = Cresta
+pit-design-layer-toe = Pie
+pit-design-layer-ramp = Rampa
+pit-design-layer-daylight = Afloramiento

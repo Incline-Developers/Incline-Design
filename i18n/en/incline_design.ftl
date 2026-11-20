@@ -5931,3 +5931,7 @@ pit-design-shell-left = Left in the shell
 pit-design-shell-net = Difference
 pit-design-compare = Pit designs compared
 pit-design-compare-stale = Measured before its last change: it is measured again once what it is measured against is loaded.
+pit-design-layer-crest = Crest
+pit-design-layer-toe = Toe
+pit-design-layer-ramp = Ramp
+pit-design-layer-daylight = Daylight

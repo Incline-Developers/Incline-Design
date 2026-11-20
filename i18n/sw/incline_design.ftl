@@ -5265,3 +5265,7 @@ pit-design-shell-left = Iliyoachwa ndani ya ganda
 pit-design-shell-net = Tofauti
 pit-design-compare = Ulinganisho wa miundo ya mashimo
 pit-design-compare-stale = Ulipimwa kabla ya mabadiliko yake ya mwisho: utapimwa tena kile unachopimwa dhidi yake kikipakiwa.
+pit-design-layer-crest = Kilele
+pit-design-layer-toe = Kitako
+pit-design-layer-ramp = Njia panda
+pit-design-layer-daylight = Mstari wa uso

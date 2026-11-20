@@ -5231,3 +5231,7 @@ pit-design-shell-left = Deixado no invólucro
 pit-design-shell-net = Diferença
 pit-design-compare = Projetos de cava comparados
 pit-design-compare-stale = Medido antes da última alteração: é medido de novo quando aquilo contra o qual é medido for carregado.
+pit-design-layer-crest = Crista
+pit-design-layer-toe = Pé
+pit-design-layer-ramp = Rampa
+pit-design-layer-daylight = Linha de afloramento

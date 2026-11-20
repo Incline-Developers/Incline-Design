@@ -145,7 +145,7 @@ pub(crate) fn snap_cursor(
                     for vertex in verts {
                         nearest.consider_point(&view, vertex.pos);
                     }
-                    for point in object.pit_strings().iter().flat_map(|string| &string.points) {
+                    for point in object.pit_strings().flat_map(|string| &string.points) {
                         nearest.consider_point(&view, *point);
                     }
                 }

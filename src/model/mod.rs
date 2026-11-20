@@ -1410,19 +1410,27 @@ impl Object {
     /// role: the string it is designed from is not among them (it is the
     /// object's own, [`Self::string_geometry`]). Empty for anything else, and
     /// for a design not worked out yet.
-    pub(crate) fn pit_strings(&self) -> &[pit_design::DesignString] {
-        match self {
+    pub(crate) fn pit_strings(&self) -> impl Iterator<Item = &pit_design::DesignString> + Clone {
+        let (designed, daylight) = match self {
             // The design's first string is the starting ring, which the
             // object's own string stands for.
-            Object::PitDesign { pit, .. } => pit.design().map_or(&[], |design| design.strings.get(1..).unwrap_or_default()),
-            _ => &[],
-        }
+            Object::PitDesign { pit, .. } => (pit.design().map_or(&[][..], |design| design.strings.get(1..).unwrap_or_default()), pit.daylight()),
+            _ => (&[][..], &[][..]),
+        };
+        designed.iter().chain(daylight)
     }
 
     /// A pit design as plain polylines, all with its id and layer: its
-    /// string first, then each of its benches' and ramp's strings in their
-    /// colours. Nothing for anything else.
+    /// string first, then each of its benches' and ramp's strings and its
+    /// daylight line in their colours, and each ramp's road outline. Nothing
+    /// for anything else.
     pub(crate) fn pit_polylines(&self) -> Vec<Object> {
+        self.pit_polylines_by_role().into_iter().map(|(_, polyline)| polyline).collect()
+    }
+
+    /// [`Self::pit_polylines`], each with what it is: none for the string
+    /// the design is drawn from, a road's outline as one of its edges.
+    pub(crate) fn pit_polylines_by_role(&self) -> Vec<(Option<pit_design::StringKind>, Object)> {
         let Object::PitDesign {
             id,
             layer,
@@ -1434,24 +1442,38 @@ impl Object {
         else {
             return Vec::new();
         };
-        let mut polylines = vec![Object::Polyline {
-            id: *id,
-            layer: *layer,
-            verts: verts.clone(),
-            closed: true,
-            color: *color,
-            fill: FillStyle::Clear,
-            line_weight: *line_weight,
-        }];
-        polylines.extend(self.pit_strings().iter().map(|string| Object::Polyline {
-            id: *id,
-            layer: *layer,
-            verts: string.points.iter().copied().map(PolyVertex::straight).collect(),
-            closed: string.closed,
-            color: ObjectColor::Fixed(string.kind.colour()),
-            fill: FillStyle::Clear,
-            line_weight: *line_weight,
-        }));
+        let polyline = |points: &[DVec3], closed: bool, kind: pit_design::StringKind| {
+            (
+                Some(kind),
+                Object::Polyline {
+                    id: *id,
+                    layer: *layer,
+                    verts: points.iter().copied().map(PolyVertex::straight).collect(),
+                    closed,
+                    color: ObjectColor::Fixed(kind.colour()),
+                    fill: FillStyle::Clear,
+                    line_weight: *line_weight,
+                },
+            )
+        };
+        let mut polylines = vec![(
+            None,
+            Object::Polyline {
+                id: *id,
+                layer: *layer,
+                verts: verts.clone(),
+                closed: true,
+                color: *color,
+                fill: FillStyle::Clear,
+                line_weight: *line_weight,
+            },
+        )];
+        polylines.extend(self.pit_strings().map(|string| polyline(&string.points, string.closed, string.kind)));
+        if let Object::PitDesign { pit, .. } = self
+            && let Some(design) = pit.design()
+        {
+            polylines.extend(design.road_outlines().iter().map(|outline| polyline(outline, true, pit_design::StringKind::RampEdge)));
+        }
         polylines
     }
 }
@@ -3716,7 +3738,7 @@ impl Command {
                 + match object {
                     Object::Polyline { verts, .. } => verts.len().saturating_mul(size_of::<PolyVertex>()),
                     Object::PitDesign { verts, .. } => {
-                        verts.len().saturating_mul(size_of::<PolyVertex>()) + object.pit_strings().iter().map(|string| string.points.len() * size_of::<DVec3>()).sum::<usize>()
+                        verts.len().saturating_mul(size_of::<PolyVertex>()) + object.pit_strings().map(|string| string.points.len() * size_of::<DVec3>()).sum::<usize>()
                     }
                     Object::Text { content, .. } => content.len(),
                     Object::Point { .. } | Object::Circle { .. } => 0,

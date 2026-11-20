@@ -75,6 +75,15 @@ impl PitObject {
         self.settings.clone()
     }
 
+    /// Where the design meets the topography, as last measured for the
+    /// design it has now: none where it has not been measured since.
+    pub(crate) fn daylight(&self) -> &[super::DesignString] {
+        match (&self.derived, &self.evaluation) {
+            (Some(derived), Some(evaluation)) if evaluation.design == derived.inputs => &evaluation.daylight,
+            _ => &[],
+        }
+    }
+
     /// The design worked out, if it has been and there is one.
     pub(crate) fn design(&self) -> Option<&Design> {
         match &self.derived.as_ref()?.outcome {

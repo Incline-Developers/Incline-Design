@@ -5274,3 +5274,7 @@ pit-design-shell-left = In der Hülle belassen
 pit-design-shell-net = Differenz
 pit-design-compare = Grubenentwürfe im Vergleich
 pit-design-compare-stale = Vor der letzten Änderung gemessen: Er wird erneut gemessen, sobald das, woran er gemessen wird, geladen ist.
+pit-design-layer-crest = Oberkante
+pit-design-layer-toe = Unterkante
+pit-design-layer-ramp = Rampe
+pit-design-layer-daylight = Geländeanschnitt

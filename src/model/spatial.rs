@@ -226,7 +226,7 @@ fn object_bbox(object: &Object) -> (DVec3, DVec3) {
         // Its string and everything it draws from it.
         Object::PitDesign { verts, .. } => {
             let (mut min, mut max) = polyline_bulge_bounds(verts, true).unwrap_or((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)));
-            for point in object.pit_strings().iter().flat_map(|string| &string.points) {
+            for point in object.pit_strings().flat_map(|string| &string.points) {
                 min = min.min(*point);
                 max = max.max(*point);
             }

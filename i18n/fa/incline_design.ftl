@@ -5230,3 +5230,7 @@ pit-design-shell-left = برجامانده در پوسته
 pit-design-shell-net = تفاوت
 pit-design-compare = مقایسه طرح‌های پیت
 pit-design-compare-stale = پیش از آخرین تغییرش اندازه‌گیری شده: پس از بارگذاری آنچه با آن سنجیده می‌شود دوباره اندازه‌گیری می‌شود.
+pit-design-layer-crest = لبه بالا
+pit-design-layer-toe = پنجه
+pit-design-layer-ramp = رمپ
+pit-design-layer-daylight = خط رخنمون

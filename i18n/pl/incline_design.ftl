@@ -5367,3 +5367,7 @@ pit-design-shell-left = Pozostawione w powłoce
 pit-design-shell-net = Różnica
 pit-design-compare = Porównanie projektów wyrobisk
 pit-design-compare-stale = Zmierzony przed ostatnią zmianą: zostanie zmierzony ponownie po wczytaniu tego, względem czego jest mierzony.
+pit-design-layer-crest = Krawędź górna
+pit-design-layer-toe = Krawędź dolna
+pit-design-layer-ramp = Rampa
+pit-design-layer-daylight = Linia wychodni
