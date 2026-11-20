@@ -4993,7 +4993,6 @@ pit-design-face-angle = फेस कोण
 pit-design-berm-width = बर्म चौड़ाई
 pit-design-wall-radius = दीवार त्रिज्या
 pit-design-wall-radius-help = दीवारों का सबसे तंग मोड़। तीखे कोने इस त्रिज्या तक गोल किए जाते हैं, ताकि दीवारें चट्टान की पतली नोकें या पिट के तंग कोने न छोड़ें।
-pit-design-stop-section = रुकना
 pit-design-stop = रुकना
 pit-design-stop-help = डिज़ाइन कहाँ समाप्त होता है: कुछ बेंचों के बाद, किसी RL पर (अंतिम बेंच उस तक पहुँचने के लिए छोटी की जाती है), या जहाँ पूरी बेंच टोपोग्राफ़ी से ऊपर निकल आती है।
 pit-design-stop-benches = कुछ बेंचों के बाद
@@ -5056,6 +5055,8 @@ pit-design-draw-close = रेखा बंद करने के लिए प
 pit-design-draw-close-minor = दायाँ क्लिक भी समाप्त करता है
 pit-design-draw-help = वह बंद रेखा बनाएँ जिससे डिज़ाइन शुरू होता है: पिट के तल का पाद या शिखर, या डंप का पाद या शीर्ष। बंद होते ही सक्रिय परत पर उससे डिज़ाइन बनता है, और उसका प्रकार और दिशा अगले चरण में तय होते हैं।
 pit-design-round-corners = कोने गोल करें
+pit-design-draw-rl = RL
+pit-design-draw-rl-help = वह RL जिस पर रेखा खींची जाती है: पिट का तल या शिखर, या डंप का टो या शीर्ष। टूलबार के Z जैसा ही।
 pit-design-round-corners-help = रेखा के हर कोने को चाप में गोल करता है, जैसे पाद या शिखर खनन होता है। चाप रेखा का हिस्सा हैं, और उसके शीर्ष कम व संपादन योग्य रहते हैं।
 pit-design-corner-radius = कोने की त्रिज्या
 pit-design-done-help = यह पिट पूरा करें और टूल बंद करें। Escape भी यही करता है।
@@ -5148,11 +5149,13 @@ pit-design-problem-daylight-dump-up = पाद से ऊपर बनाए �
 pit-design-continue = जारी रखें
 pit-design-continue-help = ढुलाई रैंप रखने और उसे डिज़ाइन करने पर जाएँ।
 pit-design-back = वापस
-pit-design-ramp-picking = रेखा पर वहाँ क्लिक करें जहाँ रैंप उससे निकलता है। चिह्न दिखाता है कि वह कहाँ शुरू होगा।
 pit-design-ramp-none = इस पिट में अभी कोई रैंप नहीं है।
 pit-design-ramp-place = रैंप रखें
 pit-design-ramp-place-help = रेखा पर वहाँ क्लिक करें जहाँ रैंप उससे निकलता है, फिर रैंप डिज़ाइन करें।
 pit-design-ramp-remove = रैंप हटाएँ
+pit-design-ramp-remove-short = हटाएँ
+pit-design-send-to = भेजें
+pit-design-send-to-help = रैम्प ढुलाई नेटवर्क में, या पिट प्लानिंग में भेजें।
 pit-design-ramp-remove-help = पिट को बिना रैंप के डिज़ाइन करें। उसकी सेटिंग्स फिर से रखने के लिए बनी रहती हैं।
 pit-design-ramp-move = खिसकाएँ
 pit-design-done = हो गया
@@ -5165,14 +5168,10 @@ pit-design-exploded =
         [one] पिट डिज़ाइन को एक पॉलीलाइन में विघटित किया।
        *[other] पिट डिज़ाइन को { $count } पॉलीलाइनों में विघटित किया।
     }
-pit-design-default-name = पिट डिज़ाइन
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - कोई पिट डिज़ाइन या बंद पॉलीलाइन चुनें, या बनाने के लिए एक लेयर बनाएँ
 pit-design-gone = वह पिट डिज़ाइन अब प्रोजेक्ट में नहीं है।
 pit-design-name = नाम
-pit-design-flats =
-    { $count ->
-        [one] एक बेंच चढ़ने से पहले { $length } मी समतल चलती है, जहाँ रैंप को अपनी ढलान बनाए रखने के लिए जगह चाहिए।
-       *[other] { $count } बेंच चढ़ने से पहले कुल { $length } मी समतल चलती हैं, जहाँ रैंप को अपनी ढलान बनाए रखने के लिए जगह चाहिए।
-    }
 pit-design-flatter =
     { $count ->
         [one] एक बेंच ढलान से कम ढलवाँ चढ़ती है: कोई समतल खंड उसे सुदृढ़ नहीं छोड़ता।
@@ -5189,10 +5188,11 @@ pit-design-table-flatter-hint = ढलान की माँग से { $lengt
 pit-design-table-narrow-hint = माँगी गई { $width } मी से संकरी, जहाँ यह दीवार के मोड़ पर जुड़ती है।
 pit-design-checks = जाँचें
 pit-design-checks-pass = सभी जाँचें पास: रैम्प का ढाल, चौड़ाई और मोड़, तथा बर्म और फेस, जैसा माँगा गया वैसे हैं।
-pit-design-checks-count =
+pit-design-checks-pass-short = सभी जाँचें पास।
+pit-design-checks-heading =
     { $count ->
-        [one] एक जगह सेटिंग्स से कम पड़ती है।
-       *[other] { $count } जगहें सेटिंग्स से कम पड़ती हैं।
+        [one] एक जगह कम पड़ती है
+       *[other] { $count } जगहें कम पड़ती हैं
     }
 pit-design-checks-what = जाँच
 pit-design-checks-is = परिणाम
@@ -5246,7 +5246,6 @@ pit-design-send-no-ramp = पिट डिज़ाइन में भेजन
 pit-design-haul-road = { $design } रैम्प
 pit-design-haul-road-numbered = { $design } रैम्प { $number }
 pit-design-report-send-haulage = रैम्प ढुलाई नेटवर्क में भेजे गए
-pit-design-send-section = आगे भेजें
 pit-design-send-planning = प्लानिंग में भेजें
 pit-design-update-planning = प्लानिंग में अद्यतन करें
 pit-design-send-planning-help = पिट की सतह उसकी रेखाओं से बनाता है, जैसे ट्रायंगुलेशन बनाएँ बनाता, और उसकी टोपोग्राफी के सापेक्ष एक प्लानिंग सॉलिड, उसके ब्लॉक मॉडल से रिज़र्व और उसी की बेंचों में। फिर से भेजने पर सतह उसी जगह फिर बनती है और सॉलिड अद्यतन होता है।

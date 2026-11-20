@@ -5035,7 +5035,6 @@ pit-design-face-angle = زاوية الواجهة
 pit-design-berm-width = عرض حاجز الأمان
 pit-design-wall-radius = نصف قطر الجدار
 pit-design-wall-radius-help = أضيق انعطاف مسموح للجدران. تُدوَّر الزوايا الحادة بهذا النصف قطر، فلا تترك الجدران نتوءات صخرية ضيقة ولا زوايا ضيقة في الحفرة.
-pit-design-stop-section = التوقف
 pit-design-stop = التوقف
 pit-design-stop-help = أين ينتهي التصميم: بعد عدد من المصاطب، أو عند منسوب (تُقصَّر آخر مصطبة لتبلغه)، أو حيث تقف مصطبة كاملة فوق التضاريس.
 pit-design-stop-benches = بعد عدد من المصاطب
@@ -5098,6 +5097,8 @@ pit-design-draw-close = انقر النقطة الأولى، أو اضغط Enter
 pit-design-draw-close-minor = النقر بالزر الأيمن ينهي أيضًا
 pit-design-draw-help = ارسم الخط المغلق الذي يبدأ منه التصميم: قدم قاع الحفرة أو حافتها، أو قدم المكب أو قمته. ما إن يُغلق حتى يُصنع التصميم منه على الطبقة النشطة، ويُضبط نوعه واتجاهه في الخطوة التالية.
 pit-design-round-corners = تدوير الزوايا
+pit-design-draw-rl = المنسوب
+pit-design-draw-rl-help = المنسوب الذي يُرسم عليه الخط: قاع الحفرة أو حافتها، أو قدم المكب أو قمته. هو نفسه Z في شريط الأدوات.
 pit-design-round-corners-help = يدوّر كل زاوية من الخط إلى قوس، كما يُحفر القدم أو الحافة. الأقواس جزء من الخط، وتبقى رؤوسه قليلة وقابلة للتحرير.
 pit-design-corner-radius = نصف قطر الزاوية
 pit-design-done-help = أنهِ هذه الحفرة وأغلق الأداة. مفتاح Escape يفعل الشيء نفسه.
@@ -5190,11 +5191,13 @@ pit-design-problem-daylight-dump-up = المكب المبني صعودًا من 
 pit-design-continue = متابعة
 pit-design-continue-help = انتقل إلى وضع منحدر النقل وتصميمه.
 pit-design-back = رجوع
-pit-design-ramp-picking = انقر الخط حيث يغادره المنحدر. تُظهر العلامة أين سيبدأ.
 pit-design-ramp-none = لا يوجد منحدر لهذه الحفرة بعد.
 pit-design-ramp-place = وضع المنحدر
 pit-design-ramp-place-help = انقر الخط حيث يغادره المنحدر، ثم صمّم المنحدر.
 pit-design-ramp-remove = إزالة المنحدر
+pit-design-ramp-remove-short = إزالة
+pit-design-send-to = إرسال إلى
+pit-design-send-to-help = أرسل المنحدرات إلى شبكة النقل، أو الحفرة إلى التخطيط.
 pit-design-ramp-remove-help = صمّم الحفرة بلا منحدر. تُحفظ إعداداته لوضعه مجددًا.
 pit-design-ramp-move = نقل
 pit-design-done = تم
@@ -5211,18 +5214,10 @@ pit-design-exploded =
         [many] فُكّك تصميم الحفرة إلى { $count } خطًا متعددًا.
        *[other] فُكّك تصميم الحفرة إلى { $count } خط متعدد.
     }
-pit-design-default-name = تصميم الحفرة
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - حدد تصميم حفرة أو خطًا متعددًا مغلقًا، أو أنشئ طبقة للرسم عليها
 pit-design-gone = لم يعد تصميم الحفرة هذا في المشروع.
 pit-design-name = الاسم
-pit-design-flats =
-    { $count ->
-        [zero] لا توجد مصاطب تسير مستوية قبل أن تصعد.
-        [one] مصطبة واحدة تسير مستوية مسافة { $length } م قبل أن تصعد، حيث يحتاج المنحدر المساحة ليحافظ على ميله.
-        [two] مصطبتان تسيران مستويتين مسافة { $length } م إجمالًا قبل أن تصعدا، حيث يحتاج المنحدر المساحة ليحافظ على ميله.
-        [few] { $count } مصاطب تسير مستوية مسافة { $length } م إجمالًا قبل أن تصعد، حيث يحتاج المنحدر المساحة ليحافظ على ميله.
-        [many] { $count } مصطبة تسير مستوية مسافة { $length } م إجمالًا قبل أن تصعد، حيث يحتاج المنحدر المساحة ليحافظ على ميله.
-       *[other] { $count } مصطبة تسير مستوية مسافة { $length } م إجمالًا قبل أن تصعد، حيث يحتاج المنحدر المساحة ليحافظ على ميله.
-    }
 pit-design-flatter =
     { $count ->
         [zero] لا توجد مصاطب تصعد بميل أقل من المطلوب.
@@ -5243,10 +5238,11 @@ pit-design-table-flatter-hint = يصعد على مسافة أطول بـ { $leng
 pit-design-table-narrow-hint = أضيق من { $width } م المطلوبة، حيث يتصل عند منعطف في الجدار.
 pit-design-checks = الفحوص
 pit-design-checks-pass = اجتازت كل الفحوص: ميل المنحدر وعرضه ومنعطفاته، والمصاطب والوجوه، كما طُلب.
-pit-design-checks-count =
+pit-design-checks-pass-short = اجتازت كل الفحوص.
+pit-design-checks-heading =
     { $count ->
-        [one] موضع واحد لا يفي بالإعدادات.
-       *[other] { $count } مواضع لا تفي بالإعدادات.
+        [one] موضع واحد لا يفي
+       *[other] { $count } مواضع لا تفي
     }
 pit-design-checks-what = الفحص
 pit-design-checks-is = القيمة
@@ -5300,7 +5296,6 @@ pit-design-send-no-ramp = لا يحوي تصميم الحفرة منحدرًا �
 pit-design-haul-road = منحدر { $design }
 pit-design-haul-road-numbered = منحدر { $number } من { $design }
 pit-design-report-send-haulage = أُرسلت المنحدرات إلى شبكة النقل
-pit-design-send-section = إرسال إلى
 pit-design-send-planning = إرسال إلى التخطيط
 pit-design-update-planning = تحديث في التخطيط
 pit-design-send-planning-help = يُنشئ سطح الحفرة من خطوطها كما يفعل إنشاء التثليث، ومجسّم تخطيط منه بالنسبة إلى طبوغرافيتها، باحتياطي من نموذجها الكتلي ومقسّمًا إلى مصاطبها. الإرسال مجددًا يعيد بناء السطح في مكانه ويحدّث المجسّم.

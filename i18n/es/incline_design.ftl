@@ -4991,7 +4991,6 @@ pit-design-face-angle = Ángulo de cara
 pit-design-berm-width = Ancho de berma
 pit-design-wall-radius = Radio de pared
 pit-design-wall-radius-help = El giro más cerrado que pueden hacer las paredes. Las esquinas agudas se redondean a este radio, para que las paredes no dejen narices estrechas de roca ni esquinas cerradas de rajo.
-pit-design-stop-section = Fin
 pit-design-stop = Fin
 pit-design-stop-help = Dónde termina el diseño: tras un número de bancos, en una cota (el último banco recortado para alcanzarla) o donde un banco entero queda por encima de la topografía.
 pit-design-stop-benches = Tras un número de bancos
@@ -5054,6 +5053,8 @@ pit-design-draw-close = Haga clic en el primer punto, o pulse Intro, para cerrar
 pit-design-draw-close-minor = El clic derecho también termina
 pit-design-draw-help = Dibuje la línea cerrada de la que parte el diseño: el pie del fondo o la cresta de un rajo, o el pie o la cima de un botadero. Al cerrarse, el diseño se crea a partir de ella en la capa activa, y su tipo y dirección se fijan en el paso siguiente.
 pit-design-round-corners = Redondear esquinas
+pit-design-draw-rl = Cota
+pit-design-draw-rl-help = La cota a la que se dibuja la línea: el fondo o la cresta de un tajo, o el pie o la cima de un botadero. La misma que la Z de la barra de herramientas.
 pit-design-round-corners-help = Redondea cada esquina de la línea en un arco, como se explota un pie o una cresta. Los arcos forman parte de la línea, y sus vértices siguen siendo pocos y editables.
 pit-design-corner-radius = Radio de esquina
 pit-design-done-help = Terminar este rajo y dejar la herramienta. Escape hace lo mismo.
@@ -5146,11 +5147,13 @@ pit-design-problem-daylight-dump-up = Un botadero construido hacia arriba desde 
 pit-design-continue = Continuar
 pit-design-continue-help = Pasar a ubicar la rampa de acarreo y diseñarla.
 pit-design-back = Atrás
-pit-design-ramp-picking = Haga clic en la línea donde sale la rampa. La marca muestra dónde empezará.
 pit-design-ramp-none = Este rajo aún no tiene rampa.
 pit-design-ramp-place = Ubicar rampa
 pit-design-ramp-place-help = Haga clic en la línea donde sale la rampa y luego diséñela.
 pit-design-ramp-remove = Quitar rampa
+pit-design-ramp-remove-short = Quitar
+pit-design-send-to = Enviar a
+pit-design-send-to-help = Enviar las rampas a la red de transporte, o el tajo a Planificación.
 pit-design-ramp-remove-help = Diseñar el rajo sin rampa. Sus ajustes se conservan para volver a ubicarla.
 pit-design-ramp-move = Mover
 pit-design-done = Listo
@@ -5163,14 +5166,10 @@ pit-design-exploded =
         [one] Diseño de rajo descompuesto en una polilínea.
        *[other] Diseño de rajo descompuesto en { $count } polilíneas.
     }
-pit-design-default-name = Diseño de rajo
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - seleccione un diseño de tajo o una polilínea cerrada, o cree una capa en la que dibujar
 pit-design-gone = Ese diseño de rajo ya no está en el proyecto.
 pit-design-name = Nombre
-pit-design-flats =
-    { $count ->
-        [one] Un banco va a nivel durante { $length } m antes de subir, donde la rampa necesita el espacio para mantener su pendiente.
-       *[other] { $count } bancos van a nivel durante { $length } m en total antes de subir, donde la rampa necesita el espacio para mantener su pendiente.
-    }
 pit-design-flatter =
     { $count ->
         [one] Un banco sube con menos pendiente de la pedida: ningún tramo a nivel lo dejaría estable.
@@ -5187,10 +5186,11 @@ pit-design-table-flatter-hint = Sube a lo largo de { $length } m más de lo que 
 pit-design-table-narrow-hint = Más estrecha que los { $width } m pedidos, donde enlaza en un giro del talud.
 pit-design-checks = Comprobaciones
 pit-design-checks-pass = Todas las comprobaciones se cumplen: la pendiente, el ancho y las curvas de la rampa, y las bermas y los taludes, son los pedidos.
-pit-design-checks-count =
+pit-design-checks-pass-short = Todas las comprobaciones se cumplen.
+pit-design-checks-heading =
     { $count ->
-        [one] Un lugar no cumple la configuración.
-       *[other] { $count } lugares no cumplen la configuración.
+        [one] Un lugar no cumple
+       *[other] { $count } lugares no cumplen
     }
 pit-design-checks-what = Comprobación
 pit-design-checks-is = Resulta
@@ -5244,7 +5244,6 @@ pit-design-send-no-ramp = El diseño de tajo no tiene rampa que enviar.
 pit-design-haul-road = Rampa de { $design }
 pit-design-haul-road-numbered = Rampa { $number } de { $design }
 pit-design-report-send-haulage = Rampas enviadas a la red de transporte
-pit-design-send-section = Enviar
 pit-design-send-planning = Enviar a Planificación
 pit-design-update-planning = Actualizar en Planificación
 pit-design-send-planning-help = Crea la superficie del tajo a partir de sus líneas, como lo haría Crear triangulación, y un sólido de Planificación con ella frente a su topografía, con reservas de su modelo de bloques y con sus bancos. Enviarlo de nuevo reconstruye la superficie en su lugar y actualiza el sólido.

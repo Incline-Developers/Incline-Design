@@ -67,6 +67,8 @@ struct ModelInputs {
 /// all held where it is, until a worker needs a copy.
 struct Plan<'a> {
     key: u64,
+    /// What must be loaded first to measure it, if anything.
+    missing: Option<String>,
     design: &'a Design,
     design_inputs: u64,
     topography: &'a crate::model::triangulation::OpenTriangulation,
@@ -124,9 +126,15 @@ impl App<'_> {
             .topography
             .and_then(|id| self.triangulations.iter().find(|surface| surface.id == id))
             .ok_or(Waiting::NoTopography)?;
-        if !surface.state.loaded || surface.state.deferred.is_some() {
-            return Err(Waiting::NotLoaded(surface.name.clone()));
-        }
+        // What must be loaded to measure it, but not to know whether what
+        // it was measured with has changed: the first not loaded, by name.
+        let mut missing: Option<String> = None;
+        let mut need = |loaded: bool, name: &str| {
+            if !loaded && missing.is_none() {
+                missing = Some(name.to_owned());
+            }
+        };
+        need(surface.state.loaded && surface.state.deferred.is_none(), &surface.name);
         let fields = self.workspace.active_document().map(|document| document.reserve_fields().to_vec()).unwrap_or_default();
         let model = match settings.evaluation.block_model {
             None => None,
@@ -140,9 +148,7 @@ impl App<'_> {
                     .iter()
                     .filter_map(|entry| entry.source.column())
                     .all(|name| model.model.shared_numeric_values(name).is_some());
-                if !model.state.loaded || !resident {
-                    return Err(Waiting::NotLoaded(model.name.clone()));
-                }
+                need(model.state.loaded && resident, &model.name);
                 Some(model)
             }
         };
@@ -153,9 +159,7 @@ impl App<'_> {
                 let Some(shell) = self.triangulations.iter().find(|surface| surface.id == id) else {
                     return Err(Waiting::NotLoaded(tr!("pit-design-evaluate-missing-shell")));
                 };
-                if !shell.state.loaded || shell.state.deferred.is_some() {
-                    return Err(Waiting::NotLoaded(shell.name.clone()));
-                }
+                need(shell.state.loaded && shell.state.deferred.is_none(), &shell.name);
                 Some(shell)
             }
         };
@@ -176,6 +180,8 @@ impl App<'_> {
         if let Some(model) = model {
             parts.push(model.id.0.to_le_bytes().to_vec());
             parts.push((model.model.metadata.n_blocks as u64).to_le_bytes().to_vec());
+            // The mapping and fields, not the values: a model's values are
+            // read only when it is loaded.
             parts.push(serde_json::to_vec(&fields).unwrap_or_default());
             parts.push(serde_json::to_vec(&model.reserve_mapping).unwrap_or_default());
         }
@@ -185,6 +191,7 @@ impl App<'_> {
         let key = fingerprint(&parts.iter().map(Vec::as_slice).collect::<Vec<_>>());
         Ok(Plan {
             key,
+            missing,
             design,
             design_inputs: derived.inputs,
             topography: surface,
@@ -203,6 +210,7 @@ impl App<'_> {
         match self.pit_evaluation_plan(object) {
             Err(waiting) => Some(waiting),
             Ok(plan) if pit.evaluation.as_ref().is_some_and(|evaluation| evaluation.key == plan.key) => None,
+            Ok(Plan { missing: Some(name), .. }) => Some(Waiting::NotLoaded(name)),
             Ok(_) => Some(Waiting::Measuring),
         }
     }
@@ -240,7 +248,7 @@ impl App<'_> {
             .iter()
             .filter_map(|object| {
                 let (_, pit) = pit_parts(object)?;
-                let plan = self.pit_evaluation_plan(object).ok()?;
+                let plan = self.pit_evaluation_plan(object).ok().filter(|plan| plan.missing.is_none())?;
                 let key = plan.key;
                 let current = pit.evaluation.as_ref().is_some_and(|evaluation| evaluation.key == key);
                 (!current && self.editor.pit_evaluations.get(&object.id()) != Some(&key)).then(|| (object.id(), key, plan.inputs()))

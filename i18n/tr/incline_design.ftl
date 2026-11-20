@@ -5035,7 +5035,6 @@ pit-design-face-angle = Şev açısı
 pit-design-berm-width = Berm genişliği
 pit-design-wall-radius = Duvar yarıçapı
 pit-design-wall-radius-help = Duvarların yapabileceği en dar dönüş. Keskin köşeler buna göre yuvarlanır, böylece duvarlar dar kaya burunları ve sıkışık ocak köşeleri bırakmaz.
-pit-design-stop-section = Bitiş
 pit-design-stop = Bitiş
 pit-design-stop-help = Tasarımın bittiği yer: belirli sayıda basamaktan sonra, bir kotta (son basamak ona ulaşacak şekilde kısaltılır) ya da bütün bir basamağın topografyanın üzerinde kaldığı yerde.
 pit-design-stop-benches = Belirli sayıda basamaktan sonra
@@ -5098,6 +5097,8 @@ pit-design-draw-close = Çizgiyi kapatmak için ilk noktaya tıklayın ya da Ent
 pit-design-draw-close-minor = Sağ tık da bitirir
 pit-design-draw-help = Tasarımın başladığı kapalı çizgiyi çizin: bir ocağın taban topuğu ya da kreti, ya da bir döküm sahasının topuğu ya da tepesi. Kapanır kapanmaz tasarım etkin katmanda ondan yapılır; türü ve yönü sonraki adımda ayarlanır.
 pit-design-round-corners = Köşeleri yuvarla
+pit-design-draw-rl = Kot
+pit-design-draw-rl-help = Çizginin çizildiği kot: bir ocağın tabanı veya şev üstü, ya da bir döküm sahasının topuğu veya tepesi. Araç çubuğundaki Z ile aynı.
 pit-design-round-corners-help = Çizginin her köşesini, bir topuk ya da kret kazıldığı gibi bir yaya yuvarlar. Yaylar çizginin parçasıdır ve köşe noktaları az ve düzenlenebilir kalır.
 pit-design-corner-radius = Köşe yarıçapı
 pit-design-done-help = Bu ocağı bitirin ve aracı bırakın. Escape de aynısını yapar.
@@ -5190,11 +5191,13 @@ pit-design-problem-daylight-dump-up = Topuğundan yukarı kurulan bir döküm sa
 pit-design-continue = Devam
 pit-design-continue-help = Taşıma rampasını yerleştirmeye ve tasarlamaya geçin.
 pit-design-back = Geri
-pit-design-ramp-picking = Rampanın çizgiden ayrıldığı yere tıklayın. İşaret, nerede başlayacağını gösterir.
 pit-design-ramp-none = Bu ocağın henüz rampası yok.
 pit-design-ramp-place = Rampa yerleştir
 pit-design-ramp-place-help = Rampanın çizgiden ayrıldığı yere tıklayın, sonra rampayı tasarlayın.
 pit-design-ramp-remove = Rampayı kaldır
+pit-design-ramp-remove-short = Kaldır
+pit-design-send-to = Gönder
+pit-design-send-to-help = Rampaları taşıma ağına ya da ocağı planlamaya gönder.
 pit-design-ramp-remove-help = Ocağı rampasız tasarla. Ayarları yeniden yerleştirmek için korunur.
 pit-design-ramp-move = Taşı
 pit-design-done = Tamam
@@ -5206,13 +5209,10 @@ pit-design-exploded =
     { $count ->
        *[other] Ocak tasarımı { $count } çoklu çizgiye dönüştürüldü.
     }
-pit-design-default-name = Ocak tasarımı
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - bir ocak tasarımı veya kapalı çoklu çizgi seçin ya da çizim için bir katman oluşturun
 pit-design-gone = Bu ocak tasarımı artık projede değil.
 pit-design-name = Ad
-pit-design-flats =
-    { $count ->
-       *[other] { $count } basamak, rampanın eğimini korumak için yere ihtiyaç duyduğu yerde, yükselmeden önce toplam { $length } m düz gidiyor.
-    }
 pit-design-flatter =
     { $count ->
        *[other] { $count } basamak eğimden daha yatık yükseliyor: hiçbir düz kesim onları sağlam bırakmazdı.
@@ -5228,10 +5228,11 @@ pit-design-table-flatter-hint = Eğimin istediğinden { $length } m daha uzun y�
 pit-design-table-narrow-hint = Duvarın bir dönüşünde bağlandığı yerde istenen { $width } m'den daha dar.
 pit-design-checks = Denetimler
 pit-design-checks-pass = Tüm denetimler geçti: rampanın eğimi, genişliği ve dönüşleri ile bermeler ve şevler istendiği gibi.
-pit-design-checks-count =
+pit-design-checks-pass-short = Tüm denetimler geçti.
+pit-design-checks-heading =
     { $count ->
-        [one] Bir yer ayarları karşılamıyor.
-       *[other] { $count } yer ayarları karşılamıyor.
+        [one] Bir yer karşılamıyor
+       *[other] { $count } yer karşılamıyor
     }
 pit-design-checks-what = Denetim
 pit-design-checks-is = Sonuç
@@ -5285,7 +5286,6 @@ pit-design-send-no-ramp = Ocak tasarımının gönderilecek rampası yok.
 pit-design-haul-road = { $design } rampası
 pit-design-haul-road-numbered = { $design } rampası { $number }
 pit-design-report-send-haulage = Rampalar taşıma ağına gönderildi
-pit-design-send-section = İlet
 pit-design-send-planning = Planlamaya gönder
 pit-design-update-planning = Planlamada güncelle
 pit-design-send-planning-help = Ocağın yüzeyini, Üçgenleme oluştur'un yapacağı gibi çizgilerinden oluşturur ve topoğrafyasına göre, blok modelinden rezervli ve basamaklarına göre basamaklanmış bir planlama katısı yapar. Yeniden göndermek yüzeyi yerinde yeniden oluşturur ve katıyı günceller.

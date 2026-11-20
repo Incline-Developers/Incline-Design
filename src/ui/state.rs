@@ -1115,6 +1115,9 @@ pub(crate) struct SelectionCounts {
     pub(crate) objects: usize,
     /// Selected polylines; circles are not among them.
     pub(crate) polylines: usize,
+    /// Selected pit designs, and closed polylines that could become one:
+    /// what the Pit Design tool opens.
+    pub(crate) pit_designable: usize,
     /// Selected design objects able to contribute an edge to a triangulation.
     pub(crate) triangulation_sources: usize,
     /// Selected design points, which a surface can be triangulated from.

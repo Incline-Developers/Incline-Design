@@ -69,12 +69,16 @@ struct LeftTool {
 /// what a tool belongs to is its neighbours' business, not a tile's.
 fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
     let tool = |icon: egui::ImageSource<'static>, tooltip: String, tool: ActiveTool| {
-        let layer_ok = !tool.requires_active_layer() || editor.active_layer.is_some();
+        // Pit Design opens what is selected as well as drawing anew.
+        let opens_selection = tool == ActiveTool::PitDesign && editor.selection_counts.pit_designable > 0;
+        let layer_ok = !tool.requires_active_layer() || editor.active_layer.is_some() || opens_selection;
         let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses();
         LeftTool {
             icon: egui::Image::new(icon),
             hint: if !editing_enabled {
                 None
+            } else if !layer_ok && tool == ActiveTool::PitDesign {
+                Some(tr!("pit-design-tool-needs", tool = tooltip.as_str().to_string()))
             } else if !layer_ok {
                 Some(tr!("toolbars-tool-needs-layer", tool = tooltip.as_str().to_string()))
             } else {

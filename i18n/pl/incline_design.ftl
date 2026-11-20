@@ -5121,7 +5121,6 @@ pit-design-face-angle = Kąt skarpy
 pit-design-berm-width = Szerokość bermy
 pit-design-wall-radius = Promień ściany
 pit-design-wall-radius-help = Najciaśniejszy łuk, jaki mogą tworzyć ściany. Ostre narożniki są zaokrąglane do tego promienia, aby ściany nie zostawiały wąskich ostróg skalnych ani ciasnych narożników wyrobiska.
-pit-design-stop-section = Koniec
 pit-design-stop = Koniec
 pit-design-stop-help = Gdzie kończy się projekt: po określonej liczbie pięter, na rzędnej (ostatnie piętro skrócone, by ją osiągnąć) lub tam, gdzie całe piętro wychodzi ponad topografię.
 pit-design-stop-benches = Po liczbie pięter
@@ -5184,6 +5183,8 @@ pit-design-draw-close = Kliknij pierwszy punkt lub naciśnij Enter, aby zamkną�
 pit-design-draw-close-minor = Prawy przycisk też kończy
 pit-design-draw-help = Narysuj zamkniętą linię, od której zaczyna się projekt: stopę dna lub krawędź wyrobiska albo podnóże lub wierzch zwałowiska. Gdy się zamknie, projekt powstaje z niej na aktywnej warstwie, a rodzaj i kierunek ustala się w następnym kroku.
 pit-design-round-corners = Zaokrąglij narożniki
+pit-design-draw-rl = Rzędna
+pit-design-draw-rl-help = Rzędna, na której rysowana jest linia: spąg lub krawędź wyrobiska, podnóże lub wierzch zwałowiska. Ta sama co Z na pasku narzędzi.
 pit-design-round-corners-help = Zaokrągla każdy narożnik linii łukiem, tak jak urabia się stopę lub krawędź. Łuki są częścią linii, a jej wierzchołków zostaje niewiele i można je edytować.
 pit-design-corner-radius = Promień narożnika
 pit-design-done-help = Zakończ to wyrobisko i odłóż narzędzie. Escape robi to samo.
@@ -5276,11 +5277,13 @@ pit-design-problem-daylight-dump-up = Zwałowisko usypywane w górę od podnóż
 pit-design-continue = Dalej
 pit-design-continue-help = Przejdź do umieszczenia i zaprojektowania rampy transportowej.
 pit-design-back = Wstecz
-pit-design-ramp-picking = Kliknij linię tam, gdzie rampa z niej schodzi. Znacznik pokazuje, gdzie się zacznie.
 pit-design-ramp-none = To wyrobisko nie ma jeszcze rampy.
 pit-design-ramp-place = Umieść rampę
 pit-design-ramp-place-help = Kliknij linię tam, gdzie rampa z niej schodzi, a potem zaprojektuj rampę.
 pit-design-ramp-remove = Usuń rampę
+pit-design-ramp-remove-short = Usuń
+pit-design-send-to = Wyślij do
+pit-design-send-to-help = Wyślij rampy do sieci transportowej albo wyrobisko do planowania.
 pit-design-ramp-remove-help = Zaprojektuj wyrobisko bez rampy. Jej ustawienia zostają, by umieścić ją ponownie.
 pit-design-ramp-move = Przesuń
 pit-design-done = Gotowe
@@ -5295,16 +5298,10 @@ pit-design-exploded =
         [many] Rozbito projekt wyrobiska na { $count } polilinii.
        *[other] Rozbito projekt wyrobiska na { $count } polilinii.
     }
-pit-design-default-name = Projekt wyrobiska
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - zaznacz projekt wyrobiska lub zamkniętą polilinię albo utwórz warstwę do rysowania
 pit-design-gone = Tego projektu wyrobiska nie ma już w projekcie.
 pit-design-name = Nazwa
-pit-design-flats =
-    { $count ->
-        [one] { $count } piętro biegnie poziomo przez { $length } m, zanim się wzniesie, gdzie rampa potrzebuje miejsca, by utrzymać nachylenie.
-        [few] { $count } piętra biegną poziomo łącznie przez { $length } m, zanim się wzniosą, gdzie rampa potrzebuje miejsca, by utrzymać nachylenie.
-        [many] { $count } pięter biegnie poziomo łącznie przez { $length } m, zanim się wzniosą, gdzie rampa potrzebuje miejsca, by utrzymać nachylenie.
-       *[other] { $count } piętra biegną poziomo łącznie przez { $length } m, zanim się wzniosą, gdzie rampa potrzebuje miejsca, by utrzymać nachylenie.
-    }
 pit-design-flatter =
     { $count ->
         [one] { $count } piętro wznosi się łagodniej niż nachylenie: żaden poziomy odcinek nie uczyniłby go stabilnym.
@@ -5323,10 +5320,11 @@ pit-design-table-flatter-hint = Wznosi się na { $length } m dłużej, niż wyma
 pit-design-table-narrow-hint = Węższa niż zadane { $width } m tam, gdzie przechodzi na zakręcie skarpy.
 pit-design-checks = Kontrole
 pit-design-checks-pass = Wszystkie kontrole spełnione: nachylenie, szerokość i zakręty rampy oraz półki i skarpy są zgodne z ustawieniami.
-pit-design-checks-count =
+pit-design-checks-pass-short = Wszystkie kontrole spełnione.
+pit-design-checks-heading =
     { $count ->
-        [one] Jedno miejsce nie spełnia ustawień.
-       *[other] Miejsca niespełniające ustawień: { $count }.
+        [one] Jedno miejsce nie spełnia ustawień
+       *[other] Miejsca niespełniające ustawień: { $count }
     }
 pit-design-checks-what = Kontrola
 pit-design-checks-is = Wynosi
@@ -5380,7 +5378,6 @@ pit-design-send-no-ramp = Projekt wyrobiska nie ma rampy do wysłania.
 pit-design-haul-road = Rampa { $design }
 pit-design-haul-road-numbered = Rampa { $number } { $design }
 pit-design-report-send-haulage = Wysłano rampy do sieci transportowej
-pit-design-send-section = Przekaż
 pit-design-send-planning = Wyślij do planowania
 pit-design-update-planning = Aktualizuj w planowaniu
 pit-design-send-planning-help = Tworzy powierzchnię wyrobiska z jego linii, tak jak Utwórz triangulację, i bryłę planowania względem jego topografii, z zasobami z jego modelu blokowego i z jego poziomami. Ponowne wysłanie przebudowuje powierzchnię na miejscu i aktualizuje bryłę.

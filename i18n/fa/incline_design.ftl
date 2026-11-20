@@ -4993,7 +4993,6 @@ pit-design-face-angle = زاویه سینه
 pit-design-berm-width = عرض برم
 pit-design-wall-radius = شعاع دیواره
 pit-design-wall-radius-help = تندترین پیچی که دیواره‌ها می‌توانند داشته باشند. گوشه‌های تیز تا این شعاع گرد می‌شوند تا دیواره‌ها دماغه‌های باریک سنگ یا گوشه‌های تنگ پیت به جا نگذارند.
-pit-design-stop-section = توقف
 pit-design-stop = توقف
 pit-design-stop-help = جایی که طراحی پایان می‌یابد: پس از تعدادی پله، در یک تراز (آخرین پله کوتاه می‌شود تا به آن برسد)، یا جایی که یک پله کامل بالای توپوگرافی قرار می‌گیرد.
 pit-design-stop-benches = پس از تعدادی پله
@@ -5056,6 +5055,8 @@ pit-design-draw-close = برای بستن خط، نقطهٔ نخست را کلی
 pit-design-draw-close-minor = کلیک راست هم پایان می‌دهد
 pit-design-draw-help = خط بسته‌ای را که طراحی از آن آغاز می‌شود بکشید: پای کف یا تاج پیت، یا پا یا بالای دامپ. به محض بسته شدن، طراحی روی لایهٔ فعال از آن ساخته می‌شود و نوع و جهت آن در گام بعد تنظیم می‌شود.
 pit-design-round-corners = گرد کردن گوشه‌ها
+pit-design-draw-rl = تراز
+pit-design-draw-rl-help = ترازی که خط در آن کشیده می‌شود: کف یا لبه پیت، یا پنجه یا بالای دامپ. همان Z در نوار ابزار.
 pit-design-round-corners-help = هر گوشهٔ خط را به یک کمان گرد می‌کند، همان‌گونه که پا یا تاج استخراج می‌شود. کمان‌ها بخشی از خط‌اند و رأس‌های آن کم و ویرایش‌پذیر می‌مانند.
 pit-design-corner-radius = شعاع گوشه
 pit-design-done-help = این پیت را تمام کنید و ابزار را کنار بگذارید. Escape هم همین کار را می‌کند.
@@ -5148,11 +5149,13 @@ pit-design-problem-daylight-dump-up = دامپی که از پا رو به بال
 pit-design-continue = ادامه
 pit-design-continue-help = رفتن به جای‌گذاری و طراحی رمپ باربری.
 pit-design-back = بازگشت
-pit-design-ramp-picking = روی خط جایی که رمپ از آن جدا می‌شود کلیک کنید. نشانگر جای آغاز آن را نشان می‌دهد.
 pit-design-ramp-none = این پیت هنوز رمپ ندارد.
 pit-design-ramp-place = جای‌گذاری رمپ
 pit-design-ramp-place-help = روی خط جایی که رمپ از آن جدا می‌شود کلیک کنید، سپس رمپ را طراحی کنید.
 pit-design-ramp-remove = حذف رمپ
+pit-design-ramp-remove-short = حذف
+pit-design-send-to = فرستادن به
+pit-design-send-to-help = رمپ‌ها را به شبکه حمل یا پیت را به برنامه‌ریزی بفرستید.
 pit-design-ramp-remove-help = پیت را بدون رمپ طراحی کنید. تنظیمات آن برای جای‌گذاری دوباره نگه داشته می‌شود.
 pit-design-ramp-move = جابه‌جایی
 pit-design-done = انجام شد
@@ -5164,13 +5167,10 @@ pit-design-exploded =
     { $count ->
        *[other] طراحی پیت به { $count } چندخطی تجزیه شد.
     }
-pit-design-default-name = طراحی پیت
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - یک طرح پیت یا چندخط بسته انتخاب کنید، یا لایه‌ای برای ترسیم بسازید
 pit-design-gone = آن طراحی پیت دیگر در پروژه نیست.
 pit-design-name = نام
-pit-design-flats =
-    { $count ->
-       *[other] { $count } پله پیش از بالا رفتن، روی هم { $length } متر هموار می‌روند، جایی که رمپ برای نگه داشتن شیب خود جا لازم دارد.
-    }
 pit-design-flatter =
     { $count ->
        *[other] { $count } پله کم‌شیب‌تر از شیب خواسته‌شده بالا می‌روند: هیچ بخش همواری آن‌ها را پایدار نمی‌کرد.
@@ -5186,10 +5186,11 @@ pit-design-table-flatter-hint = { $length } متر بیش از آنچه شیب �
 pit-design-table-narrow-hint = باریک‌تر از { $width } متر خواسته‌شده، جایی که در پیچ دیواره تحویل می‌دهد.
 pit-design-checks = بررسی‌ها
 pit-design-checks-pass = همه بررسی‌ها گذشت: شیب، عرض و پیچ‌های رمپ، و برم‌ها و دیواره‌ها همان‌طورند که خواسته شده.
-pit-design-checks-count =
+pit-design-checks-pass-short = همه بررسی‌ها گذشت.
+pit-design-checks-heading =
     { $count ->
-        [one] یک جا با تنظیمات نمی‌خواند.
-       *[other] { $count } جا با تنظیمات نمی‌خوانند.
+        [one] یک جا نمی‌خواند
+       *[other] { $count } جا نمی‌خوانند
     }
 pit-design-checks-what = بررسی
 pit-design-checks-is = مقدار
@@ -5243,7 +5244,6 @@ pit-design-send-no-ramp = طرح پیت رمپی برای فرستادن ندا�
 pit-design-haul-road = رمپ { $design }
 pit-design-haul-road-numbered = رمپ { $number } { $design }
 pit-design-report-send-haulage = رمپ‌ها به شبکه حمل فرستاده شدند
-pit-design-send-section = فرستادن به
 pit-design-send-planning = فرستادن به برنامه‌ریزی
 pit-design-update-planning = به‌روزرسانی در برنامه‌ریزی
 pit-design-send-planning-help = سطح پیت را از خطوطش می‌سازد، همان‌طور که ساخت مثلث‌بندی می‌سازد، و یک جسم برنامه‌ریزی از آن در برابر توپوگرافی‌اش، با ذخیره از مدل بلوکی‌اش و پله‌بندی‌شده مانند خودش. فرستادن دوباره سطح را در جا بازسازی و جسم را به‌روز می‌کند.

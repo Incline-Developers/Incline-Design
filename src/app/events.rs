@@ -1691,8 +1691,11 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr!("events-tool-not-available-section-view"));
             return;
         }
+        // Pit Design on a selected pit, or a closed polyline that could be
+        // one, opens it, and needs no layer to draw on.
+        let opens_pit = tool == ActiveTool::PitDesign && self.editor.selection_counts.pit_designable > 0;
         if tool != self.editor.active_tool
-            && ((tool.requires_active_layer() && self.active_layer().is_none())
+            && ((tool.requires_active_layer() && self.active_layer().is_none() && !opens_pit)
                 || (matches!(tool, ActiveTool::TieHoles | ActiveTool::SetInitiationPoint | ActiveTool::ChargeHoles)
                     && !self
                         .editor
@@ -1774,6 +1777,9 @@ impl<'a> App<'a> {
             self.editor.measurement_start = None;
             self.editor.measurement_end = None;
             self.editor.batter_angle_points.clear();
+        }
+        if next_tool == ActiveTool::PitDesign && previous_tool != ActiveTool::PitDesign {
+            self.open_selected_pit();
         }
     }
 

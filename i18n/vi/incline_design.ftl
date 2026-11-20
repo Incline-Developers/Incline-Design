@@ -5021,7 +5021,6 @@ pit-design-face-angle = Góc sườn tầng
 pit-design-berm-width = Chiều rộng cơ
 pit-design-wall-radius = Bán kính bờ
 pit-design-wall-radius-help = Độ cong gắt nhất mà bờ được phép có. Các góc nhọn được bo tròn theo bán kính này, để bờ không để lại mũi đá hẹp hay góc moong chật.
-pit-design-stop-section = Dừng
 pit-design-stop = Dừng
 pit-design-stop-help = Nơi thiết kế kết thúc: sau một số tầng, tại một cao độ (tầng cuối được rút ngắn để đạt tới), hoặc nơi cả một tầng nằm trên địa hình.
 pit-design-stop-benches = Sau một số tầng
@@ -5084,6 +5083,8 @@ pit-design-draw-close = Nhấp điểm đầu tiên, hoặc nhấn Enter, để 
 pit-design-draw-close-minor = Nhấp chuột phải cũng kết thúc
 pit-design-draw-help = Vẽ đường khép kín mà thiết kế bắt đầu: chân đáy hoặc mép trên của moong, hoặc chân hoặc đỉnh của bãi thải. Ngay khi khép lại, thiết kế được tạo từ nó trên lớp đang hoạt động, còn loại và hướng được đặt ở bước tiếp theo.
 pit-design-round-corners = Bo tròn góc
+pit-design-draw-rl = Cao độ
+pit-design-draw-rl-help = Cao độ vẽ đường: đáy hoặc mép trên của moong, hoặc chân hoặc đỉnh của bãi thải. Giống Z trên thanh công cụ.
 pit-design-round-corners-help = Bo mỗi góc của đường thành một cung, như khi khai thác chân hoặc mép tầng. Các cung là một phần của đường, và các đỉnh của nó vẫn ít và dễ chỉnh sửa.
 pit-design-corner-radius = Bán kính góc
 pit-design-done-help = Kết thúc moong này và đóng công cụ. Escape cũng làm như vậy.
@@ -5176,11 +5177,13 @@ pit-design-problem-daylight-dump-up = Bãi thải đắp lên từ chân không 
 pit-design-continue = Tiếp tục
 pit-design-continue-help = Chuyển sang đặt và thiết kế đường dốc vận tải.
 pit-design-back = Quay lại
-pit-design-ramp-picking = Nhấp vào đường nơi đường dốc rời khỏi nó. Dấu cho biết nơi nó bắt đầu.
 pit-design-ramp-none = Moong này chưa có đường dốc.
 pit-design-ramp-place = Đặt đường dốc
 pit-design-ramp-place-help = Nhấp vào đường nơi đường dốc rời khỏi nó, rồi thiết kế đường dốc.
 pit-design-ramp-remove = Bỏ đường dốc
+pit-design-ramp-remove-short = Xóa
+pit-design-send-to = Gửi tới
+pit-design-send-to-help = Gửi các đường dốc vào mạng vận tải, hoặc moong sang Lập kế hoạch.
 pit-design-ramp-remove-help = Thiết kế moong không có đường dốc. Các thiết lập của nó được giữ lại để đặt lại.
 pit-design-ramp-move = Di chuyển
 pit-design-done = Xong
@@ -5192,13 +5195,10 @@ pit-design-exploded =
     { $count ->
        *[other] Đã tách thiết kế moong thành { $count } đường đa tuyến.
     }
-pit-design-default-name = Thiết kế moong
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - chọn một thiết kế moong hoặc đường đa tuyến khép kín, hoặc tạo lớp để vẽ
 pit-design-gone = Thiết kế moong đó không còn trong dự án.
 pit-design-name = Tên
-pit-design-flats =
-    { $count ->
-       *[other] { $count } tầng chạy phẳng tổng cộng { $length } m trước khi lên dốc, ở nơi đường dốc cần chỗ để giữ độ dốc.
-    }
 pit-design-flatter =
     { $count ->
        *[other] { $count } tầng lên dốc thoải hơn độ dốc yêu cầu: không đoạn phẳng nào giữ được chúng ổn định.
@@ -5214,10 +5214,11 @@ pit-design-table-flatter-hint = Lên dốc dài hơn { $length } m so với đ�
 pit-design-table-narrow-hint = Hẹp hơn { $width } m yêu cầu, ở nơi nó nối tiếp tại chỗ ngoặt của vách.
 pit-design-checks = Kiểm tra
 pit-design-checks-pass = Mọi kiểm tra đều đạt: độ dốc, bề rộng và khúc cua của đường dốc, cùng các bờ và mái, đều như yêu cầu.
-pit-design-checks-count =
+pit-design-checks-pass-short = Mọi kiểm tra đều đạt.
+pit-design-checks-heading =
     { $count ->
-        [one] Một chỗ không đạt cài đặt.
-       *[other] { $count } chỗ không đạt cài đặt.
+        [one] Một chỗ không đạt
+       *[other] { $count } chỗ không đạt
     }
 pit-design-checks-what = Kiểm tra
 pit-design-checks-is = Đạt được
@@ -5271,7 +5272,6 @@ pit-design-send-no-ramp = Thiết kế moong không có đường dốc nào đ�
 pit-design-haul-road = Đường dốc { $design }
 pit-design-haul-road-numbered = Đường dốc { $number } { $design }
 pit-design-report-send-haulage = Đã gửi các đường dốc vào mạng vận tải
-pit-design-send-section = Gửi tiếp
 pit-design-send-planning = Gửi sang Lập kế hoạch
 pit-design-update-planning = Cập nhật trong Lập kế hoạch
 pit-design-send-planning-help = Tạo bề mặt moong từ các đường của nó, như Tạo lưới tam giác sẽ làm, và một khối Lập kế hoạch so với địa hình, có trữ lượng từ mô hình khối và chia tầng như moong. Gửi lại sẽ dựng lại bề mặt tại chỗ và cập nhật khối.

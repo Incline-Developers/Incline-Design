@@ -5022,7 +5022,6 @@ pit-design-face-angle = 法面角度
 pit-design-berm-width = バーム幅
 pit-design-wall-radius = 壁面半径
 pit-design-wall-radius-help = 壁面が曲がれる最も小さい半径。鋭い角はこの半径に丸められ、壁面に細い岩の突出部やピットの狭い角が残らないようにします。
-pit-design-stop-section = 終了
 pit-design-stop = 終了
 pit-design-stop-help = 設計が終わる位置: 指定したベンチ数の後、ある標高 (最後のベンチはそこまで短くされます)、またはベンチ全体が地形より上に出る位置。
 pit-design-stop-benches = ベンチ数の後
@@ -5085,6 +5084,8 @@ pit-design-draw-close = 最初の点をクリックするか Enter を押して�
 pit-design-draw-close-minor = 右クリックでも完了します
 pit-design-draw-help = 設計の始まりとなる閉じたラインを描きます。ピットの底面の法尻か法肩、またはダンプの法尻か天端です。閉じるとすぐアクティブなレイヤー上にそこから設計が作られ、種類と方向は次のステップで設定します。
 pit-design-round-corners = 角を丸める
+pit-design-draw-rl = RL
+pit-design-draw-rl-help = 線を描く RL: ピットの底か法肩、ダンプの法尻か天端。ツールバーの Z と同じです。
 pit-design-round-corners-help = ラインの各角を、法尻や法肩を採掘するように円弧で丸めます。円弧はラインの一部で、頂点は少なく編集しやすいままです。
 pit-design-corner-radius = 角の半径
 pit-design-done-help = このピットを終えてツールを終了します。Escape でも同じです。
@@ -5177,11 +5178,13 @@ pit-design-problem-daylight-dump-up = 法尻から上へ築くダンプには達
 pit-design-continue = 次へ
 pit-design-continue-help = 運搬ランプの配置と設計に進みます。
 pit-design-back = 戻る
-pit-design-ramp-picking = ランプがラインから出る位置をクリックしてください。マーカーが開始位置を示します。
 pit-design-ramp-none = このピットにはまだランプがありません。
 pit-design-ramp-place = ランプを配置
 pit-design-ramp-place-help = ランプがラインから出る位置をクリックし、ランプを設計します。
 pit-design-ramp-remove = ランプを削除
+pit-design-ramp-remove-short = 削除
+pit-design-send-to = 送る
+pit-design-send-to-help = ランプを運搬ネットワークへ、またはピットを計画へ送ります。
 pit-design-ramp-remove-help = ランプなしでピットを設計します。設定は再配置のために残ります。
 pit-design-ramp-move = 移動
 pit-design-done = 完了
@@ -5193,13 +5196,10 @@ pit-design-exploded =
     { $count ->
        *[other] ピット設計を { $count } 本のポリラインに分解しました。
     }
-pit-design-default-name = ピット設計
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - ピット設計か閉じたポリラインを選択するか、描画するレイヤーを作成してください
 pit-design-gone = そのピット設計はもうプロジェクトにありません。
 pit-design-name = 名前
-pit-design-flats =
-    { $count ->
-       *[other] { $count } 段のベンチで、ランプが勾配を保つための余地が必要な箇所に、登り始める前の水平区間が合計 { $length } m あります。
-    }
 pit-design-flatter =
     { $count ->
        *[other] { $count } 段のベンチが指定勾配より緩く登ります。水平区間ではそのベンチを健全にできませんでした。
@@ -5215,10 +5215,11 @@ pit-design-table-flatter-hint = 勾配が求めるより { $length } m 長く登
 pit-design-table-narrow-hint = 壁の曲がり目で引き継ぐ箇所で、指定の { $width } m より狭くなっています。
 pit-design-checks = チェック
 pit-design-checks-pass = すべてのチェックに合格: ランプの勾配・幅・カーブ、およびバームと法面は指定どおりです。
-pit-design-checks-count =
+pit-design-checks-pass-short = すべてのチェックに合格しました。
+pit-design-checks-heading =
     { $count ->
-        [one] 設定を満たさない箇所が1か所あります。
-       *[other] 設定を満たさない箇所が { $count } か所あります。
+        [one] 1 か所が設定を満たしません
+       *[other] { $count } か所が設定を満たしません
     }
 pit-design-checks-what = チェック
 pit-design-checks-is = 結果
@@ -5272,7 +5273,6 @@ pit-design-send-no-ramp = ピット設計に送るランプがありません。
 pit-design-haul-road = { $design } ランプ
 pit-design-haul-road-numbered = { $design } ランプ { $number }
 pit-design-report-send-haulage = ランプを運搬ネットワークへ送りました
-pit-design-send-section = 送る
 pit-design-send-planning = 計画へ送る
 pit-design-update-planning = 計画で更新
 pit-design-send-planning-help = 三角網作成と同じ方法でピットの線から面を作り、その地形に対する計画ソリッドを、ブロックモデルからの埋蔵量とピットのベンチ割りで作ります。再送信すると面をその場で作り直し、ソリッドを更新します。

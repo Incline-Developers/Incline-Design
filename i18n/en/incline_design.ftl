@@ -5738,7 +5738,6 @@ pit-design-walls-too-steep =
         [one] The walls facing one way come out steeper than they should.
        *[other] The walls facing { $count } ways come out steeper than they should.
     }
-pit-design-stop-section = Stop
 pit-design-stop = Stop
 pit-design-stop-help = Where the design ends: after a number of benches, at an RL (the last bench cut short to meet it), or where a whole bench stands clear of the topography.
 pit-design-stop-benches = After a number of benches
@@ -5840,34 +5839,34 @@ pit-design-exploded =
 pit-design-report-explode = Turns a pit design into polylines.
 pit-design-explode-help = Turn the pit design into polylines: its string and each of its benches' strings, to edit by hand. They are no longer designed: undo puts the design back.
 pit-design-explode = Explode
-pit-design-kind = Pit design
-pit-design-default-name = Pit design
+pit-design-kind = Pit Design
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - select a pit design or closed polyline, or make a layer to draw on
 pit-design-gone = That pit design is no longer in the project.
 pit-design-draw-prompt = Click the string to design from, point by point: a pit's floor or crest, or a dump's toe or top.
 pit-design-draw-close = Click the first point, or press Enter, to close the string.
 pit-design-draw-close-minor = Right click finishes too
 pit-design-draw-help = Draw the closed string the design starts from: a pit's floor toe or crest, or a dump's toe or top. Once it closes, the design is made from it on the active layer, and its type and direction are set in the next step.
 pit-design-round-corners = Round corners
+pit-design-draw-rl = RL
+pit-design-draw-rl-help = The RL the string is drawn at: a pit's floor or crest, or a dump's toe or top. The same as the toolbar's Z.
 pit-design-round-corners-help = Round each corner of the string to an arc, as a toe or crest is mined. The arcs are part of the string, and its vertices stay few and editable.
 pit-design-corner-radius = Corner radius
 pit-design-done-help = Finish this pit and put the tool down. Escape does the same.
 pit-design-continue = Continue
 pit-design-continue-help = Go on to place the haul ramp and design it.
 pit-design-back = Back
-pit-design-ramp-picking = Click the string where the ramp leaves it. The marker shows where it will start.
 pit-design-ramp-none = This pit has no ramp yet.
 pit-design-ramp-place = Place ramp
 pit-design-ramp-place-help = Click the string where the ramp leaves it, then design the ramp.
 pit-design-ramp-remove = Remove ramp
+pit-design-ramp-remove-short = Remove
+pit-design-send-to = Send to
+pit-design-send-to-help = Send the ramps to the haul network, or the pit to Planning.
 pit-design-ramp-remove-help = Design the pit with no ramp. Its settings are kept, for placing it again.
 pit-design-ramp-move = Move
 pit-design-done = Done
 pit-design-name = Name
-pit-design-flats =
-    { $count ->
-        [one] One bench runs level for { $length } m before it climbs, where the ramp needs the room to hold its gradient.
-       *[other] { $count } benches run level for { $length } m in all before they climb, where the ramp needs the room to hold its gradient.
-    }
 pit-design-flatter =
     { $count ->
         [one] One bench climbs flatter than the gradient: no level stretch would leave it sound.
@@ -5887,10 +5886,11 @@ pit-design-table-flatter-hint = Climbs over { $length } m more than the gradient
 pit-design-table-narrow-hint = Narrower than the { $width } m asked for, where it hands over at a turn of the wall.
 pit-design-checks = Checks
 pit-design-checks-pass = Every check passes: the ramp's grade, width and turns, and the berms and faces, are as asked.
-pit-design-checks-count =
+pit-design-checks-pass-short = Every check passes.
+pit-design-checks-heading =
     { $count ->
-        [one] One place falls short of the settings.
-       *[other] { $count } places fall short of the settings.
+        [one] One place falls short
+       *[other] { $count } places fall short
     }
 pit-design-checks-what = Check
 pit-design-checks-is = Comes to
@@ -5944,7 +5944,6 @@ pit-design-send-no-ramp = The pit design has no ramp to send.
 pit-design-haul-road = { $design } ramp
 pit-design-haul-road-numbered = { $design } ramp { $number }
 pit-design-report-send-haulage = Sent the ramps to the haul network
-pit-design-send-section = Send on
 pit-design-send-planning = Send to Planning
 pit-design-update-planning = Update in Planning
 pit-design-send-planning-help = Makes the pit's surface from its strings, as Create Triangulation would, and a Planning solid of it against its topography, reserved from its block model and benched as it is. Sending again rebuilds the surface in place and brings the solid up to date.

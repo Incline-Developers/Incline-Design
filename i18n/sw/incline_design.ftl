@@ -5025,7 +5025,6 @@ pit-design-face-angle = Pembe ya uso
 pit-design-berm-width = Upana wa lundo la kinga
 pit-design-wall-radius = Nusu kipenyo cha ukuta
 pit-design-wall-radius-help = Mpindo mkali zaidi ambao kuta zinaweza kufanya. Pembe kali hulainishwa hadi kipimo hiki, ili kuta zisiache pua nyembamba za mwamba wala pembe finyu za shimo.
-pit-design-stop-section = Kusimama
 pit-design-stop = Kusimama
 pit-design-stop-help = Mahali usanifu unapoishia: baada ya idadi ya ngazi, kwenye RL (ngazi ya mwisho hufupishwa kuifikia), au mahali ngazi nzima inaposimama juu ya topografia.
 pit-design-stop-benches = Baada ya idadi ya ngazi
@@ -5088,6 +5087,8 @@ pit-design-draw-close = Bofya nukta ya kwanza, au bonyeza Enter, ili kufunga mst
 pit-design-draw-close-minor = Kubofya kulia pia humaliza
 pit-design-draw-help = Chora mstari uliofungwa ambao usanifu unaanzia: mguu wa sakafu au ukingo wa shimo, au mguu au kilele cha rundo. Mara unapofungwa, usanifu hutengenezwa kutoka kwake kwenye tabaka hai, na aina na mwelekeo wake huwekwa kwenye hatua inayofuata.
 pit-design-round-corners = Zungusha pembe
+pit-design-draw-rl = RL
+pit-design-draw-rl-help = RL ambapo mstari huchorwa: sakafu au kilele cha shimo, au kitako au kilele cha dampo. Ni sawa na Z ya upau wa zana.
 pit-design-round-corners-help = Huzungusha kila pembe ya mstari kuwa tao, kama mguu au ukingo unavyochimbwa. Matao ni sehemu ya mstari, na vipeo vyake hubaki vichache na vinavyoharirika.
 pit-design-corner-radius = Nusukipenyo cha pembe
 pit-design-done-help = Maliza shimo hili na uweke zana chini. Escape hufanya vivyo hivyo.
@@ -5180,11 +5181,13 @@ pit-design-problem-daylight-dump-up = Rundo linalojengwa juu kutoka mguu wake ha
 pit-design-continue = Endelea
 pit-design-continue-help = Endelea kuweka barabara ya kubebea na kuisanifu.
 pit-design-back = Nyuma
-pit-design-ramp-picking = Bofya mstari mahali barabara inapoacha. Alama inaonyesha itaanzia wapi.
 pit-design-ramp-none = Shimo hili bado halina barabara.
 pit-design-ramp-place = Weka barabara
 pit-design-ramp-place-help = Bofya mstari mahali barabara inapoacha, kisha isanifu barabara.
 pit-design-ramp-remove = Ondoa barabara
+pit-design-ramp-remove-short = Ondoa
+pit-design-send-to = Tuma kwa
+pit-design-send-to-help = Tuma njia panda kwenye mtandao wa usafirishaji, au shimo kwa Upangaji.
 pit-design-ramp-remove-help = Sanifu shimo bila barabara. Mipangilio yake inabaki, ili kuiweka tena.
 pit-design-ramp-move = Hamisha
 pit-design-done = Imekamilika
@@ -5197,14 +5200,10 @@ pit-design-exploded =
         [one] Usanifu wa shimo umevunjwa kuwa mistari mmoja.
        *[other] Usanifu wa shimo umevunjwa kuwa mistari { $count }.
     }
-pit-design-default-name = Usanifu wa shimo
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - chagua muundo wa shimo au mstari-mingi uliofungwa, au unda tabaka la kuchorea
 pit-design-gone = Usanifu huo wa shimo haupo tena kwenye mradi.
 pit-design-name = Jina
-pit-design-flats =
-    { $count ->
-        [one] Ngazi moja inaenda sawa kwa m { $length } kabla ya kupanda, mahali barabara inahitaji nafasi ili kudumisha mwinuko wake.
-       *[other] Ngazi { $count } zinaenda sawa kwa jumla ya m { $length } kabla ya kupanda, mahali barabara inahitaji nafasi ili kudumisha mwinuko wake.
-    }
 pit-design-flatter =
     { $count ->
         [one] Ngazi moja inapanda kwa mwinuko mdogo kuliko ulioombwa: hakuna sehemu sawa ambayo ingeifanya imara.
@@ -5221,10 +5220,11 @@ pit-design-table-flatter-hint = Inapanda kwa m { $length } zaidi ya mwinuko unav
 pit-design-table-narrow-hint = Nyembamba kuliko m { $width } zilizoombwa, mahali inapounganika kwenye kona ya ukuta.
 pit-design-checks = Ukaguzi
 pit-design-checks-pass = Ukaguzi wote umepita: mwinuko, upana na kona za njia panda, pamoja na berm na kuta, ni kama ulivyoombwa.
-pit-design-checks-count =
+pit-design-checks-pass-short = Ukaguzi wote umepita.
+pit-design-checks-heading =
     { $count ->
-        [one] Mahali pamoja hapatimizi mipangilio.
-       *[other] Mahali { $count } hapatimizi mipangilio.
+        [one] Mahali pamoja hapatimizi
+       *[other] Mahali { $count } hapatimizi
     }
 pit-design-checks-what = Ukaguzi
 pit-design-checks-is = Matokeo
@@ -5278,7 +5278,6 @@ pit-design-send-no-ramp = Muundo wa shimo hauna njia panda ya kutuma.
 pit-design-haul-road = Njia panda ya { $design }
 pit-design-haul-road-numbered = Njia panda { $number } ya { $design }
 pit-design-report-send-haulage = Njia panda zimetumwa kwenye mtandao wa usafirishaji
-pit-design-send-section = Tuma kwenda
 pit-design-send-planning = Tuma kwa Upangaji
 pit-design-update-planning = Sasisha katika Upangaji
 pit-design-send-planning-help = Inatengeneza uso wa shimo kutoka kwa mistari yake, kama Unda Pembetatu ingefanya, na kitu kigumu cha Upangaji dhidi ya topografia yake, chenye akiba kutoka modeli yake ya vitalu na benchi zake. Kutuma tena kunajenga upya uso mahali pake na kusasisha kitu kigumu.

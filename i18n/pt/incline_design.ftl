@@ -4991,7 +4991,6 @@ pit-design-face-angle = Ângulo de face
 pit-design-berm-width = Largura da berma
 pit-design-wall-radius = Raio de parede
 pit-design-wall-radius-help = A curva mais fechada que as paredes podem fazer. Os cantos vivos são arredondados para este raio, para que as paredes não deixem pontas estreitas de rocha nem cantos apertados de cava.
-pit-design-stop-section = Parada
 pit-design-stop = Parada
 pit-design-stop-help = Onde o projeto termina: após um número de bancadas, numa cota (a última bancada encurtada para a alcançar), ou onde uma bancada inteira fica acima da topografia.
 pit-design-stop-benches = Após um número de bancadas
@@ -5054,6 +5053,8 @@ pit-design-draw-close = Clique no primeiro ponto, ou prima Enter, para fechar a 
 pit-design-draw-close-minor = O clique direito também termina
 pit-design-draw-help = Desenhe a linha fechada de onde parte o projeto: o pé do fundo ou a crista de uma cava, ou o pé ou o topo de uma pilha. Assim que fecha, o projeto é feito a partir dela na camada ativa, e o tipo e o sentido definem-se no passo seguinte.
 pit-design-round-corners = Arredondar cantos
+pit-design-draw-rl = Cota
+pit-design-draw-rl-help = A cota em que a linha é desenhada: o fundo ou a crista de uma cava, ou o pé ou o topo de uma pilha. A mesma que o Z da barra de ferramentas.
 pit-design-round-corners-help = Arredonda cada canto da linha num arco, como se escava um pé ou uma crista. Os arcos fazem parte da linha, e os seus vértices continuam poucos e editáveis.
 pit-design-corner-radius = Raio de canto
 pit-design-done-help = Terminar esta cava e largar a ferramenta. Esc faz o mesmo.
@@ -5146,11 +5147,13 @@ pit-design-problem-daylight-dump-up = Uma pilha construída para cima a partir d
 pit-design-continue = Continuar
 pit-design-continue-help = Passar à colocação e ao projeto da rampa de transporte.
 pit-design-back = Voltar
-pit-design-ramp-picking = Clique na linha onde a rampa a deixa. A marca mostra onde vai começar.
 pit-design-ramp-none = Esta cava ainda não tem rampa.
 pit-design-ramp-place = Colocar rampa
 pit-design-ramp-place-help = Clique na linha onde a rampa a deixa e depois projete a rampa.
 pit-design-ramp-remove = Remover rampa
+pit-design-ramp-remove-short = Remover
+pit-design-send-to = Enviar para
+pit-design-send-to-help = Enviar as rampas para a rede de transporte, ou a cava para o Planejamento.
 pit-design-ramp-remove-help = Projetar a cava sem rampa. As suas definições mantêm-se, para a voltar a colocar.
 pit-design-ramp-move = Mover
 pit-design-done = Concluído
@@ -5163,14 +5166,10 @@ pit-design-exploded =
         [one] Projeto de cava decomposto numa polilinha.
        *[other] Projeto de cava decomposto em { $count } polilinhas.
     }
-pit-design-default-name = Projeto de cava
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - selecione um projeto de cava ou uma polilinha fechada, ou crie uma camada para desenhar
 pit-design-gone = Esse projeto de cava já não está no projeto.
 pit-design-name = Nome
-pit-design-flats =
-    { $count ->
-        [one] Uma bancada segue nivelada durante { $length } m antes de subir, onde a rampa precisa do espaço para manter a sua inclinação.
-       *[other] { $count } bancadas seguem niveladas durante { $length } m no total antes de subir, onde a rampa precisa do espaço para manter a sua inclinação.
-    }
 pit-design-flatter =
     { $count ->
         [one] Uma bancada sobe com menos inclinação do que a pedida: nenhum troço nivelado a deixaria estável.
@@ -5187,10 +5186,11 @@ pit-design-table-flatter-hint = Sobe ao longo de mais { $length } m do que a inc
 pit-design-table-narrow-hint = Mais estreita do que os { $width } m pedidos, onde liga numa curva do talude.
 pit-design-checks = Verificações
 pit-design-checks-pass = Todas as verificações passam: a inclinação, a largura e as curvas da rampa, e as bermas e os taludes, estão como pedido.
-pit-design-checks-count =
+pit-design-checks-pass-short = Todas as verificações passam.
+pit-design-checks-heading =
     { $count ->
-        [one] Um local não cumpre as configurações.
-       *[other] { $count } locais não cumprem as configurações.
+        [one] Um local não cumpre
+       *[other] { $count } locais não cumprem
     }
 pit-design-checks-what = Verificação
 pit-design-checks-is = Resulta
@@ -5244,7 +5244,6 @@ pit-design-send-no-ramp = O projeto de cava não tem rampa para enviar.
 pit-design-haul-road = Rampa de { $design }
 pit-design-haul-road-numbered = Rampa { $number } de { $design }
 pit-design-report-send-haulage = Rampas enviadas para a rede de transporte
-pit-design-send-section = Enviar
 pit-design-send-planning = Enviar para o Planejamento
 pit-design-update-planning = Atualizar no Planejamento
 pit-design-send-planning-help = Cria a superfície da cava a partir das suas linhas, como Criar triangulação faria, e um sólido de Planejamento com ela em relação à sua topografia, com reservas do seu modelo de blocos e as suas bancadas. Enviar de novo reconstrói a superfície no lugar e atualiza o sólido.

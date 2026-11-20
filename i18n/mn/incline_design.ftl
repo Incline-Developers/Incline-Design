@@ -5044,7 +5044,6 @@ pit-design-face-angle = Налуугийн өнцөг
 pit-design-berm-width = Бермийн өргөн
 pit-design-wall-radius = Ханын радиус
 pit-design-wall-radius-help = Хананы хамгийн хурц эргэлт. Хурц булангуудыг энэ радиусаар бөөрөнхийлж, хана нарийн хадны цухуйлт эсвэл уурхайн давчуу булан үлдээхгүй.
-pit-design-stop-section = Зогсоох
 pit-design-stop = Зогсоох
 pit-design-stop-help = Төсөл хаана дуусах: хэдэн уступын дараа, тодорхой өндөрт (сүүлийн уступыг түүнд хүргэж богиносгоно), эсвэл бүтэн уступ топографаас дээш гарах газар.
 pit-design-stop-benches = Хэдэн уступын дараа
@@ -5107,6 +5106,8 @@ pit-design-draw-close = Шугамыг битүүлэхийн тулд эхни�
 pit-design-draw-close-minor = Баруун товшилт ч дуусгана
 pit-design-draw-help = Төсөл эхлэх битүү шугамыг зурна уу: уурхайн ёроолын хормой эсвэл орой, эсвэл овоолгын хормой эсвэл орой. Битүүрмэгц идэвхтэй давхарга дээр түүнээс төсөл үүсэх ба төрөл, чиглэлийг дараагийн алхамд тохируулна.
 pit-design-round-corners = Булангуудыг бөөрөнхийлөх
+pit-design-draw-rl = RL
+pit-design-draw-rl-help = Шугамыг зурах RL: уурхайн ёроол эсвэл дээд ирмэг, овоолгын доод эсвэл орой. Хэрэгслийн самбарын Z-тэй адил.
 pit-design-round-corners-help = Шугамын булан бүрийг хормой эсвэл оройг олборлодог шиг нум болгон бөөрөнхийлнө. Нумууд шугамын хэсэг бөгөөд оройнууд нь цөөн, засварлах боломжтой хэвээр үлдэнэ.
 pit-design-corner-radius = Булангийн радиус
 pit-design-done-help = Энэ уурхайг дуусгаад хэрэгслийг хаана уу. Escape ч мөн адил.
@@ -5199,11 +5200,13 @@ pit-design-problem-daylight-dump-up = Хормойноосоо дээш байг
 pit-design-continue = Үргэлжлүүлэх
 pit-design-continue-help = Тээврийн налуу замыг байрлуулах, төлөвлөх рүү шилжих.
 pit-design-back = Буцах
-pit-design-ramp-picking = Налуу зам шугамаас гарах газар дарна уу. Тэмдэг хаанаас эхлэхийг харуулна.
 pit-design-ramp-none = Энэ уурхайд налуу зам хараахан алга.
 pit-design-ramp-place = Налуу зам байрлуулах
 pit-design-ramp-place-help = Налуу зам шугамаас гарах газар дарж, дараа нь налуу замыг төлөвлөнө үү.
 pit-design-ramp-remove = Налуу зам хасах
+pit-design-ramp-remove-short = Устгах
+pit-design-send-to = Илгээх
+pit-design-send-to-help = Налуу замуудыг тээврийн сүлжээнд, эсвэл уурхайг төлөвлөлт рүү илгээнэ.
 pit-design-ramp-remove-help = Уурхайг налуу замгүй төлөвлөх. Дахин байрлуулахаар тохиргоо нь хадгалагдана.
 pit-design-ramp-move = Зөөх
 pit-design-done = Болсон
@@ -5216,14 +5219,10 @@ pit-design-exploded =
         [one] Уурхайн төслийг нэг олон шугам болгон задаллаа.
        *[other] Уурхайн төслийг { $count } олон шугам болгон задаллаа.
     }
-pit-design-default-name = Уурхайн төсөл
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - уурхайн төсөл эсвэл битүү полишугам сонгох, эсвэл зурах давхарга үүсгэнэ үү
 pit-design-gone = Тэр уурхайн төсөл төсөлд байхаа больсон.
 pit-design-name = Нэр
-pit-design-flats =
-    { $count ->
-        [one] Нэг уступ өгсөхөөсөө өмнө { $length } м тэгш явна, налуугаа барихад налуу замд зай хэрэгтэй газар.
-       *[other] { $count } уступ өгсөхөөсөө өмнө нийт { $length } м тэгш явна, налуугаа барихад налуу замд зай хэрэгтэй газар.
-    }
 pit-design-flatter =
     { $count ->
         [one] Нэг уступ налуунаас бага налуугаар өгсөнө: ямар ч тэгш хэсэг түүнийг тогтвортой болгохгүй байсан.
@@ -5240,10 +5239,11 @@ pit-design-table-flatter-hint = Налуугийн шаардлагаас { $len
 pit-design-table-narrow-hint = Хананы эргэлтэд залгах газар шаардсан { $width } м-ээс нарийн.
 pit-design-checks = Шалгалт
 pit-design-checks-pass = Бүх шалгалт давлаа: налуу замын налуу, өргөн, эргэлт болон бермүүд, налуу хана хүссэнээр байна.
-pit-design-checks-count =
+pit-design-checks-pass-short = Бүх шалгалт давлаа.
+pit-design-checks-heading =
     { $count ->
-        [one] Нэг газар тохиргоог хангахгүй байна.
-       *[other] { $count } газар тохиргоог хангахгүй байна.
+        [one] Нэг газар хангахгүй
+       *[other] { $count } газар хангахгүй
     }
 pit-design-checks-what = Шалгалт
 pit-design-checks-is = Гарсан
@@ -5297,7 +5297,6 @@ pit-design-send-no-ramp = Уурхайн төсөлд илгээх налуу з
 pit-design-haul-road = { $design } налуу зам
 pit-design-haul-road-numbered = { $design } налуу зам { $number }
 pit-design-report-send-haulage = Налуу замуудыг тээврийн сүлжээнд илгээлээ
-pit-design-send-section = Дамжуулах
 pit-design-send-planning = Төлөвлөлт рүү илгээх
 pit-design-update-planning = Төлөвлөлтөд шинэчлэх
 pit-design-send-planning-help = Гурвалжинжуулалт үүсгэх шиг уурхайн гадаргууг шугамуудаас нь үүсгэж, түүний топографитай харьцуулсан төлөвлөлтийн биет, блок загварын нөөцтэй, шатлалтай нь үүсгэнэ. Дахин илгээвэл гадаргууг байранд нь шинэчилж биетийг шинэчилнэ.

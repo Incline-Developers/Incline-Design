@@ -4994,7 +4994,6 @@ pit-design-face-angle = Angle de front
 pit-design-berm-width = Largeur de banquette
 pit-design-wall-radius = Rayon de paroi
 pit-design-wall-radius-help = Le virage le plus serré que les parois peuvent faire. Les angles vifs y sont arrondis, pour que les parois ne laissent ni nez de roche étroits ni coins de fosse serrés.
-pit-design-stop-section = Arrêt
 pit-design-stop = Arrêt
 pit-design-stop-help = Où la conception s'arrête : après un nombre de gradins, à une cote (le dernier gradin raccourci pour l'atteindre), ou là où un gradin entier dépasse la topographie.
 pit-design-stop-benches = Après un nombre de gradins
@@ -5057,6 +5056,8 @@ pit-design-draw-close = Cliquez sur le premier point, ou appuyez sur Entrée, po
 pit-design-draw-close-minor = Le clic droit termine aussi
 pit-design-draw-help = Dessinez la ligne fermée dont part la conception : le pied du fond ou la crête d’une fosse, ou le pied ou le sommet d’une verse. Dès qu’elle est fermée, la conception en est faite sur le calque actif, et son type et son sens se règlent à l’étape suivante.
 pit-design-round-corners = Arrondir les angles
+pit-design-draw-rl = Cote
+pit-design-draw-rl-help = La cote à laquelle la ligne est tracée : le fond ou la crête d'une fosse, le pied ou le sommet d'une verse. La même que le Z de la barre d'outils.
 pit-design-round-corners-help = Arrondit chaque angle de la ligne en arc, comme un pied ou une crête est exploité. Les arcs font partie de la ligne, et ses sommets restent peu nombreux et modifiables.
 pit-design-corner-radius = Rayon d’angle
 pit-design-done-help = Terminer cette fosse et poser l’outil. Échap fait de même.
@@ -5149,11 +5150,13 @@ pit-design-problem-daylight-dump-up = Une verse bâtie vers le haut depuis son p
 pit-design-continue = Continuer
 pit-design-continue-help = Passer au placement et à la conception de la rampe de roulage.
 pit-design-back = Retour
-pit-design-ramp-picking = Cliquez sur la ligne là où la rampe la quitte. Le repère montre où elle commencera.
 pit-design-ramp-none = Cette fosse n’a pas encore de rampe.
 pit-design-ramp-place = Placer la rampe
 pit-design-ramp-place-help = Cliquez sur la ligne là où la rampe la quitte, puis concevez la rampe.
 pit-design-ramp-remove = Retirer la rampe
+pit-design-ramp-remove-short = Retirer
+pit-design-send-to = Envoyer à
+pit-design-send-to-help = Envoyer les rampes au réseau de roulage, ou la fosse à la planification.
 pit-design-ramp-remove-help = Concevoir la fosse sans rampe. Ses réglages sont conservés pour la replacer.
 pit-design-ramp-move = Déplacer
 pit-design-done = Terminé
@@ -5166,14 +5169,10 @@ pit-design-exploded =
         [one] Conception de fosse décomposée en une polyligne.
        *[other] Conception de fosse décomposée en { $count } polylignes.
     }
-pit-design-default-name = Conception de fosse
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - sélectionnez une conception de fosse ou une polyligne fermée, ou créez un calque où dessiner
 pit-design-gone = Cette conception de fosse n’est plus dans le projet.
 pit-design-name = Nom
-pit-design-flats =
-    { $count ->
-        [one] Un gradin court à plat sur { $length } m avant de monter, là où la rampe a besoin de place pour garder sa pente.
-       *[other] { $count } gradins courent à plat sur { $length } m au total avant de monter, là où la rampe a besoin de place pour garder sa pente.
-    }
 pit-design-flatter =
     { $count ->
         [one] Un gradin monte moins raide que la pente : aucun palier ne le laisserait stable.
@@ -5190,10 +5189,11 @@ pit-design-table-flatter-hint = Monte sur { $length } m de plus que la pente ne 
 pit-design-table-narrow-hint = Plus étroite que les { $width } m demandés, là où elle se raccorde à un virage du talus.
 pit-design-checks = Contrôles
 pit-design-checks-pass = Tous les contrôles sont respectés : la pente, la largeur et les virages de la rampe, ainsi que les bermes et les talus, sont conformes.
-pit-design-checks-count =
+pit-design-checks-pass-short = Tous les contrôles sont respectés.
+pit-design-checks-heading =
     { $count ->
-        [one] Un endroit ne respecte pas les paramètres.
-       *[other] { $count } endroits ne respectent pas les paramètres.
+        [one] Un endroit n'est pas conforme
+       *[other] { $count } endroits ne sont pas conformes
     }
 pit-design-checks-what = Contrôle
 pit-design-checks-is = Obtenu
@@ -5247,7 +5247,6 @@ pit-design-send-no-ramp = La conception de fosse n'a pas de rampe à envoyer.
 pit-design-haul-road = Rampe de { $design }
 pit-design-haul-road-numbered = Rampe { $number } de { $design }
 pit-design-report-send-haulage = Rampes envoyées au réseau de roulage
-pit-design-send-section = Transmettre
 pit-design-send-planning = Envoyer à la planification
 pit-design-update-planning = Mettre à jour dans la planification
 pit-design-send-planning-help = Crée la surface de la fosse à partir de ses lignes, comme le ferait Créer une triangulation, et un solide de planification par rapport à sa topographie, avec les réserves de son modèle de blocs et ses gradins. Un nouvel envoi reconstruit la surface sur place et met le solide à jour.

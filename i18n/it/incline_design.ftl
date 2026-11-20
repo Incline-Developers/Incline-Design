@@ -5035,7 +5035,6 @@ pit-design-face-angle = Angolo della parete
 pit-design-berm-width = Larghezza berma
 pit-design-wall-radius = Raggio di parete
 pit-design-wall-radius-help = La curva più stretta che le pareti possono fare. Gli spigoli vivi vengono arrotondati a questo raggio, così le pareti non lasciano speroni di roccia stretti né angoli di fossa serrati.
-pit-design-stop-section = Arresto
 pit-design-stop = Arresto
 pit-design-stop-help = Dove finisce il progetto: dopo un numero di gradini, a una quota (l'ultimo gradino accorciato per raggiungerla), o dove un gradino intero sta sopra la topografia.
 pit-design-stop-benches = Dopo un numero di gradini
@@ -5098,6 +5097,8 @@ pit-design-draw-close = Fai clic sul primo punto, o premi Invio, per chiudere la
 pit-design-draw-close-minor = Anche il clic destro termina
 pit-design-draw-help = Disegna la linea chiusa da cui parte il progetto: il piede del fondo o la cresta di una fossa, o il piede o la sommità di una discarica. Appena si chiude, il progetto viene fatto da essa sul livello attivo, e tipo e verso si impostano al passo successivo.
 pit-design-round-corners = Arrotonda gli angoli
+pit-design-draw-rl = Quota
+pit-design-draw-rl-help = La quota a cui si disegna la linea: il fondo o la cresta di una fossa, il piede o la cima di una discarica. La stessa Z della barra degli strumenti.
 pit-design-round-corners-help = Arrotonda ogni angolo della linea in un arco, come si scava un piede o una cresta. Gli archi fanno parte della linea, e i suoi vertici restano pochi e modificabili.
 pit-design-corner-radius = Raggio d'angolo
 pit-design-done-help = Termina questa fossa e chiudi lo strumento. Esc fa lo stesso.
@@ -5190,11 +5191,13 @@ pit-design-problem-daylight-dump-up = Una discarica costruita verso l'alto dal p
 pit-design-continue = Continua
 pit-design-continue-help = Passa a posizionare la rampa di trasporto e a progettarla.
 pit-design-back = Indietro
-pit-design-ramp-picking = Fai clic sulla linea dove la rampa la lascia. Il segno mostra dove inizierà.
 pit-design-ramp-none = Questa fossa non ha ancora una rampa.
 pit-design-ramp-place = Posiziona rampa
 pit-design-ramp-place-help = Fai clic sulla linea dove la rampa la lascia, poi progetta la rampa.
 pit-design-ramp-remove = Rimuovi rampa
+pit-design-ramp-remove-short = Rimuovi
+pit-design-send-to = Invia a
+pit-design-send-to-help = Invia le rampe alla rete di trasporto, o la fossa alla pianificazione.
 pit-design-ramp-remove-help = Progetta la fossa senza rampa. Le sue impostazioni restano, per posizionarla di nuovo.
 pit-design-ramp-move = Sposta
 pit-design-done = Fatto
@@ -5207,14 +5210,10 @@ pit-design-exploded =
         [one] Progetto della fossa scomposto in una polilinea.
        *[other] Progetto della fossa scomposto in { $count } polilinee.
     }
-pit-design-default-name = Progetto della fossa
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - seleziona un progetto di fossa o una polilinea chiusa, o crea un livello su cui disegnare
 pit-design-gone = Quel progetto della fossa non è più nel progetto.
 pit-design-name = Nome
-pit-design-flats =
-    { $count ->
-        [one] Un gradino corre in piano per { $length } m prima di salire, dove la rampa ha bisogno di spazio per tenere la sua pendenza.
-       *[other] { $count } gradini corrono in piano per { $length } m in tutto prima di salire, dove la rampa ha bisogno di spazio per tenere la sua pendenza.
-    }
 pit-design-flatter =
     { $count ->
         [one] Un gradino sale meno ripido della pendenza: nessun tratto in piano lo lascerebbe stabile.
@@ -5231,10 +5230,11 @@ pit-design-table-flatter-hint = Sale su { $length } m in più di quanto chiede l
 pit-design-table-narrow-hint = Più stretta dei { $width } m richiesti, dove si raccorda a una curva della parete.
 pit-design-checks = Controlli
 pit-design-checks-pass = Tutti i controlli superati: pendenza, larghezza e curve della rampa, berme e scarpate sono come richiesto.
-pit-design-checks-count =
+pit-design-checks-pass-short = Tutti i controlli superati.
+pit-design-checks-heading =
     { $count ->
-        [one] Un punto non rispetta le impostazioni.
-       *[other] { $count } punti non rispettano le impostazioni.
+        [one] Un punto non è conforme
+       *[other] { $count } punti non sono conformi
     }
 pit-design-checks-what = Controllo
 pit-design-checks-is = Risulta
@@ -5288,7 +5288,6 @@ pit-design-send-no-ramp = Il progetto di fossa non ha rampe da inviare.
 pit-design-haul-road = Rampa di { $design }
 pit-design-haul-road-numbered = Rampa { $number } di { $design }
 pit-design-report-send-haulage = Rampe inviate alla rete di trasporto
-pit-design-send-section = Invia
 pit-design-send-planning = Invia alla pianificazione
 pit-design-update-planning = Aggiorna nella pianificazione
 pit-design-send-planning-help = Crea la superficie della fossa dalle sue linee, come farebbe Crea triangolazione, e un solido di pianificazione rispetto alla sua topografia, con le riserve del suo modello a blocchi e i suoi gradoni. Un nuovo invio ricostruisce la superficie sul posto e aggiorna il solido.

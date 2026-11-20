@@ -280,6 +280,16 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
             .min_width(300.0)
             .help_text(tr!("pit-design-draw-help"))
             .show(ui.ctx(), |ui| {
+                // The level the string is drawn at: the same as the
+                // toolbar's Z, set here where it matters most.
+                let response = MenuFieldF64::new(tr!("pit-design-draw-rl"), &mut editor.z_input, f64::MIN..=f64::MAX)
+                    .speed(0.5)
+                    .suffix(" m")
+                    .help_text(tr!("pit-design-draw-rl-help"))
+                    .show(ui);
+                if response.changed() && editor.z_input.is_finite() {
+                    editor.z_level = editor.z_input;
+                }
                 MenuFieldBool::new(tr!("pit-design-round-corners"), &mut editor.pit_round_corners)
                     .help_text(tr!("pit-design-round-corners-help"))
                     .show(ui);
@@ -307,8 +317,15 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
             }
             // The step's settings and what they come to scroll between the
             // name and the actions, which stay in view.
+            // Each step scrolls on its own, from its top.
+            let stage_salt = match draft.stage {
+                PitStage::Benches => "benches",
+                PitStage::Ramp => "ramp",
+            };
+            // The step's settings and what they come to scroll between the
+            // name and the actions, which stay in view.
             egui::ScrollArea::vertical()
-                .id_salt("pit_design_body")
+                .id_salt(("pit_design_body", stage_salt))
                 .max_height(body_height(viewport_rect))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
@@ -325,79 +342,7 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                         }
                         PitStage::Ramp => {
                             let base_rl = draft.built_for.as_ref().and_then(|key| key.verts.first()).map_or(0.0, |vertex| vertex.pos.z);
-                            let settings = &mut working.settings;
-                            let (sign, height) = (settings.direction.sign(), settings.bench_height);
-                            if settings.ramps.is_empty() && picking.is_none() {
-                                menu::menu_section(ui, tr!("pit-design-ramp-section"));
-                                menu::menu_note(ui, tr!("pit-design-ramp-none"));
-                            }
-                            let several = settings.ramps.len() > 1;
-                            let mut remove = None;
-                            for (index, ramp) in settings.ramps.iter_mut().enumerate() {
-                                ui.push_id(("pit_design_ramp", index), |ui| {
-                                    let heading = if several {
-                                        tr!("pit-design-ramp-numbered", number = (index + 1).to_string())
-                                    } else {
-                                        tr!("pit-design-ramp-section")
-                                    };
-                                    menu::menu_section(ui, heading);
-                                    if picking == Some(index) {
-                                        menu::menu_note(ui, tr!("pit-design-ramp-picking"));
-                                        return;
-                                    }
-                                    draw_ramp_settings(ui, ramp, commands, index, (base_rl, sign, height));
-                                    if button_row(ui, String::new(), tr!("pit-design-ramp-remove-help"), &[(tr!("pit-design-ramp-remove"), true)]).is_some() {
-                                        remove = Some(index);
-                                    }
-                                });
-                            }
-                            if let Some(index) = remove {
-                                settings.ramps.remove(index);
-                            }
-                            let count = settings.ramps.len();
-                            if picking == Some(count) {
-                                menu::menu_section(ui, tr!("pit-design-ramp-numbered", number = (count + 1).to_string()));
-                                menu::menu_note(ui, tr!("pit-design-ramp-picking"));
-                            } else if picking.is_none() {
-                                let (label, help) = if count == 0 {
-                                    (tr!("pit-design-ramp-place"), tr!("pit-design-ramp-place-help"))
-                                } else {
-                                    (tr!("pit-design-ramp-add"), tr!("pit-design-ramp-add-help"))
-                                };
-                                if button_row(ui, String::new(), help, &[(label, true)]).is_some() {
-                                    commands.push(UiCommand::BeginPitRampStartPick(count));
-                                }
-                            }
-                            // On to the rest of the project: the ramps to the
-                            // haul network, the pit to Planning.
-                            if picking.is_none() {
-                                menu::menu_section(ui, tr!("pit-design-send-section"));
-                                let fresh = draft.facts.fresh;
-                                if count > 0 {
-                                    let label = if working.sent.roads.is_empty() {
-                                        tr!("pit-design-send-haulage")
-                                    } else {
-                                        tr!("pit-design-update-haulage")
-                                    };
-                                    if button_row(ui, String::new(), tr!("pit-design-send-haulage-help"), &[(label, fresh)]).is_some() {
-                                        commands.push(UiCommand::SendPitRampsToHaulage(id));
-                                    }
-                                }
-                                let label = if working.sent.solid.is_none() {
-                                    tr!("pit-design-send-planning")
-                                } else {
-                                    tr!("pit-design-update-planning")
-                                };
-                                let topography = working.settings.topography.is_some();
-                                let help = if topography {
-                                    tr!("pit-design-send-planning-help")
-                                } else {
-                                    tr!("pit-design-send-no-topography")
-                                };
-                                if button_row(ui, String::new(), help, &[(label, fresh && topography)]).is_some() {
-                                    commands.push(UiCommand::SendPitToPlanning(id));
-                                }
-                            }
+                            draw_ramps(ui, &mut working.settings, picking, (base_rl, commands));
                         }
                     }
                     menu::menu_section(ui, tr!("pit-design-result-section"));
@@ -411,8 +356,9 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                     }
                 });
 
-            ui.add_space(4.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match draft.stage {
+            let fresh = draft.facts.fresh;
+            let picking = draft.picking_ramp.is_some();
+            menu::menu_actions(ui, |ui| match draft.stage {
                 PitStage::Benches => {
                     if ui
                         .add(MenuButton::new(tr!("pit-design-continue")).primary())
@@ -432,9 +378,12 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                     if ui.add(MenuButton::new(tr!("pit-design-back"))).clicked() {
                         commands.push(UiCommand::PitDesignStage(PitStage::Benches));
                     }
-                    if ui.add(MenuButton::new(tr!("pit-design-explode"))).hint(tr!("pit-design-explode-help")).clicked() {
-                        commands.push(UiCommand::ExplodePitDesign(id));
-                    }
+                    // On to the rest of the project, at the row's far end.
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        if let Some(working) = draft.working.as_ref() {
+                            draw_send_menu(ui, working, id, fresh && !picking, commands);
+                        }
+                    });
                 }
             });
         });
@@ -450,6 +399,97 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
     // A field is mid-edit while the pointer is down on it or text is being
     // typed into it; until then the copy waits to be written.
     draft.settled = !ui.ctx().input(|input| input.pointer.any_down()) && ui.ctx().memory(|memory| memory.focused().is_none());
+}
+
+/// The pit's ramps, each under a heading that removes it, and a button to
+/// add one; while a new ramp's start is being picked, the banner over the
+/// viewport says what to do, so nothing here repeats it.
+fn draw_ramps(ui: &mut egui::Ui, settings: &mut PitDesignSettings, picking: Option<usize>, (base_rl, commands): (f64, &mut Vec<UiCommand>)) {
+    let (sign, height) = (settings.direction.sign(), settings.bench_height);
+    let several = settings.ramps.len() > 1;
+    let mut remove = None;
+    for (index, ramp) in settings.ramps.iter_mut().enumerate() {
+        ui.push_id(("pit_design_ramp", index), |ui| {
+            let heading = if several {
+                tr!("pit-design-ramp-numbered", number = (index + 1).to_string())
+            } else {
+                tr!("pit-design-ramp-section")
+            };
+            if menu::menu_section_with_action(ui, heading, tr!("pit-design-ramp-remove-short"), tr!("pit-design-ramp-remove-help")) {
+                remove = Some(index);
+            }
+            draw_ramp_settings(ui, ramp, commands, index, (base_rl, sign, height));
+        });
+    }
+    if let Some(index) = remove {
+        settings.ramps.remove(index);
+    }
+    let count = settings.ramps.len();
+    if picking.is_some() {
+        return;
+    }
+    if count == 0 {
+        menu::menu_section(ui, tr!("pit-design-ramp-section"));
+        menu::menu_note(ui, tr!("pit-design-ramp-none"));
+    }
+    let (label, help) = if count == 0 {
+        (tr!("pit-design-ramp-place"), tr!("pit-design-ramp-place-help"))
+    } else {
+        (tr!("pit-design-ramp-add"), tr!("pit-design-ramp-add-help"))
+    };
+    ui.add_space(2.0);
+    let width = menu::natural_button_width(ui, &label, 80.0);
+    if ui.add(MenuButton::new(label).min_width(width)).hint(help).clicked() {
+        commands.push(UiCommand::BeginPitRampStartPick(count));
+    }
+}
+
+/// The footer's Send to menu: the ramps to the haul network, the pit to
+/// Planning, each again once sent, and each only once the design is current.
+fn draw_send_menu(ui: &mut egui::Ui, working: &PitObject, id: ObjectId, ready: bool, commands: &mut Vec<UiCommand>) {
+    use crate::ui::widgets::context_menu::{ContextMenuAction, dropup_menu};
+    let label = tr!("pit-design-send-to");
+    let width = menu::natural_button_width(ui, &label, 60.0);
+    let response = ui.add(MenuButton::new(label).min_width(width).enabled(ready));
+    let response = if ready {
+        response.hint(tr!("pit-design-send-to-help"))
+    } else {
+        response.disabled_hint(tr!("pit-design-send-not-designed"))
+    };
+    let has_ramp = !working.settings.ramps.is_empty();
+    let topography = working.settings.topography.is_some();
+    dropup_menu(&response, 240.0, |ui| {
+        let haulage = if working.sent.roads.is_empty() {
+            tr!("pit-design-send-haulage")
+        } else {
+            tr!("pit-design-update-haulage")
+        };
+        let row = ContextMenuAction::new(haulage).enabled(has_ramp).show(ui);
+        let row = if has_ramp {
+            row.hint(tr!("pit-design-send-haulage-help"))
+        } else {
+            row.disabled_hint(tr!("pit-design-send-no-ramp"))
+        };
+        if row.clicked() {
+            commands.push(UiCommand::SendPitRampsToHaulage(id));
+            ui.close();
+        }
+        let planning = if working.sent.solid.is_none() {
+            tr!("pit-design-send-planning")
+        } else {
+            tr!("pit-design-update-planning")
+        };
+        let row = ContextMenuAction::new(planning).enabled(topography).show(ui);
+        let row = if topography {
+            row.hint(tr!("pit-design-send-planning-help"))
+        } else {
+            row.disabled_hint(tr!("pit-design-send-no-topography"))
+        };
+        if row.clicked() {
+            commands.push(UiCommand::SendPitToPlanning(id));
+            ui.close();
+        }
+    });
 }
 
 /// The pit's benches and where it stops. `base_rl` is the string's, where a
@@ -479,36 +519,7 @@ fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, proj
     .help_text(tr!("pit-design-direction-help"))
     .show(ui);
 
-    menu::menu_section(ui, tr!("pit-design-benches-section"));
-    MenuFieldF64::new(tr!("pit-design-bench-height"), &mut settings.bench_height, 0.1..=1000.0)
-        .width(FIELD_WIDTH)
-        .speed(0.1)
-        .suffix(" m")
-        .show(ui);
-    MenuFieldF64::new(tr!("pit-design-face-angle"), &mut settings.face_angle, 1.0..=89.0)
-        .width(FIELD_WIDTH)
-        .speed(0.5)
-        .suffix("°")
-        .show(ui);
-    MenuFieldF64::new(tr!("pit-design-berm-width"), &mut settings.berm_width, 0.0..=1000.0)
-        .width(FIELD_WIDTH)
-        .speed(0.1)
-        .suffix(" m")
-        .show(ui);
-    MenuFieldF64::new(tr!("pit-design-wall-radius"), &mut settings.wall_radius, 0.0..=10000.0)
-        .width(FIELD_WIDTH)
-        .speed(0.5)
-        .suffix(" m")
-        .help_text(tr!("pit-design-wall-radius-help"))
-        .show(ui);
-    if menu::menu_section_folding(ui, "pit_design_bench_rules", tr!("pit-design-rules-section")) {
-        draw_bench_rules(ui, settings, base_rl);
-    }
-    if menu::menu_section_folding(ui, "pit_design_slope_rules", tr!("pit-design-slopes-section")) {
-        draw_slope_rules(ui, settings, picking_region, commands);
-    }
-
-    menu::menu_section(ui, tr!("pit-design-stop-section"));
+    // How far it goes, with what it is and which way it is built.
     // Only a pit built up, or a dump built down, meets the ground.
     let stops: Vec<StopMode> = if settings.can_daylight() {
         vec![StopMode::Benches, StopMode::Elevation, StopMode::Daylight]
@@ -559,6 +570,35 @@ fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, proj
             .help_text(tr!("pit-design-topography-help"))
             .show(ui);
         }
+    }
+
+    menu::menu_section(ui, tr!("pit-design-benches-section"));
+    MenuFieldF64::new(tr!("pit-design-bench-height"), &mut settings.bench_height, 0.1..=1000.0)
+        .width(FIELD_WIDTH)
+        .speed(0.1)
+        .suffix(" m")
+        .show(ui);
+    MenuFieldF64::new(tr!("pit-design-face-angle"), &mut settings.face_angle, 1.0..=89.0)
+        .width(FIELD_WIDTH)
+        .speed(0.5)
+        .suffix("°")
+        .show(ui);
+    MenuFieldF64::new(tr!("pit-design-berm-width"), &mut settings.berm_width, 0.0..=1000.0)
+        .width(FIELD_WIDTH)
+        .speed(0.1)
+        .suffix(" m")
+        .show(ui);
+    MenuFieldF64::new(tr!("pit-design-wall-radius"), &mut settings.wall_radius, 0.0..=10000.0)
+        .width(FIELD_WIDTH)
+        .speed(0.5)
+        .suffix(" m")
+        .help_text(tr!("pit-design-wall-radius-help"))
+        .show(ui);
+    if menu::menu_section_folding(ui, "pit_design_bench_rules", tr!("pit-design-rules-section")) {
+        draw_bench_rules(ui, settings, base_rl);
+    }
+    if menu::menu_section_folding(ui, "pit_design_slope_rules", tr!("pit-design-slopes-section")) {
+        draw_slope_rules(ui, settings, picking_region, commands);
     }
 }
 
@@ -1032,9 +1072,18 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
             read_only_row(ui, &tr!("pit-design-benches-built"), &design.benches.to_string());
             read_only_row(ui, &tr!("pit-design-final-rl"), &format!("{:.1} m", design.final_elevation()));
             if ramp {
-                read_only_row(ui, &tr!("pit-design-ramp-length"), &format!("{:.0} m", design.ramp_length));
+                read_only_row(ui, &tr!("pit-design-ramp-length"), &format!("{} m", whole(design.ramp_length)));
             }
-            read_only_row(ui, &tr!("pit-design-volume"), &format!("{:.0} m³", design.volume));
+            // The volume as measured against the ground is the Evaluation's;
+            // until there is one, what the rings enclose.
+            let measured = draft
+                .working
+                .as_ref()
+                .and_then(|working| working.evaluation.as_ref())
+                .is_some_and(|evaluation| evaluation.problem.is_none());
+            if !measured {
+                read_only_row(ui, &tr!("pit-design-volume"), &format!("{} m³", whole(design.volume)));
+            }
             let ended = end_text(design);
             if stopped_short(design) {
                 ui.colored_label(warning, ended);
@@ -1059,16 +1108,6 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
                 ui.colored_label(warning, tr!("pit-design-start-moved", distance = format!("{:.0}", design.ramp_start_moved)));
             }
             if ramp {
-                let flats: Vec<f64> = design
-                    .report
-                    .iter()
-                    .flat_map(|bench| bench.ramps.iter())
-                    .map(|road| road.flat)
-                    .filter(|flat| *flat > 0.0)
-                    .collect();
-                if !flats.is_empty() {
-                    menu::menu_note(ui, tr!("pit-design-flats", count = flats.len(), length = format!("{:.0}", flats.iter().sum::<f64>())));
-                }
                 let flatter = design.report.iter().filter(|bench| bench.ramps.iter().any(|road| road.lengthened > 0.0)).count();
                 if flatter > 0 {
                     ui.colored_label(warning, tr!("pit-design-flatter", count = flatter));
@@ -1078,13 +1117,19 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
                     ui.colored_label(warning, tr!("pit-design-walls-too-steep", count = steep));
                 }
             }
+            // The checks: a quiet line where all pass, and where some do not,
+            // a section that opens itself and says how many.
             if design.flags.is_empty() {
-                menu::menu_note(ui, tr!("pit-design-checks-pass"));
-            } else {
-                ui.colored_label(warning, tr!("pit-design-checks-count", count = design.flags.len()));
-                if menu::menu_section_folding(ui, "pit_design_checks", tr!("pit-design-checks")) {
-                    draw_checks(ui, design, settings, draft.hover, &mut hover, commands);
-                }
+                ui.label(egui::RichText::new(tr!("pit-design-checks-pass-short")).color(ui.visuals().weak_text_color()))
+                    .hint(tr!("pit-design-checks-pass"));
+            } else if menu::menu_section_folding_as(
+                ui,
+                "pit_design_checks_open",
+                tr!("pit-design-checks-heading", count = design.flags.len()),
+                true,
+                Some(warning),
+            ) {
+                draw_checks(ui, design, settings, draft.hover, &mut hover, commands);
             }
             if ramp {
                 if menu::menu_section_folding(ui, "pit_design_bench_table", tr!("pit-design-bench-table")) {
@@ -1112,15 +1157,10 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
     hover
 }
 
-/// A quantity as the reserves show one: whole and grouped in thousands
-/// from a thousand, to two places below.
-fn quantity(value: Option<f64>) -> String {
+/// A whole quantity, grouped in thousands: a volume, a length.
+fn whole(value: f64) -> String {
     use thousands::Separable;
-    match value {
-        None => "-".to_owned(),
-        Some(value) if value.abs() >= 1000.0 => format!("{value:.0}").separate_with_commas(),
-        Some(value) => format!("{value:.2}"),
-    }
+    format!("{value:.0}").separate_with_commas()
 }
 
 /// What the design takes out of the ground, measured against the
@@ -1258,21 +1298,17 @@ fn draw_evaluation(ui: &mut egui::Ui, working: &mut PitObject, facts: &DraftFact
 /// A dump reshaped for its rehabilitation: where its top stands, what it
 /// holds, the earthworks it takes, and how far it spreads.
 fn draw_rehab(ui: &mut egui::Ui, rehab: &RehabFigures) {
-    menu::menu_note(ui, tr!("pit-design-rehab-figures"));
+    menu::menu_section(ui, tr!("pit-design-rehab-figures"));
     if let Some(problem) = &rehab.problem {
         ui.colored_label(ui.visuals().warn_fg_color, tr!("pit-design-rehab-failed", reason = problem.clone()));
         return;
     }
     read_only_row(ui, &tr!("pit-design-rehab-top"), &format!("{:.1} m", rehab.top));
-    read_only_row(ui, &tr!("pit-design-evaluation-volume"), &format!("{} m³", quantity(Some(rehab.volume))));
-    read_only_row(ui, &tr!("pit-design-rehab-cut"), &format!("{} m³", quantity(Some(rehab.cut))));
-    read_only_row(ui, &tr!("pit-design-rehab-fill"), &format!("{} m³", quantity(Some(rehab.fill))));
+    read_only_row(ui, &tr!("pit-design-evaluation-volume"), &format!("{} m³", whole(rehab.volume)));
+    read_only_row(ui, &tr!("pit-design-rehab-cut"), &format!("{} m³", whole(rehab.cut)));
+    read_only_row(ui, &tr!("pit-design-rehab-fill"), &format!("{} m³", whole(rehab.fill)));
     let [before, after] = rehab.footprint;
-    read_only_row(
-        ui,
-        &tr!("pit-design-rehab-footprint"),
-        &format!("{} m² → {} m²", quantity(Some(before)), quantity(Some(after))),
-    );
+    read_only_row(ui, &tr!("pit-design-rehab-footprint"), &format!("{} → {} m²", whole(before), whole(after)));
 }
 
 /// The numeric reserve fields: those a figure is given for.
@@ -1280,51 +1316,170 @@ fn numeric_fields(fields: &[ReserveField]) -> Vec<&ReserveField> {
     fields.iter().filter(|field| field.aggregation != ReserveAggregation::Category).collect()
 }
 
-/// A small heading over a table's column.
-fn column_heading(ui: &mut egui::Ui, text: String) {
-    let weak = ui.visuals().weak_text_color();
-    ui.label(egui::RichText::new(text).color(weak).small());
+/// A reserve field's figure as it reads best: a sum whole and grouped in
+/// thousands, an average to two places.
+fn field_figure(field: &ReserveField, value: Option<f64>) -> String {
+    match (field.aggregation, value) {
+        (_, None) => "-".to_owned(),
+        (ReserveAggregation::Sum, Some(value)) => whole(value),
+        (_, Some(value)) => format!("{value:.2}"),
+    }
+}
+
+/// The heading over a column of volumes, with its unit.
+fn volume_heading() -> String {
+    format!("{} (m³)", tr!("pit-design-evaluation-volume"))
+}
+
+/// How a row of a figures table stands out from the rest.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RowStyle {
+    Plain,
+    /// The one the panel is open on.
+    Strong,
+    /// Out of date.
+    Dim,
+}
+
+/// One row of a figures table: its name, and its figure under each column.
+struct FigureRow {
+    name: String,
+    figures: Vec<String>,
+    style: RowStyle,
+    hint: Option<String>,
+}
+
+impl FigureRow {
+    fn new(name: impl Into<String>, figures: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            figures,
+            style: RowStyle::Plain,
+            hint: None,
+        }
+    }
+}
+
+/// A table of figures: names down the left, each column of figures set right
+/// under its heading, as wide as its widest entry, every other row shaded.
+/// Scrolls sideways where it is wider than the panel.
+fn figures_table(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, name_heading: String, headings: &[String], rows: &[FigureRow]) {
+    const GAP: f32 = 14.0;
+    const ROW: f32 = 20.0;
+    let visuals = ui.visuals().clone();
+    let (weak, text, strong) = (visuals.weak_text_color(), visuals.text_color(), visuals.strong_text_color());
+    let small = egui::TextStyle::Small.resolve(ui.style());
+    // Measured as the labels lay them out, in the panel's own text style, so
+    // each column is exactly as wide as what is in it.
+    let width = |text: egui::RichText| {
+        egui::WidgetText::from(text)
+            .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body)
+            .size()
+            .x
+    };
+    let heading_width = |text: &str| width(egui::RichText::new(text).font(small.clone()));
+    let body_width = |text: &str| width(egui::RichText::new(text).strong());
+    let name_width = rows.iter().map(|row| body_width(&row.name)).fold(heading_width(&name_heading), f32::max);
+    let widths: Vec<f32> = (0..headings.len())
+        .map(|column| {
+            rows.iter()
+                .filter_map(|row| row.figures.get(column))
+                .map(|figure| body_width(figure))
+                .fold(heading_width(&headings[column]), f32::max)
+        })
+        .collect();
+    let total = name_width + widths.iter().map(|width| width + GAP).sum::<f32>() + 8.0;
+    egui::ScrollArea::horizontal().id_salt(("pit_design_table", id)).show(ui, |ui| {
+        let cell = |ui: &mut egui::Ui, width: f32, right: bool, text: egui::RichText| {
+            let layout = if right {
+                egui::Layout::right_to_left(egui::Align::Center)
+            } else {
+                egui::Layout::left_to_right(egui::Align::Center)
+            };
+            ui.allocate_ui_with_layout(egui::vec2(width, ROW), layout, |ui| {
+                // As wide as its column, whatever is in it.
+                ui.set_min_width(width);
+                ui.label(text)
+            })
+            .inner
+        };
+        // Headings, small and weak, over their columns.
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            cell(ui, name_width + 4.0, false, egui::RichText::new(name_heading.clone()).font(small.clone()).color(weak));
+            for (heading, width) in headings.iter().zip(&widths) {
+                cell(ui, *width, true, egui::RichText::new(heading.clone()).font(small.clone()).color(weak));
+            }
+        });
+        for (index, row) in rows.iter().enumerate() {
+            let top = ui.cursor().min.y;
+            if index % 2 == 1 {
+                let band = egui::Rect::from_min_size(egui::pos2(ui.cursor().min.x, top), egui::vec2(total, ROW));
+                ui.painter().rect_filled(band, 2.0, visuals.faint_bg_color);
+            }
+            let color = match row.style {
+                RowStyle::Plain => text,
+                RowStyle::Strong => strong,
+                RowStyle::Dim => weak,
+            };
+            let styled = |text: &str| {
+                let text = egui::RichText::new(text).color(color);
+                if row.style == RowStyle::Strong { text.strong() } else { text }
+            };
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = GAP;
+                let name = cell(ui, name_width + 4.0, false, styled(&row.name));
+                if let Some(hint) = &row.hint {
+                    name.hint(hint.clone());
+                }
+                for (figure, width) in row.figures.iter().zip(&widths) {
+                    cell(ui, *width, true, styled(figure));
+                }
+            });
+        }
+    });
 }
 
 /// What the design takes beyond the shell and leaves inside it, and the
 /// difference, where a difference means something: of the volume and the
 /// summed fields, not of an average.
 fn draw_against_shell(ui: &mut egui::Ui, shell: &ShellFigures, fields: &[ReserveField]) {
-    menu::menu_note(ui, tr!("pit-design-shell-against"));
+    menu::menu_section(ui, tr!("pit-design-shell-against"));
     if let Some(problem) = &shell.problem {
         ui.colored_label(ui.visuals().warn_fg_color, tr!("pit-design-shell-failed", reason = problem.clone()));
         return;
     }
     let numeric = numeric_fields(fields);
-    let value = |figures: &Figures, field: &ReserveField| figures.measured.as_ref().and_then(|measured| measured.value(field.id));
-    egui::ScrollArea::horizontal().id_salt("pit_design_against_shell").show(ui, |ui| {
-        egui::Grid::new("pit_design_against_shell_grid").striped(true).spacing([12.0, 2.0]).show(ui, |ui| {
-            column_heading(ui, String::new());
-            column_heading(ui, tr!("pit-design-evaluation-volume"));
-            for field in &numeric {
-                column_heading(ui, field.name.clone());
-            }
-            ui.end_row();
-            for (label, figures) in [(tr!("pit-design-shell-gained"), &shell.gained), (tr!("pit-design-shell-left"), &shell.left)] {
-                ui.label(label);
-                ui.label(quantity(Some(figures.volume)));
-                for field in &numeric {
-                    ui.label(quantity(value(figures, field)));
-                }
-                ui.end_row();
-            }
-            ui.label(tr!("pit-design-shell-net"));
-            ui.label(quantity(Some(shell.gained.volume - shell.left.volume)));
-            for field in &numeric {
-                let net = match field.aggregation {
-                    ReserveAggregation::Sum => value(&shell.gained, field).zip(value(&shell.left, field)).map(|(gained, left)| gained - left),
-                    _ => None,
-                };
-                ui.label(net.map_or_else(String::new, |net| quantity(Some(net))));
-            }
-            ui.end_row();
-        });
-    });
+    // Where there is no ground at all, a summed figure is none of it.
+    let value = |figures: &Figures, field: &ReserveField| {
+        figures
+            .measured
+            .as_ref()
+            .and_then(|measured| measured.value(field.id))
+            .or_else(|| (figures.volume == 0.0 && field.aggregation == ReserveAggregation::Sum).then_some(0.0))
+    };
+    let mut headings = vec![volume_heading()];
+    headings.extend(numeric.iter().map(|field| field.name.clone()));
+    let row = |label: String, figures: &Figures| {
+        let mut cells = vec![whole(figures.volume)];
+        cells.extend(numeric.iter().map(|field| field_figure(field, value(figures, field))));
+        FigureRow::new(label, cells)
+    };
+    let mut net = vec![whole(shell.gained.volume - shell.left.volume)];
+    net.extend(numeric.iter().map(|field| {
+        match field.aggregation {
+            ReserveAggregation::Sum => value(&shell.gained, field)
+                .zip(value(&shell.left, field))
+                .map_or_else(String::new, |(gained, left)| whole(gained - left)),
+            _ => String::new(),
+        }
+    }));
+    let rows = [
+        row(tr!("pit-design-shell-gained"), &shell.gained),
+        row(tr!("pit-design-shell-left"), &shell.left),
+        FigureRow::new(tr!("pit-design-shell-net"), net),
+    ];
+    figures_table(ui, "against_shell", String::new(), &headings, &rows);
 }
 
 /// Every pit design in the project measured, side by side: this one picked
@@ -1334,71 +1489,63 @@ fn draw_comparison(ui: &mut egui::Ui, facts: &DraftFacts, designed: bool) {
     if measured.len() < 2 || !designed {
         return;
     }
-    menu::menu_note(ui, tr!("pit-design-compare"));
+    menu::menu_section(ui, tr!("pit-design-compare"));
     let numeric = numeric_fields(&facts.fields);
     let shells = measured.iter().any(|design| design.shell.as_ref().is_some_and(|shell| shell.problem.is_none()));
-    let weak = ui.visuals().weak_text_color();
-    egui::ScrollArea::horizontal().id_salt("pit_design_compare").show(ui, |ui| {
-        egui::Grid::new("pit_design_compare_grid").striped(true).spacing([12.0, 2.0]).show(ui, |ui| {
-            column_heading(ui, tr!("pit-design-name"));
-            column_heading(ui, tr!("pit-design-evaluation-volume"));
-            for field in &numeric {
-                column_heading(ui, field.name.clone());
-            }
+    let mut headings = vec![volume_heading()];
+    headings.extend(numeric.iter().map(|field| field.name.clone()));
+    if shells {
+        headings.extend([tr!("pit-design-shell-gained"), tr!("pit-design-shell-left")]);
+    }
+    let rows: Vec<FigureRow> = measured
+        .iter()
+        .map(|design| {
+            let total = design.total.as_ref();
+            let mut cells = vec![total.map_or_else(|| "-".to_owned(), |total| whole(total.volume))];
+            cells.extend(
+                numeric
+                    .iter()
+                    .map(|field| field_figure(field, total.and_then(|total| total.measured.as_ref()).and_then(|measured| measured.value(field.id)))),
+            );
             if shells {
-                column_heading(ui, tr!("pit-design-shell-gained"));
-                column_heading(ui, tr!("pit-design-shell-left"));
+                let shell = design.shell.as_ref().filter(|shell| shell.problem.is_none());
+                cells.push(shell.map_or_else(String::new, |shell| whole(shell.gained.volume)));
+                cells.push(shell.map_or_else(String::new, |shell| whole(shell.left.volume)));
             }
-            ui.end_row();
-            for design in measured {
-                let this = facts.designs.first().is_some_and(|first| first.id == design.id);
-                let text = |text: String| {
-                    let text = egui::RichText::new(text);
-                    match (this, design.current) {
-                        (true, _) => text.strong(),
-                        (false, false) => text.color(weak),
-                        (false, true) => text,
-                    }
-                };
-                let name = ui.label(text(design.name.clone()));
-                if !design.current {
-                    name.hint(tr!("pit-design-compare-stale"));
-                }
-                let total = design.total.as_ref();
-                ui.label(text(quantity(total.map(|total| total.volume))));
-                for field in &numeric {
-                    ui.label(text(quantity(
-                        total.and_then(|total| total.measured.as_ref()).and_then(|measured| measured.value(field.id)),
-                    )));
-                }
-                if shells {
-                    let shell = design.shell.as_ref().filter(|shell| shell.problem.is_none());
-                    ui.label(text(shell.map_or_else(String::new, |shell| quantity(Some(shell.gained.volume)))));
-                    ui.label(text(shell.map_or_else(String::new, |shell| quantity(Some(shell.left.volume)))));
-                }
-                ui.end_row();
+            let this = facts.designs.first().is_some_and(|first| first.id == design.id);
+            FigureRow {
+                name: design.name.clone(),
+                figures: cells,
+                style: match (this, design.current) {
+                    (true, _) => RowStyle::Strong,
+                    (false, false) => RowStyle::Dim,
+                    (false, true) => RowStyle::Plain,
+                },
+                hint: (!design.current).then(|| tr!("pit-design-compare-stale")),
             }
-        });
-    });
+        })
+        .collect();
+    figures_table(ui, "compare", tr!("pit-design-name"), &headings, &rows);
 }
 
 /// A measure's figures: the whole design's, its materials' and its
 /// benches'.
 fn draw_figures(ui: &mut egui::Ui, evaluation: &Evaluation, fields: &[ReserveField]) {
-    let weak = ui.visuals().weak_text_color();
     let total = &evaluation.total;
-    read_only_row(ui, &tr!("pit-design-evaluation-volume"), &format!("{} m³", quantity(Some(total.volume))));
-    let numeric: Vec<&ReserveField> = fields.iter().filter(|field| field.aggregation != ReserveAggregation::Category).collect();
+    read_only_row(ui, &tr!("pit-design-evaluation-volume"), &format!("{} m³", whole(total.volume)));
+    let numeric = numeric_fields(fields);
     let Some(measured) = total.measured.as_ref() else {
         return;
     };
-    read_only_row(ui, &tr!("pit-design-evaluation-covered"), &format!("{} m³", quantity(Some(measured.covered))));
-    for field in &numeric {
-        read_only_row(ui, &field.name, &quantity(measured.value(field.id)));
+    // The block model short of the ground is worth saying only where it is.
+    if measured.covered < total.volume * 0.999 {
+        read_only_row(ui, &tr!("pit-design-evaluation-covered"), &format!("{} m³", whole(measured.covered)));
     }
-    let heading = |ui: &mut egui::Ui, text: String| {
-        ui.label(egui::RichText::new(text).color(weak).small());
-    };
+    for field in &numeric {
+        read_only_row(ui, &field.name, &field_figure(field, measured.value(field.id)));
+    }
+    let mut headings = vec![volume_heading()];
+    headings.extend(numeric.iter().map(|field| field.name.clone()));
     // By material: each category field's categories.
     for category in &measured.categories {
         let Some(field) = fields.iter().find(|field| field.id == category.field) else {
@@ -1407,53 +1554,39 @@ fn draw_figures(ui: &mut egui::Ui, evaluation: &Evaluation, fields: &[ReserveFie
         if category.groups.is_empty() {
             continue;
         }
-        menu::menu_note(ui, tr!("pit-design-evaluation-by", field = field.name.clone()));
-        egui::ScrollArea::horizontal().id_salt(("pit_design_materials", field.id.0)).show(ui, |ui| {
-            egui::Grid::new(("pit_design_materials_grid", field.id.0))
-                .striped(true)
-                .spacing([12.0, 2.0])
-                .show(ui, |ui| {
-                    heading(ui, field.name.clone());
-                    heading(ui, tr!("pit-design-evaluation-volume"));
-                    for field in &numeric {
-                        heading(ui, field.name.clone());
-                    }
-                    ui.end_row();
-                    for group in &category.groups {
-                        ui.label(&group.name);
-                        ui.label(quantity(Some(group.covered)));
-                        for field in &numeric {
-                            ui.label(quantity(group.value(field.id)));
-                        }
-                        ui.end_row();
-                    }
-                });
-        });
+        menu::menu_section(ui, tr!("pit-design-evaluation-by", field = field.name.clone()));
+        let rows: Vec<FigureRow> = category
+            .groups
+            .iter()
+            .map(|group| {
+                let mut cells = vec![whole(group.covered)];
+                cells.extend(numeric.iter().map(|numeric| field_figure(numeric, group.value(numeric.id))));
+                FigureRow::new(group.name.clone(), cells)
+            })
+            .collect();
+        figures_table(ui, ("materials", field.id.0), field.name.clone(), &headings, &rows);
     }
-    // Bench by bench.
+    // Bench by bench, top down, as a pit is mined.
     if evaluation.benches.is_empty() {
         return;
     }
-    menu::menu_note(ui, tr!("pit-design-evaluation-benches"));
-    egui::ScrollArea::horizontal().id_salt("pit_design_evaluation_benches").show(ui, |ui| {
-        egui::Grid::new("pit_design_evaluation_benches_grid").striped(true).spacing([12.0, 2.0]).show(ui, |ui| {
-            heading(ui, tr!("pit-design-table-rl"));
-            heading(ui, tr!("pit-design-evaluation-volume"));
-            for field in &numeric {
-                heading(ui, field.name.clone());
-            }
-            ui.end_row();
-            for bench in evaluation.benches.iter().rev() {
-                let Figures { volume, measured } = &bench.figures;
-                ui.label(format!("{:.1}–{:.1}", bench.base, bench.top));
-                ui.label(quantity(Some(*volume)));
-                for field in &numeric {
-                    ui.label(quantity(measured.as_ref().and_then(|measured| measured.value(field.id))));
-                }
-                ui.end_row();
-            }
-        });
-    });
+    menu::menu_section(ui, tr!("pit-design-evaluation-benches"));
+    let rows: Vec<FigureRow> = evaluation
+        .benches
+        .iter()
+        .rev()
+        .map(|bench| {
+            let Figures { volume, measured } = &bench.figures;
+            let mut cells = vec![whole(*volume)];
+            cells.extend(
+                numeric
+                    .iter()
+                    .map(|field| field_figure(field, measured.as_ref().and_then(|measured| measured.value(field.id)))),
+            );
+            FigureRow::new(format!("{:.1}–{:.1}", bench.base, bench.top), cells)
+        })
+        .collect();
+    figures_table(ui, "benches", tr!("pit-design-table-rl"), &headings, &rows);
 }
 
 /// What a check is called.
@@ -1530,7 +1663,7 @@ fn draw_checks(ui: &mut egui::Ui, design: &Design, settings: &PitDesignSettings,
             }
         }
     });
-    menu::menu_note(ui, tr!("pit-design-checks-help"));
+    ui.label(egui::RichText::new(tr!("pit-design-checks-help")).small().color(ui.visuals().weak_text_color()));
 }
 
 /// Each bench as built: its RL, its ramp's grade, flat and narrowest width,

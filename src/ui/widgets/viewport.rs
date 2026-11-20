@@ -142,6 +142,17 @@ impl ViewportDockPanel {
                 })
                 .inner
         });
+        // Placed by its pivot from the size it had last frame: when that
+        // changes (a section folding, a step with less in it), it is drawn
+        // again at once, or it would stand where its old size put it until
+        // something else asked for a frame.
+        let size_id = self.id.with("dock_panel_size");
+        let size = shown.response.rect.size();
+        let resized = ctx.data_mut(|data| data.get_temp::<egui::Vec2>(size_id).is_none_or(|last| (last - size).length() > 0.5));
+        if resized {
+            ctx.data_mut(|data| data.insert_temp(size_id, size));
+            ctx.request_repaint();
+        }
         if docked_left {
             let pass = ctx.cumulative_pass_nr();
             let right = shown.response.rect.right();

@@ -4993,7 +4993,6 @@ pit-design-face-angle = 坡面角
 pit-design-berm-width = 平台宽度
 pit-design-wall-radius = 边帮半径
 pit-design-wall-radius-help = 边帮允许的最小转弯半径。尖角会按此半径倒圆,使边帮不留下狭窄的岩石凸角或狭窄的坑角。
-pit-design-stop-section = 终止
 pit-design-stop = 终止
 pit-design-stop-help = 设计在何处结束: 达到一定台阶数后、在某一标高处 (最后一个台阶截短以到达该标高),或在整个台阶都高出地形处。
 pit-design-stop-benches = 达到台阶数后
@@ -5056,6 +5055,8 @@ pit-design-draw-close = 单击第一个点或按 Enter 闭合线条。
 pit-design-draw-close-minor = 右键单击也可完成
 pit-design-draw-help = 绘制设计起始的闭合线：采坑坑底的坡脚或坡顶，或排土场的坡脚或顶部。一旦闭合，便在当前图层上据此生成设计，其类型和方向在下一步设置。
 pit-design-round-corners = 圆角
+pit-design-draw-rl = 标高
+pit-design-draw-rl-help = 绘制线所在的标高：采坑的底或坡顶，或排土场的坡脚或顶部。与工具栏的 Z 相同。
 pit-design-round-corners-help = 像开采坡脚或坡顶那样，将线条的每个角倒成圆弧。圆弧是线条的一部分，其顶点仍然少而易于编辑。
 pit-design-corner-radius = 圆角半径
 pit-design-done-help = 完成此采坑并收起工具。Escape 也可以。
@@ -5148,11 +5149,13 @@ pit-design-problem-daylight-dump-up = 从坡脚向上堆筑的排土场没有可
 pit-design-continue = 继续
 pit-design-continue-help = 继续放置并设计运输坡道。
 pit-design-back = 返回
-pit-design-ramp-picking = 单击坡道离开线条的位置。标记显示坡道的起点。
 pit-design-ramp-none = 此采坑尚无坡道。
 pit-design-ramp-place = 放置坡道
 pit-design-ramp-place-help = 单击坡道离开线条的位置，然后设计坡道。
 pit-design-ramp-remove = 移除坡道
+pit-design-ramp-remove-short = 移除
+pit-design-send-to = 发送到
+pit-design-send-to-help = 将坡道发送到运输网络，或将采坑发送到规划。
 pit-design-ramp-remove-help = 设计不带坡道的采坑。其设置会保留，以便再次放置。
 pit-design-ramp-move = 移动
 pit-design-done = 完成
@@ -5164,13 +5167,10 @@ pit-design-exploded =
     { $count ->
        *[other] 已将采坑设计分解为 { $count } 条多段线。
     }
-pit-design-default-name = 采坑设计
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - 请选择采坑设计或闭合多段线，或新建用于绘制的图层
 pit-design-gone = 该采坑设计已不在项目中。
 pit-design-name = 名称
-pit-design-flats =
-    { $count ->
-       *[other] { $count } 个台阶在上坡前共有 { $length } m 平路，用于坡道保持坡度所需的空间。
-    }
 pit-design-flatter =
     { $count ->
        *[other] { $count } 个台阶的坡度比要求的缓：任何平路段都无法使其稳固。
@@ -5186,10 +5186,11 @@ pit-design-table-flatter-hint = 爬升比坡度要求多出 { $length } m，因�
 pit-design-table-narrow-hint = 在墙体转弯处衔接的位置，比要求的 { $width } m 窄。
 pit-design-checks = 检查
 pit-design-checks-pass = 全部检查通过：坡道的坡度、宽度和转弯，以及平台和台阶坡面均符合要求。
-pit-design-checks-count =
+pit-design-checks-pass-short = 全部检查通过。
+pit-design-checks-heading =
     { $count ->
-        [one] 有一处未达到设置。
-       *[other] 有 { $count } 处未达到设置。
+        [one] 有一处未达到设置
+       *[other] 有 { $count } 处未达到设置
     }
 pit-design-checks-what = 检查
 pit-design-checks-is = 结果
@@ -5243,7 +5244,6 @@ pit-design-send-no-ramp = 采坑设计没有可发送的坡道。
 pit-design-haul-road = { $design } 坡道
 pit-design-haul-road-numbered = { $design } 坡道 { $number }
 pit-design-report-send-haulage = 已将坡道发送到运输网络
-pit-design-send-section = 发送到
 pit-design-send-planning = 发送到规划
 pit-design-update-planning = 在规划中更新
 pit-design-send-planning-help = 按“创建三角网”的方式由采坑的线生成其表面，并据其地形生成规划实体，储量取自其块体模型，台阶按采坑划分。再次发送会原地重建表面并更新实体。

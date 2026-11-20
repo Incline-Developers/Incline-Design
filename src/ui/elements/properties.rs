@@ -772,16 +772,23 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
         }
     }
 
+    // A pit design is no area to fill: the row is for the rest.
+    let fillable = context
+        .polylines
+        .iter()
+        .any(|id| !matches!(document.get_object(*id), Some(crate::model::Object::PitDesign { .. })));
     let mut fill = first_fill;
-    MenuFieldCombo::new(
-        "design_fill",
-        tr!("common-fill"),
-        &mut fill,
-        fill_style_label(first_fill),
-        [FillStyle::Clear, FillStyle::Crosses, FillStyle::Slashes, FillStyle::Solid].map(|style| (style, fill_style_label(style).into())),
-    )
-    .width(FIELD_WIDTH)
-    .show(ui);
+    if fillable {
+        MenuFieldCombo::new(
+            "design_fill",
+            tr!("common-fill"),
+            &mut fill,
+            fill_style_label(first_fill),
+            [FillStyle::Clear, FillStyle::Crosses, FillStyle::Slashes, FillStyle::Solid].map(|style| (style, fill_style_label(style).into())),
+        )
+        .width(FIELD_WIDTH)
+        .show(ui);
+    }
     if fill != first_fill {
         commands.push(UiCommand::BatchSetObjectFill(context.polylines.clone(), fill));
         *geometry_dirty = true;

@@ -166,7 +166,10 @@ fn draw_body<R>(ui: &mut egui::Ui, title: &egui::WidgetText, width: f32, add_con
     ui.set_min_width(width);
     ui.set_max_width(width);
     apply_compact_style(ui);
-    paint_header(ui, title.text(), width);
+    // A menu opened from a button that names it needs no title of its own.
+    if !title.is_empty() {
+        paint_header(ui, title.text(), width);
+    }
     egui::Frame::NONE
         .inner_margin(egui::Margin::symmetric(CONTENT_HORIZONTAL_MARGIN, CONTENT_VERTICAL_MARGIN))
         .show(ui, add_contents)
@@ -440,6 +443,25 @@ pub(crate) fn dropdown_menu<R>(
     let config = MenuConfig::new();
     let title = title.into();
     on_top(egui::Popup::menu(response))
+        .close_behavior(config.close_behavior)
+        .style(config.style.clone())
+        .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
+        .width(width)
+        .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
+        .show(|ui| draw_body(ui, &title, width, add_contents))
+}
+
+/// [`dropdown_menu`] opening upward from its button, untitled: for a button
+/// at the foot of a panel, which names the menu itself and has no room under
+/// it.
+pub(crate) fn dropup_menu<R>(response: &egui::Response, width: f32, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
+    use egui::containers::menu::MenuConfig;
+
+    let config = MenuConfig::new();
+    let title = egui::WidgetText::default();
+    on_top(egui::Popup::menu(response))
+        .align(egui::RectAlign::TOP_START)
+        .align_alternatives(&[egui::RectAlign::BOTTOM_START])
         .close_behavior(config.close_behavior)
         .style(config.style.clone())
         .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))

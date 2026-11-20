@@ -149,37 +149,43 @@ impl App<'_> {
     }
 
     /// The version of the ground a design with `settings` daylights against,
-    /// if it daylights against one that is loaded.
+    /// if it daylights against one in the project: known whether or not it
+    /// is loaded, so a design against ground put away unchanged stays
+    /// current.
     pub(super) fn pit_ground_version(&self, settings: &PitDesignSettings) -> Option<GeometryVersion> {
         settings
             .ground()
             .and_then(|id| self.triangulations.iter().find(|surface| surface.id == id))
-            .filter(|surface| surface.state.loaded && surface.state.deferred.is_none())
             .map(|surface| surface.geometry)
+    }
+
+    /// Whether the ground a design with `settings` daylights against is
+    /// loaded, or it needs none: whether it can be worked out now.
+    fn pit_ground_loaded(&self, settings: &PitDesignSettings) -> bool {
+        settings.ground().is_none_or(|id| {
+            self.triangulations
+                .iter()
+                .any(|surface| surface.id == id && surface.state.loaded && surface.state.deferred.is_none())
+        })
     }
 
     /// Take up the Pit Design tool, from the menu or the context menu: on the
     /// pit design selected, or on a closed polyline selected, which becomes a
     /// pit design in its place; otherwise the tool waits for a click on one.
     pub(crate) fn open_pit_design(&mut self) {
-        let selected = self.selected_pit_or_string();
+        // Taking the tool up opens what is selected; with it up already,
+        // this does.
         if self.editor.active_tool != ActiveTool::PitDesign {
             self.set_active_tool_from_toolbar(ActiveTool::PitDesign);
+        } else {
+            self.open_selected_pit();
         }
-        // Editing a pit, or making one of a polyline already drawn, needs no
-        // layer to draw on: only drawing a new string does.
-        if self.editor.active_tool != ActiveTool::PitDesign
-            && selected.is_some()
-            && self.active_layer().is_none()
-            && !self.editor.text_editing_enabled
-            && !self.editor.slice_mode_enabled
-        {
-            self.editor.active_tool = ActiveTool::PitDesign;
-        }
-        if self.editor.active_tool != ActiveTool::PitDesign {
-            return;
-        }
-        if let Some(id) = selected {
+    }
+
+    /// Open the selected pit design, or closed polyline that could become
+    /// one, in the tool's panel: the tool is up.
+    pub(crate) fn open_selected_pit(&mut self) {
+        if let Some(id) = self.selected_pit_or_string() {
             self.open_pit_design_target(id);
         }
         self.invalidate_overlay();
@@ -272,6 +278,11 @@ impl App<'_> {
             return;
         }
         self.cancel_jobs(|key| matches!(key, JobKey::PitDesignPreview(_)));
+        // Open, it is drawn in the colours of its parts, which the
+        // selection's highlight would cover.
+        if self.editor.selected_handles.remove(&SceneEntityId::Object(id)) {
+            self.invalidate_geometry();
+        }
         self.editor.pit_design = Some(PitDesignDraft::on(id, pit));
         self.update_pit_design_preview();
         self.invalidate_overlay();
@@ -342,7 +353,15 @@ impl App<'_> {
                 .active_document()
                 .map(|document| document.objects().iter().filter_map(pit_parts).map(|(_, pit)| pit.name.clone()).collect())
                 .unwrap_or_default();
-            crate::model::project::unique_item_name(tr!("pit-design-default-name"), names.iter().map(String::as_str))
+            // Named for what it is, numbered past the others: Pit 1, Pit 2.
+            let kind = match settings.kind {
+                pit_design::Kind::Pit => tr!("pit-design-kind-pit"),
+                pit_design::Kind::Dump => tr!("pit-design-kind-dump"),
+            };
+            (1u32..)
+                .map(|number| tr!("pit-design-default-name", kind = kind.clone(), number = number.to_string()))
+                .find(|candidate| !names.contains(candidate))
+                .unwrap_or_default()
         });
         PitObject::new(name, settings)
     }
@@ -637,7 +656,7 @@ impl App<'_> {
                 let settings = pit.settings();
                 let ground = self.pit_ground_version(&settings);
                 // A design against ground that is not loaded waits for it.
-                if (settings.ground().is_some() && ground.is_none()) || pit.is_fresh(verts, ground) {
+                if !self.pit_ground_loaded(&settings) || pit.is_fresh(verts, ground) {
                     return None;
                 }
                 let key = inputs_key(verts, &settings) ^ ground.map_or(0, |ground| ground.0.as_u64_pair().0);

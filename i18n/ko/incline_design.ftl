@@ -5027,7 +5027,6 @@ pit-design-face-angle = 사면 각도
 pit-design-berm-width = 소단 폭
 pit-design-wall-radius = 벽면 반경
 pit-design-wall-radius-help = 벽면이 돌 수 있는 가장 작은 반경입니다. 날카로운 모서리는 이 반경으로 둥글게 처리되어 벽면에 좁은 암석 돌출부나 좁은 피트 모서리가 남지 않습니다.
-pit-design-stop-section = 종료
 pit-design-stop = 종료
 pit-design-stop-help = 설계가 끝나는 곳: 정해진 벤치 수 이후, 특정 표고 (마지막 벤치를 잘라 맞춤), 또는 벤치 전체가 지형 위로 드러나는 곳.
 pit-design-stop-benches = 벤치 수 이후
@@ -5090,6 +5089,8 @@ pit-design-draw-close = 첫 점을 클릭하거나 Enter를 눌러 선을 닫으
 pit-design-draw-close-minor = 오른쪽 클릭으로도 마칩니다
 pit-design-draw-help = 설계가 시작되는 닫힌 선을 그립니다. 피트 바닥의 법면 끝이나 어깨, 또는 덤프의 법면 끝이나 정상입니다. 선이 닫히면 활성 레이어에 그 선에서 설계가 만들어지고, 유형과 방향은 다음 단계에서 정합니다.
 pit-design-round-corners = 모서리 둥글게
+pit-design-draw-rl = RL
+pit-design-draw-rl-help = 선을 그리는 RL: 피트의 바닥이나 상단, 또는 적치장의 하단이나 정상. 도구 모음의 Z와 같습니다.
 pit-design-round-corners-help = 법면 끝이나 어깨를 채굴하듯 선의 각 모서리를 호로 둥글게 합니다. 호는 선의 일부이며 꼭짓점은 적고 편집하기 쉽게 유지됩니다.
 pit-design-corner-radius = 모서리 반경
 pit-design-done-help = 이 피트를 마치고 도구를 내려놓습니다. Escape도 같습니다.
@@ -5182,11 +5183,13 @@ pit-design-problem-daylight-dump-up = 법면 끝에서 위로 쌓는 덤프에�
 pit-design-continue = 계속
 pit-design-continue-help = 운반 램프 배치와 설계로 넘어갑니다.
 pit-design-back = 뒤로
-pit-design-ramp-picking = 램프가 선을 떠나는 곳을 클릭하세요. 표시가 시작 위치를 보여 줍니다.
 pit-design-ramp-none = 이 피트에는 아직 램프가 없습니다.
 pit-design-ramp-place = 램프 배치
 pit-design-ramp-place-help = 램프가 선을 떠나는 곳을 클릭한 다음 램프를 설계하세요.
 pit-design-ramp-remove = 램프 제거
+pit-design-ramp-remove-short = 제거
+pit-design-send-to = 보내기
+pit-design-send-to-help = 램프를 운반 네트워크로, 또는 피트를 계획으로 보냅니다.
 pit-design-ramp-remove-help = 램프 없이 피트를 설계합니다. 다시 배치할 수 있도록 설정은 유지됩니다.
 pit-design-ramp-move = 이동
 pit-design-done = 완료
@@ -5198,13 +5201,10 @@ pit-design-exploded =
     { $count ->
        *[other] 피트 설계를 폴리라인 { $count }개로 분해했습니다.
     }
-pit-design-default-name = 피트 설계
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - 피트 설계나 닫힌 폴리라인을 선택하거나 그릴 레이어를 만드세요
 pit-design-gone = 그 피트 설계는 더 이상 프로젝트에 없습니다.
 pit-design-name = 이름
-pit-design-flats =
-    { $count ->
-       *[other] 벤치 { $count }개에서 램프가 경사를 유지할 공간이 필요한 곳에, 오르기 전 평탄 구간이 모두 { $length } m 있습니다.
-    }
 pit-design-flatter =
     { $count ->
        *[other] 벤치 { $count }개가 지정 경사보다 완만하게 오릅니다. 어떤 평탄 구간으로도 안정되게 할 수 없었습니다.
@@ -5220,10 +5220,11 @@ pit-design-table-flatter-hint = 경사가 요구하는 것보다 { $length } m �
 pit-design-table-narrow-hint = 벽의 굽은 곳에서 이어지는 부분이 지정한 { $width } m보다 좁습니다.
 pit-design-checks = 검사
 pit-design-checks-pass = 모든 검사 통과: 램프의 경사, 폭, 회전과 소단 및 사면이 요청대로입니다.
-pit-design-checks-count =
+pit-design-checks-pass-short = 모든 검사를 통과했습니다.
+pit-design-checks-heading =
     { $count ->
-        [one] 한 곳이 설정에 미치지 못합니다.
-       *[other] { $count }곳이 설정에 미치지 못합니다.
+        [one] 한 곳이 설정에 미치지 못함
+       *[other] { $count }곳이 설정에 미치지 못함
     }
 pit-design-checks-what = 검사
 pit-design-checks-is = 결과
@@ -5277,7 +5278,6 @@ pit-design-send-no-ramp = 피트 설계에 보낼 램프가 없습니다.
 pit-design-haul-road = { $design } 램프
 pit-design-haul-road-numbered = { $design } 램프 { $number }
 pit-design-report-send-haulage = 램프를 운반 네트워크로 보냈습니다
-pit-design-send-section = 보내기
 pit-design-send-planning = 계획으로 보내기
 pit-design-update-planning = 계획에서 업데이트
 pit-design-send-planning-help = 삼각망 만들기와 같은 방식으로 피트의 선에서 면을 만들고, 그 지형에 대한 계획 솔리드를 블록 모델의 매장량과 피트의 벤치로 만듭니다. 다시 보내면 면을 제자리에서 다시 만들고 솔리드를 업데이트합니다.

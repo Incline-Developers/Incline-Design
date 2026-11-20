@@ -768,10 +768,23 @@ pub(crate) fn menu_section(ui: &mut egui::Ui, heading: impl Into<String>) {
 /// click hides or shows what follows, remembered between sessions. Returns
 /// whether the section is open, so the caller draws its body only then.
 pub(crate) fn menu_section_folding(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, heading: impl Into<String>) -> bool {
+    menu_section_folding_as(ui, id, heading, false, None)
+}
+
+/// [`menu_section_folding`], open until it is first folded where `open_at_first`
+/// says, and its heading in `color` where one is given: a section that holds
+/// something wanting attention, say, opens itself and says so.
+pub(crate) fn menu_section_folding_as(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    heading: impl Into<String>,
+    open_at_first: bool,
+    color: Option<egui::Color32>,
+) -> bool {
     const ARROW: f32 = 8.0;
     const ARROW_GAP: f32 = 5.0;
     let id = egui::Id::unique(id);
-    let mut open = ui.data_mut(|data| data.get_persisted::<bool>(id)).unwrap_or(false);
+    let mut open = ui.data_mut(|data| data.get_persisted::<bool>(id)).unwrap_or(open_at_first);
     ui.add_space(4.0);
     let galley = ui.painter().layout_no_wrap(heading.into(), egui::FontId::proportional(11.0), egui::Color32::PLACEHOLDER);
     record_intrinsic_content_width(ui, ARROW + ARROW_GAP + galley.size().x);
@@ -782,10 +795,10 @@ pub(crate) fn menu_section_folding(ui: &mut egui::Ui, id: impl std::hash::Hash +
         open = !open;
         ui.data_mut(|data| data.insert_persisted(id, open));
     }
-    let color = if response.hovered() {
-        ui.visuals().strong_text_color()
-    } else {
-        ui.visuals().weak_text_color()
+    let color = match (response.hovered(), color) {
+        (true, _) => ui.visuals().strong_text_color(),
+        (false, Some(color)) => color,
+        (false, None) => ui.visuals().weak_text_color(),
     };
     let center = egui::pos2(rect.left() + ARROW / 2.0, rect.center().y);
     let half = ARROW / 2.0;
@@ -812,6 +825,44 @@ pub(crate) fn menu_section_folding(ui: &mut egui::Ui, id: impl std::hash::Hash +
     );
     ui.add_space(2.0);
     open
+}
+
+/// A [`menu_section`] heading ending in a small action at its right, such as
+/// Remove: whether the action was clicked.
+pub(crate) fn menu_section_with_action(ui: &mut egui::Ui, heading: impl Into<String>, action: impl Into<String>, hint: impl Into<egui::WidgetText>) -> bool {
+    use crate::ui::widgets::hint::Hint;
+    ui.add_space(4.0);
+    let weak = ui.visuals().weak_text_color();
+    let font = egui::FontId::proportional(11.0);
+    let heading = ui.painter().layout_no_wrap(heading.into(), font.clone(), weak);
+    let action = ui.painter().layout_no_wrap(action.into(), font, egui::Color32::PLACEHOLDER);
+    record_intrinsic_content_width(ui, heading.size().x + action.size().x + 40.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 18.0), egui::Sense::hover());
+    let action_rect = egui::Rect::from_min_max(egui::pos2(rect.right() - action.size().x - 16.0, rect.top()), rect.right_bottom());
+    let response = ui
+        .interact(action_rect, ui.scope_id().with(("section_action", heading.text())), egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .hint(hint);
+    let visuals = ui.visuals();
+    let widget = if response.is_pointer_button_down_on() {
+        &visuals.widgets.active
+    } else if response.hovered() {
+        &visuals.widgets.hovered
+    } else {
+        &visuals.widgets.inactive
+    };
+    ui.painter()
+        .rect(action_rect, CONTROL_CORNER_RADIUS, widget.bg_fill, widget.bg_stroke, egui::StrokeKind::Inside);
+    let action_color = widget.fg_stroke.color;
+    let heading_end = rect.left() + heading.size().x;
+    ui.painter().line_segment(
+        [egui::pos2(heading_end + 8.0, rect.center().y), egui::pos2(action_rect.left() - 6.0, rect.center().y)],
+        egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color),
+    );
+    ui.painter().galley(egui::pos2(rect.left(), rect.center().y - heading.size().y / 2.0), heading, weak);
+    ui.painter().galley(action_rect.center() - action.size() / 2.0, action, action_color);
+    ui.add_space(2.0);
+    response.clicked()
 }
 
 /// A [`menu_section`] heading at body size, for the Planning pages and their

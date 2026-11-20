@@ -4993,7 +4993,6 @@ pit-design-face-angle = Sudut muka
 pit-design-berm-width = Lebar berm
 pit-design-wall-radius = Jari-jari dinding
 pit-design-wall-radius-help = Belokan paling tajam yang boleh dibuat dinding. Sudut tajam dibulatkan ke jari-jari ini, sehingga dinding tidak meninggalkan tonjolan batuan sempit atau sudut pit yang sempit.
-pit-design-stop-section = Berhenti
 pit-design-stop = Berhenti
 pit-design-stop-help = Tempat desain berakhir: setelah sejumlah jenjang, pada suatu RL (jenjang terakhir dipendekkan agar mencapainya), atau di mana satu jenjang utuh berada di atas topografi.
 pit-design-stop-benches = Setelah sejumlah jenjang
@@ -5056,6 +5055,8 @@ pit-design-draw-close = Klik titik pertama, atau tekan Enter, untuk menutup gari
 pit-design-draw-close-minor = Klik kanan juga menyelesaikan
 pit-design-draw-help = Gambar garis tertutup tempat desain dimulai: kaki dasar atau puncak pit, atau kaki atau puncak timbunan. Begitu tertutup, desain dibuat darinya di lapisan aktif, dan jenis serta arahnya diatur pada langkah berikutnya.
 pit-design-round-corners = Bulatkan sudut
+pit-design-draw-rl = RL
+pit-design-draw-rl-help = RL tempat garis digambar: lantai atau puncak pit, atau kaki atau puncak timbunan. Sama dengan Z di bilah alat.
 pit-design-round-corners-help = Membulatkan setiap sudut garis menjadi busur, seperti kaki atau puncak ditambang. Busur adalah bagian garis, dan simpulnya tetap sedikit dan dapat disunting.
 pit-design-corner-radius = Jari-jari sudut
 pit-design-done-help = Selesaikan pit ini dan letakkan alatnya. Escape melakukan hal yang sama.
@@ -5148,11 +5149,13 @@ pit-design-problem-daylight-dump-up = Timbunan yang dibangun naik dari kakinya t
 pit-design-continue = Lanjut
 pit-design-continue-help = Lanjut ke penempatan ramp angkut dan perancangannya.
 pit-design-back = Kembali
-pit-design-ramp-picking = Klik garis di tempat ramp meninggalkannya. Penanda menunjukkan tempat ramp dimulai.
 pit-design-ramp-none = Pit ini belum memiliki ramp.
 pit-design-ramp-place = Tempatkan ramp
 pit-design-ramp-place-help = Klik garis di tempat ramp meninggalkannya, lalu rancang ramp.
 pit-design-ramp-remove = Hapus ramp
+pit-design-ramp-remove-short = Hapus
+pit-design-send-to = Kirim ke
+pit-design-send-to-help = Kirim ramp ke jaringan angkut, atau pit ke Perencanaan.
 pit-design-ramp-remove-help = Rancang pit tanpa ramp. Pengaturannya disimpan untuk menempatkannya lagi.
 pit-design-ramp-move = Pindah
 pit-design-done = Selesai
@@ -5164,13 +5167,10 @@ pit-design-exploded =
     { $count ->
        *[other] Desain pit dipecah menjadi { $count } polilinia.
     }
-pit-design-default-name = Desain pit
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - pilih desain pit atau polilinier tertutup, atau buat lapisan untuk menggambar
 pit-design-gone = Desain pit itu tidak lagi ada di proyek.
 pit-design-name = Nama
-pit-design-flats =
-    { $count ->
-       *[other] { $count } jenjang berjalan datar sejauh { $length } m seluruhnya sebelum menanjak, tempat ramp membutuhkan ruang untuk mempertahankan kemiringannya.
-    }
 pit-design-flatter =
     { $count ->
        *[other] { $count } jenjang menanjak lebih landai dari kemiringannya: tidak ada bagian datar yang akan membuatnya stabil.
@@ -5186,10 +5186,11 @@ pit-design-table-flatter-hint = Menanjak sepanjang { $length } m lebih dari yang
 pit-design-table-narrow-hint = Lebih sempit dari { $width } m yang diminta, tempat ia bersambung di tikungan dinding.
 pit-design-checks = Pemeriksaan
 pit-design-checks-pass = Semua pemeriksaan lolos: kemiringan, lebar, dan tikungan ramp, serta berm dan lereng, sesuai yang diminta.
-pit-design-checks-count =
+pit-design-checks-pass-short = Semua pemeriksaan lolos.
+pit-design-checks-heading =
     { $count ->
-        [one] Satu tempat tidak memenuhi pengaturan.
-       *[other] { $count } tempat tidak memenuhi pengaturan.
+        [one] Satu tempat tidak memenuhi
+       *[other] { $count } tempat tidak memenuhi
     }
 pit-design-checks-what = Pemeriksaan
 pit-design-checks-is = Hasil
@@ -5243,7 +5244,6 @@ pit-design-send-no-ramp = Desain pit tidak memiliki ramp untuk dikirim.
 pit-design-haul-road = Ramp { $design }
 pit-design-haul-road-numbered = Ramp { $number } { $design }
 pit-design-report-send-haulage = Ramp dikirim ke jaringan angkut
-pit-design-send-section = Teruskan
 pit-design-send-planning = Kirim ke Perencanaan
 pit-design-update-planning = Perbarui di Perencanaan
 pit-design-send-planning-help = Membuat permukaan pit dari garis-garisnya, seperti Buat Triangulasi, dan solid Perencanaan darinya terhadap topografinya, dengan cadangan dari model bloknya dan dijenjangkan seperti pit itu. Mengirim lagi membangun ulang permukaan di tempat dan memperbarui solidnya.

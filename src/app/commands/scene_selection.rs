@@ -162,6 +162,9 @@ impl App<'_> {
                         if matches!(object, Object::Polyline { .. }) {
                             counts.polylines += 1;
                         }
+                        if matches!(object, Object::PitDesign { .. }) || (matches!(object, Object::Polyline { .. }) && object.encloses_area()) {
+                            counts.pit_designable += 1;
+                        }
                         if is_triangulation_polyline(object) {
                             counts.triangulation_sources += 1;
                         }

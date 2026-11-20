@@ -5034,7 +5034,6 @@ pit-design-face-angle = Böschungswinkel
 pit-design-berm-width = Bermenbreite
 pit-design-wall-radius = Wandradius
 pit-design-wall-radius-help = Die engste Krümmung, die die Wände machen dürfen. Scharfe Ecken werden darauf gerundet, sodass die Wände keine schmalen Felsnasen und keine engen Grubenecken hinterlassen.
-pit-design-stop-section = Ende
 pit-design-stop = Ende
 pit-design-stop-help = Wo der Entwurf endet: nach einer Anzahl von Strossen, auf einer Höhe (die letzte Strosse wird darauf gekürzt) oder dort, wo eine ganze Strosse frei über der Topografie steht.
 pit-design-stop-benches = Nach einer Anzahl von Strossen
@@ -5097,6 +5096,8 @@ pit-design-draw-close = Klicken Sie auf den ersten Punkt oder drücken Sie Enter
 pit-design-draw-close-minor = Rechtsklick schließt ebenfalls ab
 pit-design-draw-help = Zeichnen Sie die geschlossene Linie, von der der Entwurf ausgeht: Sohle oder Böschungskante einer Grube, Fuß oder Krone einer Halde. Sobald sie geschlossen ist, wird der Entwurf daraus auf der aktiven Ebene erstellt, Art und Richtung werden im nächsten Schritt festgelegt.
 pit-design-round-corners = Ecken abrunden
+pit-design-draw-rl = Höhe
+pit-design-draw-rl-help = Die Höhe, auf der die Linie gezeichnet wird: Sohle oder Oberkante einer Grube, Fuß oder Kopf einer Halde. Dieselbe wie Z in der Werkzeugleiste.
 pit-design-round-corners-help = Rundet jede Ecke der Linie zu einem Bogen ab, wie ein Böschungsfuß oder eine Böschungskante abgebaut wird. Die Bögen gehören zur Linie, und ihre Stützpunkte bleiben wenige und bearbeitbar.
 pit-design-corner-radius = Eckenradius
 pit-design-done-help = Diese Grube abschließen und das Werkzeug ablegen. Escape tut dasselbe.
@@ -5189,11 +5190,13 @@ pit-design-problem-daylight-dump-up = Eine vom Fuß nach oben gebaute Halde hat 
 pit-design-continue = Weiter
 pit-design-continue-help = Weiter zum Platzieren und Entwerfen der Förderrampe.
 pit-design-back = Zurück
-pit-design-ramp-picking = Klicken Sie auf die Linie, wo die Rampe sie verlässt. Die Markierung zeigt, wo sie beginnt.
 pit-design-ramp-none = Diese Grube hat noch keine Rampe.
 pit-design-ramp-place = Rampe platzieren
 pit-design-ramp-place-help = Klicken Sie auf die Linie, wo die Rampe sie verlässt, und entwerfen Sie dann die Rampe.
 pit-design-ramp-remove = Rampe entfernen
+pit-design-ramp-remove-short = Entfernen
+pit-design-send-to = Senden an
+pit-design-send-to-help = Die Rampen ins Transportnetz oder die Grube an die Planung senden.
 pit-design-ramp-remove-help = Die Grube ohne Rampe entwerfen. Ihre Einstellungen bleiben erhalten, um sie erneut zu platzieren.
 pit-design-ramp-move = Verschieben
 pit-design-done = Fertig
@@ -5206,14 +5209,10 @@ pit-design-exploded =
         [one] Grubenentwurf in eine Polylinie aufgelöst.
        *[other] Grubenentwurf in { $count } Polylinien aufgelöst.
     }
-pit-design-default-name = Grubenentwurf
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - einen Grubenentwurf oder eine geschlossene Polylinie wählen oder eine Ebene zum Zeichnen anlegen
 pit-design-gone = Dieser Grubenentwurf ist nicht mehr im Projekt.
 pit-design-name = Name
-pit-design-flats =
-    { $count ->
-        [one] Eine Strosse verläuft { $length } m eben, bevor sie ansteigt, wo die Rampe den Platz braucht, um ihre Steigung zu halten.
-       *[other] { $count } Strossen verlaufen insgesamt { $length } m eben, bevor sie ansteigen, wo die Rampe den Platz braucht, um ihre Steigung zu halten.
-    }
 pit-design-flatter =
     { $count ->
         [one] Eine Strosse steigt flacher als die Steigung: kein ebenes Stück würde sie standsicher lassen.
@@ -5230,10 +5229,11 @@ pit-design-table-flatter-hint = Steigt auf { $length } m mehr, als die Steigung 
 pit-design-table-narrow-hint = Schmaler als die verlangten { $width } m, wo sie an einer Biegung der Wand übergibt.
 pit-design-checks = Prüfungen
 pit-design-checks-pass = Alle Prüfungen bestanden: Steigung, Breite und Kurven der Rampe sowie Bermen und Böschungen entsprechen den Vorgaben.
-pit-design-checks-count =
+pit-design-checks-pass-short = Alle Prüfungen bestanden.
+pit-design-checks-heading =
     { $count ->
-        [one] Eine Stelle erfüllt die Einstellungen nicht.
-       *[other] { $count } Stellen erfüllen die Einstellungen nicht.
+        [one] Eine Stelle erfüllt die Vorgaben nicht
+       *[other] { $count } Stellen erfüllen die Vorgaben nicht
     }
 pit-design-checks-what = Prüfung
 pit-design-checks-is = Ergibt
@@ -5287,7 +5287,6 @@ pit-design-send-no-ramp = Der Grubenentwurf hat keine Rampe zum Senden.
 pit-design-haul-road = { $design } Rampe
 pit-design-haul-road-numbered = { $design } Rampe { $number }
 pit-design-report-send-haulage = Rampen ins Transportnetz gesendet
-pit-design-send-section = Weitergeben
 pit-design-send-planning = An Planung senden
 pit-design-update-planning = In Planung aktualisieren
 pit-design-send-planning-help = Erstellt die Oberfläche der Grube aus ihren Linien, wie Triangulation erstellen es täte, und einen Planungskörper daraus gegen ihre Topografie, mit Vorräten aus ihrem Blockmodell und so abgestuft wie sie. Erneutes Senden baut die Oberfläche an Ort und Stelle neu und bringt den Körper auf den neuesten Stand.
