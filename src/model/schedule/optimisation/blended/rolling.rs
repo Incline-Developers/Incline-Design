@@ -525,6 +525,11 @@ impl Stitched {
                 self.solution.durations.insert((interval + window.first, segment), duration);
             }
         }
+        // Where the window's intervals were solved in parts, so the replay
+        // walks their piles part by part as the dispatch did.
+        for &(interval, segment) in solution.parts.iter().filter(|(interval, _)| *interval < window.committed) {
+            self.solution.parts.insert((interval + window.first, segment));
+        }
         for row in solution.chunks.iter().filter(|row| row.interval < window.committed) {
             self.solution.chunks.push(ChunkRow {
                 interval: row.interval + window.first,
