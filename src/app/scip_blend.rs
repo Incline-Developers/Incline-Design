@@ -276,7 +276,9 @@ pub(crate) fn improve(
         let left = budget.saturating_sub(started.elapsed());
         let closed = searched_bound
             .zip(options.relative_gap)
-            .is_some_and(|(bound, target)| gap_closed(replay.replayed_objective, bound, target));
+            // The bound is on what the search ranks by, the incentive with
+            // the money.
+            .is_some_and(|(bound, target)| gap_closed(replay.ranked_objective(), bound, target));
         if left >= CONTINUE_MINIMUM && !closed && !activity.finishing() && !cancel.is_cancelled() {
             let timeline = solution.drill_blast.clone();
             (solution, replay) = anytime::continue_from(&out.input, (solution, replay), left, &activity.finish, |progress| {

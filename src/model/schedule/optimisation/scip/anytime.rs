@@ -373,8 +373,9 @@ pub(crate) struct Progress {
 }
 
 impl Progress {
+    /// [`super::super::progress::relative_gap`], as every gap is read.
     pub(crate) fn gap(&self) -> Option<f64> {
-        self.bound.filter(|bound| *bound > 0.0).map(|bound| (bound - self.value).max(0.0) / bound)
+        super::super::progress::relative_gap(self.value, self.bound?)
     }
 }
 
