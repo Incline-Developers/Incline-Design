@@ -5276,3 +5276,17 @@ pit-design-layer-crest = Şev üstü
 pit-design-layer-toe = Şev topuğu
 pit-design-layer-ramp = Rampa
 pit-design-layer-daylight = Yüzey kesişimi
+pit-design-send-haulage = Rampaları taşıma ağına gönder
+pit-design-update-haulage = Taşıma yollarını güncelle
+pit-design-send-haulage-help = Her rampa, ekseni boyunca bir taşıma yolu olur ve yaklaştığı ağ yollarına ve düğümlerine bağlanır. Yeniden göndermek daha önce gönderilen yolların yerini alır.
+pit-design-send-missing = Ocak tasarımı artık yok.
+pit-design-send-not-designed = Ocak tasarımı hâlâ hesaplanıyor: hazır olunca gönderin.
+pit-design-send-no-ramp = Ocak tasarımının gönderilecek rampası yok.
+pit-design-haul-road = { $design } rampası
+pit-design-haul-road-numbered = { $design } rampası { $number }
+pit-design-report-send-haulage = Rampalar taşıma ağına gönderildi
+pit-design-sent-roads =
+    { $count ->
+        [one] { $design } rampası taşıma ağına bir yol olarak gönderildi.
+       *[other] { $design } rampaları taşıma ağına { $count } yol olarak gönderildi.
+    }

@@ -5235,3 +5235,17 @@ pit-design-layer-crest = Cresta
 pit-design-layer-toe = Pie
 pit-design-layer-ramp = Rampa
 pit-design-layer-daylight = Afloramiento
+pit-design-send-haulage = Enviar rampas a la red de transporte
+pit-design-update-haulage = Actualizar caminos
+pit-design-send-haulage-help = Cada rampa se convierte en un camino de acarreo a lo largo de su eje, unido a los caminos y nodos de la red a los que se acerca. Enviarla de nuevo reemplaza los caminos enviados antes.
+pit-design-send-missing = El diseño de tajo ya no existe.
+pit-design-send-not-designed = El diseño de tajo aún se está calculando: envíelo cuando esté listo.
+pit-design-send-no-ramp = El diseño de tajo no tiene rampa que enviar.
+pit-design-haul-road = Rampa de { $design }
+pit-design-haul-road-numbered = Rampa { $number } de { $design }
+pit-design-report-send-haulage = Rampas enviadas a la red de transporte
+pit-design-sent-roads =
+    { $count ->
+        [one] Se envió la rampa de { $design } a la red de transporte como un camino.
+       *[other] Se enviaron las rampas de { $design } a la red de transporte como { $count } caminos.
+    }

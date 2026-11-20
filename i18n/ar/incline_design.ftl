@@ -5291,3 +5291,17 @@ pit-design-layer-crest = الحافة العليا
 pit-design-layer-toe = القدم
 pit-design-layer-ramp = المنحدر
 pit-design-layer-daylight = خط الظهور
+pit-design-send-haulage = إرسال المنحدرات إلى شبكة النقل
+pit-design-update-haulage = تحديث طرق النقل
+pit-design-send-haulage-help = يصبح كل منحدر طريق نقل على امتداد محوره، متصلًا بطرق الشبكة وعقدها التي يقترب منها. الإرسال مجددًا يستبدل الطرق المرسلة من قبل.
+pit-design-send-missing = لم يعد تصميم الحفرة موجودًا.
+pit-design-send-not-designed = ما زال تصميم الحفرة قيد الحساب: أرسله حين يكتمل.
+pit-design-send-no-ramp = لا يحوي تصميم الحفرة منحدرًا لإرساله.
+pit-design-haul-road = منحدر { $design }
+pit-design-haul-road-numbered = منحدر { $number } من { $design }
+pit-design-report-send-haulage = أُرسلت المنحدرات إلى شبكة النقل
+pit-design-sent-roads =
+    { $count ->
+        [one] أُرسل منحدر { $design } إلى شبكة النقل كطريق واحد.
+       *[other] أُرسلت منحدرات { $design } إلى شبكة النقل كـ { $count } طرق.
+    }

@@ -5624,3 +5624,17 @@ pit-design-layer-crest = Бровка
 pit-design-layer-toe = Подошва
 pit-design-layer-ramp = Съезд
 pit-design-layer-daylight = Линия выхода
+pit-design-send-haulage = Отправить съезды в сеть дорог
+pit-design-update-haulage = Обновить дороги
+pit-design-send-haulage-help = Каждый съезд становится дорогой по своей оси, присоединённой к дорогам и узлам сети, к которым он подходит. Повторная отправка заменяет отправленные ранее дороги.
+pit-design-send-missing = Проект карьера больше не существует.
+pit-design-send-not-designed = Проект карьера ещё рассчитывается: отправьте его, когда он будет готов.
+pit-design-send-no-ramp = У проекта карьера нет съезда для отправки.
+pit-design-haul-road = Съезд { $design }
+pit-design-haul-road-numbered = Съезд { $number } { $design }
+pit-design-report-send-haulage = Съезды отправлены в сеть дорог
+pit-design-sent-roads =
+    { $count ->
+        [one] Съезд { $design } отправлен в сеть дорог как одна дорога.
+       *[other] Съезды { $design } отправлены в сеть дорог, дорог: { $count }.
+    }

@@ -67,6 +67,21 @@ pub(super) fn definitions() -> Vec<Value> {
             "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false },
         }),
         json!({
+            "name": "send_pit_design",
+            "title": "Send a pit design on",
+            "description": "Send a pit design on to the rest of the project, as the Pit Design tool's Send buttons do. to haul_network: each ramp becomes a haul road along its centreline, joined to the network's nodes and roads it comes within the join tolerance of. Sending again replaces what it sent before. Its design must be current (get_pit_designs says fresh). Returns what it made.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "design": { "type": "integer", "minimum": 0 },
+                    "to": { "type": "string", "enum": ["haul_network"] },
+                },
+                "required": ["design", "to"],
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true },
+        }),
+        json!({
             "name": "design_pit",
             "title": "Design a pit in one call",
             "description": "Make a pit or dump design from a closed polyline, in its place, in one call: set_pit_design with string and these settings. A pit up from a floor's toe (each bench a face at face_angle rising bench_height, then a berm berm_width wide) or down from a crest. Exactly one of benches, stop_rl or daylight says where it stops. The ramp climbs at gradient along the steeper edge of the road, starting where the string passes nearest start, as a spiral round the walls or, with switchback_every, turning back on a level pad. Every ring is kept sound: where the next bench has no room, the design stops at the last good one and says why. With preview it only says what the design comes to, and makes nothing. Returns the design's id, which the other pit design tools take.",
@@ -448,6 +463,7 @@ impl App<'_> {
             "get_pit_designs" => self.mcp_get_pit_designs(arguments),
             "set_pit_design" => self.mcp_set_pit_design(arguments),
             "explode_pit_design" => self.mcp_explode_pit_design(arguments),
+            "send_pit_design" => self.mcp_send_pit_design(arguments),
             "design_pit" => self.mcp_design_pit(arguments),
             _ => return None,
         };
@@ -661,6 +677,18 @@ impl App<'_> {
         let (id, _) = self.mcp_pit_design(arguments)?;
         let ids = self.explode_pit_design(id).map_err(|error| format!("{error:#}"))?;
         Ok(json!({ "polylines": ids.iter().map(|id| id.0).collect::<Vec<_>>() }))
+    }
+
+    fn mcp_send_pit_design(&mut self, arguments: &Value) -> Result<Value, String> {
+        let (id, _) = self.mcp_pit_design(arguments)?;
+        match arguments["to"].as_str() {
+            Some("haul_network") => {
+                self.send_pit_ramps_to_haulage(id).map_err(|error| format!("{error:#}"))?;
+                let (_, pit) = self.operand_object(id).and_then(pit_parts).ok_or("The design is gone.")?;
+                Ok(json!({ "roads": pit.sent.roads.iter().map(|road| road.0).collect::<Vec<_>>() }))
+            }
+            _ => Err("to is haul_network.".to_owned()),
+        }
     }
 
     fn mcp_design_pit(&mut self, arguments: &Value) -> Result<Value, String> {

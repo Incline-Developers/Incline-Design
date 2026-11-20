@@ -14,6 +14,7 @@ pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod optimization; // Handles pit optimization's scenario list, editor and scenarios file.
 pub(crate) mod pit_design; // Designs a pit's benches and ramp from a closed string.
 pub(crate) mod pit_evaluation; // Measures what each pit design takes out of the ground.
+pub(crate) mod pit_send; // Sends a pit design's ramps to the haul network and the pit to Planning.
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
@@ -1421,6 +1422,10 @@ impl<'a> App<'a> {
             UiCommand::PitDesignHover(hover) => {
                 self.set_pit_design_hover(hover);
                 Ok(())
+            }
+            UiCommand::SendPitRampsToHaulage(id) => {
+                self.flush_pit_design_draft();
+                self.send_pit_ramps_to_haulage(id).map(|_| ())
             }
             UiCommand::FramePitFlag(index) => {
                 self.frame_pit_flag(index);

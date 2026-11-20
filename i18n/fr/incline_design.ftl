@@ -5238,3 +5238,17 @@ pit-design-layer-crest = Crête
 pit-design-layer-toe = Pied
 pit-design-layer-ramp = Rampe
 pit-design-layer-daylight = Ligne de jour
+pit-design-send-haulage = Envoyer les rampes au réseau de roulage
+pit-design-update-haulage = Mettre à jour les pistes
+pit-design-send-haulage-help = Chaque rampe devient une piste de roulage le long de son axe, raccordée aux pistes et nœuds du réseau qu'elle approche. Un nouvel envoi remplace les pistes envoyées auparavant.
+pit-design-send-missing = La conception de fosse n'existe plus.
+pit-design-send-not-designed = La conception de fosse est encore en calcul : envoyez-la une fois prête.
+pit-design-send-no-ramp = La conception de fosse n'a pas de rampe à envoyer.
+pit-design-haul-road = Rampe de { $design }
+pit-design-haul-road-numbered = Rampe { $number } de { $design }
+pit-design-report-send-haulage = Rampes envoyées au réseau de roulage
+pit-design-sent-roads =
+    { $count ->
+        [one] La rampe de { $design } a été envoyée au réseau de roulage comme une piste.
+       *[other] Les rampes de { $design } ont été envoyées au réseau de roulage comme { $count } pistes.
+    }

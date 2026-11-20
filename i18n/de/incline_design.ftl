@@ -5278,3 +5278,17 @@ pit-design-layer-crest = Oberkante
 pit-design-layer-toe = Unterkante
 pit-design-layer-ramp = Rampe
 pit-design-layer-daylight = Geländeanschnitt
+pit-design-send-haulage = Rampen ins Transportnetz senden
+pit-design-update-haulage = Transportwege aktualisieren
+pit-design-send-haulage-help = Jede Rampe wird zu einem Transportweg entlang ihrer Mittellinie, verbunden mit den Wegen und Knoten des Netzes, denen sie nahe kommt. Erneutes Senden ersetzt die zuvor gesendeten Wege.
+pit-design-send-missing = Der Grubenentwurf ist nicht mehr vorhanden.
+pit-design-send-not-designed = Der Grubenentwurf wird noch berechnet: Senden Sie ihn, sobald er fertig ist.
+pit-design-send-no-ramp = Der Grubenentwurf hat keine Rampe zum Senden.
+pit-design-haul-road = { $design } Rampe
+pit-design-haul-road-numbered = { $design } Rampe { $number }
+pit-design-report-send-haulage = Rampen ins Transportnetz gesendet
+pit-design-sent-roads =
+    { $count ->
+        [one] Die Rampe von { $design } wurde als ein Weg ins Transportnetz gesendet.
+       *[other] Die Rampen von { $design } wurden als { $count } Wege ins Transportnetz gesendet.
+    }

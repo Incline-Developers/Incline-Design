@@ -5262,3 +5262,17 @@ pit-design-layer-crest = Mép trên
 pit-design-layer-toe = Chân tầng
 pit-design-layer-ramp = Đường dốc
 pit-design-layer-daylight = Đường giao địa hình
+pit-design-send-haulage = Gửi đường dốc vào mạng vận tải
+pit-design-update-haulage = Cập nhật đường vận tải
+pit-design-send-haulage-help = Mỗi đường dốc thành một đường vận tải dọc theo tim đường, nối với các đường và nút của mạng mà nó đi gần. Gửi lại sẽ thay các đường đã gửi trước đó.
+pit-design-send-missing = Thiết kế moong không còn nữa.
+pit-design-send-not-designed = Thiết kế moong vẫn đang được tính: hãy gửi khi xong.
+pit-design-send-no-ramp = Thiết kế moong không có đường dốc nào để gửi.
+pit-design-haul-road = Đường dốc { $design }
+pit-design-haul-road-numbered = Đường dốc { $number } { $design }
+pit-design-report-send-haulage = Đã gửi các đường dốc vào mạng vận tải
+pit-design-sent-roads =
+    { $count ->
+        [one] Đã gửi đường dốc của { $design } vào mạng vận tải thành một đường.
+       *[other] Đã gửi các đường dốc của { $design } vào mạng vận tải thành { $count } đường.
+    }

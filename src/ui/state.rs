@@ -6225,6 +6225,8 @@ pub(crate) enum UiCommand {
     /// Turn the view to one of Pit Design's flags, by its place in the
     /// preview's design.
     FramePitFlag(usize),
+    /// Send a pit design's ramps to the haul network as roads.
+    SendPitRampsToHaulage(ObjectId),
     /// Insert vertices where selected polylines cross an elevation.
     InsertPointsAtElevation {
         object_ids: Vec<ObjectId>,
@@ -6919,6 +6921,7 @@ impl UiCommand {
             Self::ZoomToExtents => report(tr!("common-zoom-extents"), tr!("state-preserve-view-angle")),
             Self::BeginOffsetPick { object_ids, .. } => report(tr!("common-offset"), tr!("common-count-object-s", count = object_ids.len().to_string())),
             Self::RelimitLineResize { .. } => report(tr!("common-relimit-line"), String::new()),
+            Self::SendPitRampsToHaulage(_) => report(tr!("pit-design-title"), tr!("pit-design-report-send-haulage")),
             Self::ExplodePitDesign(_) => report(tr!("pit-design-title"), tr!("pit-design-report-explode")),
             Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
             #[cfg(not(target_arch = "wasm32"))]

@@ -5234,3 +5234,17 @@ pit-design-layer-crest = لبه بالا
 pit-design-layer-toe = پنجه
 pit-design-layer-ramp = رمپ
 pit-design-layer-daylight = خط رخنمون
+pit-design-send-haulage = فرستادن رمپ‌ها به شبکه حمل
+pit-design-update-haulage = به‌روزرسانی جاده‌های حمل
+pit-design-send-haulage-help = هر رمپ جاده حملی در امتداد محورش می‌شود و به جاده‌ها و گره‌های شبکه که به آن‌ها نزدیک می‌شود وصل می‌گردد. فرستادن دوباره جاده‌های فرستاده‌شده قبلی را جایگزین می‌کند.
+pit-design-send-missing = طرح پیت دیگر وجود ندارد.
+pit-design-send-not-designed = طرح پیت هنوز در حال محاسبه است: پس از آماده شدن بفرستید.
+pit-design-send-no-ramp = طرح پیت رمپی برای فرستادن ندارد.
+pit-design-haul-road = رمپ { $design }
+pit-design-haul-road-numbered = رمپ { $number } { $design }
+pit-design-report-send-haulage = رمپ‌ها به شبکه حمل فرستاده شدند
+pit-design-sent-roads =
+    { $count ->
+        [one] رمپ { $design } به‌صورت یک جاده به شبکه حمل فرستاده شد.
+       *[other] رمپ‌های { $design } به‌صورت { $count } جاده به شبکه حمل فرستاده شدند.
+    }

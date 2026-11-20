@@ -5935,3 +5935,17 @@ pit-design-layer-crest = Crest
 pit-design-layer-toe = Toe
 pit-design-layer-ramp = Ramp
 pit-design-layer-daylight = Daylight
+pit-design-send-haulage = Send ramps to haul network
+pit-design-update-haulage = Update haul roads
+pit-design-send-haulage-help = Each ramp becomes a haul road along its centreline, joined to the network's roads and nodes it comes near. Sending again replaces the roads it sent before.
+pit-design-send-missing = The pit design is gone.
+pit-design-send-not-designed = The pit design is still being worked out: send it once it is.
+pit-design-send-no-ramp = The pit design has no ramp to send.
+pit-design-haul-road = { $design } ramp
+pit-design-haul-road-numbered = { $design } ramp { $number }
+pit-design-report-send-haulage = Sent the ramps to the haul network
+pit-design-sent-roads =
+    { $count ->
+        [one] Sent { $design }'s ramp to the haul network as one road.
+       *[other] Sent { $design }'s ramps to the haul network as { $count } roads.
+    }

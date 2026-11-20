@@ -5371,3 +5371,17 @@ pit-design-layer-crest = Krawędź górna
 pit-design-layer-toe = Krawędź dolna
 pit-design-layer-ramp = Rampa
 pit-design-layer-daylight = Linia wychodni
+pit-design-send-haulage = Wyślij rampy do sieci transportowej
+pit-design-update-haulage = Aktualizuj drogi
+pit-design-send-haulage-help = Każda rampa staje się drogą transportową wzdłuż swojej osi, połączoną z drogami i węzłami sieci, do których się zbliża. Ponowne wysłanie zastępuje drogi wysłane wcześniej.
+pit-design-send-missing = Projekt wyrobiska już nie istnieje.
+pit-design-send-not-designed = Projekt wyrobiska jest jeszcze obliczany: wyślij go, gdy będzie gotowy.
+pit-design-send-no-ramp = Projekt wyrobiska nie ma rampy do wysłania.
+pit-design-haul-road = Rampa { $design }
+pit-design-haul-road-numbered = Rampa { $number } { $design }
+pit-design-report-send-haulage = Wysłano rampy do sieci transportowej
+pit-design-sent-roads =
+    { $count ->
+        [one] Wysłano rampę { $design } do sieci transportowej jako jedną drogę.
+       *[other] Wysłano rampy { $design } do sieci transportowej jako drogi (liczba: { $count }).
+    }

@@ -5263,3 +5263,17 @@ pit-design-layer-crest = 法肩
 pit-design-layer-toe = 法尻
 pit-design-layer-ramp = ランプ
 pit-design-layer-daylight = 地表交線
+pit-design-send-haulage = ランプを運搬ネットワークへ送る
+pit-design-update-haulage = 運搬道路を更新
+pit-design-send-haulage-help = 各ランプは中心線に沿った運搬道路になり、近くのネットワークの道路やノードにつながります。再送信すると前に送った道路が置き換わります。
+pit-design-send-missing = ピット設計がなくなっています。
+pit-design-send-not-designed = ピット設計はまだ計算中です: 完了してから送ってください。
+pit-design-send-no-ramp = ピット設計に送るランプがありません。
+pit-design-haul-road = { $design } ランプ
+pit-design-haul-road-numbered = { $design } ランプ { $number }
+pit-design-report-send-haulage = ランプを運搬ネットワークへ送りました
+pit-design-sent-roads =
+    { $count ->
+        [one] { $design } のランプを運搬ネットワークへ 1 本の道路として送りました。
+       *[other] { $design } のランプを運搬ネットワークへ { $count } 本の道路として送りました。
+    }

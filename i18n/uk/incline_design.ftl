@@ -5353,3 +5353,17 @@ pit-design-layer-crest = Бровка
 pit-design-layer-toe = Підошва
 pit-design-layer-ramp = З'їзд
 pit-design-layer-daylight = Лінія виходу
+pit-design-send-haulage = Надіслати з'їзди до мережі доріг
+pit-design-update-haulage = Оновити дороги
+pit-design-send-haulage-help = Кожен з'їзд стає дорогою вздовж своєї осі, приєднаною до доріг і вузлів мережі, до яких він підходить. Повторне надсилання замінює надіслані раніше дороги.
+pit-design-send-missing = Проєкту кар'єру більше не існує.
+pit-design-send-not-designed = Проєкт кар'єру ще розраховується: надішліть його, коли він буде готовий.
+pit-design-send-no-ramp = Проєкт кар'єру не має з'їзду для надсилання.
+pit-design-haul-road = З'їзд { $design }
+pit-design-haul-road-numbered = З'їзд { $number } { $design }
+pit-design-report-send-haulage = З'їзди надіслано до мережі доріг
+pit-design-sent-roads =
+    { $count ->
+        [one] З'їзд { $design } надіслано до мережі доріг як одну дорогу.
+       *[other] З'їзди { $design } надіслано до мережі доріг, доріг: { $count }.
+    }

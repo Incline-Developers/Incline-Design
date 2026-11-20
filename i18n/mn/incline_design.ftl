@@ -5288,3 +5288,17 @@ pit-design-layer-crest = Дээд ирмэг
 pit-design-layer-toe = Доод ирмэг
 pit-design-layer-ramp = Налуу зам
 pit-design-layer-daylight = Гадаргуутай огтлолцол
+pit-design-send-haulage = Налуу замуудыг тээврийн сүлжээнд илгээх
+pit-design-update-haulage = Тээврийн замуудыг шинэчлэх
+pit-design-send-haulage-help = Налуу зам бүр төв шугамынхаа дагуу тээврийн зам болж, ойртсон сүлжээний зам, зангилаатай холбогдоно. Дахин илгээвэл өмнө илгээсэн замуудыг орлоно.
+pit-design-send-missing = Уурхайн төсөл байхгүй болсон.
+pit-design-send-not-designed = Уурхайн төслийг тооцоолж байна: бэлэн болмогц илгээнэ үү.
+pit-design-send-no-ramp = Уурхайн төсөлд илгээх налуу зам алга.
+pit-design-haul-road = { $design } налуу зам
+pit-design-haul-road-numbered = { $design } налуу зам { $number }
+pit-design-report-send-haulage = Налуу замуудыг тээврийн сүлжээнд илгээлээ
+pit-design-sent-roads =
+    { $count ->
+        [one] { $design }-ийн налуу замыг нэг зам болгон тээврийн сүлжээнд илгээлээ.
+       *[other] { $design }-ийн налуу замуудыг { $count } зам болгон тээврийн сүлжээнд илгээлээ.
+    }

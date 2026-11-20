@@ -5234,3 +5234,17 @@ pit-design-layer-crest = 坡顶线
 pit-design-layer-toe = 坡底线
 pit-design-layer-ramp = 坡道
 pit-design-layer-daylight = 地表交线
+pit-design-send-haulage = 将坡道发送到运输网络
+pit-design-update-haulage = 更新运输道路
+pit-design-send-haulage-help = 每条坡道沿其中心线成为一条运输道路，并连接到它靠近的网络道路和节点。再次发送会替换之前发送的道路。
+pit-design-send-missing = 采坑设计已不存在。
+pit-design-send-not-designed = 采坑设计仍在计算中：完成后再发送。
+pit-design-send-no-ramp = 采坑设计没有可发送的坡道。
+pit-design-haul-road = { $design } 坡道
+pit-design-haul-road-numbered = { $design } 坡道 { $number }
+pit-design-report-send-haulage = 已将坡道发送到运输网络
+pit-design-sent-roads =
+    { $count ->
+        [one] 已将 { $design } 的坡道作为 1 条道路发送到运输网络。
+       *[other] 已将 { $design } 的坡道作为 { $count } 条道路发送到运输网络。
+    }

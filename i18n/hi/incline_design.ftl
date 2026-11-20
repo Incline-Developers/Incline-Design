@@ -5237,3 +5237,17 @@ pit-design-layer-crest = क्रेस्ट
 pit-design-layer-toe = टो
 pit-design-layer-ramp = रैम्प
 pit-design-layer-daylight = डेलाइट
+pit-design-send-haulage = रैम्प ढुलाई नेटवर्क में भेजें
+pit-design-update-haulage = ढुलाई सड़कें अद्यतन करें
+pit-design-send-haulage-help = हर रैम्प अपनी केंद्र रेखा के साथ एक ढुलाई सड़क बनता है, जो नेटवर्क की उन सड़कों और नोड से जुड़ता है जिनके पास आता है। फिर से भेजने पर पहले भेजी सड़कें बदल जाती हैं।
+pit-design-send-missing = पिट डिज़ाइन अब मौजूद नहीं है।
+pit-design-send-not-designed = पिट डिज़ाइन की गणना अभी चल रही है: तैयार होने पर भेजें।
+pit-design-send-no-ramp = पिट डिज़ाइन में भेजने के लिए कोई रैम्प नहीं है।
+pit-design-haul-road = { $design } रैम्प
+pit-design-haul-road-numbered = { $design } रैम्प { $number }
+pit-design-report-send-haulage = रैम्प ढुलाई नेटवर्क में भेजे गए
+pit-design-sent-roads =
+    { $count ->
+        [one] { $design } का रैम्प ढुलाई नेटवर्क में एक सड़क के रूप में भेजा गया।
+       *[other] { $design } के रैम्प ढुलाई नेटवर्क में { $count } सड़कों के रूप में भेजे गए।
+    }

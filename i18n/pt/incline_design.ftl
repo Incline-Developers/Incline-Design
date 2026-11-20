@@ -5235,3 +5235,17 @@ pit-design-layer-crest = Crista
 pit-design-layer-toe = Pé
 pit-design-layer-ramp = Rampa
 pit-design-layer-daylight = Linha de afloramento
+pit-design-send-haulage = Enviar rampas para a rede de transporte
+pit-design-update-haulage = Atualizar estradas
+pit-design-send-haulage-help = Cada rampa torna-se uma estrada de transporte ao longo do seu eixo, ligada às estradas e nós da rede de que se aproxima. Enviar de novo substitui as estradas enviadas antes.
+pit-design-send-missing = O projeto de cava já não existe.
+pit-design-send-not-designed = O projeto de cava ainda está sendo calculado: envie-o quando estiver pronto.
+pit-design-send-no-ramp = O projeto de cava não tem rampa para enviar.
+pit-design-haul-road = Rampa de { $design }
+pit-design-haul-road-numbered = Rampa { $number } de { $design }
+pit-design-report-send-haulage = Rampas enviadas para a rede de transporte
+pit-design-sent-roads =
+    { $count ->
+        [one] A rampa de { $design } foi enviada para a rede de transporte como uma estrada.
+       *[other] As rampas de { $design } foram enviadas para a rede de transporte como { $count } estradas.
+    }

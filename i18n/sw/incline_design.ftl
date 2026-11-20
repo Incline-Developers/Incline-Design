@@ -5269,3 +5269,17 @@ pit-design-layer-crest = Kilele
 pit-design-layer-toe = Kitako
 pit-design-layer-ramp = Njia panda
 pit-design-layer-daylight = Mstari wa uso
+pit-design-send-haulage = Tuma njia panda kwenye mtandao wa usafirishaji
+pit-design-update-haulage = Sasisha barabara za usafirishaji
+pit-design-send-haulage-help = Kila njia panda inakuwa barabara ya usafirishaji kando ya mstari wake wa kati, ikiunganishwa na barabara na vifundo vya mtandao inavyokaribia. Kutuma tena kunabadilisha barabara zilizotumwa awali.
+pit-design-send-missing = Muundo wa shimo haupo tena.
+pit-design-send-not-designed = Muundo wa shimo bado unakokotolewa: utume ukikamilika.
+pit-design-send-no-ramp = Muundo wa shimo hauna njia panda ya kutuma.
+pit-design-haul-road = Njia panda ya { $design }
+pit-design-haul-road-numbered = Njia panda { $number } ya { $design }
+pit-design-report-send-haulage = Njia panda zimetumwa kwenye mtandao wa usafirishaji
+pit-design-sent-roads =
+    { $count ->
+        [one] Njia panda ya { $design } imetumwa kwenye mtandao wa usafirishaji kama barabara moja.
+       *[other] Njia panda za { $design } zimetumwa kwenye mtandao wa usafirishaji kama barabara { $count }.
+    }
