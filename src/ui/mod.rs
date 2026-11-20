@@ -1888,6 +1888,22 @@ fn draw_global_dialogs(
         dialogs::triangulation::draw_include_solid_dialog(root_ui, editor, project, commands);
     }
 
+    if editor.tri_difference_open {
+        dialogs::triangulation::draw_difference_surfaces_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_merge_open {
+        dialogs::triangulation::draw_merge_surfaces_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_clean_open {
+        dialogs::triangulation::draw_clean_surface_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_smooth_open {
+        dialogs::triangulation::draw_smooth_surface_dialog(root_ui, editor, project, commands);
+    }
+
     if editor.tri_contour_open {
         dialogs::triangulation::draw_contour_dialog(root_ui, editor, project, commands);
     }

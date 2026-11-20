@@ -2300,7 +2300,7 @@ fn with_merged_values(item: &OpenPrismoidGrid, merged: PrismoidGrid, sources: Ve
 
 /// The mark a surface made from a grid's `values` carries, or from its
 /// vertical thickness with `None`.
-fn surface_mark(values: Option<&CellValues>) -> QualityMark {
+pub(super) fn surface_mark(values: Option<&CellValues>) -> QualityMark {
     match values {
         Some(values) => QualityMark {
             name: values.name.clone(),

@@ -250,6 +250,37 @@ impl<'a> App<'a> {
                     &tr!("canvas-trimmed"),
                 );
             }
+            TriangulationPickTarget::DifferenceUpper => {
+                self.editor.tri_difference_upper_id = Some(id);
+                if self.editor.tri_difference_lower_id == Some(id) {
+                    self.editor.tri_difference_lower_id = None;
+                }
+                update_auto_derived_name(
+                    &mut self.editor.tri_difference_name_input,
+                    self.editor.tri_difference_name_auto,
+                    name,
+                    &tr!("cmd-commands-difference"),
+                );
+            }
+            TriangulationPickTarget::DifferenceLower => {
+                self.editor.tri_difference_lower_id = Some(id);
+                if self.editor.tri_difference_upper_id == Some(id) {
+                    self.editor.tri_difference_upper_id = None;
+                }
+            }
+            TriangulationPickTarget::MergeFirst => {
+                self.editor.tri_merge_first_id = Some(id);
+                if self.editor.tri_merge_second_id == Some(id) {
+                    self.editor.tri_merge_second_id = None;
+                }
+                update_auto_derived_name(&mut self.editor.tri_merge_name_input, self.editor.tri_merge_name_auto, name, &tr!("cmd-commands-merged"));
+            }
+            TriangulationPickTarget::MergeSecond => {
+                self.editor.tri_merge_second_id = Some(id);
+                if self.editor.tri_merge_first_id == Some(id) {
+                    self.editor.tri_merge_first_id = None;
+                }
+            }
             TriangulationPickTarget::SolidDesign => {
                 self.editor.tri_solid_design_id = Some(id);
                 if self.editor.tri_solid_topography_id == Some(id) {
@@ -319,6 +350,8 @@ impl<'a> App<'a> {
             TriangulationPickTarget::ClipSurface => self.set_tool_subject(ToolSubject::ClipSurface(id)),
             TriangulationPickTarget::SliceSurface => self.set_tool_subject(ToolSubject::SliceSurface(id)),
             TriangulationPickTarget::ContourSurface => self.set_tool_subject(ToolSubject::ContourSurface(id)),
+            TriangulationPickTarget::SmoothSurface => self.set_tool_subject(ToolSubject::SmoothSurface(id)),
+            TriangulationPickTarget::CleanSurface => self.set_tool_subject(ToolSubject::CleanSurface(id)),
             TriangulationPickTarget::IncludeShape => {
                 self.editor.tri_include_solid_shape_id = Some(id);
                 if self.editor.tri_include_solid_topology_id == Some(id) {

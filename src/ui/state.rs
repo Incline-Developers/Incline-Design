@@ -691,6 +691,8 @@ impl EditorState {
             || self.tri_cut_poly_open
             || self.tri_cut_z_open
             || self.tri_contour_open
+            || self.tri_smooth_open
+            || self.tri_clean_open
             || self.point_cloud_tin_open
             || self.point_cloud_join_open
             || self.point_cloud_classify_open
@@ -1398,6 +1400,21 @@ impl SolidRegion {
     }
 }
 
+/// Which of two merged surfaces Merge Surfaces keeps where both lie.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MergeKeep {
+    Lower,
+    Upper,
+}
+
+/// Which sheet Clean Surface keeps where a surface folds over itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum CleanFoldKeep {
+    #[default]
+    Upper,
+    Lower,
+}
+
 /// Which side of a reference topology to remove from a surface being trimmed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TriSurfaceCutSide {
@@ -1558,6 +1575,18 @@ pub(crate) enum TriangulationPickTarget {
     SliceSurface,
     /// The surface contour lines are generated from.
     ContourSurface,
+    /// The surface Smooth Surface smooths.
+    SmoothSurface,
+    /// The surface Clean Surface repairs.
+    CleanSurface,
+    /// The upper surface of Difference between Surfaces.
+    DifferenceUpper,
+    /// The lower surface of Difference between Surfaces.
+    DifferenceLower,
+    /// The first surface of Merge Surfaces.
+    MergeFirst,
+    /// The second surface of Merge Surfaces.
+    MergeSecond,
     /// The roof half of the Build Prismoid Grid tool.
     PrismoidRoof,
     /// The floor half of the Build Prismoid Grid tool.
@@ -1584,6 +1613,8 @@ pub(crate) enum ToolSubject {
     ClipSurface(TriangulationId),
     SliceSurface(TriangulationId),
     ContourSurface(TriangulationId),
+    SmoothSurface(TriangulationId),
+    CleanSurface(TriangulationId),
     OreBlockModel(BlockModelId),
     /// The whole collection: a subset of its holes comes only from holes
     /// picked in the viewport before the dialog opened.
@@ -1612,6 +1643,12 @@ impl TriangulationPickTarget {
             | Self::ClipSurface
             | Self::SliceSurface
             | Self::ContourSurface
+            | Self::SmoothSurface
+            | Self::CleanSurface
+            | Self::DifferenceUpper
+            | Self::DifferenceLower
+            | Self::MergeFirst
+            | Self::MergeSecond
             | Self::ClipToUpper
             | Self::ClipToLower
             | Self::PrismoidRoof
@@ -3613,6 +3650,36 @@ pub(crate) struct EditorState {
     /// Hide and unload the source topology and solid once the merge completes.
     pub(crate) tri_include_solid_hide_old: bool,
 
+    // Smooth Surface
+    pub(crate) tri_smooth_open: bool,
+    pub(crate) tri_smooth_surface_id: Option<TriangulationId>,
+    pub(crate) tri_smooth_passes: u32,
+    pub(crate) tri_smooth_name_input: String,
+    pub(crate) tri_smooth_name_auto: bool,
+
+    // Clean Surface
+    pub(crate) tri_clean_open: bool,
+    pub(crate) tri_clean_surface_id: Option<TriangulationId>,
+    pub(crate) tri_clean_keep: CleanFoldKeep,
+    pub(crate) tri_clean_name_input: String,
+    pub(crate) tri_clean_name_auto: bool,
+
+    // Difference between Surfaces
+    pub(crate) tri_difference_open: bool,
+    pub(crate) tri_difference_upper_id: Option<TriangulationId>,
+    pub(crate) tri_difference_lower_id: Option<TriangulationId>,
+    pub(crate) tri_difference_name_input: String,
+    pub(crate) tri_difference_name_auto: bool,
+
+    // Merge Surfaces
+    pub(crate) tri_merge_open: bool,
+    pub(crate) tri_merge_first_id: Option<TriangulationId>,
+    pub(crate) tri_merge_second_id: Option<TriangulationId>,
+    pub(crate) tri_merge_keep: MergeKeep,
+    pub(crate) tri_merge_name_input: String,
+    pub(crate) tri_merge_name_auto: bool,
+    pub(crate) tri_merge_unload_source: bool,
+
     // Contour Generation
     pub(crate) tri_contour_open: bool,
     pub(crate) tri_contour_tri_id: Option<TriangulationId>,
@@ -4520,6 +4587,10 @@ impl EditorState {
             || self.tri_cut_pitshell_open
             || self.tri_include_solid_open
             || self.tri_contour_open
+            || self.tri_smooth_open
+            || self.tri_clean_open
+            || self.tri_difference_open
+            || self.tri_merge_open
             || self.point_cloud_tin_open
             || self.point_cloud_join_open
             || self.point_cloud_classify_open
@@ -5570,6 +5641,28 @@ impl EditorState {
             tri_include_solid_name_auto: true,
             tri_include_solid_save_as_two: false,
             tri_include_solid_hide_old: true,
+            tri_smooth_open: false,
+            tri_smooth_surface_id: None,
+            tri_smooth_passes: 3,
+            tri_smooth_name_input: String::new(),
+            tri_smooth_name_auto: true,
+            tri_clean_open: false,
+            tri_clean_surface_id: None,
+            tri_clean_keep: CleanFoldKeep::Upper,
+            tri_clean_name_input: String::new(),
+            tri_clean_name_auto: true,
+            tri_difference_open: false,
+            tri_difference_upper_id: None,
+            tri_difference_lower_id: None,
+            tri_difference_name_input: String::new(),
+            tri_difference_name_auto: true,
+            tri_merge_open: false,
+            tri_merge_first_id: None,
+            tri_merge_second_id: None,
+            tri_merge_keep: MergeKeep::Lower,
+            tri_merge_name_input: String::new(),
+            tri_merge_name_auto: true,
+            tri_merge_unload_source: true,
             tri_contour_open: false,
             tri_contour_tri_id: None,
             tri_contour_major_interval_input: 10.0,
@@ -7577,6 +7670,41 @@ pub(crate) enum UiCommand {
     },
     /// Open the "Generate Contour Lines" dialog.
     OpenContourTriangulation,
+    /// Open the "Smooth Surface" dialog.
+    OpenSmoothSurface,
+    /// Open the "Difference between Surfaces" dialog.
+    OpenDifferenceSurfaces,
+    /// Make the height of the upper surface above the lower into a new surface.
+    ExecuteDifferenceSurfaces {
+        upper_id: TriangulationId,
+        lower_id: TriangulationId,
+        name: String,
+    },
+    /// Open the "Merge Surfaces" dialog.
+    OpenMergeSurfaces,
+    /// Make the two surfaces one, the lower or the upper where both lie.
+    ExecuteMergeSurfaces {
+        first_id: TriangulationId,
+        second_id: TriangulationId,
+        keep: MergeKeep,
+        name: String,
+        unload_source: bool,
+    },
+    /// Smooth the surface's heights, rim held, into a new surface.
+    ExecuteSmoothSurface {
+        surface: TriangulationId,
+        passes: u32,
+        name: String,
+    },
+    /// Open the "Clean Surface" dialog.
+    OpenCleanSurface,
+    /// Repair the surface into a new one: welded, one sheet where it folds,
+    /// flat holes closed.
+    ExecuteCleanSurface {
+        surface: TriangulationId,
+        keep: CleanFoldKeep,
+        name: String,
+    },
     Undo,
     Redo,
     /// Execute contour generation and store lines in the requested active project layer.
@@ -7753,6 +7881,10 @@ impl UiCommand {
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
             | Self::OpenContourTriangulation
+            | Self::OpenSmoothSurface
+            | Self::OpenCleanSurface
+            | Self::OpenDifferenceSurfaces
+            | Self::OpenMergeSurfaces
             | Self::SetBlockModelColorTransfer { .. }
             | Self::ResetBlockModelColorTransfer { .. }
             | Self::SetDrillHoleColorStops { .. }
@@ -8267,6 +8399,10 @@ impl UiCommand {
                 tr!("state-name-z-min-z-max", name = name.to_string(), z_min = z_min.to_string(), z_max = z_max.to_string()),
             ),
             Self::ExecuteCutTriangulationBySurface { name, .. } => report(tr!("state-trim-triangulation-surface"), name.clone()),
+            Self::ExecuteSmoothSurface { name, .. } => report(tr!("state-smooth-surface"), name.clone()),
+            Self::ExecuteCleanSurface { name, .. } => report(tr!("state-clean-surface"), name.clone()),
+            Self::ExecuteDifferenceSurfaces { name, .. } => report(tr!("state-difference-surfaces"), name.clone()),
+            Self::ExecuteMergeSurfaces { name, .. } => report(tr!("state-merge-surfaces"), name.clone()),
             Self::ExecuteBuildSolidFromSurfaces { name, .. } => report(tr!("tri-build-solid-surfaces"), name.clone()),
             Self::ExecuteBuildPrismoidGrid { name, .. } => report(tr!("tri-build-prismoid-grid"), name.clone()),
             Self::ExecuteBuildStrata { name, .. } => report(tr!("tri-build-strata"), name.clone()),

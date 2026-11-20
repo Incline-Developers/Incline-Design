@@ -12,8 +12,8 @@ use crate::{
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         state::{
-            ContourOutputLayer, EditorState, SelectionPickTool, SolidRegion, ToolSubject, TriCreatePhase, TriCutSource, TriLowerCut, TriPolylineClipMode, TriSurfaceCutSide,
-            TriSurfaceType, TriUpperCut, TriangulationPickTarget, UiCommand, UiPrismoidGridEntry, UiProjectView, apply_strata_actions, refresh_strata_drafts,
+            CleanFoldKeep, ContourOutputLayer, EditorState, MergeKeep, SelectionPickTool, SolidRegion, ToolSubject, TriCreatePhase, TriCutSource, TriLowerCut, TriPolylineClipMode,
+            TriSurfaceCutSide, TriSurfaceType, TriUpperCut, TriangulationPickTarget, UiCommand, UiPrismoidGridEntry, UiProjectView, apply_strata_actions, refresh_strata_drafts,
         },
         widgets::{
             context_menu::{ChecklistRow, Tick},
@@ -2520,6 +2520,197 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
     }
 }
 
+pub(crate) fn draw_smooth_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_smooth_open || editor.triangulation_pick_target.is_some() {
+        return;
+    }
+    let mut open = true;
+    DragableMenu::new("smooth_surface_dialog", tr!("tri-smooth-surface"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let width = picker_control_width(ui);
+            let (chosen, pick) = subject_surface_field(ui, "smooth_surface", editor.tri_smooth_surface_id, tr!("tri-smooth-surface-help"), project, width);
+            if let Some(id) = chosen {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::SmoothSurface(id)));
+            }
+            if pick {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::SmoothSurface);
+            }
+
+            ui.add_space(4.0);
+
+            MenuFieldU32::new(tr!("tri-smooth-passes"), &mut editor.tri_smooth_passes, 1..=1000)
+                .help_text(tr!("tri-smooth-passes-help"))
+                .width(width)
+                .show(ui);
+
+            if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_smooth_name_input)
+                .width(width)
+                .hint_text(tr!("tri-smooth-name-hint"))
+                .show(ui)
+                .changed()
+            {
+                editor.tri_smooth_name_auto = false;
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let surface_loaded = editor
+                .tri_smooth_surface_id
+                .is_some_and(|id| project.triangulations.iter().any(|entry| entry.id == id && entry.is_loaded));
+            let blocker = if !surface_loaded {
+                Some(tr!("tri-smooth-need-surface"))
+            } else if editor.tri_smooth_passes == 0 {
+                Some(tr!("tri-smooth-need-passes"))
+            } else if editor.tri_smooth_name_input.trim().is_empty() {
+                Some(tr!("tri-smooth-need-name"))
+            } else {
+                None
+            };
+            let can_run = blocker.is_none();
+
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                // A disabled MenuButton still senses hover in an enabled Ui,
+                // so its reason is plain hover text.
+                let mut smooth = ui.add(MenuButton::new(tr!("tri-smooth")).primary().enabled(can_run));
+                if let Some(reason) = blocker.as_deref() {
+                    smooth = smooth.hint(reason);
+                }
+                if (smooth.clicked() || (confirm && can_run))
+                    && let Some(surface) = editor.tri_smooth_surface_id
+                {
+                    commands.push(UiCommand::ExecuteSmoothSurface {
+                        surface,
+                        passes: editor.tri_smooth_passes,
+                        name: editor.tri_smooth_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_smooth_open = false;
+                }
+            });
+        });
+    if !open {
+        editor.tri_smooth_open = false;
+    }
+}
+
+pub(crate) fn draw_difference_surfaces_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_difference_open || editor.triangulation_pick_target.is_some() {
+        return;
+    }
+    let mut open = true;
+    DragableMenu::new("difference_surfaces_dialog", tr!("tri-difference-surfaces"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
+            let name_of = |id: Option<TriangulationId>| {
+                id.and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| (*name).to_owned()))
+                    .unwrap_or_else(|| tr!("tri-select"))
+            };
+
+            let lower_id = editor.tri_difference_lower_id;
+            let old_upper = editor.tri_difference_upper_id;
+            if triangulation_picker_field(
+                ui,
+                "difference_upper",
+                tr!("tri-difference-upper"),
+                &mut editor.tri_difference_upper_id,
+                name_of(old_upper),
+                loaded.iter().filter(|(id, _)| Some(*id) != lower_id).map(|(id, name)| (Some(*id), (*name).into())),
+                tr!("tri-difference-upper-help"),
+                project,
+            ) {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::DifferenceUpper);
+            }
+
+            let upper_id = editor.tri_difference_upper_id;
+            if triangulation_picker_field(
+                ui,
+                "difference_lower",
+                tr!("tri-difference-lower"),
+                &mut editor.tri_difference_lower_id,
+                name_of(lower_id),
+                loaded.iter().filter(|(id, _)| Some(*id) != upper_id).map(|(id, name)| (Some(*id), (*name).into())),
+                tr!("tri-difference-lower-help"),
+                project,
+            ) {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::DifferenceLower);
+            }
+
+            // Also when the dialog opened with the upper surface chosen from
+            // the selection, and so has no name yet.
+            if (editor.tri_difference_upper_id != old_upper || editor.tri_difference_name_input.is_empty())
+                && editor.tri_difference_name_auto
+                && editor.tri_difference_upper_id.is_some()
+            {
+                editor.tri_difference_name_input = crate::app::canvas::derived_triangulation_name(&name_of(editor.tri_difference_upper_id), &tr!("cmd-commands-difference"));
+            }
+
+            tool_help_panel(ui, tr!("tri-difference-help"));
+
+            if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_difference_name_input)
+                .width(picker_control_width(ui))
+                .hint_text(tr!("tri-difference-name-hint"))
+                .show(ui)
+                .changed()
+            {
+                editor.tri_difference_name_auto = false;
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let is_loaded = |id: Option<TriangulationId>| id.is_some_and(|id| loaded.iter().any(|(loaded_id, _)| *loaded_id == id));
+            let blocker = if !is_loaded(editor.tri_difference_upper_id) {
+                Some(tr!("tri-difference-need-upper"))
+            } else if !is_loaded(editor.tri_difference_lower_id) {
+                Some(tr!("tri-difference-need-lower"))
+            } else if editor.tri_difference_upper_id == editor.tri_difference_lower_id {
+                Some(tr!("tri-difference-need-different"))
+            } else if editor.tri_difference_name_input.trim().is_empty() {
+                Some(tr!("tri-difference-need-name"))
+            } else {
+                None
+            };
+            let can_run = blocker.is_none();
+
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                let mut run = ui.add(MenuButton::new(tr!("tri-difference")).primary().enabled(can_run));
+                if let Some(reason) = blocker.as_deref() {
+                    run = run.hint(reason);
+                }
+                if (run.clicked() || (confirm && can_run))
+                    && let (Some(upper_id), Some(lower_id)) = (editor.tri_difference_upper_id, editor.tri_difference_lower_id)
+                {
+                    commands.push(UiCommand::ExecuteDifferenceSurfaces {
+                        upper_id,
+                        lower_id,
+                        name: editor.tri_difference_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_difference_open = false;
+                }
+            });
+        });
+    if !open {
+        editor.tri_difference_open = false;
+    }
+}
+
 pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     if !editor.tri_contour_open || editor.triangulation_pick_target.is_some() {
         return;
@@ -2892,5 +3083,232 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
         });
     if !open {
         editor.point_cloud_tin_open = false;
+    }
+}
+
+pub(crate) fn draw_clean_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_clean_open || editor.triangulation_pick_target.is_some() {
+        return;
+    }
+    let mut open = true;
+    DragableMenu::new("clean_surface_dialog", tr!("tri-clean-surface"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let width = picker_control_width(ui);
+            let (chosen, pick) = subject_surface_field(ui, "clean_surface", editor.tri_clean_surface_id, tr!("tri-clean-surface-help"), project, width);
+            if let Some(id) = chosen {
+                commands.push(UiCommand::SetToolSubject(ToolSubject::CleanSurface(id)));
+            }
+            if pick {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::CleanSurface);
+            }
+
+            ui.add_space(4.0);
+
+            MenuField::new(tr!("tri-clean-fold")).help_text(tr!("tri-clean-fold-help")).show(ui, |ui, row_height, _| {
+                let (response, clicked) = centered_choice_buttons(
+                    ui,
+                    row_height,
+                    [
+                        (tr!("tri-clean-keep-upper"), editor.tri_clean_keep == CleanFoldKeep::Upper),
+                        (tr!("tri-clean-keep-lower"), editor.tri_clean_keep == CleanFoldKeep::Lower),
+                    ],
+                );
+                if clicked == Some(0) {
+                    editor.tri_clean_keep = CleanFoldKeep::Upper;
+                } else if clicked == Some(1) {
+                    editor.tri_clean_keep = CleanFoldKeep::Lower;
+                }
+                response
+            });
+
+            ui.add_space(4.0);
+
+            if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_clean_name_input)
+                .width(width)
+                .hint_text(tr!("tri-clean-name-hint"))
+                .show(ui)
+                .changed()
+            {
+                editor.tri_clean_name_auto = false;
+            }
+
+            tool_help_panel(ui, tr!("tri-clean-help"));
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let surface_loaded = editor
+                .tri_clean_surface_id
+                .is_some_and(|id| project.triangulations.iter().any(|entry| entry.id == id && entry.is_loaded));
+            let blocker = if !surface_loaded {
+                Some(tr!("tri-clean-need-surface"))
+            } else if editor.tri_clean_name_input.trim().is_empty() {
+                Some(tr!("tri-clean-need-name"))
+            } else {
+                None
+            };
+            let can_run = blocker.is_none();
+
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                // A disabled MenuButton still senses hover in an enabled Ui,
+                // so its reason is plain hover text.
+                let mut clean = ui.add(MenuButton::new(tr!("tri-clean")).primary().enabled(can_run));
+                if let Some(reason) = blocker.as_deref() {
+                    clean = clean.hint(reason);
+                }
+                if (clean.clicked() || (confirm && can_run))
+                    && let Some(surface) = editor.tri_clean_surface_id
+                {
+                    commands.push(UiCommand::ExecuteCleanSurface {
+                        surface,
+                        keep: editor.tri_clean_keep,
+                        name: editor.tri_clean_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_clean_open = false;
+                }
+            });
+        });
+    if !open {
+        editor.tri_clean_open = false;
+    }
+}
+
+pub(crate) fn draw_merge_surfaces_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_merge_open || editor.triangulation_pick_target.is_some() {
+        return;
+    }
+    let mut open = true;
+    DragableMenu::new("merge_surfaces_dialog", tr!("tri-merge-surfaces"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
+            let name_of = |id: Option<TriangulationId>| {
+                id.and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| (*name).to_owned()))
+                    .unwrap_or_else(|| tr!("tri-select"))
+            };
+
+            let second_id = editor.tri_merge_second_id;
+            let old_first = editor.tri_merge_first_id;
+            if triangulation_picker_field(
+                ui,
+                "merge_first",
+                tr!("tri-merge-first"),
+                &mut editor.tri_merge_first_id,
+                name_of(old_first),
+                loaded.iter().filter(|(id, _)| Some(*id) != second_id).map(|(id, name)| (Some(*id), (*name).into())),
+                tr!("tri-merge-first-help"),
+                project,
+            ) {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::MergeFirst);
+            }
+
+            let first_id = editor.tri_merge_first_id;
+            if triangulation_picker_field(
+                ui,
+                "merge_second",
+                tr!("tri-merge-second"),
+                &mut editor.tri_merge_second_id,
+                name_of(second_id),
+                loaded.iter().filter(|(id, _)| Some(*id) != first_id).map(|(id, name)| (Some(*id), (*name).into())),
+                tr!("tri-merge-second-help"),
+                project,
+            ) {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::MergeSecond);
+            }
+
+            // Also when the dialog opened with the first surface chosen from
+            // the selection, and so has no name yet.
+            if (editor.tri_merge_first_id != old_first || editor.tri_merge_name_input.is_empty()) && editor.tri_merge_name_auto && editor.tri_merge_first_id.is_some() {
+                editor.tri_merge_name_input = crate::app::canvas::derived_triangulation_name(&name_of(editor.tri_merge_first_id), &tr!("cmd-commands-merged"));
+            }
+
+            ui.add_space(4.0);
+
+            MenuField::new(tr!("tri-merge-keep")).help_text(tr!("tri-merge-keep-help")).show(ui, |ui, row_height, _| {
+                let (response, clicked) = centered_choice_buttons(
+                    ui,
+                    row_height,
+                    [
+                        (tr!("tri-merge-keep-lower"), editor.tri_merge_keep == MergeKeep::Lower),
+                        (tr!("tri-merge-keep-upper"), editor.tri_merge_keep == MergeKeep::Upper),
+                    ],
+                );
+                if clicked == Some(0) {
+                    editor.tri_merge_keep = MergeKeep::Lower;
+                } else if clicked == Some(1) {
+                    editor.tri_merge_keep = MergeKeep::Upper;
+                }
+                response
+            });
+
+            ui.add_space(4.0);
+
+            if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_merge_name_input)
+                .width(picker_control_width(ui))
+                .hint_text(tr!("tri-merge-name-hint"))
+                .show(ui)
+                .changed()
+            {
+                editor.tri_merge_name_auto = false;
+            }
+
+            MenuFieldBool::new(tr!("tri-merge-unload-sources"), &mut editor.tri_merge_unload_source).show(ui);
+
+            tool_help_panel(ui, tr!("tri-merge-help"));
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let is_loaded = |id: Option<TriangulationId>| id.is_some_and(|id| loaded.iter().any(|(loaded_id, _)| *loaded_id == id));
+            let blocker = if !is_loaded(editor.tri_merge_first_id) {
+                Some(tr!("tri-merge-need-first"))
+            } else if !is_loaded(editor.tri_merge_second_id) {
+                Some(tr!("tri-merge-need-second"))
+            } else if editor.tri_merge_first_id == editor.tri_merge_second_id {
+                Some(tr!("tri-merge-need-different"))
+            } else if editor.tri_merge_name_input.trim().is_empty() {
+                Some(tr!("tri-merge-need-name"))
+            } else {
+                None
+            };
+            let can_run = blocker.is_none();
+
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                let mut run = ui.add(MenuButton::new(tr!("tri-merge")).primary().enabled(can_run));
+                if let Some(reason) = blocker.as_deref() {
+                    run = run.hint(reason);
+                }
+                if (run.clicked() || (confirm && can_run))
+                    && let (Some(first_id), Some(second_id)) = (editor.tri_merge_first_id, editor.tri_merge_second_id)
+                {
+                    commands.push(UiCommand::ExecuteMergeSurfaces {
+                        first_id,
+                        second_id,
+                        keep: editor.tri_merge_keep,
+                        name: editor.tri_merge_name_input.trim().to_owned(),
+                        unload_source: editor.tri_merge_unload_source,
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_merge_open = false;
+                }
+            });
+        });
+    if !open {
+        editor.tri_merge_open = false;
     }
 }

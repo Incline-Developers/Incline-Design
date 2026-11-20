@@ -2003,6 +2003,56 @@ impl<'a> App<'a> {
                 }
                 result
             }
+            UiCommand::OpenDifferenceSurfaces => {
+                self.open_difference_surfaces();
+                Ok(())
+            }
+            UiCommand::ExecuteDifferenceSurfaces { upper_id, lower_id, name } => {
+                let result = self.difference_triangulations(upper_id, lower_id, name);
+                if result.is_ok() {
+                    self.editor.tri_difference_open = false;
+                }
+                result
+            }
+            UiCommand::OpenMergeSurfaces => {
+                self.open_merge_surfaces();
+                Ok(())
+            }
+            UiCommand::ExecuteMergeSurfaces {
+                first_id,
+                second_id,
+                keep,
+                name,
+                unload_source,
+            } => {
+                let result = self.merge_triangulations(first_id, second_id, keep, name, unload_source);
+                if result.is_ok() {
+                    self.editor.tri_merge_open = false;
+                }
+                result
+            }
+            UiCommand::OpenSmoothSurface => {
+                self.open_smooth_surface();
+                Ok(())
+            }
+            UiCommand::ExecuteSmoothSurface { surface, passes, name } => {
+                let result = self.smooth_triangulation(surface, passes, name);
+                if result.is_ok() {
+                    self.editor.tri_smooth_open = false;
+                }
+                result
+            }
+            UiCommand::OpenCleanSurface => {
+                self.open_clean_surface();
+                Ok(())
+            }
+            UiCommand::ExecuteCleanSurface { surface, keep, name } => {
+                let result = self.clean_triangulation(surface, keep, name);
+                if result.is_ok() {
+                    self.editor.tri_clean_open = false;
+                }
+                result
+            }
             UiCommand::OpenContourTriangulation => {
                 self.open_contour_surface();
                 Ok(())

@@ -574,7 +574,7 @@ impl RingPip {
 /// that survives the cut. Faces absent from the result never touch the
 /// footprint and pass through whole; present with no fragments means fully
 /// excavated. Returned sorted by face index.
-fn fragment_topology_faces_by_coverage(
+pub(super) fn fragment_topology_faces_by_coverage(
     topology: &mesh_data::Triangulation,
     coverage: &RingCoverage,
     progress: &crate::model::progress::Phase,
@@ -2089,7 +2089,7 @@ fn filter_presence_boundary_edges(edges: Vec<[usize; 2]>, topology: &mesh_data::
 
 /// Edges used by exactly one topology face: the rims of holes and of the
 /// surface itself.
-fn topology_boundary_edges(topology: &mesh_data::Triangulation) -> Vec<[usize; 2]> {
+pub(super) fn topology_boundary_edges(topology: &mesh_data::Triangulation) -> Vec<[usize; 2]> {
     use rayon::prelude::*;
 
     let mut keys: Vec<u64> = Vec::with_capacity(topology.face_count() * 3);

@@ -483,6 +483,10 @@ pub(crate) enum MenuRow {
     GeologyCleanStrings,
     GeologySetAxis(Axis),
     GeologyCreateTriangulation,
+    SmoothSurface,
+    DifferenceSurfaces,
+    CleanSurface,
+    MergeSurfaces,
     InsertAtSpacing,
     Reverse,
     DrapeAlongTriangles,
@@ -681,6 +685,10 @@ const GEOLOGY_MENUS: &[WorkspaceMenu] = &[
                     MenuRow::Tool(ActiveTool::DrapeToTopology),
                     MenuRow::DrapeAlongTriangles,
                     MenuRow::GeologyCreateTriangulation,
+                    MenuRow::SmoothSurface,
+                    MenuRow::DifferenceSurfaces,
+                    MenuRow::CleanSurface,
+                    MenuRow::MergeSurfaces,
                 ],
             ),
             rows(&[
@@ -843,6 +851,10 @@ impl MenuRow {
             Self::DrapeAlongTriangles => tr!("ws-menubar-geology-drape-along-triangles"),
             Self::Thin => tr!("ws-menubar-geology-thin"),
             Self::Smooth => tr!("ws-menubar-geology-smooth"),
+            Self::SmoothSurface => tr!("ws-menubar-geology-smooth-surface"),
+            Self::DifferenceSurfaces => tr!("ws-menubar-geology-difference-surfaces"),
+            Self::CleanSurface => tr!("ws-menubar-geology-clean-surface"),
+            Self::MergeSurfaces => tr!("ws-menubar-geology-merge-surfaces"),
             Self::RemoveLastVertex => tr!("ws-menubar-geology-remove-last-vertex"),
             Self::NextVertex => tr!("ws-menubar-geology-next-vertex"),
             Self::CopyAlongString => tr!("ws-menubar-geology-copy-along-string"),
@@ -937,6 +949,10 @@ impl MenuRow {
             Self::DrapeAlongTriangles => UiCommand::ArmDrapeAlongTriangles,
             Self::Thin => UiCommand::OpenThinStringsDialog,
             Self::Smooth => UiCommand::OpenSmoothStringsDialog,
+            Self::SmoothSurface => UiCommand::OpenSmoothSurface,
+            Self::DifferenceSurfaces => UiCommand::OpenDifferenceSurfaces,
+            Self::CleanSurface => UiCommand::OpenCleanSurface,
+            Self::MergeSurfaces => UiCommand::OpenMergeSurfaces,
             Self::RemoveLastVertex => UiCommand::RemoveLastStrokeVertex,
             Self::NextVertex => UiCommand::OpenNextVertexPanel,
             Self::CopyAlongString => UiCommand::ArmCopyAlongString,
@@ -993,6 +1009,10 @@ impl MenuRow {
             | Self::GeologyCleanStrings
             | Self::GeologySetAxis(_)
             | Self::GeologyCreateTriangulation
+            | Self::SmoothSurface
+            | Self::DifferenceSurfaces
+            | Self::CleanSurface
+            | Self::MergeSurfaces
             | Self::InsertAtSpacing
             | Self::Reverse
             | Self::DrapeAlongTriangles
@@ -1161,6 +1181,10 @@ impl MenuRow {
             Self::DrapeAlongTriangles => "ws-menubar-geology-drape-along-triangles",
             Self::Thin => "ws-menubar-geology-thin",
             Self::Smooth => "ws-menubar-geology-smooth",
+            Self::SmoothSurface => "ws-menubar-geology-smooth-surface",
+            Self::DifferenceSurfaces => "ws-menubar-geology-difference-surfaces",
+            Self::CleanSurface => "ws-menubar-geology-clean-surface",
+            Self::MergeSurfaces => "ws-menubar-geology-merge-surfaces",
             Self::RemoveLastVertex => "ws-menubar-geology-remove-last-vertex",
             Self::NextVertex => "ws-menubar-geology-next-vertex",
             Self::CopyAlongString => "ws-menubar-geology-copy-along-string",

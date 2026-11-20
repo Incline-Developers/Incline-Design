@@ -296,6 +296,24 @@ impl<'a> App<'a> {
             self.editor.tri_include_solid_shape_id = None;
             self.editor.tri_include_solid_open = false;
         }
+        if self.editor.tri_difference_upper_id == Some(id) || self.editor.tri_difference_lower_id == Some(id) {
+            self.editor.tri_difference_upper_id = None;
+            self.editor.tri_difference_lower_id = None;
+            self.editor.tri_difference_open = false;
+        }
+        if self.editor.tri_merge_first_id == Some(id) || self.editor.tri_merge_second_id == Some(id) {
+            self.editor.tri_merge_first_id = None;
+            self.editor.tri_merge_second_id = None;
+            self.editor.tri_merge_open = false;
+        }
+        if self.editor.tri_smooth_surface_id == Some(id) {
+            self.editor.tri_smooth_surface_id = None;
+            self.editor.tri_smooth_open = false;
+        }
+        if self.editor.tri_clean_surface_id == Some(id) {
+            self.editor.tri_clean_surface_id = None;
+            self.editor.tri_clean_open = false;
+        }
         if self.editor.tri_contour_tri_id == Some(id) {
             self.editor.tri_contour_tri_id = None;
             self.editor.tri_contour_open = false;

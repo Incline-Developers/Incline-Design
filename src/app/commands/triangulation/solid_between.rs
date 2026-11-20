@@ -81,7 +81,7 @@ fn oriented(sheet: (Vec<mesh_data::Vertex>, Vec<[u32; 3]>), facing: Facing) -> (
 /// rounding, or to where the two triangulate the same ground differently.
 /// Taken literally, that noise is thousands of slivers a hair thick, each its
 /// own scrap of solid with sides too thin to close.
-const SURFACE_CONTACT: f64 = 1.0e-2;
+pub(super) const SURFACE_CONTACT: f64 = 1.0e-2;
 
 /// Clip each surface to the wanted region and hand back the two sheets that
 /// bound it.
@@ -297,7 +297,7 @@ fn mesh_fingerprint(mesh: &mesh_data::Triangulation) -> u64 {
     })
 }
 
-fn build_solid_between_surfaces_uncached(
+pub(super) fn build_solid_between_surfaces_uncached(
     design: &mesh_data::Triangulation,
     topography: &mesh_data::Triangulation,
     region: SolidRegion,
@@ -526,7 +526,7 @@ fn volume_between(lower: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), upper: &(Vec<
 }
 
 /// [`edge_uses`] once coincident points are welded.
-fn welded_edge_uses(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> Vec<EdgeUse> {
+pub(super) fn welded_edge_uses(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> Vec<EdgeUse> {
     use rayon::prelude::*;
     // Welded first: a mesh handed in here may repeat its points, a copy per
     // face, so its indices alone do not say which edges are one.
@@ -592,7 +592,7 @@ fn leaking_edges(vertices: &[mesh_data::Vertex], uses: &[EdgeUse]) -> usize {
 
 /// One edge of an indexed mesh and how its faces use it.
 #[derive(Clone, Copy)]
-struct EdgeUse {
+pub(super) struct EdgeUse {
     /// Its ends, the lower index first.
     low: u32,
     high: u32,
@@ -928,7 +928,7 @@ pub(crate) fn slabs_between_elevations(mesh: &mesh_data::Triangulation, bands: &
 /// Not whether its area is small: a sliver cut off along a plane has long
 /// sides, and its neighbours meet it along them. Dropping it leaves a crack
 /// in the body, and a rim through the crack that no cap can close.
-fn collapsed(triangle: &[mesh_data::Vertex; 3]) -> bool {
+pub(super) fn collapsed(triangle: &[mesh_data::Vertex; 3]) -> bool {
     let [a, b, c] = triangle.map(|p| glam::DVec3::new(p.x, p.y, p.z));
     a.distance_squared(b).min(b.distance_squared(c)).min(c.distance_squared(a)) <= 1e-18
 }
@@ -1051,7 +1051,7 @@ fn rims_close(rims: &[[mesh_data::Vertex; 2]], planes: &[f64], weld: Weld) -> bo
 /// collinear edges does, and the slab then has a crack there and its cap a
 /// rim that never closes. Merging by distance first means the grid only ever
 /// sees identical points.
-fn merge_coincident(vertices: &mut [mesh_data::Vertex], indices: &[usize], weld: Weld) {
+pub(super) fn merge_coincident(vertices: &mut [mesh_data::Vertex], indices: &[usize], weld: Weld) {
     use std::collections::HashMap;
     // Cells two tolerances wide, so the points within tolerance of one lie in
     // at most two cells along each axis rather than three.
@@ -1851,7 +1851,7 @@ fn close_region_sides(vertices: &[mesh_data::Vertex], uses: &[EdgeUse], weld: We
 /// roof's break at points a hair apart, which leaves a sliver of wall - flat,
 /// a hair wide, and as tall as the wall. Filling a hole that is not flat would
 /// be inventing a surface, so those are left for the open-edge warning.
-fn fill_flat_holes(vertices: &[mesh_data::Vertex], uses: &[EdgeUse]) -> Vec<[u32; 3]> {
+pub(super) fn fill_flat_holes(vertices: &[mesh_data::Vertex], uses: &[EdgeUse]) -> Vec<[u32; 3]> {
     use std::collections::HashMap;
     // Each open edge, run the way the faces it is short of a partner wind it:
     // an edge two faces run one way and one the other is open once.
@@ -1905,7 +1905,7 @@ fn fill_flat_holes(vertices: &[mesh_data::Vertex], uses: &[EdgeUse]) -> Vec<[u32
 }
 
 /// The most points a hole [`fill_flat_holes`] fills may have.
-const FLAT_HOLE_POINTS: usize = 64;
+pub(super) const FLAT_HOLE_POINTS: usize = 64;
 
 /// Ear-clip `ring` in its own plane, keeping its winding, or nothing when it
 /// is not flat to within `flatness`. A ring along one line is fanned flat.
@@ -2271,13 +2271,13 @@ fn weld_scale(vertices: &[mesh_data::Vertex]) -> f64 {
 /// step - the rim trace, the ring walk, the degenerate test - agrees about
 /// which points coincide.
 #[derive(Clone, Copy)]
-struct Weld {
+pub(super) struct Weld {
     scale: f64,
     tolerance: f64,
 }
 
 impl Weld {
-    fn of(vertices: &[mesh_data::Vertex]) -> Self {
+    pub(super) fn of(vertices: &[mesh_data::Vertex]) -> Self {
         let scale = weld_scale(vertices);
         Self { scale, tolerance: 1.0 / scale }
     }

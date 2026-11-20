@@ -37,6 +37,8 @@ impl App<'_> {
             ToolSubject::ClipSurface(id) => self.set_clip_surface(id),
             ToolSubject::SliceSurface(id) => self.set_slice_surface(id),
             ToolSubject::ContourSurface(id) => self.set_contour_surface(id),
+            ToolSubject::SmoothSurface(id) => self.set_smooth_surface(id),
+            ToolSubject::CleanSurface(id) => self.set_clean_surface(id),
             ToolSubject::OreBlockModel(id) => self.set_ore_block_model(id),
             ToolSubject::BlockModelDrillholes(id) => self.open_create_block_model_dialog(id, None),
             ToolSubject::TinPointCloud(id) => self.set_tin_point_cloud(id),
@@ -134,6 +136,48 @@ impl App<'_> {
         self.editor.tri_contour_z_max_input = bounds.max.z;
         // Only the automatic layer name follows the surface; a typed one stays.
         self.editor.update_contour_layer_name_from_surface(&name);
+    }
+
+    pub(crate) fn open_smooth_surface(&mut self) {
+        self.editor.tri_smooth_open = true;
+        self.editor.tri_smooth_surface_id = None;
+        self.editor.tri_smooth_name_auto = true;
+        self.editor.tri_smooth_name_input.clear();
+        if let Some(id) = only(&self.selected_triangulations()) {
+            self.set_smooth_surface(id);
+        }
+    }
+
+    fn set_smooth_surface(&mut self, id: TriangulationId) {
+        let Some(surface) = self.triangulations.iter().find(|surface| surface.id == id && surface.state.loaded) else {
+            return;
+        };
+        let name = surface.name.clone();
+        self.editor.tri_smooth_surface_id = Some(id);
+        if self.editor.tri_smooth_name_auto {
+            self.editor.tri_smooth_name_input = crate::app::canvas::derived_triangulation_name(&name, &tr!("cmd-commands-smoothed"));
+        }
+    }
+
+    pub(crate) fn open_clean_surface(&mut self) {
+        self.editor.tri_clean_open = true;
+        self.editor.tri_clean_surface_id = None;
+        self.editor.tri_clean_name_auto = true;
+        self.editor.tri_clean_name_input.clear();
+        if let Some(id) = only(&self.selected_triangulations()) {
+            self.set_clean_surface(id);
+        }
+    }
+
+    fn set_clean_surface(&mut self, id: TriangulationId) {
+        let Some(surface) = self.triangulations.iter().find(|surface| surface.id == id && surface.state.loaded) else {
+            return;
+        };
+        let name = surface.name.clone();
+        self.editor.tri_clean_surface_id = Some(id);
+        if self.editor.tri_clean_name_auto {
+            self.editor.tri_clean_name_input = crate::app::canvas::derived_triangulation_name(&name, &tr!("cmd-commands-cleaned"));
+        }
     }
 
     pub(crate) fn open_ore_triangulation(&mut self) {
