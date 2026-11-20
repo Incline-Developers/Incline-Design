@@ -2552,6 +2552,13 @@ impl SchedulePlan {
             if (scenario.id == self.scenarios.open) == scenario.stash.is_some() {
                 return Err(ScheduleError::UnknownScenario);
             }
+            // A stored horizon holds what the horizon editor would accept:
+            // the scenarios starting from it step through it.
+            if let Some(stash) = &scenario.stash {
+                let mut check = self.experiment.clone();
+                check.set_planning_end_day(stash.horizon.end_day)?;
+                check.set_interval_h(stash.horizon.interval_h)?;
+            }
             if scenario
                 .base
                 .is_some_and(|base| self.scenarios.get(base).is_none() || self.scenarios.bases(scenario.id).contains(&scenario.id))
