@@ -179,7 +179,19 @@ pub(crate) fn draw_right_click_context(
             && let Some(ring) = editor.string_rings.get(index).cloned()
         {
             let editable = |id| editor.ringed_string_editable(id);
-            if ring.joinable() && ring.sides.iter().all(|&(id, _)| editable(id)) && ContextMenuAction::new(tr!("cmd-string-clean-join-here-at-halfway")).show(ui).clicked() {
+            let joined = ring.join_strings();
+            // Where more than two strings meet, the row names every one.
+            let join_label = match ring.join_numbers(&editor.string_numbers) {
+                Some(numbers) => {
+                    let numbers: Vec<String> = numbers.iter().map(usize::to_string).collect();
+                    tr!(
+                        "cmd-string-clean-join-strings-here-at-halfway",
+                        strings = crate::app::commands::string_clean::word_list(&numbers)
+                    )
+                }
+                None => tr!("cmd-string-clean-join-here-at-halfway"),
+            };
+            if ring.joinable() && joined.iter().all(|&id| editable(id)) && ContextMenuAction::new(join_label).show(ui).clicked() {
                 commands.push(UiCommand::JoinHereAtHalfway(index));
                 commands.push(UiCommand::CloseCanvasContextMenu);
             }
@@ -188,11 +200,21 @@ pub(crate) fn draw_right_click_context(
                     continue;
                 };
                 let number = (vertex + 1).to_string();
-                if editable(id) && ContextMenuAction::new(tr!("edit-delete-vertex-number", number = number.clone())).show(ui).clicked() {
+                let (delete, show) = match ring.side_number(&editor.string_numbers, id) {
+                    Some(string) => (
+                        tr!("edit-delete-string-vertex-number", number = number.clone(), string = string.to_string()),
+                        tr!("edit-show-string-vertex-number-in-table", number = number, string = string.to_string()),
+                    ),
+                    None => (
+                        tr!("edit-delete-vertex-number", number = number.clone()),
+                        tr!("edit-show-vertex-number-in-table", number = number),
+                    ),
+                };
+                if editable(id) && ContextMenuAction::new(delete).show(ui).clicked() {
                     commands.push(UiCommand::DeleteRingVertex { id, vertex });
                     commands.push(UiCommand::CloseCanvasContextMenu);
                 }
-                if ContextMenuAction::new(tr!("edit-show-vertex-number-in-table", number = number)).show(ui).clicked() {
+                if ContextMenuAction::new(show).show(ui).clicked() {
                     commands.push(UiCommand::ShowObjectVertex { id, row: vertex });
                     commands.push(UiCommand::CloseCanvasContextMenu);
                 }

@@ -124,12 +124,12 @@ Geology workspace, plan or 3D view. Rings are drawn on the canvas only. Right-cl
 A **Build Surface** that refused, or that built with strings left out. **Clean Strings** rings places too, with the same ring menu.
 ### Steps
 1. After a refusal an error alert titled **Build Surface** opens and lists the strings, as the console does, for example "2 refused control string(s) are now selected", and "The other 1 control string(s) are hidden; Unhide All on the view toolbar brings them back". The view frames the refused strings and each bad place is ringed.
-2. Right-click a ring and repair the place from the ring menu: read the ringed vertex in the table and delete it if it is wrong, or edit the string there by hand. The build has already joined, in its own copy, every crossing that missed by 5 m or less, so a ring from a build does not offer **Join here at halfway**.
+2. Right-click a ring and repair the place from the ring menu: read the ringed vertex in the table and delete it if it is wrong, or edit the string there by hand. The build has already joined, in its own copy, every crossing that missed by 5 m or less, so a ring from a build offers **Join here at halfway** only where the strings as drawn, all on one layer, still meet within 5 m.
 3. Click **Unhide All** on the view toolbar; the console says "Showed", the count, "hidden object(s) again".
 4. Start the next build: it clears the old rings itself.
 5. When a build succeeds with strings left out, those strings stay selected and ringed beside the new surface, nothing is hidden, and a **Build Surface** alert lists them, for example "1 control string(s) left out of this build, each ringed and selected; the surface is built from the rest:".
 
-![Geology workspace, plan view: two control strings, one ringed at the refused crossing, the ring menu open on Delete vertex 3 and Show vertex 3 in the table](images/05-rings-ring-menu.svg)
+![Geology workspace, plan view: two control strings, one ringed at the refused crossing, the ring menu open on Delete vertex 3 of string 1, Show vertex 3 of string 1 in the table, and the same two rows for string 2](images/05-rings-ring-menu.svg)
 ### Options and defaults
 | Option | Default | What it does |
 |---|---|---|

@@ -40,6 +40,44 @@ struct Cluster {
     mean: f64,
 }
 
+/// One place strings meet as [`share_crossings`] clusters them: where the
+/// shared vertex goes, the contacts there, the pieces meeting in piece
+/// order, and how far apart their heights are, highest minus lowest.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Meeting {
+    pub(crate) at: DVec2,
+    pub(crate) contacts: Vec<DVec2>,
+    pub(crate) pieces: Vec<usize>,
+    pub(crate) miss: f64,
+}
+
+impl Meeting {
+    /// A join asked for at `at` joins this meeting.
+    pub(crate) fn holds(&self, at: DVec2) -> bool {
+        at.distance(self.at) <= MERGE_DISTANCE || self.contacts.iter().any(|&contact| at.distance(contact) <= MERGE_DISTANCE)
+    }
+}
+
+/// Every place two strings or more meet, nothing changed. `Err` once
+/// `cancelled` says so.
+pub(super) fn meetings(pieces: &[Piece], cancelled: &dyn Fn() -> bool) -> Result<Vec<Meeting>, Cancelled> {
+    let contacts = find_contacts(pieces, cancelled)?;
+    let groups = group_contacts(pieces, &contacts);
+    stop_if(cancelled)?;
+    Ok(groups
+        .into_iter()
+        .map(|group| {
+            let cluster = build_cluster(pieces, &contacts, group);
+            Meeting {
+                at: cluster.at,
+                contacts: cluster.contacts.iter().map(|&index| contacts[index].point).collect(),
+                pieces: cluster.heights.iter().map(|&(piece, _)| piece).collect(),
+                miss: cluster.miss,
+            }
+        })
+        .collect())
+}
+
 /// A vertex one piece gets for one cluster.
 enum Op {
     /// The piece's own vertex at the place, moved onto it in plan.

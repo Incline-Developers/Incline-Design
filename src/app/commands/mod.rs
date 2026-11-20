@@ -115,13 +115,14 @@ impl<'a> App<'a> {
         self.invalidate_geometry();
     }
 
-    /// Every string ring `index` names may be edited from the canvas.
+    /// Every string a join at ring `index` moves may be edited from the
+    /// canvas.
     fn ring_strings_editable(&self, index: usize) -> bool {
         let document = self.active_document();
         self.editor
             .string_rings
             .get(index)
-            .is_some_and(|ring| ring.sides.iter().all(|&(id, _)| self.editor.canvas_edits_object(document, id)))
+            .is_some_and(|ring| ring.join_strings().into_iter().all(|id| self.editor.canvas_edits_object(document, id)))
     }
 
     pub(crate) fn handle_ui_commands(&mut self, commands: Vec<UiCommand>) {
@@ -1577,7 +1578,7 @@ impl<'a> App<'a> {
             // here.
             UiCommand::CleanString(id) => {
                 if self.editor.canvas_edits_object(self.active_document(), id) {
-                    self.clean_strings(&[id]);
+                    self.clean_ringed_string(id);
                 }
                 Ok(())
             }

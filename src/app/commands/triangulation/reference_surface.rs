@@ -23,10 +23,10 @@ use crate::{
         project::{ModelEnvelope, ModellingSettings, trimmed},
         rbf::{self, DEFAULT_SPACING, MERGE_DISTANCE, POINT_BUDGET, RbfSurface, SteepPair},
         rbf_spans::{LatticeBox, RowRuns, SpanLattice},
-        string_clean::{self, LeftOut, NotLeftOut, OddOneOut, Problem, ProblemKind},
+        string_clean::{self, LeftOut, Meeting, NotLeftOut, OddOneOut, Problem, ProblemKind},
         triangulation::{QualityMark, unit_label},
     },
-    ui::state::{StringRing, StringRingKind},
+    ui::state::{RingMeeting, StringRing, StringRingKind},
 };
 
 pub(crate) mod seam;
@@ -94,6 +94,9 @@ struct SurfaceMesh {
     /// Control strings left out of this build so the rest pass its checks,
     /// in the order they were chosen, by place in the selection.
     left_out_strings: Vec<LeftOut>,
+    /// Every place the strings as drawn meet, by place in the selection,
+    /// when strings were left out: a join on their rings moves those.
+    left_out_meetings: Vec<Meeting>,
     /// What the build cleaned in its copy of the controls, each change by
     /// the place in the selection of the string it came from.
     cleaned: Vec<string_clean::Change>,
@@ -255,6 +258,7 @@ fn refused_rings(ids: &[ObjectId], refused: &[usize], positions: &[DVec3], verte
                 kind: StringRingKind::Refused,
                 sides: vec![(id, vertex_of(id, at))],
                 title: None,
+                meeting: None,
             })
         })
         .collect()
@@ -384,7 +388,7 @@ impl<'a> App<'a> {
             .map(|id| self.scene_document.get_object(*id).map_or(0, |object| object.layer().0))
             .collect();
 
-        let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)> {
+        let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>, Vec<Meeting>)> {
             if cancel.is_cancelled() {
                 anyhow::bail!(crate::app::jobs::Cancelled);
             }
@@ -408,8 +412,8 @@ impl<'a> App<'a> {
                 progress,
             )
         };
-        let apply = move |app: &mut App, result: Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)>| match result {
-            Ok((generated, left_out)) => {
+        let apply = move |app: &mut App, result: Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>, Vec<Meeting>)>| match result {
+            Ok((generated, left_out, meetings)) => {
                 let marked = generated.quality.is_some();
                 app.insert_generated_triangulation_in(generated, section);
                 // A quality surface is not selected, and measures no seam.
@@ -422,7 +426,7 @@ impl<'a> App<'a> {
                     let pieces: Vec<usize> = left_out.iter().map(|left| left.piece).collect();
                     if app.select_refused_controls(runtime_id, &control_ids, &pieces) > 0 {
                         let problems: Vec<Problem> = left_out.iter().flat_map(|left| left.problems.iter().cloned()).collect();
-                        app.ring_placed_controls(&control_ids, &problems);
+                        app.ring_placed_controls(&control_ids, &problems, &meetings);
                     }
                 }
             }
@@ -436,9 +440,11 @@ impl<'a> App<'a> {
                     // Reported after the build's own text, which stands as
                     // it was; then treated as a shape refusal is.
                     message.push('\n');
-                    message.push_str(&placed_report(&placed.problems, &placed.odd_ones));
+                    message.push_str(&placed_report(&placed.problems, &placed.odd_ones, &placed.meetings));
                     let involved = placed_strings(&placed.problems);
-                    message.push_str(&app.isolate_refused_controls(runtime_id, &control_ids, &involved, |app| app.ring_placed_controls(&control_ids, &placed.problems)));
+                    message.push_str(&app.isolate_refused_controls(runtime_id, &control_ids, &involved, |app| {
+                        app.ring_placed_controls(&control_ids, &placed.problems, &placed.meetings)
+                    }));
                 }
                 crate::userspace_error!("{}", tr!("cmd-reference-surface-build-surface-failed-error", error = message))
             }
@@ -529,9 +535,10 @@ impl<'a> App<'a> {
     /// Ring every place Clean Strings' final check found in the refused
     /// controls, as [`Self::ring_refused_controls`] rings, each ring naming
     /// the drawn vertex of each string at its position when there is one.
-    fn ring_placed_controls(&mut self, ids: &[ObjectId], problems: &[Problem]) {
+    fn ring_placed_controls(&mut self, ids: &[ObjectId], problems: &[Problem], meetings: &[Meeting]) {
         let document = self.workspace.active_document();
-        self.editor.string_rings = placed_rings(ids, problems, |id, at| match document.and_then(|document| document.get_object(id)) {
+        let layer_of = |id: ObjectId| document.and_then(|document| document.get_object(id)).map(|object| object.layer().0);
+        self.editor.string_rings = placed_rings(ids, problems, meetings, layer_of, |id, at| match document.and_then(|document| document.get_object(id)) {
             Some(Object::Polyline { verts, .. }) => crate::app::commands::string_clean::vertex_at(verts, at),
             _ => None,
         });
@@ -762,7 +769,7 @@ fn grid_surface_from_points(
     stamp: &RunStamp,
     cancel: &CancelFlag,
     progress: &Progress,
-) -> Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)> {
+) -> Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>, Vec<Meeting>)> {
     let mut surface = surface_mesh(&points, controls, extent.as_deref(), spacing, settings, cancel, progress)?;
     let held = if quality.is_some() { held_at_zero(&mut surface.vertices) } else { 0 };
     if let Some(envelope) = heights_within {
@@ -885,7 +892,7 @@ fn grid_surface_from_points(
         userspace_warn!("{}", report);
     }
     let generated = session::build_generated_triangulation(name, surface.vertices, surface.faces, TriSurfaceType::Surface, |_| Vec::new())?;
-    Ok((generated.with_quality(quality.cloned()), surface.left_out_strings))
+    Ok((generated.with_quality(quality.cloned()), surface.left_out_strings, surface.left_out_meetings))
 }
 
 /// The one quality the points' layers are marked with, by name, with the
@@ -1036,15 +1043,7 @@ fn surface_mesh(
     // depend on the order they were selected in; `names` keeps each one's
     // place in the selection for the messages.
     let copy = string_clean::clean_copy(selected.strings, selected.layers, selected.keys, &cancelled).map_err(|_| anyhow::Error::new(crate::app::jobs::Cancelled))?;
-    let strings: Vec<Vec<DVec3>> = copy
-        .pieces
-        .iter()
-        .map(|piece| {
-            let mut string = piece.verts.clone();
-            string.dedup();
-            string
-        })
-        .collect();
+    let strings = string_clean::build_strings(&copy);
     let sources: Vec<usize> = copy.pieces.iter().map(|piece| piece.source).collect();
     let keys: Vec<u64> = sources.iter().map(|&source| selected.keys.get(source).copied().unwrap_or(source as u64)).collect();
     let copied = CopiedControls {
@@ -1052,7 +1051,22 @@ fn surface_mesh(
         sources: &sources,
         keys: &keys,
     };
-    let checked = checked_controls(copied, &cancelled)?;
+    // Rings are joined on the strings as drawn, so their meetings are
+    // measured there, by place in the selection.
+    let drawn_meetings = || string_clean::meetings(selected.strings, &cancelled).map_err(|_| anyhow::Error::new(crate::app::jobs::Cancelled));
+    let checked = match checked_controls(copied, &cancelled) {
+        Ok(checked) => checked,
+        Err(error) => {
+            return Err(match error.downcast::<PlacedRefusal>() {
+                Ok(mut placed) => {
+                    placed.meetings = drawn_meetings()?;
+                    placed.into()
+                }
+                Err(error) => error,
+            });
+        }
+    };
+    let left_out_meetings = if checked.left_out.is_empty() { Vec::new() } else { drawn_meetings()? };
     let (names, controls, crossings, entered) = (&checked.names, checked.ordered.as_slice(), &checked.crossings, &checked.entered);
     let drawn = extent.map(RingBands::new);
     let mut support = 0usize;
@@ -1174,6 +1188,7 @@ fn surface_mesh(
         settings: *settings,
         cut_to_envelope: envelope.is_some(),
         left_out_strings: checked.left_out,
+        left_out_meetings,
         cleaned: copy.changes,
     })
 }
@@ -1852,6 +1867,9 @@ struct PlacedRefusal {
     report: String,
     problems: Vec<Problem>,
     odd_ones: Vec<OddOneOut>,
+    /// Every place the strings as drawn meet, by place in the selection,
+    /// filled in by the build.
+    meetings: Vec<Meeting>,
 }
 
 impl std::fmt::Display for PlacedRefusal {
@@ -1874,7 +1892,7 @@ fn placed(error: anyhow::Error, copied: CopiedControls, cancelled: &dyn Fn() -> 
     let Ok(problems) = string_clean::problems(copied.strings, cancelled) else {
         return error;
     };
-    if !problems.iter().any(|problem| problem.at.is_finite()) {
+    if !problems.iter().any(Problem::placed) {
         return error;
     }
     let Ok(odd_ones) = string_clean::odd_ones_out(copied.strings, &problems, cancelled) else {
@@ -1891,6 +1909,7 @@ fn placed(error: anyhow::Error, copied: CopiedControls, cancelled: &dyn Fn() -> 
         report: format!("{error:#}"),
         problems: problems.into_iter().map(|problem| copied.named(problem)).collect(),
         odd_ones,
+        meetings: Vec::new(),
     }
     .into()
 }
@@ -1900,7 +1919,7 @@ fn placed(error: anyhow::Error, copied: CopiedControls, cancelled: &dyn Fn() -> 
 /// it misses, both up to [`SELF_SHAPE_LINES`] and then a count of the rest.
 /// Strings are numbered as the build numbers them, by place in the
 /// selection.
-fn placed_report(problems: &[Problem], odd_ones: &[OddOneOut]) -> String {
+fn placed_report(problems: &[Problem], odd_ones: &[OddOneOut], meetings: &[Meeting]) -> String {
     use crate::app::commands::string_clean::{odd_one_out_line, problem_line_named};
     let capped = |mut lines: Vec<String>, all: usize| {
         if all > SELF_SHAPE_LINES
@@ -1913,7 +1932,7 @@ fn placed_report(problems: &[Problem], odd_ones: &[OddOneOut]) -> String {
     let rings = problems.iter().filter(|problem| problem.at.is_finite()).count();
     let mut lines = vec![tr!("cmd-reference-surface-count-places-stop-build", count = rings.to_string())];
     lines.extend(capped(
-        problems.iter().take(SELF_SHAPE_LINES).map(|problem| problem_line_named(problem, &Some)).collect(),
+        problems.iter().take(SELF_SHAPE_LINES).map(|problem| problem_line_named(problem, &Some, meetings)).collect(),
         problems.len(),
     ));
     lines.extend(capped(
@@ -1938,11 +1957,22 @@ fn placed_strings(problems: &[Problem]) -> Vec<usize> {
 
 /// One ring per placed problem, its strings by the ids they were chosen as,
 /// each with the drawn vertex at the ring when there is one, titled with
-/// the strings' numbers in the selection and the miss.
-fn placed_rings(ids: &[ObjectId], problems: &[Problem], vertex_of: impl Fn(ObjectId, DVec3) -> Option<usize>) -> Vec<StringRing> {
+/// the strings' numbers in the selection and the miss. A meeting of strings
+/// on more than one layer, by `layer_of`, is never joined.
+fn placed_rings(
+    ids: &[ObjectId],
+    problems: &[Problem],
+    meetings: &[Meeting],
+    layer_of: impl Fn(ObjectId) -> Option<u64>,
+    vertex_of: impl Fn(ObjectId, DVec3) -> Option<usize>,
+) -> Vec<StringRing> {
+    let one_layer = |strings: &[ObjectId]| {
+        let first = strings.first().and_then(|&id| layer_of(id));
+        first.is_some() && strings.iter().all(|&id| layer_of(id) == first)
+    };
     problems
         .iter()
-        .filter(|problem| problem.at.is_finite())
+        .filter(|problem| problem.placed())
         .map(|problem| StringRing {
             at: problem.at,
             kind: StringRingKind::Left(problem.kind.clone()),
@@ -1953,6 +1983,10 @@ fn placed_rings(ids: &[ObjectId], problems: &[Problem], vertex_of: impl Fn(Objec
                 .map(|&id| (id, vertex_of(id, problem.at)))
                 .collect(),
             title: crate::app::commands::string_clean::ring_title(problem, &Some),
+            meeting: crate::app::commands::string_clean::ring_meeting(problem, ids, meetings).map(|meeting| RingMeeting {
+                one_layer: one_layer(&meeting.strings),
+                ..meeting
+            }),
         })
         .collect()
 }

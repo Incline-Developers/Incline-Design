@@ -66,12 +66,60 @@ pub(crate) struct StringRing {
     /// The header of the canvas menu opened on it, for a ring of two
     /// strings or more: their numbers and miss as the console names them.
     pub(crate) title: Option<String>,
+    /// For a crossing, every string meeting at the ring.
+    pub(crate) meeting: Option<RingMeeting>,
+}
+
+/// The strings meeting at a crossing ring, two or more, and how far apart
+/// their heights are, highest minus lowest.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RingMeeting {
+    pub(crate) strings: Vec<ObjectId>,
+    pub(crate) miss: f64,
+    /// All on one layer: Join at halfway joins a layer at a time.
+    pub(crate) one_layer: bool,
 }
 
 impl StringRing {
-    /// Two strings meeting here close enough in height for Join at halfway.
+    /// Strings meeting here close enough in height for Join at halfway: all
+    /// those of its meeting together, on one layer, else the ring's two.
     pub(crate) fn joinable(&self) -> bool {
-        matches!(self.kind, StringRingKind::Left(crate::model::string_clean::ProblemKind::Crossing { miss }) if miss <= crate::model::string_clean::JOIN_ON_REQUEST)
+        let limit = crate::model::string_clean::JOIN_ON_REQUEST;
+        match (&self.kind, &self.meeting) {
+            (StringRingKind::Left(crate::model::string_clean::ProblemKind::Crossing { .. }), Some(meeting)) => meeting.one_layer && meeting.miss <= limit,
+            (StringRingKind::Left(crate::model::string_clean::ProblemKind::Crossing { miss }), None) => *miss <= limit,
+            _ => false,
+        }
+    }
+
+    /// The numbers, from one and in order, a join here names its strings by
+    /// in `numbers`: only where more than two meet and every one has one.
+    pub(crate) fn join_numbers(&self, numbers: &std::collections::HashMap<ObjectId, usize>) -> Option<Vec<usize>> {
+        let strings = self.join_strings();
+        if strings.len() <= 2 {
+            return None;
+        }
+        let mut named: Vec<usize> = strings.iter().map(|id| numbers.get(id).map(|number| number + 1)).collect::<Option<_>>()?;
+        named.sort_unstable();
+        named.dedup();
+        Some(named)
+    }
+
+    /// The strings a join here moves: every one of its meeting, else its own.
+    pub(crate) fn join_strings(&self) -> Vec<ObjectId> {
+        match &self.meeting {
+            Some(meeting) => meeting.strings.clone(),
+            None => self.sides.iter().map(|&(id, _)| id).collect(),
+        }
+    }
+
+    /// The number, from one, the ring's rows name side `id` by: on a ring of
+    /// two strings or more, the one the console gave it in `numbers`.
+    pub(crate) fn side_number(&self, numbers: &std::collections::HashMap<ObjectId, usize>, id: ObjectId) -> Option<usize> {
+        if self.sides.len() < 2 {
+            return None;
+        }
+        numbers.get(&id).map(|number| number + 1)
     }
 }
 
@@ -253,7 +301,8 @@ fn retain_rings(rings: &mut Vec<StringRing>, slots: &mut Vec<OptionalScreenPoint
 /// vertices. A deletion keeps the rings at the vertices and on the segments
 /// it left alone, renumbered; a ring at a deleted vertex or on a changed
 /// segment goes, and so does every ring on a string edited any other way
-/// (moved, reshaped, vertices added).
+/// (moved, reshaped, vertices added). A ring whose meeting the string only
+/// joins goes on any edit of it, as its meeting may have changed.
 pub(crate) fn carry_rings_across_edit(
     rings: &mut Vec<StringRing>,
     slots: &mut Vec<OptionalScreenPointPx>,
@@ -266,7 +315,7 @@ pub(crate) fn carry_rings_across_edit(
     let map = surviving_vertices(old, new);
     retain_rings(rings, slots, menu_ring, |ring| {
         if !ring.sides.iter().any(|&(side, _)| side == id) {
-            return true;
+            return !ring.meeting.as_ref().is_some_and(|meeting| meeting.strings.contains(&id));
         }
         let Some(map) = &map else {
             return false;
@@ -4700,7 +4749,7 @@ impl EditorState {
         let locked = |id: ObjectId| frozen.contains(&SceneEntityId::Object(id));
         if self.string_rings_screen_px.len() != self.string_rings.len() {
             // New rings, made against what the project holds now.
-            let mut ids: Vec<ObjectId> = self.string_rings.iter().flat_map(|ring| ring.sides.iter().map(|&(id, _)| id)).collect();
+            let mut ids: Vec<ObjectId> = self.string_rings.iter().flat_map(StringRing::join_strings).collect();
             ids.sort_unstable_by_key(|id| id.0);
             ids.dedup();
             cache.strings = ids
@@ -4794,11 +4843,11 @@ impl EditorState {
     }
 
     /// Ring `index` may be joined at halfway from the canvas: a crossing
-    /// close enough in height, drawn, and on no locked string.
+    /// close enough in height, drawn, and no string meeting there locked.
     pub(crate) fn string_ring_joinable(&self, index: usize) -> bool {
         self.string_rings
             .get(index)
-            .is_some_and(|ring| ring.joinable() && self.string_ring_shown(index) && ring.sides.iter().all(|&(id, _)| self.ringed_string_editable(id)))
+            .is_some_and(|ring| ring.joinable() && self.string_ring_shown(index) && ring.join_strings().into_iter().all(|id| self.ringed_string_editable(id)))
     }
 
     /// The ring menu may offer rows that edit ringed string `id`: it is

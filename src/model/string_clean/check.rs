@@ -73,6 +73,11 @@ pub(crate) enum ProblemKind {
 }
 
 impl Problem {
+    /// It has a place, so it is ringed.
+    pub(crate) fn placed(&self) -> bool {
+        self.at.is_finite()
+    }
+
     /// The miss in height a problem measures, for ordering the biggest first.
     fn miss(&self) -> Option<f64> {
         match self.kind {
