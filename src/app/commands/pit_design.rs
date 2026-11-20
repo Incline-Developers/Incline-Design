@@ -150,7 +150,7 @@ impl App<'_> {
 
     /// The version of the ground a design with `settings` daylights against,
     /// if it daylights against one that is loaded.
-    fn pit_ground_version(&self, settings: &PitDesignSettings) -> Option<GeometryVersion> {
+    pub(super) fn pit_ground_version(&self, settings: &PitDesignSettings) -> Option<GeometryVersion> {
         settings
             .ground()
             .and_then(|id| self.triangulations.iter().find(|surface| surface.id == id))
@@ -423,6 +423,7 @@ impl App<'_> {
             let only_derived = synced.as_ref().is_some_and(|synced| {
                 PitObject {
                     derived: now.derived.clone(),
+                    evaluation: now.evaluation.clone(),
                     ..synced.clone()
                 } == now
             });
@@ -430,6 +431,7 @@ impl App<'_> {
                 draft.working = match (only_derived, working) {
                     (true, Some(mut working)) => {
                         working.derived = now.derived.clone();
+                        working.evaluation = now.evaluation.clone();
                         Some(working)
                     }
                     _ => Some(now.clone()),
@@ -457,6 +459,8 @@ impl App<'_> {
         let ground = self.pit_ground_version(&pit.settings());
         let facts = DraftFacts {
             fresh: pit.is_fresh(verts, ground),
+            waiting: self.pit_evaluation_waiting(id),
+            fields: self.workspace.active_document().map(|document| document.reserve_fields().to_vec()).unwrap_or_default(),
         };
         if let Some(draft) = self.editor.pit_design.as_mut() {
             draft.facts = facts;

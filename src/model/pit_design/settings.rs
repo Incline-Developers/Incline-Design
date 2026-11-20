@@ -38,8 +38,12 @@ pub(crate) struct PitDesignSettings {
     pub(crate) stop: StopMode,
     pub(crate) benches: u32,
     pub(crate) stop_elevation: f64,
-    /// The ground a design built up daylights against.
+    /// The ground a design built up daylights against, and that any design
+    /// is measured against.
     pub(crate) topography: Option<TriangulationId>,
+    /// What the design is measured against: no part of what it is designed
+    /// from.
+    pub(crate) evaluation: super::evaluation::EvaluationSettings,
 }
 
 /// One ramp of a pit design, as its settings say.
@@ -145,6 +149,7 @@ impl Default for PitDesignSettings {
             benches: 8,
             stop_elevation: 0.0,
             topography: None,
+            evaluation: super::evaluation::EvaluationSettings::default(),
         }
     }
 }

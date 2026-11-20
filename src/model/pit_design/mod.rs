@@ -19,6 +19,7 @@
 //! next was offset from (`ring::Ring::sources`).
 
 pub(crate) mod checks;
+pub(crate) mod evaluation;
 pub(crate) mod object;
 #[cfg(test)]
 mod object_tests;

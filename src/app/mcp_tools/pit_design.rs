@@ -12,6 +12,7 @@ use crate::{
         pit_design::{
             Design, End,
             checks::Check,
+            evaluation::Evaluation,
             object::{Outcome, PitObject},
             settings::{PitDesignSettings, RampSettings, StopMode},
         },
@@ -20,14 +21,14 @@ use crate::{
     ui::dialogs::pit_design::{NoDesign, end_text, no_design_text, problem_text},
 };
 
-const SETTINGS_DESCRIPTION: &str = "A pit design's settings: kind (pit, cut into the ground, or dump, a dump or stockpile built on it); direction (a pit up from its floor's toe or down from its crest, a dump up from its toe stepping in or down from its top stepping out); bench_height; face_angle (degrees from horizontal); berm_width; bench_rules (height_cycle, a list of heights the benches take in turn; catch_every and catch_width, a berm that wide every that many benches; zones, bands of RL from..to whose benches take their own height, face_angle, berm_width and wall_radius, a bench taking the zone it starts in and the last listed winning; sectors, each a bearing the walls face (dip direction, degrees from north) with its face_angle, berm_width and optional inter_ramp target, interpolated round the compass; regions, each an outline ([x, y] points) whose walls take its face_angle and berm_width, blending over blend metres across its edge; inter_ramp, a target to check the walls against; a region counts over a zone, a zone over a sector, a sector over the design); wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id: a pit built up daylights against it, a dump built down meets it); ramps, a list (empty for none), each with width, gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, inside_radius (the tightest the road's inside edge should turn, checked all along it), switchback (true turns back every switchback_every benches, or at 0 only at turns_at RLs, round inside_radius, turn_widening wider round the turn, climbing at turn_grade round it or level at 0), from and to (RLs it begins and ends at, the way the design is built; null for the whole pit), exit_flat (a level run where it leaves the pit), junction_flat (a level run where each stretch leaves its berm), bands (bands of RL from..to whose stretches take their own width and/or a flat before they climb; a change of width tapers over five times the change); two ramps on one bench keep a road's width apart. Its surface is made with triangulate, which takes a pit design as every string it draws.";
+const SETTINGS_DESCRIPTION: &str = "A pit design's settings: kind (pit, cut into the ground, or dump, a dump or stockpile built on it); direction (a pit up from its floor's toe or down from its crest, a dump up from its toe stepping in or down from its top stepping out); bench_height; face_angle (degrees from horizontal); berm_width; bench_rules (height_cycle, a list of heights the benches take in turn; catch_every and catch_width, a berm that wide every that many benches; zones, bands of RL from..to whose benches take their own height, face_angle, berm_width and wall_radius, a bench taking the zone it starts in and the last listed winning; sectors, each a bearing the walls face (dip direction, degrees from north) with its face_angle, berm_width and optional inter_ramp target, interpolated round the compass; regions, each an outline ([x, y] points) whose walls take its face_angle and berm_width, blending over blend metres across its edge; inter_ramp, a target to check the walls against; a region counts over a zone, a zone over a sector, a sector over the design); wall_radius (the tightest the walls turn); stop (benches, elevation or daylight) with benches, stop_elevation, or topography (a surface id: a pit built up daylights against it, a dump built down meets it; any design is measured against it); evaluation (block_model, the id of a block model the design's ground is measured in by the project's reserve fields); ramps, a list (empty for none), each with width, gradient (a percentage: 10 is 1 in 10, held along the road's steeper edge), start ([x, y] near where it leaves the string, or null for the string's first point), climbs_clockwise, inside_radius (the tightest the road's inside edge should turn, checked all along it), switchback (true turns back every switchback_every benches, or at 0 only at turns_at RLs, round inside_radius, turn_widening wider round the turn, climbing at turn_grade round it or level at 0), from and to (RLs it begins and ends at, the way the design is built; null for the whole pit), exit_flat (a level run where it leaves the pit), junction_flat (a level run where each stretch leaves its berm), bands (bands of RL from..to whose stretches take their own width and/or a flat before they climb; a change of width tapers over five times the change); two ramps on one bench keep a road's width apart. Its surface is made with triangulate, which takes a pit design as every string it draws.";
 
 pub(super) fn definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "get_pit_designs",
             "title": "Read the pit designs",
-            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). Without design: a summary of each. With design (its object id): that one whole, its settings and what they come to included, which set_pit_design takes back. What it comes to lists its checks: each place it falls short of its settings (the ramp steeper, flatter or narrower than asked or turning tighter than inside_radius, a berm narrower, a bench face steeper, or walls steeper between ramps than their target), at its worst point, with the bench (its place in bench_report) and ramp it is on, its value, what was asked and how far along it runs.",
+            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). Without design: a summary of each. With design (its object id): that one whole, its settings and what they come to included, which set_pit_design takes back, and its evaluation: the volume between it and its topography in all and bench by bench, and with settings.evaluation.block_model, each reserve field's figure in all, by category and by bench (current says whether that is what the design comes to now, or waiting why not). What it comes to lists its checks: each place it falls short of its settings (the ramp steeper, flatter or narrower than asked or turning tighter than inside_radius, a berm narrower, a bench face steeper, or walls steeper between ramps than their target), at its worst point, with the bench (its place in bench_report) and ramp it is on, its value, what was asked and how far along it runs.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "design": { "type": "integer", "minimum": 0 } },
@@ -141,6 +142,8 @@ pub(super) fn definitions() -> Vec<Value> {
                     "benches": { "type": "integer", "minimum": 1, "description": "Stop after this many benches." },
                     "stop_rl": { "type": "number", "description": "Stop at this RL, the last bench cut short to meet it." },
                     "daylight": { "type": "integer", "minimum": 0, "description": "A loaded topography surface: a pit built up until a whole bench stands clear of it, or a dump built down until a whole lift meets it." },
+                    "topography": { "type": "integer", "minimum": 0, "description": "A surface the design is measured against, where it does not daylight against one." },
+                    "block_model": { "type": "integer", "minimum": 0, "description": "A block model the design's ground is measured in, by the project's reserve fields: get_pit_designs then reports it in all, by category and bench by bench." },
                     "ramp": {
                         "type": "object",
                         "description": "The haul ramp. None if left out.",
@@ -268,6 +271,10 @@ fn one_call_settings(arguments: &Value) -> Result<PitDesignSettings, String> {
     } else {
         return Err("benches is a whole number, stop_rl an RL and daylight a surface id.".to_owned());
     }
+    if let Some(surface) = arguments["topography"].as_u64() {
+        settings.topography = settings.topography.or(Some(TriangulationId(surface)));
+    }
+    settings.evaluation.block_model = arguments["block_model"].as_u64().map(crate::model::block_model::BlockModelId);
     settings.ramps = match (&arguments["ramp"], &arguments["ramps"]) {
         (Value::Null, Value::Null) => Vec::new(),
         (ramp, Value::Null) => vec![ramp_settings(ramp)?],
@@ -500,6 +507,12 @@ impl App<'_> {
                 Some(Outcome::Problem(problem)) => json!({ "problem": problem_text(*problem) }),
                 None => json!({ "problem": "Not worked out yet." }),
             };
+            value["evaluation"] = self.mcp_evaluation(id, pit.evaluation.as_ref());
+            if pit.design().is_some_and(|design| pit.settings.can_daylight() && design.end != End::Daylight) && pit.evaluation.is_some() {
+                value["evaluation"]["note"] = json!(
+                    "The design stops short of the topography: the ground above its last ring is measured up to the topography as though its walls stood straight up from there."
+                );
+            }
             return Ok(value);
         }
         let designs: Vec<Value> = self
@@ -515,6 +528,68 @@ impl App<'_> {
             })
             .unwrap_or_default();
         Ok(json!({ "designs": designs }))
+    }
+
+    /// What a design takes out of the ground, as last measured, with each
+    /// reserve field by name; and whether that is what it comes to now.
+    fn mcp_evaluation(&self, id: ObjectId, evaluation: Option<&Evaluation>) -> Value {
+        use crate::model::pit_design::evaluation::{Figures, Measured, Waiting};
+        let fields = self.workspace.active_document().map(|document| document.reserve_fields().to_vec()).unwrap_or_default();
+        let name = |field: crate::model::ReserveFieldId| {
+            fields
+                .iter()
+                .find(|entry| entry.id == field)
+                .map_or_else(|| field.0.to_string(), |entry| entry.name.clone())
+        };
+        let round = |value: f64| (value * 1000.0).round() / 1000.0;
+        let measured = |measured: &Measured| {
+            let values = |values: &[crate::model::pit_design::evaluation::FieldValue]| -> serde_json::Map<String, Value> {
+                values.iter().map(|value| (name(value.field), json!(value.value.map(round)))).collect()
+            };
+            json!({
+                "in_block_model": round(measured.covered),
+                "fields": values(&measured.values),
+                "by_category": measured.categories.iter().map(|category| json!({
+                    "field": name(category.field),
+                    "groups": category.groups.iter().map(|group| json!({
+                        "name": group.name,
+                        "in_block_model": round(group.covered),
+                        "fields": values(&group.values),
+                    })).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+            })
+        };
+        let figures = |figures: &Figures| {
+            let mut value = json!({ "volume": round(figures.volume) });
+            if let Some(found) = &figures.measured {
+                value["measured"] = measured(found);
+            }
+            value
+        };
+        let waiting = match self.pit_evaluation_waiting(id) {
+            None => Value::Null,
+            Some(Waiting::Design) => json!("The design is being worked out."),
+            Some(Waiting::NoTopography) => json!("No topography is chosen to measure it against: settings.topography."),
+            Some(Waiting::NotLoaded(name)) => json!(format!("{name} must be loaded to measure it.")),
+            Some(Waiting::Measuring) => json!("Being measured: what follows is from before."),
+        };
+        let Some(evaluation) = evaluation else {
+            return json!({ "current": false, "waiting": waiting });
+        };
+        if let Some(problem) = &evaluation.problem {
+            return json!({ "current": waiting.is_null(), "waiting": waiting, "problem": problem });
+        }
+        json!({
+            "current": waiting.is_null(),
+            "waiting": waiting,
+            "total": figures(&evaluation.total),
+            "benches": evaluation.benches.iter().map(|bench| {
+                let mut value = figures(&bench.figures);
+                value["from"] = json!(round(bench.base));
+                value["to"] = json!(round(bench.top));
+                value
+            }).collect::<Vec<_>>(),
+        })
     }
 
     /// A closed polyline's id, if `arguments` gives one.

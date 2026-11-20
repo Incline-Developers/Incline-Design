@@ -32,6 +32,10 @@ pub(crate) struct PitObject {
     /// The design as last worked out, and what from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) derived: Option<Derived>,
+    /// What the design takes out of the ground, as last measured, and what
+    /// from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) evaluation: Option<super::evaluation::Evaluation>,
 }
 
 /// What the string and settings came to when last worked out.
@@ -58,7 +62,12 @@ pub(crate) enum Outcome {
 
 impl PitObject {
     pub(crate) fn new(name: String, settings: PitDesignSettings) -> Self {
-        Self { name, settings, derived: None }
+        Self {
+            name,
+            settings,
+            derived: None,
+            evaluation: None,
+        }
     }
 
     /// What it is designed with, as a copy.
@@ -121,7 +130,12 @@ pub(crate) fn inputs_key(verts: &[PolyVertex], settings: &PitDesignSettings) -> 
             mix(&value.to_bits().to_le_bytes());
         }
     }
-    mix(&serde_json::to_vec(settings).unwrap_or_default());
+    // What it is measured against changes nothing designed.
+    let designed = PitDesignSettings {
+        evaluation: super::evaluation::EvaluationSettings::default(),
+        ..settings.clone()
+    };
+    mix(&serde_json::to_vec(&designed).unwrap_or_default());
     hash
 }
 

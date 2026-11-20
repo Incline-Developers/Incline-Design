@@ -433,6 +433,23 @@ fn build_created_triangulation(
     session::build_generated_triangulation(name, all_verts, all_faces, surface_type, |_| Vec::new())
 }
 
+/// A terrain surface through strings, as Create Triangulation makes one of
+/// them: each `(points, closed)`, welded where they meet, every edge kept.
+/// For a surface that is worked with rather than added to the project: a
+/// pit design's, to measure it.
+pub(crate) fn surface_through_strings(strings: Vec<(Vec<glam::DVec3>, bool)>) -> Result<mesh_data::Triangulation> {
+    let mut paths: Vec<BreaklinePath> = strings
+        .into_iter()
+        .filter(|(points, closed)| points.len() >= if *closed { 3 } else { 2 })
+        .map(|(points, closed)| BreaklinePath { points, closed })
+        .collect();
+    weld_breakline_vertices(&mut paths, crate::model::kernel::XY_TOL, crate::model::kernel::Z_TOL);
+    let input = assemble_triangulation_input(paths)?;
+    let (vertices, faces) = cdt_surface_from_breaklines(&input.boundaries, &input.constraints)?;
+    anyhow::ensure!(!faces.is_empty(), tr!("err-tri-no-faces-produced"));
+    Ok(mesh_data::Triangulation::from_vertices_and_faces(vertices, faces)?)
+}
+
 /// Snap breakline vertices that coincide within the given tolerances (XY
 /// horizontally, Z vertically, both metres) onto one canonical position,
 /// across all paths. At kernel tolerance, vertices this close come from

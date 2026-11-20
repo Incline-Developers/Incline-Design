@@ -14,10 +14,12 @@ use glam::{DVec2, DVec3};
 use crate::{
     i18n::tr,
     model::{
-        ObjectId, PolyVertex,
+        ObjectId, PolyVertex, ReserveAggregation, ReserveField,
+        block_model::BlockModelId,
         pit_design::{
             Design, Direction, End, Kind, Problem, RampBand, Zone,
             checks::{Check, Flag},
+            evaluation::{Evaluation, Figures, Waiting},
             object::PitObject,
             settings::{PitDesignSettings, RampSettings, StopMode},
             walls::{Sector, WallReport},
@@ -77,6 +79,10 @@ pub(crate) struct Preview {
 pub(crate) struct DraftFacts {
     /// Whether the object's own design is what it comes to now.
     pub(crate) fresh: bool,
+    /// Why its measure is not what it comes to now, if it is not.
+    pub(crate) waiting: Option<Waiting>,
+    /// The project's reserve fields, which its measure is in.
+    pub(crate) fields: Vec<ReserveField>,
 }
 
 /// The steps the Pit Design tool takes a pit through once its string is
@@ -356,6 +362,9 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                     let hover = draw_result(ui, draft, &settings, commands);
                     if hover != draft.hover {
                         commands.push(UiCommand::PitDesignHover(hover));
+                    }
+                    if let Some(working) = draft.working.as_mut() {
+                        draw_evaluation(ui, working, &draft.facts, project);
                     }
                 });
 
@@ -1058,6 +1067,159 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
         menu::menu_note(ui, tr!("pit-design-designing"));
     }
     hover
+}
+
+/// A quantity as the reserves show one: whole and grouped in thousands
+/// from a thousand, to two places below.
+fn quantity(value: Option<f64>) -> String {
+    use thousands::Separable;
+    match value {
+        None => "-".to_owned(),
+        Some(value) if value.abs() >= 1000.0 => format!("{value:.0}").separate_with_commas(),
+        Some(value) => format!("{value:.2}"),
+    }
+}
+
+/// What the design takes out of the ground, measured against the
+/// topography and a block model the section chooses: in all, by material
+/// and bench by bench.
+fn draw_evaluation(ui: &mut egui::Ui, working: &mut PitObject, facts: &DraftFacts, project: &UiProjectView) {
+    if !menu::menu_section_folding(ui, "pit_design_evaluation", tr!("pit-design-evaluation")) {
+        return;
+    }
+    // Built up short of the ground it could daylight against, its ground
+    // above its last ring is measured as though its walls stood straight up.
+    let short = working.design().is_some_and(|design| working.settings.can_daylight() && design.end != End::Daylight);
+    let settings = &mut working.settings;
+    // Daylighting, the topography is chosen with where the design stops.
+    if !settings.daylights() {
+        let surfaces: Vec<(TriangulationId, &str)> = project.triangulations.iter().map(|entry| (entry.id, entry.name.as_str())).collect();
+        let chosen = settings
+            .topography
+            .and_then(|id| surfaces.iter().find(|(surface, _)| *surface == id).map(|(_, name)| (*name).to_owned()))
+            .unwrap_or_else(|| tr!("pit-design-topography-none"));
+        MenuFieldCombo::new(
+            "pit_design_evaluation_topography",
+            tr!("pit-design-topography"),
+            &mut settings.topography,
+            chosen,
+            std::iter::once((None, tr!("pit-design-topography-none").into())).chain(surfaces.iter().map(|(id, name)| (Some(*id), (*name).into()))),
+        )
+        .width(FIELD_WIDTH)
+        .help_text(tr!("pit-design-evaluation-topography-help"))
+        .show(ui);
+    }
+    let models: Vec<(BlockModelId, &str)> = project.block_models.iter().map(|entry| (entry.id, entry.name.as_str())).collect();
+    let chosen = settings
+        .evaluation
+        .block_model
+        .and_then(|id| models.iter().find(|(model, _)| *model == id).map(|(_, name)| (*name).to_owned()))
+        .unwrap_or_else(|| tr!("pit-design-block-model-none"));
+    MenuFieldCombo::new(
+        "pit_design_block_model",
+        tr!("pit-design-block-model"),
+        &mut settings.evaluation.block_model,
+        chosen,
+        std::iter::once((None, tr!("pit-design-block-model-none").into())).chain(models.iter().map(|(id, name)| (Some(*id), (*name).into()))),
+    )
+    .width(FIELD_WIDTH)
+    .help_text(tr!("pit-design-block-model-help"))
+    .show(ui);
+    let warning = ui.visuals().warn_fg_color;
+    match &facts.waiting {
+        Some(Waiting::Design) => menu::menu_note(ui, tr!("pit-design-designing")),
+        Some(Waiting::NoTopography) => menu::menu_note(ui, tr!("pit-design-evaluation-no-topography")),
+        Some(Waiting::NotLoaded(name)) => {
+            ui.colored_label(warning, tr!("pit-design-evaluation-not-loaded", name = name.clone()));
+        }
+        Some(Waiting::Measuring) => menu::menu_note(ui, tr!("pit-design-measuring")),
+        None => {}
+    }
+    let Some(evaluation) = working.evaluation.as_ref() else {
+        return;
+    };
+    if let Some(problem) = &evaluation.problem {
+        ui.colored_label(warning, tr!("pit-design-evaluation-failed", reason = problem.clone()));
+        return;
+    }
+    if short {
+        ui.colored_label(warning, tr!("pit-design-evaluation-short"));
+    }
+    draw_figures(ui, evaluation, &facts.fields);
+}
+
+/// A measure's figures: the whole design's, its materials' and its
+/// benches'.
+fn draw_figures(ui: &mut egui::Ui, evaluation: &Evaluation, fields: &[ReserveField]) {
+    let weak = ui.visuals().weak_text_color();
+    let total = &evaluation.total;
+    read_only_row(ui, &tr!("pit-design-evaluation-volume"), &format!("{} m³", quantity(Some(total.volume))));
+    let numeric: Vec<&ReserveField> = fields.iter().filter(|field| field.aggregation != ReserveAggregation::Category).collect();
+    let Some(measured) = total.measured.as_ref() else {
+        return;
+    };
+    read_only_row(ui, &tr!("pit-design-evaluation-covered"), &format!("{} m³", quantity(Some(measured.covered))));
+    for field in &numeric {
+        read_only_row(ui, &field.name, &quantity(measured.value(field.id)));
+    }
+    let heading = |ui: &mut egui::Ui, text: String| {
+        ui.label(egui::RichText::new(text).color(weak).small());
+    };
+    // By material: each category field's categories.
+    for category in &measured.categories {
+        let Some(field) = fields.iter().find(|field| field.id == category.field) else {
+            continue;
+        };
+        if category.groups.is_empty() {
+            continue;
+        }
+        menu::menu_note(ui, tr!("pit-design-evaluation-by", field = field.name.clone()));
+        egui::ScrollArea::horizontal().id_salt(("pit_design_materials", field.id.0)).show(ui, |ui| {
+            egui::Grid::new(("pit_design_materials_grid", field.id.0))
+                .striped(true)
+                .spacing([12.0, 2.0])
+                .show(ui, |ui| {
+                    heading(ui, field.name.clone());
+                    heading(ui, tr!("pit-design-evaluation-volume"));
+                    for field in &numeric {
+                        heading(ui, field.name.clone());
+                    }
+                    ui.end_row();
+                    for group in &category.groups {
+                        ui.label(&group.name);
+                        ui.label(quantity(Some(group.covered)));
+                        for field in &numeric {
+                            ui.label(quantity(group.value(field.id)));
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+    }
+    // Bench by bench.
+    if evaluation.benches.is_empty() {
+        return;
+    }
+    menu::menu_note(ui, tr!("pit-design-evaluation-benches"));
+    egui::ScrollArea::horizontal().id_salt("pit_design_evaluation_benches").show(ui, |ui| {
+        egui::Grid::new("pit_design_evaluation_benches_grid").striped(true).spacing([12.0, 2.0]).show(ui, |ui| {
+            heading(ui, tr!("pit-design-table-rl"));
+            heading(ui, tr!("pit-design-evaluation-volume"));
+            for field in &numeric {
+                heading(ui, field.name.clone());
+            }
+            ui.end_row();
+            for bench in evaluation.benches.iter().rev() {
+                let Figures { volume, measured } = &bench.figures;
+                ui.label(format!("{:.1}–{:.1}", bench.base, bench.top));
+                ui.label(quantity(Some(*volume)));
+                for field in &numeric {
+                    ui.label(quantity(measured.as_ref().and_then(|measured| measured.value(field.id))));
+                }
+                ui.end_row();
+            }
+        });
+    });
 }
 
 /// What a check is called.

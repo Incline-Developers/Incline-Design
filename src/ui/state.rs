@@ -2448,6 +2448,9 @@ pub(crate) struct EditorState {
     /// project looked like when last checked for any that need it.
     pub(crate) pit_refreshes: std::collections::HashMap<ObjectId, u64>,
     pub(crate) pit_refresh_checked: Option<u64>,
+    /// The same for measuring them.
+    pub(crate) pit_evaluations: std::collections::HashMap<ObjectId, u64>,
+    pub(crate) pit_evaluation_checked: Option<u64>,
     /// Whether the string drawn with Pit Design has its corners rounded to
     /// arcs of `pit_corner_radius` when it closes.
     pub(crate) pit_round_corners: bool,
@@ -4281,6 +4284,8 @@ impl EditorState {
             pit_design: None,
             pit_refreshes: std::collections::HashMap::new(),
             pit_refresh_checked: None,
+            pit_evaluations: std::collections::HashMap::new(),
+            pit_evaluation_checked: None,
             pit_round_corners: true,
             pit_corner_radius: 15.0,
             pit_last_settings: None,

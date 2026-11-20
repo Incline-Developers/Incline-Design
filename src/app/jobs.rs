@@ -176,6 +176,8 @@ pub(crate) enum JobKey {
     PitDesignPreview(u64),
     /// A pit design object's benches worked out again.
     PitDesignRefresh(crate::model::ObjectId),
+    /// A pit design object measured again.
+    PitDesignEvaluation(crate::model::ObjectId),
     /// A job not tied to any tracked source (always applied).
     #[allow(dead_code)]
     Anonymous,
@@ -346,7 +348,7 @@ impl<'a> App<'a> {
             // Held under its key, which a reader checks against the ground
             // and lines it is counting.
             JobKey::DigBlockCount { .. } => true,
-            JobKey::PitDesignPreview(_) | JobKey::PitDesignRefresh(_) => true,
+            JobKey::PitDesignPreview(_) | JobKey::PitDesignRefresh(_) | JobKey::PitDesignEvaluation(_) => true,
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects

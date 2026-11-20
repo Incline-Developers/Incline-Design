@@ -62,9 +62,39 @@ fn parts(object: &Object) -> (&[PolyVertex], &PitObject) {
 
 #[test]
 fn saves_and_reads_back_whole() {
+    use super::evaluation::{BenchFigures, CategoryFigures, Evaluation, FieldValue, Figures, GroupFigures, Measured};
     let mut object = pit_object(square(100.0), settings());
     if let Object::PitDesign { pit, .. } = &mut object {
         pit.settings.face_angle = 75.0;
+        pit.settings.evaluation.block_model = Some(crate::model::block_model::BlockModelId(3));
+        let measured = Measured {
+            covered: 900.0,
+            values: vec![FieldValue {
+                field: crate::model::ReserveFieldId(1),
+                value: Some(2.5),
+            }],
+            categories: vec![CategoryFigures {
+                field: crate::model::ReserveFieldId(2),
+                groups: vec![GroupFigures {
+                    name: "Oxide".to_owned(),
+                    covered: 900.0,
+                    values: vec![FieldValue {
+                        field: crate::model::ReserveFieldId(1),
+                        value: None,
+                    }],
+                }],
+            }],
+        };
+        let figures = Figures {
+            volume: 1000.0,
+            measured: Some(measured),
+        };
+        pit.evaluation = Some(Evaluation {
+            key: 42,
+            problem: None,
+            total: figures.clone(),
+            benches: vec![BenchFigures { base: 100.0, top: 115.0, figures }],
+        });
     }
     let json = serde_json::to_string(&object).expect("an object serialises");
     let read: Object = serde_json::from_str(&json).expect("and reads back");
@@ -87,6 +117,11 @@ fn says_when_its_benches_are_stale() {
     let mut changed = pit.clone();
     changed.settings.bench_height = 10.0;
     assert!(!changed.is_fresh(verts, None), "so does a changed setting");
+    // What it is measured against is no part of what it is designed from.
+    let mut measured = pit.clone();
+    measured.settings.evaluation.block_model = Some(crate::model::block_model::BlockModelId(2));
+    measured.settings.evaluation.shell = Some(TriangulationId(5));
+    assert!(measured.is_fresh(verts, None), "choosing a block model leaves the design current");
 
     // Against ground, the ground's version counts too; without, it does not.
     assert!(pit.is_fresh(verts, Some(GeometryVersion::mint())));
