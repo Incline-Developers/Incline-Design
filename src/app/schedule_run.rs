@@ -339,6 +339,12 @@ impl crate::app::App<'_> {
                 member.volume.map(f64::to_bits).hash(&mut hasher);
             }
         }
+        // The finer steps of the scenarios it starts from, over their
+        // horizons, which its calculation's intervals keep.
+        for (end_h, step_h) in document.schedule().inherited_steps() {
+            end_h.to_bits().hash(&mut hasher);
+            step_h.to_bits().hash(&mut hasher);
+        }
         // Drill and blast: its settings and starting stages, and what each
         // class's machines do.
         document.schedule().drill_blast().hash_content(&mut hasher);
