@@ -1667,6 +1667,7 @@ improve-card-title-published = Improve finished
 improve-card-title-stopped = Improve stopped early, best kept
 improve-card-title-not-published = Improve stopped
 improve-card-limit = of { $limit }
+improve-card-no-limit = no limit
 improve-card-best = Best found
 improve-card-gain = +{ $gain } ({ $percent })
 improve-card-no-gain = No better schedule yet
