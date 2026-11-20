@@ -5287,6 +5287,16 @@ pit-design-send-no-ramp = Der Grubenentwurf hat keine Rampe zum Senden.
 pit-design-haul-road = { $design } Rampe
 pit-design-haul-road-numbered = { $design } Rampe { $number }
 pit-design-report-send-haulage = Rampen ins Transportnetz gesendet
+pit-design-send-section = Weitergeben
+pit-design-send-planning = An Planung senden
+pit-design-update-planning = In Planung aktualisieren
+pit-design-send-planning-help = Erstellt die Oberfläche der Grube aus ihren Linien, wie Triangulation erstellen es täte, und einen Planungskörper daraus gegen ihre Topografie, mit Vorräten aus ihrem Blockmodell und so abgestuft wie sie. Erneutes Senden baut die Oberfläche an Ort und Stelle neu und bringt den Körper auf den neuesten Stand.
+pit-design-send-no-topography = Wählen Sie zuerst eine Topografie (Auswertung): Die Planung misst den Körper der Grube daran.
+pit-design-sending-planning = Grube wird an die Planung gesendet...
+pit-design-send-planning-failed = Die Grube konnte nicht an die Planung gesendet werden: { $reason }
+pit-design-send-changed = Der Grubenentwurf hat sich geändert, während seine Oberfläche erstellt wurde: Senden Sie ihn erneut.
+pit-design-sent-planning = { $design } mit seiner Oberfläche an die Planung gesendet.
+pit-design-report-send-planning = Grube an die Planung gesendet
 pit-design-sent-roads =
     { $count ->
         [one] Die Rampe von { $design } wurde als ein Weg ins Transportnetz gesendet.

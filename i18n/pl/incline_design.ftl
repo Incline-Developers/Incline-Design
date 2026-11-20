@@ -5380,6 +5380,16 @@ pit-design-send-no-ramp = Projekt wyrobiska nie ma rampy do wysłania.
 pit-design-haul-road = Rampa { $design }
 pit-design-haul-road-numbered = Rampa { $number } { $design }
 pit-design-report-send-haulage = Wysłano rampy do sieci transportowej
+pit-design-send-section = Przekaż
+pit-design-send-planning = Wyślij do planowania
+pit-design-update-planning = Aktualizuj w planowaniu
+pit-design-send-planning-help = Tworzy powierzchnię wyrobiska z jego linii, tak jak Utwórz triangulację, i bryłę planowania względem jego topografii, z zasobami z jego modelu blokowego i z jego poziomami. Ponowne wysłanie przebudowuje powierzchnię na miejscu i aktualizuje bryłę.
+pit-design-send-no-topography = Najpierw wybierz topografię (Ocena): planowanie mierzy bryłę wyrobiska względem niej.
+pit-design-sending-planning = Wysyłanie wyrobiska do planowania...
+pit-design-send-planning-failed = Nie udało się wysłać wyrobiska do planowania: { $reason }
+pit-design-send-changed = Projekt wyrobiska zmienił się podczas budowania jego powierzchni: wyślij go ponownie.
+pit-design-sent-planning = Wysłano { $design } do planowania wraz z powierzchnią.
+pit-design-report-send-planning = Wysłano wyrobisko do planowania
 pit-design-sent-roads =
     { $count ->
         [one] Wysłano rampę { $design } do sieci transportowej jako jedną drogę.

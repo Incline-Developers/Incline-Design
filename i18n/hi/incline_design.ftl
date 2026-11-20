@@ -5246,6 +5246,16 @@ pit-design-send-no-ramp = पिट डिज़ाइन में भेजन
 pit-design-haul-road = { $design } रैम्प
 pit-design-haul-road-numbered = { $design } रैम्प { $number }
 pit-design-report-send-haulage = रैम्प ढुलाई नेटवर्क में भेजे गए
+pit-design-send-section = आगे भेजें
+pit-design-send-planning = प्लानिंग में भेजें
+pit-design-update-planning = प्लानिंग में अद्यतन करें
+pit-design-send-planning-help = पिट की सतह उसकी रेखाओं से बनाता है, जैसे ट्रायंगुलेशन बनाएँ बनाता, और उसकी टोपोग्राफी के सापेक्ष एक प्लानिंग सॉलिड, उसके ब्लॉक मॉडल से रिज़र्व और उसी की बेंचों में। फिर से भेजने पर सतह उसी जगह फिर बनती है और सॉलिड अद्यतन होता है।
+pit-design-send-no-topography = पहले एक टोपोग्राफी चुनें (मूल्यांकन): प्लानिंग पिट के सॉलिड को उसके सापेक्ष मापता है।
+pit-design-sending-planning = पिट प्लानिंग में भेजा जा रहा है...
+pit-design-send-planning-failed = पिट प्लानिंग में नहीं भेजा जा सका: { $reason }
+pit-design-send-changed = सतह बनते समय पिट डिज़ाइन बदल गया: फिर से भेजें।
+pit-design-sent-planning = { $design } अपनी सतह के साथ प्लानिंग में भेजा गया।
+pit-design-report-send-planning = पिट प्लानिंग में भेजा गया
 pit-design-sent-roads =
     { $count ->
         [one] { $design } का रैम्प ढुलाई नेटवर्क में एक सड़क के रूप में भेजा गया।

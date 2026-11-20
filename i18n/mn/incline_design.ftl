@@ -5297,6 +5297,16 @@ pit-design-send-no-ramp = Уурхайн төсөлд илгээх налуу з
 pit-design-haul-road = { $design } налуу зам
 pit-design-haul-road-numbered = { $design } налуу зам { $number }
 pit-design-report-send-haulage = Налуу замуудыг тээврийн сүлжээнд илгээлээ
+pit-design-send-section = Дамжуулах
+pit-design-send-planning = Төлөвлөлт рүү илгээх
+pit-design-update-planning = Төлөвлөлтөд шинэчлэх
+pit-design-send-planning-help = Гурвалжинжуулалт үүсгэх шиг уурхайн гадаргууг шугамуудаас нь үүсгэж, түүний топографитай харьцуулсан төлөвлөлтийн биет, блок загварын нөөцтэй, шатлалтай нь үүсгэнэ. Дахин илгээвэл гадаргууг байранд нь шинэчилж биетийг шинэчилнэ.
+pit-design-send-no-topography = Эхлээд топографи сонгоно уу (Үнэлгээ): төлөвлөлт уурхайн биетийг түүнтэй харьцуулж хэмжинэ.
+pit-design-sending-planning = Уурхайг төлөвлөлт рүү илгээж байна...
+pit-design-send-planning-failed = Уурхайг төлөвлөлт рүү илгээж чадсангүй: { $reason }
+pit-design-send-changed = Гадаргуу үүсэх зуур уурхайн төсөл өөрчлөгдсөн: дахин илгээнэ үү.
+pit-design-sent-planning = { $design }-г гадаргуутай нь төлөвлөлт рүү илгээлээ.
+pit-design-report-send-planning = Уурхайг төлөвлөлт рүү илгээлээ
 pit-design-sent-roads =
     { $count ->
         [one] { $design }-ийн налуу замыг нэг зам болгон тээврийн сүлжээнд илгээлээ.

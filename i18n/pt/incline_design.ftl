@@ -5244,6 +5244,16 @@ pit-design-send-no-ramp = O projeto de cava não tem rampa para enviar.
 pit-design-haul-road = Rampa de { $design }
 pit-design-haul-road-numbered = Rampa { $number } de { $design }
 pit-design-report-send-haulage = Rampas enviadas para a rede de transporte
+pit-design-send-section = Enviar
+pit-design-send-planning = Enviar para o Planejamento
+pit-design-update-planning = Atualizar no Planejamento
+pit-design-send-planning-help = Cria a superfície da cava a partir das suas linhas, como Criar triangulação faria, e um sólido de Planejamento com ela em relação à sua topografia, com reservas do seu modelo de blocos e as suas bancadas. Enviar de novo reconstrói a superfície no lugar e atualiza o sólido.
+pit-design-send-no-topography = Escolha primeiro uma topografia (Avaliação): o Planejamento mede o sólido da cava em relação a ela.
+pit-design-sending-planning = Enviando a cava para o Planejamento...
+pit-design-send-planning-failed = Não foi possível enviar a cava para o Planejamento: { $reason }
+pit-design-send-changed = O projeto de cava mudou enquanto a sua superfície era construída: envie-o de novo.
+pit-design-sent-planning = { $design } enviado para o Planejamento, com a sua superfície.
+pit-design-report-send-planning = Cava enviada para o Planejamento
 pit-design-sent-roads =
     { $count ->
         [one] A rampa de { $design } foi enviada para a rede de transporte como uma estrada.

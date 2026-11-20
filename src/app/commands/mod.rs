@@ -1423,6 +1423,10 @@ impl<'a> App<'a> {
                 self.set_pit_design_hover(hover);
                 Ok(())
             }
+            UiCommand::SendPitToPlanning(id) => {
+                self.flush_pit_design_draft();
+                self.send_pit_to_planning(id)
+            }
             UiCommand::SendPitRampsToHaulage(id) => {
                 self.flush_pit_design_draft();
                 self.send_pit_ramps_to_haulage(id).map(|_| ())

@@ -5300,6 +5300,16 @@ pit-design-send-no-ramp = لا يحوي تصميم الحفرة منحدرًا �
 pit-design-haul-road = منحدر { $design }
 pit-design-haul-road-numbered = منحدر { $number } من { $design }
 pit-design-report-send-haulage = أُرسلت المنحدرات إلى شبكة النقل
+pit-design-send-section = إرسال إلى
+pit-design-send-planning = إرسال إلى التخطيط
+pit-design-update-planning = تحديث في التخطيط
+pit-design-send-planning-help = يُنشئ سطح الحفرة من خطوطها كما يفعل إنشاء التثليث، ومجسّم تخطيط منه بالنسبة إلى طبوغرافيتها، باحتياطي من نموذجها الكتلي ومقسّمًا إلى مصاطبها. الإرسال مجددًا يعيد بناء السطح في مكانه ويحدّث المجسّم.
+pit-design-send-no-topography = اختر طبوغرافيا أولًا (التقييم): يقيس التخطيط مجسّم الحفرة بالنسبة إليها.
+pit-design-sending-planning = جارٍ إرسال الحفرة إلى التخطيط...
+pit-design-send-planning-failed = تعذّر إرسال الحفرة إلى التخطيط: { $reason }
+pit-design-send-changed = تغيّر تصميم الحفرة أثناء بناء سطحه: أرسله مجددًا.
+pit-design-sent-planning = أُرسل { $design } إلى التخطيط مع سطحه.
+pit-design-report-send-planning = أُرسلت الحفرة إلى التخطيط
 pit-design-sent-roads =
     { $count ->
         [one] أُرسل منحدر { $design } إلى شبكة النقل كطريق واحد.

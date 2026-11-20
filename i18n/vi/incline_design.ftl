@@ -5271,6 +5271,16 @@ pit-design-send-no-ramp = Thiết kế moong không có đường dốc nào đ�
 pit-design-haul-road = Đường dốc { $design }
 pit-design-haul-road-numbered = Đường dốc { $number } { $design }
 pit-design-report-send-haulage = Đã gửi các đường dốc vào mạng vận tải
+pit-design-send-section = Gửi tiếp
+pit-design-send-planning = Gửi sang Lập kế hoạch
+pit-design-update-planning = Cập nhật trong Lập kế hoạch
+pit-design-send-planning-help = Tạo bề mặt moong từ các đường của nó, như Tạo lưới tam giác sẽ làm, và một khối Lập kế hoạch so với địa hình, có trữ lượng từ mô hình khối và chia tầng như moong. Gửi lại sẽ dựng lại bề mặt tại chỗ và cập nhật khối.
+pit-design-send-no-topography = Hãy chọn địa hình trước (Đánh giá): Lập kế hoạch đo khối moong so với nó.
+pit-design-sending-planning = Đang gửi moong sang Lập kế hoạch...
+pit-design-send-planning-failed = Không gửi được moong sang Lập kế hoạch: { $reason }
+pit-design-send-changed = Thiết kế moong đã thay đổi trong khi dựng bề mặt: hãy gửi lại.
+pit-design-sent-planning = Đã gửi { $design } sang Lập kế hoạch, kèm bề mặt.
+pit-design-report-send-planning = Đã gửi moong sang Lập kế hoạch
 pit-design-sent-roads =
     { $count ->
         [one] Đã gửi đường dốc của { $design } vào mạng vận tải thành một đường.

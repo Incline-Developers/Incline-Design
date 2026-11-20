@@ -69,12 +69,12 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "send_pit_design",
             "title": "Send a pit design on",
-            "description": "Send a pit design on to the rest of the project, as the Pit Design tool's Send buttons do. to haul_network: each ramp becomes a haul road along its centreline, joined to the network's nodes and roads it comes within the join tolerance of. Sending again replaces what it sent before. Its design must be current (get_pit_designs says fresh). Returns what it made.",
+            "description": "Send a pit design on to the rest of the project, as the Pit Design tool's Send buttons do. to haul_network: each ramp becomes a haul road along its centreline, joined to the network's nodes and roads it comes within the join tolerance of. to planning: the pit's surface is made from its strings as triangulate would make it, as a project surface named after it, and a Planning solid of it against its topography (settings.topography, which it needs), reserved from settings.evaluation.block_model and benched at its RLs; runs in the background (get_tasks follows it, get_solids reads the solid). Sending again replaces what it sent before: the roads, or the surface rebuilt in place and the solid brought up to date. Its design must be current (get_pit_designs says fresh). Returns what it made.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "design": { "type": "integer", "minimum": 0 },
-                    "to": { "type": "string", "enum": ["haul_network"] },
+                    "to": { "type": "string", "enum": ["haul_network", "planning"] },
                 },
                 "required": ["design", "to"],
                 "additionalProperties": false,
@@ -687,7 +687,11 @@ impl App<'_> {
                 let (_, pit) = self.operand_object(id).and_then(pit_parts).ok_or("The design is gone.")?;
                 Ok(json!({ "roads": pit.sent.roads.iter().map(|road| road.0).collect::<Vec<_>>() }))
             }
-            _ => Err("to is haul_network.".to_owned()),
+            Some("planning") => {
+                self.send_pit_to_planning(id).map_err(|error| format!("{error:#}"))?;
+                Ok(json!({ "started": "send_pit_design" }))
+            }
+            _ => Err("to is haul_network or planning.".to_owned()),
         }
     }
 

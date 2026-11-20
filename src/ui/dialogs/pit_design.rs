@@ -368,15 +368,34 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                                     commands.push(UiCommand::BeginPitRampStartPick(count));
                                 }
                             }
-                            // On to the haul network, once there is a road to send.
-                            if count > 0 && picking.is_none() {
-                                let label = if working.sent.roads.is_empty() {
-                                    tr!("pit-design-send-haulage")
+                            // On to the rest of the project: the ramps to the
+                            // haul network, the pit to Planning.
+                            if picking.is_none() {
+                                menu::menu_section(ui, tr!("pit-design-send-section"));
+                                let fresh = draft.facts.fresh;
+                                if count > 0 {
+                                    let label = if working.sent.roads.is_empty() {
+                                        tr!("pit-design-send-haulage")
+                                    } else {
+                                        tr!("pit-design-update-haulage")
+                                    };
+                                    if button_row(ui, String::new(), tr!("pit-design-send-haulage-help"), &[(label, fresh)]).is_some() {
+                                        commands.push(UiCommand::SendPitRampsToHaulage(id));
+                                    }
+                                }
+                                let label = if working.sent.solid.is_none() {
+                                    tr!("pit-design-send-planning")
                                 } else {
-                                    tr!("pit-design-update-haulage")
+                                    tr!("pit-design-update-planning")
                                 };
-                                if button_row(ui, String::new(), tr!("pit-design-send-haulage-help"), &[(label, draft.facts.fresh)]).is_some() {
-                                    commands.push(UiCommand::SendPitRampsToHaulage(id));
+                                let topography = working.settings.topography.is_some();
+                                let help = if topography {
+                                    tr!("pit-design-send-planning-help")
+                                } else {
+                                    tr!("pit-design-send-no-topography")
+                                };
+                                if button_row(ui, String::new(), help, &[(label, fresh && topography)]).is_some() {
+                                    commands.push(UiCommand::SendPitToPlanning(id));
                                 }
                             }
                         }

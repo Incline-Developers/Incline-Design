@@ -5243,6 +5243,16 @@ pit-design-send-no-ramp = طرح پیت رمپی برای فرستادن ندا�
 pit-design-haul-road = رمپ { $design }
 pit-design-haul-road-numbered = رمپ { $number } { $design }
 pit-design-report-send-haulage = رمپ‌ها به شبکه حمل فرستاده شدند
+pit-design-send-section = فرستادن به
+pit-design-send-planning = فرستادن به برنامه‌ریزی
+pit-design-update-planning = به‌روزرسانی در برنامه‌ریزی
+pit-design-send-planning-help = سطح پیت را از خطوطش می‌سازد، همان‌طور که ساخت مثلث‌بندی می‌سازد، و یک جسم برنامه‌ریزی از آن در برابر توپوگرافی‌اش، با ذخیره از مدل بلوکی‌اش و پله‌بندی‌شده مانند خودش. فرستادن دوباره سطح را در جا بازسازی و جسم را به‌روز می‌کند.
+pit-design-send-no-topography = ابتدا یک توپوگرافی انتخاب کنید (ارزیابی): برنامه‌ریزی جسم پیت را در برابر آن اندازه می‌گیرد.
+pit-design-sending-planning = در حال فرستادن پیت به برنامه‌ریزی...
+pit-design-send-planning-failed = پیت به برنامه‌ریزی فرستاده نشد: { $reason }
+pit-design-send-changed = طرح پیت هنگام ساخت سطحش تغییر کرد: دوباره بفرستید.
+pit-design-sent-planning = { $design } همراه با سطحش به برنامه‌ریزی فرستاده شد.
+pit-design-report-send-planning = پیت به برنامه‌ریزی فرستاده شد
 pit-design-sent-roads =
     { $count ->
         [one] رمپ { $design } به‌صورت یک جاده به شبکه حمل فرستاده شد.

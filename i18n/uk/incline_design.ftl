@@ -5362,6 +5362,16 @@ pit-design-send-no-ramp = Проєкт кар'єру не має з'їзду д�
 pit-design-haul-road = З'їзд { $design }
 pit-design-haul-road-numbered = З'їзд { $number } { $design }
 pit-design-report-send-haulage = З'їзди надіслано до мережі доріг
+pit-design-send-section = Передати
+pit-design-send-planning = Надіслати до планування
+pit-design-update-planning = Оновити в плануванні
+pit-design-send-planning-help = Будує поверхню кар'єру за його лініями, як це зробило б «Створити тріангуляцію», і тіло планування відносно його топографії, із запасами з його блокової моделі та з його уступами. Повторне надсилання перебудовує поверхню на місці й оновлює тіло.
+pit-design-send-no-topography = Спершу виберіть топографію (Оцінка): планування вимірює тіло кар'єру відносно неї.
+pit-design-sending-planning = Надсилання кар'єру до планування...
+pit-design-send-planning-failed = Не вдалося надіслати кар'єр до планування: { $reason }
+pit-design-send-changed = Проєкт кар'єру змінився, поки будувалася його поверхня: надішліть його знову.
+pit-design-sent-planning = { $design } надіслано до планування разом із поверхнею.
+pit-design-report-send-planning = Кар'єр надіслано до планування
 pit-design-sent-roads =
     { $count ->
         [one] З'їзд { $design } надіслано до мережі доріг як одну дорогу.

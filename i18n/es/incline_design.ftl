@@ -5244,6 +5244,16 @@ pit-design-send-no-ramp = El diseño de tajo no tiene rampa que enviar.
 pit-design-haul-road = Rampa de { $design }
 pit-design-haul-road-numbered = Rampa { $number } de { $design }
 pit-design-report-send-haulage = Rampas enviadas a la red de transporte
+pit-design-send-section = Enviar
+pit-design-send-planning = Enviar a Planificación
+pit-design-update-planning = Actualizar en Planificación
+pit-design-send-planning-help = Crea la superficie del tajo a partir de sus líneas, como lo haría Crear triangulación, y un sólido de Planificación con ella frente a su topografía, con reservas de su modelo de bloques y con sus bancos. Enviarlo de nuevo reconstruye la superficie en su lugar y actualiza el sólido.
+pit-design-send-no-topography = Elija primero una topografía (Evaluación): Planificación mide el sólido del tajo contra ella.
+pit-design-sending-planning = Enviando el tajo a Planificación...
+pit-design-send-planning-failed = No se pudo enviar el tajo a Planificación: { $reason }
+pit-design-send-changed = El diseño de tajo cambió mientras se construía su superficie: envíelo de nuevo.
+pit-design-sent-planning = { $design } enviado a Planificación, con su superficie.
+pit-design-report-send-planning = Tajo enviado a Planificación
 pit-design-sent-roads =
     { $count ->
         [one] Se envió la rampa de { $design } a la red de transporte como un camino.

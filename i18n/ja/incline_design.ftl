@@ -5272,6 +5272,16 @@ pit-design-send-no-ramp = ピット設計に送るランプがありません。
 pit-design-haul-road = { $design } ランプ
 pit-design-haul-road-numbered = { $design } ランプ { $number }
 pit-design-report-send-haulage = ランプを運搬ネットワークへ送りました
+pit-design-send-section = 送る
+pit-design-send-planning = 計画へ送る
+pit-design-update-planning = 計画で更新
+pit-design-send-planning-help = 三角網作成と同じ方法でピットの線から面を作り、その地形に対する計画ソリッドを、ブロックモデルからの埋蔵量とピットのベンチ割りで作ります。再送信すると面をその場で作り直し、ソリッドを更新します。
+pit-design-send-no-topography = 先に地形を選択してください(評価): 計画はピットのソリッドをそれに対して測定します。
+pit-design-sending-planning = ピットを計画へ送っています...
+pit-design-send-planning-failed = ピットを計画へ送れませんでした: { $reason }
+pit-design-send-changed = 面の作成中にピット設計が変わりました: もう一度送ってください。
+pit-design-sent-planning = { $design } を面とともに計画へ送りました。
+pit-design-report-send-planning = ピットを計画へ送りました
 pit-design-sent-roads =
     { $count ->
         [one] { $design } のランプを運搬ネットワークへ 1 本の道路として送りました。

@@ -5243,6 +5243,16 @@ pit-design-send-no-ramp = 采坑设计没有可发送的坡道。
 pit-design-haul-road = { $design } 坡道
 pit-design-haul-road-numbered = { $design } 坡道 { $number }
 pit-design-report-send-haulage = 已将坡道发送到运输网络
+pit-design-send-section = 发送到
+pit-design-send-planning = 发送到规划
+pit-design-update-planning = 在规划中更新
+pit-design-send-planning-help = 按“创建三角网”的方式由采坑的线生成其表面，并据其地形生成规划实体，储量取自其块体模型，台阶按采坑划分。再次发送会原地重建表面并更新实体。
+pit-design-send-no-topography = 请先选择地形(评估)：规划会依据它测量采坑实体。
+pit-design-sending-planning = 正在将采坑发送到规划...
+pit-design-send-planning-failed = 无法将采坑发送到规划：{ $reason }
+pit-design-send-changed = 构建表面期间采坑设计已更改：请重新发送。
+pit-design-sent-planning = 已将 { $design } 连同其表面发送到规划。
+pit-design-report-send-planning = 已将采坑发送到规划
 pit-design-sent-roads =
     { $count ->
         [one] 已将 { $design } 的坡道作为 1 条道路发送到运输网络。

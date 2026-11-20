@@ -5944,6 +5944,16 @@ pit-design-send-no-ramp = The pit design has no ramp to send.
 pit-design-haul-road = { $design } ramp
 pit-design-haul-road-numbered = { $design } ramp { $number }
 pit-design-report-send-haulage = Sent the ramps to the haul network
+pit-design-send-section = Send on
+pit-design-send-planning = Send to Planning
+pit-design-update-planning = Update in Planning
+pit-design-send-planning-help = Makes the pit's surface from its strings, as Create Triangulation would, and a Planning solid of it against its topography, reserved from its block model and benched as it is. Sending again rebuilds the surface in place and brings the solid up to date.
+pit-design-send-no-topography = Choose a topography first (Evaluation): Planning measures the pit's solid against it.
+pit-design-sending-planning = Sending the pit to Planning...
+pit-design-send-planning-failed = The pit could not be sent to Planning: { $reason }
+pit-design-send-changed = The pit design changed while its surface was built: send it again.
+pit-design-sent-planning = Sent { $design } to Planning, with its surface.
+pit-design-report-send-planning = Sent the pit to Planning
 pit-design-sent-roads =
     { $count ->
         [one] Sent { $design }'s ramp to the haul network as one road.

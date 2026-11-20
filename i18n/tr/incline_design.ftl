@@ -5285,6 +5285,16 @@ pit-design-send-no-ramp = Ocak tasarımının gönderilecek rampası yok.
 pit-design-haul-road = { $design } rampası
 pit-design-haul-road-numbered = { $design } rampası { $number }
 pit-design-report-send-haulage = Rampalar taşıma ağına gönderildi
+pit-design-send-section = İlet
+pit-design-send-planning = Planlamaya gönder
+pit-design-update-planning = Planlamada güncelle
+pit-design-send-planning-help = Ocağın yüzeyini, Üçgenleme oluştur'un yapacağı gibi çizgilerinden oluşturur ve topoğrafyasına göre, blok modelinden rezervli ve basamaklarına göre basamaklanmış bir planlama katısı yapar. Yeniden göndermek yüzeyi yerinde yeniden oluşturur ve katıyı günceller.
+pit-design-send-no-topography = Önce bir topoğrafya seçin (Değerlendirme): planlama ocağın katısını ona göre ölçer.
+pit-design-sending-planning = Ocak planlamaya gönderiliyor...
+pit-design-send-planning-failed = Ocak planlamaya gönderilemedi: { $reason }
+pit-design-send-changed = Ocak tasarımı, yüzeyi oluşturulurken değişti: yeniden gönderin.
+pit-design-sent-planning = { $design } yüzeyiyle birlikte planlamaya gönderildi.
+pit-design-report-send-planning = Ocak planlamaya gönderildi
 pit-design-sent-roads =
     { $count ->
         [one] { $design } rampası taşıma ağına bir yol olarak gönderildi.

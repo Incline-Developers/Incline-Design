@@ -5278,6 +5278,16 @@ pit-design-send-no-ramp = Muundo wa shimo hauna njia panda ya kutuma.
 pit-design-haul-road = Njia panda ya { $design }
 pit-design-haul-road-numbered = Njia panda { $number } ya { $design }
 pit-design-report-send-haulage = Njia panda zimetumwa kwenye mtandao wa usafirishaji
+pit-design-send-section = Tuma kwenda
+pit-design-send-planning = Tuma kwa Upangaji
+pit-design-update-planning = Sasisha katika Upangaji
+pit-design-send-planning-help = Inatengeneza uso wa shimo kutoka kwa mistari yake, kama Unda Pembetatu ingefanya, na kitu kigumu cha Upangaji dhidi ya topografia yake, chenye akiba kutoka modeli yake ya vitalu na benchi zake. Kutuma tena kunajenga upya uso mahali pake na kusasisha kitu kigumu.
+pit-design-send-no-topography = Chagua topografia kwanza (Tathmini): Upangaji hupima kitu kigumu cha shimo dhidi yake.
+pit-design-sending-planning = Inatuma shimo kwa Upangaji...
+pit-design-send-planning-failed = Shimo halikuweza kutumwa kwa Upangaji: { $reason }
+pit-design-send-changed = Muundo wa shimo ulibadilika wakati uso wake ukijengwa: utume tena.
+pit-design-sent-planning = { $design } limetumwa kwa Upangaji, pamoja na uso wake.
+pit-design-report-send-planning = Shimo limetumwa kwa Upangaji
 pit-design-sent-roads =
     { $count ->
         [one] Njia panda ya { $design } imetumwa kwenye mtandao wa usafirishaji kama barabara moja.

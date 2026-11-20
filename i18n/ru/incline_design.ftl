@@ -5633,6 +5633,16 @@ pit-design-send-no-ramp = У проекта карьера нет съезда �
 pit-design-haul-road = Съезд { $design }
 pit-design-haul-road-numbered = Съезд { $number } { $design }
 pit-design-report-send-haulage = Съезды отправлены в сеть дорог
+pit-design-send-section = Передать
+pit-design-send-planning = Отправить в планирование
+pit-design-update-planning = Обновить в планировании
+pit-design-send-planning-help = Строит поверхность карьера по его линиям, как это сделало бы «Создать триангуляцию», и тело планирования относительно его топографии, с запасами из его блочной модели и с его уступами. Повторная отправка перестраивает поверхность на месте и обновляет тело.
+pit-design-send-no-topography = Сначала выберите топографию (Оценка): планирование измеряет тело карьера относительно неё.
+pit-design-sending-planning = Отправка карьера в планирование...
+pit-design-send-planning-failed = Не удалось отправить карьер в планирование: { $reason }
+pit-design-send-changed = Проект карьера изменился, пока строилась его поверхность: отправьте его снова.
+pit-design-sent-planning = { $design } отправлен в планирование вместе с поверхностью.
+pit-design-report-send-planning = Карьер отправлен в планирование
 pit-design-sent-roads =
     { $count ->
         [one] Съезд { $design } отправлен в сеть дорог как одна дорога.

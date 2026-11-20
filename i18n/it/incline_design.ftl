@@ -5288,6 +5288,16 @@ pit-design-send-no-ramp = Il progetto di fossa non ha rampe da inviare.
 pit-design-haul-road = Rampa di { $design }
 pit-design-haul-road-numbered = Rampa { $number } di { $design }
 pit-design-report-send-haulage = Rampe inviate alla rete di trasporto
+pit-design-send-section = Invia
+pit-design-send-planning = Invia alla pianificazione
+pit-design-update-planning = Aggiorna nella pianificazione
+pit-design-send-planning-help = Crea la superficie della fossa dalle sue linee, come farebbe Crea triangolazione, e un solido di pianificazione rispetto alla sua topografia, con le riserve del suo modello a blocchi e i suoi gradoni. Un nuovo invio ricostruisce la superficie sul posto e aggiorna il solido.
+pit-design-send-no-topography = Scegli prima una topografia (Valutazione): la pianificazione misura il solido della fossa rispetto a essa.
+pit-design-sending-planning = Invio della fossa alla pianificazione...
+pit-design-send-planning-failed = Impossibile inviare la fossa alla pianificazione: { $reason }
+pit-design-send-changed = Il progetto di fossa è cambiato mentre se ne costruiva la superficie: invialo di nuovo.
+pit-design-sent-planning = { $design } inviato alla pianificazione, con la sua superficie.
+pit-design-report-send-planning = Fossa inviata alla pianificazione
 pit-design-sent-roads =
     { $count ->
         [one] La rampa di { $design } è stata inviata alla rete di trasporto come una pista.

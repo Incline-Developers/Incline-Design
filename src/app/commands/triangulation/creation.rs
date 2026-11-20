@@ -438,6 +438,12 @@ fn build_created_triangulation(
 /// For a surface that is worked with rather than added to the project: a
 /// pit design's, to measure it.
 pub(crate) fn surface_through_strings(strings: Vec<(Vec<glam::DVec3>, bool)>) -> Result<mesh_data::Triangulation> {
+    let (vertices, faces) = surface_points_through_strings(strings)?;
+    Ok(mesh_data::Triangulation::from_vertices_and_faces(vertices, faces)?)
+}
+
+/// [`surface_through_strings`]' points and triangles.
+pub(crate) fn surface_points_through_strings(strings: Vec<(Vec<glam::DVec3>, bool)>) -> Result<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>)> {
     let mut paths: Vec<BreaklinePath> = strings
         .into_iter()
         .filter(|(points, closed)| points.len() >= if *closed { 3 } else { 2 })
@@ -447,7 +453,7 @@ pub(crate) fn surface_through_strings(strings: Vec<(Vec<glam::DVec3>, bool)>) ->
     let input = assemble_triangulation_input(paths)?;
     let (vertices, faces) = cdt_surface_from_breaklines(&input.boundaries, &input.constraints)?;
     anyhow::ensure!(!faces.is_empty(), tr!("err-tri-no-faces-produced"));
-    Ok(mesh_data::Triangulation::from_vertices_and_faces(vertices, faces)?)
+    Ok((vertices, faces))
 }
 
 /// Snap breakline vertices that coincide within the given tolerances (XY

@@ -5277,6 +5277,16 @@ pit-design-send-no-ramp = 피트 설계에 보낼 램프가 없습니다.
 pit-design-haul-road = { $design } 램프
 pit-design-haul-road-numbered = { $design } 램프 { $number }
 pit-design-report-send-haulage = 램프를 운반 네트워크로 보냈습니다
+pit-design-send-section = 보내기
+pit-design-send-planning = 계획으로 보내기
+pit-design-update-planning = 계획에서 업데이트
+pit-design-send-planning-help = 삼각망 만들기와 같은 방식으로 피트의 선에서 면을 만들고, 그 지형에 대한 계획 솔리드를 블록 모델의 매장량과 피트의 벤치로 만듭니다. 다시 보내면 면을 제자리에서 다시 만들고 솔리드를 업데이트합니다.
+pit-design-send-no-topography = 먼저 지형을 선택하세요(평가): 계획은 피트 솔리드를 그것에 대해 측정합니다.
+pit-design-sending-planning = 피트를 계획으로 보내는 중...
+pit-design-send-planning-failed = 피트를 계획으로 보낼 수 없습니다: { $reason }
+pit-design-send-changed = 면을 만드는 동안 피트 설계가 바뀌었습니다: 다시 보내세요.
+pit-design-sent-planning = { $design }을(를) 면과 함께 계획으로 보냈습니다.
+pit-design-report-send-planning = 피트를 계획으로 보냈습니다
 pit-design-sent-roads =
     { $count ->
         [one] { $design }의 램프를 운반 네트워크에 도로 1개로 보냈습니다.

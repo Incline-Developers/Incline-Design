@@ -5243,6 +5243,16 @@ pit-design-send-no-ramp = Desain pit tidak memiliki ramp untuk dikirim.
 pit-design-haul-road = Ramp { $design }
 pit-design-haul-road-numbered = Ramp { $number } { $design }
 pit-design-report-send-haulage = Ramp dikirim ke jaringan angkut
+pit-design-send-section = Teruskan
+pit-design-send-planning = Kirim ke Perencanaan
+pit-design-update-planning = Perbarui di Perencanaan
+pit-design-send-planning-help = Membuat permukaan pit dari garis-garisnya, seperti Buat Triangulasi, dan solid Perencanaan darinya terhadap topografinya, dengan cadangan dari model bloknya dan dijenjangkan seperti pit itu. Mengirim lagi membangun ulang permukaan di tempat dan memperbarui solidnya.
+pit-design-send-no-topography = Pilih topografi dulu (Evaluasi): Perencanaan mengukur solid pit terhadapnya.
+pit-design-sending-planning = Mengirim pit ke Perencanaan...
+pit-design-send-planning-failed = Pit tidak dapat dikirim ke Perencanaan: { $reason }
+pit-design-send-changed = Desain pit berubah saat permukaannya dibangun: kirim lagi.
+pit-design-sent-planning = { $design } dikirim ke Perencanaan, dengan permukaannya.
+pit-design-report-send-planning = Pit dikirim ke Perencanaan
 pit-design-sent-roads =
     { $count ->
         [one] Ramp { $design } dikirim ke jaringan angkut sebagai satu jalan.
