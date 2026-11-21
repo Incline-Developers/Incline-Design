@@ -179,8 +179,11 @@ pub(crate) struct WallGizmo {
     /// a point every [`RING_STEPS`]th of a turn; and its handle, on the face.
     pub(crate) angle_ring: Vec<(f32, f32)>,
     pub(crate) angle_handle: (f32, f32),
-    /// The height arrow up from the crest, and the berm arrow out along it.
+    /// The height arrow up from the toe, and the berm arrow out across from
+    /// it: each from the ring's end on its axis to its tip.
+    pub(crate) height_from: (f32, f32),
     pub(crate) height_tip: (f32, f32),
+    pub(crate) berm_from: (f32, f32),
     pub(crate) berm_tip: (f32, f32),
 }
 
@@ -782,8 +785,7 @@ fn draw_wall_gizmo(ui: &mut egui::Ui, draft: &mut PitDesignDraft, viewport_rect:
     };
     let (crest, berm_end) = (at(gizmo.crest), at(gizmo.berm_end));
     let out = egui::vec2(gizmo.out.0, gizmo.out.1);
-    // The section: the floor out from the toe, the face and the berm.
-    painter.line_segment([toe, toe + out * 70.0], egui::Stroke::new(1.0, gizmo_color(egui::Color32::WHITE, GIZMO_IDLE_ALPHA * 0.5)));
+    // The section: the face and the berm.
     painter.add(egui::Shape::line(
         vec![toe, crest, berm_end],
         egui::Stroke::new(2.0, gizmo_color(egui::Color32::WHITE, 0.85)),
@@ -798,21 +800,29 @@ fn draw_wall_gizmo(ui: &mut egui::Ui, draft: &mut PitDesignDraft, viewport_rect:
     } else {
         (ROTATE_RING_COLORS[1], GIZMO_IDLE_ALPHA * fade)
     };
-    let steps = ((settings.face_angle / 360.0 * RING_STEPS as f64).round() as usize).min(RING_STEPS / 4);
+    // The ring's steps the angle passes, short of it: the sweep ends at the
+    // handle itself, never past it.
+    let steps = ((settings.face_angle / 360.0 * RING_STEPS as f64).floor() as usize).min(RING_STEPS / 4);
     if fade > 0.0 {
-        let quarter: Vec<egui::Pos2> = gizmo.angle_ring[..=RING_STEPS / 4].iter().copied().map(at).collect();
+        let handle = at(gizmo.angle_handle);
+        let mut swept: Vec<egui::Pos2> = gizmo.angle_ring[..=steps].iter().copied().map(at).collect();
+        swept.push(handle);
         let mut sector = vec![toe];
-        sector.extend(gizmo.angle_ring[..=steps].iter().copied().map(at));
-        sector.push(at(gizmo.angle_handle));
-        if sector.len() >= 3 {
-            painter.add(egui::Shape::convex_polygon(
-                sector,
-                gizmo_color(ROTATE_RING_COLORS[1], if lit { 0.4 } else { 0.22 } * fade),
-                egui::Stroke::NONE,
-            ));
+        sector.extend(swept.iter().copied());
+        painter.add(egui::Shape::convex_polygon(
+            sector,
+            gizmo_color(ROTATE_RING_COLORS[1], if lit { 0.4 } else { 0.22 } * fade),
+            egui::Stroke::NONE,
+        ));
+        // The rest of the quarter, up to standing upright, is only the track
+        // the handle runs on.
+        let mut track = vec![handle];
+        track.extend(gizmo.angle_ring[steps + 1..=RING_STEPS / 4].iter().copied().map(at));
+        if track.len() >= 2 {
+            painter.add(egui::Shape::line(track, egui::Stroke::new(1.0, gizmo_color(colour, alpha * 0.35))));
         }
-        painter.add(egui::Shape::line(quarter, egui::Stroke::new(if lit { 3.0 } else { 2.0 }, gizmo_color(colour, alpha))));
-        painter.circle_filled(at(gizmo.angle_handle), if lit { 6.0 } else { 5.0 }, gizmo_color(colour, alpha.max(0.85 * fade)));
+        painter.add(egui::Shape::line(swept, egui::Stroke::new(if lit { 3.0 } else { 2.0 }, gizmo_color(colour, alpha))));
+        painter.circle_filled(handle, if lit { 6.0 } else { 5.0 }, gizmo_color(colour, alpha.max(0.85 * fade)));
     }
     // Its value outside the ring, on the middle of the angle it sweeps; or
     // seen from above, behind the toe.
@@ -845,20 +855,20 @@ fn draw_wall_gizmo(ui: &mut egui::Ui, draft: &mut PitDesignDraft, viewport_rect:
     let height_tip = at(gizmo.height_tip);
     // Seen down it, faded out as a Blender axis arrow; its value stays
     // beside the crest.
-    arrow(crest, height_tip, GIZMO_AXIS_COLORS[2], lit, gizmo.height_fade);
+    arrow(at(gizmo.height_from), height_tip, GIZMO_AXIS_COLORS[2], lit, gizmo.height_fade);
     let text = format!("{:.1} m", settings.bench_height);
     let place = if gizmo.height_fade > 0.0 {
-        let way = (height_tip - crest).normalized();
+        let way = (height_tip - toe).normalized();
         beside(height_tip + way * 8.0, way, &painter, &text)
     } else {
         let side = egui::vec2(-out.y, out.x);
-        beside(crest + side * 14.0, side, &painter, &text)
+        beside(toe + side * 14.0, side, &painter, &text)
     };
     readout(&painter, place, GizmoValue::BenchHeight, lit);
     let lit = active(GizmoPart::Berm);
     let berm_tip = at(gizmo.berm_tip);
-    arrow(crest, berm_tip, GIZMO_AXIS_COLORS[1], lit, gizmo.berm_fade);
-    let way = (berm_tip - crest).normalized();
+    arrow(at(gizmo.berm_from), berm_tip, GIZMO_AXIS_COLORS[1], lit, gizmo.berm_fade);
+    let way = (berm_tip - toe).normalized();
     let text = format!("{:.1} m", settings.berm_width);
     readout(&painter, beside(berm_tip + way * 8.0, way, &painter, &text), GizmoValue::Berm, lit);
     // How far the design goes, below the toe (away from the handles), to

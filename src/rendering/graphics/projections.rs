@@ -804,8 +804,13 @@ impl<'a> Graphics<'a> {
                 pixels_per_metre_out: out_px,
                 angle_ring,
                 angle_handle: project(on_ring(angle))?,
-                height_tip: project(crest + up * arrow)?,
-                berm_tip: project(berm_end + out3 * arrow * 0.5)?,
+                // Both from the toe, where the ring stands: each starting at
+                // the ring's end on its axis and a fixed length on screen
+                // whatever it sets, as a Blender gizmo's arms.
+                height_from: project(on_ring(std::f64::consts::FRAC_PI_2))?,
+                height_tip: project(toe + up * (radius + arrow))?,
+                berm_from: project(on_ring(0.0))?,
+                berm_tip: project(toe + out3 * (radius + arrow))?,
             },
             at,
         ))

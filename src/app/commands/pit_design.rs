@@ -1074,9 +1074,9 @@ impl App<'_> {
         let wall = draft.wall_gizmo.as_ref().and_then(|gizmo| {
             if gizmo.ring_fade > 0.0 && (near(gizmo.angle_handle) || near_chain(&gizmo.angle_ring[..=RING_STEPS / 4])) {
                 Some(GizmoPart::FaceAngle)
-            } else if gizmo.height_fade > 0.0 && near_chain(&[gizmo.crest, gizmo.height_tip]) {
+            } else if gizmo.height_fade > 0.0 && near_chain(&[gizmo.height_from, gizmo.height_tip]) {
                 Some(GizmoPart::BenchHeight)
-            } else if gizmo.berm_fade > 0.0 && near_chain(&[gizmo.crest, gizmo.berm_tip]) {
+            } else if gizmo.berm_fade > 0.0 && near_chain(&[gizmo.berm_from, gizmo.berm_tip]) {
                 Some(GizmoPart::Berm)
             } else {
                 None
