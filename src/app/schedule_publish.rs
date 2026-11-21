@@ -1015,7 +1015,34 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
                 // Ground is dug in order: what the machine could be on is the
                 // first block of the sequence that still holds any.
                 TaskKind::Dig { sequence } => {
-                    sources.extend(next_in_sequence(task, sequence, start_h).map(SourceId::Ground));
+                    let next = next_in_sequence(task, sequence, start_h);
+                    if task.lookahead_t > 0.0
+                        && let Some(first) = next
+                    {
+                        // An automatic bar could be on any released block
+                        // within the lookahead's days of its reach, which
+                        // counts only released ground.
+                        let from = sequence.iter().position(|at| *at == first).unwrap_or(0);
+                        let most = crate::model::schedule::optimisation::blended::input::LOOKAHEAD_DAYS as f64 * task.lookahead_t;
+                        let mut before = 0.0;
+                        for at in &sequence[from..] {
+                            if before > most {
+                                break;
+                            }
+                            let left = ground_by_id.get(at).map_or(0.0, |source| source.tonnes_t)
+                                - lookup
+                                    .identities
+                                    .ground_blocks
+                                    .get(at)
+                                    .map_or(0.0, |block| sum_within(dug.get(block), f64::NEG_INFINITY, start_h));
+                            if left > IDLE_NEGLIGIBLE_T && releases.get(at).is_none_or(|(when, _)| *when <= start_h + 1e-9) {
+                                sources.push(SourceId::Ground(*at));
+                                before += left;
+                            }
+                        }
+                    } else {
+                        sources.extend(next.map(SourceId::Ground));
+                    }
                 }
                 TaskKind::Reclaim { approved_sources, .. } => {
                     for pile in approved_sources {
