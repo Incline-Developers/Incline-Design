@@ -5012,10 +5012,6 @@ err-file-desc-opt-report = 最適化レポート
 
 pit-design-menu = ピット設計
 pit-design-title = ピット設計
-pit-design-direction = 構築
-pit-design-direction-help = 設計をラインからどちらへ築くか。ピットは底面から上へ、または法肩から下へ。ダンプは法尻から上へ、または天端から下へ。
-pit-design-up = 底盤から上向き
-pit-design-down = 法肩から下向き
 pit-design-benches-section = ベンチ
 pit-design-bench-height = ベンチ高さ
 pit-design-face-angle = 法面角度
@@ -5040,29 +5036,10 @@ pit-design-climbs = 登る向き
 pit-design-climbs-help = 上から見て、ランプがピットの周りをどちら向きに登るか。
 pit-design-clockwise = 時計回り
 pit-design-anticlockwise = 反時計回り
-pit-design-ramp-start = 開始位置
-pit-design-ramp-start-help = ランプがラインから出る位置です。ビューで緑の十字をラインに沿ってドラッグするか、移動を押してから出るべき位置をクリックしてください。
-pit-design-ramp-start-default = ラインの始点
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] 北側
-    [ne] 北東側
-    [e] 東側
-    [se] 南東側
-    [s] 南側
-    [sw] 南西側
-    [w] 西側
-   *[nw] 北西側
 }
 pit-design-ramp-drag-hint = ドラッグしてランプの開始位置を移動
 pit-design-ramp-drag-prompt = ランプが出るべきライン上の位置で離してください。
 pit-design-ramp-start-prompt = ランプが開始ラインを離れる位置でラインをクリックしてください。
-pit-design-layout = 配置
-pit-design-layout-help = スパイラルは登る向きのまま壁面に沿って回り続けます。スイッチバックは、壁面に転回の余地がある位置で、数ベンチごとに平坦なパッドで折り返します。
-pit-design-spiral = スパイラル
-pit-design-switchback = スイッチバック
-pit-design-switchback-every = 折り返し間のベンチ数
-pit-design-switchback-every-help = 折り返す前にランプが登るベンチ数。指定した RL だけで折り返すなら0。折り返しが収まらない所では、ランプはもう1ベンチ進んでそこで折り返します。
 pit-design-inside-radius = 内側半径
 pit-design-inside-radius-help = 道路の内側の縁が曲がってよい最小の半径: スイッチバックの回転半径であり、道路全体の検査基準です。
 pit-design-result-section = 設計
@@ -5094,7 +5071,7 @@ pit-design-problem-topography-not-loaded = 地表に出るには { $name } を�
 pit-design-draw-prompt = 開始ラインを1点ずつクリックしてください。ピットの底面か法肩、またはダンプの法尻か天端です。
 pit-design-draw-close = 最初の点をクリックするか Enter を押して、ラインを閉じてください。
 pit-design-draw-close-minor = 右クリックでも完了します
-pit-design-draw-help = 設計の始まりとなる閉じたラインを描きます。ピットの底面の法尻か法肩、またはダンプの法尻か天端です。閉じるとすぐアクティブなレイヤー上にそこから設計が作られ、種類と方向は次のステップで設定します。
+pit-design-draw-help = 設計の始まりとなる閉じたラインを描きます。ピットの底面の法尻か法肩、またはダンプの法尻か天端です。閉じるとすぐアクティブなレイヤー上にそこから設計が作られます。
 pit-design-round-corners = 角を丸める
 pit-design-draw-ground = この地点の地表
 pit-design-draw-ground-above = { $rl } m（RL より { $by } m 上）
@@ -5104,12 +5081,8 @@ pit-design-corner-radius = 角の半径
 pit-design-done-help = このピットを終えてツールを終了します。Escape でも同じです。
 pit-design-turn-grade = 折り返し勾配
 pit-design-turn-grade-help = スイッチバックで道路の内側の縁が登る勾配。その後の区間はベンチの残りを登ります。トラックがカーブで速度を保てるよう、通常はランプより2〜3%緩くします。パッド上の平坦な折り返しなら0。
-pit-design-turns-at = 折り返し RL
-pit-design-turns-at-hint = 例: 130, 175
-pit-design-turns-at-help = 一定ベンチごとに加えて、ランプが折り返す RL。構築方向で各 RL かそれ以降に始まる最初のベンチで折り返します。そこに収まらなければ余地のある次のベンチで行い、結果にそう表示されます。
 pit-design-turn-widening = 折り返しの拡幅
 pit-design-turn-widening-help = トラックが曲がれるよう、折り返しの中央で外側に道路幅よりどれだけ広くするか。
-pit-design-turns-none = 折り返し間のベンチ数も折り返す RL もないと、ランプは折り返しません。
 pit-design-turn-moved = RL { $asked } で求めた折り返しは RL { $made } で行いました。それより前には余地がありませんでした。
 pit-design-ramp-junction-flat = 接続部の平坦部
 pit-design-ramp-junction-flat-help = ランプの各区間がベンチのバームを離れる所で平坦に走る長さ。道路からバームへ平坦部で出入りできます。帯の平坦部の方が長ければそちらが優先されます。
@@ -5179,10 +5152,6 @@ pit-design-zone-add-help = ベンチを独自の高さ、法面角度、バー�
 pit-design-table-face = 法面
 pit-design-table-berm = バーム
 pit-design-problem-zone = ゾーンの開始 RL と終了 RL は異なる必要があります。
-pit-design-dump-up = 法尻から上へ
-pit-design-dump-down = 天端から下へ
-pit-design-type = 種類
-pit-design-type-help = ピットは地面を掘り込み、上るほど壁が外へ広がります。ダンプや貯鉱場は地面の上に築かれ、上るほど壁が内へ狭まります。天端から下へ築くと、地面に達するまで外へ広がります。
 pit-design-kind-pit = ピット
 pit-design-kind-dump = ダンプまたは貯鉱場
 pit-design-stop-ground = 地面に達する所
@@ -5199,7 +5168,6 @@ pit-design-ramp-remove-short = 削除
 pit-design-send-to = 送る
 pit-design-send-to-help = ランプを運搬ネットワークへ、またはピットを計画へ送ります。
 pit-design-ramp-remove-help = ランプなしでピットを設計します。設定は再配置のために残ります。
-pit-design-ramp-move = 移動
 pit-design-done = 完了
 pit-design-kind = ピット設計
 pit-design-explode = 分解

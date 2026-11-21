@@ -5111,10 +5111,6 @@ err-file-desc-opt-report = raport optymalizacji
 
 pit-design-menu = Projekt wyrobiska
 pit-design-title = Projekt wyrobiska
-pit-design-direction = Budowa
-pit-design-direction-help = W którą stronę projekt jest budowany od linii: wyrobisko w górę od dna lub w dół od krawędzi, zwałowisko w górę od podnóża lub w dół od wierzchu.
-pit-design-up = W górę od dna
-pit-design-down = W dół od krawędzi
 pit-design-benches-section = Piętra
 pit-design-bench-height = Wysokość piętra
 pit-design-face-angle = Kąt skarpy
@@ -5139,29 +5135,10 @@ pit-design-climbs = Wznosi się
 pit-design-climbs-help = W którą stronę rampa wznosi się wokół wyrobiska, patrząc z góry.
 pit-design-clockwise = Zgodnie z ruchem wskazówek zegara
 pit-design-anticlockwise = Przeciwnie do ruchu wskazówek zegara
-pit-design-ramp-start = Zaczyna się w
-pit-design-ramp-start-help = Gdzie rampa schodzi z linii. Przeciągnij jej zielony krzyżyk wzdłuż linii w widoku albo kliknij Przesuń, a potem miejsce, gdzie ma schodzić.
-pit-design-ramp-start-default = Początek linii
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] Strona północna
-    [ne] Strona północno-wschodnia
-    [e] Strona wschodnia
-    [se] Strona południowo-wschodnia
-    [s] Strona południowa
-    [sw] Strona południowo-zachodnia
-    [w] Strona zachodnia
-   *[nw] Strona północno-zachodnia
 }
 pit-design-ramp-drag-hint = Przeciągnij, aby przesunąć początek rampy
 pit-design-ramp-drag-prompt = Puść na linii tam, gdzie rampa ma z niej schodzić.
 pit-design-ramp-start-prompt = Kliknij linię wyjściową tam, gdzie rampa ją opuszcza.
-pit-design-layout = Układ
-pit-design-layout-help = Spirala biegnie dalej wokół ścian w kierunku wznoszenia. Serpentyna zawraca na poziomym placu co kilka pięter, tam gdzie ściany zostawiają miejsce na zawrót.
-pit-design-spiral = Spirala
-pit-design-switchback = Serpentyna
-pit-design-switchback-every = Pięter między zawrotami
-pit-design-switchback-every-help = Ile pięter rampa wznosi się przed nawrotem; 0, by nawracać tylko na podanych rzędnych. Gdzie nawrót się nie mieści, rampa jedzie jeszcze jedno piętro i nawraca tam.
 pit-design-inside-radius = Promień wewnętrzny
 pit-design-inside-radius-help = Najciaśniejszy łuk, jaki ma pokonywać wewnętrzna krawędź drogi: promień nawrotu i wartość, z którą sprawdzana jest cała droga.
 pit-design-result-section = Projekt
@@ -5193,7 +5170,7 @@ pit-design-problem-topography-not-loaded = Wczytaj { $name }, aby na nią wyjś�
 pit-design-draw-prompt = Klikaj linię wyjściową punkt po punkcie: dno lub krawędź wyrobiska albo podnóże lub wierzch zwałowiska.
 pit-design-draw-close = Kliknij pierwszy punkt lub naciśnij Enter, aby zamknąć linię.
 pit-design-draw-close-minor = Prawy przycisk też kończy
-pit-design-draw-help = Narysuj zamkniętą linię, od której zaczyna się projekt: stopę dna lub krawędź wyrobiska albo podnóże lub wierzch zwałowiska. Gdy się zamknie, projekt powstaje z niej na aktywnej warstwie, a rodzaj i kierunek ustala się w następnym kroku.
+pit-design-draw-help = Narysuj zamkniętą linię, od której zaczyna się projekt: stopę dna lub krawędź wyrobiska albo podnóże lub wierzch zwałowiska. Gdy się zamknie, projekt powstaje z niej na aktywnej warstwie.
 pit-design-round-corners = Zaokrąglij narożniki
 pit-design-draw-ground = Teren tutaj
 pit-design-draw-ground-above = { $rl } m ({ $by } m nad rzędną)
@@ -5203,12 +5180,8 @@ pit-design-corner-radius = Promień narożnika
 pit-design-done-help = Zakończ to wyrobisko i odłóż narzędzie. Escape robi to samo.
 pit-design-turn-grade = Nachylenie nawrotu
 pit-design-turn-grade-help = Nachylenie, z jakim wznosi się wewnętrzna krawędź drogi na nawrocie; następny odcinek pokonuje resztę piętra: zwykle o 2–3 % łagodniej niż rampa, by ciężarówki utrzymały prędkość na łuku. 0 dla poziomego nawrotu na placu.
-pit-design-turns-at = Nawroty na rzędnych
-pit-design-turns-at-hint = np. 130, 175
-pit-design-turns-at-help = Rzędne, na których rampa nawraca, oprócz co tylu pięter: na pierwszym piętrze zaczynającym się na każdej lub dalej, w kierunku budowy. Gdzie nawrót się tam nie mieści, robi się go na następnym piętrze z miejscem, a wynik o tym mówi.
 pit-design-turn-widening = Poszerzenie nawrotu
 pit-design-turn-widening-help = O ile nawrót jest szerszy od drogi w środku, po zewnętrznej, by ciężarówki go pokonały.
-pit-design-turns-none = Bez pięter między nawrotami i bez rzędnych nawrotu rampa nigdy nie nawraca.
 pit-design-turn-moved = Nawrót zadany na rzędnej { $asked } zrobiono na rzędnej { $made }: wcześniej nie było miejsca.
 pit-design-ramp-junction-flat = Poziomy odcinek połączenia
 pit-design-ramp-junction-flat-help = Jak długo każdy odcinek rampy biegnie poziomo tam, gdzie opuszcza bermę swojego piętra, aby na bermę wjeżdżać z drogi po poziomym. Liczy się poziomy odcinek pasa, gdzie jest dłuższy.
@@ -5278,10 +5251,6 @@ pit-design-zone-add-help = Przedział rzędnych, którego piętra urabia się z 
 pit-design-table-face = Skarpa
 pit-design-table-berm = Berma
 pit-design-problem-zone = Rzędne Od i Do strefy muszą się różnić.
-pit-design-dump-up = W górę od podnóża
-pit-design-dump-down = W dół od wierzchu
-pit-design-type = Rodzaj
-pit-design-type-help = Wyrobisko wcina się w teren, jego skarpy rozchodzą się w górę. Zwałowisko lub skład usypuje się na nim, jego skarpy schodzą się w górę; usypywane w dół od wierzchu, rozchodzi się, aż spotka teren.
 pit-design-kind-pit = Wyrobisko
 pit-design-kind-dump = Zwałowisko lub skład
 pit-design-stop-ground = Gdzie spotyka teren
@@ -5298,7 +5267,6 @@ pit-design-ramp-remove-short = Usuń
 pit-design-send-to = Wyślij do
 pit-design-send-to-help = Wyślij rampy do sieci transportowej albo wyrobisko do planowania.
 pit-design-ramp-remove-help = Zaprojektuj wyrobisko bez rampy. Jej ustawienia zostają, by umieścić ją ponownie.
-pit-design-ramp-move = Przesuń
 pit-design-done = Gotowe
 pit-design-kind = Projekt wyrobiska
 pit-design-explode = Rozbij

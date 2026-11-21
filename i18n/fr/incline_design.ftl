@@ -4984,10 +4984,6 @@ err-file-desc-opt-report = rapport d’optimisation
 
 pit-design-menu = Conception de fosse
 pit-design-title = Conception de fosse
-pit-design-direction = Construire
-pit-design-direction-help = Dans quel sens la conception est bâtie depuis sa ligne : une fosse vers le haut depuis son fond ou vers le bas depuis sa crête, une verse vers le haut depuis son pied ou vers le bas depuis son sommet.
-pit-design-up = Vers le haut depuis le fond
-pit-design-down = Vers le bas depuis la crête
 pit-design-benches-section = Gradins
 pit-design-bench-height = Hauteur de gradin
 pit-design-face-angle = Angle de front
@@ -5012,29 +5008,10 @@ pit-design-climbs = Monte
 pit-design-climbs-help = Dans quel sens la rampe monte autour de la fosse, vue de dessus.
 pit-design-clockwise = Sens horaire
 pit-design-anticlockwise = Sens antihoraire
-pit-design-ramp-start = Commence à
-pit-design-ramp-start-help = Là où la rampe quitte la ligne. Faites glisser sa croix verte le long de la ligne dans la vue, ou cliquez sur Déplacer puis là où elle doit partir à la place.
-pit-design-ramp-start-default = Début de la ligne
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] Côté nord
-    [ne] Côté nord-est
-    [e] Côté est
-    [se] Côté sud-est
-    [s] Côté sud
-    [sw] Côté sud-ouest
-    [w] Côté ouest
-   *[nw] Côté nord-ouest
 }
 pit-design-ramp-drag-hint = Faites glisser pour déplacer le départ de la rampe
 pit-design-ramp-drag-prompt = Relâchez sur la ligne là où la rampe doit la quitter.
 pit-design-ramp-start-prompt = Cliquez sur la ligne de départ là où la rampe la quitte.
-pit-design-layout = Tracé
-pit-design-layout-help = Une spirale continue autour des parois dans le sens où elle monte. Un lacet fait demi-tour sur une plateforme plane tous les quelques gradins, là où les parois laissent de la place pour le virage.
-pit-design-spiral = Spirale
-pit-design-switchback = Lacet
-pit-design-switchback-every = Gradins entre virages
-pit-design-switchback-every-help = Combien de gradins la rampe monte avant de faire demi-tour ; 0 pour ne tourner qu’aux cotes données. Là où un virage ne tient pas, la rampe continue un gradin de plus et tourne là.
 pit-design-inside-radius = Rayon intérieur
 pit-design-inside-radius-help = Le virage le plus serré que doit prendre le bord intérieur de la route : le rayon d'un lacet, et la valeur à laquelle toute la route est contrôlée.
 pit-design-result-section = Conception
@@ -5066,7 +5043,7 @@ pit-design-problem-topography-not-loaded = Chargez { $name } pour affleurer cont
 pit-design-draw-prompt = Cliquez la ligne de départ point par point : le fond ou la crête d’une fosse, ou le pied ou le sommet d’une verse.
 pit-design-draw-close = Cliquez sur le premier point, ou appuyez sur Entrée, pour fermer la ligne.
 pit-design-draw-close-minor = Le clic droit termine aussi
-pit-design-draw-help = Dessinez la ligne fermée dont part la conception : le pied du fond ou la crête d’une fosse, ou le pied ou le sommet d’une verse. Dès qu’elle est fermée, la conception en est faite sur le calque actif, et son type et son sens se règlent à l’étape suivante.
+pit-design-draw-help = Dessinez la ligne fermée dont part la conception : le pied du fond ou la crête d’une fosse, ou le pied ou le sommet d’une verse. Dès qu’elle est fermée, la conception en est faite sur le calque actif.
 pit-design-round-corners = Arrondir les angles
 pit-design-draw-ground = Terrain ici
 pit-design-draw-ground-above = { $rl } m ({ $by } m au-dessus de la cote)
@@ -5076,12 +5053,8 @@ pit-design-corner-radius = Rayon d’angle
 pit-design-done-help = Terminer cette fosse et poser l’outil. Échap fait de même.
 pit-design-turn-grade = Pente du virage
 pit-design-turn-grade-help = La pente à laquelle monte le bord intérieur de la piste dans un lacet ; le tronçon suivant monte ce qui reste du gradin : d’ordinaire 2 à 3 % plus douce que la rampe, pour que les camions gardent leur vitesse dans la courbe. 0 pour un virage plat sur une plateforme.
-pit-design-turns-at = Virages aux cotes
-pit-design-turns-at-hint = p. ex. 130, 175
-pit-design-turns-at-help = Cotes où la rampe fait demi-tour, en plus de tous les tant de gradins : au premier gradin commençant à chacune ou au-delà, dans le sens de construction. Là où un virage n’y tient pas, il est fait au gradin suivant qui a la place, et le résultat le dit.
 pit-design-turn-widening = Élargissement du virage
 pit-design-turn-widening-help = De combien le virage est plus large que la piste en son milieu, à l’extérieur, pour que les camions le prennent.
-pit-design-turns-none = Sans gradins entre les virages ni cotes où tourner, la rampe ne fait jamais demi-tour.
 pit-design-turn-moved = Le virage demandé à la cote { $asked } a été fait à la cote { $made } : il n’y avait pas la place plus tôt.
 pit-design-ramp-junction-flat = Palier de jonction
 pit-design-ramp-junction-flat-help = Sur quelle longueur chaque tronçon de la rampe reste à plat là où il quitte la banquette de son gradin, pour rejoindre la banquette depuis la piste à plat. Le palier d’une tranche compte là où il est plus long.
@@ -5151,10 +5124,6 @@ pit-design-zone-add-help = Une tranche de cotes dont les gradins sont taillés a
 pit-design-table-face = Front
 pit-design-table-berm = Banquette
 pit-design-problem-zone = Les cotes De et À d’une zone doivent différer.
-pit-design-dump-up = Vers le haut depuis le pied
-pit-design-dump-down = Vers le bas depuis le sommet
-pit-design-type = Type
-pit-design-type-help = Une fosse est creusée dans le terrain, ses talus s’écartant en montant. Une verse ou un stock est bâti dessus, ses talus se resserrant en montant ; bâti vers le bas depuis son sommet, il s’élargit jusqu’à rencontrer le terrain.
 pit-design-kind-pit = Fosse
 pit-design-kind-dump = Verse ou stock
 pit-design-stop-ground = Là où elle rencontre le terrain
@@ -5171,7 +5140,6 @@ pit-design-ramp-remove-short = Retirer
 pit-design-send-to = Envoyer à
 pit-design-send-to-help = Envoyer les rampes au réseau de roulage, ou la fosse à la planification.
 pit-design-ramp-remove-help = Concevoir la fosse sans rampe. Ses réglages sont conservés pour la replacer.
-pit-design-ramp-move = Déplacer
 pit-design-done = Terminé
 pit-design-kind = Conception de fosse
 pit-design-explode = Décomposer

@@ -619,6 +619,7 @@ impl<'a> Graphics<'a> {
         };
         draft.gizmos.clear();
         draft.wall_gizmo = None;
+        draft.switch_spots.clear();
         let view_proj = self.view_proj();
         let project = |world: DVec3| self.world_to_window_px(&view_proj, world);
         let design = draft.preview.as_ref().and_then(|preview| preview.design.as_ref().ok());
@@ -645,6 +646,7 @@ impl<'a> Graphics<'a> {
             .map(|string| string.points.as_slice())
             .collect();
         let mut gizmos = Vec::new();
+        let mut spots = Vec::new();
         for (index, (ramp, foot)) in working.settings.ramps.iter().zip(&preview.ramp_starts).enumerate() {
             let at = foot.truncate();
             let edge = (ring::nearest(&ring, at).0.floor() as usize).min(count - 1);
@@ -654,7 +656,7 @@ impl<'a> Graphics<'a> {
             let normal = glam::DVec2::new(tangent.y, -tangent.x);
             // The road's own way from its foot, and its side of the string:
             // as its centreline leaves, whichever way the design is built.
-            let Some((leaving, ahead)) = centrelines
+            let Some((leaving, ahead, line)) = centrelines
                 .iter()
                 .filter_map(|line| {
                     let (first, last) = (line.first()?.truncate(), line.last()?.truncate());
@@ -663,13 +665,27 @@ impl<'a> Graphics<'a> {
                     } else {
                         (last, line.get(line.len().saturating_sub(4))?.truncate())
                     };
-                    Some((end.distance(at), end, next))
+                    Some((end.distance(at), end, next, *line))
                 })
                 .min_by(|a, b| a.0.total_cmp(&b.0))
-                .map(|(_, end, next)| (end, next))
+                .map(|(_, end, next, line)| (end, next, line))
             else {
                 continue;
             };
+            // Where it can switch back: each bench's stretch where it begins,
+            // but its first, which it starts on; where it turns, the turn.
+            for bench in design.report.iter().filter(|bench| bench.ramps.iter().any(|road| road.ramp == index)).skip(1) {
+                let Some(road) = bench.ramps.iter().find(|road| road.ramp == index) else {
+                    continue;
+                };
+                let (rl, place, turn) = match road.turn_at.filter(|_| road.switchback) {
+                    Some(turn_at) => (road.turn_moved_from.unwrap_or(bench.elevation), Some(turn_at), true),
+                    None => (bench.elevation, line.iter().find(|point| (point.z - bench.elevation).abs() < 1.0e-3).copied(), false),
+                };
+                if let Some(at) = place.and_then(project) {
+                    spots.push(crate::ui::dialogs::pit_design::SwitchSpot { ramp: index, rl, at, turn });
+                }
+            }
             let goes = tangent * (next_sign(ahead - leaving, tangent));
             let across = normal * next_sign(leaving - at, normal);
             if let Some(gizmo) = self.ramp_gizmo(index, *foot, goes, across, ramp.gradient, &project) {
@@ -688,6 +704,7 @@ impl<'a> Graphics<'a> {
         draft.wall_place = wall.as_ref().map(|(_, place)| *place).or(kept);
         draft.wall_gizmo = wall.map(|(gizmo, _)| gizmo);
         draft.gizmos = if benches { Vec::new() } else { gizmos };
+        draft.switch_spots = if benches { Vec::new() } else { spots };
     }
 
     /// The walls' gizmo, on the pit's string where it stands furthest from

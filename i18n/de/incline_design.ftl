@@ -5024,10 +5024,6 @@ err-file-desc-opt-report = Optimierungsbericht
 
 pit-design-menu = Grubenentwurf
 pit-design-title = Grubenentwurf
-pit-design-direction = Aufbau
-pit-design-direction-help = In welche Richtung der Entwurf von seiner Linie gebaut wird: eine Grube nach oben von ihrer Sohle oder nach unten von ihrer Böschungskante, eine Halde nach oben von ihrem Fuß oder nach unten von ihrer Krone.
-pit-design-up = Nach oben von der Sohle
-pit-design-down = Nach unten von der Kante
 pit-design-benches-section = Strossen
 pit-design-bench-height = Strossenhöhe
 pit-design-face-angle = Böschungswinkel
@@ -5052,29 +5048,10 @@ pit-design-climbs = Steigt
 pit-design-climbs-help = In welcher Richtung die Rampe um die Grube ansteigt, von oben gesehen.
 pit-design-clockwise = Im Uhrzeigersinn
 pit-design-anticlockwise = Gegen den Uhrzeigersinn
-pit-design-ramp-start = Beginnt bei
-pit-design-ramp-start-help = Wo die Rampe die Linie verlässt. Ziehen Sie ihr grünes Kreuz in der Ansicht entlang der Linie, oder klicken Sie auf Verschieben und dann dort, wo sie stattdessen beginnen soll.
-pit-design-ramp-start-default = Anfang der Linie
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] Nordseite
-    [ne] Nordostseite
-    [e] Ostseite
-    [se] Südostseite
-    [s] Südseite
-    [sw] Südwestseite
-    [w] Westseite
-   *[nw] Nordwestseite
 }
 pit-design-ramp-drag-hint = Ziehen, um den Rampenbeginn zu verschieben
 pit-design-ramp-drag-prompt = Lassen Sie auf der Linie dort los, wo die Rampe sie verlassen soll.
 pit-design-ramp-start-prompt = Klicken Sie auf die Ausgangslinie dort, wo die Rampe sie verlässt.
-pit-design-layout = Anordnung
-pit-design-layout-help = Eine Spirale läuft weiter um die Wände, in der Richtung, in der sie ansteigt. Eine Serpentine kehrt alle paar Strossen auf einer ebenen Wendeplatte um, wo die Wände Platz für die Wende lassen.
-pit-design-spiral = Spirale
-pit-design-switchback = Serpentine
-pit-design-switchback-every = Strossen zwischen Wenden
-pit-design-switchback-every-help = Wie viele Strossen die Rampe steigt, bevor sie wendet; 0, um nur an den angegebenen RLs zu wenden. Wo eine Wende nicht passt, fährt die Rampe eine Strosse weiter und wendet dort.
 pit-design-inside-radius = Innenradius
 pit-design-inside-radius-help = Der engste Radius, den die Innenkante der Straße fahren soll: der Radius einer Spitzkehre, und woran die ganze Straße geprüft wird.
 pit-design-result-section = Entwurf
@@ -5106,7 +5083,7 @@ pit-design-problem-topography-not-loaded = Laden Sie { $name }, um daran zutage 
 pit-design-draw-prompt = Klicken Sie die Linie, von der aus entworfen wird, Punkt für Punkt: Sohle oder Böschungskante einer Grube, Fuß oder Krone einer Halde.
 pit-design-draw-close = Klicken Sie auf den ersten Punkt oder drücken Sie Enter, um die Linie zu schließen.
 pit-design-draw-close-minor = Rechtsklick schließt ebenfalls ab
-pit-design-draw-help = Zeichnen Sie die geschlossene Linie, von der der Entwurf ausgeht: Sohle oder Böschungskante einer Grube, Fuß oder Krone einer Halde. Sobald sie geschlossen ist, wird der Entwurf daraus auf der aktiven Ebene erstellt, Art und Richtung werden im nächsten Schritt festgelegt.
+pit-design-draw-help = Zeichnen Sie die geschlossene Linie, von der der Entwurf ausgeht: Sohle oder Böschungskante einer Grube, Fuß oder Krone einer Halde. Sobald sie geschlossen ist, wird der Entwurf daraus auf der aktiven Ebene erstellt.
 pit-design-round-corners = Ecken abrunden
 pit-design-draw-ground = Gelände hier
 pit-design-draw-ground-above = { $rl } m ({ $by } m über der Höhe)
@@ -5116,12 +5093,8 @@ pit-design-corner-radius = Eckenradius
 pit-design-done-help = Diese Grube abschließen und das Werkzeug ablegen. Escape tut dasselbe.
 pit-design-turn-grade = Wendensteigung
 pit-design-turn-grade-help = Die Steigung, mit der der Innenrand der Straße in einer Spitzkehre steigt; der Abschnitt danach steigt, was von der Strosse bleibt: meist 2 bis 3 % flacher als die Rampe, damit Lkw in der Kurve Tempo halten. 0 für eine ebene Wende auf einem Absatz.
-pit-design-turns-at = Wenden auf RLs
-pit-design-turns-at-hint = z. B. 130, 175
-pit-design-turns-at-help = RLs, an denen die Rampe wendet, zusätzlich zu alle so vielen Strossen: auf der ersten Strosse, die auf oder nach jeder beginnt, in Baurichtung. Wo eine Wende dort nicht passt, wird sie auf der nächsten Strosse mit Platz gemacht, und das Ergebnis sagt es.
 pit-design-turn-widening = Wendenverbreiterung
 pit-design-turn-widening-help = Wie viel breiter als die Straße die Wende in ihrer Mitte ist, außen, damit die Lkw sie schaffen.
-pit-design-turns-none = Ohne Strossen zwischen Wenden und ohne RLs zum Wenden wendet die Rampe nie.
 pit-design-turn-moved = Die auf RL { $asked } verlangte Wende wurde auf RL { $made } gemacht: Früher war kein Platz dafür.
 pit-design-ramp-junction-flat = Kreuzungsflachstück
 pit-design-ramp-junction-flat-help = Wie weit jeder Rampenabschnitt eben verläuft, wo er die Berme seiner Strosse verlässt, sodass die Berme von der Straße aus eben erreicht wird. Das Flachstück eines Bands zählt, wo es länger ist.
@@ -5191,10 +5164,6 @@ pit-design-zone-add-help = Ein RL-Band, dessen Strossen mit eigener Höhe, eigen
 pit-design-table-face = Böschung
 pit-design-table-berm = Berme
 pit-design-problem-zone = Von- und Bis-RL einer Zone müssen sich unterscheiden.
-pit-design-dump-up = Nach oben vom Fuß
-pit-design-dump-down = Nach unten von der Krone
-pit-design-type = Art
-pit-design-type-help = Eine Grube wird in den Boden geschnitten, ihre Wände treten beim Ansteigen nach außen. Eine Halde wird darauf geschüttet, ihre Wände treten beim Ansteigen nach innen; von ihrer Krone nach unten gebaut, tritt sie nach außen, bis sie den Boden trifft.
 pit-design-kind-pit = Grube
 pit-design-kind-dump = Halde
 pit-design-stop-ground = Wo sie den Boden trifft
@@ -5211,7 +5180,6 @@ pit-design-ramp-remove-short = Entfernen
 pit-design-send-to = Senden an
 pit-design-send-to-help = Die Rampen ins Transportnetz oder die Grube an die Planung senden.
 pit-design-ramp-remove-help = Die Grube ohne Rampe entwerfen. Ihre Einstellungen bleiben erhalten, um sie erneut zu platzieren.
-pit-design-ramp-move = Verschieben
 pit-design-done = Fertig
 pit-design-kind = Grubenentwurf
 pit-design-explode = Auflösen

@@ -4983,10 +4983,6 @@ err-file-desc-opt-report = ऑप्टिमाइज़ेशन रिपो�
 
 pit-design-menu = पिट डिज़ाइन
 pit-design-title = पिट डिज़ाइन
-pit-design-direction = निर्माण
-pit-design-direction-help = डिज़ाइन अपनी रेखा से किस ओर बनता है: पिट तल से ऊपर या शिखर से नीचे, डंप पाद से ऊपर या शीर्ष से नीचे।
-pit-design-up = तल से ऊपर
-pit-design-down = क्रेस्ट से नीचे
 pit-design-benches-section = बेंच
 pit-design-bench-height = बेंच ऊँचाई
 pit-design-face-angle = फेस कोण
@@ -5011,29 +5007,10 @@ pit-design-climbs = चढ़ाई
 pit-design-climbs-help = ऊपर से देखने पर रैंप पिट के चारों ओर किस दिशा में चढ़ता है।
 pit-design-clockwise = दक्षिणावर्त
 pit-design-anticlockwise = वामावर्त
-pit-design-ramp-start = शुरू होता है
-pit-design-ramp-start-help = जहाँ रैंप रेखा से निकलता है। दृश्य में उसके हरे क्रॉस को रेखा के साथ खींचें, या खिसकाएँ दबाएँ और वहाँ क्लिक करें जहाँ उसे निकलना चाहिए।
-pit-design-ramp-start-default = रेखा का आरंभ
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] उत्तरी ओर
-    [ne] उत्तर-पूर्वी ओर
-    [e] पूर्वी ओर
-    [se] दक्षिण-पूर्वी ओर
-    [s] दक्षिणी ओर
-    [sw] दक्षिण-पश्चिमी ओर
-    [w] पश्चिमी ओर
-   *[nw] उत्तर-पश्चिमी ओर
 }
 pit-design-ramp-drag-hint = रैंप की शुरुआत खिसकाने के लिए खींचें
 pit-design-ramp-drag-prompt = रेखा पर वहाँ छोड़ें जहाँ रैंप को उससे निकलना चाहिए।
 pit-design-ramp-start-prompt = आरंभिक रेखा पर वहाँ क्लिक करें जहाँ रैंप उसे छोड़ता है।
-pit-design-layout = विन्यास
-pit-design-layout-help = सर्पिल चढ़ाई की दिशा में दीवारों के चारों ओर चलता रहता है। स्विचबैक हर कुछ बेंचों पर एक समतल पैड पर वापस मुड़ता है, जहाँ दीवारें मोड़ के लिए जगह छोड़ती हैं।
-pit-design-spiral = सर्पिल
-pit-design-switchback = स्विचबैक
-pit-design-switchback-every = मोड़ों के बीच बेंच
-pit-design-switchback-every-help = रैंप पलटने से पहले कितनी बेंचें चढ़ता है; केवल दिए गए RL पर पलटने के लिए 0। जहाँ मोड़ नहीं समाता, रैंप एक बेंच और चलता है और वहाँ पलटता है।
 pit-design-inside-radius = भीतरी त्रिज्या
 pit-design-inside-radius-help = सड़क का भीतरी किनारा जितना सबसे तीखा मुड़ना चाहिए: स्विचबैक की त्रिज्या, और पूरी सड़क इसी से जाँची जाती है।
 pit-design-result-section = डिज़ाइन
@@ -5065,7 +5042,7 @@ pit-design-problem-topography-not-loaded = उस पर सतह पर नि
 pit-design-draw-prompt = आरंभिक रेखा पर बिंदु-दर-बिंदु क्लिक करें: पिट का तल या शिखर, या डंप का पाद या शीर्ष।
 pit-design-draw-close = रेखा बंद करने के लिए पहले बिंदु पर क्लिक करें, या Enter दबाएँ।
 pit-design-draw-close-minor = दायाँ क्लिक भी समाप्त करता है
-pit-design-draw-help = वह बंद रेखा बनाएँ जिससे डिज़ाइन शुरू होता है: पिट के तल का पाद या शिखर, या डंप का पाद या शीर्ष। बंद होते ही सक्रिय परत पर उससे डिज़ाइन बनता है, और उसका प्रकार और दिशा अगले चरण में तय होते हैं।
+pit-design-draw-help = वह बंद रेखा बनाएँ जिससे डिज़ाइन शुरू होता है: पिट के तल का पाद या शिखर, या डंप का पाद या शीर्ष। बंद होते ही सक्रिय परत पर उससे डिज़ाइन बनता है।
 pit-design-round-corners = कोने गोल करें
 pit-design-draw-ground = यहाँ ज़मीन
 pit-design-draw-ground-above = { $rl } मी (RL से { $by } मी ऊपर)
@@ -5075,12 +5052,8 @@ pit-design-corner-radius = कोने की त्रिज्या
 pit-design-done-help = यह पिट पूरा करें और टूल बंद करें। Escape भी यही करता है।
 pit-design-turn-grade = मोड़ ढाल
 pit-design-turn-grade-help = वह ढाल जिससे मोड़ पर सड़क का भीतरी किनारा चढ़ता है; उसके बाद का हिस्सा बेंच का बचा भाग चढ़ता है: आमतौर पर रैंप से 2 से 3 % कम, ताकि ट्रक मोड़ पर गति बनाए रखें। पैड पर समतल मोड़ के लिए 0।
-pit-design-turns-at = RL पर मोड़
-pit-design-turns-at-hint = जैसे 130, 175
-pit-design-turns-at-help = वे RL जहाँ रैंप पलटता है, हर इतनी बेंचों के अलावा: निर्माण की दिशा में हर एक पर या उसके बाद शुरू होने वाली पहली बेंच पर। जहाँ मोड़ वहाँ नहीं समाता, वह जगह वाली अगली बेंच पर बनता है, और परिणाम यह बताता है।
 pit-design-turn-widening = मोड़ चौड़ीकरण
 pit-design-turn-widening-help = ट्रकों के मुड़ पाने के लिए मोड़ अपने बीच में, बाहरी ओर, सड़क से कितना चौड़ा है।
-pit-design-turns-none = मोड़ों के बीच बेंच और पलटने के RL के बिना रैंप कभी नहीं पलटता।
 pit-design-turn-moved = RL { $asked } पर माँगा गया मोड़ RL { $made } पर बना: पहले उसके लिए जगह नहीं थी।
 pit-design-ramp-junction-flat = जंक्शन समतल
 pit-design-ramp-junction-flat-help = रैंप का हर हिस्सा अपनी बेंच के बर्म से निकलते समय कितनी दूर समतल चलता है, ताकि सड़क से बर्म तक समतल पर पहुँचा जा सके। पट्टे का समतल जहाँ लंबा हो, वह मान्य होता है।
@@ -5150,10 +5123,6 @@ pit-design-zone-add-help = RL का एक पट्टा जिसकी ब�
 pit-design-table-face = फेस
 pit-design-table-berm = बर्म
 pit-design-problem-zone = क्षेत्र के RL से और RL तक अलग होने चाहिए।
-pit-design-dump-up = पाद से ऊपर
-pit-design-dump-down = शीर्ष से नीचे
-pit-design-type = प्रकार
-pit-design-type-help = पिट ज़मीन में काटा जाता है, उसकी दीवारें चढ़ते हुए बाहर फैलती हैं। डंप या स्टॉकपाइल उस पर बनाया जाता है, उसकी दीवारें चढ़ते हुए भीतर सिमटती हैं; शीर्ष से नीचे बनाने पर वह ज़मीन से मिलने तक बाहर फैलता है।
 pit-design-kind-pit = पिट
 pit-design-kind-dump = डंप या स्टॉकपाइल
 pit-design-stop-ground = जहाँ यह ज़मीन से मिलता है
@@ -5170,7 +5139,6 @@ pit-design-ramp-remove-short = हटाएँ
 pit-design-send-to = भेजें
 pit-design-send-to-help = रैम्प ढुलाई नेटवर्क में, या पिट प्लानिंग में भेजें।
 pit-design-ramp-remove-help = पिट को बिना रैंप के डिज़ाइन करें। उसकी सेटिंग्स फिर से रखने के लिए बनी रहती हैं।
-pit-design-ramp-move = खिसकाएँ
 pit-design-done = हो गया
 pit-design-kind = पिट डिज़ाइन
 pit-design-explode = विघटित करें

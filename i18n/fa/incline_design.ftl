@@ -4983,10 +4983,6 @@ err-file-desc-opt-report = گزارش بهینه‌سازی
 
 pit-design-menu = طراحی پیت
 pit-design-title = طراحی پیت
-pit-design-direction = ساخت
-pit-design-direction-help = جهتی که طراحی از خطش ساخته می‌شود: پیت از کف رو به بالا یا از تاج رو به پایین، دامپ از پا رو به بالا یا از بالا رو به پایین.
-pit-design-up = رو به بالا از کف
-pit-design-down = رو به پایین از تاج
 pit-design-benches-section = پله‌ها
 pit-design-bench-height = ارتفاع پله
 pit-design-face-angle = زاویه سینه
@@ -5011,29 +5007,10 @@ pit-design-climbs = جهت بالا رفتن
 pit-design-climbs-help = جهتی که رمپ از دید بالا دور پیت بالا می‌رود.
 pit-design-clockwise = ساعتگرد
 pit-design-anticlockwise = پادساعتگرد
-pit-design-ramp-start = شروع از
-pit-design-ramp-start-help = جایی که رمپ از خط جدا می‌شود. علامت سبز آن را در نما در امتداد خط بکشید، یا جابه‌جایی را بزنید و جایی که باید جدا شود کلیک کنید.
-pit-design-ramp-start-default = ابتدای خط
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] سمت شمال
-    [ne] سمت شمال شرقی
-    [e] سمت شرق
-    [se] سمت جنوب شرقی
-    [s] سمت جنوب
-    [sw] سمت جنوب غربی
-    [w] سمت غرب
-   *[nw] سمت شمال غربی
 }
 pit-design-ramp-drag-hint = برای جابه‌جا کردن آغاز رمپ بکشید
 pit-design-ramp-drag-prompt = روی خط، جایی که رمپ باید از آن جدا شود، رها کنید.
 pit-design-ramp-start-prompt = روی خط آغاز در جایی که رمپ آن را ترک می‌کند کلیک کنید.
-pit-design-layout = چیدمان
-pit-design-layout-help = مارپیچ در جهت بالا رفتن دور دیواره‌ها ادامه می‌دهد. زیگزاگ هر چند پله یک بار روی یک سکوی هموار برمی‌گردد، جایی که دیواره‌ها برای دور زدن جا می‌گذارند.
-pit-design-spiral = مارپیچ
-pit-design-switchback = زیگزاگ
-pit-design-switchback-every = پله‌ها میان دورها
-pit-design-switchback-every-help = رمپ چند پله بالا می‌رود تا برگردد؛ 0 برای برگشتن فقط در ترازهای داده‌شده. جایی که برگشت جا نشود، رمپ یک پله دیگر می‌رود و آنجا برمی‌گردد.
 pit-design-inside-radius = شعاع داخلی
 pit-design-inside-radius-help = تندترین پیچی که لبه داخلی جاده باید بگیرد: شعاع پیچ برگشتی، و آنچه کل جاده با آن بررسی می‌شود.
 pit-design-result-section = طراحی
@@ -5065,7 +5042,7 @@ pit-design-problem-topography-not-loaded = برای رسیدن به سطح آن�
 pit-design-draw-prompt = خط آغاز را نقطه به نقطه کلیک کنید: کف یا تاج پیت، یا پا یا بالای دامپ.
 pit-design-draw-close = برای بستن خط، نقطهٔ نخست را کلیک کنید یا Enter را بزنید.
 pit-design-draw-close-minor = کلیک راست هم پایان می‌دهد
-pit-design-draw-help = خط بسته‌ای را که طراحی از آن آغاز می‌شود بکشید: پای کف یا تاج پیت، یا پا یا بالای دامپ. به محض بسته شدن، طراحی روی لایهٔ فعال از آن ساخته می‌شود و نوع و جهت آن در گام بعد تنظیم می‌شود.
+pit-design-draw-help = خط بسته‌ای را که طراحی از آن آغاز می‌شود بکشید: پای کف یا تاج پیت، یا پا یا بالای دامپ. به محض بسته شدن، طراحی روی لایهٔ فعال از آن ساخته می‌شود.
 pit-design-round-corners = گرد کردن گوشه‌ها
 pit-design-draw-ground = زمین در اینجا
 pit-design-draw-ground-above = { $rl } م ({ $by } م بالاتر از تراز)
@@ -5075,12 +5052,8 @@ pit-design-corner-radius = شعاع گوشه
 pit-design-done-help = این پیت را تمام کنید و ابزار را کنار بگذارید. Escape هم همین کار را می‌کند.
 pit-design-turn-grade = شیب برگشت
 pit-design-turn-grade-help = شیبی که لبه درونی جاده در برگشت با آن بالا می‌رود؛ بخش پس از آن باقی پله را بالا می‌رود: معمولاً 2 تا 3 درصد ملایم‌تر از رمپ، تا کامیون‌ها در پیچ سرعتشان را نگه دارند. 0 برای برگشتی هموار روی سکو.
-pit-design-turns-at = برگشت در ترازها
-pit-design-turns-at-hint = مثلاً 130، 175
-pit-design-turns-at-help = ترازهایی که رمپ در آن‌ها برمی‌گردد، افزون بر هر چند پله: روی نخستین پله‌ای که در هر کدام یا پس از آن آغاز می‌شود، در جهت ساخت. جایی که برگشت آنجا جا نشود، روی پله بعدی که جا دارد انجام می‌شود و نتیجه این را می‌گوید.
 pit-design-turn-widening = پهن‌شدگی برگشت
 pit-design-turn-widening-help = برگشت در میانه‌اش، در سمت بیرون، چقدر از جاده پهن‌تر است تا کامیون‌ها از آن بگذرند.
-pit-design-turns-none = بدون پله میان برگشت‌ها و بدون ترازی برای برگشت، رمپ هرگز برنمی‌گردد.
 pit-design-turn-moved = برگشتی که در تراز { $asked } خواسته شده بود در تراز { $made } انجام شد: زودتر جایی برایش نبود.
 pit-design-ramp-junction-flat = هموار محل اتصال
 pit-design-ramp-junction-flat-help = هر بخش رمپ تا کجا هموار می‌رود جایی که از برم پله‌اش جدا می‌شود، تا از جاده روی هموار به برم برسند. هموار نوار، جایی که بلندتر باشد، معتبر است.
@@ -5150,10 +5123,6 @@ pit-design-zone-add-help = بازه‌ای از تراز که پله‌هایش 
 pit-design-table-face = سینه
 pit-design-table-berm = برم
 pit-design-problem-zone = ترازهای «از» و «تا» یک ناحیه باید متفاوت باشند.
-pit-design-dump-up = رو به بالا از پا
-pit-design-dump-down = رو به پایین از بالا
-pit-design-type = نوع
-pit-design-type-help = پیت در زمین کنده می‌شود و دیواره‌هایش با بالا رفتن باز می‌شوند. دامپ یا انباشت روی آن ساخته می‌شود و دیواره‌هایش با بالا رفتن جمع می‌شوند؛ اگر از بالا رو به پایین ساخته شود، باز می‌شود تا به زمین برسد.
 pit-design-kind-pit = پیت
 pit-design-kind-dump = دامپ یا انباشت
 pit-design-stop-ground = جایی که به زمین می‌رسد
@@ -5170,7 +5139,6 @@ pit-design-ramp-remove-short = حذف
 pit-design-send-to = فرستادن به
 pit-design-send-to-help = رمپ‌ها را به شبکه حمل یا پیت را به برنامه‌ریزی بفرستید.
 pit-design-ramp-remove-help = پیت را بدون رمپ طراحی کنید. تنظیمات آن برای جای‌گذاری دوباره نگه داشته می‌شود.
-pit-design-ramp-move = جابه‌جایی
 pit-design-done = انجام شد
 pit-design-kind = طراحی پیت
 pit-design-explode = تجزیه

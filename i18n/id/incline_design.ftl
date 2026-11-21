@@ -4983,10 +4983,6 @@ err-file-desc-opt-report = laporan optimisasi
 
 pit-design-menu = Desain Pit
 pit-design-title = Desain Pit
-pit-design-direction = Bangun
-pit-design-direction-help = Arah desain dibangun dari garisnya: pit naik dari dasarnya atau turun dari puncaknya, timbunan naik dari kakinya atau turun dari puncaknya.
-pit-design-up = Ke atas dari lantai
-pit-design-down = Ke bawah dari puncak lereng
 pit-design-benches-section = Jenjang
 pit-design-bench-height = Tinggi jenjang
 pit-design-face-angle = Sudut muka
@@ -5011,29 +5007,10 @@ pit-design-climbs = Naik
 pit-design-climbs-help = Arah ramp naik mengelilingi pit, dilihat dari atas.
 pit-design-clockwise = Searah jarum jam
 pit-design-anticlockwise = Berlawanan arah jarum jam
-pit-design-ramp-start = Mulai di
-pit-design-ramp-start-help = Tempat ramp meninggalkan garis. Seret tanda silang hijaunya di sepanjang garis pada tampilan, atau tekan Pindah lalu klik tempat ramp seharusnya pergi.
-pit-design-ramp-start-default = Awal garis
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] Sisi utara
-    [ne] Sisi timur laut
-    [e] Sisi timur
-    [se] Sisi tenggara
-    [s] Sisi selatan
-    [sw] Sisi barat daya
-    [w] Sisi barat
-   *[nw] Sisi barat laut
 }
 pit-design-ramp-drag-hint = Seret untuk memindahkan awal ramp
 pit-design-ramp-drag-prompt = Lepaskan di garis tempat ramp seharusnya meninggalkannya.
 pit-design-ramp-start-prompt = Klik garis awal di tempat ramp meninggalkannya.
-pit-design-layout = Tata letak
-pit-design-layout-help = Spiral terus mengelilingi dinding ke arah ia naik. Switchback berbalik di landasan datar setiap beberapa jenjang, di mana dinding menyisakan ruang untuk berbelok.
-pit-design-spiral = Spiral
-pit-design-switchback = Switchback
-pit-design-switchback-every = Jenjang antar belokan
-pit-design-switchback-every-help = Berapa jenjang ramp naik sebelum berbalik; 0 untuk berbalik hanya di RL yang diberikan. Bila belokan tidak muat, ramp terus satu jenjang lagi dan berbalik di sana.
 pit-design-inside-radius = Jari-jari dalam
 pit-design-inside-radius-help = Belokan tertajam yang boleh dibuat tepi dalam jalan: jari-jari tikungan balik, dan acuan pemeriksaan seluruh jalan.
 pit-design-result-section = Desain
@@ -5065,7 +5042,7 @@ pit-design-problem-topography-not-loaded = Muat { $name } untuk muncul ke permuk
 pit-design-draw-prompt = Klik garis awal titik demi titik: dasar atau puncak pit, atau kaki atau puncak timbunan.
 pit-design-draw-close = Klik titik pertama, atau tekan Enter, untuk menutup garis.
 pit-design-draw-close-minor = Klik kanan juga menyelesaikan
-pit-design-draw-help = Gambar garis tertutup tempat desain dimulai: kaki dasar atau puncak pit, atau kaki atau puncak timbunan. Begitu tertutup, desain dibuat darinya di lapisan aktif, dan jenis serta arahnya diatur pada langkah berikutnya.
+pit-design-draw-help = Gambar garis tertutup tempat desain dimulai: kaki dasar atau puncak pit, atau kaki atau puncak timbunan. Begitu tertutup, desain dibuat darinya di lapisan aktif.
 pit-design-round-corners = Bulatkan sudut
 pit-design-draw-ground = Tanah di sini
 pit-design-draw-ground-above = { $rl } m ({ $by } m di atas RL)
@@ -5075,12 +5052,8 @@ pit-design-corner-radius = Jari-jari sudut
 pit-design-done-help = Selesaikan pit ini dan letakkan alatnya. Escape melakukan hal yang sama.
 pit-design-turn-grade = Kemiringan belokan
 pit-design-turn-grade-help = Kemiringan tepi dalam jalan saat menanjak di belokan balik; bagian sesudahnya menanjak sisa jenjang: biasanya 2 hingga 3 % lebih landai dari ramp, agar truk menjaga kecepatan di tikungan. 0 untuk belokan datar di landasan.
-pit-design-turns-at = Belok di RL
-pit-design-turns-at-hint = mis. 130, 175
-pit-design-turns-at-help = RL tempat ramp berbalik, selain setiap sekian jenjang: di jenjang pertama yang dimulai pada atau sesudah masing-masing, menurut arah pembangunan. Bila belokan tidak muat di sana, dibuat di jenjang berikutnya yang ada ruang, dan hasilnya menyebutkannya.
 pit-design-turn-widening = Pelebaran belokan
 pit-design-turn-widening-help = Seberapa lebar belokan melebihi jalan di tengahnya, di sisi luar, agar truk dapat melaluinya.
-pit-design-turns-none = Tanpa jenjang di antara belokan dan tanpa RL untuk berbalik, ramp tidak pernah berbalik.
 pit-design-turn-moved = Belokan yang diminta pada RL { $asked } dibuat pada RL { $made }: sebelumnya tidak ada ruang.
 pit-design-ramp-junction-flat = Datar persimpangan
 pit-design-ramp-junction-flat-help = Seberapa jauh setiap bagian ramp berjalan datar di tempat ia meninggalkan berm jenjangnya, agar berm dicapai dari jalan di bagian datar. Bagian datar pita berlaku bila lebih panjang.
@@ -5150,10 +5123,6 @@ pit-design-zone-add-help = Rentang RL yang jenjangnya dipotong dengan tinggi, su
 pit-design-table-face = Muka
 pit-design-table-berm = Berm
 pit-design-problem-zone = RL Dari dan Sampai suatu zona harus berbeda.
-pit-design-dump-up = Naik dari kaki
-pit-design-dump-down = Turun dari puncak
-pit-design-type = Jenis
-pit-design-type-help = Pit digali ke dalam tanah, dindingnya melebar saat naik. Timbunan atau stockpile dibangun di atasnya, dindingnya menyempit saat naik; dibangun turun dari puncaknya, ia melebar sampai bertemu tanah.
 pit-design-kind-pit = Pit
 pit-design-kind-dump = Timbunan atau stockpile
 pit-design-stop-ground = Tempat ia bertemu tanah
@@ -5170,7 +5139,6 @@ pit-design-ramp-remove-short = Hapus
 pit-design-send-to = Kirim ke
 pit-design-send-to-help = Kirim ramp ke jaringan angkut, atau pit ke Perencanaan.
 pit-design-ramp-remove-help = Rancang pit tanpa ramp. Pengaturannya disimpan untuk menempatkannya lagi.
-pit-design-ramp-move = Pindah
 pit-design-done = Selesai
 pit-design-kind = Desain pit
 pit-design-explode = Pecah

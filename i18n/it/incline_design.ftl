@@ -5025,10 +5025,6 @@ err-file-desc-opt-report = report di ottimizzazione
 
 pit-design-menu = Progettazione della fossa
 pit-design-title = Progettazione della fossa
-pit-design-direction = Costruisci
-pit-design-direction-help = In che verso il progetto è costruito dalla sua linea: una fossa verso l'alto dal fondo o verso il basso dalla cresta, una discarica verso l'alto dal piede o verso il basso dalla sommità.
-pit-design-up = Verso l'alto dal fondo
-pit-design-down = Verso il basso dal ciglio
 pit-design-benches-section = Gradini
 pit-design-bench-height = Altezza gradino
 pit-design-face-angle = Angolo della parete
@@ -5053,29 +5049,10 @@ pit-design-climbs = Sale
 pit-design-climbs-help = In quale verso la rampa sale intorno alla fossa, vista dall'alto.
 pit-design-clockwise = In senso orario
 pit-design-anticlockwise = In senso antiorario
-pit-design-ramp-start = Inizia da
-pit-design-ramp-start-help = Dove la rampa lascia la linea. Trascina la sua croce verde lungo la linea nella vista, oppure premi Sposta e fai clic dove deve partire invece.
-pit-design-ramp-start-default = Inizio della linea
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] Lato nord
-    [ne] Lato nord-est
-    [e] Lato est
-    [se] Lato sud-est
-    [s] Lato sud
-    [sw] Lato sud-ovest
-    [w] Lato ovest
-   *[nw] Lato nord-ovest
 }
 pit-design-ramp-drag-hint = Trascina per spostare l'inizio della rampa
 pit-design-ramp-drag-prompt = Rilascia sulla linea dove la rampa deve lasciarla.
 pit-design-ramp-start-prompt = Fate clic sulla linea di partenza dove la rampa la lascia.
-pit-design-layout = Tracciato
-pit-design-layout-help = Una spirale prosegue intorno alle pareti nel verso in cui sale. Un tornante torna indietro su una piazzola piana ogni tot gradini, dove le pareti lasciano spazio per la curva.
-pit-design-spiral = Spirale
-pit-design-switchback = Tornante
-pit-design-switchback-every = Gradini tra i tornanti
-pit-design-switchback-every-help = Quanti gradini sale la rampa prima di invertire; 0 per invertire solo alle quote date. Dove un tornante non ci sta, la rampa prosegue un gradino in più e inverte lì.
 pit-design-inside-radius = Raggio interno
 pit-design-inside-radius-help = La curva più stretta che il bordo interno della strada deve fare: il raggio di un tornante, e il valore con cui si controlla tutta la strada.
 pit-design-result-section = Progetto
@@ -5107,7 +5084,7 @@ pit-design-problem-topography-not-loaded = Caricate { $name } per affiorare cont
 pit-design-draw-prompt = Fai clic sulla linea di partenza punto per punto: il fondo o la cresta di una fossa, o il piede o la sommità di una discarica.
 pit-design-draw-close = Fai clic sul primo punto, o premi Invio, per chiudere la linea.
 pit-design-draw-close-minor = Anche il clic destro termina
-pit-design-draw-help = Disegna la linea chiusa da cui parte il progetto: il piede del fondo o la cresta di una fossa, o il piede o la sommità di una discarica. Appena si chiude, il progetto viene fatto da essa sul livello attivo, e tipo e verso si impostano al passo successivo.
+pit-design-draw-help = Disegna la linea chiusa da cui parte il progetto: il piede del fondo o la cresta di una fossa, o il piede o la sommità di una discarica. Appena si chiude, il progetto viene fatto da essa sul livello attivo.
 pit-design-round-corners = Arrotonda gli angoli
 pit-design-draw-ground = Terreno qui
 pit-design-draw-ground-above = { $rl } m ({ $by } m sopra la quota)
@@ -5117,12 +5094,8 @@ pit-design-corner-radius = Raggio d'angolo
 pit-design-done-help = Termina questa fossa e chiudi lo strumento. Esc fa lo stesso.
 pit-design-turn-grade = Pendenza del tornante
 pit-design-turn-grade-help = La pendenza con cui sale il bordo interno della strada in un tornante; il tratto successivo sale quanto resta del gradino: di solito 2 o 3 % più dolce della rampa, perché i camion tengano la velocità in curva. 0 per un tornante in piano su una piazzola.
-pit-design-turns-at = Tornanti alle quote
-pit-design-turns-at-hint = es. 130, 175
-pit-design-turns-at-help = Quote a cui la rampa inverte, oltre che ogni tanti gradini: al primo gradino che inizia a ciascuna o oltre, nel verso di costruzione. Dove un tornante non ci sta, si fa al gradino successivo con spazio, e il risultato lo dice.
 pit-design-turn-widening = Allargamento del tornante
 pit-design-turn-widening-help = Quanto il tornante è più largo della strada al suo centro, all'esterno, perché i camion lo percorrano.
-pit-design-turns-none = Senza gradini tra i tornanti né quote a cui invertire, la rampa non inverte mai.
 pit-design-turn-moved = Il tornante chiesto a quota { $asked } è stato fatto a quota { $made }: prima non c'era spazio.
 pit-design-ramp-junction-flat = Tratto in piano di innesto
 pit-design-ramp-junction-flat-help = Per quanto ogni tratto della rampa corre in piano dove lascia la berma del suo gradino, così la berma si raggiunge dalla strada in piano. Conta il tratto in piano di una fascia dove è più lungo.
@@ -5192,10 +5165,6 @@ pit-design-zone-add-help = Una fascia di quote i cui gradini sono tagliati con a
 pit-design-table-face = Parete
 pit-design-table-berm = Berma
 pit-design-problem-zone = Le quote Da e A di una zona devono essere diverse.
-pit-design-dump-up = Verso l'alto dal piede
-pit-design-dump-down = Verso il basso dalla sommità
-pit-design-type = Tipo
-pit-design-type-help = Una fossa è scavata nel terreno, le pareti si allargano salendo. Una discarica o un cumulo è costruito sopra, le pareti si stringono salendo; costruito verso il basso dalla sommità, si allarga fino a incontrare il terreno.
 pit-design-kind-pit = Fossa
 pit-design-kind-dump = Discarica o cumulo
 pit-design-stop-ground = Dove incontra il terreno
@@ -5212,7 +5181,6 @@ pit-design-ramp-remove-short = Rimuovi
 pit-design-send-to = Invia a
 pit-design-send-to-help = Invia le rampe alla rete di trasporto, o la fossa alla pianificazione.
 pit-design-ramp-remove-help = Progetta la fossa senza rampa. Le sue impostazioni restano, per posizionarla di nuovo.
-pit-design-ramp-move = Sposta
 pit-design-done = Fatto
 pit-design-kind = Progetto della fossa
 pit-design-explode = Scomponi

@@ -5011,10 +5011,6 @@ err-file-desc-opt-report = báo cáo tối ưu hóa
 
 pit-design-menu = Thiết kế moong
 pit-design-title = Thiết kế moong
-pit-design-direction = Xây dựng
-pit-design-direction-help = Thiết kế được dựng từ đường của nó theo hướng nào: moong lên từ đáy hoặc xuống từ mép trên, bãi thải lên từ chân hoặc xuống từ đỉnh.
-pit-design-up = Lên từ đáy
-pit-design-down = Xuống từ mép trên
 pit-design-benches-section = Tầng
 pit-design-bench-height = Chiều cao tầng
 pit-design-face-angle = Góc sườn tầng
@@ -5039,29 +5035,10 @@ pit-design-climbs = Leo
 pit-design-climbs-help = Đường dốc leo quanh moong theo chiều nào, nhìn từ trên xuống.
 pit-design-clockwise = Theo chiều kim đồng hồ
 pit-design-anticlockwise = Ngược chiều kim đồng hồ
-pit-design-ramp-start = Bắt đầu tại
-pit-design-ramp-start-help = Nơi đường dốc rời khỏi đường. Kéo dấu chữ thập xanh của nó dọc theo đường trong khung nhìn, hoặc nhấn Di chuyển rồi nhấp vào nơi nó nên rời đi.
-pit-design-ramp-start-default = Đầu đường
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] Phía bắc
-    [ne] Phía đông bắc
-    [e] Phía đông
-    [se] Phía đông nam
-    [s] Phía nam
-    [sw] Phía tây nam
-    [w] Phía tây
-   *[nw] Phía tây bắc
 }
 pit-design-ramp-drag-hint = Kéo để dời điểm bắt đầu đường dốc
 pit-design-ramp-drag-prompt = Thả trên đường tại nơi đường dốc nên rời khỏi nó.
 pit-design-ramp-start-prompt = Nhấp vào đường xuất phát tại nơi đường dốc rời khỏi nó.
-pit-design-layout = Bố trí
-pit-design-layout-help = Đường xoắn ốc tiếp tục vòng quanh các bờ theo chiều leo. Đường chữ chi quay đầu trên một bãi phẳng sau mỗi vài tầng, nơi các bờ chừa chỗ để quay đầu.
-pit-design-spiral = Xoắn ốc
-pit-design-switchback = Chữ chi
-pit-design-switchback-every = Số tầng giữa các lần quay đầu
-pit-design-switchback-every-help = Đường dốc leo bao nhiêu tầng trước khi quay đầu; 0 để chỉ quay ở các cao độ đã cho. Nơi vòng quay không vừa, đường dốc đi thêm một tầng và quay ở đó.
 pit-design-inside-radius = Bán kính trong
 pit-design-inside-radius-help = Bán kính nhỏ nhất mà mép trong của đường được phép cua: bán kính của khúc cua gấp, và mức để kiểm tra toàn bộ con đường.
 pit-design-result-section = Thiết kế
@@ -5093,7 +5070,7 @@ pit-design-problem-topography-not-loaded = Hãy tải { $name } để lộ ra m�
 pit-design-draw-prompt = Nhấp đường xuất phát từng điểm một: đáy hoặc mép trên của moong, hoặc chân hoặc đỉnh của bãi thải.
 pit-design-draw-close = Nhấp điểm đầu tiên, hoặc nhấn Enter, để khép đường.
 pit-design-draw-close-minor = Nhấp chuột phải cũng kết thúc
-pit-design-draw-help = Vẽ đường khép kín mà thiết kế bắt đầu: chân đáy hoặc mép trên của moong, hoặc chân hoặc đỉnh của bãi thải. Ngay khi khép lại, thiết kế được tạo từ nó trên lớp đang hoạt động, còn loại và hướng được đặt ở bước tiếp theo.
+pit-design-draw-help = Vẽ đường khép kín mà thiết kế bắt đầu: chân đáy hoặc mép trên của moong, hoặc chân hoặc đỉnh của bãi thải. Ngay khi khép lại, thiết kế được tạo từ nó trên lớp đang hoạt động.
 pit-design-round-corners = Bo tròn góc
 pit-design-draw-ground = Mặt đất tại đây
 pit-design-draw-ground-above = { $rl } m (cao hơn cao độ { $by } m)
@@ -5103,12 +5080,8 @@ pit-design-corner-radius = Bán kính góc
 pit-design-done-help = Kết thúc moong này và đóng công cụ. Escape cũng làm như vậy.
 pit-design-turn-grade = Độ dốc vòng quay
 pit-design-turn-grade-help = Độ dốc mà mép trong của đường leo lên ở vòng quay; đoạn sau đó leo phần còn lại của tầng: thường thoải hơn đường dốc 2 đến 3 %, để xe tải giữ tốc độ ở khúc cua. 0 cho vòng quay phẳng trên một nền.
-pit-design-turns-at = Quay đầu tại cao độ
-pit-design-turns-at-hint = vd. 130, 175
-pit-design-turns-at-help = Các cao độ đường dốc quay đầu, ngoài việc quay sau mỗi chừng ấy tầng: ở tầng đầu tiên bắt đầu tại hoặc sau mỗi cao độ, theo hướng xây dựng. Nơi không vừa, vòng quay được làm ở tầng kế tiếp còn chỗ, và kết quả có báo.
 pit-design-turn-widening = Mở rộng vòng quay
 pit-design-turn-widening-help = Vòng quay rộng hơn đường bao nhiêu ở giữa, phía ngoài, để xe tải quay được.
-pit-design-turns-none = Không có tầng giữa các vòng quay và không có cao độ để quay, đường dốc không bao giờ quay đầu.
 pit-design-turn-moved = Vòng quay yêu cầu ở cao độ { $asked } được làm ở cao độ { $made }: trước đó không có chỗ.
 pit-design-ramp-junction-flat = Đoạn phẳng nút giao
 pit-design-ramp-junction-flat-help = Mỗi đoạn đường dốc chạy phẳng bao xa nơi nó rời cơ của tầng, để từ đường lên cơ trên đoạn phẳng. Đoạn phẳng của một dải được dùng nếu dài hơn.
@@ -5178,10 +5151,6 @@ pit-design-zone-add-help = Một dải cao độ mà các tầng trong đó đư
 pit-design-table-face = Sườn
 pit-design-table-berm = Cơ
 pit-design-problem-zone = Cao độ Từ và Đến của một vùng phải khác nhau.
-pit-design-dump-up = Lên từ chân
-pit-design-dump-down = Xuống từ đỉnh
-pit-design-type = Loại
-pit-design-type-help = Moong được đào vào đất, vách mở rộng ra khi lên cao. Bãi thải hoặc bãi chứa được đắp lên trên, vách thu hẹp vào khi lên cao; đắp xuống từ đỉnh, nó mở rộng ra đến khi gặp mặt đất.
 pit-design-kind-pit = Moong
 pit-design-kind-dump = Bãi thải hoặc bãi chứa
 pit-design-stop-ground = Nơi gặp mặt đất
@@ -5198,7 +5167,6 @@ pit-design-ramp-remove-short = Xóa
 pit-design-send-to = Gửi tới
 pit-design-send-to-help = Gửi các đường dốc vào mạng vận tải, hoặc moong sang Lập kế hoạch.
 pit-design-ramp-remove-help = Thiết kế moong không có đường dốc. Các thiết lập của nó được giữ lại để đặt lại.
-pit-design-ramp-move = Di chuyển
 pit-design-done = Xong
 pit-design-kind = Thiết kế moong
 pit-design-explode = Tách

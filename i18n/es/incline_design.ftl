@@ -4981,10 +4981,6 @@ err-file-desc-opt-report = informe de optimización
 
 pit-design-menu = Diseño de rajo
 pit-design-title = Diseño de rajo
-pit-design-direction = Construir
-pit-design-direction-help = Hacia dónde se construye el diseño desde su línea: un rajo hacia arriba desde el fondo o hacia abajo desde la cresta, un botadero hacia arriba desde el pie o hacia abajo desde la cima.
-pit-design-up = Hacia arriba desde el fondo
-pit-design-down = Hacia abajo desde la cresta
 pit-design-benches-section = Bancos
 pit-design-bench-height = Altura de banco
 pit-design-face-angle = Ángulo de cara
@@ -5009,29 +5005,10 @@ pit-design-climbs = Sube
 pit-design-climbs-help = En qué sentido sube la rampa alrededor del rajo, vista desde arriba.
 pit-design-clockwise = En sentido horario
 pit-design-anticlockwise = En sentido antihorario
-pit-design-ramp-start = Empieza en
-pit-design-ramp-start-help = Dónde sale la rampa de la línea. Arrastre su cruz verde a lo largo de la línea en la vista, o pulse Mover y haga clic donde debe salir en su lugar.
-pit-design-ramp-start-default = Inicio de la línea
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] Lado norte
-    [ne] Lado noreste
-    [e] Lado este
-    [se] Lado sureste
-    [s] Lado sur
-    [sw] Lado suroeste
-    [w] Lado oeste
-   *[nw] Lado noroeste
 }
 pit-design-ramp-drag-hint = Arrastre para mover dónde empieza la rampa
 pit-design-ramp-drag-prompt = Suelte sobre la línea donde la rampa debe salir de ella.
 pit-design-ramp-start-prompt = Haga clic en la línea de partida donde la rampa la deja.
-pit-design-layout = Trazado
-pit-design-layout-help = Una espiral sigue alrededor de las paredes en el sentido en que sube. Un zigzag da la vuelta sobre una plataforma plana cada tantos bancos, donde las paredes dejan sitio para el giro.
-pit-design-spiral = Espiral
-pit-design-switchback = Zigzag
-pit-design-switchback-every = Bancos entre giros
-pit-design-switchback-every-help = Cuántos bancos sube la rampa antes de volverse; 0 para volverse solo en las cotas dadas. Donde no cabe una vuelta, la rampa sigue un banco más y se vuelve allí.
 pit-design-inside-radius = Radio interior
 pit-design-inside-radius-help = El giro más cerrado que debe hacer el borde interior del camino: el radio de una curva de retorno, y contra lo que se comprueba todo el camino.
 pit-design-result-section = Diseño
@@ -5063,7 +5040,7 @@ pit-design-problem-topography-not-loaded = Cargue { $name } para aflorar contra 
 pit-design-draw-prompt = Haga clic punto por punto en la línea de partida: el fondo o la cresta de un rajo, o el pie o la cima de un botadero.
 pit-design-draw-close = Haga clic en el primer punto, o pulse Intro, para cerrar la línea.
 pit-design-draw-close-minor = El clic derecho también termina
-pit-design-draw-help = Dibuje la línea cerrada de la que parte el diseño: el pie del fondo o la cresta de un rajo, o el pie o la cima de un botadero. Al cerrarse, el diseño se crea a partir de ella en la capa activa, y su tipo y dirección se fijan en el paso siguiente.
+pit-design-draw-help = Dibuje la línea cerrada de la que parte el diseño: el pie del fondo o la cresta de un rajo, o el pie o la cima de un botadero. Al cerrarse, el diseño se crea a partir de ella en la capa activa.
 pit-design-round-corners = Redondear esquinas
 pit-design-draw-ground = Terreno aquí
 pit-design-draw-ground-above = { $rl } m ({ $by } m por encima de la cota)
@@ -5073,12 +5050,8 @@ pit-design-corner-radius = Radio de esquina
 pit-design-done-help = Terminar este rajo y dejar la herramienta. Escape hace lo mismo.
 pit-design-turn-grade = Pendiente de vuelta
 pit-design-turn-grade-help = La pendiente a la que sube el borde interior del camino en un zigzag; el tramo siguiente sube lo que queda del banco: suele ser un 2 a 3 % más suave que la rampa, para que los camiones mantengan la velocidad en la curva. 0 para una vuelta plana sobre una plataforma.
-pit-design-turns-at = Vueltas en cotas
-pit-design-turns-at-hint = p. ej. 130, 175
-pit-design-turns-at-help = Cotas en las que la rampa se vuelve, además de cada tantos bancos: en el primer banco que empieza en o después de cada una, en el sentido de construcción. Donde no cabe allí, se hace en el siguiente banco con espacio, y el resultado lo indica.
 pit-design-turn-widening = Ensanche de la vuelta
 pit-design-turn-widening-help = Cuánto más ancha que el camino es la vuelta en su centro, por fuera, para que los camiones la tomen.
-pit-design-turns-none = Sin bancos entre vueltas ni cotas donde volverse, la rampa nunca se vuelve.
 pit-design-turn-moved = La vuelta pedida a la cota { $asked } se hizo a la cota { $made }: antes no había espacio.
 pit-design-ramp-junction-flat = Tramo plano de empalme
 pit-design-ramp-junction-flat-help = Cuánto avanza en plano cada tramo de la rampa donde deja la berma de su banco, para llegar a la berma desde el camino en plano. Cuenta el tramo plano de una franja donde sea más largo.
@@ -5148,10 +5121,6 @@ pit-design-zone-add-help = Una franja de cotas cuyos bancos se cortan con su pro
 pit-design-table-face = Cara
 pit-design-table-berm = Berma
 pit-design-problem-zone = Las cotas Desde y Hasta de una zona deben ser distintas.
-pit-design-dump-up = Hacia arriba desde el pie
-pit-design-dump-down = Hacia abajo desde la cima
-pit-design-type = Tipo
-pit-design-type-help = Un rajo se excava en el terreno y sus taludes se abren al subir. Un botadero o acopio se construye sobre él y sus taludes se cierran al subir; construido hacia abajo desde su cima, se abre hasta encontrar el terreno.
 pit-design-kind-pit = Rajo
 pit-design-kind-dump = Botadero o acopio
 pit-design-stop-ground = Donde encuentra el terreno
@@ -5168,7 +5137,6 @@ pit-design-ramp-remove-short = Quitar
 pit-design-send-to = Enviar a
 pit-design-send-to-help = Enviar las rampas a la red de transporte, o el tajo a Planificación.
 pit-design-ramp-remove-help = Diseñar el rajo sin rampa. Sus ajustes se conservan para volver a ubicarla.
-pit-design-ramp-move = Mover
 pit-design-done = Listo
 pit-design-kind = Diseño de rajo
 pit-design-explode = Descomponer

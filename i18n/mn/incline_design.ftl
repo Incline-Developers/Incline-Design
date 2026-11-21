@@ -5034,10 +5034,6 @@ err-file-desc-opt-report = оновчлолын тайлан
 
 pit-design-menu = Уурхайн зураг төсөл
 pit-design-title = Уурхайн зураг төсөл
-pit-design-direction = Барих
-pit-design-direction-help = Төслийг шугамаас аль чиглэлд байгуулах: уурхайг ёроолоос дээш эсвэл оройгоос доош, овоолгыг хормойноос дээш эсвэл оройноос доош.
-pit-design-up = Ёроолоос дээш
-pit-design-down = Дээд ирмэгээс доош
 pit-design-benches-section = Уступууд
 pit-design-bench-height = Уступын өндөр
 pit-design-face-angle = Налуугийн өнцөг
@@ -5062,29 +5058,10 @@ pit-design-climbs = Өгсөх чиглэл
 pit-design-climbs-help = Дээрээс харахад налуу зам уурхайг тойрон аль чиглэлд өгсөх.
 pit-design-clockwise = Цагийн зүүний дагуу
 pit-design-anticlockwise = Цагийн зүүний эсрэг
-pit-design-ramp-start = Эхлэх цэг
-pit-design-ramp-start-help = Налуу зам шугамаас гарах газар. Харагдац дээр түүний ногоон загалмайг шугамын дагуу чирэх, эсвэл Зөөх дараад гарах ёстой газар дарна уу.
-pit-design-ramp-start-default = Шугамын эхлэл
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] Хойд тал
-    [ne] Зүүн хойд тал
-    [e] Зүүн тал
-    [se] Зүүн өмнөд тал
-    [s] Өмнөд тал
-    [sw] Баруун өмнөд тал
-    [w] Баруун тал
-   *[nw] Баруун хойд тал
 }
 pit-design-ramp-drag-hint = Налуу замын эхлэлийг зөөхийн тулд чирнэ үү
 pit-design-ramp-drag-prompt = Налуу зам шугамаас гарах ёстой газарт суллана уу.
 pit-design-ramp-start-prompt = Налуу зам эхлэх шугамаас салах газарт шугам дээр дарна уу.
-pit-design-layout = Байрлал
-pit-design-layout-help = Спираль өгсөх чиглэлээрээ ханыг тойрон үргэлжилнэ. Зигзаг хана эргэх зай үлдээсэн газарт хэдэн уступ тутамд тэгш талбай дээр буцаж эргэнэ.
-pit-design-spiral = Спираль
-pit-design-switchback = Зигзаг
-pit-design-switchback-every = Эргэлт хоорондын уступ
-pit-design-switchback-every-help = Рамп буцаж эргэхээсээ өмнө хэдэн уступ өгсөх; зөвхөн өгсөн RL-үүдэд эргэхийн тулд 0. Эргэлт багтахгүй газар рамп нэг уступ цааш явж тэнд эргэнэ.
 pit-design-inside-radius = Дотоод радиус
 pit-design-inside-radius-help = Замын дотор ирмэгийн эргэх ёстой хамгийн бага радиус: эргэх тохойн радиус, мөн бүх замыг шалгах хэмжээ.
 pit-design-result-section = Төсөл
@@ -5116,7 +5093,7 @@ pit-design-problem-topography-not-loaded = Түүн дээр гадаргад г
 pit-design-draw-prompt = Эхлэх шугамыг цэг цэгээр дарна уу: уурхайн ёроол эсвэл орой, эсвэл овоолгын хормой эсвэл орой.
 pit-design-draw-close = Шугамыг битүүлэхийн тулд эхний цэг дээр дарах эсвэл Enter дарна уу.
 pit-design-draw-close-minor = Баруун товшилт ч дуусгана
-pit-design-draw-help = Төсөл эхлэх битүү шугамыг зурна уу: уурхайн ёроолын хормой эсвэл орой, эсвэл овоолгын хормой эсвэл орой. Битүүрмэгц идэвхтэй давхарга дээр түүнээс төсөл үүсэх ба төрөл, чиглэлийг дараагийн алхамд тохируулна.
+pit-design-draw-help = Төсөл эхлэх битүү шугамыг зурна уу: уурхайн ёроолын хормой эсвэл орой, эсвэл овоолгын хормой эсвэл орой. Битүүрмэгц идэвхтэй давхарга дээр түүнээс төсөл үүснэ.
 pit-design-round-corners = Булангуудыг бөөрөнхийлөх
 pit-design-draw-ground = Энд газрын гадарга
 pit-design-draw-ground-above = { $rl } м (RL-ээс { $by } м дээр)
@@ -5126,12 +5103,8 @@ pit-design-corner-radius = Булангийн радиус
 pit-design-done-help = Энэ уурхайг дуусгаад хэрэгслийг хаана уу. Escape ч мөн адил.
 pit-design-turn-grade = Эргэлтийн налуу
 pit-design-turn-grade-help = Эргэлт дээр замын дотор захын өгсөх налуу; дараагийн хэсэг уступын үлдсэнийг өгсөнө: ачааны машин тохойд хурдаа барихын тулд ихэвчлэн рампаас 2-3 %-иар зөөлөн. Талбай дээрх тэгш эргэлтэд 0.
-pit-design-turns-at = RL-д эргэх
-pit-design-turns-at-hint = жишээ нь 130, 175
-pit-design-turns-at-help = Хэдэн уступ тутамд эргэхээс гадна рамп буцаж эргэх RL-үүд: байгуулах чиглэлд тус бүр дээр эсвэл түүнээс хойш эхлэх анхны уступ дээр. Тэнд багтахгүй бол зайтай дараагийн уступ дээр хийгдэх ба үр дүн үүнийг хэлнэ.
 pit-design-turn-widening = Эргэлтийн өргөтгөл
 pit-design-turn-widening-help = Ачааны машин эргэж чадахын тулд эргэлт голдоо, гадна талдаа замаас хэр өргөн байх.
-pit-design-turns-none = Эргэлтийн хооронд уступгүй, эргэх RL-гүй бол рамп хэзээ ч буцаж эргэхгүй.
 pit-design-turn-moved = RL { $asked }-д хүссэн эргэлтийг RL { $made }-д хийсэн: түүнээс өмнө зай байгаагүй.
 pit-design-ramp-junction-flat = Уулзварын тэгш хэсэг
 pit-design-ramp-junction-flat-help = Рампын хэсэг бүр уступынхаа бермээс салах газраа хэр зай тэгш явах, ингэснээр замаас бермд тэгшээр хүрнэ. Бүсийн тэгш хэсэг урт байвал тэр нь хүчинтэй.
@@ -5201,10 +5174,6 @@ pit-design-zone-add-help = Уступууд нь өөрийн өндөр, нал
 pit-design-table-face = Налуу
 pit-design-table-berm = Берм
 pit-design-problem-zone = Бүсийн эхлэх ба дуусах RL ялгаатай байх ёстой.
-pit-design-dump-up = Хормойноос дээш
-pit-design-dump-down = Оройноос доош
-pit-design-type = Төрөл
-pit-design-type-help = Уурхайг газарт ухна, өгсөх тусам хана нь гадагш тэлнэ. Овоолго буюу нөөцийн овоолгыг түүн дээр байгуулна, өгсөх тусам хана нь дотогш нарийсна; оройноосоо доош байгуулбал газартай тулах хүртэл гадагш тэлнэ.
 pit-design-kind-pit = Уурхай
 pit-design-kind-dump = Овоолго эсвэл нөөц
 pit-design-stop-ground = Газартай тулах газар
@@ -5221,7 +5190,6 @@ pit-design-ramp-remove-short = Устгах
 pit-design-send-to = Илгээх
 pit-design-send-to-help = Налуу замуудыг тээврийн сүлжээнд, эсвэл уурхайг төлөвлөлт рүү илгээнэ.
 pit-design-ramp-remove-help = Уурхайг налуу замгүй төлөвлөх. Дахин байрлуулахаар тохиргоо нь хадгалагдана.
-pit-design-ramp-move = Зөөх
 pit-design-done = Болсон
 pit-design-kind = Уурхайн төсөл
 pit-design-explode = Задлах

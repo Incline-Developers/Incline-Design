@@ -5677,14 +5677,6 @@ mcp-show-objects = Show Objects (MCP)
 
 pit-design-menu = Pit Design
 pit-design-title = Pit Design
-pit-design-direction = Build
-pit-design-direction-help = Which way the design is built from its string: a pit up from its floor or down from its crest, a dump up from its toe or down from its top.
-pit-design-up = Up from the floor
-pit-design-down = Down from the crest
-pit-design-dump-up = Up from the toe
-pit-design-dump-down = Down from the top
-pit-design-type = Type
-pit-design-type-help = A pit is cut into the ground, its walls stepping out as it climbs. A dump or stockpile is built on it, its walls stepping in as it climbs; built down from its top, it steps out until it meets the ground.
 pit-design-kind-pit = Pit
 pit-design-kind-dump = Dump or stockpile
 pit-design-stop-ground = Where it meets the ground
@@ -5756,37 +5748,14 @@ pit-design-climbs = Climbs
 pit-design-climbs-help = Which way round the pit the ramp climbs, seen from above.
 pit-design-clockwise = Clockwise
 pit-design-anticlockwise = Anticlockwise
-pit-design-ramp-start = Starts at
-pit-design-ramp-start-help = Where the ramp leaves the string. Drag its green cross along the string in the view, or press Move and click where it should leave instead.
-pit-design-ramp-start-default = Start of the string
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] North side
-    [ne] North-east side
-    [e] East side
-    [se] South-east side
-    [s] South side
-    [sw] South-west side
-    [w] West side
-   *[nw] North-west side
 }
 pit-design-ramp-drag-hint = Drag to move where the ramp starts
 pit-design-ramp-drag-prompt = Let go on the string where the ramp should leave it.
 pit-design-ramp-start-prompt = Click the starting string where the ramp leaves it.
-pit-design-layout = Layout
-pit-design-layout-help = A spiral carries on round the walls the way it climbs. A switchback turns back on a level pad every so many benches, where the walls leave room for the turn.
-pit-design-spiral = Spiral
-pit-design-switchback = Switchback
-pit-design-switchback-every = Benches between turns
-pit-design-switchback-every-help = How many benches the ramp climbs before it turns back; 0 to turn only at the RLs given. Where a turn will not fit, the ramp carries on for another bench and turns there.
-pit-design-turns-at = Turn at RLs
-pit-design-turns-at-hint = e.g. 130, 175
-pit-design-turns-at-help = RLs the ramp turns back at, as well as every so many benches: on the first bench starting at or past each, the way the design is built. Where a turn will not fit there it is made on the next bench that has room, and the result says so.
 pit-design-turn-widening = Turn widening
 pit-design-turn-widening-help = How much wider than the road the turn is round its middle, on the outside, for the trucks to make it.
 pit-design-turn-grade = Turn grade
 pit-design-turn-grade-help = The grade the road's inside edge climbs at round a switchback, the stretch after it climbing what is left of the bench: usually 2 to 3% flatter than the ramp, so trucks hold their speed on the bend. 0 for a level turn on a pad.
-pit-design-turns-none = With no benches between turns and no RLs to turn at, the ramp never turns back.
 pit-design-turn-moved = The turn asked at RL { $asked } was made at RL { $made }: there was no room for it sooner.
 pit-design-inside-radius = Inside radius
 pit-design-inside-radius-help = The tightest the inside edge of the road should turn: what a switchback turns round, and what the whole road is checked against.
@@ -5859,7 +5828,7 @@ pit-design-gone = That pit design is no longer in the project.
 pit-design-draw-prompt = Click the string to design from, point by point: a pit's floor or crest, or a dump's toe or top.
 pit-design-draw-close = Click the first point, or press Enter, to close the string.
 pit-design-draw-close-minor = Right click finishes too
-pit-design-draw-help = Draw the closed string the design starts from: a pit's floor toe or crest, or a dump's toe or top. Once it closes, the design is made from it on the active layer, and its type and direction are set in the next step.
+pit-design-draw-help = Draw the closed string the design starts from: a pit's floor toe or crest, or a dump's toe or top. Once it closes, the design is made from it on the active layer.
 pit-design-round-corners = Round corners
 pit-design-draw-ground = Ground here
 pit-design-draw-ground-above = { $rl } m ({ $by } m above the RL)
@@ -5878,7 +5847,6 @@ pit-design-ramp-remove-short = Remove
 pit-design-send-to = Send to
 pit-design-send-to-help = Send the ramps to the haul network, or the pit to Planning.
 pit-design-ramp-remove-help = Design the pit with no ramp. Its settings are kept, for placing it again.
-pit-design-ramp-move = Move
 pit-design-done = Done
 pit-design-name = Name
 pit-design-flatter =

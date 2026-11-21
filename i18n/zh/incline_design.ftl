@@ -4983,10 +4983,6 @@ err-file-desc-opt-report = 优化报告
 
 pit-design-menu = 采坑设计
 pit-design-title = 采坑设计
-pit-design-direction = 构建
-pit-design-direction-help = 设计从其线条向哪个方向构建：采坑从坑底向上或从坡顶向下，排土场从坡脚向上或从顶部向下。
-pit-design-up = 从坑底向上
-pit-design-down = 从坡顶向下
 pit-design-benches-section = 台阶
 pit-design-bench-height = 台阶高度
 pit-design-face-angle = 坡面角
@@ -5011,29 +5007,10 @@ pit-design-climbs = 上升方向
 pit-design-climbs-help = 从上方看,坡道绕采坑上升的方向。
 pit-design-clockwise = 顺时针
 pit-design-anticlockwise = 逆时针
-pit-design-ramp-start = 起点
-pit-design-ramp-start-help = 坡道离开线条的位置。在视图中沿线条拖动其绿色十字，或单击移动，然后单击应改为离开的位置。
-pit-design-ramp-start-default = 线的起点
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] 北侧
-    [ne] 东北侧
-    [e] 东侧
-    [se] 东南侧
-    [s] 南侧
-    [sw] 西南侧
-    [w] 西侧
-   *[nw] 西北侧
 }
 pit-design-ramp-drag-hint = 拖动以移动坡道起点
 pit-design-ramp-drag-prompt = 在坡道应离开的线条位置松开。
 pit-design-ramp-start-prompt = 在坡道离开起始线的位置点击该线。
-pit-design-layout = 布置
-pit-design-layout-help = 螺旋式沿上升方向继续绕边帮延伸。之字形每隔若干台阶在平坦的回车平台上折返,前提是边帮留有转弯空间。
-pit-design-spiral = 螺旋式
-pit-design-switchback = 之字形
-pit-design-switchback-every = 折返间隔台阶数
-pit-design-switchback-every-help = 坡道折返前爬升的台阶数；为 0 时只在给定的 RL 处折返。折返放不下时，坡道再走一个台阶并在那里折返。
 pit-design-inside-radius = 内侧半径
 pit-design-inside-radius-help = 道路内侧边缘允许的最小转弯半径：即回头弯的转弯半径，也是检查整条道路所用的标准。
 pit-design-result-section = 设计
@@ -5065,7 +5042,7 @@ pit-design-problem-topography-not-loaded = 请加载 { $name } 以便出露到�
 pit-design-draw-prompt = 逐点单击起始线：采坑的坑底或坡顶，或排土场的坡脚或顶部。
 pit-design-draw-close = 单击第一个点或按 Enter 闭合线条。
 pit-design-draw-close-minor = 右键单击也可完成
-pit-design-draw-help = 绘制设计起始的闭合线：采坑坑底的坡脚或坡顶，或排土场的坡脚或顶部。一旦闭合，便在当前图层上据此生成设计，其类型和方向在下一步设置。
+pit-design-draw-help = 绘制设计起始的闭合线：采坑坑底的坡脚或坡顶，或排土场的坡脚或顶部。一旦闭合，便在当前图层上据此生成设计。
 pit-design-round-corners = 圆角
 pit-design-draw-ground = 此处地面
 pit-design-draw-ground-above = { $rl } m（高于标高 { $by } m）
@@ -5075,12 +5052,8 @@ pit-design-corner-radius = 圆角半径
 pit-design-done-help = 完成此采坑并收起工具。Escape 也可以。
 pit-design-turn-grade = 折返坡度
 pit-design-turn-grade-help = 折返处道路内侧边缘爬升的坡度，其后的路段爬升台阶剩余的高度：通常比坡道缓 2% 到 3%，使卡车在弯道上保持车速。为 0 时为平台上的水平折返。
-pit-design-turns-at = 折返 RL
-pit-design-turns-at-hint = 例如 130, 175
-pit-design-turns-at-help = 坡道折返的 RL，在每隔若干台阶折返之外：按构建方向，在每个 RL 处或其后开始的第一个台阶上。那里放不下时，在下一个有空间的台阶上折返，结果会注明。
 pit-design-turn-widening = 折返加宽
 pit-design-turn-widening-help = 折返中部外侧比道路宽出多少，便于卡车通过。
-pit-design-turns-none = 既无折返间隔台阶数，也无折返 RL，坡道永不折返。
 pit-design-turn-moved = 要求在 RL { $asked } 的折返在 RL { $made } 完成：更早处没有空间。
 pit-design-ramp-junction-flat = 接口平段
 pit-design-ramp-junction-flat-help = 坡道每一段离开其台阶平台处水平行驶的长度，使车辆可从道路平顺地进入平台。分段的平段更长时以其为准。
@@ -5150,10 +5123,6 @@ pit-design-zone-add-help = 一段 RL 范围，其中的台阶以各自的高度�
 pit-design-table-face = 坡面
 pit-design-table-berm = 平台
 pit-design-problem-zone = 区域的起始 RL 与终止 RL 必须不同。
-pit-design-dump-up = 从坡脚向上
-pit-design-dump-down = 从顶部向下
-pit-design-type = 类型
-pit-design-type-help = 采坑挖入地面，越往上坑壁越向外扩。排土场或堆场堆筑在地面上，越往上坡面越向内收；从顶部向下堆筑时，向外扩展直到与地面相接。
 pit-design-kind-pit = 采坑
 pit-design-kind-dump = 排土场或堆场
 pit-design-stop-ground = 与地面相接处
@@ -5170,7 +5139,6 @@ pit-design-ramp-remove-short = 移除
 pit-design-send-to = 发送到
 pit-design-send-to-help = 将坡道发送到运输网络，或将采坑发送到规划。
 pit-design-ramp-remove-help = 设计不带坡道的采坑。其设置会保留，以便再次放置。
-pit-design-ramp-move = 移动
 pit-design-done = 完成
 pit-design-kind = 采坑设计
 pit-design-explode = 分解

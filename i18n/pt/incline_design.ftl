@@ -4981,10 +4981,6 @@ err-file-desc-opt-report = relatório de otimização
 
 pit-design-menu = Projeto de cava
 pit-design-title = Projeto de cava
-pit-design-direction = Construir
-pit-design-direction-help = Em que sentido o projeto é construído a partir da sua linha: uma cava para cima a partir do fundo ou para baixo a partir da crista, uma pilha para cima a partir do pé ou para baixo a partir do topo.
-pit-design-up = Para cima a partir do fundo
-pit-design-down = Para baixo a partir da crista
 pit-design-benches-section = Bancadas
 pit-design-bench-height = Altura da bancada
 pit-design-face-angle = Ângulo de face
@@ -5009,29 +5005,10 @@ pit-design-climbs = Sobe
 pit-design-climbs-help = Em que sentido a rampa sobe à volta da cava, vista de cima.
 pit-design-clockwise = No sentido horário
 pit-design-anticlockwise = No sentido anti-horário
-pit-design-ramp-start = Começa em
-pit-design-ramp-start-help = Onde a rampa deixa a linha. Arraste a sua cruz verde ao longo da linha na vista, ou clique em Mover e depois onde deve sair em vez disso.
-pit-design-ramp-start-default = Início da linha
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] Lado norte
-    [ne] Lado nordeste
-    [e] Lado leste
-    [se] Lado sudeste
-    [s] Lado sul
-    [sw] Lado sudoeste
-    [w] Lado oeste
-   *[nw] Lado noroeste
 }
 pit-design-ramp-drag-hint = Arraste para mover onde a rampa começa
 pit-design-ramp-drag-prompt = Solte sobre a linha onde a rampa deve deixá-la.
 pit-design-ramp-start-prompt = Clique na linha de partida onde a rampa a deixa.
-pit-design-layout = Traçado
-pit-design-layout-help = Uma espiral continua à volta das paredes no sentido em que sobe. Um ziguezague volta para trás numa plataforma plana a cada tantas bancadas, onde as paredes deixam espaço para a curva.
-pit-design-spiral = Espiral
-pit-design-switchback = Ziguezague
-pit-design-switchback-every = Bancadas entre curvas
-pit-design-switchback-every-help = Quantas bancadas a rampa sobe antes de inverter; 0 para inverter só nas cotas dadas. Onde uma inversão não cabe, a rampa segue mais uma bancada e inverte aí.
 pit-design-inside-radius = Raio interno
 pit-design-inside-radius-help = A curva mais fechada que a borda interna da estrada deve fazer: o raio de um retorno, e o valor contra o qual toda a estrada é verificada.
 pit-design-result-section = Projeto
@@ -5063,7 +5040,7 @@ pit-design-problem-topography-not-loaded = Carregue { $name } para aflorar contr
 pit-design-draw-prompt = Clique na linha de partida ponto a ponto: o fundo ou a crista de uma cava, ou o pé ou o topo de uma pilha.
 pit-design-draw-close = Clique no primeiro ponto, ou prima Enter, para fechar a linha.
 pit-design-draw-close-minor = O clique direito também termina
-pit-design-draw-help = Desenhe a linha fechada de onde parte o projeto: o pé do fundo ou a crista de uma cava, ou o pé ou o topo de uma pilha. Assim que fecha, o projeto é feito a partir dela na camada ativa, e o tipo e o sentido definem-se no passo seguinte.
+pit-design-draw-help = Desenhe a linha fechada de onde parte o projeto: o pé do fundo ou a crista de uma cava, ou o pé ou o topo de uma pilha. Assim que fecha, o projeto é feito a partir dela na camada ativa.
 pit-design-round-corners = Arredondar cantos
 pit-design-draw-ground = Terreno aqui
 pit-design-draw-ground-above = { $rl } m ({ $by } m acima da cota)
@@ -5073,12 +5050,8 @@ pit-design-corner-radius = Raio de canto
 pit-design-done-help = Terminar esta cava e largar a ferramenta. Esc faz o mesmo.
 pit-design-turn-grade = Inclinação da inversão
 pit-design-turn-grade-help = A inclinação a que sobe o bordo interior da estrada numa inversão; o troço seguinte sobe o que resta da bancada: normalmente 2 a 3 % mais suave do que a rampa, para os camiões manterem a velocidade na curva. 0 para uma inversão plana numa plataforma.
-pit-design-turns-at = Inversões nas cotas
-pit-design-turns-at-hint = ex. 130, 175
-pit-design-turns-at-help = Cotas em que a rampa inverte, além de a cada tantas bancadas: na primeira bancada que começa em cada uma ou depois, no sentido de construção. Onde não cabe aí, faz-se na bancada seguinte com espaço, e o resultado di-lo.
 pit-design-turn-widening = Alargamento da inversão
 pit-design-turn-widening-help = Quanto a inversão é mais larga do que a estrada ao meio, por fora, para os camiões a fazerem.
-pit-design-turns-none = Sem bancadas entre inversões nem cotas para inverter, a rampa nunca inverte.
 pit-design-turn-moved = A inversão pedida à cota { $asked } foi feita à cota { $made }: antes não havia espaço.
 pit-design-ramp-junction-flat = Troço plano de junção
 pit-design-ramp-junction-flat-help = Quanto cada troço da rampa corre em plano onde deixa a berma da sua bancada, para se chegar à berma a partir da estrada em plano. Conta o troço plano de uma faixa onde for mais longo.
@@ -5148,10 +5121,6 @@ pit-design-zone-add-help = Uma faixa de cotas cujas bancadas são cortadas com a
 pit-design-table-face = Face
 pit-design-table-berm = Berma
 pit-design-problem-zone = As cotas De e Até de uma zona têm de ser diferentes.
-pit-design-dump-up = Para cima a partir do pé
-pit-design-dump-down = Para baixo a partir do topo
-pit-design-type = Tipo
-pit-design-type-help = Uma cava é escavada no terreno, os taludes abrem ao subir. Uma pilha de estéril ou de estoque é construída sobre ele, os taludes fecham ao subir; construída para baixo a partir do topo, abre até encontrar o terreno.
 pit-design-kind-pit = Cava
 pit-design-kind-dump = Pilha de estéril ou estoque
 pit-design-stop-ground = Onde encontra o terreno
@@ -5168,7 +5137,6 @@ pit-design-ramp-remove-short = Remover
 pit-design-send-to = Enviar para
 pit-design-send-to-help = Enviar as rampas para a rede de transporte, ou a cava para o Planejamento.
 pit-design-ramp-remove-help = Projetar a cava sem rampa. As suas definições mantêm-se, para a voltar a colocar.
-pit-design-ramp-move = Mover
 pit-design-done = Concluído
 pit-design-kind = Projeto de cava
 pit-design-explode = Decompor

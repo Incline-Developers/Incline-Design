@@ -1034,23 +1034,36 @@ impl App<'_> {
             }
             return;
         }
-        if let Some((part, from, value, pressed)) = draft.wall_drag {
+        if let Some(drag) = draft.wall_drag {
             let (Some(gizmo), Some(working)) = (draft.wall_gizmo.as_ref(), draft.working.as_mut()) else {
                 return;
             };
             let settings = &mut working.settings;
-            let moved = |way: (f32, f32), per_metre: f32| f64::from(((cursor.0 - from.0) * way.0 + (cursor.1 - from.1) * way.1) / per_metre.max(1.0e-3));
-            let (field, changed) = match part {
-                GizmoPart::BenchHeight => (&mut settings.bench_height, snapped(value + moved(gizmo.up, gizmo.pixels_per_metre_up)).max(1.0)),
-                GizmoPart::Berm => (&mut settings.berm_width, snapped(value + moved(gizmo.out, gizmo.pixels_per_metre_out)).max(0.0)),
+            // Along the arm as it was taken up, signed: past the toe, the
+            // walls go the other way.
+            let pulled = drag.value + f64::from(((cursor.0 - drag.from.0) * drag.way.0 + (cursor.1 - drag.from.1) * drag.way.1) / drag.per_metre.max(1.0e-3));
+            let (kind, direction) = match drag.part {
+                // Up or down, out or in as it was.
+                GizmoPart::BenchHeight if pulled < 0.0 => (drag.kind.other(), drag.direction.other()),
+                // Out or in, up or down as it was.
+                GizmoPart::Berm if pulled < 0.0 => (drag.kind.other(), drag.direction),
+                _ => (drag.kind, drag.direction),
+            };
+            if (settings.kind, settings.direction) != (kind, direction) {
+                (settings.kind, settings.direction) = (kind, direction);
+                self.redraw_requested = true;
+            }
+            let (field, changed) = match drag.part {
+                GizmoPart::BenchHeight => (&mut settings.bench_height, snapped(pulled.abs()).max(1.0)),
+                GizmoPart::Berm => (&mut settings.berm_width, snapped(pulled.abs())),
                 GizmoPart::FaceAngle => {
                     let Some(angle) = ring_angle(&gizmo.angle_ring, cursor) else {
                         return;
                     };
-                    let turned = (angle - pressed + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
+                    let turned = (angle - drag.pressed + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
                     (
                         &mut settings.face_angle,
-                        snapped(value + turned.to_degrees() * FACE_RING_GEAR).clamp(MIN_FACE_ANGLE, MAX_FACE_ANGLE),
+                        snapped(drag.value + turned.to_degrees() * FACE_RING_GEAR).clamp(MIN_FACE_ANGLE, MAX_FACE_ANGLE),
                     )
                 }
                 _ => return,
@@ -1105,6 +1118,17 @@ impl App<'_> {
                 }
             })
         });
+        // A ramp's switchback spots, the nearest under the pointer.
+        let hover = hover.or_else(|| {
+            draft
+                .switch_spots
+                .iter()
+                .enumerate()
+                .map(|(index, spot)| (index, (spot.at.0 - cursor.0).hypot(spot.at.1 - cursor.1)))
+                .filter(|(_, distance)| *distance <= GIZMO_REACH)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(index, _)| GizmoPart::Switch(index))
+        });
         if draft.gizmo_hover != hover {
             draft.gizmo_hover = hover;
             self.redraw_requested = true;
@@ -1148,6 +1172,31 @@ impl App<'_> {
                     self.redraw_requested = true;
                     return;
                 }
+                Some(GizmoPart::Switch(index)) => {
+                    let Some(spot) = draft.switch_spots.get(index).copied() else {
+                        return;
+                    };
+                    // The turns it makes now, each at the RL it was asked at,
+                    // with this one made or unmade: those, and no others.
+                    let mut turns: Vec<f64> = draft
+                        .switch_spots
+                        .iter()
+                        .filter(|other| other.ramp == spot.ramp && other.turn)
+                        .map(|other| other.rl)
+                        .collect();
+                    if spot.turn {
+                        turns.retain(|rl| (rl - spot.rl).abs() > 1.0e-6);
+                    } else {
+                        turns.push(spot.rl);
+                    }
+                    if let Some(ramp) = draft.working.as_mut().and_then(|working| working.settings.ramps.get_mut(spot.ramp)) {
+                        ramp.switchback = !turns.is_empty();
+                        ramp.switchback_every = 0;
+                        ramp.turns_at = turns;
+                    }
+                    self.redraw_requested = true;
+                    return;
+                }
                 Some(part @ (GizmoPart::BenchHeight | GizmoPart::Berm | GizmoPart::FaceAngle)) => {
                     let (Some(at), Some(settings)) = (pressed_at, draft.working.as_ref().map(|working| &working.settings)) else {
                         return;
@@ -1157,12 +1206,25 @@ impl App<'_> {
                         GizmoPart::Berm => settings.berm_width,
                         _ => settings.face_angle,
                     };
-                    let pressed = draft
-                        .wall_gizmo
-                        .as_ref()
-                        .and_then(|gizmo| crate::app::commands::drawing::rotate_collar::ring_angle(&gizmo.angle_ring, at))
-                        .unwrap_or(0.0);
-                    draft.wall_drag = Some((part, at, value, pressed));
+                    let (kind, direction) = (settings.kind, settings.direction);
+                    let Some(gizmo) = draft.wall_gizmo.as_ref() else {
+                        return;
+                    };
+                    let pressed = crate::app::commands::drawing::rotate_collar::ring_angle(&gizmo.angle_ring, at).unwrap_or(0.0);
+                    let (way, per_metre) = match part {
+                        GizmoPart::Berm => (gizmo.out, gizmo.pixels_per_metre_out),
+                        _ => (gizmo.up, gizmo.pixels_per_metre_up),
+                    };
+                    draft.wall_drag = Some(crate::ui::dialogs::pit_design::WallDrag {
+                        part,
+                        from: at,
+                        value,
+                        pressed,
+                        way,
+                        per_metre,
+                        kind,
+                        direction,
+                    });
                     return;
                 }
                 None => {}

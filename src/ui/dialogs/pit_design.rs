@@ -195,11 +195,58 @@ pub(crate) enum GizmoPart {
     BenchHeight,
     FaceAngle,
     Berm,
+    /// A place on a ramp it can switch back, by its place in the spots.
+    Switch(usize),
 }
+
+/// A place on a ramp it can switch back: where its stretch on a bench
+/// begins, or where it turns back, if it does there. Clicked, it turns
+/// there or stops turning there. In physical window pixels.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SwitchSpot {
+    pub(crate) ramp: usize,
+    /// The RL the turn is asked at: the bench's, or where it was asked if
+    /// it was made later.
+    pub(crate) rl: f64,
+    pub(crate) at: (f32, f32),
+    /// Whether it turns back here.
+    pub(crate) turn: bool,
+}
+
+/// A part of the walls' gizmo being dragged: which, where the press was
+/// (and where round the face's ring), its value then, and its arm's way on
+/// screen and pixels a metre then, held for the drag: pulled back through
+/// the toe, the walls turn to go the other way, and the arm with them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WallDrag {
+    pub(crate) part: GizmoPart,
+    pub(crate) from: (f32, f32),
+    pub(crate) value: f64,
+    pub(crate) pressed: f64,
+    pub(crate) way: (f32, f32),
+    pub(crate) per_metre: f32,
+    /// What the design was and the way it was built when taken up.
+    pub(crate) kind: Kind,
+    pub(crate) direction: Direction,
+}
+
+/// The panel's folding sections, folded each time a design is opened.
+const PANEL_FOLDS: [&str; 6] = [
+    "pit_design_bench_rules",
+    "pit_design_slope_rules",
+    "pit_design_ramp_extent",
+    "pit_design_bench_table",
+    "pit_design_walls_table",
+    "pit_design_evaluation",
+];
 
 /// The panel's state.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PitDesignDraft {
+    /// Whether the panel's sections have been folded for this design yet.
+    pub(crate) folds_reset: bool,
+    /// Where each ramp can switch back, as the viewport draws them.
+    pub(crate) switch_spots: Vec<SwitchSpot>,
     /// Each ramp's handles, as the viewport draws them.
     pub(crate) gizmos: Vec<RampGizmo>,
     /// The handle under the pointer.
@@ -218,9 +265,8 @@ pub(crate) struct PitDesignDraft {
     pub(crate) wall_place: Option<DVec2>,
     /// The walls' gizmo, as the viewport draws it.
     pub(crate) wall_gizmo: Option<WallGizmo>,
-    /// A part of the walls' gizmo being dragged: which, where the press
-    /// was (and where round the face's ring), and its value then.
-    pub(crate) wall_drag: Option<(GizmoPart, (f32, f32), f64, f64)>,
+    /// A part of the walls' gizmo being dragged.
+    pub(crate) wall_drag: Option<WallDrag>,
     /// A ramp whose grade is being turned on its ring: which, where round
     /// the ring the press was, and the grade's angle then.
     pub(crate) grading: Option<(usize, f64, f64)>,
@@ -300,22 +346,6 @@ impl PitDesignDraft {
     /// design: it shows one, and has a design to show.
     pub(crate) fn covers_object(&self) -> bool {
         self.shows_preview() && self.preview.as_ref().is_some_and(|preview| preview.design.is_ok())
-    }
-}
-
-fn direction_label(kind: Kind, direction: Direction) -> String {
-    match (kind, direction) {
-        (Kind::Pit, Direction::Up) => tr!("pit-design-up"),
-        (Kind::Pit, Direction::Down) => tr!("pit-design-down"),
-        (Kind::Dump, Direction::Up) => tr!("pit-design-dump-up"),
-        (Kind::Dump, Direction::Down) => tr!("pit-design-dump-down"),
-    }
-}
-
-fn kind_label(kind: Kind) -> String {
-    match kind {
-        Kind::Pit => tr!("pit-design-kind-pit"),
-        Kind::Dump => tr!("pit-design-kind-dump"),
     }
 }
 
@@ -482,8 +512,15 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
         .min_width(400.0)
         .max_width(420.0)
         .show(ui.ctx(), |ui| {
-            if let Some(working) = draft.working.as_mut() {
-                MenuFieldText::new(tr!("pit-design-name"), &mut working.name).width(FIELD_WIDTH).show(ui);
+            // Each time a design is opened, its sections start folded: they
+            // open only when asked.
+            if !draft.folds_reset {
+                draft.folds_reset = true;
+                ui.data_mut(|data| {
+                    for id in PANEL_FOLDS {
+                        data.remove::<bool>(egui::Id::unique(id));
+                    }
+                });
             }
             // Each step scrolls on its own, from its top.
             let stage_salt = match draft.stage {
@@ -525,10 +562,7 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                         PitStage::Ramp => {
                             let verts = draft.built_for.as_ref().map_or(&[][..], |key| key.verts.as_slice());
                             let base_rl = verts.first().map_or(0.0, |vertex| vertex.pos.z);
-                            // The middle of the string, which a ramp's start is
-                            // said to be north or south of.
-                            let middle = verts.iter().map(|vertex| vertex.pos.truncate()).sum::<DVec2>() / verts.len().max(1) as f64;
-                            draw_ramps(ui, &mut working.settings, (picking, &in_view), (base_rl, middle, commands));
+                            draw_ramps(ui, &mut working.settings, (picking, &in_view), (base_rl, commands));
                         }
                     }
                     menu::menu_section(ui, tr!("pit-design-result-section"));
@@ -629,6 +663,24 @@ fn draw_viewport_handles(ui: &mut egui::Ui, draft: &mut PitDesignDraft, commands
     // gizmos are drawn, shown once they are.
     let mut fields: Vec<GizmoField> = Vec::new();
     let mut readout = |anchor: egui::Pos2, way: egui::Vec2, value: GizmoValue, lit: bool| fields.push(GizmoField { anchor, way, value, lit });
+    // Where each ramp can switch back: a ring where it could, filled where
+    // it does; a click turns it there or stops it.
+    for (index, spot) in draft.switch_spots.iter().enumerate() {
+        let centre = at(spot.at);
+        if !viewport_rect.contains(centre) {
+            continue;
+        }
+        let lit = draft.gizmo_hover == Some(GizmoPart::Switch(index));
+        // In the ramp's own colour: amber is what falls short.
+        let colour = if lit { egui::Color32::WHITE } else { width_colour };
+        if spot.turn {
+            painter.circle_filled(centre, if lit { 7.0 } else { 6.0 }, gizmo_color(colour, if lit { 1.0 } else { 0.9 }));
+            painter.circle_stroke(centre, if lit { 7.0 } else { 6.0 }, egui::Stroke::new(1.5, gizmo_color(egui::Color32::BLACK, 0.5)));
+        } else {
+            painter.circle_filled(centre, 5.0, gizmo_color(egui::Color32::BLACK, if lit { 0.45 } else { 0.25 }));
+            painter.circle_stroke(centre, 5.0, egui::Stroke::new(1.5, gizmo_color(colour, if lit { 1.0 } else { GIZMO_IDLE_ALPHA })));
+        }
+    }
     for gizmo in &draft.gizmos {
         let centre = at(gizmo.centre);
         if !viewport_rect.contains(centre) {
@@ -642,7 +694,7 @@ fn draw_viewport_handles(ui: &mut egui::Ui, draft: &mut PitDesignDraft, commands
                 || match part {
                     GizmoPart::Width(index) => draft.widening.is_some_and(|(dragged, ..)| dragged == index),
                     GizmoPart::Grade(index) => draft.grading.is_some_and(|(dragged, ..)| dragged == index),
-                    GizmoPart::Turn(_) | GizmoPart::BenchHeight | GizmoPart::FaceAngle | GizmoPart::Berm => false,
+                    GizmoPart::Turn(_) | GizmoPart::BenchHeight | GizmoPart::FaceAngle | GizmoPart::Berm | GizmoPart::Switch(_) => false,
                 }
         };
         // The grade ring: its half above the road's line, the grade swept
@@ -765,7 +817,7 @@ fn draw_wall_gizmo(ui: &mut egui::Ui, draft: &mut PitDesignDraft, viewport_rect:
         return;
     }
     let painter = ui.painter().with_clip_rect(viewport_rect);
-    let active = |part: GizmoPart| draft.gizmo_hover == Some(part) || draft.wall_drag.is_some_and(|(dragged, ..)| dragged == part);
+    let active = |part: GizmoPart| draft.gizmo_hover == Some(part) || draft.wall_drag.is_some_and(|drag| drag.part == part);
     let Some(settings) = draft.working.as_ref().map(|working| working.settings.clone()) else {
         return;
     };
@@ -968,7 +1020,7 @@ const FLAG_LABELS: usize = 12;
 /// viewport says what to do, so nothing here repeats it.
 /// `in_view` are the ramps whose gizmos stand in the view, which set what
 /// they set there; the others', here.
-fn draw_ramps(ui: &mut egui::Ui, settings: &mut PitDesignSettings, (picking, in_view): (Option<usize>, &[usize]), (base_rl, middle, commands): (f64, DVec2, &mut Vec<UiCommand>)) {
+fn draw_ramps(ui: &mut egui::Ui, settings: &mut PitDesignSettings, (picking, in_view): (Option<usize>, &[usize]), (base_rl, commands): (f64, &mut Vec<UiCommand>)) {
     let (sign, height) = (settings.direction.sign(), settings.bench_height);
     let several = settings.ramps.len() > 1;
     let mut remove = None;
@@ -982,7 +1034,7 @@ fn draw_ramps(ui: &mut egui::Ui, settings: &mut PitDesignSettings, (picking, in_
             if menu::menu_section_with_action(ui, heading, tr!("pit-design-ramp-remove-short"), tr!("pit-design-ramp-remove-help")) {
                 remove = Some(index);
             }
-            draw_ramp_settings(ui, ramp, commands, (index, in_view.contains(&index)), (base_rl, middle, sign, height));
+            draw_ramp_settings(ui, ramp, (index, in_view.contains(&index)), (base_rl, sign, height));
         });
     }
     if let Some(index) = remove {
@@ -1067,30 +1119,9 @@ fn draw_bench_settings(
     (base_rl, picking_region, on_gizmo): (f64, bool, bool),
     commands: &mut Vec<UiCommand>,
 ) {
-    let chosen = kind_label(settings.kind);
-    MenuFieldCombo::new(
-        "pit_design_kind",
-        tr!("pit-design-type"),
-        &mut settings.kind,
-        chosen,
-        [Kind::Pit, Kind::Dump].map(|kind| (kind, kind_label(kind).into())),
-    )
-    .width(FIELD_WIDTH)
-    .help_text(tr!("pit-design-type-help"))
-    .show(ui);
+    // What it is and the way it is built are pulled on the walls' gizmo: its
+    // arms through the toe turn the walls the other way.
     let kind = settings.kind;
-    let chosen = direction_label(kind, settings.direction);
-    MenuFieldCombo::new(
-        "pit_design_direction",
-        tr!("pit-design-direction"),
-        &mut settings.direction,
-        chosen,
-        [Direction::Up, Direction::Down].map(|direction| (direction, direction_label(kind, direction).into())),
-    )
-    .width(FIELD_WIDTH)
-    .help_text(tr!("pit-design-direction-help"))
-    .show(ui);
-
     // How far it goes, with what it is and which way it is built.
     // Only a pit built up, or a dump built down, meets the ground.
     let stops: Vec<StopMode> = if settings.can_daylight() {
@@ -1391,51 +1422,9 @@ fn draw_slope_rules(ui: &mut egui::Ui, settings: &mut PitDesignSettings, picking
     }
 }
 
-/// A list of numbers typed into one field, such as RLs: what is typed stays
-/// as it is while it still reads as the list held, so a half-typed list is
-/// not rewritten under the cursor. Values `accept` refuses leave the list
-/// as it was.
-fn number_list_field(
-    ui: &mut egui::Ui,
-    id: impl std::hash::Hash + std::fmt::Debug,
-    (label, hint, help): (String, String, String),
-    values: &mut Vec<f64>,
-    accept: impl Fn(f64) -> bool,
-) {
-    let typed_id = egui::Id::unique(id);
-    let held = values.clone();
-    let mut text = ui
-        .data(|data| data.get_temp::<(String, Vec<f64>)>(typed_id))
-        .filter(|(_, read)| *read == held)
-        .map_or_else(|| held.iter().map(|value| format!("{value}")).collect::<Vec<_>>().join(", "), |(text, _)| text);
-    let response = MenuFieldText::new(label, &mut text).width(FIELD_WIDTH).hint_text(hint).help_text(help).show(ui);
-    if response.changed() {
-        let read: Option<Vec<f64>> = text
-            .split([',', ' ', ';'])
-            .filter(|part| !part.trim().is_empty())
-            .map(|part| part.trim().parse::<f64>().ok().filter(|value| accept(*value)))
-            .collect();
-        match read {
-            Some(read) => {
-                values.clone_from(&read);
-                ui.data_mut(|data| data.insert_temp(typed_id, (text, read)));
-            }
-            None => {
-                ui.data_mut(|data| data.insert_temp(typed_id, (text, held)));
-            }
-        }
-    }
-}
-
 /// The ramp's settings, for a pit that has one: where it starts, its
 /// width and gradient, which way it climbs, and how it turns.
-fn draw_ramp_settings(
-    ui: &mut egui::Ui,
-    ramp: &mut RampSettings,
-    commands: &mut Vec<UiCommand>,
-    (index, on_gizmo): (usize, bool),
-    (base_rl, middle, sign, height): (f64, DVec2, f64, f64),
-) {
+fn draw_ramp_settings(ui: &mut egui::Ui, ramp: &mut RampSettings, (index, on_gizmo): (usize, bool), (base_rl, sign, height): (f64, f64, f64)) {
     // Its width, grade and the way it climbs are set on its gizmo in the
     // view, at its foot; with its foot out of view, here.
     if !on_gizmo {
@@ -1463,36 +1452,6 @@ fn draw_ramp_settings(
         .help_text(tr!("pit-design-climbs-help"))
         .show(ui);
     }
-    // The side of the pit it leaves from, which is how it is talked about;
-    // where exactly, said on hover.
-    let (start_text, start_hint) = ramp.start.map_or_else(
-        || (tr!("pit-design-ramp-start-default"), tr!("pit-design-ramp-start-help")),
-        |start: DVec2| {
-            (
-                tr!("pit-design-ramp-start-side", side = compass_point(start - middle)),
-                tr!("pit-design-ramp-start-picked", x = format!("{:.1}", start.x), y = format!("{:.1}", start.y)),
-            )
-        },
-    );
-    let mut pick = false;
-    MenuField::new(tr!("pit-design-ramp-start"))
-        .help_text(tr!("pit-design-ramp-start-help"))
-        .show(ui, |ui, row_height, _| {
-            ui.allocate_ui_with_layout(egui::vec2(FIELD_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let pick_label = tr!("pit-design-ramp-move");
-                let pick_width = menu::natural_button_width(ui, &pick_label, 52.0);
-                let text_width = FIELD_WIDTH - ui.spacing().item_spacing.x - pick_width;
-                ui.allocate_ui_with_layout(egui::vec2(text_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.set_min_width(text_width);
-                    ui.add(egui::Label::new(start_text.clone()).truncate()).hint(start_hint.clone());
-                });
-                pick = ui.add(MenuButton::new(pick_label).min_width(pick_width)).clicked();
-            })
-            .response
-        });
-    if pick {
-        commands.push(UiCommand::BeginPitRampStartPick(index));
-    }
     // The tightest the road should turn: what a switchback turns round, and
     // what the whole road is checked against, either way.
     MenuFieldF64::new(tr!("pit-design-inside-radius"), &mut ramp.inside_radius, 0.0..=10000.0)
@@ -1501,30 +1460,9 @@ fn draw_ramp_settings(
         .suffix(" m")
         .help_text(tr!("pit-design-inside-radius-help"))
         .show(ui);
-    let layout_label = |switchback: bool| if switchback { tr!("pit-design-switchback") } else { tr!("pit-design-spiral") };
-    let chosen = layout_label(ramp.switchback);
-    MenuFieldCombo::new(
-        "pit_design_layout",
-        tr!("pit-design-layout"),
-        &mut ramp.switchback,
-        chosen,
-        [false, true].map(|switchback| (switchback, layout_label(switchback).into())),
-    )
-    .width(FIELD_WIDTH)
-    .help_text(tr!("pit-design-layout-help"))
-    .show(ui);
+    // Where it switches back is clicked on the ramp in the view; how its
+    // turns are laid, here, once it has one.
     if ramp.switchback {
-        MenuFieldU32::new(tr!("pit-design-switchback-every"), &mut ramp.switchback_every, 0..=u32::MAX)
-            .width(FIELD_WIDTH)
-            .help_text(tr!("pit-design-switchback-every-help"))
-            .show(ui);
-        number_list_field(
-            ui,
-            ("pit_design_turns_at", index),
-            (tr!("pit-design-turns-at"), tr!("pit-design-turns-at-hint"), tr!("pit-design-turns-at-help")),
-            &mut ramp.turns_at,
-            f64::is_finite,
-        );
         MenuFieldF64::new(tr!("pit-design-turn-widening"), &mut ramp.turn_widening, 0.0..=1000.0)
             .width(FIELD_WIDTH)
             .speed(0.1)
@@ -1538,23 +1476,10 @@ fn draw_ramp_settings(
             .suffix(" %")
             .help_text(tr!("pit-design-turn-grade-help"))
             .show(ui);
-        // Turning only at RLs, with none given, it never turns.
-        if ramp.switchback_every == 0 && ramp.turns_at.is_empty() {
-            menu::menu_note(ui, tr!("pit-design-turns-none"));
-        }
     }
     if menu::menu_section_folding(ui, "pit_design_ramp_extent", tr!("pit-design-ramp-extent-section")) {
         draw_ramp_extent(ui, ramp, (base_rl, sign, height));
     }
-}
-
-/// The eighth of the compass `offset` points to: n, ne, e, se, s, sw, w or
-/// nw.
-fn compass_point(offset: DVec2) -> &'static str {
-    const POINTS: [&str; 8] = ["n", "ne", "e", "se", "s", "sw", "w", "nw"];
-    // Clockwise from north, in eighths, rounded to the nearest.
-    let eighths = (offset.x.atan2(offset.y).to_degrees().rem_euclid(360.0) / 45.0).round() as usize;
-    POINTS[eighths % 8]
 }
 
 /// Where the ramp runs, and how its stretches are laid bench by bench: the

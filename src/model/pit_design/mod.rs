@@ -59,6 +59,26 @@ pub(crate) enum Kind {
     Dump,
 }
 
+impl Kind {
+    /// A pit's a dump, and a dump's a pit.
+    pub(crate) fn other(self) -> Self {
+        match self {
+            Self::Pit => Self::Dump,
+            Self::Dump => Self::Pit,
+        }
+    }
+}
+
+impl Direction {
+    /// Up's down, and down's up.
+    pub(crate) fn other(self) -> Self {
+        match self {
+            Self::Up => Self::Down,
+            Self::Down => Self::Up,
+        }
+    }
+}
+
 impl Direction {
     /// The other way.
     fn flipped(self) -> Self {

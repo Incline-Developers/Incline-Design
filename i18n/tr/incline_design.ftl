@@ -5025,10 +5025,6 @@ err-file-desc-opt-report = optimizasyon raporu
 
 pit-design-menu = Ocak Tasarımı
 pit-design-title = Ocak Tasarımı
-pit-design-direction = İnşa
-pit-design-direction-help = Tasarımın çizgisinden hangi yöne kurulduğu: ocak tabanından yukarı ya da kretinden aşağı, döküm sahası topuğundan yukarı ya da tepesinden aşağı.
-pit-design-up = Tabandan yukarı
-pit-design-down = Kretten aşağı
 pit-design-benches-section = Basamaklar
 pit-design-bench-height = Basamak yüksekliği
 pit-design-face-angle = Şev açısı
@@ -5053,29 +5049,10 @@ pit-design-climbs = Tırmanış
 pit-design-climbs-help = Rampanın yukarıdan bakıldığında ocağın çevresinde hangi yönde tırmandığı.
 pit-design-clockwise = Saat yönünde
 pit-design-anticlockwise = Saat yönünün tersine
-pit-design-ramp-start = Başladığı yer
-pit-design-ramp-start-help = Rampanın çizgiden ayrıldığı yer. Görünümde yeşil artısını çizgi boyunca sürükleyin ya da Taşı'ya basıp ayrılması gereken yere tıklayın.
-pit-design-ramp-start-default = Çizginin başı
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] Kuzey yüzü
-    [ne] Kuzeydoğu yüzü
-    [e] Doğu yüzü
-    [se] Güneydoğu yüzü
-    [s] Güney yüzü
-    [sw] Güneybatı yüzü
-    [w] Batı yüzü
-   *[nw] Kuzeybatı yüzü
 }
 pit-design-ramp-drag-hint = Rampanın başlangıcını taşımak için sürükleyin
 pit-design-ramp-drag-prompt = Rampanın ayrılması gereken yerde çizginin üzerinde bırakın.
 pit-design-ramp-start-prompt = Başlangıç çizgisine rampanın ondan ayrıldığı yerde tıklayın.
-pit-design-layout = Düzen
-pit-design-layout-help = Spiral, tırmandığı yönde duvarların çevresinde devam eder. Zikzak, duvarların dönüşe yer bıraktığı yerde, belirli sayıda basamakta bir düz bir platformda geri döner.
-pit-design-spiral = Spiral
-pit-design-switchback = Zikzak
-pit-design-switchback-every = Dönüşler arası basamak
-pit-design-switchback-every-help = Rampanın geri dönmeden önce kaç basamak tırmandığı; yalnızca verilen RL'lerde dönmek için 0. Dönüş sığmayan yerde rampa bir basamak daha gider ve orada döner.
 pit-design-inside-radius = İç yarıçap
 pit-design-inside-radius-help = Yolun iç kenarının dönmesi gereken en dar yarıçap: bir virajın döndüğü yarıçap ve tüm yolun denetlendiği değer.
 pit-design-result-section = Tasarım
@@ -5107,7 +5084,7 @@ pit-design-problem-topography-not-loaded = Ona karşı yüzeye çıkmak için { 
 pit-design-draw-prompt = Başlangıç çizgisine nokta nokta tıklayın: bir ocağın tabanı ya da kreti, ya da bir döküm sahasının topuğu ya da tepesi.
 pit-design-draw-close = Çizgiyi kapatmak için ilk noktaya tıklayın ya da Enter'a basın.
 pit-design-draw-close-minor = Sağ tık da bitirir
-pit-design-draw-help = Tasarımın başladığı kapalı çizgiyi çizin: bir ocağın taban topuğu ya da kreti, ya da bir döküm sahasının topuğu ya da tepesi. Kapanır kapanmaz tasarım etkin katmanda ondan yapılır; türü ve yönü sonraki adımda ayarlanır.
+pit-design-draw-help = Tasarımın başladığı kapalı çizgiyi çizin: bir ocağın taban topuğu ya da kreti, ya da bir döküm sahasının topuğu ya da tepesi. Kapanır kapanmaz tasarım etkin katmanda ondan yapılır.
 pit-design-round-corners = Köşeleri yuvarla
 pit-design-draw-ground = Buradaki zemin
 pit-design-draw-ground-above = { $rl } m (kotun { $by } m üstünde)
@@ -5117,12 +5094,8 @@ pit-design-corner-radius = Köşe yarıçapı
 pit-design-done-help = Bu ocağı bitirin ve aracı bırakın. Escape de aynısını yapar.
 pit-design-turn-grade = Dönüş eğimi
 pit-design-turn-grade-help = Yolun iç kenarının bir dönüşte tırmandığı eğim; sonraki kısım basamağın kalanını tırmanır: kamyonlar virajda hız kesmesin diye genellikle rampadan %2 ila 3 daha yatık. Düzlükte düz bir dönüş için 0.
-pit-design-turns-at = RL'lerde dönüş
-pit-design-turns-at-hint = ör. 130, 175
-pit-design-turns-at-help = Her bu kadar basamağa ek olarak rampanın geri döndüğü RL'ler: yapım yönünde her birinde ya da sonrasında başlayan ilk basamakta. Dönüş orada sığmazsa yeri olan sonraki basamakta yapılır ve sonuç bunu söyler.
 pit-design-turn-widening = Dönüş genişlemesi
 pit-design-turn-widening-help = Kamyonların dönebilmesi için dönüşün ortasında, dış tarafta yoldan ne kadar geniş olduğu.
-pit-design-turns-none = Dönüşler arasında basamak ve dönülecek RL olmadan rampa hiç geri dönmez.
 pit-design-turn-moved = RL { $asked } için istenen dönüş RL { $made } kotunda yapıldı: daha önce yer yoktu.
 pit-design-ramp-junction-flat = Kavşak düzlüğü
 pit-design-ramp-junction-flat-help = Rampanın her kısmının basamağının berminden ayrıldığı yerde ne kadar düz gittiği; böylece berme yoldan düzde ulaşılır. Bir bandın düzlüğü daha uzunsa o geçerlidir.
@@ -5192,10 +5165,6 @@ pit-design-zone-add-help = Basamakları kendi yüksekliği, şev açısı ve ber
 pit-design-table-face = Şev
 pit-design-table-berm = Berm
 pit-design-problem-zone = Bir bölgenin başlangıç ve bitiş RL'leri farklı olmalıdır.
-pit-design-dump-up = Topuktan yukarı
-pit-design-dump-down = Tepeden aşağı
-pit-design-type = Tür
-pit-design-type-help = Bir ocak zemine kazılır, duvarları yükseldikçe dışa açılır. Bir döküm sahası ya da stok onun üzerine kurulur, duvarları yükseldikçe içe kapanır; tepesinden aşağı kurulursa zemine ulaşana kadar dışa açılır.
 pit-design-kind-pit = Ocak
 pit-design-kind-dump = Döküm sahası ya da stok
 pit-design-stop-ground = Zemine ulaştığı yer
@@ -5212,7 +5181,6 @@ pit-design-ramp-remove-short = Kaldır
 pit-design-send-to = Gönder
 pit-design-send-to-help = Rampaları taşıma ağına ya da ocağı planlamaya gönder.
 pit-design-ramp-remove-help = Ocağı rampasız tasarla. Ayarları yeniden yerleştirmek için korunur.
-pit-design-ramp-move = Taşı
 pit-design-done = Tamam
 pit-design-kind = Ocak tasarımı
 pit-design-explode = Patlat

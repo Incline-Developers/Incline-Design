@@ -5015,10 +5015,6 @@ err-file-desc-opt-report = ripoti ya uboreshaji
 
 pit-design-menu = Usanifu wa Shimo
 pit-design-title = Usanifu wa Shimo
-pit-design-direction = Jenga
-pit-design-direction-help = Upande usanifu unaojengwa kutoka mstari wake: shimo juu kutoka sakafu au chini kutoka ukingo, rundo juu kutoka mguu au chini kutoka kilele.
-pit-design-up = Juu kutoka sakafu
-pit-design-down = Chini kutoka ukingo wa juu
 pit-design-benches-section = Ngazi
 pit-design-bench-height = Kimo cha ngazi
 pit-design-face-angle = Pembe ya uso
@@ -5043,29 +5039,10 @@ pit-design-climbs = Hupanda
 pit-design-climbs-help = Upande ambao barabara ya mteremko hupanda kuzunguka shimo, ikitazamwa kutoka juu.
 pit-design-clockwise = Kwa mwelekeo wa saa
 pit-design-anticlockwise = Kinyume cha mwelekeo wa saa
-pit-design-ramp-start = Inaanzia
-pit-design-ramp-start-help = Mahali barabara inapoacha mstari. Buruta msalaba wake wa kijani kando ya mstari kwenye mwonekano, au bonyeza Hamisha kisha ubofye mahali inapopaswa kuacha.
-pit-design-ramp-start-default = Mwanzo wa mstari
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] Upande wa kaskazini
-    [ne] Upande wa kaskazini-mashariki
-    [e] Upande wa mashariki
-    [se] Upande wa kusini-mashariki
-    [s] Upande wa kusini
-    [sw] Upande wa kusini-magharibi
-    [w] Upande wa magharibi
-   *[nw] Upande wa kaskazini-magharibi
 }
 pit-design-ramp-drag-hint = Buruta ili kuhamisha mwanzo wa barabara
 pit-design-ramp-drag-prompt = Achilia kwenye mstari mahali barabara inapopaswa kuuacha.
 pit-design-ramp-start-prompt = Bofya mstari wa kuanzia mahali barabara ya mteremko inapouacha.
-pit-design-layout = Mpangilio
-pit-design-layout-help = Mzunguko huendelea kuzunguka kuta upande unaopanda. Zigizaga hugeuka nyuma kwenye jukwaa tambarare kila baada ya ngazi kadhaa, mahali kuta zinapoacha nafasi ya kugeuka.
-pit-design-spiral = Mzunguko
-pit-design-switchback = Zigizaga
-pit-design-switchback-every = Ngazi kati ya migeuko
-pit-design-switchback-every-help = Ngazi ngapi njia panda hupanda kabla ya kugeuka; 0 kugeuka tu kwenye RL zilizotolewa. Pale kugeuka hakutoshi, njia panda huendelea ngazi moja zaidi na kugeuka hapo.
 pit-design-inside-radius = Nusu kipenyo cha ndani
 pit-design-inside-radius-help = Kipenyo kidogo zaidi ambacho ukingo wa ndani wa barabara unapaswa kupinda: kipenyo cha kona ya kurudi, na kipimo cha kukagua barabara nzima.
 pit-design-result-section = Usanifu
@@ -5097,7 +5074,7 @@ pit-design-problem-topography-not-loaded = Pakia { $name } ili kutokeza juu yake
 pit-design-draw-prompt = Bofya mstari wa kuanzia nukta kwa nukta: sakafu au ukingo wa shimo, au mguu au kilele cha rundo.
 pit-design-draw-close = Bofya nukta ya kwanza, au bonyeza Enter, ili kufunga mstari.
 pit-design-draw-close-minor = Kubofya kulia pia humaliza
-pit-design-draw-help = Chora mstari uliofungwa ambao usanifu unaanzia: mguu wa sakafu au ukingo wa shimo, au mguu au kilele cha rundo. Mara unapofungwa, usanifu hutengenezwa kutoka kwake kwenye tabaka hai, na aina na mwelekeo wake huwekwa kwenye hatua inayofuata.
+pit-design-draw-help = Chora mstari uliofungwa ambao usanifu unaanzia: mguu wa sakafu au ukingo wa shimo, au mguu au kilele cha rundo. Mara unapofungwa, usanifu hutengenezwa kutoka kwake kwenye tabaka hai.
 pit-design-round-corners = Zungusha pembe
 pit-design-draw-ground = Ardhi hapa
 pit-design-draw-ground-above = { $rl } m ({ $by } m juu ya RL)
@@ -5107,12 +5084,8 @@ pit-design-corner-radius = Nusukipenyo cha pembe
 pit-design-done-help = Maliza shimo hili na uweke zana chini. Escape hufanya vivyo hivyo.
 pit-design-turn-grade = Mwinamo wa mgeuko
 pit-design-turn-grade-help = Mwinamo ambao ukingo wa ndani wa barabara hupanda kwenye mgeuko; sehemu inayofuata hupanda kilichobaki cha ngazi: kwa kawaida 2 hadi 3 % laini kuliko njia panda, ili malori yadumishe kasi kwenye kona. 0 kwa mgeuko tambarare juu ya jukwaa.
-pit-design-turns-at = Geuka kwenye RL
-pit-design-turns-at-hint = k.m. 130, 175
-pit-design-turns-at-help = RL ambazo njia panda hugeuka, pamoja na kila ngazi hizo: kwenye ngazi ya kwanza inayoanza kwenye kila moja au baada yake, kwa mwelekeo wa ujenzi. Pale kugeuka hakutoshi hapo, hufanywa kwenye ngazi inayofuata yenye nafasi, na matokeo husema hivyo.
 pit-design-turn-widening = Upanuzi wa mgeuko
 pit-design-turn-widening-help = Mgeuko ni mpana kiasi gani kuliko barabara katikati yake, upande wa nje, ili malori yaupite.
-pit-design-turns-none = Bila ngazi kati ya migeuko wala RL za kugeuka, njia panda haigeuki kamwe.
 pit-design-turn-moved = Mgeuko ulioombwa kwenye RL { $asked } ulifanywa kwenye RL { $made }: hapakuwa na nafasi mapema zaidi.
 pit-design-ramp-junction-flat = Sehemu tambarare ya makutano
 pit-design-ramp-junction-flat-help = Umbali kila sehemu ya njia panda inaenda tambarare inapoacha lundo la kinga la ngazi yake, ili lundo lifikiwe kutoka barabarani kwenye tambarare. Tambarare ya ukanda hutumika pale ilipo ndefu zaidi.
@@ -5182,10 +5155,6 @@ pit-design-zone-add-help = Ukanda wa RL ambao ngazi zake hukatwa kwa kimo, pembe
 pit-design-table-face = Uso
 pit-design-table-berm = Lundo
 pit-design-problem-zone = RL za Kutoka na Hadi za eneo lazima zitofautiane.
-pit-design-dump-up = Juu kutoka mguu
-pit-design-dump-down = Chini kutoka kilele
-pit-design-type = Aina
-pit-design-type-help = Shimo huchimbwa ardhini, kuta zake hupanuka kadiri linavyopanda. Rundo au hifadhi hujengwa juu yake, kuta zake hupungua kadiri linavyopanda; likijengwa chini kutoka kilele chake, hupanuka hadi likutane na ardhi.
 pit-design-kind-pit = Shimo
 pit-design-kind-dump = Rundo au hifadhi
 pit-design-stop-ground = Mahali linapokutana na ardhi
@@ -5202,7 +5171,6 @@ pit-design-ramp-remove-short = Ondoa
 pit-design-send-to = Tuma kwa
 pit-design-send-to-help = Tuma njia panda kwenye mtandao wa usafirishaji, au shimo kwa Upangaji.
 pit-design-ramp-remove-help = Sanifu shimo bila barabara. Mipangilio yake inabaki, ili kuiweka tena.
-pit-design-ramp-move = Hamisha
 pit-design-done = Imekamilika
 pit-design-kind = Usanifu wa shimo
 pit-design-explode = Vunja

@@ -5025,10 +5025,6 @@ err-file-desc-opt-report = تقرير التحسين
 
 pit-design-menu = تصميم الحفرة
 pit-design-title = تصميم الحفرة
-pit-design-direction = البناء
-pit-design-direction-help = الاتجاه الذي يُبنى فيه التصميم من خطه: حفرة صعودًا من قاعها أو نزولًا من حافتها، ومكب صعودًا من قدمه أو نزولًا من قمته.
-pit-design-up = صعودًا من الأرضية
-pit-design-down = نزولًا من الحافة العلوية
 pit-design-benches-section = المصاطب
 pit-design-bench-height = ارتفاع المصطبة
 pit-design-face-angle = زاوية الواجهة
@@ -5053,29 +5049,10 @@ pit-design-climbs = اتجاه الصعود
 pit-design-climbs-help = الاتجاه الذي يصعد فيه المنحدر حول الحفرة، منظورًا من الأعلى.
 pit-design-clockwise = باتجاه عقارب الساعة
 pit-design-anticlockwise = عكس اتجاه عقارب الساعة
-pit-design-ramp-start = يبدأ عند
-pit-design-ramp-start-help = حيث يغادر المنحدر الخط. اسحب علامته الخضراء على الخط في العرض، أو اضغط «نقل» وانقر حيث ينبغي أن يغادره بدلًا من ذلك.
-pit-design-ramp-start-default = بداية الخط
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] الجانب الشمالي
-    [ne] الجانب الشمالي الشرقي
-    [e] الجانب الشرقي
-    [se] الجانب الجنوبي الشرقي
-    [s] الجانب الجنوبي
-    [sw] الجانب الجنوبي الغربي
-    [w] الجانب الغربي
-   *[nw] الجانب الشمالي الغربي
 }
 pit-design-ramp-drag-hint = اسحب لتغيير مكان بدء المنحدر
 pit-design-ramp-drag-prompt = أفلت الزر على الخط حيث ينبغي أن يغادره المنحدر.
 pit-design-ramp-start-prompt = انقر على خط البداية حيث يغادره المنحدر.
-pit-design-layout = التخطيط
-pit-design-layout-help = يستمر الحلزون حول الجدران في اتجاه صعوده. ويرتد المتعرج على منصة مستوية كل بضع مصاطب، حيث تترك الجدران مكانًا للانعطاف.
-pit-design-spiral = حلزوني
-pit-design-switchback = متعرج
-pit-design-switchback-every = المصاطب بين الانعطافات
-pit-design-switchback-every-help = عدد المصاطب التي يصعدها المنحدر قبل أن ينعطف عائدًا؛ 0 للانعطاف عند المناسيب المعطاة فقط. وحيث لا يتسع الانعطاف، يمضي المنحدر مصطبة أخرى وينعطف هناك.
 pit-design-inside-radius = نصف القطر الداخلي
 pit-design-inside-radius-help = أضيق انعطاف ينبغي أن تنعطفه الحافة الداخلية للطريق: نصف قطر المنعطف المتعرج، وما يُفحص به الطريق كله.
 pit-design-result-section = التصميم
@@ -5107,7 +5084,7 @@ pit-design-problem-topography-not-loaded = حمِّل { $name } ليبرز ال�
 pit-design-draw-prompt = انقر خط البداية نقطة بعد نقطة: قاع الحفرة أو حافتها، أو قدم المكب أو قمته.
 pit-design-draw-close = انقر النقطة الأولى، أو اضغط Enter، لإغلاق الخط.
 pit-design-draw-close-minor = النقر بالزر الأيمن ينهي أيضًا
-pit-design-draw-help = ارسم الخط المغلق الذي يبدأ منه التصميم: قدم قاع الحفرة أو حافتها، أو قدم المكب أو قمته. ما إن يُغلق حتى يُصنع التصميم منه على الطبقة النشطة، ويُضبط نوعه واتجاهه في الخطوة التالية.
+pit-design-draw-help = ارسم الخط المغلق الذي يبدأ منه التصميم: قدم قاع الحفرة أو حافتها، أو قدم المكب أو قمته. ما إن يُغلق حتى يُصنع التصميم منه على الطبقة النشطة.
 pit-design-round-corners = تدوير الزوايا
 pit-design-draw-ground = الأرض هنا
 pit-design-draw-ground-above = { $rl } م (أعلى من المنسوب بمقدار { $by } م)
@@ -5117,12 +5094,8 @@ pit-design-corner-radius = نصف قطر الزاوية
 pit-design-done-help = أنهِ هذه الحفرة وأغلق الأداة. مفتاح Escape يفعل الشيء نفسه.
 pit-design-turn-grade = ميل المنعطف
 pit-design-turn-grade-help = الميل الذي تصعد به الحافة الداخلية للطريق حول المنعطف، ويصعد المقطع بعده ما بقي من المصطبة: عادة أقل من ميل المنحدر بنسبة 2 إلى 3 %، لتحافظ الشاحنات على سرعتها في المنعطف. 0 لمنعطف مستوٍ على منصة.
-pit-design-turns-at = انعطاف عند مناسيب
-pit-design-turns-at-hint = مثلًا 130، 175
-pit-design-turns-at-help = مناسيب ينعطف عندها المنحدر عائدًا، إضافة إلى كل عدد من المصاطب: على أول مصطبة تبدأ عند كل منها أو بعده، في اتجاه البناء. وحيث لا يتسع الانعطاف هناك يُنفذ على المصطبة التالية التي فيها متسع، وتذكر النتيجة ذلك.
 pit-design-turn-widening = توسعة المنعطف
 pit-design-turn-widening-help = كم يزيد عرض المنعطف عن الطريق في وسطه، من الخارج، لتجتازه الشاحنات.
-pit-design-turns-none = بلا مصاطب بين الانعطافات ولا مناسيب للانعطاف، لا ينعطف المنحدر أبدًا.
 pit-design-turn-moved = الانعطاف المطلوب عند المنسوب { $asked } نُفذ عند المنسوب { $made }: لم يكن له متسع قبل ذلك.
 pit-design-ramp-junction-flat = مقطع الوصلة المستوي
 pit-design-ramp-junction-flat-help = المسافة التي يسيرها كل مقطع من المنحدر مستويًا حيث يغادر حاجز مصطبته، ليُبلغ الحاجز من الطريق على المستوي. يُعتمد المقطع المستوي للشريط حيث يكون أطول.
@@ -5192,10 +5165,6 @@ pit-design-zone-add-help = نطاق من المناسيب تُقطع مصاطب�
 pit-design-table-face = الواجهة
 pit-design-table-berm = الحاجز
 pit-design-problem-zone = يجب أن يختلف منسوبا البداية والنهاية للمنطقة.
-pit-design-dump-up = صعودًا من القدم
-pit-design-dump-down = نزولًا من القمة
-pit-design-type = النوع
-pit-design-type-help = تُحفر الحفرة في الأرض فتتسع جدرانها كلما ارتفعت. ويُبنى المكب أو المخزن عليها فتضيق جدرانه كلما ارتفع؛ وإذا بُني نزولًا من قمته اتسع حتى يلقى الأرض.
 pit-design-kind-pit = حفرة
 pit-design-kind-dump = مكب أو مخزن
 pit-design-stop-ground = حيث يلقى الأرض
@@ -5212,7 +5181,6 @@ pit-design-ramp-remove-short = إزالة
 pit-design-send-to = إرسال إلى
 pit-design-send-to-help = أرسل المنحدرات إلى شبكة النقل، أو الحفرة إلى التخطيط.
 pit-design-ramp-remove-help = صمّم الحفرة بلا منحدر. تُحفظ إعداداته لوضعه مجددًا.
-pit-design-ramp-move = نقل
 pit-design-done = تم
 pit-design-kind = تصميم الحفرة
 pit-design-explode = تفكيك

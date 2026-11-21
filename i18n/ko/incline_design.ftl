@@ -5017,10 +5017,6 @@ err-file-desc-opt-report = 최적화 보고서
 
 pit-design-menu = 피트 설계
 pit-design-title = 피트 설계
-pit-design-direction = 구축
-pit-design-direction-help = 설계를 선에서 어느 쪽으로 쌓는지입니다. 피트는 바닥에서 위로 또는 법면 어깨에서 아래로, 덤프는 법면 끝에서 위로 또는 정상에서 아래로.
-pit-design-up = 바닥에서 위로
-pit-design-down = 상단선에서 아래로
 pit-design-benches-section = 벤치
 pit-design-bench-height = 벤치 높이
 pit-design-face-angle = 사면 각도
@@ -5045,29 +5041,10 @@ pit-design-climbs = 오르는 방향
 pit-design-climbs-help = 위에서 볼 때 램프가 피트를 따라 오르는 방향입니다.
 pit-design-clockwise = 시계 방향
 pit-design-anticlockwise = 반시계 방향
-pit-design-ramp-start = 시작 위치
-pit-design-ramp-start-help = 램프가 선을 떠나는 곳입니다. 뷰에서 녹색 십자를 선을 따라 끌거나, 이동을 누른 다음 대신 떠나야 할 곳을 클릭하세요.
-pit-design-ramp-start-default = 선의 시작점
-pit-design-ramp-start-picked = { $x }, { $y }
-pit-design-ramp-start-side = { $side ->
-    [n] 북쪽
-    [ne] 북동쪽
-    [e] 동쪽
-    [se] 남동쪽
-    [s] 남쪽
-    [sw] 남서쪽
-    [w] 서쪽
-   *[nw] 북서쪽
 }
 pit-design-ramp-drag-hint = 끌어서 램프 시작 위치 이동
 pit-design-ramp-drag-prompt = 램프가 떠나야 할 선 위에서 놓으세요.
 pit-design-ramp-start-prompt = 램프가 시작 선을 떠나는 위치에서 선을 클릭하세요.
-pit-design-layout = 배치
-pit-design-layout-help = 나선형은 오르는 방향으로 벽면을 따라 계속 돕니다. 스위치백은 벽면에 회전할 여유가 있는 곳에서 몇 벤치마다 평평한 패드에서 되돌아갑니다.
-pit-design-spiral = 나선형
-pit-design-switchback = 스위치백
-pit-design-switchback-every = 회전 간 벤치 수
-pit-design-switchback-every-help = 램프가 되돌아가기 전에 오르는 벤치 수. 지정한 RL에서만 되돌아가려면 0. 회차가 들어가지 않는 곳에서는 램프가 한 벤치 더 가서 그곳에서 되돌아갑니다.
 pit-design-inside-radius = 안쪽 반경
 pit-design-inside-radius-help = 도로 안쪽 가장자리가 돌아야 할 가장 작은 반경: 스위치백의 회전 반경이자 도로 전체를 검사하는 기준입니다.
 pit-design-result-section = 설계
@@ -5099,7 +5076,7 @@ pit-design-problem-topography-not-loaded = 지표에 드러나려면 { $name }�
 pit-design-draw-prompt = 시작 선을 한 점씩 클릭하세요. 피트의 바닥이나 어깨, 또는 덤프의 법면 끝이나 정상입니다.
 pit-design-draw-close = 첫 점을 클릭하거나 Enter를 눌러 선을 닫으세요.
 pit-design-draw-close-minor = 오른쪽 클릭으로도 마칩니다
-pit-design-draw-help = 설계가 시작되는 닫힌 선을 그립니다. 피트 바닥의 법면 끝이나 어깨, 또는 덤프의 법면 끝이나 정상입니다. 선이 닫히면 활성 레이어에 그 선에서 설계가 만들어지고, 유형과 방향은 다음 단계에서 정합니다.
+pit-design-draw-help = 설계가 시작되는 닫힌 선을 그립니다. 피트 바닥의 법면 끝이나 어깨, 또는 덤프의 법면 끝이나 정상입니다. 선이 닫히면 활성 레이어에 그 선에서 설계가 만들어집니다.
 pit-design-round-corners = 모서리 둥글게
 pit-design-draw-ground = 이곳의 지면
 pit-design-draw-ground-above = { $rl } m (RL보다 { $by } m 위)
@@ -5109,12 +5086,8 @@ pit-design-corner-radius = 모서리 반경
 pit-design-done-help = 이 피트를 마치고 도구를 내려놓습니다. Escape도 같습니다.
 pit-design-turn-grade = 회차 경사
 pit-design-turn-grade-help = 스위치백에서 도로 안쪽 가장자리가 오르는 경사이며, 그 뒤 구간은 벤치의 나머지를 오릅니다. 트럭이 커브에서 속도를 유지하도록 보통 램프보다 2~3% 완만하게 합니다. 패드 위 평탄 회차는 0.
-pit-design-turns-at = 회차 RL
-pit-design-turns-at-hint = 예: 130, 175
-pit-design-turns-at-help = 일정 벤치마다에 더해 램프가 되돌아가는 RL. 시공 방향으로 각 RL 또는 그 이후에서 시작하는 첫 벤치에서 되돌아갑니다. 그곳에 들어가지 않으면 자리가 있는 다음 벤치에서 하며, 결과에 그렇게 표시됩니다.
 pit-design-turn-widening = 회차 확폭
 pit-design-turn-widening-help = 트럭이 돌 수 있도록 회차 중간 바깥쪽이 도로보다 얼마나 넓은지.
-pit-design-turns-none = 회차 사이 벤치 수도 회차 RL도 없으면 램프는 되돌아가지 않습니다.
 pit-design-turn-moved = RL { $asked }에서 요청한 회차를 RL { $made }에서 했습니다. 그 전에는 자리가 없었습니다.
 pit-design-ramp-junction-flat = 접속부 평탄 구간
 pit-design-ramp-junction-flat-help = 램프의 각 구간이 벤치의 소단을 떠나는 곳에서 평탄하게 가는 거리로, 도로에서 소단으로 평탄하게 드나들 수 있습니다. 구간의 평탄 구간이 더 길면 그것이 적용됩니다.
@@ -5184,10 +5157,6 @@ pit-design-zone-add-help = 벤치를 고유한 높이, 사면 각도, 소단 폭
 pit-design-table-face = 사면
 pit-design-table-berm = 소단
 pit-design-problem-zone = 구역의 시작 RL과 끝 RL은 달라야 합니다.
-pit-design-dump-up = 법면 끝에서 위로
-pit-design-dump-down = 정상에서 아래로
-pit-design-type = 유형
-pit-design-type-help = 피트는 땅에 파 들어가며, 오를수록 벽이 바깥으로 벌어집니다. 덤프나 적치장은 그 위에 쌓으며, 오를수록 벽이 안으로 좁아집니다. 정상에서 아래로 쌓으면 땅에 닿을 때까지 바깥으로 벌어집니다.
 pit-design-kind-pit = 피트
 pit-design-kind-dump = 덤프 또는 적치장
 pit-design-stop-ground = 땅에 닿는 곳
@@ -5204,7 +5173,6 @@ pit-design-ramp-remove-short = 제거
 pit-design-send-to = 보내기
 pit-design-send-to-help = 램프를 운반 네트워크로, 또는 피트를 계획으로 보냅니다.
 pit-design-ramp-remove-help = 램프 없이 피트를 설계합니다. 다시 배치할 수 있도록 설정은 유지됩니다.
-pit-design-ramp-move = 이동
 pit-design-done = 완료
 pit-design-kind = 피트 설계
 pit-design-explode = 분해
