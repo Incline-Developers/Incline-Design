@@ -1689,7 +1689,10 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
         }
         Ok(design) => {
             read_only_row(ui, &tr!("pit-design-benches-built"), &design.benches.to_string());
-            read_only_row(ui, &tr!("pit-design-final-rl"), &format!("{:.1} m", design.final_elevation()));
+            // How it ended says the RL it ended at, but for every bench built.
+            if matches!(design.end, End::Complete) {
+                read_only_row(ui, &tr!("pit-design-final-rl"), &format!("{:.1} m", design.final_elevation()));
+            }
             if ramp {
                 read_only_row(ui, &tr!("pit-design-ramp-length"), &format!("{} m", whole(design.ramp_length)));
             }
