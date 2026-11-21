@@ -891,11 +891,11 @@ fn stretch_height(elevation: f64, sign: f64, height: f64, lift: f64, climbed: f6
 }
 
 /// The ground's RL at a point, for daylighting.
-pub(crate) type Ground<'a> = &'a dyn Fn(DVec2) -> Option<f64>;
+pub(crate) type Ground<'a> = &'a (dyn Fn(DVec2) -> Option<f64> + Sync);
 
 /// Build the design a base string and its settings describe, stopping early
 /// if `cancelled` says to.
-pub(crate) fn design(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &dyn Fn() -> bool) -> Result<Design, Problem> {
+pub(crate) fn design(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<Design, Problem> {
     if spec.kind == Kind::Dump {
         return design_dump(base, spec, ground, cancelled);
     }
@@ -907,7 +907,7 @@ pub(crate) fn design(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cance
 /// down stepping out to the ground, a pit built up to daylight. The ramp
 /// that climbs one way round the dump falls that way round the pit, so it is
 /// asked to climb the other.
-fn design_dump(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &dyn Fn() -> bool) -> Result<Design, Problem> {
+fn design_dump(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<Design, Problem> {
     let flipped = Spec {
         kind: Kind::Pit,
         direction: spec.direction.flipped(),
@@ -934,28 +934,37 @@ fn design_dump(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
 }
 
 /// A pit, cut into the ground.
-fn design_pit(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &dyn Fn() -> bool) -> Result<Design, Problem> {
+fn design_pit(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<Design, Problem> {
+    use rayon::prelude::*;
     // A ramp kept to its gradient by flats can come to a bench with no room
     // where one climbing a little flatter would have found it, the benches
     // before having put it somewhere else; and conditioned rings, a hair
     // different, can put it somewhere with no way on where rings left as
     // they were would not. Where a design runs out of room, the others are
-    // tried in turn: the one that gets furthest is given, the first of
-    // those that get as far.
+    // tried: the one that gets furthest is given, the first of those that
+    // get as far. They are worked out side by side, then taken in turn.
     let mut best = design_with(base, spec, ground, cancelled, Additions::FlatsFirst, true)?;
-    for (additions, condition) in [(Additions::LongerOnly, true), (Additions::FlatsFirst, false), (Additions::LongerOnly, false)] {
-        if best.end != End::OutOfRoom || cancelled() {
-            break;
-        }
-        if additions == Additions::LongerOnly && spec.ramps.is_empty() {
-            continue;
-        }
-        let other = design_with(base, spec, ground, cancelled, additions, condition)?;
-        if other.benches > best.benches {
-            best = other;
+    if best.0.end == End::OutOfRoom && !cancelled() {
+        let others: Vec<Result<(Design, Vec<Road>), Problem>> = [(Additions::LongerOnly, true), (Additions::FlatsFirst, false), (Additions::LongerOnly, false)]
+            .into_par_iter()
+            .filter(|(additions, _)| *additions != Additions::LongerOnly || !spec.ramps.is_empty())
+            .map(|(additions, condition)| design_with(base, spec, ground, cancelled, additions, condition))
+            .collect();
+        for other in others {
+            if best.0.end != End::OutOfRoom || cancelled() {
+                break;
+            }
+            let other = other?;
+            if other.0.benches > best.0.benches {
+                best = other;
+            }
         }
     }
-    Ok(best)
+    // Its walls and checks, for the one given only.
+    let (mut design, roads) = best;
+    design.walls = inter_ramp(spec, &base.ring, &design);
+    design.flags = checks::flags(spec, &design, &roads);
+    Ok(design)
 }
 
 /// What a stretch may have added to it to leave its bench sound.
@@ -970,7 +979,16 @@ enum Additions {
 
 /// A design built with only `additions` to its stretches, its end rings
 /// conditioned where `condition` says.
-fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &dyn Fn() -> bool, additions: Additions, condition: bool) -> Result<Design, Problem> {
+/// Its walls and flags are left for [`design_pit`] to work out, once it is
+/// the one given; its roads, which its checks need, come with it.
+fn design_with(
+    base: &Base,
+    spec: &Spec,
+    ground: Option<Ground<'_>>,
+    cancelled: &(dyn Fn() -> bool + Sync),
+    additions: Additions,
+    condition: bool,
+) -> Result<(Design, Vec<Road>), Problem> {
     if let Some(problem) = spec.problem() {
         return Err(problem);
     }
@@ -1098,9 +1116,7 @@ fn design_with(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: 
         flags: Vec::new(),
     };
     without_straight_points(&mut design.strings);
-    design.walls = inter_ramp(spec, &base.ring, &design);
-    design.flags = checks::flags(spec, &design, &roads);
-    Ok(design)
+    Ok((design, roads))
 }
 
 /// A finished design's rings with the points that do not bend them taken
@@ -1475,7 +1491,7 @@ struct Road {
 #[derive(Clone, Default)]
 struct Built {
     segments: Vec<(DVec3, DVec3)>,
-    cells: std::collections::HashMap<(i64, i64), Vec<u32>>,
+    cells: std::collections::HashMap<(i64, i64), Vec<u32>, foldhash::fast::FixedState>,
 }
 
 /// The size of a cell of the grid built strings are binned in.
@@ -1506,7 +1522,7 @@ impl Built {
     /// Whether any of `candidate` crosses a built string in plan at a
     /// different height.
     fn crossed_by(&self, candidate: &[(DVec3, DVec3)]) -> bool {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen: std::collections::HashSet<u32, foldhash::fast::FixedState> = std::collections::HashSet::default();
         candidate.iter().any(|(a, b)| {
             seen.clear();
             Self::cells_of(*a, *b).any(|cell| {
@@ -1516,6 +1532,9 @@ impl Built {
                             return false;
                         }
                         let (c, d) = self.segments[index as usize];
+                        if !road::boxes_meet(a.truncate(), b.truncate(), c.truncate(), d.truncate()) {
+                            return false;
+                        }
                         match crate::model::kernel::segment_segment(a.truncate(), b.truncate(), c.truncate(), d.truncate()) {
                             crate::model::kernel::SegSeg::Crossing { t, u, .. } => (a.z + (b.z - a.z) * t - (c.z + (d.z - c.z) * u)).abs() > SAME_HEIGHT,
                             _ => false,
@@ -1542,6 +1561,7 @@ impl Laid {
     /// It as placed on its bench.
     fn placed(&self) -> Placed<'_> {
         Placed {
+            ramp: self.index,
             stretch: &self.stretch,
             join: match (&self.turn, self.handover) {
                 (Some(turn), _) => Join::TurnsBack(turn),
@@ -1632,8 +1652,9 @@ impl Builder<'_> {
 
         let end_elevation = elevation + sign * height;
         // With no berm the bench starts on the ring the last one ended on,
-        // which is a string already.
-        if leaves_berm {
+        // which is a string already: unless a road's foot opened a bay in it.
+        let bayed = laid.iter().any(|laid| laid.placed().foot()) && start_ring.as_slice() != from;
+        if leaves_berm || bayed {
             self.strings.push(level_string(spec, &start_ring, elevation, true));
         }
         self.strings.push(level_string(spec, &end_ring, end_elevation, false));
@@ -2392,9 +2413,21 @@ fn with_pad(start_ring: &[DVec2], pad: &[DVec2]) -> Option<Vec<DVec2>> {
 /// bench starts from.
 #[derive(Clone, Copy)]
 struct Placed<'a> {
+    /// Which ramp, by its place in the list.
+    ramp: usize,
     stretch: &'a Stretch,
     join: Join<'a>,
     on_start: bool,
+}
+
+impl Placed<'_> {
+    /// Whether this is a road's end on the ring its bench starts from: a
+    /// road begun there, whose trucks come and go along that level (the
+    /// pit's floor building up, the ground at its crest building down), and
+    /// so leave it through a bay.
+    fn foot(&self) -> bool {
+        matches!(self.join, Join::Begins) && !self.on_start
+    }
 }
 
 /// The ring a bench starts on: the ring it starts from, `from`, set off
@@ -2521,6 +2554,40 @@ fn start_ring(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, placed: &[P
 fn rings(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, placed: &[Placed<'_>]) -> Result<(Vec<DVec2>, Vec<DVec2>), End> {
     let sign = spec.direction.sign();
     let start_ring = start_ring(spec, from, walls, placed)?;
+    // A road's foot opens on the floor through a bay; where a bay leaves
+    // the bench unsound, it is built as before, its head wall behind it.
+    if placed.iter().any(|placed| placed.foot()) {
+        let bays: Vec<Option<Bay>> = placed
+            .iter()
+            .map(|placed| {
+                let radius = spec.ramps.get(placed.ramp).map_or(0.0, |ramp| ramp.turning_radius);
+                placed.foot().then(|| Bay::new(&start_ring, placed.stretch, radius, sign)).flatten()
+            })
+            .collect();
+        let opened: Vec<&Bay> = bays.iter().flatten().collect();
+        if !opened.is_empty()
+            && let Some(bayed) = opened.iter().try_fold(start_ring.clone(), |ring, bay| bay.opened(&ring))
+            && let Ok(rings) = rings_from(spec, bayed, from, walls, placed, Some((&start_ring, &bays)))
+        {
+            return Ok(rings);
+        }
+    }
+    rings_from(spec, start_ring, from, walls, placed, None)
+}
+
+/// [`rings`] from a start ring worked out; with `bays`, the ring before
+/// them and each stretch's bay (by its place in `placed`), if its foot was
+/// opened in it through one.
+fn rings_from(
+    spec: &Spec,
+    start_ring: Vec<DVec2>,
+    from: &[DVec2],
+    walls: &walls::Walls<'_>,
+    placed: &[Placed<'_>],
+    bays: Option<(&[DVec2], &[Option<Bay>])>,
+) -> Result<(Vec<DVec2>, Vec<DVec2>), End> {
+    let sign = spec.direction.sign();
+    let bay_of = |index: usize| bays.and_then(|(unbayed, bays)| Some((unbayed, bays.get(index)?.as_ref()?)));
     let plain = || {
         let distances = walls.offsets(&start_ring, sign, |walls, point, facing| walls.face_at(point, facing));
         walls
@@ -2532,12 +2599,13 @@ fn rings(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, placed: &[Placed
     };
     let end_ring = match placed {
         [] => plain()?,
-        [only] => end_beside(&start_ring, &plain, from, walls, sign, only)?,
+        [only] => end_beside(&start_ring, &plain, from, walls, sign, only, bay_of(0))?,
         several => {
             let plain_ring = plain()?;
             let ends: Vec<Vec<DVec2>> = several
                 .iter()
-                .map(|placed| end_beside(&start_ring, &|| Ok(plain_ring.clone()), from, walls, sign, placed))
+                .enumerate()
+                .map(|(index, placed)| end_beside(&start_ring, &|| Ok(plain_ring.clone()), from, walls, sign, placed, bay_of(index)))
                 .collect::<Result<_, _>>()?;
             merged(&plain_ring, &ends).ok_or(End::OutOfRoom)?
         }
@@ -2589,9 +2657,15 @@ fn end_beside(
     walls: &walls::Walls<'_>,
     sign: f64,
     placed: &Placed<'_>,
+    bay: Option<(&[DVec2], &Bay)>,
 ) -> Result<Vec<DVec2>, End> {
     match placed.join {
-        Join::Begins => beside_new_ramp(start_ring, placed.stretch, walls, sign).ok_or(End::OutOfRoom),
+        // A foot opened through a bay is set off from the ring the bay was.
+        Join::Begins => match bay {
+            Some((unbayed, bay)) => beside_new_ramp(unbayed, placed.stretch, walls, sign, Some(bay)),
+            None => beside_new_ramp(start_ring, placed.stretch, walls, sign, None),
+        }
+        .ok_or(End::OutOfRoom),
         Join::TurnsBack(turn) if turn.lift > 0.0 => spliced(&plain()?, placed.stretch, from, walls, sign, Some(turn)).ok_or(End::OutOfRoom),
         _ => spliced(&plain()?, placed.stretch, from, walls, sign, None).ok_or(End::OutOfRoom),
     }
@@ -2796,7 +2870,11 @@ fn spliced(plain: &[DVec2], stretch: &Stretch, from: &[DVec2], walls: &walls::Wa
 /// the step comes to a face's run behind the start: the shelf the road
 /// leaves stands on rock benched back under it rather than a face cut
 /// beneath it.
-fn beside_new_ramp(start_ring: &[DVec2], stretch: &Stretch, walls: &walls::Walls<'_>, sign: f64) -> Option<Vec<DVec2>> {
+///
+/// Where its foot opens through a bay (`bayed`, see [`with_foot_bay`]), the
+/// start ring is already out round it: the ring is set off from it with no
+/// step, its head wall standing behind the bay.
+fn beside_new_ramp(start_ring: &[DVec2], stretch: &Stretch, walls: &walls::Walls<'_>, sign: f64, bay: Option<&Bay>) -> Option<Vec<DVec2>> {
     let width = stretch.across;
     let direction = stretch.direction;
     let (near_start, near_end) = (stretch.edges.near.first()?.0, stretch.edges.near.last()?.0);
@@ -2806,6 +2884,8 @@ fn beside_new_ramp(start_ring: &[DVec2], stretch: &Stretch, walls: &walls::Walls
     let around = arcs[count];
     let road_start = ring::arc_at(&arcs, ring::nearest(start_ring, near_start).0);
     let end_arc = ring::arc_at(&arcs, ring::nearest(start_ring, near_end).0);
+    // The face as it is cut where the road begins.
+    let face = walls.on(start_ring).face(ring::nearest(start_ring, near_start).0);
     let with_step_at = |start_arc: f64| {
         let run = ((end_arc - start_arc) * direction).rem_euclid(around);
         let cuts = [ring::parameter_at(&arcs, start_arc), ring::parameter_at(&arcs, end_arc)];
@@ -2825,12 +2905,15 @@ fn beside_new_ramp(start_ring: &[DVec2], stretch: &Stretch, walls: &walls::Walls
             .collect();
         walls.offset(&split, &distances).into_iter().next().map(|ring| walls.unfolded(ring))
     };
+    // Behind a bay, the head wall stands round it: the step at the foot
+    // gives way to the bay's outside, a face's run out.
+    if let Some(bay) = bay {
+        return bay.crest(&with_step_at(road_start)?, face);
+    }
     // The head wall rises behind where the road starts, a face's run behind
     // its far edge at least: square over it, the wall would stand vertical.
     // Where the road starts at a corner, behind it is round the corner, and
     // the step goes further back until the road's start stands clear.
-    // The face as it is cut where the road begins.
-    let face = walls.on(start_ring).face(ring::nearest(start_ring, near_start).0);
     let first = if sign < 0.0 { 2.0 } else { 1.0 };
     let mut last = None;
     for behind in [first, first + 1.0, first + 2.0, first + 4.0] {
@@ -2842,6 +2925,136 @@ fn beside_new_ramp(start_ring: &[DVec2], stretch: &Stretch, walls: &walls::Walls
     }
     last
 }
+
+/// A road's foot opened on the ring its bench starts from through a bay:
+/// behind where the road leaves the ring, level ground as wide as the road
+/// runs straight on from it, its outside an arc (the road's outside edge
+/// turning at its inside radius) curving back into the ring, so trucks come
+/// off the road onto the floor and turn away along it. The road's foot,
+/// square across it, is the bay's end. The bench's start ring takes the arc
+/// in place of the ring behind the foot, and the ring it ends on the arc a
+/// face's run further out about the same centre, its head wall standing
+/// round the bay rather than square behind the road.
+struct Bay {
+    /// Where the road's near edge leaves the ring, and the way round it the
+    /// road climbs.
+    foot: DVec2,
+    direction: f64,
+    /// Out from the ring at the foot, and back the way the road came.
+    out: DVec2,
+    back: DVec2,
+    across: f64,
+    /// The centre of the bay's outside.
+    centre: DVec2,
+}
+
+impl Bay {
+    /// The bay behind `stretch`'s foot on `ring` (`sign` outward), its
+    /// outside turning at `inside_radius` inside the road's own.
+    fn new(ring: &[DVec2], stretch: &Stretch, inside_radius: f64, sign: f64) -> Option<Self> {
+        let near_start = stretch.edges.near.first()?.0;
+        let (parameter, _) = ring::nearest(ring, near_start);
+        let count = ring.len();
+        let edge = (parameter.floor() as usize).min(count - 1);
+        let out = ring::outward(ring, edge) * sign;
+        let along = (ring[(edge + 1) % count] - ring[edge]).try_normalize()?;
+        let back = along * -stretch.direction;
+        let foot = ring::point_at(ring, parameter);
+        let across = stretch.across;
+        let radius = inside_radius.max(0.0) + across;
+        Some(Self {
+            foot,
+            direction: stretch.direction,
+            out,
+            back,
+            across,
+            centre: foot + out * (across - radius),
+        })
+    }
+
+    /// The bay's outside from the road's far edge at the foot, back and
+    /// round toward the ring, a point every [`ring::ARC_STEP`] as the
+    /// design's other arcs: [`BAY_TURN`] at most, past which it is no bay.
+    fn arc(&self, from: DVec2) -> Vec<DVec2> {
+        let radius = from.distance(self.centre);
+        let steps = (BAY_TURN / ring::ARC_STEP).round() as usize;
+        (0..=steps)
+            .map(|step| {
+                let angle = ring::ARC_STEP * step as f64;
+                self.centre + (self.out * angle.cos() + self.back * angle.sin()) * radius
+            })
+            .collect()
+    }
+
+    /// The bench's start ring with the bay opened in it: from the foot,
+    /// round the ring the way the road goes to where the bay's outside meets
+    /// it behind, then along the bay's outside to the road's far edge and
+    /// square back across the road to the foot.
+    fn opened(&self, ring: &[DVec2]) -> Option<Vec<DVec2>> {
+        let corner = self.foot + self.out * self.across;
+        spliced_behind(ring, self.foot, &self.arc(corner), true, self.direction)
+    }
+
+    /// The ring the bench ends on round the bay: `crest` (set off from the
+    /// ring before the bay, the road beside the foot and the face behind
+    /// it), its step behind the road replaced by the bay's outside a face's
+    /// run further out (`face`, and a hair more, as the arcs are cut into
+    /// straight runs).
+    fn crest(&self, crest: &[DVec2], face: f64) -> Option<Vec<DVec2>> {
+        let corner = ring::point_at(crest, ring::nearest(crest, self.foot + self.out * (self.across + face)).0);
+        // Its straight runs fall inside the arc, the bay's touch it at their
+        // points: a hair further out, the face is nowhere narrower.
+        let reach = corner.distance(self.centre);
+        let sag = reach * (1.0 / (ring::ARC_STEP * 0.5).cos() - 1.0) * 1.01;
+        let arc: Vec<DVec2> = self
+            .arc(corner)
+            .into_iter()
+            .map(|point| self.centre + (point - self.centre) * (1.0 + sag / reach))
+            .collect();
+        spliced_behind(crest, corner, &arc, false, self.direction)
+    }
+}
+
+/// `ring` with what lies behind `from` (round it against `direction`) up to
+/// where `arc` meets it replaced by the arc: from `from` the way `direction`
+/// says round to the meeting, then back along the arc to its start (kept
+/// where `keep_start`, where it is not `from` itself). Wound as `ring` is.
+/// `None` where the arc never meets the ring.
+fn spliced_behind(ring: &[DVec2], from: DVec2, arc: &[DVec2], keep_start: bool, direction: f64) -> Option<Vec<DVec2>> {
+    let count = ring.len();
+    // The first place along the arc it crosses the ring.
+    let (step, edge, meeting, along) = arc.windows(2).enumerate().find_map(|(step, pair)| {
+        (0..count)
+            .filter_map(|edge| match crate::model::kernel::segment_segment(pair[0], pair[1], ring[edge], ring[(edge + 1) % count]) {
+                crate::model::kernel::SegSeg::Crossing { t, u, point } => Some((t, edge, point, u)),
+                _ => None,
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, edge, point, u)| (step, edge, point, u))
+    })?;
+    let (start, _) = ring::nearest(ring, from);
+    let reach = |parameter: f64| ((parameter - start) * direction).rem_euclid(count as f64);
+    let meets = reach(edge as f64 + along);
+    let mut between: Vec<(f64, DVec2)> = (0..count)
+        .map(|index| (reach(index as f64), ring[index]))
+        .filter(|(reached, _)| *reached > 1.0e-9 && *reached < meets - 1.0e-9)
+        .collect();
+    between.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut spliced = vec![from];
+    spliced.extend(between.into_iter().map(|(_, point)| point));
+    spliced.push(meeting);
+    let back_to = if keep_start { 0 } else { 1 };
+    spliced.extend(arc[back_to..=step].iter().rev().copied());
+    if ring::signed_area(&spliced).signum() != ring::signed_area(ring).signum() {
+        spliced.reverse();
+    }
+    Some(spliced)
+}
+
+/// The most a foot's bay turns before it meets the ring: a third of a turn.
+/// Where the ring falls away behind the foot so far that the bay would
+/// swing further round, the road starts under a head wall instead.
+const BAY_TURN: f64 = std::f64::consts::TAU / 3.0;
 
 /// Whether `point` stands within `clear` of a turn's edges.
 fn beside_turn(turn: &Turn, point: DVec2, clear: f64) -> bool {
@@ -2857,6 +3070,13 @@ const HEAD_WALL_CLEAR: f64 = 0.5;
 
 /// Where segment `a`-`b` crosses segment `c`-`d`, and how far along `c`-`d`.
 fn crossing(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> Option<(DVec2, f64)> {
+    // Segments that cross or touch have boxes within the kernel's
+    // tolerance of each other (twice it, against rounding): the cheap test
+    // first.
+    let margin = DVec2::splat(2.0 * crate::model::kernel::XY_TOL);
+    if !(a.min(b) - margin).cmple(c.max(d)).all() || !(c.min(d) - margin).cmple(a.max(b)).all() {
+        return None;
+    }
     match crate::model::kernel::segment_segment(a, b, c, d) {
         crate::model::kernel::SegSeg::Crossing { u, point, .. } | crate::model::kernel::SegSeg::Touching { u, point, .. } => Some((point, u)),
         _ => None,

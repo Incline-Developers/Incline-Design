@@ -755,7 +755,9 @@ fn conditioned_rings_are_lighter_and_no_steeper() {
             let name = format!("{kind} {direction:?} {layout:?}");
             let design = built(kind, elevation, &spec, None);
             let points: Vec<DVec3> = outline(kind).iter().map(|point| point.extend(elevation)).collect();
-            let raw = super::design_with(&Base::from_points(&points).unwrap(), &spec, None, &|| false, Additions::FlatsFirst, false).unwrap();
+            let raw = super::design_with(&Base::from_points(&points).unwrap(), &spec, None, &|| false, Additions::FlatsFirst, false)
+                .unwrap()
+                .0;
             assert_sound(&name, &design, &spec.ramps[0]);
             assert!(design.benches >= raw.benches, "{name}: {} benches conditioned, {} not", design.benches, raw.benches);
             let short = steeper_than_cut(&design, spec.face_angle);
@@ -1299,4 +1301,113 @@ fn flags_move_and_turn_over_with_their_design() {
     for flag in &design.flags {
         assert!(flag.at.z >= low - 1.0e-6 && flag.at.z <= high + 1.0e-6, "{flag:?} outside the dump's {low}..{high}");
     }
+}
+
+/// How long designs of every sort take, for profiling: run with
+/// `cargo test --profile profiling --bin incline-design time_designs -- --ignored --nocapture`.
+/// `PIT_CASE` runs only the cases whose name holds it.
+#[test]
+#[ignore = "a timing, not a test"]
+fn time_designs() {
+    let rolling = |point: DVec2| Some(170.0 + 12.0 * (point.x / 60.0).sin() + 8.0 * (point.y / 45.0).cos());
+    let switchback = Layout::Switchback {
+        every: 3,
+        inside_radius: 15.0,
+        widening: 0.0,
+        grade: 0.0,
+    };
+    let mut cases: Vec<(String, &str, f64, Spec, bool)> = Vec::new();
+    for kind in ["rect", "circle", "ell", "star", "floor"] {
+        let start = outline(kind)[0];
+        cases.push((
+            format!("{kind} spiral up"),
+            kind,
+            100.0,
+            spec(Direction::Up, Layout::Spiral, start, false, Stop::Benches(10)),
+            false,
+        ));
+        cases.push((
+            format!("{kind} switchback up"),
+            kind,
+            100.0,
+            spec(Direction::Up, switchback, start, false, Stop::Benches(10)),
+            false,
+        ));
+        cases.push((
+            format!("{kind} daylight"),
+            kind,
+            100.0,
+            spec(Direction::Up, Layout::Spiral, start, false, Stop::Daylight),
+            true,
+        ));
+    }
+    cases.push((
+        "crest down".into(),
+        "crest",
+        500.0,
+        spec(Direction::Down, Layout::Spiral, outline("crest")[2], false, Stop::Benches(40)),
+        false,
+    ));
+    let mut walled = spec(Direction::Up, Layout::Spiral, outline("rect")[0], false, Stop::Benches(10));
+    walled.rules.sectors = sectors();
+    walled.rules.regions = vec![east_region()];
+    cases.push(("rect sectors and region".into(), "rect", 100.0, walled, false));
+    let mut two = spec(Direction::Up, Layout::Spiral, DVec2::new(150.0, 0.0), false, Stop::Benches(8));
+    let mut second = two.ramps[0].clone();
+    second.start = DVec2::new(250.0, 250.0);
+    two.ramps.push(second);
+    cases.push(("rect two ramps".into(), "rect", 100.0, two, false));
+
+    let only = std::env::var("PIT_CASE").ok();
+    let repeats: usize = std::env::var("PIT_REPEATS").ok().and_then(|text| text.parse().ok()).unwrap_or(3);
+    let mut total = std::time::Duration::ZERO;
+    for (name, kind, elevation, spec, daylight) in cases.iter().filter(|case| only.as_ref().is_none_or(|only| case.0.contains(only.as_str()))) {
+        let points: Vec<DVec3> = outline(kind).iter().map(|point| point.extend(*elevation)).collect();
+        let base = Base::from_points(&points).expect("a closed outline");
+        let ground: Option<super::Ground<'_>> = daylight.then_some(&rolling as super::Ground<'_>);
+        let mut best = std::time::Duration::MAX;
+        let mut benches = 0;
+        let mut print = 0u64;
+        for _ in 0..repeats {
+            let began = std::time::Instant::now();
+            let made = design(&base, spec, ground, &|| false);
+            best = best.min(began.elapsed());
+            print = fingerprint(made.as_ref().ok());
+            benches = made.map_or(0, |made| made.benches);
+        }
+        total += best;
+        println!("{name:<28} {:>8.1} ms  {benches} benches  print {print:016x}", best.as_secs_f64() * 1000.0);
+    }
+    println!("{:<28} {:>8.1} ms", "all", total.as_secs_f64() * 1000.0);
+}
+
+/// Every number a design comes to, hashed: two designs alike to the bit
+/// hash alike.
+fn fingerprint(design: Option<&Design>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let Some(design) = design else {
+        return 0;
+    };
+    for string in &design.strings {
+        (string.kind as u8, string.closed).hash(&mut hasher);
+        for point in &string.points {
+            point.to_array().map(f64::to_bits).hash(&mut hasher);
+        }
+    }
+    (design.benches, design.end as u8, design.volume.to_bits(), design.ramp_length.to_bits()).hash(&mut hasher);
+    for flag in &design.flags {
+        (
+            flag.check as u8,
+            flag.bench,
+            flag.value.to_bits(),
+            flag.asked.to_bits(),
+            flag.at.to_array().map(f64::to_bits),
+        )
+            .hash(&mut hasher);
+    }
+    for wall in &design.walls {
+        (wall.bearing.to_bits(), wall.designed.to_bits(), wall.achieved.to_bits(), wall.steepest.to_bits()).hash(&mut hasher);
+    }
+    hasher.finish()
 }

@@ -552,14 +552,27 @@ fn standing_clear(ring: &[DVec2], parameters: &[f64], direction: f64, distances:
     let edges: Vec<usize> = (0..=span)
         .map(|step| ((first_edge as f64 + direction * step as f64).rem_euclid(count as f64)) as usize)
         .collect();
-    let nearest_wall = |point: DVec2| -> f64 {
-        edges
-            .iter()
-            .map(|&edge| {
-                let (foot, _) = kernel::project_onto_segment(point, ring[edge], ring[(edge + 1) % count]);
-                foot.distance(point)
-            })
-            .fold(f64::INFINITY, f64::min)
+    // Each wall edge with the box round it: a wall whose box stands further
+    // off than a point needs is no nearer itself, and is passed over.
+    let walls: Vec<(DVec2, DVec2, DVec2, DVec2)> = edges
+        .iter()
+        .map(|&edge| {
+            let (a, b) = (ring[edge], ring[(edge + 1) % count]);
+            (a, b, a.min(b), a.max(b))
+        })
+        .collect();
+    // Whether every wall stands at least `needed` from a point.
+    let clear_of_walls = |point: DVec2, needed: f64| -> bool {
+        // Well beyond rounding in the distances measured.
+        let beyond = needed + BOX_MARGIN;
+        walls.iter().all(|&(a, b, low, high)| {
+            let off = (low - point).max(point - high).max(DVec2::ZERO);
+            if off.x > beyond || off.y > beyond || off.length_squared() > beyond * beyond {
+                return true;
+            }
+            let (foot, _) = kernel::project_onto_segment(point, a, b);
+            foot.distance(point) >= needed
+        })
     };
     let total = chain.len();
     let kept: Vec<(DVec2, f64)> = chain
@@ -571,13 +584,16 @@ fn standing_clear(ring: &[DVec2], parameters: &[f64], direction: f64, distances:
                 return true;
             }
             let needed = meant(*source);
-            let nearest = nearest_wall(*point);
-            nearest >= needed - (OVERSHOOT_TOLERANCE + 1.0e-3 * needed)
+            clear_of_walls(*point, needed - (OVERSHOOT_TOLERANCE + 1.0e-3 * needed))
         })
         .map(|(_, point)| point)
         .collect();
     kept
 }
+
+/// How much further off than needed a wall's box must stand to be passed
+/// over unmeasured: far more than rounding in a measured distance.
+const BOX_MARGIN: f64 = 1.0e-6;
 
 /// How much nearer the ring a road edge's point may come than it was set
 /// off and still be kept.
@@ -611,53 +627,35 @@ pub(crate) fn remove_loops(chain: Vec<(DVec2, f64)>) -> Vec<(DVec2, f64)> {
     if chain.len() < 4 {
         return chain;
     }
-    // Segments binned by a grid, so each is tested only against those near it.
     let segments = chain.len() - 1;
-    let (mut min, mut max) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
-    let mut length = 0.0;
-    for pair in chain.windows(2) {
-        min = min.min(pair[0].0.min(pair[1].0));
-        max = max.max(pair[0].0.max(pair[1].0));
-        length += pair[0].0.distance(pair[1].0);
-    }
-    let cell = (length / segments as f64).max(1.0e-3) * 2.0;
-    let columns = (((max.x - min.x) / cell).floor() as usize + 1).max(1);
-    let rows = (((max.y - min.y) / cell).floor() as usize + 1).max(1);
-    let cell_of = |point: DVec2| {
-        let column = (((point.x - min.x) / cell).floor().max(0.0) as usize).min(columns - 1);
-        let row = (((point.y - min.y) / cell).floor().max(0.0) as usize).min(rows - 1);
-        (column, row)
+    // The furthest later segment each crosses: a short chain looks back
+    // from its end, which finds it first; a long one bins its segments in
+    // a grid, so each is tested only against those near it. A crossing
+    // lies in both segments' cells, so both find the same.
+    let furthest: Box<FurthestCrossing<'_>> = if segments <= SHORT_CHAIN {
+        let chain = &chain;
+        Box::new(move |index: usize| {
+            let (a, b) = (chain[index].0, chain[index + 1].0);
+            (index + 2..segments).rev().find_map(|other| {
+                let (c, d) = (chain[other].0, chain[other + 1].0);
+                if !boxes_meet(a, b, c, d) {
+                    return None;
+                }
+                match kernel::segment_segment(a, b, c, d) {
+                    kernel::SegSeg::Crossing { t, point, .. } => Some((other, point, chain[index].1 + (chain[index + 1].1 - chain[index].1) * t)),
+                    _ => None,
+                }
+            })
+        })
+    } else {
+        Box::new(binned_crossings(&chain))
     };
-    let mut cells: std::collections::HashMap<(usize, usize), Vec<usize>> = std::collections::HashMap::new();
-    for index in 0..segments {
-        let (low, high) = (cell_of(chain[index].0.min(chain[index + 1].0)), cell_of(chain[index].0.max(chain[index + 1].0)));
-        for column in low.0..=high.0 {
-            for row in low.1..=high.1 {
-                cells.entry((column, row)).or_default().push(index);
-            }
-        }
-    }
     // Walk the chain; at each segment, the furthest later segment it crosses
     // closes the biggest loop from here, which is cut out whole.
     let mut kept: Vec<(DVec2, f64)> = vec![chain[0]];
     let mut index = 0;
     while index < segments {
-        let (a, b) = (chain[index].0, chain[index + 1].0);
-        let (low, high) = (cell_of(a.min(b)), cell_of(a.max(b)));
-        let mut furthest: Option<(usize, DVec2, f64)> = None;
-        for column in low.0..=high.0 {
-            for row in low.1..=high.1 {
-                for &other in cells.get(&(column, row)).map_or(&[][..], Vec::as_slice) {
-                    if other < index + 2 || furthest.is_some_and(|found| other <= found.0) {
-                        continue;
-                    }
-                    if let kernel::SegSeg::Crossing { t, point, .. } = kernel::segment_segment(a, b, chain[other].0, chain[other + 1].0) {
-                        furthest = Some((other, point, chain[index].1 + (chain[index + 1].1 - chain[index].1) * t));
-                    }
-                }
-            }
-        }
-        match furthest {
+        match furthest(index) {
             Some((other, point, source)) => {
                 kept.push((point, source));
                 index = other;
@@ -672,6 +670,74 @@ pub(crate) fn remove_loops(chain: Vec<(DVec2, f64)>) -> Vec<(DVec2, f64)> {
         }
     }
     kept
+}
+
+/// The furthest later segment of a chain a segment crosses: its index, where
+/// they cross, and the ring parameter there.
+type FurthestCrossing<'a> = dyn Fn(usize) -> Option<(usize, DVec2, f64)> + 'a;
+
+/// The most segments a chain has for [`remove_loops`] to look back along it
+/// whole rather than through a grid.
+const SHORT_CHAIN: usize = 512;
+
+/// For [`remove_loops`] on a long chain: the furthest later segment each
+/// crosses, found through a grid the segments are binned in.
+fn binned_crossings(chain: &[(DVec2, f64)]) -> impl Fn(usize) -> Option<(usize, DVec2, f64)> + '_ {
+    let segments = chain.len() - 1;
+    let (mut min, mut max) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+    let mut length = 0.0;
+    for pair in chain.windows(2) {
+        min = min.min(pair[0].0.min(pair[1].0));
+        max = max.max(pair[0].0.max(pair[1].0));
+        length += pair[0].0.distance(pair[1].0);
+    }
+    let cell = (length / segments as f64).max(1.0e-3) * 2.0;
+    let columns = (((max.x - min.x) / cell).floor() as usize + 1).max(1);
+    let rows = (((max.y - min.y) / cell).floor() as usize + 1).max(1);
+    let cell_of = move |point: DVec2| {
+        let column = (((point.x - min.x) / cell).floor().max(0.0) as usize).min(columns - 1);
+        let row = (((point.y - min.y) / cell).floor().max(0.0) as usize).min(rows - 1);
+        (column, row)
+    };
+    let mut cells: std::collections::HashMap<(usize, usize), Vec<usize>, foldhash::fast::FixedState> = std::collections::HashMap::default();
+    for index in 0..segments {
+        let (low, high) = (cell_of(chain[index].0.min(chain[index + 1].0)), cell_of(chain[index].0.max(chain[index + 1].0)));
+        for column in low.0..=high.0 {
+            for row in low.1..=high.1 {
+                cells.entry((column, row)).or_default().push(index);
+            }
+        }
+    }
+    move |index: usize| {
+        let (a, b) = (chain[index].0, chain[index + 1].0);
+        let (low, high) = (cell_of(a.min(b)), cell_of(a.max(b)));
+        let mut furthest: Option<(usize, DVec2, f64)> = None;
+        for column in low.0..=high.0 {
+            for row in low.1..=high.1 {
+                for &other in cells.get(&(column, row)).map_or(&[][..], Vec::as_slice) {
+                    if other < index + 2 || furthest.is_some_and(|found| other <= found.0) {
+                        continue;
+                    }
+                    // Segments that cross overlap in both directions: the
+                    // cheap test first.
+                    let (c, d) = (chain[other].0, chain[other + 1].0);
+                    if !boxes_meet(a, b, c, d) {
+                        continue;
+                    }
+                    if let kernel::SegSeg::Crossing { t, point, .. } = kernel::segment_segment(a, b, c, d) {
+                        furthest = Some((other, point, chain[index].1 + (chain[index + 1].1 - chain[index].1) * t));
+                    }
+                }
+            }
+        }
+        furthest
+    }
+}
+
+/// Whether the boxes round two segments meet: segments that cross always
+/// do, so any pair whose boxes do not cannot cross.
+pub(crate) fn boxes_meet(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> bool {
+    a.min(b).cmple(c.max(d)).all() && c.min(d).cmple(a.max(b)).all()
 }
 
 /// Offset an open chain, each point by its own distance, to its right

@@ -378,6 +378,13 @@ fn ring_samples(ring: &[DVec2]) -> Vec<f64> {
 /// the road.
 fn wall_flags(spec: &Spec, design: &Design, roads: &[Road], flags: &mut Vec<Flag>) {
     let sign = spec.direction.sign();
+    // Each ring with its RL.
+    let levels: Vec<f64> = design
+        .strings
+        .iter()
+        .filter(|string| string.closed)
+        .map(|string| string.points.first().map_or(f64::NAN, |point| point.z))
+        .collect();
     let rings: Vec<Vec<DVec2>> = design
         .strings
         .iter()
@@ -416,7 +423,11 @@ fn wall_flags(spec: &Spec, design: &Design, roads: &[Road], flags: &mut Vec<Flag
             ..spec.cut(u32::try_from(bench).unwrap_or(u32::MAX), report.elevation)
         };
         let walls = cut.walls(spec);
-        let start = if walls.no_berm() {
+        // With no berm a bench starts on the ring the last one ended on,
+        // unless a road's foot opened a bay in it: then that ring, at the
+        // bench's own RL, comes next.
+        let bayed = levels.get(next).is_some_and(|level| (level - report.elevation).abs() < 1.0e-6);
+        let start = if walls.no_berm() && !bayed {
             previous_end
         } else {
             let Some(start) = rings.get(next) else {

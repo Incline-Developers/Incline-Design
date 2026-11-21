@@ -436,6 +436,9 @@ fn untangle(pieces: &[Piece]) -> Vec<Vec<DVec2>> {
                 continue;
             }
             let found = pieces[other];
+            if !super::road::boxes_meet(piece.from, piece.to, found.from, found.to) {
+                continue;
+            }
             if let kernel::SegSeg::Crossing { t, u, point } = kernel::segment_segment(piece.from, piece.to, found.from, found.to) {
                 let crossing = crossings.len();
                 crossings.push(point);
@@ -498,12 +501,13 @@ fn untangle(pieces: &[Piece]) -> Vec<Vec<DVec2>> {
     // slice is wholly kept or wholly not.
     let scale = pieces.iter().map(|piece| piece.from.abs().max_element()).fold(1.0, f64::max);
     let probe = (scale * 1.0e-9).max(1.0e-7);
+    let bands = Bands::new(pieces);
     let mut kept: Vec<Slice> = slices
         .into_iter()
         .filter(|slice| {
             let (middle, along) = middle_of(slice);
             let left = DVec2::new(-along.y, along.x) * probe;
-            winding(pieces, middle + left) > 0 && winding(pieces, middle - left) <= 0
+            bands.winding(pieces, middle + left) > 0 && bands.winding(pieces, middle - left) <= 0
         })
         .collect();
 
@@ -548,8 +552,57 @@ fn middle_of(slice: &Slice) -> (DVec2, DVec2) {
     (points[0], DVec2::X)
 }
 
+/// The raw offset's pieces binned by the band of height (y) they span: only
+/// a piece spanning a point's height can wind round it, so only its band's
+/// are counted.
+struct Bands {
+    low: f64,
+    high: f64,
+    size: f64,
+    bands: Vec<Vec<u32>>,
+}
+
+impl Bands {
+    fn new(pieces: &[Piece]) -> Self {
+        let (low, high) = pieces.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), piece| {
+            (low.min(piece.from.y.min(piece.to.y)), high.max(piece.from.y.max(piece.to.y)))
+        });
+        let count = (pieces.len() / 2).max(1);
+        let size = ((high - low) / count as f64).max(f64::MIN_POSITIVE);
+        let mut bands = Self {
+            low,
+            high,
+            size,
+            bands: vec![Vec::new(); count],
+        };
+        for (index, piece) in pieces.iter().enumerate() {
+            let (first, last) = (bands.band(piece.from.y.min(piece.to.y)), bands.band(piece.from.y.max(piece.to.y)));
+            for band in &mut bands.bands[first..=last] {
+                band.push(index as u32);
+            }
+        }
+        bands
+    }
+
+    /// The band a height falls in. Never lower for a greater height, so a
+    /// piece spanning a height is in that height's band.
+    fn band(&self, y: f64) -> usize {
+        (((y - self.low) / self.size).floor().max(0.0) as usize).min(self.bands.len() - 1)
+    }
+
+    /// How many times the raw offset winds round a point, anticlockwise: as
+    /// [`winding`] counts it.
+    fn winding(&self, pieces: &[Piece], point: DVec2) -> i32 {
+        // Nothing spans a height outside them all.
+        if !(point.y >= self.low && point.y < self.high) {
+            return 0;
+        }
+        winding(self.bands[self.band(point.y)].iter().map(|&index| &pieces[index as usize]), point)
+    }
+}
+
 /// How many times the raw offset winds round a point, anticlockwise.
-fn winding(pieces: &[Piece], point: DVec2) -> i32 {
+fn winding<'a>(pieces: impl IntoIterator<Item = &'a Piece>, point: DVec2) -> i32 {
     let mut count = 0;
     for piece in pieces {
         let (a, b) = (piece.from, piece.to);
