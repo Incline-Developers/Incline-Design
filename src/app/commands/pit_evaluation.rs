@@ -385,14 +385,17 @@ fn measure(inputs: &Inputs, cancel: &crate::app::jobs::CancelFlag, progress: &cr
         }
         total.measured = all.map(|all| Measured::of(&all, &model.fields));
     }
-    let shell = inputs.shell.as_ref().map(|shell| match against_shell(inputs, &surface, shell, cancel, progress) {
-        Ok(figures) => Ok(figures),
-        Err(error) if error.is::<crate::app::jobs::Cancelled>() => Err(error),
-        Err(error) => Ok(ShellFigures {
-            problem: Some(format!("{error:#}")),
-            ..ShellFigures::default()
-        }),
-    });
+    let shell = inputs
+        .shell
+        .as_ref()
+        .map(|shell| match against_shell(&inputs.topography, inputs.model.as_ref(), &surface, shell, cancel, progress) {
+            Ok(figures) => Ok(figures),
+            Err(error) if error.is::<crate::app::jobs::Cancelled>() => Err(error),
+            Err(error) => Ok(ShellFigures {
+                problem: Some(format!("{error:#}")),
+                ..ShellFigures::default()
+            }),
+        });
     let shell = shell.transpose()?;
     progress.set_fraction(1.0);
     // A dump reshaped for its rehabilitation, where it asks.
@@ -564,89 +567,142 @@ fn floor_and_walls(mesh: &mesh_data::Triangulation) -> anyhow::Result<Option<mes
         .collect();
     Ok(Some(mesh_data::Triangulation::from_vertices_and_faces(vertices.to_vec(), kept)?))
 }
-
-/// The design, by its surface, set against the optimisation `shell`: what
-/// it takes beyond the shell and what of it it leaves, each measured. Each
-/// is set into the topography by its floor and walls, as the Include tool
-/// sets a pit shell: the topography round it kept, the ground over it taken
-/// away.
+/// What the design takes beyond the shell and leaves inside it, measured
+/// between the two landforms (the topography with each set in) column by
+/// column: where the shell's landform stands above the design's, ground the
+/// design takes beyond it; where below, ground inside it the design leaves.
+///
+/// The landforms are single valued, so the ground between them is no more
+/// than the gap at each point, read off a raster of both a fraction of a
+/// block across; each block holds the share of its height the gap spans,
+/// averaged over points across it. A solid between them is no use: they
+/// are the same ground beyond both pits, and surfaces lying on each other
+/// leave it open, where the block model cannot measure it.
 fn against_shell(
-    inputs: &Inputs,
+    topography: &mesh_data::Triangulation,
+    model: Option<&ModelInputs>,
     design: &mesh_data::Triangulation,
     shell: &mesh_data::Triangulation,
     cancel: &crate::app::jobs::CancelFlag,
     progress: &crate::model::progress::Progress,
 ) -> anyhow::Result<ShellFigures> {
-    use super::triangulation::solid_between::{build_solid_mesh, no_volume};
+    use rayon::prelude::*;
     let own = floor_and_walls(shell)?;
     let shell = own.as_ref().unwrap_or(shell);
     // The ground round both, set with each in turn.
     let (design_bounds, shell_bounds) = (design.bounds(), shell.bounds());
     let min = glam::DVec2::new(design_bounds.min.x.min(shell_bounds.min.x), design_bounds.min.y.min(shell_bounds.min.y)) - glam::DVec2::splat(LANDFORM_MARGIN);
     let max = glam::DVec2::new(design_bounds.max.x.max(shell_bounds.max.x), design_bounds.max.y.max(shell_bounds.max.y)) + glam::DVec2::splat(LANDFORM_MARGIN);
-    let ground = cropped(&inputs.topography, (min, max))?;
+    let ground = cropped(topography, (min, max))?;
     let spatial = TriangleBvh::build(&ground);
     let include = super::triangulation::include::landform_with;
-    let with_design = include(&ground, &spatial, design, &progress.phase(0.5, 0.6))?;
+    let (with_design, with_shell) = rayon::join(
+        || include(&ground, &spatial, design, &progress.phase(0.5, 0.6)),
+        || include(&ground, &spatial, shell, &progress.phase(0.6, 0.7)),
+    );
+    let (with_design, with_shell) = (with_design?, with_shell?);
     anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
-    let with_shell = include(&ground, &spatial, shell, &progress.phase(0.6, 0.7))?;
+
+    // Both landforms on a raster: a quarter of a block across, and never
+    // coarser than SHELL_RASTER.
+    let block = model.and_then(|model| model.blocks.get(0)).map(|bounds| bounds.upper - bounds.lower);
+    let spacing = block.map_or(SHELL_RASTER, |size| (size.x.min(size.y) / 4.0).clamp(SHELL_RASTER / 8.0, SHELL_RASTER));
+    let columns = (((max.x - min.x) / spacing).ceil() as usize).max(1);
+    let rows = (((max.y - min.y) / spacing).ceil() as usize).max(1);
+    let (design_spatial, shell_spatial) = rayon::join(|| TriangleBvh::build(&with_design), || TriangleBvh::build(&with_shell));
+    let above = design_bounds.max.z.max(shell_bounds.max.z).max(ground.bounds().max.z) + 1.0;
+    let read = |mesh: &mesh_data::Triangulation, spatial: &TriangleBvh, point: glam::DVec2| spatial.ray_hit(mesh, point.extend(above), -glam::DVec3::Z).map(|hit| hit.z);
+    let cells: Vec<Option<(f64, f64)>> = (0..rows)
+        .into_par_iter()
+        .flat_map_iter(|row| {
+            let (read, design_spatial, shell_spatial, with_design, with_shell) = (&read, &design_spatial, &shell_spatial, &with_design, &with_shell);
+            (0..columns).map(move |column| {
+                let point = min + glam::DVec2::new((column as f64 + 0.5) * spacing, (row as f64 + 0.5) * spacing);
+                Some((read(with_design, design_spatial, point)?, read(with_shell, shell_spatial, point)?))
+            })
+        })
+        .collect();
     anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
-    // Below the shell's landform, the design takes more; above, it leaves
-    // some. Neither at all is none.
-    let between = |region: SolidRegion, phase| match build_solid_mesh(&with_design, &with_shell, region, "", &phase) {
-        Ok(solid) => Ok(Some(solid)),
-        Err(error) if error.chain().any(|cause| cause.to_string() == no_volume(region)) => Ok(None),
-        Err(error) => Err(error),
-    };
-    let gained = between(SolidRegion::Cut, progress.phase(0.75, 0.8))?;
-    let left = between(SolidRegion::Fill, progress.phase(0.8, 0.85))?;
+    // The volumes between them, and the band of RL they part over.
+    let area = spacing * spacing;
+    let (mut gained, mut left, mut low, mut high) = (0.0, 0.0, f64::INFINITY, f64::NEG_INFINITY);
+    for &(design_z, shell_z) in cells.iter().flatten() {
+        if (design_z - shell_z).abs() > SAME_GROUND {
+            gained += (shell_z - design_z).max(0.0) * area;
+            left += (design_z - shell_z).max(0.0) * area;
+            low = low.min(design_z.min(shell_z));
+            high = high.max(design_z.max(shell_z));
+        }
+    }
     let mut figures = ShellFigures {
-        gained: Figures {
-            volume: gained.as_ref().map_or(0.0, |solid| solid.volume),
-            measured: None,
-        },
-        left: Figures {
-            volume: left.as_ref().map_or(0.0, |solid| solid.volume),
-            measured: None,
-        },
+        gained: Figures { volume: gained, measured: None },
+        left: Figures { volume: left, measured: None },
         problem: None,
     };
-    if let Some(model) = &inputs.model {
-        // Apart in space, so two pieces of one band spanning both.
-        let pieces: Vec<ReservePiece> = [&gained, &left]
-            .into_iter()
-            .enumerate()
-            .filter_map(|(slot, solid)| {
-                let mesh = solid.as_ref()?.mesh.clone();
-                Some(ReservePiece {
-                    spatial: Arc::new(TriangleBvh::deferred(mesh.clone())),
-                    mesh,
-                    slot,
-                })
-            })
-            .collect();
-        let (low, high) = pieces.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), piece| {
-            let bounds = piece.mesh.bounds();
-            (low.min(bounds.min.z), high.max(bounds.max.z))
-        });
-        let partition = ReservePartition {
-            slots: 2,
-            bands: if pieces.is_empty() {
-                Vec::new()
-            } else {
-                vec![ReserveBand {
-                    base: low - 1.0e-3,
-                    top: high + 1.0e-3,
-                    pieces,
-                }]
-            },
+    progress.set_fraction(0.8);
+    let (Some(model), true) = (model, low < high) else {
+        return Ok(figures);
+    };
+    let cell_at = |point: glam::DVec2| {
+        let offset = (point - min) / spacing;
+        if offset.x < 0.0 || offset.y < 0.0 {
+            return None;
+        }
+        let (column, row) = (offset.x as usize, offset.y as usize);
+        (column < columns && row < rows).then(|| cells[row * columns + column]).flatten()
+    };
+    let measure = |_: &mut crate::model::solid_reserves::MeasureScratch, index: usize| -> anyhow::Result<crate::model::solid_reserves::BlockOverlaps> {
+        let nothing = || crate::model::solid_reserves::BlockOverlaps { volume: 0.0, hits: Vec::new() };
+        let Some(bounds) = model.blocks.get(index) else {
+            return Ok(nothing());
         };
-        let outcome = crate::model::solid_reserves::compute(&model.data, &model.blocks, &model.mapping, &model.fields, &partition, false, cancel, progress)?;
-        figures.gained.measured = outcome.totals.first().map(|totals| Measured::of(totals, &model.fields));
-        figures.left.measured = outcome.totals.get(1).map(|totals| Measured::of(totals, &model.fields));
-    }
+        let size = bounds.upper - bounds.lower;
+        if !size.is_finite() || size.min_element() <= 0.0 {
+            return Ok(nothing());
+        }
+        let centre = model.data.local_to_world(bounds.lower + size * 0.5);
+        let (floor, roof) = (centre.z - size.z * 0.5, centre.z + size.z * 0.5);
+        let reach = size.x.max(size.y);
+        if roof <= low || floor >= high || centre.x < min.x - reach || centre.x > max.x + reach || centre.y < min.y - reach || centre.y > max.y + reach {
+            return Ok(nothing());
+        }
+        // The gap's share of the block's height at points across it.
+        let (mut taken, mut kept, mut points) = (0.0, 0.0, 0usize);
+        for step in 0..BLOCK_SAMPLES * BLOCK_SAMPLES {
+            let (i, j) = (step % BLOCK_SAMPLES, step / BLOCK_SAMPLES);
+            let local = bounds.lower + size * glam::DVec3::new((i as f64 + 0.5) / BLOCK_SAMPLES as f64, (j as f64 + 0.5) / BLOCK_SAMPLES as f64, 0.5);
+            points += 1;
+            let Some((design_z, shell_z)) = cell_at(model.data.local_to_world(local).truncate()) else {
+                continue;
+            };
+            let under = design_z.min(shell_z);
+            let spans = |top: f64| (top.min(roof) - under.max(floor)).max(0.0);
+            taken += spans(shell_z);
+            kept += spans(design_z);
+        }
+        let share = |depth: f64| depth / (points as f64 * size.z);
+        let hits: Vec<(usize, f64)> = [(0, share(taken)), (1, share(kept))].into_iter().filter(|(_, fraction)| *fraction > 0.0).collect();
+        Ok(crate::model::solid_reserves::BlockOverlaps {
+            volume: size.x * size.y * size.z,
+            hits,
+        })
+    };
+    let outcome = crate::model::solid_reserves::compute_by(&model.data, &model.blocks, &model.mapping, &model.fields, 2, false, cancel, progress, Some(&measure))?;
+    figures.gained.measured = outcome.totals.first().map(|totals| Measured::of(totals, &model.fields));
+    figures.left.measured = outcome.totals.get(1).map(|totals| Measured::of(totals, &model.fields));
     Ok(figures)
 }
+
+/// The coarsest a shell comparison's raster is, in metres; finer, at a
+/// quarter of a block, against a block model.
+const SHELL_RASTER: f64 = 2.5;
+
+/// How many points across a block, each way, the gap between two landforms
+/// is read at.
+const BLOCK_SAMPLES: usize = 4;
+
+/// How far apart two landforms may stand and still be the same ground.
+const SAME_GROUND: f64 = 1.0e-3;
 
 #[cfg(test)]
 mod tests {
@@ -678,5 +734,54 @@ mod tests {
         }
         let open = mesh_data::Triangulation::from_vertices_and_faces(vertices, faces[..2].to_vec()).unwrap();
         assert!(floor_and_walls(&open).unwrap().is_none());
+    }
+
+    /// A square pit, its floor `half_floor` either side of the centre at
+    /// `floor`, its crest `half_crest` either side on the flat ground at 10.
+    fn square_pit(half_floor: f64, floor: f64, half_crest: f64) -> mesh_data::Triangulation {
+        let ring = |half: f64, z: f64| [(-half, -half), (half, -half), (half, half), (-half, half)].map(|(x, y)| mesh_data::Vertex::new(x, y, z));
+        let vertices: Vec<mesh_data::Vertex> = ring(half_floor, floor).into_iter().chain(ring(half_crest, 10.0)).collect();
+        let mut faces: Vec<[u32; 3]> = vec![[0, 1, 2], [0, 2, 3]];
+        for side in 0..4u32 {
+            let (a, b) = (side, (side + 1) % 4);
+            faces.push([a, b + 4, b]);
+            faces.push([a, a + 4, b + 4]);
+        }
+        mesh_data::Triangulation::from_vertices_and_faces(vertices, faces).unwrap()
+    }
+
+    /// Volume of a square frustum between half widths `a` and `b`, `h` deep.
+    fn frustum(a: f64, b: f64, h: f64) -> f64 {
+        let (low, high) = ((2.0 * a).powi(2), (2.0 * b).powi(2));
+        h / 3.0 * (low + high + (low * high).sqrt())
+    }
+
+    /// A design inside its shell leaves the ground between them and gains
+    /// none; set the other way round, it gains that ground and leaves none.
+    /// The two landforms are the same ground beyond both pits, which a solid
+    /// between them could not be closed over.
+    #[test]
+    fn a_shell_comparison_measures_the_ground_between_the_landforms() {
+        let ground = mesh_data::Triangulation::from_vertices_and_faces(
+            [(-100.0, -100.0), (100.0, -100.0), (100.0, 100.0), (-100.0, 100.0)]
+                .map(|(x, y)| mesh_data::Vertex::new(x, y, 10.0))
+                .to_vec(),
+            vec![[0, 1, 2], [0, 2, 3]],
+        )
+        .unwrap();
+        let (small, large) = (square_pit(10.0, 0.0, 20.0), square_pit(15.0, -10.0, 30.0));
+        let between = frustum(15.0, 30.0, 20.0) - frustum(10.0, 20.0, 10.0);
+        let cancel = crate::app::jobs::CancelFlag::default();
+        let progress = crate::model::progress::Progress::default();
+        let inside = against_shell(&ground, None, &small, &large, &cancel, &progress).unwrap();
+        let outside = against_shell(&ground, None, &large, &small, &cancel, &progress).unwrap();
+        for (measured, expected) in [
+            (inside.gained.volume, 0.0),
+            (inside.left.volume, between),
+            (outside.gained.volume, between),
+            (outside.left.volume, 0.0),
+        ] {
+            assert!((measured - expected).abs() <= between * 0.01, "{measured} against {expected}");
+        }
     }
 }
