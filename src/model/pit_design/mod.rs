@@ -1637,7 +1637,7 @@ impl Builder<'_> {
         // With no berm the bench starts on the ring the one below ended on,
         // and there is no berm to round into.
         let (rounded, ramps) = if leaves_berm {
-            rounded_under_roads(spec, from, &walls, height, ramps)
+            rounded_under_roads(spec, from, &walls, (elevation, height), ramps)
         } else {
             (None, ramps)
         };
@@ -2614,26 +2614,43 @@ fn rings(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, placed: &[Placed
 /// off by before the far edge is: round a corner of that radius, the edge on
 /// the inside of the turn keeps the inside radius. The road's run is taken
 /// generously: two and a half times a bench's climb, and four widths.
-fn rounded_under_roads(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, height: f64, mut ramps: Vec<Option<RampOn>>) -> (Option<Vec<DVec2>>, Vec<Option<RampOn>>) {
+fn rounded_under_roads(
+    spec: &Spec,
+    from: &[DVec2],
+    walls: &walls::Walls<'_>,
+    (elevation, height): (f64, f64),
+    mut ramps: Vec<Option<RampOn>>,
+) -> (Option<Vec<DVec2>>, Vec<Option<RampOn>>) {
     let sign = spec.direction.sign();
     let mut ring: Option<Vec<DVec2>> = None;
     for (index, on) in ramps.iter().enumerate() {
         // Only a road carrying on from the bench below: where one begins, its
-        // foot opens a bay in the ring that is its own rounding.
+        // foot opens a bay in the ring that is its own rounding. Nor one due
+        // to turn back here, which may set off the other way round the ring
+        // from its pad.
         let (Some(on), Some(ramp)) = (on.filter(|on| on.cursor.handover.is_some()), spec.ramps.get(index)) else {
             continue;
         };
-        let current = ring.as_deref().unwrap_or(from);
-        let at = ring::nearest(current, ring::point_at(from, on.cursor.at)).0;
-        let place = walls.on(current);
-        let drift = place.berm(at) + place.face(at);
-        let radius = ramp.turning_radius + ramp.width + drift;
+        if turn_due(ramp, &on.cursor, elevation, sign) {
+            continue;
+        }
+        let place = walls.on(from);
+        let drift = place.berm(on.cursor.at) + place.face(on.cursor.at);
         let length = height / ramp.gradient.max(f64::MIN_POSITIVE) * 2.5 + ramp.width * 4.0;
         // Clear of where the road arrives from the bench below, where the
         // ring steps across it, or where its foot opens a bay in the ring.
         let clear = ramp.width * 1.5;
-        if let Some(rounded) = ring::rounded_along(current, sign, radius, (at, on.cursor.direction, length), clear) {
-            ring = Some(rounded);
+        // As wide as the road needs where it has drifted right across the
+        // bench; then, for corners that rounding had to leave (running into
+        // the step where the road arrives), as it needs part way, and at
+        // the least. A corner already rounded wider is left as it is.
+        for share in [1.0, 0.5, 0.0] {
+            let radius = ramp.turning_radius + ramp.width + drift * share;
+            let current = ring.as_deref().unwrap_or(from);
+            let at = ring::nearest(current, ring::point_at(from, on.cursor.at)).0;
+            if let Some(rounded) = ring::rounded_along(current, sign, radius, (at, on.cursor.direction, length), clear) {
+                ring = Some(rounded);
+            }
         }
     }
     if let Some(rounded) = &ring {
@@ -3346,7 +3363,7 @@ fn pinched(stretch: &Stretch, width: f64) -> bool {
 }
 
 /// The share of its width a road may narrow to and still be sound.
-const PINCH: f64 = 0.96;
+pub(crate) const PINCH: f64 = 0.96;
 
 /// How far a stretch's edge may start from where the last one arrived; the
 /// edge is joined straight on to it.

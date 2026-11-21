@@ -60,8 +60,11 @@ pub(crate) struct Flag {
 pub(crate) const GRADE_TOLERANCE: f64 = 0.005;
 
 /// How much narrower than its width a road may be before it is flagged, as a
-/// share of the width.
-pub(crate) const WIDTH_TOLERANCE: f64 = 0.01;
+/// share of the width: as much as the engine itself lets a road pinch where
+/// one stretch hands over to the next and still calls it sound. Flagged
+/// tighter, every design the engine accepts would carry flags it made on
+/// purpose.
+pub(crate) const WIDTH_TOLERANCE: f64 = 1.0 - super::PINCH;
 
 /// How much tighter than its radius a road may turn before it is flagged, as
 /// a share of the radius.
@@ -466,9 +469,13 @@ fn wall_check(walls: &Walls<'_>, (ring, from): (&[DVec2], &[DVec2]), z: f64, che
         .map(|(index, &parameter)| {
             let point = super::ring::point_at(ring, parameter);
             let (wanted, reach) = match check {
+                // A road drifts across the whole bench, face and berm, as
+                // it climbs, and the berm beside it tapers into it over as
+                // much: so far is left to the road's own checks.
                 Check::Berm => {
                     let width = on.berm(parameter);
-                    (width, width)
+                    let (angle, _) = walls.at(point, on.facing(parameter));
+                    (width, width + face_run(walls.height, angle))
                 }
                 _ => {
                     let (angle, _) = walls.at(point, on.facing(parameter));
@@ -479,8 +486,9 @@ fn wall_check(walls: &Walls<'_>, (ring, from): (&[DVec2], &[DVec2]), z: f64, che
             if reach <= 0.0 || near_road(point, z, reach + ROAD_CLEAR) {
                 return None;
             }
-            // How near the other ring comes; beyond reach, far enough.
-            let across = other.nearest(point, reach, |_| true)?;
+            // How near the other ring comes; beyond a berm's width or a
+            // face's run, far enough.
+            let across = other.nearest(point, if check == Check::Berm { wanted } else { reach }, |_| true)?;
             match check {
                 Check::Berm => (across < wanted - (wanted * BERM_TOLERANCE).max(BERM_SLACK)).then_some(across),
                 _ => {

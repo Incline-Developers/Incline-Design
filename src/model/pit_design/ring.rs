@@ -206,6 +206,29 @@ fn offset_joined(ring: &[DVec2], distances: &[EdgeOffset], meet: bool) -> Vec<Ve
     if count < 3 || distances.len() != count {
         return Vec::new();
     }
+    let rings = untangled_offset(ring, distances, meet);
+    // Set off outward, a ring always leaves one. Where it seems to leave
+    // none, its folds met in what is all but one point (an arc set off by
+    // its own radius, made by setting off by as much the other way), too
+    // close to untangle: a hair further, they cross cleanly.
+    if rings.is_empty() && distances.iter().all(|distance| distance.start >= 0.0 && distance.end >= 0.0) {
+        let further: Vec<EdgeOffset> = distances
+            .iter()
+            .map(|distance| EdgeOffset {
+                start: distance.start + UNFOLD_NUDGE,
+                end: distance.end + UNFOLD_NUDGE,
+            })
+            .collect();
+        return untangled_offset(ring, &further, meet);
+    }
+    rings
+}
+
+/// How much further a ring is set off outward when its folds meet too
+/// nearly in one point to untangle.
+const UNFOLD_NUDGE: f64 = 1.0e-4;
+
+fn untangled_offset(ring: &[DVec2], distances: &[EdgeOffset], meet: bool) -> Vec<Vec<DVec2>> {
     let pieces = raw_offset(ring, distances, meet);
     if pieces.len() < 3 {
         return Vec::new();
@@ -872,6 +895,12 @@ pub(crate) fn rounded_along(ring: &[DVec2], side: f64, radius: f64, (from, direc
     let even = |distance: f64, points: &[DVec2]| vec![EdgeOffset::even(distance); points.len()];
     let there = offset(ring, &even(side * radius, ring)).into_iter().next()?;
     let rounded = offset(&there, &even(-side * radius, &there)).into_iter().next()?;
+    // Each piece's middle too: a straight piece back along the ring between
+    // two rounded corners has its ends off it, where the corners' arcs
+    // leave, and only its middle shows the corners are two.
+    let rounded: Vec<DVec2> = (0..rounded.len())
+        .flat_map(|index| [rounded[index], rounded[index].lerp(rounded[(index + 1) % rounded.len()], 0.5)])
+        .collect();
     // Where the rounded ring leaves the ring: runs of its points off it.
     let placed: Vec<(f64, bool)> = rounded
         .iter()
@@ -912,7 +941,13 @@ pub(crate) fn rounded_along(ring: &[DVec2], side: f64, radius: f64, (from, direc
     let met: Vec<&(f64, f64, Vec<DVec2>)> = runs
         .iter()
         .filter(|(before, after, _)| {
-            let (first, last) = (along(*before), along(*after));
+            // Before and after run the ring's way; the road may run the
+            // other, meeting a corner's after first.
+            let (first, last) = if direction < 0.0 {
+                (along(*after), along(*before))
+            } else {
+                (along(*before), along(*after))
+            };
             // Its span runs on through the start where its end comes round
             // before its beginning.
             let spans_start = last < first;
@@ -961,3 +996,34 @@ pub(crate) fn rounded_along(ring: &[DVec2], side: f64, radius: f64, (from, direc
 /// How far a point of a rounded ring may stand off the ring it was rounded
 /// from and still count as on it.
 const ROUNDED_OFF: f64 = 1.0e-3;
+
+#[cfg(test)]
+mod unfold_tests {
+    use super::*;
+
+    /// A ring whose bay is an arc made by setting off by some radius, set
+    /// off outward by that radius again: the arc's offsets all but meet in
+    /// its centre, and the ring must still come out.
+    #[test]
+    fn a_bay_set_off_by_its_own_radius_still_leaves_a_ring() {
+        let ring: Vec<DVec2> = [
+            (222.69941317490844, 81.98076211353316),
+            (227.59419384786833, 88.42338659456394),
+            (234.288243628983, 94.76866356896798),
+            (241.92030754733662, 99.94789543287493),
+            (250.2894724939772, 103.82473956823378),
+            (259.17542126942254, 106.297138547789),
+            (268.34423240582834, 107.30000678383249),
+            (292.97760588427235, 105.98128810148117),
+            (292.97760588427235, 168.01923788646678),
+            (81.98076211353316, 168.0192378864668),
+            (81.98076211353316, 81.98076211353316),
+        ]
+        .iter()
+        .map(|&(x, y)| DVec2::new(x, y))
+        .collect();
+        let out = offset(&ring, &vec![EdgeOffset::even(56.66025403784439); ring.len()]);
+        assert_eq!(out.len(), 1);
+        assert!(signed_area(&out[0]) > signed_area(&ring) * 3.0, "{}", signed_area(&out[0]));
+    }
+}
