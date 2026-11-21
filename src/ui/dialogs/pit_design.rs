@@ -123,6 +123,10 @@ pub(crate) struct PitHover {
 pub(crate) struct RampGizmo {
     /// Which ramp, by its place in the list.
     pub(crate) ramp: usize,
+    /// How much of its ring shows: none edge on, where it cannot be taken;
+    /// and of its width arrow, none pointing at the camera.
+    pub(crate) ring_fade: f32,
+    pub(crate) width_fade: f32,
     pub(crate) centre: (f32, f32),
     /// The ring, a whole turn from the way the road goes, round over the
     /// top: a point every [`RING_STEPS`]th of a turn.
@@ -155,6 +159,12 @@ pub(crate) const RING_STEPS: usize = 72;
 /// pixels.
 #[derive(Clone, Debug)]
 pub(crate) struct WallGizmo {
+    /// How much of its face's ring shows, edge on none, and of its height
+    /// arrow, seen down it none: neither can then be taken.
+    pub(crate) ring_fade: f32,
+    pub(crate) height_fade: f32,
+    /// How much of its berm arrow shows: none pointing at the camera.
+    pub(crate) berm_fade: f32,
     /// The bench's toe, on the string, its crest, and where its berm ends.
     pub(crate) toe: (f32, f32),
     pub(crate) crest: (f32, f32),
@@ -465,13 +475,27 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                     let stage = draft.stage;
                     let picking = draft.picking_ramp;
                     let picking_region = draft.picking_region;
+                    // With the walls' gizmo up, what it sets is set there.
+                    let on_gizmo = draft.wall_gizmo.is_some();
+                    // The ramps whose gizmos stand in what the panel leaves of
+                    // the view.
+                    let in_view: Vec<usize> = draft
+                        .gizmos
+                        .iter()
+                        .filter(|gizmo| {
+                            draft
+                                .clear_view
+                                .is_some_and(|[left, top, right, bottom]| gizmo.centre.0 > left && gizmo.centre.0 < right && gizmo.centre.1 > top && gizmo.centre.1 < bottom)
+                        })
+                        .map(|gizmo| gizmo.ramp)
+                        .collect();
                     let Some(working) = draft.working.as_mut() else {
                         return;
                     };
                     match stage {
                         PitStage::Benches => {
                             let base_rl = draft.built_for.as_ref().and_then(|key| key.verts.first()).map_or(0.0, |vertex| vertex.pos.z);
-                            draw_bench_settings(ui, &mut working.settings, project, (base_rl, picking_region), commands);
+                            draw_bench_settings(ui, &mut working.settings, project, (base_rl, picking_region, on_gizmo), commands);
                         }
                         PitStage::Ramp => {
                             let verts = draft.built_for.as_ref().map_or(&[][..], |key| key.verts.as_slice());
@@ -479,7 +503,7 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                             // The middle of the string, which a ramp's start is
                             // said to be north or south of.
                             let middle = verts.iter().map(|vertex| vertex.pos.truncate()).sum::<DVec2>() / verts.len().max(1) as f64;
-                            draw_ramps(ui, &mut working.settings, picking, (base_rl, middle, commands));
+                            draw_ramps(ui, &mut working.settings, (picking, &in_view), (base_rl, middle, commands));
                         }
                     }
                     menu::menu_section(ui, tr!("pit-design-result-section"));
@@ -610,46 +634,66 @@ fn draw_viewport_handles(ui: &mut egui::Ui, draft: &mut PitDesignDraft, commands
         };
         // The grade ring: its half above the road's line, the grade swept
         // out of it, and its handle.
+        // Faded out edge on, as a Blender rotate ring: its value stays, to
+        // drag or type.
         let lit = active(GizmoPart::Grade(gizmo.ramp));
-        let (colour, alpha) = if lit { (egui::Color32::WHITE, 1.0) } else { (grade_colour, GIZMO_IDLE_ALPHA) };
-        let half: Vec<egui::Pos2> = gizmo.ring[..=RING_STEPS / 2].iter().copied().map(at).collect();
-        painter.line_segment([half[0], half[half.len() - 1]], egui::Stroke::new(1.0, gizmo_color(grade_colour, GIZMO_IDLE_ALPHA * 0.5)));
-        let mut sector = vec![centre];
-        sector.extend(gizmo.grade_arc.iter().copied().map(at));
-        if sector.len() >= 3 {
+        let fade = gizmo.ring_fade;
+        let (colour, alpha) = if lit { (egui::Color32::WHITE, fade) } else { (grade_colour, GIZMO_IDLE_ALPHA * fade) };
+        let handle = at(gizmo.grade_handle);
+        if fade > 0.0 {
+            let half: Vec<egui::Pos2> = gizmo.ring[..=RING_STEPS / 2].iter().copied().map(at).collect();
+            painter.line_segment(
+                [half[0], half[half.len() - 1]],
+                egui::Stroke::new(1.0, gizmo_color(grade_colour, GIZMO_IDLE_ALPHA * 0.5 * fade)),
+            );
+            let mut sector = vec![centre];
+            sector.extend(gizmo.grade_arc.iter().copied().map(at));
+            if sector.len() >= 3 {
+                painter.add(egui::Shape::convex_polygon(
+                    sector,
+                    gizmo_color(grade_colour, if lit { 0.45 } else { 0.25 } * fade),
+                    egui::Stroke::NONE,
+                ));
+            }
+            painter.add(egui::Shape::line(half, egui::Stroke::new(if lit { 3.0 } else { 2.0 }, gizmo_color(colour, alpha))));
+            painter.line_segment([centre, handle], egui::Stroke::new(2.0, gizmo_color(colour, alpha)));
+            painter.circle_filled(handle, if lit { 6.0 } else { 5.0 }, gizmo_color(colour, alpha.max(0.85 * fade)));
+            // The other way round, faint: a click climbs that way.
+            let turn_lit = active(GizmoPart::Turn(gizmo.ramp));
+            let (colour, alpha) = if turn_lit {
+                (egui::Color32::WHITE, fade)
+            } else {
+                (grade_colour, GIZMO_IDLE_ALPHA * 0.6 * fade)
+            };
+            painter.circle_stroke(at(gizmo.turn_handle), 4.5, egui::Stroke::new(1.5, gizmo_color(colour, alpha)));
+        }
+        // Its value beside the handle, or seen from above, beside the foot.
+        let place = if fade > 0.0 {
+            handle + egui::vec2(9.0, -18.0)
+        } else {
+            centre + egui::vec2(12.0, -26.0)
+        };
+        readout(&painter, place, GizmoValue::Gradient(gizmo.ramp), lit);
+        // The width arrow: faded out pointing at the camera, as a Blender
+        // axis arrow, its value staying beside the foot.
+        let lit = active(GizmoPart::Width(gizmo.ramp));
+        let fade = gizmo.width_fade;
+        let (colour, alpha) = if lit { (egui::Color32::WHITE, fade) } else { (width_colour, GIZMO_IDLE_ALPHA * fade) };
+        let (from, tip) = (at(gizmo.width_from), at(gizmo.width_tip));
+        if fade > 0.0 && (tip - from).length() > GIZMO_HEAD_LENGTH {
+            let way = (tip - from).normalized();
+            let head = tip - way * GIZMO_HEAD_LENGTH;
+            let side = egui::vec2(-way.y, way.x) * GIZMO_HEAD_HALF_WIDTH * if lit { 1.15 } else { 1.0 };
+            painter.line_segment([from, head], egui::Stroke::new(if lit { 3.0 } else { 2.0 }, gizmo_color(colour, alpha)));
             painter.add(egui::Shape::convex_polygon(
-                sector,
-                gizmo_color(grade_colour, if lit { 0.45 } else { 0.25 }),
+                vec![tip, head + side, head - side],
+                gizmo_color(colour, alpha),
                 egui::Stroke::NONE,
             ));
-        }
-        painter.add(egui::Shape::line(half, egui::Stroke::new(if lit { 3.0 } else { 2.0 }, gizmo_color(colour, alpha))));
-        let handle = at(gizmo.grade_handle);
-        painter.line_segment([centre, handle], egui::Stroke::new(2.0, gizmo_color(colour, alpha)));
-        painter.circle_filled(handle, if lit { 6.0 } else { 5.0 }, gizmo_color(colour, alpha.max(0.85)));
-        readout(&painter, handle + egui::vec2(9.0, -18.0), GizmoValue::Gradient(gizmo.ramp), lit);
-        // The other way round, faint: a click climbs that way.
-        let turn_lit = active(GizmoPart::Turn(gizmo.ramp));
-        let (colour, alpha) = if turn_lit {
-            (egui::Color32::WHITE, 1.0)
+            readout(&painter, tip + way * 6.0 + egui::vec2(2.0, -8.0), GizmoValue::Width(gizmo.ramp), lit);
         } else {
-            (grade_colour, GIZMO_IDLE_ALPHA * 0.6)
-        };
-        painter.circle_stroke(at(gizmo.turn_handle), 4.5, egui::Stroke::new(1.5, gizmo_color(colour, alpha)));
-        // The width arrow.
-        let lit = active(GizmoPart::Width(gizmo.ramp));
-        let (colour, alpha) = if lit { (egui::Color32::WHITE, 1.0) } else { (width_colour, GIZMO_IDLE_ALPHA) };
-        let (from, tip) = (at(gizmo.width_from), at(gizmo.width_tip));
-        let way = (tip - from).normalized();
-        let head = tip - way * GIZMO_HEAD_LENGTH;
-        let side = egui::vec2(-way.y, way.x) * GIZMO_HEAD_HALF_WIDTH * if lit { 1.15 } else { 1.0 };
-        painter.line_segment([from, head], egui::Stroke::new(if lit { 3.0 } else { 2.0 }, gizmo_color(colour, alpha)));
-        painter.add(egui::Shape::convex_polygon(
-            vec![tip, head + side, head - side],
-            gizmo_color(colour, alpha),
-            egui::Stroke::NONE,
-        ));
-        readout(&painter, tip + way * 6.0 + egui::vec2(2.0, -8.0), GizmoValue::Width(gizmo.ramp), lit);
+            readout(&painter, centre + egui::vec2(12.0, 10.0), GizmoValue::Width(gizmo.ramp), lit);
+        }
         // Where it turns about.
         painter.circle_filled(centre, 3.0, gizmo_color(egui::Color32::WHITE, GIZMO_IDLE_ALPHA));
     }
@@ -721,36 +765,48 @@ fn draw_wall_gizmo(ui: &mut egui::Ui, draft: &mut PitDesignDraft, viewport_rect:
         egui::Stroke::new(2.0, gizmo_color(egui::Color32::WHITE, 0.85)),
     ));
     // The face's ring, a quarter turn from out across to up, the face's
-    // angle swept out of it.
+    // angle swept out of it: faded out edge on, as a Blender rotate ring,
+    // its value staying beside the toe to drag or type.
     let lit = active(GizmoPart::FaceAngle);
-    let (colour, alpha) = if lit { (egui::Color32::WHITE, 1.0) } else { (ROTATE_RING_COLORS[1], GIZMO_IDLE_ALPHA) };
-    let quarter: Vec<egui::Pos2> = gizmo.angle_ring[..=RING_STEPS / 4].iter().copied().map(at).collect();
+    let fade = gizmo.ring_fade;
+    let (colour, alpha) = if lit {
+        (egui::Color32::WHITE, fade)
+    } else {
+        (ROTATE_RING_COLORS[1], GIZMO_IDLE_ALPHA * fade)
+    };
     let steps = ((settings.face_angle / 360.0 * RING_STEPS as f64).round() as usize).min(RING_STEPS / 4);
-    let mut sector = vec![toe];
-    sector.extend(gizmo.angle_ring[..=steps].iter().copied().map(at));
-    sector.push(at(gizmo.angle_handle));
-    if sector.len() >= 3 {
-        painter.add(egui::Shape::convex_polygon(
-            sector,
-            gizmo_color(ROTATE_RING_COLORS[1], if lit { 0.4 } else { 0.22 }),
-            egui::Stroke::NONE,
-        ));
+    if fade > 0.0 {
+        let quarter: Vec<egui::Pos2> = gizmo.angle_ring[..=RING_STEPS / 4].iter().copied().map(at).collect();
+        let mut sector = vec![toe];
+        sector.extend(gizmo.angle_ring[..=steps].iter().copied().map(at));
+        sector.push(at(gizmo.angle_handle));
+        if sector.len() >= 3 {
+            painter.add(egui::Shape::convex_polygon(
+                sector,
+                gizmo_color(ROTATE_RING_COLORS[1], if lit { 0.4 } else { 0.22 } * fade),
+                egui::Stroke::NONE,
+            ));
+        }
+        painter.add(egui::Shape::line(quarter, egui::Stroke::new(if lit { 3.0 } else { 2.0 }, gizmo_color(colour, alpha))));
+        painter.circle_filled(at(gizmo.angle_handle), if lit { 6.0 } else { 5.0 }, gizmo_color(colour, alpha.max(0.85 * fade)));
     }
-    painter.add(egui::Shape::line(quarter, egui::Stroke::new(if lit { 3.0 } else { 2.0 }, gizmo_color(colour, alpha))));
-    let handle = at(gizmo.angle_handle);
-    painter.circle_filled(handle, if lit { 6.0 } else { 5.0 }, gizmo_color(colour, alpha.max(0.85)));
-    // Its value outside the ring, on the middle of the angle it sweeps.
-    let middle = at(gizmo.angle_ring[steps / 2]);
-    let outward = (middle - toe).normalized();
-    readout(
-        &painter,
-        beside(middle + outward * 10.0, outward, &painter, &format!("{:.1}°", settings.face_angle)),
-        GizmoValue::FaceAngle,
-        lit,
-    );
+    // Its value outside the ring, on the middle of the angle it sweeps; or
+    // seen from above, behind the toe.
+    let text = format!("{:.1}°", settings.face_angle);
+    let place = if fade > 0.0 {
+        let middle = at(gizmo.angle_ring[steps / 2]);
+        let outward = (middle - toe).normalized();
+        beside(middle + outward * 10.0, outward, &painter, &text)
+    } else {
+        beside(toe - out * 12.0, -out, &painter, &text)
+    };
+    readout(&painter, place, GizmoValue::FaceAngle, lit);
     // An arrow, Move gizmo style.
-    let arrow = |from: egui::Pos2, tip: egui::Pos2, base: egui::Color32, lit: bool| {
-        let (colour, alpha) = if lit { (egui::Color32::WHITE, 1.0) } else { (base, GIZMO_IDLE_ALPHA) };
+    let arrow = |from: egui::Pos2, tip: egui::Pos2, base: egui::Color32, lit: bool, fade: f32| {
+        if fade <= 0.0 || (tip - from).length() < GIZMO_HEAD_LENGTH {
+            return;
+        }
+        let (colour, alpha) = if lit { (egui::Color32::WHITE, fade) } else { (base, GIZMO_IDLE_ALPHA * fade) };
         let way = (tip - from).normalized();
         let head = tip - way * GIZMO_HEAD_LENGTH;
         let side = egui::vec2(-way.y, way.x) * GIZMO_HEAD_HALF_WIDTH * if lit { 1.15 } else { 1.0 };
@@ -763,13 +819,21 @@ fn draw_wall_gizmo(ui: &mut egui::Ui, draft: &mut PitDesignDraft, viewport_rect:
     };
     let lit = active(GizmoPart::BenchHeight);
     let height_tip = at(gizmo.height_tip);
-    arrow(crest, height_tip, GIZMO_AXIS_COLORS[2], lit);
-    let way = (height_tip - crest).normalized();
+    // Seen down it, faded out as a Blender axis arrow; its value stays
+    // beside the crest.
+    arrow(crest, height_tip, GIZMO_AXIS_COLORS[2], lit, gizmo.height_fade);
     let text = format!("{:.1} m", settings.bench_height);
-    readout(&painter, beside(height_tip + way * 8.0, way, &painter, &text), GizmoValue::BenchHeight, lit);
+    let place = if gizmo.height_fade > 0.0 {
+        let way = (height_tip - crest).normalized();
+        beside(height_tip + way * 8.0, way, &painter, &text)
+    } else {
+        let side = egui::vec2(-out.y, out.x);
+        beside(crest + side * 14.0, side, &painter, &text)
+    };
+    readout(&painter, place, GizmoValue::BenchHeight, lit);
     let lit = active(GizmoPart::Berm);
     let berm_tip = at(gizmo.berm_tip);
-    arrow(crest, berm_tip, GIZMO_AXIS_COLORS[1], lit);
+    arrow(crest, berm_tip, GIZMO_AXIS_COLORS[1], lit, gizmo.berm_fade);
     let way = (berm_tip - crest).normalized();
     let text = format!("{:.1} m", settings.berm_width);
     readout(&painter, beside(berm_tip + way * 8.0, way, &painter, &text), GizmoValue::Berm, lit);
@@ -892,7 +956,9 @@ const FLAG_LABELS: usize = 12;
 /// The pit's ramps, each under a heading that removes it, and a button to
 /// add one; while a new ramp's start is being picked, the banner over the
 /// viewport says what to do, so nothing here repeats it.
-fn draw_ramps(ui: &mut egui::Ui, settings: &mut PitDesignSettings, picking: Option<usize>, (base_rl, middle, commands): (f64, DVec2, &mut Vec<UiCommand>)) {
+/// `in_view` are the ramps whose gizmos stand in the view, which set what
+/// they set there; the others', here.
+fn draw_ramps(ui: &mut egui::Ui, settings: &mut PitDesignSettings, (picking, in_view): (Option<usize>, &[usize]), (base_rl, middle, commands): (f64, DVec2, &mut Vec<UiCommand>)) {
     let (sign, height) = (settings.direction.sign(), settings.bench_height);
     let several = settings.ramps.len() > 1;
     let mut remove = None;
@@ -906,7 +972,7 @@ fn draw_ramps(ui: &mut egui::Ui, settings: &mut PitDesignSettings, picking: Opti
             if menu::menu_section_with_action(ui, heading, tr!("pit-design-ramp-remove-short"), tr!("pit-design-ramp-remove-help")) {
                 remove = Some(index);
             }
-            draw_ramp_settings(ui, ramp, commands, index, (base_rl, middle, sign, height));
+            draw_ramp_settings(ui, ramp, commands, (index, in_view.contains(&index)), (base_rl, middle, sign, height));
         });
     }
     if let Some(index) = remove {
@@ -982,7 +1048,15 @@ fn draw_send_menu(ui: &mut egui::Ui, working: &PitObject, id: ObjectId, ready: b
 
 /// The pit's benches and where it stops. `base_rl` is the string's, where a
 /// new zone starts.
-fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, project: &UiProjectView, (base_rl, picking_region): (f64, bool), commands: &mut Vec<UiCommand>) {
+/// What the walls' gizmo sets (`on_gizmo`, while it is in the view) is left
+/// to it; without it, the fields are here.
+fn draw_bench_settings(
+    ui: &mut egui::Ui,
+    settings: &mut PitDesignSettings,
+    project: &UiProjectView,
+    (base_rl, picking_region, on_gizmo): (f64, bool, bool),
+    commands: &mut Vec<UiCommand>,
+) {
     let chosen = kind_label(settings.kind);
     MenuFieldCombo::new(
         "pit_design_kind",
@@ -1028,7 +1102,10 @@ fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, proj
     .width(FIELD_WIDTH)
     .help_text(tr!("pit-design-stop-help"))
     .show(ui);
+    // How many benches, or the RL, is set beside the walls' gizmo in the
+    // view; the ground it daylights against, here.
     match settings.stop {
+        StopMode::Benches | StopMode::Elevation if on_gizmo => {}
         StopMode::Benches => {
             MenuFieldU32::new(tr!("pit-design-benches"), &mut settings.benches, 1..=u32::MAX)
                 .width(FIELD_WIDTH)
@@ -1063,6 +1140,23 @@ fn draw_bench_settings(ui: &mut egui::Ui, settings: &mut PitDesignSettings, proj
     // The bench's height, face angle and berm are set on the gizmo in the
     // view, which stands on the pit's wall.
     menu::menu_section(ui, tr!("pit-design-benches-section"));
+    if !on_gizmo {
+        MenuFieldF64::new(tr!("pit-design-bench-height"), &mut settings.bench_height, 0.1..=1000.0)
+            .width(FIELD_WIDTH)
+            .speed(0.1)
+            .suffix(" m")
+            .show(ui);
+        MenuFieldF64::new(tr!("pit-design-face-angle"), &mut settings.face_angle, 1.0..=89.0)
+            .width(FIELD_WIDTH)
+            .speed(0.5)
+            .suffix("°")
+            .show(ui);
+        MenuFieldF64::new(tr!("pit-design-berm-width"), &mut settings.berm_width, 0.0..=1000.0)
+            .width(FIELD_WIDTH)
+            .speed(0.1)
+            .suffix(" m")
+            .show(ui);
+    }
     MenuFieldF64::new(tr!("pit-design-wall-radius"), &mut settings.wall_radius, 0.0..=10000.0)
         .width(FIELD_WIDTH)
         .speed(0.5)
@@ -1325,9 +1419,40 @@ fn number_list_field(
 
 /// The ramp's settings, for a pit that has one: where it starts, its
 /// width and gradient, which way it climbs, and how it turns.
-fn draw_ramp_settings(ui: &mut egui::Ui, ramp: &mut RampSettings, commands: &mut Vec<UiCommand>, index: usize, (base_rl, middle, sign, height): (f64, DVec2, f64, f64)) {
+fn draw_ramp_settings(
+    ui: &mut egui::Ui,
+    ramp: &mut RampSettings,
+    commands: &mut Vec<UiCommand>,
+    (index, on_gizmo): (usize, bool),
+    (base_rl, middle, sign, height): (f64, DVec2, f64, f64),
+) {
     // Its width, grade and the way it climbs are set on its gizmo in the
-    // view, at its foot.
+    // view, at its foot; with its foot out of view, here.
+    if !on_gizmo {
+        MenuFieldF64::new(tr!("pit-design-ramp-width"), &mut ramp.width, 0.1..=1000.0)
+            .width(FIELD_WIDTH)
+            .speed(0.1)
+            .suffix(" m")
+            .show(ui);
+        MenuFieldF64::new(tr!("pit-design-ramp-gradient"), &mut ramp.gradient, 0.1..=100.0)
+            .width(FIELD_WIDTH)
+            .speed(0.1)
+            .suffix(" %")
+            .help_text(tr!("pit-design-ramp-gradient-help"))
+            .show(ui);
+        let turn_label = |clockwise: bool| if clockwise { tr!("pit-design-clockwise") } else { tr!("pit-design-anticlockwise") };
+        let chosen = turn_label(ramp.climbs_clockwise);
+        MenuFieldCombo::new(
+            ("pit_design_climbs", index),
+            tr!("pit-design-climbs"),
+            &mut ramp.climbs_clockwise,
+            chosen,
+            [false, true].map(|clockwise| (clockwise, turn_label(clockwise).into())),
+        )
+        .width(FIELD_WIDTH)
+        .help_text(tr!("pit-design-climbs-help"))
+        .show(ui);
+    }
     // The side of the pit it leaves from, which is how it is talked about;
     // where exactly, said on hover.
     let (start_text, start_hint) = ramp.start.map_or_else(

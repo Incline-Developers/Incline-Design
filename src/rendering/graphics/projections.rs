@@ -692,8 +692,8 @@ impl<'a> Graphics<'a> {
 
     /// The walls' gizmo, on the pit's string where it stands furthest from
     /// the ramps: a section of the first bench as the settings cut it, at a
-    /// fixed size on screen, standing up from the string (lying flat along
-    /// the wall as the view comes to look straight down).
+    /// fixed size on screen, standing up from the string as it stands in the
+    /// ground.
     fn wall_gizmo(
         &self,
         working: &crate::model::pit_design::object::PitObject,
@@ -760,23 +760,18 @@ impl<'a> Graphics<'a> {
         let toe = at.extend(base);
         let forward = self.camera.forward();
         let centre = project(toe)?;
-        // Along the wall the way that is up the screen, so that seen from
-        // above the section stands the right way up.
-        let along = {
-            let along = glam::DVec2::new(-out.y, out.x);
-            if project(toe + along.extend(0.0)).is_some_and(|point| point.1 < centre.1) {
-                along
-            } else {
-                -along
-            }
-        };
         let scale = gizmo_screen_scale(toe, centre, forward, self.camera.up(), project)?;
         // A section metre's world length, so it draws the same size at any zoom.
         let metre = SECTION_POINTS_PER_METRE * self.scale_factor() / scale.px_per_world;
-        let upright = ((1.0 - forward.z.abs()) / RING_LEAN_FULL).clamp(0.0, 1.0);
+        // Standing as it is in the ground, as a Blender gizmo does: seen down
+        // its height, the height arrow fades out, and seen edge on, the
+        // face's ring.
         let rise = (top - base).signum();
-        let up = (DVec3::Z * rise * upright + along.extend(0.0) * (1.0 - upright)).normalize();
+        let up = DVec3::Z * rise;
         let out3 = out.extend(0.0);
+        let ring_fade = fade_ramp(out3.cross(DVec3::Z).dot(forward).abs() as f32, ROTATE_RING_FADE_MIN, ROTATE_RING_FADE_FULL);
+        let height_fade = fade_ramp((1.0 - forward.z * forward.z).max(0.0).sqrt() as f32, GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL);
+        let berm_fade = fade_ramp((1.0 - out3.dot(forward).powi(2)).max(0.0).sqrt() as f32, GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL);
         let settings = &working.settings;
         let (height, angle, berm) = (settings.bench_height, settings.face_angle.to_radians(), settings.berm_width);
         let crest = toe + (out3 * (height / angle.tan()) + up * height) * metre;
@@ -792,10 +787,14 @@ impl<'a> Graphics<'a> {
             let length = (to.0 - from.0).hypot(to.1 - from.1);
             (length > 1.0e-3).then_some(((to.0 - from.0) / length, (to.1 - from.1) / length, length))
         };
-        let (up_x, up_y, up_px) = unit_px(toe_px, project(toe + up * metre)?)?;
-        let (out_x, out_y, out_px) = unit_px(toe_px, project(toe + out3 * metre)?)?;
+        // Seen down it, up has no way on screen: its arrow is faded out.
+        let (up_x, up_y, up_px) = unit_px(toe_px, project(toe + up * metre)?).unwrap_or((0.0, -1.0, 1.0e-3));
+        let (out_x, out_y, out_px) = unit_px(toe_px, project(toe + out3 * metre)?).unwrap_or((1.0, 0.0, 1.0e-3));
         Some((
             WallGizmo {
+                ring_fade,
+                height_fade,
+                berm_fade,
                 toe: toe_px,
                 crest: crest_px,
                 berm_end: project(berm_end)?,
@@ -813,9 +812,8 @@ impl<'a> Graphics<'a> {
     }
 
     /// A ramp's gizmo at its foot: its grade ring standing on the road's
-    /// line (leaning over to lie flat, off the road's pit side, as the view
-    /// comes to look straight down, where an upright ring would be edge-on),
-    /// and its width arrow out across the road, both a fixed size on screen.
+    /// line, faded out as it turns edge on, and its width arrow out across
+    /// the road, both a fixed size on screen.
     fn ramp_gizmo(
         &self,
         ramp: usize,
@@ -831,9 +829,10 @@ impl<'a> Graphics<'a> {
         let scale = gizmo_screen_scale(foot, centre, forward, self.camera.up(), project)?;
         let length = GIZMO_LENGTH_POINTS * self.scale_factor();
         let radius = length * ROTATE_RING_RATIO / scale.px_per_world;
-        // How much an upright ring shows: none looking straight down.
-        let upright = ((1.0 - forward.z.abs()) / RING_LEAN_FULL).clamp(0.0, 1.0);
-        let lean = (DVec3::Z * upright + (-across).extend(0.0) * (1.0 - upright)).normalize();
+        // Standing upright on the road's line, as a Blender rotate ring: seen
+        // edge on, from straight above, it fades out.
+        let lean = DVec3::Z;
+        let ring_fade = fade_ramp(goes.extend(0.0).cross(DVec3::Z).dot(forward).abs() as f32, ROTATE_RING_FADE_MIN, ROTATE_RING_FADE_FULL);
         let goes3 = goes.extend(0.0);
         let on_ring = |angle: f64| foot + (goes3 * angle.cos() + lean * angle.sin()) * radius;
         let ring: Vec<(f32, f32)> = (0..RING_STEPS)
@@ -846,9 +845,17 @@ impl<'a> Graphics<'a> {
         let grade_arc: Vec<(f32, f32)> = (0..=steps).filter_map(|step| project(on_ring(grade * step as f64 / steps as f64))).collect();
         let width_from = project(foot + across.extend(0.0) * radius)?;
         let width_tip = project(foot + across.extend(0.0) * (radius + length * WIDTH_ARROW_RATIO / scale.px_per_world))?;
-        let run = (width_tip.0 - width_from.0).hypot(width_tip.1 - width_from.1);
-        (run > 1.0).then(|| RampGizmo {
+        let run = (width_tip.0 - width_from.0).hypot(width_tip.1 - width_from.1).max(1.0e-3);
+        // Pointing at the camera, as a Blender axis arrow, it fades out.
+        let width_fade = fade_ramp(
+            (1.0 - across.extend(0.0).dot(forward).powi(2)).max(0.0).sqrt() as f32,
+            GIZMO_AXIS_FADE_MIN,
+            GIZMO_AXIS_FADE_FULL,
+        );
+        Some(RampGizmo {
             ramp,
+            ring_fade,
+            width_fade,
             centre,
             ring,
             grade_arc,
@@ -1361,10 +1368,6 @@ impl Graphics<'_> {
         Some(2f64.powf(wanted.log2().ceil()))
     }
 }
-
-/// How far from looking straight down (as 1 less the view's downward
-/// share) a ramp's grade ring takes to stand fully upright.
-const RING_LEAN_FULL: f64 = 0.35;
 
 /// The angle between the points of a ramp's grade sector.
 const GRADE_ARC_STEP: f64 = 0.02;

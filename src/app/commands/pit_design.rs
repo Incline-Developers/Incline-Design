@@ -1072,11 +1072,11 @@ impl App<'_> {
             })
         };
         let wall = draft.wall_gizmo.as_ref().and_then(|gizmo| {
-            if near(gizmo.angle_handle) || near_chain(&gizmo.angle_ring[..=RING_STEPS / 4]) {
+            if gizmo.ring_fade > 0.0 && (near(gizmo.angle_handle) || near_chain(&gizmo.angle_ring[..=RING_STEPS / 4])) {
                 Some(GizmoPart::FaceAngle)
-            } else if near_chain(&[gizmo.crest, gizmo.height_tip]) {
+            } else if gizmo.height_fade > 0.0 && near_chain(&[gizmo.crest, gizmo.height_tip]) {
                 Some(GizmoPart::BenchHeight)
-            } else if near_chain(&[gizmo.crest, gizmo.berm_tip]) {
+            } else if gizmo.berm_fade > 0.0 && near_chain(&[gizmo.crest, gizmo.berm_tip]) {
                 Some(GizmoPart::Berm)
             } else {
                 None
@@ -1085,11 +1085,11 @@ impl App<'_> {
         let hover = wall.or_else(|| {
             draft.gizmos.iter().find_map(|gizmo| {
                 // The handles first, then the ring and arrow they sit on.
-                if near(gizmo.turn_handle) {
+                if gizmo.ring_fade > 0.0 && near(gizmo.turn_handle) {
                     Some(GizmoPart::Turn(gizmo.ramp))
-                } else if near(gizmo.grade_handle) || near_chain(&gizmo.ring[..=RING_STEPS / 2]) {
+                } else if gizmo.ring_fade > 0.0 && (near(gizmo.grade_handle) || near_chain(&gizmo.ring[..=RING_STEPS / 2])) {
                     Some(GizmoPart::Grade(gizmo.ramp))
-                } else if near_chain(&[gizmo.width_from, gizmo.width_tip]) {
+                } else if gizmo.width_fade > 0.0 && near_chain(&[gizmo.width_from, gizmo.width_tip]) {
                     Some(GizmoPart::Width(gizmo.ramp))
                 } else {
                     None
