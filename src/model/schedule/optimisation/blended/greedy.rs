@@ -3172,10 +3172,12 @@ impl<'a> State<'a> {
             .unwrap_or_default()
     }
 
-    /// What `destination` can still take in `interval`.
+    /// What `destination` can still take in `interval`, never less than
+    /// nothing: what the parts before took can round past its room, and a
+    /// limit below zero leaves the part no program at all.
     fn destination_room(&self, destination: DestinationId, interval: Interval) -> f64 {
         let used = self.part_used.get(&destination).copied().unwrap_or(0.0);
-        self.destination_room_opening(destination, interval) - used
+        (self.destination_room_opening(destination, interval) - used).max(0.0)
     }
 
     fn destination_room_opening(&self, destination: DestinationId, interval: Interval) -> f64 {
