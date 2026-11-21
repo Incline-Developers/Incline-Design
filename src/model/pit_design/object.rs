@@ -41,12 +41,12 @@ pub(crate) struct PitObject {
     pub(crate) sent: Sent,
 }
 
-/// What a design has made elsewhere in the project when sent on: the haul
-/// roads its ramps became, and the surface and Planning solid it became.
+/// What a design has made elsewhere in the project when sent on: the
+/// surface and Planning solid it became. (Its ramps are always roads in the
+/// haul network, which say whose they are.)
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Sent {
-    pub(crate) roads: Vec<crate::model::haulage::RoadId>,
     pub(crate) surface: Option<crate::model::triangulation::TriangulationId>,
     pub(crate) solid: Option<crate::model::SolidId>,
 }

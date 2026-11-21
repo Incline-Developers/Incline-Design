@@ -5136,8 +5136,6 @@ pit-design-ramp-place = 放置坡道
 pit-design-ramp-place-help = 单击坡道离开线条的位置，然后设计坡道。
 pit-design-ramp-remove = 移除坡道
 pit-design-ramp-remove-short = 移除
-pit-design-send-to = 发送到
-pit-design-send-to-help = 将坡道发送到运输网络，或将采坑发送到规划。
 pit-design-ramp-remove-help = 设计不带坡道的采坑。其设置会保留，以便再次放置。
 pit-design-done = 完成
 pit-design-kind = 采坑设计
@@ -5215,15 +5213,10 @@ pit-design-layer-crest = 坡顶线
 pit-design-layer-toe = 坡底线
 pit-design-layer-ramp = 坡道
 pit-design-layer-daylight = 地表交线
-pit-design-send-haulage = 将坡道发送到运输网络
-pit-design-update-haulage = 更新运输道路
-pit-design-send-haulage-help = 每条坡道沿其中心线成为一条运输道路，并连接到它靠近的网络道路和节点。再次发送会替换之前发送的道路。
 pit-design-send-missing = 采坑设计已不存在。
 pit-design-send-not-designed = 采坑设计仍在计算中：完成后再发送。
-pit-design-send-no-ramp = 采坑设计没有可发送的坡道。
 pit-design-haul-road = { $design } 坡道
 pit-design-haul-road-numbered = { $design } 坡道 { $number }
-pit-design-report-send-haulage = 已将坡道发送到运输网络
 pit-design-send-planning = 发送到规划
 pit-design-update-planning = 在规划中更新
 pit-design-send-planning-help = 按“创建三角网”的方式由采坑的线生成其表面，并据其地形生成规划实体，储量取自其块体模型，台阶按采坑划分。再次发送会原地重建表面并更新实体。
@@ -5252,8 +5245,3 @@ pit-design-rehab-failed = 无法重塑排土场：{ $reason }
 pit-design-rehab-cut = 从排土场削去
 pit-design-rehab-fill = 在其外堆填
 pit-design-rehab-footprint = 占地面积
-pit-design-sent-roads =
-    { $count ->
-        [one] 已将 { $design } 的坡道作为 1 条道路发送到运输网络。
-       *[other] 已将 { $design } 的坡道作为 { $count } 条道路发送到运输网络。
-    }

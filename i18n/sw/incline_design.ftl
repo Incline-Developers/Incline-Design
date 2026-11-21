@@ -5168,8 +5168,6 @@ pit-design-ramp-place = Weka barabara
 pit-design-ramp-place-help = Bofya mstari mahali barabara inapoacha, kisha isanifu barabara.
 pit-design-ramp-remove = Ondoa barabara
 pit-design-ramp-remove-short = Ondoa
-pit-design-send-to = Tuma kwa
-pit-design-send-to-help = Tuma njia panda kwenye mtandao wa usafirishaji, au shimo kwa Upangaji.
 pit-design-ramp-remove-help = Sanifu shimo bila barabara. Mipangilio yake inabaki, ili kuiweka tena.
 pit-design-done = Imekamilika
 pit-design-kind = Usanifu wa shimo
@@ -5249,15 +5247,10 @@ pit-design-layer-crest = Kilele
 pit-design-layer-toe = Kitako
 pit-design-layer-ramp = Njia panda
 pit-design-layer-daylight = Mstari wa uso
-pit-design-send-haulage = Tuma njia panda kwenye mtandao wa usafirishaji
-pit-design-update-haulage = Sasisha barabara za usafirishaji
-pit-design-send-haulage-help = Kila njia panda inakuwa barabara ya usafirishaji kando ya mstari wake wa kati, ikiunganishwa na barabara na vifundo vya mtandao inavyokaribia. Kutuma tena kunabadilisha barabara zilizotumwa awali.
 pit-design-send-missing = Muundo wa shimo haupo tena.
 pit-design-send-not-designed = Muundo wa shimo bado unakokotolewa: utume ukikamilika.
-pit-design-send-no-ramp = Muundo wa shimo hauna njia panda ya kutuma.
 pit-design-haul-road = Njia panda ya { $design }
 pit-design-haul-road-numbered = Njia panda { $number } ya { $design }
-pit-design-report-send-haulage = Njia panda zimetumwa kwenye mtandao wa usafirishaji
 pit-design-send-planning = Tuma kwa Upangaji
 pit-design-update-planning = Sasisha katika Upangaji
 pit-design-send-planning-help = Inatengeneza uso wa shimo kutoka kwa mistari yake, kama Unda Pembetatu ingefanya, na kitu kigumu cha Upangaji dhidi ya topografia yake, chenye akiba kutoka modeli yake ya vitalu na benchi zake. Kutuma tena kunajenga upya uso mahali pake na kusasisha kitu kigumu.
@@ -5286,8 +5279,3 @@ pit-design-rehab-failed = Dampo halikuweza kuundwa upya: { $reason }
 pit-design-rehab-cut = Kilichochimbwa kutoka dampo
 pit-design-rehab-fill = Kilichowekwa nje yake
 pit-design-rehab-footprint = Alama ya eneo
-pit-design-sent-roads =
-    { $count ->
-        [one] Njia panda ya { $design } imetumwa kwenye mtandao wa usafirishaji kama barabara moja.
-       *[other] Njia panda za { $design } zimetumwa kwenye mtandao wa usafirishaji kama barabara { $count }.
-    }

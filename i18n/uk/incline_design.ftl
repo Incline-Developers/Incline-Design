@@ -5246,8 +5246,6 @@ pit-design-ramp-place = Розмістити з'їзд
 pit-design-ramp-place-help = Клацніть лінію там, де з'їзд від неї відходить, потім спроєктуйте з'їзд.
 pit-design-ramp-remove = Прибрати з'їзд
 pit-design-ramp-remove-short = Видалити
-pit-design-send-to = Надіслати до
-pit-design-send-to-help = Надіслати з'їзди до мережі доріг або кар'єр до планування.
 pit-design-ramp-remove-help = Проєктувати кар'єр без з'їзду. Його налаштування зберігаються, щоб розмістити знову.
 pit-design-done = Готово
 pit-design-kind = Проєкт кар'єру
@@ -5331,15 +5329,10 @@ pit-design-layer-crest = Бровка
 pit-design-layer-toe = Підошва
 pit-design-layer-ramp = З'їзд
 pit-design-layer-daylight = Лінія виходу
-pit-design-send-haulage = Надіслати з'їзди до мережі доріг
-pit-design-update-haulage = Оновити дороги
-pit-design-send-haulage-help = Кожен з'їзд стає дорогою вздовж своєї осі, приєднаною до доріг і вузлів мережі, до яких він підходить. Повторне надсилання замінює надіслані раніше дороги.
 pit-design-send-missing = Проєкту кар'єру більше не існує.
 pit-design-send-not-designed = Проєкт кар'єру ще розраховується: надішліть його, коли він буде готовий.
-pit-design-send-no-ramp = Проєкт кар'єру не має з'їзду для надсилання.
 pit-design-haul-road = З'їзд { $design }
 pit-design-haul-road-numbered = З'їзд { $number } { $design }
-pit-design-report-send-haulage = З'їзди надіслано до мережі доріг
 pit-design-send-planning = Надіслати до планування
 pit-design-update-planning = Оновити в плануванні
 pit-design-send-planning-help = Будує поверхню кар'єру за його лініями, як це зробило б «Створити тріангуляцію», і тіло планування відносно його топографії, із запасами з його блокової моделі та з його уступами. Повторне надсилання перебудовує поверхню на місці й оновлює тіло.
@@ -5368,8 +5361,3 @@ pit-design-rehab-failed = Не вдалося переформувати від�
 pit-design-rehab-cut = Зрізано з відвалу
 pit-design-rehab-fill = Відсипано за ним
 pit-design-rehab-footprint = Площа основи
-pit-design-sent-roads =
-    { $count ->
-        [one] З'їзд { $design } надіслано до мережі доріг як одну дорогу.
-       *[other] З'їзди { $design } надіслано до мережі доріг, доріг: { $count }.
-    }

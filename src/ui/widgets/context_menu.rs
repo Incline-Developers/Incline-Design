@@ -451,25 +451,6 @@ pub(crate) fn dropdown_menu<R>(
         .show(|ui| draw_body(ui, &title, width, add_contents))
 }
 
-/// [`dropdown_menu`] opening upward from its button, untitled: for a button
-/// at the foot of a panel, which names the menu itself and has no room under
-/// it.
-pub(crate) fn dropup_menu<R>(response: &egui::Response, width: f32, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
-    use egui::containers::menu::MenuConfig;
-
-    let config = MenuConfig::new();
-    let title = egui::WidgetText::default();
-    on_top(egui::Popup::menu(response))
-        .align(egui::RectAlign::TOP_START)
-        .align_alternatives(&[egui::RectAlign::BOTTOM_START])
-        .close_behavior(config.close_behavior)
-        .style(config.style.clone())
-        .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
-        .width(width)
-        .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
-        .show(|ui| draw_body(ui, &title, width, add_contents))
-}
-
 /// A submenu row inside a [`MenuBarMenu`] or [`context_menu_popup`], opening a
 /// nested menu that wears the same frame, header and rows.
 ///

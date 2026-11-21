@@ -5178,8 +5178,6 @@ pit-design-ramp-place = وضع المنحدر
 pit-design-ramp-place-help = انقر الخط حيث يغادره المنحدر، ثم صمّم المنحدر.
 pit-design-ramp-remove = إزالة المنحدر
 pit-design-ramp-remove-short = إزالة
-pit-design-send-to = إرسال إلى
-pit-design-send-to-help = أرسل المنحدرات إلى شبكة النقل، أو الحفرة إلى التخطيط.
 pit-design-ramp-remove-help = صمّم الحفرة بلا منحدر. تُحفظ إعداداته لوضعه مجددًا.
 pit-design-done = تم
 pit-design-kind = تصميم الحفرة
@@ -5267,15 +5265,10 @@ pit-design-layer-crest = الحافة العليا
 pit-design-layer-toe = القدم
 pit-design-layer-ramp = المنحدر
 pit-design-layer-daylight = خط الظهور
-pit-design-send-haulage = إرسال المنحدرات إلى شبكة النقل
-pit-design-update-haulage = تحديث طرق النقل
-pit-design-send-haulage-help = يصبح كل منحدر طريق نقل على امتداد محوره، متصلًا بطرق الشبكة وعقدها التي يقترب منها. الإرسال مجددًا يستبدل الطرق المرسلة من قبل.
 pit-design-send-missing = لم يعد تصميم الحفرة موجودًا.
 pit-design-send-not-designed = ما زال تصميم الحفرة قيد الحساب: أرسله حين يكتمل.
-pit-design-send-no-ramp = لا يحوي تصميم الحفرة منحدرًا لإرساله.
 pit-design-haul-road = منحدر { $design }
 pit-design-haul-road-numbered = منحدر { $number } من { $design }
-pit-design-report-send-haulage = أُرسلت المنحدرات إلى شبكة النقل
 pit-design-send-planning = إرسال إلى التخطيط
 pit-design-update-planning = تحديث في التخطيط
 pit-design-send-planning-help = يُنشئ سطح الحفرة من خطوطها كما يفعل إنشاء التثليث، ومجسّم تخطيط منه بالنسبة إلى طبوغرافيتها، باحتياطي من نموذجها الكتلي ومقسّمًا إلى مصاطبها. الإرسال مجددًا يعيد بناء السطح في مكانه ويحدّث المجسّم.
@@ -5304,8 +5297,3 @@ pit-design-rehab-failed = تعذّر إعادة تشكيل المكب: { $reason
 pit-design-rehab-cut = محفور من المكب
 pit-design-rehab-fill = مردوم خارجه
 pit-design-rehab-footprint = المساحة المشغولة
-pit-design-sent-roads =
-    { $count ->
-        [one] أُرسل منحدر { $design } إلى شبكة النقل كطريق واحد.
-       *[other] أُرسلت منحدرات { $design } إلى شبكة النقل كـ { $count } طرق.
-    }

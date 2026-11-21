@@ -5134,8 +5134,6 @@ pit-design-ramp-place = Colocar rampa
 pit-design-ramp-place-help = Clique na linha onde a rampa a deixa e depois projete a rampa.
 pit-design-ramp-remove = Remover rampa
 pit-design-ramp-remove-short = Remover
-pit-design-send-to = Enviar para
-pit-design-send-to-help = Enviar as rampas para a rede de transporte, ou a cava para o Planejamento.
 pit-design-ramp-remove-help = Projetar a cava sem rampa. As suas definições mantêm-se, para a voltar a colocar.
 pit-design-done = Concluído
 pit-design-kind = Projeto de cava
@@ -5215,15 +5213,10 @@ pit-design-layer-crest = Crista
 pit-design-layer-toe = Pé
 pit-design-layer-ramp = Rampa
 pit-design-layer-daylight = Linha de afloramento
-pit-design-send-haulage = Enviar rampas para a rede de transporte
-pit-design-update-haulage = Atualizar estradas
-pit-design-send-haulage-help = Cada rampa torna-se uma estrada de transporte ao longo do seu eixo, ligada às estradas e nós da rede de que se aproxima. Enviar de novo substitui as estradas enviadas antes.
 pit-design-send-missing = O projeto de cava já não existe.
 pit-design-send-not-designed = O projeto de cava ainda está sendo calculado: envie-o quando estiver pronto.
-pit-design-send-no-ramp = O projeto de cava não tem rampa para enviar.
 pit-design-haul-road = Rampa de { $design }
 pit-design-haul-road-numbered = Rampa { $number } de { $design }
-pit-design-report-send-haulage = Rampas enviadas para a rede de transporte
 pit-design-send-planning = Enviar para o Planejamento
 pit-design-update-planning = Atualizar no Planejamento
 pit-design-send-planning-help = Cria a superfície da cava a partir das suas linhas, como Criar triangulação faria, e um sólido de Planejamento com ela em relação à sua topografia, com reservas do seu modelo de blocos e as suas bancadas. Enviar de novo reconstrói a superfície no lugar e atualiza o sólido.
@@ -5252,8 +5245,3 @@ pit-design-rehab-failed = Não foi possível remodelar a pilha: { $reason }
 pit-design-rehab-cut = Cortado da pilha
 pit-design-rehab-fill = Colocado além
 pit-design-rehab-footprint = Pegada
-pit-design-sent-roads =
-    { $count ->
-        [one] A rampa de { $design } foi enviada para a rede de transporte como uma estrada.
-       *[other] As rampas de { $design } foram enviadas para a rede de transporte como { $count } estradas.
-    }

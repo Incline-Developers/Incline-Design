@@ -5170,8 +5170,6 @@ pit-design-ramp-place = 램프 배치
 pit-design-ramp-place-help = 램프가 선을 떠나는 곳을 클릭한 다음 램프를 설계하세요.
 pit-design-ramp-remove = 램프 제거
 pit-design-ramp-remove-short = 제거
-pit-design-send-to = 보내기
-pit-design-send-to-help = 램프를 운반 네트워크로, 또는 피트를 계획으로 보냅니다.
 pit-design-ramp-remove-help = 램프 없이 피트를 설계합니다. 다시 배치할 수 있도록 설정은 유지됩니다.
 pit-design-done = 완료
 pit-design-kind = 피트 설계
@@ -5249,15 +5247,10 @@ pit-design-layer-crest = 상단
 pit-design-layer-toe = 하단
 pit-design-layer-ramp = 램프
 pit-design-layer-daylight = 지표 교선
-pit-design-send-haulage = 램프를 운반 네트워크로 보내기
-pit-design-update-haulage = 운반 도로 업데이트
-pit-design-send-haulage-help = 각 램프는 중심선을 따라 운반 도로가 되고, 가까이 지나는 네트워크의 도로와 노드에 연결됩니다. 다시 보내면 전에 보낸 도로를 대체합니다.
 pit-design-send-missing = 피트 설계가 더 이상 없습니다.
 pit-design-send-not-designed = 피트 설계를 아직 계산 중입니다: 완료되면 보내세요.
-pit-design-send-no-ramp = 피트 설계에 보낼 램프가 없습니다.
 pit-design-haul-road = { $design } 램프
 pit-design-haul-road-numbered = { $design } 램프 { $number }
-pit-design-report-send-haulage = 램프를 운반 네트워크로 보냈습니다
 pit-design-send-planning = 계획으로 보내기
 pit-design-update-planning = 계획에서 업데이트
 pit-design-send-planning-help = 삼각망 만들기와 같은 방식으로 피트의 선에서 면을 만들고, 그 지형에 대한 계획 솔리드를 블록 모델의 매장량과 피트의 벤치로 만듭니다. 다시 보내면 면을 제자리에서 다시 만들고 솔리드를 업데이트합니다.
@@ -5286,8 +5279,3 @@ pit-design-rehab-failed = 적치장을 재성형할 수 없습니다: { $reason 
 pit-design-rehab-cut = 적치장에서 절토
 pit-design-rehab-fill = 그 밖으로 성토
 pit-design-rehab-footprint = 점유 면적
-pit-design-sent-roads =
-    { $count ->
-        [one] { $design }의 램프를 운반 네트워크에 도로 1개로 보냈습니다.
-       *[other] { $design }의 램프를 운반 네트워크에 도로 { $count }개로 보냈습니다.
-    }

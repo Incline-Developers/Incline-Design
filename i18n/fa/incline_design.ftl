@@ -5136,8 +5136,6 @@ pit-design-ramp-place = جای‌گذاری رمپ
 pit-design-ramp-place-help = روی خط جایی که رمپ از آن جدا می‌شود کلیک کنید، سپس رمپ را طراحی کنید.
 pit-design-ramp-remove = حذف رمپ
 pit-design-ramp-remove-short = حذف
-pit-design-send-to = فرستادن به
-pit-design-send-to-help = رمپ‌ها را به شبکه حمل یا پیت را به برنامه‌ریزی بفرستید.
 pit-design-ramp-remove-help = پیت را بدون رمپ طراحی کنید. تنظیمات آن برای جای‌گذاری دوباره نگه داشته می‌شود.
 pit-design-done = انجام شد
 pit-design-kind = طراحی پیت
@@ -5215,15 +5213,10 @@ pit-design-layer-crest = لبه بالا
 pit-design-layer-toe = پنجه
 pit-design-layer-ramp = رمپ
 pit-design-layer-daylight = خط رخنمون
-pit-design-send-haulage = فرستادن رمپ‌ها به شبکه حمل
-pit-design-update-haulage = به‌روزرسانی جاده‌های حمل
-pit-design-send-haulage-help = هر رمپ جاده حملی در امتداد محورش می‌شود و به جاده‌ها و گره‌های شبکه که به آن‌ها نزدیک می‌شود وصل می‌گردد. فرستادن دوباره جاده‌های فرستاده‌شده قبلی را جایگزین می‌کند.
 pit-design-send-missing = طرح پیت دیگر وجود ندارد.
 pit-design-send-not-designed = طرح پیت هنوز در حال محاسبه است: پس از آماده شدن بفرستید.
-pit-design-send-no-ramp = طرح پیت رمپی برای فرستادن ندارد.
 pit-design-haul-road = رمپ { $design }
 pit-design-haul-road-numbered = رمپ { $number } { $design }
-pit-design-report-send-haulage = رمپ‌ها به شبکه حمل فرستاده شدند
 pit-design-send-planning = فرستادن به برنامه‌ریزی
 pit-design-update-planning = به‌روزرسانی در برنامه‌ریزی
 pit-design-send-planning-help = سطح پیت را از خطوطش می‌سازد، همان‌طور که ساخت مثلث‌بندی می‌سازد، و یک جسم برنامه‌ریزی از آن در برابر توپوگرافی‌اش، با ذخیره از مدل بلوکی‌اش و پله‌بندی‌شده مانند خودش. فرستادن دوباره سطح را در جا بازسازی و جسم را به‌روز می‌کند.
@@ -5252,8 +5245,3 @@ pit-design-rehab-failed = دامپ بازشکل‌دهی نشد: { $reason }
 pit-design-rehab-cut = برداشته از دامپ
 pit-design-rehab-fill = ریخته فراتر از آن
 pit-design-rehab-footprint = ردپا
-pit-design-sent-roads =
-    { $count ->
-        [one] رمپ { $design } به‌صورت یک جاده به شبکه حمل فرستاده شد.
-       *[other] رمپ‌های { $design } به‌صورت { $count } جاده به شبکه حمل فرستاده شدند.
-    }

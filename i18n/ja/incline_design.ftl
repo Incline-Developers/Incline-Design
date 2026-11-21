@@ -5165,8 +5165,6 @@ pit-design-ramp-place = ランプを配置
 pit-design-ramp-place-help = ランプがラインから出る位置をクリックし、ランプを設計します。
 pit-design-ramp-remove = ランプを削除
 pit-design-ramp-remove-short = 削除
-pit-design-send-to = 送る
-pit-design-send-to-help = ランプを運搬ネットワークへ、またはピットを計画へ送ります。
 pit-design-ramp-remove-help = ランプなしでピットを設計します。設定は再配置のために残ります。
 pit-design-done = 完了
 pit-design-kind = ピット設計
@@ -5244,15 +5242,10 @@ pit-design-layer-crest = 法肩
 pit-design-layer-toe = 法尻
 pit-design-layer-ramp = ランプ
 pit-design-layer-daylight = 地表交線
-pit-design-send-haulage = ランプを運搬ネットワークへ送る
-pit-design-update-haulage = 運搬道路を更新
-pit-design-send-haulage-help = 各ランプは中心線に沿った運搬道路になり、近くのネットワークの道路やノードにつながります。再送信すると前に送った道路が置き換わります。
 pit-design-send-missing = ピット設計がなくなっています。
 pit-design-send-not-designed = ピット設計はまだ計算中です: 完了してから送ってください。
-pit-design-send-no-ramp = ピット設計に送るランプがありません。
 pit-design-haul-road = { $design } ランプ
 pit-design-haul-road-numbered = { $design } ランプ { $number }
-pit-design-report-send-haulage = ランプを運搬ネットワークへ送りました
 pit-design-send-planning = 計画へ送る
 pit-design-update-planning = 計画で更新
 pit-design-send-planning-help = 三角網作成と同じ方法でピットの線から面を作り、その地形に対する計画ソリッドを、ブロックモデルからの埋蔵量とピットのベンチ割りで作ります。再送信すると面をその場で作り直し、ソリッドを更新します。
@@ -5281,8 +5274,3 @@ pit-design-rehab-failed = ダンプを整形できませんでした: { $reason 
 pit-design-rehab-cut = ダンプからの切土
 pit-design-rehab-fill = その外側への盛土
 pit-design-rehab-footprint = 占有面積
-pit-design-sent-roads =
-    { $count ->
-        [one] { $design } のランプを運搬ネットワークへ 1 本の道路として送りました。
-       *[other] { $design } のランプを運搬ネットワークへ { $count } 本の道路として送りました。
-    }

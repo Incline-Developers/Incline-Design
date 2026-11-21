@@ -1,11 +1,12 @@
-//! Sending a pit design on to the rest of the project: its ramps to the
-//! haul network as roads, and the pit to Planning as a solid, with a
-//! surface made from its strings as Create Triangulation would make it.
+//! A pit design in the rest of the project: its ramps always roads in the
+//! haul network, kept in step with it, and the pit sent to Planning as a
+//! solid, with a surface made from its strings as Create Triangulation would
+//! make it.
 //!
-//! What a design makes elsewhere is kept on it ([`Sent`]), so sending it
-//! again replaces what it made before rather than adding to it. Each send is
-//! one edit: the network and the design that remembers what it made, undone
-//! together.
+//! What a design makes elsewhere is kept on it ([`Sent`]), so making it
+//! again replaces what it made before rather than adding to it. Each is in
+//! the edit that changed the design: the network and the design that
+//! remembers what it made, undone together.
 
 use anyhow::Result;
 
@@ -59,6 +60,43 @@ fn benching_of(design: &Design, kept: &BenchingPlan) -> BenchingPlan {
     }
 }
 
+/// A design's ramps as the roads they make: each its centreline, named
+/// after the design.
+fn pit_road_strings(name: &str, design: &Design) -> Vec<(String, Vec<glam::DVec3>)> {
+    let centrelines: Vec<&[glam::DVec3]> = design
+        .strings
+        .iter()
+        .filter(|string| string.kind == StringKind::RampCentreline)
+        .map(|string| string.points.as_slice())
+        .collect();
+    let several = centrelines.len() > 1;
+    centrelines
+        .iter()
+        .enumerate()
+        .map(|(index, points)| {
+            let name = if several {
+                tr!("pit-design-haul-road-numbered", design = name.to_owned(), number = (index + 1).to_string())
+            } else {
+                tr!("pit-design-haul-road", design = name.to_owned())
+            };
+            (name, points.to_vec())
+        })
+        .collect()
+}
+
+/// What a design's roads are made from, to tell when they are out of step.
+fn road_strings_key(strings: &[(String, Vec<glam::DVec3>)]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (name, points) in strings {
+        name.hash(&mut hasher);
+        for point in points {
+            point.to_array().map(f64::to_bits).hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
 impl App<'_> {
     /// The pit design `id`, with its design current: what can be sent on.
     fn sendable_pit(&self, id: ObjectId) -> Result<&Object> {
@@ -69,59 +107,78 @@ impl App<'_> {
         Ok(object)
     }
 
-    /// Send pit design `id`'s ramps to the haul network: each ramp a road
-    /// along its centreline, joined to the network where it comes within
-    /// the network's join tolerance of it, in place of the roads it was sent
-    /// as before.
-    pub(crate) fn send_pit_ramps_to_haulage(&mut self, id: ObjectId) -> Result<usize> {
-        let object = self.sendable_pit(id)?.clone();
-        let (_, pit) = pit_parts(&object).expect("checked a pit design");
-        let design = pit.design().expect("checked designed");
-        let centrelines: Vec<_> = design.strings.iter().filter(|string| string.kind == StringKind::RampCentreline).collect();
-        anyhow::ensure!(!centrelines.is_empty(), tr!("pit-design-send-no-ramp"));
-        let several = centrelines.len() > 1;
-        let strings: Vec<(String, Vec<glam::DVec3>)> = centrelines
+    /// Bring the haul network into step with the project's pit designs:
+    /// each current design's ramps roads along their centrelines, joined to
+    /// the network where they come within its join tolerance, made again
+    /// where the design has changed; and the roads of a design no longer
+    /// there gone. Not an undo step: like a design worked out, it follows
+    /// from the designs, whichever step put them as they are.
+    pub(crate) fn keep_pit_roads(&mut self) {
+        let Some(document) = self.workspace.active_document() else {
+            return;
+        };
+        let mut network = document.haulage().clone();
+        let before = network.clone();
+        let designs: std::collections::HashMap<u64, &Object> = document
+            .objects()
             .iter()
-            .enumerate()
-            .map(|(index, string)| {
-                let name = if several {
-                    tr!("pit-design-haul-road-numbered", design = pit.name.clone(), number = (index + 1).to_string())
-                } else {
-                    tr!("pit-design-haul-road", design = pit.name.clone())
-                };
-                (name, string.points.clone())
-            })
+            .filter(|object| matches!(object, Object::PitDesign { .. }))
+            .map(|object| (object.id().0, object))
             .collect();
-        let document = self.workspace.active_document().ok_or_else(|| anyhow::anyhow!(tr!("pit-design-send-missing")))?;
-        let before = document.haulage().clone();
-        let mut after = before.clone();
-        for road in &pit.sent.roads {
-            if after.road(*road).is_some() {
-                after.delete_road(*road);
+        // Roads of designs gone, or no longer designs.
+        let orphans: Vec<RoadId> = network
+            .roads
+            .iter()
+            .filter(|road| road.pit.is_some_and(|pit| !designs.contains_key(&pit.design)))
+            .map(|road| road.id)
+            .collect();
+        for road in orphans {
+            network.delete_road(road);
+        }
+        for (&design, object) in &designs {
+            let Object::PitDesign { verts, pit, .. } = object else {
+                continue;
+            };
+            // A design out of date keeps its roads until it is worked out.
+            let ground = self.pit_ground_version(&pit.settings());
+            let Some(worked) = pit.design().filter(|_| pit.is_fresh(verts.as_slice(), ground)) else {
+                continue;
+            };
+            let strings = pit_road_strings(&pit.name, worked);
+            let from = road_strings_key(&strings);
+            let owned: Vec<RoadId> = network
+                .roads
+                .iter()
+                .filter(|road| road.pit.is_some_and(|pit| pit.design == design))
+                .map(|road| road.id)
+                .collect();
+            let current = network
+                .roads
+                .iter()
+                .filter(|road| road.pit.is_some_and(|pit| pit.design == design))
+                .all(|road| road.pit.is_some_and(|pit| pit.from == from));
+            if current && (owned.is_empty() == strings.is_empty()) {
+                continue;
+            }
+            for road in owned {
+                network.delete_road(road);
+            }
+            let existing: std::collections::HashSet<RoadId> = network.roads.iter().map(|road| road.id).collect();
+            if network.convert(&strings).is_err() {
+                continue;
+            }
+            for road in network.roads.iter_mut().filter(|road| !existing.contains(&road.id)) {
+                road.pit = Some(crate::model::haulage::PitRoad { design, from });
             }
         }
-        let existing: std::collections::HashSet<RoadId> = after.roads.iter().map(|road| road.id).collect();
-        after.convert(&strings)?;
-        after.validate()?;
-        let made: Vec<RoadId> = after.roads.iter().map(|road| road.id).filter(|road| !existing.contains(road)).collect();
-        let mut sent = object.clone();
-        if let Object::PitDesign { pit, .. } = &mut sent {
-            pit.sent.roads = made.clone();
+        if network == before || network.validate().is_err() {
+            return;
         }
-        self.execute_edit(Command::Batch(vec![
-            Command::SetHaulNetwork {
-                before: Box::new(before),
-                after: Box::new(after),
-            },
-            Command::Replace {
-                before: object.clone(),
-                after: sent,
-            },
-        ]));
+        if let Some(document) = self.workspace.active_document_mut() {
+            document.set_haulage(network);
+        }
         self.editor.haul_route = None;
         self.refresh_haulage_view();
-        crate::userspace_log!("{}", tr!("pit-design-sent-roads", count = made.len(), design = pit.name.clone()));
-        Ok(made.len())
     }
 
     /// Send pit design `id` to Planning: its surface, made from its strings,

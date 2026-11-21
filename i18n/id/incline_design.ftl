@@ -5136,8 +5136,6 @@ pit-design-ramp-place = Tempatkan ramp
 pit-design-ramp-place-help = Klik garis di tempat ramp meninggalkannya, lalu rancang ramp.
 pit-design-ramp-remove = Hapus ramp
 pit-design-ramp-remove-short = Hapus
-pit-design-send-to = Kirim ke
-pit-design-send-to-help = Kirim ramp ke jaringan angkut, atau pit ke Perencanaan.
 pit-design-ramp-remove-help = Rancang pit tanpa ramp. Pengaturannya disimpan untuk menempatkannya lagi.
 pit-design-done = Selesai
 pit-design-kind = Desain pit
@@ -5215,15 +5213,10 @@ pit-design-layer-crest = Puncak
 pit-design-layer-toe = Kaki
 pit-design-layer-ramp = Ramp
 pit-design-layer-daylight = Garis daylight
-pit-design-send-haulage = Kirim ramp ke jaringan angkut
-pit-design-update-haulage = Perbarui jalan angkut
-pit-design-send-haulage-help = Setiap ramp menjadi jalan angkut di sepanjang garis tengahnya, terhubung ke jalan dan simpul jaringan yang didekatinya. Mengirim lagi menggantikan jalan yang dikirim sebelumnya.
 pit-design-send-missing = Desain pit sudah tidak ada.
 pit-design-send-not-designed = Desain pit masih dihitung: kirim setelah selesai.
-pit-design-send-no-ramp = Desain pit tidak memiliki ramp untuk dikirim.
 pit-design-haul-road = Ramp { $design }
 pit-design-haul-road-numbered = Ramp { $number } { $design }
-pit-design-report-send-haulage = Ramp dikirim ke jaringan angkut
 pit-design-send-planning = Kirim ke Perencanaan
 pit-design-update-planning = Perbarui di Perencanaan
 pit-design-send-planning-help = Membuat permukaan pit dari garis-garisnya, seperti Buat Triangulasi, dan solid Perencanaan darinya terhadap topografinya, dengan cadangan dari model bloknya dan dijenjangkan seperti pit itu. Mengirim lagi membangun ulang permukaan di tempat dan memperbarui solidnya.
@@ -5252,8 +5245,3 @@ pit-design-rehab-failed = Timbunan tidak dapat dibentuk ulang: { $reason }
 pit-design-rehab-cut = Digali dari timbunan
 pit-design-rehab-fill = Ditimbun di luarnya
 pit-design-rehab-footprint = Jejak
-pit-design-sent-roads =
-    { $count ->
-        [one] Ramp { $design } dikirim ke jaringan angkut sebagai satu jalan.
-       *[other] Ramp { $design } dikirim ke jaringan angkut sebagai { $count } jalan.
-    }

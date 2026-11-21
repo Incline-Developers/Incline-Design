@@ -5264,8 +5264,6 @@ pit-design-ramp-place = Umieść rampę
 pit-design-ramp-place-help = Kliknij linię tam, gdzie rampa z niej schodzi, a potem zaprojektuj rampę.
 pit-design-ramp-remove = Usuń rampę
 pit-design-ramp-remove-short = Usuń
-pit-design-send-to = Wyślij do
-pit-design-send-to-help = Wyślij rampy do sieci transportowej albo wyrobisko do planowania.
 pit-design-ramp-remove-help = Zaprojektuj wyrobisko bez rampy. Jej ustawienia zostają, by umieścić ją ponownie.
 pit-design-done = Gotowe
 pit-design-kind = Projekt wyrobiska
@@ -5349,15 +5347,10 @@ pit-design-layer-crest = Krawędź górna
 pit-design-layer-toe = Krawędź dolna
 pit-design-layer-ramp = Rampa
 pit-design-layer-daylight = Linia wychodni
-pit-design-send-haulage = Wyślij rampy do sieci transportowej
-pit-design-update-haulage = Aktualizuj drogi
-pit-design-send-haulage-help = Każda rampa staje się drogą transportową wzdłuż swojej osi, połączoną z drogami i węzłami sieci, do których się zbliża. Ponowne wysłanie zastępuje drogi wysłane wcześniej.
 pit-design-send-missing = Projekt wyrobiska już nie istnieje.
 pit-design-send-not-designed = Projekt wyrobiska jest jeszcze obliczany: wyślij go, gdy będzie gotowy.
-pit-design-send-no-ramp = Projekt wyrobiska nie ma rampy do wysłania.
 pit-design-haul-road = Rampa { $design }
 pit-design-haul-road-numbered = Rampa { $number } { $design }
-pit-design-report-send-haulage = Wysłano rampy do sieci transportowej
 pit-design-send-planning = Wyślij do planowania
 pit-design-update-planning = Aktualizuj w planowaniu
 pit-design-send-planning-help = Tworzy powierzchnię wyrobiska z jego linii, tak jak Utwórz triangulację, i bryłę planowania względem jego topografii, z zasobami z jego modelu blokowego i z jego poziomami. Ponowne wysłanie przebudowuje powierzchnię na miejscu i aktualizuje bryłę.
@@ -5386,8 +5379,3 @@ pit-design-rehab-failed = Nie udało się przekształcić zwałowiska: { $reason
 pit-design-rehab-cut = Wykop ze zwałowiska
 pit-design-rehab-fill = Nasyp poza nim
 pit-design-rehab-footprint = Powierzchnia zajęta
-pit-design-sent-roads =
-    { $count ->
-        [one] Wysłano rampę { $design } do sieci transportowej jako jedną drogę.
-       *[other] Wysłano rampy { $design } do sieci transportowej jako drogi (liczba: { $count }).
-    }

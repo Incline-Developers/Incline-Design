@@ -609,7 +609,7 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                     // On to the rest of the project, at the row's far end.
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         if let Some(working) = draft.working.as_ref() {
-                            draw_send_menu(ui, working, id, fresh && !picking, commands);
+                            draw_send_button(ui, working, id, fresh && !picking, commands);
                         }
                     });
                 }
@@ -1066,52 +1066,27 @@ fn draw_ramps(ui: &mut egui::Ui, settings: &mut PitDesignSettings, (picking, in_
     }
 }
 
-/// The footer's Send to menu: the ramps to the haul network, the pit to
-/// Planning, each again once sent, and each only once the design is current.
-fn draw_send_menu(ui: &mut egui::Ui, working: &PitObject, id: ObjectId, ready: bool, commands: &mut Vec<UiCommand>) {
-    use crate::ui::widgets::context_menu::{ContextMenuAction, dropup_menu};
-    let label = tr!("pit-design-send-to");
-    let width = menu::natural_button_width(ui, &label, 60.0);
-    let response = ui.add(MenuButton::new(label).min_width(width).enabled(ready));
-    let response = if ready {
-        response.hint(tr!("pit-design-send-to-help"))
+/// Send the pit to Planning, or bring it up to date there: its ramps need
+/// no sending, being always in the haul network.
+fn draw_send_button(ui: &mut egui::Ui, working: &PitObject, id: ObjectId, ready: bool, commands: &mut Vec<UiCommand>) {
+    let label = if working.sent.solid.is_none() {
+        tr!("pit-design-send-planning")
     } else {
-        response.disabled_hint(tr!("pit-design-send-not-designed"))
+        tr!("pit-design-update-planning")
     };
-    let has_ramp = !working.settings.ramps.is_empty();
     let topography = working.settings.topography.is_some();
-    dropup_menu(&response, 240.0, |ui| {
-        let haulage = if working.sent.roads.is_empty() {
-            tr!("pit-design-send-haulage")
-        } else {
-            tr!("pit-design-update-haulage")
-        };
-        let row = ContextMenuAction::new(haulage).enabled(has_ramp).show(ui);
-        let row = if has_ramp {
-            row.hint(tr!("pit-design-send-haulage-help"))
-        } else {
-            row.disabled_hint(tr!("pit-design-send-no-ramp"))
-        };
-        if row.clicked() {
-            commands.push(UiCommand::SendPitRampsToHaulage(id));
-            ui.close();
-        }
-        let planning = if working.sent.solid.is_none() {
-            tr!("pit-design-send-planning")
-        } else {
-            tr!("pit-design-update-planning")
-        };
-        let row = ContextMenuAction::new(planning).enabled(topography).show(ui);
-        let row = if topography {
-            row.hint(tr!("pit-design-send-planning-help"))
-        } else {
-            row.disabled_hint(tr!("pit-design-send-no-topography"))
-        };
-        if row.clicked() {
-            commands.push(UiCommand::SendPitToPlanning(id));
-            ui.close();
-        }
-    });
+    let width = menu::natural_button_width(ui, &label, 60.0);
+    let response = ui.add(MenuButton::new(label).min_width(width).enabled(ready && topography));
+    let response = if !ready {
+        response.disabled_hint(tr!("pit-design-send-not-designed"))
+    } else if !topography {
+        response.disabled_hint(tr!("pit-design-send-no-topography"))
+    } else {
+        response.hint(tr!("pit-design-send-planning-help"))
+    };
+    if response.clicked() {
+        commands.push(UiCommand::SendPitToPlanning(id));
+    }
 }
 
 /// The pit's benches and where it stops. `base_rl` is the string's, where a

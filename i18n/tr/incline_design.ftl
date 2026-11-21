@@ -5178,8 +5178,6 @@ pit-design-ramp-place = Rampa yerleştir
 pit-design-ramp-place-help = Rampanın çizgiden ayrıldığı yere tıklayın, sonra rampayı tasarlayın.
 pit-design-ramp-remove = Rampayı kaldır
 pit-design-ramp-remove-short = Kaldır
-pit-design-send-to = Gönder
-pit-design-send-to-help = Rampaları taşıma ağına ya da ocağı planlamaya gönder.
 pit-design-ramp-remove-help = Ocağı rampasız tasarla. Ayarları yeniden yerleştirmek için korunur.
 pit-design-done = Tamam
 pit-design-kind = Ocak tasarımı
@@ -5257,15 +5255,10 @@ pit-design-layer-crest = Şev üstü
 pit-design-layer-toe = Şev topuğu
 pit-design-layer-ramp = Rampa
 pit-design-layer-daylight = Yüzey kesişimi
-pit-design-send-haulage = Rampaları taşıma ağına gönder
-pit-design-update-haulage = Taşıma yollarını güncelle
-pit-design-send-haulage-help = Her rampa, ekseni boyunca bir taşıma yolu olur ve yaklaştığı ağ yollarına ve düğümlerine bağlanır. Yeniden göndermek daha önce gönderilen yolların yerini alır.
 pit-design-send-missing = Ocak tasarımı artık yok.
 pit-design-send-not-designed = Ocak tasarımı hâlâ hesaplanıyor: hazır olunca gönderin.
-pit-design-send-no-ramp = Ocak tasarımının gönderilecek rampası yok.
 pit-design-haul-road = { $design } rampası
 pit-design-haul-road-numbered = { $design } rampası { $number }
-pit-design-report-send-haulage = Rampalar taşıma ağına gönderildi
 pit-design-send-planning = Planlamaya gönder
 pit-design-update-planning = Planlamada güncelle
 pit-design-send-planning-help = Ocağın yüzeyini, Üçgenleme oluştur'un yapacağı gibi çizgilerinden oluşturur ve topoğrafyasına göre, blok modelinden rezervli ve basamaklarına göre basamaklanmış bir planlama katısı yapar. Yeniden göndermek yüzeyi yerinde yeniden oluşturur ve katıyı günceller.
@@ -5294,8 +5287,3 @@ pit-design-rehab-failed = Döküm sahası yeniden biçimlendirilemedi: { $reason
 pit-design-rehab-cut = Dökümden kazılan
 pit-design-rehab-fill = Ötesine serilen
 pit-design-rehab-footprint = Ayak izi
-pit-design-sent-roads =
-    { $count ->
-        [one] { $design } rampası taşıma ağına bir yol olarak gönderildi.
-       *[other] { $design } rampaları taşıma ağına { $count } yol olarak gönderildi.
-    }

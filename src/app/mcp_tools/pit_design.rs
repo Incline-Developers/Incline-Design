@@ -69,12 +69,12 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "send_pit_design",
             "title": "Send a pit design on",
-            "description": "Send a pit design on to the rest of the project, as the Pit Design tool's Send buttons do. to haul_network: each ramp becomes a haul road along its centreline, joined to the network's nodes and roads it comes within the join tolerance of. to planning: the pit's surface is made from its strings as triangulate would make it, as a project surface named after it, and a Planning solid of it against its topography (settings.topography, which it needs), reserved from settings.evaluation.block_model and benched at its RLs; runs in the background (get_tasks follows it, get_solids reads the solid). Sending again replaces what it sent before: the roads, or the surface rebuilt in place and the solid brought up to date. Its design must be current (get_pit_designs says fresh). Returns what it made.",
+            "description": "Send a pit design on to Planning, as the Pit Design tool's Send to Planning does. (Its ramps need no sending: each is always a haul road along its centreline in the haul network, joined to the network's nodes and roads it comes within the join tolerance of, kept in step with the design as it changes and gone with it.) to planning: the pit's surface is made from its strings as triangulate would make it, as a project surface named after it, and a Planning solid of it against its topography (settings.topography, which it needs), reserved from settings.evaluation.block_model and benched at its RLs; runs in the background (get_tasks follows it, get_solids reads the solid). Sending again rebuilds the surface in place and brings the solid up to date. Its design must be current (get_pit_designs says fresh). Returns what it made.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "design": { "type": "integer", "minimum": 0 },
-                    "to": { "type": "string", "enum": ["haul_network", "planning"] },
+                    "to": { "type": "string", "enum": ["planning"] },
                 },
                 "required": ["design", "to"],
                 "additionalProperties": false,
@@ -695,16 +695,11 @@ impl App<'_> {
     fn mcp_send_pit_design(&mut self, arguments: &Value) -> Result<Value, String> {
         let (id, _) = self.mcp_pit_design(arguments)?;
         match arguments["to"].as_str() {
-            Some("haul_network") => {
-                self.send_pit_ramps_to_haulage(id).map_err(|error| format!("{error:#}"))?;
-                let (_, pit) = self.operand_object(id).and_then(pit_parts).ok_or("The design is gone.")?;
-                Ok(json!({ "roads": pit.sent.roads.iter().map(|road| road.0).collect::<Vec<_>>() }))
-            }
             Some("planning") => {
                 self.send_pit_to_planning(id).map_err(|error| format!("{error:#}"))?;
                 Ok(json!({ "started": "send_pit_design" }))
             }
-            _ => Err("to is haul_network or planning.".to_owned()),
+            _ => Err("to is planning: a design's ramps are always in the haul network.".to_owned()),
         }
     }
 

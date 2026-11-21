@@ -5517,8 +5517,6 @@ pit-design-ramp-place = Разместить съезд
 pit-design-ramp-place-help = Щёлкните линию там, где съезд от неё отходит, затем спроектируйте съезд.
 pit-design-ramp-remove = Убрать съезд
 pit-design-ramp-remove-short = Удалить
-pit-design-send-to = Отправить в
-pit-design-send-to-help = Отправить съезды в сеть дорог или карьер в планирование.
 pit-design-ramp-remove-help = Проектировать карьер без съезда. Его настройки сохраняются, чтобы разместить снова.
 pit-design-done = Готово
 pit-design-kind = Проект карьера
@@ -5602,15 +5600,10 @@ pit-design-layer-crest = Бровка
 pit-design-layer-toe = Подошва
 pit-design-layer-ramp = Съезд
 pit-design-layer-daylight = Линия выхода
-pit-design-send-haulage = Отправить съезды в сеть дорог
-pit-design-update-haulage = Обновить дороги
-pit-design-send-haulage-help = Каждый съезд становится дорогой по своей оси, присоединённой к дорогам и узлам сети, к которым он подходит. Повторная отправка заменяет отправленные ранее дороги.
 pit-design-send-missing = Проект карьера больше не существует.
 pit-design-send-not-designed = Проект карьера ещё рассчитывается: отправьте его, когда он будет готов.
-pit-design-send-no-ramp = У проекта карьера нет съезда для отправки.
 pit-design-haul-road = Съезд { $design }
 pit-design-haul-road-numbered = Съезд { $number } { $design }
-pit-design-report-send-haulage = Съезды отправлены в сеть дорог
 pit-design-send-planning = Отправить в планирование
 pit-design-update-planning = Обновить в планировании
 pit-design-send-planning-help = Строит поверхность карьера по его линиям, как это сделало бы «Создать триангуляцию», и тело планирования относительно его топографии, с запасами из его блочной модели и с его уступами. Повторная отправка перестраивает поверхность на месте и обновляет тело.
@@ -5639,8 +5632,3 @@ pit-design-rehab-failed = Не удалось переформировать о�
 pit-design-rehab-cut = Срезано с отвала
 pit-design-rehab-fill = Отсыпано за ним
 pit-design-rehab-footprint = Площадь основания
-pit-design-sent-roads =
-    { $count ->
-        [one] Съезд { $design } отправлен в сеть дорог как одна дорога.
-       *[other] Съезды { $design } отправлены в сеть дорог, дорог: { $count }.
-    }

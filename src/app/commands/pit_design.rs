@@ -691,6 +691,17 @@ impl App<'_> {
     /// it was last worked out. Called every frame; it looks again only when
     /// the project or the surfaces have changed.
     pub(crate) fn refresh_pit_designs(&mut self) {
+        let checked = self.editor.pit_refresh_checked;
+        self.refresh_stale_pit_designs();
+        // Whatever changed the project (an edit, undo or redo, a design
+        // worked out), the pits' ramps are the network's roads still.
+        if self.editor.pit_refresh_checked != checked {
+            self.keep_pit_roads();
+        }
+    }
+
+    /// [`Self::refresh_pit_designs`]'s designs worked out again.
+    fn refresh_stale_pit_designs(&mut self) {
         let Some(project) = self.workspace.active_project() else {
             return;
         };

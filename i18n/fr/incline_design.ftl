@@ -5137,8 +5137,6 @@ pit-design-ramp-place = Placer la rampe
 pit-design-ramp-place-help = Cliquez sur la ligne là où la rampe la quitte, puis concevez la rampe.
 pit-design-ramp-remove = Retirer la rampe
 pit-design-ramp-remove-short = Retirer
-pit-design-send-to = Envoyer à
-pit-design-send-to-help = Envoyer les rampes au réseau de roulage, ou la fosse à la planification.
 pit-design-ramp-remove-help = Concevoir la fosse sans rampe. Ses réglages sont conservés pour la replacer.
 pit-design-done = Terminé
 pit-design-kind = Conception de fosse
@@ -5218,15 +5216,10 @@ pit-design-layer-crest = Crête
 pit-design-layer-toe = Pied
 pit-design-layer-ramp = Rampe
 pit-design-layer-daylight = Ligne de jour
-pit-design-send-haulage = Envoyer les rampes au réseau de roulage
-pit-design-update-haulage = Mettre à jour les pistes
-pit-design-send-haulage-help = Chaque rampe devient une piste de roulage le long de son axe, raccordée aux pistes et nœuds du réseau qu'elle approche. Un nouvel envoi remplace les pistes envoyées auparavant.
 pit-design-send-missing = La conception de fosse n'existe plus.
 pit-design-send-not-designed = La conception de fosse est encore en calcul : envoyez-la une fois prête.
-pit-design-send-no-ramp = La conception de fosse n'a pas de rampe à envoyer.
 pit-design-haul-road = Rampe de { $design }
 pit-design-haul-road-numbered = Rampe { $number } de { $design }
-pit-design-report-send-haulage = Rampes envoyées au réseau de roulage
 pit-design-send-planning = Envoyer à la planification
 pit-design-update-planning = Mettre à jour dans la planification
 pit-design-send-planning-help = Crée la surface de la fosse à partir de ses lignes, comme le ferait Créer une triangulation, et un solide de planification par rapport à sa topographie, avec les réserves de son modèle de blocs et ses gradins. Un nouvel envoi reconstruit la surface sur place et met le solide à jour.
@@ -5255,8 +5248,3 @@ pit-design-rehab-failed = La verse n'a pas pu être remodelée : { $reason }
 pit-design-rehab-cut = Déblai sur la verse
 pit-design-rehab-fill = Remblai au-delà
 pit-design-rehab-footprint = Emprise
-pit-design-sent-roads =
-    { $count ->
-        [one] La rampe de { $design } a été envoyée au réseau de roulage comme une piste.
-       *[other] Les rampes de { $design } ont été envoyées au réseau de roulage comme { $count } pistes.
-    }

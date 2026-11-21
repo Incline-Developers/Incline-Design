@@ -5164,8 +5164,6 @@ pit-design-ramp-place = Đặt đường dốc
 pit-design-ramp-place-help = Nhấp vào đường nơi đường dốc rời khỏi nó, rồi thiết kế đường dốc.
 pit-design-ramp-remove = Bỏ đường dốc
 pit-design-ramp-remove-short = Xóa
-pit-design-send-to = Gửi tới
-pit-design-send-to-help = Gửi các đường dốc vào mạng vận tải, hoặc moong sang Lập kế hoạch.
 pit-design-ramp-remove-help = Thiết kế moong không có đường dốc. Các thiết lập của nó được giữ lại để đặt lại.
 pit-design-done = Xong
 pit-design-kind = Thiết kế moong
@@ -5243,15 +5241,10 @@ pit-design-layer-crest = Mép trên
 pit-design-layer-toe = Chân tầng
 pit-design-layer-ramp = Đường dốc
 pit-design-layer-daylight = Đường giao địa hình
-pit-design-send-haulage = Gửi đường dốc vào mạng vận tải
-pit-design-update-haulage = Cập nhật đường vận tải
-pit-design-send-haulage-help = Mỗi đường dốc thành một đường vận tải dọc theo tim đường, nối với các đường và nút của mạng mà nó đi gần. Gửi lại sẽ thay các đường đã gửi trước đó.
 pit-design-send-missing = Thiết kế moong không còn nữa.
 pit-design-send-not-designed = Thiết kế moong vẫn đang được tính: hãy gửi khi xong.
-pit-design-send-no-ramp = Thiết kế moong không có đường dốc nào để gửi.
 pit-design-haul-road = Đường dốc { $design }
 pit-design-haul-road-numbered = Đường dốc { $number } { $design }
-pit-design-report-send-haulage = Đã gửi các đường dốc vào mạng vận tải
 pit-design-send-planning = Gửi sang Lập kế hoạch
 pit-design-update-planning = Cập nhật trong Lập kế hoạch
 pit-design-send-planning-help = Tạo bề mặt moong từ các đường của nó, như Tạo lưới tam giác sẽ làm, và một khối Lập kế hoạch so với địa hình, có trữ lượng từ mô hình khối và chia tầng như moong. Gửi lại sẽ dựng lại bề mặt tại chỗ và cập nhật khối.
@@ -5280,8 +5273,3 @@ pit-design-rehab-failed = Không định hình lại được bãi thải: { $re
 pit-design-rehab-cut = Đào từ bãi thải
 pit-design-rehab-fill = Đắp ra ngoài
 pit-design-rehab-footprint = Diện tích chiếm đất
-pit-design-sent-roads =
-    { $count ->
-        [one] Đã gửi đường dốc của { $design } vào mạng vận tải thành một đường.
-       *[other] Đã gửi các đường dốc của { $design } vào mạng vận tải thành { $count } đường.
-    }

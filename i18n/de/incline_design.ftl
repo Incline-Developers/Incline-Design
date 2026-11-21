@@ -5177,8 +5177,6 @@ pit-design-ramp-place = Rampe platzieren
 pit-design-ramp-place-help = Klicken Sie auf die Linie, wo die Rampe sie verlässt, und entwerfen Sie dann die Rampe.
 pit-design-ramp-remove = Rampe entfernen
 pit-design-ramp-remove-short = Entfernen
-pit-design-send-to = Senden an
-pit-design-send-to-help = Die Rampen ins Transportnetz oder die Grube an die Planung senden.
 pit-design-ramp-remove-help = Die Grube ohne Rampe entwerfen. Ihre Einstellungen bleiben erhalten, um sie erneut zu platzieren.
 pit-design-done = Fertig
 pit-design-kind = Grubenentwurf
@@ -5258,15 +5256,10 @@ pit-design-layer-crest = Oberkante
 pit-design-layer-toe = Unterkante
 pit-design-layer-ramp = Rampe
 pit-design-layer-daylight = Geländeanschnitt
-pit-design-send-haulage = Rampen ins Transportnetz senden
-pit-design-update-haulage = Transportwege aktualisieren
-pit-design-send-haulage-help = Jede Rampe wird zu einem Transportweg entlang ihrer Mittellinie, verbunden mit den Wegen und Knoten des Netzes, denen sie nahe kommt. Erneutes Senden ersetzt die zuvor gesendeten Wege.
 pit-design-send-missing = Der Grubenentwurf ist nicht mehr vorhanden.
 pit-design-send-not-designed = Der Grubenentwurf wird noch berechnet: Senden Sie ihn, sobald er fertig ist.
-pit-design-send-no-ramp = Der Grubenentwurf hat keine Rampe zum Senden.
 pit-design-haul-road = { $design } Rampe
 pit-design-haul-road-numbered = { $design } Rampe { $number }
-pit-design-report-send-haulage = Rampen ins Transportnetz gesendet
 pit-design-send-planning = An Planung senden
 pit-design-update-planning = In Planung aktualisieren
 pit-design-send-planning-help = Erstellt die Oberfläche der Grube aus ihren Linien, wie Triangulation erstellen es täte, und einen Planungskörper daraus gegen ihre Topografie, mit Vorräten aus ihrem Blockmodell und so abgestuft wie sie. Erneutes Senden baut die Oberfläche an Ort und Stelle neu und bringt den Körper auf den neuesten Stand.
@@ -5295,8 +5288,3 @@ pit-design-rehab-failed = Die Halde konnte nicht umgeformt werden: { $reason }
 pit-design-rehab-cut = Von der Halde abgetragen
 pit-design-rehab-fill = Davor aufgetragen
 pit-design-rehab-footprint = Grundfläche
-pit-design-sent-roads =
-    { $count ->
-        [one] Die Rampe von { $design } wurde als ein Weg ins Transportnetz gesendet.
-       *[other] Die Rampen von { $design } wurden als { $count } Wege ins Transportnetz gesendet.
-    }

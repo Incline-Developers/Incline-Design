@@ -5187,8 +5187,6 @@ pit-design-ramp-place = Налуу зам байрлуулах
 pit-design-ramp-place-help = Налуу зам шугамаас гарах газар дарж, дараа нь налуу замыг төлөвлөнө үү.
 pit-design-ramp-remove = Налуу зам хасах
 pit-design-ramp-remove-short = Устгах
-pit-design-send-to = Илгээх
-pit-design-send-to-help = Налуу замуудыг тээврийн сүлжээнд, эсвэл уурхайг төлөвлөлт рүү илгээнэ.
 pit-design-ramp-remove-help = Уурхайг налуу замгүй төлөвлөх. Дахин байрлуулахаар тохиргоо нь хадгалагдана.
 pit-design-done = Болсон
 pit-design-kind = Уурхайн төсөл
@@ -5268,15 +5266,10 @@ pit-design-layer-crest = Дээд ирмэг
 pit-design-layer-toe = Доод ирмэг
 pit-design-layer-ramp = Налуу зам
 pit-design-layer-daylight = Гадаргуутай огтлолцол
-pit-design-send-haulage = Налуу замуудыг тээврийн сүлжээнд илгээх
-pit-design-update-haulage = Тээврийн замуудыг шинэчлэх
-pit-design-send-haulage-help = Налуу зам бүр төв шугамынхаа дагуу тээврийн зам болж, ойртсон сүлжээний зам, зангилаатай холбогдоно. Дахин илгээвэл өмнө илгээсэн замуудыг орлоно.
 pit-design-send-missing = Уурхайн төсөл байхгүй болсон.
 pit-design-send-not-designed = Уурхайн төслийг тооцоолж байна: бэлэн болмогц илгээнэ үү.
-pit-design-send-no-ramp = Уурхайн төсөлд илгээх налуу зам алга.
 pit-design-haul-road = { $design } налуу зам
 pit-design-haul-road-numbered = { $design } налуу зам { $number }
-pit-design-report-send-haulage = Налуу замуудыг тээврийн сүлжээнд илгээлээ
 pit-design-send-planning = Төлөвлөлт рүү илгээх
 pit-design-update-planning = Төлөвлөлтөд шинэчлэх
 pit-design-send-planning-help = Гурвалжинжуулалт үүсгэх шиг уурхайн гадаргууг шугамуудаас нь үүсгэж, түүний топографитай харьцуулсан төлөвлөлтийн биет, блок загварын нөөцтэй, шатлалтай нь үүсгэнэ. Дахин илгээвэл гадаргууг байранд нь шинэчилж биетийг шинэчилнэ.
@@ -5305,8 +5298,3 @@ pit-design-rehab-failed = Овоолгыг дахин хэлбэржүүлж ч�
 pit-design-rehab-cut = Овоолгоос хуулсан
 pit-design-rehab-fill = Гадна нь овоолсон
 pit-design-rehab-footprint = Эзлэх талбай
-pit-design-sent-roads =
-    { $count ->
-        [one] { $design }-ийн налуу замыг нэг зам болгон тээврийн сүлжээнд илгээлээ.
-       *[other] { $design }-ийн налуу замуудыг { $count } зам болгон тээврийн сүлжээнд илгээлээ.
-    }

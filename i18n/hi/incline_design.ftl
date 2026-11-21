@@ -5136,8 +5136,6 @@ pit-design-ramp-place = रैंप रखें
 pit-design-ramp-place-help = रेखा पर वहाँ क्लिक करें जहाँ रैंप उससे निकलता है, फिर रैंप डिज़ाइन करें।
 pit-design-ramp-remove = रैंप हटाएँ
 pit-design-ramp-remove-short = हटाएँ
-pit-design-send-to = भेजें
-pit-design-send-to-help = रैम्प ढुलाई नेटवर्क में, या पिट प्लानिंग में भेजें।
 pit-design-ramp-remove-help = पिट को बिना रैंप के डिज़ाइन करें। उसकी सेटिंग्स फिर से रखने के लिए बनी रहती हैं।
 pit-design-done = हो गया
 pit-design-kind = पिट डिज़ाइन
@@ -5217,15 +5215,10 @@ pit-design-layer-crest = क्रेस्ट
 pit-design-layer-toe = टो
 pit-design-layer-ramp = रैम्प
 pit-design-layer-daylight = डेलाइट
-pit-design-send-haulage = रैम्प ढुलाई नेटवर्क में भेजें
-pit-design-update-haulage = ढुलाई सड़कें अद्यतन करें
-pit-design-send-haulage-help = हर रैम्प अपनी केंद्र रेखा के साथ एक ढुलाई सड़क बनता है, जो नेटवर्क की उन सड़कों और नोड से जुड़ता है जिनके पास आता है। फिर से भेजने पर पहले भेजी सड़कें बदल जाती हैं।
 pit-design-send-missing = पिट डिज़ाइन अब मौजूद नहीं है।
 pit-design-send-not-designed = पिट डिज़ाइन की गणना अभी चल रही है: तैयार होने पर भेजें।
-pit-design-send-no-ramp = पिट डिज़ाइन में भेजने के लिए कोई रैम्प नहीं है।
 pit-design-haul-road = { $design } रैम्प
 pit-design-haul-road-numbered = { $design } रैम्प { $number }
-pit-design-report-send-haulage = रैम्प ढुलाई नेटवर्क में भेजे गए
 pit-design-send-planning = प्लानिंग में भेजें
 pit-design-update-planning = प्लानिंग में अद्यतन करें
 pit-design-send-planning-help = पिट की सतह उसकी रेखाओं से बनाता है, जैसे ट्रायंगुलेशन बनाएँ बनाता, और उसकी टोपोग्राफी के सापेक्ष एक प्लानिंग सॉलिड, उसके ब्लॉक मॉडल से रिज़र्व और उसी की बेंचों में। फिर से भेजने पर सतह उसी जगह फिर बनती है और सॉलिड अद्यतन होता है।
@@ -5254,8 +5247,3 @@ pit-design-rehab-failed = डंप को नया आकार नहीं �
 pit-design-rehab-cut = डंप से काटा
 pit-design-rehab-fill = उसके आगे भरा
 pit-design-rehab-footprint = फ़ुटप्रिंट
-pit-design-sent-roads =
-    { $count ->
-        [one] { $design } का रैम्प ढुलाई नेटवर्क में एक सड़क के रूप में भेजा गया।
-       *[other] { $design } के रैम्प ढुलाई नेटवर्क में { $count } सड़कों के रूप में भेजे गए।
-    }

@@ -5134,8 +5134,6 @@ pit-design-ramp-place = Ubicar rampa
 pit-design-ramp-place-help = Haga clic en la línea donde sale la rampa y luego diséñela.
 pit-design-ramp-remove = Quitar rampa
 pit-design-ramp-remove-short = Quitar
-pit-design-send-to = Enviar a
-pit-design-send-to-help = Enviar las rampas a la red de transporte, o el tajo a Planificación.
 pit-design-ramp-remove-help = Diseñar el rajo sin rampa. Sus ajustes se conservan para volver a ubicarla.
 pit-design-done = Listo
 pit-design-kind = Diseño de rajo
@@ -5215,15 +5213,10 @@ pit-design-layer-crest = Cresta
 pit-design-layer-toe = Pie
 pit-design-layer-ramp = Rampa
 pit-design-layer-daylight = Afloramiento
-pit-design-send-haulage = Enviar rampas a la red de transporte
-pit-design-update-haulage = Actualizar caminos
-pit-design-send-haulage-help = Cada rampa se convierte en un camino de acarreo a lo largo de su eje, unido a los caminos y nodos de la red a los que se acerca. Enviarla de nuevo reemplaza los caminos enviados antes.
 pit-design-send-missing = El diseño de tajo ya no existe.
 pit-design-send-not-designed = El diseño de tajo aún se está calculando: envíelo cuando esté listo.
-pit-design-send-no-ramp = El diseño de tajo no tiene rampa que enviar.
 pit-design-haul-road = Rampa de { $design }
 pit-design-haul-road-numbered = Rampa { $number } de { $design }
-pit-design-report-send-haulage = Rampas enviadas a la red de transporte
 pit-design-send-planning = Enviar a Planificación
 pit-design-update-planning = Actualizar en Planificación
 pit-design-send-planning-help = Crea la superficie del tajo a partir de sus líneas, como lo haría Crear triangulación, y un sólido de Planificación con ella frente a su topografía, con reservas de su modelo de bloques y con sus bancos. Enviarlo de nuevo reconstruye la superficie en su lugar y actualiza el sólido.
@@ -5252,8 +5245,3 @@ pit-design-rehab-failed = No se pudo remodelar el botadero: { $reason }
 pit-design-rehab-cut = Cortado del botadero
 pit-design-rehab-fill = Colocado más allá
 pit-design-rehab-footprint = Huella
-pit-design-sent-roads =
-    { $count ->
-        [one] Se envió la rampa de { $design } a la red de transporte como un camino.
-       *[other] Se enviaron las rampas de { $design } a la red de transporte como { $count } caminos.
-    }

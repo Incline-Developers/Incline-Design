@@ -1428,10 +1428,6 @@ impl<'a> App<'a> {
                 self.flush_pit_design_draft();
                 self.send_pit_to_planning(id)
             }
-            UiCommand::SendPitRampsToHaulage(id) => {
-                self.flush_pit_design_draft();
-                self.send_pit_ramps_to_haulage(id).map(|_| ())
-            }
             UiCommand::FramePitFlag(index) => {
                 self.frame_pit_flag(index);
                 Ok(())

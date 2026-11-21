@@ -5178,8 +5178,6 @@ pit-design-ramp-place = Posiziona rampa
 pit-design-ramp-place-help = Fai clic sulla linea dove la rampa la lascia, poi progetta la rampa.
 pit-design-ramp-remove = Rimuovi rampa
 pit-design-ramp-remove-short = Rimuovi
-pit-design-send-to = Invia a
-pit-design-send-to-help = Invia le rampe alla rete di trasporto, o la fossa alla pianificazione.
 pit-design-ramp-remove-help = Progetta la fossa senza rampa. Le sue impostazioni restano, per posizionarla di nuovo.
 pit-design-done = Fatto
 pit-design-kind = Progetto della fossa
@@ -5259,15 +5257,10 @@ pit-design-layer-crest = Cresta
 pit-design-layer-toe = Piede
 pit-design-layer-ramp = Rampa
 pit-design-layer-daylight = Linea di affioramento
-pit-design-send-haulage = Invia le rampe alla rete di trasporto
-pit-design-update-haulage = Aggiorna le piste
-pit-design-send-haulage-help = Ogni rampa diventa una pista di trasporto lungo il suo asse, collegata alle piste e ai nodi della rete a cui si avvicina. Un nuovo invio sostituisce le piste inviate prima.
 pit-design-send-missing = Il progetto di fossa non esiste più.
 pit-design-send-not-designed = Il progetto di fossa è ancora in calcolo: invialo quando è pronto.
-pit-design-send-no-ramp = Il progetto di fossa non ha rampe da inviare.
 pit-design-haul-road = Rampa di { $design }
 pit-design-haul-road-numbered = Rampa { $number } di { $design }
-pit-design-report-send-haulage = Rampe inviate alla rete di trasporto
 pit-design-send-planning = Invia alla pianificazione
 pit-design-update-planning = Aggiorna nella pianificazione
 pit-design-send-planning-help = Crea la superficie della fossa dalle sue linee, come farebbe Crea triangolazione, e un solido di pianificazione rispetto alla sua topografia, con le riserve del suo modello a blocchi e i suoi gradoni. Un nuovo invio ricostruisce la superficie sul posto e aggiorna il solido.
@@ -5296,8 +5289,3 @@ pit-design-rehab-failed = Impossibile rimodellare la discarica: { $reason }
 pit-design-rehab-cut = Sterro dalla discarica
 pit-design-rehab-fill = Riporto oltre
 pit-design-rehab-footprint = Impronta
-pit-design-sent-roads =
-    { $count ->
-        [one] La rampa di { $design } è stata inviata alla rete di trasporto come una pista.
-       *[other] Le rampe di { $design } sono state inviate alla rete di trasporto come { $count } piste.
-    }

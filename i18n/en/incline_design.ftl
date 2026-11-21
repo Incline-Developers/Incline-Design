@@ -5844,8 +5844,6 @@ pit-design-ramp-place = Place ramp
 pit-design-ramp-place-help = Click the string where the ramp leaves it, then design the ramp.
 pit-design-ramp-remove = Remove ramp
 pit-design-ramp-remove-short = Remove
-pit-design-send-to = Send to
-pit-design-send-to-help = Send the ramps to the haul network, or the pit to Planning.
 pit-design-ramp-remove-help = Design the pit with no ramp. Its settings are kept, for placing it again.
 pit-design-done = Done
 pit-design-name = Name
@@ -5915,15 +5913,10 @@ pit-design-layer-crest = Crest
 pit-design-layer-toe = Toe
 pit-design-layer-ramp = Ramp
 pit-design-layer-daylight = Daylight
-pit-design-send-haulage = Send ramps to haul network
-pit-design-update-haulage = Update haul roads
-pit-design-send-haulage-help = Each ramp becomes a haul road along its centreline, joined to the network's roads and nodes it comes near. Sending again replaces the roads it sent before.
 pit-design-send-missing = The pit design is gone.
 pit-design-send-not-designed = The pit design is still being worked out: send it once it is.
-pit-design-send-no-ramp = The pit design has no ramp to send.
 pit-design-haul-road = { $design } ramp
 pit-design-haul-road-numbered = { $design } ramp { $number }
-pit-design-report-send-haulage = Sent the ramps to the haul network
 pit-design-send-planning = Send to Planning
 pit-design-update-planning = Update in Planning
 pit-design-send-planning-help = Makes the pit's surface from its strings, as Create Triangulation would, and a Planning solid of it against its topography, reserved from its block model and benched as it is. Sending again rebuilds the surface in place and brings the solid up to date.
@@ -5952,8 +5945,3 @@ pit-design-rehab-failed = The dump could not be reshaped: { $reason }
 pit-design-rehab-cut = Cut from the dump
 pit-design-rehab-fill = Placed beyond it
 pit-design-rehab-footprint = Footprint
-pit-design-sent-roads =
-    { $count ->
-        [one] Sent { $design }'s ramp to the haul network as one road.
-       *[other] Sent { $design }'s ramps to the haul network as { $count } roads.
-    }
