@@ -1528,6 +1528,7 @@ fn draw_ui(
     draw_machine_icons(root_ui, editor, canvas_rect);
     draw_machine_labels(root_ui, editor, &project.schedule, canvas_rect, &mut space);
     draw_haul_flows(root_ui, editor, canvas_rect);
+    dialogs::pit_design::draw_pit_ground_tag(root_ui, editor, canvas_rect);
     if editor.is_schedule_animation()
         && let Some(frame) = editor.video_export_frame
     {

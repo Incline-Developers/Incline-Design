@@ -397,9 +397,61 @@ fn button_row(ui: &mut egui::Ui, label: String, help: String, buttons: &[(String
     clicked
 }
 
+/// The ground under the pointer while a pit's string is drawn, beside the
+/// pointer: what the RL is set by, and how far below or above the string
+/// would sit. The RL itself is the toolbar's Z.
+pub(crate) fn draw_pit_ground_tag(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
+    if !editor.pit_drawing() {
+        return;
+    }
+    let Some(reading) = editor.pit_ground_under_cursor else {
+        return;
+    };
+    let ctx = ui.ctx();
+    let Some(pointer) = ctx.pointer_hover_pos().filter(|pos| canvas_rect.contains(*pos)) else {
+        return;
+    };
+    // Only over the scene itself, not the panel or a menu over it.
+    if ctx.layer_id_at(pointer).is_some_and(|layer| layer != egui::LayerId::background()) {
+        return;
+    }
+    let text = reading.map_or_else(
+        || "-".to_owned(),
+        |ground| {
+            let (rl, depth) = (format!("{ground:.1}"), ground - editor.z_level);
+            if depth >= 0.0 {
+                tr!("pit-design-draw-ground-above", rl = rl, by = format!("{depth:.1}"))
+            } else {
+                tr!("pit-design-draw-ground-below", rl = rl, by = format!("{:.1}", -depth))
+            }
+        },
+    );
+    let visuals = ui.visuals();
+    let painter = ctx
+        .layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("pit_ground_tag")))
+        .with_clip_rect(canvas_rect);
+    let font = egui::FontId::proportional(12.0);
+    let label = painter.layout_no_wrap(tr!("pit-design-draw-ground"), font.clone(), visuals.weak_text_color());
+    let value = painter.layout_no_wrap(text, font, visuals.text_color());
+    let gap = 6.0;
+    let size = egui::vec2(label.size().x + gap + value.size().x, label.size().y.max(value.size().y)) + egui::vec2(12.0, 8.0);
+    // Below and right of the pointer, turned back in at the view's edges.
+    let mut min = pointer + egui::vec2(16.0, 20.0);
+    if min.x + size.x > canvas_rect.right() {
+        min.x = pointer.x - 16.0 - size.x;
+    }
+    if min.y + size.y > canvas_rect.bottom() {
+        min.y = pointer.y - 20.0 - size.y;
+    }
+    let rect = egui::Rect::from_min_size(min, size);
+    painter.rect_filled(rect, crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS, visuals.window_fill());
+    let label_width = label.size().x;
+    painter.galley(rect.min + egui::vec2(6.0, 4.0), label, visuals.weak_text_color());
+    painter.galley(rect.min + egui::vec2(6.0 + label_width + gap, 4.0), value, visuals.text_color());
+}
+
 /// The Pit Design tool's panel, docked in the viewport while a pit design is
-/// open in it: its name and settings, and what it
-/// comes to.
+/// open in it: its name and settings, and what it comes to.
 pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
     // Drawing the string: how its corners are made.
     if editor.pit_drawing() {
@@ -407,32 +459,6 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
             .min_width(300.0)
             .help_text(tr!("pit-design-draw-help"))
             .show(ui.ctx(), |ui| {
-                // The level the string is drawn at: the same as the
-                // toolbar's Z, set here where it matters most.
-                let response = MenuFieldF64::new(tr!("pit-design-draw-rl"), &mut editor.z_input, f64::MIN..=f64::MAX)
-                    .speed(0.5)
-                    .suffix(" m")
-                    .help_text(tr!("pit-design-draw-rl-help"))
-                    .show(ui);
-                if response.changed() && editor.z_input.is_finite() {
-                    editor.z_level = editor.z_input;
-                }
-                // The ground under the pointer, to set the RL by, and how far
-                // the string would sit below or above it.
-                if let Some(reading) = editor.pit_ground_under_cursor {
-                    let text = reading.map_or_else(
-                        || "-".to_owned(),
-                        |ground| {
-                            let (rl, depth) = (format!("{ground:.1}"), ground - editor.z_level);
-                            if depth >= 0.0 {
-                                tr!("pit-design-draw-ground-above", rl = rl, by = format!("{depth:.1}"))
-                            } else {
-                                tr!("pit-design-draw-ground-below", rl = rl, by = format!("{:.1}", -depth))
-                            }
-                        },
-                    );
-                    read_only_row(ui, &tr!("pit-design-draw-ground"), &text);
-                }
                 MenuFieldBool::new(tr!("pit-design-round-corners"), &mut editor.pit_round_corners)
                     .help_text(tr!("pit-design-round-corners-help"))
                     .show(ui);
@@ -458,8 +484,6 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
             if let Some(working) = draft.working.as_mut() {
                 MenuFieldText::new(tr!("pit-design-name"), &mut working.name).width(FIELD_WIDTH).show(ui);
             }
-            // The step's settings and what they come to scroll between the
-            // name and the actions, which stay in view.
             // Each step scrolls on its own, from its top.
             let stage_salt = match draft.stage {
                 PitStage::Benches => "benches",
