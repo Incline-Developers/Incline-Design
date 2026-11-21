@@ -196,6 +196,8 @@ struct Block {
 /// what sending it there instead changes, for all of its tonnes: what the
 /// movements earn, undiscounted, and the truck hours by class. The pile is
 /// the one its material does best through, receipt and reclaim together.
+/// Material whose best way already is to a pile the crusher is fed from is
+/// one too: it goes there when dug and feeds the crusher when reclaimed.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Stockable {
     crusher: usize,
@@ -213,6 +215,13 @@ struct Stockable {
     reclaim_dig_t: f64,
     /// The piles it may go to, by position in the input's destinations.
     pile: usize,
+    /// Material whose best way is to the pile, which reaches the crusher
+    /// only when reclaimed: sent there whenever it is dug.
+    only_pile: bool,
+    /// What it contains of each grade the crusher's targets price, for
+    /// material only a pile takes; a crusher's own feed carries its assay
+    /// on the block.
+    contained: Vec<(usize, f64)>,
 }
 
 /// Each crusher grade target's rows, by `(crusher, grade, period)`: the
@@ -248,9 +257,9 @@ struct StockColumn {
 /// own, there only to be reclaimed. The classes stand for whichever piles
 /// the material does best through, with their room together.
 struct Stockpiling {
-    /// Each block's feed in each class: `(row, tonnes)`, the row its
-    /// period's first.
-    feed: Vec<Vec<(usize, f64)>>,
+    /// What each block dug adds to the classes' rows: `(row, stride, amount)`,
+    /// the row its first period's, a period's that many rows on.
+    feed: Vec<Vec<(usize, usize, f64)>>,
     columns: Vec<StockColumn>,
 }
 
@@ -262,11 +271,12 @@ impl Stockpiling {
         spans: usize,
         discount: &[f64],
         limits: &mut Vec<f64>,
+        equal: &mut BTreeSet<usize>,
         crush_row: &BTreeMap<(usize, usize), usize>,
         haul_row: &BTreeMap<(usize, usize), usize>,
         hinges: &HingeRows,
     ) -> Self {
-        let mut feed: Vec<Vec<(usize, f64)>> = vec![Vec::new(); blocks.len()];
+        let mut feed: Vec<Vec<(usize, usize, f64)>> = vec![Vec::new(); blocks.len()];
         let mut columns: Vec<StockColumn> = Vec::new();
         let crushers: Vec<DestinationId> = input
             .destinations
@@ -288,7 +298,7 @@ impl Stockpiling {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, block)| {
-                    let stock = block.stock.iter().find(|stock| stock.crusher == crusher && stock.tonnes > 1e-9)?;
+                    let stock = block.stock.iter().find(|stock| stock.crusher == crusher && !stock.only_pile && stock.tonnes > 1e-9)?;
                     let crushed: f64 = block.crushed.iter().filter(|(at, _)| *at == crusher).map(|(_, tonnes)| tonnes).sum();
                     let contained: f64 = grade
                         .map(|grade| {
@@ -335,7 +345,7 @@ impl Stockpiling {
                 let class = (((running + 0.5 * tonnes) / total.max(1e-9)) * classes as f64).floor().clamp(0.0, (classes - 1) as f64) as usize;
                 running += tonnes;
                 let block = &blocks[*index];
-                let Some(stock) = block.stock.iter().find(|stock| stock.crusher == crusher) else {
+                let Some(stock) = block.stock.iter().find(|stock| stock.crusher == crusher && !stock.only_pile) else {
                     continue;
                 };
                 let crushed: f64 = block.crushed.iter().filter(|(at, _)| *at == crusher).map(|(_, tonnes)| tonnes).sum();
@@ -355,6 +365,33 @@ impl Stockpiling {
                 }
                 entry.members.push((*index, stock.tonnes));
                 piles.insert(stock.pile);
+            }
+            // What only a pile takes, a class of its own that is sent there
+            // whenever it is dug.
+            let mut forced = Class {
+                tonnes: 0.0,
+                to_pile: 0.0,
+                reclaim: 0.0,
+                reclaim_dig_t: 0.0,
+                hauls: BTreeMap::new(),
+                rehauls: BTreeMap::new(),
+                contained: BTreeMap::new(),
+                members: Vec::new(),
+            };
+            for (index, block) in blocks.iter().enumerate() {
+                for stock in block.stock.iter().filter(|stock| stock.crusher == crusher && stock.only_pile && stock.tonnes > 1e-9) {
+                    forced.tonnes += stock.tonnes;
+                    forced.reclaim += stock.reclaim;
+                    forced.reclaim_dig_t += stock.reclaim_dig_t;
+                    for (truck, hours) in &stock.rehauls {
+                        *forced.rehauls.entry(*truck).or_default() += hours;
+                    }
+                    for (grade, contained) in &stock.contained {
+                        *forced.contained.entry(*grade).or_default() += contained;
+                    }
+                    forced.members.push((index, stock.tonnes));
+                    piles.insert(stock.pile);
+                }
             }
             // The piles' room together, past what they open with.
             let room: f64 = piles
@@ -424,31 +461,37 @@ impl Stockpiling {
                     }
                 }
             };
-            let classes_here: Vec<(Class, bool)> = sorted
+            // Each class, and how it is filled: by choice, whenever its
+            // ground is dug, or only by what the piles open with.
+            #[derive(PartialEq)]
+            enum Filled {
+                Chosen,
+                Dug,
+                Opening,
+            }
+            let classes_here: Vec<(Class, Filled)> = sorted
                 .into_iter()
                 .filter(|class| class.tonnes > 1e-9)
-                .map(|class| (class, true))
-                .chain((opening.tonnes > 1e-9).then_some((opening, false)))
+                .map(|class| (class, Filled::Chosen))
+                .chain((forced.tonnes > 1e-9).then_some((forced, Filled::Dug)))
+                .chain((opening.tonnes > 1e-9).then_some((opening, Filled::Opening)))
                 .collect();
-            for (class, receives) in &classes_here {
+            for (class, filled) in &classes_here {
+                let receives = *filled != Filled::Opening;
                 let per = |amount: f64| amount / class.tonnes.max(1e-9);
                 // What the class holds at the end of each period, a column of
                 // its own: no more than it held before, what it opened with
                 // for the first, and what the period sent, less what the
                 // period reclaimed.
-                // Exactly: a row each way, as the master's rows are limits.
-                let held_rows: Vec<(usize, usize)> = (0..spans)
+                // Exactly.
+                let held_rows: Vec<usize> = (0..spans)
                     .map(|period| {
-                        let opening = if period == 0 && !*receives { class.tonnes } else { 0.0 };
-                        limits.push(opening);
-                        limits.push(-opening);
-                        (limits.len() - 2, limits.len() - 1)
+                        limits.push(if period == 0 && !receives { class.tonnes } else { 0.0 });
+                        equal.insert(limits.len() - 1);
+                        limits.len() - 1
                     })
                     .collect();
-                let balance = |period: usize, sign: f64, terms: &mut Vec<(usize, f64)>| {
-                    terms.push((held_rows[period].0, sign));
-                    terms.push((held_rows[period].1, -sign));
-                };
+                let balance = |period: usize, sign: f64, terms: &mut Vec<(usize, f64)>| terms.push((held_rows[period], sign));
                 for (period, room) in room_rows.iter().enumerate() {
                     let mut terms = Vec::new();
                     balance(period, 1.0, &mut terms);
@@ -456,7 +499,7 @@ impl Stockpiling {
                         balance(period + 1, -1.0, &mut terms);
                     }
                     // What the piles open with is off their room already.
-                    if let Some(row) = room.filter(|_| *receives) {
+                    if let Some(row) = room.filter(|_| receives) {
                         terms.push((row, 1.0));
                     }
                     columns.push(StockColumn {
@@ -466,7 +509,7 @@ impl Stockpiling {
                     });
                 }
                 // No more of it sent in a period than was dug then.
-                let feed_rows: Vec<usize> = if *receives {
+                let feed_rows: Vec<usize> = if *filled == Filled::Chosen {
                     (0..spans)
                         .map(|_| {
                             limits.push(0.0);
@@ -477,10 +520,15 @@ impl Stockpiling {
                     Vec::new()
                 };
                 for (index, tonnes) in &class.members {
-                    feed[*index].push((feed_rows[0], *tonnes));
+                    if *filled == Filled::Dug {
+                        // Into the stock as it is dug.
+                        feed[*index].push((held_rows[0], 1, -tonnes));
+                    } else {
+                        feed[*index].push((feed_rows[0], 1, -tonnes));
+                    }
                 }
                 for period in 0..spans {
-                    if *receives {
+                    if *filled == Filled::Chosen {
                         let mut terms = vec![(feed_rows[period], 1.0)];
                         if let Some(row) = crush_row.get(&(crusher, period)) {
                             terms.push((*row, -1.0));
@@ -528,7 +576,7 @@ impl Stockpiling {
     /// What a block dug in `period` makes available to each class's
     /// stock: `(row, tonnes)`.
     fn feed(&self, index: usize, period: usize) -> impl Iterator<Item = (usize, f64)> + '_ {
-        self.feed[index].iter().map(move |(first, tonnes)| (first + period, *tonnes))
+        self.feed[index].iter().map(move |(first, stride, used)| (first + stride * period, *used))
     }
 
     /// What one more unit of each column would add at `prices`, where that
@@ -863,13 +911,51 @@ fn blocks(input: &BlendInput, request: &PlanRequest<'_>, grounds: &[GroundId]) -
                         None => piled.push((at, share_t)),
                     }
                 }
+                // Its best way is to a pile reclaimed to a crusher: it feeds
+                // that crusher once reclaimed.
+                if let Some((at, pile)) = pile_of(*destination)
+                    && let Some((crusher, &(reclaimed, reclaim_truck, reclaim_hours, digging))) = (0..crushers.len())
+                        .filter_map(|crusher| reclaims.get(&(pile, crusher)).map(|reclaim| (crusher, reclaim)))
+                        .max_by(|a, b| a.1.0.total_cmp(&b.1.0))
+                {
+                    let at_entry = match stock.iter().position(|held| held.crusher == crusher && held.only_pile) {
+                        Some(found) => found,
+                        None => {
+                            stock.push(Stockable {
+                                crusher,
+                                pile: at,
+                                only_pile: true,
+                                ..Stockable::default()
+                            });
+                            stock.len() - 1
+                        }
+                    };
+                    let entry = &mut stock[at_entry];
+                    entry.tonnes += share_t;
+                    entry.reclaim += reclaimed * share_t;
+                    entry.reclaim_dig_t += digging * share_t;
+                    if let Some(truck) = reclaim_truck {
+                        match entry.rehauls.iter_mut().find(|(held, _)| *held == truck) {
+                            Some((_, held)) => *held += reclaim_hours * share_t,
+                            None => entry.rehauls.push((truck, reclaim_hours * share_t)),
+                        }
+                    }
+                    let fractions = input.grades.fractions(share.material).unwrap_or_default();
+                    for grade in targeted.iter().filter(|(on, _)| *on == crusher).map(|(_, grade)| *grade) {
+                        let contained = share_t * fractions.get(grade).copied().unwrap_or(0.0);
+                        match entry.contained.iter_mut().find(|(held, _)| *held == grade) {
+                            Some((_, held)) => *held += contained,
+                            None => entry.contained.push((grade, contained)),
+                        }
+                    }
+                }
                 if let Some(crusher) = crushers.iter().position(|id| id == destination) {
                     match crushed.iter_mut().find(|(held, _)| *held == crusher) {
                         Some((_, held)) => *held += share_t,
                         None => crushed.push((crusher, share_t)),
                     }
                     if let Some(&(receipt, pile, pile_truck, pile_hours, (reclaimed, reclaim_truck, reclaim_hours, digging))) = via.get(&(*ground, share.material, crusher)) {
-                        let at = match stock.iter().position(|held| held.crusher == crusher) {
+                        let at = match stock.iter().position(|held| held.crusher == crusher && !held.only_pile) {
                             Some(at) => at,
                             None => {
                                 stock.push(Stockable {
@@ -1470,7 +1556,9 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         .iter()
         .map(|(key, rows)| (*key, rows.iter().map(|at| (hinges[*at].row, hinges[*at].boundary, hinges[*at].direction)).collect()))
         .collect();
-    let stockpiling = Stockpiling::new(input, blocks, spans, &discount, &mut limits, &crush_row, &haul_row, &hinge_list);
+    // Rows that must hold exactly rather than as a limit.
+    let mut equal: BTreeSet<usize> = BTreeSet::new();
+    let stockpiling = Stockpiling::new(input, blocks, spans, &discount, &mut limits, &mut equal, &crush_row, &haul_row, &hinge_list);
     let worth = |column: &Column| -> f64 {
         blocks
             .iter()
@@ -1591,9 +1679,7 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                 out.extend((period..spans).filter_map(|later| pile_row.get(&(*at, later)).map(|row| (*row, *tonnes))));
             }
         }
-        for (row, tonnes) in stockpiling.feed(index, period) {
-            out.push((row, -tonnes));
-        }
+        out.extend(stockpiling.feed(index, period));
         let (crushed, hauled) = block.on_limits();
         for (crusher, tonnes) in crushed {
             if let Some(row) = crush_row.get(&(*crusher, period)) {
@@ -1712,6 +1798,9 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         let mut hard = vec![true; limits.len()];
         for hinge in &hinges {
             hard[hinge.row] = false;
+        }
+        for row in &equal {
+            hard[*row] = false;
         }
         hard
     };
@@ -1989,6 +2078,9 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         let mut stop = false;
         // The prices that gave the lowest bound on these groups, and it.
         let mut centre: Option<(Vec<f64>, f64)> = None;
+        // The lowest bound found on these groups, the stockpile columns'
+        // share counted: whether the mix is near enough the best.
+        let mut tightest = f64::INFINITY;
         // Near enough the best on these groups: a fraction of how far the
         // plan is from the bound, as the next split moves the best anyway.
         let enough = if bound.is_finite() { INNER * (bound - value).max(0.0) } else { 1e-3 * value.abs() }.max(IMPROVEMENT * value.abs().max(1.0));
@@ -2007,8 +2099,10 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                 excess.insert(hinge.row, master.add_col(-hinge.cost / unit, 0.0, f64::INFINITY));
             }
             let stocked = master.num_cols();
+            // Each in its own size, nought to its most, as the plans' shares
+            // are: in tonnes they ran to millions beside rows of about one.
             for column in &stockpiling.columns {
-                master.add_col(column.objective / unit, 0.0, column.upper);
+                master.add_col(column.objective * column.upper / unit, 0.0, 1.0);
             }
             let first = master.num_cols();
             for plan in &plans {
@@ -2017,7 +2111,7 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             for (row, limit) in limits.iter().enumerate() {
                 let scale = row_unit[row];
                 master.add_row(
-                    f64::NEG_INFINITY,
+                    if equal.contains(&row) { limit * scale } else { f64::NEG_INFINITY },
                     limit * scale,
                     plans
                         .iter()
@@ -2025,7 +2119,7 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                         .filter(|(_, plan)| plan.uses[row] != 0.0)
                         .map(|(at, plan)| (first + at, plan.uses[row] * scale))
                         .chain(excess.get(&row).map(|col| (*col, -scale)))
-                        .chain(stock_terms[row].iter().map(|(at, used)| (stocked + at, used * scale))),
+                        .chain(stock_terms[row].iter().map(|(at, used)| (stocked + at, used * stockpiling.columns[*at].upper * scale))),
                 );
             }
             master.add_row(f64::NEG_INFINITY, 1.0, (0..plans.len()).map(|at| (first + at, 1.0)));
@@ -2066,9 +2160,19 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
             basis = solution.basis.clone();
             value = solution.objective * unit;
             mixed = Some(solution.col_value[first..].to_vec());
-            // A limit's price is what one more tonne of it would add.
-            for ((price, dual), scale) in prices.iter_mut().zip(&solution.row_dual).zip(&row_unit) {
-                *price = dual.abs() * unit * scale;
+            // A limit's price is what one more tonne of it would add. A row
+            // held exactly may be worth more or less: its price keeps the
+            // sign the limits' prices are reported with.
+            let sense = solution
+                .row_dual
+                .iter()
+                .enumerate()
+                .filter(|(row, dual)| !equal.contains(row) && dual.abs() > 1e-12)
+                .map(|(_, dual)| dual.signum())
+                .next()
+                .unwrap_or(1.0);
+            for (row, ((price, dual), scale)) in prices.iter_mut().zip(&solution.row_dual).zip(&row_unit).enumerate() {
+                *price = if equal.contains(&row) { dual * sense } else { dual.abs() } * unit * scale;
             }
             // Never more than the hinge costs: past that the excess pays it.
             for hinge in &hinges {
@@ -2107,7 +2211,13 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                 inner.solve_with_cancel(cancelled).ok()?;
                 let held = inner.pit().ok()?.as_slice().to_vec();
                 let gain: f64 = gains.iter().zip(&held).filter(|(_, held)| **held).map(|(gain, _)| gain).sum();
-                let low = allowance(&at) + gain.max(0.0) + stockpiling.slack(&at);
+                // The point the next prices are drawn toward is the one whose
+                // closures and limits alone bound the plan lowest: the
+                // stockpile columns' share of the bound, each at its most,
+                // is too loose to steer by and held the prices back for
+                // rounds. The bound the plan stops on counts it.
+                let low = allowance(&at) + gain.max(0.0);
+                tightest = tightest.min(low + stockpiling.slack(&at));
                 if centre.as_ref().is_none_or(|(_, lowest)| low < *lowest) {
                     centre = Some((at, low));
                 }
@@ -2124,8 +2234,7 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
                 }
                 weight = 0.0;
             }
-            let lowest = centre.as_ref().map_or(f64::INFINITY, |(_, lowest)| *lowest);
-            let Some(plan) = found.filter(|_| lowest - value > enough) else {
+            let Some(plan) = found.filter(|_| tightest - value > enough) else {
                 break;
             };
             plans.push(plan);
