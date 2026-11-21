@@ -2567,7 +2567,7 @@ haul-open-layout = 打开路网
 haul-dump-override = 覆盖卸载时间 (s)
 haul-unlimited = 默认
 haul-convert-help = 将所选设计多段线转为运输道路。位于连接容差内的端点和交叉处成为共用节点；多段线本身保持不变。
-haul-empty = 暂无道路。请绘制一条，或转换、导入采坑设计多段线。
+haul-empty = 暂无道路。请绘制一条，或转换、导入台阶设计多段线。
 haul-connected-help = 当块体能在自动连接距离内到达某个道路节点，且上下坡不超过卡车最大坡度时，即为已连接。绿色块体连到最近的节点，蓝色块体连到为其选定的节点；红色块体够不到，仍会被排程，但需沿更长的直线行驶到最近的节点。
 haul-roads-selected =
     { $count ->
@@ -4983,9 +4983,9 @@ err-file-desc-opt-report = 优化报告
 
 ## Pit Design
 
-pit-design-menu = 采坑设计
-pit-design-title = 采坑设计
-pit-design-benches-section = 台阶
+pit-design-menu = 台阶设计
+pit-design-title = 台阶设计
+pit-design-benches-section = 边坡
 pit-design-bench-height = 台阶高度
 pit-design-face-angle = 坡面角
 pit-design-berm-width = 平台宽度
@@ -5139,24 +5139,24 @@ pit-design-ramp-remove = 移除坡道
 pit-design-ramp-remove-short = 移除
 pit-design-ramp-remove-help = 设计不带坡道的采坑。其设置会保留，以便再次放置。
 pit-design-done = 完成
-pit-design-kind = 采坑设计
+pit-design-kind = 台阶设计
 pit-design-explode = 分解
-pit-design-explode-help = 将采坑设计转换为多段线：其线条及每个台阶的线条，供手动编辑。它们不再是设计；撤销可恢复设计。
-pit-design-report-explode = 将采坑设计转换为多段线。
+pit-design-explode-help = 将台阶设计转换为多段线：其线条及每个台阶的线条，供手动编辑。它们不再是设计；撤销可恢复设计。
+pit-design-report-explode = 将台阶设计转换为多段线。
 pit-design-exploded =
     { $count ->
-       *[other] 已将采坑设计分解为 { $count } 条多段线。
+       *[other] 已将台阶设计分解为 { $count } 条多段线。
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - 请选择采坑设计或闭合多段线，或新建用于绘制的图层
-pit-design-cursor-held = 采坑设计将线水平绘制在其标高上，因此启用时不吸附任何对象。
-pit-design-gone = 该采坑设计已不在项目中。
+pit-design-tool-needs = { $tool } - 请选择台阶设计或闭合多段线，或新建用于绘制的图层
+pit-design-cursor-held = 台阶设计将线水平绘制在其标高上，因此启用时不吸附任何对象。
+pit-design-gone = 该台阶设计已不在项目中。
 pit-design-name = 名称
 pit-design-flatter =
     { $count ->
        *[other] { $count } 个台阶的坡度比要求的缓：任何平路段都无法使其稳固。
     }
-pit-design-bench-table = 台阶
+pit-design-bench-table = 逐台阶
 pit-design-table-rl = RL
 pit-design-table-grade = 坡度
 pit-design-table-flat = 平路
@@ -5207,7 +5207,7 @@ pit-design-shell-failed = 无法将设计与壳体对比：{ $reason }
 pit-design-shell-gained = 壳体之外
 pit-design-shell-left = 壳体内留下
 pit-design-shell-net = 差值
-pit-design-compare = 采坑设计对比
+pit-design-compare = 台阶设计对比
 pit-design-compare-stale = 在最近一次更改前测量：测量所依据的对象加载后将重新测量。
 pit-design-layer-crest = 坡顶线
 pit-design-layer-toe = 坡底线

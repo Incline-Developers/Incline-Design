@@ -63,7 +63,7 @@ pub(super) fn definitions() -> Vec<Value> {
         starts(
             "triangulate",
             "Triangulate design objects",
-            "Build a surface from design polylines, pit designs and points, as Create Triangulation does: the objects are the surface's breaklines and spot heights, on hidden layers too. A pit design gives every string it draws: its string, its benches' rings and its ramp's edges. solid makes a closed solid from closed polylines (a stack of outlines) instead of an open surface. A surface is single-valued, so breaklines must not cross in plan at different elevations: if they do, it fails listing every place they do. Then fix the strings, or build with upper_surface; and where strings' ends only nearly meet, weld joins them.",
+            "Build a surface from design polylines, bench designs and points, as Create Triangulation does: the objects are the surface's breaklines and spot heights, on hidden layers too. A bench design gives every string it draws: its string, its benches' rings and its ramp's edges. solid makes a closed solid from closed polylines (a stack of outlines) instead of an open surface. A surface is single-valued, so breaklines must not cross in plan at different elevations: if they do, it fails listing every place they do. Then fix the strings, or build with upper_surface; and where strings' ends only nearly meet, weld joins them.",
             json!({
                 "objects": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0 }, "description": "Ids of the design objects to build from." },
                 "name": name("surface"),
@@ -158,7 +158,7 @@ pub(super) fn definitions() -> Vec<Value> {
         starts(
             "cut_topography_by_pit",
             "Cut a topography to a pit shell",
-            "Cut a topography back to where a pit shell or pit design does not dig into it, as Cut Topography to Pit Shell does: the topography is kept under parts of the shell that stand above the ground. With the pit design trimmed to the topography (trim_surface, keep below), join_surfaces joins the two into one landform; include_solid_in_topography does all of that in one step.",
+            "Cut a topography back to where a pit shell or bench design does not dig into it, as Cut Topography to Pit Shell does: the topography is kept under parts of the shell that stand above the ground. With the bench design trimmed to the topography (trim_surface, keep below), join_surfaces joins the two into one landform; include_solid_in_topography does all of that in one step.",
             json!({
                 "topography": surface("The topography to cut."),
                 "pit": surface("The pit shell."),
@@ -173,7 +173,7 @@ pub(super) fn definitions() -> Vec<Value> {
             "Set a pit or a dump into a topography, as Merge Shell into Topography does: where it digs into the ground (a pit) or stands on it (a dump or stockpile), the topography is replaced by its surface, giving the landform with the pit dug or the dump placed, in one step. Whether it is a pit or a dump is worked out from its shape.",
             json!({
                 "topography": surface("The topography."),
-                "solid": surface("The pit or dump: an open design surface such as a pit design, or a closed solid."),
+                "solid": surface("The pit or dump: an open design surface such as a bench design, or a closed solid."),
                 "name": name("surface"),
                 "as_two": { "type": "boolean", "description": "Keep the result as two surfaces, the trimmed topography and the shell, rather than one. False if left out." },
                 "hide_old": { "type": "boolean", "description": "Hide the topography and solid it was made from. True if left out." },

@@ -2567,7 +2567,7 @@ haul-open-layout = सड़क नेटवर्क खोलें
 haul-dump-override = डंप समय ओवरराइड करें (s)
 haul-unlimited = डिफ़ॉल्ट
 haul-convert-help = चुनी हुई डिज़ाइन पॉलीलाइनों को हॉल रोड में बदलें। जोड़ सहनशीलता के भीतर के सिरे और क्रॉसिंग साझा नोड बन जाते हैं; पॉलीलाइनें जैसी हैं वैसी रहती हैं।
-haul-empty = अभी कोई सड़क नहीं। एक बनाएँ, या पिट डिज़ाइन पॉलीलाइनें बदलें या आयात करें।
+haul-empty = अभी कोई सड़क नहीं। एक बनाएँ, या बेंच डिज़ाइन पॉलीलाइनें बदलें या आयात करें।
 haul-connected-help = कोई ब्लॉक तब जुड़ा माना जाता है जब वह ऑटो-जॉइन दूरी के भीतर सड़क नोड तक पहुँच सके, ट्रक के अधिकतम ग्रेड से ज़्यादा ढलवाँ चढ़े-उतरे बिना। हरे ब्लॉक सबसे पास के नोड से जुड़ते हैं, नीले उनके लिए चुने नोड से; लाल पहुँच से बाहर हैं और फिर भी शेड्यूल होते हैं, सबसे पास के नोड तक लंबी सीधी ड्राइव के साथ।
 haul-roads-selected =
     { $count ->
@@ -4983,9 +4983,9 @@ err-file-desc-opt-report = ऑप्टिमाइज़ेशन रिपो�
 
 ## Pit Design
 
-pit-design-menu = पिट डिज़ाइन
-pit-design-title = पिट डिज़ाइन
-pit-design-benches-section = बेंच
+pit-design-menu = बेंच डिज़ाइन
+pit-design-title = बेंच डिज़ाइन
+pit-design-benches-section = दीवारें
 pit-design-bench-height = बेंच ऊँचाई
 pit-design-face-angle = फेस कोण
 pit-design-berm-width = बर्म चौड़ाई
@@ -5139,26 +5139,26 @@ pit-design-ramp-remove = रैंप हटाएँ
 pit-design-ramp-remove-short = हटाएँ
 pit-design-ramp-remove-help = पिट को बिना रैंप के डिज़ाइन करें। उसकी सेटिंग्स फिर से रखने के लिए बनी रहती हैं।
 pit-design-done = हो गया
-pit-design-kind = पिट डिज़ाइन
+pit-design-kind = बेंच डिज़ाइन
 pit-design-explode = विघटित करें
-pit-design-explode-help = पिट डिज़ाइन को पॉलीलाइनों में बदलें: उसकी रेखा और हर बेंच की रेखाएँ, हाथ से संपादित करने के लिए। वे अब डिज़ाइन नहीं रहतीं; पूर्ववत करने से डिज़ाइन लौट आता है।
-pit-design-report-explode = पिट डिज़ाइन को पॉलीलाइनों में बदलता है।
+pit-design-explode-help = बेंच डिज़ाइन को पॉलीलाइनों में बदलें: उसकी रेखा और हर बेंच की रेखाएँ, हाथ से संपादित करने के लिए। वे अब डिज़ाइन नहीं रहतीं; पूर्ववत करने से डिज़ाइन लौट आता है।
+pit-design-report-explode = बेंच डिज़ाइन को पॉलीलाइनों में बदलता है।
 pit-design-exploded =
     { $count ->
-        [one] पिट डिज़ाइन को एक पॉलीलाइन में विघटित किया।
-       *[other] पिट डिज़ाइन को { $count } पॉलीलाइनों में विघटित किया।
+        [one] बेंच डिज़ाइन को एक पॉलीलाइन में विघटित किया।
+       *[other] बेंच डिज़ाइन को { $count } पॉलीलाइनों में विघटित किया।
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - कोई पिट डिज़ाइन या बंद पॉलीलाइन चुनें, या बनाने के लिए एक लेयर बनाएँ
-pit-design-cursor-held = पिट डिज़ाइन अपनी रेखाएँ उनके RL पर समतल खींचता है, इसलिए चालू रहते यह किसी चीज़ पर स्नैप नहीं करता।
-pit-design-gone = वह पिट डिज़ाइन अब प्रोजेक्ट में नहीं है।
+pit-design-tool-needs = { $tool } - कोई बेंच डिज़ाइन या बंद पॉलीलाइन चुनें, या बनाने के लिए एक लेयर बनाएँ
+pit-design-cursor-held = बेंच डिज़ाइन अपनी रेखाएँ उनके RL पर समतल खींचता है, इसलिए चालू रहते यह किसी चीज़ पर स्नैप नहीं करता।
+pit-design-gone = वह बेंच डिज़ाइन अब प्रोजेक्ट में नहीं है।
 pit-design-name = नाम
 pit-design-flatter =
     { $count ->
         [one] एक बेंच ढलान से कम ढलवाँ चढ़ती है: कोई समतल खंड उसे सुदृढ़ नहीं छोड़ता।
        *[other] { $count } बेंच ढलान से कम ढलवाँ चढ़ती हैं: कोई समतल खंड उन्हें सुदृढ़ नहीं छोड़ता।
     }
-pit-design-bench-table = बेंच
+pit-design-bench-table = बेंच दर बेंच
 pit-design-table-rl = RL
 pit-design-table-grade = ढलान
 pit-design-table-flat = समतल
@@ -5209,7 +5209,7 @@ pit-design-shell-failed = डिज़ाइन की शेल से तु�
 pit-design-shell-gained = शेल के बाहर
 pit-design-shell-left = शेल में छोड़ा गया
 pit-design-shell-net = अंतर
-pit-design-compare = पिट डिज़ाइनों की तुलना
+pit-design-compare = बेंच डिज़ाइनों की तुलना
 pit-design-compare-stale = पिछले बदलाव से पहले मापा गया: जिसके सापेक्ष मापा जाता है उसके लोड होते ही फिर से मापा जाएगा।
 pit-design-layer-crest = क्रेस्ट
 pit-design-layer-toe = टो

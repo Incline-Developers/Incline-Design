@@ -1559,7 +1559,11 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
             ui.colored_label(warning, no_design_text(reason));
         }
         Ok(design) => {
-            read_only_row(ui, &tr!("pit-design-benches-built"), &design.benches.to_string());
+            // The count stands in the view beside the toe while the walls'
+            // gizmo is up; here only when it is not.
+            if draft.wall_gizmo.is_none() {
+                read_only_row(ui, &tr!("pit-design-benches-built"), &design.benches.to_string());
+            }
             // How it ended says the RL it ended at, but for every bench built.
             if matches!(design.end, End::Complete) {
                 read_only_row(ui, &tr!("pit-design-final-rl"), &format!("{:.1} m", design.final_elevation()));

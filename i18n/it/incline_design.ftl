@@ -2609,7 +2609,7 @@ haul-open-layout = Apri la rete di piste
 haul-dump-override = Sostituisci tempo di scarico (s)
 haul-unlimited = Predefinito
 haul-convert-help = Trasforma le polilinee di progetto della fossa selezionate in piste. Le estremità e gli incroci entro la tolleranza di unione diventano nodi condivisi; le polilinee restano come sono.
-haul-empty = Ancora nessuna pista. Disegnane una, oppure converti o importa polilinee di progetto della fossa.
+haul-empty = Ancora nessuna pista. Disegnane una, oppure converti o importa polilinee di progetto a gradini.
 haul-connected-help = Un blocco è collegato quando può raggiungere un nodo di pista entro la distanza di unione automatica, salendo o scendendo con una pendenza non superiore al massimo del camion. I blocchi verdi si uniscono al nodo più vicino, quelli blu ai nodi scelti per loro; quelli rossi sono fuori portata e sono comunque pianificati, con un tragitto rettilineo più lungo fino al nodo più vicino.
 haul-roads-selected =
     { $count ->
@@ -5025,9 +5025,9 @@ err-file-desc-opt-report = report di ottimizzazione
 
 ## Pit Design
 
-pit-design-menu = Progettazione della fossa
-pit-design-title = Progettazione della fossa
-pit-design-benches-section = Gradini
+pit-design-menu = Progettazione a gradini
+pit-design-title = Progettazione a gradini
+pit-design-benches-section = Pareti
 pit-design-bench-height = Altezza gradino
 pit-design-face-angle = Angolo della parete
 pit-design-berm-width = Larghezza berma
@@ -5181,26 +5181,26 @@ pit-design-ramp-remove = Rimuovi rampa
 pit-design-ramp-remove-short = Rimuovi
 pit-design-ramp-remove-help = Progetta la fossa senza rampa. Le sue impostazioni restano, per posizionarla di nuovo.
 pit-design-done = Fatto
-pit-design-kind = Progetto della fossa
+pit-design-kind = Progetto a gradini
 pit-design-explode = Scomponi
-pit-design-explode-help = Trasforma il progetto della fossa in polilinee: la sua linea e le linee di ogni gradino, da modificare a mano. Non sono più progettate; Annulla ripristina il progetto.
-pit-design-report-explode = Trasforma un progetto della fossa in polilinee.
+pit-design-explode-help = Trasforma il progetto a gradini in polilinee: la sua linea e le linee di ogni gradino, da modificare a mano. Non sono più progettate; Annulla ripristina il progetto.
+pit-design-report-explode = Trasforma un progetto a gradini in polilinee.
 pit-design-exploded =
     { $count ->
-        [one] Progetto della fossa scomposto in una polilinea.
-       *[other] Progetto della fossa scomposto in { $count } polilinee.
+        [one] Progetto a gradini scomposto in una polilinea.
+       *[other] Progetto a gradini scomposto in { $count } polilinee.
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - seleziona un progetto di fossa o una polilinea chiusa, o crea un livello su cui disegnare
-pit-design-cursor-held = Progetto fossa disegna le sue linee in piano alla loro quota, quindi non si aggancia a nulla finché è attivo.
-pit-design-gone = Quel progetto della fossa non è più nel progetto.
+pit-design-tool-needs = { $tool } - seleziona un progetto a gradini o una polilinea chiusa, o crea un livello su cui disegnare
+pit-design-cursor-held = Progetto a gradini disegna le sue linee in piano alla loro quota, quindi non si aggancia a nulla finché è attivo.
+pit-design-gone = Quel progetto a gradini non è più nel progetto.
 pit-design-name = Nome
 pit-design-flatter =
     { $count ->
         [one] Un gradino sale meno ripido della pendenza: nessun tratto in piano lo lascerebbe stabile.
        *[other] { $count } gradini salgono meno ripidi della pendenza: nessun tratto in piano li lascerebbe stabili.
     }
-pit-design-bench-table = Gradini
+pit-design-bench-table = Gradino per gradino
 pit-design-table-rl = Quota
 pit-design-table-grade = Pendenza
 pit-design-table-flat = In piano
@@ -5251,7 +5251,7 @@ pit-design-shell-failed = Impossibile confrontare il progetto con l'involucro: {
 pit-design-shell-gained = Oltre l'involucro
 pit-design-shell-left = Lasciato nell'involucro
 pit-design-shell-net = Differenza
-pit-design-compare = Progetti di fossa a confronto
+pit-design-compare = Progetti a gradini a confronto
 pit-design-compare-stale = Misurato prima dell'ultima modifica: sarà misurato di nuovo quando ciò rispetto a cui si misura sarà caricato.
 pit-design-layer-crest = Cresta
 pit-design-layer-toe = Piede

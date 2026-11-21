@@ -2567,7 +2567,7 @@ haul-open-layout = فتح شبكة الطرق
 haul-dump-override = تجاوز زمن التفريغ (s)
 haul-unlimited = الافتراضي
 haul-convert-help = حوّل الخطوط المتعددة المقاطع المحددة لتصميم الحفرة إلى طرق نقل. تصبح النهايات والتقاطعات ضمن تسامح الوصل عقدًا مشتركة؛ وتبقى الخطوط كما هي.
-haul-empty = لا توجد طرق بعد. ارسم واحدًا، أو حوّل خطوط تصميم الحفرة المتعددة المقاطع أو استوردها.
+haul-empty = لا توجد طرق بعد. ارسم واحدًا، أو حوّل خطوط تصميم المصاطب المتعددة المقاطع أو استوردها.
 haul-connected-help = تكون الكتلة متصلة عندما تستطيع الوصول إلى عقدة طريق ضمن مسافة الوصل التلقائي، بصعود أو نزول لا يزيد انحداره على الميل الأقصى للشاحنة. الكتل الخضراء تنضم إلى أقرب عقدة، والزرقاء إلى العقد المختارة لها؛ أما الحمراء فخارج المنال وتظل مجدولة، بمسافة مباشرة أطول إلى أقرب عقدة.
 haul-roads-selected =
     { $count ->
@@ -5025,9 +5025,9 @@ err-file-desc-opt-report = تقرير التحسين
 
 ## Pit Design
 
-pit-design-menu = تصميم الحفرة
-pit-design-title = تصميم الحفرة
-pit-design-benches-section = المصاطب
+pit-design-menu = تصميم المصاطب
+pit-design-title = تصميم المصاطب
+pit-design-benches-section = الجدران
 pit-design-bench-height = ارتفاع المصطبة
 pit-design-face-angle = زاوية الواجهة
 pit-design-berm-width = عرض حاجز الأمان
@@ -5181,23 +5181,23 @@ pit-design-ramp-remove = إزالة المنحدر
 pit-design-ramp-remove-short = إزالة
 pit-design-ramp-remove-help = صمّم الحفرة بلا منحدر. تُحفظ إعداداته لوضعه مجددًا.
 pit-design-done = تم
-pit-design-kind = تصميم الحفرة
+pit-design-kind = تصميم المصاطب
 pit-design-explode = تفكيك
-pit-design-explode-help = يحوّل تصميم الحفرة إلى خطوط متعددة: خطه وخطوط كل مصطبة، لتحريرها يدويًا. لم تعد مصمَّمة؛ والتراجع يعيد التصميم.
-pit-design-report-explode = يحوّل تصميم حفرة إلى خطوط متعددة.
+pit-design-explode-help = يحوّل تصميم المصاطب إلى خطوط متعددة: خطه وخطوط كل مصطبة، لتحريرها يدويًا. لم تعد مصمَّمة؛ والتراجع يعيد التصميم.
+pit-design-report-explode = يحوّل تصميم مصاطب إلى خطوط متعددة.
 pit-design-exploded =
     { $count ->
-        [zero] فُكّك تصميم الحفرة.
-        [one] فُكّك تصميم الحفرة إلى خط متعدد واحد.
-        [two] فُكّك تصميم الحفرة إلى خطين متعددين.
-        [few] فُكّك تصميم الحفرة إلى { $count } خطوط متعددة.
-        [many] فُكّك تصميم الحفرة إلى { $count } خطًا متعددًا.
-       *[other] فُكّك تصميم الحفرة إلى { $count } خط متعدد.
+        [zero] فُكّك تصميم المصاطب.
+        [one] فُكّك تصميم المصاطب إلى خط متعدد واحد.
+        [two] فُكّك تصميم المصاطب إلى خطين متعددين.
+        [few] فُكّك تصميم المصاطب إلى { $count } خطوط متعددة.
+        [many] فُكّك تصميم المصاطب إلى { $count } خطًا متعددًا.
+       *[other] فُكّك تصميم المصاطب إلى { $count } خط متعدد.
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - حدد تصميم حفرة أو خطًا متعددًا مغلقًا، أو أنشئ طبقة للرسم عليها
-pit-design-cursor-held = يرسم تصميم الحفرة خطوطه أفقية عند منسوبها، فلا يلتقط شيئًا ما دام قيد العمل.
-pit-design-gone = لم يعد تصميم الحفرة هذا في المشروع.
+pit-design-tool-needs = { $tool } - حدد تصميم مصاطب أو خطًا متعددًا مغلقًا، أو أنشئ طبقة للرسم عليها
+pit-design-cursor-held = يرسم تصميم المصاطب خطوطه أفقية عند منسوبها، فلا يلتقط شيئًا ما دام قيد العمل.
+pit-design-gone = لم يعد تصميم المصاطب هذا في المشروع.
 pit-design-name = الاسم
 pit-design-flatter =
     { $count ->
@@ -5208,7 +5208,7 @@ pit-design-flatter =
         [many] { $count } مصطبة تصعد بميل أقل من المطلوب: لا يجعلها أي مقطع مستوٍ سليمة.
        *[other] { $count } مصطبة تصعد بميل أقل من المطلوب: لا يجعلها أي مقطع مستوٍ سليمة.
     }
-pit-design-bench-table = المصاطب
+pit-design-bench-table = مصطبة بمصطبة
 pit-design-table-rl = المنسوب
 pit-design-table-grade = الميل
 pit-design-table-flat = مستوٍ
@@ -5259,7 +5259,7 @@ pit-design-shell-failed = تعذّرت مقارنة التصميم بالغلا�
 pit-design-shell-gained = خارج الغلاف
 pit-design-shell-left = متروك في الغلاف
 pit-design-shell-net = الفرق
-pit-design-compare = مقارنة تصاميم الحفر
+pit-design-compare = مقارنة تصاميم المصاطب
 pit-design-compare-stale = قيس قبل آخر تغيير: يُقاس من جديد حين يُحمَّل ما يُقاس بالنسبة إليه.
 pit-design-layer-crest = الحافة العليا
 pit-design-layer-toe = القدم

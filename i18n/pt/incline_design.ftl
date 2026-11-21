@@ -2565,7 +2565,7 @@ haul-open-layout = Abrir a rede de estradas
 haul-dump-override = Substituir tempo de descarga (s)
 haul-unlimited = Predefinição
 haul-convert-help = Transforma as polilinhas de projeto selecionadas em estradas de transporte. As extremidades e cruzamentos dentro da tolerância de junção tornam-se nós partilhados; as polilinhas ficam como estão.
-haul-empty = Ainda sem estradas. Desenhe uma ou converta ou importe polilinhas do projeto da cava.
+haul-empty = Ainda sem estradas. Desenhe uma ou converta ou importe polilinhas do projeto de bancadas.
 haul-connected-help = Um bloco está ligado quando consegue chegar a um nó de estrada dentro da distância de junção automática, subindo ou descendo com inclinação não superior à máxima do camião. Os blocos verdes ligam-se ao nó mais próximo, os azuis aos nós escolhidos para eles; os vermelhos estão fora de alcance e continuam programados, com um percurso em linha reta mais longo até ao nó mais próximo.
 haul-roads-selected =
     { $count ->
@@ -4981,9 +4981,9 @@ err-file-desc-opt-report = relatório de otimização
 
 ## Pit Design
 
-pit-design-menu = Projeto de cava
-pit-design-title = Projeto de cava
-pit-design-benches-section = Bancadas
+pit-design-menu = Projeto de bancadas
+pit-design-title = Projeto de bancadas
+pit-design-benches-section = Paredes
 pit-design-bench-height = Altura da bancada
 pit-design-face-angle = Ângulo de face
 pit-design-berm-width = Largura da berma
@@ -5137,26 +5137,26 @@ pit-design-ramp-remove = Remover rampa
 pit-design-ramp-remove-short = Remover
 pit-design-ramp-remove-help = Projetar a cava sem rampa. As suas definições mantêm-se, para a voltar a colocar.
 pit-design-done = Concluído
-pit-design-kind = Projeto de cava
+pit-design-kind = Projeto de bancadas
 pit-design-explode = Decompor
-pit-design-explode-help = Transforma o projeto de cava em polilinhas: a sua linha e as linhas de cada bancada, para editar à mão. Deixam de ser projetadas; Anular repõe o projeto.
-pit-design-report-explode = Transforma um projeto de cava em polilinhas.
+pit-design-explode-help = Transforma o projeto de bancadas em polilinhas: a sua linha e as linhas de cada bancada, para editar à mão. Deixam de ser projetadas; Anular repõe o projeto.
+pit-design-report-explode = Transforma um projeto de bancadas em polilinhas.
 pit-design-exploded =
     { $count ->
-        [one] Projeto de cava decomposto numa polilinha.
-       *[other] Projeto de cava decomposto em { $count } polilinhas.
+        [one] Projeto de bancadas decomposto numa polilinha.
+       *[other] Projeto de bancadas decomposto em { $count } polilinhas.
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - selecione um projeto de cava ou uma polilinha fechada, ou crie uma camada para desenhar
-pit-design-cursor-held = O projeto de cava desenha as suas linhas niveladas na sua cota, por isso não se ajusta a nada enquanto está ativo.
-pit-design-gone = Esse projeto de cava já não está no projeto.
+pit-design-tool-needs = { $tool } - selecione um projeto de bancadas ou uma polilinha fechada, ou crie uma camada para desenhar
+pit-design-cursor-held = O projeto de bancadas desenha as suas linhas niveladas na sua cota, por isso não se ajusta a nada enquanto está ativo.
+pit-design-gone = Esse projeto de bancadas já não está no projeto.
 pit-design-name = Nome
 pit-design-flatter =
     { $count ->
         [one] Uma bancada sobe com menos inclinação do que a pedida: nenhum troço nivelado a deixaria estável.
        *[other] { $count } bancadas sobem com menos inclinação do que a pedida: nenhum troço nivelado as deixaria estáveis.
     }
-pit-design-bench-table = Bancadas
+pit-design-bench-table = Bancada a bancada
 pit-design-table-rl = Cota
 pit-design-table-grade = Inclinação
 pit-design-table-flat = Nivelado
@@ -5207,7 +5207,7 @@ pit-design-shell-failed = Não foi possível comparar o projeto com o invólucro
 pit-design-shell-gained = Além do invólucro
 pit-design-shell-left = Deixado no invólucro
 pit-design-shell-net = Diferença
-pit-design-compare = Projetos de cava comparados
+pit-design-compare = Projetos de bancadas comparados
 pit-design-compare-stale = Medido antes da última alteração: é medido de novo quando aquilo contra o qual é medido for carregado.
 pit-design-layer-crest = Crista
 pit-design-layer-toe = Pé

@@ -2596,7 +2596,7 @@ haul-open-layout = 道路ネットワークを開く
 haul-dump-override = 排土時間を上書き (秒)
 haul-unlimited = 標準
 haul-convert-help = 選択した設計ポリラインを運搬路に変換します。結合許容値内の端と交差は共有ノードになり、ポリライン自体は変更されません。
-haul-empty = 道路はまだありません。描くか、ピット設計のポリラインを変換またはインポートしてください。
+haul-empty = 道路はまだありません。描くか、ベンチ設計のポリラインを変換またはインポートしてください。
 haul-connected-help = ブロックは、自動結合距離内で、トラックの最大勾配より急にならずに上り下りして道路ノードに到達できるとき、接続されています。緑のブロックは最寄りのノード、青のブロックは選択されたノードに結合されます。赤のブロックは到達できませんが、最寄りのノードまでより長く直進するものとしてスケジュールされます。
 haul-roads-selected =
     { $count ->
@@ -5012,9 +5012,9 @@ err-file-desc-opt-report = 最適化レポート
 
 ## Pit Design
 
-pit-design-menu = ピット設計
-pit-design-title = ピット設計
-pit-design-benches-section = ベンチ
+pit-design-menu = ベンチ設計
+pit-design-title = ベンチ設計
+pit-design-benches-section = 壁
 pit-design-bench-height = ベンチ高さ
 pit-design-face-angle = 法面角度
 pit-design-berm-width = バーム幅
@@ -5168,24 +5168,24 @@ pit-design-ramp-remove = ランプを削除
 pit-design-ramp-remove-short = 削除
 pit-design-ramp-remove-help = ランプなしでピットを設計します。設定は再配置のために残ります。
 pit-design-done = 完了
-pit-design-kind = ピット設計
+pit-design-kind = ベンチ設計
 pit-design-explode = 分解
-pit-design-explode-help = ピット設計をポリラインに変換します。手で編集できるよう、そのラインと各ベンチのラインになります。設計ではなくなります。元に戻すと設計が戻ります。
-pit-design-report-explode = ピット設計をポリラインに変換します。
+pit-design-explode-help = ベンチ設計をポリラインに変換します。手で編集できるよう、そのラインと各ベンチのラインになります。設計ではなくなります。元に戻すと設計が戻ります。
+pit-design-report-explode = ベンチ設計をポリラインに変換します。
 pit-design-exploded =
     { $count ->
-       *[other] ピット設計を { $count } 本のポリラインに分解しました。
+       *[other] ベンチ設計を { $count } 本のポリラインに分解しました。
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - ピット設計か閉じたポリラインを選択するか、描画するレイヤーを作成してください
-pit-design-cursor-held = ピット設計は線をその RL に水平に描くため、使用中は何にもスナップしません。
-pit-design-gone = そのピット設計はもうプロジェクトにありません。
+pit-design-tool-needs = { $tool } - ベンチ設計か閉じたポリラインを選択するか、描画するレイヤーを作成してください
+pit-design-cursor-held = ベンチ設計は線をその RL に水平に描くため、使用中は何にもスナップしません。
+pit-design-gone = そのベンチ設計はもうプロジェクトにありません。
 pit-design-name = 名前
 pit-design-flatter =
     { $count ->
        *[other] { $count } 段のベンチが指定勾配より緩く登ります。水平区間ではそのベンチを健全にできませんでした。
     }
-pit-design-bench-table = ベンチ
+pit-design-bench-table = ベンチごと
 pit-design-table-rl = RL
 pit-design-table-grade = 勾配
 pit-design-table-flat = 水平
@@ -5236,7 +5236,7 @@ pit-design-shell-failed = 設計をシェルと比較できませんでした: {
 pit-design-shell-gained = シェルの外
 pit-design-shell-left = シェル内に残る
 pit-design-shell-net = 差
-pit-design-compare = ピット設計の比較
+pit-design-compare = ベンチ設計の比較
 pit-design-compare-stale = 前回の変更前に測定: 測定基準が読み込まれると再測定されます。
 pit-design-layer-crest = 法肩
 pit-design-layer-toe = 法尻

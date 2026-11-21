@@ -2599,7 +2599,7 @@ haul-open-layout = Fungua Mtandao wa Barabara
 haul-dump-override = Badilisha muda wa kumwaga (s)
 haul-unlimited = Kawaida
 haul-convert-help = Geuza mistari ya pointi nyingi ya muundo iliyochaguliwa kuwa barabara za kusafirishia. Miisho na makutano ndani ya uvumilivu wa kuunganisha huwa nodi zinazoshirikiwa; mistari ya pointi nyingi inabaki kama ilivyo.
-haul-empty = Hakuna barabara bado. Chora moja, au geuza au ingiza mistari ya pointi nyingi ya muundo wa shimo.
+haul-empty = Hakuna barabara bado. Chora moja, au geuza au ingiza mistari ya pointi nyingi ya muundo wa ngazi.
 haul-connected-help = Kitalu kimeunganishwa kinapoweza kufikia nodi ya barabara ndani ya umbali wa kuunganisha kiotomatiki, kikipanda au kushuka bila mteremko mkali kuliko wa juu zaidi wa lori. Vitalu vya kijani huungana na nodi iliyo karibu zaidi, vya buluu na nodi zilizochaguliwa kwa ajili yake; vyekundu viko mbali na bado vinapangiwa ratiba, kwa mwendo mrefu zaidi wa moja kwa moja hadi nodi iliyo karibu zaidi.
 haul-roads-selected =
     { $count ->
@@ -5015,9 +5015,9 @@ err-file-desc-opt-report = ripoti ya uboreshaji
 
 ## Pit Design
 
-pit-design-menu = Usanifu wa Shimo
-pit-design-title = Usanifu wa Shimo
-pit-design-benches-section = Ngazi
+pit-design-menu = Usanifu wa Ngazi
+pit-design-title = Usanifu wa Ngazi
+pit-design-benches-section = Kuta
 pit-design-bench-height = Kimo cha ngazi
 pit-design-face-angle = Pembe ya uso
 pit-design-berm-width = Upana wa lundo la kinga
@@ -5171,26 +5171,26 @@ pit-design-ramp-remove = Ondoa barabara
 pit-design-ramp-remove-short = Ondoa
 pit-design-ramp-remove-help = Sanifu shimo bila barabara. Mipangilio yake inabaki, ili kuiweka tena.
 pit-design-done = Imekamilika
-pit-design-kind = Usanifu wa shimo
+pit-design-kind = Usanifu wa ngazi
 pit-design-explode = Vunja
-pit-design-explode-help = Badilisha usanifu wa shimo kuwa mistari: mstari wake na mistari ya kila ngazi, ili kuhariri kwa mkono. Haisanifiwi tena; Tendua hurudisha usanifu.
-pit-design-report-explode = Hubadilisha usanifu wa shimo kuwa mistari.
+pit-design-explode-help = Badilisha usanifu wa ngazi kuwa mistari: mstari wake na mistari ya kila ngazi, ili kuhariri kwa mkono. Haisanifiwi tena; Tendua hurudisha usanifu.
+pit-design-report-explode = Hubadilisha usanifu wa ngazi kuwa mistari.
 pit-design-exploded =
     { $count ->
-        [one] Usanifu wa shimo umevunjwa kuwa mistari mmoja.
-       *[other] Usanifu wa shimo umevunjwa kuwa mistari { $count }.
+        [one] Usanifu wa ngazi umevunjwa kuwa mistari mmoja.
+       *[other] Usanifu wa ngazi umevunjwa kuwa mistari { $count }.
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - chagua muundo wa shimo au mstari-mingi uliofungwa, au unda tabaka la kuchorea
-pit-design-cursor-held = Muundo wa shimo huchora mistari yake sawa kwenye RL yake, kwa hivyo haunasi kitu chochote ukiwa umewashwa.
-pit-design-gone = Usanifu huo wa shimo haupo tena kwenye mradi.
+pit-design-tool-needs = { $tool } - chagua muundo wa ngazi au mstari-mingi uliofungwa, au unda tabaka la kuchorea
+pit-design-cursor-held = Muundo wa ngazi huchora mistari yake sawa kwenye RL yake, kwa hivyo haunasi kitu chochote ukiwa umewashwa.
+pit-design-gone = Usanifu huo wa ngazi haupo tena kwenye mradi.
 pit-design-name = Jina
 pit-design-flatter =
     { $count ->
         [one] Ngazi moja inapanda kwa mwinuko mdogo kuliko ulioombwa: hakuna sehemu sawa ambayo ingeifanya imara.
        *[other] Ngazi { $count } zinapanda kwa mwinuko mdogo kuliko ulioombwa: hakuna sehemu sawa ambayo ingezifanya imara.
     }
-pit-design-bench-table = Ngazi
+pit-design-bench-table = Ngazi kwa ngazi
 pit-design-table-rl = RL
 pit-design-table-grade = Mwinuko
 pit-design-table-flat = Sawa
@@ -5241,7 +5241,7 @@ pit-design-shell-failed = Muundo haukuweza kulinganishwa na ganda: { $reason }
 pit-design-shell-gained = Nje ya ganda
 pit-design-shell-left = Iliyoachwa ndani ya ganda
 pit-design-shell-net = Tofauti
-pit-design-compare = Ulinganisho wa miundo ya mashimo
+pit-design-compare = Ulinganisho wa miundo ya ngazi
 pit-design-compare-stale = Ulipimwa kabla ya mabadiliko yake ya mwisho: utapimwa tena kile unachopimwa dhidi yake kikipakiwa.
 pit-design-layer-crest = Kilele
 pit-design-layer-toe = Kitako

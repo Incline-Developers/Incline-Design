@@ -2601,7 +2601,7 @@ haul-open-layout = 도로 네트워크 열기
 haul-dump-override = 덤프 시간 재정의 (초)
 haul-unlimited = 기본값
 haul-convert-help = 선택한 설계 폴리라인을 운반로로 바꿉니다. 연결 허용 오차 안의 끝과 교차점은 공유 노드가 되며, 폴리라인은 그대로 남습니다.
-haul-empty = 아직 도로가 없습니다. 도로를 그리거나 피트 설계 폴리라인을 변환 또는 가져오세요.
+haul-empty = 아직 도로가 없습니다. 도로를 그리거나 벤치 설계 폴리라인을 변환 또는 가져오세요.
 haul-connected-help = 블록이 자동 연결 거리 안의 도로 노드에 닿을 수 있고, 오르내리는 경사가 트럭의 최대 경사를 넘지 않으면 연결된 것입니다. 녹색 블록은 가장 가까운 노드에, 파란색은 지정한 노드에 연결되며, 빨간색은 닿지 못하지만 가장 가까운 노드까지 더 긴 직선 주행으로 여전히 스케줄에 포함됩니다.
 haul-roads-selected =
     { $count ->
@@ -5017,9 +5017,9 @@ err-file-desc-opt-report = 최적화 보고서
 
 ## Pit Design
 
-pit-design-menu = 피트 설계
-pit-design-title = 피트 설계
-pit-design-benches-section = 벤치
+pit-design-menu = 벤치 설계
+pit-design-title = 벤치 설계
+pit-design-benches-section = 벽
 pit-design-bench-height = 벤치 높이
 pit-design-face-angle = 사면 각도
 pit-design-berm-width = 소단 폭
@@ -5173,24 +5173,24 @@ pit-design-ramp-remove = 램프 제거
 pit-design-ramp-remove-short = 제거
 pit-design-ramp-remove-help = 램프 없이 피트를 설계합니다. 다시 배치할 수 있도록 설정은 유지됩니다.
 pit-design-done = 완료
-pit-design-kind = 피트 설계
+pit-design-kind = 벤치 설계
 pit-design-explode = 분해
-pit-design-explode-help = 피트 설계를 폴리라인으로 바꿉니다. 직접 편집할 수 있도록 그 선과 각 벤치의 선이 됩니다. 더 이상 설계되지 않으며, 실행 취소하면 설계가 돌아옵니다.
-pit-design-report-explode = 피트 설계를 폴리라인으로 바꿉니다.
+pit-design-explode-help = 벤치 설계를 폴리라인으로 바꿉니다. 직접 편집할 수 있도록 그 선과 각 벤치의 선이 됩니다. 더 이상 설계되지 않으며, 실행 취소하면 설계가 돌아옵니다.
+pit-design-report-explode = 벤치 설계를 폴리라인으로 바꿉니다.
 pit-design-exploded =
     { $count ->
-       *[other] 피트 설계를 폴리라인 { $count }개로 분해했습니다.
+       *[other] 벤치 설계를 폴리라인 { $count }개로 분해했습니다.
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - 피트 설계나 닫힌 폴리라인을 선택하거나 그릴 레이어를 만드세요
-pit-design-cursor-held = 피트 설계는 선을 해당 RL에 수평으로 그리므로, 사용하는 동안에는 아무것에도 스냅하지 않습니다.
-pit-design-gone = 그 피트 설계는 더 이상 프로젝트에 없습니다.
+pit-design-tool-needs = { $tool } - 벤치 설계나 닫힌 폴리라인을 선택하거나 그릴 레이어를 만드세요
+pit-design-cursor-held = 벤치 설계는 선을 해당 RL에 수평으로 그리므로, 사용하는 동안에는 아무것에도 스냅하지 않습니다.
+pit-design-gone = 그 벤치 설계는 더 이상 프로젝트에 없습니다.
 pit-design-name = 이름
 pit-design-flatter =
     { $count ->
        *[other] 벤치 { $count }개가 지정 경사보다 완만하게 오릅니다. 어떤 평탄 구간으로도 안정되게 할 수 없었습니다.
     }
-pit-design-bench-table = 벤치
+pit-design-bench-table = 벤치별
 pit-design-table-rl = RL
 pit-design-table-grade = 경사
 pit-design-table-flat = 평탄
@@ -5241,7 +5241,7 @@ pit-design-shell-failed = 설계를 셸과 비교할 수 없습니다: { $reason
 pit-design-shell-gained = 셸 밖
 pit-design-shell-left = 셸 안에 남음
 pit-design-shell-net = 차이
-pit-design-compare = 피트 설계 비교
+pit-design-compare = 벤치 설계 비교
 pit-design-compare-stale = 마지막 변경 전에 측정됨: 측정 기준을 불러오면 다시 측정됩니다.
 pit-design-layer-crest = 상단
 pit-design-layer-toe = 하단

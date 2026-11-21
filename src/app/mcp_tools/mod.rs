@@ -441,7 +441,7 @@ fn object_points(object: &Object) -> Vec<DVec3> {
     match object {
         Object::Point { pos, .. } | Object::Text { pos, .. } => vec![*pos],
         Object::Polyline { verts, .. } => verts.iter().map(|vertex| vertex.pos).collect(),
-        // A pit design is as wide as its benches, not only its string.
+        // A bench design is as wide as its benches, not only its string.
         Object::PitDesign { verts, .. } => verts
             .iter()
             .map(|vertex| vertex.pos)

@@ -2655,7 +2655,7 @@ haul-open-layout = Otwórz sieć dróg
 haul-dump-override = Nadpisz czas wyładunku (s)
 haul-unlimited = Domyślne
 haul-convert-help = Zamień zaznaczone polilinie projektu na drogi transportowe. Końce i skrzyżowania w granicach tolerancji łączenia stają się wspólnymi węzłami; polilinie pozostają bez zmian.
-haul-empty = Brak dróg. Narysuj jedną albo zamień lub zaimportuj polilinie projektu wyrobiska.
+haul-empty = Brak dróg. Narysuj jedną albo zamień lub zaimportuj polilinie projektu piętera.
 haul-connected-help = Blok jest połączony, gdy może dotrzeć do węzła drogi w odległości automatycznego łączenia, wznosząc się lub opadając nie bardziej stromo niż maksymalne nachylenie wywrotki. Zielone bloki łączą się z najbliższym węzłem, niebieskie z węzłami wybranymi dla nich; czerwone są poza zasięgiem i nadal są planowane, z dłuższym przejazdem prosto do najbliższego węzła.
 haul-roads-selected =
     { $count ->
@@ -5111,9 +5111,9 @@ err-file-desc-opt-report = raport optymalizacji
 
 ## Pit Design
 
-pit-design-menu = Projekt wyrobiska
-pit-design-title = Projekt wyrobiska
-pit-design-benches-section = Piętra
+pit-design-menu = Projekt piętera
+pit-design-title = Projekt piętera
+pit-design-benches-section = Ściany
 pit-design-bench-height = Wysokość piętra
 pit-design-face-angle = Kąt skarpy
 pit-design-berm-width = Szerokość bermy
@@ -5267,21 +5267,21 @@ pit-design-ramp-remove = Usuń rampę
 pit-design-ramp-remove-short = Usuń
 pit-design-ramp-remove-help = Zaprojektuj wyrobisko bez rampy. Jej ustawienia zostają, by umieścić ją ponownie.
 pit-design-done = Gotowe
-pit-design-kind = Projekt wyrobiska
+pit-design-kind = Projekt piętera
 pit-design-explode = Rozbij
-pit-design-explode-help = Zamień projekt wyrobiska na polilinie: jego linię i linie każdego piętra, do ręcznej edycji. Nie są już projektowane; Cofnij przywraca projekt.
-pit-design-report-explode = Zamienia projekt wyrobiska na polilinie.
+pit-design-explode-help = Zamień projekt piętera na polilinie: jego linię i linie każdego piętra, do ręcznej edycji. Nie są już projektowane; Cofnij przywraca projekt.
+pit-design-report-explode = Zamienia projekt piętera na polilinie.
 pit-design-exploded =
     { $count ->
-        [one] Rozbito projekt wyrobiska na { $count } polilinię.
-        [few] Rozbito projekt wyrobiska na { $count } polilinie.
-        [many] Rozbito projekt wyrobiska na { $count } polilinii.
-       *[other] Rozbito projekt wyrobiska na { $count } polilinii.
+        [one] Rozbito projekt piętera na { $count } polilinię.
+        [few] Rozbito projekt piętera na { $count } polilinie.
+        [many] Rozbito projekt piętera na { $count } polilinii.
+       *[other] Rozbito projekt piętera na { $count } polilinii.
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - zaznacz projekt wyrobiska lub zamkniętą polilinię albo utwórz warstwę do rysowania
-pit-design-cursor-held = Projekt wyrobiska rysuje linie poziomo na ich rzędnej, więc nie przyciąga do niczego, póki jest aktywny.
-pit-design-gone = Tego projektu wyrobiska nie ma już w projekcie.
+pit-design-tool-needs = { $tool } - zaznacz projekt piętera lub zamkniętą polilinię albo utwórz warstwę do rysowania
+pit-design-cursor-held = Projekt piętera rysuje linie poziomo na ich rzędnej, więc nie przyciąga do niczego, póki jest aktywny.
+pit-design-gone = Tego projektu piętera nie ma już w projekcie.
 pit-design-name = Nazwa
 pit-design-flatter =
     { $count ->
@@ -5290,7 +5290,7 @@ pit-design-flatter =
         [many] { $count } pięter wznosi się łagodniej niż nachylenie: żaden poziomy odcinek nie uczyniłby ich stabilnymi.
        *[other] { $count } piętra wznoszą się łagodniej niż nachylenie: żaden poziomy odcinek nie uczyniłby ich stabilnymi.
     }
-pit-design-bench-table = Piętra
+pit-design-bench-table = Piętro po piętrze
 pit-design-table-rl = Rzędna
 pit-design-table-grade = Nachylenie
 pit-design-table-flat = Poziomo
@@ -5341,7 +5341,7 @@ pit-design-shell-failed = Nie udało się porównać projektu z powłoką: { $re
 pit-design-shell-gained = Poza powłoką
 pit-design-shell-left = Pozostawione w powłoce
 pit-design-shell-net = Różnica
-pit-design-compare = Porównanie projektów wyrobisk
+pit-design-compare = Porównanie projektów pięter
 pit-design-compare-stale = Zmierzony przed ostatnią zmianą: zostanie zmierzony ponownie po wczytaniu tego, względem czego jest mierzony.
 pit-design-layer-crest = Krawędź górna
 pit-design-layer-toe = Krawędź dolna

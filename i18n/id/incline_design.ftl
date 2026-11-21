@@ -2567,7 +2567,7 @@ haul-open-layout = Buka Jaringan Jalan
 haul-dump-override = Timpa waktu buang (dtk)
 haul-unlimited = Default
 haul-convert-help = Ubah polyline desain pit terpilih menjadi jalan angkut. Ujung dan persilangan dalam toleransi sambungan menjadi simpul bersama; polyline tetap seperti semula.
-haul-empty = Belum ada jalan. Gambar satu, atau ubah atau impor polyline desain pit.
+haul-empty = Belum ada jalan. Gambar satu, atau ubah atau impor polyline desain jenjang.
 haul-connected-help = Blok dianggap terhubung bila dapat mencapai simpul jalan dalam jarak sambung otomatis, menanjak atau menurun tidak lebih curam daripada kemiringan maksimum truk. Blok hijau tersambung ke simpul terdekat, biru ke simpul yang dipilih untuknya; merah di luar jangkauan dan tetap dijadwalkan, dengan perjalanan lurus yang lebih panjang ke simpul terdekat.
 haul-roads-selected =
     { $count ->
@@ -4983,9 +4983,9 @@ err-file-desc-opt-report = laporan optimisasi
 
 ## Pit Design
 
-pit-design-menu = Desain Pit
-pit-design-title = Desain Pit
-pit-design-benches-section = Jenjang
+pit-design-menu = Desain Jenjang
+pit-design-title = Desain Jenjang
+pit-design-benches-section = Dinding
 pit-design-bench-height = Tinggi jenjang
 pit-design-face-angle = Sudut muka
 pit-design-berm-width = Lebar berm
@@ -5139,24 +5139,24 @@ pit-design-ramp-remove = Hapus ramp
 pit-design-ramp-remove-short = Hapus
 pit-design-ramp-remove-help = Rancang pit tanpa ramp. Pengaturannya disimpan untuk menempatkannya lagi.
 pit-design-done = Selesai
-pit-design-kind = Desain pit
+pit-design-kind = Desain jenjang
 pit-design-explode = Pecah
-pit-design-explode-help = Ubah desain pit menjadi polilinia: garisnya dan garis tiap jenjang, untuk disunting manual. Tidak lagi dirancang; Urungkan mengembalikan desain.
-pit-design-report-explode = Mengubah desain pit menjadi polilinia.
+pit-design-explode-help = Ubah desain jenjang menjadi polilinia: garisnya dan garis tiap jenjang, untuk disunting manual. Tidak lagi dirancang; Urungkan mengembalikan desain.
+pit-design-report-explode = Mengubah desain jenjang menjadi polilinia.
 pit-design-exploded =
     { $count ->
-       *[other] Desain pit dipecah menjadi { $count } polilinia.
+       *[other] Desain jenjang dipecah menjadi { $count } polilinia.
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - pilih desain pit atau polilinier tertutup, atau buat lapisan untuk menggambar
-pit-design-cursor-held = Desain pit menggambar garisnya datar pada RL-nya, jadi tidak menempel ke apa pun selama aktif.
-pit-design-gone = Desain pit itu tidak lagi ada di proyek.
+pit-design-tool-needs = { $tool } - pilih desain jenjang atau polilinier tertutup, atau buat lapisan untuk menggambar
+pit-design-cursor-held = Desain jenjang menggambar garisnya datar pada RL-nya, jadi tidak menempel ke apa pun selama aktif.
+pit-design-gone = Desain jenjang itu tidak lagi ada di proyek.
 pit-design-name = Nama
 pit-design-flatter =
     { $count ->
        *[other] { $count } jenjang menanjak lebih landai dari kemiringannya: tidak ada bagian datar yang akan membuatnya stabil.
     }
-pit-design-bench-table = Jenjang
+pit-design-bench-table = Jenjang demi jenjang
 pit-design-table-rl = RL
 pit-design-table-grade = Kemiringan
 pit-design-table-flat = Datar
@@ -5207,7 +5207,7 @@ pit-design-shell-failed = Desain tidak dapat dibandingkan dengan cangkang: { $re
 pit-design-shell-gained = Di luar cangkang
 pit-design-shell-left = Tertinggal di cangkang
 pit-design-shell-net = Selisih
-pit-design-compare = Perbandingan desain pit
+pit-design-compare = Perbandingan desain jenjang
 pit-design-compare-stale = Diukur sebelum perubahan terakhirnya: diukur ulang setelah acuan pengukurannya dimuat.
 pit-design-layer-crest = Puncak
 pit-design-layer-toe = Kaki

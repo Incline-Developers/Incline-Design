@@ -951,7 +951,7 @@ haul-open-layout = Open the Road Network
 haul-dump-override = Override dump time (s)
 haul-unlimited = Default
 haul-convert-help = Turn the selected design polylines into haul roads. Ends and crossings within the join tolerance become shared nodes; the polylines stay as they are.
-haul-empty = No roads yet. Draw one, or convert or import pit design polylines.
+haul-empty = No roads yet. Draw one, or convert or import bench design polylines.
 haul-connected-help = A block is connected when it can reach a road node within the auto-join distance, climbing or descending no steeper than the truck's maximum grade. Green blocks join the nearest node, blue ones the nodes chosen for them; red ones are out of reach and still scheduled, with a longer straight drive to the nearest node.
 haul-roads-selected =
     { $count ->
@@ -5677,14 +5677,14 @@ mcp-show-objects = Show Objects (MCP)
 
 ## Pit Design
 
-pit-design-menu = Pit Design
-pit-design-title = Pit Design
+pit-design-menu = Bench Design
+pit-design-title = Bench Design
 pit-design-kind-pit = Pit
 pit-design-kind-dump = Dump or stockpile
 pit-design-stop-ground = Where it meets the ground
 pit-design-end-ground = Met the ground at RL { $rl }
 pit-design-problem-daylight-dump-up = A dump built up from its toe has no ground to meet: stop it after a number of benches, or at an RL.
-pit-design-benches-section = Benches
+pit-design-benches-section = Walls
 pit-design-bench-height = Bench height
 pit-design-face-angle = Face angle
 pit-design-berm-width = Berm width
@@ -5815,17 +5815,17 @@ pit-design-problem-no-topography = Choose the topography to daylight against.
 pit-design-problem-topography-not-loaded = Load { $name } to daylight against it.
 pit-design-exploded =
     { $count ->
-        [one] Exploded the pit design into one polyline.
-       *[other] Exploded the pit design into { $count } polylines.
+        [one] Exploded the bench design into one polyline.
+       *[other] Exploded the bench design into { $count } polylines.
     }
-pit-design-report-explode = Turns a pit design into polylines.
-pit-design-explode-help = Turn the pit design into polylines: its string and each of its benches' strings, to edit by hand. They are no longer designed: undo puts the design back.
+pit-design-report-explode = Turns a bench design into polylines.
+pit-design-explode-help = Turn the bench design into polylines: its string and each of its benches' strings, to edit by hand. They are no longer designed: undo puts the design back.
 pit-design-explode = Explode
-pit-design-kind = Pit Design
+pit-design-kind = Bench Design
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - select a pit design or closed polyline, or make a layer to draw on
-pit-design-cursor-held = Pit Design draws its strings level at their RL, so it snaps to nothing while it is up.
-pit-design-gone = That pit design is no longer in the project.
+pit-design-tool-needs = { $tool } - select a bench design or closed polyline, or make a layer to draw on
+pit-design-cursor-held = Bench Design draws its strings level at their RL, so it snaps to nothing while it is up.
+pit-design-gone = That bench design is no longer in the project.
 pit-design-draw-prompt = Click the string to design from, point by point: a pit's floor or crest, or a dump's toe or top.
 pit-design-draw-close = Click the first point, or press Enter, to close the string.
 pit-design-draw-close-minor = Right click finishes too
@@ -5853,7 +5853,7 @@ pit-design-flatter =
         [one] One bench climbs flatter than the gradient: no level stretch would leave it sound.
        *[other] { $count } benches climb flatter than the gradient: no level stretch would leave them sound.
     }
-pit-design-bench-table = Benches
+pit-design-bench-table = Bench by bench
 pit-design-table-rl = RL
 pit-design-table-grade = Grade
 pit-design-table-flat = Level
@@ -5907,7 +5907,7 @@ pit-design-shell-failed = The design could not be set against the shell: { $reas
 pit-design-shell-gained = Beyond the shell
 pit-design-shell-left = Left in the shell
 pit-design-shell-net = Difference
-pit-design-compare = Pit designs compared
+pit-design-compare = Bench designs compared
 pit-design-compare-stale = Measured before its last change: it is measured again once what it is measured against is loaded.
 pit-design-layer-crest = Crest
 pit-design-layer-toe = Toe

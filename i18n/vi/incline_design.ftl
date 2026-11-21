@@ -2594,7 +2594,7 @@ haul-open-layout = Mở Mạng đường
 haul-dump-override = Ghi đè thời gian đổ (s)
 haul-unlimited = Mặc định
 haul-convert-help = Biến các đường đa tuyến thiết kế đã chọn thành đường vận tải. Các đầu và chỗ giao trong dung sai nối trở thành nút dùng chung; các đường đa tuyến vẫn giữ nguyên.
-haul-empty = Chưa có đường. Hãy vẽ một đường, hoặc chuyển đổi hay nhập các đường đa tuyến thiết kế moong.
+haul-empty = Chưa có đường. Hãy vẽ một đường, hoặc chuyển đổi hay nhập các đường đa tuyến thiết kế tầng.
 haul-connected-help = Một khối được coi là đã kết nối khi nó tới được một nút đường trong khoảng cách tự nối, lên hoặc xuống không dốc hơn độ dốc tối đa của xe tải. Khối xanh lục nối với nút gần nhất, khối xanh lam nối với các nút đã chọn cho chúng; khối đỏ nằm ngoài tầm với và vẫn được lập lịch, với quãng chạy thẳng dài hơn đến nút gần nhất.
 haul-roads-selected =
     { $count ->
@@ -5011,9 +5011,9 @@ err-file-desc-opt-report = báo cáo tối ưu hóa
 
 ## Pit Design
 
-pit-design-menu = Thiết kế moong
-pit-design-title = Thiết kế moong
-pit-design-benches-section = Tầng
+pit-design-menu = Thiết kế tầng
+pit-design-title = Thiết kế tầng
+pit-design-benches-section = Tường
 pit-design-bench-height = Chiều cao tầng
 pit-design-face-angle = Góc sườn tầng
 pit-design-berm-width = Chiều rộng cơ
@@ -5167,24 +5167,24 @@ pit-design-ramp-remove = Bỏ đường dốc
 pit-design-ramp-remove-short = Xóa
 pit-design-ramp-remove-help = Thiết kế moong không có đường dốc. Các thiết lập của nó được giữ lại để đặt lại.
 pit-design-done = Xong
-pit-design-kind = Thiết kế moong
+pit-design-kind = Thiết kế tầng
 pit-design-explode = Tách
-pit-design-explode-help = Chuyển thiết kế moong thành các đường đa tuyến: đường của nó và đường của từng tầng, để sửa bằng tay. Chúng không còn được thiết kế; Hoàn tác sẽ khôi phục thiết kế.
-pit-design-report-explode = Chuyển một thiết kế moong thành các đường đa tuyến.
+pit-design-explode-help = Chuyển thiết kế tầng thành các đường đa tuyến: đường của nó và đường của từng tầng, để sửa bằng tay. Chúng không còn được thiết kế; Hoàn tác sẽ khôi phục thiết kế.
+pit-design-report-explode = Chuyển một thiết kế tầng thành các đường đa tuyến.
 pit-design-exploded =
     { $count ->
-       *[other] Đã tách thiết kế moong thành { $count } đường đa tuyến.
+       *[other] Đã tách thiết kế tầng thành { $count } đường đa tuyến.
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - chọn một thiết kế moong hoặc đường đa tuyến khép kín, hoặc tạo lớp để vẽ
-pit-design-cursor-held = Thiết kế moong vẽ các đường nằm ngang ở cao độ của chúng, nên không bắt điểm vào gì khi đang bật.
-pit-design-gone = Thiết kế moong đó không còn trong dự án.
+pit-design-tool-needs = { $tool } - chọn một thiết kế tầng hoặc đường đa tuyến khép kín, hoặc tạo lớp để vẽ
+pit-design-cursor-held = Thiết kế tầng vẽ các đường nằm ngang ở cao độ của chúng, nên không bắt điểm vào gì khi đang bật.
+pit-design-gone = Thiết kế tầng đó không còn trong dự án.
 pit-design-name = Tên
 pit-design-flatter =
     { $count ->
        *[other] { $count } tầng lên dốc thoải hơn độ dốc yêu cầu: không đoạn phẳng nào giữ được chúng ổn định.
     }
-pit-design-bench-table = Tầng
+pit-design-bench-table = Từng tầng
 pit-design-table-rl = Cao độ
 pit-design-table-grade = Độ dốc
 pit-design-table-flat = Phẳng
@@ -5235,7 +5235,7 @@ pit-design-shell-failed = Không so sánh được thiết kế với vỏ: { $r
 pit-design-shell-gained = Ngoài vỏ
 pit-design-shell-left = Để lại trong vỏ
 pit-design-shell-net = Chênh lệch
-pit-design-compare = So sánh các thiết kế moong
+pit-design-compare = So sánh các thiết kế tầng
 pit-design-compare-stale = Được đo trước lần thay đổi gần nhất: sẽ được đo lại khi cái dùng để đo được tải.
 pit-design-layer-crest = Mép trên
 pit-design-layer-toe = Chân tầng

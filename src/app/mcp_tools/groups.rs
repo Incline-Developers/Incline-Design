@@ -53,7 +53,7 @@ struct Group {
 const GROUPS: [Group; 7] = [
     Group {
         name: "design",
-        about: "drawing and editing design objects: move, offset, batters and berms, explode, insert points, drape; designing a pit with its haul ramp",
+        about: "drawing and editing design objects: move, offset, batters and berms, explode, insert points, drape; designing pits and dumps bench by bench, with their haul ramps",
         tools: design,
     },
     Group {
@@ -201,7 +201,7 @@ mod tests {
         assert!(reads_only("load_tools"));
         assert!(!reads_only("add_objects"));
         assert!(!reads_only("show_in_window"));
-        assert!(!reads_only("design_pit"));
+        assert!(!reads_only("design_benches"));
         assert!(reads_only("no_such_tool"));
     }
 }

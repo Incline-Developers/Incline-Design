@@ -2608,7 +2608,7 @@ haul-open-layout = Straßennetz öffnen
 haul-dump-override = Kippzeit überschreiben (s)
 haul-unlimited = Standard
 haul-convert-help = Die ausgewählten Designpolylinien in Förderstraßen umwandeln. Enden und Kreuzungen innerhalb der Verbindungstoleranz werden zu gemeinsamen Knoten; die Polylinien bleiben unverändert.
-haul-empty = Noch keine Straßen. Zeichnen Sie eine oder wandeln Sie Polylinien des Grubendesigns um oder importieren Sie sie.
+haul-empty = Noch keine Straßen. Zeichnen Sie eine oder wandeln Sie Polylinien des Strossenentwurfs um oder importieren Sie sie.
 haul-connected-help = Ein Block ist verbunden, wenn er innerhalb der Auto-Verbindungsdistanz einen Straßenknoten erreichen kann, mit Steigung oder Gefälle von höchstens dem maximalen Gefälle des Lkw. Grüne Blöcke schließen an den nächsten Knoten an, blaue an die für sie gewählten Knoten; rote sind außer Reichweite und werden dennoch eingeplant, mit einer längeren Geradeausfahrt zum nächsten Knoten.
 haul-roads-selected =
     { $count ->
@@ -5024,9 +5024,9 @@ err-file-desc-opt-report = Optimierungsbericht
 
 ## Pit Design
 
-pit-design-menu = Grubenentwurf
-pit-design-title = Grubenentwurf
-pit-design-benches-section = Strossen
+pit-design-menu = Strossenentwurf
+pit-design-title = Strossenentwurf
+pit-design-benches-section = Wände
 pit-design-bench-height = Strossenhöhe
 pit-design-face-angle = Böschungswinkel
 pit-design-berm-width = Bermenbreite
@@ -5180,26 +5180,26 @@ pit-design-ramp-remove = Rampe entfernen
 pit-design-ramp-remove-short = Entfernen
 pit-design-ramp-remove-help = Die Grube ohne Rampe entwerfen. Ihre Einstellungen bleiben erhalten, um sie erneut zu platzieren.
 pit-design-done = Fertig
-pit-design-kind = Grubenentwurf
+pit-design-kind = Strossenentwurf
 pit-design-explode = Auflösen
-pit-design-explode-help = Den Grubenentwurf in Polylinien umwandeln: seine Linie und die Linien jeder Strosse, zum Bearbeiten von Hand. Sie werden nicht mehr entworfen; Rückgängig stellt den Entwurf wieder her.
-pit-design-report-explode = Wandelt einen Grubenentwurf in Polylinien um.
+pit-design-explode-help = Den Strossenentwurf in Polylinien umwandeln: seine Linie und die Linien jeder Strosse, zum Bearbeiten von Hand. Sie werden nicht mehr entworfen; Rückgängig stellt den Entwurf wieder her.
+pit-design-report-explode = Wandelt einen Strossenentwurf in Polylinien um.
 pit-design-exploded =
     { $count ->
-        [one] Grubenentwurf in eine Polylinie aufgelöst.
-       *[other] Grubenentwurf in { $count } Polylinien aufgelöst.
+        [one] Strossenentwurf in eine Polylinie aufgelöst.
+       *[other] Strossenentwurf in { $count } Polylinien aufgelöst.
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - einen Grubenentwurf oder eine geschlossene Polylinie wählen oder eine Ebene zum Zeichnen anlegen
-pit-design-cursor-held = Pit Design zeichnet seine Linien eben auf ihrer Höhe und rastet daher nirgends ein, solange es aktiv ist.
-pit-design-gone = Dieser Grubenentwurf ist nicht mehr im Projekt.
+pit-design-tool-needs = { $tool } - einen Strossenentwurf oder eine geschlossene Polylinie wählen oder eine Ebene zum Zeichnen anlegen
+pit-design-cursor-held = Der Strossenentwurf zeichnet seine Linien eben auf ihrer Höhe und rastet daher nirgends ein, solange er aktiv ist.
+pit-design-gone = Dieser Strossenentwurf ist nicht mehr im Projekt.
 pit-design-name = Name
 pit-design-flatter =
     { $count ->
         [one] Eine Strosse steigt flacher als die Steigung: kein ebenes Stück würde sie standsicher lassen.
        *[other] { $count } Strossen steigen flacher als die Steigung: kein ebenes Stück würde sie standsicher lassen.
     }
-pit-design-bench-table = Strossen
+pit-design-bench-table = Strosse für Strosse
 pit-design-table-rl = RL
 pit-design-table-grade = Steigung
 pit-design-table-flat = Eben
@@ -5250,7 +5250,7 @@ pit-design-shell-failed = Der Entwurf konnte nicht mit der Hülle verglichen wer
 pit-design-shell-gained = Über die Hülle hinaus
 pit-design-shell-left = In der Hülle belassen
 pit-design-shell-net = Differenz
-pit-design-compare = Grubenentwürfe im Vergleich
+pit-design-compare = Strossenentwürfe im Vergleich
 pit-design-compare-stale = Vor der letzten Änderung gemessen: Er wird erneut gemessen, sobald das, woran er gemessen wird, geladen ist.
 pit-design-layer-crest = Oberkante
 pit-design-layer-toe = Unterkante

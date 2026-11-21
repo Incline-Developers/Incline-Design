@@ -2609,7 +2609,7 @@ haul-open-layout = Yol Ağını Aç
 haul-dump-override = Boşaltma süresini geçersiz kıl (s)
 haul-unlimited = Varsayılan
 haul-convert-help = Seçili tasarım çoklu çizgilerini nakliye yollarına dönüştürür. Birleştirme toleransı içindeki uçlar ve kesişimler ortak düğüm olur; çoklu çizgiler olduğu gibi kalır.
-haul-empty = Henüz yol yok. Bir tane çizin veya ocak tasarımı çoklu çizgilerini dönüştürün ya da içe aktarın.
+haul-empty = Henüz yol yok. Bir tane çizin veya basamak tasarımı çoklu çizgilerini dönüştürün ya da içe aktarın.
 haul-connected-help = Bir blok, otomatik birleştirme mesafesi içinde, kamyonun azami eğiminden daha dik olmayan bir iniş veya çıkışla bir yol düğümüne ulaşabiliyorsa bağlıdır. Yeşil bloklar en yakın düğüme, mavi olanlar kendileri için seçilen düğümlere bağlanır; kırmızı olanlar erişim dışıdır ve en yakın düğüme daha uzun bir doğrudan sürüşle yine de çizelgelenir.
 haul-roads-selected =
     { $count ->
@@ -5025,9 +5025,9 @@ err-file-desc-opt-report = optimizasyon raporu
 
 ## Pit Design
 
-pit-design-menu = Ocak Tasarımı
-pit-design-title = Ocak Tasarımı
-pit-design-benches-section = Basamaklar
+pit-design-menu = Basamak Tasarımı
+pit-design-title = Basamak Tasarımı
+pit-design-benches-section = Şevler
 pit-design-bench-height = Basamak yüksekliği
 pit-design-face-angle = Şev açısı
 pit-design-berm-width = Berm genişliği
@@ -5181,24 +5181,24 @@ pit-design-ramp-remove = Rampayı kaldır
 pit-design-ramp-remove-short = Kaldır
 pit-design-ramp-remove-help = Ocağı rampasız tasarla. Ayarları yeniden yerleştirmek için korunur.
 pit-design-done = Tamam
-pit-design-kind = Ocak tasarımı
+pit-design-kind = Basamak tasarımı
 pit-design-explode = Patlat
-pit-design-explode-help = Ocak tasarımını çoklu çizgilere dönüştürür: elle düzenlemek için çizgisini ve her basamağın çizgilerini. Artık tasarlanmazlar; Geri Al tasarımı geri getirir.
-pit-design-report-explode = Bir ocak tasarımını çoklu çizgilere dönüştürür.
+pit-design-explode-help = Basamak tasarımını çoklu çizgilere dönüştürür: elle düzenlemek için çizgisini ve her basamağın çizgilerini. Artık tasarlanmazlar; Geri Al tasarımı geri getirir.
+pit-design-report-explode = Bir basamak tasarımını çoklu çizgilere dönüştürür.
 pit-design-exploded =
     { $count ->
-       *[other] Ocak tasarımı { $count } çoklu çizgiye dönüştürüldü.
+       *[other] Basamak tasarımı { $count } çoklu çizgiye dönüştürüldü.
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - bir ocak tasarımı veya kapalı çoklu çizgi seçin ya da çizim için bir katman oluşturun
-pit-design-cursor-held = Ocak tasarımı çizgilerini kotlarında düz çizer, bu yüzden açıkken hiçbir şeye yapışmaz.
-pit-design-gone = Bu ocak tasarımı artık projede değil.
+pit-design-tool-needs = { $tool } - bir basamak tasarımı veya kapalı çoklu çizgi seçin ya da çizim için bir katman oluşturun
+pit-design-cursor-held = Basamak tasarımı çizgilerini kotlarında düz çizer, bu yüzden açıkken hiçbir şeye yapışmaz.
+pit-design-gone = Bu basamak tasarımı artık projede değil.
 pit-design-name = Ad
 pit-design-flatter =
     { $count ->
        *[other] { $count } basamak eğimden daha yatık yükseliyor: hiçbir düz kesim onları sağlam bırakmazdı.
     }
-pit-design-bench-table = Basamaklar
+pit-design-bench-table = Basamak basamak
 pit-design-table-rl = RL
 pit-design-table-grade = Eğim
 pit-design-table-flat = Düz
@@ -5249,7 +5249,7 @@ pit-design-shell-failed = Tasarım kabukla karşılaştırılamadı: { $reason }
 pit-design-shell-gained = Kabuğun ötesinde
 pit-design-shell-left = Kabukta bırakılan
 pit-design-shell-net = Fark
-pit-design-compare = Ocak tasarımları karşılaştırması
+pit-design-compare = Basamak tasarımları karşılaştırması
 pit-design-compare-stale = Son değişikliğinden önce ölçüldü: neye göre ölçüldüğü yüklendiğinde yeniden ölçülür.
 pit-design-layer-crest = Şev üstü
 pit-design-layer-toe = Şev topuğu

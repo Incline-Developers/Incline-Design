@@ -2565,7 +2565,7 @@ haul-open-layout = Abrir la red de caminos
 haul-dump-override = Anular tiempo de descarga (s)
 haul-unlimited = Predeterminado
 haul-convert-help = Convierte las polilíneas de diseño seleccionadas en caminos de acarreo. Los extremos y cruces dentro de la tolerancia de unión se convierten en nodos compartidos; las polilíneas se mantienen como están.
-haul-empty = Aún no hay caminos. Dibuje uno, o convierta o importe polilíneas del diseño del tajo.
+haul-empty = Aún no hay caminos. Dibuje uno, o convierta o importe polilíneas del diseño de bancos.
 haul-connected-help = Un bloque está conectado cuando puede llegar a un nodo de camino dentro de la distancia de unión automática, subiendo o bajando con una pendiente no mayor que la máxima del camión. Los bloques verdes se unen al nodo más cercano, los azules a los nodos elegidos para ellos; los rojos están fuera de alcance y se programan igualmente, con un trayecto recto más largo hasta el nodo más cercano.
 haul-roads-selected =
     { $count ->
@@ -4981,9 +4981,9 @@ err-file-desc-opt-report = informe de optimización
 
 ## Pit Design
 
-pit-design-menu = Diseño de rajo
-pit-design-title = Diseño de rajo
-pit-design-benches-section = Bancos
+pit-design-menu = Diseño de bancos
+pit-design-title = Diseño de bancos
+pit-design-benches-section = Paredes
 pit-design-bench-height = Altura de banco
 pit-design-face-angle = Ángulo de cara
 pit-design-berm-width = Ancho de berma
@@ -5137,26 +5137,26 @@ pit-design-ramp-remove = Quitar rampa
 pit-design-ramp-remove-short = Quitar
 pit-design-ramp-remove-help = Diseñar el rajo sin rampa. Sus ajustes se conservan para volver a ubicarla.
 pit-design-done = Listo
-pit-design-kind = Diseño de rajo
+pit-design-kind = Diseño de bancos
 pit-design-explode = Descomponer
-pit-design-explode-help = Convierte el diseño de rajo en polilíneas: su línea y las líneas de cada banco, para editarlas a mano. Dejan de estar diseñadas; Deshacer devuelve el diseño.
-pit-design-report-explode = Convierte un diseño de rajo en polilíneas.
+pit-design-explode-help = Convierte el diseño de bancos en polilíneas: su línea y las líneas de cada banco, para editarlas a mano. Dejan de estar diseñadas; Deshacer devuelve el diseño.
+pit-design-report-explode = Convierte un diseño de bancos en polilíneas.
 pit-design-exploded =
     { $count ->
-        [one] Diseño de rajo descompuesto en una polilínea.
-       *[other] Diseño de rajo descompuesto en { $count } polilíneas.
+        [one] Diseño de bancos descompuesto en una polilínea.
+       *[other] Diseño de bancos descompuesto en { $count } polilíneas.
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - seleccione un diseño de tajo o una polilínea cerrada, o cree una capa en la que dibujar
-pit-design-cursor-held = Diseño de tajo dibuja sus líneas a nivel en su cota, así que no se ajusta a nada mientras está activo.
-pit-design-gone = Ese diseño de rajo ya no está en el proyecto.
+pit-design-tool-needs = { $tool } - seleccione un diseño de bancos o una polilínea cerrada, o cree una capa en la que dibujar
+pit-design-cursor-held = Diseño de bancos dibuja sus líneas a nivel en su cota, así que no se ajusta a nada mientras está activo.
+pit-design-gone = Ese diseño de bancos ya no está en el proyecto.
 pit-design-name = Nombre
 pit-design-flatter =
     { $count ->
         [one] Un banco sube con menos pendiente de la pedida: ningún tramo a nivel lo dejaría estable.
        *[other] { $count } bancos suben con menos pendiente de la pedida: ningún tramo a nivel los dejaría estables.
     }
-pit-design-bench-table = Bancos
+pit-design-bench-table = Banco a banco
 pit-design-table-rl = Cota
 pit-design-table-grade = Pendiente
 pit-design-table-flat = A nivel
@@ -5207,7 +5207,7 @@ pit-design-shell-failed = No se pudo comparar el diseño con la envolvente: { $r
 pit-design-shell-gained = Más allá de la envolvente
 pit-design-shell-left = Dejado en la envolvente
 pit-design-shell-net = Diferencia
-pit-design-compare = Diseños de tajo comparados
+pit-design-compare = Diseños de bancos comparados
 pit-design-compare-stale = Medido antes de su último cambio: se vuelve a medir cuando se cargue aquello contra lo que se mide.
 pit-design-layer-crest = Cresta
 pit-design-layer-toe = Pie

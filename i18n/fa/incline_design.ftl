@@ -2567,7 +2567,7 @@ haul-open-layout = باز کردن شبکهٔ جاده
 haul-dump-override = جایگزینی زمان تخلیه (s)
 haul-unlimited = پیش‌فرض
 haul-convert-help = چندخطی‌های طراحی انتخاب‌شده را به جاده‌های حمل تبدیل می‌کند. سرها و تقاطع‌ها در تلورانس اتصال به گره‌های مشترک تبدیل می‌شوند؛ چندخطی‌ها همان‌گونه می‌مانند.
-haul-empty = هنوز جاده‌ای نیست. یکی رسم کنید یا چندخطی‌های طراحی پیت را تبدیل یا درون‌ریزی کنید.
+haul-empty = هنوز جاده‌ای نیست. یکی رسم کنید یا چندخطی‌های طراحی پله را تبدیل یا درون‌ریزی کنید.
 haul-connected-help = بلوکی متصل است که بتواند در فاصلهٔ اتصال خودکار به گره جاده‌ای برسد و شیب بالا یا پایین رفتنش از بیشینهٔ شیب کامیون تندتر نباشد. بلوک‌های سبز به نزدیک‌ترین گره می‌پیوندند، آبی‌ها به گره‌هایی که برایشان انتخاب شده؛ قرمزها دور از دسترس‌اند و همچنان زمان‌بندی می‌شوند، با رانندگی مستقیم طولانی‌تر تا نزدیک‌ترین گره.
 haul-roads-selected =
     { $count ->
@@ -4983,9 +4983,9 @@ err-file-desc-opt-report = گزارش بهینه‌سازی
 
 ## Pit Design
 
-pit-design-menu = طراحی پیت
-pit-design-title = طراحی پیت
-pit-design-benches-section = پله‌ها
+pit-design-menu = طراحی پله
+pit-design-title = طراحی پله
+pit-design-benches-section = دیواره‌ها
 pit-design-bench-height = ارتفاع پله
 pit-design-face-angle = زاویه سینه
 pit-design-berm-width = عرض برم
@@ -5139,24 +5139,24 @@ pit-design-ramp-remove = حذف رمپ
 pit-design-ramp-remove-short = حذف
 pit-design-ramp-remove-help = پیت را بدون رمپ طراحی کنید. تنظیمات آن برای جای‌گذاری دوباره نگه داشته می‌شود.
 pit-design-done = انجام شد
-pit-design-kind = طراحی پیت
+pit-design-kind = طراحی پله
 pit-design-explode = تجزیه
-pit-design-explode-help = طراحی پیت را به چندخطی‌ها تبدیل می‌کند: خط آن و خطوط هر پله، برای ویرایش دستی. دیگر طراحی‌شده نیستند؛ واگرد طراحی را برمی‌گرداند.
-pit-design-report-explode = یک طراحی پیت را به چندخطی‌ها تبدیل می‌کند.
+pit-design-explode-help = طراحی پله را به چندخطی‌ها تبدیل می‌کند: خط آن و خطوط هر پله، برای ویرایش دستی. دیگر طراحی‌شده نیستند؛ واگرد طراحی را برمی‌گرداند.
+pit-design-report-explode = یک طراحی پله را به چندخطی‌ها تبدیل می‌کند.
 pit-design-exploded =
     { $count ->
-       *[other] طراحی پیت به { $count } چندخطی تجزیه شد.
+       *[other] طراحی پله به { $count } چندخطی تجزیه شد.
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - یک طرح پیت یا چندخط بسته انتخاب کنید، یا لایه‌ای برای ترسیم بسازید
-pit-design-cursor-held = طرح پیت خطوطش را تراز در ترازشان می‌کشد، پس تا وقتی فعال است به چیزی نمی‌چسبد.
-pit-design-gone = آن طراحی پیت دیگر در پروژه نیست.
+pit-design-tool-needs = { $tool } - یک طرح پله یا چندخط بسته انتخاب کنید، یا لایه‌ای برای ترسیم بسازید
+pit-design-cursor-held = طرح پله خطوطش را تراز در ترازشان می‌کشد، پس تا وقتی فعال است به چیزی نمی‌چسبد.
+pit-design-gone = آن طراحی پله دیگر در پروژه نیست.
 pit-design-name = نام
 pit-design-flatter =
     { $count ->
        *[other] { $count } پله کم‌شیب‌تر از شیب خواسته‌شده بالا می‌روند: هیچ بخش همواری آن‌ها را پایدار نمی‌کرد.
     }
-pit-design-bench-table = پله‌ها
+pit-design-bench-table = پله به پله
 pit-design-table-rl = تراز
 pit-design-table-grade = شیب
 pit-design-table-flat = هموار
@@ -5207,7 +5207,7 @@ pit-design-shell-failed = طرح با پوسته مقایسه نشد: { $reason 
 pit-design-shell-gained = فراتر از پوسته
 pit-design-shell-left = برجامانده در پوسته
 pit-design-shell-net = تفاوت
-pit-design-compare = مقایسه طرح‌های پیت
+pit-design-compare = مقایسه طرح‌های پله
 pit-design-compare-stale = پیش از آخرین تغییرش اندازه‌گیری شده: پس از بارگذاری آنچه با آن سنجیده می‌شود دوباره اندازه‌گیری می‌شود.
 pit-design-layer-crest = لبه بالا
 pit-design-layer-toe = پنجه

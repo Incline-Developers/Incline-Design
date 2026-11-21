@@ -2567,7 +2567,7 @@ haul-open-layout = Ouvrir le réseau routier
 haul-dump-override = Remplacer le temps de déversement (s)
 haul-unlimited = Par défaut
 haul-convert-help = Transforme les polylignes de conception sélectionnées en pistes de roulage. Les extrémités et croisements dans la tolérance de jonction deviennent des nœuds partagés ; les polylignes restent telles quelles.
-haul-empty = Aucune piste pour l’instant. Tracez-en une, ou convertissez ou importez des polylignes de conception de fosse.
+haul-empty = Aucune piste pour l’instant. Tracez-en une, ou convertissez ou importez des polylignes de conception de gradins.
 haul-connected-help = Un bloc est relié lorsqu’il peut atteindre un nœud de piste dans la distance de jonction automatique, en montant ou descendant sans dépasser la pente maximale du camion. Les blocs verts rejoignent le nœud le plus proche, les bleus les nœuds choisis pour eux ; les rouges sont hors d’atteinte et restent planifiés, avec un trajet en ligne droite plus long jusqu’au nœud le plus proche.
 haul-roads-selected =
     { $count ->
@@ -4984,9 +4984,9 @@ err-file-desc-opt-report = rapport d’optimisation
 
 ## Pit Design
 
-pit-design-menu = Conception de fosse
-pit-design-title = Conception de fosse
-pit-design-benches-section = Gradins
+pit-design-menu = Conception de gradins
+pit-design-title = Conception de gradins
+pit-design-benches-section = Parois
 pit-design-bench-height = Hauteur de gradin
 pit-design-face-angle = Angle de front
 pit-design-berm-width = Largeur de banquette
@@ -5140,26 +5140,26 @@ pit-design-ramp-remove = Retirer la rampe
 pit-design-ramp-remove-short = Retirer
 pit-design-ramp-remove-help = Concevoir la fosse sans rampe. Ses réglages sont conservés pour la replacer.
 pit-design-done = Terminé
-pit-design-kind = Conception de fosse
+pit-design-kind = Conception de gradins
 pit-design-explode = Décomposer
-pit-design-explode-help = Transformer la conception de fosse en polylignes : sa ligne et les lignes de chaque gradin, à modifier à la main. Elles ne sont plus conçues ; Annuler rétablit la conception.
-pit-design-report-explode = Transforme une conception de fosse en polylignes.
+pit-design-explode-help = Transformer la conception de gradins en polylignes : sa ligne et les lignes de chaque gradin, à modifier à la main. Elles ne sont plus conçues ; Annuler rétablit la conception.
+pit-design-report-explode = Transforme une conception de gradins en polylignes.
 pit-design-exploded =
     { $count ->
-        [one] Conception de fosse décomposée en une polyligne.
-       *[other] Conception de fosse décomposée en { $count } polylignes.
+        [one] Conception de gradins décomposée en une polyligne.
+       *[other] Conception de gradins décomposée en { $count } polylignes.
     }
 pit-design-default-name = { $kind } { $number }
-pit-design-tool-needs = { $tool } - sélectionnez une conception de fosse ou une polyligne fermée, ou créez un calque où dessiner
-pit-design-cursor-held = La conception de fosse trace ses lignes de niveau à leur cote : elle ne s'accroche à rien tant qu'elle est active.
-pit-design-gone = Cette conception de fosse n’est plus dans le projet.
+pit-design-tool-needs = { $tool } - sélectionnez une conception de gradins ou une polyligne fermée, ou créez un calque où dessiner
+pit-design-cursor-held = La conception de gradins trace ses lignes de niveau à leur cote : elle ne s'accroche à rien tant qu'elle est active.
+pit-design-gone = Cette conception de gradins n’est plus dans le projet.
 pit-design-name = Nom
 pit-design-flatter =
     { $count ->
         [one] Un gradin monte moins raide que la pente : aucun palier ne le laisserait stable.
        *[other] { $count } gradins montent moins raide que la pente : aucun palier ne les laisserait stables.
     }
-pit-design-bench-table = Gradins
+pit-design-bench-table = Gradin par gradin
 pit-design-table-rl = Cote
 pit-design-table-grade = Pente
 pit-design-table-flat = Palier
@@ -5210,7 +5210,7 @@ pit-design-shell-failed = La conception n'a pas pu être comparée à l'envelopp
 pit-design-shell-gained = Au-delà de l'enveloppe
 pit-design-shell-left = Laissé dans l'enveloppe
 pit-design-shell-net = Différence
-pit-design-compare = Conceptions de fosse comparées
+pit-design-compare = Conceptions de gradins comparées
 pit-design-compare-stale = Mesurée avant sa dernière modification : elle sera mesurée de nouveau une fois chargé ce par rapport à quoi elle est mesurée.
 pit-design-layer-crest = Crête
 pit-design-layer-toe = Pied
