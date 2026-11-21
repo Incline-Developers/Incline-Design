@@ -561,6 +561,9 @@ struct UiFrameContext<'a> {
 /// to, the way out, why it is being asked - goes in `minor` rather than being
 /// punctuated onto the end, so the banner can dim it. See [`ViewportMessage`].
 fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
+    if editor.pit_design.as_ref().is_some_and(|draft| draft.dragging_ramp.is_some()) {
+        return Some(ViewportMessage::text(tr!("pit-design-ramp-drag-prompt")).minor(tr!("ui-esc-cancels")));
+    }
     if editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp.is_some()) {
         return Some(ViewportMessage::text(tr!("pit-design-ramp-start-prompt")).minor(tr!("ui-esc-cancels")));
     }

@@ -5006,9 +5006,21 @@ pit-design-ramp-width = Ancho
 pit-design-ramp-gradient = Pendiente
 pit-design-ramp-gradient-help = Desnivel sobre recorrido. Se mantiene a lo largo del borde más empinado del camino, de modo que en una curva su borde interior no es más empinado que esto.
 pit-design-ramp-start = Empieza en
-pit-design-ramp-start-help = Dónde sale la rampa de la línea. Pulse Mover y haga clic en la línea donde debe salir en su lugar.
+pit-design-ramp-start-help = Dónde sale la rampa de la línea. Arrastre su cruz verde a lo largo de la línea en la vista, o pulse Mover y haga clic donde debe salir en su lugar.
 pit-design-ramp-start-default = Inicio de la línea
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] Lado norte
+    [ne] Lado noreste
+    [e] Lado este
+    [se] Lado sureste
+    [s] Lado sur
+    [sw] Lado suroeste
+    [w] Lado oeste
+   *[nw] Lado noroeste
+}
+pit-design-ramp-drag-hint = Arrastre para mover dónde empieza la rampa
+pit-design-ramp-drag-prompt = Suelte sobre la línea donde la rampa debe salir de ella.
 pit-design-ramp-start-prompt = Haga clic en la línea de partida donde la rampa la deja.
 pit-design-climbs = Sube
 pit-design-climbs-help = En qué sentido sube la rampa alrededor del rajo, vista desde arriba.
@@ -5055,6 +5067,9 @@ pit-design-draw-help = Dibuje la línea cerrada de la que parte el diseño: el p
 pit-design-round-corners = Redondear esquinas
 pit-design-draw-rl = Cota
 pit-design-draw-rl-help = La cota a la que se dibuja la línea: el fondo o la cresta de un tajo, o el pie o la cima de un botadero. La misma que la Z de la barra de herramientas.
+pit-design-draw-ground = Terreno aquí
+pit-design-draw-ground-above = { $rl } m ({ $by } m por encima de la cota)
+pit-design-draw-ground-below = { $rl } m ({ $by } m por debajo de la cota)
 pit-design-round-corners-help = Redondea cada esquina de la línea en un arco, como se explota un pie o una cresta. Los arcos forman parte de la línea, y sus vértices siguen siendo pocos y editables.
 pit-design-corner-radius = Radio de esquina
 pit-design-done-help = Terminar este rajo y dejar la herramienta. Escape hace lo mismo.

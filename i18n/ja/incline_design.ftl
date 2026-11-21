@@ -5037,9 +5037,21 @@ pit-design-ramp-width = 幅
 pit-design-ramp-gradient = 勾配
 pit-design-ramp-gradient-help = 高低差 / 水平距離。道路のより急な側の縁に沿って保たれるため、カーブでも内側の縁はこれより急になりません。
 pit-design-ramp-start = 開始位置
-pit-design-ramp-start-help = ランプがラインから出る位置です。移動を押してから、代わりに出るべき位置をクリックしてください。
+pit-design-ramp-start-help = ランプがラインから出る位置です。ビューで緑の十字をラインに沿ってドラッグするか、移動を押してから出るべき位置をクリックしてください。
 pit-design-ramp-start-default = ラインの始点
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] 北側
+    [ne] 北東側
+    [e] 東側
+    [se] 南東側
+    [s] 南側
+    [sw] 南西側
+    [w] 西側
+   *[nw] 北西側
+}
+pit-design-ramp-drag-hint = ドラッグしてランプの開始位置を移動
+pit-design-ramp-drag-prompt = ランプが出るべきライン上の位置で離してください。
 pit-design-ramp-start-prompt = ランプが開始ラインを離れる位置でラインをクリックしてください。
 pit-design-climbs = 登る向き
 pit-design-climbs-help = 上から見て、ランプがピットの周りをどちら向きに登るか。
@@ -5086,6 +5098,9 @@ pit-design-draw-help = 設計の始まりとなる閉じたラインを描きま
 pit-design-round-corners = 角を丸める
 pit-design-draw-rl = RL
 pit-design-draw-rl-help = 線を描く RL: ピットの底か法肩、ダンプの法尻か天端。ツールバーの Z と同じです。
+pit-design-draw-ground = この地点の地表
+pit-design-draw-ground-above = { $rl } m（RL より { $by } m 上）
+pit-design-draw-ground-below = { $rl } m（RL より { $by } m 下）
 pit-design-round-corners-help = ラインの各角を、法尻や法肩を採掘するように円弧で丸めます。円弧はラインの一部で、頂点は少なく編集しやすいままです。
 pit-design-corner-radius = 角の半径
 pit-design-done-help = このピットを終えてツールを終了します。Escape でも同じです。

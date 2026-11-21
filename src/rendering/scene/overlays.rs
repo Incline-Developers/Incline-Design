@@ -344,9 +344,14 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     // Where each of Pit Design's ramps leaves its string, and where each
     // turns back.
     if let Some(preview) = editor.pit_design.as_ref().and_then(|draft| draft.preview.as_ref()) {
-        for start in &preview.ramp_starts {
-            draw_screen_cross(&mut overlay, *start, 20.0, 8.0, [0.05, 0.35, 0.1, 1.0]);
-            draw_screen_cross(&mut overlay, *start, 18.0, 4.0, [0.45, 0.9, 0.5, 1.0]);
+        // The marker under the pointer, which a press drags, stands larger.
+        let grabbable = editor.pit_design.as_ref().and_then(|draft| draft.ramp_marker_under_cursor);
+        // A start being picked is drawn at the pointer, not where it was.
+        let picking = editor.pit_design.as_ref().and_then(|draft| draft.picking_ramp);
+        for (index, start) in preview.ramp_starts.iter().enumerate().filter(|(index, _)| picking != Some(*index)) {
+            let grow = if grabbable == Some(index) { 6.0 } else { 0.0 };
+            draw_screen_cross(&mut overlay, *start, 20.0 + grow, 8.0, [0.05, 0.35, 0.1, 1.0]);
+            draw_screen_cross(&mut overlay, *start, 18.0 + grow, 4.0, [0.45, 0.9, 0.5, 1.0]);
         }
         if let Ok(design) = &preview.design {
             for turn in design.report.iter().flat_map(|bench| &bench.ramps).filter_map(|road| road.turn_at) {

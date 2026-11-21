@@ -5006,9 +5006,21 @@ pit-design-ramp-width = Largura
 pit-design-ramp-gradient = Inclinação
 pit-design-ramp-gradient-help = Desnível sobre percurso. É mantida ao longo da borda mais íngreme da estrada, de modo que numa curva a borda interna não é mais íngreme do que isto.
 pit-design-ramp-start = Começa em
-pit-design-ramp-start-help = Onde a rampa deixa a linha. Mover e depois clique na linha onde deve sair em vez disso.
+pit-design-ramp-start-help = Onde a rampa deixa a linha. Arraste a sua cruz verde ao longo da linha na vista, ou clique em Mover e depois onde deve sair em vez disso.
 pit-design-ramp-start-default = Início da linha
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] Lado norte
+    [ne] Lado nordeste
+    [e] Lado leste
+    [se] Lado sudeste
+    [s] Lado sul
+    [sw] Lado sudoeste
+    [w] Lado oeste
+   *[nw] Lado noroeste
+}
+pit-design-ramp-drag-hint = Arraste para mover onde a rampa começa
+pit-design-ramp-drag-prompt = Solte sobre a linha onde a rampa deve deixá-la.
 pit-design-ramp-start-prompt = Clique na linha de partida onde a rampa a deixa.
 pit-design-climbs = Sobe
 pit-design-climbs-help = Em que sentido a rampa sobe à volta da cava, vista de cima.
@@ -5055,6 +5067,9 @@ pit-design-draw-help = Desenhe a linha fechada de onde parte o projeto: o pé do
 pit-design-round-corners = Arredondar cantos
 pit-design-draw-rl = Cota
 pit-design-draw-rl-help = A cota em que a linha é desenhada: o fundo ou a crista de uma cava, ou o pé ou o topo de uma pilha. A mesma que o Z da barra de ferramentas.
+pit-design-draw-ground = Terreno aqui
+pit-design-draw-ground-above = { $rl } m ({ $by } m acima da cota)
+pit-design-draw-ground-below = { $rl } m ({ $by } m abaixo da cota)
 pit-design-round-corners-help = Arredonda cada canto da linha num arco, como se escava um pé ou uma crista. Os arcos fazem parte da linha, e os seus vértices continuam poucos e editáveis.
 pit-design-corner-radius = Raio de canto
 pit-design-done-help = Terminar esta cava e largar a ferramenta. Esc faz o mesmo.

@@ -5050,9 +5050,21 @@ pit-design-ramp-width = Genişlik
 pit-design-ramp-gradient = Eğim
 pit-design-ramp-gradient-help = Yükseliş bölü uzunluk. Yolun daha dik kenarı boyunca tutulur, böylece bir virajda iç kenarı bundan daha dik olmaz.
 pit-design-ramp-start = Başladığı yer
-pit-design-ramp-start-help = Rampanın çizgiden ayrıldığı yer. Taşı'ya basın, sonra bunun yerine ayrılması gereken yere tıklayın.
+pit-design-ramp-start-help = Rampanın çizgiden ayrıldığı yer. Görünümde yeşil artısını çizgi boyunca sürükleyin ya da Taşı'ya basıp ayrılması gereken yere tıklayın.
 pit-design-ramp-start-default = Çizginin başı
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] Kuzey yüzü
+    [ne] Kuzeydoğu yüzü
+    [e] Doğu yüzü
+    [se] Güneydoğu yüzü
+    [s] Güney yüzü
+    [sw] Güneybatı yüzü
+    [w] Batı yüzü
+   *[nw] Kuzeybatı yüzü
+}
+pit-design-ramp-drag-hint = Rampanın başlangıcını taşımak için sürükleyin
+pit-design-ramp-drag-prompt = Rampanın ayrılması gereken yerde çizginin üzerinde bırakın.
 pit-design-ramp-start-prompt = Başlangıç çizgisine rampanın ondan ayrıldığı yerde tıklayın.
 pit-design-climbs = Tırmanış
 pit-design-climbs-help = Rampanın yukarıdan bakıldığında ocağın çevresinde hangi yönde tırmandığı.
@@ -5099,6 +5111,9 @@ pit-design-draw-help = Tasarımın başladığı kapalı çizgiyi çizin: bir oc
 pit-design-round-corners = Köşeleri yuvarla
 pit-design-draw-rl = Kot
 pit-design-draw-rl-help = Çizginin çizildiği kot: bir ocağın tabanı veya şev üstü, ya da bir döküm sahasının topuğu veya tepesi. Araç çubuğundaki Z ile aynı.
+pit-design-draw-ground = Buradaki zemin
+pit-design-draw-ground-above = { $rl } m (kotun { $by } m üstünde)
+pit-design-draw-ground-below = { $rl } m (kotun { $by } m altında)
 pit-design-round-corners-help = Çizginin her köşesini, bir topuk ya da kret kazıldığı gibi bir yaya yuvarlar. Yaylar çizginin parçasıdır ve köşe noktaları az ve düzenlenebilir kalır.
 pit-design-corner-radius = Köşe yarıçapı
 pit-design-done-help = Bu ocağı bitirin ve aracı bırakın. Escape de aynısını yapar.

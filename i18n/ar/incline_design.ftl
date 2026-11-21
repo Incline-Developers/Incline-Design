@@ -5050,9 +5050,21 @@ pit-design-ramp-width = العرض
 pit-design-ramp-gradient = الميل
 pit-design-ramp-gradient-help = الارتفاع إلى المسافة الأفقية. يُحافَظ عليه على امتداد الحافة الأشد انحدارًا من الطريق، فلا تكون حافته الداخلية عند المنعطف أشد انحدارًا من ذلك.
 pit-design-ramp-start = يبدأ عند
-pit-design-ramp-start-help = حيث يغادر المنحدر الخط. اضغط «نقل» ثم انقر الخط حيث ينبغي أن يغادره بدلًا من ذلك.
+pit-design-ramp-start-help = حيث يغادر المنحدر الخط. اسحب علامته الخضراء على الخط في العرض، أو اضغط «نقل» وانقر حيث ينبغي أن يغادره بدلًا من ذلك.
 pit-design-ramp-start-default = بداية الخط
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] الجانب الشمالي
+    [ne] الجانب الشمالي الشرقي
+    [e] الجانب الشرقي
+    [se] الجانب الجنوبي الشرقي
+    [s] الجانب الجنوبي
+    [sw] الجانب الجنوبي الغربي
+    [w] الجانب الغربي
+   *[nw] الجانب الشمالي الغربي
+}
+pit-design-ramp-drag-hint = اسحب لتغيير مكان بدء المنحدر
+pit-design-ramp-drag-prompt = أفلت الزر على الخط حيث ينبغي أن يغادره المنحدر.
 pit-design-ramp-start-prompt = انقر على خط البداية حيث يغادره المنحدر.
 pit-design-climbs = اتجاه الصعود
 pit-design-climbs-help = الاتجاه الذي يصعد فيه المنحدر حول الحفرة، منظورًا من الأعلى.
@@ -5099,6 +5111,9 @@ pit-design-draw-help = ارسم الخط المغلق الذي يبدأ منه �
 pit-design-round-corners = تدوير الزوايا
 pit-design-draw-rl = المنسوب
 pit-design-draw-rl-help = المنسوب الذي يُرسم عليه الخط: قاع الحفرة أو حافتها، أو قدم المكب أو قمته. هو نفسه Z في شريط الأدوات.
+pit-design-draw-ground = الأرض هنا
+pit-design-draw-ground-above = { $rl } م (أعلى من المنسوب بمقدار { $by } م)
+pit-design-draw-ground-below = { $rl } م (أدنى من المنسوب بمقدار { $by } م)
 pit-design-round-corners-help = يدوّر كل زاوية من الخط إلى قوس، كما يُحفر القدم أو الحافة. الأقواس جزء من الخط، وتبقى رؤوسه قليلة وقابلة للتحرير.
 pit-design-corner-radius = نصف قطر الزاوية
 pit-design-done-help = أنهِ هذه الحفرة وأغلق الأداة. مفتاح Escape يفعل الشيء نفسه.

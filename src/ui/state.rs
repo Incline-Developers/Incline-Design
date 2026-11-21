@@ -2462,6 +2462,9 @@ pub(crate) struct EditorState {
     /// arcs of `pit_corner_radius` when it closes.
     pub(crate) pit_round_corners: bool,
     pub(crate) pit_corner_radius: f64,
+    /// While a pit's string is drawn: the topography's RL under the pointer,
+    /// `Some(None)` off it, and `None` with no topography to read.
+    pub(crate) pit_ground_under_cursor: Option<Option<f64>>,
     /// The settings of the pit last edited, which the next one drawn starts
     /// with.
     pub(crate) pit_last_settings: Option<crate::model::pit_design::settings::PitDesignSettings>,
@@ -4302,6 +4305,7 @@ impl EditorState {
             pit_evaluation_checked: None,
             pit_round_corners: true,
             pit_corner_radius: 15.0,
+            pit_ground_under_cursor: None,
             pit_last_settings: None,
             object_edit_dialog: None,
             xray_enabled: false,

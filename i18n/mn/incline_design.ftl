@@ -5059,9 +5059,21 @@ pit-design-ramp-width = Өргөн
 pit-design-ramp-gradient = Налуу
 pit-design-ramp-gradient-help = Өндрийн зөрүү ба зайн харьцаа. Замын илүү эгц ирмэгийн дагуу хадгалагддаг тул эргэлтэнд дотоод ирмэг нь үүнээс эгц болохгүй.
 pit-design-ramp-start = Эхлэх цэг
-pit-design-ramp-start-help = Налуу зам шугамаас гарах газар. Зөөх дараад оронд нь гарах ёстой газар дарна уу.
+pit-design-ramp-start-help = Налуу зам шугамаас гарах газар. Харагдац дээр түүний ногоон загалмайг шугамын дагуу чирэх, эсвэл Зөөх дараад гарах ёстой газар дарна уу.
 pit-design-ramp-start-default = Шугамын эхлэл
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] Хойд тал
+    [ne] Зүүн хойд тал
+    [e] Зүүн тал
+    [se] Зүүн өмнөд тал
+    [s] Өмнөд тал
+    [sw] Баруун өмнөд тал
+    [w] Баруун тал
+   *[nw] Баруун хойд тал
+}
+pit-design-ramp-drag-hint = Налуу замын эхлэлийг зөөхийн тулд чирнэ үү
+pit-design-ramp-drag-prompt = Налуу зам шугамаас гарах ёстой газарт суллана уу.
 pit-design-ramp-start-prompt = Налуу зам эхлэх шугамаас салах газарт шугам дээр дарна уу.
 pit-design-climbs = Өгсөх чиглэл
 pit-design-climbs-help = Дээрээс харахад налуу зам уурхайг тойрон аль чиглэлд өгсөх.
@@ -5108,6 +5120,9 @@ pit-design-draw-help = Төсөл эхлэх битүү шугамыг зурн�
 pit-design-round-corners = Булангуудыг бөөрөнхийлөх
 pit-design-draw-rl = RL
 pit-design-draw-rl-help = Шугамыг зурах RL: уурхайн ёроол эсвэл дээд ирмэг, овоолгын доод эсвэл орой. Хэрэгслийн самбарын Z-тэй адил.
+pit-design-draw-ground = Энд газрын гадарга
+pit-design-draw-ground-above = { $rl } м (RL-ээс { $by } м дээр)
+pit-design-draw-ground-below = { $rl } м (RL-ээс { $by } м доор)
 pit-design-round-corners-help = Шугамын булан бүрийг хормой эсвэл оройг олборлодог шиг нум болгон бөөрөнхийлнө. Нумууд шугамын хэсэг бөгөөд оройнууд нь цөөн, засварлах боломжтой хэвээр үлдэнэ.
 pit-design-corner-radius = Булангийн радиус
 pit-design-done-help = Энэ уурхайг дуусгаад хэрэгслийг хаана уу. Escape ч мөн адил.

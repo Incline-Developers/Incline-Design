@@ -5753,9 +5753,21 @@ pit-design-ramp-width = Width
 pit-design-ramp-gradient = Gradient
 pit-design-ramp-gradient-help = Rise over run. It is held along the steeper edge of the road, so round a bend its inside edge is no steeper than this.
 pit-design-ramp-start = Starts at
-pit-design-ramp-start-help = Where the ramp leaves the string. Move, then click the string where it should leave instead.
+pit-design-ramp-start-help = Where the ramp leaves the string. Drag its green cross along the string in the view, or press Move and click where it should leave instead.
 pit-design-ramp-start-default = Start of the string
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] North side
+    [ne] North-east side
+    [e] East side
+    [se] South-east side
+    [s] South side
+    [sw] South-west side
+    [w] West side
+   *[nw] North-west side
+}
+pit-design-ramp-drag-hint = Drag to move where the ramp starts
+pit-design-ramp-drag-prompt = Let go on the string where the ramp should leave it.
 pit-design-ramp-start-prompt = Click the starting string where the ramp leaves it.
 pit-design-climbs = Climbs
 pit-design-climbs-help = Which way round the pit the ramp climbs, seen from above.
@@ -5851,6 +5863,9 @@ pit-design-draw-help = Draw the closed string the design starts from: a pit's fl
 pit-design-round-corners = Round corners
 pit-design-draw-rl = RL
 pit-design-draw-rl-help = The RL the string is drawn at: a pit's floor or crest, or a dump's toe or top. The same as the toolbar's Z.
+pit-design-draw-ground = Ground here
+pit-design-draw-ground-above = { $rl } m ({ $by } m above the RL)
+pit-design-draw-ground-below = { $rl } m ({ $by } m below the RL)
 pit-design-round-corners-help = Round each corner of the string to an arc, as a toe or crest is mined. The arcs are part of the string, and its vertices stay few and editable.
 pit-design-corner-radius = Corner radius
 pit-design-done-help = Finish this pit and put the tool down. Escape does the same.

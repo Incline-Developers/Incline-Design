@@ -5036,9 +5036,21 @@ pit-design-ramp-width = Chiều rộng
 pit-design-ramp-gradient = Độ dốc
 pit-design-ramp-gradient-help = Chênh cao trên chiều dài. Được giữ dọc theo mép dốc hơn của đường, nên ở khúc cua mép trong không dốc hơn mức này.
 pit-design-ramp-start = Bắt đầu tại
-pit-design-ramp-start-help = Nơi đường dốc rời khỏi đường. Di chuyển, rồi nhấp vào đường nơi nó nên rời đi thay thế.
+pit-design-ramp-start-help = Nơi đường dốc rời khỏi đường. Kéo dấu chữ thập xanh của nó dọc theo đường trong khung nhìn, hoặc nhấn Di chuyển rồi nhấp vào nơi nó nên rời đi.
 pit-design-ramp-start-default = Đầu đường
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] Phía bắc
+    [ne] Phía đông bắc
+    [e] Phía đông
+    [se] Phía đông nam
+    [s] Phía nam
+    [sw] Phía tây nam
+    [w] Phía tây
+   *[nw] Phía tây bắc
+}
+pit-design-ramp-drag-hint = Kéo để dời điểm bắt đầu đường dốc
+pit-design-ramp-drag-prompt = Thả trên đường tại nơi đường dốc nên rời khỏi nó.
 pit-design-ramp-start-prompt = Nhấp vào đường xuất phát tại nơi đường dốc rời khỏi nó.
 pit-design-climbs = Leo
 pit-design-climbs-help = Đường dốc leo quanh moong theo chiều nào, nhìn từ trên xuống.
@@ -5085,6 +5097,9 @@ pit-design-draw-help = Vẽ đường khép kín mà thiết kế bắt đầu: 
 pit-design-round-corners = Bo tròn góc
 pit-design-draw-rl = Cao độ
 pit-design-draw-rl-help = Cao độ vẽ đường: đáy hoặc mép trên của moong, hoặc chân hoặc đỉnh của bãi thải. Giống Z trên thanh công cụ.
+pit-design-draw-ground = Mặt đất tại đây
+pit-design-draw-ground-above = { $rl } m (cao hơn cao độ { $by } m)
+pit-design-draw-ground-below = { $rl } m (thấp hơn cao độ { $by } m)
 pit-design-round-corners-help = Bo mỗi góc của đường thành một cung, như khi khai thác chân hoặc mép tầng. Các cung là một phần của đường, và các đỉnh của nó vẫn ít và dễ chỉnh sửa.
 pit-design-corner-radius = Bán kính góc
 pit-design-done-help = Kết thúc moong này và đóng công cụ. Escape cũng làm như vậy.

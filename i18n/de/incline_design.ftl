@@ -5049,9 +5049,21 @@ pit-design-ramp-width = Breite
 pit-design-ramp-gradient = Steigung
 pit-design-ramp-gradient-help = Steigung über Lauflänge. Sie gilt entlang der steileren Kante der Straße, sodass ihre Innenkante in einer Kurve nicht steiler ist.
 pit-design-ramp-start = Beginnt bei
-pit-design-ramp-start-help = Wo die Rampe die Linie verlässt. Verschieben, dann auf die Linie klicken, wo sie stattdessen beginnen soll.
+pit-design-ramp-start-help = Wo die Rampe die Linie verlässt. Ziehen Sie ihr grünes Kreuz in der Ansicht entlang der Linie, oder klicken Sie auf Verschieben und dann dort, wo sie stattdessen beginnen soll.
 pit-design-ramp-start-default = Anfang der Linie
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] Nordseite
+    [ne] Nordostseite
+    [e] Ostseite
+    [se] Südostseite
+    [s] Südseite
+    [sw] Südwestseite
+    [w] Westseite
+   *[nw] Nordwestseite
+}
+pit-design-ramp-drag-hint = Ziehen, um den Rampenbeginn zu verschieben
+pit-design-ramp-drag-prompt = Lassen Sie auf der Linie dort los, wo die Rampe sie verlassen soll.
 pit-design-ramp-start-prompt = Klicken Sie auf die Ausgangslinie dort, wo die Rampe sie verlässt.
 pit-design-climbs = Steigt
 pit-design-climbs-help = In welcher Richtung die Rampe um die Grube ansteigt, von oben gesehen.
@@ -5098,6 +5110,9 @@ pit-design-draw-help = Zeichnen Sie die geschlossene Linie, von der der Entwurf 
 pit-design-round-corners = Ecken abrunden
 pit-design-draw-rl = Höhe
 pit-design-draw-rl-help = Die Höhe, auf der die Linie gezeichnet wird: Sohle oder Oberkante einer Grube, Fuß oder Kopf einer Halde. Dieselbe wie Z in der Werkzeugleiste.
+pit-design-draw-ground = Gelände hier
+pit-design-draw-ground-above = { $rl } m ({ $by } m über der Höhe)
+pit-design-draw-ground-below = { $rl } m ({ $by } m unter der Höhe)
 pit-design-round-corners-help = Rundet jede Ecke der Linie zu einem Bogen ab, wie ein Böschungsfuß oder eine Böschungskante abgebaut wird. Die Bögen gehören zur Linie, und ihre Stützpunkte bleiben wenige und bearbeitbar.
 pit-design-corner-radius = Eckenradius
 pit-design-done-help = Diese Grube abschließen und das Werkzeug ablegen. Escape tut dasselbe.

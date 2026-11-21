@@ -5008,9 +5008,21 @@ pit-design-ramp-width = عرض
 pit-design-ramp-gradient = شیب
 pit-design-ramp-gradient-help = ارتفاع به طول. در امتداد لبه شیب‌دارتر جاده حفظ می‌شود، پس در پیچ لبه داخلی آن تندتر از این نیست.
 pit-design-ramp-start = شروع از
-pit-design-ramp-start-help = جایی که رمپ از خط جدا می‌شود. جابه‌جایی را بزنید و سپس روی خط جایی که باید جدا شود کلیک کنید.
+pit-design-ramp-start-help = جایی که رمپ از خط جدا می‌شود. علامت سبز آن را در نما در امتداد خط بکشید، یا جابه‌جایی را بزنید و جایی که باید جدا شود کلیک کنید.
 pit-design-ramp-start-default = ابتدای خط
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] سمت شمال
+    [ne] سمت شمال شرقی
+    [e] سمت شرق
+    [se] سمت جنوب شرقی
+    [s] سمت جنوب
+    [sw] سمت جنوب غربی
+    [w] سمت غرب
+   *[nw] سمت شمال غربی
+}
+pit-design-ramp-drag-hint = برای جابه‌جا کردن آغاز رمپ بکشید
+pit-design-ramp-drag-prompt = روی خط، جایی که رمپ باید از آن جدا شود، رها کنید.
 pit-design-ramp-start-prompt = روی خط آغاز در جایی که رمپ آن را ترک می‌کند کلیک کنید.
 pit-design-climbs = جهت بالا رفتن
 pit-design-climbs-help = جهتی که رمپ از دید بالا دور پیت بالا می‌رود.
@@ -5057,6 +5069,9 @@ pit-design-draw-help = خط بسته‌ای را که طراحی از آن آغ�
 pit-design-round-corners = گرد کردن گوشه‌ها
 pit-design-draw-rl = تراز
 pit-design-draw-rl-help = ترازی که خط در آن کشیده می‌شود: کف یا لبه پیت، یا پنجه یا بالای دامپ. همان Z در نوار ابزار.
+pit-design-draw-ground = زمین در اینجا
+pit-design-draw-ground-above = { $rl } م ({ $by } م بالاتر از تراز)
+pit-design-draw-ground-below = { $rl } م ({ $by } م پایین‌تر از تراز)
 pit-design-round-corners-help = هر گوشهٔ خط را به یک کمان گرد می‌کند، همان‌گونه که پا یا تاج استخراج می‌شود. کمان‌ها بخشی از خط‌اند و رأس‌های آن کم و ویرایش‌پذیر می‌مانند.
 pit-design-corner-radius = شعاع گوشه
 pit-design-done-help = این پیت را تمام کنید و ابزار را کنار بگذارید. Escape هم همین کار را می‌کند.

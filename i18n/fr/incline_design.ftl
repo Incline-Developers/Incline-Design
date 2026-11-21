@@ -5009,9 +5009,21 @@ pit-design-ramp-width = Largeur
 pit-design-ramp-gradient = Pente
 pit-design-ramp-gradient-help = Dénivelé sur longueur. Elle est tenue le long du bord le plus raide de la route, de sorte que dans un virage son bord intérieur n'est pas plus raide.
 pit-design-ramp-start = Commence à
-pit-design-ramp-start-help = Là où la rampe quitte la ligne. Déplacer, puis cliquez sur la ligne là où elle doit partir à la place.
+pit-design-ramp-start-help = Là où la rampe quitte la ligne. Faites glisser sa croix verte le long de la ligne dans la vue, ou cliquez sur Déplacer puis là où elle doit partir à la place.
 pit-design-ramp-start-default = Début de la ligne
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] Côté nord
+    [ne] Côté nord-est
+    [e] Côté est
+    [se] Côté sud-est
+    [s] Côté sud
+    [sw] Côté sud-ouest
+    [w] Côté ouest
+   *[nw] Côté nord-ouest
+}
+pit-design-ramp-drag-hint = Faites glisser pour déplacer le départ de la rampe
+pit-design-ramp-drag-prompt = Relâchez sur la ligne là où la rampe doit la quitter.
 pit-design-ramp-start-prompt = Cliquez sur la ligne de départ là où la rampe la quitte.
 pit-design-climbs = Monte
 pit-design-climbs-help = Dans quel sens la rampe monte autour de la fosse, vue de dessus.
@@ -5058,6 +5070,9 @@ pit-design-draw-help = Dessinez la ligne fermée dont part la conception : le pi
 pit-design-round-corners = Arrondir les angles
 pit-design-draw-rl = Cote
 pit-design-draw-rl-help = La cote à laquelle la ligne est tracée : le fond ou la crête d'une fosse, le pied ou le sommet d'une verse. La même que le Z de la barre d'outils.
+pit-design-draw-ground = Terrain ici
+pit-design-draw-ground-above = { $rl } m ({ $by } m au-dessus de la cote)
+pit-design-draw-ground-below = { $rl } m ({ $by } m sous la cote)
 pit-design-round-corners-help = Arrondit chaque angle de la ligne en arc, comme un pied ou une crête est exploité. Les arcs font partie de la ligne, et ses sommets restent peu nombreux et modifiables.
 pit-design-corner-radius = Rayon d’angle
 pit-design-done-help = Terminer cette fosse et poser l’outil. Échap fait de même.

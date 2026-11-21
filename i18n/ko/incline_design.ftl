@@ -5042,9 +5042,21 @@ pit-design-ramp-width = 폭
 pit-design-ramp-gradient = 경사
 pit-design-ramp-gradient-help = 높이 대 수평거리. 도로의 더 가파른 쪽 가장자리를 따라 유지되므로, 굽은 곳에서도 안쪽 가장자리가 이보다 가파르지 않습니다.
 pit-design-ramp-start = 시작 위치
-pit-design-ramp-start-help = 램프가 선을 떠나는 곳입니다. 이동을 누른 다음 대신 떠나야 할 곳을 클릭하세요.
+pit-design-ramp-start-help = 램프가 선을 떠나는 곳입니다. 뷰에서 녹색 십자를 선을 따라 끌거나, 이동을 누른 다음 대신 떠나야 할 곳을 클릭하세요.
 pit-design-ramp-start-default = 선의 시작점
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] 북쪽
+    [ne] 북동쪽
+    [e] 동쪽
+    [se] 남동쪽
+    [s] 남쪽
+    [sw] 남서쪽
+    [w] 서쪽
+   *[nw] 북서쪽
+}
+pit-design-ramp-drag-hint = 끌어서 램프 시작 위치 이동
+pit-design-ramp-drag-prompt = 램프가 떠나야 할 선 위에서 놓으세요.
 pit-design-ramp-start-prompt = 램프가 시작 선을 떠나는 위치에서 선을 클릭하세요.
 pit-design-climbs = 오르는 방향
 pit-design-climbs-help = 위에서 볼 때 램프가 피트를 따라 오르는 방향입니다.
@@ -5091,6 +5103,9 @@ pit-design-draw-help = 설계가 시작되는 닫힌 선을 그립니다. 피트
 pit-design-round-corners = 모서리 둥글게
 pit-design-draw-rl = RL
 pit-design-draw-rl-help = 선을 그리는 RL: 피트의 바닥이나 상단, 또는 적치장의 하단이나 정상. 도구 모음의 Z와 같습니다.
+pit-design-draw-ground = 이곳의 지면
+pit-design-draw-ground-above = { $rl } m (RL보다 { $by } m 위)
+pit-design-draw-ground-below = { $rl } m (RL보다 { $by } m 아래)
 pit-design-round-corners-help = 법면 끝이나 어깨를 채굴하듯 선의 각 모서리를 호로 둥글게 합니다. 호는 선의 일부이며 꼭짓점은 적고 편집하기 쉽게 유지됩니다.
 pit-design-corner-radius = 모서리 반경
 pit-design-done-help = 이 피트를 마치고 도구를 내려놓습니다. Escape도 같습니다.

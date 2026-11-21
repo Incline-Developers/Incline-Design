@@ -80,6 +80,9 @@ pub(crate) fn document_scene_key(document: &Document, editor: &EditorState, stat
         acc ^ hasher.finish()
     });
     hidden.hash(&mut hasher);
+    // The pit design open in Pit Design is seen through the ground, and
+    // gives way to its preview.
+    editor.pit_design.as_ref().and_then(|draft| Some((draft.object_id()?, draft.covering))).hash(&mut hasher);
     editor.editing_labels_id.hash(&mut hasher);
     if editor.editing_labels_id.is_some() {
         editor.pending_text.hash(&mut hasher);
@@ -287,7 +290,10 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
             // whole.
             Object::PitDesign { verts, line_weight, .. } => {
                 tessellate_polyline_stroke(&mut draw_ctx, verts, true, *line_weight, rgba);
-                for string in object.pit_strings() {
+                // Open in the tool with a preview drawn in its place, only its
+                // string: two designs over each other read as neither.
+                let covered = editor.pit_design.as_ref().is_some_and(|draft| draft.covering && draft.object_id() == Some(object.id()));
+                for string in object.pit_strings().filter(|_| !covered) {
                     let points: Vec<crate::model::PolyVertex> = string.points.iter().copied().map(crate::model::PolyVertex::straight).collect();
                     let weight = match string.kind {
                         crate::model::pit_design::StringKind::RampEdge => *line_weight * 1.5,
@@ -518,7 +524,14 @@ pub(crate) fn restyle_document_scene(
 ) {
     batches.clear();
     for object in objects {
-        let always_visible = editor.editing_labels_id.is_some_and(|id| object.entity == SceneEntityId::Object(id));
+        // Text being typed, and the pit open in Pit Design, whose benches
+        // mostly lie under the ground it is cut into: seen through it.
+        let always_visible = editor.editing_labels_id.is_some_and(|id| object.entity == SceneEntityId::Object(id))
+            || editor
+                .pit_design
+                .as_ref()
+                .and_then(crate::ui::dialogs::pit_design::PitDesignDraft::object_id)
+                .is_some_and(|id| object.entity == SceneEntityId::Object(id));
         let overlay = is_highlighted(editor, object.entity);
         // Frozen objects are never restyled, translucency included.
         let alpha_scale = if editor.translucent_handles.contains(&object.entity) && !editor.frozen_handles.contains(&object.entity) {

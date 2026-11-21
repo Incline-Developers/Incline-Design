@@ -5040,9 +5040,21 @@ pit-design-ramp-width = Upana
 pit-design-ramp-gradient = Mwinuko
 pit-design-ramp-gradient-help = Kupanda kwa urefu. Hushikwa kando ya ukingo wenye mwinuko zaidi wa barabara, hivyo kwenye kona ukingo wake wa ndani hauna mwinuko zaidi ya huu.
 pit-design-ramp-start = Inaanzia
-pit-design-ramp-start-help = Mahali barabara inapoacha mstari. Hamisha, kisha bofya mstari mahali inapopaswa kuacha badala yake.
+pit-design-ramp-start-help = Mahali barabara inapoacha mstari. Buruta msalaba wake wa kijani kando ya mstari kwenye mwonekano, au bonyeza Hamisha kisha ubofye mahali inapopaswa kuacha.
 pit-design-ramp-start-default = Mwanzo wa mstari
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] Upande wa kaskazini
+    [ne] Upande wa kaskazini-mashariki
+    [e] Upande wa mashariki
+    [se] Upande wa kusini-mashariki
+    [s] Upande wa kusini
+    [sw] Upande wa kusini-magharibi
+    [w] Upande wa magharibi
+   *[nw] Upande wa kaskazini-magharibi
+}
+pit-design-ramp-drag-hint = Buruta ili kuhamisha mwanzo wa barabara
+pit-design-ramp-drag-prompt = Achilia kwenye mstari mahali barabara inapopaswa kuuacha.
 pit-design-ramp-start-prompt = Bofya mstari wa kuanzia mahali barabara ya mteremko inapouacha.
 pit-design-climbs = Hupanda
 pit-design-climbs-help = Upande ambao barabara ya mteremko hupanda kuzunguka shimo, ikitazamwa kutoka juu.
@@ -5089,6 +5101,9 @@ pit-design-draw-help = Chora mstari uliofungwa ambao usanifu unaanzia: mguu wa s
 pit-design-round-corners = Zungusha pembe
 pit-design-draw-rl = RL
 pit-design-draw-rl-help = RL ambapo mstari huchorwa: sakafu au kilele cha shimo, au kitako au kilele cha dampo. Ni sawa na Z ya upau wa zana.
+pit-design-draw-ground = Ardhi hapa
+pit-design-draw-ground-above = { $rl } m ({ $by } m juu ya RL)
+pit-design-draw-ground-below = { $rl } m ({ $by } m chini ya RL)
 pit-design-round-corners-help = Huzungusha kila pembe ya mstari kuwa tao, kama mguu au ukingo unavyochimbwa. Matao ni sehemu ya mstari, na vipeo vyake hubaki vichache na vinavyoharirika.
 pit-design-corner-radius = Nusukipenyo cha pembe
 pit-design-done-help = Maliza shimo hili na uweke zana chini. Escape hufanya vivyo hivyo.

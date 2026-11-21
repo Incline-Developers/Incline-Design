@@ -5050,9 +5050,21 @@ pit-design-ramp-width = Larghezza
 pit-design-ramp-gradient = Pendenza
 pit-design-ramp-gradient-help = Dislivello sulla lunghezza. È mantenuta lungo il bordo più ripido della strada, così in curva il bordo interno non è più ripido di così.
 pit-design-ramp-start = Inizia da
-pit-design-ramp-start-help = Dove la rampa lascia la linea. Sposta, poi fai clic sulla linea dove deve partire invece.
+pit-design-ramp-start-help = Dove la rampa lascia la linea. Trascina la sua croce verde lungo la linea nella vista, oppure premi Sposta e fai clic dove deve partire invece.
 pit-design-ramp-start-default = Inizio della linea
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] Lato nord
+    [ne] Lato nord-est
+    [e] Lato est
+    [se] Lato sud-est
+    [s] Lato sud
+    [sw] Lato sud-ovest
+    [w] Lato ovest
+   *[nw] Lato nord-ovest
+}
+pit-design-ramp-drag-hint = Trascina per spostare l'inizio della rampa
+pit-design-ramp-drag-prompt = Rilascia sulla linea dove la rampa deve lasciarla.
 pit-design-ramp-start-prompt = Fate clic sulla linea di partenza dove la rampa la lascia.
 pit-design-climbs = Sale
 pit-design-climbs-help = In quale verso la rampa sale intorno alla fossa, vista dall'alto.
@@ -5099,6 +5111,9 @@ pit-design-draw-help = Disegna la linea chiusa da cui parte il progetto: il pied
 pit-design-round-corners = Arrotonda gli angoli
 pit-design-draw-rl = Quota
 pit-design-draw-rl-help = La quota a cui si disegna la linea: il fondo o la cresta di una fossa, il piede o la cima di una discarica. La stessa Z della barra degli strumenti.
+pit-design-draw-ground = Terreno qui
+pit-design-draw-ground-above = { $rl } m ({ $by } m sopra la quota)
+pit-design-draw-ground-below = { $rl } m ({ $by } m sotto la quota)
 pit-design-round-corners-help = Arrotonda ogni angolo della linea in un arco, come si scava un piede o una cresta. Gli archi fanno parte della linea, e i suoi vertici restano pochi e modificabili.
 pit-design-corner-radius = Raggio d'angolo
 pit-design-done-help = Termina questa fossa e chiudi lo strumento. Esc fa lo stesso.

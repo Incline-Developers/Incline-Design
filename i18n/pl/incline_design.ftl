@@ -5136,9 +5136,21 @@ pit-design-ramp-width = Szerokość
 pit-design-ramp-gradient = Nachylenie
 pit-design-ramp-gradient-help = Wzniesienie na długość. Jest utrzymywane wzdłuż bardziej stromej krawędzi drogi, więc na łuku jej wewnętrzna krawędź nie jest bardziej stroma.
 pit-design-ramp-start = Zaczyna się w
-pit-design-ramp-start-help = Gdzie rampa schodzi z linii. Przesuń, a potem kliknij linię tam, gdzie ma schodzić.
+pit-design-ramp-start-help = Gdzie rampa schodzi z linii. Przeciągnij jej zielony krzyżyk wzdłuż linii w widoku albo kliknij Przesuń, a potem miejsce, gdzie ma schodzić.
 pit-design-ramp-start-default = Początek linii
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] Strona północna
+    [ne] Strona północno-wschodnia
+    [e] Strona wschodnia
+    [se] Strona południowo-wschodnia
+    [s] Strona południowa
+    [sw] Strona południowo-zachodnia
+    [w] Strona zachodnia
+   *[nw] Strona północno-zachodnia
+}
+pit-design-ramp-drag-hint = Przeciągnij, aby przesunąć początek rampy
+pit-design-ramp-drag-prompt = Puść na linii tam, gdzie rampa ma z niej schodzić.
 pit-design-ramp-start-prompt = Kliknij linię wyjściową tam, gdzie rampa ją opuszcza.
 pit-design-climbs = Wznosi się
 pit-design-climbs-help = W którą stronę rampa wznosi się wokół wyrobiska, patrząc z góry.
@@ -5185,6 +5197,9 @@ pit-design-draw-help = Narysuj zamkniętą linię, od której zaczyna się proje
 pit-design-round-corners = Zaokrąglij narożniki
 pit-design-draw-rl = Rzędna
 pit-design-draw-rl-help = Rzędna, na której rysowana jest linia: spąg lub krawędź wyrobiska, podnóże lub wierzch zwałowiska. Ta sama co Z na pasku narzędzi.
+pit-design-draw-ground = Teren tutaj
+pit-design-draw-ground-above = { $rl } m ({ $by } m nad rzędną)
+pit-design-draw-ground-below = { $rl } m ({ $by } m pod rzędną)
 pit-design-round-corners-help = Zaokrągla każdy narożnik linii łukiem, tak jak urabia się stopę lub krawędź. Łuki są częścią linii, a jej wierzchołków zostaje niewiele i można je edytować.
 pit-design-corner-radius = Promień narożnika
 pit-design-done-help = Zakończ to wyrobisko i odłóż narzędzie. Escape robi to samo.

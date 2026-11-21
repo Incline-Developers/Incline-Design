@@ -29,7 +29,7 @@ use crate::{
         pit_design::{
             self, Base, Design,
             object::{Derived, Outcome, PitObject, base_points, inputs_key},
-            settings::PitDesignSettings,
+            settings::{PitDesignSettings, StopMode},
         },
         spatial::TriangleBvh,
         triangulation::{GeometryVersion, TriangulationId},
@@ -133,6 +133,18 @@ fn with_pit(object: &Object, pit: PitObject) -> Object {
         **held = pit;
     }
     object
+}
+
+/// Start ramp `index` of `settings` at `start`: a new ramp, cut as the last
+/// one is, where `index` is one past the last.
+fn place_ramp(settings: &mut PitDesignSettings, index: usize, start: DVec2) {
+    let ramps = &mut settings.ramps;
+    if index >= ramps.len() {
+        let like = ramps.last().cloned().unwrap_or_default();
+        ramps.push(crate::model::pit_design::settings::RampSettings { from: None, to: None, ..like });
+    }
+    let index = index.min(ramps.len() - 1);
+    ramps[index].start = Some(start);
 }
 
 impl App<'_> {
@@ -301,11 +313,10 @@ impl App<'_> {
         }
         self.cancel_jobs(|key| matches!(key, JobKey::PitDesignPreview(_)));
         // Open, it is drawn in the colours of its parts, which the
-        // selection's highlight would cover.
-        if self.editor.selected_handles.remove(&SceneEntityId::Object(id)) {
-            self.invalidate_geometry();
-        }
+        // selection's highlight would cover, and seen through the ground.
+        self.editor.selected_handles.remove(&SceneEntityId::Object(id));
         self.editor.pit_design = Some(PitDesignDraft::on(id, pit));
+        self.invalidate_geometry();
         self.update_pit_design_preview();
         self.invalidate_overlay();
     }
@@ -356,11 +367,17 @@ impl App<'_> {
                 .and_then(|draft| draft.working.as_ref())
                 .map(PitObject::settings)
                 .or_else(|| self.editor.pit_last_settings.clone())
-                .unwrap_or_else(|| PitDesignSettings {
+                .unwrap_or_else(|| {
                     // The topography most projects have is the obvious ground
-                    // to daylight against.
-                    topography: self.triangulations.iter().find(|surface| surface.state.loaded).map(|surface| surface.id),
-                    ..PitDesignSettings::default()
+                    // to daylight against, and a pit with ground to meet is
+                    // built until it meets it.
+                    let topography = self.pit_topography_guess();
+                    let stop = if topography.is_some() { StopMode::Daylight } else { StopMode::Benches };
+                    PitDesignSettings {
+                        topography,
+                        stop,
+                        ..PitDesignSettings::default()
+                    }
                 })
         });
         if carried {
@@ -386,6 +403,18 @@ impl App<'_> {
                 .unwrap_or_default()
         });
         PitObject::new(name, settings)
+    }
+
+    /// The topography a new pit would be designed against: the last pit's,
+    /// while it is still loaded, or else the first loaded.
+    fn pit_topography_guess(&self) -> Option<TriangulationId> {
+        let loaded = |id: TriangulationId| self.triangulations.iter().any(|surface| surface.id == id && surface.state.loaded);
+        self.editor
+            .pit_last_settings
+            .as_ref()
+            .and_then(|settings| settings.topography)
+            .filter(|id| loaded(*id))
+            .or_else(|| self.triangulations.iter().find(|surface| surface.state.loaded).map(|surface| surface.id))
     }
 
     /// Work `pit`'s design out here and now, so a new one draws at once.
@@ -547,10 +576,10 @@ impl App<'_> {
             self.editor.pit_last_settings = Some(settings);
         }
         self.editor.pending_stroke.clear();
+        // Closed, it is drawn as the rest of the scene is again.
         self.editor.pit_design = None;
-        if self.editor.tool_highlight_id.take().is_some() {
-            self.invalidate_geometry();
-        }
+        self.editor.tool_highlight_id = None;
+        self.invalidate_geometry();
         self.cancel_jobs(|key| matches!(key, JobKey::PitDesignPreview(_)));
         self.invalidate_overlay();
     }
@@ -567,7 +596,13 @@ impl App<'_> {
         let (Some(id), Some(working)) = (draft.object_id(), draft.working.as_ref()) else {
             return;
         };
-        let settings = working.settings();
+        let mut settings = working.settings();
+        // While a ramp's start is picked, the design is worked out with the
+        // ramp where a click would start it, so it follows the pointer.
+        let following = draft.picking_ramp.is_some();
+        if let Some((index, start)) = draft.ramp_previewed() {
+            place_ramp(&mut settings, index, start.truncate());
+        }
         let Some((verts, _)) = self.operand_object(id).and_then(pit_parts) else {
             return;
         };
@@ -586,6 +621,12 @@ impl App<'_> {
             return;
         };
         if draft.built_for.as_ref() == Some(&key) || draft.building.as_ref().is_some_and(|(_, building)| *building == key) {
+            return;
+        }
+        // Following the pointer, a design under way is let finish: cut off
+        // at every move, none would ever be shown. The next starts from
+        // wherever the pointer is then.
+        if following && draft.building.is_some() {
             return;
         }
         // Reasons there is nothing to build, settled here and now.
@@ -785,6 +826,28 @@ impl App<'_> {
         }
     }
 
+    /// While a pit's string is drawn, the ground under the pointer: the
+    /// topography the new pit would meet, read where the pointer points.
+    pub(crate) fn update_pit_ground_under_cursor(&mut self) {
+        let reading = if self.editor.pit_drawing() {
+            self.pit_topography_guess()
+                .and_then(|topography| self.pit_design_ground(Some(topography)).ok())
+                .map(|ground| {
+                    let level = self.editor.z_level;
+                    self.graphics
+                        .as_ref()
+                        .and_then(|graphics| graphics.cursor_on_plane(level, crate::app::PICK_THRESHOLD_PX))
+                        .and_then(|(cursor, _)| ground.rl(cursor.truncate()))
+                })
+        } else {
+            None
+        };
+        if self.editor.pit_ground_under_cursor != reading {
+            self.editor.pit_ground_under_cursor = reading;
+            self.redraw_requested = true;
+        }
+    }
+
     /// The flags of the design the panel shows: its preview's.
     fn pit_flags(&self) -> &[crate::model::pit_design::checks::Flag] {
         self.editor
@@ -857,8 +920,84 @@ impl App<'_> {
         if let Some(draft) = self.editor.pit_design.as_mut() {
             draft.picking_ramp = None;
             draft.ramp_hover = None;
+            draft.dragging_ramp = None;
         }
         self.invalidate_overlay();
+    }
+
+    /// Which ramp start marker is under the pointer, if any: a press there
+    /// drags it.
+    pub(crate) fn update_pit_ramp_marker_hover(&mut self) {
+        let under = (|| {
+            let draft = self.editor.pit_design.as_ref().filter(|draft| draft.picking_ramp.is_none() && !draft.picking_region)?;
+            let graphics = self.graphics.as_ref()?;
+            let cursor = graphics.window_to_viewport_px(self.editor.cursor_screen_px?);
+            let cursor = DVec2::new(f64::from(cursor.0), f64::from(cursor.1));
+            let (view_proj, screen) = (graphics.view_proj(), graphics.screen_size_pub());
+            let reach = f64::from(crate::app::PICK_THRESHOLD_PX * 2.0);
+            draft
+                .preview
+                .as_ref()?
+                .ramp_starts
+                .iter()
+                .enumerate()
+                .filter_map(|(index, start)| Some((index, crate::rendering::pick::world_to_screen(&view_proj, *start, screen)?.distance(cursor))))
+                .filter(|(_, distance)| *distance <= reach)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(index, _)| index)
+        })();
+        if let Some(draft) = self.editor.pit_design.as_mut()
+            && draft.ramp_marker_under_cursor != under
+        {
+            draft.ramp_marker_under_cursor = under;
+            self.invalidate_overlay();
+            self.redraw_requested = true;
+        }
+    }
+
+    /// A left press in the viewport with a pit open: on a ramp's start
+    /// marker, it takes the marker up to drag along the string.
+    pub(crate) fn press_pit_design(&mut self) {
+        let pressed_at = self.editor.cursor_screen_px;
+        let Some(index) = self.editor.pit_design.as_ref().and_then(|draft| draft.ramp_marker_under_cursor) else {
+            return;
+        };
+        self.begin_pit_ramp_start_pick(index);
+        if let Some(draft) = self.editor.pit_design.as_mut() {
+            draft.dragging_ramp = pressed_at.or(Some((0.0, 0.0)));
+            draft.ramp_marker_under_cursor = None;
+        }
+        self.update_pit_ramp_hover();
+    }
+
+    /// The left button let go: a ramp start dragged is placed where it was
+    /// let go; one pressed and let go where it was waits for a click, as
+    /// Move does.
+    pub(crate) fn release_pit_design(&mut self) {
+        let Some(pressed_at) = self.editor.pit_design.as_mut().and_then(|draft| draft.dragging_ramp.take()) else {
+            return;
+        };
+        let moved = self
+            .editor
+            .cursor_screen_px
+            .is_some_and(|(x, y)| (x - pressed_at.0).hypot(y - pressed_at.1) > crate::app::PICK_THRESHOLD_PX);
+        if moved {
+            self.pick_pit_ramp_start_at_cursor();
+        }
+        self.invalidate_overlay();
+    }
+
+    /// Have the scene draw the preview in place of the open object's own
+    /// design, or the object's again, as the preview comes and goes.
+    pub(crate) fn note_pit_preview_cover(&mut self) {
+        let Some(draft) = self.editor.pit_design.as_mut() else {
+            return;
+        };
+        let covers = draft.covers_object();
+        if draft.covering != covers {
+            draft.covering = covers;
+            self.invalidate_geometry();
+        }
     }
 
     /// A click while picking a ramp's start: it places the ramp there, at
@@ -881,17 +1020,12 @@ impl App<'_> {
         let nearest = nearest_on_string(&points, cursor.truncate());
         let index = self.editor.pit_design.as_ref().and_then(|draft| draft.picking_ramp).unwrap_or(0);
         if let Some(working) = self.editor.pit_design.as_mut().and_then(|draft| draft.working.as_mut()) {
-            let ramps = &mut working.settings.ramps;
-            if index >= ramps.len() {
-                let like = ramps.last().cloned().unwrap_or_default();
-                ramps.push(crate::model::pit_design::settings::RampSettings { from: None, to: None, ..like });
-            }
-            let index = index.min(ramps.len() - 1);
-            ramps[index].start = Some(nearest.truncate());
+            place_ramp(&mut working.settings, index, nearest.truncate());
         }
         if let Some(draft) = self.editor.pit_design.as_mut() {
             draft.picking_ramp = None;
             draft.ramp_hover = None;
+            draft.dragging_ramp = None;
         }
         self.update_pit_design_preview();
         self.invalidate_overlay();

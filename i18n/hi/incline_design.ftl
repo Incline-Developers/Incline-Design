@@ -5008,9 +5008,21 @@ pit-design-ramp-width = चौड़ाई
 pit-design-ramp-gradient = ढलान
 pit-design-ramp-gradient-help = ऊँचाई प्रति दूरी। यह सड़क के अधिक ढलान वाले किनारे के साथ रखी जाती है, इसलिए मोड़ पर भीतरी किनारा इससे अधिक ढलान वाला नहीं होता।
 pit-design-ramp-start = शुरू होता है
-pit-design-ramp-start-help = जहाँ रैंप रेखा से निकलता है। खिसकाएँ दबाएँ, फिर रेखा पर वहाँ क्लिक करें जहाँ उसे निकलना चाहिए।
+pit-design-ramp-start-help = जहाँ रैंप रेखा से निकलता है। दृश्य में उसके हरे क्रॉस को रेखा के साथ खींचें, या खिसकाएँ दबाएँ और वहाँ क्लिक करें जहाँ उसे निकलना चाहिए।
 pit-design-ramp-start-default = रेखा का आरंभ
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] उत्तरी ओर
+    [ne] उत्तर-पूर्वी ओर
+    [e] पूर्वी ओर
+    [se] दक्षिण-पूर्वी ओर
+    [s] दक्षिणी ओर
+    [sw] दक्षिण-पश्चिमी ओर
+    [w] पश्चिमी ओर
+   *[nw] उत्तर-पश्चिमी ओर
+}
+pit-design-ramp-drag-hint = रैंप की शुरुआत खिसकाने के लिए खींचें
+pit-design-ramp-drag-prompt = रेखा पर वहाँ छोड़ें जहाँ रैंप को उससे निकलना चाहिए।
 pit-design-ramp-start-prompt = आरंभिक रेखा पर वहाँ क्लिक करें जहाँ रैंप उसे छोड़ता है।
 pit-design-climbs = चढ़ाई
 pit-design-climbs-help = ऊपर से देखने पर रैंप पिट के चारों ओर किस दिशा में चढ़ता है।
@@ -5057,6 +5069,9 @@ pit-design-draw-help = वह बंद रेखा बनाएँ जिस�
 pit-design-round-corners = कोने गोल करें
 pit-design-draw-rl = RL
 pit-design-draw-rl-help = वह RL जिस पर रेखा खींची जाती है: पिट का तल या शिखर, या डंप का टो या शीर्ष। टूलबार के Z जैसा ही।
+pit-design-draw-ground = यहाँ ज़मीन
+pit-design-draw-ground-above = { $rl } मी (RL से { $by } मी ऊपर)
+pit-design-draw-ground-below = { $rl } मी (RL से { $by } मी नीचे)
 pit-design-round-corners-help = रेखा के हर कोने को चाप में गोल करता है, जैसे पाद या शिखर खनन होता है। चाप रेखा का हिस्सा हैं, और उसके शीर्ष कम व संपादन योग्य रहते हैं।
 pit-design-corner-radius = कोने की त्रिज्या
 pit-design-done-help = यह पिट पूरा करें और टूल बंद करें। Escape भी यही करता है।

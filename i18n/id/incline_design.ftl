@@ -5008,9 +5008,21 @@ pit-design-ramp-width = Lebar
 pit-design-ramp-gradient = Kemiringan
 pit-design-ramp-gradient-help = Kenaikan per jarak. Dipertahankan sepanjang tepi jalan yang lebih curam, sehingga di tikungan tepi dalamnya tidak lebih curam dari ini.
 pit-design-ramp-start = Mulai di
-pit-design-ramp-start-help = Tempat ramp meninggalkan garis. Pindah, lalu klik garis di tempat ramp seharusnya pergi.
+pit-design-ramp-start-help = Tempat ramp meninggalkan garis. Seret tanda silang hijaunya di sepanjang garis pada tampilan, atau tekan Pindah lalu klik tempat ramp seharusnya pergi.
 pit-design-ramp-start-default = Awal garis
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] Sisi utara
+    [ne] Sisi timur laut
+    [e] Sisi timur
+    [se] Sisi tenggara
+    [s] Sisi selatan
+    [sw] Sisi barat daya
+    [w] Sisi barat
+   *[nw] Sisi barat laut
+}
+pit-design-ramp-drag-hint = Seret untuk memindahkan awal ramp
+pit-design-ramp-drag-prompt = Lepaskan di garis tempat ramp seharusnya meninggalkannya.
 pit-design-ramp-start-prompt = Klik garis awal di tempat ramp meninggalkannya.
 pit-design-climbs = Naik
 pit-design-climbs-help = Arah ramp naik mengelilingi pit, dilihat dari atas.
@@ -5057,6 +5069,9 @@ pit-design-draw-help = Gambar garis tertutup tempat desain dimulai: kaki dasar a
 pit-design-round-corners = Bulatkan sudut
 pit-design-draw-rl = RL
 pit-design-draw-rl-help = RL tempat garis digambar: lantai atau puncak pit, atau kaki atau puncak timbunan. Sama dengan Z di bilah alat.
+pit-design-draw-ground = Tanah di sini
+pit-design-draw-ground-above = { $rl } m ({ $by } m di atas RL)
+pit-design-draw-ground-below = { $rl } m ({ $by } m di bawah RL)
 pit-design-round-corners-help = Membulatkan setiap sudut garis menjadi busur, seperti kaki atau puncak ditambang. Busur adalah bagian garis, dan simpulnya tetap sedikit dan dapat disunting.
 pit-design-corner-radius = Jari-jari sudut
 pit-design-done-help = Selesaikan pit ini dan letakkan alatnya. Escape melakukan hal yang sama.

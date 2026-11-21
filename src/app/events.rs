@@ -410,8 +410,14 @@ impl<'a> App<'a> {
                                 }
                                 // Pit Design rebuilds its preview, in the
                                 // background, when its settings change.
+                                // Put down some other way than its own, the tool
+                                // still closes its pit as it does.
+                                if self.editor.pit_design.is_some() && self.editor.active_tool != ActiveTool::PitDesign {
+                                    self.close_pit_design();
+                                }
                                 if self.editor.pit_design.is_some() {
                                     self.update_pit_design_preview();
+                                    self.note_pit_preview_cover();
                                 }
                                 // Clear in-progress stroke when switching away from drawing tools.
                                 if !matches!(self.editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly | ActiveTool::PitDesign) && !self.editor.pending_stroke.is_empty()
@@ -706,6 +712,10 @@ impl<'a> App<'a> {
                     }
                     if self.editor.pit_design.is_some() {
                         self.update_pit_flag_hover();
+                        self.update_pit_ramp_marker_hover();
+                    }
+                    if self.editor.active_tool == ActiveTool::PitDesign {
+                        self.update_pit_ground_under_cursor();
                     }
                     if (self.editor.triangulation_pick_target.is_some()
                         || self.editor.optimization.start_pick.is_some()
@@ -899,6 +909,7 @@ impl<'a> App<'a> {
                 }
                 ActiveTool::DrapeToTopology => self.begin_select_or_drag(),
                 ActiveTool::PitDesign if self.editor.pit_drawing() => self.place_stroke_point(),
+                ActiveTool::PitDesign => self.press_pit_design(),
                 _ => {}
             }
         }
@@ -913,6 +924,7 @@ impl<'a> App<'a> {
     fn finish_left_button_interactions(&mut self) {
         // Before the box selection: a drag that moved a node is not a click.
         self.finish_haul_drag();
+        self.release_pit_design();
         self.finish_box_selection();
         self.finish_drag();
         if self.gizmo_drag.is_some() {

@@ -5008,9 +5008,21 @@ pit-design-ramp-width = 宽度
 pit-design-ramp-gradient = 坡度
 pit-design-ramp-gradient-help = 高差与水平距离之比。沿道路较陡的一侧边缘保持,因此在弯道处其内侧边缘不会比此更陡。
 pit-design-ramp-start = 起点
-pit-design-ramp-start-help = 坡道离开线条的位置。单击移动，然后单击应改为离开的位置。
+pit-design-ramp-start-help = 坡道离开线条的位置。在视图中沿线条拖动其绿色十字，或单击移动，然后单击应改为离开的位置。
 pit-design-ramp-start-default = 线的起点
 pit-design-ramp-start-picked = { $x }, { $y }
+pit-design-ramp-start-side = { $side ->
+    [n] 北侧
+    [ne] 东北侧
+    [e] 东侧
+    [se] 东南侧
+    [s] 南侧
+    [sw] 西南侧
+    [w] 西侧
+   *[nw] 西北侧
+}
+pit-design-ramp-drag-hint = 拖动以移动坡道起点
+pit-design-ramp-drag-prompt = 在坡道应离开的线条位置松开。
 pit-design-ramp-start-prompt = 在坡道离开起始线的位置点击该线。
 pit-design-climbs = 上升方向
 pit-design-climbs-help = 从上方看,坡道绕采坑上升的方向。
@@ -5057,6 +5069,9 @@ pit-design-draw-help = 绘制设计起始的闭合线：采坑坑底的坡脚或
 pit-design-round-corners = 圆角
 pit-design-draw-rl = 标高
 pit-design-draw-rl-help = 绘制线所在的标高：采坑的底或坡顶，或排土场的坡脚或顶部。与工具栏的 Z 相同。
+pit-design-draw-ground = 此处地面
+pit-design-draw-ground-above = { $rl } m（高于标高 { $by } m）
+pit-design-draw-ground-below = { $rl } m（低于标高 { $by } m）
 pit-design-round-corners-help = 像开采坡脚或坡顶那样，将线条的每个角倒成圆弧。圆弧是线条的一部分，其顶点仍然少而易于编辑。
 pit-design-corner-radius = 圆角半径
 pit-design-done-help = 完成此采坑并收起工具。Escape 也可以。

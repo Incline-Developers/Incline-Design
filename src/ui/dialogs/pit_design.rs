@@ -136,6 +136,13 @@ pub(crate) struct PitDesignDraft {
     /// The viewport is waiting for a click on the string where the ramp
     /// starts.
     pub(crate) picking_ramp: Option<usize>,
+    /// The ramp's start is being dragged along the string, from where the
+    /// press was: let go, it is placed (or, not moved, it waits for a click).
+    pub(crate) dragging_ramp: Option<(f32, f32)>,
+    /// The ramp start marker under the pointer, which a press drags.
+    pub(crate) ramp_marker_under_cursor: Option<usize>,
+    /// The viewport draws the preview in place of the object's own design.
+    pub(crate) covering: bool,
     /// The viewport is waiting for a click on a closed polyline, the outline
     /// of a new slope region.
     pub(crate) picking_region: bool,
@@ -169,9 +176,22 @@ impl PitDesignDraft {
     }
 
     /// Whether the viewport draws the preview over the object: while the
-    /// copy differs from it, or its own design is not yet current.
+    /// copy differs from it, its own design is not yet current, or a ramp
+    /// is shown where a click would start it.
     pub(crate) fn shows_preview(&self) -> bool {
-        self.object.is_some() && (self.working != self.synced || !self.facts.fresh)
+        self.object.is_some() && (self.working != self.synced || !self.facts.fresh || self.ramp_previewed().is_some())
+    }
+
+    /// The ramp, and where on the string, the preview starts it while its
+    /// start is picked: where a click would put it.
+    pub(crate) fn ramp_previewed(&self) -> Option<(usize, DVec3)> {
+        self.picking_ramp.zip(self.ramp_hover)
+    }
+
+    /// Whether the viewport draws the preview in place of the object's own
+    /// design: it shows one, and has a design to show.
+    pub(crate) fn covers_object(&self) -> bool {
+        self.shows_preview() && self.preview.as_ref().is_some_and(|preview| preview.design.is_ok())
     }
 }
 
@@ -290,6 +310,22 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                 if response.changed() && editor.z_input.is_finite() {
                     editor.z_level = editor.z_input;
                 }
+                // The ground under the pointer, to set the RL by, and how far
+                // the string would sit below or above it.
+                if let Some(reading) = editor.pit_ground_under_cursor {
+                    let text = reading.map_or_else(
+                        || "-".to_owned(),
+                        |ground| {
+                            let (rl, depth) = (format!("{ground:.1}"), ground - editor.z_level);
+                            if depth >= 0.0 {
+                                tr!("pit-design-draw-ground-above", rl = rl, by = format!("{depth:.1}"))
+                            } else {
+                                tr!("pit-design-draw-ground-below", rl = rl, by = format!("{:.1}", -depth))
+                            }
+                        },
+                    );
+                    read_only_row(ui, &tr!("pit-design-draw-ground"), &text);
+                }
                 MenuFieldBool::new(tr!("pit-design-round-corners"), &mut editor.pit_round_corners)
                     .help_text(tr!("pit-design-round-corners-help"))
                     .show(ui);
@@ -341,12 +377,18 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                             draw_bench_settings(ui, &mut working.settings, project, (base_rl, picking_region), commands);
                         }
                         PitStage::Ramp => {
-                            let base_rl = draft.built_for.as_ref().and_then(|key| key.verts.first()).map_or(0.0, |vertex| vertex.pos.z);
-                            draw_ramps(ui, &mut working.settings, picking, (base_rl, commands));
+                            let verts = draft.built_for.as_ref().map_or(&[][..], |key| key.verts.as_slice());
+                            let base_rl = verts.first().map_or(0.0, |vertex| vertex.pos.z);
+                            // The middle of the string, which a ramp's start is
+                            // said to be north or south of.
+                            let middle = verts.iter().map(|vertex| vertex.pos.truncate()).sum::<DVec2>() / verts.len().max(1) as f64;
+                            draw_ramps(ui, &mut working.settings, picking, (base_rl, middle, commands));
                         }
                     }
                     menu::menu_section(ui, tr!("pit-design-result-section"));
-                    let settings = working.settings();
+                    // What the design shown was worked out with: the copy's
+                    // settings, or with a ramp where a click would start it.
+                    let settings = draft.built_for.as_ref().map_or_else(|| working.settings(), |key| key.settings.clone());
                     let hover = draw_result(ui, draft, &settings, commands);
                     if hover != draft.hover {
                         commands.push(UiCommand::PitDesignHover(hover));
@@ -387,12 +429,16 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                 }
             });
         });
-    // The flag under the pointer in the viewport, said beside it.
-    if let Some(flag) = draft
+    let over_viewport = ui.ctx().pointer_hover_pos().is_some_and(|pointer| viewport_rect.contains(pointer)) && !ui.ctx().egui_wants_pointer_input();
+    // A ramp's start marker under the pointer says it can be dragged.
+    if draft.ramp_marker_under_cursor.is_some() && over_viewport {
+        crate::ui::widgets::hint::hint_at_pointer(ui.ctx(), egui::Id::unique("pit_design_ramp_drag_hint"), tr!("pit-design-ramp-drag-hint"));
+    } else if let Some(flag) = draft
         .flag_under_cursor
         .and_then(|index| draft.preview.as_ref()?.design.as_ref().ok()?.flags.get(index))
-        .filter(|_| ui.ctx().pointer_hover_pos().is_some_and(|pointer| viewport_rect.contains(pointer)) && !ui.ctx().egui_wants_pointer_input())
+        .filter(|_| over_viewport)
     {
+        // The flag under the pointer in the viewport, said beside it.
         let settings = draft.working.as_ref().map(PitObject::settings).unwrap_or_default();
         crate::ui::widgets::hint::hint_at_pointer(ui.ctx(), egui::Id::unique("pit_design_flag_hint"), flag_text(flag, &settings));
     }
@@ -404,7 +450,7 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
 /// The pit's ramps, each under a heading that removes it, and a button to
 /// add one; while a new ramp's start is being picked, the banner over the
 /// viewport says what to do, so nothing here repeats it.
-fn draw_ramps(ui: &mut egui::Ui, settings: &mut PitDesignSettings, picking: Option<usize>, (base_rl, commands): (f64, &mut Vec<UiCommand>)) {
+fn draw_ramps(ui: &mut egui::Ui, settings: &mut PitDesignSettings, picking: Option<usize>, (base_rl, middle, commands): (f64, DVec2, &mut Vec<UiCommand>)) {
     let (sign, height) = (settings.direction.sign(), settings.bench_height);
     let several = settings.ramps.len() > 1;
     let mut remove = None;
@@ -418,7 +464,7 @@ fn draw_ramps(ui: &mut egui::Ui, settings: &mut PitDesignSettings, picking: Opti
             if menu::menu_section_with_action(ui, heading, tr!("pit-design-ramp-remove-short"), tr!("pit-design-ramp-remove-help")) {
                 remove = Some(index);
             }
-            draw_ramp_settings(ui, ramp, commands, index, (base_rl, sign, height));
+            draw_ramp_settings(ui, ramp, commands, index, (base_rl, middle, sign, height));
         });
     }
     if let Some(index) = remove {
@@ -850,7 +896,7 @@ fn number_list_field(
 
 /// The ramp's settings, for a pit that has one: where it starts, its
 /// width and gradient, which way it climbs, and how it turns.
-fn draw_ramp_settings(ui: &mut egui::Ui, ramp: &mut RampSettings, commands: &mut Vec<UiCommand>, index: usize, (base_rl, sign, height): (f64, f64, f64)) {
+fn draw_ramp_settings(ui: &mut egui::Ui, ramp: &mut RampSettings, commands: &mut Vec<UiCommand>, index: usize, (base_rl, middle, sign, height): (f64, DVec2, f64, f64)) {
     MenuFieldF64::new(tr!("pit-design-ramp-width"), &mut ramp.width, 0.1..=1000.0)
         .width(FIELD_WIDTH)
         .speed(0.1)
@@ -862,9 +908,16 @@ fn draw_ramp_settings(ui: &mut egui::Ui, ramp: &mut RampSettings, commands: &mut
         .suffix(" %")
         .help_text(tr!("pit-design-ramp-gradient-help"))
         .show(ui);
-    let start_text = ramp.start.map_or_else(
-        || tr!("pit-design-ramp-start-default"),
-        |start: DVec2| tr!("pit-design-ramp-start-picked", x = format!("{:.1}", start.x), y = format!("{:.1}", start.y)),
+    // The side of the pit it leaves from, which is how it is talked about;
+    // where exactly, said on hover.
+    let (start_text, start_hint) = ramp.start.map_or_else(
+        || (tr!("pit-design-ramp-start-default"), tr!("pit-design-ramp-start-help")),
+        |start: DVec2| {
+            (
+                tr!("pit-design-ramp-start-side", side = compass_point(start - middle)),
+                tr!("pit-design-ramp-start-picked", x = format!("{:.1}", start.x), y = format!("{:.1}", start.y)),
+            )
+        },
     );
     let mut pick = false;
     MenuField::new(tr!("pit-design-ramp-start"))
@@ -876,7 +929,7 @@ fn draw_ramp_settings(ui: &mut egui::Ui, ramp: &mut RampSettings, commands: &mut
                 let text_width = FIELD_WIDTH - ui.spacing().item_spacing.x - pick_width;
                 ui.allocate_ui_with_layout(egui::vec2(text_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.set_min_width(text_width);
-                    ui.add(egui::Label::new(start_text.clone()).truncate()).hint(start_text.clone());
+                    ui.add(egui::Label::new(start_text.clone()).truncate()).hint(start_hint.clone());
                 });
                 pick = ui.add(MenuButton::new(pick_label).min_width(pick_width)).clicked();
             })
@@ -950,6 +1003,15 @@ fn draw_ramp_settings(ui: &mut egui::Ui, ramp: &mut RampSettings, commands: &mut
     if menu::menu_section_folding(ui, "pit_design_ramp_extent", tr!("pit-design-ramp-extent-section")) {
         draw_ramp_extent(ui, ramp, (base_rl, sign, height));
     }
+}
+
+/// The eighth of the compass `offset` points to: n, ne, e, se, s, sw, w or
+/// nw.
+fn compass_point(offset: DVec2) -> &'static str {
+    const POINTS: [&str; 8] = ["n", "ne", "e", "se", "s", "sw", "w", "nw"];
+    // Clockwise from north, in eighths, rounded to the nearest.
+    let eighths = (offset.x.atan2(offset.y).to_degrees().rem_euclid(360.0) / 45.0).round() as usize;
+    POINTS[eighths % 8]
 }
 
 /// Where the ramp runs, and how its stretches are laid bench by bench: the
@@ -1074,16 +1136,17 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
             if ramp {
                 read_only_row(ui, &tr!("pit-design-ramp-length"), &format!("{} m", whole(design.ramp_length)));
             }
-            // The volume as measured against the ground is the Evaluation's;
-            // until there is one, what the rings enclose.
+            // One volume, always in view: as measured against the ground,
+            // the last measure standing until the next comes (the rings
+            // enclose the air above the ground too, so would jump about);
+            // with nothing measured, what the rings enclose.
             let measured = draft
                 .working
                 .as_ref()
                 .and_then(|working| working.evaluation.as_ref())
-                .is_some_and(|evaluation| evaluation.problem.is_none());
-            if !measured {
-                read_only_row(ui, &tr!("pit-design-volume"), &format!("{} m³", whole(design.volume)));
-            }
+                .filter(|evaluation| evaluation.problem.is_none())
+                .map(|evaluation| evaluation.total.volume);
+            read_only_row(ui, &tr!("pit-design-volume"), &format!("{} m³", whole(measured.unwrap_or(design.volume))));
             let ended = end_text(design);
             if stopped_short(design) {
                 ui.colored_label(warning, ended);
@@ -1531,8 +1594,8 @@ fn draw_comparison(ui: &mut egui::Ui, facts: &DraftFacts, designed: bool) {
 /// A measure's figures: the whole design's, its materials' and its
 /// benches'.
 fn draw_figures(ui: &mut egui::Ui, evaluation: &Evaluation, fields: &[ReserveField]) {
+    // Its volume is said with the design's figures, above.
     let total = &evaluation.total;
-    read_only_row(ui, &tr!("pit-design-evaluation-volume"), &format!("{} m³", whole(total.volume)));
     let numeric = numeric_fields(fields);
     let Some(measured) = total.measured.as_ref() else {
         return;
