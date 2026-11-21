@@ -703,27 +703,6 @@ fn draw_display_switches(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
     if wireframes.clicked() {
         commands.push(UiCommand::SetTopologyWireframes(!editor.topology_wireframes_enabled));
     }
-
-    // A rain simulation's tab has no design points to show.
-    if editor.is_water_run() {
-        return;
-    }
-    let points = ui.add(
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("toggle_points.svg")),
-            if editor.show_points {
-                tr!("viewport-bar-hide-points")
-            } else {
-                tr!("viewport-bar-show-points")
-            },
-        )
-        .id_salt("show_points")
-        .button_side(side)
-        .selected(editor.show_points),
-    );
-    if points.clicked() {
-        commands.push(UiCommand::SetShowPoints(!editor.show_points));
-    }
 }
 
 /// How the scene is drawn and got at, which every workspace carries.

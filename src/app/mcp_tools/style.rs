@@ -101,7 +101,6 @@ pub(super) fn definitions() -> Vec<Value> {
                 "grid": { "type": "boolean", "description": "The coordinate grid (the RL grid in a section)." },
                 "wireframes": { "type": "boolean", "description": "Triangle edges on surfaces." },
                 "contours": { "type": "boolean", "description": "Contour lines on surfaces." },
-                "points": { "type": "boolean", "description": "Vertices of design objects." },
                 "cinematic": { "type": "boolean", "description": "Presentation shading." },
             }),
             &[],
@@ -373,9 +372,6 @@ fn display(arguments: &Value) -> Vec<UiCommand> {
     }
     if let Some(on) = arguments["contours"].as_bool() {
         commands.push(UiCommand::SetTopologyContours(on));
-    }
-    if let Some(on) = arguments["points"].as_bool() {
-        commands.push(UiCommand::SetShowPoints(on));
     }
     if let Some(on) = arguments["cinematic"].as_bool() {
         commands.push(UiCommand::SetCinematicEnabled(on));

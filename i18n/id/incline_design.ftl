@@ -621,7 +621,6 @@ cmd-view-no-point-under-cursor-fix = Tidak ada titik di bawah kursor untuk menet
 cmd-view-released-centre-rotation = Titik pusat rotasi dilepaskan
 cmd-view-reset-view-fit-extents = Atur ulang tampilan (sesuaikan dengan batas)
 cmd-view-set-cinematic-view-enabled = Tampilan sinematik = { $enabled }
-cmd-view-set-view-points-enabled = Atur titik tampilan = { $enabled }
 cmd-view-set-xy-grid-enabled = Grid XY aktif = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Zum ke batas (pertahankan sudut)
 
@@ -1564,7 +1563,6 @@ state-set-layer-lock = Atur Kunci Lapisan
 state-set-line-weight = Atur Berat Garis
 state-set-object-colour = Atur Warna Objek
 state-set-object-fill = Atur Isi Objek
-state-set-point-visibility = Atur Visibilitas Titik
 state-set-polyline-closed = Atur Polyline Tertutup
 state-set-raster-lock = Atur Kunci Raster
 state-set-standard-view = Atur Tampilan Standar
@@ -1777,12 +1775,10 @@ viewport-bar-disable-x-ray-vision = Nonaktifkan Pandangan Sinar-X
 viewport-bar-enable-x-ray-vision = Aktifkan Pandangan Sinar-X
 viewport-bar-fill = Isi:
 viewport-bar-fix-centre-rotation = Tetapkan Pusat Rotasi
-viewport-bar-hide-points = Sembunyikan Titik
 viewport-bar-hide-rl-grid = Sembunyikan Grid Elevasi
 viewport-bar-hide-wireframes = Sembunyikan Kerangka Kawat
 viewport-bar-hide-xy-grid = Sembunyikan Grid XY
 viewport-bar-release-centre-rotation = Lepaskan Pusat Rotasi
-viewport-bar-show-points = Tampilkan Titik
 viewport-bar-show-rl-grid = Tampilkan Grid Elevasi
 viewport-bar-show-wireframes = Tampilkan Kerangka Kawat
 viewport-bar-show-xy-grid = Tampilkan Grid XY

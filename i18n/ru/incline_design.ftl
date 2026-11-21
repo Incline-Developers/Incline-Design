@@ -673,7 +673,6 @@ cmd-view-no-point-under-cursor-fix = Под курсором нет точки, 
 cmd-view-released-centre-rotation = Центр вращения освобождён
 cmd-view-reset-view-fit-extents = Сбросить вид (вписать в границы)
 cmd-view-set-cinematic-view-enabled = Кинематографический вид = { $enabled }
-cmd-view-set-view-points-enabled = Отображение точек = { $enabled }
 cmd-view-set-xy-grid-enabled = Сетка XY включена = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Масштабировать до границ (с сохранением угла)
 
@@ -1616,7 +1615,6 @@ state-set-layer-lock = Задать блокировку слоя
 state-set-line-weight = Задать толщину линии
 state-set-object-colour = Задать цвет объекта
 state-set-object-fill = Задать заливку объекта
-state-set-point-visibility = Задать видимость точки
 state-set-polyline-closed = Задать замкнутость полилинии
 state-set-raster-lock = Задать блокировку растра
 state-set-standard-view = Задать стандартный вид
@@ -1829,12 +1827,10 @@ viewport-bar-disable-x-ray-vision = Отключить рентгеновски�
 viewport-bar-enable-x-ray-vision = Включить рентгеновский режим
 viewport-bar-fill = Заливка:
 viewport-bar-fix-centre-rotation = Закрепить центр вращения
-viewport-bar-hide-points = Скрыть точки
 viewport-bar-hide-rl-grid = Скрыть сетку отметок
 viewport-bar-hide-wireframes = Скрыть каркасы
 viewport-bar-hide-xy-grid = Скрыть сетку XY
 viewport-bar-release-centre-rotation = Освободить центр вращения
-viewport-bar-show-points = Показать точки
 viewport-bar-show-rl-grid = Показать сетку отметок
 viewport-bar-show-wireframes = Показать каркасы
 viewport-bar-show-xy-grid = Показать сетку XY

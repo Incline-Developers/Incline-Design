@@ -672,7 +672,6 @@ cmd-view-no-point-under-cursor-fix = Заагчийн доор эргэлтий�
 cmd-view-released-centre-rotation = Эргэлтийн төвийг суллалаа
 cmd-view-reset-view-fit-extents = Харагдацыг сэргээх (хэмжээнд тааруулах)
 cmd-view-set-cinematic-view-enabled = Кино харагдацыг тохируулав = { $enabled }
-cmd-view-set-view-points-enabled = Цэгийн харагдацыг тохируулав = { $enabled }
 cmd-view-set-xy-grid-enabled = XY торыг тохируулав = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Хэмжээнд тааруулж томруулах (өнцгийг хадгалах)
 
@@ -1615,7 +1614,6 @@ state-set-layer-lock = Давхаргын түгжээг тохируулах
 state-set-line-weight = Шугамын зузааныг тохируулах
 state-set-object-colour = Объектын өнгийг тохируулах
 state-set-object-fill = Объектын дүүргэлтийг тохируулах
-state-set-point-visibility = Цэгийн харагдацыг тохируулах
 state-set-polyline-closed = Полилиниаг хаалттай болгож тохируулах
 state-set-raster-lock = Растерын түгжээг тохируулах
 state-set-standard-view = Стандарт харагдацыг тохируулах
@@ -1828,12 +1826,10 @@ viewport-bar-disable-x-ray-vision = Рентген харагдацыг унтр
 viewport-bar-enable-x-ray-vision = Рентген харагдацыг асаах
 viewport-bar-fill = Дүүргэлт:
 viewport-bar-fix-centre-rotation = Эргэлтийн төвийг тогтоох
-viewport-bar-hide-points = Цэгүүдийг нуух
 viewport-bar-hide-rl-grid = RL торыг нуух
 viewport-bar-hide-wireframes = Торон дүрсийг нуух
 viewport-bar-hide-xy-grid = XY торыг нуух
 viewport-bar-release-centre-rotation = Эргэлтийн төвийг суллах
-viewport-bar-show-points = Цэгүүдийг харуулах
 viewport-bar-show-rl-grid = RL торыг харуулах
 viewport-bar-show-wireframes = Торон дүрсийг харуулах
 viewport-bar-show-xy-grid = XY торыг харуулах

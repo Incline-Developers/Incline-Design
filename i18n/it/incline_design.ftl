@@ -663,7 +663,6 @@ cmd-view-no-point-under-cursor-fix = Nessun punto sotto il cursore su cui fissar
 cmd-view-released-centre-rotation = Centro di rotazione rilasciato
 cmd-view-reset-view-fit-extents = Ripristina vista (adatta all'estensione)
 cmd-view-set-cinematic-view-enabled = Vista cinematica = { $enabled }
-cmd-view-set-view-points-enabled = Visualizzazione punti = { $enabled }
 cmd-view-set-xy-grid-enabled = Griglia XY attiva = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Zoom su estensione (angolazione invariata)
 
@@ -1606,7 +1605,6 @@ state-set-layer-lock = Imposta blocco livello
 state-set-line-weight = Imposta spessore linea
 state-set-object-colour = Imposta colore oggetto
 state-set-object-fill = Imposta riempimento oggetto
-state-set-point-visibility = Imposta visibilità punto
 state-set-polyline-closed = Imposta polilinea chiusa
 state-set-raster-lock = Imposta blocco raster
 state-set-standard-view = Imposta vista standard
@@ -1819,12 +1817,10 @@ viewport-bar-disable-x-ray-vision = Disattiva visione a raggi X
 viewport-bar-enable-x-ray-vision = Attiva visione a raggi X
 viewport-bar-fill = Riempimento:
 viewport-bar-fix-centre-rotation = Fissa centro di rotazione
-viewport-bar-hide-points = Nascondi punti
 viewport-bar-hide-rl-grid = Nascondi griglia quote
 viewport-bar-hide-wireframes = Nascondi wireframe
 viewport-bar-hide-xy-grid = Nascondi griglia XY
 viewport-bar-release-centre-rotation = Rilascia centro di rotazione
-viewport-bar-show-points = Mostra punti
 viewport-bar-show-rl-grid = Mostra griglia quote
 viewport-bar-show-wireframes = Mostra wireframe
 viewport-bar-show-xy-grid = Mostra griglia XY

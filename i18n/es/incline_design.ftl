@@ -619,7 +619,6 @@ cmd-view-no-point-under-cursor-fix = No hay ningún punto bajo el cursor donde f
 cmd-view-released-centre-rotation = Centro de rotación liberado
 cmd-view-reset-view-fit-extents = Restablecer vista (ajustar a extensiones)
 cmd-view-set-cinematic-view-enabled = Vista cinematográfica = { $enabled }
-cmd-view-set-view-points-enabled = Se estableció mostrar puntos = { $enabled }
 cmd-view-set-xy-grid-enabled = Cuadrícula XY activada = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Zoom a extensiones (conservar ángulo)
 
@@ -1562,7 +1561,6 @@ state-set-layer-lock = Establecer bloqueo de capa
 state-set-line-weight = Establecer peso de línea
 state-set-object-colour = Configurar el color del objeto
 state-set-object-fill = Establecer relleno del objeto
-state-set-point-visibility = Establecer visibilidad de puntos
 state-set-polyline-closed = Establecer polilínea cerrada
 state-set-raster-lock = Establecer bloqueo de ráster
 state-set-standard-view = Configurar la vista estándar
@@ -1775,12 +1773,10 @@ viewport-bar-disable-x-ray-vision = Desactivar visión de rayos X
 viewport-bar-enable-x-ray-vision = Activar visión de rayos X
 viewport-bar-fill = Rellenar:
 viewport-bar-fix-centre-rotation = Fijar centro de rotación
-viewport-bar-hide-points = Ocultar puntos
 viewport-bar-hide-rl-grid = Ocultar cuadrícula de cotas
 viewport-bar-hide-wireframes = Ocultar mallas alámbricas
 viewport-bar-hide-xy-grid = Ocultar cuadrícula XY
 viewport-bar-release-centre-rotation = Liberar centro de rotación
-viewport-bar-show-points = Mostrar puntos
 viewport-bar-show-rl-grid = Mostrar cuadrícula de cotas
 viewport-bar-show-wireframes = Mostrar mallas alámbricas
 viewport-bar-show-xy-grid = Mostrar cuadrícula XY

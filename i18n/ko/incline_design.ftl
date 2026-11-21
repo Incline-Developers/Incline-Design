@@ -655,7 +655,6 @@ cmd-view-no-point-under-cursor-fix = 커서 아래에 회전 중심을 고정할
 cmd-view-released-centre-rotation = 회전 중심을 해제했습니다
 cmd-view-reset-view-fit-extents = 뷰 재설정(범위에 맞춤)
 cmd-view-set-cinematic-view-enabled = 시네마틱 뷰 설정 = { $enabled }
-cmd-view-set-view-points-enabled = 뷰 포인트 설정 = { $enabled }
 cmd-view-set-xy-grid-enabled = XY 그리드 설정 = { $enabled }
 cmd-view-zoom-extents-preserving-angle = 범위에 맞춰 확대/축소(각도 유지)
 
@@ -1598,7 +1597,6 @@ state-set-layer-lock = 레이어 잠금 설정
 state-set-line-weight = 선 두께 설정
 state-set-object-colour = 객체 색상 설정
 state-set-object-fill = 객체 채우기 설정
-state-set-point-visibility = 점 표시 여부 설정
 state-set-polyline-closed = 폴리라인 닫힘 설정
 state-set-raster-lock = 래스터 잠금 설정
 state-set-standard-view = 표준 뷰 설정
@@ -1811,12 +1809,10 @@ viewport-bar-disable-x-ray-vision = 투시 모드 비활성화
 viewport-bar-enable-x-ray-vision = 투시 모드 활성화
 viewport-bar-fill = 채우기:
 viewport-bar-fix-centre-rotation = 회전 중심 고정
-viewport-bar-hide-points = 점 숨기기
 viewport-bar-hide-rl-grid = RL 그리드 숨기기
 viewport-bar-hide-wireframes = 와이어프레임 숨기기
 viewport-bar-hide-xy-grid = XY 그리드 숨기기
 viewport-bar-release-centre-rotation = 회전 중심 해제
-viewport-bar-show-points = 점 표시
 viewport-bar-show-rl-grid = RL 그리드 표시
 viewport-bar-show-wireframes = 와이어프레임 표시
 viewport-bar-show-xy-grid = XY 그리드 표시

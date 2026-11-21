@@ -621,7 +621,6 @@ cmd-view-no-point-under-cursor-fix = Aucun point sous le curseur pour y fixer le
 cmd-view-released-centre-rotation = Centre de rotation libéré
 cmd-view-reset-view-fit-extents = Réinitialiser la vue (ajuster à l’étendue)
 cmd-view-set-cinematic-view-enabled = Vue cinématique = { $enabled }
-cmd-view-set-view-points-enabled = Points de la vue = { $enabled }
 cmd-view-set-xy-grid-enabled = Grille XY activée = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Zoom sur l’étendue (angle conservé)
 
@@ -1564,7 +1563,6 @@ state-set-layer-lock = Définir le verrouillage de la couche
 state-set-line-weight = Définir l'épaisseur de ligne
 state-set-object-colour = Définir la couleur de l'objet
 state-set-object-fill = Définir le remplissage de l'objet
-state-set-point-visibility = Définir la visibilité du point
 state-set-polyline-closed = Définir la polyligne comme fermée
 state-set-raster-lock = Définir le verrouillage du raster
 state-set-standard-view = Configurer la vue standard
@@ -1777,12 +1775,10 @@ viewport-bar-disable-x-ray-vision = Désactiver la vision aux rayons X
 viewport-bar-enable-x-ray-vision = Activer la vision aux rayons X
 viewport-bar-fill = Remplissage :
 viewport-bar-fix-centre-rotation = Fixer le centre de rotation
-viewport-bar-hide-points = Masquer les points
 viewport-bar-hide-rl-grid = Masquer la grille d'altitude
 viewport-bar-hide-wireframes = Masquer les filaires
 viewport-bar-hide-xy-grid = Masquer la grille XY
 viewport-bar-release-centre-rotation = Libérer le centre de rotation
-viewport-bar-show-points = Afficher les points
 viewport-bar-show-rl-grid = Afficher la grille d'altitude
 viewport-bar-show-wireframes = Afficher les filaires
 viewport-bar-show-xy-grid = Afficher la grille XY

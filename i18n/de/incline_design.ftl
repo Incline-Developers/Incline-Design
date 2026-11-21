@@ -662,7 +662,6 @@ cmd-view-no-point-under-cursor-fix = Kein Punkt unter dem Cursor, um den Rotatio
 cmd-view-released-centre-rotation = Rotationsmittelpunkt freigegeben
 cmd-view-reset-view-fit-extents = Ansicht zurückgesetzt (an Ausdehnung angepasst)
 cmd-view-set-cinematic-view-enabled = Kinoansicht = { $enabled } gesetzt
-cmd-view-set-view-points-enabled = Punkte anzeigen = { $enabled } gesetzt
 cmd-view-set-xy-grid-enabled = XY-Raster aktiviert = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Auf Ausdehnung zoomen (Blickwinkel beibehalten)
 
@@ -1605,7 +1604,6 @@ state-set-layer-lock = Ebenensperre festlegen
 state-set-line-weight = Linienstärke festlegen
 state-set-object-colour = Objektfarbe festlegen
 state-set-object-fill = Objektfüllung festlegen
-state-set-point-visibility = Punkt-Sichtbarkeit festlegen
 state-set-polyline-closed = Polylinie geschlossen festlegen
 state-set-raster-lock = Rastersperre festlegen
 state-set-standard-view = Standardansicht festlegen
@@ -1818,12 +1816,10 @@ viewport-bar-disable-x-ray-vision = Röntgensicht deaktivieren
 viewport-bar-enable-x-ray-vision = Röntgensicht aktivieren
 viewport-bar-fill = Füllung:
 viewport-bar-fix-centre-rotation = Rotationsmittelpunkt festlegen
-viewport-bar-hide-points = Punkte ausblenden
 viewport-bar-hide-rl-grid = Höhenraster ausblenden
 viewport-bar-hide-wireframes = Drahtgitter ausblenden
 viewport-bar-hide-xy-grid = XY-Raster ausblenden
 viewport-bar-release-centre-rotation = Rotationsmittelpunkt freigeben
-viewport-bar-show-points = Punkte anzeigen
 viewport-bar-show-rl-grid = Höhenraster einblenden
 viewport-bar-show-wireframes = Drahtgitter anzeigen
 viewport-bar-show-xy-grid = XY-Raster einblenden

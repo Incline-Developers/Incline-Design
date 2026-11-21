@@ -621,7 +621,6 @@ cmd-view-no-point-under-cursor-fix = 光标下没有可用于固定旋转中心�
 cmd-view-released-centre-rotation = 已释放旋转中心
 cmd-view-reset-view-fit-extents = 重置视图（适合范围）
 cmd-view-set-cinematic-view-enabled = 设置电影视图 = { $enabled }
-cmd-view-set-view-points-enabled = 设置视图点 = { $enabled }
 cmd-view-set-xy-grid-enabled = 设置 XY 网格 = { $enabled }
 cmd-view-zoom-extents-preserving-angle = 缩放至范围（保留角度）
 
@@ -1564,7 +1563,6 @@ state-set-layer-lock = 设置层锁
 state-set-line-weight = 设置线宽
 state-set-object-colour = 设置对象颜色
 state-set-object-fill = 设置对象填充
-state-set-point-visibility = 设置点可见性
 state-set-polyline-closed = 设置多段线为闭合
 state-set-raster-lock = 设置栅格锁
 state-set-standard-view = 设置标准视图
@@ -1777,12 +1775,10 @@ viewport-bar-disable-x-ray-vision = 禁用透视模式
 viewport-bar-enable-x-ray-vision = 启用透视模式
 viewport-bar-fill = 填充:
 viewport-bar-fix-centre-rotation = 固定旋转中心
-viewport-bar-hide-points = 隐藏点
 viewport-bar-hide-rl-grid = 隐藏 RL 网格
 viewport-bar-hide-wireframes = 隐藏线框
 viewport-bar-hide-xy-grid = 隐藏 XY 网格
 viewport-bar-release-centre-rotation = 释放旋转中心
-viewport-bar-show-points = 显示点
 viewport-bar-show-rl-grid = 显示 RL 网格
 viewport-bar-show-wireframes = 显示线框
 viewport-bar-show-xy-grid = 显示 XY 网格

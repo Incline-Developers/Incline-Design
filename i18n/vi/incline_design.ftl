@@ -648,7 +648,6 @@ cmd-view-no-point-under-cursor-fix = Không có điểm nào dưới con trỏ �
 cmd-view-released-centre-rotation = Đã giải phóng tâm xoay
 cmd-view-reset-view-fit-extents = Đặt lại khung nhìn (vừa khung)
 cmd-view-set-cinematic-view-enabled = Đặt chế độ xem điện ảnh = { $enabled }
-cmd-view-set-view-points-enabled = Đặt hiển thị điểm = { $enabled }
 cmd-view-set-xy-grid-enabled = Bật lưới XY = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Thu phóng vừa khung (giữ nguyên góc nhìn)
 
@@ -1591,7 +1590,6 @@ state-set-layer-lock = Đặt khóa lớp
 state-set-line-weight = Đặt độ dày nét
 state-set-object-colour = Đặt màu đối tượng
 state-set-object-fill = Đặt tô đối tượng
-state-set-point-visibility = Đặt hiển thị điểm
 state-set-polyline-closed = Đặt đường đa tuyến khép kín
 state-set-raster-lock = Đặt khóa ảnh raster
 state-set-standard-view = Đặt khung nhìn chuẩn
@@ -1804,12 +1802,10 @@ viewport-bar-disable-x-ray-vision = Tắt chế độ nhìn xuyên thấu
 viewport-bar-enable-x-ray-vision = Bật chế độ nhìn xuyên thấu
 viewport-bar-fill = Tô:
 viewport-bar-fix-centre-rotation = Cố định tâm xoay
-viewport-bar-hide-points = Ẩn điểm
 viewport-bar-hide-rl-grid = Ẩn lưới cao độ
 viewport-bar-hide-wireframes = Ẩn khung dây
 viewport-bar-hide-xy-grid = Ẩn lưới XY
 viewport-bar-release-centre-rotation = Giải phóng tâm xoay
-viewport-bar-show-points = Hiện điểm
 viewport-bar-show-rl-grid = Hiện lưới cao độ
 viewport-bar-show-wireframes = Hiện khung dây
 viewport-bar-show-xy-grid = Hiện lưới XY

@@ -7,7 +7,7 @@ use crate::{
     model::{Document, Object, ObjectPoint, geometry::circle_polyline_vertices},
     rendering::{
         StrokeInstance, Vertex,
-        geometry::{DrawContext, draw_line, draw_screen_cross, draw_screen_point_marker, draw_screen_point_marker_sized, tessellate_polyline_stroke},
+        geometry::{DrawContext, draw_line, draw_screen_cross, draw_screen_point_marker, draw_screen_point_marker_sized, draw_vertex_dots, tessellate_polyline_stroke},
         graphics::{ACTIVE_POINT_COLOR, DOC_LINE_WIDTH, MEASUREMENT_COLOR, PREVIEW_COLOR},
         pick::world_to_screen,
     },
@@ -203,6 +203,9 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
             draw_line(&mut overlay, pair[0], pair[1], DOC_LINE_WIDTH, PREVIEW_COLOR);
         }
     }
+    // The points placed so far, as the line will show them.
+    let placed: Vec<crate::model::PolyVertex> = stroke_preview.iter().copied().map(crate::model::PolyVertex::straight).collect();
+    draw_vertex_dots(&mut overlay, &placed, DOC_LINE_WIDTH, PREVIEW_COLOR);
 
     if editor.is_haulage_page() {
         // Blocks out of reach are tinted already; a cross each would bury them.

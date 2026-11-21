@@ -689,7 +689,6 @@ cmd-view-no-point-under-cursor-fix = Pod kursorem nie ma punktu, na którym moż
 cmd-view-released-centre-rotation = Zwolniono środek obrotu
 cmd-view-reset-view-fit-extents = Zresetowano widok (dopasowano do zasięgu)
 cmd-view-set-cinematic-view-enabled = Widok filmowy = { $enabled }
-cmd-view-set-view-points-enabled = Ustawiono widoczność punktów = { $enabled }
 cmd-view-set-xy-grid-enabled = Siatka XY włączona = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Przybliżono do zasięgu (z zachowaniem kąta)
 
@@ -1632,7 +1631,6 @@ state-set-layer-lock = Ustaw blokadę warstwy
 state-set-line-weight = Ustaw grubość linii
 state-set-object-colour = Ustaw kolor obiektu
 state-set-object-fill = Ustaw wypełnienie obiektu
-state-set-point-visibility = Ustaw widoczność punktu
 state-set-polyline-closed = Ustaw zamknięcie polilinii
 state-set-raster-lock = Ustaw blokadę rastra
 state-set-standard-view = Ustaw widok standardowy
@@ -1845,12 +1843,10 @@ viewport-bar-disable-x-ray-vision = Wyłącz widzenie rentgenowskie
 viewport-bar-enable-x-ray-vision = Włącz widzenie rentgenowskie
 viewport-bar-fill = Wypełnienie:
 viewport-bar-fix-centre-rotation = Ustaw środek obrotu
-viewport-bar-hide-points = Ukryj punkty
 viewport-bar-hide-rl-grid = Ukryj siatkę rzędnych
 viewport-bar-hide-wireframes = Ukryj siatki krawędziowe
 viewport-bar-hide-xy-grid = Ukryj siatkę XY
 viewport-bar-release-centre-rotation = Zwolnij środek obrotu
-viewport-bar-show-points = Pokaż punkty
 viewport-bar-show-rl-grid = Pokaż siatkę rzędnych
 viewport-bar-show-wireframes = Pokaż siatki krawędziowe
 viewport-bar-show-xy-grid = Pokaż siatkę XY

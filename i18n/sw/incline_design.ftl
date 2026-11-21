@@ -653,7 +653,6 @@ cmd-view-no-point-under-cursor-fix = Hakuna kidokezo chini ya kishale cha kufung
 cmd-view-released-centre-rotation = Kitovu cha mzunguko kimeachiliwa
 cmd-view-reset-view-fit-extents = Rejesha mwonekano (oanisha na wigo)
 cmd-view-set-cinematic-view-enabled = Weka mwonekano wa sinema = { $enabled }
-cmd-view-set-view-points-enabled = Mwonekano wa vidokezo umewekwa = { $enabled }
 cmd-view-set-xy-grid-enabled = Weka gridi ya XY = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Kuza kwa wigo wote (ukihifadhi pembe)
 
@@ -1596,7 +1595,6 @@ state-set-layer-lock = Weka Ufungaji wa Tabaka
 state-set-line-weight = Weka Uzito wa Mstari
 state-set-object-colour = Weka Rangi ya Kitu
 state-set-object-fill = Weka Ujazaji wa Kitu
-state-set-point-visibility = Weka Mwonekano wa Kidokezo
 state-set-polyline-closed = Weka Mstari wa Pointi Nyingi Kufungwa
 state-set-raster-lock = Weka Ufungaji wa Rasta
 state-set-standard-view = Weka Mwonekano wa Kawaida
@@ -1809,12 +1807,10 @@ viewport-bar-disable-x-ray-vision = Zima Mwono wa X-Ray
 viewport-bar-enable-x-ray-vision = Washa Mwono wa X-Ray
 viewport-bar-fill = Jaza:
 viewport-bar-fix-centre-rotation = Funga Kitovu cha Mzunguko
-viewport-bar-hide-points = Ficha Vidokezo
 viewport-bar-hide-rl-grid = Ficha Gridi ya RL
 viewport-bar-hide-wireframes = Ficha Nyaya
 viewport-bar-hide-xy-grid = Ficha Gridi ya XY
 viewport-bar-release-centre-rotation = Achilia Kitovu cha Mzunguko
-viewport-bar-show-points = Onyesha Vidokezo
 viewport-bar-show-rl-grid = Onyesha Gridi ya RL
 viewport-bar-show-wireframes = Onyesha Nyaya
 viewport-bar-show-xy-grid = Onyesha Gridi ya XY

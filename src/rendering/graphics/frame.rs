@@ -633,7 +633,7 @@ impl Graphics<'_> {
             &editor.hidden_handles,
             self.scene_origin,
             scale_factor,
-            editor.show_points || editor.active_tool == crate::ui::state::ActiveTool::DeletePoints,
+            editor.active_tool == crate::ui::state::ActiveTool::DeletePoints,
             self.geometry_dirty || self.cached_document_revision != document.revision(),
         );
         // Selection, hover and translucency only restyle: the shaders read

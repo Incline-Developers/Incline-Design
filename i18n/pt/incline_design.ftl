@@ -619,7 +619,6 @@ cmd-view-no-point-under-cursor-fix = Nenhum ponto sob o cursor onde fixar o cent
 cmd-view-released-centre-rotation = Centro de rotação libertado
 cmd-view-reset-view-fit-extents = Repor vista (ajustar às extensões)
 cmd-view-set-cinematic-view-enabled = Vista cinematográfica = { $enabled }
-cmd-view-set-view-points-enabled = Pontos da vista = { $enabled }
 cmd-view-set-xy-grid-enabled = Grelha XY ativada = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Zoom para as extensões (preservar ângulo)
 
@@ -1562,7 +1561,6 @@ state-set-layer-lock = Definir bloqueio da camada
 state-set-line-weight = Definir peso da linha
 state-set-object-colour = Definir cor do objeto
 state-set-object-fill = Definir preenchimento do objeto
-state-set-point-visibility = Definir visibilidade do ponto
 state-set-polyline-closed = Definir polilinha como fechada
 state-set-raster-lock = Definir bloqueio do raster
 state-set-standard-view = Definir vista padrão
@@ -1775,12 +1773,10 @@ viewport-bar-disable-x-ray-vision = Desativar visão de raios X
 viewport-bar-enable-x-ray-vision = Ativar visão de raios X
 viewport-bar-fill = Preencher:
 viewport-bar-fix-centre-rotation = Fixar centro de rotação
-viewport-bar-hide-points = Ocultar pontos
 viewport-bar-hide-rl-grid = Ocultar grelha de cotas
 viewport-bar-hide-wireframes = Ocultar estruturas de arame
 viewport-bar-hide-xy-grid = Ocultar grelha XY
 viewport-bar-release-centre-rotation = Libertar centro de rotação
-viewport-bar-show-points = Mostrar pontos
 viewport-bar-show-rl-grid = Mostrar grelha de cotas
 viewport-bar-show-wireframes = Mostrar estruturas de arame
 viewport-bar-show-xy-grid = Mostrar grelha XY

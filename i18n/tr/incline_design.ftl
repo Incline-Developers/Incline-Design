@@ -663,7 +663,6 @@ cmd-view-no-point-under-cursor-fix = İmlecin altında dönüş merkezinin sabit
 cmd-view-released-centre-rotation = Dönüş merkezi serbest bırakıldı
 cmd-view-reset-view-fit-extents = Görünümü sıfırla (kapsama sığdır)
 cmd-view-set-cinematic-view-enabled = Sinematik görünüm = { $enabled } olarak ayarlandı
-cmd-view-set-view-points-enabled = Görünüm noktaları = { $enabled } olarak ayarlandı
 cmd-view-set-xy-grid-enabled = XY ızgarası etkin = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Kapsama yakınlaştır (açıyı koru)
 
@@ -1606,7 +1605,6 @@ state-set-layer-lock = Katman Kilidini Ayarla
 state-set-line-weight = Çizgi Kalınlığını Ayarla
 state-set-object-colour = Nesne Rengini Ayarla
 state-set-object-fill = Nesne Dolgusunu Ayarla
-state-set-point-visibility = Nokta Görünürlüğünü Ayarla
 state-set-polyline-closed = Çoklu Çizgiyi Kapalı Yap
 state-set-raster-lock = Raster Kilidini Ayarla
 state-set-standard-view = Standart Görünümü Ayarla
@@ -1819,12 +1817,10 @@ viewport-bar-disable-x-ray-vision = X-Ray Görüşünü Devre Dışı Bırak
 viewport-bar-enable-x-ray-vision = X-Ray Görüşünü Etkinleştir
 viewport-bar-fill = Dolgu:
 viewport-bar-fix-centre-rotation = Dönüş Merkezini Sabitle
-viewport-bar-hide-points = Noktaları Gizle
 viewport-bar-hide-rl-grid = Kot Izgarasını Gizle
 viewport-bar-hide-wireframes = Tel Kafesleri Gizle
 viewport-bar-hide-xy-grid = XY Izgarasını Gizle
 viewport-bar-release-centre-rotation = Dönüş Merkezini Serbest Bırak
-viewport-bar-show-points = Noktaları Göster
 viewport-bar-show-rl-grid = Kot Izgarasını Göster
 viewport-bar-show-wireframes = Tel Kafesleri Göster
 viewport-bar-show-xy-grid = XY Izgarasını Göster

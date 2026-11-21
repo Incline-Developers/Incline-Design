@@ -1531,7 +1531,6 @@ cmd-view-reset-view-fit-extents = Reset view (fit to extents)
 cmd-view-set-cinematic-view-enabled = Set cinematic view = { $enabled }
 cmd-view-set-topology-contours-enabled = Set topography contours = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Set topography wireframes = { $enabled }
-cmd-view-set-view-points-enabled = Set view points = { $enabled }
 cmd-view-set-xy-grid-enabled = Set XY grid = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Zoom to extents (preserving angle)
 
@@ -3586,7 +3585,6 @@ state-set-layer-lock = Set Layer Lock
 state-set-line-weight = Set Line Weight
 state-set-object-colour = Set Object Colour
 state-set-object-fill = Set Object Fill
-state-set-point-visibility = Set Point Visibility
 state-set-polyline-closed = Set Polyline Closed
 state-set-raster-lock = Set Raster Lock
 state-set-standard-view = Set Standard View
@@ -3862,14 +3860,12 @@ viewport-bar-fill = Fill:
 viewport-bar-fix-centre-rotation = Fix Centre of Rotation
 viewport-bar-hide-borehole-inspector = Hide Drillhole Inspector
 viewport-bar-hide-contours = Hide Contours
-viewport-bar-hide-points = Hide Points
 viewport-bar-hide-rl-grid = Hide RL Grid
 viewport-bar-hide-wireframes = Hide Wireframes
 viewport-bar-hide-xy-grid = Hide XY Grid
 viewport-bar-release-centre-rotation = Release Centre of Rotation
 viewport-bar-show-borehole-inspector = Show Drillhole Inspector
 viewport-bar-show-contours = Show Contours
-viewport-bar-show-points = Show Points
 viewport-bar-show-rl-grid = Show RL Grid
 viewport-bar-show-wireframes = Show Wireframes
 viewport-bar-show-xy-grid = Show XY Grid

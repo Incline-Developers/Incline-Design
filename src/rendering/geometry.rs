@@ -127,6 +127,23 @@ pub(crate) fn draw_round_join(ctx: &mut DrawContext, center: DVec3, line_width: 
     ctx.push(position, position, radius, STROKE_ROUND, color);
 }
 
+/// A dot at each of a polyline's vertices, in its own colour and as much
+/// wider than its line as reads as a point on it at any weight: the
+/// vertices are always shown, drawn and picked with the line.
+pub(crate) fn draw_vertex_dots(ctx: &mut DrawContext, verts: &[PolyVertex], line_weight: f32, color: [f32; 4]) {
+    let radius = ((line_weight * ctx.scale_factor).max(1.0) * VERTEX_DOT_SCALE).max(VERTEX_DOT_LEAST * ctx.scale_factor);
+    for vertex in verts {
+        let position = local(vertex.pos, ctx.scene_origin);
+        ctx.push(position, position, radius, STROKE_ROUND, color);
+    }
+}
+
+/// How wide a vertex's dot is across, in lines' widths, halved: its radius.
+const VERTEX_DOT_SCALE: f32 = 1.5;
+
+/// The least radius of a vertex's dot, in logical pixels, for hairlines.
+const VERTEX_DOT_LEAST: f32 = 2.2;
+
 /// Tessellate a polyline's stroke (segments, arcs and the round joins between
 /// them) into the context's stroke buffers. Shared by the per-rebuild scene
 /// builder and the static stroke chunk cache so both produce identical

@@ -621,7 +621,6 @@ cmd-view-no-point-under-cursor-fix = घूर्णन केंद्र त�
 cmd-view-released-centre-rotation = घूर्णन केंद्र मुक्त किया गया
 cmd-view-reset-view-fit-extents = दृश्य रीसेट करें (सीमाओं में फिट करें)
 cmd-view-set-cinematic-view-enabled = सिनेमैटिक दृश्य सेट करें = { $enabled }
-cmd-view-set-view-points-enabled = दृश्य बिंदु सेट करें = { $enabled }
 cmd-view-set-xy-grid-enabled = XY ग्रिड सक्षम = { $enabled }
 cmd-view-zoom-extents-preserving-angle = सीमाओं तक ज़ूम करें (कोण बनाए रखते हुए)
 
@@ -1564,7 +1563,6 @@ state-set-layer-lock = लेयर लॉक सेट करें
 state-set-line-weight = रेखा भार निर्धारित करें
 state-set-object-colour = वस्तु का रंग सेट करें
 state-set-object-fill = वस्तु भराव सेट करें
-state-set-point-visibility = पॉइंट दृश्यता सेट करें
 state-set-polyline-closed = पॉलीलाइन बंद सेट करें
 state-set-raster-lock = रास्टर लॉक सेट करें
 state-set-standard-view = मानक दृश्य सेट करें
@@ -1777,12 +1775,10 @@ viewport-bar-disable-x-ray-vision = एक्स-रे दृश्य अक�
 viewport-bar-enable-x-ray-vision = एक्स-रे दृश्य सक्षम करें
 viewport-bar-fill = भरें:
 viewport-bar-fix-centre-rotation = घूर्णन केंद्र तय करें
-viewport-bar-hide-points = बिंदु छिपाएँ
 viewport-bar-hide-rl-grid = ऊंचाई ग्रिड छिपाएँ
 viewport-bar-hide-wireframes = वायरफ़्रेम छिपाएँ
 viewport-bar-hide-xy-grid = XY ग्रिड छिपाएँ
 viewport-bar-release-centre-rotation = घूर्णन केंद्र मुक्त करें
-viewport-bar-show-points = बिंदु दिखाएँ
 viewport-bar-show-rl-grid = ऊंचाई ग्रिड दिखाएँ
 viewport-bar-show-wireframes = वायरफ़्रेम दिखाएँ
 viewport-bar-show-xy-grid = XY ग्रिड दिखाएँ

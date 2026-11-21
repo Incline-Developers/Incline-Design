@@ -621,7 +621,6 @@ cmd-view-no-point-under-cursor-fix = لا توجد نقطة تحت المؤشر 
 cmd-view-released-centre-rotation = تم تحرير مركز الدوران
 cmd-view-reset-view-fit-extents = إعادة تعيين العرض (ملاءمة للحدود)
 cmd-view-set-cinematic-view-enabled = تعيين العرض السينمائي = { $enabled }
-cmd-view-set-view-points-enabled = تعيين نقاط العرض = { $enabled }
 cmd-view-set-xy-grid-enabled = تفعيل شبكة XY = { $enabled }
 cmd-view-zoom-extents-preserving-angle = التكبير إلى الحدود (مع الحفاظ على الزاوية)
 
@@ -1564,7 +1563,6 @@ state-set-layer-lock = تعيين قفل الطبقة
 state-set-line-weight = تعيين وزن الخط
 state-set-object-colour = تعيين لون الكائن
 state-set-object-fill = تعيين تعبئة الكائن
-state-set-point-visibility = تعيين رؤية النقطة
 state-set-polyline-closed = تعيين إغلاق الخط المتعدد المقاطع
 state-set-raster-lock = تعيين قفل البيانات النقطية
 state-set-standard-view = تعيين المشاهدة القياسية
@@ -1777,12 +1775,10 @@ viewport-bar-disable-x-ray-vision = تعطيل الرؤية بالأشعة ال�
 viewport-bar-enable-x-ray-vision = تمكين الرؤية بالأشعة السينية
 viewport-bar-fill = ملء:
 viewport-bar-fix-centre-rotation = تثبيت مركز الدوران
-viewport-bar-hide-points = إخفاء النقاط
 viewport-bar-hide-rl-grid = إخفاء شبكة المناسيب
 viewport-bar-hide-wireframes = إخفاء الإطارات السلكية
 viewport-bar-hide-xy-grid = إخفاء شبكة XY
 viewport-bar-release-centre-rotation = تحرير مركز الدوران
-viewport-bar-show-points = إظهار النقاط
 viewport-bar-show-rl-grid = إظهار شبكة المناسيب
 viewport-bar-show-wireframes = إظهار الإطارات السلكية
 viewport-bar-show-xy-grid = إظهار شبكة XY

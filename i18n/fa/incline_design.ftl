@@ -621,7 +621,6 @@ cmd-view-no-point-under-cursor-fix = هیچ نقطه‌ای زیر نشانگر 
 cmd-view-released-centre-rotation = مرکز چرخش آزاد شد
 cmd-view-reset-view-fit-extents = بازنشانی نما (جا دادن در محدوده)
 cmd-view-set-cinematic-view-enabled = تنظیم نمای سینمایی = { $enabled }
-cmd-view-set-view-points-enabled = تنظیم نقاط نما = { $enabled }
 cmd-view-set-xy-grid-enabled = شبکه XY فعال = { $enabled }
 cmd-view-zoom-extents-preserving-angle = بزرگ‌نمایی تا محدوده (با حفظ زاویه)
 
@@ -1564,7 +1563,6 @@ state-set-layer-lock = تنظیم قفل لایه
 state-set-line-weight = تنظیم ضخامت خط
 state-set-object-colour = رنگ اشیاء را تنظیم کنید
 state-set-object-fill = تنظیم پر کردن اشیاء
-state-set-point-visibility = تنظیم نمایانی نقطه
 state-set-polyline-closed = تنظیم چندخطی به‌صورت بسته
 state-set-raster-lock = تنظیم قفل رستر
 state-set-standard-view = تنظیم نمای استاندارد
@@ -1777,12 +1775,10 @@ viewport-bar-disable-x-ray-vision = غیرفعال کردن نمای اشعه ا
 viewport-bar-enable-x-ray-vision = فعال کردن نمای اشعه ایکس
 viewport-bar-fill = پر کردن:
 viewport-bar-fix-centre-rotation = ثابت کردن مرکز چرخش
-viewport-bar-hide-points = پنهان کردن نقاط
 viewport-bar-hide-rl-grid = پنهان کردن شبکه ترازها
 viewport-bar-hide-wireframes = پنهان کردن قاب‌های سیمی
 viewport-bar-hide-xy-grid = پنهان کردن شبکه XY
 viewport-bar-release-centre-rotation = آزاد کردن مرکز چرخش
-viewport-bar-show-points = نمایش نقاط
 viewport-bar-show-rl-grid = نمایش شبکه ترازها
 viewport-bar-show-wireframes = نمایش قاب‌های سیمی
 viewport-bar-show-xy-grid = نمایش شبکه XY

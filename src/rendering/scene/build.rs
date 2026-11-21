@@ -12,7 +12,7 @@ use crate::{
     },
     rendering::{
         StrokeInstance, Vertex,
-        geometry::{DrawContext, draw_line, draw_round_join, draw_screen_cross, draw_screen_point_marker_sized, tessellate_polyline_stroke},
+        geometry::{DrawContext, draw_line, draw_round_join, draw_screen_cross, draw_screen_point_marker_sized, draw_vertex_dots, tessellate_polyline_stroke},
         graphics::{DOC_LINE_WIDTH, DOC_TEXT_FONT_SIZE, TEXT_EDIT_INDICATOR_COLOR, text_bounds_corners_with_layout_width},
         pick::{PickRecord, TextPickRecord, world_bounds_from_local_positions},
         scene::{
@@ -257,6 +257,10 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                 let geometry = object.string_geometry();
                 let (verts, closed) = geometry.as_ref().map_or((&[][..], false), |(verts, closed)| (verts.as_ref(), *closed));
                 tessellate_polyline_stroke(&mut draw_ctx, verts, closed, *line_weight, line_rgba);
+                // A polyline shows its vertices; a circle has none of its own.
+                if matches!(object, Object::Polyline { .. }) {
+                    draw_vertex_dots(&mut draw_ctx, verts, *line_weight, line_rgba);
+                }
                 if closed
                     && verts.len() >= 2
                     && *fill != crate::model::FillStyle::Clear
@@ -290,6 +294,9 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
             // whole.
             Object::PitDesign { verts, line_weight, .. } => {
                 tessellate_polyline_stroke(&mut draw_ctx, verts, true, *line_weight, rgba);
+                // Its own string shows its vertices, as a polyline's do: the
+                // benches worked out from it do not.
+                draw_vertex_dots(&mut draw_ctx, verts, *line_weight, rgba);
                 // Open in the tool with a preview drawn in its place, only its
                 // string: two designs over each other read as neither.
                 let covered = editor.pit_design.as_ref().is_some_and(|draft| draft.covering && draft.object_id() == Some(object.id()));

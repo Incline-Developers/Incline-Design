@@ -22,7 +22,7 @@ use crate::{
     model::{Document, FillStyle, LayerId, Object, ObjectId, SceneEntityId},
     rendering::{
         StrokeInstance, Vertex,
-        geometry::{DrawContext, tessellate_polyline_stroke},
+        geometry::{DrawContext, draw_vertex_dots, tessellate_polyline_stroke},
         pick::{PickRecord, StrokeBlocks, world_bounds_from_local_positions},
         scene::document_style::DocumentStyleSlots,
     },
@@ -158,9 +158,9 @@ fn estimate_stroke(object: &Object) -> Option<usize> {
     }
     let segments = verts.len().saturating_sub(1).saturating_add(usize::from(*closed && verts.len() >= 2));
     let joins = if *closed && verts.len() >= 2 { verts.len() } else { verts.len().saturating_sub(2) };
-    // A segment and a round join are one instance each. Degenerate and
-    // nearly collinear geometry only reduces the count.
-    Some(segments.saturating_add(joins))
+    // A segment, a round join and a vertex's dot are one instance each.
+    // Degenerate and nearly collinear geometry only reduces the count.
+    Some(segments.saturating_add(joins).saturating_add(verts.len()))
 }
 
 fn can_append(current: usize, next: usize, limit: usize) -> bool {
@@ -346,6 +346,7 @@ impl StaticStrokeCache {
                 let mut draw_ctx = DrawContext::unstyled(&mut chunk.strokes, &mut unused_fill_vertices, &mut unused_fill_indices, scene_origin, scale_factor);
                 draw_ctx.style = slots.slot(id);
                 tessellate_polyline_stroke(&mut draw_ctx, verts, *closed, *line_weight, rgba);
+                draw_vertex_dots(&mut draw_ctx, verts, *line_weight, rgba);
             }
             let stroke_end = chunk.strokes.len() as u32;
             if stroke_end > stroke_start

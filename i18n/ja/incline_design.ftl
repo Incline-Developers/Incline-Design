@@ -650,7 +650,6 @@ cmd-view-no-point-under-cursor-fix = カーソルの下に回転中心を固定�
 cmd-view-released-centre-rotation = 回転中心を解放しました
 cmd-view-reset-view-fit-extents = ビューをリセット（全体表示）
 cmd-view-set-cinematic-view-enabled = シネマティックビュー = { $enabled }
-cmd-view-set-view-points-enabled = 頂点表示 = { $enabled }
 cmd-view-set-xy-grid-enabled = XYグリッド有効 = { $enabled }
 cmd-view-zoom-extents-preserving-angle = 全体表示にズーム（視点角度を維持）
 
@@ -1593,7 +1592,6 @@ state-set-layer-lock = レイヤーのロックを設定
 state-set-line-weight = 線の太さを設定
 state-set-object-colour = オブジェクトのカラーを設定
 state-set-object-fill = オブジェクトの塗りつぶしを設定
-state-set-point-visibility = 点の表示を設定
 state-set-polyline-closed = ポリラインの閉合を設定
 state-set-raster-lock = ラスターのロックを設定
 state-set-standard-view = 標準ビューを設定
@@ -1806,12 +1804,10 @@ viewport-bar-disable-x-ray-vision = X線ビジョンを無効化
 viewport-bar-enable-x-ray-vision = X線ビジョンを有効化
 viewport-bar-fill = 塗りつぶし:
 viewport-bar-fix-centre-rotation = 回転中心を固定
-viewport-bar-hide-points = 点を非表示
 viewport-bar-hide-rl-grid = 標高グリッドを非表示
 viewport-bar-hide-wireframes = ワイヤーフレームを非表示
 viewport-bar-hide-xy-grid = XYグリッドを非表示
 viewport-bar-release-centre-rotation = 回転中心を解放
-viewport-bar-show-points = 点を表示
 viewport-bar-show-rl-grid = 標高グリッドを表示
 viewport-bar-show-wireframes = ワイヤーフレームを表示
 viewport-bar-show-xy-grid = XYグリッドを表示

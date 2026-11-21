@@ -33,7 +33,6 @@ pub(super) fn slice_preview_scene_key(
     editor.render_style_key().hash(&mut hasher);
     editor.topology_wireframes_enabled.hash(&mut hasher);
     editor.topology_contours_enabled.hash(&mut hasher);
-    editor.show_points.hash(&mut hasher);
     editor.xray_enabled.hash(&mut hasher);
     editor.debug_surface_chunks.hash(&mut hasher);
     editor.vertical_exaggeration.to_bits().hash(&mut hasher);
