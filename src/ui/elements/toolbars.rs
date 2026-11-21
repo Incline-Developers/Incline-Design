@@ -448,7 +448,7 @@ pub(crate) fn draw_left_toolbar(
         .rect
 }
 
-/// Draw the bottom toolbar (cursor mode, measuring, task progress).
+/// Draw the bottom toolbar (cursor mode, measuring).
 ///
 /// Visibility and locking are per-item concerns now, so they live on the
 /// explorer's rows rather than as whole-scene toolbar actions: see
@@ -490,13 +490,6 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                     let left = super::cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_measure_tools(ui, editor, commands, side);
                     });
-                    // Task progress hugs the right end of the strip, out of the
-                    // way of the tools and with room to say what is running -
-                    // the status bar had neither.
-                    let right = super::cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        crate::ui::widgets::progress::draw_task_progress(ui, editor, crate::ui::widgets::progress::END_INSET);
-                    });
-
                     // Held clear of the left cluster first and slid back from
                     // the right only where there is room, so the window centre
                     // landing behind a cluster crowds the run rather than
@@ -505,7 +498,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                     // sized to it, so that crowding never clips a button.
                     let width = cursor_modes_width(side);
                     let band_left = left.right() + CENTRE_CLEARANCE;
-                    let band_right = right.left() - CENTRE_CLEARANCE;
+                    let band_right = strip.right() - CENTRE_CLEARANCE;
                     let x = (strip.left() + centre_offset - width / 2.0).clamp(band_left, (band_right - width).max(band_left));
                     let run = egui::Rect::from_min_max(egui::pos2(x, strip.top()), egui::pos2(strip.right(), strip.bottom()));
                     let modes = super::cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -513,9 +506,9 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                     });
                     cursor_modes_centre = modes.center().x;
 
-                    // The width the strip has to keep: the three clusters, the
+                    // The width the strip has to keep: the two clusters, the
                     // centre one with its clearance either side.
-                    left.width() + CENTRE_CLEARANCE + width + CENTRE_CLEARANCE + right.width()
+                    left.width() + CENTRE_CLEARANCE + width + CENTRE_CLEARANCE
                 })
                 .inner
             });

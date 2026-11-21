@@ -20,6 +20,7 @@ pub(crate) mod scip_blend; // Improve: the SCIP solve of one owned blended model
 pub(crate) mod step_pipeline; // The run/invalidation core shared by the Schedule and Haulage Setup pipelines
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 pub(crate) mod video_export; // Animate played through the viewport into a video file
+pub(crate) mod water; // Water runs: a storm over a surface, each in a tab of its own
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
 #[cfg(target_arch = "wasm32")]
@@ -226,6 +227,7 @@ struct ReportedTask {
     ticket: BackgroundTaskTicket,
     label: String,
     progress: crate::model::progress::Progress,
+    started: Instant,
 }
 
 #[derive(Default)]
@@ -237,6 +239,9 @@ struct BackgroundTaskState {
     /// Tickets that carry a status-bar label, oldest first: the bar reports
     /// the longest-running task rather than flickering between concurrent ones.
     reported: Vec<ReportedTask>,
+    /// Reported tasks that ran to completion since the editor last collected
+    /// them, oldest first. Cancelled ones are not listed: they did not finish.
+    completed: Vec<crate::ui::state::FinishedTask>,
     /// Tickets that asked not to announce themselves: no status-bar row and no
     /// busy pointer. Work that reruns on every drag of a slider is reported
     /// where the user is already looking, not by a readout and a cursor
@@ -256,26 +261,43 @@ impl BackgroundTaskState {
     }
 
     fn report(&mut self, ticket: BackgroundTaskTicket, label: String, progress: crate::model::progress::Progress) {
-        self.reported.push(ReportedTask { ticket, label, progress });
+        self.reported.push(ReportedTask {
+            ticket,
+            label,
+            progress,
+            started: Instant::now(),
+        });
     }
 
-    fn stop_reporting(&mut self, ticket: BackgroundTaskTicket) {
-        self.reported.retain(|task| task.ticket != ticket);
+    fn stop_reporting(&mut self, ticket: BackgroundTaskTicket) -> Option<ReportedTask> {
+        let index = self.reported.iter().position(|task| task.ticket == ticket)?;
+        Some(self.reported.remove(index))
     }
 
-    /// The task the status bar should show, if any.
-    fn status_message(&self) -> Option<crate::ui::state::StatusBarMessage> {
-        let task = self.reported.first()?;
-        let snapshot = task.progress.snapshot();
-        Some(crate::ui::state::StatusBarMessage {
-            text: task.label.clone(),
-            progress: snapshot.map(|snapshot| snapshot.fraction),
-            units: snapshot.and_then(|snapshot| snapshot.units),
-        })
+    /// Every reported task still running, oldest first: the status bar gives
+    /// each a ring and reads out the oldest.
+    fn status_tasks(&self) -> Vec<crate::ui::state::StatusBarMessage> {
+        self.reported
+            .iter()
+            .map(|task| {
+                let snapshot = task.progress.snapshot();
+                crate::ui::state::StatusBarMessage {
+                    ticket: task.ticket.0,
+                    text: task.label.clone(),
+                    progress: snapshot.map(|snapshot| snapshot.fraction),
+                    units: snapshot.and_then(|snapshot| snapshot.units),
+                    started: task.started,
+                }
+            })
+            .collect()
     }
 
     fn settle_cpu(&mut self, ticket: BackgroundTaskTicket, needs_gpu: bool) {
-        self.stop_reporting(ticket);
+        if let Some(task) = self.stop_reporting(ticket) {
+            let units = task.progress.snapshot().and_then(|snapshot| snapshot.units);
+            self.completed
+                .push(crate::ui::state::FinishedTask::new(ticket.0, &task.label, units, task.started.elapsed()));
+        }
         if !self.cpu_pending.remove(&ticket) {
             debug_assert!(false, "unknown or double-completed background ticket {ticket:?}");
             return;
@@ -636,6 +658,8 @@ pub(crate) struct App<'a> {
     /// longer than the scan that needs it.
     pub(crate) scanned_model_kept_until: Option<Instant>,
     pub(crate) schedule_animation: crate::app::schedule_animation::ScheduleAnimation,
+    /// The water runs whose tabs are open. Session-only.
+    pub(crate) water: crate::app::water::WaterRuns,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
     slice_preview_cursor_px: Option<(f64, f64)>,
     slice_preview_middle_down: bool,
@@ -845,6 +869,7 @@ impl<'a> Default for App<'a> {
             residency_held_by_pipeline: false,
             scanned_model_kept_until: None,
             schedule_animation: Default::default(),
+            water: Default::default(),
             solid_preview_restore_requested: None,
             slice_preview_cursor_px: None,
             slice_preview_middle_down: false,
@@ -1789,6 +1814,10 @@ impl<'a> App<'a> {
         // Scenarios, runs and results belong to the outgoing project; the next
         // one's scenarios are read from it when the list first opens.
         self.editor.optimization = Default::default();
+        // The playback deck played one of its block models: it goes with it.
+        if let Some(animation) = self.editor.field_animation.take() {
+            self.editor.isolated_entity = animation.restore.isolated_entity;
+        }
         self.scene_document_key = None;
         self.section_surface_lines_key = None;
         self.section_surface_colors.clear();
@@ -1995,7 +2024,11 @@ impl<'a> App<'a> {
         // workspace contents actually changed.
         let composite_key = self.workspace.composite_key();
         if Some(composite_key) != self.scene_document_key {
-            self.scene_document = if self.editor.is_planning_cut_step() {
+            self.scene_document = if self.editor.is_water_run() {
+                // A rain simulation's tab shows its ground and its water,
+                // and nothing of the project's.
+                Document::new()
+            } else if self.editor.is_planning_cut_step() {
                 let mut scene = Document::new();
                 if let Some(document) = self.workspace.active_document() {
                     scene.clone_reserve_fields_from(document);
@@ -2147,15 +2180,19 @@ impl<'a> App<'a> {
         (ticket, crate::model::progress::Progress::new())
     }
 
-    /// Point the status bar at the longest-running reported task (or clear it
-    /// once none are left). Called once per frame after the `poll_*` drains.
+    /// Hand the status bar the reported tasks still running and those that
+    /// finished since last frame. Called once per frame after the `poll_*`
+    /// drains.
     pub(crate) fn refresh_status_message(&mut self) {
-        let message = self.background_tasks.status_message();
+        let tasks = self.background_tasks.status_tasks();
         // Workers only wake the loop when they finish, so keep redrawing while
-        // one is running: otherwise a determinate bar would freeze part-way
+        // one is running: otherwise a determinate ring would freeze part-way
         // and only jump to its final value at the end.
-        self.redraw_requested |= message.is_some();
-        self.editor.set_status_message(message);
+        self.redraw_requested |= !tasks.is_empty();
+        for finished in std::mem::take(&mut self.background_tasks.completed) {
+            self.editor.record_finished_task(finished);
+        }
+        self.editor.status_tasks = tasks;
     }
 
     /// Move one CPU ticket through the UI-apply phase and either settle it or

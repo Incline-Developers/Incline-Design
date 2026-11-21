@@ -301,6 +301,7 @@ impl<'a> Graphics<'a> {
                 block_model_transparency_composite: &self.block_model_transparency_composite_bind_group_layout,
                 block_model_volume_upscale: &self.block_model_volume_upscale_bind_group_layout,
                 drill_selection: self.drill_hole_gpu.selection_layout(),
+                water: &self.water.layout,
             },
             HDR_FORMAT,
             MSAA_SAMPLE_COUNT,

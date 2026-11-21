@@ -25,6 +25,8 @@ pub(crate) mod haulage;
 pub(crate) mod input;
 pub(crate) mod kernel;
 pub(crate) mod kriging;
+pub(crate) mod npv_schedule;
+pub(crate) mod npv_schedule_run;
 pub(crate) mod numbers;
 pub(crate) mod object_edit;
 pub(crate) mod optimization;
@@ -42,6 +44,7 @@ pub(crate) mod raster;
 pub(crate) mod rbf;
 pub(crate) mod rbf_spans;
 pub(crate) mod schedule;
+pub(crate) mod simplify;
 pub(crate) mod solid_reserves;
 pub(crate) mod spatial;
 pub(crate) mod strat_order;
@@ -49,6 +52,7 @@ pub(crate) mod string_clean;
 pub(crate) mod survey;
 pub(crate) mod thickness_points;
 pub(crate) mod triangulation;
+pub(crate) mod water;
 
 use std::{borrow::Cow, collections::HashMap};
 

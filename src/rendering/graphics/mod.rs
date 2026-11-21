@@ -455,7 +455,8 @@ pub(crate) struct Graphics<'a> {
     pub(super) size: winit::dpi::PhysicalSize<u32>,
     /// The sub-rect of the window the scene is actually visible through, once
     /// the toolbars/status bar around it are accounted for. Sourced from
-    /// egui's layout one frame behind, via `apply_canvas_rect`.
+    /// this frame's egui layout, which runs before the scene is drawn, via
+    /// `apply_canvas_rect`.
     pub(super) viewport_rect: ViewportRect,
     /// The window-centring offset, in viewport pixels, that the startup view
     /// currently carries - see `track_startup_view_framing`. `None` once the
@@ -486,6 +487,13 @@ pub(crate) struct Graphics<'a> {
     /// Animate's machine models, loaded the first time one is shown; `Err`
     /// once loading them has failed, so it is not retried every frame.
     pub(super) machines: Option<Result<crate::rendering::machines::MachineGpu, ()>>,
+    /// The open rain simulation's water, drawn by the editor overlay pass.
+    pub(super) water: crate::rendering::water::WaterGpu,
+    /// The clock the water's ripples move by, which runs only while a rain
+    /// simulation's timeline plays; and the flow clock at the last frame it
+    /// ran.
+    pub(super) water_clock_s: f64,
+    pub(super) water_clock_last_s: Option<f64>,
     pub(super) text_vertex_buf: Vec<Vertex>,
     pub(super) text_index_buf: Vec<u32>,
     pub(super) text_vertex_capacity: usize,

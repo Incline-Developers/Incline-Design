@@ -16,11 +16,17 @@ pub(crate) struct Scrubber<'a> {
     value: &'a mut f64,
     range: RangeInclusive<f64>,
     width: Option<f32>,
+    loaded: Option<f64>,
 }
 
 impl<'a> Scrubber<'a> {
     pub(crate) fn new(value: &'a mut f64, range: RangeInclusive<f64>) -> Self {
-        Self { value, range, width: None }
+        Self {
+            value,
+            range,
+            width: None,
+            loaded: None,
+        }
     }
 
     /// How wide the track is; the rest of the row by default.
@@ -28,11 +34,19 @@ impl<'a> Scrubber<'a> {
         self.width = Some(width);
         self
     }
+
+    /// How far along the range is there to be shown yet, for something still
+    /// arriving: the track is drawn lighter up to there, and the handle goes
+    /// no further.
+    pub(crate) fn loaded(mut self, loaded: f64) -> Self {
+        self.loaded = Some(loaded);
+        self
+    }
 }
 
 impl egui::Widget for Scrubber<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        let Self { value, range, width } = self;
+        let Self { value, range, width, loaded } = self;
         let height = ui.spacing().interact_size.y;
         let width = width.unwrap_or_else(|| ui.available_width());
         let (rect, mut response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click_and_drag());
@@ -46,7 +60,7 @@ impl egui::Widget for Scrubber<'_> {
             && let Some(pointer) = response.interact_pointer_pos()
         {
             let t = f64::from(((pointer.x - track_x.start()) / track_width).clamp(0.0, 1.0));
-            let next = low + t * span;
+            let next = (low + t * span).min(loaded.unwrap_or(high));
             if next != *value {
                 *value = next;
                 response.mark_changed();
@@ -64,6 +78,14 @@ impl egui::Widget for Scrubber<'_> {
         let track = egui::Rect::from_x_y_ranges(track_x.clone(), egui::Rangef::point(rect.center().y).expand(TRACK_HEIGHT / 2.0));
         let painter = ui.painter();
         painter.rect_filled(track, GROUP_CORNER_RADIUS, fade(shifted(visuals.panel_fill, if visuals.dark_mode { 24 } else { -24 })));
+        if let Some(loaded) = loaded {
+            let loaded_x = egui::lerp(track_x.clone(), ((loaded - low) / span).clamp(0.0, 1.0) as f32);
+            painter.rect_filled(
+                egui::Rect::from_x_y_ranges(*track_x.start()..=loaded_x, track.y_range()),
+                GROUP_CORNER_RADIUS,
+                fade(shifted(visuals.panel_fill, if visuals.dark_mode { 72 } else { -72 })),
+            );
+        }
         painter.rect_filled(
             egui::Rect::from_x_y_ranges(*track_x.start()..=x, track.y_range()),
             GROUP_CORNER_RADIUS,

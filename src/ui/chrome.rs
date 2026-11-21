@@ -254,9 +254,15 @@ impl Grip {
 /// the panels and the scene overlays, which are drawn there too, but below
 /// menus, tooltips and the floating dialogs, which are areas of their own and
 /// should be free to sit wherever they open.
-pub(crate) fn paint_regions(ctx: &egui::Context, regions: impl IntoIterator<Item = Rect>) {
+///
+/// Nothing is painted below `status_bar`'s top. The bands and masks reach past
+/// a region's claimed edge, and over the bar, which is no region's neighbour,
+/// they would only cut into the hover fills of its buttons.
+pub(crate) fn paint_regions(ctx: &egui::Context, regions: impl IntoIterator<Item = Rect>, status_bar: Rect) {
     let visuals = &ctx.global_style().visuals;
-    let painter = ctx.layer_painter(egui::LayerId::background());
+    let screen = ctx.content_rect();
+    let above_bar = Rect::from_min_max(screen.min, egui::pos2(screen.max.x, status_bar.top().min(screen.max.y)));
+    let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(above_bar);
     for claimed in regions {
         let region = region_rect(claimed);
         if !region.is_positive() {

@@ -82,6 +82,7 @@ impl<'a> App<'a> {
                     &self.solid_view_body,
                     &self.reserves_scene,
                     &self.schedule_animation,
+                    &self.water,
                     self.solid_preview.as_ref(),
                 );
                 let overlay = if self.editor.is_haulage_page() { &self.haul_block_surface[..] } else { drawn.1 };
@@ -305,6 +306,7 @@ impl<'a> App<'a> {
                     self.sync_blasting_frame();
                     self.sync_haulage_frame();
                     self.sync_animation_frame();
+                    self.sync_water();
                     self.sync_page_locks();
                     let showing_solid_preview = self.showing_solid_preview();
                     let completing_topology_load = self.topology_uploads_pending();
@@ -339,16 +341,20 @@ impl<'a> App<'a> {
                             &self.solid_view_body,
                             &self.reserves_scene,
                             &self.schedule_animation,
+                            &self.water,
                             self.solid_preview.as_ref(),
                         );
+                        // A rain simulation's tab shows its ground and its
+                        // water, and nothing else of the project's.
+                        let project_shown = !self.editor.is_water_run();
                         match graphics.render(crate::rendering::graphics::frame::RenderInput {
                             editor: &mut self.editor,
                             document: &mut self.scene_document,
                             triangulations: drawn.0,
-                            block_models: &self.block_models,
-                            drill_holes: &self.drill_holes,
+                            block_models: if project_shown { &self.block_models } else { &[] },
+                            drill_holes: if project_shown { &self.drill_holes } else { &[] },
                             well_logs: &self.well_logs,
-                            point_clouds: &self.point_clouds,
+                            point_clouds: if project_shown { &self.point_clouds } else { &[] },
                             rasters: with_prismoid_scene(&self.raster_textures, &self.prismoid_rasters),
                             solid_preview: drawn.1,
                             retained_surfaces: &self.solid_view_retained,
@@ -1573,6 +1579,7 @@ impl<'a> App<'a> {
             &self.solid_view_body,
             &self.reserves_scene,
             &self.schedule_animation,
+            &self.water,
             self.solid_preview.as_ref(),
         );
         // The Layout's blocks are flat fills in the scene, not surfaces; their
@@ -2171,6 +2178,7 @@ impl<'a> App<'a> {
 /// it as a preview. Rendering and every pick read this one answer, so a
 /// pivot lands on whatever the eye sees - planning solids, Animate's ground -
 /// rather than passing through it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn drawn_surfaces<'s>(
     editor: &crate::ui::state::EditorState,
     showing_solid_preview: bool,
@@ -2178,8 +2186,13 @@ pub(crate) fn drawn_surfaces<'s>(
     solid_view_body: &'s [crate::model::triangulation::OpenTriangulation],
     reserves_scene: &'s [crate::model::triangulation::OpenTriangulation],
     schedule_animation: &'s crate::app::schedule_animation::ScheduleAnimation,
+    water: &'s crate::app::water::WaterRuns,
     solid_preview: Option<&'s crate::app::commands::solids::SolidPreview>,
 ) -> (&'s [crate::model::triangulation::OpenTriangulation], &'s [crate::model::triangulation::OpenTriangulation]) {
+    // A water run's tab draws the run's own surface and the water on it.
+    if editor.is_water_run() {
+        return (water.scene(), &[]);
+    }
     // Blasting draws into the real viewport, so its bench slabs are the
     // scene rather than an offscreen preview.
     if editor.is_planning_cut_step() {

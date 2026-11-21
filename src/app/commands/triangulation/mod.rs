@@ -30,6 +30,7 @@ mod include;
 mod point_cloud_tin;
 pub(crate) mod reference_surface;
 pub(crate) mod session;
+mod simplify;
 mod smooth;
 pub(crate) mod solid_between;
 

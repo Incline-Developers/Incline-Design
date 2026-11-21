@@ -5,6 +5,11 @@
 //!
 //! Painted by hand so it looks the same on every platform and needs no plot
 //! crate. Hovering a column shows the caller's text for it; clicking selects it.
+//!
+//! The legend above the plot scrolls sideways when it does not fit. Hovering
+//! an entry brings its series to the front and fades the others to a quarter;
+//! clicking it hides or shows the series (its entry greyed), and the axes
+//! follow what is shown. Hidden series are kept per chart (`id_salt`).
 
 use super::{hint::Hint, toolbar::GROUP_CORNER_RADIUS};
 
@@ -12,8 +17,10 @@ use super::{hint::Hint, toolbar::GROUP_CORNER_RADIUS};
 const AXIS_WIDTH: f32 = 56.0;
 /// Room under the plot for the category labels.
 const LABEL_HEIGHT: f32 = 18.0;
-/// Room above the plot for the legend.
-const LEGEND_HEIGHT: f32 = 20.0;
+/// The legend's row above the plot.
+const LEGEND_HEIGHT: f32 = 22.0;
+/// What the series not hovered in the legend fade to (75 % transparent).
+const FADED: f32 = 0.25;
 /// Share of a column its bar fills.
 const BAR_FILL: f32 = 0.7;
 /// Gridlines (and axis numbers) each axis aims for.
@@ -26,26 +33,44 @@ pub(crate) struct BarSeries<'a> {
     pub(crate) values: &'a [f64],
 }
 
-/// A line, against an axis of its own right of the plot (the first line's
-/// axis nearest the plot).
+/// A line, against an axis of its own right of the plot (the first such
+/// line's axis nearest the plot), or another line's.
 pub(crate) struct LineSeries<'a> {
     pub(crate) name: String,
     pub(crate) color: egui::Color32,
     pub(crate) values: &'a [f64],
-    /// Where the line's values sit, as fractions of the plot height from the
-    /// bottom (lowest value, highest value): `None` spans a round-numbered axis
-    /// over the whole height, taking in 0; `Some((0.35, 0.65))` keeps the line
-    /// in the middle, clear of the bars' tops and the other lines.
-    pub(crate) band: Option<(f32, f32)>,
+    pub(crate) scale: LineScale,
+}
+
+/// Which axis a line is drawn against.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum LineScale {
+    /// Its own axis right of the plot. The band is where its values sit, as
+    /// fractions of the plot height from the bottom (lowest value, highest
+    /// value): `None` spans a round-numbered axis over the whole height,
+    /// taking in 0; `Some((0.35, 0.65))` keeps the line in the middle, clear
+    /// of the bars' tops and the other lines.
+    Own(Option<(f32, f32)>),
+    /// The axis of line `index` (an earlier one with its own), which then
+    /// spans both: lines of one quantity compared on one scale.
+    SameAs(usize),
 }
 
 pub(crate) struct BarLineChart<'a> {
     labels: &'a [String],
+    /// Filled areas on the bars' axis, behind everything else.
+    areas: Vec<BarSeries<'a>>,
     bars: Vec<BarSeries<'a>>,
     lines: Vec<LineSeries<'a>>,
     selected: Vec<usize>,
+    /// Columns tinted to draw the eye, and the tint.
+    marked: (Vec<usize>, egui::Color32),
     height: f32,
     hover_text: Option<&'a dyn Fn(usize) -> String>,
+    /// Keys the hidden series, so they stay hidden from frame to frame.
+    id_salt: Option<egui::Id>,
+    /// A point drawn larger and ringed: (the line's name, its column).
+    emphasized: Option<(String, usize)>,
 }
 
 /// What the reader did with the chart this frame.
@@ -61,12 +86,35 @@ impl<'a> BarLineChart<'a> {
     pub(crate) fn new(labels: &'a [String]) -> Self {
         Self {
             labels,
+            areas: Vec::new(),
             bars: Vec::new(),
             lines: Vec::new(),
             selected: Vec::new(),
+            marked: (Vec::new(), egui::Color32::TRANSPARENT),
             height: 260.0,
             hover_text: None,
+            id_salt: None,
+            emphasized: None,
         }
+    }
+
+    /// Which chart this is, so the series hidden in its legend stay hidden.
+    pub(crate) fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
+        self.id_salt = Some(egui::Id::unique(salt));
+        self
+    }
+
+    /// Draw line `line`'s point in `column` larger and ringed (the best value, say).
+    pub(crate) fn emphasize(mut self, line: impl Into<String>, column: usize) -> Self {
+        self.emphasized = Some((line.into(), column));
+        self
+    }
+
+    /// A filled area against the bars' axis, drawn behind the bars (a stock
+    /// over time, say).
+    pub(crate) fn area(mut self, series: BarSeries<'a>) -> Self {
+        self.areas.push(series);
+        self
     }
 
     pub(crate) fn bars(mut self, series: BarSeries<'a>) -> Self {
@@ -85,6 +133,12 @@ impl<'a> BarLineChart<'a> {
         self
     }
 
+    /// Columns tinted with `color` (a warning, say), under any selection.
+    pub(crate) fn marked(mut self, columns: impl IntoIterator<Item = usize>, color: egui::Color32) -> Self {
+        self.marked = (columns.into_iter().collect(), color);
+        self
+    }
+
     pub(crate) fn height(mut self, height: f32) -> Self {
         self.height = height;
         self
@@ -96,9 +150,11 @@ impl<'a> BarLineChart<'a> {
         self
     }
 
-    pub(crate) fn show(self, ui: &mut egui::Ui) -> ChartResponse {
+    pub(crate) fn show(mut self, ui: &mut egui::Ui) -> ChartResponse {
         let columns = self.labels.len();
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), self.height), egui::Sense::click());
+        let id = self.id_salt.unwrap_or_else(|| ui.scope_id().with("bar_line_chart"));
+        let highlighted = self.legend(ui, id);
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), (self.height - LEGEND_HEIGHT).max(40.0)), egui::Sense::click());
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
         let visuals = ui.visuals().clone();
         let painter = ui.painter_at(rect);
@@ -108,9 +164,18 @@ impl<'a> BarLineChart<'a> {
             return out;
         }
 
+        // The axis each line is drawn against: its own (one column of numbers
+        // each, right of the plot), or the one it shares.
+        let owner = |index: usize| -> usize {
+            match self.lines[index].scale {
+                LineScale::SameAs(other) if other < self.lines.len() && matches!(self.lines[other].scale, LineScale::Own(_)) => other,
+                _ => index,
+            }
+        };
+        let own: Vec<usize> = (0..self.lines.len()).filter(|&index| owner(index) == index).collect();
         let plot = egui::Rect::from_min_max(
-            rect.min + egui::vec2(AXIS_WIDTH, LEGEND_HEIGHT + 6.0),
-            rect.max - egui::vec2(if self.lines.is_empty() { 12.0 } else { AXIS_WIDTH * self.lines.len() as f32 }, LABEL_HEIGHT + 4.0),
+            rect.min + egui::vec2(AXIS_WIDTH, 8.0),
+            rect.max - egui::vec2(if own.is_empty() { 12.0 } else { AXIS_WIDTH * own.len() as f32 }, LABEL_HEIGHT + 4.0),
         );
         if plot.width() <= 10.0 || plot.height() <= 10.0 {
             return out;
@@ -120,10 +185,15 @@ impl<'a> BarLineChart<'a> {
         let grid = visuals.widgets.noninteractive.bg_stroke.color;
         let font = egui::FontId::proportional(11.0);
 
-        // Left axis: from 0 to the tallest stack.
+        // Left axis: from 0 to the tallest stack, or the highest area.
         let stack_top = (0..columns)
             .map(|column| self.bars.iter().map(|series| series.values.get(column).copied().unwrap_or(0.0).max(0.0)).sum::<f64>())
             .fold(0.0, f64::max);
+        let stack_top = self
+            .areas
+            .iter()
+            .flat_map(|area| area.values.iter().copied().filter(|value| value.is_finite()))
+            .fold(stack_top, f64::max);
         let left = nice_axis(0.0, stack_top);
         let left_y = |value: f64| plot.bottom() - ((value - left.min) / (left.max - left.min)) as f32 * plot.height();
         for tick in left.ticks() {
@@ -138,11 +208,26 @@ impl<'a> BarLineChart<'a> {
             );
         }
 
-        // Right axes, one per line, each a column further out.
-        let axes: Vec<LineAxis> = self.lines.iter().map(|line| LineAxis::of(line.values, line.band)).collect();
+        // Right axes, one per line with its own, each a column further out;
+        // an axis spans the values of every line drawn against it.
+        let axes: Vec<Option<LineAxis>> = (0..self.lines.len())
+            .map(|index| {
+                let LineScale::Own(band) = self.lines[index].scale else {
+                    return (owner(index) == index).then(|| LineAxis::of(self.lines[index].values, None));
+                };
+                let values: Vec<f64> = (0..self.lines.len())
+                    .filter(|&other| owner(other) == index)
+                    .flat_map(|other| self.lines[other].values.iter().copied())
+                    .collect();
+                Some(LineAxis::of(&values, band))
+            })
+            .collect();
         let line_y = |axis: &LineAxis, value: f64| plot.bottom() - ((value - axis.low) / (axis.high - axis.low)) as f32 * plot.height();
-        for (index, (line, axis)) in self.lines.iter().zip(&axes).enumerate() {
-            let x = plot.right() + 6.0 + AXIS_WIDTH * index as f32;
+        for (slot, &index) in own.iter().enumerate() {
+            let (line, Some(axis)) = (&self.lines[index], &axes[index]) else {
+                continue;
+            };
+            let x = plot.right() + 6.0 + AXIS_WIDTH * slot as f32;
             for tick in axis.ticks() {
                 painter.text(
                     egui::pos2(x, line_y(axis, tick)),
@@ -152,7 +237,7 @@ impl<'a> BarLineChart<'a> {
                     line.color,
                 );
             }
-            if line.band.is_none() && axis.low < 0.0 {
+            if !matches!(line.scale, LineScale::Own(Some(_))) && axis.low < 0.0 {
                 let zero = line_y(axis, 0.0);
                 painter.line_segment(
                     [egui::pos2(plot.left(), zero), egui::pos2(plot.right(), zero)],
@@ -168,6 +253,9 @@ impl<'a> BarLineChart<'a> {
         let hovered = pointer.map(|pos| (((pos.x - plot.left()) / width) as usize).min(columns - 1));
         // The confirm button's accent, as the rest of the optimization windows select with.
         let accent = super::menu::accent_fill(&visuals);
+        for &column in self.marked.0.iter().filter(|&&column| column < columns) {
+            painter.rect_filled(column_rect(column), 0.0, self.marked.1);
+        }
         for &column in self.selected.iter().filter(|&&column| column < columns) {
             let area = column_rect(column);
             painter.rect_filled(area, 0.0, accent.gamma_multiply(0.25));
@@ -176,6 +264,40 @@ impl<'a> BarLineChart<'a> {
         if let Some(column) = hovered {
             painter.rect_filled(column_rect(column), 0.0, accent.gamma_multiply(0.12));
         }
+        // Hovered in the legend: that series in front, the others faded.
+        let fade = |name: &str, color: egui::Color32| match &highlighted {
+            Some(hovered) if hovered != name => color.gamma_multiply(FADED),
+            _ => color,
+        };
+        let is_highlighted = |name: &str| highlighted.as_deref() == Some(name);
+        // Areas: from the axis up to each column's value, joined across column
+        // centres; a hovered one is drawn over the bars instead of behind them.
+        let draw_area = |area: &BarSeries| {
+            let points: Vec<egui::Pos2> = (0..columns)
+                .map(|column| {
+                    egui::pos2(
+                        column_rect(column).center().x,
+                        left_y(area.values.get(column).copied().filter(|value| value.is_finite()).unwrap_or(0.0).max(0.0)),
+                    )
+                })
+                .collect();
+            let color = fade(&area.name, area.color);
+            let fill = color.gamma_multiply(0.35);
+            for pair in points.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                let base = left_y(0.0);
+                let quad = vec![egui::pos2(a.x, base), a, b, egui::pos2(b.x, base)];
+                painter.add(egui::Shape::convex_polygon(quad, fill, egui::Stroke::NONE));
+            }
+            if points.len() == 1 {
+                let bar = column_rect(0).shrink2(egui::vec2(width * (1.0 - BAR_FILL) / 2.0, 0.0));
+                painter.rect_filled(egui::Rect::from_x_y_ranges(bar.x_range(), points[0].y..=left_y(0.0)), 0.0, fill);
+            }
+            painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, color)));
+        };
+        for area in self.areas.iter().filter(|area| !is_highlighted(&area.name)) {
+            draw_area(area);
+        }
         for column in 0..columns {
             let bar = column_rect(column).shrink2(egui::vec2(width * (1.0 - BAR_FILL) / 2.0, 0.0));
             let mut base = 0.0;
@@ -183,23 +305,48 @@ impl<'a> BarLineChart<'a> {
                 let value = series.values.get(column).copied().unwrap_or(0.0).max(0.0);
                 if value > 0.0 {
                     let block = egui::Rect::from_x_y_ranges(bar.x_range(), left_y(base + value)..=left_y(base));
-                    painter.rect_filled(block, 0.0, series.color);
+                    painter.rect_filled(block, 0.0, fade(&series.name, series.color));
                 }
                 base += value;
             }
         }
+        for area in self.areas.iter().filter(|area| is_highlighted(&area.name)) {
+            draw_area(area);
+        }
 
-        // The lines, one point per column centre.
-        for (line, axis) in self.lines.iter().zip(&axes) {
-            let points: Vec<egui::Pos2> = (0..columns)
-                .filter_map(|column| {
-                    let value = *line.values.get(column)?;
-                    value.is_finite().then(|| egui::pos2(column_rect(column).center().x, line_y(axis, value)))
-                })
-                .collect();
-            painter.add(egui::Shape::line(points.clone(), egui::Stroke::new(2.0, line.color)));
-            for point in points {
-                painter.circle_filled(point, 3.0, line.color);
+        // The lines, one point per column centre; a gap (a value that is not
+        // finite) breaks a line. A hovered one is drawn last, on top.
+        let mut order: Vec<usize> = (0..self.lines.len()).collect();
+        order.sort_by_key(|&index| is_highlighted(&self.lines[index].name));
+        for index in order {
+            let line = &self.lines[index];
+            let color = fade(&line.name, line.color);
+            let y = |value: f64| match axes[owner(index)].as_ref() {
+                Some(axis) => line_y(axis, value),
+                None => left_y(value),
+            };
+            let mut run: Vec<egui::Pos2> = Vec::new();
+            let mut runs: Vec<Vec<egui::Pos2>> = Vec::new();
+            for column in 0..columns {
+                match line.values.get(column).copied().filter(|value| value.is_finite()) {
+                    Some(value) => run.push(egui::pos2(column_rect(column).center().x, y(value))),
+                    None => runs.push(std::mem::take(&mut run)),
+                }
+            }
+            runs.push(run);
+            for run in runs.into_iter().filter(|run| !run.is_empty()) {
+                painter.add(egui::Shape::line(run.clone(), egui::Stroke::new(2.0, color)));
+                for point in run {
+                    painter.circle_filled(point, 3.0, color);
+                }
+            }
+            // The emphasized point: larger, ringed in the text colour.
+            if let Some((_, column)) = self.emphasized.as_ref().filter(|(name, _)| *name == line.name)
+                && let Some(value) = line.values.get(*column).copied().filter(|value| value.is_finite())
+            {
+                let point = egui::pos2(column_rect(*column).center().x, y(value));
+                painter.circle_filled(point, 5.0, color);
+                painter.circle_stroke(point, 8.0, egui::Stroke::new(2.0, fade(&line.name, text)));
             }
         }
 
@@ -216,23 +363,6 @@ impl<'a> BarLineChart<'a> {
             );
         }
 
-        // Legend along the top.
-        let mut x = plot.left();
-        let legend_y = rect.top() + LEGEND_HEIGHT / 2.0 + 2.0;
-        let entries = self
-            .bars
-            .iter()
-            .map(|series| (&series.name, series.color, false))
-            .chain(self.lines.iter().map(|line| (&line.name, line.color, true)));
-        for (name, color, is_line) in entries {
-            let swatch = egui::Rect::from_center_size(egui::pos2(x + 6.0, legend_y), egui::vec2(12.0, if is_line { 3.0 } else { 10.0 }));
-            painter.rect_filled(swatch, 0.0, color);
-            let galley = painter.layout_no_wrap(name.clone(), font.clone(), text);
-            let width = galley.size().x;
-            painter.galley(egui::pos2(x + 16.0, legend_y - galley.size().y / 2.0), galley, text);
-            x += 16.0 + width + 14.0;
-        }
-
         if let Some(column) = hovered {
             out.hovered = Some(column);
             if let Some(hover_text) = self.hover_text {
@@ -244,6 +374,98 @@ impl<'a> BarLineChart<'a> {
         }
         out
     }
+}
+
+impl BarLineChart<'_> {
+    /// The legend row: one entry per series, scrolling sideways when it does
+    /// not fit. A click hides or shows a series; the hidden ones are taken out
+    /// of the chart here (an axis a hidden line owned passes to the first line
+    /// still shown that shared it). Returns the series hovered, if shown.
+    fn legend(&mut self, ui: &mut egui::Ui, id: egui::Id) -> Option<String> {
+        let hidden_id = id.with("hidden");
+        let mut hidden: Vec<String> = ui.ctx().data(|data| data.get_temp(hidden_id)).unwrap_or_default();
+        let entries: Vec<(String, egui::Color32, bool)> = self
+            .areas
+            .iter()
+            .map(|series| (series.name.clone(), series.color.gamma_multiply(0.6), false))
+            .chain(self.bars.iter().map(|series| (series.name.clone(), series.color, false)))
+            .chain(self.lines.iter().map(|line| (line.name.clone(), line.color, true)))
+            .collect();
+        let mut highlighted = None;
+        egui::ScrollArea::horizontal().id_salt(id.with("legend")).max_height(LEGEND_HEIGHT).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 14.0;
+                for (name, color, is_line) in &entries {
+                    let off = hidden.contains(name);
+                    let response = legend_entry(ui, name, *color, *is_line, off);
+                    if response.hovered() && !off {
+                        highlighted = Some(name.clone());
+                    }
+                    if response.clicked() {
+                        match hidden.iter().position(|other| other == name) {
+                            Some(index) => {
+                                hidden.remove(index);
+                            }
+                            None => hidden.push(name.clone()),
+                        }
+                    }
+                }
+            });
+        });
+        ui.ctx().data_mut(|data| data.insert_temp(hidden_id, hidden.clone()));
+
+        self.areas.retain(|series| !hidden.contains(&series.name));
+        self.bars.retain(|series| !hidden.contains(&series.name));
+        let lines = std::mem::take(&mut self.lines);
+        let owner_of = |index: usize| match lines[index].scale {
+            LineScale::SameAs(other) if other < lines.len() && matches!(lines[other].scale, LineScale::Own(_)) => other,
+            _ => index,
+        };
+        let kept: Vec<usize> = (0..lines.len()).filter(|&index| !hidden.contains(&lines[index].name)).collect();
+        let scales: Vec<LineScale> = kept
+            .iter()
+            .map(|&index| {
+                let owner = owner_of(index);
+                if owner == index {
+                    return lines[index].scale;
+                }
+                // The axis's line, or the first shown line on that axis, keeps it.
+                let holder = if kept.contains(&owner) {
+                    owner
+                } else {
+                    kept.iter().copied().find(|&other| owner_of(other) == owner).unwrap_or(index)
+                };
+                if holder == index {
+                    lines[owner].scale
+                } else {
+                    LineScale::SameAs(kept.iter().position(|&other| other == holder).unwrap_or(0))
+                }
+            })
+            .collect();
+        self.lines = lines
+            .into_iter()
+            .enumerate()
+            .filter(|(index, _)| kept.contains(index))
+            .zip(scales)
+            .map(|((_, line), scale)| LineSeries { scale, ..line })
+            .collect();
+        highlighted
+    }
+}
+
+/// One legend entry: its swatch (a bar, or a line's stroke) and name, greyed
+/// while its series is hidden.
+fn legend_entry(ui: &mut egui::Ui, name: &str, color: egui::Color32, is_line: bool, off: bool) -> egui::Response {
+    let font = egui::FontId::proportional(11.0);
+    let text = if off { ui.visuals().weak_text_color() } else { ui.visuals().text_color() };
+    let galley = ui.painter().layout_no_wrap(name.to_owned(), font, text);
+    let size = egui::vec2(16.0 + galley.size().x, LEGEND_HEIGHT - 4.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let swatch_color = if off { color.gamma_multiply(0.25) } else { color };
+    let swatch = egui::Rect::from_center_size(egui::pos2(rect.left() + 6.0, rect.center().y), egui::vec2(12.0, if is_line { 3.0 } else { 10.0 }));
+    ui.painter().rect_filled(swatch, 0.0, swatch_color);
+    ui.painter().galley(egui::pos2(rect.left() + 16.0, rect.center().y - galley.size().y / 2.0), galley, text);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).hint(crate::i18n::tr!("chart-legend-hint"))
 }
 
 /// A line's axis: the values `low..high` span the plot's height; ticks are

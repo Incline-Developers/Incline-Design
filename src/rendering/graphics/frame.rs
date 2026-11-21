@@ -168,44 +168,57 @@ impl<'a> Graphics<'a> {
             // following the view as well could leave the two trading it.
             self.keep_scene_origin_near_view();
         }
-        let mut scene_content_changed = self.geometry_dirty;
-        self.haul_roads_in_bounds = editor.shows_haul_network();
-        self.vertical_exaggeration = editor.vertical_exaggeration.clamp(0.1, 20.0);
-        let slice_visible_half_length = slice_visible_half_length(self.projection.zoom, self.screen_size());
-        if self.slice_view.is_some() {
-            self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
-        }
-        if let Some(slice) = self.slice_view.as_mut() {
-            // Slice mode sets the clip planes itself; the scene-fitting passes below must not run.
-            slice.width = editor.slice_width_input.clamp(0.1, 1.0e6);
-            slice.move_speed = editor.slice_speed_input.clamp(0.0, 1.0e6);
-            slice.rotate_speed = editor.slice_rotate_input.clamp(1.0, 720.0).to_radians();
-            slice.set_outlines(editor.slice_outlines);
-            // Camera's own depth range, not the slab (fragment shaders clip to that directly) - kept wide enough a tilted or overhead view won't clip away geometry the slab would show.
-            let forward = self.camera.forward();
-            let strike = DVec3::new(slice.direction.x, slice.direction.y, 0.0);
-            // Scene bounds are model elevations, the slice centre a display one - stretch bounds by the vertical exaggeration before comparing.
-            let origin_z = self.scene_origin.z;
-            let exaggeration = self.vertical_exaggeration;
-            let display_z = |z: f64| origin_z + (z - origin_z) * exaggeration;
-            let bounds = self
-                .cached_scene_bounds
-                .map(|(min, max)| (DVec3::new(min.x, min.y, display_z(min.z)), DVec3::new(max.x, max.y, display_z(max.z))));
-            self.projection
-                .set_symmetric_depth_extent(slice_depth_half_extent(slice.center, strike, forward, slice.width * 0.5, bounds) + slice.view_offset.dot(forward).abs());
-            editor.slice_center = [slice.center.x, slice.center.y, slice.center.z];
-            editor.slice_direction = [slice.direction.x, slice.direction.y];
-            editor.slice_half_length = slice_visible_half_length;
+        self.fit_camera(editor, document, triangulations, block_models, drill_holes, point_clouds);
+
+        // The UI is laid out before the scene is drawn, so the scene fills the
+        // rect this frame's panels leave (see `Gui::layout`). What the UI reads
+        // of the view (labels, pins, icons and markers on the scene) is
+        // projected first, through the camera as fitted to the rect the last
+        // frame left; only a frame whose panels move it sees those a frame
+        // late.
+        let scale_factor = self.window.scale_factor() as f32;
+        self.update_tool_projections(editor, document, drill_holes);
+        // Animate's machines: each drawn as its model where it is close
+        // enough to read, and otherwise as an icon the UI paints, held on the
+        // block or blast it works.
+        let (near_machines, icons, labels) = if editor.is_schedule_animation() {
+            self.split_machines(&editor.animation_machines, scale_factor)
         } else {
-            self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
-            self.include_tool_previews_in_depth(editor);
-            self.include_batter_berm_preview_in_depth(editor);
-            self.include_blast_outlines_in_depth(editor);
-            self.include_haul_blocks_in_depth(editor);
+            (Vec::new(), Vec::new(), Vec::new())
+        };
+        editor.animation_machine_icons = icons;
+        editor.animation_machine_labels = labels;
+        let orbit_marker_screen = self.orbit_marker_screen_pos();
+        let rotation_centre_screen = editor.rotation_centre.and_then(|centre| self.rotation_centre_screen_pos(centre));
+        let camera_active = self.is_camera_active();
+        let camera_forward = self.camera.forward();
+        let camera_up = self.camera.up();
+        let world_per_physical_pixel = (!self.projection.is_perspective()).then(|| 2.0 * self.projection.zoom / f64::from(self.viewport_rect.height.max(1)));
+        let (ui_output, ui_paint) = self.gui.layout(
+            &self.window,
+            editor,
+            document,
+            project,
+            block_models,
+            drill_holes,
+            well_logs,
+            [self.size.width, self.size.height],
+            orbit_marker_screen,
+            rotation_centre_screen,
+            camera_active,
+            [camera_forward.x as f32, camera_forward.y as f32, camera_forward.z as f32],
+            [camera_up.x as f32, camera_up.y as f32, camera_up.z as f32],
+            world_per_physical_pixel,
+        );
+        let canvas = ui_output.canvas_rect;
+        if canvas.width != 0 && canvas.height != 0 && canvas != self.viewport_rect {
+            self.apply_canvas_rect(canvas);
+            self.fit_camera(editor, document, triangulations, block_models, drill_holes, point_clouds);
         }
-        editor.debug_clip_plane_distances = Some(self.projection.clip_planes());
-        // Uploaded every frame; outside a section this is `None`, which is what switches the shader clip off.
-        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor);
+        if ui_output.geometry_dirty {
+            self.invalidate_geometry();
+        }
+        let mut scene_content_changed = self.geometry_dirty;
         let grid_uniform = GridUniform::new(
             self.scene_origin,
             editor.renderer_background_color,
@@ -250,7 +263,6 @@ impl<'a> Graphics<'a> {
         });
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") });
 
-        let scale_factor = self.window.scale_factor() as f32;
         let gpu_work_was_pending = self.point_cloud_gpu.has_pending_uploads() || self.block_model_gpu.has_pending_builds();
         self.raster_gpu
             .sync(&self.device, &self.queue, self.scene_origin, rasters, &self.raster_surface_bind_group_layout);
@@ -423,17 +435,9 @@ impl<'a> Graphics<'a> {
         let time_s = self.flow_clock.elapsed().as_secs_f64();
         self.upload_flow_scene(editor, scale_factor, time_s);
 
-        // Animate's machines: each drawn as its model where it is close
-        // enough to read, and otherwise as an icon the UI paints, held on the
-        // block or blast it works. Uploaded when the drawn ones move, not
-        // every frame.
-        let (near, icons, labels) = if editor.is_schedule_animation() {
-            self.split_machines(&editor.animation_machines, scale_factor)
-        } else {
-            (Vec::new(), Vec::new(), Vec::new())
-        };
-        editor.animation_machine_icons = icons;
-        editor.animation_machine_labels = labels;
+        // The machines drawn as models, split from the icons above. Uploaded
+        // when they move, not every frame.
+        let near = near_machines;
         if !near.is_empty() && self.machines.is_none() {
             self.machines = Some(crate::rendering::machines::MachineGpu::new(&self.device).map_err(|error| {
                 crate::userspace_error!("{error:#}");
@@ -441,6 +445,21 @@ impl<'a> Graphics<'a> {
         }
         if let Some(Ok(machines)) = &mut self.machines {
             machines.place(&self.device, &self.queue, &near, self.scene_origin);
+        }
+
+        // A rain simulation's water: uploaded when the instants it lies
+        // between change. It ripples and runs only while its timeline plays,
+        // and stands still with it.
+        self.water.show(&self.device, &self.queue, editor.water.mesh.as_deref().filter(|_| editor.is_water_run()));
+        let water_running = !self.water.is_empty() && editor.water.playing;
+        if water_running {
+            self.water_clock_s += (time_s - self.water_clock_last_s.unwrap_or(time_s)).clamp(0.0, 0.1);
+            self.window.request_redraw();
+        }
+        self.water_clock_last_s = water_running.then_some(time_s);
+        if !self.water.is_empty() {
+            self.water
+                .set_frame(&self.queue, self.scene_origin, self.water_clock_s, editor.water.blend, editor.water.raining);
         }
 
         let measurement_state = (
@@ -638,44 +657,11 @@ impl<'a> Graphics<'a> {
             editor,
         );
 
-        self.update_tool_projections(editor, document, drill_holes);
-
-        let orbit_marker_screen = self.orbit_marker_screen_pos();
-        let rotation_centre_screen = editor.rotation_centre.and_then(|centre| self.rotation_centre_screen_pos(centre));
-        let camera_active = self.is_camera_active();
-        let camera_forward = self.camera.forward();
-        let camera_up = self.camera.up();
-        let world_per_physical_pixel = (!self.projection.is_perspective()).then(|| 2.0 * self.projection.zoom / f64::from(self.viewport_rect.height.max(1)));
-        let ui_output = self.gui.render(
-            &self.window,
-            &self.device,
-            &self.queue,
-            &mut encoder,
-            &gui_view,
-            editor,
-            document,
-            project,
-            block_models,
-            drill_holes,
-            well_logs,
-            [self.size.width, self.size.height],
-            orbit_marker_screen,
-            rotation_centre_screen,
-            camera_active,
-            [camera_forward.x as f32, camera_forward.y as f32, camera_forward.z as f32],
-            [camera_up.x as f32, camera_up.y as f32, camera_up.z as f32],
-            world_per_physical_pixel,
-        );
-        // Apply this frame's egui layout for next frame's scene pass - the
-        // scene renders before egui lays out, so it's always one frame behind
-        // (see `apply_canvas_rect`).
-        self.apply_canvas_rect(ui_output.canvas_rect);
+        // The UI, over the scene: laid out before it, at the top of the frame.
+        self.gui.paint(&self.device, &self.queue, &mut encoder, &gui_view, ui_paint);
         // Keep the startup view framed on the window the splash is centred
         // on, until the splash goes - see `track_startup_view_framing`.
         self.track_startup_view_framing(project.needs_startup_dialog);
-        if ui_output.geometry_dirty {
-            self.invalidate_geometry();
-        }
         // Keep redrawing through the interaction cooldown so the volume
         // raycaster's reduced-quality frames are always followed by a
         // full-quality one once the camera settles / resizing stops.
@@ -716,6 +702,56 @@ impl<'a> Graphics<'a> {
 }
 
 impl Graphics<'_> {
+    /// Fit the camera's depth range to what is shown (or to the section) and
+    /// upload it, for the viewport as it now stands. Run again when the UI
+    /// moves the viewport.
+    fn fit_camera(
+        &mut self,
+        editor: &mut EditorState,
+        document: &Document,
+        triangulations: &[OpenTriangulation],
+        block_models: &[OpenBlockModel],
+        drill_holes: &[OpenDrillHoleDataset],
+        point_clouds: &[OpenPointCloud],
+    ) {
+        self.haul_roads_in_bounds = editor.shows_haul_network();
+        self.vertical_exaggeration = editor.vertical_exaggeration.clamp(0.1, 20.0);
+        let slice_visible_half_length = slice_visible_half_length(self.projection.zoom, self.screen_size());
+        if self.slice_view.is_some() {
+            self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
+        }
+        if let Some(slice) = self.slice_view.as_mut() {
+            // Slice mode sets the clip planes itself; the scene-fitting passes below must not run.
+            slice.width = editor.slice_width_input.clamp(0.1, 1.0e6);
+            slice.move_speed = editor.slice_speed_input.clamp(0.0, 1.0e6);
+            slice.rotate_speed = editor.slice_rotate_input.clamp(1.0, 720.0).to_radians();
+            slice.set_outlines(editor.slice_outlines);
+            // Camera's own depth range, not the slab (fragment shaders clip to that directly) - kept wide enough a tilted or overhead view won't clip away geometry the slab would show.
+            let forward = self.camera.forward();
+            let strike = DVec3::new(slice.direction.x, slice.direction.y, 0.0);
+            // Scene bounds are model elevations, the slice centre a display one - stretch bounds by the vertical exaggeration before comparing.
+            let origin_z = self.scene_origin.z;
+            let exaggeration = self.vertical_exaggeration;
+            let display_z = |z: f64| origin_z + (z - origin_z) * exaggeration;
+            let bounds = self
+                .cached_scene_bounds
+                .map(|(min, max)| (DVec3::new(min.x, min.y, display_z(min.z)), DVec3::new(max.x, max.y, display_z(max.z))));
+            self.projection
+                .set_symmetric_depth_extent(slice_depth_half_extent(slice.center, strike, forward, slice.width * 0.5, bounds) + slice.view_offset.dot(forward).abs());
+            editor.slice_center = [slice.center.x, slice.center.y, slice.center.z];
+            editor.slice_direction = [slice.direction.x, slice.direction.y];
+            editor.slice_half_length = slice_visible_half_length;
+        } else {
+            self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
+            self.include_tool_previews_in_depth(editor);
+            self.include_batter_berm_preview_in_depth(editor);
+            self.include_blast_outlines_in_depth(editor);
+            self.include_haul_blocks_in_depth(editor);
+        }
+        editor.debug_clip_plane_distances = Some(self.projection.clip_planes());
+        // Uploaded every frame; outside a section this is `None`, which is what switches the shader clip off.
+        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor);
+    }
     /// Rebuild and upload Animate's haul flows and blast marks for the
     /// editor's current projections, `time_s` setting where the stripes have
     /// flowed to. Shared by the window's frame and the video export's.
