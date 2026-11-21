@@ -339,6 +339,15 @@ pub(crate) fn recommended_cloth_resolution(spacing: f64) -> f64 {
         .unwrap_or(RESOLUTION_STEPS[RESOLUTION_STEPS.len() - 1])
 }
 
+/// The noise radius to suggest for returns `spacing` apart: room for a few
+/// neighbours round every return of a sparse survey, so its ground is not
+/// taken for isolated blunders, and never under the default for dense
+/// clouds. Rounded up to 5 cm.
+pub(crate) fn recommended_noise_radius(spacing: f64) -> f64 {
+    let wanted = (spacing * 1.5 * 20.0).ceil() / 20.0;
+    wanted.max(GroundFilterParams::default().noise_radius)
+}
+
 /// Flag returns with fewer than `min_neighbours` others near them.
 ///
 /// Points are bucketed into cubes of `radius` and a point's neighbours are

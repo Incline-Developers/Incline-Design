@@ -28,10 +28,10 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "get_pit_designs",
             "title": "Read the pit designs",
-            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). Without design: a summary of each. With design (its object id): that one whole, its settings and what they come to included, which set_pit_design takes back, and its evaluation: the volume between it and its topography in all and bench by bench, and with settings.evaluation.block_model, each reserve field's figure in all, by category and by bench, and with settings.evaluation.shell, what it takes beyond the shell (gained) and what of it it leaves (left) (current says whether that is what the design comes to now, or waiting why not), and its daylight line, where it meets the topography (drawn with the design, and part of what explode_pit_design gives). What it comes to lists its checks: each place it falls short of its settings (the ramp steeper, flatter or narrower than asked or turning tighter than inside_radius, a berm narrower, a bench face steeper, or walls steeper between ramps than their target), at its worst point, with the bench (its place in bench_report) and ramp it is on, its value, what was asked and how far along it runs. Its ramps are always roads in the haul network, each along its centreline and joined to the network's nodes and roads it comes within the join tolerance of, made again as the design changes and gone with it. It is built until it meets its topography where it can (a pit built up from its floor, or a dump down from its top, with settings.topography and settings.stop daylight); otherwise to settings.benches, or settings.stop_elevation.",
+            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). Without design: a summary of each. With design (its object id): that one whole, its settings and what they come to included, which set_pit_design takes back, and its evaluation: the volume between it and its topography in all (and bench by bench with bench_by_bench), and with settings.evaluation.block_model, each reserve field's figure in all, by category (and by bench), and with settings.evaluation.shell, what it takes beyond the shell (gained) and what of it it leaves (left) (current says whether that is what the design comes to now, or waiting why not), and its daylight line, where it meets the topography (drawn with the design, and part of what explode_pit_design gives). What it comes to lists its checks: each place it falls short of its settings (the ramp steeper, flatter or narrower than asked or turning tighter than inside_radius, a berm narrower, a bench face steeper, or walls steeper between ramps than their target), at its worst point, with the bench (its place in bench_report) and ramp it is on, its value, what was asked and how far along it runs. Its ramps are always roads in the haul network, each along its centreline and joined to the network's nodes and roads it comes within the join tolerance of, made again as the design changes and gone with it. It is built until it meets its topography where it can (a pit built up from its floor, or a dump down from its top, with settings.topography and settings.stop daylight); otherwise to settings.benches, or settings.stop_elevation.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "design": { "type": "integer", "minimum": 0 } },
+                "properties": { "design": { "type": "integer", "minimum": 0 }, "bench_by_bench": bench_by_bench_schema() },
                 "additionalProperties": false,
             },
             "annotations": { "readOnlyHint": true },
@@ -47,6 +47,7 @@ pub(super) fn definitions() -> Vec<Value> {
                     "string": { "type": "integer", "minimum": 0, "description": "A closed polyline to make a pit design: the floor's toe building up, the crest building down." },
                     "name": { "type": "string", "minLength": 1 },
                     "settings": { "type": "object" },
+                    "bench_by_bench": bench_by_bench_schema(),
                 },
                 "additionalProperties": false,
             },
@@ -218,6 +219,7 @@ pub(super) fn definitions() -> Vec<Value> {
                         "additionalProperties": false,
                     } },
                     "preview": { "type": "boolean", "description": "Only say what the design comes to; make nothing. False if left out." },
+                    "bench_by_bench": bench_by_bench_schema(),
                 },
                 "required": ["string", "bench_height", "face_angle", "berm_width"],
                 "additionalProperties": false,
@@ -347,10 +349,11 @@ fn check_name(check: Check) -> &'static str {
     }
 }
 
-/// What a design comes to.
-fn summary(design: &Design) -> Value {
+/// What a design comes to: bench by bench too with `benches`, which is
+/// most of it, so an AI iterating on a design reads the totals unless it asks.
+fn summary(design: &Design, benches: bool) -> Value {
     let round = |value: f64| (value * 100.0).round() / 100.0;
-    json!({
+    let mut value = json!({
         "benches": design.benches,
         "ended": end_name(design.end),
         "ended_because": end_text(design),
@@ -388,7 +391,14 @@ fn summary(design: &Design) -> Value {
                 "length": round(flag.length),
             })
         }).collect::<Vec<_>>(),
-        "bench_report": design.report.iter().map(|bench| {
+    });
+    if !benches {
+        return value;
+    }
+    value["bench_report"] = design
+        .report
+        .iter()
+        .map(|bench| {
             let mut row = json!({
                 "rl": round(bench.elevation),
                 "height": round(bench.height),
@@ -419,8 +429,20 @@ fn summary(design: &Design) -> Value {
                 row["ramps"] = Value::Array(roads);
             }
             row
-        }).collect::<Vec<_>>(),
-    })
+        })
+        .collect::<Vec<_>>()
+        .into();
+    value
+}
+
+/// Whether a call asks for its design bench by bench, as well as in all.
+fn bench_by_bench(arguments: &Value) -> bool {
+    arguments["bench_by_bench"].as_bool().unwrap_or(false)
+}
+
+/// The schema of the argument that asks for a design bench by bench.
+fn bench_by_bench_schema() -> Value {
+    json!({ "type": "boolean", "description": "Give the design bench by bench too: bench_report, and the evaluation's benches. False if left out: the totals, checks and walls only." })
 }
 
 /// Why there is no design, said so the AI can put it right.
@@ -434,9 +456,9 @@ fn no_design_message(reason: &NoDesign) -> String {
 }
 
 /// What a design came to, or why it came to nothing.
-fn comes_to(design: &Result<Design, NoDesign>) -> Value {
+fn comes_to(design: &Result<Design, NoDesign>, benches: bool) -> Value {
     match design {
-        Ok(design) => summary(design),
+        Ok(design) => summary(design, benches),
         Err(reason) => json!({ "problem": no_design_message(reason) }),
     }
 }
@@ -495,6 +517,7 @@ impl App<'_> {
     }
 
     fn mcp_get_pit_designs(&self, arguments: &Value) -> Result<Value, String> {
+        let benches = bench_by_bench(arguments);
         if arguments.get("design").is_some() {
             let (id, pit) = self.mcp_pit_design(arguments)?;
             let object = self.operand_object(id).ok_or("The design is gone.")?;
@@ -504,12 +527,12 @@ impl App<'_> {
             }
             value["settings"] = json!(pit.settings);
             value["comes_to"] = match pit.derived.as_ref().map(|derived| &derived.outcome) {
-                Some(Outcome::Design(design)) => summary(design),
+                Some(Outcome::Design(design)) => summary(design, benches),
                 Some(Outcome::NotClosed) => json!({ "problem": no_design_message(&NoDesign::NotClosed) }),
                 Some(Outcome::Problem(problem)) => json!({ "problem": problem_text(*problem) }),
                 None => json!({ "problem": "Not worked out yet." }),
             };
-            value["evaluation"] = self.mcp_evaluation(id, pit.evaluation.as_ref());
+            value["evaluation"] = self.mcp_evaluation(id, pit.evaluation.as_ref(), benches);
             if pit.design().is_some_and(|design| pit.settings.can_daylight() && design.end != End::Daylight) && pit.evaluation.is_some() {
                 value["evaluation"]["note"] = json!(
                     "The design stops short of the topography: the ground above its last ring is measured up to the topography as though its walls stood straight up from there."
@@ -534,7 +557,7 @@ impl App<'_> {
 
     /// What a design takes out of the ground, as last measured, with each
     /// reserve field by name; and whether that is what it comes to now.
-    fn mcp_evaluation(&self, id: ObjectId, evaluation: Option<&Evaluation>) -> Value {
+    fn mcp_evaluation(&self, id: ObjectId, evaluation: Option<&Evaluation>, benches: bool) -> Value {
         use crate::model::pit_design::evaluation::{Figures, Measured, Waiting};
         let fields = self.workspace.active_document().map(|document| document.reserve_fields().to_vec()).unwrap_or_default();
         let name = |field: crate::model::ReserveFieldId| {
@@ -611,20 +634,28 @@ impl App<'_> {
                 "contours": rehab.strings.len(),
             }),
         });
-        json!({
+        let mut value = json!({
             "current": waiting.is_null(),
             "waiting": waiting,
             "rehab": rehab,
             "daylight": daylight,
             "shell": shell,
             "total": figures(&evaluation.total),
-            "benches": evaluation.benches.iter().map(|bench| {
-                let mut value = figures(&bench.figures);
-                value["from"] = json!(round(bench.base));
-                value["to"] = json!(round(bench.top));
-                value
-            }).collect::<Vec<_>>(),
-        })
+        });
+        if benches {
+            value["benches"] = evaluation
+                .benches
+                .iter()
+                .map(|bench| {
+                    let mut value = figures(&bench.figures);
+                    value["from"] = json!(round(bench.base));
+                    value["to"] = json!(round(bench.top));
+                    value
+                })
+                .collect::<Vec<_>>()
+                .into();
+        }
+        value
     }
 
     /// A closed polyline's id, if `arguments` gives one.
@@ -667,7 +698,7 @@ impl App<'_> {
             pit.settings = serde_json::from_value(value).map_err(|error| format!("The settings do not fit a pit design: {error}"))?;
         }
         let design = self.set_pit_now(id, pit).map_err(|error| format!("{error:#}"))?;
-        Ok(json!({ "design": id.0, "comes_to": comes_to(&design) }))
+        Ok(json!({ "design": id.0, "comes_to": comes_to(&design, bench_by_bench(arguments)) }))
     }
 
     fn mcp_explode_pit_design(&mut self, arguments: &Value) -> Result<Value, String> {
@@ -689,14 +720,14 @@ impl App<'_> {
             Err(reason) => return Err(no_design_message(reason)),
         };
         if arguments["preview"].as_bool().unwrap_or(false) {
-            return Ok(summary(built));
+            return Ok(summary(built, bench_by_bench(arguments)));
         }
         if built.benches == 0 {
             return Err(format!("Not even one bench fits: {}", end_text(built)));
         }
         self.make_pit_design(string, arguments["name"].as_str().map(str::to_owned), Some(settings))
             .map_err(|error| format!("{error:#}"))?;
-        Ok(json!({ "design": string.0, "comes_to": comes_to(&design) }))
+        Ok(json!({ "design": string.0, "comes_to": comes_to(&design, bench_by_bench(arguments)) }))
     }
 }
 

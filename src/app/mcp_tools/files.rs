@@ -182,7 +182,7 @@ pub(super) fn definitions() -> Vec<Value> {
         tool(
             "export",
             "Export",
-            "Write part of the project to a file, as the File > Export menus do. what: omf (the items listed, or everything), project_dxf (every design layer), layer_dxf (one design layer), surface (obj, stl or ply, by the path's extension), block_model_csv, drillholes_csv (a set of CSV tables named from the path), viewport_png, haul_roads_dxf (the haul network's roads), or optimisation_scenarios (every pit optimisation scenario, as JSON). Runs in the background.",
+            "Write part of the project to a file, as the File > Export menus do. what: omf (the items listed, or everything), project_dxf (every design layer), layer_dxf (one design layer), surface (obj, stl or ply, by the path's extension), block_model_csv, drillholes_csv (a set of CSV tables named from the path), viewport_png (the window's view as it stands; none in a headless Incline, where render_view draws a picture), haul_roads_dxf (the haul network's roads), or optimisation_scenarios (every pit optimisation scenario, as JSON). Runs in the background.",
             json!({
                 "what": { "type": "string", "enum": ["omf", "project_dxf", "layer_dxf", "surface", "block_model_csv", "drillholes_csv", "viewport_png", "haul_roads_dxf", "optimisation_scenarios"] },
                 "id": { "type": "integer", "minimum": 0, "description": "The layer, surface, block model or drillhole collection, for those." },
@@ -417,6 +417,12 @@ impl App<'_> {
                 Target::Item(ItemRef::DrillHole(id)) => FileDialogAction::ExportDrillHoleCsv { id, path },
                 _ => unreachable!("a drillholes target is a drillhole collection"),
             },
+            // The window's view as it stands: a headless Incline has none.
+            "viewport_png" if self.headless => {
+                return Err(
+                    "viewport_png is the window's view, and this Incline has no window (it was started with mcp --headless): render_view draws a picture instead.".to_owned(),
+                );
+            }
             "viewport_png" => FileDialogAction::ExportViewportImage(path),
             "haul_roads_dxf" => FileDialogAction::ExportHaulRoads {
                 project: Box::new(self.haul_roads_project().ok_or("No project is open.")?),
@@ -477,6 +483,9 @@ impl App<'_> {
         let runtime_id = project.runtime_id;
         if arguments["path"].is_string() {
             let path = absolute(&arguments["path"])?;
+            if !path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("omf")) {
+                return Err(format!("{} is not an .omf path: a project is saved as an .omf file.", path.display()));
+            }
             self.mcp_action(FileDialogAction::SaveProjectAs {
                 project_runtime_id: runtime_id,
                 path: path.clone(),

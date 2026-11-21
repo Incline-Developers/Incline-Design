@@ -290,8 +290,29 @@ impl Default for Config {
     }
 }
 
+/// Whether this process only reads the person's settings and session,
+/// never writing them: a headless Incline, one MCP client's own, is not
+/// theirs to change the libraries or recent projects of.
+#[cfg(not(target_arch = "wasm32"))]
+static SETTINGS_READ_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Keep this process from writing the person's settings and session from
+/// now on: what it changes in them lasts as long as it does.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn keep_settings_read_only() {
+    SETTINGS_READ_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn settings_read_only() -> bool {
+    SETTINGS_READ_ONLY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn save_config(config: &Config) -> io::Result<()> {
+    if settings_read_only() {
+        return Ok(());
+    }
     let path = data_path("config.toml")?;
     let contents = toml::to_string_pretty(config).map_err(io::Error::other)?;
     write_atomic(&path, contents.as_bytes())
@@ -305,6 +326,9 @@ pub(crate) fn load_config() -> io::Result<Config> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn save_session(session: &Session) -> io::Result<()> {
+    if settings_read_only() {
+        return Ok(());
+    }
     let path = data_path("last_session.toml")?;
     let contents = toml::to_string_pretty(session).map_err(io::Error::other)?;
     write_atomic(&path, contents.as_bytes())

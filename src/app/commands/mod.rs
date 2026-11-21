@@ -314,22 +314,7 @@ impl<'a> App<'a> {
             UiCommand::ShowProjectInFileManager => self.show_active_project_in_file_manager(),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::ShowTrackedProjectInFileManager(path) => file::show_in_file_manager(&path),
-            UiCommand::CloseStartupDialog => {
-                // A project picked from the splash is still opening: leave the
-                // splash up until it lands rather than dropping the user on the
-                // empty startup project while the load runs behind it.
-                if self.project_open_pending() {
-                    return Ok(());
-                }
-                self.startup_dialog_dismissed = true;
-                // Dismissing the splash leaves the application on a project,
-                // never on nothing: closing a project puts the splash back, so
-                // this is the path that has to restore one.
-                if !self.workspace.has_active_project() {
-                    self.start_untitled_project()?;
-                }
-                Ok(())
-            }
+            UiCommand::CloseStartupDialog => self.dismiss_startup_dialog(),
             UiCommand::ImportOmfPaths(paths) => {
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -935,7 +920,8 @@ impl<'a> App<'a> {
             }
             UiCommand::BuildReferenceSurface { points, controls, extent } => self.build_reference_surface(points, controls, extent),
             UiCommand::BuildReferencePoints { holes, field, target, side } => {
-                self.build_reference_points(holes, field, target, side);
+                // What it placed is said in the activity log.
+                let _ = self.build_reference_points(holes, field, target, side);
                 Ok(())
             }
             UiCommand::InspectDrillHole(hole) => self.inspect_drill_hole(hole),

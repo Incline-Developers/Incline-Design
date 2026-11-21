@@ -116,12 +116,17 @@ pub(super) fn definitions() -> Vec<Value> {
                     "type": "array",
                     "items": { "type": "object", "properties": { "name": { "type": "string" }, "delay_ms": { "type": "integer", "minimum": 0 }, "colour": { "type": "string" } }, "required": ["name", "delay_ms"] },
                 },
-                "delete_delays": { "type": "array", "items": { "type": "string" }, "description": "Delay products by name." },
+                "delete_delays": { "type": "array", "items": { "type": "string" }, "description": "Delay products by their label as get_blast shows it (\"25 ms\"), or by name where only one has it." },
             }),
             &[],
             false,
         ),
     ]
+}
+
+/// A delay product as the window labels it: its delay, then its name.
+fn delay_label(product: &crate::ui::state::DelayProduct) -> String {
+    format!("{} {}", product.delay_ms, product.name)
 }
 
 impl App<'_> {
@@ -229,7 +234,7 @@ impl App<'_> {
             "charge_products": serde_json::to_value(&library.products).unwrap_or_default(),
             "charge_rules": serde_json::to_value(&library.rules).unwrap_or_default(),
             "delay_products": self.editor.delay_products.iter().map(|product| json!({
-                "name": product.name, "delay_ms": product.delay_ms,
+                "label": delay_label(product), "name": product.name, "delay_ms": product.delay_ms,
                 "colour": format!("#{:02x}{:02x}{:02x}", product.color.r(), product.color.g(), product.color.b()),
             })).collect::<Vec<_>>(),
         }))
@@ -360,13 +365,21 @@ impl App<'_> {
             self.mcp_run_command(UiCommand::AddDelayProduct { delay_ms, name, color })?;
         }
         for name in arguments["delete_delays"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-            let id = self
-                .editor
-                .delay_products
-                .iter()
-                .find(|product| product.name == name)
-                .map(|product| product.id)
-                .ok_or_else(|| format!("There is no delay product {name}."))?;
+            // By the label the window shows, which tells them apart; by name
+            // only where that names one.
+            let products = &self.editor.delay_products;
+            let by_name: Vec<_> = products.iter().filter(|product| product.name == name).collect();
+            let id = match (products.iter().find(|product| delay_label(product) == name), by_name.as_slice()) {
+                (Some(product), _) => product.id,
+                (None, [product]) => product.id,
+                (None, []) => return Err(format!("There is no delay product {name}.")),
+                (None, several) => {
+                    return Err(format!(
+                        "Several delay products are called {name}: name one by its label, {}.",
+                        several.iter().map(|product| delay_label(product)).collect::<Vec<_>>().join(", ")
+                    ));
+                }
+            };
             self.mcp_run_command(UiCommand::DeleteDelayProduct(id))?;
             done.push(format!("deleted delay {name}"));
         }

@@ -256,20 +256,62 @@ fn role_alias(role: CsvDrillFileRole, header: &str) -> Option<(CsvDrillColumnRol
     }
 }
 
-/// The purpose a file's headers point to, if they point to one: a depth and
-/// a gamma or density column make a geophysics file. Other purposes are
-/// left for the user to choose.
+/// The purpose a file's headers point to, if they point to one, read from
+/// the columns each purpose would recognise in them: a depth and a gamma or
+/// density column make a geophysics file; start and end coordinates
+/// explicit segments; from and to an interval table; a depth with an
+/// azimuth, dip or inclination a survey; an east and a north a collar
+/// table. Every table but geophysics needs a hole id. Headers that point
+/// nowhere are left for the user to choose.
 pub(crate) fn guess_role(headers: &[String]) -> CsvDrillFileRole {
-    let roles = headers
-        .iter()
-        .filter_map(|header| role_alias(CsvDrillFileRole::Geophysics, &normalize_header(header)))
-        .map(|(role, _)| role)
-        .collect::<Vec<_>>();
-    if roles.contains(&CsvDrillColumnRole::Depth) && roles.iter().any(|role| crate::model::formats::csv_geophysics::curve_kind(role).is_some()) {
-        CsvDrillFileRole::Geophysics
-    } else {
-        CsvDrillFileRole::Unassigned
+    let found = |role: CsvDrillFileRole| {
+        headers
+            .iter()
+            .filter_map(|header| role_alias(role, &normalize_header(header)))
+            .map(|(column, _)| column)
+            .collect::<Vec<_>>()
+    };
+    let geophysics = found(CsvDrillFileRole::Geophysics);
+    if geophysics.contains(&CsvDrillColumnRole::Depth) && geophysics.iter().any(|role| crate::model::formats::csv_geophysics::curve_kind(role).is_some()) {
+        return CsvDrillFileRole::Geophysics;
     }
+    let all = |columns: &[CsvDrillColumnRole], wanted: &[CsvDrillColumnRole]| wanted.iter().all(|role| columns.contains(role));
+    let segments = found(CsvDrillFileRole::ExplicitSegments);
+    if all(
+        &segments,
+        &[
+            CsvDrillColumnRole::Dhid,
+            CsvDrillColumnRole::StartEast,
+            CsvDrillColumnRole::StartNorth,
+            CsvDrillColumnRole::StartElevation,
+            CsvDrillColumnRole::EndEast,
+            CsvDrillColumnRole::EndNorth,
+            CsvDrillColumnRole::EndElevation,
+        ],
+    ) {
+        return CsvDrillFileRole::ExplicitSegments;
+    }
+    if all(
+        &found(CsvDrillFileRole::Interval),
+        &[CsvDrillColumnRole::Dhid, CsvDrillColumnRole::From, CsvDrillColumnRole::To],
+    ) {
+        return CsvDrillFileRole::Interval;
+    }
+    let survey = found(CsvDrillFileRole::Survey);
+    if all(&survey, &[CsvDrillColumnRole::Dhid, CsvDrillColumnRole::Depth])
+        && [CsvDrillColumnRole::Azimuth, CsvDrillColumnRole::Dip, CsvDrillColumnRole::Inclination]
+            .iter()
+            .any(|role| survey.contains(role))
+    {
+        return CsvDrillFileRole::Survey;
+    }
+    if all(
+        &found(CsvDrillFileRole::Collar),
+        &[CsvDrillColumnRole::Dhid, CsvDrillColumnRole::East, CsvDrillColumnRole::North],
+    ) {
+        return CsvDrillFileRole::Collar;
+    }
+    CsvDrillFileRole::Unassigned
 }
 
 /// Drops a repair marker's two hex digits, keeping the mark to show the damage.
@@ -1449,4 +1491,52 @@ fn segment_orientation(trace: &[TraceStation], index: usize) -> Option<HoleOrien
         .chain(arriving)
         .find(|delta| delta.length_squared() > 1.0e-18)
         .map(direction_orientation)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn guesses_each_table_from_its_headers() {
+        assert_eq!(guess_role(&headers(&["HoleID", "East", "North", "RL", "Depth"])), CsvDrillFileRole::Collar);
+        assert_eq!(guess_role(&headers(&["HoleID", "Depth", "Azimuth", "Dip"])), CsvDrillFileRole::Survey);
+        assert_eq!(guess_role(&headers(&["hole_id", "at", "azi", "inclination"])), CsvDrillFileRole::Survey);
+        assert_eq!(guess_role(&headers(&["HoleID", "From", "To", "Cu_pct", "Au_gpt", "Lith"])), CsvDrillFileRole::Interval);
+        assert_eq!(
+            guess_role(&headers(&["DHID", "From", "To", "StartX", "StartY", "StartZ", "EndX", "EndY", "EndZ"])),
+            CsvDrillFileRole::ExplicitSegments
+        );
+        assert_eq!(guess_role(&headers(&["HoleID", "Depth", "Gamma"])), CsvDrillFileRole::Geophysics);
+    }
+
+    #[test]
+    fn leaves_tables_without_a_hole_id_or_their_columns_unassigned() {
+        assert_eq!(guess_role(&headers(&["East", "North", "RL"])), CsvDrillFileRole::Unassigned);
+        assert_eq!(guess_role(&headers(&["HoleID", "Cu_pct"])), CsvDrillFileRole::Unassigned);
+        assert_eq!(guess_role(&headers(&["HoleID", "Depth"])), CsvDrillFileRole::Unassigned);
+    }
+
+    #[test]
+    fn a_guessed_table_maps_its_columns() {
+        let preview = CsvDrillPreview {
+            headers: headers(&["HoleID", "From", "To", "Cu_pct"]),
+            rows: Vec::new(),
+        };
+        let mapping = initial_mapping(PathBuf::from("assay.csv"), &preview);
+        assert_eq!(mapping.role, CsvDrillFileRole::Interval);
+        assert_eq!(
+            mapping.columns,
+            vec![
+                CsvDrillColumnRole::Dhid,
+                CsvDrillColumnRole::From,
+                CsvDrillColumnRole::To,
+                CsvDrillColumnRole::Attribute("Cu_pct".to_owned())
+            ]
+        );
+    }
 }

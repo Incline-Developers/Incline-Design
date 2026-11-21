@@ -1445,6 +1445,26 @@ impl<'a> App<'a> {
         return !self.browser_project_loads_pending.is_empty();
     }
 
+    /// Take the welcome splash down, as its close does, and as the AI's
+    /// first change does: the user clicks it away to start work, but work
+    /// done over MCP never clicks, and would go on behind it.
+    pub(crate) fn dismiss_startup_dialog(&mut self) -> Result<()> {
+        // A project picked from the splash is still opening: leave the
+        // splash up until it lands rather than dropping the user on the
+        // empty startup project while the load runs behind it.
+        if self.startup_dialog_dismissed || self.project_open_pending() {
+            return Ok(());
+        }
+        self.startup_dialog_dismissed = true;
+        // Dismissing the splash leaves the application on a project,
+        // never on nothing: closing a project puts the splash back, so
+        // this is the path that has to restore one.
+        if !self.workspace.has_active_project() {
+            self.start_untitled_project()?;
+        }
+        Ok(())
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn activate_tracked_project(&mut self, path: PathBuf) -> Result<()> {
         if self.workspace.active_project().and_then(|project| project.path.as_ref()) == Some(&path) {

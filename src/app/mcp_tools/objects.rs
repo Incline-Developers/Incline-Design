@@ -84,7 +84,7 @@ pub(super) fn definitions() -> Vec<Value> {
         changes(
             "offset_objects",
             "Offset design objects",
-            "Draw an offset copy of each polyline or circle, as the Offset tool does: a parallel line distance away on one side, raised by z_change. Or, with batter_angle and to_rl, a batter projected down or up at that angle until it reaches the RL. Returns the new objects' ids.",
+            "Draw an offset copy of each polyline or circle, as the Offset tool does: a parallel line distance away on one side, raised by z_change. Or, with batter_angle and to_rl, a batter projected down or up at that angle until it reaches the RL. A closed polyline set in past where part of it shrinks to nothing keeps what is left, untangled: several polylines where it pinches apart, and an error where it all collapses. Returns the new objects' ids.",
             json!({
                 "ids": ids(),
                 "side": { "type": "string", "enum": ["outside", "inside", "left", "right"], "description": "For closed polylines and circles: outside or inside. For open polylines: left or right of the direction they are drawn in." },
@@ -390,8 +390,8 @@ impl App<'_> {
         let mut made = Vec::new();
         for object in &objects {
             match offset(object, side, shift) {
-                Ok(Some(new)) => made.push(new),
-                Ok(None) => return failed(format!("The offset of design object {} collapses to nothing.", object.id().0)),
+                Ok(new) if new.is_empty() => return failed(format!("The offset of design object {} collapses to nothing.", object.id().0)),
+                Ok(new) => made.extend(new),
                 Err(error) => return failed(format!("Design object {}: {error}", object.id().0)),
             }
         }
@@ -404,12 +404,19 @@ impl App<'_> {
             Ok(objects) => objects,
             Err(error) => return failed(error),
         };
+        let mut commands = Vec::new();
+        let mut lines: Vec<u64> = Vec::new();
         let mut exploded = 0;
-        for object in objects.iter().filter(|object| matches!(object, Object::Polyline { .. })) {
-            self.explode_polyline(object.id());
-            exploded += 1;
+        for object in &objects {
+            if let Some((edit, made)) = self.exploded_polyline(object.id()) {
+                commands.extend(edit);
+                lines.extend(made.iter().map(|id| id.0));
+                exploded += 1;
+            }
         }
-        ok(&json!({ "exploded": exploded }))
+        // All of them as one undo step.
+        self.mcp_apply(commands, tr!("cmd-explode-polyline"), exploded);
+        ok(&json!({ "exploded": exploded, "lines": lines }))
     }
 
     fn mcp_drape_objects(&mut self, arguments: &Value) -> Value {
@@ -476,7 +483,7 @@ enum Shift {
 
 /// The offset of one polyline or circle to `side`, or `None` if it
 /// collapses.
-fn offset(object: &Object, side: &str, shift: Shift) -> Result<Option<Object>, String> {
+fn offset(object: &Object, side: &str, shift: Shift) -> Result<Vec<Object>, String> {
     if let Some((center, radius)) = object.circle() {
         let outward = match side {
             "outside" => true,
@@ -493,7 +500,7 @@ fn offset(object: &Object, side: &str, shift: Shift) -> Result<Option<Object>, S
             *c = DVec3::new(center.x, center.y, z);
             *r = radius;
         }
-        return Ok((radius > 1.0e-9).then_some(new));
+        return Ok(if radius > 1.0e-9 { vec![new] } else { Vec::new() });
     }
     let Some((verts, closed)) = object.tessellated_path() else {
         return Err("Only polylines and circles can be offset.".to_owned());
@@ -521,18 +528,32 @@ fn offset(object: &Object, side: &str, shift: Shift) -> Result<Option<Object>, S
         Shift::Flat { distance, z } => geometry::geometric_offset(&verts, closed, sign * distance, z),
         Shift::Batter { tan, rl } => geometry::geometric_offset_project_to_rl(&verts, closed, sign, tan, rl),
     };
+    if closed && geometry::offset_turned_over(&verts, &new_verts) {
+        return Ok(Vec::new());
+    }
+    // Set in past where part of it shrinks to nothing, what is left,
+    // untangled: as the Offset tool lays it down.
+    let strings = match shift {
+        Shift::Flat { distance, z } if closed && geometry::offset_needs_untangling(&verts, &new_verts) => geometry::untangled_closed_offset(&verts, sign * distance, z),
+        _ => vec![new_verts],
+    };
     let (Some(fill), Some(line_weight)) = (object.fill(), object.line_weight()) else {
         return Err("Only polylines and circles can be offset.".to_owned());
     };
-    let new = Object::Polyline {
-        id: object.id(),
-        layer: object.layer(),
-        verts: new_verts.into_iter().map(PolyVertex::straight).collect(),
-        closed,
-        color: object.color(),
-        fill,
-        line_weight,
-    };
-    new.validate_geometry()?;
-    Ok(Some(new))
+    strings
+        .into_iter()
+        .map(|string| {
+            let new = Object::Polyline {
+                id: object.id(),
+                layer: object.layer(),
+                verts: string.into_iter().map(PolyVertex::straight).collect(),
+                closed,
+                color: object.color(),
+                fill,
+                line_weight,
+            };
+            new.validate_geometry()?;
+            Ok(new)
+        })
+        .collect()
 }

@@ -131,6 +131,16 @@ pub(super) fn listed(loaded: &BTreeSet<&'static str>) -> Vec<Value> {
     tools
 }
 
+/// Whether the tool named `name` only reads, as its `readOnlyHint` says,
+/// loaded or not. A name no tool has reads nothing.
+pub(super) fn reads_only(name: &str) -> bool {
+    core()
+        .into_iter()
+        .chain(GROUPS.iter().flat_map(|group| (group.tools)()))
+        .find(|tool| tool["name"] == name)
+        .is_none_or(|tool| tool["annotations"]["readOnlyHint"].as_bool().unwrap_or(false))
+}
+
 impl App<'_> {
     /// The tools as `tools/list` gives them now.
     pub(crate) fn mcp_listed_tools(&self) -> Vec<Value> {
@@ -176,5 +186,22 @@ impl App<'_> {
             "loaded": self.mcp_loaded_groups.iter().collect::<Vec<_>>(),
             "added": tools,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reads_only;
+
+    #[test]
+    fn only_changes_count_as_work() {
+        assert!(reads_only("get_project"));
+        assert!(reads_only("render_view"));
+        assert!(reads_only("get_tasks"));
+        assert!(reads_only("load_tools"));
+        assert!(!reads_only("add_objects"));
+        assert!(!reads_only("show_in_window"));
+        assert!(!reads_only("design_pit"));
+        assert!(reads_only("no_such_tool"));
     }
 }

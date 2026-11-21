@@ -182,7 +182,14 @@ pub(crate) fn lay(ring: &[DVec2], from: f64, direction: f64, lay: Lay, reach: &d
             (run * 2.0).min(longest)
         };
         if (next - run).abs() <= 1.0e-6 * run.max(1.0) {
-            break;
+            if best.is_some() {
+                break;
+            }
+            // Closed in on from below only, every try a hair short of the
+            // climb: step over it by as much as a match may be off, rather
+            // than stop with nothing laid.
+            run = (run + close_enough.max(1.0e-6 * run.max(1.0))).min(longest);
+            continue;
         }
         run = next;
     }

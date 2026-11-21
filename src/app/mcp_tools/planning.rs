@@ -96,10 +96,36 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "set_constants",
             "title": "Set the optimisation constants",
-            "description": "Replace the project's optimisation constants, the named values scenarios' settings can refer to, in the shape get_scenario shows them (rows of groups and constants).",
+            "description": "Replace the project's optimisation constants, the named values scenarios' settings can refer to (a setting's {\"constant\": name} in place of its value), in the shape get_scenario shows them: rows in order, each a group heading or a constant, a constant belonging to the group above it.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "constants": { "type": "array" } },
+                "properties": {
+                    "constants": {
+                        "type": "array",
+                        "items": {
+                            "oneOf": [
+                                {
+                                    "type": "object",
+                                    "description": "A group heading.",
+                                    "properties": { "Group": { "type": "object", "properties": { "name": { "type": "string" }, "collapsed": { "type": "boolean" } }, "required": ["name", "collapsed"] } },
+                                    "required": ["Group"],
+                                },
+                                {
+                                    "type": "object",
+                                    "description": "A constant: its value {\"Number\": 9000}, {\"Text\": \"...\"} or {\"YesNo\": true}.",
+                                    "properties": {
+                                        "Constant": {
+                                            "type": "object",
+                                            "properties": { "name": { "type": "string" }, "value": { "type": "object" }, "description": { "type": "string" } },
+                                            "required": ["name", "value", "description"],
+                                        },
+                                    },
+                                    "required": ["Constant"],
+                                },
+                            ],
+                        },
+                    },
+                },
                 "required": ["constants"],
                 "additionalProperties": false,
             },

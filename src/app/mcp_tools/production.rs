@@ -837,6 +837,9 @@ impl App<'_> {
             })
             .collect();
         let document = self.workspace.active_document().ok_or("No project is open.")?;
+        // With no field read as tonnes, no block has any: Configuration says
+        // so once, and a block is only listed for a problem of its own.
+        let tonnes_measured = document.schedule().tonnage_field().is_some();
         let bars: Vec<Value> = document
             .schedule()
             .bars()
@@ -852,16 +855,20 @@ impl App<'_> {
                         report
                             .members
                             .iter()
-                            .filter(|member| !member.excluded && (member.unresolved.is_some() || member.tonnes.is_none()))
+                            .filter(|member| !member.excluded && (member.unresolved.is_some() || (tonnes_measured && member.tonnes.is_none())))
                             .map(|member| {
+                                let problem = member.unresolved.as_deref().map_or_else(
+                                    || "No tonnes are measured for it: the reserve field read as tonnes has no value there.".to_owned(),
+                                    super::plain,
+                                );
                                 json!({
+                                    "problem": problem,
                                     "position": member.position,
                                     "dig_block": member.resolved.map(|block| block.0),
                                     "solid": member.solid_name,
                                     "bench": member.bench,
                                     "flitch": member.flitch,
                                     "block": member.name,
-                                    "unresolved": member.unresolved.as_deref().map(super::plain),
                                     "tonnes": member.tonnes,
                                 })
                             })
@@ -1053,6 +1060,11 @@ impl App<'_> {
         });
         let text = super::plain(&text);
         let wanted: Option<Vec<&str>> = arguments["sections"].as_array().map(|sections| sections.iter().filter_map(Value::as_str).collect());
+        // Each table is a block headed by its title, after the report's own.
+        let titles: Vec<&str> = text.split("\n\n").skip(1).filter_map(|block| block.lines().next().map(str::trim)).collect();
+        if let Some(missing) = wanted.iter().flatten().find(|name| !titles.iter().any(|title| title.eq_ignore_ascii_case(name))) {
+            return Err(format!("The report has no table {missing}. It has: {}.", titles.join(", ")));
+        }
         match arguments["format"].as_str() {
             Some("csv") if wanted.is_none() => result["report_csv"] = json!(text),
             Some("csv") => {

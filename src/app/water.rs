@@ -101,6 +101,11 @@ impl WaterRuns {
         &self.scene
     }
 
+    /// The runs' ids, oldest first.
+    pub(crate) fn ids(&self) -> impl Iterator<Item = u64> + '_ {
+        self.runs.iter().map(|run| run.id)
+    }
+
     pub(crate) fn has(&self, id: u64) -> bool {
         self.runs.iter().any(|run| run.id == id)
     }

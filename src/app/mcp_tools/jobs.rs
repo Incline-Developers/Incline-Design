@@ -209,10 +209,14 @@ pub(super) fn definitions() -> Vec<Value> {
         starts(
             "classify_point_clouds",
             "Classify point clouds",
-            "Classify each point cloud's points into ground, vegetation and noise, as Classify Point Clouds does, rewriting their classes in place.",
+            "Classify each point cloud's points into ground, vegetation and noise, as Classify Point Clouds does, rewriting their classes in place. The cloth and the noise pass are sized to the points' spacing unless given (the sparsest cloud's, when there are several): the cloth resolution the dialog recommends, and a noise radius of at least one and a half spacings, so a sparse survey is not taken for noise.",
             json!({
                 "clouds": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0 } },
                 "terrain": { "type": "string", "enum": ["steep", "relief", "flat"], "description": "steep: pit walls, benches and stockpiles; relief: rolling ground and dumps; flat: flat ground with large structures. The dialog's if left out." },
+                "cloth_resolution": { "type": "number", "exclusiveMinimum": 0, "description": "Cloth particle spacing in metres. As recommended for the points' spacing if left out." },
+                "noise": { "type": "boolean", "description": "Mark isolated points as noise first. True if left out." },
+                "noise_radius": { "type": "number", "exclusiveMinimum": 0, "description": "How far round a point its neighbours are counted, in metres. At least one and a half point spacings if left out." },
+                "min_neighbours": { "type": "integer", "minimum": 1, "description": "Neighbours a point needs within noise_radius not to be noise. The dialog's (3 unless changed) if left out." },
             }),
             &["clouds"],
         ),
@@ -467,6 +471,9 @@ impl App<'_> {
             .as_f64()
             .filter(|interval| *interval >= 0.0)
             .ok_or("minor_interval must be 0 or more.")?;
+        // No minors is every level a major: the contours take the minor
+        // interval as their step, and colour the majors among them.
+        let minor_interval = if minor_interval == 0.0 { major_interval } else { minor_interval };
         let colour = |key: &str, default: [f32; 4]| match arguments[key].as_str() {
             None => Ok(default),
             Some(text) => parse_hex(text).ok_or_else(|| format!("{key} must be #rrggbb.")),
@@ -626,10 +633,39 @@ impl App<'_> {
             Some("flat") => params.terrain = ClothTerrain::Flat,
             Some(_) => return Err("terrain is steep, relief or flat.".to_owned()),
         }
-        Ok(UiCommand::ExecutePointCloudClassify {
-            cloud_ids: self.mcp_point_cloud_ids(arguments, "clouds")?,
-            params,
-        })
+        let cloud_ids = self.mcp_point_cloud_ids(arguments, "clouds")?;
+        // The sparsest cloud's spacing: one setting serves them all, and a
+        // cloth or noise radius sized for denser points would tear on it.
+        let spacing = self
+            .point_clouds
+            .iter()
+            .filter(|cloud| cloud_ids.contains(&cloud.id))
+            .filter_map(|cloud| crate::model::ground_filter::plan_spacing(&cloud.points))
+            .fold(None, |widest: Option<f64>, spacing| Some(widest.map_or(spacing, |widest| widest.max(spacing))));
+        let positive = |key: &str| match &arguments[key] {
+            Value::Null => Ok(None),
+            value => value.as_f64().filter(|number| *number > 0.0).map(Some).ok_or_else(|| format!("{key} is a length above 0.")),
+        };
+        params.cloth_resolution = match (positive("cloth_resolution")?, spacing) {
+            (Some(resolution), _) => resolution,
+            (None, Some(spacing)) => crate::model::ground_filter::recommended_cloth_resolution(spacing),
+            (None, None) => params.cloth_resolution,
+        };
+        params.noise_radius = match (positive("noise_radius")?, spacing) {
+            (Some(radius), _) => radius,
+            (None, Some(spacing)) => params.noise_radius.max(crate::model::ground_filter::recommended_noise_radius(spacing)),
+            (None, None) => params.noise_radius,
+        };
+        if let Some(noise) = arguments["noise"].as_bool() {
+            params.remove_noise = noise;
+        }
+        if let Some(neighbours) = arguments["min_neighbours"].as_u64() {
+            params.noise_min_neighbours = u32::try_from(neighbours)
+                .ok()
+                .filter(|count| *count >= 1)
+                .ok_or("min_neighbours is a whole number from 1.")?;
+        }
+        Ok(UiCommand::ExecutePointCloudClassify { cloud_ids, params })
     }
 
     fn mcp_join_point_clouds(&self, arguments: &Value) -> Result<UiCommand, String> {

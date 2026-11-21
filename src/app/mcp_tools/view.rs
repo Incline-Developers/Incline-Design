@@ -84,7 +84,7 @@ pub(super) fn definitions() -> Vec<Value> {
                     "perspective": { "type": "boolean", "description": "Draw in perspective rather than orthographic (true to scale everywhere). False if left out." },
                     "section": json!({
                         "type": "object",
-                        "description": "Look square-on at a vertical section along a line in plan instead, showing what lies within a slab round it, framed on the line. frame, box, view, azimuth, elevation and perspective are then ignored.",
+                        "description": "Look square-on at a vertical section along a line in plan instead, showing what lies within a slab round it, framed on the line along it and on the RLs of what is drawn up and down it (only and hide narrow those), whatever RL its ends are given at. frame, box, view, azimuth, elevation and perspective are then ignored.",
                         "properties": {
                             "from": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "[x, y, z] one end of the section line." },
                             "to": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "[x, y, z] the other end." },

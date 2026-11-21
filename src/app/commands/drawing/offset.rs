@@ -150,6 +150,30 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The strings one copy of the offset lays down for `src_verts`: the
+    /// offset as it comes, but for a closed string set in past where part of
+    /// it shrinks to nothing, what is left of it untangled, as the pit
+    /// designer sets off its rings: none where it all collapses, and one
+    /// string for each piece where it pinches apart. A batter, or an offset
+    /// held to the surfaces, sets each point off by its own distance and is
+    /// left as it comes.
+    fn offset_strings(&self, src_verts: &[glam::DVec3], closed: bool, cursor_world_xy: glam::DVec2, scale: f64) -> Vec<Vec<glam::DVec3>> {
+        let result = self.compute_offset_result(src_verts, closed, cursor_world_xy, scale);
+        if !closed {
+            return vec![result];
+        }
+        if crate::model::geometry::offset_turned_over(src_verts, &result) {
+            return Vec::new();
+        }
+        let clamped = self.editor.offset_collide_with_triangulation && !self.editor.is_planning_cut_step();
+        if self.editor.offset_project_to_rl.is_none() && !clamped && crate::model::geometry::offset_needs_untangling(src_verts, &result) {
+            let abs_dist = self.editor.offset_horiz_dist.abs() * scale;
+            let side = crate::model::geometry::offset_side_from_cursor(src_verts, closed, cursor_world_xy, abs_dist);
+            return crate::model::geometry::untangled_closed_offset(src_verts, side * abs_dist, self.editor.offset_z_delta * scale);
+        }
+        vec![result]
+    }
+
     /// How many evenly spaced copies one side-pick should lay down.
     ///
     /// A planning cut is drawn flat on a single bench or flitch, so the tool is
@@ -244,16 +268,22 @@ impl<'a> App<'a> {
             };
             for step in 1..=self.offset_repeat_steps(&src_verts, cursor_world_xy) {
                 let scale = step as f64;
-                let preview = match self.offset_circle_result(object, cursor_world_xy, scale) {
-                    Some((center, radius)) => crate::model::geometry::tessellate_circle(center, radius),
+                let strings = match self.offset_circle_result(object, cursor_world_xy, scale) {
+                    Some((center, radius)) => vec![crate::model::geometry::tessellate_circle(center, radius)],
                     None if object.circle().is_some() && !self.editor.offset_collide_with_triangulation => break,
-                    None => self.compute_offset_result(&src_verts, closed, cursor_world_xy, scale),
+                    None => self.offset_strings(&src_verts, closed, cursor_world_xy, scale),
                 };
-                let start = preview_world.len();
-                preview_world.extend(preview);
-                ranges.push((start, preview_world.len(), closed));
-                if ranges.len() == 1 {
-                    first_closed = closed;
+                // Collapsed: a further copy would collapse too.
+                if strings.is_empty() {
+                    break;
+                }
+                for preview in strings {
+                    let start = preview_world.len();
+                    preview_world.extend(preview);
+                    ranges.push((start, preview_world.len(), closed));
+                    if ranges.len() == 1 {
+                        first_closed = closed;
+                    }
                 }
             }
         }
@@ -292,6 +322,7 @@ impl<'a> App<'a> {
 
         let mut offset_specs = Vec::new();
         let mut collapsed_circles = 0usize;
+        let mut collapsed_polylines = 0usize;
         for object_id in object_ids {
             let Some(object) = self.active_document().get_object(object_id) else {
                 continue;
@@ -305,8 +336,8 @@ impl<'a> App<'a> {
             };
             for step in 1..=self.offset_repeat_steps(&src_verts, cursor_world_xy) {
                 let scale = step as f64;
-                let shape = match self.offset_circle_result(object, cursor_world_xy, scale) {
-                    Some((center, radius)) => OffsetShape::Circle { center, radius },
+                let shapes = match self.offset_circle_result(object, cursor_world_xy, scale) {
+                    Some((center, radius)) => vec![OffsetShape::Circle { center, radius }],
                     // Only a collapse lands here when collision is off; with
                     // collision on the general path below is the right answer.
                     // A further copy collapses too, so stop at the first.
@@ -315,17 +346,31 @@ impl<'a> App<'a> {
                         break;
                     }
                     None => {
-                        let new_positions = self.compute_offset_result(&src_verts, closed, cursor_world_xy, scale);
-                        OffsetShape::Polyline {
-                            verts: new_positions.into_iter().map(PolyVertex::straight).collect(),
-                            closed,
+                        let strings = self.offset_strings(&src_verts, closed, cursor_world_xy, scale);
+                        // Set in past where it shrinks to nothing; a further
+                        // copy would be too.
+                        if strings.is_empty() {
+                            collapsed_polylines += 1;
+                            break;
                         }
+                        strings
+                            .into_iter()
+                            .map(|positions| OffsetShape::Polyline {
+                                verts: positions.into_iter().map(PolyVertex::straight).collect(),
+                                closed,
+                            })
+                            .collect()
                     }
                 };
-                offset_specs.push((layer, shape, color, fill, line_weight));
+                for shape in shapes {
+                    offset_specs.push((layer, shape, color, fill, line_weight));
+                }
             }
         }
 
+        if collapsed_polylines > 0 {
+            userspace_warn!("{}", crate::i18n::tr!("cmd-offset-skipped-collapsed-polylines", count = collapsed_polylines.to_string()));
+        }
         if collapsed_circles > 0 {
             userspace_warn!("{}", crate::i18n::tr!("cmd-offset-skipped-count-circle-s-offset", count = collapsed_circles.to_string()));
         }

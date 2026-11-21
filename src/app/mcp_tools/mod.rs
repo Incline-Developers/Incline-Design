@@ -251,6 +251,14 @@ impl App<'_> {
     /// Run the tool `tools/call` names, with its arguments.
     pub(super) fn call_mcp_tool(&mut self, params: &Value) -> Value {
         let mut result = self.dispatch_mcp_tool(params);
+        // The AI starting work takes the welcome splash down, as the user's
+        // first click does, so the change is not made behind it.
+        if result["isError"] != true
+            && !groups::reads_only(params["name"].as_str().unwrap_or_default())
+            && let Err(error) = self.dismiss_startup_dialog()
+        {
+            log::warn!("Could not close the welcome splash: {error:#}");
+        }
         let notes: Vec<String> = self.mcp_new_warnings().into_iter().chain(self.mcp_memory_warning()).collect();
         if let Some(content) = result["content"].as_array_mut() {
             content.extend(notes.into_iter().map(|text| json!({ "type": "text", "text": text })));

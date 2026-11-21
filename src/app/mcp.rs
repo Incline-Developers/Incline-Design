@@ -34,7 +34,9 @@ instance with no window, for this client alone. The user does not see it, and no
 have open; it starts with an empty Untitled project, so open_project or new_project first. get_project's mode says \
 headless. There is no selection to read and no window to show anything in, so get_selection is always empty and \
 show_in_window is refused; render_view draws pictures as ever. open_project and new_project fail rather than ask when \
-the open project has unsaved changes: save it or pass discard_changes. ";
+the open project has unsaved changes: save it or pass discard_changes. It reads this computer's settings (coordinate \
+systems, the blast library, delay products) but never writes them: a change to them lasts as long as this instance, and \
+the projects it opens stay out of the user's recent projects. ";
 
 /// What both say after their introduction.
 #[cfg(not(target_arch = "wasm32"))]

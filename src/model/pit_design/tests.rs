@@ -1411,3 +1411,123 @@ fn fingerprint(design: Option<&Design>) -> u64 {
     }
     hasher.finish()
 }
+
+/// Places strings cross or touch in plan at different heights: either makes
+/// the design's surface fail to triangulate.
+fn clashes(design: &Design) -> Vec<DVec3> {
+    let segments = segments(design);
+    let mut found = Vec::new();
+    for (i, (a, b, first)) in segments.iter().enumerate() {
+        for (c, d, second) in &segments[i + 1..] {
+            if first == second {
+                continue;
+            }
+            use crate::model::kernel::SegSeg;
+            if let SegSeg::Crossing { t, u, point } | SegSeg::Touching { t, u, point } =
+                crate::model::kernel::segment_segment(a.truncate(), b.truncate(), c.truncate(), d.truncate())
+                && (a.z + (b.z - a.z) * t - (c.z + (d.z - c.z) * u)).abs() > 0.05
+            {
+                found.push(point.extend(a.z + (b.z - a.z) * t));
+            }
+        }
+    }
+    found
+}
+
+/// Rolling ground over a dome orebody's pit, the ground a search for the
+/// best pit was tried on: floors from an optimised shell, the ramp started
+/// at the bearings round them that once failed.
+#[test]
+fn pits_up_to_rolling_ground_daylight_soundly_from_any_ramp_start() {
+    let ground = |point: DVec2| {
+        let (u, v) = ((point.x - 10_000.0) / 2000.0, (point.y - 20_000.0) / 2000.0);
+        let pi = std::f64::consts::PI;
+        Some(
+            420.0 + 25.0 * (2.1 * u * pi + 0.4).sin() * (1.6 * v * pi).cos() + 35.0 * (-((u - 0.75).powi(2) + (v - 0.7).powi(2)) / 0.03).exp()
+                - 18.0 * (-((u + v - 1.0) / 0.08).powi(2)).exp()
+                + 6.0 * (9.0 * u + 3.0 * v).sin() * (7.0 * v).sin(),
+        )
+    };
+    /// A floor at its RL, and the ramp starts tried round it.
+    struct Floor {
+        elevation: f64,
+        outline: &'static [(f64, f64)],
+        /// In sixteenths of a turn from north, and whether the ramp climbs
+        /// clockwise: the starts that once left a fold in a ring (strings
+        /// touching at different heights), ran out of room, or found no
+        /// stretch long enough to climb a bench.
+        starts: &'static [(u32, bool)],
+    }
+    let floors = [
+        Floor {
+            elevation: 220.0,
+            outline: &[
+                (10890.0, 21090.0),
+                (10900.0, 21060.0),
+                (10930.0, 21000.0),
+                (10970.0, 20990.0),
+                (10980.0, 20990.0),
+                (11020.0, 21030.0),
+                (11020.0, 21070.0),
+                (11010.0, 21100.0),
+                (10980.0, 21130.0),
+                (10950.0, 21140.0),
+                (10930.0, 21140.0),
+                (10910.0, 21130.0),
+                (10890.0, 21110.0),
+            ],
+            starts: &[(4, false), (12, false), (14, false), (15, false), (12, true)],
+        },
+        Floor {
+            elevation: 230.0,
+            outline: &[
+                (10880.0, 21090.0),
+                (10890.0, 21050.0),
+                (10920.0, 21000.0),
+                (10930.0, 20990.0),
+                (10960.0, 20980.0),
+                (11000.0, 20980.0),
+                (11030.0, 21020.0),
+                (11030.0, 21070.0),
+                (11020.0, 21100.0),
+                (10980.0, 21140.0),
+                (10950.0, 21150.0),
+                (10930.0, 21150.0),
+                (10900.0, 21140.0),
+                (10890.0, 21130.0),
+                (10880.0, 21110.0),
+            ],
+            starts: &[(0, false), (14, false)],
+        },
+    ];
+    let mut failures = Vec::new();
+    for Floor {
+        elevation,
+        outline: floor,
+        starts,
+    } in floors
+    {
+        let points: Vec<DVec3> = floor.iter().map(|&(x, y)| DVec3::new(x, y, elevation)).collect();
+        let base = Base::from_points(&points).expect("a closed floor");
+        let centre = floor.iter().fold(DVec2::ZERO, |sum, &(x, y)| sum + DVec2::new(x, y)) / floor.len() as f64;
+        for &(step, clockwise) in starts {
+            let bearing = f64::from(step) * std::f64::consts::TAU / 16.0;
+            let start = centre + DVec2::new(bearing.sin(), bearing.cos()) * 300.0;
+            let mut spec = with_ramp(Direction::Up, Layout::Spiral, start, clockwise, Stop::Daylight, (0.1, 5.0));
+            spec.bench_height = 10.0;
+            spec.face_angle = 75.0;
+            spec.wall_radius = 20.0;
+            spec.ramps[0].width = 25.0;
+            let design = design(&base, &spec, Some(&ground), &|| false).expect("a design");
+            let name = format!("floor {elevation}, start {:.1}°, clockwise {clockwise}", bearing.to_degrees());
+            if design.end != End::Daylight {
+                failures.push(format!("{name}: ended {:?} at RL {}", design.end, design.final_elevation()));
+            }
+            let clashes = clashes(&design);
+            if let Some(first) = clashes.first() {
+                failures.push(format!("{name}: {} clashes, first at {first:.2}", clashes.len()));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{} designs failed:\n{}", failures.len(), failures.join("\n"));
+}

@@ -63,6 +63,10 @@ impl Waker {
 
 /// Serve the MCP client on standard input and output until it goes.
 pub(crate) fn run() -> Result<()> {
+    // The person's settings are read, for their libraries and coordinate
+    // systems, but this Incline is the client's: it leaves them, and the
+    // projects it opens out of their recent list.
+    super::io::keep_settings_read_only();
     let waker = Arc::new(Waker::default());
     let wake = {
         let waker = Arc::clone(&waker);

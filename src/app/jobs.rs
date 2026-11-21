@@ -105,6 +105,12 @@ pub(crate) enum JobKey {
     /// A run of the schedule with this id.
     NpvScheduleRun(u64),
     DrillHole(crate::model::drill_hole::DrillHoleId),
+    /// Work on a snapshot of the project's objects, wanted as long as the
+    /// project is open: its apply step checks the objects it read itself,
+    /// so a change elsewhere in the project does not throw it away.
+    ProjectOpen {
+        runtime_id: u32,
+    },
     /// The Solids Setup page's inspection mesh. Keyed by the solid, so
     /// selecting another one - or changing this one's surfaces - cancels the
     /// build already in flight for it.
@@ -341,6 +347,7 @@ impl<'a> App<'a> {
                 .is_some_and(|pending| pending.runtime == runtime && pending.serial == serial),
             JobKey::Geophysics { dataset, generation } => self.well_logs.generation(dataset) == Some(generation),
             JobKey::DrillHoleLoad { runtime_id, .. } => self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id),
+            JobKey::ProjectOpen { runtime_id } => self.workspace.projects.iter().any(|project| project.runtime_id == runtime_id),
             JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
             // Its result is a finished video, wanted whatever moved.
             JobKey::VideoExport => true,

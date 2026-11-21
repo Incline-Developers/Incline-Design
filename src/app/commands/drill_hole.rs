@@ -620,7 +620,7 @@ impl<'a> App<'a> {
         field: String,
         target: crate::model::drill_hole::ReferenceTarget,
         side: crate::model::drill_hole::ReferenceSide,
-    ) {
+    ) -> Option<ReferencePicks> {
         let value = target.name().to_owned();
         let mut picks = Vec::new();
         let mut absent = 0usize;
@@ -664,11 +664,9 @@ impl<'a> App<'a> {
         }
         if picks.is_empty() {
             userspace_warn!("{}", tr!("cmd-drill-hole-no-hole-holds-value-field", value = target.label().to_string()));
-            return;
+            return None;
         }
-        let Some(project) = self.workspace.active_project_mut() else {
-            return;
-        };
+        let project = self.workspace.active_project_mut()?;
         let document = &mut project.project.document;
         let layer_id = document.allocate_layer_id();
         let layer = crate::model::Layer {
@@ -707,7 +705,24 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr!("cmd-drill-hole-uppermost-run-used-flagged-holes", holes = flagged.join(", ").to_string()));
         }
         self.invalidate_geometry();
+        Some(ReferencePicks {
+            layer: layer_id,
+            points: used,
+            without: absent,
+            flagged,
+        })
     }
+}
+
+/// What a reference pick placed: one point on each hole that holds the
+/// code, on a layer of their own.
+pub(crate) struct ReferencePicks {
+    pub(crate) layer: crate::model::LayerId,
+    pub(crate) points: usize,
+    /// Holes it gave nothing for: the code not logged in them, or gone.
+    pub(crate) without: usize,
+    /// Holes where the code runs more than once, picked at its uppermost run.
+    pub(crate) flagged: Vec<String>,
 }
 
 /// The new layer's name for a reference pick. A working section says so, so

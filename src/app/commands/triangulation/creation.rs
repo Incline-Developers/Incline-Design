@@ -200,6 +200,19 @@ fn upper_surface_retry_available(error: &anyhow::Error, surface_type: TriSurface
 /// treated as one intended shared vertex when the user opts in.
 pub(crate) const COARSE_WELD_TOL: f64 = 0.05;
 
+/// What a set of breaklines is, to tell whether they changed.
+fn breakline_fingerprint(paths: &[BreaklinePath]) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    for path in paths {
+        path.closed.hash(&mut hasher);
+        for point in &path.points {
+            [point.x, point.y, point.z].map(f64::to_bits).hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
 #[derive(Clone, Debug)]
 struct BreaklinePath {
     points: Vec<glam::DVec3>,
@@ -229,10 +242,10 @@ impl<'a> App<'a> {
             anyhow::bail!(tr!("err-tri-no-objects-selected"));
         }
         let project = self.workspace.active_project().ok_or_else(|| anyhow::anyhow!(tr!("err-tri-open-project-first")))?;
-        let project_key = crate::app::jobs::JobKey::Project {
-            runtime_id: project.runtime_id,
-            document_revision: project.project.document.revision(),
-        };
+        // Stale only if the strings it is built from change while it runs,
+        // not when anything else in the project does: a pit design's
+        // evaluation landing, say, as it does just after the design is made.
+        let project_key = crate::app::jobs::JobKey::ProjectOpen { runtime_id: project.runtime_id };
 
         // Snapshot the referenced geometry into owned paths on the UI thread -
         // the worker must not touch `self.scene_document`.
@@ -253,6 +266,7 @@ impl<'a> App<'a> {
         };
         let name_for_failure = name.clone();
         let object_ids_for_failure = object_ids.clone();
+        let sources = breakline_fingerprint(&paths);
 
         // A retry supersedes the previous failure; clear it now for immediate
         // feedback (the apply step re-sets it if this attempt also fails).
@@ -271,6 +285,11 @@ impl<'a> App<'a> {
             Ok(generated)
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulation>| match result {
+            _ if breakline_fingerprint(&app.collect_triangulation_paths(&object_ids_for_failure).0) != sources => {
+                let message = tr!("jobs-discarded-stale-result", poll_label = tr!("cmd-creation-creating-triangulation").to_string());
+                crate::userspace_log!("{message}");
+                app.settled_job_error = Some(message);
+            }
             Ok(generated) => {
                 app.editor.tri_create_failure = None;
                 app.editor.tri_create_diagnostic_markers_screen_px.clear();

@@ -439,12 +439,18 @@ fn untangle(pieces: &[Piece]) -> Vec<Vec<DVec2>> {
             if !super::road::boxes_meet(piece.from, piece.to, found.from, found.to) {
                 continue;
             }
-            if let kernel::SegSeg::Crossing { t, u, point } = kernel::segment_segment(piece.from, piece.to, found.from, found.to) {
-                let crossing = crossings.len();
-                crossings.push(point);
-                cuts[index].push((t, crossing));
-                cuts[other].push((u, crossing));
-            }
+            let (t, u, point) = match kernel::segment_segment(piece.from, piece.to, found.from, found.to) {
+                kernel::SegSeg::Crossing { t, u, point } => (t, u, point),
+                kernel::SegSeg::Touching { point, .. } => match through_vertex(pieces, index, other, point) {
+                    Some((t, u)) => (t, u, point),
+                    None => continue,
+                },
+                _ => continue,
+            };
+            let crossing = crossings.len();
+            crossings.push(point);
+            cuts[index].push((t, crossing));
+            cuts[other].push((u, crossing));
         }
     }
 
@@ -535,6 +541,42 @@ fn untangle(pieces: &[Piece]) -> Vec<Vec<DVec2>> {
         }
     }
     rings
+}
+
+/// Where the raw offset passes through one of its own pieces at a vertex
+/// of the other: the two pieces touch rather than cross, the vertex within
+/// [`kernel::XY_TOL`] of the piece it meets, but the run through the vertex
+/// goes from one side of that piece to the other. Set off again, a ring's
+/// points left where offsets crossed keep lying on the next offsets' lines,
+/// so this is no rarity: missed, the fold it closes is never cut away. The
+/// cut is on the piece the vertex ends, at its end, and on the piece it
+/// meets, where; `(t, u)` along `pieces[first]` and `pieces[second]`. A touch
+/// that turns back (a tangent) is no crossing, nor one at both pieces' ends.
+fn through_vertex(pieces: &[Piece], first: usize, second: usize, point: DVec2) -> Option<(f64, f64)> {
+    let count = pieces.len();
+    let near = |a: DVec2| a.distance(point) <= kernel::XY_TOL * 2.0;
+    let along = |piece: &Piece| {
+        let span = piece.to - piece.from;
+        ((point - piece.from).dot(span) / span.length_squared().max(f64::MIN_POSITIVE)).clamp(0.0, 1.0)
+    };
+    // The vertex the run passes through, as the end of piece `ends`, and
+    // the piece `met` it touches part way along.
+    let passes = |ends: usize, met: usize| {
+        let (ending, meeting) = (&pieces[ends], &pieces[met]);
+        if !near(ending.to) || near(meeting.from) || near(meeting.to) {
+            return false;
+        }
+        let after = pieces[(ends + 1) % count].to;
+        let side = |p: DVec2| kernel::orient2d(meeting.from, meeting.to, p);
+        side(ending.from) * side(after) < 0.0
+    };
+    if passes(first, second) {
+        Some((1.0, along(&pieces[second])))
+    } else if passes(second, first) {
+        Some((along(&pieces[first]), 1.0))
+    } else {
+        None
+    }
 }
 
 /// The point half way along a slice by length, and its direction there.

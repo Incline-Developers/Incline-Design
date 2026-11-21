@@ -233,8 +233,12 @@ impl App<'_> {
             .find(|collection| collection.id.0 == id)
             .ok_or_else(|| format!("There is no drillhole collection with id {id}."))?;
         let field = arguments["field"].as_str().ok_or("Give the field.")?.to_owned();
-        if !collection.dataset.fields.iter().any(|candidate| candidate.key == field) {
-            return Err(format!("The drillholes have no field {field}."));
+        match collection.dataset.fields.iter().find(|candidate| candidate.key == field).map(|candidate| &candidate.kind) {
+            None => return Err(format!("The drillholes have no field {field}.")),
+            Some(crate::model::drill_hole::DrillFieldKind::Numeric { .. }) => {
+                return Err(format!("{field} is numeric: reference points are picked where a categorical field's code starts or ends."));
+            }
+            Some(crate::model::drill_hole::DrillFieldKind::Categorical { .. }) => {}
         }
         let target = match (arguments["code"].as_str(), arguments["working_section"].as_str()) {
             (Some(code), None) => ReferenceTarget::Code(code.to_owned()),
@@ -263,8 +267,16 @@ impl App<'_> {
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         };
-        self.mcp_do(UiCommand::BuildReferencePoints { holes, field, target, side })?;
-        Ok(json!({ "done": true }))
+        let label = target.label();
+        let picks = self
+            .build_reference_points(holes, field.clone(), target, side)
+            .ok_or_else(|| format!("No hole holds {label} in {field}: nothing was placed."))?;
+        Ok(json!({
+            "layer": picks.layer.0,
+            "points": picks.points,
+            "holes_without_it": picks.without,
+            "holes_where_it_runs_more_than_once": picks.flagged,
+        }))
     }
 
     fn mcp_link_geophysics(&mut self, arguments: &Value) -> Result<Value, String> {
@@ -316,27 +328,32 @@ impl App<'_> {
         if !settings.is_valid() {
             return Err("Those settings do not make a run: rain, its hours, roughness and the step must be above 0, and run on and infiltration not below it.".to_owned());
         }
-        let before: Vec<u64> = self.editor.water.tabs.iter().map(|tab| tab.id).collect();
+        let before: Vec<u64> = self.water.ids().collect();
         self.mcp_do(UiCommand::RunWaterSimulation { surface, settings })?;
-        let run = self.editor.water.tabs.iter().map(|tab| tab.id).find(|id| !before.contains(id));
+        // The run is made at once; its tab, on the next frame.
+        let run = self.water.ids().find(|id| !before.contains(id));
+        self.sync_water();
         Ok(json!({ "run": run }))
     }
 
     fn mcp_rain(&mut self, arguments: &Value) -> Result<Value, String> {
-        if let Some(run) = arguments["run"].as_u64() {
-            if !self.editor.water.tabs.iter().any(|tab| tab.id == run) {
-                return Err(format!("There is no rain run {run}."));
-            }
-            if arguments["close"].as_bool().unwrap_or(false) {
-                self.mcp_do(UiCommand::CloseWaterRun(run))?;
-            } else {
-                self.editor.water.open = Some(run);
-            }
+        let run = match arguments["run"].as_u64() {
+            Some(run) if !self.water.has(run) => return Err(format!("There is no rain run {run}.")),
+            Some(run) => Some(run),
+            None => self.editor.water.open,
+        };
+        if arguments["close"].as_bool().unwrap_or(false) {
+            let run = run.ok_or("There is no rain run open to close.")?;
+            self.mcp_do(UiCommand::CloseWaterRun(run))?;
+        } else if let Some(run) = run {
+            self.editor.water.open = Some(run);
         }
         if let Some(hours) = arguments["hours"].as_f64() {
             self.editor.water.playing = false;
             self.editor.water.time_s = hours.max(0.0) * 3600.0;
         }
+        // What the window would show on its next frame, said now.
+        self.sync_water();
         self.redraw_requested = true;
         let water = &self.editor.water;
         let shown = water.shown.as_ref().map(|shown| {

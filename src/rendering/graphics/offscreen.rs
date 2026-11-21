@@ -159,6 +159,10 @@ pub(crate) enum ViewAim {
     Section { from: DVec3, to: DVec3, width: f64 },
 }
 
+/// The longest a picture waits for what it shows to be built and uploaded.
+#[cfg(not(target_arch = "wasm32"))]
+const SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
 #[cfg(not(target_arch = "wasm32"))]
 impl Graphics<'_> {
     /// Draw the scene as `request` describes into a picture of its own and
@@ -227,10 +231,28 @@ impl Graphics<'_> {
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&self.camera_uniform));
         self.write_grid_uniforms(editor);
 
+        let scale_factor = self.scale_factor() as f32;
+        // The window draws what is ready and draws again as the rest lands; a
+        // picture is drawn once, so what it shows is first worked through:
+        // block models built and point clouds uploaded. A build that fails
+        // lands as nothing to draw, so this ends; the bound is for a worker
+        // that never answers.
+        let settle_by = std::time::Instant::now() + SETTLE_LIMIT;
+        loop {
+            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Requested view preparation"),
+            });
+            self.sync_scene_content(&mut encoder, content, scale_factor);
+            self.queue.submit(std::iter::once(encoder.finish()));
+            let pending = self.point_cloud_gpu.has_pending_uploads() || self.block_model_gpu.has_pending_builds();
+            if !pending || std::time::Instant::now() >= settle_by {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Requested view encoder"),
         });
-        let scale_factor = self.scale_factor() as f32;
         self.sync_scene_content(&mut encoder, content, scale_factor);
         let full = ViewportRect::full(width, height);
         self.render_scene_pass(&mut encoder, view, full, editor, triangulations, block_models, drill_holes, point_clouds, rasters, true);
@@ -271,8 +293,12 @@ impl Graphics<'_> {
             self.aim_camera_at(min, max, forward, up);
         }
         if let ViewAim::Section { from, to, width } = aim {
-            self.aim_at_section(from, to, width)?;
-            self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+            // Up and down, the section frames what is drawn, wherever the
+            // line's ends were given: their RL says nothing of what it cuts.
+            let heights = self
+                .scene_bounds_now(document, triangulations, block_models, drill_holes, point_clouds, hidden)
+                .map(|(min, max)| (min.z, max.z));
+            self.aim_at_section(from, to, width, heights)?;
             self.fit_depth_to_section();
         } else {
             self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
@@ -296,9 +322,11 @@ impl Graphics<'_> {
     }
 
     /// Look square-on at the section along `from`..`to`, `width` thick,
-    /// framing the line across the picture. Puts a section in place for the
-    /// draw; `render_view` puts the window's back after.
-    fn aim_at_section(&mut self, from: DVec3, to: DVec3, width: f64) -> Result<(), String> {
+    /// framing the line across the picture and `heights`, the RLs of what is
+    /// drawn, up and down it (the line's own RL without them). Puts a
+    /// section in place for the draw; `render_view` puts the window's back
+    /// after.
+    fn aim_at_section(&mut self, from: DVec3, to: DVec3, width: f64, heights: Option<(f64, f64)>) -> Result<(), String> {
         let delta = (to - from).truncate();
         if delta.length_squared() <= 1.0e-12 {
             return Err("from and to are the same point seen from above: a section needs a line.".to_owned());
@@ -306,8 +334,14 @@ impl Graphics<'_> {
         let screen = self.screen_size();
         let aspect = (f64::from(screen.0) / f64::from(screen.1.max(1.0))).max(1e-9);
         let half_length = delta.length() * 0.5;
-        self.projection.zoom = (half_length.max(1.0) / aspect * 1.1).max(1.0e-4);
-        let center = self.exaggerate_point((from + to) * 0.5);
+        let mut middle = (from + to) * 0.5;
+        let mut half_height = half_length.max(1.0) / aspect;
+        if let Some((low, high)) = heights {
+            middle.z = (low + high) * 0.5;
+            half_height = half_height.max((high - low) * 0.5 * self.vertical_exaggeration);
+        }
+        self.projection.zoom = (half_height * 1.1).max(1.0e-4);
+        let center = self.exaggerate_point(middle);
         let slice = SliceViewState::entered(center, delta.normalize(), width.clamp(0.1, 1.0e6), 0.0, 0.0, self.camera.clone(), self.projection.zoom);
         let (forward, _, up) = slice.camera_basis();
         self.camera.look_to(slice.center, forward, up, self.projection.zoom);

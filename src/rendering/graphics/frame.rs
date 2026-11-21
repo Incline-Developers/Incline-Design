@@ -520,6 +520,7 @@ impl<'a> Graphics<'a> {
 }
 
 /// What the scene is drawn from, for [`Graphics::sync_scene_content`].
+#[derive(Clone, Copy)]
 pub(crate) struct SceneContent<'frame> {
     pub(crate) editor: &'frame EditorState,
     pub(crate) document: &'frame Document,

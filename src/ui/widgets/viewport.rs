@@ -583,9 +583,17 @@ impl<'a> BlockModelProperties<'a> {
 
     /// One row per axis, so the six bounds fit a side panel's width.
     fn draw_slice_controls(&self, ui: &mut egui::Ui, content_width: f32, model: &OpenBlockModel, commands: &mut Vec<UiCommand>) {
+        // Shown and edited as eastings, northings and RLs; kept in the
+        // model's own coordinates.
+        let shift = model.slice_display_shift();
         let (lower, upper) = model.local_bounds();
         let full = BlockModelSlice { min: lower, max: upper };
-        let mut slice = model.slice.unwrap_or(full).clamped_to(lower, upper);
+        let kept = model.slice.unwrap_or(full).clamped_to(lower, upper);
+        let mut slice = BlockModelSlice {
+            min: kept.min + shift,
+            max: kept.max + shift,
+        };
+        let (lower, upper) = (lower + shift, upper + shift);
         let mut changed = false;
 
         if section_header_with_reset(ui, tr!("common-slice"), tr!("viewport-restore-full-model-range")) {
@@ -625,6 +633,10 @@ impl<'a> BlockModelProperties<'a> {
         }
 
         if changed {
+            let slice = BlockModelSlice {
+                min: slice.min - shift,
+                max: slice.max - shift,
+            };
             commands.push(UiCommand::SetBlockModelSlice { id: model.id, slice: Some(slice) });
         }
     }

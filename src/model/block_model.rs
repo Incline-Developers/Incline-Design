@@ -87,6 +87,12 @@ impl RegularBlockBounds {
         })
     }
 
+    /// The grid's block counts and block size, where its blocks are in
+    /// plain order (x fastest, then y, then z) rather than by voxel.
+    pub(crate) fn row_major(&self) -> Option<([usize; 3], DVec3)> {
+        self.voxel_size.is_none().then_some((self.dims, self.cell))
+    }
+
     fn coords(&self, index: usize) -> Option<[usize; 3]> {
         if index >= self.len {
             return None;
@@ -1711,6 +1717,36 @@ impl OpenBlockModel {
     /// schemas, and [`Self::slice`] are expressed in.
     pub(crate) fn local_bounds(&self) -> (DVec3, DVec3) {
         (self.model.metadata.lower, self.model.metadata.upper)
+    }
+
+    /// A box given in world coordinates as the box round it in the model's
+    /// own, which its slice is kept in: the same box moved, for a model not
+    /// turned, else the box round its corners turned into the model's frame.
+    pub(crate) fn world_box_to_local(&self, min: DVec3, max: DVec3) -> (DVec3, DVec3) {
+        let inverse = self.model.rotation().inverse();
+        let origin = self.model.origin();
+        (0..8)
+            .map(|corner| {
+                let world = DVec3::new(
+                    if corner & 1 == 0 { min.x } else { max.x },
+                    if corner & 2 == 0 { min.y } else { max.y },
+                    if corner & 4 == 0 { min.z } else { max.z },
+                );
+                inverse * (world - origin)
+            })
+            .fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(low, high), point| (low.min(point), high.max(point)))
+    }
+
+    /// What the slice controls add to the model's own coordinates to show
+    /// them as eastings, northings and RLs: its origin, for a model not
+    /// turned. A turned model's own axes are not east and north, and are
+    /// shown as they are.
+    pub(crate) fn slice_display_shift(&self) -> DVec3 {
+        if self.model.rotation() == glam::DMat3::IDENTITY {
+            self.model.origin()
+        } else {
+            DVec3::ZERO
+        }
     }
 
     /// The slice clamped to the model's local bounds, or `None` when there is

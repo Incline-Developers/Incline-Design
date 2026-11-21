@@ -240,12 +240,11 @@ impl App<'_> {
                 let (Some(min), Some(max)) = (slice.get("min").and_then(parse_point), slice.get("max").and_then(parse_point)) else {
                     return Err("slice needs min and max as [x, y, z].".to_owned());
                 };
+                // Given in world coordinates, kept in the model's own.
+                let (min, max) = model.world_box_to_local(min.min(max), min.max(max));
                 commands.push(UiCommand::SetBlockModelSlice {
                     id: model.id,
-                    slice: Some(BlockModelSlice {
-                        min: min.min(max),
-                        max: min.max(max),
-                    }),
+                    slice: Some(BlockModelSlice { min, max }),
                 });
             }
             _ => {}
