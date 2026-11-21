@@ -848,7 +848,8 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
     };
     // A loader waits on a blast when its highest-priority open bar is a dig
     // whose next block has not been released - and, for an automatic bar,
-    // nor has any other block within its reach, which it could start instead.
+    // nor has any other block left in its sequence: its reach counts only
+    // released ground, so it could start any of those instead.
     let waiting = |agent: LoaderAgentId, position: usize| -> Option<usize> {
         if releases.is_empty() {
             return None;
@@ -871,23 +872,19 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             let TaskKind::Dig { sequence } = &task.kind else { return None };
             if let Some(ground) = next_in_sequence(task, sequence, start_h) {
                 let held = releases.get(&ground).filter(|(at, _)| *at > start_h + 1e-9).map(|(_, blast)| *blast);
-                let reach = task.lookahead_t.max(task.lookahead_feed_t);
-                if held.is_some() && reach > 0.0 {
+                if held.is_some() && task.lookahead_t > 0.0 {
                     let from = sequence.iter().position(|at| *at == ground).unwrap_or(0);
-                    let mut before = 0.0;
-                    for at in &sequence[from..] {
-                        let Some(block) = lookup.identities.ground_blocks.get(at) else { continue };
-                        let left = ground_by_id.get(at).map_or(0.0, |source| source.tonnes_t) - sum_within(dug.get(block), f64::NEG_INFINITY, start_h);
-                        if left <= IDLE_NEGLIGIBLE_T {
-                            continue;
-                        }
-                        if before > reach {
-                            break;
-                        }
-                        if releases.get(at).is_none_or(|(when, _)| *when <= start_h + 1e-9) {
-                            return None;
-                        }
-                        before += left;
+                    let open = sequence[from..].iter().any(|at| {
+                        let left = ground_by_id.get(at).map_or(0.0, |source| source.tonnes_t)
+                            - lookup
+                                .identities
+                                .ground_blocks
+                                .get(at)
+                                .map_or(0.0, |block| sum_within(dug.get(block), f64::NEG_INFINITY, start_h));
+                        left > IDLE_NEGLIGIBLE_T && releases.get(at).is_none_or(|(when, _)| *when <= start_h + 1e-9)
+                    });
+                    if open {
+                        return None;
                     }
                 }
                 return held;
