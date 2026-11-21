@@ -672,6 +672,7 @@ cmd-view-no-point-under-cursor-fix = Заагчийн доор эргэлтий�
 cmd-view-released-centre-rotation = Эргэлтийн төвийг суллалаа
 cmd-view-reset-view-fit-extents = Харагдацыг сэргээх (хэмжээнд тааруулах)
 cmd-view-set-cinematic-view-enabled = Кино харагдацыг тохируулав = { $enabled }
+cmd-view-set-view-points-enabled = Цэгийн харагдацыг тохируулав = { $enabled }
 cmd-view-set-xy-grid-enabled = XY торыг тохируулав = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Хэмжээнд тааруулж томруулах (өнцгийг хадгалах)
 
@@ -1614,6 +1615,7 @@ state-set-layer-lock = Давхаргын түгжээг тохируулах
 state-set-line-weight = Шугамын зузааныг тохируулах
 state-set-object-colour = Объектын өнгийг тохируулах
 state-set-object-fill = Объектын дүүргэлтийг тохируулах
+state-set-point-visibility = Цэгийн харагдацыг тохируулах
 state-set-polyline-closed = Полилиниаг хаалттай болгож тохируулах
 state-set-raster-lock = Растерын түгжээг тохируулах
 state-set-standard-view = Стандарт харагдацыг тохируулах
@@ -1826,10 +1828,12 @@ viewport-bar-disable-x-ray-vision = Рентген харагдацыг унтр
 viewport-bar-enable-x-ray-vision = Рентген харагдацыг асаах
 viewport-bar-fill = Дүүргэлт:
 viewport-bar-fix-centre-rotation = Эргэлтийн төвийг тогтоох
+viewport-bar-hide-points = Цэгүүдийг нуух
 viewport-bar-hide-rl-grid = RL торыг нуух
 viewport-bar-hide-wireframes = Торон дүрсийг нуух
 viewport-bar-hide-xy-grid = XY торыг нуух
 viewport-bar-release-centre-rotation = Эргэлтийн төвийг суллах
+viewport-bar-show-points = Цэгүүдийг харуулах
 viewport-bar-show-rl-grid = RL торыг харуулах
 viewport-bar-show-wireframes = Торон дүрсийг харуулах
 viewport-bar-show-xy-grid = XY торыг харуулах
@@ -5052,8 +5056,6 @@ pit-design-topography-help = Төслийг хүртэл нь байгуулах
 pit-design-topography-none = Байхгүй
 pit-design-ramp-section = Налуу зам
 pit-design-ramp-width = Өргөн
-pit-design-ramp-gradient = Налуу
-pit-design-ramp-gradient-help = Өндрийн зөрүү ба зайн харьцаа. Замын илүү эгц ирмэгийн дагуу хадгалагддаг тул эргэлтэнд дотоод ирмэг нь үүнээс эгц болохгүй.
 pit-design-ramp-start = Эхлэх цэг
 pit-design-ramp-start-help = Налуу зам шугамаас гарах газар. Харагдац дээр түүний ногоон загалмайг шугамын дагуу чирэх, эсвэл Зөөх дараад гарах ёстой газар дарна уу.
 pit-design-ramp-start-default = Шугамын эхлэл
@@ -5071,10 +5073,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = Налуу замын эхлэлийг зөөхийн тулд чирнэ үү
 pit-design-ramp-drag-prompt = Налуу зам шугамаас гарах ёстой газарт суллана уу.
 pit-design-ramp-start-prompt = Налуу зам эхлэх шугамаас салах газарт шугам дээр дарна уу.
-pit-design-climbs = Өгсөх чиглэл
-pit-design-climbs-help = Дээрээс харахад налуу зам уурхайг тойрон аль чиглэлд өгсөх.
-pit-design-clockwise = Цагийн зүүний дагуу
-pit-design-anticlockwise = Цагийн зүүний эсрэг
 pit-design-layout = Байрлал
 pit-design-layout-help = Спираль өгсөх чиглэлээрээ ханыг тойрон үргэлжилнэ. Зигзаг хана эргэх зай үлдээсэн газарт хэдэн уступ тутамд тэгш талбай дээр буцаж эргэнэ.
 pit-design-spiral = Спираль
@@ -5252,15 +5250,19 @@ pit-design-table-narrow-hint = Хананы эргэлтэд залгах газ
 pit-design-checks = Шалгалт
 pit-design-checks-pass = Бүх шалгалт давлаа: налуу замын налуу, өргөн, эргэлт болон бермүүд, налуу хана хүссэнээр байна.
 pit-design-checks-pass-short = Бүх шалгалт давлаа.
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] Нэг газар хангахгүй
-       *[other] { $count } газар хангахгүй
+        [one] Нэг газар шаардлага хангахгүй, харагдац дээр тэмдэглэсэн
+       *[other] { $count } газар шаардлага хангахгүй, харагдац дээр тэмдэглэсэн
     }
-pit-design-checks-what = Шалгалт
-pit-design-checks-is = Гарсан
-pit-design-checks-asked = Хүссэн
-pit-design-checks-help = Харагдацаас олохын тулд шалгалт дээр заагчаа аваачих, эсвэл тийш очихын тулд дарна уу.
+pit-design-gizmo-width-hint = Налуу замын өргөнийг өөрчлөхийн тулд чирнэ үү
+pit-design-gizmo-turn-hint = Нөгөө чиглэлд өгсүүлэхийн тулд дарна уу
+pit-design-gizmo-grade-hint = Налуу замын налууг өөрчлөхийн тулд эргүүлж чирнэ үү
+pit-design-gizmo-height-hint = Шатны өндрийг өөрчлөхийн тулд чирнэ үү
+pit-design-gizmo-angle-hint = Хананы өнцгийг өөрчлөхийн тулд эргүүлж чирнэ үү
+pit-design-gizmo-berm-hint = Бермийн өргөнийг өөрчлөхийн тулд чирнэ үү
+pit-design-gizmo-dragging = Тогтоохын тулд суллана уу.
+pit-design-gizmo-fine = Нарийн алхамд Shift
 pit-design-check-steep = Налуу зам хэт эгц
 pit-design-check-flatter = Налуу зам зөөлөн
 pit-design-check-narrow = Налуу зам хэт нарийн

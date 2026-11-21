@@ -1175,6 +1175,7 @@ impl<'a> App<'a> {
             UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
             UiCommand::SetTopologyContours(enabled) => self.set_topology_contours(enabled),
+            UiCommand::SetShowPoints(enabled) => self.set_show_points(enabled),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SetCinematicEnabled(enabled) => self.set_cinematic_enabled(enabled),
             UiCommand::SetStandardView(view) => {

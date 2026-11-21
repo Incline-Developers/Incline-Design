@@ -1531,6 +1531,7 @@ cmd-view-reset-view-fit-extents = Reset view (fit to extents)
 cmd-view-set-cinematic-view-enabled = Set cinematic view = { $enabled }
 cmd-view-set-topology-contours-enabled = Set topography contours = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Set topography wireframes = { $enabled }
+cmd-view-set-view-points-enabled = Set view points = { $enabled }
 cmd-view-set-xy-grid-enabled = Set XY grid = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Zoom to extents (preserving angle)
 
@@ -3585,6 +3586,7 @@ state-set-layer-lock = Set Layer Lock
 state-set-line-weight = Set Line Weight
 state-set-object-colour = Set Object Colour
 state-set-object-fill = Set Object Fill
+state-set-point-visibility = Set Point Visibility
 state-set-polyline-closed = Set Polyline Closed
 state-set-raster-lock = Set Raster Lock
 state-set-standard-view = Set Standard View
@@ -3860,12 +3862,14 @@ viewport-bar-fill = Fill:
 viewport-bar-fix-centre-rotation = Fix Centre of Rotation
 viewport-bar-hide-borehole-inspector = Hide Drillhole Inspector
 viewport-bar-hide-contours = Hide Contours
+viewport-bar-hide-points = Hide Points
 viewport-bar-hide-rl-grid = Hide RL Grid
 viewport-bar-hide-wireframes = Hide Wireframes
 viewport-bar-hide-xy-grid = Hide XY Grid
 viewport-bar-release-centre-rotation = Release Centre of Rotation
 viewport-bar-show-borehole-inspector = Show Drillhole Inspector
 viewport-bar-show-contours = Show Contours
+viewport-bar-show-points = Show Points
 viewport-bar-show-rl-grid = Show RL Grid
 viewport-bar-show-wireframes = Show Wireframes
 viewport-bar-show-xy-grid = Show XY Grid
@@ -5746,8 +5750,6 @@ pit-design-topography-help = The ground the design builds to: a pit daylights ag
 pit-design-topography-none = None
 pit-design-ramp-section = Ramp
 pit-design-ramp-width = Width
-pit-design-ramp-gradient = Gradient
-pit-design-ramp-gradient-help = Rise over run. It is held along the steeper edge of the road, so round a bend its inside edge is no steeper than this.
 pit-design-ramp-start = Starts at
 pit-design-ramp-start-help = Where the ramp leaves the string. Drag its green cross along the string in the view, or press Move and click where it should leave instead.
 pit-design-ramp-start-default = Start of the string
@@ -5765,10 +5767,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = Drag to move where the ramp starts
 pit-design-ramp-drag-prompt = Let go on the string where the ramp should leave it.
 pit-design-ramp-start-prompt = Click the starting string where the ramp leaves it.
-pit-design-climbs = Climbs
-pit-design-climbs-help = Which way round the pit the ramp climbs, seen from above.
-pit-design-clockwise = Clockwise
-pit-design-anticlockwise = Anticlockwise
 pit-design-layout = Layout
 pit-design-layout-help = A spiral carries on round the walls the way it climbs. A switchback turns back on a level pad every so many benches, where the walls leave room for the turn.
 pit-design-spiral = Spiral
@@ -5899,15 +5897,19 @@ pit-design-table-narrow-hint = Narrower than the { $width } m asked for, where i
 pit-design-checks = Checks
 pit-design-checks-pass = Every check passes: the ramp's grade, width and turns, and the berms and faces, are as asked.
 pit-design-checks-pass-short = Every check passes.
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] One place falls short
-       *[other] { $count } places fall short
+        [one] One place falls short, marked in the view
+       *[other] { $count } places fall short, marked in the view
     }
-pit-design-checks-what = Check
-pit-design-checks-is = Comes to
-pit-design-checks-asked = Asked
-pit-design-checks-help = Hover over a check to find it in the view, or click it to go there.
+pit-design-gizmo-width-hint = Drag to change the ramp's width
+pit-design-gizmo-turn-hint = Click to climb the other way
+pit-design-gizmo-grade-hint = Drag round to change the ramp's grade
+pit-design-gizmo-height-hint = Drag to change the bench height
+pit-design-gizmo-angle-hint = Drag round to change the face angle
+pit-design-gizmo-berm-hint = Drag to change the berm width
+pit-design-gizmo-dragging = Let go to set it.
+pit-design-gizmo-fine = Shift for finer steps
 pit-design-check-steep = Ramp too steep
 pit-design-check-flatter = Ramp flatter
 pit-design-check-narrow = Ramp too narrow

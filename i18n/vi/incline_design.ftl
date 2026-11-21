@@ -648,6 +648,7 @@ cmd-view-no-point-under-cursor-fix = Không có điểm nào dưới con trỏ �
 cmd-view-released-centre-rotation = Đã giải phóng tâm xoay
 cmd-view-reset-view-fit-extents = Đặt lại khung nhìn (vừa khung)
 cmd-view-set-cinematic-view-enabled = Đặt chế độ xem điện ảnh = { $enabled }
+cmd-view-set-view-points-enabled = Đặt hiển thị điểm = { $enabled }
 cmd-view-set-xy-grid-enabled = Bật lưới XY = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Thu phóng vừa khung (giữ nguyên góc nhìn)
 
@@ -1590,6 +1591,7 @@ state-set-layer-lock = Đặt khóa lớp
 state-set-line-weight = Đặt độ dày nét
 state-set-object-colour = Đặt màu đối tượng
 state-set-object-fill = Đặt tô đối tượng
+state-set-point-visibility = Đặt hiển thị điểm
 state-set-polyline-closed = Đặt đường đa tuyến khép kín
 state-set-raster-lock = Đặt khóa ảnh raster
 state-set-standard-view = Đặt khung nhìn chuẩn
@@ -1802,10 +1804,12 @@ viewport-bar-disable-x-ray-vision = Tắt chế độ nhìn xuyên thấu
 viewport-bar-enable-x-ray-vision = Bật chế độ nhìn xuyên thấu
 viewport-bar-fill = Tô:
 viewport-bar-fix-centre-rotation = Cố định tâm xoay
+viewport-bar-hide-points = Ẩn điểm
 viewport-bar-hide-rl-grid = Ẩn lưới cao độ
 viewport-bar-hide-wireframes = Ẩn khung dây
 viewport-bar-hide-xy-grid = Ẩn lưới XY
 viewport-bar-release-centre-rotation = Giải phóng tâm xoay
+viewport-bar-show-points = Hiện điểm
 viewport-bar-show-rl-grid = Hiện lưới cao độ
 viewport-bar-show-wireframes = Hiện khung dây
 viewport-bar-show-xy-grid = Hiện lưới XY
@@ -5029,8 +5033,6 @@ pit-design-topography-help = Mặt đất mà thiết kế được dựng tới
 pit-design-topography-none = Không
 pit-design-ramp-section = Đường dốc
 pit-design-ramp-width = Chiều rộng
-pit-design-ramp-gradient = Độ dốc
-pit-design-ramp-gradient-help = Chênh cao trên chiều dài. Được giữ dọc theo mép dốc hơn của đường, nên ở khúc cua mép trong không dốc hơn mức này.
 pit-design-ramp-start = Bắt đầu tại
 pit-design-ramp-start-help = Nơi đường dốc rời khỏi đường. Kéo dấu chữ thập xanh của nó dọc theo đường trong khung nhìn, hoặc nhấn Di chuyển rồi nhấp vào nơi nó nên rời đi.
 pit-design-ramp-start-default = Đầu đường
@@ -5048,10 +5050,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = Kéo để dời điểm bắt đầu đường dốc
 pit-design-ramp-drag-prompt = Thả trên đường tại nơi đường dốc nên rời khỏi nó.
 pit-design-ramp-start-prompt = Nhấp vào đường xuất phát tại nơi đường dốc rời khỏi nó.
-pit-design-climbs = Leo
-pit-design-climbs-help = Đường dốc leo quanh moong theo chiều nào, nhìn từ trên xuống.
-pit-design-clockwise = Theo chiều kim đồng hồ
-pit-design-anticlockwise = Ngược chiều kim đồng hồ
 pit-design-layout = Bố trí
 pit-design-layout-help = Đường xoắn ốc tiếp tục vòng quanh các bờ theo chiều leo. Đường chữ chi quay đầu trên một bãi phẳng sau mỗi vài tầng, nơi các bờ chừa chỗ để quay đầu.
 pit-design-spiral = Xoắn ốc
@@ -5227,15 +5225,19 @@ pit-design-table-narrow-hint = Hẹp hơn { $width } m yêu cầu, ở nơi nó 
 pit-design-checks = Kiểm tra
 pit-design-checks-pass = Mọi kiểm tra đều đạt: độ dốc, bề rộng và khúc cua của đường dốc, cùng các bờ và mái, đều như yêu cầu.
 pit-design-checks-pass-short = Mọi kiểm tra đều đạt.
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] Một chỗ không đạt
-       *[other] { $count } chỗ không đạt
+        [one] Một chỗ chưa đạt, đã đánh dấu trong khung nhìn
+       *[other] { $count } chỗ chưa đạt, đã đánh dấu trong khung nhìn
     }
-pit-design-checks-what = Kiểm tra
-pit-design-checks-is = Đạt được
-pit-design-checks-asked = Yêu cầu
-pit-design-checks-help = Rê con trỏ lên một kiểm tra để tìm nó trong khung nhìn, hoặc nhấp để đến đó.
+pit-design-gizmo-width-hint = Kéo để đổi bề rộng đường dốc
+pit-design-gizmo-turn-hint = Nhấp để đường dốc lên theo chiều kia
+pit-design-gizmo-grade-hint = Kéo vòng để đổi độ dốc đường dốc
+pit-design-gizmo-height-hint = Kéo để đổi chiều cao tầng
+pit-design-gizmo-angle-hint = Kéo vòng để đổi góc mái
+pit-design-gizmo-berm-hint = Kéo để đổi bề rộng đai
+pit-design-gizmo-dragging = Thả ra để đặt.
+pit-design-gizmo-fine = Shift để bước nhỏ hơn
 pit-design-check-steep = Đường dốc quá dốc
 pit-design-check-flatter = Đường dốc thoải hơn
 pit-design-check-narrow = Đường dốc quá hẹp

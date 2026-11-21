@@ -621,6 +621,7 @@ cmd-view-no-point-under-cursor-fix = 光标下没有可用于固定旋转中心�
 cmd-view-released-centre-rotation = 已释放旋转中心
 cmd-view-reset-view-fit-extents = 重置视图（适合范围）
 cmd-view-set-cinematic-view-enabled = 设置电影视图 = { $enabled }
+cmd-view-set-view-points-enabled = 设置视图点 = { $enabled }
 cmd-view-set-xy-grid-enabled = 设置 XY 网格 = { $enabled }
 cmd-view-zoom-extents-preserving-angle = 缩放至范围（保留角度）
 
@@ -1563,6 +1564,7 @@ state-set-layer-lock = 设置层锁
 state-set-line-weight = 设置线宽
 state-set-object-colour = 设置对象颜色
 state-set-object-fill = 设置对象填充
+state-set-point-visibility = 设置点可见性
 state-set-polyline-closed = 设置多段线为闭合
 state-set-raster-lock = 设置栅格锁
 state-set-standard-view = 设置标准视图
@@ -1775,10 +1777,12 @@ viewport-bar-disable-x-ray-vision = 禁用透视模式
 viewport-bar-enable-x-ray-vision = 启用透视模式
 viewport-bar-fill = 填充:
 viewport-bar-fix-centre-rotation = 固定旋转中心
+viewport-bar-hide-points = 隐藏点
 viewport-bar-hide-rl-grid = 隐藏 RL 网格
 viewport-bar-hide-wireframes = 隐藏线框
 viewport-bar-hide-xy-grid = 隐藏 XY 网格
 viewport-bar-release-centre-rotation = 释放旋转中心
+viewport-bar-show-points = 显示点
 viewport-bar-show-rl-grid = 显示 RL 网格
 viewport-bar-show-wireframes = 显示线框
 viewport-bar-show-xy-grid = 显示 XY 网格
@@ -5001,8 +5005,6 @@ pit-design-topography-help = 设计构建所至的地面：采坑在其上出露
 pit-design-topography-none = 无
 pit-design-ramp-section = 坡道
 pit-design-ramp-width = 宽度
-pit-design-ramp-gradient = 坡度
-pit-design-ramp-gradient-help = 高差与水平距离之比。沿道路较陡的一侧边缘保持,因此在弯道处其内侧边缘不会比此更陡。
 pit-design-ramp-start = 起点
 pit-design-ramp-start-help = 坡道离开线条的位置。在视图中沿线条拖动其绿色十字，或单击移动，然后单击应改为离开的位置。
 pit-design-ramp-start-default = 线的起点
@@ -5020,10 +5022,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = 拖动以移动坡道起点
 pit-design-ramp-drag-prompt = 在坡道应离开的线条位置松开。
 pit-design-ramp-start-prompt = 在坡道离开起始线的位置点击该线。
-pit-design-climbs = 上升方向
-pit-design-climbs-help = 从上方看,坡道绕采坑上升的方向。
-pit-design-clockwise = 顺时针
-pit-design-anticlockwise = 逆时针
 pit-design-layout = 布置
 pit-design-layout-help = 螺旋式沿上升方向继续绕边帮延伸。之字形每隔若干台阶在平坦的回车平台上折返,前提是边帮留有转弯空间。
 pit-design-spiral = 螺旋式
@@ -5199,15 +5197,19 @@ pit-design-table-narrow-hint = 在墙体转弯处衔接的位置，比要求的 
 pit-design-checks = 检查
 pit-design-checks-pass = 全部检查通过：坡道的坡度、宽度和转弯，以及平台和台阶坡面均符合要求。
 pit-design-checks-pass-short = 全部检查通过。
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] 有一处未达到设置
-       *[other] 有 { $count } 处未达到设置
+        [one] 有 1 处未达要求（已在视图中标出）
+       *[other] 有 { $count } 处未达要求（已在视图中标出）
     }
-pit-design-checks-what = 检查
-pit-design-checks-is = 结果
-pit-design-checks-asked = 要求
-pit-design-checks-help = 将指针悬停在检查项上可在视图中找到它，单击可转到该处。
+pit-design-gizmo-width-hint = 拖动以更改坡道宽度
+pit-design-gizmo-turn-hint = 单击使其沿另一方向爬升
+pit-design-gizmo-grade-hint = 沿圆环拖动以更改坡道坡度
+pit-design-gizmo-height-hint = 拖动以更改台阶高度
+pit-design-gizmo-angle-hint = 沿圆环拖动以更改坡面角
+pit-design-gizmo-berm-hint = 拖动以更改平台宽度
+pit-design-gizmo-dragging = 松开以设定。
+pit-design-gizmo-fine = 按住 Shift 以更细步长
 pit-design-check-steep = 坡道过陡
 pit-design-check-flatter = 坡道偏缓
 pit-design-check-narrow = 坡道过窄

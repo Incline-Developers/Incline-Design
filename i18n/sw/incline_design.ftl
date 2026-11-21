@@ -653,6 +653,7 @@ cmd-view-no-point-under-cursor-fix = Hakuna kidokezo chini ya kishale cha kufung
 cmd-view-released-centre-rotation = Kitovu cha mzunguko kimeachiliwa
 cmd-view-reset-view-fit-extents = Rejesha mwonekano (oanisha na wigo)
 cmd-view-set-cinematic-view-enabled = Weka mwonekano wa sinema = { $enabled }
+cmd-view-set-view-points-enabled = Mwonekano wa vidokezo umewekwa = { $enabled }
 cmd-view-set-xy-grid-enabled = Weka gridi ya XY = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Kuza kwa wigo wote (ukihifadhi pembe)
 
@@ -1595,6 +1596,7 @@ state-set-layer-lock = Weka Ufungaji wa Tabaka
 state-set-line-weight = Weka Uzito wa Mstari
 state-set-object-colour = Weka Rangi ya Kitu
 state-set-object-fill = Weka Ujazaji wa Kitu
+state-set-point-visibility = Weka Mwonekano wa Kidokezo
 state-set-polyline-closed = Weka Mstari wa Pointi Nyingi Kufungwa
 state-set-raster-lock = Weka Ufungaji wa Rasta
 state-set-standard-view = Weka Mwonekano wa Kawaida
@@ -1807,10 +1809,12 @@ viewport-bar-disable-x-ray-vision = Zima Mwono wa X-Ray
 viewport-bar-enable-x-ray-vision = Washa Mwono wa X-Ray
 viewport-bar-fill = Jaza:
 viewport-bar-fix-centre-rotation = Funga Kitovu cha Mzunguko
+viewport-bar-hide-points = Ficha Vidokezo
 viewport-bar-hide-rl-grid = Ficha Gridi ya RL
 viewport-bar-hide-wireframes = Ficha Nyaya
 viewport-bar-hide-xy-grid = Ficha Gridi ya XY
 viewport-bar-release-centre-rotation = Achilia Kitovu cha Mzunguko
+viewport-bar-show-points = Onyesha Vidokezo
 viewport-bar-show-rl-grid = Onyesha Gridi ya RL
 viewport-bar-show-wireframes = Onyesha Nyaya
 viewport-bar-show-xy-grid = Onyesha Gridi ya XY
@@ -5033,8 +5037,6 @@ pit-design-topography-help = Ardhi ambayo usanifu hujengwa hadi kuifikia: shimo 
 pit-design-topography-none = Hakuna
 pit-design-ramp-section = Barabara ya mteremko
 pit-design-ramp-width = Upana
-pit-design-ramp-gradient = Mwinuko
-pit-design-ramp-gradient-help = Kupanda kwa urefu. Hushikwa kando ya ukingo wenye mwinuko zaidi wa barabara, hivyo kwenye kona ukingo wake wa ndani hauna mwinuko zaidi ya huu.
 pit-design-ramp-start = Inaanzia
 pit-design-ramp-start-help = Mahali barabara inapoacha mstari. Buruta msalaba wake wa kijani kando ya mstari kwenye mwonekano, au bonyeza Hamisha kisha ubofye mahali inapopaswa kuacha.
 pit-design-ramp-start-default = Mwanzo wa mstari
@@ -5052,10 +5054,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = Buruta ili kuhamisha mwanzo wa barabara
 pit-design-ramp-drag-prompt = Achilia kwenye mstari mahali barabara inapopaswa kuuacha.
 pit-design-ramp-start-prompt = Bofya mstari wa kuanzia mahali barabara ya mteremko inapouacha.
-pit-design-climbs = Hupanda
-pit-design-climbs-help = Upande ambao barabara ya mteremko hupanda kuzunguka shimo, ikitazamwa kutoka juu.
-pit-design-clockwise = Kwa mwelekeo wa saa
-pit-design-anticlockwise = Kinyume cha mwelekeo wa saa
 pit-design-layout = Mpangilio
 pit-design-layout-help = Mzunguko huendelea kuzunguka kuta upande unaopanda. Zigizaga hugeuka nyuma kwenye jukwaa tambarare kila baada ya ngazi kadhaa, mahali kuta zinapoacha nafasi ya kugeuka.
 pit-design-spiral = Mzunguko
@@ -5233,15 +5231,19 @@ pit-design-table-narrow-hint = Nyembamba kuliko m { $width } zilizoombwa, mahali
 pit-design-checks = Ukaguzi
 pit-design-checks-pass = Ukaguzi wote umepita: mwinuko, upana na kona za njia panda, pamoja na berm na kuta, ni kama ulivyoombwa.
 pit-design-checks-pass-short = Ukaguzi wote umepita.
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] Mahali pamoja hapatimizi
-       *[other] Mahali { $count } hapatimizi
+        [one] Sehemu moja haitimizi, imewekwa alama kwenye mwonekano
+       *[other] Sehemu { $count } hazitimizi, zimewekwa alama kwenye mwonekano
     }
-pit-design-checks-what = Ukaguzi
-pit-design-checks-is = Matokeo
-pit-design-checks-asked = Kilichoombwa
-pit-design-checks-help = Weka kiashiria juu ya ukaguzi ili kuupata kwenye mwonekano, au bofya kwenda huko.
+pit-design-gizmo-width-hint = Buruta ili kubadilisha upana wa barabara
+pit-design-gizmo-turn-hint = Bofya ili ipande upande mwingine
+pit-design-gizmo-grade-hint = Buruta kuzunguka ili kubadilisha mteremko wa barabara
+pit-design-gizmo-height-hint = Buruta ili kubadilisha urefu wa benchi
+pit-design-gizmo-angle-hint = Buruta kuzunguka ili kubadilisha pembe ya uso
+pit-design-gizmo-berm-hint = Buruta ili kubadilisha upana wa berm
+pit-design-gizmo-dragging = Achilia ili kuweka.
+pit-design-gizmo-fine = Shift kwa hatua ndogo zaidi
 pit-design-check-steep = Njia panda ina mwinuko mkubwa mno
 pit-design-check-flatter = Njia panda ina mwinuko mdogo
 pit-design-check-narrow = Njia panda ni nyembamba mno

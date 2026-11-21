@@ -621,6 +621,7 @@ cmd-view-no-point-under-cursor-fix = घूर्णन केंद्र त�
 cmd-view-released-centre-rotation = घूर्णन केंद्र मुक्त किया गया
 cmd-view-reset-view-fit-extents = दृश्य रीसेट करें (सीमाओं में फिट करें)
 cmd-view-set-cinematic-view-enabled = सिनेमैटिक दृश्य सेट करें = { $enabled }
+cmd-view-set-view-points-enabled = दृश्य बिंदु सेट करें = { $enabled }
 cmd-view-set-xy-grid-enabled = XY ग्रिड सक्षम = { $enabled }
 cmd-view-zoom-extents-preserving-angle = सीमाओं तक ज़ूम करें (कोण बनाए रखते हुए)
 
@@ -1563,6 +1564,7 @@ state-set-layer-lock = लेयर लॉक सेट करें
 state-set-line-weight = रेखा भार निर्धारित करें
 state-set-object-colour = वस्तु का रंग सेट करें
 state-set-object-fill = वस्तु भराव सेट करें
+state-set-point-visibility = पॉइंट दृश्यता सेट करें
 state-set-polyline-closed = पॉलीलाइन बंद सेट करें
 state-set-raster-lock = रास्टर लॉक सेट करें
 state-set-standard-view = मानक दृश्य सेट करें
@@ -1775,10 +1777,12 @@ viewport-bar-disable-x-ray-vision = एक्स-रे दृश्य अक�
 viewport-bar-enable-x-ray-vision = एक्स-रे दृश्य सक्षम करें
 viewport-bar-fill = भरें:
 viewport-bar-fix-centre-rotation = घूर्णन केंद्र तय करें
+viewport-bar-hide-points = बिंदु छिपाएँ
 viewport-bar-hide-rl-grid = ऊंचाई ग्रिड छिपाएँ
 viewport-bar-hide-wireframes = वायरफ़्रेम छिपाएँ
 viewport-bar-hide-xy-grid = XY ग्रिड छिपाएँ
 viewport-bar-release-centre-rotation = घूर्णन केंद्र मुक्त करें
+viewport-bar-show-points = बिंदु दिखाएँ
 viewport-bar-show-rl-grid = ऊंचाई ग्रिड दिखाएँ
 viewport-bar-show-wireframes = वायरफ़्रेम दिखाएँ
 viewport-bar-show-xy-grid = XY ग्रिड दिखाएँ
@@ -5001,8 +5005,6 @@ pit-design-topography-help = वह ज़मीन जहाँ तक डि�
 pit-design-topography-none = कोई नहीं
 pit-design-ramp-section = रैंप
 pit-design-ramp-width = चौड़ाई
-pit-design-ramp-gradient = ढलान
-pit-design-ramp-gradient-help = ऊँचाई प्रति दूरी। यह सड़क के अधिक ढलान वाले किनारे के साथ रखी जाती है, इसलिए मोड़ पर भीतरी किनारा इससे अधिक ढलान वाला नहीं होता।
 pit-design-ramp-start = शुरू होता है
 pit-design-ramp-start-help = जहाँ रैंप रेखा से निकलता है। दृश्य में उसके हरे क्रॉस को रेखा के साथ खींचें, या खिसकाएँ दबाएँ और वहाँ क्लिक करें जहाँ उसे निकलना चाहिए।
 pit-design-ramp-start-default = रेखा का आरंभ
@@ -5020,10 +5022,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = रैंप की शुरुआत खिसकाने के लिए खींचें
 pit-design-ramp-drag-prompt = रेखा पर वहाँ छोड़ें जहाँ रैंप को उससे निकलना चाहिए।
 pit-design-ramp-start-prompt = आरंभिक रेखा पर वहाँ क्लिक करें जहाँ रैंप उसे छोड़ता है।
-pit-design-climbs = चढ़ाई
-pit-design-climbs-help = ऊपर से देखने पर रैंप पिट के चारों ओर किस दिशा में चढ़ता है।
-pit-design-clockwise = दक्षिणावर्त
-pit-design-anticlockwise = वामावर्त
 pit-design-layout = विन्यास
 pit-design-layout-help = सर्पिल चढ़ाई की दिशा में दीवारों के चारों ओर चलता रहता है। स्विचबैक हर कुछ बेंचों पर एक समतल पैड पर वापस मुड़ता है, जहाँ दीवारें मोड़ के लिए जगह छोड़ती हैं।
 pit-design-spiral = सर्पिल
@@ -5201,15 +5199,19 @@ pit-design-table-narrow-hint = माँगी गई { $width } मी से �
 pit-design-checks = जाँचें
 pit-design-checks-pass = सभी जाँचें पास: रैम्प का ढाल, चौड़ाई और मोड़, तथा बर्म और फेस, जैसा माँगा गया वैसे हैं।
 pit-design-checks-pass-short = सभी जाँचें पास।
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] एक जगह कम पड़ती है
-       *[other] { $count } जगहें कम पड़ती हैं
+        [one] एक जगह कमी है, दृश्य में चिह्नित
+       *[other] { $count } जगह कमी है, दृश्य में चिह्नित
     }
-pit-design-checks-what = जाँच
-pit-design-checks-is = परिणाम
-pit-design-checks-asked = माँगा गया
-pit-design-checks-help = किसी जाँच को दृश्य में खोजने के लिए उस पर पॉइंटर रखें, या वहाँ जाने के लिए क्लिक करें।
+pit-design-gizmo-width-hint = रैंप की चौड़ाई बदलने के लिए खींचें
+pit-design-gizmo-turn-hint = दूसरी दिशा में चढ़ाने के लिए क्लिक करें
+pit-design-gizmo-grade-hint = रैंप की ढलान बदलने के लिए घेरे पर घुमाएँ
+pit-design-gizmo-height-hint = बेंच की ऊँचाई बदलने के लिए खींचें
+pit-design-gizmo-angle-hint = फेस कोण बदलने के लिए घेरे पर घुमाएँ
+pit-design-gizmo-berm-hint = बर्म की चौड़ाई बदलने के लिए खींचें
+pit-design-gizmo-dragging = तय करने के लिए छोड़ें।
+pit-design-gizmo-fine = बारीक कदमों के लिए Shift
 pit-design-check-steep = रैम्प बहुत खड़ा
 pit-design-check-flatter = रैम्प कम ढलवाँ
 pit-design-check-narrow = रैम्प बहुत संकरा

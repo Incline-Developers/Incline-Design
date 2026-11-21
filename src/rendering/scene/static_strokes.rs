@@ -94,6 +94,8 @@ pub(crate) struct StaticStrokeCache {
     claimed_key: u64,
     cached_scene_origin: DVec3,
     cached_scale_factor: f32,
+    /// Whether the members' vertices are drawn as dots.
+    cached_show_points: bool,
 }
 
 /// Everything the cache bakes into vertices besides the object's own data.
@@ -198,12 +200,14 @@ impl StaticStrokeCache {
         scale_factor: f32,
     ) {
         let limits = StaticStrokeLimits::from_device(device);
-        // Origin and scale factor are baked into every instance.
-        if scene_origin != self.cached_scene_origin || (scale_factor - self.cached_scale_factor).abs() > f32::EPSILON {
+        // Origin, scale factor and the vertices' dots are baked into every
+        // instance.
+        if scene_origin != self.cached_scene_origin || (scale_factor - self.cached_scale_factor).abs() > f32::EPSILON || editor.show_points != self.cached_show_points {
             self.chunks.clear();
             self.object_chunk.clear();
             self.cached_scene_origin = scene_origin;
             self.cached_scale_factor = scale_factor;
+            self.cached_show_points = editor.show_points;
         }
 
         self.claimed.clear();
@@ -324,6 +328,7 @@ impl StaticStrokeCache {
         scale_factor: f32,
         limits: StaticStrokeLimits,
     ) {
+        let show_points = self.cached_show_points;
         let chunk = &mut self.chunks[chunk_index];
         chunk.strokes.clear();
         chunk.records.clear();
@@ -346,7 +351,9 @@ impl StaticStrokeCache {
                 let mut draw_ctx = DrawContext::unstyled(&mut chunk.strokes, &mut unused_fill_vertices, &mut unused_fill_indices, scene_origin, scale_factor);
                 draw_ctx.style = slots.slot(id);
                 tessellate_polyline_stroke(&mut draw_ctx, verts, *closed, *line_weight, rgba);
-                draw_vertex_dots(&mut draw_ctx, verts, *line_weight, rgba);
+                if show_points {
+                    draw_vertex_dots(&mut draw_ctx, verts, *line_weight, rgba);
+                }
             }
             let stroke_end = chunk.strokes.len() as u32;
             if stroke_end > stroke_start

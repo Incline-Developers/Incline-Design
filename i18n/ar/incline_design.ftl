@@ -621,6 +621,7 @@ cmd-view-no-point-under-cursor-fix = لا توجد نقطة تحت المؤشر 
 cmd-view-released-centre-rotation = تم تحرير مركز الدوران
 cmd-view-reset-view-fit-extents = إعادة تعيين العرض (ملاءمة للحدود)
 cmd-view-set-cinematic-view-enabled = تعيين العرض السينمائي = { $enabled }
+cmd-view-set-view-points-enabled = تعيين نقاط العرض = { $enabled }
 cmd-view-set-xy-grid-enabled = تفعيل شبكة XY = { $enabled }
 cmd-view-zoom-extents-preserving-angle = التكبير إلى الحدود (مع الحفاظ على الزاوية)
 
@@ -1563,6 +1564,7 @@ state-set-layer-lock = تعيين قفل الطبقة
 state-set-line-weight = تعيين وزن الخط
 state-set-object-colour = تعيين لون الكائن
 state-set-object-fill = تعيين تعبئة الكائن
+state-set-point-visibility = تعيين رؤية النقطة
 state-set-polyline-closed = تعيين إغلاق الخط المتعدد المقاطع
 state-set-raster-lock = تعيين قفل البيانات النقطية
 state-set-standard-view = تعيين المشاهدة القياسية
@@ -1775,10 +1777,12 @@ viewport-bar-disable-x-ray-vision = تعطيل الرؤية بالأشعة ال�
 viewport-bar-enable-x-ray-vision = تمكين الرؤية بالأشعة السينية
 viewport-bar-fill = ملء:
 viewport-bar-fix-centre-rotation = تثبيت مركز الدوران
+viewport-bar-hide-points = إخفاء النقاط
 viewport-bar-hide-rl-grid = إخفاء شبكة المناسيب
 viewport-bar-hide-wireframes = إخفاء الإطارات السلكية
 viewport-bar-hide-xy-grid = إخفاء شبكة XY
 viewport-bar-release-centre-rotation = تحرير مركز الدوران
+viewport-bar-show-points = إظهار النقاط
 viewport-bar-show-rl-grid = إظهار شبكة المناسيب
 viewport-bar-show-wireframes = إظهار الإطارات السلكية
 viewport-bar-show-xy-grid = إظهار شبكة XY
@@ -5043,8 +5047,6 @@ pit-design-topography-help = الأرض التي يُبنى التصميم حت�
 pit-design-topography-none = لا شيء
 pit-design-ramp-section = المنحدر
 pit-design-ramp-width = العرض
-pit-design-ramp-gradient = الميل
-pit-design-ramp-gradient-help = الارتفاع إلى المسافة الأفقية. يُحافَظ عليه على امتداد الحافة الأشد انحدارًا من الطريق، فلا تكون حافته الداخلية عند المنعطف أشد انحدارًا من ذلك.
 pit-design-ramp-start = يبدأ عند
 pit-design-ramp-start-help = حيث يغادر المنحدر الخط. اسحب علامته الخضراء على الخط في العرض، أو اضغط «نقل» وانقر حيث ينبغي أن يغادره بدلًا من ذلك.
 pit-design-ramp-start-default = بداية الخط
@@ -5062,10 +5064,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = اسحب لتغيير مكان بدء المنحدر
 pit-design-ramp-drag-prompt = أفلت الزر على الخط حيث ينبغي أن يغادره المنحدر.
 pit-design-ramp-start-prompt = انقر على خط البداية حيث يغادره المنحدر.
-pit-design-climbs = اتجاه الصعود
-pit-design-climbs-help = الاتجاه الذي يصعد فيه المنحدر حول الحفرة، منظورًا من الأعلى.
-pit-design-clockwise = باتجاه عقارب الساعة
-pit-design-anticlockwise = عكس اتجاه عقارب الساعة
 pit-design-layout = التخطيط
 pit-design-layout-help = يستمر الحلزون حول الجدران في اتجاه صعوده. ويرتد المتعرج على منصة مستوية كل بضع مصاطب، حيث تترك الجدران مكانًا للانعطاف.
 pit-design-spiral = حلزوني
@@ -5251,15 +5249,19 @@ pit-design-table-narrow-hint = أضيق من { $width } م المطلوبة، ح
 pit-design-checks = الفحوص
 pit-design-checks-pass = اجتازت كل الفحوص: ميل المنحدر وعرضه ومنعطفاته، والمصاطب والوجوه، كما طُلب.
 pit-design-checks-pass-short = اجتازت كل الفحوص.
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] موضع واحد لا يفي
-       *[other] { $count } مواضع لا تفي
+        [one] موضع واحد لا يفي بالمطلوب، ومُعلَّم في العرض
+       *[other] { $count } مواضع لا تفي بالمطلوب، ومُعلَّمة في العرض
     }
-pit-design-checks-what = الفحص
-pit-design-checks-is = القيمة
-pit-design-checks-asked = المطلوب
-pit-design-checks-help = مرّر المؤشر فوق فحص لتجده في العرض، أو انقر للانتقال إليه.
+pit-design-gizmo-width-hint = اسحب لتغيير عرض المنحدر
+pit-design-gizmo-turn-hint = انقر ليصعد في الاتجاه الآخر
+pit-design-gizmo-grade-hint = اسحب حول الحلقة لتغيير انحدار المنحدر
+pit-design-gizmo-height-hint = اسحب لتغيير ارتفاع المدرّج
+pit-design-gizmo-angle-hint = اسحب حول الحلقة لتغيير زاوية الواجهة
+pit-design-gizmo-berm-hint = اسحب لتغيير عرض الرصيف
+pit-design-gizmo-dragging = أفلت الزر لتثبيته.
+pit-design-gizmo-fine = Shift لخطوات أدق
 pit-design-check-steep = المنحدر شديد الميل
 pit-design-check-flatter = المنحدر أقل ميلًا
 pit-design-check-narrow = المنحدر ضيق

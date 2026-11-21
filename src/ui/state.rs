@@ -2132,6 +2132,9 @@ pub(crate) struct EditorState {
     /// Draw contour bands on all topology meshes, at an interval that
     /// follows zoom, in the wireframe's colour.
     pub(crate) topology_contours_enabled: bool,
+    /// Show a dot at every vertex of polylines and pit designs, in their own
+    /// colours, drawn with the lines.
+    pub(crate) show_points: bool,
     /// The UI language in force, which the status bar's picker changes live.
     /// Read only to tick the running language in that picker - what the strings
     /// themselves come from is the loader in [`crate::i18n`].
@@ -4148,6 +4151,7 @@ impl EditorState {
             translucent_handles: HashSet::new(),
             topology_wireframes_enabled: false,
             topology_contours_enabled: false,
+            show_points: false,
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
@@ -5756,6 +5760,7 @@ pub(crate) enum UiCommand {
     SetGridShown(bool),
     SetTopologyWireframes(bool),
     SetTopologyContours(bool),
+    SetShowPoints(bool),
     /// Presentation shading over the scene pass. Native only.
     #[cfg(not(target_arch = "wasm32"))]
     SetCinematicEnabled(bool),
@@ -6814,6 +6819,7 @@ impl UiCommand {
             Self::SetTopologyWireframes(enabled) => report(tr!("state-set-topology-wireframes"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::SetTopologyContours(enabled) => report(tr!("state-set-topology-contours"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::SetGridShown(shown) => report(tr!("state-set-grid"), if *shown { tr!("state-shown") } else { tr!("state-hidden") }),
+            Self::SetShowPoints(enabled) => report(tr!("state-set-point-visibility"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             #[cfg(not(target_arch = "wasm32"))]
             Self::SetCinematicEnabled(enabled) => report(tr!("state-set-cinematic-view"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
             Self::SetStandardView(view) => report(tr!("state-set-standard-view"), view.label()),

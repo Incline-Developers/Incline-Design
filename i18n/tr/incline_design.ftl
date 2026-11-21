@@ -663,6 +663,7 @@ cmd-view-no-point-under-cursor-fix = İmlecin altında dönüş merkezinin sabit
 cmd-view-released-centre-rotation = Dönüş merkezi serbest bırakıldı
 cmd-view-reset-view-fit-extents = Görünümü sıfırla (kapsama sığdır)
 cmd-view-set-cinematic-view-enabled = Sinematik görünüm = { $enabled } olarak ayarlandı
+cmd-view-set-view-points-enabled = Görünüm noktaları = { $enabled } olarak ayarlandı
 cmd-view-set-xy-grid-enabled = XY ızgarası etkin = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Kapsama yakınlaştır (açıyı koru)
 
@@ -1605,6 +1606,7 @@ state-set-layer-lock = Katman Kilidini Ayarla
 state-set-line-weight = Çizgi Kalınlığını Ayarla
 state-set-object-colour = Nesne Rengini Ayarla
 state-set-object-fill = Nesne Dolgusunu Ayarla
+state-set-point-visibility = Nokta Görünürlüğünü Ayarla
 state-set-polyline-closed = Çoklu Çizgiyi Kapalı Yap
 state-set-raster-lock = Raster Kilidini Ayarla
 state-set-standard-view = Standart Görünümü Ayarla
@@ -1817,10 +1819,12 @@ viewport-bar-disable-x-ray-vision = X-Ray Görüşünü Devre Dışı Bırak
 viewport-bar-enable-x-ray-vision = X-Ray Görüşünü Etkinleştir
 viewport-bar-fill = Dolgu:
 viewport-bar-fix-centre-rotation = Dönüş Merkezini Sabitle
+viewport-bar-hide-points = Noktaları Gizle
 viewport-bar-hide-rl-grid = Kot Izgarasını Gizle
 viewport-bar-hide-wireframes = Tel Kafesleri Gizle
 viewport-bar-hide-xy-grid = XY Izgarasını Gizle
 viewport-bar-release-centre-rotation = Dönüş Merkezini Serbest Bırak
+viewport-bar-show-points = Noktaları Göster
 viewport-bar-show-rl-grid = Kot Izgarasını Göster
 viewport-bar-show-wireframes = Tel Kafesleri Göster
 viewport-bar-show-xy-grid = XY Izgarasını Göster
@@ -5043,8 +5047,6 @@ pit-design-topography-help = Tasarımın kurulduğu zemin: ocak ona karşı yüz
 pit-design-topography-none = Yok
 pit-design-ramp-section = Rampa
 pit-design-ramp-width = Genişlik
-pit-design-ramp-gradient = Eğim
-pit-design-ramp-gradient-help = Yükseliş bölü uzunluk. Yolun daha dik kenarı boyunca tutulur, böylece bir virajda iç kenarı bundan daha dik olmaz.
 pit-design-ramp-start = Başladığı yer
 pit-design-ramp-start-help = Rampanın çizgiden ayrıldığı yer. Görünümde yeşil artısını çizgi boyunca sürükleyin ya da Taşı'ya basıp ayrılması gereken yere tıklayın.
 pit-design-ramp-start-default = Çizginin başı
@@ -5062,10 +5064,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = Rampanın başlangıcını taşımak için sürükleyin
 pit-design-ramp-drag-prompt = Rampanın ayrılması gereken yerde çizginin üzerinde bırakın.
 pit-design-ramp-start-prompt = Başlangıç çizgisine rampanın ondan ayrıldığı yerde tıklayın.
-pit-design-climbs = Tırmanış
-pit-design-climbs-help = Rampanın yukarıdan bakıldığında ocağın çevresinde hangi yönde tırmandığı.
-pit-design-clockwise = Saat yönünde
-pit-design-anticlockwise = Saat yönünün tersine
 pit-design-layout = Düzen
 pit-design-layout-help = Spiral, tırmandığı yönde duvarların çevresinde devam eder. Zikzak, duvarların dönüşe yer bıraktığı yerde, belirli sayıda basamakta bir düz bir platformda geri döner.
 pit-design-spiral = Spiral
@@ -5241,15 +5239,19 @@ pit-design-table-narrow-hint = Duvarın bir dönüşünde bağlandığı yerde i
 pit-design-checks = Denetimler
 pit-design-checks-pass = Tüm denetimler geçti: rampanın eğimi, genişliği ve dönüşleri ile bermeler ve şevler istendiği gibi.
 pit-design-checks-pass-short = Tüm denetimler geçti.
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] Bir yer karşılamıyor
-       *[other] { $count } yer karşılamıyor
+        [one] Bir yer ayarları karşılamıyor, görünümde işaretli
+       *[other] { $count } yer ayarları karşılamıyor, görünümde işaretli
     }
-pit-design-checks-what = Denetim
-pit-design-checks-is = Sonuç
-pit-design-checks-asked = İstenen
-pit-design-checks-help = Görünümde bulmak için bir denetimin üzerine gelin veya oraya gitmek için tıklayın.
+pit-design-gizmo-width-hint = Rampanın genişliğini değiştirmek için sürükleyin
+pit-design-gizmo-turn-hint = Diğer yöne çıkması için tıklayın
+pit-design-gizmo-grade-hint = Rampanın eğimini değiştirmek için çevresinde sürükleyin
+pit-design-gizmo-height-hint = Basamak yüksekliğini değiştirmek için sürükleyin
+pit-design-gizmo-angle-hint = Şev açısını değiştirmek için çevresinde sürükleyin
+pit-design-gizmo-berm-hint = Berm genişliğini değiştirmek için sürükleyin
+pit-design-gizmo-dragging = Ayarlamak için bırakın.
+pit-design-gizmo-fine = Daha ince adımlar için Shift
 pit-design-check-steep = Rampa çok dik
 pit-design-check-flatter = Rampa daha yatık
 pit-design-check-narrow = Rampa çok dar

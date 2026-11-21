@@ -561,6 +561,13 @@ struct UiFrameContext<'a> {
 /// to, the way out, why it is being asked - goes in `minor` rather than being
 /// punctuated onto the end, so the banner can dim it. See [`ViewportMessage`].
 fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
+    if editor
+        .pit_design
+        .as_ref()
+        .is_some_and(|draft| draft.widening.is_some() || draft.grading.is_some() || draft.wall_drag.is_some())
+    {
+        return Some(ViewportMessage::text(tr!("pit-design-gizmo-dragging")).minor(tr!("pit-design-gizmo-fine")));
+    }
     if editor.pit_design.as_ref().is_some_and(|draft| draft.dragging_ramp.is_some()) {
         return Some(ViewportMessage::text(tr!("pit-design-ramp-drag-prompt")).minor(tr!("ui-esc-cancels")));
     }
@@ -1911,11 +1918,11 @@ const GIZMO_AXIS_COLORS: [egui::Color32; 3] = [
     egui::Color32::from_rgb(46, 138, 248),
 ];
 /// Opacity of an idle handle; a hovered or dragged one goes fully opaque.
-const GIZMO_IDLE_ALPHA: f32 = 0.6;
-const GIZMO_HEAD_LENGTH: f32 = 13.0;
-const GIZMO_HEAD_HALF_WIDTH: f32 = 4.5;
+pub(crate) const GIZMO_IDLE_ALPHA: f32 = 0.6;
+pub(crate) const GIZMO_HEAD_LENGTH: f32 = 13.0;
+pub(crate) const GIZMO_HEAD_HALF_WIDTH: f32 = 4.5;
 
-fn gizmo_color(color: egui::Color32, alpha: f32) -> egui::Color32 {
+pub(crate) fn gizmo_color(color: egui::Color32, alpha: f32) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), (alpha.clamp(0.0, 1.0) * 255.0) as u8)
 }
 
@@ -2007,7 +2014,7 @@ fn draw_move_gizmo(root_ui: &egui::Ui, editor: &EditorState) {
 /// what it changes is a bearing on the flat. Dip takes amber rather than an
 /// axis colour: the axis it turns about is not a world axis at all - it swings
 /// with the bearing - so naming it after one would be a lie.
-const ROTATE_RING_COLORS: [egui::Color32; 2] = [GIZMO_AXIS_COLORS[2], egui::Color32::from_rgb(247, 168, 34)];
+pub(crate) const ROTATE_RING_COLORS: [egui::Color32; 2] = [GIZMO_AXIS_COLORS[2], egui::Color32::from_rgb(247, 168, 34)];
 
 /// Draw the Rotate Collar gizmo: an azimuth ring lying flat and a dip ring
 /// standing in the vertical plane the holes point along, with a dot at the

@@ -929,7 +929,15 @@ impl App<'_> {
     /// drags it.
     pub(crate) fn update_pit_ramp_marker_hover(&mut self) {
         let under = (|| {
-            let draft = self.editor.pit_design.as_ref().filter(|draft| draft.picking_ramp.is_none() && !draft.picking_region)?;
+            // A handle under the pointer, or one being dragged, has it.
+            let draft = self.editor.pit_design.as_ref().filter(|draft| {
+                draft.picking_ramp.is_none()
+                    && !draft.picking_region
+                    && draft.gizmo_hover.is_none()
+                    && draft.widening.is_none()
+                    && draft.grading.is_none()
+                    && draft.wall_drag.is_none()
+            })?;
             let graphics = self.graphics.as_ref()?;
             let cursor = graphics.window_to_viewport_px(self.editor.cursor_screen_px?);
             let cursor = DVec2::new(f64::from(cursor.0), f64::from(cursor.1));
@@ -955,10 +963,202 @@ impl App<'_> {
         }
     }
 
-    /// A left press in the viewport with a pit open: on a ramp's start
-    /// marker, it takes the marker up to drag along the string.
+    /// Whether a gizmo's handle is being dragged.
+    pub(crate) fn dragging_pit_gizmo(&self) -> bool {
+        self.editor
+            .pit_design
+            .as_ref()
+            .is_some_and(|draft| draft.widening.is_some() || draft.grading.is_some() || draft.wall_drag.is_some())
+    }
+
+    /// Escape while a gizmo's handle is dragged: the drag is let go of and
+    /// what it changed put back.
+    pub(crate) fn cancel_pit_gizmo_drag(&mut self) {
+        if let Some(draft) = self.editor.pit_design.as_mut() {
+            if let (Some(from), Some(working)) = (draft.drag_from.take(), draft.working.as_mut()) {
+                working.settings = from;
+            }
+            draft.widening = None;
+            draft.grading = None;
+            draft.wall_drag = None;
+        }
+        self.redraw_requested = true;
+    }
+
+    /// The part of a ramp's gizmo under the pointer, or, while one is
+    /// dragged, the ramp it changes changed to where the pointer is.
+    pub(crate) fn update_pit_gizmo(&mut self) {
+        use crate::{
+            app::commands::drawing::rotate_collar::ring_angle,
+            ui::dialogs::pit_design::{GizmoPart, RING_STEPS},
+        };
+        let Some(cursor) = self.editor.cursor_screen_px else {
+            return;
+        };
+        // In round steps, or with Shift held, in fine ones.
+        let step = if self.modifiers.shift_key() { 0.1 } else { 0.5 };
+        let snapped = |value: f64| (value / step).round() * step;
+        let Some(draft) = self.editor.pit_design.as_mut() else {
+            return;
+        };
+        if let Some((index, from, width)) = draft.widening {
+            let Some(gizmo) = draft.gizmos.iter().find(|gizmo| gizmo.ramp == index) else {
+                return;
+            };
+            let moved = (cursor.0 - from.0) * gizmo.across.0 + (cursor.1 - from.1) * gizmo.across.1;
+            // A metre wide at least.
+            let widened = snapped(width + f64::from(moved / gizmo.pixels_per_metre.max(1.0e-3))).max(1.0);
+            if let Some(ramp) = draft.working.as_mut().and_then(|working| working.settings.ramps.get_mut(index))
+                && ramp.width != widened
+            {
+                ramp.width = widened;
+                self.redraw_requested = true;
+            }
+            return;
+        }
+        if let Some((index, pressed, from)) = draft.grading {
+            let Some(angle) = draft.gizmos.iter().find(|gizmo| gizmo.ramp == index).and_then(|gizmo| ring_angle(&gizmo.ring, cursor)) else {
+                return;
+            };
+            // Turned by as much as the pointer has gone round since the
+            // press, as a rotate gizmo turns: the short way round.
+            let turned = (angle - pressed + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
+            let angle = (from + turned * GRADE_RING_GEAR).clamp(0.0, std::f64::consts::FRAC_PI_2 - 1.0e-6);
+            // The ring shows the grade exaggerated; the grade is its own.
+            let gradient = snapped(angle.tan() / crate::ui::dialogs::pit_design::GRADE_EXAGGERATION * 100.0).clamp(MIN_GRADE, MAX_GRADE);
+            if let Some(ramp) = draft.working.as_mut().and_then(|working| working.settings.ramps.get_mut(index))
+                && ramp.gradient != gradient
+            {
+                ramp.gradient = gradient;
+                self.redraw_requested = true;
+            }
+            return;
+        }
+        if let Some((part, from, value, pressed)) = draft.wall_drag {
+            let (Some(gizmo), Some(working)) = (draft.wall_gizmo.as_ref(), draft.working.as_mut()) else {
+                return;
+            };
+            let settings = &mut working.settings;
+            let moved = |way: (f32, f32), per_metre: f32| f64::from(((cursor.0 - from.0) * way.0 + (cursor.1 - from.1) * way.1) / per_metre.max(1.0e-3));
+            let (field, changed) = match part {
+                GizmoPart::BenchHeight => (&mut settings.bench_height, snapped(value + moved(gizmo.up, gizmo.pixels_per_metre_up)).max(1.0)),
+                GizmoPart::Berm => (&mut settings.berm_width, snapped(value + moved(gizmo.out, gizmo.pixels_per_metre_out)).max(0.0)),
+                GizmoPart::FaceAngle => {
+                    let Some(angle) = ring_angle(&gizmo.angle_ring, cursor) else {
+                        return;
+                    };
+                    let turned = (angle - pressed + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
+                    (
+                        &mut settings.face_angle,
+                        snapped(value + turned.to_degrees() * FACE_RING_GEAR).clamp(MIN_FACE_ANGLE, MAX_FACE_ANGLE),
+                    )
+                }
+                _ => return,
+            };
+            if *field != changed {
+                *field = changed;
+                self.redraw_requested = true;
+            }
+            return;
+        }
+        let near = |point: (f32, f32)| (point.0 - cursor.0).hypot(point.1 - cursor.1) <= GIZMO_REACH;
+        let near_chain = |chain: &[(f32, f32)]| {
+            chain.windows(2).any(|pair| {
+                let (a, b) = (glam::Vec2::from(pair[0]), glam::Vec2::from(pair[1]));
+                let point = glam::Vec2::from(cursor);
+                let along = (b - a).length_squared();
+                let t = if along > 0.0 { ((point - a).dot(b - a) / along).clamp(0.0, 1.0) } else { 0.0 };
+                (a + (b - a) * t).distance(point) <= GIZMO_REACH
+            })
+        };
+        let wall = draft.wall_gizmo.as_ref().and_then(|gizmo| {
+            if near(gizmo.angle_handle) || near_chain(&gizmo.angle_ring[..=RING_STEPS / 4]) {
+                Some(GizmoPart::FaceAngle)
+            } else if near_chain(&[gizmo.crest, gizmo.height_tip]) {
+                Some(GizmoPart::BenchHeight)
+            } else if near_chain(&[gizmo.crest, gizmo.berm_tip]) {
+                Some(GizmoPart::Berm)
+            } else {
+                None
+            }
+        });
+        let hover = wall.or_else(|| {
+            draft.gizmos.iter().find_map(|gizmo| {
+                // The handles first, then the ring and arrow they sit on.
+                if near(gizmo.turn_handle) {
+                    Some(GizmoPart::Turn(gizmo.ramp))
+                } else if near(gizmo.grade_handle) || near_chain(&gizmo.ring[..=RING_STEPS / 2]) {
+                    Some(GizmoPart::Grade(gizmo.ramp))
+                } else if near_chain(&[gizmo.width_from, gizmo.width_tip]) {
+                    Some(GizmoPart::Width(gizmo.ramp))
+                } else {
+                    None
+                }
+            })
+        });
+        if draft.gizmo_hover != hover {
+            draft.gizmo_hover = hover;
+            self.redraw_requested = true;
+        }
+    }
+
+    /// A left press in the viewport with a pit open: on a ramp's width
+    /// handle, it takes it up to drag; on its arrow, the ramp climbs the
+    /// other way; on its start marker, it takes the marker up to drag along
+    /// the string.
     pub(crate) fn press_pit_design(&mut self) {
+        use crate::ui::dialogs::pit_design::GizmoPart;
         let pressed_at = self.editor.cursor_screen_px;
+        if let Some(draft) = self.editor.pit_design.as_mut() {
+            if draft.gizmo_hover.is_some() {
+                draft.drag_from = draft.working.as_ref().map(PitObject::settings);
+            }
+            match draft.gizmo_hover {
+                Some(GizmoPart::Width(index)) => {
+                    let width = draft.working.as_ref().and_then(|working| working.settings.ramps.get(index)).map(|ramp| ramp.width);
+                    if let (Some(width), Some(at)) = (width, pressed_at) {
+                        draft.widening = Some((index, at, width));
+                    }
+                    return;
+                }
+                Some(GizmoPart::Grade(index)) => {
+                    let pressed = pressed_at.and_then(|at| {
+                        let gizmo = draft.gizmos.iter().find(|gizmo| gizmo.ramp == index)?;
+                        crate::app::commands::drawing::rotate_collar::ring_angle(&gizmo.ring, at)
+                    });
+                    let gradient = draft.working.as_ref().and_then(|working| working.settings.ramps.get(index)).map(|ramp| ramp.gradient);
+                    if let (Some(pressed), Some(gradient)) = (pressed, gradient) {
+                        draft.grading = Some((index, pressed, (gradient / 100.0 * crate::ui::dialogs::pit_design::GRADE_EXAGGERATION).atan()));
+                    }
+                    return;
+                }
+                Some(GizmoPart::Turn(index)) => {
+                    if let Some(ramp) = draft.working.as_mut().and_then(|working| working.settings.ramps.get_mut(index)) {
+                        ramp.climbs_clockwise = !ramp.climbs_clockwise;
+                    }
+                    self.redraw_requested = true;
+                    return;
+                }
+                Some(part @ (GizmoPart::BenchHeight | GizmoPart::Berm | GizmoPart::FaceAngle)) => {
+                    let (Some(at), Some(settings)) = (pressed_at, draft.working.as_ref().map(|working| &working.settings)) else {
+                        return;
+                    };
+                    let value = match part {
+                        GizmoPart::BenchHeight => settings.bench_height,
+                        GizmoPart::Berm => settings.berm_width,
+                        _ => settings.face_angle,
+                    };
+                    let pressed = draft
+                        .wall_gizmo
+                        .as_ref()
+                        .and_then(|gizmo| crate::app::commands::drawing::rotate_collar::ring_angle(&gizmo.angle_ring, at))
+                        .unwrap_or(0.0);
+                    draft.wall_drag = Some((part, at, value, pressed));
+                    return;
+                }
+                None => {}
+            }
+        }
         let Some(index) = self.editor.pit_design.as_ref().and_then(|draft| draft.ramp_marker_under_cursor) else {
             return;
         };
@@ -974,6 +1174,11 @@ impl App<'_> {
     /// let go; one pressed and let go where it was waits for a click, as
     /// Move does.
     pub(crate) fn release_pit_design(&mut self) {
+        if let Some(draft) = self.editor.pit_design.as_mut()
+            && (draft.widening.take().is_some() | draft.grading.take().is_some() | draft.wall_drag.take().is_some() | draft.drag_from.take().is_some())
+        {
+            self.redraw_requested = true;
+        }
         let Some(pressed_at) = self.editor.pit_design.as_mut().and_then(|draft| draft.dragging_ramp.take()) else {
             return;
         };
@@ -1153,3 +1358,21 @@ impl App<'_> {
         Ok(ids)
     }
 }
+
+/// How near a ramp handle the pointer must come to take it, in physical
+/// pixels.
+const GIZMO_REACH: f32 = 10.0;
+
+/// How much of a sweep round a ring turns what it sets: geared down, as the
+/// rings are small on screen and faces and grades are set to fine steps.
+const FACE_RING_GEAR: f64 = 0.25;
+const GRADE_RING_GEAR: f64 = 0.5;
+
+/// The gentlest and steepest a face's ring turns a bench face to, in
+/// degrees.
+const MIN_FACE_ANGLE: f64 = 20.0;
+const MAX_FACE_ANGLE: f64 = 89.0;
+
+/// The gentlest and steepest grades a ramp's ring turns to, in percent.
+const MIN_GRADE: f64 = 0.5;
+const MAX_GRADE: f64 = 50.0;

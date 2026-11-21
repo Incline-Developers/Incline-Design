@@ -621,6 +621,7 @@ cmd-view-no-point-under-cursor-fix = هیچ نقطه‌ای زیر نشانگر 
 cmd-view-released-centre-rotation = مرکز چرخش آزاد شد
 cmd-view-reset-view-fit-extents = بازنشانی نما (جا دادن در محدوده)
 cmd-view-set-cinematic-view-enabled = تنظیم نمای سینمایی = { $enabled }
+cmd-view-set-view-points-enabled = تنظیم نقاط نما = { $enabled }
 cmd-view-set-xy-grid-enabled = شبکه XY فعال = { $enabled }
 cmd-view-zoom-extents-preserving-angle = بزرگ‌نمایی تا محدوده (با حفظ زاویه)
 
@@ -1563,6 +1564,7 @@ state-set-layer-lock = تنظیم قفل لایه
 state-set-line-weight = تنظیم ضخامت خط
 state-set-object-colour = رنگ اشیاء را تنظیم کنید
 state-set-object-fill = تنظیم پر کردن اشیاء
+state-set-point-visibility = تنظیم نمایانی نقطه
 state-set-polyline-closed = تنظیم چندخطی به‌صورت بسته
 state-set-raster-lock = تنظیم قفل رستر
 state-set-standard-view = تنظیم نمای استاندارد
@@ -1775,10 +1777,12 @@ viewport-bar-disable-x-ray-vision = غیرفعال کردن نمای اشعه ا
 viewport-bar-enable-x-ray-vision = فعال کردن نمای اشعه ایکس
 viewport-bar-fill = پر کردن:
 viewport-bar-fix-centre-rotation = ثابت کردن مرکز چرخش
+viewport-bar-hide-points = پنهان کردن نقاط
 viewport-bar-hide-rl-grid = پنهان کردن شبکه ترازها
 viewport-bar-hide-wireframes = پنهان کردن قاب‌های سیمی
 viewport-bar-hide-xy-grid = پنهان کردن شبکه XY
 viewport-bar-release-centre-rotation = آزاد کردن مرکز چرخش
+viewport-bar-show-points = نمایش نقاط
 viewport-bar-show-rl-grid = نمایش شبکه ترازها
 viewport-bar-show-wireframes = نمایش قاب‌های سیمی
 viewport-bar-show-xy-grid = نمایش شبکه XY
@@ -5001,8 +5005,6 @@ pit-design-topography-help = زمینی که طراحی تا آن ساخته م�
 pit-design-topography-none = هیچ
 pit-design-ramp-section = رمپ
 pit-design-ramp-width = عرض
-pit-design-ramp-gradient = شیب
-pit-design-ramp-gradient-help = ارتفاع به طول. در امتداد لبه شیب‌دارتر جاده حفظ می‌شود، پس در پیچ لبه داخلی آن تندتر از این نیست.
 pit-design-ramp-start = شروع از
 pit-design-ramp-start-help = جایی که رمپ از خط جدا می‌شود. علامت سبز آن را در نما در امتداد خط بکشید، یا جابه‌جایی را بزنید و جایی که باید جدا شود کلیک کنید.
 pit-design-ramp-start-default = ابتدای خط
@@ -5020,10 +5022,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = برای جابه‌جا کردن آغاز رمپ بکشید
 pit-design-ramp-drag-prompt = روی خط، جایی که رمپ باید از آن جدا شود، رها کنید.
 pit-design-ramp-start-prompt = روی خط آغاز در جایی که رمپ آن را ترک می‌کند کلیک کنید.
-pit-design-climbs = جهت بالا رفتن
-pit-design-climbs-help = جهتی که رمپ از دید بالا دور پیت بالا می‌رود.
-pit-design-clockwise = ساعتگرد
-pit-design-anticlockwise = پادساعتگرد
 pit-design-layout = چیدمان
 pit-design-layout-help = مارپیچ در جهت بالا رفتن دور دیواره‌ها ادامه می‌دهد. زیگزاگ هر چند پله یک بار روی یک سکوی هموار برمی‌گردد، جایی که دیواره‌ها برای دور زدن جا می‌گذارند.
 pit-design-spiral = مارپیچ
@@ -5199,15 +5197,19 @@ pit-design-table-narrow-hint = باریک‌تر از { $width } متر خواس
 pit-design-checks = بررسی‌ها
 pit-design-checks-pass = همه بررسی‌ها گذشت: شیب، عرض و پیچ‌های رمپ، و برم‌ها و دیواره‌ها همان‌طورند که خواسته شده.
 pit-design-checks-pass-short = همه بررسی‌ها گذشت.
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] یک جا نمی‌خواند
-       *[other] { $count } جا نمی‌خوانند
+        [one] یک جا کم می‌آورد، در نما نشان داده شده
+       *[other] { $count } جا کم می‌آورند، در نما نشان داده شده
     }
-pit-design-checks-what = بررسی
-pit-design-checks-is = مقدار
-pit-design-checks-asked = خواسته
-pit-design-checks-help = نشانگر را روی یک بررسی ببرید تا آن را در نما بیابید، یا کلیک کنید تا به آنجا بروید.
+pit-design-gizmo-width-hint = برای تغییر پهنای رمپ بکشید
+pit-design-gizmo-turn-hint = کلیک کنید تا در جهت دیگر بالا برود
+pit-design-gizmo-grade-hint = برای تغییر شیب رمپ دور حلقه بکشید
+pit-design-gizmo-height-hint = برای تغییر ارتفاع پله بکشید
+pit-design-gizmo-angle-hint = برای تغییر زاویه دیواره دور حلقه بکشید
+pit-design-gizmo-berm-hint = برای تغییر پهنای برم بکشید
+pit-design-gizmo-dragging = رها کنید تا ثبت شود.
+pit-design-gizmo-fine = Shift برای گام‌های ریزتر
 pit-design-check-steep = رمپ بیش از حد شیب‌دار
 pit-design-check-flatter = رمپ کم‌شیب‌تر
 pit-design-check-narrow = رمپ بیش از حد باریک

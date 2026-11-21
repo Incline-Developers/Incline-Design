@@ -621,6 +621,7 @@ cmd-view-no-point-under-cursor-fix = Tidak ada titik di bawah kursor untuk menet
 cmd-view-released-centre-rotation = Titik pusat rotasi dilepaskan
 cmd-view-reset-view-fit-extents = Atur ulang tampilan (sesuaikan dengan batas)
 cmd-view-set-cinematic-view-enabled = Tampilan sinematik = { $enabled }
+cmd-view-set-view-points-enabled = Atur titik tampilan = { $enabled }
 cmd-view-set-xy-grid-enabled = Grid XY aktif = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Zum ke batas (pertahankan sudut)
 
@@ -1563,6 +1564,7 @@ state-set-layer-lock = Atur Kunci Lapisan
 state-set-line-weight = Atur Berat Garis
 state-set-object-colour = Atur Warna Objek
 state-set-object-fill = Atur Isi Objek
+state-set-point-visibility = Atur Visibilitas Titik
 state-set-polyline-closed = Atur Polyline Tertutup
 state-set-raster-lock = Atur Kunci Raster
 state-set-standard-view = Atur Tampilan Standar
@@ -1775,10 +1777,12 @@ viewport-bar-disable-x-ray-vision = Nonaktifkan Pandangan Sinar-X
 viewport-bar-enable-x-ray-vision = Aktifkan Pandangan Sinar-X
 viewport-bar-fill = Isi:
 viewport-bar-fix-centre-rotation = Tetapkan Pusat Rotasi
+viewport-bar-hide-points = Sembunyikan Titik
 viewport-bar-hide-rl-grid = Sembunyikan Grid Elevasi
 viewport-bar-hide-wireframes = Sembunyikan Kerangka Kawat
 viewport-bar-hide-xy-grid = Sembunyikan Grid XY
 viewport-bar-release-centre-rotation = Lepaskan Pusat Rotasi
+viewport-bar-show-points = Tampilkan Titik
 viewport-bar-show-rl-grid = Tampilkan Grid Elevasi
 viewport-bar-show-wireframes = Tampilkan Kerangka Kawat
 viewport-bar-show-xy-grid = Tampilkan Grid XY
@@ -5001,8 +5005,6 @@ pit-design-topography-help = Tanah yang menjadi batas desain: pit muncul ke perm
 pit-design-topography-none = Tidak ada
 pit-design-ramp-section = Ramp
 pit-design-ramp-width = Lebar
-pit-design-ramp-gradient = Kemiringan
-pit-design-ramp-gradient-help = Kenaikan per jarak. Dipertahankan sepanjang tepi jalan yang lebih curam, sehingga di tikungan tepi dalamnya tidak lebih curam dari ini.
 pit-design-ramp-start = Mulai di
 pit-design-ramp-start-help = Tempat ramp meninggalkan garis. Seret tanda silang hijaunya di sepanjang garis pada tampilan, atau tekan Pindah lalu klik tempat ramp seharusnya pergi.
 pit-design-ramp-start-default = Awal garis
@@ -5020,10 +5022,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = Seret untuk memindahkan awal ramp
 pit-design-ramp-drag-prompt = Lepaskan di garis tempat ramp seharusnya meninggalkannya.
 pit-design-ramp-start-prompt = Klik garis awal di tempat ramp meninggalkannya.
-pit-design-climbs = Naik
-pit-design-climbs-help = Arah ramp naik mengelilingi pit, dilihat dari atas.
-pit-design-clockwise = Searah jarum jam
-pit-design-anticlockwise = Berlawanan arah jarum jam
 pit-design-layout = Tata letak
 pit-design-layout-help = Spiral terus mengelilingi dinding ke arah ia naik. Switchback berbalik di landasan datar setiap beberapa jenjang, di mana dinding menyisakan ruang untuk berbelok.
 pit-design-spiral = Spiral
@@ -5199,15 +5197,19 @@ pit-design-table-narrow-hint = Lebih sempit dari { $width } m yang diminta, temp
 pit-design-checks = Pemeriksaan
 pit-design-checks-pass = Semua pemeriksaan lolos: kemiringan, lebar, dan tikungan ramp, serta berm dan lereng, sesuai yang diminta.
 pit-design-checks-pass-short = Semua pemeriksaan lolos.
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] Satu tempat tidak memenuhi
-       *[other] { $count } tempat tidak memenuhi
+        [one] Satu tempat tidak memenuhi, ditandai di tampilan
+       *[other] { $count } tempat tidak memenuhi, ditandai di tampilan
     }
-pit-design-checks-what = Pemeriksaan
-pit-design-checks-is = Hasil
-pit-design-checks-asked = Diminta
-pit-design-checks-help = Arahkan penunjuk ke pemeriksaan untuk menemukannya di tampilan, atau klik untuk ke sana.
+pit-design-gizmo-width-hint = Seret untuk mengubah lebar ramp
+pit-design-gizmo-turn-hint = Klik agar ramp naik ke arah lain
+pit-design-gizmo-grade-hint = Seret memutar untuk mengubah kemiringan ramp
+pit-design-gizmo-height-hint = Seret untuk mengubah tinggi jenjang
+pit-design-gizmo-angle-hint = Seret memutar untuk mengubah sudut muka
+pit-design-gizmo-berm-hint = Seret untuk mengubah lebar berm
+pit-design-gizmo-dragging = Lepaskan untuk menetapkannya.
+pit-design-gizmo-fine = Shift untuk langkah lebih halus
 pit-design-check-steep = Ramp terlalu curam
 pit-design-check-flatter = Ramp lebih landai
 pit-design-check-narrow = Ramp terlalu sempit

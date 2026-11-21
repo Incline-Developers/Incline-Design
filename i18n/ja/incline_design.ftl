@@ -650,6 +650,7 @@ cmd-view-no-point-under-cursor-fix = カーソルの下に回転中心を固定�
 cmd-view-released-centre-rotation = 回転中心を解放しました
 cmd-view-reset-view-fit-extents = ビューをリセット（全体表示）
 cmd-view-set-cinematic-view-enabled = シネマティックビュー = { $enabled }
+cmd-view-set-view-points-enabled = 頂点表示 = { $enabled }
 cmd-view-set-xy-grid-enabled = XYグリッド有効 = { $enabled }
 cmd-view-zoom-extents-preserving-angle = 全体表示にズーム（視点角度を維持）
 
@@ -1592,6 +1593,7 @@ state-set-layer-lock = レイヤーのロックを設定
 state-set-line-weight = 線の太さを設定
 state-set-object-colour = オブジェクトのカラーを設定
 state-set-object-fill = オブジェクトの塗りつぶしを設定
+state-set-point-visibility = 点の表示を設定
 state-set-polyline-closed = ポリラインの閉合を設定
 state-set-raster-lock = ラスターのロックを設定
 state-set-standard-view = 標準ビューを設定
@@ -1804,10 +1806,12 @@ viewport-bar-disable-x-ray-vision = X線ビジョンを無効化
 viewport-bar-enable-x-ray-vision = X線ビジョンを有効化
 viewport-bar-fill = 塗りつぶし:
 viewport-bar-fix-centre-rotation = 回転中心を固定
+viewport-bar-hide-points = 点を非表示
 viewport-bar-hide-rl-grid = 標高グリッドを非表示
 viewport-bar-hide-wireframes = ワイヤーフレームを非表示
 viewport-bar-hide-xy-grid = XYグリッドを非表示
 viewport-bar-release-centre-rotation = 回転中心を解放
+viewport-bar-show-points = 点を表示
 viewport-bar-show-rl-grid = 標高グリッドを表示
 viewport-bar-show-wireframes = ワイヤーフレームを表示
 viewport-bar-show-xy-grid = XYグリッドを表示
@@ -5030,8 +5034,6 @@ pit-design-topography-help = 設計を築く先の地面。ピットはそこに
 pit-design-topography-none = なし
 pit-design-ramp-section = ランプ
 pit-design-ramp-width = 幅
-pit-design-ramp-gradient = 勾配
-pit-design-ramp-gradient-help = 高低差 / 水平距離。道路のより急な側の縁に沿って保たれるため、カーブでも内側の縁はこれより急になりません。
 pit-design-ramp-start = 開始位置
 pit-design-ramp-start-help = ランプがラインから出る位置です。ビューで緑の十字をラインに沿ってドラッグするか、移動を押してから出るべき位置をクリックしてください。
 pit-design-ramp-start-default = ラインの始点
@@ -5049,10 +5051,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = ドラッグしてランプの開始位置を移動
 pit-design-ramp-drag-prompt = ランプが出るべきライン上の位置で離してください。
 pit-design-ramp-start-prompt = ランプが開始ラインを離れる位置でラインをクリックしてください。
-pit-design-climbs = 登る向き
-pit-design-climbs-help = 上から見て、ランプがピットの周りをどちら向きに登るか。
-pit-design-clockwise = 時計回り
-pit-design-anticlockwise = 反時計回り
 pit-design-layout = 配置
 pit-design-layout-help = スパイラルは登る向きのまま壁面に沿って回り続けます。スイッチバックは、壁面に転回の余地がある位置で、数ベンチごとに平坦なパッドで折り返します。
 pit-design-spiral = スパイラル
@@ -5228,15 +5226,19 @@ pit-design-table-narrow-hint = 壁の曲がり目で引き継ぐ箇所で、指�
 pit-design-checks = チェック
 pit-design-checks-pass = すべてのチェックに合格: ランプの勾配・幅・カーブ、およびバームと法面は指定どおりです。
 pit-design-checks-pass-short = すべてのチェックに合格しました。
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] 1 か所が設定を満たしません
-       *[other] { $count } か所が設定を満たしません
+        [one] 1 か所が設定を満たしません（ビューに表示）
+       *[other] { $count } か所が設定を満たしません（ビューに表示）
     }
-pit-design-checks-what = チェック
-pit-design-checks-is = 結果
-pit-design-checks-asked = 指定
-pit-design-checks-help = チェックにポインターを合わせるとビューで位置がわかり、クリックするとそこへ移動します。
+pit-design-gizmo-width-hint = ドラッグしてランプの幅を変更
+pit-design-gizmo-turn-hint = クリックして逆向きに上らせる
+pit-design-gizmo-grade-hint = 回すようにドラッグしてランプの勾配を変更
+pit-design-gizmo-height-hint = ドラッグしてベンチ高を変更
+pit-design-gizmo-angle-hint = 回すようにドラッグして法面角を変更
+pit-design-gizmo-berm-hint = ドラッグして小段幅を変更
+pit-design-gizmo-dragging = 離して確定します。
+pit-design-gizmo-fine = Shift で細かい刻み
 pit-design-check-steep = ランプが急すぎる
 pit-design-check-flatter = ランプが緩い
 pit-design-check-narrow = ランプが狭すぎる

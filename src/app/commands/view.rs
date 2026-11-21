@@ -107,6 +107,16 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    pub(crate) fn set_show_points(&mut self, enabled: bool) -> anyhow::Result<()> {
+        self.editor.show_points = enabled;
+        // Deliberately not persisted: this is a per-session view toggle. The
+        // dots are drawn with the lines, so the scene is drawn again.
+        self.invalidate_geometry();
+        self.redraw_requested = true;
+        userspace_log!("{}", tr!("cmd-view-set-view-points-enabled", enabled = enabled.to_string()));
+        Ok(())
+    }
+
     /// Turn the presentation shading on or off. Like the other view switches
     /// this is per-session and unsaved; unlike them it changes what the scene
     /// pass itself draws, so the cached scene image has to be thrown away.

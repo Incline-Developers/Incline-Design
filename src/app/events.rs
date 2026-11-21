@@ -712,6 +712,7 @@ impl<'a> App<'a> {
                     }
                     if self.editor.pit_design.is_some() {
                         self.update_pit_flag_hover();
+                        self.update_pit_gizmo();
                         self.update_pit_ramp_marker_hover();
                     }
                     if self.editor.active_tool == ActiveTool::PitDesign {
@@ -1456,6 +1457,8 @@ impl<'a> App<'a> {
                     self.redraw_requested = true;
                 } else if self.editor.text_editing_enabled {
                     self.cancel_text_edit();
+                } else if self.dragging_pit_gizmo() {
+                    self.cancel_pit_gizmo_drag();
                 } else if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp.is_some()) {
                     self.cancel_pit_ramp_start_pick();
                 } else if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region) {

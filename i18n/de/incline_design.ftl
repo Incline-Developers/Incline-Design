@@ -662,6 +662,7 @@ cmd-view-no-point-under-cursor-fix = Kein Punkt unter dem Cursor, um den Rotatio
 cmd-view-released-centre-rotation = Rotationsmittelpunkt freigegeben
 cmd-view-reset-view-fit-extents = Ansicht zurückgesetzt (an Ausdehnung angepasst)
 cmd-view-set-cinematic-view-enabled = Kinoansicht = { $enabled } gesetzt
+cmd-view-set-view-points-enabled = Punkte anzeigen = { $enabled } gesetzt
 cmd-view-set-xy-grid-enabled = XY-Raster aktiviert = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Auf Ausdehnung zoomen (Blickwinkel beibehalten)
 
@@ -1604,6 +1605,7 @@ state-set-layer-lock = Ebenensperre festlegen
 state-set-line-weight = Linienstärke festlegen
 state-set-object-colour = Objektfarbe festlegen
 state-set-object-fill = Objektfüllung festlegen
+state-set-point-visibility = Punkt-Sichtbarkeit festlegen
 state-set-polyline-closed = Polylinie geschlossen festlegen
 state-set-raster-lock = Rastersperre festlegen
 state-set-standard-view = Standardansicht festlegen
@@ -1816,10 +1818,12 @@ viewport-bar-disable-x-ray-vision = Röntgensicht deaktivieren
 viewport-bar-enable-x-ray-vision = Röntgensicht aktivieren
 viewport-bar-fill = Füllung:
 viewport-bar-fix-centre-rotation = Rotationsmittelpunkt festlegen
+viewport-bar-hide-points = Punkte ausblenden
 viewport-bar-hide-rl-grid = Höhenraster ausblenden
 viewport-bar-hide-wireframes = Drahtgitter ausblenden
 viewport-bar-hide-xy-grid = XY-Raster ausblenden
 viewport-bar-release-centre-rotation = Rotationsmittelpunkt freigeben
+viewport-bar-show-points = Punkte anzeigen
 viewport-bar-show-rl-grid = Höhenraster einblenden
 viewport-bar-show-wireframes = Drahtgitter anzeigen
 viewport-bar-show-xy-grid = XY-Raster einblenden
@@ -5042,8 +5046,6 @@ pit-design-topography-help = Der Boden, bis zu dem gebaut wird: Eine Grube läuf
 pit-design-topography-none = Keine
 pit-design-ramp-section = Rampe
 pit-design-ramp-width = Breite
-pit-design-ramp-gradient = Steigung
-pit-design-ramp-gradient-help = Steigung über Lauflänge. Sie gilt entlang der steileren Kante der Straße, sodass ihre Innenkante in einer Kurve nicht steiler ist.
 pit-design-ramp-start = Beginnt bei
 pit-design-ramp-start-help = Wo die Rampe die Linie verlässt. Ziehen Sie ihr grünes Kreuz in der Ansicht entlang der Linie, oder klicken Sie auf Verschieben und dann dort, wo sie stattdessen beginnen soll.
 pit-design-ramp-start-default = Anfang der Linie
@@ -5061,10 +5063,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = Ziehen, um den Rampenbeginn zu verschieben
 pit-design-ramp-drag-prompt = Lassen Sie auf der Linie dort los, wo die Rampe sie verlassen soll.
 pit-design-ramp-start-prompt = Klicken Sie auf die Ausgangslinie dort, wo die Rampe sie verlässt.
-pit-design-climbs = Steigt
-pit-design-climbs-help = In welcher Richtung die Rampe um die Grube ansteigt, von oben gesehen.
-pit-design-clockwise = Im Uhrzeigersinn
-pit-design-anticlockwise = Gegen den Uhrzeigersinn
 pit-design-layout = Anordnung
 pit-design-layout-help = Eine Spirale läuft weiter um die Wände, in der Richtung, in der sie ansteigt. Eine Serpentine kehrt alle paar Strossen auf einer ebenen Wendeplatte um, wo die Wände Platz für die Wende lassen.
 pit-design-spiral = Spirale
@@ -5242,15 +5240,19 @@ pit-design-table-narrow-hint = Schmaler als die verlangten { $width } m, wo sie 
 pit-design-checks = Prüfungen
 pit-design-checks-pass = Alle Prüfungen bestanden: Steigung, Breite und Kurven der Rampe sowie Bermen und Böschungen entsprechen den Vorgaben.
 pit-design-checks-pass-short = Alle Prüfungen bestanden.
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] Eine Stelle erfüllt die Vorgaben nicht
-       *[other] { $count } Stellen erfüllen die Vorgaben nicht
+        [one] Eine Stelle erfüllt die Vorgaben nicht, in der Ansicht markiert
+       *[other] { $count } Stellen erfüllen die Vorgaben nicht, in der Ansicht markiert
     }
-pit-design-checks-what = Prüfung
-pit-design-checks-is = Ergibt
-pit-design-checks-asked = Vorgabe
-pit-design-checks-help = Bewegen Sie den Zeiger über eine Prüfung, um sie in der Ansicht zu finden, oder klicken Sie, um dorthin zu gehen.
+pit-design-gizmo-width-hint = Ziehen, um die Breite der Rampe zu ändern
+pit-design-gizmo-turn-hint = Klicken, um die Rampe andersherum steigen zu lassen
+pit-design-gizmo-grade-hint = Ringsum ziehen, um die Steigung der Rampe zu ändern
+pit-design-gizmo-height-hint = Ziehen, um die Strossenhöhe zu ändern
+pit-design-gizmo-angle-hint = Ringsum ziehen, um den Böschungswinkel zu ändern
+pit-design-gizmo-berm-hint = Ziehen, um die Bermenbreite zu ändern
+pit-design-gizmo-dragging = Loslassen, um es zu übernehmen.
+pit-design-gizmo-fine = Umschalt für feinere Schritte
 pit-design-check-steep = Rampe zu steil
 pit-design-check-flatter = Rampe flacher
 pit-design-check-narrow = Rampe zu schmal

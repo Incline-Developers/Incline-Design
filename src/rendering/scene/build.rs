@@ -83,6 +83,8 @@ pub(crate) fn document_scene_key(document: &Document, editor: &EditorState, stat
     // The pit design open in Pit Design is seen through the ground, and
     // gives way to its preview.
     editor.pit_design.as_ref().and_then(|draft| Some((draft.object_id()?, draft.covering))).hash(&mut hasher);
+    // Vertices are drawn as dots, or not.
+    editor.show_points.hash(&mut hasher);
     editor.editing_labels_id.hash(&mut hasher);
     if editor.editing_labels_id.is_some() {
         editor.pending_text.hash(&mut hasher);
@@ -257,8 +259,9 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                 let geometry = object.string_geometry();
                 let (verts, closed) = geometry.as_ref().map_or((&[][..], false), |(verts, closed)| (verts.as_ref(), *closed));
                 tessellate_polyline_stroke(&mut draw_ctx, verts, closed, *line_weight, line_rgba);
-                // A polyline shows its vertices; a circle has none of its own.
-                if matches!(object, Object::Polyline { .. }) {
+                // A polyline shows its vertices where points are shown; a
+                // circle has none of its own.
+                if editor.show_points && matches!(object, Object::Polyline { .. }) {
                     draw_vertex_dots(&mut draw_ctx, verts, *line_weight, line_rgba);
                 }
                 if closed
@@ -294,9 +297,11 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
             // whole.
             Object::PitDesign { verts, line_weight, .. } => {
                 tessellate_polyline_stroke(&mut draw_ctx, verts, true, *line_weight, rgba);
-                // Its own string shows its vertices, as a polyline's do: the
-                // benches worked out from it do not.
-                draw_vertex_dots(&mut draw_ctx, verts, *line_weight, rgba);
+                // Its strings show their vertices where points are shown, as
+                // a polyline's do.
+                if editor.show_points {
+                    draw_vertex_dots(&mut draw_ctx, verts, *line_weight, rgba);
+                }
                 // Open in the tool with a preview drawn in its place, only its
                 // string: two designs over each other read as neither.
                 let covered = editor.pit_design.as_ref().is_some_and(|draft| draft.covering && draft.object_id() == Some(object.id()));
@@ -307,6 +312,9 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                         _ => *line_weight,
                     };
                     tessellate_polyline_stroke(&mut draw_ctx, &points, string.closed, weight, string.kind.colour());
+                    if editor.show_points {
+                        draw_vertex_dots(&mut draw_ctx, &points, weight, string.kind.colour());
+                    }
                 }
             }
             Object::Text {
@@ -707,6 +715,10 @@ pub(crate) fn rebuild_dynamic_scene(input: DynamicSceneBuildInput<'_>) {
             };
             for pair in string.points.windows(2) {
                 draw_line(&mut draw_ctx, pair[0], pair[1], weight, colour);
+            }
+            if editor.show_points {
+                let points: Vec<crate::model::PolyVertex> = string.points.iter().copied().map(crate::model::PolyVertex::straight).collect();
+                draw_vertex_dots(&mut draw_ctx, &points, weight, colour);
             }
             if string.closed
                 && let (Some(&first), Some(&last)) = (string.points.first(), string.points.last())

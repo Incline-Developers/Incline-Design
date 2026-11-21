@@ -663,6 +663,7 @@ cmd-view-no-point-under-cursor-fix = Nessun punto sotto il cursore su cui fissar
 cmd-view-released-centre-rotation = Centro di rotazione rilasciato
 cmd-view-reset-view-fit-extents = Ripristina vista (adatta all'estensione)
 cmd-view-set-cinematic-view-enabled = Vista cinematica = { $enabled }
+cmd-view-set-view-points-enabled = Visualizzazione punti = { $enabled }
 cmd-view-set-xy-grid-enabled = Griglia XY attiva = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Zoom su estensione (angolazione invariata)
 
@@ -1605,6 +1606,7 @@ state-set-layer-lock = Imposta blocco livello
 state-set-line-weight = Imposta spessore linea
 state-set-object-colour = Imposta colore oggetto
 state-set-object-fill = Imposta riempimento oggetto
+state-set-point-visibility = Imposta visibilità punto
 state-set-polyline-closed = Imposta polilinea chiusa
 state-set-raster-lock = Imposta blocco raster
 state-set-standard-view = Imposta vista standard
@@ -1817,10 +1819,12 @@ viewport-bar-disable-x-ray-vision = Disattiva visione a raggi X
 viewport-bar-enable-x-ray-vision = Attiva visione a raggi X
 viewport-bar-fill = Riempimento:
 viewport-bar-fix-centre-rotation = Fissa centro di rotazione
+viewport-bar-hide-points = Nascondi punti
 viewport-bar-hide-rl-grid = Nascondi griglia quote
 viewport-bar-hide-wireframes = Nascondi wireframe
 viewport-bar-hide-xy-grid = Nascondi griglia XY
 viewport-bar-release-centre-rotation = Rilascia centro di rotazione
+viewport-bar-show-points = Mostra punti
 viewport-bar-show-rl-grid = Mostra griglia quote
 viewport-bar-show-wireframes = Mostra wireframe
 viewport-bar-show-xy-grid = Mostra griglia XY
@@ -5043,8 +5047,6 @@ pit-design-topography-help = Il terreno fino a cui il progetto è costruito: una
 pit-design-topography-none = Nessuna
 pit-design-ramp-section = Rampa
 pit-design-ramp-width = Larghezza
-pit-design-ramp-gradient = Pendenza
-pit-design-ramp-gradient-help = Dislivello sulla lunghezza. È mantenuta lungo il bordo più ripido della strada, così in curva il bordo interno non è più ripido di così.
 pit-design-ramp-start = Inizia da
 pit-design-ramp-start-help = Dove la rampa lascia la linea. Trascina la sua croce verde lungo la linea nella vista, oppure premi Sposta e fai clic dove deve partire invece.
 pit-design-ramp-start-default = Inizio della linea
@@ -5062,10 +5064,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = Trascina per spostare l'inizio della rampa
 pit-design-ramp-drag-prompt = Rilascia sulla linea dove la rampa deve lasciarla.
 pit-design-ramp-start-prompt = Fate clic sulla linea di partenza dove la rampa la lascia.
-pit-design-climbs = Sale
-pit-design-climbs-help = In quale verso la rampa sale intorno alla fossa, vista dall'alto.
-pit-design-clockwise = In senso orario
-pit-design-anticlockwise = In senso antiorario
 pit-design-layout = Tracciato
 pit-design-layout-help = Una spirale prosegue intorno alle pareti nel verso in cui sale. Un tornante torna indietro su una piazzola piana ogni tot gradini, dove le pareti lasciano spazio per la curva.
 pit-design-spiral = Spirale
@@ -5243,15 +5241,19 @@ pit-design-table-narrow-hint = Più stretta dei { $width } m richiesti, dove si 
 pit-design-checks = Controlli
 pit-design-checks-pass = Tutti i controlli superati: pendenza, larghezza e curve della rampa, berme e scarpate sono come richiesto.
 pit-design-checks-pass-short = Tutti i controlli superati.
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] Un punto non è conforme
-       *[other] { $count } punti non sono conformi
+        [one] Un punto non rispetta le impostazioni, segnato nella vista
+       *[other] { $count } punti non rispettano le impostazioni, segnati nella vista
     }
-pit-design-checks-what = Controllo
-pit-design-checks-is = Risulta
-pit-design-checks-asked = Richiesto
-pit-design-checks-help = Passa il puntatore su un controllo per trovarlo nella vista, o fai clic per andarci.
+pit-design-gizmo-width-hint = Trascina per cambiare la larghezza della rampa
+pit-design-gizmo-turn-hint = Fai clic per farla salire nell'altro verso
+pit-design-gizmo-grade-hint = Trascina attorno per cambiare la pendenza della rampa
+pit-design-gizmo-height-hint = Trascina per cambiare l'altezza del gradone
+pit-design-gizmo-angle-hint = Trascina attorno per cambiare l'angolo della parete
+pit-design-gizmo-berm-hint = Trascina per cambiare la larghezza della berma
+pit-design-gizmo-dragging = Rilascia per fissarlo.
+pit-design-gizmo-fine = Maiusc per passi più fini
 pit-design-check-steep = Rampa troppo ripida
 pit-design-check-flatter = Rampa più dolce
 pit-design-check-narrow = Rampa troppo stretta

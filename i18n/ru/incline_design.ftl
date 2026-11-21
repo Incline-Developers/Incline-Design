@@ -673,6 +673,7 @@ cmd-view-no-point-under-cursor-fix = Под курсором нет точки, 
 cmd-view-released-centre-rotation = Центр вращения освобождён
 cmd-view-reset-view-fit-extents = Сбросить вид (вписать в границы)
 cmd-view-set-cinematic-view-enabled = Кинематографический вид = { $enabled }
+cmd-view-set-view-points-enabled = Отображение точек = { $enabled }
 cmd-view-set-xy-grid-enabled = Сетка XY включена = { $enabled }
 cmd-view-zoom-extents-preserving-angle = Масштабировать до границ (с сохранением угла)
 
@@ -1615,6 +1616,7 @@ state-set-layer-lock = Задать блокировку слоя
 state-set-line-weight = Задать толщину линии
 state-set-object-colour = Задать цвет объекта
 state-set-object-fill = Задать заливку объекта
+state-set-point-visibility = Задать видимость точки
 state-set-polyline-closed = Задать замкнутость полилинии
 state-set-raster-lock = Задать блокировку растра
 state-set-standard-view = Задать стандартный вид
@@ -1827,10 +1829,12 @@ viewport-bar-disable-x-ray-vision = Отключить рентгеновски�
 viewport-bar-enable-x-ray-vision = Включить рентгеновский режим
 viewport-bar-fill = Заливка:
 viewport-bar-fix-centre-rotation = Закрепить центр вращения
+viewport-bar-hide-points = Скрыть точки
 viewport-bar-hide-rl-grid = Скрыть сетку отметок
 viewport-bar-hide-wireframes = Скрыть каркасы
 viewport-bar-hide-xy-grid = Скрыть сетку XY
 viewport-bar-release-centre-rotation = Освободить центр вращения
+viewport-bar-show-points = Показать точки
 viewport-bar-show-rl-grid = Показать сетку отметок
 viewport-bar-show-wireframes = Показать каркасы
 viewport-bar-show-xy-grid = Показать сетку XY
@@ -5382,8 +5386,6 @@ pit-design-topography-help = Земля, до которой строится п
 pit-design-topography-none = Нет
 pit-design-ramp-section = Съезд
 pit-design-ramp-width = Ширина
-pit-design-ramp-gradient = Уклон
-pit-design-ramp-gradient-help = Подъём на длину. Он выдерживается вдоль более крутой кромки дороги, так что на повороте её внутренняя кромка не круче этого.
 pit-design-ramp-start = Начинается в
 pit-design-ramp-start-help = Где съезд отходит от линии. Перетащите его зелёный крестик вдоль линии в виде или нажмите «Переместить» и щёлкните там, где он должен отходить.
 pit-design-ramp-start-default = Начало линии
@@ -5401,10 +5403,6 @@ pit-design-ramp-start-side = { $side ->
 pit-design-ramp-drag-hint = Перетащите, чтобы перенести начало съезда
 pit-design-ramp-drag-prompt = Отпустите на линии там, где съезд должен от неё отходить.
 pit-design-ramp-start-prompt = Щёлкните по исходной линии там, где от неё отходит съезд.
-pit-design-climbs = Подъём
-pit-design-climbs-help = В каком направлении съезд поднимается вокруг карьера, если смотреть сверху.
-pit-design-clockwise = По часовой стрелке
-pit-design-anticlockwise = Против часовой стрелки
 pit-design-layout = Трасса
 pit-design-layout-help = Спираль продолжается вокруг бортов в направлении подъёма. Серпантин разворачивается на горизонтальной площадке через заданное число уступов, там, где борта оставляют место для разворота.
 pit-design-spiral = Спираль
@@ -5586,15 +5584,19 @@ pit-design-table-narrow-hint = Уже заданных { $width } м там, г�
 pit-design-checks = Проверки
 pit-design-checks-pass = Все проверки пройдены: уклон, ширина и повороты съезда, а также бермы и откосы соответствуют заданным.
 pit-design-checks-pass-short = Все проверки пройдены.
-pit-design-checks-heading =
+pit-design-checks-in-view =
     { $count ->
-        [one] Одно место не соответствует
-       *[other] Мест, не соответствующих настройкам: { $count }
+        [one] Одно место не соответствует настройкам, отмечено в виде
+       *[other] Мест, не соответствующих настройкам: { $count }, отмечены в виде
     }
-pit-design-checks-what = Проверка
-pit-design-checks-is = Получено
-pit-design-checks-asked = Задано
-pit-design-checks-help = Наведите указатель на проверку, чтобы найти её в виде, или щёлкните, чтобы перейти к ней.
+pit-design-gizmo-width-hint = Перетащите, чтобы изменить ширину съезда
+pit-design-gizmo-turn-hint = Щёлкните, чтобы съезд поднимался в другую сторону
+pit-design-gizmo-grade-hint = Тяните по кругу, чтобы изменить уклон съезда
+pit-design-gizmo-height-hint = Тяните, чтобы изменить высоту уступа
+pit-design-gizmo-angle-hint = Тяните по кругу, чтобы изменить угол откоса
+pit-design-gizmo-berm-hint = Тяните, чтобы изменить ширину бермы
+pit-design-gizmo-dragging = Отпустите, чтобы задать.
+pit-design-gizmo-fine = Shift для мелких шагов
 pit-design-check-steep = Съезд слишком крутой
 pit-design-check-flatter = Съезд положе
 pit-design-check-narrow = Съезд слишком узкий
