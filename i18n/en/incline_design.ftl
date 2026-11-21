@@ -5906,12 +5906,6 @@ pit-design-checks-in-view =
         [one] One place falls short, marked in the view
        *[other] { $count } places fall short, marked in the view
     }
-pit-design-gizmo-width-hint = Drag to change the ramp's width
-pit-design-gizmo-turn-hint = Click to climb the other way
-pit-design-gizmo-grade-hint = Drag round to change the ramp's grade
-pit-design-gizmo-height-hint = Drag to change the bench height
-pit-design-gizmo-angle-hint = Drag round to change the face angle
-pit-design-gizmo-berm-hint = Drag to change the berm width
 pit-design-gizmo-dragging = Let go to set it.
 pit-design-gizmo-fine = Shift for finer steps
 pit-design-check-steep = Ramp too steep

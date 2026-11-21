@@ -5250,12 +5250,6 @@ pit-design-checks-in-view =
         [one] Un punto non rispetta le impostazioni, segnato nella vista
        *[other] { $count } punti non rispettano le impostazioni, segnati nella vista
     }
-pit-design-gizmo-width-hint = Trascina per cambiare la larghezza della rampa
-pit-design-gizmo-turn-hint = Fai clic per farla salire nell'altro verso
-pit-design-gizmo-grade-hint = Trascina attorno per cambiare la pendenza della rampa
-pit-design-gizmo-height-hint = Trascina per cambiare l'altezza del gradone
-pit-design-gizmo-angle-hint = Trascina attorno per cambiare l'angolo della parete
-pit-design-gizmo-berm-hint = Trascina per cambiare la larghezza della berma
 pit-design-gizmo-dragging = Rilascia per fissarlo.
 pit-design-gizmo-fine = Maiusc per passi più fini
 pit-design-check-steep = Rampa troppo ripida

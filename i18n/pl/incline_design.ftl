@@ -5340,12 +5340,6 @@ pit-design-checks-in-view =
         [one] Jedno miejsce nie spełnia ustawień, zaznaczone w widoku
        *[other] Miejsca niespełniające ustawień: { $count }, zaznaczone w widoku
     }
-pit-design-gizmo-width-hint = Przeciągnij, aby zmienić szerokość rampy
-pit-design-gizmo-turn-hint = Kliknij, aby wznosiła się w drugą stronę
-pit-design-gizmo-grade-hint = Przeciągnij po okręgu, aby zmienić nachylenie rampy
-pit-design-gizmo-height-hint = Przeciągnij, aby zmienić wysokość piętra
-pit-design-gizmo-angle-hint = Przeciągnij po okręgu, aby zmienić kąt skarpy
-pit-design-gizmo-berm-hint = Przeciągnij, aby zmienić szerokość półki
 pit-design-gizmo-dragging = Puść, aby ustawić.
 pit-design-gizmo-fine = Shift dla drobniejszych kroków
 pit-design-check-steep = Rampa zbyt stroma

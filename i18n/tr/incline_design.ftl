@@ -5248,12 +5248,6 @@ pit-design-checks-in-view =
         [one] Bir yer ayarları karşılamıyor, görünümde işaretli
        *[other] { $count } yer ayarları karşılamıyor, görünümde işaretli
     }
-pit-design-gizmo-width-hint = Rampanın genişliğini değiştirmek için sürükleyin
-pit-design-gizmo-turn-hint = Diğer yöne çıkması için tıklayın
-pit-design-gizmo-grade-hint = Rampanın eğimini değiştirmek için çevresinde sürükleyin
-pit-design-gizmo-height-hint = Basamak yüksekliğini değiştirmek için sürükleyin
-pit-design-gizmo-angle-hint = Şev açısını değiştirmek için çevresinde sürükleyin
-pit-design-gizmo-berm-hint = Berm genişliğini değiştirmek için sürükleyin
 pit-design-gizmo-dragging = Ayarlamak için bırakın.
 pit-design-gizmo-fine = Daha ince adımlar için Shift
 pit-design-check-steep = Rampa çok dik

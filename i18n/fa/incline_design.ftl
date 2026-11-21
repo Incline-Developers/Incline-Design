@@ -5206,12 +5206,6 @@ pit-design-checks-in-view =
         [one] یک جا کم می‌آورد، در نما نشان داده شده
        *[other] { $count } جا کم می‌آورند، در نما نشان داده شده
     }
-pit-design-gizmo-width-hint = برای تغییر پهنای رمپ بکشید
-pit-design-gizmo-turn-hint = کلیک کنید تا در جهت دیگر بالا برود
-pit-design-gizmo-grade-hint = برای تغییر شیب رمپ دور حلقه بکشید
-pit-design-gizmo-height-hint = برای تغییر ارتفاع پله بکشید
-pit-design-gizmo-angle-hint = برای تغییر زاویه دیواره دور حلقه بکشید
-pit-design-gizmo-berm-hint = برای تغییر پهنای برم بکشید
 pit-design-gizmo-dragging = رها کنید تا ثبت شود.
 pit-design-gizmo-fine = Shift برای گام‌های ریزتر
 pit-design-check-steep = رمپ بیش از حد شیب‌دار

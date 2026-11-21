@@ -5206,12 +5206,6 @@ pit-design-checks-in-view =
         [one] 有 1 处未达要求（已在视图中标出）
        *[other] 有 { $count } 处未达要求（已在视图中标出）
     }
-pit-design-gizmo-width-hint = 拖动以更改坡道宽度
-pit-design-gizmo-turn-hint = 单击使其沿另一方向爬升
-pit-design-gizmo-grade-hint = 沿圆环拖动以更改坡道坡度
-pit-design-gizmo-height-hint = 拖动以更改台阶高度
-pit-design-gizmo-angle-hint = 沿圆环拖动以更改坡面角
-pit-design-gizmo-berm-hint = 拖动以更改平台宽度
 pit-design-gizmo-dragging = 松开以设定。
 pit-design-gizmo-fine = 按住 Shift 以更细步长
 pit-design-check-steep = 坡道过陡

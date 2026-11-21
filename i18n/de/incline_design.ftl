@@ -5249,12 +5249,6 @@ pit-design-checks-in-view =
         [one] Eine Stelle erfüllt die Vorgaben nicht, in der Ansicht markiert
        *[other] { $count } Stellen erfüllen die Vorgaben nicht, in der Ansicht markiert
     }
-pit-design-gizmo-width-hint = Ziehen, um die Breite der Rampe zu ändern
-pit-design-gizmo-turn-hint = Klicken, um die Rampe andersherum steigen zu lassen
-pit-design-gizmo-grade-hint = Ringsum ziehen, um die Steigung der Rampe zu ändern
-pit-design-gizmo-height-hint = Ziehen, um die Strossenhöhe zu ändern
-pit-design-gizmo-angle-hint = Ringsum ziehen, um den Böschungswinkel zu ändern
-pit-design-gizmo-berm-hint = Ziehen, um die Bermenbreite zu ändern
 pit-design-gizmo-dragging = Loslassen, um es zu übernehmen.
 pit-design-gizmo-fine = Umschalt für feinere Schritte
 pit-design-check-steep = Rampe zu steil

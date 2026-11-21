@@ -5209,12 +5209,6 @@ pit-design-checks-in-view =
         [one] Un endroit ne respecte pas les réglages, marqué dans la vue
        *[other] { $count } endroits ne respectent pas les réglages, marqués dans la vue
     }
-pit-design-gizmo-width-hint = Faites glisser pour changer la largeur de la rampe
-pit-design-gizmo-turn-hint = Cliquez pour qu'elle monte dans l'autre sens
-pit-design-gizmo-grade-hint = Faites glisser autour pour changer la pente de la rampe
-pit-design-gizmo-height-hint = Faites glisser pour changer la hauteur du gradin
-pit-design-gizmo-angle-hint = Faites glisser autour pour changer l'angle du front
-pit-design-gizmo-berm-hint = Faites glisser pour changer la largeur de la risberme
 pit-design-gizmo-dragging = Relâchez pour le fixer.
 pit-design-gizmo-fine = Maj pour des pas plus fins
 pit-design-check-steep = Rampe trop raide

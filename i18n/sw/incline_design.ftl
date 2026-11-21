@@ -5240,12 +5240,6 @@ pit-design-checks-in-view =
         [one] Sehemu moja haitimizi, imewekwa alama kwenye mwonekano
        *[other] Sehemu { $count } hazitimizi, zimewekwa alama kwenye mwonekano
     }
-pit-design-gizmo-width-hint = Buruta ili kubadilisha upana wa barabara
-pit-design-gizmo-turn-hint = Bofya ili ipande upande mwingine
-pit-design-gizmo-grade-hint = Buruta kuzunguka ili kubadilisha mteremko wa barabara
-pit-design-gizmo-height-hint = Buruta ili kubadilisha urefu wa benchi
-pit-design-gizmo-angle-hint = Buruta kuzunguka ili kubadilisha pembe ya uso
-pit-design-gizmo-berm-hint = Buruta ili kubadilisha upana wa berm
 pit-design-gizmo-dragging = Achilia ili kuweka.
 pit-design-gizmo-fine = Shift kwa hatua ndogo zaidi
 pit-design-check-steep = Njia panda ina mwinuko mkubwa mno

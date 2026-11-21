@@ -5259,12 +5259,6 @@ pit-design-checks-in-view =
         [one] Нэг газар шаардлага хангахгүй, харагдац дээр тэмдэглэсэн
        *[other] { $count } газар шаардлага хангахгүй, харагдац дээр тэмдэглэсэн
     }
-pit-design-gizmo-width-hint = Налуу замын өргөнийг өөрчлөхийн тулд чирнэ үү
-pit-design-gizmo-turn-hint = Нөгөө чиглэлд өгсүүлэхийн тулд дарна уу
-pit-design-gizmo-grade-hint = Налуу замын налууг өөрчлөхийн тулд эргүүлж чирнэ үү
-pit-design-gizmo-height-hint = Шатны өндрийг өөрчлөхийн тулд чирнэ үү
-pit-design-gizmo-angle-hint = Хананы өнцгийг өөрчлөхийн тулд эргүүлж чирнэ үү
-pit-design-gizmo-berm-hint = Бермийн өргөнийг өөрчлөхийн тулд чирнэ үү
 pit-design-gizmo-dragging = Тогтоохын тулд суллана уу.
 pit-design-gizmo-fine = Нарийн алхамд Shift
 pit-design-check-steep = Налуу зам хэт эгц

@@ -5258,12 +5258,6 @@ pit-design-checks-in-view =
         [one] موضع واحد لا يفي بالمطلوب، ومُعلَّم في العرض
        *[other] { $count } مواضع لا تفي بالمطلوب، ومُعلَّمة في العرض
     }
-pit-design-gizmo-width-hint = اسحب لتغيير عرض المنحدر
-pit-design-gizmo-turn-hint = انقر ليصعد في الاتجاه الآخر
-pit-design-gizmo-grade-hint = اسحب حول الحلقة لتغيير انحدار المنحدر
-pit-design-gizmo-height-hint = اسحب لتغيير ارتفاع المدرّج
-pit-design-gizmo-angle-hint = اسحب حول الحلقة لتغيير زاوية الواجهة
-pit-design-gizmo-berm-hint = اسحب لتغيير عرض الرصيف
 pit-design-gizmo-dragging = أفلت الزر لتثبيته.
 pit-design-gizmo-fine = Shift لخطوات أدق
 pit-design-check-steep = المنحدر شديد الميل

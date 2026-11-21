@@ -5206,12 +5206,6 @@ pit-design-checks-in-view =
         [one] Satu tempat tidak memenuhi, ditandai di tampilan
        *[other] { $count } tempat tidak memenuhi, ditandai di tampilan
     }
-pit-design-gizmo-width-hint = Seret untuk mengubah lebar ramp
-pit-design-gizmo-turn-hint = Klik agar ramp naik ke arah lain
-pit-design-gizmo-grade-hint = Seret memutar untuk mengubah kemiringan ramp
-pit-design-gizmo-height-hint = Seret untuk mengubah tinggi jenjang
-pit-design-gizmo-angle-hint = Seret memutar untuk mengubah sudut muka
-pit-design-gizmo-berm-hint = Seret untuk mengubah lebar berm
 pit-design-gizmo-dragging = Lepaskan untuk menetapkannya.
 pit-design-gizmo-fine = Shift untuk langkah lebih halus
 pit-design-check-steep = Ramp terlalu curam

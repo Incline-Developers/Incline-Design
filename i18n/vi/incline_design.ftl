@@ -5234,12 +5234,6 @@ pit-design-checks-in-view =
         [one] Một chỗ chưa đạt, đã đánh dấu trong khung nhìn
        *[other] { $count } chỗ chưa đạt, đã đánh dấu trong khung nhìn
     }
-pit-design-gizmo-width-hint = Kéo để đổi bề rộng đường dốc
-pit-design-gizmo-turn-hint = Nhấp để đường dốc lên theo chiều kia
-pit-design-gizmo-grade-hint = Kéo vòng để đổi độ dốc đường dốc
-pit-design-gizmo-height-hint = Kéo để đổi chiều cao tầng
-pit-design-gizmo-angle-hint = Kéo vòng để đổi góc mái
-pit-design-gizmo-berm-hint = Kéo để đổi bề rộng đai
 pit-design-gizmo-dragging = Thả ra để đặt.
 pit-design-gizmo-fine = Shift để bước nhỏ hơn
 pit-design-check-steep = Đường dốc quá dốc

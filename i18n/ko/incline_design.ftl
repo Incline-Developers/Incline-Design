@@ -5240,12 +5240,6 @@ pit-design-checks-in-view =
         [one] 1곳이 설정에 못 미칩니다(뷰에 표시)
        *[other] { $count }곳이 설정에 못 미칩니다(뷰에 표시)
     }
-pit-design-gizmo-width-hint = 끌어서 램프 폭 변경
-pit-design-gizmo-turn-hint = 클릭하면 반대 방향으로 오릅니다
-pit-design-gizmo-grade-hint = 돌려 끌어서 램프 경사 변경
-pit-design-gizmo-height-hint = 끌어서 벤치 높이 변경
-pit-design-gizmo-angle-hint = 돌려 끌어서 사면 각도 변경
-pit-design-gizmo-berm-hint = 끌어서 소단 폭 변경
 pit-design-gizmo-dragging = 놓으면 설정됩니다.
 pit-design-gizmo-fine = Shift로 더 세밀하게
 pit-design-check-steep = 램프가 너무 가파름

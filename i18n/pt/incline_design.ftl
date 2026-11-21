@@ -5206,12 +5206,6 @@ pit-design-checks-in-view =
         [one] Um ponto não cumpre, marcado na vista
        *[other] { $count } pontos não cumprem, marcados na vista
     }
-pit-design-gizmo-width-hint = Arraste para mudar a largura da rampa
-pit-design-gizmo-turn-hint = Clique para subir no outro sentido
-pit-design-gizmo-grade-hint = Arraste à volta para mudar a inclinação da rampa
-pit-design-gizmo-height-hint = Arraste para mudar a altura da bancada
-pit-design-gizmo-angle-hint = Arraste à volta para mudar o ângulo da face
-pit-design-gizmo-berm-hint = Arraste para mudar a largura da berma
 pit-design-gizmo-dragging = Solte para definir.
 pit-design-gizmo-fine = Shift para passos mais finos
 pit-design-check-steep = Rampa íngreme demais

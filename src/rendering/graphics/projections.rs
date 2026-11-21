@@ -773,15 +773,14 @@ impl<'a> Graphics<'a> {
         let height_fade = fade_ramp((1.0 - forward.z * forward.z).max(0.0).sqrt() as f32, GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL);
         let berm_fade = fade_ramp((1.0 - out3.dot(forward).powi(2)).max(0.0).sqrt() as f32, GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL);
         let settings = &working.settings;
-        let (height, angle) = (settings.bench_height, settings.face_angle.to_radians());
-        let crest = toe + (out3 * (height / angle.tan()) + up * height) * metre;
+        let angle = settings.face_angle.to_radians();
         let radius = SECTION_RING_POINTS * self.scale_factor() / scale.px_per_world;
         let on_ring = |turn: f64| toe + (out3 * turn.cos() + up * turn.sin()) * radius;
         let angle_ring: Vec<(f32, f32)> = (0..RING_STEPS)
             .map(|step| project(on_ring(std::f64::consts::TAU * step as f64 / RING_STEPS as f64)))
             .collect::<Option<_>>()?;
         let arm = SECTION_ARM_POINTS * self.scale_factor() / scale.px_per_world;
-        let (toe_px, crest_px) = (centre, project(crest)?);
+        let toe_px = centre;
         let unit_px = |from: (f32, f32), to: (f32, f32)| {
             let length = (to.0 - from.0).hypot(to.1 - from.1);
             (length > 1.0e-3).then_some(((to.0 - from.0) / length, (to.1 - from.1) / length, length))
@@ -795,7 +794,6 @@ impl<'a> Graphics<'a> {
                 height_fade,
                 berm_fade,
                 toe: toe_px,
-                crest: crest_px,
                 up: (up_x, up_y),
                 out: (out_x, out_y),
                 pixels_per_metre_up: up_px,
@@ -845,8 +843,11 @@ impl<'a> Graphics<'a> {
         let grade = (gradient / 100.0 * crate::ui::dialogs::pit_design::GRADE_EXAGGERATION).atan();
         let steps = ((grade / GRADE_ARC_STEP).ceil() as usize).max(1);
         let grade_arc: Vec<(f32, f32)> = (0..=steps).filter_map(|step| project(on_ring(grade * step as f64 / steps as f64))).collect();
-        let width_from = project(foot + across.extend(0.0) * radius)?;
-        let width_tip = project(foot + across.extend(0.0) * (radius + length * WIDTH_ARROW_RATIO / scale.px_per_world))?;
+        // From the foot, the ring's centre, as the walls' arms are from
+        // their toe, and as long.
+        let arm = SECTION_ARM_POINTS * self.scale_factor();
+        let width_from = centre;
+        let width_tip = project(foot + across.extend(0.0) * (arm / scale.px_per_world))?;
         let run = (width_tip.0 - width_from.0).hypot(width_tip.1 - width_from.1).max(1.0e-3);
         // Pointing at the camera, as a Blender axis arrow, it fades out.
         let width_fade = fade_ramp(
@@ -866,7 +867,7 @@ impl<'a> Graphics<'a> {
             width_from,
             width_tip,
             across: ((width_tip.0 - width_from.0) / run, (width_tip.1 - width_from.1) / run),
-            pixels_per_metre: (scale.px_per_world as f32) * (run / (length * WIDTH_ARROW_RATIO) as f32).max(1.0e-3),
+            pixels_per_metre: (scale.px_per_world as f32) * (run / arm as f32).max(1.0e-3),
         })
     }
 
@@ -1381,15 +1382,11 @@ const WALL_GIZMO_STEP: f64 = 5.0;
 const WALL_GIZMO_RAMP_CLEAR: f64 = 40.0;
 const WALL_GIZMO_MARGIN: f64 = 130.0;
 
-/// The walls' gizmo: the points a metre of its face takes, the radius of
-/// its face's ring, and the length of its arms from the toe, in logical
-/// points.
+/// The walls' gizmo: the points a metre dragged takes, the radius of its
+/// face's ring, and the length of its arms from the toe, in logical points.
 const SECTION_POINTS_PER_METRE: f64 = 6.0;
 const SECTION_RING_POINTS: f64 = 44.0;
 const SECTION_ARM_POINTS: f64 = 110.0;
-
-/// A ramp's width arrow's length, as a share of a gizmo's arm.
-const WIDTH_ARROW_RATIO: f64 = 0.7;
 
 /// Which way along `axis` a vector points: 1 or -1.
 fn next_sign(vector: glam::DVec2, axis: glam::DVec2) -> f64 {

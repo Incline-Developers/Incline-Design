@@ -5208,12 +5208,6 @@ pit-design-checks-in-view =
         [one] एक जगह कमी है, दृश्य में चिह्नित
        *[other] { $count } जगह कमी है, दृश्य में चिह्नित
     }
-pit-design-gizmo-width-hint = रैंप की चौड़ाई बदलने के लिए खींचें
-pit-design-gizmo-turn-hint = दूसरी दिशा में चढ़ाने के लिए क्लिक करें
-pit-design-gizmo-grade-hint = रैंप की ढलान बदलने के लिए घेरे पर घुमाएँ
-pit-design-gizmo-height-hint = बेंच की ऊँचाई बदलने के लिए खींचें
-pit-design-gizmo-angle-hint = फेस कोण बदलने के लिए घेरे पर घुमाएँ
-pit-design-gizmo-berm-hint = बर्म की चौड़ाई बदलने के लिए खींचें
 pit-design-gizmo-dragging = तय करने के लिए छोड़ें।
 pit-design-gizmo-fine = बारीक कदमों के लिए Shift
 pit-design-check-steep = रैम्प बहुत खड़ा

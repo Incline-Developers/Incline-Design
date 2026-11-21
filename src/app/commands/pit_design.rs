@@ -1089,7 +1089,16 @@ impl App<'_> {
                     Some(GizmoPart::Turn(gizmo.ramp))
                 } else if gizmo.ring_fade > 0.0 && (near(gizmo.grade_handle) || near_chain(&gizmo.ring[..=RING_STEPS / 2])) {
                     Some(GizmoPart::Grade(gizmo.ramp))
-                } else if gizmo.width_fade > 0.0 && near_chain(&[gizmo.width_from, gizmo.width_tip]) {
+                } else if gizmo.width_fade > 0.0
+                    && near_chain(&[
+                        // Clear of the foot, which the ramp's start is dragged by.
+                        (
+                            gizmo.width_from.0 + (gizmo.width_tip.0 - gizmo.width_from.0) * 0.25,
+                            gizmo.width_from.1 + (gizmo.width_tip.1 - gizmo.width_from.1) * 0.25,
+                        ),
+                        gizmo.width_tip,
+                    ])
+                {
                     Some(GizmoPart::Width(gizmo.ramp))
                 } else {
                     None

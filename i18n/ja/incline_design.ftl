@@ -5235,12 +5235,6 @@ pit-design-checks-in-view =
         [one] 1 か所が設定を満たしません（ビューに表示）
        *[other] { $count } か所が設定を満たしません（ビューに表示）
     }
-pit-design-gizmo-width-hint = ドラッグしてランプの幅を変更
-pit-design-gizmo-turn-hint = クリックして逆向きに上らせる
-pit-design-gizmo-grade-hint = 回すようにドラッグしてランプの勾配を変更
-pit-design-gizmo-height-hint = ドラッグしてベンチ高を変更
-pit-design-gizmo-angle-hint = 回すようにドラッグして法面角を変更
-pit-design-gizmo-berm-hint = ドラッグして小段幅を変更
 pit-design-gizmo-dragging = 離して確定します。
 pit-design-gizmo-fine = Shift で細かい刻み
 pit-design-check-steep = ランプが急すぎる

@@ -5593,12 +5593,6 @@ pit-design-checks-in-view =
         [one] Одно место не соответствует настройкам, отмечено в виде
        *[other] Мест, не соответствующих настройкам: { $count }, отмечены в виде
     }
-pit-design-gizmo-width-hint = Перетащите, чтобы изменить ширину съезда
-pit-design-gizmo-turn-hint = Щёлкните, чтобы съезд поднимался в другую сторону
-pit-design-gizmo-grade-hint = Тяните по кругу, чтобы изменить уклон съезда
-pit-design-gizmo-height-hint = Тяните, чтобы изменить высоту уступа
-pit-design-gizmo-angle-hint = Тяните по кругу, чтобы изменить угол откоса
-pit-design-gizmo-berm-hint = Тяните, чтобы изменить ширину бермы
 pit-design-gizmo-dragging = Отпустите, чтобы задать.
 pit-design-gizmo-fine = Shift для мелких шагов
 pit-design-check-steep = Съезд слишком крутой

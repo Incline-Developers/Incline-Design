@@ -674,6 +674,31 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
 }
 
 /// Draw the compact MakeCircle radius editor beside (but never under) the cursor.
+/// How a value box floating in the viewport is drawn: at rest, picked out
+/// (its handle hovered or dragged), or holding what cannot be taken.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ViewportInputState {
+    Idle,
+    Lit,
+    Invalid,
+}
+
+/// The frame of a value box floating in the viewport, as every tool's is
+/// (Make Circle's radius, Pit Design's gizmo values): the panel's fill with
+/// a thin outline, the value's field and its unit inside.
+pub(crate) fn viewport_input_frame(ui: &egui::Ui, state: ViewportInputState) -> egui::Frame {
+    let stroke = match state {
+        ViewportInputState::Idle => egui::Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color),
+        ViewportInputState::Lit => egui::Stroke::new(1.5, ui.visuals().selection.stroke.color),
+        ViewportInputState::Invalid => egui::Stroke::new(1.5, egui::Color32::from_rgb(220, 70, 70)),
+    };
+    egui::Frame::new()
+        .fill(ui.visuals().panel_fill)
+        .stroke(stroke)
+        .corner_radius(egui::CornerRadius::same(4))
+        .inner_margin(egui::Margin::symmetric(6, 4))
+}
+
 fn draw_circle_radius_input(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) -> bool {
     if editor.active_tool != ActiveTool::MakeCircle {
         return false;
@@ -714,55 +739,45 @@ fn draw_circle_radius_input(ui: &mut egui::Ui, editor: &mut EditorState, command
         .order(egui::Order::Foreground)
         .fixed_pos(egui::pos2(x, y))
         .show(ui.ctx(), |ui| {
-            let stroke_color = if typed_invalid {
-                egui::Color32::from_rgb(220, 70, 70)
-            } else {
-                ui.visuals().widgets.inactive.bg_stroke.color
-            };
-            egui::Frame::new()
-                .fill(ui.visuals().panel_fill)
-                .stroke(egui::Stroke::new(if typed_invalid { 1.5 } else { 1.0 }, stroke_color))
-                .corner_radius(egui::CornerRadius::same(4))
-                .inner_margin(egui::Margin::symmetric(6, 4))
-                .show(ui, |ui| {
-                    let draft = editor.circle_draft.as_mut().expect("circle draft checked before drawing radius input");
-                    let was_empty = draft.radius_text.is_empty();
-                    ui.horizontal_centered(|ui| {
-                        let response = ui.add_sized(
-                            [94.0, 22.0],
-                            egui::TextEdit::singleline(&mut draft.radius_text)
-                                .id_source("make_circle_radius_text")
-                                .hint_text(live_mouse_radius.as_str())
-                                .char_limit(32),
-                        );
-                        ui.label(tr!("common-m"));
+            viewport_input_frame(ui, if typed_invalid { ViewportInputState::Invalid } else { ViewportInputState::Idle }).show(ui, |ui| {
+                let draft = editor.circle_draft.as_mut().expect("circle draft checked before drawing radius input");
+                let was_empty = draft.radius_text.is_empty();
+                ui.horizontal_centered(|ui| {
+                    let response = ui.add_sized(
+                        [94.0, 22.0],
+                        egui::TextEdit::singleline(&mut draft.radius_text)
+                            .id_source("make_circle_radius_text")
+                            .hint_text(live_mouse_radius.as_str())
+                            .char_limit(32),
+                    );
+                    ui.label(tr!("common-m"));
 
-                        if draft.focus_requested || !response.has_focus() {
-                            response.request_focus();
-                            draft.focus_requested = false;
-                        }
-                        if response.changed() {
-                            draft.note_radius_text_changed(was_empty, cursor_screen_px);
+                    if draft.focus_requested || !response.has_focus() {
+                        response.request_focus();
+                        draft.focus_requested = false;
+                    }
+                    if response.changed() {
+                        draft.note_radius_text_changed(was_empty, cursor_screen_px);
+                        changed = true;
+                    }
+
+                    let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                    let escape_pressed = ui.input(|input| input.key_pressed(egui::Key::Escape));
+                    if response.has_focus() && enter_pressed && draft.typed_radius().is_some() {
+                        commit_typed_radius = true;
+                    }
+                    if response.has_focus() && escape_pressed {
+                        if draft.radius_text.is_empty() {
+                            cancel_center = true;
+                        } else {
+                            draft.radius_text.clear();
+                            draft.typing_origin_screen_px = None;
+                            draft.focus_requested = true;
                             changed = true;
                         }
-
-                        let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
-                        let escape_pressed = ui.input(|input| input.key_pressed(egui::Key::Escape));
-                        if response.has_focus() && enter_pressed && draft.typed_radius().is_some() {
-                            commit_typed_radius = true;
-                        }
-                        if response.has_focus() && escape_pressed {
-                            if draft.radius_text.is_empty() {
-                                cancel_center = true;
-                            } else {
-                                draft.radius_text.clear();
-                                draft.typing_origin_screen_px = None;
-                                draft.focus_requested = true;
-                                changed = true;
-                            }
-                        }
-                    });
+                    }
                 });
+            });
         });
 
     if cancel_center {
