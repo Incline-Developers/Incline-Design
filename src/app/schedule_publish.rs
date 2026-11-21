@@ -847,7 +847,8 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         _ => BTreeMap::new(),
     };
     // A loader waits on a blast when its highest-priority open bar is a dig
-    // whose next block has not been released.
+    // whose next block has not been released - and, for an automatic bar,
+    // nor has any other block within its reach, which it could start instead.
     let waiting = |agent: LoaderAgentId, position: usize| -> Option<usize> {
         if releases.is_empty() {
             return None;
@@ -869,7 +870,27 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         for task in open {
             let TaskKind::Dig { sequence } = &task.kind else { return None };
             if let Some(ground) = next_in_sequence(task, sequence, start_h) {
-                return releases.get(&ground).filter(|(at, _)| *at > start_h + 1e-9).map(|(_, blast)| *blast);
+                let held = releases.get(&ground).filter(|(at, _)| *at > start_h + 1e-9).map(|(_, blast)| *blast);
+                let reach = task.lookahead_t.max(task.lookahead_feed_t);
+                if held.is_some() && reach > 0.0 {
+                    let from = sequence.iter().position(|at| *at == ground).unwrap_or(0);
+                    let mut before = 0.0;
+                    for at in &sequence[from..] {
+                        let Some(block) = lookup.identities.ground_blocks.get(at) else { continue };
+                        let left = ground_by_id.get(at).map_or(0.0, |source| source.tonnes_t) - sum_within(dug.get(block), f64::NEG_INFINITY, start_h);
+                        if left <= IDLE_NEGLIGIBLE_T {
+                            continue;
+                        }
+                        if before > reach {
+                            break;
+                        }
+                        if releases.get(at).is_none_or(|(when, _)| *when <= start_h + 1e-9) {
+                            return None;
+                        }
+                        before += left;
+                    }
+                }
+                return held;
             }
         }
         None
