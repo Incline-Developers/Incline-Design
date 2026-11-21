@@ -28,6 +28,7 @@ mod include;
 mod point_cloud_tin;
 pub(crate) mod reference_surface;
 pub(crate) mod session;
+mod simplify;
 pub(crate) mod solid_between;
 
 pub(crate) use contours::section_surface_lines;

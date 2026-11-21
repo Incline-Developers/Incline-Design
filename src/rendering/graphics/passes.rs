@@ -1363,6 +1363,13 @@ impl<'a> Graphics<'a> {
         let (vp_x, vp_y, vp_width, vp_height) = self.clamp_viewport_rect(viewport);
         render_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
 
+        // Under every line the pass draws: a rain simulation's water.
+        if !self.water.is_empty() {
+            render_pass.set_pipeline(&self.pipes().water_render_pipeline);
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
+            self.water.draw(&mut render_pass);
+        }
+
         if !self.dynamic_strokes.is_empty() {
             render_pass.set_pipeline(if editor.xray_enabled || editor.tying_holes() {
                 &self.pipes().overlay_render_pipeline

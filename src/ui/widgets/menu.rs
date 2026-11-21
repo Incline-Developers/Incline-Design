@@ -145,12 +145,18 @@ pub(crate) fn menu_surface(visuals: &egui::Visuals) -> egui::Color32 {
     shifted(visuals.panel_fill, if visuals.dark_mode { 8 } else { 7 })
 }
 
+/// The room a window covering the canvas keeps inside its edges, every side alike.
+const COVER_MARGIN: i8 = 8;
+
+/// Width of the menu border (`menu_border`).
+const MENU_BORDER_WIDTH: f32 = 1.0;
+
 /// Hairline around a floating menu's card.
 ///
 /// The card's only elevation cue, so it is a firmer line than the one
 /// [`crate::ui::chrome`] draws around a region.
 pub(crate) fn menu_border(visuals: &egui::Visuals) -> egui::Stroke {
-    egui::Stroke::new(1.0, shifted(visuals.panel_fill, if visuals.dark_mode { 34 } else { -40 }))
+    egui::Stroke::new(MENU_BORDER_WIDTH, shifted(visuals.panel_fill, if visuals.dark_mode { 34 } else { -40 }))
 }
 
 /// Tint of the drag bar: a hint of separation from the body, no divider line.
@@ -341,6 +347,23 @@ impl<'open> DragableMenu<'open> {
             movable: true,
             order: egui::Order::Foreground,
         }
+    }
+
+    /// Fill `rect` exactly (the 3D canvas, say), fixed in place: a window
+    /// that takes the whole working area while it is up.
+    pub(crate) fn cover(mut self, rect: egui::Rect) -> Self {
+        // A frame is its content plus its stroke on each side (the menu border,
+        // 1 point), so the content is that much smaller for the frame to fit.
+        let border = 2.0 * MENU_BORDER_WIDTH;
+        let size = (rect.size() - egui::vec2(border, border)).max(egui::Vec2::ZERO);
+        self.current_pos = Some(rect.min);
+        self.fixed_size = Some(size);
+        // The same room on every side, the bottom included.
+        self.inner_margin = egui::Margin::same(COVER_MARGIN);
+        self.min_width = size.x;
+        self.max_width = size.x;
+        self.movable = false;
+        self
     }
 
     /// Show or hide the title bar. A hidden title bar also hides its close button.
@@ -813,6 +836,23 @@ fn section_heading(ui: &mut egui::Ui, heading: String, font: egui::FontId) {
     ui.add_space(2.0);
 }
 
+/// Make the next dialog modal: a lightly dimmed sheet over the whole
+/// window that takes every click, so nothing under it can be used
+/// until the dialog answers. Call it just before the dialog, then raise the
+/// dialog above it with `ctx.move_to_top(dialog.response.layer_id)`.
+pub(crate) fn modal_sheet(ctx: &egui::Context, id_salt: impl Hash + Debug) {
+    let sheet = egui::Area::new(egui::Id::unique(id_salt))
+        .order(egui::Order::Foreground)
+        .fixed_pos(ctx.content_rect().min)
+        .interactable(true)
+        .show(ctx, |ui| {
+            let rect = ctx.content_rect();
+            ui.allocate_rect(rect, egui::Sense::click_and_drag());
+            ui.painter().rect_filled(rect, 0.0, egui::Color32::from_black_alpha(70));
+        });
+    ctx.move_to_top(sheet.response.layer_id);
+}
+
 /// A quiet block of explanatory text inside a menu.
 ///
 /// For the sentence that says what the dialog is about to do, or what the
@@ -1241,12 +1281,35 @@ impl<'value> MenuFieldBool<'value> {
 /// on", which is what an Auto run is.
 pub(crate) struct SlidingToggle<'value> {
     value: &'value mut bool,
+    /// The track's size; the house size unless set.
+    size: Option<egui::Vec2>,
+    /// What keys the knob's slide, when the bool is a temporary (see `ui`).
+    id: Option<egui::Id>,
     label: Option<egui::WidgetText>,
 }
 
 impl<'value> SlidingToggle<'value> {
     pub(crate) fn new(value: &'value mut bool) -> Self {
-        Self { value, label: None }
+        Self {
+            value,
+            size: None,
+            id: None,
+            label: None,
+        }
+    }
+
+    /// Key the knob's slide by `salt` rather than by the bool's address: for a
+    /// bool rebuilt each frame (a local, a fresh `Vec`), whose address another
+    /// switch drawn the same frame can share with the opposite value.
+    pub(crate) fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
+        self.id = Some(egui::Id::unique(salt));
+        self
+    }
+
+    /// A smaller track, for a switch inside another widget's box.
+    pub(crate) fn size(mut self, size: egui::Vec2) -> Self {
+        self.size = Some(size);
+        self
     }
 
     /// Text after the switch, clickable with it.
@@ -1265,8 +1328,13 @@ impl egui::Widget for SlidingToggle<'_> {
         let label_width = galley.as_ref().map_or(0.0, |galley| LABEL_GAP + galley.size().x);
         // The track is a fixed size, but the row's full height stays clickable
         // so the switch is no harder to hit than the fields above it.
-        let height = ui.spacing().interact_size.y.max(TOGGLE_HEIGHT);
-        let (rect, mut response) = ui.allocate_exact_size(egui::vec2(TOGGLE_WIDTH + label_width, height), egui::Sense::click());
+        let track = self.size.unwrap_or(egui::vec2(TOGGLE_WIDTH, TOGGLE_HEIGHT));
+        let height = if self.size.is_some() {
+            track.y
+        } else {
+            ui.spacing().interact_size.y.max(TOGGLE_HEIGHT)
+        };
+        let (rect, mut response) = ui.allocate_exact_size(egui::vec2(track.x + label_width, height), egui::Sense::click());
 
         if response.clicked() {
             *self.value = !*self.value;
@@ -1277,7 +1345,7 @@ impl egui::Widget for SlidingToggle<'_> {
         response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *self.value, text));
 
         if ui.is_rect_visible(rect) {
-            let rect = egui::Rect::from_min_size(rect.min, egui::vec2(TOGGLE_WIDTH, height));
+            let rect = egui::Rect::from_min_size(rect.min, egui::vec2(track.x, height));
             if let Some(galley) = galley {
                 let text_pos = egui::pos2(rect.right() + LABEL_GAP, rect.center().y - galley.size().y / 2.0);
                 ui.painter().galley(text_pos, galley, ui.style().interact(&response).text_color());
@@ -1287,9 +1355,10 @@ impl egui::Widget for SlidingToggle<'_> {
             // assigned by allocation order within the enclosing panel, so switching
             // properties tabs lines a toggle up with whatever occupied that same slot
             // in the previous tab and replays a slide from its stale cached value.
-            let value_id = egui::Id::unique(self.value as *const bool as usize);
+            // A temporary bool has no lasting address, so its caller names it.
+            let value_id = self.id.unwrap_or_else(|| egui::Id::unique(self.value as *const bool as usize));
             let animation = ui.ctx().animate_bool_responsive(value_id, *self.value);
-            let track_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(TOGGLE_WIDTH, TOGGLE_HEIGHT));
+            let track_rect = egui::Rect::from_center_size(rect.center(), track);
             let radius = track_rect.height() / 2.0;
             let off_fill = ui.visuals().widgets.inactive.bg_fill;
             let on_fill = ui.visuals().selection.bg_fill;

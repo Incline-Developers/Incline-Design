@@ -286,6 +286,8 @@ impl<'a> App<'a> {
             TriangulationPickTarget::ClipSurface => self.set_tool_subject(ToolSubject::ClipSurface(id)),
             TriangulationPickTarget::SliceSurface => self.set_tool_subject(ToolSubject::SliceSurface(id)),
             TriangulationPickTarget::ContourSurface => self.set_tool_subject(ToolSubject::ContourSurface(id)),
+            TriangulationPickTarget::WaterSurface => self.set_tool_subject(ToolSubject::WaterSurface(id)),
+            TriangulationPickTarget::SimplifySurface => self.set_tool_subject(ToolSubject::SimplifySurface(id)),
             TriangulationPickTarget::IncludeShape => {
                 self.editor.tri_include_solid_shape_id = Some(id);
                 if self.editor.tri_include_solid_topology_id == Some(id) {

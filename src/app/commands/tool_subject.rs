@@ -34,6 +34,8 @@ impl App<'_> {
             ToolSubject::ClipSurface(id) => self.set_clip_surface(id),
             ToolSubject::SliceSurface(id) => self.set_slice_surface(id),
             ToolSubject::ContourSurface(id) => self.set_contour_surface(id),
+            ToolSubject::WaterSurface(id) => self.set_water_surface(id),
+            ToolSubject::SimplifySurface(id) => self.set_simplify_surface(id),
             ToolSubject::OreBlockModel(id) => self.set_ore_block_model(id),
             ToolSubject::BlockModelDrillholes(id) => self.open_create_block_model_dialog(id, None),
             ToolSubject::TinPointCloud(id) => self.set_tin_point_cloud(id),
@@ -96,6 +98,43 @@ impl App<'_> {
         self.editor.tri_cut_z_min_input = bounds.min.z;
         self.editor.tri_cut_z_max_input = bounds.max.z;
         self.editor.tri_cut_z_limits = (bounds.min.z, bounds.max.z);
+    }
+
+    /// Open Rain Simulation. The storm it last ran stays as it was set.
+    pub(crate) fn open_water_surface(&mut self) {
+        self.editor.water_dialog.open = true;
+        self.editor.water_dialog.surface = None;
+        self.editor.tri_hover_handles.clear();
+        if let Some(id) = only(&self.selected_triangulations()) {
+            self.set_water_surface(id);
+        }
+    }
+
+    fn set_water_surface(&mut self, id: TriangulationId) {
+        if self.triangulations.iter().any(|surface| surface.id == id && surface.state.loaded) {
+            self.editor.water_dialog.surface = Some(id);
+        }
+    }
+
+    /// Open Simplify. How far it last thinned stays as it was set.
+    pub(crate) fn open_simplify_surface(&mut self) {
+        self.editor.simplify_dialog.open = true;
+        self.editor.simplify_dialog.surface = None;
+        self.editor.simplify_dialog.faces = 0;
+        self.editor.simplify_dialog.name.clear();
+        self.editor.tri_hover_handles.clear();
+        if let Some(id) = only(&self.selected_triangulations()) {
+            self.set_simplify_surface(id);
+        }
+    }
+
+    fn set_simplify_surface(&mut self, id: TriangulationId) {
+        let Some(surface) = self.triangulations.iter().find(|surface| surface.id == id && surface.state.loaded) else {
+            return;
+        };
+        self.editor.simplify_dialog.name = crate::app::canvas::derived_triangulation_name(&surface.name, &tr!("simplify-name-suffix"));
+        self.editor.simplify_dialog.faces = surface.mesh.face_count();
+        self.editor.simplify_dialog.surface = Some(id);
     }
 
     pub(crate) fn open_contour_surface(&mut self) {

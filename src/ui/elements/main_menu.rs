@@ -463,6 +463,8 @@ pub(crate) enum MenuRow {
     MergeShellIntoTopology,
     BuildSolidFromSurfaces,
     GenerateContours,
+    Simplify,
+    SimulateWater,
     PitOptimization,
     UndrapeAllRasters,
     CreateOreTriangulation,
@@ -583,7 +585,9 @@ const PRODUCTION_MENUS: &[WorkspaceMenu] = &[
         groups: &[
             rows(&[MenuRow::ClipSurfaceByPolyline, MenuRow::SliceSurfaceByZ, MenuRow::TrimTopology, MenuRow::ClipToSurface]),
             rows(&[MenuRow::CutTopologyByPitShell, MenuRow::MergeShellIntoTopology, MenuRow::BuildSolidFromSurfaces]),
+            rows(&[MenuRow::Simplify]),
             rows(&[MenuRow::GenerateContours]),
+            rows(&[MenuRow::SimulateWater]),
         ],
     },
     // Pit optimization works over a block model, but it opens on its
@@ -770,6 +774,8 @@ impl MenuRow {
             Self::MergeShellIntoTopology => tr!("common-merge-shell-into-topology-ellipsis"),
             Self::BuildSolidFromSurfaces => tr!("menu-build-solid-surfaces"),
             Self::GenerateContours => tr!("common-generate-contour-lines"),
+            Self::Simplify => tr!("simplify-menu"),
+            Self::SimulateWater => tr!("water-simulate-ellipsis"),
             Self::PitOptimization => tr!("menu-pit-optimization"),
             Self::UndrapeAllRasters => tr!("common-undrape-all"),
             Self::CreateOreTriangulation => tr!("common-create-ore-triangulation-ellipsis"),
@@ -840,6 +846,8 @@ impl MenuRow {
             Self::MergeShellIntoTopology => UiCommand::OpenIncludeSolidInTopology,
             Self::BuildSolidFromSurfaces => UiCommand::OpenBuildSolidFromSurfaces,
             Self::GenerateContours => UiCommand::OpenContourTriangulation,
+            Self::Simplify => UiCommand::OpenSimplifyTriangulation,
+            Self::SimulateWater => UiCommand::OpenWaterSimulation,
             Self::PitOptimization => UiCommand::OpenOptimizationScenarios,
             Self::UndrapeAllRasters => UiCommand::UndrapeAllRasters,
             Self::CreateOreTriangulation => UiCommand::OpenCreateOreTriangulation,
@@ -894,7 +902,14 @@ impl MenuRow {
             Self::UndrapeAllRasters => project.raster_textures.iter().any(|raster| raster.is_draped),
             // These work on one named item, which their dialog lists: the
             // selection only saves choosing it there.
-            Self::ClipSurfaceByPolyline | Self::SliceSurfaceByZ | Self::GenerateContours | Self::PointCloudTin | Self::PointCloudJoin | Self::PointCloudClassify => true,
+            Self::ClipSurfaceByPolyline
+            | Self::SliceSurfaceByZ
+            | Self::GenerateContours
+            | Self::Simplify
+            | Self::SimulateWater
+            | Self::PointCloudTin
+            | Self::PointCloudJoin
+            | Self::PointCloudClassify => true,
             Self::CreateOreTriangulation | Self::CreateBlockModel | Self::SurveyTransform => project.has_active_project,
             // Geology's own rows, and the two Clip to Surface rows, wait on
             // the editor instead; see [`MenuRow::ready`].
@@ -1006,6 +1021,8 @@ impl MenuRow {
             Self::MergeShellIntoTopology => "ws-menubar-triangulation-merge-shell",
             Self::BuildSolidFromSurfaces => "ws-menubar-triangulation-build-solid",
             Self::GenerateContours => "ws-menubar-triangulation-contours",
+            Self::Simplify => "ws-menubar-triangulation-simplify",
+            Self::SimulateWater => "ws-menubar-triangulation-simulate-water",
             Self::PitOptimization => "ws-menubar-block-model-pit-optimization",
             Self::UndrapeAllRasters => "ws-menubar-raster-undrape-all",
             Self::CreateOreTriangulation => "ws-menubar-block-model-ore-triangulation",

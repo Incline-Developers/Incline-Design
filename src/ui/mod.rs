@@ -196,14 +196,18 @@ impl Gui {
         self.renderer.update_egui_texture_from_wgpu_texture(device, view, wgpu::FilterMode::Linear, id);
     }
 
+    /// Run the frame's UI: lay it out, take its commands and the scene's
+    /// rect, and tessellate what it draws, which [`Self::paint`] puts on
+    /// screen once the scene is under it.
+    ///
+    /// Laid out before the scene is drawn, so the scene fills the rect this
+    /// frame's panels leave rather than last frame's: a panel that opens or
+    /// goes would otherwise leave the scene a frame in the old place, and the
+    /// ground the panel gave up bare.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn render(
+    pub(crate) fn layout(
         &mut self,
         window: &Window,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        target_view: &wgpu::TextureView,
         editor: &mut EditorState,
         document: &mut Document,
         project: &UiProjectView,
@@ -217,7 +221,7 @@ impl Gui {
         camera_forward: [f32; 3],
         camera_up: [f32; 3],
         world_per_physical_pixel: Option<f64>,
-    ) -> UiFrameOutput {
+    ) -> (UiFrameOutput, UiPaint) {
         self.update_scale(window, editor.ui_size_percent);
         let selection_color = SELECTION_COLOR;
         let visuals = &self.ctx.global_style().visuals;
@@ -286,7 +290,7 @@ impl Gui {
             console_snapshot: &console_snapshot,
         };
         let mut canvas_rect_logical = egui::Rect::NOTHING;
-        let mut full_output = self.ctx.run_ui(raw_input, |ui| {
+        let full_output = self.ctx.run_ui(raw_input, |ui| {
             geometry_dirty |= draw_ui(
                 ui,
                 editor,
@@ -310,12 +314,6 @@ impl Gui {
         mirror_copy_text_to_browser_clipboard(&full_output.platform_output);
         self.state.handle_platform_output(window, full_output.platform_output);
 
-        for (id, image_deltas) in full_output.textures_delta.set.drain() {
-            for image_delta in image_deltas {
-                self.renderer.update_texture(device, queue, id, &image_delta);
-            }
-        }
-
         let pixels_per_point = full_output.pixels_per_point;
         // Read once the frame's widgets have run. A held button is the gesture:
         // `dragged_id` alone would miss the press before the pointer has moved
@@ -327,8 +325,44 @@ impl Gui {
             size_in_pixels: screen_size,
             pixels_per_point,
         };
-        let extra_command_buffers = self.renderer.update_buffers(device, queue, encoder, &paint_jobs, &screen_descriptor);
 
+        let canvas_rect = if editor.is_planning_setup() {
+            ViewportRect { x: 0, y: 0, width: 0, height: 0 }
+        } else if canvas_rect_logical.is_finite() && canvas_rect_logical.is_positive() {
+            ViewportRect {
+                x: (canvas_rect_logical.min.x * pixels_per_point).round().max(0.0) as u32,
+                y: (canvas_rect_logical.min.y * pixels_per_point).round().max(0.0) as u32,
+                width: ((canvas_rect_logical.width() * pixels_per_point).round().max(1.0)) as u32,
+                height: ((canvas_rect_logical.height() * pixels_per_point).round().max(1.0)) as u32,
+            }
+        } else {
+            ViewportRect::full(screen_size[0], screen_size[1])
+        };
+
+        let output = UiFrameOutput {
+            repaint_after,
+            geometry_dirty,
+            commands,
+            canvas_rect,
+            pointer_gesture_active,
+        };
+        let paint = UiPaint {
+            jobs: paint_jobs,
+            textures: full_output.textures_delta,
+            screen: screen_descriptor,
+        };
+        (output, paint)
+    }
+
+    /// Paint what [`Self::layout`] laid out over `target_view`, which holds
+    /// the frame's scene.
+    pub(crate) fn paint(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, target_view: &wgpu::TextureView, paint: UiPaint) {
+        for (id, image_deltas) in &paint.textures.set {
+            for image_delta in image_deltas {
+                self.renderer.update_texture(device, queue, *id, image_delta);
+            }
+        }
+        let extra_command_buffers = self.renderer.update_buffers(device, queue, encoder, &paint.jobs, &paint.screen);
         for command_buffer in extra_command_buffers {
             queue.submit(std::iter::once(command_buffer));
         }
@@ -350,34 +384,21 @@ impl Gui {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            self.renderer.render(&mut render_pass.forget_lifetime(), &paint_jobs, &screen_descriptor);
+            self.renderer.render(&mut render_pass.forget_lifetime(), &paint.jobs, &paint.screen);
         }
 
-        for id in full_output.textures_delta.free.drain() {
-            self.renderer.free_texture(&id);
-        }
-
-        let canvas_rect = if editor.is_planning_setup() {
-            ViewportRect { x: 0, y: 0, width: 0, height: 0 }
-        } else if canvas_rect_logical.is_finite() && canvas_rect_logical.is_positive() {
-            ViewportRect {
-                x: (canvas_rect_logical.min.x * pixels_per_point).round().max(0.0) as u32,
-                y: (canvas_rect_logical.min.y * pixels_per_point).round().max(0.0) as u32,
-                width: ((canvas_rect_logical.width() * pixels_per_point).round().max(1.0)) as u32,
-                height: ((canvas_rect_logical.height() * pixels_per_point).round().max(1.0)) as u32,
-            }
-        } else {
-            ViewportRect::full(screen_size[0], screen_size[1])
-        };
-
-        UiFrameOutput {
-            repaint_after,
-            geometry_dirty,
-            commands,
-            canvas_rect,
-            pointer_gesture_active,
+        for id in &paint.textures.free {
+            self.renderer.free_texture(id);
         }
     }
+}
+
+/// What a frame's UI draws, laid out and tessellated by [`Gui::layout`] and
+/// waiting for [`Gui::paint`].
+pub(crate) struct UiPaint {
+    jobs: Vec<egui::ClippedPrimitive>,
+    textures: egui::TexturesDelta,
+    screen: ScreenDescriptor,
 }
 
 /// What the video export paints over each frame it renders: the destination
@@ -853,7 +874,14 @@ fn draw_ui(
     let workspace_tabs = workspace_tabs.map(|tabs| tabs.standing_on(chrome::region_rect(viewport_bar_rect).top()));
     // Planning's page tabs, across the window under the bar and over every
     // page, so they are claimed before anything below them too.
-    let planning_tabs = (editor.active_workspace == state::Workspace::Planning).then(|| elements::planning_tabs::draw_planning_tabs(root_ui, editor, commands));
+    let planning_tabs = if editor.active_workspace == state::Workspace::Planning {
+        Some(elements::planning_tabs::draw_planning_tabs(root_ui, editor, commands))
+    } else if editor.has_water_tabs() {
+        // A workspace with water runs open has the same row, for their tabs.
+        Some(elements::planning_tabs::draw_water_tabs(root_ui, editor, commands))
+    } else {
+        None
+    };
     if planning_tabs.is_none() {
         // `Panel::show` creates one direct child of `root_ui`. Keep the root
         // auto-id sequence identical in the workspaces without this row, or
@@ -901,10 +929,24 @@ fn draw_ui(
             dialogs::editing::draw_select_project_dialog(root_ui, project, main_menu_rect.bottom(), commands);
         }
         *canvas_rect_out = egui::Rect::ZERO;
-        geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, frame_context.console_snapshot, commands);
+        geometry_dirty |= draw_global_dialogs(
+            root_ui,
+            editor,
+            document,
+            project,
+            block_models,
+            drill_holes,
+            egui::Rect::ZERO,
+            frame_context.console_snapshot,
+            commands,
+        );
         let ctx = root_ui.ctx();
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
-        chrome::paint_regions(ctx, [viewport_bar_rect, console].into_iter().chain(explorer.regions).chain(planning_layout.regions));
+        chrome::paint_regions(
+            ctx,
+            [viewport_bar_rect, console].into_iter().chain(explorer.regions).chain(planning_layout.regions),
+            status_bar_rect,
+        );
         chrome::paint_grips(ctx, planning_layout.grips);
         if let Some(tabs) = &planning_tabs {
             tabs.paint(ctx);
@@ -922,7 +964,16 @@ fn draw_ui(
         return geometry_dirty;
     }
 
-    let explorer = elements::explorer::draw_explorer(root_ui, editor, project, document, commands);
+    // A rain simulation's tab shows nothing of the project's, so it has no
+    // explorer to choose from.
+    let explorer = if editor.is_water_run() {
+        // As for the optional panels below: keep the root auto-id sequence
+        // the same whether or not this one is drawn.
+        root_ui.skip_ahead_auto_ids(1);
+        elements::explorer::ExplorerLayout::empty()
+    } else {
+        elements::explorer::draw_explorer(root_ui, editor, project, document, commands)
+    };
 
     // The console belongs below the bottom toolbar. Reserve the toolbar's height
     // before showing the console so dragging it to its maximum cannot starve the
@@ -940,9 +991,22 @@ fn draw_ui(
         root_ui.skip_ahead_auto_ids(1);
     }
 
-    let (bottom_toolbar_rect, cursor_modes_centre) = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
+    // A rain simulation shows its own copy of a surface, with nothing to
+    // measure, snap to or draw on: its tab has neither toolbar, only its
+    // timeline.
+    let (bottom_toolbar_rect, cursor_modes_centre) = if editor.is_water_run() {
+        // As for the optional panels around it: keep the root auto-id
+        // sequence the same whether or not this one is drawn.
+        root_ui.skip_ahead_auto_ids(1);
+        (egui::Rect::NOTHING, root_ui.ctx().content_rect().center().x)
+    } else {
+        elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands)
+    };
     let animation_timeline_rect = if editor.is_schedule_animation() {
         elements::schedule_animation::draw_timeline(root_ui, editor, document, &project.schedule, commands)
+    } else if editor.is_water_run() {
+        // A water run's timeline takes the same place under the viewport.
+        elements::water::draw_timeline(root_ui, editor)
     } else {
         // As above: keep the root auto-id sequence the same whether or not
         // this optional panel is drawn, so leaving Animate does not renumber
@@ -998,7 +1062,12 @@ fn draw_ui(
     // scene, so they are claimed before the scene's rect is worked out: what
     // they leave is where it starts. The column is one region the full height
     // of the workspace, like the explorer beside it.
-    let left_toolbar_rect = elements::toolbars::draw_left_toolbar(root_ui, editor, project, editing_enabled, project_active, commands);
+    let left_toolbar_rect = if editor.is_water_run() {
+        root_ui.skip_ahead_auto_ids(1);
+        egui::Rect::NOTHING
+    } else {
+        elements::toolbars::draw_left_toolbar(root_ui, editor, project, editing_enabled, project_active, commands)
+    };
 
     // --- Compute canvas rect (area not occupied by panels) ---
     let canvas_bottom = console_rect.map_or_else(
@@ -1033,6 +1102,7 @@ fn draw_ui(
     // points the whole round is read from - stay on top of them.
     elements::blast::draw_blast_overlays(root_ui, editor, drill_holes, canvas_rect);
     draw_initiation_cards(root_ui, editor, canvas_rect);
+    elements::field_animation::draw_field_animation(root_ui, editor, canvas_rect, commands);
 
     if let (Some(start), Some(end)) = (editor.selection_box_start_px, editor.selection_box_current_px) {
         // Box selection: left-to-right = cross select (dashed green), right-to-left = window select
@@ -1597,7 +1667,17 @@ fn draw_ui(
         scale_bar.show(root_ui.ctx());
     }
 
-    geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, frame_context.console_snapshot, commands);
+    geometry_dirty |= draw_global_dialogs(
+        root_ui,
+        editor,
+        document,
+        project,
+        block_models,
+        drill_holes,
+        canvas_rect,
+        frame_context.console_snapshot,
+        commands,
+    );
 
     // --- Window chrome ---
     // Last, so the corner masks cut back everything the regions drew into
@@ -1622,6 +1702,7 @@ fn draw_ui(
         .into_iter()
         .chain(explorer.regions)
         .chain(planning_regions),
+        status_bar_rect,
     );
     // Centre the explorer resize grip on its full-height column.
     let panel_id = |salt: &str| root_ui.scope_id().with(salt);
@@ -1712,7 +1793,7 @@ fn draw_initiation_cards(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui:
 /// Draw dialogs after the workspace so modal lifecycle state is never hidden.
 /// These dialogs are global application state even when their contents refer
 /// to workspace data.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "the dialogs' shared inputs, as draw_ui's; the canvas is what a Results window covers")]
 fn draw_global_dialogs(
     root_ui: &mut egui::Ui,
     editor: &mut EditorState,
@@ -1720,6 +1801,7 @@ fn draw_global_dialogs(
     project: &UiProjectView,
     block_models: &[OpenBlockModel],
     drill_holes: &[crate::model::drill_hole::OpenDrillHoleDataset],
+    canvas_rect: egui::Rect,
     console_snapshot: &crate::logging::ConsoleSnapshot,
     commands: &mut Vec<UiCommand>,
 ) -> bool {
@@ -1846,6 +1928,13 @@ fn draw_global_dialogs(
     if editor.tri_contour_open {
         dialogs::triangulation::draw_contour_dialog(root_ui, editor, project, commands);
     }
+    if editor.simplify_dialog.open {
+        dialogs::triangulation::draw_simplify_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.water_dialog.open {
+        dialogs::triangulation::draw_water_dialog(root_ui, editor, project, commands);
+    }
     if editor.point_cloud_tin_open {
         dialogs::triangulation::draw_point_cloud_tin_dialog(root_ui, editor, project, commands);
     }
@@ -1862,7 +1951,7 @@ fn draw_global_dialogs(
     if editor.block_model_create_open {
         elements::block_model::draw_create_block_model_dialog(root_ui, editor, drill_holes, commands);
     }
-    dialogs::optimization::draw_optimization_dialogs(root_ui, editor, block_models, project, commands);
+    dialogs::optimization::draw_optimization_dialogs(root_ui, editor, block_models, project, canvas_rect, commands);
     widgets::toast::draw_toasts(root_ui.ctx(), &mut editor.toasts);
     if editor.ore_triangulation_open {
         elements::block_model::draw_ore_triangulation_dialog(root_ui, editor, block_models, commands);
