@@ -5137,6 +5137,7 @@ pit-design-clockwise = Zgodnie z ruchem wskazówek zegara
 pit-design-anticlockwise = Przeciwnie do ruchu wskazówek zegara
 }
 pit-design-ramp-drag-hint = Przeciągnij, aby przesunąć początek rampy
+pit-design-switch-refused = Żadna półka od tego miejsca nie ma miejsca na nawrót: kliknij, aby przestać go wymagać
 pit-design-ramp-drag-prompt = Puść na linii tam, gdzie rampa ma z niej schodzić.
 pit-design-ramp-start-prompt = Kliknij linię wyjściową tam, gdzie rampa ją opuszcza.
 pit-design-inside-radius = Promień wewnętrzny

@@ -5038,6 +5038,7 @@ pit-design-clockwise = 時計回り
 pit-design-anticlockwise = 反時計回り
 }
 pit-design-ramp-drag-hint = ドラッグしてランプの開始位置を移動
+pit-design-switch-refused = ここから先のどのベンチにも折り返す余地がありません: クリックすると要求をやめます
 pit-design-ramp-drag-prompt = ランプが出るべきライン上の位置で離してください。
 pit-design-ramp-start-prompt = ランプが開始ラインを離れる位置でラインをクリックしてください。
 pit-design-inside-radius = 内側半径

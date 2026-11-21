@@ -5010,6 +5010,7 @@ pit-design-clockwise = Sens horaire
 pit-design-anticlockwise = Sens antihoraire
 }
 pit-design-ramp-drag-hint = Faites glisser pour déplacer le départ de la rampe
+pit-design-switch-refused = Aucun gradin à partir d'ici n'a la place de faire demi-tour : cliquez pour ne plus le demander
 pit-design-ramp-drag-prompt = Relâchez sur la ligne là où la rampe doit la quitter.
 pit-design-ramp-start-prompt = Cliquez sur la ligne de départ là où la rampe la quitte.
 pit-design-inside-radius = Rayon intérieur

@@ -5041,6 +5041,7 @@ pit-design-clockwise = Kwa mwelekeo wa saa
 pit-design-anticlockwise = Kinyume cha mwelekeo wa saa
 }
 pit-design-ramp-drag-hint = Buruta ili kuhamisha mwanzo wa barabara
+pit-design-switch-refused = Hakuna benchi kuanzia hapa yenye nafasi ya kugeuka: bofya kuacha kuiomba
 pit-design-ramp-drag-prompt = Achilia kwenye mstari mahali barabara inapopaswa kuuacha.
 pit-design-ramp-start-prompt = Bofya mstari wa kuanzia mahali barabara ya mteremko inapouacha.
 pit-design-inside-radius = Nusu kipenyo cha ndani

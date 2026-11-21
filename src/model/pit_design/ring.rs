@@ -851,3 +851,113 @@ pub(crate) fn filleted(ring: &[DVec2], radius: f64, side: f64, keep: &[DVec2]) -
     }
     cleaned(result)
 }
+
+/// `ring` (anticlockwise) with the corners an offset to `side` (outward at
+/// 1, inward at -1) would close rounded to `radius`, but only those met
+/// along the stretch from parameter `from` running `direction` (1 with the
+/// ring's order) for `length` in plan: whole corners, however far each runs
+/// past the stretch's ends. A road set off to that side from a corner so
+/// rounded turns no tighter than the radius less its own offset. Rounded
+/// so, a corner only moves toward that side: a closing (outward at a
+/// concave corner, inward at a convex one, as a morphological closing or
+/// opening). A corner within `clear` of the stretch's start is left as it
+/// is: there the ring steps across the road arriving from the bench below,
+/// and that step is road, not wall. `None` where no corner along the
+/// stretch is tighter.
+pub(crate) fn rounded_along(ring: &[DVec2], side: f64, radius: f64, (from, direction, length): (f64, f64, f64), clear: f64) -> Option<Vec<DVec2>> {
+    let count = ring.len();
+    if count < 3 || radius <= 0.0 || length <= 0.0 {
+        return None;
+    }
+    let even = |distance: f64, points: &[DVec2]| vec![EdgeOffset::even(distance); points.len()];
+    let there = offset(ring, &even(side * radius, ring)).into_iter().next()?;
+    let rounded = offset(&there, &even(-side * radius, &there)).into_iter().next()?;
+    // Where the rounded ring leaves the ring: runs of its points off it.
+    let placed: Vec<(f64, bool)> = rounded
+        .iter()
+        .map(|point| {
+            let (parameter, distance) = nearest(ring, *point);
+            (parameter, distance > ROUNDED_OFF)
+        })
+        .collect();
+    let arcs = arcs(ring);
+    let around = arcs[count];
+    let start = arc_at(&arcs, from);
+    // How far along the stretch a parameter is, the way the road runs.
+    let along = |parameter: f64| ((arc_at(&arcs, parameter) - start) * direction).rem_euclid(around);
+    let total = rounded.len();
+    let first_on = placed.iter().position(|(_, off)| !off)?;
+    // The runs off the ring, each with the parameters it spans on the ring:
+    // from the last point on it before to the first after.
+    let mut runs: Vec<(f64, f64, Vec<DVec2>)> = Vec::new();
+    let mut step = 0;
+    while step < total {
+        let index = (first_on + step) % total;
+        if !placed[index].1 {
+            step += 1;
+            continue;
+        }
+        let before = placed[(index + total - 1) % total].0;
+        let mut points = Vec::new();
+        while step < total && placed[(first_on + step) % total].1 {
+            points.push(rounded[(first_on + step) % total]);
+            step += 1;
+        }
+        let after = placed[(first_on + step) % total].0;
+        runs.push((before, after, points));
+    }
+    // Only the corners the stretch meets, clear of its start: a corner
+    // whose span reaches back past the start, or lies within `clear` of it
+    // either way, is left.
+    let met: Vec<&(f64, f64, Vec<DVec2>)> = runs
+        .iter()
+        .filter(|(before, after, _)| {
+            let (first, last) = (along(*before), along(*after));
+            // Its span runs on through the start where its end comes round
+            // before its beginning.
+            let spans_start = last < first;
+            !spans_start && first >= clear && first <= length && around - last >= clear
+        })
+        .collect();
+    if met.is_empty() {
+        return None;
+    }
+    // The ring, each met corner's span of it replaced by the corner rounded.
+    let inside = |parameter: f64, (before, after): (f64, f64)| {
+        let span = (after - before).rem_euclid(count as f64);
+        let into = (parameter - before).rem_euclid(count as f64);
+        into > 1.0e-9 && into < span - 1.0e-9
+    };
+    let mut out: Vec<DVec2> = Vec::with_capacity(count + met.iter().map(|run| run.2.len()).sum::<usize>());
+    let mut placed_runs = vec![false; met.len()];
+    for index in 0..count {
+        let parameter = index as f64;
+        if let Some(run) = met.iter().position(|(before, after, _)| inside(parameter, (*before, *after))) {
+            if !placed_runs[run] {
+                placed_runs[run] = true;
+                out.push(point_at(ring, met[run].0));
+                out.extend(met[run].2.iter().copied());
+                out.push(point_at(ring, met[run].1));
+            }
+            continue;
+        }
+        out.push(ring[index]);
+    }
+    // A corner between two of the ring's points, holding none of them.
+    for (run, done) in met.iter().zip(&placed_runs) {
+        if !done {
+            let at = (run.0.floor() as usize + 1) % count;
+            let insert = out.iter().position(|point| point.distance(ring[at]) <= SAME_POINT).unwrap_or(out.len());
+            let mut corner = vec![point_at(ring, run.0)];
+            corner.extend(run.2.iter().copied());
+            corner.push(point_at(ring, run.1));
+            out.splice(insert..insert, corner);
+        }
+    }
+    let out = cleaned(out);
+    (out.len() >= 3 && signed_area(&out) > 0.0).then_some(out)
+}
+
+/// How far a point of a rounded ring may stand off the ring it was rounded
+/// from and still count as on it.
+const ROUNDED_OFF: f64 = 1.0e-3;

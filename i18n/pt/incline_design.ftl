@@ -5007,6 +5007,7 @@ pit-design-clockwise = No sentido horário
 pit-design-anticlockwise = No sentido anti-horário
 }
 pit-design-ramp-drag-hint = Arraste para mover onde a rampa começa
+pit-design-switch-refused = Nenhuma berma daqui em diante tem espaço para retornar: clique para deixar de pedir
 pit-design-ramp-drag-prompt = Solte sobre a linha onde a rampa deve deixá-la.
 pit-design-ramp-start-prompt = Clique na linha de partida onde a rampa a deixa.
 pit-design-inside-radius = Raio interno

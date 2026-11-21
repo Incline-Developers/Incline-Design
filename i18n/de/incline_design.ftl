@@ -5050,6 +5050,7 @@ pit-design-clockwise = Im Uhrzeigersinn
 pit-design-anticlockwise = Gegen den Uhrzeigersinn
 }
 pit-design-ramp-drag-hint = Ziehen, um den Rampenbeginn zu verschieben
+pit-design-switch-refused = Keine Berme von hier an hat Platz zum Wenden: klicken, um es nicht mehr anzufordern
 pit-design-ramp-drag-prompt = Lassen Sie auf der Linie dort los, wo die Rampe sie verlassen soll.
 pit-design-ramp-start-prompt = Klicken Sie auf die Ausgangslinie dort, wo die Rampe sie verlässt.
 pit-design-inside-radius = Innenradius

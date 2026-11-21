@@ -5009,6 +5009,7 @@ pit-design-clockwise = दक्षिणावर्त
 pit-design-anticlockwise = वामावर्त
 }
 pit-design-ramp-drag-hint = रैंप की शुरुआत खिसकाने के लिए खींचें
+pit-design-switch-refused = यहाँ से आगे किसी बेंच पर मुड़ने की जगह नहीं है: इसे माँगना बंद करने के लिए क्लिक करें
 pit-design-ramp-drag-prompt = रेखा पर वहाँ छोड़ें जहाँ रैंप को उससे निकलना चाहिए।
 pit-design-ramp-start-prompt = आरंभिक रेखा पर वहाँ क्लिक करें जहाँ रैंप उसे छोड़ता है।
 pit-design-inside-radius = भीतरी त्रिज्या

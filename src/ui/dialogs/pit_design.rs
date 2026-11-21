@@ -211,6 +211,9 @@ pub(crate) struct SwitchSpot {
     pub(crate) at: (f32, f32),
     /// Whether it turns back here.
     pub(crate) turn: bool,
+    /// Whether a turn was asked here that no bench from here on has room
+    /// for: kept asked, drawn amber, said so under the pointer.
+    pub(crate) refused: bool,
 }
 
 /// A part of the walls' gizmo being dragged: which, where the press was
@@ -622,10 +625,17 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
     ]);
     draw_viewport_handles(ui, draft, commands, viewport_rect);
     let over_viewport = ui.ctx().pointer_hover_pos().is_some_and(|pointer| viewport_rect.contains(pointer)) && !ui.ctx().egui_wants_pointer_input();
-    // A gizmo's handles say what they do by their shape: nothing is said
-    // over them.
-    let over_viewport = over_viewport && draft.gizmo_hover.is_none();
-    if draft.ramp_marker_under_cursor.is_some() && over_viewport {
+    // A turn asked where none fits is the one handle with something to say.
+    let refused = match draft.gizmo_hover {
+        Some(GizmoPart::Switch(index)) => draft.switch_spots.get(index).is_some_and(|spot| spot.refused),
+        _ => false,
+    };
+    // A gizmo's handles say what they do by their shape: nothing else is
+    // said over them.
+    let over_viewport = over_viewport && (draft.gizmo_hover.is_none() || refused);
+    if refused && over_viewport {
+        crate::ui::widgets::hint::hint_at_pointer(ui.ctx(), egui::Id::unique("pit_design_switch_refused_hint"), tr!("pit-design-switch-refused"));
+    } else if draft.ramp_marker_under_cursor.is_some() && over_viewport {
         crate::ui::widgets::hint::hint_at_pointer(ui.ctx(), egui::Id::unique("pit_design_ramp_drag_hint"), tr!("pit-design-ramp-drag-hint"));
     } else if let Some(flag) = draft
         .flag_under_cursor
@@ -672,7 +682,11 @@ fn draw_viewport_handles(ui: &mut egui::Ui, draft: &mut PitDesignDraft, commands
         let lit = draft.gizmo_hover == Some(GizmoPart::Switch(index));
         // In the ramp's own colour: amber is what falls short.
         let colour = if lit { egui::Color32::WHITE } else { width_colour };
-        if spot.turn {
+        if spot.refused {
+            let amber = ui.visuals().warn_fg_color;
+            painter.circle_filled(centre, 5.0, gizmo_color(egui::Color32::BLACK, if lit { 0.45 } else { 0.25 }));
+            painter.circle_stroke(centre, if lit { 6.0 } else { 5.0 }, egui::Stroke::new(2.0, gizmo_color(amber, if lit { 1.0 } else { 0.9 })));
+        } else if spot.turn {
             painter.circle_filled(centre, if lit { 7.0 } else { 6.0 }, gizmo_color(colour, if lit { 1.0 } else { 0.9 }));
             painter.circle_stroke(centre, if lit { 7.0 } else { 6.0 }, egui::Stroke::new(1.5, gizmo_color(egui::Color32::BLACK, 0.5)));
         } else {

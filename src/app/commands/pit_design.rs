@@ -1186,14 +1186,21 @@ impl App<'_> {
                         return;
                     };
                     // The turns it makes now, each at the RL it was asked at,
-                    // with this one made or unmade: those, and no others.
+                    // and those asked where none fits, with this one made or
+                    // unmade: those, and no others.
                     let mut turns: Vec<f64> = draft
                         .switch_spots
                         .iter()
-                        .filter(|other| other.ramp == spot.ramp && other.turn)
+                        .filter(|other| other.ramp == spot.ramp && (other.turn || other.refused))
                         .map(|other| other.rl)
                         .collect();
-                    if spot.turn {
+                    // A turn asked here but made further on is this spot's
+                    // too: a click takes it away rather than asking twice.
+                    let moved_from_here = draft
+                        .switch_spots
+                        .iter()
+                        .any(|other| other.ramp == spot.ramp && other.turn && (other.rl - spot.rl).abs() <= 1.0e-6);
+                    if spot.turn || spot.refused || moved_from_here {
                         turns.retain(|rl| (rl - spot.rl).abs() > 1.0e-6);
                     } else {
                         turns.push(spot.rl);

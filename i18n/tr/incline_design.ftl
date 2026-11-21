@@ -5051,6 +5051,7 @@ pit-design-clockwise = Saat yönünde
 pit-design-anticlockwise = Saat yönünün tersine
 }
 pit-design-ramp-drag-hint = Rampanın başlangıcını taşımak için sürükleyin
+pit-design-switch-refused = Buradan itibaren hiçbir basamakta geri dönüş için yer yok: istemeyi bırakmak için tıklayın
 pit-design-ramp-drag-prompt = Rampanın ayrılması gereken yerde çizginin üzerinde bırakın.
 pit-design-ramp-start-prompt = Başlangıç çizgisine rampanın ondan ayrıldığı yerde tıklayın.
 pit-design-inside-radius = İç yarıçap

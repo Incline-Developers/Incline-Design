@@ -5009,6 +5009,7 @@ pit-design-clockwise = Searah jarum jam
 pit-design-anticlockwise = Berlawanan arah jarum jam
 }
 pit-design-ramp-drag-hint = Seret untuk memindahkan awal ramp
+pit-design-switch-refused = Tidak ada jenjang dari sini yang cukup untuk berbalik: klik untuk berhenti memintanya
 pit-design-ramp-drag-prompt = Lepaskan di garis tempat ramp seharusnya meninggalkannya.
 pit-design-ramp-start-prompt = Klik garis awal di tempat ramp meninggalkannya.
 pit-design-inside-radius = Jari-jari dalam

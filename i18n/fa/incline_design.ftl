@@ -5009,6 +5009,7 @@ pit-design-clockwise = ساعتگرد
 pit-design-anticlockwise = پادساعتگرد
 }
 pit-design-ramp-drag-hint = برای جابه‌جا کردن آغاز رمپ بکشید
+pit-design-switch-refused = هیچ پله‌ای از اینجا به بعد جای دور زدن ندارد: برای لغو آن کلیک کنید
 pit-design-ramp-drag-prompt = روی خط، جایی که رمپ باید از آن جدا شود، رها کنید.
 pit-design-ramp-start-prompt = روی خط آغاز در جایی که رمپ آن را ترک می‌کند کلیک کنید.
 pit-design-inside-radius = شعاع داخلی

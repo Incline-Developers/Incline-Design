@@ -5750,6 +5750,7 @@ pit-design-clockwise = Clockwise
 pit-design-anticlockwise = Anticlockwise
 }
 pit-design-ramp-drag-hint = Drag to move where the ramp starts
+pit-design-switch-refused = No bench from here up has room to turn back: click to stop asking for it
 pit-design-ramp-drag-prompt = Let go on the string where the ramp should leave it.
 pit-design-ramp-start-prompt = Click the starting string where the ramp leaves it.
 pit-design-turn-widening = Turn widening

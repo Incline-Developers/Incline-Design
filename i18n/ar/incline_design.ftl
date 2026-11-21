@@ -5051,6 +5051,7 @@ pit-design-clockwise = باتجاه عقارب الساعة
 pit-design-anticlockwise = عكس اتجاه عقارب الساعة
 }
 pit-design-ramp-drag-hint = اسحب لتغيير مكان بدء المنحدر
+pit-design-switch-refused = لا توجد مصطبة من هنا فما فوق فيها متسع للالتفاف: انقر للتوقف عن طلبه
 pit-design-ramp-drag-prompt = أفلت الزر على الخط حيث ينبغي أن يغادره المنحدر.
 pit-design-ramp-start-prompt = انقر على خط البداية حيث يغادره المنحدر.
 pit-design-inside-radius = نصف القطر الداخلي

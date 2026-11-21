@@ -5037,6 +5037,7 @@ pit-design-clockwise = Theo chiều kim đồng hồ
 pit-design-anticlockwise = Ngược chiều kim đồng hồ
 }
 pit-design-ramp-drag-hint = Kéo để dời điểm bắt đầu đường dốc
+pit-design-switch-refused = Không có tầng nào từ đây trở đi đủ chỗ để quay đầu: nhấp để thôi yêu cầu
 pit-design-ramp-drag-prompt = Thả trên đường tại nơi đường dốc nên rời khỏi nó.
 pit-design-ramp-start-prompt = Nhấp vào đường xuất phát tại nơi đường dốc rời khỏi nó.
 pit-design-inside-radius = Bán kính trong

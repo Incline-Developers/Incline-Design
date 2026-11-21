@@ -5060,6 +5060,7 @@ pit-design-clockwise = Цагийн зүүний дагуу
 pit-design-anticlockwise = Цагийн зүүний эсрэг
 }
 pit-design-ramp-drag-hint = Налуу замын эхлэлийг зөөхийн тулд чирнэ үү
+pit-design-switch-refused = Эндээс цааш аль ч шатанд эргэх зай алга: хүсэлтээ цуцлахын тулд товшино уу
 pit-design-ramp-drag-prompt = Налуу зам шугамаас гарах ёстой газарт суллана уу.
 pit-design-ramp-start-prompt = Налуу зам эхлэх шугамаас салах газарт шугам дээр дарна уу.
 pit-design-inside-radius = Дотоод радиус

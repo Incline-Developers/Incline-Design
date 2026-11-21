@@ -1531,3 +1531,142 @@ fn pits_up_to_rolling_ground_daylight_soundly_from_any_ramp_start() {
     }
     assert!(failures.is_empty(), "{} designs failed:\n{}", failures.len(), failures.join("\n"));
 }
+
+/// A census of what the checks flag across outlines and settings, by check
+/// and by kind, way and layout, printed: run by hand with `--ignored
+/// --nocapture` to measure the engine. Its counts are the yardstick for work
+/// on what the designs fall short of.
+#[test]
+#[ignore = "a census to read, not a test"]
+fn flag_census() {
+    use std::collections::BTreeMap;
+    let mut by_check: BTreeMap<String, (usize, f64, String)> = BTreeMap::new();
+    let mut designs = 0;
+    let mut flagged = 0;
+    let mut ends: BTreeMap<String, usize> = BTreeMap::new();
+    let mut groups: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for kind_name in ["rect", "circle", "ell", "star", "floor", "crest"] {
+        let points = outline(kind_name);
+        for direction in [Direction::Up, Direction::Down] {
+            for dump in [false, true] {
+                for layout in [
+                    Layout::Spiral,
+                    Layout::Switchback {
+                        every: 3,
+                        inside_radius: 15.0,
+                        widening: 0.0,
+                        grade: 0.0,
+                    },
+                ] {
+                    for clockwise in [false, true] {
+                        for (bench, face, berm) in [(10.0, 70.0, 6.0), (15.0, 60.0, 8.0)] {
+                            let start = points[2];
+                            let mut spec = with_ramp(direction, layout, start, clockwise, Stop::Benches(8), (0.1, berm));
+                            spec.bench_height = bench;
+                            spec.face_angle = face;
+                            spec.wall_radius = 20.0;
+                            spec.ramps[0].width = 25.0;
+                            if dump {
+                                spec.kind = Kind::Dump;
+                            }
+                            let elevation = if direction == Direction::Up { 100.0 } else { 500.0 };
+                            let pts: Vec<DVec3> = points.iter().map(|p| p.extend(elevation)).collect();
+                            let Ok(design) = design(&Base::from_points(&pts).unwrap(), &spec, None, &|| false) else {
+                                continue;
+                            };
+                            designs += 1;
+                            *ends.entry(format!("{:?}", design.end)).or_default() += 1;
+                            if !design.flags.is_empty() {
+                                flagged += 1;
+                            }
+                            let name = format!(
+                                "{kind_name} {direction:?} {} {layout:?} cw={clockwise} {bench}/{face}/{berm}",
+                                if dump { "dump" } else { "pit" }
+                            );
+                            for flag in &design.flags {
+                                *groups
+                                    .entry((
+                                        format!("{:?}", flag.check),
+                                        format!(
+                                            "{} {direction:?} {}",
+                                            if dump { "dump" } else { "pit" },
+                                            match layout {
+                                                Layout::Spiral => "spiral",
+                                                _ => "switchback",
+                                            }
+                                        ),
+                                    ))
+                                    .or_default() += 1;
+                                let miss = (flag.value - flag.asked).abs() / flag.asked.abs().max(1.0e-9);
+                                let entry = by_check.entry(format!("{:?}", flag.check)).or_insert((0, 0.0, String::new()));
+                                entry.0 += 1;
+                                if miss > entry.1 {
+                                    *entry = (
+                                        entry.0,
+                                        miss,
+                                        format!(
+                                            "{name}: value {:.3} asked {:.3} len {:.1} bench {} at {:.1}",
+                                            flag.value, flag.asked, flag.length, flag.bench, flag.at
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    println!("{designs} designs, {flagged} with flags; ends {ends:?}");
+    for (check, (count, miss, worst)) in by_check {
+        println!("{check}: {count} flags, worst {:.1}% off, {worst}", miss * 100.0);
+    }
+    for ((check, group), count) in groups {
+        println!("  {check:8} {group:24} {count}");
+    }
+}
+
+/// Each flag of one check (ZZ_CHECK: Tight, Berm, Narrow, Flatter, Steep,
+/// Face) for one way (ZZ_DIR: Up or Down) and layout (ZZ_LAYOUT: spiral or
+/// switchback), with where it is: for following up the census.
+#[test]
+#[ignore = "a census to read, not a test"]
+fn flag_detail() {
+    let filter_check = std::env::var("ZZ_CHECK").unwrap_or_else(|_| "Tight".to_owned());
+    let filter_dir = std::env::var("ZZ_DIR").unwrap_or_else(|_| "Up".to_owned());
+    let filter_layout = std::env::var("ZZ_LAYOUT").unwrap_or_else(|_| "spiral".to_owned());
+    for kind_name in ["rect", "circle", "ell", "star", "floor", "crest"] {
+        let points = outline(kind_name);
+        let direction = if filter_dir == "Up" { Direction::Up } else { Direction::Down };
+        let layout = if filter_layout == "spiral" {
+            Layout::Spiral
+        } else {
+            Layout::Switchback {
+                every: 3,
+                inside_radius: 15.0,
+                widening: 0.0,
+                grade: 0.0,
+            }
+        };
+        for clockwise in [false, true] {
+            for (bench, face, berm) in [(10.0, 70.0, 6.0), (15.0, 60.0, 8.0)] {
+                let mut spec = with_ramp(direction, layout, points[2], clockwise, Stop::Benches(8), (0.1, berm));
+                spec.bench_height = bench;
+                spec.face_angle = face;
+                spec.wall_radius = 20.0;
+                spec.ramps[0].width = 25.0;
+                let elevation = if direction == Direction::Up { 100.0 } else { 500.0 };
+                let pts: Vec<DVec3> = points.iter().map(|p| p.extend(elevation)).collect();
+                let Ok(design) = design(&Base::from_points(&pts).unwrap(), &spec, None, &|| false) else {
+                    continue;
+                };
+                for flag in design.flags.iter().filter(|flag| format!("{:?}", flag.check) == filter_check) {
+                    println!(
+                        "{kind_name:6} cw={clockwise:5} {bench}/{face}/{berm}: value {:7.3} asked {:6.3} len {:6.1} bench {} at {:.1}",
+                        flag.value, flag.asked, flag.length, flag.bench, flag.at
+                    );
+                }
+            }
+        }
+    }
+}

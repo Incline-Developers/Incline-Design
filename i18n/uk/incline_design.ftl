@@ -5119,6 +5119,7 @@ pit-design-clockwise = За годинниковою стрілкою
 pit-design-anticlockwise = Проти годинникової стрілки
 }
 pit-design-ramp-drag-hint = Перетягніть, щоб перенести початок з'їзду
+pit-design-switch-refused = Жоден уступ звідси не має місця для розвороту: клацніть, щоб скасувати запит
 pit-design-ramp-drag-prompt = Відпустіть на лінії там, де з'їзд має від неї відходити.
 pit-design-ramp-start-prompt = Клацніть по вихідній лінії там, де від неї відходить з'їзд.
 pit-design-inside-radius = Внутрішній радіус

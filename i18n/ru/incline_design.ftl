@@ -5390,6 +5390,7 @@ pit-design-clockwise = По часовой стрелке
 pit-design-anticlockwise = Против часовой стрелки
 }
 pit-design-ramp-drag-hint = Перетащите, чтобы перенести начало съезда
+pit-design-switch-refused = Ни на одном уступе отсюда нет места для разворота: щёлкните, чтобы отменить запрос
 pit-design-ramp-drag-prompt = Отпустите на линии там, где съезд должен от неё отходить.
 pit-design-ramp-start-prompt = Щёлкните по исходной линии там, где от неё отходит съезд.
 pit-design-inside-radius = Внутренний радиус

@@ -672,6 +672,17 @@ impl<'a> Graphics<'a> {
             else {
                 continue;
             };
+            // The RLs turns were asked at that some bench made, there or
+            // further on.
+            let made: Vec<f64> = design
+                .report
+                .iter()
+                .filter_map(|bench| {
+                    let road = bench.ramps.iter().find(|road| road.ramp == index && road.switchback && road.turn_at.is_some())?;
+                    Some(road.turn_moved_from.unwrap_or(bench.elevation))
+                })
+                .collect();
+            let near = |a: f64, b: f64| (a - b).abs() < 1.0e-6;
             // Where it can switch back: each bench's stretch where it begins,
             // but its first, which it starts on; where it turns, the turn.
             for bench in design.report.iter().filter(|bench| bench.ramps.iter().any(|road| road.ramp == index)).skip(1) {
@@ -680,10 +691,19 @@ impl<'a> Graphics<'a> {
                 };
                 let (rl, place, turn) = match road.turn_at.filter(|_| road.switchback) {
                     Some(turn_at) => (road.turn_moved_from.unwrap_or(bench.elevation), Some(turn_at), true),
-                    None => (bench.elevation, line.iter().find(|point| (point.z - bench.elevation).abs() < 1.0e-3).copied(), false),
+                    // Where the road reaches the bench's RL: a graded turn
+                    // or a flat can leave no point at it exactly.
+                    None => (bench.elevation, at_rl(line, bench.elevation), false),
                 };
+                let refused = !turn && ramp.turns_at.iter().any(|asked| near(*asked, rl)) && !made.iter().any(|done| near(*done, rl));
                 if let Some(at) = place.and_then(project) {
-                    spots.push(crate::ui::dialogs::pit_design::SwitchSpot { ramp: index, rl, at, turn });
+                    spots.push(crate::ui::dialogs::pit_design::SwitchSpot {
+                        ramp: index,
+                        rl,
+                        at,
+                        turn,
+                        refused,
+                    });
                 }
             }
             let goes = tangent * (next_sign(ahead - leaving, tangent));
@@ -1408,4 +1428,15 @@ const SECTION_ARM_POINTS: f64 = 110.0;
 /// Which way along `axis` a vector points: 1 or -1.
 fn next_sign(vector: glam::DVec2, axis: glam::DVec2) -> f64 {
     if vector.dot(axis) < 0.0 { -1.0 } else { 1.0 }
+}
+
+/// Where a ramp's centreline first reaches `rl`: at a point of it, or
+/// between two that straddle it.
+fn at_rl(line: &[DVec3], rl: f64) -> Option<DVec3> {
+    line.iter().find(|point| (point.z - rl).abs() < 1.0e-3).copied().or_else(|| {
+        line.windows(2).find_map(|pair| {
+            let (a, b) = (pair[0], pair[1]);
+            ((a.z - rl) * (b.z - rl) < 0.0).then(|| a.lerp(b, (rl - a.z) / (b.z - a.z)))
+        })
+    })
 }

@@ -5043,6 +5043,7 @@ pit-design-clockwise = 시계 방향
 pit-design-anticlockwise = 반시계 방향
 }
 pit-design-ramp-drag-hint = 끌어서 램프 시작 위치 이동
+pit-design-switch-refused = 여기부터 어느 벤치에도 되돌아 돌 공간이 없습니다. 클릭하면 요청을 취소합니다
 pit-design-ramp-drag-prompt = 램프가 떠나야 할 선 위에서 놓으세요.
 pit-design-ramp-start-prompt = 램프가 시작 선을 떠나는 위치에서 선을 클릭하세요.
 pit-design-inside-radius = 안쪽 반경

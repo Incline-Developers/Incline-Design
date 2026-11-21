@@ -5007,6 +5007,7 @@ pit-design-clockwise = En sentido horario
 pit-design-anticlockwise = En sentido antihorario
 }
 pit-design-ramp-drag-hint = Arrastre para mover dónde empieza la rampa
+pit-design-switch-refused = Ninguna berma desde aquí tiene espacio para girar en retorno: haga clic para dejar de pedirlo
 pit-design-ramp-drag-prompt = Suelte sobre la línea donde la rampa debe salir de ella.
 pit-design-ramp-start-prompt = Haga clic en la línea de partida donde la rampa la deja.
 pit-design-inside-radius = Radio interior
