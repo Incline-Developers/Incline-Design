@@ -165,10 +165,9 @@ pub(crate) struct WallGizmo {
     pub(crate) height_fade: f32,
     /// How much of its berm arrow shows: none pointing at the camera.
     pub(crate) berm_fade: f32,
-    /// The bench's toe, on the string, its crest, and where its berm ends.
+    /// The bench's toe, on the string, and its crest.
     pub(crate) toe: (f32, f32),
     pub(crate) crest: (f32, f32),
-    pub(crate) berm_end: (f32, f32),
     /// Up the section and out across it, units on screen, and the pixels a
     /// metre takes on the section.
     pub(crate) up: (f32, f32),
@@ -180,7 +179,7 @@ pub(crate) struct WallGizmo {
     pub(crate) angle_ring: Vec<(f32, f32)>,
     pub(crate) angle_handle: (f32, f32),
     /// The height arrow up from the toe, and the berm arrow out across from
-    /// it: each from the ring's end on its axis to its tip.
+    /// it: each from the toe to its tip.
     pub(crate) height_from: (f32, f32),
     pub(crate) height_tip: (f32, f32),
     pub(crate) berm_from: (f32, f32),
@@ -783,13 +782,10 @@ fn draw_wall_gizmo(ui: &mut egui::Ui, draft: &mut PitDesignDraft, viewport_rect:
     let Some(settings) = draft.working.as_ref().map(|working| working.settings.clone()) else {
         return;
     };
-    let (crest, berm_end) = (at(gizmo.crest), at(gizmo.berm_end));
+    let crest = at(gizmo.crest);
     let out = egui::vec2(gizmo.out.0, gizmo.out.1);
-    // The section: the face and the berm.
-    painter.add(egui::Shape::line(
-        vec![toe, crest, berm_end],
-        egui::Stroke::new(2.0, gizmo_color(egui::Color32::WHITE, 0.85)),
-    ));
+    // The face, up to its crest.
+    painter.line_segment([toe, crest], egui::Stroke::new(2.0, gizmo_color(egui::Color32::WHITE, 0.85)));
     // The face's ring, a quarter turn from out across to up, the face's
     // angle swept out of it: faded out edge on, as a Blender rotate ring,
     // its value staying beside the toe to drag or type.

@@ -773,15 +773,14 @@ impl<'a> Graphics<'a> {
         let height_fade = fade_ramp((1.0 - forward.z * forward.z).max(0.0).sqrt() as f32, GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL);
         let berm_fade = fade_ramp((1.0 - out3.dot(forward).powi(2)).max(0.0).sqrt() as f32, GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL);
         let settings = &working.settings;
-        let (height, angle, berm) = (settings.bench_height, settings.face_angle.to_radians(), settings.berm_width);
+        let (height, angle) = (settings.bench_height, settings.face_angle.to_radians());
         let crest = toe + (out3 * (height / angle.tan()) + up * height) * metre;
-        let berm_end = crest + out3 * berm * metre;
         let radius = SECTION_RING_POINTS * self.scale_factor() / scale.px_per_world;
         let on_ring = |turn: f64| toe + (out3 * turn.cos() + up * turn.sin()) * radius;
         let angle_ring: Vec<(f32, f32)> = (0..RING_STEPS)
             .map(|step| project(on_ring(std::f64::consts::TAU * step as f64 / RING_STEPS as f64)))
             .collect::<Option<_>>()?;
-        let arrow = SECTION_ARROW_POINTS * self.scale_factor() / scale.px_per_world;
+        let arm = SECTION_ARM_POINTS * self.scale_factor() / scale.px_per_world;
         let (toe_px, crest_px) = (centre, project(crest)?);
         let unit_px = |from: (f32, f32), to: (f32, f32)| {
             let length = (to.0 - from.0).hypot(to.1 - from.1);
@@ -797,20 +796,18 @@ impl<'a> Graphics<'a> {
                 berm_fade,
                 toe: toe_px,
                 crest: crest_px,
-                berm_end: project(berm_end)?,
                 up: (up_x, up_y),
                 out: (out_x, out_y),
                 pixels_per_metre_up: up_px,
                 pixels_per_metre_out: out_px,
                 angle_ring,
                 angle_handle: project(on_ring(angle))?,
-                // Both from the toe, where the ring stands: each starting at
-                // the ring's end on its axis and a fixed length on screen
-                // whatever it sets, as a Blender gizmo's arms.
-                height_from: project(on_ring(std::f64::consts::FRAC_PI_2))?,
-                height_tip: project(toe + up * (radius + arrow))?,
-                berm_from: project(on_ring(0.0))?,
-                berm_tip: project(toe + out3 * (radius + arrow))?,
+                // Both from the toe, the ring's corner, a fixed length on
+                // screen whatever they set, as a Blender gizmo's arms.
+                height_from: toe_px,
+                height_tip: project(toe + up * arm)?,
+                berm_from: toe_px,
+                berm_tip: project(toe + out3 * arm)?,
             },
             at,
         ))
@@ -1382,13 +1379,14 @@ const GRADE_ARC_STEP: f64 = 0.02;
 /// far inside the clear view, in logical points.
 const WALL_GIZMO_STEP: f64 = 5.0;
 const WALL_GIZMO_RAMP_CLEAR: f64 = 40.0;
-const WALL_GIZMO_MARGIN: f64 = 90.0;
+const WALL_GIZMO_MARGIN: f64 = 130.0;
 
-/// The walls' gizmo's section: the points a metre takes, the radius of its
-/// face's ring, and the length of its arrows, in logical points.
-const SECTION_POINTS_PER_METRE: f64 = 4.6;
-const SECTION_RING_POINTS: f64 = 26.0;
-const SECTION_ARROW_POINTS: f64 = 46.0;
+/// The walls' gizmo: the points a metre of its face takes, the radius of
+/// its face's ring, and the length of its arms from the toe, in logical
+/// points.
+const SECTION_POINTS_PER_METRE: f64 = 6.0;
+const SECTION_RING_POINTS: f64 = 44.0;
+const SECTION_ARM_POINTS: f64 = 110.0;
 
 /// A ramp's width arrow's length, as a share of a gizmo's arm.
 const WIDTH_ARROW_RATIO: f64 = 0.7;
