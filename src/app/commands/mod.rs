@@ -15,7 +15,7 @@ pub(crate) mod optimization; // Handles pit optimization's scenario list, editor
 pub(crate) mod pit_design; // Designs a pit's benches and ramp from a closed string.
 pub(crate) mod pit_evaluation; // Measures what each pit design takes out of the ground.
 pub(crate) mod pit_rehab; // Reshapes a dump into one even slope for its rehabilitation.
-pub(crate) mod pit_send; // Sends a pit design's ramps to the haul network and the pit to Planning.
+pub(crate) mod pit_roads; // Keeps every pit design's ramps in the haul network as roads.
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
@@ -1423,10 +1423,6 @@ impl<'a> App<'a> {
             UiCommand::PitDesignHover(hover) => {
                 self.set_pit_design_hover(hover);
                 Ok(())
-            }
-            UiCommand::SendPitToPlanning(id) => {
-                self.flush_pit_design_draft();
-                self.send_pit_to_planning(id)
             }
             UiCommand::FramePitFlag(index) => {
                 self.frame_pit_flag(index);

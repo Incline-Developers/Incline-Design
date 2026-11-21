@@ -28,7 +28,7 @@ pub(super) fn definitions() -> Vec<Value> {
         json!({
             "name": "get_pit_designs",
             "title": "Read the pit designs",
-            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). Without design: a summary of each. With design (its object id): that one whole, its settings and what they come to included, which set_pit_design takes back, and its evaluation: the volume between it and its topography in all and bench by bench, and with settings.evaluation.block_model, each reserve field's figure in all, by category and by bench, and with settings.evaluation.shell, what it takes beyond the shell (gained) and what of it it leaves (left) (current says whether that is what the design comes to now, or waiting why not), and its daylight line, where it meets the topography (drawn with the design, and part of what explode_pit_design gives). What it comes to lists its checks: each place it falls short of its settings (the ramp steeper, flatter or narrower than asked or turning tighter than inside_radius, a berm narrower, a bench face steeper, or walls steeper between ramps than their target), at its worst point, with the bench (its place in bench_report) and ramp it is on, its value, what was asked and how far along it runs.",
+            "description": "Read the pit designs in the project's loaded layers. A pit design is a design object: its own vertices are the closed string it is designed from, and it draws as that string and the benches and ramp designed from it, worked out again whenever its string or settings change (fresh says whether that has caught up). Without design: a summary of each. With design (its object id): that one whole, its settings and what they come to included, which set_pit_design takes back, and its evaluation: the volume between it and its topography in all and bench by bench, and with settings.evaluation.block_model, each reserve field's figure in all, by category and by bench, and with settings.evaluation.shell, what it takes beyond the shell (gained) and what of it it leaves (left) (current says whether that is what the design comes to now, or waiting why not), and its daylight line, where it meets the topography (drawn with the design, and part of what explode_pit_design gives). What it comes to lists its checks: each place it falls short of its settings (the ramp steeper, flatter or narrower than asked or turning tighter than inside_radius, a berm narrower, a bench face steeper, or walls steeper between ramps than their target), at its worst point, with the bench (its place in bench_report) and ramp it is on, its value, what was asked and how far along it runs. Its ramps are always roads in the haul network, each along its centreline and joined to the network's nodes and roads it comes within the join tolerance of, made again as the design changes and gone with it. It is built until it meets its topography where it can (a pit built up from its floor, or a dump down from its top, with settings.topography and settings.stop daylight); otherwise to settings.benches, or settings.stop_elevation.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "design": { "type": "integer", "minimum": 0 } },
@@ -65,21 +65,6 @@ pub(super) fn definitions() -> Vec<Value> {
                 "additionalProperties": false,
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false },
-        }),
-        json!({
-            "name": "send_pit_design",
-            "title": "Send a pit design on",
-            "description": "Send a pit design on to Planning, as the Pit Design tool's Send to Planning does. (Its ramps need no sending: each is always a haul road along its centreline in the haul network, joined to the network's nodes and roads it comes within the join tolerance of, kept in step with the design as it changes and gone with it.) to planning: the pit's surface is made from its strings as triangulate would make it, as a project surface named after it, and a Planning solid of it against its topography (settings.topography, which it needs), reserved from settings.evaluation.block_model and benched at its RLs; runs in the background (get_tasks follows it, get_solids reads the solid). Sending again rebuilds the surface in place and brings the solid up to date. Its design must be current (get_pit_designs says fresh). Returns what it made.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "design": { "type": "integer", "minimum": 0 },
-                    "to": { "type": "string", "enum": ["planning"] },
-                },
-                "required": ["design", "to"],
-                "additionalProperties": false,
-            },
-            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true },
         }),
         json!({
             "name": "design_pit",
@@ -463,7 +448,6 @@ impl App<'_> {
             "get_pit_designs" => self.mcp_get_pit_designs(arguments),
             "set_pit_design" => self.mcp_set_pit_design(arguments),
             "explode_pit_design" => self.mcp_explode_pit_design(arguments),
-            "send_pit_design" => self.mcp_send_pit_design(arguments),
             "design_pit" => self.mcp_design_pit(arguments),
             _ => return None,
         };
@@ -690,17 +674,6 @@ impl App<'_> {
         let (id, _) = self.mcp_pit_design(arguments)?;
         let ids = self.explode_pit_design(id).map_err(|error| format!("{error:#}"))?;
         Ok(json!({ "polylines": ids.iter().map(|id| id.0).collect::<Vec<_>>() }))
-    }
-
-    fn mcp_send_pit_design(&mut self, arguments: &Value) -> Result<Value, String> {
-        let (id, _) = self.mcp_pit_design(arguments)?;
-        match arguments["to"].as_str() {
-            Some("planning") => {
-                self.send_pit_to_planning(id).map_err(|error| format!("{error:#}"))?;
-                Ok(json!({ "started": "send_pit_design" }))
-            }
-            _ => Err("to is planning: a design's ramps are always in the haul network.".to_owned()),
-        }
     }
 
     fn mcp_design_pit(&mut self, arguments: &Value) -> Result<Value, String> {

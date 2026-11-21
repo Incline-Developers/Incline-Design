@@ -505,9 +505,9 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
     let Some(draft) = editor.pit_design.as_mut() else {
         return;
     };
-    let Some(id) = draft.object_id() else {
+    if draft.object_id().is_none() {
         return;
-    };
+    }
     ViewportDockPanel::new("pit_design_panel", tr!("pit-design-title"), viewport_rect)
         .min_width(400.0)
         .max_width(420.0)
@@ -557,7 +557,8 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                     match stage {
                         PitStage::Benches => {
                             let base_rl = draft.built_for.as_ref().and_then(|key| key.verts.first()).map_or(0.0, |vertex| vertex.pos.z);
-                            draw_bench_settings(ui, &mut working.settings, project, (base_rl, picking_region, on_gizmo), commands);
+                            let built = draft.preview.as_ref().and_then(|preview| preview.design.as_ref().ok()).map(|design| design.benches);
+                            draw_bench_settings(ui, &mut working.settings, project, (base_rl, picking_region, on_gizmo, built), commands);
                         }
                         PitStage::Ramp => {
                             let verts = draft.built_for.as_ref().map_or(&[][..], |key| key.verts.as_slice());
@@ -584,8 +585,6 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                     }
                 });
 
-            let fresh = draft.facts.fresh;
-            let picking = draft.picking_ramp.is_some();
             menu::menu_actions(ui, |ui| match draft.stage {
                 PitStage::Benches => {
                     if ui
@@ -606,12 +605,6 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                     if ui.add(MenuButton::new(tr!("pit-design-back"))).clicked() {
                         commands.push(UiCommand::PitDesignStage(PitStage::Benches));
                     }
-                    // On to the rest of the project, at the row's far end.
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        if let Some(working) = draft.working.as_ref() {
-                            draw_send_button(ui, working, id, fresh && !picking, commands);
-                        }
-                    });
                 }
             });
         });
@@ -869,7 +862,9 @@ fn draw_wall_gizmo(ui: &mut egui::Ui, draft: &mut PitDesignDraft, viewport_rect:
         let way = (corner - toe).normalized();
         readout(corner + way * 8.0, way, GizmoValue::FaceAngle, lit);
     } else {
-        readout(toe - out * 12.0, -out, GizmoValue::FaceAngle, lit);
+        // Seen from above: to the side of the toe the height's is not.
+        let side = egui::vec2(out.y, -out.x);
+        readout(toe + side * 14.0, side, GizmoValue::FaceAngle, lit);
     }
     // An arrow, Move gizmo style.
     let arrow = |from: egui::Pos2, tip: egui::Pos2, base: egui::Color32, lit: bool, fade: f32| {
@@ -905,8 +900,14 @@ fn draw_wall_gizmo(ui: &mut egui::Ui, draft: &mut PitDesignDraft, viewport_rect:
     let way = (berm_tip - toe).normalized();
     readout(berm_tip + way * 8.0, way, GizmoValue::Berm, lit);
     // How far the design goes, off the toe away from both arms, to type or
-    // drag.
-    let away = -(egui::vec2(gizmo.up.0, gizmo.up.1) + out).normalized();
+    // drag; seen from above, behind the toe, the berm ahead and the height's
+    // and angle's values to either side.
+    let away = if gizmo.height_fade > 0.0 {
+        -(egui::vec2(gizmo.up.0, gizmo.up.1) + out).normalized()
+    } else {
+        -out
+    };
+    let built = draft.preview.as_ref().and_then(|preview| preview.design.as_ref().ok()).map(|design| design.benches);
     let Some(settings) = draft.working.as_mut().map(|working| &mut working.settings) else {
         return;
     };
@@ -919,24 +920,41 @@ fn draw_wall_gizmo(ui: &mut egui::Ui, draft: &mut PitDesignDraft, viewport_rect:
             crate::ui::viewport_input_frame(ui, crate::ui::ViewportInputState::Idle).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    match settings.stop {
-                        StopMode::Benches => {
-                            ui.label(tr!("pit-design-benches"));
-                            ui.add_sized([48.0, 22.0], egui::DragValue::new(&mut settings.benches).range(1..=u32::MAX).speed(0.05));
-                        }
-                        StopMode::Elevation => {
-                            ui.label(tr!("pit-design-stop-rl"));
-                            ui.add_sized([72.0, 22.0], egui::DragValue::new(&mut settings.stop_elevation).speed(0.5).fixed_decimals(1));
-                            ui.label(tr!("common-m"));
-                        }
-                        StopMode::Daylight => {
-                            let kind = settings.kind;
-                            ui.label(stop_label(kind, StopMode::Daylight));
-                        }
-                    }
+                    extent_controls(ui, settings, built, true);
                 });
             });
         });
+}
+
+/// How far the design goes, in a row: its benches, built until it meets
+/// the ground where it can (the count it came to, which cut short, it stops
+/// at), and where cut short with ground to meet, a button back to meeting
+/// it. One stopped at an RL, the RL. `labelled` names the count, beside the
+/// toe; in the panel the row does.
+fn extent_controls(ui: &mut egui::Ui, settings: &mut PitDesignSettings, built: Option<u32>, labelled: bool) {
+    if settings.stop == StopMode::Elevation {
+        if labelled {
+            ui.label(tr!("pit-design-stop-rl"));
+        }
+        ui.add_sized([72.0, 22.0], egui::DragValue::new(&mut settings.stop_elevation).speed(0.5).fixed_decimals(1));
+        ui.label(tr!("common-m"));
+        return;
+    }
+    if labelled {
+        ui.label(tr!("pit-design-benches"));
+    }
+    let daylighting = settings.daylights();
+    let mut count = if daylighting { built.unwrap_or(settings.benches) } else { settings.benches };
+    if ui.add_sized([48.0, 22.0], egui::DragValue::new(&mut count).range(1..=u32::MAX).speed(0.05)).changed() {
+        settings.stop = StopMode::Benches;
+        settings.benches = count;
+    }
+    let meets = stop_label(settings.kind, StopMode::Daylight);
+    if daylighting {
+        ui.label(egui::RichText::new(meets).color(ui.visuals().weak_text_color()));
+    } else if settings.can_daylight() && settings.topography.is_some() && ui.add(MenuButton::new(meets)).clicked() {
+        settings.stop = StopMode::Daylight;
+    }
 }
 
 /// Which corner or edge of a box to hold at a point for the box to lie off
@@ -1066,29 +1084,6 @@ fn draw_ramps(ui: &mut egui::Ui, settings: &mut PitDesignSettings, (picking, in_
     }
 }
 
-/// Send the pit to Planning, or bring it up to date there: its ramps need
-/// no sending, being always in the haul network.
-fn draw_send_button(ui: &mut egui::Ui, working: &PitObject, id: ObjectId, ready: bool, commands: &mut Vec<UiCommand>) {
-    let label = if working.sent.solid.is_none() {
-        tr!("pit-design-send-planning")
-    } else {
-        tr!("pit-design-update-planning")
-    };
-    let topography = working.settings.topography.is_some();
-    let width = menu::natural_button_width(ui, &label, 60.0);
-    let response = ui.add(MenuButton::new(label).min_width(width).enabled(ready && topography));
-    let response = if !ready {
-        response.disabled_hint(tr!("pit-design-send-not-designed"))
-    } else if !topography {
-        response.disabled_hint(tr!("pit-design-send-no-topography"))
-    } else {
-        response.hint(tr!("pit-design-send-planning-help"))
-    };
-    if response.clicked() {
-        commands.push(UiCommand::SendPitToPlanning(id));
-    }
-}
-
 /// The pit's benches and where it stops. `base_rl` is the string's, where a
 /// new zone starts.
 /// What the walls' gizmo sets (`on_gizmo`, while it is in the view) is left
@@ -1097,66 +1092,36 @@ fn draw_bench_settings(
     ui: &mut egui::Ui,
     settings: &mut PitDesignSettings,
     project: &UiProjectView,
-    (base_rl, picking_region, on_gizmo): (f64, bool, bool),
+    (base_rl, picking_region, on_gizmo, built): (f64, bool, bool, Option<u32>),
     commands: &mut Vec<UiCommand>,
 ) {
     // What it is and the way it is built are pulled on the walls' gizmo: its
-    // arms through the toe turn the walls the other way.
-    let kind = settings.kind;
-    // How far it goes, with what it is and which way it is built.
-    // Only a pit built up, or a dump built down, meets the ground.
-    let stops: Vec<StopMode> = if settings.can_daylight() {
-        vec![StopMode::Benches, StopMode::Elevation, StopMode::Daylight]
-    } else {
-        vec![StopMode::Benches, StopMode::Elevation]
-    };
-    if !stops.contains(&settings.stop) {
-        settings.stop = StopMode::Benches;
-    }
-    let chosen = stop_label(kind, settings.stop);
+    // arms through the toe turn the walls the other way. It is built until
+    // it meets the ground where it can, unless cut short beside the toe.
+    // The ground it meets and is measured against, here.
+    let surfaces: Vec<(TriangulationId, &str)> = project.triangulations.iter().map(|entry| (entry.id, entry.name.as_str())).collect();
+    let chosen = settings
+        .topography
+        .and_then(|id| surfaces.iter().find(|(surface, _)| *surface == id).map(|(_, name)| (*name).to_owned()))
+        .unwrap_or_else(|| tr!("pit-design-topography-none"));
     MenuFieldCombo::new(
-        "pit_design_stop",
-        tr!("pit-design-stop"),
-        &mut settings.stop,
+        "pit_design_topography",
+        tr!("pit-design-topography"),
+        &mut settings.topography,
         chosen,
-        stops.into_iter().map(|stop| (stop, stop_label(kind, stop).into())),
+        std::iter::once((None, tr!("pit-design-topography-none").into())).chain(surfaces.iter().map(|(id, name)| (Some(*id), (*name).into()))),
     )
     .width(FIELD_WIDTH)
-    .help_text(tr!("pit-design-stop-help"))
+    .help_text(tr!("pit-design-topography-help"))
     .show(ui);
-    // How many benches, or the RL, is set beside the walls' gizmo in the
-    // view; the ground it daylights against, here.
-    match settings.stop {
-        StopMode::Benches | StopMode::Elevation if on_gizmo => {}
-        StopMode::Benches => {
-            MenuFieldU32::new(tr!("pit-design-benches"), &mut settings.benches, 1..=u32::MAX)
-                .width(FIELD_WIDTH)
-                .show(ui);
-        }
-        StopMode::Elevation => {
-            MenuFieldF64::new(tr!("pit-design-stop-rl"), &mut settings.stop_elevation, f64::MIN..=f64::MAX)
-                .width(FIELD_WIDTH)
-                .speed(0.5)
-                .suffix(" m")
-                .show(ui);
-        }
-        StopMode::Daylight => {
-            let surfaces: Vec<(TriangulationId, &str)> = project.triangulations.iter().map(|entry| (entry.id, entry.name.as_str())).collect();
-            let chosen = settings
-                .topography
-                .and_then(|id| surfaces.iter().find(|(surface, _)| *surface == id).map(|(_, name)| (*name).to_owned()))
-                .unwrap_or_else(|| tr!("pit-design-topography-none"));
-            MenuFieldCombo::new(
-                "pit_design_topography",
-                tr!("pit-design-topography"),
-                &mut settings.topography,
-                chosen,
-                std::iter::once((None, tr!("pit-design-topography-none").into())).chain(surfaces.iter().map(|(id, name)| (Some(*id), (*name).into()))),
-            )
-            .width(FIELD_WIDTH)
-            .help_text(tr!("pit-design-topography-help"))
-            .show(ui);
-        }
+    // How far it goes: beside the walls' gizmo in the view, or here without.
+    if !on_gizmo {
+        MenuField::new(tr!("pit-design-benches")).show(ui, |ui, row_height, _| {
+            ui.allocate_ui_with_layout(egui::vec2(FIELD_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                extent_controls(ui, settings, built, false);
+            })
+            .response
+        });
     }
 
     // The bench's height, face angle and berm are set on the gizmo in the
@@ -1700,24 +1665,8 @@ fn draw_evaluation(ui: &mut egui::Ui, working: &mut PitObject, facts: &DraftFact
     // A dump's top, where its rehabilitation's limit starts from.
     let design_top = working.design().map(|design| design.levels.iter().copied().fold(f64::NEG_INFINITY, f64::max));
     let settings = &mut working.settings;
-    // Daylighting, the topography is chosen with where the design stops.
-    if !settings.daylights() {
-        let surfaces: Vec<(TriangulationId, &str)> = project.triangulations.iter().map(|entry| (entry.id, entry.name.as_str())).collect();
-        let chosen = settings
-            .topography
-            .and_then(|id| surfaces.iter().find(|(surface, _)| *surface == id).map(|(_, name)| (*name).to_owned()))
-            .unwrap_or_else(|| tr!("pit-design-topography-none"));
-        MenuFieldCombo::new(
-            "pit_design_evaluation_topography",
-            tr!("pit-design-topography"),
-            &mut settings.topography,
-            chosen,
-            std::iter::once((None, tr!("pit-design-topography-none").into())).chain(surfaces.iter().map(|(id, name)| (Some(*id), (*name).into()))),
-        )
-        .width(FIELD_WIDTH)
-        .help_text(tr!("pit-design-evaluation-topography-help"))
-        .show(ui);
-    }
+    // The ground it is measured against is the one it meets, chosen with
+    // the benches.
     let models: Vec<(BlockModelId, &str)> = project.block_models.iter().map(|entry| (entry.id, entry.name.as_str())).collect();
     let chosen = settings
         .evaluation

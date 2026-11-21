@@ -36,25 +36,6 @@ pub(crate) struct PitObject {
     /// from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) evaluation: Option<super::evaluation::Evaluation>,
-    /// What it has been sent on to, to replace when it is sent again.
-    #[serde(default, skip_serializing_if = "Sent::is_empty")]
-    pub(crate) sent: Sent,
-}
-
-/// What a design has made elsewhere in the project when sent on: the
-/// surface and Planning solid it became. (Its ramps are always roads in the
-/// haul network, which say whose they are.)
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct Sent {
-    pub(crate) surface: Option<crate::model::triangulation::TriangulationId>,
-    pub(crate) solid: Option<crate::model::SolidId>,
-}
-
-impl Sent {
-    pub(crate) fn is_empty(&self) -> bool {
-        self == &Self::default()
-    }
 }
 
 /// What the string and settings came to when last worked out.
@@ -86,7 +67,6 @@ impl PitObject {
             settings,
             derived: None,
             evaluation: None,
-            sent: Sent::default(),
         }
     }
 

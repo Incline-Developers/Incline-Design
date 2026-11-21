@@ -494,7 +494,6 @@ impl App<'_> {
                 PitObject {
                     derived: now.derived.clone(),
                     evaluation: now.evaluation.clone(),
-                    sent: now.sent.clone(),
                     ..synced.clone()
                 } == now
             });
@@ -503,7 +502,6 @@ impl App<'_> {
                     (true, Some(mut working)) => {
                         working.derived = now.derived.clone();
                         working.evaluation = now.evaluation.clone();
-                        working.sent = now.sent.clone();
                         Some(working)
                     }
                     _ => Some(now.clone()),

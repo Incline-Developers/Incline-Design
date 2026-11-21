@@ -171,10 +171,11 @@ impl PitDesignSettings {
             rules: self.bench_rules.clone(),
             wall_radius: self.wall_radius,
             ramps: self.ramps.iter().map(|ramp| ramp.spec(default_start)).collect(),
+            // With no ground to meet, as many benches as it says.
             stop: match self.stop {
-                StopMode::Benches => Stop::Benches(self.benches),
+                StopMode::Daylight if self.daylights() => Stop::Daylight,
+                StopMode::Benches | StopMode::Daylight => Stop::Benches(self.benches),
                 StopMode::Elevation => Stop::Elevation(self.stop_elevation),
-                StopMode::Daylight => Stop::Daylight,
             },
         }
     }
@@ -185,9 +186,10 @@ impl PitDesignSettings {
         matches!((self.kind, self.direction), (Kind::Pit, Direction::Up) | (Kind::Dump, Direction::Down))
     }
 
-    /// Whether the design is built until it meets the ground.
+    /// Whether the design is built until it meets the ground: asked to, able
+    /// to, and with ground to meet.
     pub(crate) fn daylights(&self) -> bool {
-        self.stop == StopMode::Daylight && self.can_daylight()
+        self.stop == StopMode::Daylight && self.can_daylight() && self.topography.is_some()
     }
 
     /// The topography the design depends on, if it depends on one: the

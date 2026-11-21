@@ -5730,8 +5730,6 @@ pit-design-walls-too-steep =
         [one] The walls facing one way come out steeper than they should.
        *[other] The walls facing { $count } ways come out steeper than they should.
     }
-pit-design-stop = Stop
-pit-design-stop-help = Where the design ends: after a number of benches, at an RL (the last bench cut short to meet it), or where a whole bench stands clear of the topography.
 pit-design-stop-benches = After a number of benches
 pit-design-stop-elevation = At an RL
 pit-design-stop-daylight = Where it daylights
@@ -5887,7 +5885,6 @@ pit-design-table-steeper-hint = Steeper than the { $grade } % asked for.
 pit-design-measuring = Measuring...
 pit-design-evaluate-missing-model = the block model chosen
 pit-design-evaluation = Evaluation
-pit-design-evaluation-topography-help = The ground the design is measured against: a pit takes out what lies between it and this, a dump puts on what lies between.
 pit-design-block-model = Block model
 pit-design-block-model-none = None
 pit-design-block-model-help = The block model the design's ground is measured in, by the project's reserve fields and this model's mapping of them (Planning, Reserves).
@@ -5913,19 +5910,8 @@ pit-design-layer-crest = Crest
 pit-design-layer-toe = Toe
 pit-design-layer-ramp = Ramp
 pit-design-layer-daylight = Daylight
-pit-design-send-missing = The pit design is gone.
-pit-design-send-not-designed = The pit design is still being worked out: send it once it is.
 pit-design-haul-road = { $design } ramp
 pit-design-haul-road-numbered = { $design } ramp { $number }
-pit-design-send-planning = Send to Planning
-pit-design-update-planning = Update in Planning
-pit-design-send-planning-help = Makes the pit's surface from its strings, as Create Triangulation would, and a Planning solid of it against its topography, reserved from its block model and benched as it is. Sending again rebuilds the surface in place and brings the solid up to date.
-pit-design-send-no-topography = Choose a topography first (Evaluation): Planning measures the pit's solid against it.
-pit-design-sending-planning = Sending the pit to Planning...
-pit-design-send-planning-failed = The pit could not be sent to Planning: { $reason }
-pit-design-send-changed = The pit design changed while its surface was built: send it again.
-pit-design-sent-planning = Sent { $design } to Planning, with its surface.
-pit-design-report-send-planning = Sent the pit to Planning
 pit-design-layer-rehab = Rehabilitated
 pit-design-rehab-bad-settings = A rehabilitation needs a slope between 0° and 90° and contours some height apart.
 pit-design-rehab-no-top = The dump has no section at the top it is reshaped from.
