@@ -565,7 +565,13 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                             draw_ramps(ui, &mut working.settings, (picking, &in_view), (base_rl, commands));
                         }
                     }
+                    // While a design is worked out, a spinner at the heading's
+                    // end: a line coming and going would jog the panel about.
+                    let top = ui.cursor().top();
                     menu::menu_section(ui, tr!("pit-design-result-section"));
+                    if draft.building.is_some() {
+                        heading_spinner(ui, top);
+                    }
                     // What the design shown was worked out with: the copy's
                     // settings, or with a ramp where a click would start it.
                     let settings = draft.built_for.as_ref().map_or_else(|| working.settings(), |key| key.settings.clone());
@@ -1680,10 +1686,16 @@ fn draw_result(ui: &mut egui::Ui, draft: &PitDesignDraft, settings: &PitDesignSe
             }
         }
     }
-    if draft.building.is_some() {
-        menu::menu_note(ui, tr!("pit-design-designing"));
-    }
     hover
+}
+
+/// A spinner at the end of the section heading just drawn, which began at
+/// `top`: work under way, said without taking room.
+fn heading_spinner(ui: &mut egui::Ui, top: f32) {
+    let bottom = ui.cursor().top();
+    let size = 11.0;
+    let rect = egui::Rect::from_center_size(egui::pos2(ui.max_rect().right() - size / 2.0, (top + bottom) / 2.0), egui::vec2(size, size));
+    egui::Spinner::new().size(size).paint_at(ui, rect);
 }
 
 /// A whole quantity, grouped in thousands: a volume, a length.
@@ -1696,7 +1708,15 @@ fn whole(value: f64) -> String {
 /// topography and a block model the section chooses: in all, by material
 /// and bench by bench.
 fn draw_evaluation(ui: &mut egui::Ui, working: &mut PitObject, facts: &DraftFacts, project: &UiProjectView) {
-    if !menu::menu_section_folding(ui, "pit_design_evaluation", tr!("pit-design-evaluation")) {
+    // Worked out again, the last figures stay with a spinner at the
+    // heading's end, so nothing comes and goes to jog the panel about.
+    let busy = matches!(facts.waiting, Some(Waiting::Design | Waiting::Measuring));
+    let top = ui.cursor().top();
+    let open = menu::menu_section_folding(ui, "pit_design_evaluation", tr!("pit-design-evaluation"));
+    if busy {
+        heading_spinner(ui, top);
+    }
+    if !open {
         return;
     }
     // Built up short of the ground it could daylight against, its ground
@@ -1795,7 +1815,9 @@ fn draw_evaluation(ui: &mut egui::Ui, working: &mut PitObject, facts: &DraftFact
         }
     }
     let warning = ui.visuals().warn_fg_color;
+    let first = working.evaluation.is_none();
     match &facts.waiting {
+        Some(Waiting::Design | Waiting::Measuring) if !first => {}
         Some(Waiting::Design) => menu::menu_note(ui, tr!("pit-design-designing")),
         Some(Waiting::NoTopography) => menu::menu_note(ui, tr!("pit-design-evaluation-no-topography")),
         Some(Waiting::NotLoaded(name)) => {
