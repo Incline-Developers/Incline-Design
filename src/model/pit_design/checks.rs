@@ -408,11 +408,14 @@ fn wall_flags(spec: &Spec, design: &Design, roads: &[Road], flags: &mut Vec<Flag
         })
         .collect();
     let tallest = design.report.iter().map(|bench| bench.height).fold(0.0, f64::max);
-    // On or near a road passing within a bench's height of `z`.
+    // On or near a road passing within a bench and a half's height of `z`:
+    // a road climbing the bench below, still short of its top, cuts into
+    // the berm at the top as it drifts across.
+    let reach_up = tallest * 1.5;
     let near_road = |point: DVec2, z: f64, clear: f64| {
         roads.iter().any(|(middle, half)| {
             middle
-                .nearest(point, half + clear, |(a, b)| a.z.min(b.z) <= z + tallest && a.z.max(b.z) >= z - tallest)
+                .nearest(point, half + clear, |(a, b)| a.z.min(b.z) <= z + reach_up && a.z.max(b.z) >= z - reach_up)
                 .is_some()
         })
     };

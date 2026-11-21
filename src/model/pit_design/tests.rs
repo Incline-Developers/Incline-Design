@@ -1725,11 +1725,15 @@ fn flag_look() {
         Layout::Spiral
     };
     let direction = if down { Direction::Down } else { Direction::Up };
-    let mut spec = with_ramp(direction, layout, points[2], clockwise, Stop::Benches(8), (0.1, 8.0));
-    spec.bench_height = 15.0;
-    spec.face_angle = 60.0;
+    let small = std::env::var("ZZ_SMALL").is_ok();
+    let mut spec = with_ramp(direction, layout, points[2], clockwise, Stop::Benches(8), (0.1, if small { 6.0 } else { 8.0 }));
+    spec.bench_height = if small { 10.0 } else { 15.0 };
+    spec.face_angle = if small { 70.0 } else { 60.0 };
     spec.wall_radius = 20.0;
     spec.ramps[0].width = 25.0;
+    if std::env::var("ZZ_DUMP").is_ok() {
+        spec.kind = Kind::Dump;
+    }
     let base: Vec<DVec3> = points.iter().map(|p| p.extend(if down { 500.0 } else { 100.0 })).collect();
     let design = design(&Base::from_points(&base).unwrap(), &spec, None, &|| false).unwrap();
     println!("end {:?} benches {}", design.end, design.benches);
@@ -1738,6 +1742,19 @@ fn flag_look() {
             "flag {:?} value {:.2} asked {:.2} len {:.1} bench {} at {:.1}",
             flag.check, flag.value, flag.asked, flag.length, flag.bench, flag.at
         );
+    }
+    for flag in design.flags.iter().filter(|flag| flag.check == super::checks::Check::Berm) {
+        for string in design.strings.iter().filter(|string| string.kind == StringKind::RampCentreline) {
+            let best = string
+                .points
+                .windows(2)
+                .map(|pair| {
+                    let (q, _) = crate::model::kernel::project_onto_segment(flag.at.truncate(), pair[0].truncate(), pair[1].truncate());
+                    (q.distance(flag.at.truncate()), pair[0].z, pair[1].z)
+                })
+                .fold((f64::INFINITY, 0.0, 0.0), |a, b| if b.0 < a.0 { b } else { a });
+            println!("berm flag at {:.1}: centreline {:.1} m away at z {:.1}..{:.1}", flag.at, best.0, best.1, best.2);
+        }
     }
     let focus: Vec<f64> = std::env::var("ZZ_AT")
         .ok()

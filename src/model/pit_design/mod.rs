@@ -1819,8 +1819,14 @@ impl Builder<'_> {
             } if cursor.handover.is_some() && turn_due(ramp_spec, &cursor, elevation, sign) => Some((inside_radius, widening, grade)),
             _ => None,
         };
+        // The stretch after a turn eased in from it, where that fits; else
+        // run straight in, where that does; else no turn here.
+        let tries: Vec<Option<(f64, f64, f64, f64)>> = match turn {
+            Some((radius, widening, grade)) => vec![Some((radius, widening, grade, TURN_EASE)), Some((radius, widening, grade, 0.0)), None],
+            None => vec![None],
+        };
         let mut last = End::OutOfRoom;
-        for turn in [turn, None].into_iter().take(if turn.is_some() { 2 } else { 1 }) {
+        for turn in tries {
             // A flat before the climb first, which keeps the grade; only
             // where none works, a longer climb, a little flatter.
             let climb = height / ramp_spec.gradient;
@@ -1932,7 +1938,7 @@ impl Builder<'_> {
         along: &[DVec2],
         cursor: RampCursor,
         lay: Lay,
-        turn: Option<(f64, f64, f64)>,
+        turn: Option<(f64, f64, f64, f64)>,
         walls: &walls::Walls<'_>,
         lay_walls: &walls::Walls<'_>,
         elevation: f64,
@@ -1941,8 +1947,8 @@ impl Builder<'_> {
         gradient: f64,
     ) -> Result<(Laid, Vec<DVec2>, Vec<DVec2>), End> {
         let (stretch, turn, moved) = match (turn, cursor.handover) {
-            (Some((radius, widening, grade)), Some(handover)) => {
-                let (stretch, turn) = turn_back(along, cursor, handover, lay, (radius, widening, grade), (walls.height, gradient), lay_walls)?;
+            (Some((radius, widening, grade, ease)), Some(handover)) => {
+                let (stretch, turn) = turn_back(along, cursor, handover, lay, (radius, widening, grade, ease), (walls.height, gradient), lay_walls)?;
                 (stretch, Some(turn), 0.0)
             }
             _ => {
@@ -2266,7 +2272,7 @@ fn turn_back(
     cursor: RampCursor,
     handover: DVec2,
     lay: Lay,
-    (radius, widening, grade): (f64, f64, f64),
+    (radius, widening, grade, ease): (f64, f64, f64, f64),
     (height, gradient): (f64, f64),
     walls: &walls::Walls<'_>,
 ) -> Result<(Stretch, Turn), End> {
@@ -2294,8 +2300,13 @@ fn turn_back(
             climb_length: lay.climb_length - lift / gradient,
             ..lay
         };
+        // Out from the ring by the turn's width where it leaves, coming in
+        // to its usual line as it climbs; eased (`ease` of the way to
+        // setting off and arriving along the ring), it carries on from the
+        // turn with less of a kink, but stands out longer.
+        let eased = |climbed: f64| (1.0 - ease) * climbed + ease * climbed * climbed * (3.0 - 2.0 * climbed);
         let stretch = road::lay(from, back_at, -cursor.direction, lay, &|climbed, parameter| {
-            climbed * drift(parameter) + reach * (1.0 - climbed)
+            climbed * drift(parameter) + reach * (1.0 - eased(climbed))
         })
         .map_err(|_| End::RampTooLong)?;
         let (Some(leave_near), Some(leave_far)) = (stretch.edges.near.first(), stretch.edges.far.first()) else {
@@ -2327,6 +2338,11 @@ fn turn_back(
     }
     Err(End::OutOfRoom)
 }
+
+/// How far the stretch after a turn is eased in from it, where that fits:
+/// half way to leaving along the ring, which halves the kink where it leaves
+/// the turn without holding it out so long it leaves no room.
+const TURN_EASE: f64 = 0.5;
 
 /// The most of a bench a turn climbs: the stretch after it climbs the rest.
 const MOST_TURN_LIFT: f64 = 0.75;
