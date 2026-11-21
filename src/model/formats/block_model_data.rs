@@ -314,6 +314,43 @@ impl BlockModelData {
                 .fold(0usize, usize::saturating_add)
     }
 
+    /// Set numeric column `name` (a double per block), adding it when the
+    /// model has none of that name. A categorical column of that name is
+    /// refused.
+    pub(crate) fn set_numeric_column(&mut self, name: &str, values: &[f64]) -> Result<(), BlockModelDataError> {
+        if values.len() != self.metadata.n_blocks {
+            return Err(invalid(format!("column '{name}' has {} values for {} blocks", values.len(), self.metadata.n_blocks)));
+        }
+        match self.metadata.variables.iter().position(|variable| variable.name == name) {
+            Some(index) if !self.metadata.variables[index].strings.is_empty() => return Err(invalid(format!("column '{name}' is categorical"))),
+            Some(_) => {}
+            None => self.metadata.variables.push(BlockVariable {
+                name: name.to_owned(),
+                physical_type: "double".to_owned(),
+                default: "NaN".to_owned(),
+                global: "NaN".to_owned(),
+                ..BlockVariable::default()
+            }),
+        }
+        self.numeric_values.insert(name.to_owned(), Arc::new(BlockColumn::from_values(values)));
+        self._reservation = crate::app::memory::MemoryReservation::untracked();
+        if let Ok(reservation) = crate::app::memory::reserve(self.estimated_bytes(), "block model") {
+            self._reservation = reservation;
+        }
+        Ok(())
+    }
+
+    /// Remove column `name` and its values, if the model has it.
+    pub(crate) fn remove_column(&mut self, name: &str) {
+        self.metadata.variables.retain(|variable| variable.name != name);
+        if self.numeric_values.remove(name).is_some() {
+            self._reservation = crate::app::memory::MemoryReservation::untracked();
+            if let Ok(reservation) = crate::app::memory::reserve(self.estimated_bytes(), "block model") {
+                self._reservation = reservation;
+            }
+        }
+    }
+
     /// Set categorical column `name`: per block a code of `categories` (`NaN`
     /// blank), each named, with the colours `colors` gives. The column is added
     /// when the model has none of that name; a numeric column of that name is

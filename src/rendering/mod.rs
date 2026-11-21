@@ -9,6 +9,7 @@ pub(crate) mod scene;
 pub(crate) mod section_grid;
 pub(crate) mod snap;
 pub(crate) mod text;
+pub(crate) mod water;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]

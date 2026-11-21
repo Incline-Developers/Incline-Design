@@ -50,6 +50,7 @@ impl<'a> App<'a> {
                 &self.solid_view_body,
                 &self.reserves_scene,
                 &self.schedule_animation,
+                &self.water,
                 self.solid_preview.as_ref(),
             );
             let overlay = if self.editor.is_haulage_page() { &self.haul_block_surface[..] } else { drawn.1 };
@@ -344,6 +345,7 @@ impl<'a> App<'a> {
             &self.solid_view_body,
             &self.reserves_scene,
             &self.schedule_animation,
+            &self.water,
             self.solid_preview.as_ref(),
         )
         .0

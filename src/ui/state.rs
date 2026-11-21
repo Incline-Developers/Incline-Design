@@ -25,7 +25,7 @@ use crate::{
             csv_block_model::{CsvColumnMapping, CsvPreview},
             csv_drill_hole::{CsvDrillFileMapping, CsvDrillPreview},
         },
-        optimization::OptimizationScenario,
+        optimization::{ConstantsRow, OptimizationScenario},
         point_cloud::PointCloudId,
         raster::RasterTextureId,
         triangulation::TriangulationId,
@@ -619,24 +619,11 @@ impl EditorState {
         self.is_planning_view(PlanningView::Reserves)
     }
 
-    /// Set (or clear) the status-bar message. Whenever the displayed task
-    /// changes, the outgoing one is remembered as `last_finished_task` so the
-    /// idle bar keeps reading "<task>: Finished" at 100%.
-    pub(crate) fn set_status_message(&mut self, message: Option<StatusBarMessage>) {
-        if let Some(previous) = &self.status_message
-            && message.as_ref().is_none_or(|next| next.text != previous.text)
-        {
-            self.last_finished_task = Some(FinishedTask {
-                // Labels are written as "Generating contours…"; drop the trailing
-                // ellipsis so the idle text isn't "Generating contours…: Finished".
-                text: previous.text.trim_end_matches(['.', '…', ' ']).to_owned(),
-                // Progress reports are throttled, so the last one received can
-                // be short of the total even though the task ran to completion.
-                // Only the total is kept; the idle bar shows it as "y of y".
-                total_units: previous.units.map(|(_done, total)| total),
-            });
-        }
-        self.status_message = message;
+    /// Remember a reported task that ran to completion, newest first, keeping
+    /// the last [`TASK_HISTORY_LEN`] for the status bar's list.
+    pub(crate) fn record_finished_task(&mut self, task: FinishedTask) {
+        self.task_history.push_front(task);
+        self.task_history.truncate(TASK_HISTORY_LEN);
     }
 
     /// Drop everything selected, in every workspace's terms: whole scene
@@ -687,6 +674,9 @@ impl EditorState {
             || self.tri_cut_poly_open
             || self.tri_cut_z_open
             || self.tri_contour_open
+            || self.water_dialog.open
+            || self.simplify_dialog.open
+            || self.is_water_run()
             || self.point_cloud_tin_open
             || self.point_cloud_join_open
             || self.point_cloud_classify_open
@@ -1475,6 +1465,10 @@ pub(crate) enum TriangulationPickTarget {
     SliceSurface,
     /// The surface contour lines are generated from.
     ContourSurface,
+    /// The surface Rain Simulation rains on.
+    WaterSurface,
+    /// The surface Simplify thins.
+    SimplifySurface,
 }
 
 /// What a tool works on, chosen in its dialog. The app derives what follows
@@ -1485,6 +1479,8 @@ pub(crate) enum ToolSubject {
     ClipSurface(TriangulationId),
     SliceSurface(TriangulationId),
     ContourSurface(TriangulationId),
+    WaterSurface(TriangulationId),
+    SimplifySurface(TriangulationId),
     OreBlockModel(BlockModelId),
     /// The whole collection: a subset of its holes comes only from holes
     /// picked in the viewport before the dialog opened.
@@ -1501,7 +1497,14 @@ impl TriangulationPickTarget {
             Self::IncludeShape => tr!("state-click-pit-stockpile-solid-viewport"),
             Self::SolidDesign => tr!("state-click-design-surface-viewport"),
             Self::SolidTopography => tr!("state-click-topography-viewport"),
-            Self::TrimSurface | Self::ClipSurface | Self::SliceSurface | Self::ContourSurface | Self::ClipToUpper | Self::ClipToLower => tr!("state-click-surface-viewport"),
+            Self::TrimSurface
+            | Self::ClipSurface
+            | Self::SliceSurface
+            | Self::ContourSurface
+            | Self::WaterSurface
+            | Self::SimplifySurface
+            | Self::ClipToUpper
+            | Self::ClipToLower => tr!("state-click-surface-viewport"),
             Self::ClipBoundary => tr!("state-click-closed-polyline-viewport"),
         }
     }
@@ -1779,6 +1782,8 @@ pub(crate) struct FuseSegment {
 /// without per-task plumbing.
 #[derive(Clone, Debug)]
 pub(crate) struct StatusBarMessage {
+    /// The task's ticket, which is what follows it from frame to frame.
+    pub(crate) ticket: u64,
     pub(crate) text: String,
     /// `Some(f)` in `0.0..=1.0` fills the bar to that fraction and labels it
     /// with the percentage; `None` is indeterminate (marquee, no percentage).
@@ -1786,16 +1791,41 @@ pub(crate) struct StatusBarMessage {
     /// `Some((done, total))` when the task counts discrete items (mesh
     /// vertices/faces), appending "(x of y)" to the percentage.
     pub(crate) units: Option<(u64, u64)>,
+    /// When the task began, for the time it has been running.
+    pub(crate) started: web_time::Instant,
 }
 
-/// The most recent task to leave the status bar. Retained so the bar stays
-/// visible at 100% once a task ends, instead of blanking out.
+/// How many finished tasks the status bar's list keeps.
+pub(crate) const TASK_HISTORY_LEN: usize = 10;
+
+/// A reported task that ran to completion. The newest is what the idle bar
+/// shows at 100%; the last few are listed when the readout is clicked.
 #[derive(Clone, Debug)]
 pub(crate) struct FinishedTask {
+    /// The ticket it ran under, matching its [`StatusBarMessage::ticket`].
+    pub(crate) ticket: u64,
     /// Task label without its trailing ellipsis, e.g. "Generating contours".
     pub(crate) text: String,
     /// Item count the task worked through, shown as "(y of y)" when known.
     pub(crate) total_units: Option<u64>,
+    /// How long it ran.
+    pub(crate) duration: std::time::Duration,
+}
+
+impl FinishedTask {
+    pub(crate) fn new(ticket: u64, label: &str, units: Option<(u64, u64)>, duration: std::time::Duration) -> Self {
+        Self {
+            ticket,
+            // Labels are written as "Generating contours…"; drop the trailing
+            // ellipsis so the idle text isn't "Generating contours…: Finished".
+            text: label.trim_end_matches(['.', '…', ' ']).to_owned(),
+            // Progress reports are throttled, so the last one received can be
+            // short of the total even though the task ran to completion. Only
+            // the total is kept; the idle bar shows it as "y of y".
+            total_units: units.map(|(_done, total)| total),
+            duration,
+        }
+    }
 }
 
 /// The plane through the three picked points, as the Strike and Dip tool
@@ -2546,6 +2576,8 @@ pub(crate) struct EditorState {
     /// applied by `App::sync_hidden_handles`, so a rebuild keeps it, and
     /// clearing it brings the saved visibility back.
     pub(crate) isolated_entity: Option<SceneEntityId>,
+    /// The playback deck, when a block model is being played through.
+    pub(crate) field_animation: Option<FieldAnimation>,
     /// Short messages fading out above the status bar (`widgets::toast`).
     pub(crate) toasts: crate::ui::widgets::toast::Toasts,
     /// Warnings and errors raised as dialogs (`dialogs::alerts`).
@@ -2703,15 +2735,15 @@ pub(crate) struct EditorState {
     /// egui-winit's icon cache and strand whatever the pointer is showing -
     /// including the hidden cursor the viewport draws its own crosshair over.
     pub(crate) background_busy: bool,
-    /// Transient status-bar message from a background task (e.g. "Saving to …").
-    /// `None` means idle; the field is updated from `poll_saves` / `poll_jobs`
-    /// each frame. Set it through [`EditorState::set_status_message`] so the
-    /// idle bar can name the task that just ended.
-    pub(crate) status_message: Option<StatusBarMessage>,
-    /// The most recent task to leave the status bar, shown as "…: Finished" at
-    /// 100% while idle. `None` until the first task completes - the progress bar
-    /// is hidden entirely until then.
-    pub(crate) last_finished_task: Option<FinishedTask>,
+    /// Reported background tasks still running (e.g. "Saving to …"), oldest
+    /// first, refreshed each frame by `App::refresh_status_message`. Empty
+    /// means idle.
+    pub(crate) status_tasks: Vec<StatusBarMessage>,
+    /// The last few reported tasks to finish, newest first (see
+    /// [`EditorState::record_finished_task`]). The newest is shown as
+    /// "…: Finished" at 100% while idle; until one finishes, and with nothing
+    /// running, the readout is not drawn at all.
+    pub(crate) task_history: std::collections::VecDeque<FinishedTask>,
     pub(crate) active_tool: ActiveTool,
     /// Shared cursor mode, selected from the Production workspace's toolbar
     /// and used in every workspace.
@@ -3596,6 +3628,9 @@ pub(crate) struct EditorState {
     pub(crate) active_property_tab: PropertyTab,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
+    pub(crate) water_dialog: WaterDialog,
+    pub(crate) simplify_dialog: SimplifyDialog,
+    pub(crate) water: WaterView,
     /// The Planning tab showing.
     pub(crate) planning_view: PlanningView,
     /// Which group's step Setup has open. Each group remembers its own step.
@@ -4881,6 +4916,7 @@ impl EditorState {
             borehole_inspector_locked: false,
             hidden_handles: HashSet::new(),
             isolated_entity: None,
+            field_animation: None,
             toasts: Default::default(),
             alerts: Default::default(),
             frozen_handles: HashSet::new(),
@@ -4939,8 +4975,8 @@ impl EditorState {
             fly_near_clip_limit: crate::app::io::default_fly_near_clip_limit(),
             fly_max_clip_span: crate::app::io::default_fly_max_clip_span(),
             background_busy: false,
-            status_message: None,
-            last_finished_task: None,
+            status_tasks: Vec::new(),
+            task_history: std::collections::VecDeque::new(),
             active_tool: ActiveTool::None,
             cursor_mode: CursorMode::Select,
             tool_line_color: [1.0, 1.0, 1.0, 1.0],
@@ -5389,6 +5425,9 @@ impl EditorState {
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Interface,
             active_workspace: Workspace::Production,
+            water_dialog: Default::default(),
+            simplify_dialog: Default::default(),
+            water: Default::default(),
             planning_view: PlanningView::Setup,
             setup_group: SetupGroup::Solids,
             haulage_setup_step: HaulageStep::Network,
@@ -6669,6 +6708,26 @@ pub(crate) enum UiCommand {
     NoteRecentFunction(MenuRow),
     /// Point an open tool at the item chosen in its dialog.
     SetToolSubject(ToolSubject),
+    /// Open the Rain Simulation dialog.
+    OpenWaterSimulation,
+    /// Run a storm over a surface, in a tab of its own.
+    RunWaterSimulation {
+        surface: TriangulationId,
+        settings: crate::model::water::WaterSettings,
+    },
+    /// Open the Simplify dialog.
+    OpenSimplifyTriangulation,
+    /// Thin a surface to fewer triangles, as a new surface.
+    SimplifyTriangulation {
+        surface: TriangulationId,
+        /// The share of the triangles to stop at, 0 to 1.
+        keep: f64,
+        max_deviation: Option<f64>,
+        name: String,
+        unload_source: bool,
+    },
+    /// Close a water run's tab, which discards the run.
+    CloseWaterRun(u64),
     /// Hide a tool's dialog and select its input in the viewport.
     BeginSelectionPick(SelectionPickTool),
     /// Hand the picked selection to the tool.
@@ -6888,6 +6947,14 @@ pub(crate) enum UiCommand {
         scenario: Box<OptimizationScenario>,
         then_close: bool,
     },
+    /// Open the global constants in place of the optimization dialog that asked.
+    OpenOptimizationConstants,
+    /// Keep the edited global constants and hand the scenarios to the
+    /// project. The window stays open unless `then_close`.
+    SaveOptimizationConstants {
+        rows: Vec<ConstantsRow>,
+        then_close: bool,
+    },
     DeleteOptimizationScenario(u64),
     /// Write every scenario to a JSON file the user chooses.
     ExportOptimizationScenarios,
@@ -6922,6 +6989,79 @@ pub(crate) enum UiCommand {
         id: u64,
         name: String,
     },
+    /// Start a new schedule of scenario `parent` in the schedule editor.
+    AddNpvSchedule(u64),
+    /// Open a schedule in the schedule editor.
+    EditNpvSchedule {
+        parent: u64,
+        id: u64,
+    },
+    /// Keep the edited schedule in its scenario and hand the scenarios to the
+    /// project. The editor stays open unless `then_close`.
+    SaveNpvSchedule {
+        parent: u64,
+        schedule: Box<crate::model::npv_schedule::NpvSchedule>,
+        then_close: bool,
+    },
+    DeleteNpvSchedule {
+        parent: u64,
+        id: u64,
+    },
+    /// Copy a schedule to a new one right after it, in the same scenario.
+    DuplicateNpvSchedule {
+        parent: u64,
+        id: u64,
+    },
+    RenameNpvSchedule {
+        parent: u64,
+        id: u64,
+        name: String,
+    },
+    /// Move a schedule from scenario `from` to scenario `to` (dropped there).
+    MoveNpvSchedule {
+        id: u64,
+        from: u64,
+        to: u64,
+    },
+    /// Copy a schedule of scenario `from` into scenario `to` (dropped there).
+    CopyNpvScheduleTo {
+        id: u64,
+        from: u64,
+        to: u64,
+    },
+    /// Run a schedule on its scenario's run of this session.
+    RunNpvSchedule {
+        parent: u64,
+        id: u64,
+    },
+    /// Run every schedule of this scenario, side by side.
+    RunAllNpvSchedules(u64),
+    /// Play a schedule's mining on its block model (the playback deck).
+    PlayNpvScheduleAnimation {
+        parent: u64,
+        id: u64,
+    },
+    /// Show the playback deck's step on the block model.
+    ApplyFieldAnimation,
+    /// Open the schedule Results window on a schedule's last run.
+    OpenNpvScheduleResults {
+        parent: u64,
+        id: u64,
+    },
+    /// Save the schedule Results window's CSV files where the user picks.
+    ExportNpvScheduleReport,
+    /// Read a schedule's periods CSV into the Results window.
+    OpenNpvScheduleReport,
+    /// Keep the schedule Results tables' column choices, with the scenarios.
+    SaveNpvScheduleColumns,
+    /// A copy of schedule `id` mining the shells of `factors` as its pushbacks.
+    NpvScheduleFromPushbacks {
+        parent: u64,
+        id: u64,
+        factors: Vec<f64>,
+    },
+    /// Close the playback deck, putting the view back.
+    CloseFieldAnimation,
     OpenCreateBlockModel,
     ExecuteCreateBlockModel {
         drill_hole_id: DrillHoleId,
@@ -7268,11 +7408,15 @@ impl UiCommand {
             | Self::CloseCanvasContextMenu
             | Self::NoteRecentFunction(_)
             | Self::SetToolSubject(_)
+            | Self::OpenWaterSimulation
+            | Self::OpenSimplifyTriangulation
+            | Self::CloseWaterRun(_)
             | Self::BeginSelectionPick(_)
             | Self::FinishSelectionPick
             | Self::CancelSelectionPick
             | Self::ClearSelectionPick
             | Self::OpenOptimizationScenarios
+            | Self::OpenOptimizationConstants
             | Self::AddOptimizationScenario
             | Self::EditOptimizationScenario(_)
             | Self::RenameOptimizationScenario { .. }
@@ -7285,6 +7429,19 @@ impl UiCommand {
             | Self::BeginShellStartPick
             | Self::RunOptimizationScenario(_)
             | Self::CancelOptimizationScenario(_)
+            | Self::AddNpvSchedule(_)
+            | Self::EditNpvSchedule { .. }
+            | Self::RenameNpvSchedule { .. }
+            | Self::RunNpvSchedule { .. }
+            | Self::RunAllNpvSchedules(_)
+            | Self::PlayNpvScheduleAnimation { .. }
+            | Self::ApplyFieldAnimation
+            | Self::OpenNpvScheduleResults { .. }
+            | Self::ExportNpvScheduleReport
+            | Self::OpenNpvScheduleReport
+            | Self::SaveNpvScheduleColumns
+            | Self::NpvScheduleFromPushbacks { .. }
+            | Self::CloseFieldAnimation
             | Self::OpenCreateBlockModel
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
@@ -7762,10 +7919,19 @@ impl UiCommand {
             ),
             Self::SetModellingSettings(settings) => report(tr!("state-set-modelling-settings"), settings.summary()),
             Self::SaveOptimizationScenario { scenario, .. } => report(tr!("opt-save-scenario"), scenario.name.clone()),
+            Self::SaveOptimizationConstants { rows, .. } => report(
+                tr!("opt-constants-save"),
+                tr!("opt-constants-summary", count = rows.iter().filter_map(ConstantsRow::constant).count().to_string()),
+            ),
             Self::ExportOptimizationScenarios => report(tr!("opt-export-json"), tr!("opt-export-summary")),
             Self::ImportOptimizationScenarios => report(tr!("opt-import-json"), tr!("opt-import-summary")),
             Self::DuplicateOptimizationScenario(id) => report(tr!("opt-duplicate-scenario"), id.to_string()),
             Self::DeleteOptimizationScenario(id) => report(tr!("opt-delete-scenario"), id.to_string()),
+            Self::SaveNpvSchedule { schedule, .. } => report(tr!("sched-save"), schedule.name.clone()),
+            Self::DeleteNpvSchedule { id, .. } => report(tr!("sched-delete"), id.to_string()),
+            Self::DuplicateNpvSchedule { id, .. } => report(tr!("sched-duplicate"), id.to_string()),
+            Self::MoveNpvSchedule { id, .. } => report(tr!("sched-move-here"), id.to_string()),
+            Self::CopyNpvScheduleTo { id, .. } => report(tr!("sched-duplicate-here"), id.to_string()),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!("common-create-block-model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!("common-create-ore-triangulation"), name.clone()),
             Self::RemoveTriangulation(_) => report(tr!("state-remove-triangulation"), String::new()),
@@ -7823,6 +7989,11 @@ impl UiCommand {
             Self::ExecuteBuildSolidFromSurfaces { name, .. } => report(tr!("tri-build-solid-surfaces"), name.clone()),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),
             Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!("common-merge-shell-into-topology"), name.clone()),
+            Self::RunWaterSimulation { settings, .. } => report(
+                tr!("water-simulate"),
+                tr!("water-run-summary", rain = settings.rain_mm.to_string(), hours = settings.rain_hours.to_string()),
+            ),
+            Self::SimplifyTriangulation { name, .. } => report(tr!("simplify-title"), name.clone()),
             Self::Undo => report(tr!("common-undo"), tr!("state-previous-edit")),
             Self::Redo => report(tr!("common-redo"), tr!("state-next-edit")),
             Self::ExecuteContourTriangulation {
@@ -8196,6 +8367,19 @@ impl EditorState {
 }
 
 impl EditorState {
+    /// Whether a water run's tab is the open one: the viewport then shows
+    /// the run, not the project.
+    pub(crate) fn is_water_run(&self) -> bool {
+        self.water
+            .open
+            .is_some_and(|id| self.water.tabs.iter().any(|tab| tab.id == id && tab.workspace == self.active_workspace))
+    }
+
+    /// Whether the open workspace has water runs, and so their tab row.
+    pub(crate) fn has_water_tabs(&self) -> bool {
+        self.active_workspace != Workspace::Planning && self.water.tabs.iter().any(|tab| tab.workspace == self.active_workspace)
+    }
+
     /// A workspace with menus keeps a recent functions list of their rows.
     pub(crate) fn keeps_recent_functions(&self) -> bool {
         !workspace_menus(self.active_workspace).is_empty()
@@ -8232,7 +8416,6 @@ impl UiProjectView {
 /// Which row each of the scenario editor's grids has selected.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ScenarioGridSelections {
-    pub(crate) constants: Option<usize>,
     pub(crate) rocktype_costs: Option<usize>,
     pub(crate) methods: Option<usize>,
     pub(crate) elements: Option<usize>,
@@ -8245,7 +8428,6 @@ pub(crate) struct ScenarioGridSelections {
 pub(crate) enum ScenarioTab {
     #[default]
     Inputs,
-    Constants,
     MiningCosts,
     ProcessingCosts,
     Revenues,
@@ -8254,20 +8436,11 @@ pub(crate) enum ScenarioTab {
 }
 
 impl ScenarioTab {
-    pub(crate) const ALL: [Self; 7] = [
-        Self::Inputs,
-        Self::Constants,
-        Self::MiningCosts,
-        Self::ProcessingCosts,
-        Self::Revenues,
-        Self::Constraints,
-        Self::Outputs,
-    ];
+    pub(crate) const ALL: [Self; 6] = [Self::Inputs, Self::MiningCosts, Self::ProcessingCosts, Self::Revenues, Self::Constraints, Self::Outputs];
 
     pub(crate) fn label(self) -> String {
         match self {
             Self::Inputs => tr!("opt-section-inputs"),
-            Self::Constants => tr!("opt-section-constants"),
             Self::MiningCosts => tr!("opt-section-mining-costs"),
             Self::ProcessingCosts => tr!("opt-section-processing-costs"),
             Self::Revenues => tr!("opt-section-revenues"),
@@ -8309,6 +8482,138 @@ impl ScenarioDraft {
     pub(crate) fn dirty(&self) -> bool {
         self.scenario != self.saved
     }
+}
+
+/// The global constants window's working copy, apart from the saved one (the
+/// project's, in [`OptimizationState::constants`]).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ConstantsDraft {
+    pub(crate) rows: Vec<ConstantsRow>,
+    pub(crate) saved: Vec<ConstantsRow>,
+    /// Asking whether to keep unsaved changes before closing.
+    pub(crate) confirm_close: bool,
+    /// The grid's selected row.
+    pub(crate) selection: Option<usize>,
+}
+
+impl ConstantsDraft {
+    pub(crate) fn new(rows: Vec<ConstantsRow>) -> Self {
+        Self {
+            saved: rows.clone(),
+            rows,
+            confirm_close: false,
+            selection: None,
+        }
+    }
+
+    pub(crate) fn dirty(&self) -> bool {
+        self.rows != self.saved
+    }
+}
+
+/// The schedule editor's sections, in display order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum NpvScheduleTab {
+    #[default]
+    Pushbacks,
+    Periods,
+    Capacities,
+    Stockpiles,
+    CostsEvents,
+    Outputs,
+}
+
+impl NpvScheduleTab {
+    pub(crate) const ALL: [Self; 6] = [Self::Pushbacks, Self::Periods, Self::Capacities, Self::Stockpiles, Self::CostsEvents, Self::Outputs];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Pushbacks => tr!("sched-section-pushbacks"),
+            Self::Periods => tr!("sched-section-periods"),
+            Self::Capacities => tr!("sched-section-capacities"),
+            Self::Stockpiles => tr!("sched-section-stockpiles"),
+            Self::CostsEvents => tr!("sched-section-costs"),
+            Self::Outputs => tr!("sched-section-outputs"),
+        }
+    }
+}
+
+/// The selected row of each of the schedule editor's grids.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct NpvScheduleGridSelections {
+    pub(crate) process: Option<usize>,
+    pub(crate) selling: Option<usize>,
+    pub(crate) stockpile: Option<usize>,
+    pub(crate) grade: Option<usize>,
+    pub(crate) event: Option<usize>,
+}
+
+/// The schedule the schedule editor is working on, apart from the saved copy
+/// (as [`ScenarioDraft`]).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NpvScheduleDraft {
+    /// The scenario the schedule belongs to.
+    pub(crate) parent: u64,
+    pub(crate) schedule: crate::model::npv_schedule::NpvSchedule,
+    pub(crate) saved: crate::model::npv_schedule::NpvSchedule,
+    pub(crate) is_new: bool,
+    pub(crate) confirm_close: bool,
+    pub(crate) selections: NpvScheduleGridSelections,
+    pub(crate) tab: NpvScheduleTab,
+}
+
+impl NpvScheduleDraft {
+    pub(crate) fn new(parent: u64, schedule: crate::model::npv_schedule::NpvSchedule, is_new: bool) -> Self {
+        Self {
+            parent,
+            saved: schedule.clone(),
+            schedule,
+            is_new,
+            confirm_close: false,
+            selections: NpvScheduleGridSelections::default(),
+            tab: NpvScheduleTab::default(),
+        }
+    }
+
+    pub(crate) fn dirty(&self) -> bool {
+        self.schedule != self.saved
+    }
+}
+
+/// What the scenarios list shows beside a schedule.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum NpvScheduleStatus {
+    /// Its scenario has no up-to-date run in this session to schedule.
+    Blocked,
+    NeverRun,
+    UpToDate,
+    Stale,
+    Queued,
+    Running(f32),
+}
+
+/// A schedule run's NPVs at the shell where the fixed-lead NPV peaks, for the
+/// list's NPV column. Filled by the scheduling engine (stage 2).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NpvScheduleSummary {
+    /// Periods the schedule (every pushback, fixed lead) takes.
+    pub(crate) periods: usize,
+    /// The pushback (1-based) where the fixed-lead NPV peaks, when it peaks
+    /// before the last one.
+    pub(crate) peak_before_last: Option<usize>,
+    pub(crate) npv_best: f64,
+    pub(crate) npv_worst: f64,
+    pub(crate) npv_lead: f64,
+}
+
+/// A schedule dropped on another scenario, waiting for Move or Duplicate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NpvScheduleDrop {
+    pub(crate) id: u64,
+    pub(crate) from: u64,
+    pub(crate) to: u64,
+    /// Where the pointer was released; the menu opens there.
+    pub(crate) pos: egui::Pos2,
 }
 
 /// Where a scenario's run stands. A finished run keeps the fingerprint of the
@@ -8354,6 +8659,13 @@ pub(crate) const MAX_CONCURRENT_RUNS: usize = 1;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OptimizationState {
     pub(crate) scenarios: Vec<OptimizationScenario>,
+    /// The constants every scenario and schedule resolves against, saved in
+    /// the project's scenario file; each scenario holds a copy (see
+    /// [`Self::sync_constants`]).
+    pub(crate) constants: Vec<ConstantsRow>,
+    /// The global constants window. While it is open it takes the place of
+    /// the dialog that opened it, which comes back when it closes.
+    pub(crate) constants_draft: Option<ConstantsDraft>,
     /// The scenarios list window. Hidden while a scenario is being edited.
     pub(crate) list_open: bool,
     pub(crate) draft: Option<ScenarioDraft>,
@@ -8378,8 +8690,41 @@ pub(crate) struct OptimizationState {
     /// The Results table's columns per report (scenario name), saved with the
     /// scenarios; a report not in here shows the default columns.
     pub(crate) report_columns: std::collections::BTreeMap<String, Vec<String>>,
+    /// The playback deck's speed last set in this project (steps a second),
+    /// saved with the scenarios.
+    pub(crate) animation_speed: Option<f64>,
+    /// The schedule Results window, when open.
+    pub(crate) schedule_results_view: Option<NpvScheduleResultsView>,
+    /// The schedule Results tables' columns, by table (`periods`, `pits`),
+    /// saved with the scenarios; a table not in here shows the default ones.
+    pub(crate) schedule_columns: std::collections::BTreeMap<String, Vec<String>>,
     /// Asking whether to load the unloaded inputs a run or pick needs.
     pub(crate) load_prompt: Option<LoadPrompt>,
+    /// The schedule editor. Never open with `draft`; the list hides behind either.
+    pub(crate) schedule_draft: Option<NpvScheduleDraft>,
+    /// Scenarios whose schedules are listed under them.
+    pub(crate) expanded: HashSet<u64>,
+    /// The row picked in the scenarios list: what its toolbar acts on.
+    pub(crate) list_selection: Option<ListSelection>,
+    /// A schedule dropped on another scenario, asking Move or Duplicate.
+    pub(crate) drop_menu: Option<NpvScheduleDrop>,
+    /// Schedule runs by schedule id; a finished one keeps the schedule's and
+    /// its scenario run's fingerprints combined (see [`Self::schedule_status`]).
+    pub(crate) schedule_runs: HashMap<u64, RunState>,
+    /// What each schedule's last run found, by schedule id.
+    pub(crate) schedule_summaries: HashMap<u64, NpvScheduleSummary>,
+    /// What each scenario's last run read from its block model: when that
+    /// changes, the run is stale (`App::reconcile_optimization_runs`).
+    pub(crate) run_inputs: HashMap<u64, RunInputsKey>,
+    /// Schedules started by Run all: they write no period field (they would
+    /// all write the same one, last finisher winning); their mining order is
+    /// kept, so the animation still plays.
+    pub(crate) no_period_field: HashSet<u64>,
+    /// Schedules waiting for their scenario's run, by scenario id: run
+    /// asked for one whose scenario had no up-to-date run, so it runs first.
+    pub(crate) schedules_after_run: HashMap<u64, Vec<u64>>,
+    /// Each schedule's last run in full, for the session (stage 3 reads it).
+    pub(crate) schedule_results: HashMap<u64, std::sync::Arc<crate::model::npv_schedule_run::NpvScheduleResult>>,
 }
 
 /// Inputs of an optimization that are unloaded, and what to do once they are
@@ -8397,6 +8742,8 @@ pub(crate) enum LoadThen {
     Run(Vec<u64>),
     /// Pick the directional shells' starting point.
     Pick,
+    /// Run these schedules: (scenario, schedule).
+    Schedules(Vec<(u64, u64)>),
 }
 
 /// The Results window: a run's report, charted and tabled.
@@ -8410,6 +8757,87 @@ pub(crate) struct ResultsView {
     pub(crate) selected: Option<usize>,
     /// Showing only some shells, or choosing them.
     pub(crate) filter: ShellFilter,
+}
+
+/// What a scenario's run read from its block model: the model, each input
+/// column's values (where they were in memory when last checked, and a hash
+/// of all of them).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RunInputsKey {
+    pub(crate) model: crate::model::block_model::BlockModelId,
+    pub(crate) columns: Vec<(String, usize)>,
+    pub(crate) hash: u64,
+}
+
+/// A row of the scenarios list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ListSelection {
+    Scenario(u64),
+    Schedule { parent: u64, id: u64 },
+}
+
+impl ListSelection {
+    /// The scenario the row is, or is under.
+    pub(crate) fn scenario(self) -> u64 {
+        match self {
+            Self::Scenario(id) | Self::Schedule { parent: id, .. } => id,
+        }
+    }
+}
+
+/// The schedule Results window.
+#[derive(Clone, Debug)]
+pub(crate) struct NpvScheduleResultsView {
+    pub(crate) source: NpvScheduleResultsSource,
+    pub(crate) tab: NpvScheduleResultsTab,
+    pub(crate) case: crate::model::npv_schedule::PeriodCase,
+    pub(crate) content: PeriodContent,
+    /// Pushbacks (0-based) being picked for a new schedule, or none.
+    pub(crate) picking: Option<Vec<usize>>,
+    /// The pit view shows the worst and best NPV too, not only fixed lead.
+    pub(crate) all_cases: bool,
+}
+
+impl NpvScheduleResultsView {
+    pub(crate) fn new(source: NpvScheduleResultsSource) -> Self {
+        Self {
+            source,
+            tab: NpvScheduleResultsTab::Periods,
+            case: crate::model::npv_schedule::PeriodCase::FixedLead,
+            content: PeriodContent::Mining,
+            picking: None,
+            all_cases: false,
+        }
+    }
+}
+
+/// What the schedule Results window shows.
+#[derive(Clone, Debug)]
+pub(crate) enum NpvScheduleResultsSource {
+    /// A schedule's last run this session.
+    Run { parent: u64, id: u64 },
+    /// A periods CSV read from a file.
+    File {
+        name: String,
+        result: std::sync::Arc<crate::model::npv_schedule_run::NpvScheduleResult>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NpvScheduleResultsTab {
+    /// The schedule, period by period.
+    Periods,
+    /// NPV per pushback taken as the final pit.
+    Pits,
+}
+
+/// What the period chart's bars are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PeriodContent {
+    /// Rock mined: waste, ore to its method, ore to stockpiles.
+    Mining,
+    /// Ore processed per method.
+    Processing,
 }
 
 /// The Results window's shell filter: off, being chosen in the chart, or applied.
@@ -8467,6 +8895,60 @@ impl OptimizationState {
     }
 }
 
+/// A block model played through in the order of a field: one step at a
+/// time its blocks of that step vanish (a schedule's mining, bench by bench).
+///
+/// Built for schedules first; meant to become a general command animating
+/// any field by the order of its values.
+#[derive(Clone, Debug)]
+pub(crate) struct FieldAnimation {
+    pub(crate) block_model: crate::model::block_model::BlockModelId,
+    /// What is played, for the deck's title.
+    pub(crate) title: String,
+    pub(crate) steps: Vec<AnimationStep>,
+    /// Steps done; fractional while playing.
+    pub(crate) playhead: f64,
+    pub(crate) playing: bool,
+    /// Steps per second.
+    pub(crate) speed: f64,
+    /// Show the blocks around the played ones (the ground) until the end.
+    pub(crate) keep_outer: bool,
+    /// The steps done and `keep_outer` last shown on the model.
+    pub(crate) applied: Option<(usize, bool)>,
+    /// The view to put back on close.
+    pub(crate) restore: AnimationRestore,
+}
+
+impl FieldAnimation {
+    /// Steps shown as done.
+    pub(crate) fn done(&self) -> usize {
+        (self.playhead.floor().max(0.0) as usize).min(self.steps.len())
+    }
+
+    /// Whether the model shows something else than the deck asks.
+    pub(crate) fn stale(&self) -> bool {
+        self.applied != Some((self.done(), self.keep_outer))
+    }
+}
+
+/// One step of a [`FieldAnimation`].
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AnimationStep {
+    pub(crate) label: String,
+    /// Steps of one group share a colour (a schedule's period).
+    pub(crate) group: u32,
+    /// The group's colour, on the model and on the deck's strip.
+    pub(crate) color: [f32; 4],
+}
+
+/// What a [`FieldAnimation`] changed, to put back.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct AnimationRestore {
+    pub(crate) list_open: bool,
+    pub(crate) active_variable: Option<String>,
+    pub(crate) isolated_entity: Option<SceneEntityId>,
+}
+
 /// A directional-shell starting point being picked from the viewport.
 #[derive(Clone, Debug)]
 pub(crate) struct ShellStartPick {
@@ -8483,9 +8965,30 @@ impl OptimizationState {
         self.list_open || self.draft.is_some()
     }
 
+    /// Copy the global constants into every scenario, and into the editor's
+    /// working and saved copies alike so it never reads as an unsaved edit.
+    pub(crate) fn sync_constants(&mut self) {
+        let constants = &self.constants;
+        let drafts = self.draft.iter_mut().flat_map(|draft| [&mut draft.scenario, &mut draft.saved]);
+        for scenario in self.scenarios.iter_mut().chain(drafts) {
+            if scenario.constants != *constants {
+                scenario.constants = constants.clone();
+            }
+        }
+    }
+
     /// An id no scenario in the list carries.
+    /// An id no scenario or schedule has: they share one counter, so a
+    /// schedule id names one schedule whichever scenario it moves to.
     pub(crate) fn fresh_id(&mut self) -> u64 {
-        let id = self.next_scenario_id.max(self.scenarios.iter().map(|scenario| scenario.id + 1).max().unwrap_or(0));
+        let taken = self
+            .scenarios
+            .iter()
+            .flat_map(|scenario| std::iter::once(scenario.id).chain(scenario.schedules.iter().map(|schedule| schedule.id)))
+            .map(|id| id + 1)
+            .max()
+            .unwrap_or(0);
+        let id = self.next_scenario_id.max(taken);
         self.next_scenario_id = id + 1;
         id
     }
@@ -8500,9 +9003,65 @@ impl OptimizationState {
         }
     }
 
+    /// Give a scenario that is about to join the list (a copy, an import) new
+    /// schedule ids, so no two schedules share one.
+    pub(crate) fn refresh_npv_schedule_ids(&mut self, scenario: &mut OptimizationScenario) {
+        for schedule in &mut scenario.schedules {
+            schedule.id = self.fresh_id();
+        }
+    }
+
+    /// A schedule's run key: its settings and the run of its scenario it
+    /// scheduled, so rerunning the scenario makes the schedule stale too.
+    pub(crate) fn schedule_fingerprint(&self, parent: &OptimizationScenario, schedule: &crate::model::npv_schedule::NpvSchedule) -> u64 {
+        let parent_run = match self.runs.get(&parent.id) {
+            Some(RunState::Finished { fingerprint }) => *fingerprint,
+            _ => 0,
+        };
+        // The constants the schedule's own fields name (the parent's run key
+        // covers those of the scenario).
+        let constants = crate::model::optimization::used_constants_hash(schedule, &parent.constants);
+        schedule.fingerprint() ^ parent_run.rotate_left(17) ^ constants.rotate_left(29)
+    }
+
+    pub(crate) fn schedule_status(&self, parent: &OptimizationScenario, schedule: &crate::model::npv_schedule::NpvSchedule) -> NpvScheduleStatus {
+        if self.schedules_after_run.get(&parent.id).is_some_and(|waiting| waiting.contains(&schedule.id)) {
+            return NpvScheduleStatus::Queued;
+        }
+        if self.status(parent) != ScenarioStatus::UpToDate || !self.results.contains_key(&parent.id) {
+            return NpvScheduleStatus::Blocked;
+        }
+        match self.schedule_runs.get(&schedule.id) {
+            None => NpvScheduleStatus::NeverRun,
+            Some(RunState::Queued) => NpvScheduleStatus::Queued,
+            Some(RunState::Running { progress, .. }) => NpvScheduleStatus::Running(progress.snapshot().map_or(0.0, |snapshot| snapshot.fraction)),
+            Some(RunState::Finished { fingerprint }) if *fingerprint == self.schedule_fingerprint(parent, schedule) => NpvScheduleStatus::UpToDate,
+            Some(RunState::Finished { .. }) => NpvScheduleStatus::Stale,
+        }
+    }
+
+    /// The NPV summary the list shows for a schedule: only for a run that is
+    /// up to date.
+    pub(crate) fn schedule_summary(&self, parent: &OptimizationScenario, schedule: &crate::model::npv_schedule::NpvSchedule) -> Option<NpvScheduleSummary> {
+        (self.schedule_status(parent, schedule) == NpvScheduleStatus::UpToDate)
+            .then(|| self.schedule_summaries.get(&schedule.id).copied())
+            .flatten()
+    }
+
+    /// The result the schedule Results window shows.
+    pub(crate) fn schedule_results_result(&self) -> Option<std::sync::Arc<crate::model::npv_schedule_run::NpvScheduleResult>> {
+        match &self.schedule_results_view.as_ref()?.source {
+            NpvScheduleResultsSource::Run { id, .. } => self.schedule_results.get(id).cloned(),
+            NpvScheduleResultsSource::File { result, .. } => Some(std::sync::Arc::clone(result)),
+        }
+    }
+
     /// Whether a run is going or waiting, so the list keeps repainting.
     pub(crate) fn any_running(&self) -> bool {
-        self.runs.values().any(|run| matches!(run, RunState::Queued | RunState::Running { .. }))
+        self.runs
+            .values()
+            .chain(self.schedule_runs.values())
+            .any(|run| matches!(run, RunState::Queued | RunState::Running { .. }))
     }
 
     pub(crate) fn running_count(&self) -> usize {
@@ -8571,6 +9130,115 @@ impl Workspace {
     pub(crate) fn has_drawing_aids(self) -> bool {
         matches!(self, Self::Geology)
     }
+}
+
+/// Simplify's dialog: the surface to thin and how far.
+#[derive(Clone, Debug)]
+pub(crate) struct SimplifyDialog {
+    pub(crate) open: bool,
+    pub(crate) surface: Option<TriangulationId>,
+    /// The chosen surface's triangles, for the dialog's note.
+    pub(crate) faces: usize,
+    pub(crate) keep_percent: f64,
+    /// Whether the surface may only be moved so far, and how far.
+    pub(crate) limit_deviation: bool,
+    pub(crate) max_deviation: f64,
+    pub(crate) name: String,
+    pub(crate) unload_source: bool,
+}
+
+impl Default for SimplifyDialog {
+    fn default() -> Self {
+        Self {
+            open: false,
+            surface: None,
+            faces: 0,
+            keep_percent: 10.0,
+            limit_deviation: true,
+            max_deviation: 0.25,
+            name: String::new(),
+            unload_source: true,
+        }
+    }
+}
+
+/// Rain Simulation's dialog: the surface and the storm to run over it.
+#[derive(Clone, Debug)]
+pub(crate) struct WaterDialog {
+    pub(crate) open: bool,
+    pub(crate) surface: Option<TriangulationId>,
+    pub(crate) settings: crate::model::water::WaterSettings,
+    /// Whether long triangle sides are split, and the length they are split
+    /// down to.
+    pub(crate) subdivide: bool,
+    pub(crate) subdivide_m: f64,
+}
+
+impl Default for WaterDialog {
+    fn default() -> Self {
+        Self {
+            open: false,
+            surface: None,
+            settings: Default::default(),
+            subdivide: false,
+            subdivide_m: 10.0,
+        }
+    }
+}
+
+/// One open water run's tab, in the row under the viewport bar of the
+/// workspace the run was started from.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct WaterTab {
+    pub(crate) id: u64,
+    pub(crate) title: String,
+    pub(crate) workspace: Workspace,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum WaterRunStatus {
+    /// Still running, with how far it has got once it knows.
+    Running(Option<f32>),
+    Failed(String),
+    Ready,
+}
+
+/// The open water run, as its tab shows it. Mirrored from the app.
+#[derive(Clone, Debug)]
+pub(crate) struct WaterShown {
+    pub(crate) settings: crate::model::water::WaterSettings,
+    pub(crate) status: WaterRunStatus,
+    /// The instant of the run the viewport is showing, seconds in.
+    pub(crate) instant_s: Option<f64>,
+    /// How far into the run has been worked out so far, seconds: as far as
+    /// the timeline can be taken while the rest is still running.
+    pub(crate) loaded_s: f64,
+}
+
+/// The water runs' tabs and what the open one shows. Session-only: a run is
+/// gone once its tab is closed.
+#[derive(Default)]
+pub(crate) struct WaterView {
+    /// Mirrored from the app, in the order the runs were started.
+    pub(crate) tabs: Vec<WaterTab>,
+    /// The run whose tab is open in its workspace's row, or `None` while the
+    /// workspace's own tab is. Kept while another workspace is up, so coming
+    /// back finds the run still open.
+    pub(crate) open: Option<u64>,
+    /// The instant shown, seconds into the run.
+    pub(crate) time_s: f64,
+    pub(crate) playing: bool,
+    /// The UI clock at the last frame playback moved the cursor.
+    pub(crate) play_clock: Option<f64>,
+    pub(crate) shown: Option<WaterShown>,
+    /// The water the viewport draws: the open run's between the two kept
+    /// instants either side of the cursor. Built by the app when those
+    /// change.
+    pub(crate) mesh: Option<std::sync::Arc<crate::rendering::water::WaterMesh>>,
+    /// How far the cursor is from the earlier of the two to the later.
+    pub(crate) blend: f32,
+    /// Whether rain is falling at the cursor.
+    pub(crate) raining: bool,
 }
 
 /// The groups of Setup's one step list, in the order they run: each is a
