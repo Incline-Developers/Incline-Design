@@ -76,7 +76,8 @@ impl GradeTarget {
 }
 
 /// Editable crusher specification cells in the daily Calendar.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum GradeTargetInput {
     Target,
     Lower,
@@ -279,7 +280,8 @@ impl CrusherGradeCalendar {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct GradeTargetCellEdit {
     pub(crate) destination: DestinationId,
     pub(crate) field: ReserveFieldId,

@@ -1125,6 +1125,10 @@ impl crate::app::App<'_> {
         let solids = document.map(|document| document.solids().to_vec()).unwrap_or_default();
         let mut diagnostics = Vec::new();
         for solid in &solids {
+            // A dump or stockpile with no model carries no material for the
+            // schedule to lose: its blocks falling short of its benches is
+            // worth saying, but not worth stopping a schedule of the pits for.
+            let required = measurement_required(solid);
             for parent in self.bench_reserve_references(solid.id) {
                 let here = |message: String, blocking: bool| StageDiagnostic {
                     entity: Some(crate::ui::elements::solids_view::bench_path(&solid.name, parent.bench.base)),
@@ -1142,7 +1146,7 @@ impl crate::app::App<'_> {
                     // has lost its whole subdivision, which is not an empty
                     // result - it is material that fell out of the schedule.
                     if expected > tolerance {
-                        diagnostics.push(here(tr!("stage-bench-no-children", volume = format!("{expected:.3}")), true));
+                        diagnostics.push(here(tr!("stage-bench-no-children", volume = format!("{expected:.3}")), required));
                     }
                     continue;
                 }
@@ -1150,7 +1154,7 @@ impl crate::app::App<'_> {
                     diagnostics.push(StageDiagnostic {
                         entity: document.map(|document| crate::app::commands::schedule_readiness::block_path(document, open)),
                         message: tr!("stage-block-not-closed", block = open.name.clone(), area = format!("{:.1}", open.plan_area)),
-                        blocking: true,
+                        blocking: required,
                     });
                     continue;
                 }
@@ -1163,7 +1167,7 @@ impl crate::app::App<'_> {
                             parent = format!("{expected:.3}"),
                             blocks = children.len().to_string()
                         ),
-                        true,
+                        required,
                     ));
                 }
                 // Reserves reconcile against the bench's own independent
@@ -1451,7 +1455,7 @@ impl PlanningInputs<'_> {
                 diagnostics.push(StageDiagnostic {
                     entity: Some(solid.name.clone()),
                     message: tr!("planning-reserve-open-solid"),
-                    blocking: stage == SolidsStep::Reserving,
+                    blocking: stage == SolidsStep::Reserving && measurement_required(solid),
                 });
             }
             if stage == SolidsStep::Reserving {

@@ -566,6 +566,8 @@ impl crate::app::App<'_> {
             ScheduleStep::LoaderAgents => self.evaluate_loader_agents(),
             ScheduleStep::Delays => self.evaluate_delays(),
             ScheduleStep::DrillBlast => self.evaluate_drill_blast(),
+            ScheduleStep::Dependencies => self.evaluate_dependencies(),
+            ScheduleStep::LoaderLimits => self.evaluate_loader_limits(),
             ScheduleStep::Stockpiles => self.evaluate_destination_kind(crate::model::schedule::DestinationKind::Stockpile),
             ScheduleStep::Dumps => self.evaluate_destination_kind(crate::model::schedule::DestinationKind::Dump),
             ScheduleStep::Crushers => self.evaluate_crushers(),
@@ -683,7 +685,7 @@ impl crate::app::App<'_> {
                     blocking: false,
                 });
             }
-            document.schedule().bars().iter().filter(|bar| bar.blast_order().is_some()).count()
+            document.schedule().bars_with_inherited().filter(|bar| bar.blast_order().is_some()).count()
         });
         StageOutcome::Settled { diagnostics, entities }
     }
@@ -805,7 +807,9 @@ impl crate::app::App<'_> {
                 // only on a pile something delivers to or reclaims from: one
                 // nothing uses stops no run.
                 let used = routing.rules.iter().any(|rule| rule.enabled && rule.destinations.contains(&entry.id))
-                    || plan.bars().iter().any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id)));
+                    || plan
+                        .bars_with_inherited()
+                        .any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id)));
                 for message in stockpile_problems(plan, document, entry) {
                     diagnostics.push(StageDiagnostic {
                         entity: Some(entry.name.clone()),
@@ -934,6 +938,74 @@ impl crate::app::App<'_> {
     ///
     /// Empty cashflow is valid. Capture refuses unresolved enabled rules when
     /// constructing the run. Nothing is silently repaired or widened here.
+    /// A rule not finished, one that waits on its own ground, and rules
+    /// that wait on each other in a ring, so that none of their ground is
+    /// ever dug. None of these stops a schedule: the rule is applied as it
+    /// stands, and a ring of them is a schedule that leaves that ground.
+    fn evaluate_dependencies(&self) -> StageOutcome {
+        let Some(document) = self.workspace.active_document() else {
+            return StageOutcome::Settled {
+                diagnostics: Vec::new(),
+                entities: 0,
+            };
+        };
+        let dependencies = document.schedule().dependencies();
+        let name = |id| {
+            let index = dependencies.rules.iter().position(|rule| rule.id == id).unwrap_or(0);
+            tr!("dependency-name", number = (index + 1).to_string())
+        };
+        let mut diagnostics = Vec::new();
+        let ringed = dependencies.in_cycles();
+        for rule in &dependencies.rules {
+            let message = match rule.sides() {
+                None => tr!("dependency-stage-unfinished"),
+                Some(_) if ringed.contains(&rule.id) => tr!("dependency-stage-ring"),
+                Some((ground, after)) if crate::model::schedule::dependencies::overlaps(ground, after) => tr!("dependency-stage-own-ground"),
+                Some(_) => continue,
+            };
+            diagnostics.push(StageDiagnostic {
+                entity: Some(name(rule.id)),
+                message,
+                blocking: false,
+            });
+        }
+        StageOutcome::Settled {
+            diagnostics,
+            entities: dependencies.rules.len(),
+        }
+    }
+
+    /// A limit with no ground chosen does nothing, and one of no loaders
+    /// keeps every loader out of its ground. Neither stops a schedule.
+    fn evaluate_loader_limits(&self) -> StageOutcome {
+        let Some(document) = self.workspace.active_document() else {
+            return StageOutcome::Settled {
+                diagnostics: Vec::new(),
+                entities: 0,
+            };
+        };
+        let limits = document.schedule().loader_limits();
+        let mut diagnostics = Vec::new();
+        for (index, rule) in limits.rules.iter().enumerate() {
+            let message = if rule.scope.is_none() {
+                tr!("loader-limit-stage-unfinished")
+            } else if rule.loaders == 0 {
+                tr!("loader-limit-stage-none")
+            } else {
+                continue;
+            };
+            diagnostics.push(StageDiagnostic {
+                entity: Some(tr!("loader-limit-name", number = (index + 1).to_string())),
+                message,
+                blocking: false,
+            });
+        }
+        StageOutcome::Settled {
+            diagnostics,
+            entities: limits.rules.len(),
+        }
+    }
+
     fn evaluate_cashflow(&self) -> StageOutcome {
         use crate::model::schedule::{DestinationSelection, LoaderSelection, MovementSourceScope, MovementSourceSelection, destinations};
         let Some(document) = self.workspace.active_document() else {
@@ -1494,7 +1566,9 @@ fn compute_schedule_fingerprints(document: &crate::model::Document, solids: (u8,
                 format!("{:?}", entry.id),
                 format!("{:?}", plan.experiment().representation(entry.id)),
                 routing.rules.iter().any(|rule| rule.enabled && rule.destinations.contains(&entry.id))
-                    || plan.bars().iter().any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id))),
+                    || plan
+                        .bars_with_inherited()
+                        .any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id))),
                 plan.experiment().chunk_t(entry.id).map(f64::to_bits),
                 routing.inventory(entry.id).map(|inventory| {
                     let mut hasher = DefaultHasher::new();
@@ -1628,6 +1702,18 @@ fn compute_schedule_fingerprints(document: &crate::model::Document, solids: (u8,
         plan.drill_blast().hash_content(&mut hasher);
         hasher.finish()
     };
+    let dependencies_step = {
+        let mut hasher = DefaultHasher::new();
+        drill_blast_step.hash(&mut hasher);
+        plan.dependencies().hash_content(&mut hasher);
+        hasher.finish()
+    };
+    let loader_limits_step = {
+        let mut hasher = DefaultHasher::new();
+        dependencies_step.hash(&mut hasher);
+        plan.loader_limits().hash_content(&mut hasher);
+        hasher.finish()
+    };
 
     // Dates and colours name the days; they change nothing a run reads.
     // The horizon they show is the experiment's, which a calculated
@@ -1641,6 +1727,8 @@ fn compute_schedule_fingerprints(document: &crate::model::Document, solids: (u8,
         agents_step,
         delays_step,
         drill_blast_step,
+        dependencies_step,
+        loader_limits_step,
         stockpiles_step,
         dumps_step,
         crushers_step,

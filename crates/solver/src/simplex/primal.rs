@@ -423,12 +423,38 @@ impl Primal {
                 best_measure = dual_infeasibility * dual_infeasibility / self.edge_weight[col];
             }
         }
-        for col in 0..self.num_tot {
-            let dual_infeasibility = -(nonbasic_move[col] as f64) * work_dual[col];
-            if dual_infeasibility > self.dual_feasibility_tolerance && dual_infeasibility * dual_infeasibility > best_measure * self.edge_weight[col] {
-                self.variable_in = Some(col);
-                best_measure = dual_infeasibility * dual_infeasibility / self.edge_weight[col];
+        // Most variables are dual feasible, so each block of them is first
+        // passed over by a test free of bounds checks and branches, which the
+        // compiler can vectorise; a block with a candidate is then read in
+        // order as before, so the same column is chosen.
+        const BLOCK: usize = 8;
+        let tolerance = self.dual_feasibility_tolerance;
+        let n = self.num_tot;
+        let (moves, duals, weights) = (&nonbasic_move[..n], &work_dual[..n], &self.edge_weight[..n]);
+        let whole = n - n % BLOCK;
+        let mut start = 0;
+        while start < n {
+            let end = if start < whole { start + BLOCK } else { n };
+            if start < whole {
+                let step: &[i8; BLOCK] = moves[start..end].try_into().expect("a whole block");
+                let dual: &[f64; BLOCK] = duals[start..end].try_into().expect("a whole block");
+                let mut any = false;
+                for lane in 0..BLOCK {
+                    any |= -(step[lane] as f64) * dual[lane] > tolerance;
+                }
+                if !any {
+                    start = end;
+                    continue;
+                }
             }
+            for col in start..end {
+                let dual_infeasibility = -(moves[col] as f64) * duals[col];
+                if dual_infeasibility > tolerance && dual_infeasibility * dual_infeasibility > best_measure * weights[col] {
+                    self.variable_in = Some(col);
+                    best_measure = dual_infeasibility * dual_infeasibility / weights[col];
+                }
+            }
+            start = end;
         }
     }
 
@@ -504,37 +530,55 @@ impl Primal {
             return;
         }
         let row_of = |index: isize| if index >= 0 { index as usize } else { (index + num_row) as usize };
-        self.ph1_sorter_r.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        let mut max_theta = self.ph1_sorter_r[0].0;
+        // HiGHS sorts both lists in full (its own note says a partial sort
+        // would do). The keys are distinct, so their order is one order: the
+        // relaxed list is put in order a growing chunk at a time, as far as
+        // the gradient lasts, which is seldom far.
+        let key = |a: &(f64, isize), b: &(f64, isize)| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1));
+        let sorter_r = &mut self.ph1_sorter_r;
+        let mut max_theta = f64::NAN;
         let mut gradient = self.theta_dual.abs();
-        for &(theta, index) in &self.ph1_sorter_r {
-            gradient -= self.col_aq.array[row_of(index)].abs();
-            if gradient <= 0.0 {
-                break;
+        let (mut start, mut chunk) = (0, 8);
+        'scan: while start < sorter_r.len() {
+            let end = (start + chunk).min(sorter_r.len());
+            if end < sorter_r.len() {
+                sorter_r[start..].select_nth_unstable_by(end - start - 1, key);
             }
-            max_theta = theta;
-        }
-        self.ph1_sorter_t.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        let mut max_alpha: f64 = 0.0;
-        let mut last = self.ph1_sorter_t.len();
-        for (i, &(theta, index)) in self.ph1_sorter_t.iter().enumerate() {
-            let abs_alpha = self.col_aq.array[row_of(index)].abs();
-            if theta > max_theta {
-                last = i;
-                break;
+            sorter_r[start..end].sort_unstable_by(key);
+            if start == 0 {
+                max_theta = sorter_r[0].0;
             }
-            max_alpha = max_alpha.max(abs_alpha);
+            for &(theta, index) in &sorter_r[start..end] {
+                gradient -= self.col_aq.array[row_of(index)].abs();
+                if gradient <= 0.0 {
+                    break 'scan;
+                }
+                max_theta = theta;
+            }
+            start = end;
+            chunk *= 2;
         }
+        // In the tight list's order, the entries before the first whose theta
+        // passes the largest: the largest pivot among them, and the last of
+        // them in that order with a pivot over a tenth of it.
+        let cut = self.ph1_sorter_t.iter().filter(|entry| entry.0 > max_theta).min_by(|a, b| key(a, b)).copied();
+        let before = |entry: &(f64, isize)| cut.is_none_or(|cut| key(entry, &cut).is_lt());
+        let max_alpha = self
+            .ph1_sorter_t
+            .iter()
+            .filter(|entry| before(entry))
+            .map(|&(_, index)| self.col_aq.array[row_of(index)].abs())
+            .fold(0.0_f64, f64::max);
         self.row_out = NO_ROW_CHOSEN;
         self.move_out = 0;
-        for i in (1..=last).rev() {
-            let index = self.ph1_sorter_t[i - 1].1;
-            let row = row_of(index);
-            if self.col_aq.array[row].abs() > max_alpha * 0.1 {
-                self.row_out = row as isize;
-                self.move_out = if index >= 0 { 1 } else { -1 };
-                break;
-            }
+        if let Some(&(_, index)) = self
+            .ph1_sorter_t
+            .iter()
+            .filter(|entry| before(entry) && self.col_aq.array[row_of(entry.1)].abs() > max_alpha * 0.1)
+            .max_by(|a, b| key(a, b))
+        {
+            self.row_out = row_of(index) as isize;
+            self.move_out = if index >= 0 { 1 } else { -1 };
         }
     }
 

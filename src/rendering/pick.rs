@@ -160,6 +160,8 @@ impl StrokeBlocks {
 
 /// How close, in screen pixels, a road node takes the pick from its roads.
 const NODE_PICK_PX: f64 = 6.0;
+/// Lines this close on screen are taken to lie together.
+const COINCIDENT_PX: f64 = 2.0;
 
 fn build_block_node(blocks: &[(DVec3, DVec3)], order: &mut [u32], start: usize, end: usize, nodes: &mut Vec<StrokeBlockNode>) -> usize {
     let (min, max) = order[start..end]
@@ -439,7 +441,14 @@ pub(crate) fn pick_nearest(
                         let road_under_node = matches!(rec.entity, SceneEntityId::HaulRoad(_))
                             && best_stroke_hit.is_some_and(|hit| matches!(hit.entity, SceneEntityId::HaulNode(_)))
                             && best_dist <= NODE_PICK_PX;
-                        if !road_under_node && (node_over_road || screen_hit_is_better(dist, depth, best_dist, best_stroke_depth)) {
+                        // A road is often drawn over the design line it was
+                        // imported from: where the two lie together the road
+                        // is what a click on the network means.
+                        let network = |entity: SceneEntityId| matches!(entity, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_));
+                        let on_line = |entity: SceneEntityId| matches!(entity, SceneEntityId::Object(_));
+                        let network_over_line = network(rec.entity) && best_stroke_hit.is_some_and(|hit| on_line(hit.entity)) && dist <= best_dist + COINCIDENT_PX;
+                        let line_under_network = on_line(rec.entity) && best_stroke_hit.is_some_and(|hit| network(hit.entity)) && best_dist <= dist + COINCIDENT_PX;
+                        if !road_under_node && !line_under_network && (node_over_road || network_over_line || screen_hit_is_better(dist, depth, best_dist, best_stroke_depth)) {
                             best_dist = dist;
                             best_stroke_depth = depth;
                             best_stroke_hit = Some(PickHit { entity: rec.entity, world });

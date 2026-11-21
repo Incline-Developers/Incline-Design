@@ -170,6 +170,9 @@ pub(crate) struct CaptureIdentities {
     pub(crate) grades: Vec<(ReserveFieldId, String, GradeUnit)>,
     /// Each scoped dig bar's resolved blocks, in authored order.
     pub(crate) bar_blocks: Vec<(BarId, Vec<crate::model::DigBlockId>)>,
+    /// Automatic bars' ground in a blast no machine works, dug without
+    /// waiting on it - which a dig bar would wait on for ever.
+    pub(crate) unblasted: BTreeSet<crate::model::DigBlockId>,
     /// Each scoped dig bar's blocks of no tonnes: its earliest start, how
     /// many of its `bar_blocks` come before the block, and the block.
     pub(crate) empty_blocks: Vec<(BarId, f64, usize, crate::model::DigBlockId)>,
@@ -185,6 +188,9 @@ pub(crate) struct CaptureIdentities {
     /// the machine each chain agent is.
     pub(crate) blasts: Vec<CapturedBlast>,
     pub(crate) blast_agents: Vec<LoaderAgentId>,
+    /// The chain's tasks that automatic bars on machines work, by position:
+    /// one blast each.
+    pub(crate) auto_blast_tasks: Vec<usize>,
     /// Each dig bar's ground in a blast no machine bar will prep, drill or
     /// charge, so its loader waits on it all horizon: the bar, and the
     /// blast with the step nobody works.
@@ -215,6 +221,24 @@ pub(crate) struct CaptureStats {
     pub(crate) event_budget_restricted: bool,
 }
 
+/// What a schedule saved with the project says of the model it answers.
+#[derive(Clone, Debug)]
+pub(crate) struct SavedHint {
+    /// The model's stable fingerprint, where a saved schedule may answer
+    /// this run.
+    pub(crate) fingerprint: Option<u64>,
+    pub(crate) auto_order: Option<crate::model::schedule::optimisation::blended::saved::AutoOrder>,
+    /// What the last plan over this scenario left, saved or not: the plan
+    /// starts from it.
+    pub(crate) memory: Option<Arc<crate::model::schedule::optimisation::longterm::PlanMemory>>,
+    /// Earlier plans of this session, one of which may be over the same
+    /// problem.
+    pub(crate) earlier: Vec<Arc<crate::model::schedule::optimisation::longterm::PlanMemory>>,
+    /// The run only shows the saved schedule, never calculates: once its
+    /// order is not the one saved, the capture stops there.
+    pub(crate) restore_only: bool,
+}
+
 /// A finished capture: the model, what its ids mean, and one semantic key.
 pub(crate) struct BlendCapture {
     pub(crate) input: BlendInput,
@@ -228,6 +252,13 @@ pub(crate) struct BlendCapture {
     pub(crate) stats: CaptureStats,
     /// Stated approximations this capture applied. Never a silent adaptation.
     pub(crate) notes: Vec<String>,
+    /// The hourly dispatch of the input's reduced form, when capture already
+    /// made it to choose between the automatic bars' orders: the run's first
+    /// schedule, which it need not make again.
+    pub(crate) dispatched: Option<crate::model::schedule::optimisation::blended::greedy::Dispatched>,
+    /// The order the automatic bars' ground was dealt in, for a saved
+    /// schedule to deal again.
+    pub(crate) auto_order: Option<crate::model::schedule::optimisation::blended::saved::AutoOrder>,
 }
 
 /// The owned, immutable configuration one capture reads.
@@ -338,7 +369,8 @@ impl crate::app::App<'_> {
             return Err(vec![CaptureDiagnostic::global(tr!("planning-snapshot-no-project"))]);
         };
         let document: &Document = &project.project.document;
-        let plan = document.schedule().clone();
+        // The open scenario's, with the bars it starts from.
+        let plan = document.schedule().for_calculation();
         let Some(tonnage_field) = plan.tonnage_field() else {
             return Err(vec![CaptureDiagnostic::global(tr!("schedule-stage-no-tonnage-field"))]);
         };
@@ -391,6 +423,122 @@ fn calendar_field(field: &str) -> String {
 /// its area.
 const SCHEDULE_PATTERN_HOLES: usize = 4 * crate::model::drill_hole::MAX_PATTERN_HOLES;
 
+/// What a blast's place among the dig blocks is, in plan: the blocks it
+/// holds, those over it near enough to keep it from being clear (in a
+/// higher bench, within the buffer, and with no buffer over the blast
+/// itself), and where its holes go. Only the solids and the drill and blast
+/// settings move it, so it is kept between runs; see [`blast_geometry`].
+struct BlastGeometry {
+    members: Vec<usize>,
+    over: Vec<usize>,
+    pattern: crate::model::schedule::DrillPattern,
+    collars: Vec<glam::DVec2>,
+}
+
+/// The last [`BlastGeometry`] worked out: for the planning snapshot it was
+/// worked out on, while that is still held, and the buffer it used.
+type HeldGeometry = (std::sync::Weak<PlanningSnapshot>, u64, Arc<Vec<BlastGeometry>>);
+static BLAST_GEOMETRY: std::sync::Mutex<Option<HeldGeometry>> = std::sync::Mutex::new(None);
+
+/// Each blast's [`BlastGeometry`], as the last run worked it out when the
+/// solids, the buffer and the patterns are as they were - a schedule edit
+/// moves none of them - or worked out afresh, the blasts side by side.
+fn blast_geometry(snapshot: &Arc<PlanningSnapshot>, config: &crate::model::schedule::DrillBlastConfig, cancel: &CancelFlag) -> Option<Arc<Vec<BlastGeometry>>> {
+    use rayon::prelude::*;
+
+    use crate::model::drill_hole::{DrillPatternLayout, generate_pattern_collars};
+    let pattern_of = |record: &crate::app::commands::solids_view::BlastRecord| {
+        config
+            .patterns
+            .iter()
+            .find(|entry| record.holds(&entry.blast))
+            .map_or(config.pattern, |entry| entry.pattern)
+    };
+    let buffer = config.buffer_m.to_bits();
+    {
+        let held = BLAST_GEOMETRY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((of, at, geometry)) = held.as_ref()
+            && of.upgrade().is_some_and(|of| Arc::ptr_eq(&of, snapshot))
+            && *at == buffer
+            && geometry.iter().zip(&snapshot.blasts).all(|(found, record)| found.pattern == pattern_of(record))
+        {
+            return Some(Arc::clone(geometry));
+        }
+    }
+    // Plan bounds, once: a block whose box is further than the buffer from a
+    // blast's box is further from the blast itself, so the exact gap is only
+    // measured for the few near enough.
+    let bounds = |face: &crate::model::arrangement::Face| {
+        face.first().map_or((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |ring| {
+            ring.iter()
+                .fold((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |(lo, hi), point| (lo.min(*point), hi.max(*point)))
+        })
+    };
+    let block_bounds: Vec<_> = snapshot.blocks.iter().map(|block| bounds(&block.ground)).collect();
+    let measured: Vec<Option<BlastGeometry>> = snapshot
+        .blasts
+        .par_iter()
+        .map(|record| {
+            if cancel.is_cancelled() {
+                return None;
+            }
+            let (blast_lo, blast_hi) = bounds(&record.face);
+            let reach = config.buffer_m + 1e-9;
+            let near = |(lo, hi): (glam::DVec2, glam::DVec2)| {
+                let gap = (blast_lo - hi).max(lo - blast_hi).max(glam::DVec2::ZERO);
+                gap.x <= reach && gap.y <= reach
+            };
+            let pattern = pattern_of(record);
+            let outer: Vec<glam::DVec3> = record
+                .face
+                .first()
+                .map_or_else(Vec::new, |ring| ring.iter().map(|point| point.extend(record.bench.top)).collect());
+            let layout = if pattern.staggered { DrillPatternLayout::Staggered } else { DrillPatternLayout::Square };
+            // Collars are laid out for Animate to draw. A blast too big or too
+            // odd in shape for that is counted by its area instead: a schedule
+            // needs how much drilling there is, not where each hole goes.
+            let collars: Vec<glam::DVec2> = generate_pattern_collars(&outer, pattern.burden_m, pattern.spacing_m, 0.0, glam::DVec2::ZERO, layout, SCHEDULE_PATTERN_HOLES)
+                .map(|collars| {
+                    collars
+                        .into_iter()
+                        .map(|collar| collar.truncate())
+                        .filter(|collar| crate::model::arrangement::point_in_face(&record.face, *collar))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut members = Vec::new();
+            let mut over = Vec::new();
+            for (position, block) in snapshot.blocks.iter().enumerate() {
+                let in_blast = block.solid == record.solid
+                    && block.blast.is_some_and(|blast| {
+                        (blast.bench_base() - record.bench.base).abs() < 1e-6 && crate::model::arrangement::point_in_face(&record.face, glam::DVec2::from(blast.anchor()))
+                    });
+                if in_blast {
+                    members.push(position);
+                    continue;
+                }
+                // Ground in a higher bench, within the buffer in plan.
+                if block.flitch.base < record.bench.top - 1e-6 {
+                    continue;
+                }
+                if !near(block_bounds[position]) || !plan_within(&block.ground, &record.face, reach) {
+                    continue;
+                }
+                // With no buffer, only ground over the blast itself holds it:
+                // ground that merely shares an edge with it does not.
+                if config.buffer_m <= 0.0 && crate::model::arrangement::overlap_area(&block.ground, &record.face) <= SHARED_GROUND_M2 {
+                    continue;
+                }
+                over.push(position);
+            }
+            Some(BlastGeometry { members, over, pattern, collars })
+        })
+        .collect();
+    let geometry = Arc::new(measured.into_iter().collect::<Option<Vec<_>>>()?);
+    *BLAST_GEOMETRY.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((Arc::downgrade(snapshot), buffer, Arc::clone(&geometry)));
+    Some(geometry)
+}
+
 /// The drill and blast chain: every blast of the run, how much of each step
 /// it needs and what must be dug before it is clear, and the dozers, drills
 /// and MPUs working the blast bars.
@@ -401,6 +549,7 @@ fn capture_drill_blast(
     intervals: &[Interval],
     block_ground: &BTreeMap<usize, GroundId>,
     scoped: &[ScopedBar],
+    auto_ground: &BTreeSet<GroundId>,
     identities: &mut CaptureIdentities,
     notes: &mut Vec<String>,
     problems: &mut Diagnostics,
@@ -408,12 +557,9 @@ fn capture_drill_blast(
 ) -> Option<crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput> {
     use rayon::prelude::*;
 
-    use crate::model::{
-        drill_hole::{DrillPatternLayout, generate_pattern_collars},
-        schedule::{
-            MachineKind,
-            optimisation::blended::drill_blast::{BlastAgent, BlastJob, BlastTask, DrillBlastInput},
-        },
+    use crate::model::schedule::{
+        MachineKind,
+        optimisation::blended::drill_blast::{BlastAgent, BlastJob, BlastTask, DrillBlastInput},
     };
     let plan = &source.plan;
     let config = plan.drill_blast();
@@ -436,55 +582,19 @@ fn capture_drill_blast(
             empty_cleared_by.entry(position).or_insert(previous);
         }
     }
-    // Plan bounds, once: a block whose box is further than the buffer from a
-    // blast's box is further from the blast itself, so the exact gap is only
-    // measured for the few near enough.
-    let bounds = |face: &crate::model::arrangement::Face| {
-        face.first().map_or((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |ring| {
-            ring.iter()
-                .fold((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |(lo, hi), point| (lo.min(*point), hi.max(*point)))
-        })
-    };
-    let block_bounds: Vec<_> = snapshot.blocks.iter().map(|block| bounds(&block.ground)).collect();
-    // Each blast is measured on its own, so they are measured side by side
-    // and gathered in order.
+    let geometry = blast_geometry(&source.snapshot, config, cancel)?;
     let measured: Vec<Option<(BlastJob, CapturedBlast, bool)>> = snapshot
         .blasts
         .par_iter()
-        .map(|record| {
+        .zip(geometry.par_iter())
+        .map(|(record, shape)| {
             if cancel.is_cancelled() {
                 return None;
             }
-            let (blast_lo, blast_hi) = bounds(&record.face);
-            let reach = config.buffer_m + 1e-9;
-            let near = |(lo, hi): (glam::DVec2, glam::DVec2)| {
-                let gap = (blast_lo - hi).max(lo - blast_hi).max(glam::DVec2::ZERO);
-                gap.x <= reach && gap.y <= reach
-            };
             let reference = record.reference();
-            let pattern = config
-                .patterns
-                .iter()
-                .find(|entry| record.holds(&entry.blast))
-                .map_or(config.pattern, |entry| entry.pattern);
+            let pattern = shape.pattern;
             let depth = (record.bench.top - record.bench.base) + pattern.subdrill_m;
-            let outer: Vec<glam::DVec3> = record
-                .face
-                .first()
-                .map_or_else(Vec::new, |ring| ring.iter().map(|point| point.extend(record.bench.top)).collect());
-            let layout = if pattern.staggered { DrillPatternLayout::Staggered } else { DrillPatternLayout::Square };
-            // Collars are laid out for Animate to draw. A blast too big or too
-            // odd in shape for that is counted by its area instead: a schedule
-            // needs how much drilling there is, not where each hole goes.
-            let collars: Vec<glam::DVec2> = generate_pattern_collars(&outer, pattern.burden_m, pattern.spacing_m, 0.0, glam::DVec2::ZERO, layout, SCHEDULE_PATTERN_HOLES)
-                .map(|collars| {
-                    collars
-                        .into_iter()
-                        .map(|collar| collar.truncate())
-                        .filter(|collar| crate::model::arrangement::point_in_face(&record.face, *collar))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let collars = shape.collars.clone();
             let holes = if collars.is_empty() {
                 (record.area / (pattern.burden_m * pattern.spacing_m)).ceil().max(f64::from(record.area > 0.0))
             } else {
@@ -497,32 +607,14 @@ fn capture_drill_blast(
                 .iter()
                 .find(|entry| record.holds(&entry.blast))
                 .map_or(crate::model::schedule::BlastStage::NotStarted, |entry| entry.stage);
-            let mut releases = Vec::new();
+            let releases: Vec<GroundId> = shape.members.iter().filter_map(|position| block_ground.get(position).copied()).collect();
             let mut above = Vec::new();
             let mut blocked = false;
-            for (position, block) in snapshot.blocks.iter().enumerate() {
-                let in_blast = block.solid == record.solid
-                    && block.blast.is_some_and(|blast| {
-                        (blast.bench_base() - record.bench.base).abs() < 1e-6 && crate::model::arrangement::point_in_face(&record.face, glam::DVec2::from(blast.anchor()))
-                    });
-                if in_blast {
-                    if let Some(ground) = block_ground.get(&position) {
-                        releases.push(*ground);
-                    }
-                    continue;
-                }
-                // Ground in a higher bench, within the buffer in plan. Ground
-                // excluded from mining is treated as never having been there, so
-                // it holds nothing up; `snapshot.excluded` is passed over whole.
-                if block.flitch.base < record.bench.top - 1e-6 {
-                    continue;
-                }
-                if !near(block_bounds[position]) || !plan_within(&block.ground, &record.face, reach) || excluded(block, &source.exclusions) {
-                    continue;
-                }
-                // With no buffer, only ground over the blast itself holds it:
-                // ground that merely shares an edge with it does not.
-                if config.buffer_m <= 0.0 && crate::model::arrangement::overlap_area(&block.ground, &record.face) <= SHARED_GROUND_M2 {
+            for &position in &shape.over {
+                // Ground excluded from mining is treated as never having been
+                // there, so it holds nothing up; `snapshot.excluded` is passed
+                // over whole.
+                if excluded(&snapshot.blocks[position], &source.exclusions) {
                     continue;
                 }
                 match (block_ground.get(&position), empty_cleared_by.get(&position)) {
@@ -538,6 +630,7 @@ fn capture_drill_blast(
                 releases,
                 above,
                 never_clear: blocked,
+                gate: false,
             };
             let captured = CapturedBlast {
                 reference,
@@ -580,8 +673,10 @@ fn capture_drill_blast(
     // Follow bars name their leader by id; its index is known only once
     // every bar has been read.
     let mut leaders: Vec<(usize, crate::model::schedule::LoaderAgentId)> = Vec::new();
+    // Automatic bars on machines, worked out once every other bar is read.
+    let mut automatic: Vec<(usize, u32, f64, f64)> = Vec::new();
     for bar in plan.bars() {
-        if bar.blast_order().is_none() && bar.delay().is_none() && bar.follow().is_none() {
+        if bar.blast_order().is_none() && bar.delay().is_none() && bar.follow().is_none() && !bar.is_auto() {
             continue;
         }
         let members = bar.blast_order().map_or(&[][..], |order| order.members.as_slice());
@@ -623,6 +718,10 @@ fn capture_drill_blast(
                 agents.len() - 1
             }
         };
+        if bar.is_auto() {
+            automatic.push((agent_index, bar.priority, start_h, end_h));
+            continue;
+        }
         let mut sequence = Vec::new();
         let mut missing = 0usize;
         for member in members {
@@ -648,6 +747,48 @@ fn capture_drill_blast(
             delay: bar.delay().is_some(),
             follow: None,
         });
+    }
+    // An automatic bar on a machine works every blast holding ground the
+    // automatic dig bars may take that no other bar of its kind works and
+    // that still needs its step, from the top down for now: capture puts
+    // them in the order the dig bars reach them once that is known
+    // (`order_auto_blasts`). Each is a task of its own, as an automatic dig
+    // bar's runs are, so a blast not yet clear holds none of the others.
+    if !automatic.is_empty() {
+        let worked: BTreeSet<(usize, usize)> = tasks
+            .iter()
+            .filter(|task| !task.delay)
+            .flat_map(|task| task.sequence.iter().map(|blast| (agents[task.agent].activity as usize, *blast)))
+            .collect();
+        let mut held: Vec<usize> = (0..blasts.len())
+            .filter(|index| blasts[*index].releases.iter().any(|ground| auto_ground.contains(ground)))
+            .collect();
+        held.sort_by(|a, b| {
+            let (a, b) = (&snapshot.blasts[*a], &snapshot.blasts[*b]);
+            b.bench
+                .top
+                .total_cmp(&a.bench.top)
+                .then_with(|| a.solid_name.cmp(&b.solid_name))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        for (agent, priority, start_h, end_h) in automatic {
+            let activity = agents[agent].activity;
+            for blast in held.iter().copied() {
+                if worked.contains(&(activity as usize, blast)) || blasts[blast].stage.has_done(activity) {
+                    continue;
+                }
+                identities.auto_blast_tasks.push(tasks.len());
+                tasks.push(BlastTask {
+                    agent,
+                    priority,
+                    start_h,
+                    end_h,
+                    sequence: vec![blast],
+                    delay: false,
+                    follow: None,
+                });
+            }
+        }
     }
     // A leader with no blast bars of its own has nothing to follow, and the
     // bar idles.
@@ -752,11 +893,427 @@ fn excluded(block: &crate::app::commands::solids_view::DigBlockRecord, exclusion
     })
 }
 
+/// A dependency for each block at `positions` with ground above it: the
+/// block is available once that ground is dug.
+///
+/// "Above" is the nearest level over the block that some bar digs, within
+/// `buffer_m` of it in plan. Only the nearest: the ground over that is held
+/// by its own dependency when the schedule sequences it, and is the
+/// planner's to order when a dig bar names it. Ground no bar digs -
+/// excluded, unmeasured or empty - is treated as not there.
+fn ground_gates(
+    source: &CaptureSnapshot,
+    block_ground: &BTreeMap<usize, GroundId>,
+    positions: &[usize],
+    buffer_m: f64,
+) -> Vec<crate::model::schedule::optimisation::blended::drill_blast::BlastJob> {
+    use rayon::prelude::*;
+
+    use crate::model::schedule::optimisation::blended::drill_blast::BlastJob;
+    let blocks = &source.snapshot.blocks;
+    let bounds = |face: &crate::model::arrangement::Face| {
+        face.first().map_or((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |ring| {
+            ring.iter()
+                .fold((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |(lo, hi), point| (lo.min(*point), hi.max(*point)))
+        })
+    };
+    // Only ground some bar digs can hold anything up. Sorted by its west
+    // edge, so each block looks only at ground whose extent can reach it
+    // east to west, not at every block of the mine.
+    let mut dug: Vec<(usize, GroundId, (glam::DVec2, glam::DVec2))> = block_ground
+        .iter()
+        .map(|(position, ground)| (*position, *ground, bounds(&blocks[*position].ground)))
+        .collect();
+    dug.sort_by(|a, b| a.2.0.x.total_cmp(&b.2.0.x));
+    let widest = dug.iter().map(|(_, _, (lo, hi))| hi.x - lo.x).filter(|width| width.is_finite()).fold(0.0_f64, f64::max);
+    let reach = buffer_m + 1e-9;
+    positions
+        .par_iter()
+        .filter_map(|position| {
+            let block = &blocks[*position];
+            let ground = *block_ground.get(position)?;
+            let (lo, hi) = bounds(&block.ground);
+            // Ground whose west edge is further west than this could not
+            // come within reach even at the widest; further east than the
+            // block's east edge plus the reach, it could not either.
+            let first = dug.partition_point(|(_, _, (other_lo, _))| other_lo.x < lo.x - reach - widest);
+            let last = dug.partition_point(|(_, _, (other_lo, _))| other_lo.x <= hi.x + reach);
+            // Ground above whose extent comes within reach, nearest level
+            // first: only the nearest level that holds the block counts, so
+            // the costly test of whether the plans touch stops after it.
+            let mut near: Vec<(f64, usize, GroundId)> = dug[first..last.max(first)]
+                .iter()
+                .filter(|(other_position, _, (other_lo, other_hi))| {
+                    let gap = (lo - *other_hi).max(*other_lo - hi).max(glam::DVec2::ZERO);
+                    blocks[*other_position].flitch.base >= block.flitch.top - 1e-6 && gap.x <= reach && gap.y <= reach
+                })
+                .map(|(other_position, other_ground, _)| (blocks[*other_position].flitch.base, *other_position, *other_ground))
+                .collect();
+            near.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut nearest: Option<f64> = None;
+            let mut over: Vec<(usize, GroundId)> = Vec::new();
+            for (base, other_position, other_ground) in near {
+                if nearest.is_some_and(|nearest| base > nearest + 1e-6) {
+                    break;
+                }
+                let other = &blocks[other_position];
+                if !plan_within(&other.ground, &block.ground, reach) {
+                    continue;
+                }
+                // With no buffer, only ground over the block itself holds it:
+                // ground that merely shares an edge with it does not.
+                if buffer_m <= 0.0 && crate::model::arrangement::overlap_area(&other.ground, &block.ground) <= SHARED_GROUND_M2 {
+                    continue;
+                }
+                nearest.get_or_insert(base);
+                over.push((other_position, other_ground));
+            }
+            // In the blocks' own order, as the full scan found them.
+            over.sort_unstable_by_key(|(position, _)| *position);
+            let above: Vec<GroundId> = over.into_iter().map(|(_, ground)| ground).collect();
+            (!above.is_empty()).then(|| BlastJob {
+                quantity: [0.0; 3],
+                stage: crate::model::schedule::BlastStage::NotStarted,
+                releases: vec![ground],
+                above,
+                never_clear: false,
+                gate: true,
+            })
+        })
+        .collect()
+}
+
+/// Each authored dependency's ground among what the bars dig: the ground
+/// that waits, and the ground it waits for. Ground both sides hold waits for
+/// nothing, and a rule with nothing on either side is left out.
+/// Each loader limit's areas of ground: all of its ground together, each
+/// bench of it or each blast of it. Ground in no blast is in no blast's area.
+fn loader_areas(source: &CaptureSnapshot, block_ground: &BTreeMap<usize, GroundId>) -> Vec<crate::model::schedule::optimisation::blended::input::LoaderArea> {
+    use crate::model::schedule::loader_limits::LimitArea;
+    let blocks = &source.snapshot.blocks;
+    let mut out = Vec::new();
+    for rule in &source.plan.loader_limits().rules {
+        let Some(scope) = rule.scope else { continue };
+        let mut areas: BTreeMap<(crate::model::SolidId, u64, [u64; 2]), Vec<GroundId>> = BTreeMap::new();
+        for (position, ground) in block_ground {
+            let block = &blocks[*position];
+            if !scope.covers(block.solid, (block.bench.base, block.bench.top), (block.flitch.base, block.flitch.top)) {
+                continue;
+            }
+            let key = match rule.area {
+                LimitArea::Whole => Some((block.solid, 0, [0, 0])),
+                LimitArea::EachBench => Some((block.solid, block.bench.base.to_bits(), [0, 0])),
+                LimitArea::EachBlast => block.blast.map(|blast| (blast.solid, blast.bench, blast.anchor)),
+            };
+            if let Some(key) = key {
+                areas.entry(key).or_default().push(*ground);
+            }
+        }
+        out.extend(
+            areas
+                .into_values()
+                .map(|ground| crate::model::schedule::optimisation::blended::input::LoaderArea { loaders: rule.loaders, ground }),
+        );
+    }
+    out
+}
+
+fn dependency_ground(source: &CaptureSnapshot, block_ground: &BTreeMap<usize, GroundId>) -> Vec<(Vec<GroundId>, Vec<GroundId>)> {
+    let blocks = &source.snapshot.blocks;
+    source
+        .plan
+        .dependencies()
+        .rules
+        .iter()
+        .filter_map(|rule| rule.sides())
+        .filter_map(|(ground, after)| {
+            let holds = |scope: crate::model::schedule::SourceScope, position: usize| {
+                let block = &blocks[position];
+                scope.covers(block.solid, (block.bench.base, block.bench.top), (block.flitch.base, block.flitch.top))
+            };
+            let first: Vec<GroundId> = block_ground.iter().filter(|(position, _)| holds(after, **position)).map(|(_, id)| *id).collect();
+            let waiting: Vec<GroundId> = block_ground
+                .iter()
+                .filter(|(position, _)| holds(ground, **position) && !holds(after, **position))
+                .map(|(_, id)| *id)
+                .collect();
+            (!first.is_empty() && !waiting.is_empty()).then_some((waiting, first))
+        })
+        .collect()
+}
+
+/// Hold each dependency's waiting ground until the ground it waits for is
+/// dug, in the drill and blast chain, where a ground has one job that
+/// releases it.
+///
+/// Ground a job already releases waits through that job: a blast not yet
+/// started waits for the ground before it is cleared, and a dependency on
+/// the ground above adds to what it waits for. A fired blast's ground is
+/// free already, so it moves to the rule's own job with the ground no job
+/// releases. A blast that releases ground the rule waits for cannot also
+/// wait for it, and keeps its own order.
+fn apply_dependencies(chain: &mut crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput, rules: &[(Vec<GroundId>, Vec<GroundId>)]) {
+    use crate::model::schedule::{BlastStage, optimisation::blended::drill_blast::BlastJob};
+    for (waiting, first) in rules {
+        let owner: BTreeMap<GroundId, usize> = chain
+            .blasts
+            .iter()
+            .enumerate()
+            .flat_map(|(index, job)| job.releases.iter().map(move |ground| (*ground, index)))
+            .collect();
+        let waited: BTreeSet<GroundId> = first.iter().copied().collect();
+        let mut loose: Vec<GroundId> = Vec::new();
+        let mut held: BTreeSet<usize> = BTreeSet::new();
+        for ground in waiting {
+            match owner.get(ground) {
+                None => loose.push(*ground),
+                Some(&index) if !chain.blasts[index].gate && chain.blasts[index].stage == BlastStage::Fired => {
+                    chain.blasts[index].releases.retain(|released| released != ground);
+                    loose.push(*ground);
+                }
+                Some(&index) if chain.blasts[index].releases.iter().any(|released| waited.contains(released)) => {}
+                Some(&index) => {
+                    held.insert(index);
+                }
+            }
+        }
+        for index in held {
+            let above = &mut chain.blasts[index].above;
+            above.extend(first.iter().copied());
+            above.sort_unstable();
+            above.dedup();
+        }
+        if !loose.is_empty() {
+            chain.blasts.push(BlastJob {
+                quantity: [0.0; 3],
+                stage: BlastStage::NotStarted,
+                releases: loose,
+                above: first.clone(),
+                never_clear: false,
+                gate: true,
+            });
+        }
+    }
+}
+
+/// A drill and blast chain with no blasts, for dependencies to sit in when
+/// drill and blast is off.
+fn empty_chain(config: &crate::model::schedule::DrillBlastConfig) -> crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput {
+    crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput {
+        blasts: Vec::new(),
+        agents: Vec::new(),
+        tasks: Vec::new(),
+        window_end_h: config.window_end_h,
+        windows: None,
+        fixed: None,
+        resume: None,
+    }
+}
+
+/// Make each run of an automatic bar's blocks that comes free at one time a
+/// task of its own, in order, and list each automatic bar's blocks as they
+/// were dealt.
+///
+/// An automatic bar's loader works whichever of the next released blocks
+/// of its task suits the hour (`Task::lookahead_t`), so a block out of
+/// reach does not hold the rest of it. What a dig bar leaves is worked
+/// only from when that bar's window closes: such a run is a task opening
+/// then. A bar given nothing has no task at all.
+fn split_auto_runs(input: &mut BlendInput, identities: &mut CaptureIdentities, auto_ids: &[BarId], not_before_h: &BTreeMap<GroundId, f64>) {
+    for (task, bar, name) in identities.tasks.clone() {
+        if !auto_ids.contains(&bar) {
+            continue;
+        }
+        let Some(index) = input.tasks.iter().position(|entry| entry.id == task) else { continue };
+        let TaskKind::Dig { sequence } = &input.tasks[index].kind else { continue };
+        let template = input.tasks[index].clone();
+        // What a dig bar left is worked from when that bar's window closed;
+        // a run that comes free after this bar closes is not.
+        let free = |ground: &GroundId| not_before_h.get(ground).map_or(template.window_start_h, |after| after.max(template.window_start_h));
+        let mut runs: Vec<Vec<GroundId>> = Vec::new();
+        for ground in sequence {
+            match runs.last_mut().filter(|run| run.first().is_some_and(|first| free(first) == free(ground))) {
+                Some(run) => run.push(*ground),
+                None => runs.push(vec![*ground]),
+            }
+        }
+        let opens = |run: &[GroundId]| run.first().map_or(template.window_start_h, free);
+        let mut runs = runs.into_iter().filter(|run| opens(run) < template.window_end_h - 1e-9);
+        match runs.next() {
+            Some(first) => {
+                input.tasks[index].window_start_h = opens(&first);
+                input.tasks[index].kind = TaskKind::Dig { sequence: first };
+            }
+            None => input.tasks[index].kind = TaskKind::Dig { sequence: Vec::new() },
+        }
+        for run in runs {
+            let id = TaskId(input.tasks.len() as u32);
+            identities.tasks.push((id, bar, name.clone()));
+            input.tasks.push(Task {
+                id,
+                window_start_h: opens(&run),
+                kind: TaskKind::Dig { sequence: run },
+                ..template.clone()
+            });
+        }
+    }
+    let empty: Vec<TaskId> = input
+        .tasks
+        .iter()
+        .filter(|task| matches!(&task.kind, TaskKind::Dig { sequence } if sequence.is_empty()))
+        .map(|task| task.id)
+        .collect();
+    input.tasks.retain(|task| !empty.contains(&task.id));
+    identities.tasks.retain(|(task, _, _)| !empty.contains(task));
+    for bar in auto_ids {
+        let blocks: Vec<crate::model::DigBlockId> = identities
+            .tasks
+            .iter()
+            .filter(|(_, held, _)| held == bar)
+            .filter_map(|(task, _, _)| input.tasks.iter().find(|entry| entry.id == *task))
+            .filter_map(|task| match &task.kind {
+                TaskKind::Dig { sequence } => Some(sequence),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|ground| identities.ground_blocks.get(ground).copied())
+            .collect();
+        if let Some((_, held)) = identities.bar_blocks.iter_mut().find(|(held, _)| held == bar) {
+            *held = blocks;
+        }
+    }
+}
+
+/// Put the automatic machine bars' blasts in the order the automatic dig
+/// bars reach their ground: each blast where its first block comes in the
+/// dig bars' lists, those holding none of it last, in the order they were.
+fn order_auto_blasts(input: &mut BlendInput, identities: &CaptureIdentities, auto_ids: &[BarId]) {
+    let Some(chain) = input.drill_blast.as_mut() else { return };
+    if identities.auto_blast_tasks.is_empty() {
+        return;
+    }
+    let mut reached: BTreeMap<GroundId, usize> = BTreeMap::new();
+    for (task, _, _) in identities.tasks.iter().filter(|(_, bar, _)| auto_ids.contains(bar)) {
+        let Some(TaskKind::Dig { sequence }) = input.tasks.iter().find(|entry| entry.id == *task).map(|task| &task.kind) else {
+            continue;
+        };
+        for ground in sequence {
+            let next = reached.len();
+            reached.entry(*ground).or_insert(next);
+        }
+    }
+    let first = |task: &crate::model::schedule::optimisation::blended::drill_blast::BlastTask| {
+        task.sequence
+            .first()
+            .and_then(|blast| chain.blasts.get(*blast))
+            .and_then(|blast| blast.releases.iter().filter_map(|ground| reached.get(ground)).min().copied())
+            .unwrap_or(usize::MAX)
+    };
+    let mut slots: Vec<usize> = identities.auto_blast_tasks.clone();
+    slots.sort_unstable();
+    let mut moved: Vec<_> = slots.iter().map(|slot| chain.tasks[*slot].clone()).collect();
+    moved.sort_by_key(|task| first(task));
+    for (slot, task) in slots.into_iter().zip(moved) {
+        chain.tasks[slot] = task;
+    }
+}
+
+/// What [`open_auto_ground`] found.
+struct OpenGround {
+    /// Each block's position in the run and its tonnes, from the top down.
+    open: Vec<(usize, f64)>,
+    /// Each of those blocks' group.
+    groups: Vec<(usize, u32)>,
+    /// The hour each block a dig bar names is the automatic bars' to take.
+    after: BTreeMap<usize, f64>,
+    /// Blocks left out for want of a measured tonnage.
+    unmeasured: usize,
+}
+
+/// The ground the automatic bars may dig: its blocks with their tonnes from
+/// the top down, which group each belongs to, and how many blocks were left
+/// out for want of a measured tonnage.
+///
+/// Ground no dig bar names is theirs from the start. Ground a dig bar names
+/// is that bar's while its window is open - and once the window of every bar
+/// naming it has closed, whatever is left of it is the automatic bars' to
+/// take, as any later bar takes what an earlier one leaves. Ground named by
+/// a bar open to the end of the horizon is never offered.
+///
+/// The list runs a flitch level at a time, strictly downwards: a block can
+/// wait on the ground above it (see [`ground_gates`]) without ever waiting
+/// on ground listed after it. A group is one blast's ground on one level
+/// that comes free at one time, which goes to one bar whole.
+fn open_auto_ground(source: &CaptureSnapshot, horizon_h: f64) -> OpenGround {
+    let blocks = &source.snapshot.blocks;
+    let mut closes: std::collections::HashMap<crate::model::DigBlockId, f64> = std::collections::HashMap::new();
+    for (bar, report) in source.plan.bars().iter().zip(source.reports.iter()) {
+        let end_h = bar.window.end_h.unwrap_or(f64::INFINITY);
+        for block in report.members.iter().filter_map(|member| member.resolved) {
+            closes.entry(block).and_modify(|held| *held = held.max(end_h)).or_insert(end_h);
+        }
+    }
+    let zero = source.plan.unmeasured_as_zero();
+    let mut unmeasured = 0usize;
+    let mut open: Vec<(usize, f64)> = Vec::new();
+    let mut after: BTreeMap<usize, f64> = BTreeMap::new();
+    for (position, block) in blocks.iter().enumerate() {
+        let closes = closes.get(&block.id).copied();
+        if closes.is_some_and(|end_h| end_h >= horizon_h - 1e-9) || excluded(block, &source.exclusions) {
+            continue;
+        }
+        match super::schedule_readiness::block_tonnes_for_stage(block, source.tonnage_field, zero) {
+            Ok(tonnes) if tonnes > 0.0 => {
+                open.push((position, tonnes));
+                if let Some(end_h) = closes {
+                    after.insert(position, end_h.max(0.0));
+                }
+            }
+            Ok(_) => {}
+            Err(_) => unmeasured += 1,
+        }
+    }
+    // A blast is named by its anchor; ground in none is its own flitch's.
+    let blast = |position: usize| blocks[position].blast.map(|blast| blast.anchor());
+    let number = |name: &str| name.trim().parse::<u64>().unwrap_or(u64::MAX);
+    open.sort_by(|a, b| {
+        let (a, b) = (&blocks[a.0], &blocks[b.0]);
+        b.flitch
+            .top
+            .total_cmp(&a.flitch.top)
+            .then_with(|| a.solid_name.cmp(&b.solid_name))
+            .then_with(|| a.solid.cmp(&b.solid))
+            .then_with(|| {
+                let key = |block: &super::solids_view::DigBlockRecord| block.blast.map_or([f64::NEG_INFINITY; 2], |blast| blast.anchor());
+                let (a, b) = (key(a), key(b));
+                a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1]))
+            })
+            .then_with(|| number(&a.name).cmp(&number(&b.name)))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    let free = |position: usize| after.get(&position).map(|at| at.to_bits());
+    let mut groups = Vec::with_capacity(open.len());
+    let mut group = 0u32;
+    for (index, (position, _)) in open.iter().enumerate() {
+        if let Some((before, _)) = index.checked_sub(1).map(|index| open[index]) {
+            let (block, last) = (&blocks[*position], &blocks[before]);
+            if block.solid != last.solid || block.flitch.top.to_bits() != last.flitch.top.to_bits() || blast(*position) != blast(before) || free(*position) != free(before) {
+                group += 1;
+            }
+        }
+        groups.push((*position, group));
+    }
+    OpenGround { open, groups, after, unmeasured }
+}
+
 /// Resolve one owned snapshot into the experimental model, or every reason it
 /// cannot be.
 ///
 /// Runs on a worker. Cancellation is polled in each substantial loop.
-pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<BlendCapture, Vec<CaptureDiagnostic>> {
+/// `saved` is the fingerprint of a schedule saved with the project that the
+/// run will restore if the capture matches it: an automatic bars' order that
+/// matches it is taken without dispatching either.
+pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel: &CancelFlag) -> Result<BlendCapture, Vec<CaptureDiagnostic>> {
     let started = Instant::now();
     let mut problems = Diagnostics::default();
     let mut notes: Vec<String> = Vec::new();
@@ -788,6 +1345,15 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
 
     // ---- bars in scope -----------------------------------------------------
     let mut scoped: Vec<ScopedBar> = Vec::new();
+    // Where in `scoped` each automatic bar is.
+    let mut auto_bars: Vec<usize> = Vec::new();
+    // Each automatic bar's ground: `None` for any, else the pits, benches and
+    // flitches it may dig; and, once the open ground is known, the blocks of
+    // it a limited bar may take.
+    let mut auto_scopes: BTreeMap<BarId, Option<Vec<crate::model::schedule::destinations::SourceScope>>> = BTreeMap::new();
+    let mut auto_allowed: BTreeMap<BarId, BTreeSet<usize>> = BTreeMap::new();
+    // Automatic bars' reclaim, behind every bar of their own priority.
+    let mut reclaims: Vec<ScopedBar> = Vec::new();
     for (bar, report) in plan.bars().iter().zip(source.reports.iter()) {
         if cancel.is_cancelled() {
             return Err(Vec::new());
@@ -818,6 +1384,43 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         }
         let work = if bar.delay().is_some() {
             ScopedWork::Delay
+        } else if let Some(auto) = bar.auto() {
+            // What it reclaims, while it has nothing to dig: a reclaim bar of
+            // its own behind its digging, from the stockpiles it may take.
+            let stockpiles: Vec<ProjectDestinationId> = match auto.sources.stockpiles() {
+                None => source
+                    .destinations
+                    .iter()
+                    .filter(|view| view.kind == crate::model::schedule::destinations::DestinationKind::Stockpile)
+                    .map(|view| view.id)
+                    .collect(),
+                Some(chosen) => chosen,
+            };
+            if !stockpiles.is_empty() {
+                reclaims.push(ScopedBar {
+                    bar: bar.id,
+                    name: bar.name().to_owned(),
+                    agent,
+                    priority: bar.priority.saturating_add(1),
+                    start_h,
+                    end_h,
+                    work: ScopedWork::Reclaim {
+                        sources: stockpiles,
+                        maximum_t: None,
+                    },
+                });
+            }
+            // Its ground is dealt out once every dig bar's is known; see
+            // `deal_auto_ground`. A bar taking no ground only reclaims.
+            if auto.sources.ground().is_some_and(|scopes| scopes.is_empty()) {
+                continue;
+            }
+            auto_scopes.insert(bar.id, auto.sources.ground());
+            auto_bars.push(scoped.len());
+            ScopedWork::Dig {
+                members: Vec::new(),
+                empty: Vec::new(),
+            }
         } else if let Some(reclaim) = bar.reclaim() {
             ScopedWork::Reclaim {
                 sources: reclaim.sources.clone(),
@@ -880,6 +1483,51 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             end_h,
             work,
         });
+    }
+    // After every bar of the loader's own: what ids order, the reclaim
+    // follows the automatic bar's digging among bars of one priority.
+    scoped.extend(reclaims);
+    let auto_ids: Vec<BarId> = auto_bars.iter().map(|index| scoped[*index].bar).collect();
+    // Which blast's ground on which level each automatic block is, so the
+    // plan hands such ground to one bar together.
+    let mut auto_groups: Vec<(usize, u32)> = Vec::new();
+    // When each automatic block a dig bar names comes free.
+    let mut auto_after: BTreeMap<usize, f64> = BTreeMap::new();
+    if !auto_bars.is_empty() {
+        let OpenGround { open, groups, after, unmeasured } = open_auto_ground(source, horizon_h);
+        auto_groups = groups;
+        auto_after = after;
+        // Only ground some automatic bar may take, and which bar may take
+        // which: a bar limited to some pits, benches or flitches is dealt
+        // nothing else.
+        let covered = |position: usize, scopes: &[crate::model::schedule::destinations::SourceScope]| {
+            let block = &source.snapshot.blocks[position];
+            scopes
+                .iter()
+                .any(|scope| scope.covers(block.solid, (block.bench.base, block.bench.top), (block.flitch.base, block.flitch.top)))
+        };
+        let open: Vec<(usize, f64)> = open
+            .into_iter()
+            .filter(|(position, _)| auto_scopes.values().any(|scopes| scopes.as_deref().is_none_or(|scopes| covered(*position, scopes))))
+            .collect();
+        for (bar, scopes) in &auto_scopes {
+            if let Some(scopes) = scopes {
+                auto_allowed.insert(*bar, open.iter().map(|(position, _)| *position).filter(|position| covered(*position, scopes)).collect());
+            }
+        }
+        // Every automatic bar is offered all of it; the long-term plan then
+        // gives each block to one of them (`longterm::assign`).
+        for index in &auto_bars {
+            scoped[*index].work = ScopedWork::Dig {
+                members: open.clone(),
+                empty: Vec::new(),
+            };
+        }
+        if unmeasured > 0 {
+            notes.push(tr!("schedule-capture-auto-unmeasured", count = unmeasured.to_string()));
+        }
+        // An automatic bar the dig bars left nothing for has no work.
+        scoped.retain(|bar| !matches!(&bar.work, ScopedWork::Dig { members, .. } if members.is_empty()));
     }
     let has_blast_work = plan.drill_blast().enabled
         && plan
@@ -1155,6 +1803,13 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             }
         }
     }
+    // Each blast's name, for the ground path a captured block is named by.
+    let blast_names: std::collections::HashMap<crate::ui::state::BlastShapeRef, &String> = source
+        .snapshot
+        .blasts
+        .iter()
+        .map(|record| (crate::ui::state::BlastShapeRef::new(record.solid, record.bench.base, record.anchor), &record.name))
+        .collect();
     for &position in &wanted_blocks {
         if cancel.is_cancelled() {
             return Err(Vec::new());
@@ -1276,7 +1931,13 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         if shares.len() > 1 {
             mixed_blocks += 1;
         }
-        identities.ground.push((id, block.name.clone(), shares.len()));
+        let blast = block
+            .blast
+            .and_then(|reference| blast_names.get(&reference))
+            .map_or_else(|| tr!("schedule-unblasted"), |name| (*name).clone());
+        let rl = crate::ui::elements::solids_view::format_rl;
+        let path = crate::ui::elements::solids_view::ground_path(&[block.solid_name.clone(), rl(block.bench.base), blast, rl(block.flitch.base), block.name.clone()]);
+        identities.ground.push((id, path, shares.len()));
         ground.push(GroundSource {
             id,
             tonnes_t: block_tonnes,
@@ -1466,13 +2127,20 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             period = next;
         }
     }
+    // Over the horizons of the scenarios this one starts from, their own
+    // finer steps.
+    for (end_h, step_h) in plan.inherited_steps() {
+        let mut at = step_h;
+        while at < end_h.min(horizon_h) {
+            rate_changes.push(at);
+            at += step_h;
+        }
+    }
     let spec = HorizonSpec {
         end_h: horizon_h,
-        regular_step_h: if plan.drill_blast().enabled {
-            experiment.interval_h.min(1.0)
-        } else {
-            experiment.interval_h
-        },
+        // The step the scenario asks for. Firing windows and every rate
+        // change are boundaries of their own, so a longer step keeps them.
+        regular_step_h: experiment.interval_h,
         // Not read by the blended model, which has no parcels; a positive
         // value is required only so the shared interval builder validates.
         parcel_target_t: 1.0,
@@ -1597,7 +2265,39 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             window_start_h: bar.start_h,
             window_end_h: bar.end_h,
             kind,
+            lookahead_t: 0.0,
+            lookahead_feed_t: 0.0,
+            reclaims: Vec::new(),
         });
+    }
+    // An automatic bar's digging may reclaim its stockpiles in the same
+    // hours, so its loader blends between them as the hour suits; its own
+    // reclaim bar, behind, works them while it has nothing to dig.
+    for index in 0..tasks.len() {
+        if !matches!(tasks[index].kind, TaskKind::Dig { .. }) {
+            continue;
+        }
+        let Some(bar) = identities
+            .tasks
+            .iter()
+            .find(|(id, _, _)| *id == tasks[index].id)
+            .map(|(_, bar, _)| *bar)
+            .filter(|bar| auto_ids.contains(bar))
+        else {
+            continue;
+        };
+        let piles: Vec<StockpileId> = identities
+            .tasks
+            .iter()
+            .filter(|(_, held, _)| *held == bar)
+            .filter_map(|(id, _, _)| tasks.iter().find(|task| task.id == *id))
+            .filter_map(|task| match &task.kind {
+                TaskKind::Reclaim { approved_sources, .. } => Some(approved_sources.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        tasks[index].reclaims = piles;
     }
 
     // ---- movement candidates ------------------------------------------------
@@ -1854,11 +2554,96 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     let event_budget_restricted = derived > event_capacity;
     let segments_per_interval = derived.clamp(1, event_capacity);
     // ---- drill and blast ----------------------------------------------------
-    let drill_blast = if plan.drill_blast().enabled {
-        capture_drill_blast(source, horizon_h, &intervals, &block_ground, &scoped, &mut identities, &mut notes, &mut problems, cancel)
+    let mut drill_blast = if plan.drill_blast().enabled {
+        // The ground the automatic dig bars may take, for automatic bars on
+        // machines to work the blasts of.
+        let offered: BTreeSet<GroundId> = scoped
+            .iter()
+            .filter(|bar| auto_ids.contains(&bar.bar))
+            .filter_map(|bar| match &bar.work {
+                ScopedWork::Dig { members, .. } => Some(members),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|(position, _)| block_ground.get(position).copied())
+            .collect();
+        capture_drill_blast(
+            source,
+            horizon_h,
+            &intervals,
+            &block_ground,
+            &scoped,
+            &offered,
+            &mut identities,
+            &mut notes,
+            &mut problems,
+            cancel,
+        )
     } else {
         None
     };
+    // An automatic bar's ground in a blast no machine bar works is dug
+    // without waiting on it: nobody has sequenced that blast, and ground the
+    // schedule sequences for itself cannot wait on work nobody was given.
+    if let Some(input) = drill_blast.as_mut()
+        && !auto_ids.is_empty()
+    {
+        // Not ground a dig bar names: that bar waits on its blast as ever.
+        let auto_ground: std::collections::HashSet<GroundId> = scoped
+            .iter()
+            .filter(|bar| auto_ids.contains(&bar.bar))
+            .filter_map(|bar| match &bar.work {
+                ScopedWork::Dig { members, .. } => Some(members),
+                _ => None,
+            })
+            .flatten()
+            .filter(|(position, _)| !auto_after.contains_key(position))
+            .filter_map(|(position, _)| block_ground.get(position).copied())
+            .collect();
+        for (index, _) in input.unworked() {
+            for ground in input.blasts[index].releases.iter().filter(|ground| auto_ground.contains(*ground)) {
+                if let Some(block) = identities.ground_blocks.get(ground) {
+                    identities.unblasted.insert(*block);
+                }
+            }
+            input.blasts[index].releases.retain(|ground| !auto_ground.contains(ground));
+        }
+    }
+    // Ground the schedule sequences for itself is held until the ground
+    // directly above it is dug, whoever digs that: a dependency in the
+    // chain beside the blasts, which is what holds ground back everywhere.
+    // Ground a blast releases is already held by that blast's clearance.
+    // Ground a dig bar names is held by nothing here, or that bar would be
+    // held too; the plan still orders what is left of it from the top down.
+    let mut left_above: BTreeMap<GroundId, Vec<GroundId>> = BTreeMap::new();
+    if !auto_ids.is_empty() {
+        let blasted: std::collections::HashSet<GroundId> = drill_blast
+            .iter()
+            .flat_map(|input| input.blasts.iter().flat_map(|blast| blast.releases.iter().copied()))
+            .collect();
+        let offered: BTreeSet<usize> = scoped
+            .iter()
+            .filter(|bar| auto_ids.contains(&bar.bar))
+            .filter_map(|bar| match &bar.work {
+                ScopedWork::Dig { members, .. } => Some(members),
+                _ => None,
+            })
+            .flatten()
+            .map(|(position, _)| *position)
+            .filter(|position| block_ground.get(position).is_some_and(|ground| !blasted.contains(ground)))
+            .collect();
+        let (left, auto_positions): (Vec<usize>, Vec<usize>) = offered.into_iter().partition(|position| auto_after.contains_key(position));
+        let buffer_m = if plan.drill_blast().enabled { plan.drill_blast().buffer_m } else { 0.0 };
+        for job in ground_gates(source, &block_ground, &left, buffer_m) {
+            for ground in job.releases {
+                left_above.insert(ground, job.above.clone());
+            }
+        }
+        let gates = ground_gates(source, &block_ground, &auto_positions, buffer_m);
+        if !gates.is_empty() {
+            drill_blast.get_or_insert_with(|| empty_chain(plan.drill_blast())).blasts.extend(gates);
+        }
+    }
     if cancel.is_cancelled() {
         return Err(Vec::new());
     }
@@ -1895,7 +2680,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         return Err(problems.entries);
     }
 
-    let input = BlendInput {
+    let mut input = BlendInput {
         intervals,
         segments_per_interval,
         grades: grade_table,
@@ -1912,14 +2697,222 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         grade_targets,
         target_opening: Vec::new(),
         drill_blast,
+        loader_areas: loader_areas(source, &block_ground),
+        dig_prices: Vec::new(),
     };
+    let dependencies = dependency_ground(source, &block_ground);
+    // The chosen order's dispatch, kept for the run, and the order.
+    let mut dispatched = None;
+    let mut auto_order = None;
+    // The model's fingerprint, where it is already known: the saved
+    // schedule's, when the order chosen is the one that answers it.
+    let mut known_fingerprint = None;
+    // ---- the automatic bars' order ------------------------------------------
+    // Two orders for the automatic bars' ground: the long-term plan's, and
+    // the ground from the top down. The plan sees the loaders, crushers,
+    // trucks and each period's grade, but not each day's blend, stockpiles
+    // or routing, so the dispatch - which sees everything - schedules both,
+    // and the one worth more discounted is kept.
+    if !auto_ids.is_empty() {
+        use crate::model::schedule::optimisation::longterm;
+        // Their digging: an automatic bar's reclaim is a bar like any other.
+        let auto_tasks: Vec<TaskId> = identities
+            .tasks
+            .iter()
+            .filter(|(task, bar, _)| auto_ids.contains(bar) && input.tasks.iter().any(|entry| entry.id == *task && matches!(entry.kind, TaskKind::Dig { .. })))
+            .map(|(task, _, _)| *task)
+            .collect();
+        // The ground each limited bar may take.
+        let allowed: BTreeMap<TaskId, BTreeSet<GroundId>> = identities
+            .tasks
+            .iter()
+            .filter(|(task, _, _)| auto_tasks.contains(task))
+            .filter_map(|(task, bar, _)| {
+                let positions = auto_allowed.get(bar)?;
+                Some((*task, positions.iter().filter_map(|position| block_ground.get(position).copied()).collect()))
+            })
+            .collect();
+        let groups: BTreeMap<GroundId, u32> = auto_groups.iter().filter_map(|(position, group)| Some((*block_ground.get(position)?, *group))).collect();
+        let not_before_h: BTreeMap<GroundId, f64> = auto_after.iter().filter_map(|(position, after)| Some((*block_ground.get(position)?, *after))).collect();
+        let stable: BTreeMap<GroundId, u64> = identities.ground_blocks.iter().map(|(ground, block)| (*ground, block.0)).collect();
+        let scale = plan.period_scale();
+        let days = (horizon_h / SCHEDULE_PERIOD_H).ceil().max(1.0) as u32;
+        let period_ends_h: Vec<f64> = (0..scale.count(days)).map(|period| scale.start_h(period + 1).min(horizon_h)).collect();
+        let request = longterm::PlanRequest {
+            tasks: &auto_tasks,
+            period_ends_h: &period_ends_h,
+            discount_rate: experiment.discount_rate,
+            groups: &groups,
+            not_before_h: &not_before_h,
+            also_above: &left_above,
+            dependencies: &dependencies,
+            machine_tasks: &identities.auto_blast_tasks,
+            stop: experiment.plan_stop,
+            stable: &stable,
+            memory: saved.and_then(|hint| hint.memory.as_deref()),
+            earlier: saved.map_or(&[], |hint| hint.earlier.as_slice()),
+            allowed: &allowed,
+        };
+        // The model the order is dealt over, and what the plan reads beside
+        // it: a schedule saved over the same deals its own order again
+        // rather than planning one, which takes the plan's whole budget.
+        let before = {
+            let mut hasher = WidthFreeHasher::default();
+            stable_fingerprint(source, &input).hash(&mut hasher);
+            experiment.discount_rate.to_bits().hash(&mut hasher);
+            format!("{:?}", experiment.plan_stop).hash(&mut hasher);
+            for end in &period_ends_h {
+                end.to_bits().hash(&mut hasher);
+            }
+            // Walked, not formatted: the ground over ground runs to millions
+            // of entries on a large mine, and printing them took seconds.
+            for (ground, group) in &groups {
+                (ground.0, group).hash(&mut hasher);
+            }
+            for (ground, after) in &not_before_h {
+                (ground.0, after.to_bits()).hash(&mut hasher);
+            }
+            for (ground, above) in &left_above {
+                ground.0.hash(&mut hasher);
+                above.iter().map(|ground| ground.0).collect::<Vec<_>>().hash(&mut hasher);
+            }
+            for (waiting, first) in &dependencies {
+                waiting.iter().map(|ground| ground.0).collect::<Vec<_>>().hash(&mut hasher);
+                first.iter().map(|ground| ground.0).collect::<Vec<_>>().hash(&mut hasher);
+            }
+            identities.auto_blast_tasks.hash(&mut hasher);
+            hasher.finish()
+        };
+        let mut candidates: Vec<(BlendInput, CaptureIdentities, longterm::PlanSummary, Vec<u32>)> = Vec::new();
+        let finish = |trial: &mut BlendInput, named: &mut CaptureIdentities| {
+            split_auto_runs(trial, named, &auto_ids, &not_before_h);
+            order_auto_blasts(trial, named, &auto_ids);
+            if !dependencies.is_empty() {
+                apply_dependencies(trial.drill_blast.get_or_insert_with(|| empty_chain(plan.drill_blast())), &dependencies);
+            }
+        };
+        // What the plan leaves for the next run, kept whichever order wins.
+        let mut memory = None;
+        if let Some(order) = saved
+            .filter(|hint| hint.fingerprint.is_some())
+            .and_then(|hint| hint.auto_order.as_ref())
+            .filter(|order| order.before == before)
+        {
+            let (mut trial, mut named) = (input.clone(), identities.clone());
+            if longterm::assign_order(&mut trial, &request, &order.order) {
+                finish(&mut trial, &mut named);
+                candidates.push((trial, named, longterm::PlanSummary::default(), order.order.clone()));
+                memory = order.memory.clone();
+            }
+        }
+        // A model the saved order was not dealt over has no
+        // saved schedule to show, and planning one is what this run is not
+        // to do: with no diagnostics, the run reads it as out of date.
+        if candidates.is_empty() && saved.is_some_and(|hint| hint.restore_only) {
+            return Err(Vec::new());
+        }
+        if candidates.is_empty() {
+            for planned in [true, false] {
+                let (mut trial, mut named) = (input.clone(), identities.clone());
+                let (summary, order, left) = longterm::assign(&mut trial, &request, planned, &|| cancel.is_cancelled());
+                if cancel.is_cancelled() {
+                    return Err(Vec::new());
+                }
+                if let Some(left) = left {
+                    memory = Some(Arc::new(left));
+                }
+                // No plan was made: the order is the top-down one already.
+                if planned && summary.rounds == 0 && !summary.reused {
+                    continue;
+                }
+                finish(&mut trial, &mut named);
+                candidates.push((trial, named, summary, order));
+            }
+        }
+        // Both orders dispatch with the plan's price on the automatic
+        // loaders' digging, which an hour they reclaim gives up.
+        if let Some(memory) = &memory {
+            for (trial, _, _, _) in &mut candidates {
+                trial.dig_prices = memory.dig_prices.clone();
+            }
+        }
+        let worth = |trial: &BlendInput| {
+            let reduced = crate::model::schedule::optimisation::blended::reduce::Reduced::new(trial);
+            match crate::model::schedule::optimisation::blended::greedy::dispatch_cancellable(&reduced.input, &cancel.signal()) {
+                Ok(Some(found)) if found.replay.is_valid() => {
+                    let value = longterm::discounted_value(&reduced.input, &found.solution, &found.replay, experiment.discount_rate);
+                    Some((value, found))
+                }
+                _ => None,
+            }
+        };
+        // An order the saved schedule answers is that schedule's, which the
+        // run restores: neither needs dispatching to choose it.
+        let restorable = saved
+            .and_then(|hint| hint.fingerprint)
+            .and_then(|fingerprint| candidates.iter().position(|(trial, _, _, _)| stable_fingerprint(source, trial) == fingerprint));
+        // The two dispatches are independent: side by side.
+        let mut found: Vec<Option<(f64, crate::model::schedule::optimisation::blended::greedy::Dispatched)>> = match (restorable, candidates.as_slice()) {
+            (None, [(planned, _, _, _), (top_down, _, _, _)]) => {
+                let (planned, top_down) = rayon::join(|| worth(planned), || worth(top_down));
+                vec![planned, top_down]
+            }
+            _ => vec![None],
+        };
+        let values: Vec<Option<f64>> = found.iter().map(|entry| entry.as_ref().map(|(value, _)| *value)).collect();
+        if cancel.is_cancelled() {
+            return Err(Vec::new());
+        }
+        // The plan's order unless the top-down one schedules for more, both
+        // discounted as the plan values ground.
+        let chosen = match (restorable, values.as_slice()) {
+            (Some(position), _) => position,
+            (None, [Some(planned), Some(top_down)]) if top_down > planned => 1,
+            _ => 0,
+        };
+        if restorable.is_some() {
+            known_fingerprint = saved.and_then(|hint| hint.fingerprint);
+        }
+        let summary = candidates[0].2;
+        if summary.rounds > 0 {
+            notes.push(tr!(
+                "schedule-capture-auto-plan",
+                blocks = summary.blocks.to_string(),
+                periods = summary.periods.to_string(),
+                rounds = summary.rounds.to_string(),
+                seconds = format!("{:.1}", summary.seconds),
+                value = crate::model::schedule::cashflow::money_exact(summary.value),
+                bound = crate::model::schedule::cashflow::money_exact(summary.bound)
+            ));
+        }
+        if let [Some(planned), Some(top_down)] = values.as_slice() {
+            let (planned, top_down) = (
+                crate::model::schedule::cashflow::money_exact(*planned),
+                crate::model::schedule::cashflow::money_exact(*top_down),
+            );
+            let rate = format!("{}%", experiment.discount_rate * 100.0);
+            notes.push(if chosen == 0 {
+                tr!("schedule-capture-auto-planned", rate = rate, planned = planned, top_down = top_down)
+            } else {
+                tr!("schedule-capture-auto-top-down", rate = rate, planned = planned, top_down = top_down)
+            });
+        }
+        let (trial, named, _, order) = candidates.swap_remove(chosen);
+        input = trial;
+        identities = named;
+        auto_order = Some(crate::model::schedule::optimisation::blended::saved::AutoOrder { before, order, memory });
+        dispatched = found.get_mut(chosen).and_then(Option::take).map(|(_, found)| found);
+    } else if !dependencies.is_empty() {
+        // Into the chain only now, as for the automatic bars above.
+        apply_dependencies(input.drill_blast.get_or_insert_with(|| empty_chain(plan.drill_blast())), &dependencies);
+    }
     let stats = CaptureStats {
         duration: started.elapsed(),
         candidates: input.movements.len(),
         ground_sources: input.ground.len(),
         event_budget_restricted,
     };
-    let stable_fingerprint = stable_fingerprint(source, &input);
+    let stable_fingerprint = known_fingerprint.unwrap_or_else(|| stable_fingerprint(source, &input));
     let fingerprint = {
         let mut hasher = DefaultHasher::new();
         source.runtime.hash(&mut hasher);
@@ -1935,6 +2928,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         stable_fingerprint,
         stats,
         notes,
+        dispatched,
+        auto_order,
     })
 }
 
@@ -1948,13 +2943,16 @@ struct HaulCapture<'a> {
     searches: BTreeMap<(ProjectDestinationId, trucking::TruckClassId), Option<crate::model::haulage::routing::DestinationSearch<'a>>>,
     /// Cycles already worked out, by everything one depends on. A block's
     /// portions share its haul, so all but the first are looked up here.
-    cycles: std::collections::HashMap<CycleKey, Option<trucking::CycleBreakdown>>,
+    cycles: std::collections::HashMap<CycleKey, Option<trucking::CycleBreakdown>, foldhash::fast::FixedState>,
     /// Sources each destination offered by routing could not be reached
     /// from by road, so no candidate was made for them.
     unroutable: BTreeMap<ProjectDestinationId, BTreeSet<SourceId>>,
     /// Sources offered a destination, and those that reached one by road.
     offered: BTreeSet<SourceId>,
     routed: BTreeSet<SourceId>,
+    /// Where trucks meet each destination, dumping or loading: found once,
+    /// as a dump with no node of its own is found by a search of every road.
+    meets: BTreeMap<(ProjectDestinationId, bool), Option<glam::DVec3>>,
 }
 impl<'a> HaulCapture<'a> {
     fn new(network: &'a crate::model::haulage::HaulNetwork, points: &'a BTreeMap<ProjectDestinationId, glam::DVec3>, plan: &'a SchedulePlan) -> Self {
@@ -1964,14 +2962,19 @@ impl<'a> HaulCapture<'a> {
             index: crate::model::haulage::network::RoadIndex::new(network),
             plan,
             searches: BTreeMap::new(),
-            cycles: std::collections::HashMap::new(),
+            cycles: std::collections::HashMap::default(),
             unroutable: BTreeMap::new(),
             offered: BTreeSet::new(),
             routed: BTreeSet::new(),
+            meets: BTreeMap::new(),
         }
     }
-    fn point(&self, id: ProjectDestinationId, reclaim: bool) -> Option<glam::DVec3> {
-        self.network.destination_point(id, reclaim, self.points.get(&id).copied())
+    fn point(&mut self, id: ProjectDestinationId, reclaim: bool) -> Option<glam::DVec3> {
+        let (network, points) = (self.network, self.points);
+        *self
+            .meets
+            .entry((id, reclaim))
+            .or_insert_with(|| network.destination_point(id, reclaim, points.get(&id).copied()))
     }
     /// The haul's cycle along the roads, or `None` when no road route
     /// reaches the destination from this source: there is no other way to
@@ -2362,6 +3365,56 @@ fn measured(value: f64) -> u32 {
 /// is no input a separate list could forget. The project identities that
 /// produced it are folded in beside, so two projects that happen to build the
 /// same model are still two runs.
+/// The drill and blast chain, for [`stable_fingerprint`]: every field the
+/// chain reads, the numbers by their bits. The windows and a fixed timeline,
+/// few and seldom present as a model is built, go through their serialised
+/// form.
+fn hash_drill_blast(input: Option<&crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput>, hasher: &mut WidthFreeHasher) {
+    let Some(input) = input else {
+        0u8.hash(hasher);
+        return;
+    };
+    1u8.hash(hasher);
+    input.blasts.len().hash(hasher);
+    for blast in &input.blasts {
+        for quantity in blast.quantity {
+            quantity.to_bits().hash(hasher);
+        }
+        blast.stage.hash(hasher);
+        blast.releases.len().hash(hasher);
+        for ground in &blast.releases {
+            ground.0.hash(hasher);
+        }
+        blast.above.len().hash(hasher);
+        for ground in &blast.above {
+            ground.0.hash(hasher);
+        }
+        blast.never_clear.hash(hasher);
+        blast.gate.hash(hasher);
+    }
+    input.agents.len().hash(hasher);
+    for agent in &input.agents {
+        agent.activity.hash(hasher);
+        agent.rates.len().hash(hasher);
+        for rate in &agent.rates {
+            rate.to_bits().hash(hasher);
+        }
+    }
+    input.tasks.len().hash(hasher);
+    for task in &input.tasks {
+        task.agent.hash(hasher);
+        task.priority.hash(hasher);
+        task.start_h.to_bits().hash(hasher);
+        task.end_h.to_bits().hash(hasher);
+        task.sequence.hash(hasher);
+        task.delay.hash(hasher);
+        task.follow.hash(hasher);
+    }
+    input.window_end_h.to_bits().hash(hasher);
+    serde_json::to_string(&input.windows).unwrap_or_default().hash(hasher);
+    serde_json::to_string(&input.fixed).unwrap_or_default().hash(hasher);
+}
+
 fn stable_fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
     let mut hasher = WidthFreeHasher::default();
     source.tonnage_field.0.hash(&mut hasher);
@@ -2369,7 +3422,13 @@ fn stable_fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
     // The model itself. `BlendInput` derives `PartialEq` over exactly the
     // fields the solvers read, and every one of them is walked here.
     input.segments_per_interval.hash(&mut hasher);
-    serde_json::to_string(&input.drill_blast).unwrap_or_default().hash(&mut hasher);
+    hash_drill_blast(input.drill_blast.as_ref(), &mut hasher);
+    for area in &input.loader_areas {
+        area.loaders.hash(&mut hasher);
+        for ground in &area.ground {
+            ground.0.hash(&mut hasher);
+        }
+    }
     for interval in &input.intervals {
         interval.index.hash(&mut hasher);
         interval.start_h.to_bits().hash(&mut hasher);
@@ -2452,10 +3511,16 @@ fn stable_fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
             hours.to_bits().hash(&mut hasher);
         }
     }
+    // Each activity's and source's text once: candidates share a few
+    // thousand sources between millions of them.
+    let mut labels: std::collections::HashMap<(Activity, SourceId), (String, String), foldhash::fast::FixedState> = std::collections::HashMap::default();
     for candidate in &input.movements {
         candidate.loader.0.hash(&mut hasher);
-        format!("{:?}", candidate.activity).hash(&mut hasher);
-        format!("{:?}", candidate.source).hash(&mut hasher);
+        let (activity, source) = labels
+            .entry((candidate.activity, candidate.source))
+            .or_insert_with(|| (format!("{:?}", candidate.activity), format!("{:?}", candidate.source)));
+        activity.hash(&mut hasher);
+        source.hash(&mut hasher);
         candidate.material.0.hash(&mut hasher);
         candidate.destination.0.hash(&mut hasher);
         candidate.truck.0.hash(&mut hasher);

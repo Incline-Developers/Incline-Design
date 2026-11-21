@@ -355,23 +355,28 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             }
             for segment in 0..segments {
                 let duration = rows.columns().duration[&(interval.index, segment)].clone();
-                for activity in [Activity::Dig, Activity::Reclaim] {
-                    let rate = match activity {
-                        Activity::Dig => interval_rate(loader, interval.index).map(|r| r.dig_tph),
-                        Activity::Reclaim => interval_rate(loader, interval.index).map(|r| r.reclaim_tph),
-                    };
-                    let Some(rate) = rate.filter(|value| *value > 0.0) else { continue };
-                    let mut terms = vec![(duration.clone(), -rate)];
+                // Digging and reclaiming share the loader's hours, in
+                // tonnes at its faster rate so the row scales as before.
+                if let Some(rate) = interval_rate(loader, interval.index).filter(|rate| rate.dig_tph > 0.0 || rate.reclaim_tph > 0.0) {
+                    let fastest = rate.dig_tph.max(rate.reclaim_tph);
+                    let mut terms = vec![(duration.clone(), -fastest)];
                     for (index, candidate) in input.movements.iter().enumerate() {
-                        if candidate.loader != loader.id || candidate.activity != activity {
+                        if candidate.loader != loader.id {
+                            continue;
+                        }
+                        let tph = match candidate.activity {
+                            Activity::Dig => rate.dig_tph,
+                            Activity::Reclaim => rate.reclaim_tph,
+                        };
+                        if tph <= 0.0 {
                             continue;
                         }
                         if let Some(column) = rows.columns().movement.get(&(index, interval.index, segment)) {
-                            terms.push((column.clone(), 1.0));
+                            terms.push((column.clone(), fastest / tph));
                         }
                     }
                     if terms.len() > 1 {
-                        rows.leq(terms, 0.0, &format!("rate_{loader_index}_{activity:?}_{}_{segment}", interval.index));
+                        rows.leq(terms, 0.0, &format!("rate_{loader_index}_{}_{segment}", interval.index));
                     }
                 }
 
@@ -414,6 +419,8 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             }
         }
     }
+
+    loader_limits(rows, input)?;
 
     // ---- ground conservation ------------------------------------------------
     // Shared ground cannot be depleted twice: one balance per source carried
@@ -633,6 +640,11 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             return Err(FormulationCancelled);
         }
         let TaskKind::Dig { sequence } = &task.kind else { continue };
+        // An automatic bar's blocks have no order of their own: what it may
+        // reach at once is the replay's to check.
+        if task.lookahead_t > 0.0 {
+            continue;
+        }
         let Some(loader_index) = input.loaders.iter().position(|entry| entry.id == task.loader) else {
             continue;
         };
@@ -2003,7 +2015,10 @@ impl DigReach {
             let TaskKind::Dig { sequence } = &task.kind else { continue };
             for (position, &ground) in sequence.iter().enumerate() {
                 // A predecessor the capture did not include has no order row.
-                let ahead = position.checked_sub(1).map(|before| sequence[before]).filter(|before| held.contains(before));
+                let ahead = position
+                    .checked_sub(1)
+                    .map(|before| sequence[before])
+                    .filter(|before| task.lookahead_t <= 0.0 && held.contains(before));
                 ways.entry((task.loader, ground)).or_default().push((task.window_start_h, ahead));
             }
         }
@@ -3084,6 +3099,65 @@ fn formulate_targets<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(), Fo
                 let credit = rows.valued(1.0, prior, &format!("targetprior_{index}_{period}"));
                 rows.eq(vec![(credit, 1.0)], 1.0, &format!("targetpriorfix_{index}_{period}"));
             }
+        }
+    }
+    Ok(())
+}
+
+/// Loader limits: no more loaders dig in one area in an interval than it
+/// takes, as the replay counts them. A binary per loader, area and interval
+/// that the loader's digs there need, its big-M the loader's rate over the
+/// interval, and the area's binaries summed within its limit. Only areas
+/// more loaders can reach in an interval than they allow get rows.
+fn loader_limits<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(), FormulationCancelled> {
+    if input.loader_areas.is_empty() {
+        return Ok(());
+    }
+    let mut areas_of: BTreeMap<GroundId, Vec<usize>> = BTreeMap::new();
+    for (area, entry) in input.loader_areas.iter().enumerate() {
+        for ground in &entry.ground {
+            areas_of.entry(*ground).or_default().push(area);
+        }
+    }
+    let loader_index: BTreeMap<LoaderId, usize> = input.loaders.iter().enumerate().map(|(index, loader)| (loader.id, index)).collect();
+    // Each area's dig columns by interval and loader.
+    type ByLoader<V> = BTreeMap<usize, Vec<V>>;
+    let mut digs: BTreeMap<(usize, usize), ByLoader<R::Var>> = BTreeMap::new();
+    for (&(candidate, interval, _), column) in &rows.columns().movement {
+        let movement = &input.movements[candidate];
+        let SourceId::Ground(ground) = movement.source else { continue };
+        if movement.activity != Activity::Dig {
+            continue;
+        }
+        let (Some(areas), Some(&loader)) = (areas_of.get(&ground), loader_index.get(&movement.loader)) else {
+            continue;
+        };
+        for &area in areas {
+            digs.entry((interval, area)).or_default().entry(loader).or_default().push(column.clone());
+        }
+    }
+    for ((interval, area), by_loader) in digs {
+        if rows.cancelled() {
+            return Err(FormulationCancelled);
+        }
+        let limit = input.loader_areas[area].loaders;
+        if by_loader.len() <= limit as usize {
+            continue;
+        }
+        let duration_h = input.intervals.iter().find(|entry| entry.index == interval).map_or(0.0, |entry| entry.duration_h());
+        let mut flags = Vec::with_capacity(by_loader.len());
+        for (loader, columns) in by_loader {
+            let Some(rate) = interval_rate(&input.loaders[loader], interval).map(|rate| rate.dig_tph).filter(|rate| *rate > 0.0) else {
+                continue;
+            };
+            let flag = rows.binary(&format!("inarea_{loader}_{area}_{interval}"));
+            let mut terms: Vec<(R::Var, f64)> = columns.into_iter().map(|column| (column, 1.0)).collect();
+            terms.push((flag.clone(), -rate * duration_h));
+            rows.leq(terms, 0.0, &format!("areadig_{loader}_{area}_{interval}"));
+            flags.push((flag, 1.0));
+        }
+        if flags.len() > limit as usize {
+            rows.leq(flags, f64::from(limit), &format!("arealimit_{area}_{interval}"));
         }
     }
     Ok(())

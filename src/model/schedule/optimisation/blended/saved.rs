@@ -31,6 +31,24 @@ pub(crate) struct SavedSchedule {
     pub(crate) fingerprint: u64,
     pub(crate) requested_end_h: f64,
     pub(crate) solution: Arc<BlendSolution>,
+    /// The order the automatic bars' ground was dealt in, where there are
+    /// automatic bars; see [`AutoOrder`].
+    pub(crate) auto_order: Option<AutoOrder>,
+}
+
+/// The order a run dealt the automatic bars' ground in, with what it was
+/// dealt over: a run on the same model before the order deals it again
+/// rather than planning it, and so finds the saved schedule's own model.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AutoOrder {
+    /// The model's stable fingerprint before the order was dealt.
+    pub(crate) before: u64,
+    /// The plan's blocks by position, in the order dealt.
+    pub(crate) order: Vec<u32>,
+    /// What the plan left for the next one, in this session only.
+    #[serde(skip)]
+    pub(crate) memory: Option<std::sync::Arc<crate::model::schedule::optimisation::longterm::PlanMemory>>,
 }
 
 /// The rows column by column: a schedule holds hundreds of thousands, and
@@ -48,6 +66,11 @@ struct Stored {
     durations: Vec<(usize, usize, f64)>,
     chunks: Vec<StoredChunk>,
     drill_blast: Option<DrillBlastTimeline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto_order: Option<AutoOrder>,
+    /// See `BlendSolution::parts`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parts: Vec<(usize, usize)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -90,6 +113,8 @@ impl SavedSchedule {
                 })
                 .collect(),
             drill_blast: solution.drill_blast.clone(),
+            auto_order: self.auto_order.clone(),
+            parts: solution.parts.iter().copied().collect(),
         })
     }
 
@@ -126,6 +151,7 @@ impl SavedSchedule {
         Some(Self {
             fingerprint: stored.fingerprint,
             requested_end_h: stored.requested_end_h,
+            auto_order: stored.auto_order,
             solution: Arc::new(BlendSolution {
                 movements,
                 durations: stored
@@ -137,6 +163,7 @@ impl SavedSchedule {
                 reported_objective: 0.0,
                 adjustments: ExtractionAdjustments::default(),
                 drill_blast: stored.drill_blast,
+                parts: stored.parts.into_iter().collect(),
             }),
         })
     }

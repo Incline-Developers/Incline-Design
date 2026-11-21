@@ -678,7 +678,11 @@ pub(crate) fn grid_cell_entry(ui: &mut egui::Ui, id: impl std::hash::Hash + std:
 /// [`grid_cell_entry`] for a value that stands but is not used as typed: in
 /// the warning colour, with `note` after its unit saying what is used.
 pub(crate) fn grid_cell_entry_flagged(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, cell: egui::Rect, value: &mut f64, unit: &str, note: Option<&str>) -> bool {
-    let cell = cell.shrink2(egui::vec2(4.0, COLUMN_ROW_EXTRA / 2.0 + 1.0));
+    // A column grid's cell has room to spare around its text; a named row's
+    // value cell, already inset, has next to none, and trimmed as much left
+    // its text too short to show whole.
+    let spare = ((cell.height() - row_height(ui) + 2.0) / 2.0).clamp(0.0, COLUMN_ROW_EXTRA / 2.0 + 1.0);
+    let cell = cell.shrink2(egui::vec2(4.0, spare));
     if !cell.is_positive() {
         return false;
     }
@@ -1268,6 +1272,28 @@ impl PropertyRows<'_> {
     /// stands but rests on an assumption the message explains on hover.
     pub(crate) fn readonly_warning(&mut self, key: &str, value: &str, unit: Option<&str>, warning: Option<&str>) -> egui::Response {
         self.value_field(key, &mut value.to_owned(), unit, warning.map(Badge::Warning), true, " ")
+    }
+
+    /// A choice of a few options across the key column, on a
+    /// [`SlideChoice`](super::slide_choice::SlideChoice), and a number for
+    /// the chosen one in the value column with `unit` after it. Returns the
+    /// option clicked this frame, and whether a typed number was committed
+    /// into `value`.
+    pub(crate) fn choice_entry(
+        &mut self,
+        id: impl std::hash::Hash + std::fmt::Debug,
+        labels: &[String],
+        selected: usize,
+        value: &mut f64,
+        unit: &str,
+    ) -> (Option<usize>, bool, egui::Response) {
+        let id = self.scope().with(("choice_entry", id));
+        let (rect, split) = self.begin_row(false);
+        let choice = Self::key_cell(rect, split).shrink2(egui::vec2(0.0, COLUMN_ROW_EXTRA / 2.0 + 1.0));
+        let picked = super::slide_choice::SlideChoice::new(id.with("choice"), labels, selected).show(self.ui, choice);
+        let committed = grid_cell_entry(self.ui, id.with("entry"), Self::value_cell(rect, split), value, unit);
+        let response = self.ui.interact(Self::value_cell(rect, split), id.with("value"), egui::Sense::hover());
+        (picked, committed, response)
     }
 
     /// Weak text across both columns: a hint about the rows above it.

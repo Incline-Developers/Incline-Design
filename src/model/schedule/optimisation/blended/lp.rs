@@ -313,7 +313,11 @@ impl LinearProgram {
             dual_edge_weight_strategy: solver::EdgeWeightStrategy::Dantzig,
             ..solver::Options::default()
         };
-        let found = match warm.take(shape) {
+        // The rest of an interval after a part is the program just solved
+        // with its bars chosen afresh: a basis held for its shape may be from
+        // a very different hour, and the last one in its line is nearer.
+        let held = if warm.role == WarmRole::Rest { None } else { warm.take(shape) };
+        let found = match held {
             Some(basis) => Some(solver::solve_from(&problem, &light, Some(&basis), None)),
             // A shape not held: the last program's basis, carried over by
             // what its columns and rows stand for. Most of an interval's
@@ -341,7 +345,7 @@ impl LinearProgram {
         }
         if let Some(basis) = solution.basis.take() {
             if let Some(keys) = keys {
-                warm.last = Some((keys, basis.clone()));
+                warm.last[warm.role as usize] = Some((keys, basis.clone()));
             }
             warm.keep(shape, basis);
         }
@@ -357,8 +361,24 @@ impl LinearProgram {
 #[derive(Default)]
 pub(crate) struct WarmStarts {
     bases: Vec<(u64, solver::Basis)>,
-    /// The last program solved with every column keyed, and its basis.
-    last: Option<(Keys, solver::Basis)>,
+    /// The last program solved with every column keyed, and its basis, in
+    /// each role: a program of a new shape carries the last basis of its own
+    /// role, the nearest program to it.
+    last: [Option<(Keys, solver::Basis)>; 3],
+    /// What the programs now being solved are, set by the caller.
+    pub(crate) role: WarmRole,
+}
+
+/// The line of programs one belongs to, for [`WarmStarts`]: an interval's
+/// own, from its opening, follows the last interval's; a part of an
+/// interval follows the part before; the rest of an interval after a part
+/// follows the rest of it before.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum WarmRole {
+    #[default]
+    Opening,
+    Part,
+    Rest,
 }
 
 /// What each column and each row of a program stands for.
@@ -385,7 +405,7 @@ impl WarmStarts {
     /// it would refuse, become nonbasic, rows' slacks first.
     fn carried(&self, keys: &Keys, problem: &solver::Problem) -> Option<solver::Basis> {
         use solver::BasisStatus;
-        let (held, basis) = self.last.as_ref()?;
+        let (held, basis) = self.last[self.role as usize].as_ref().or_else(|| self.last.iter().flatten().next())?;
         let state = foldhash::fast::FixedState::default();
         let index = |keys: &[u64], statuses: &[BasisStatus]| {
             let mut map: std::collections::HashMap<u64, BasisStatus, foldhash::fast::FixedState> = std::collections::HashMap::with_capacity_and_hasher(keys.len(), state.clone());

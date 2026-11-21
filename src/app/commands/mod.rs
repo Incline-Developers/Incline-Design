@@ -67,6 +67,7 @@ impl<'a> App<'a> {
         let Some((true, effects)) = stepped else {
             return;
         };
+        self.follow_open_scenario();
 
         if self.editor.active_layer.is_some_and(|layer_id| self.active_layer() != Some(layer_id)) {
             self.editor.active_layer = None;
@@ -86,6 +87,9 @@ impl<'a> App<'a> {
 
     pub(crate) fn handle_ui_commands(&mut self, commands: Vec<UiCommand>) {
         let had_commands = !commands.is_empty();
+        // What is open before any command, the first after a project opens
+        // included, so a command that changes it is followed from there.
+        self.follow_open_scenario();
         if had_commands {
             self.last_ui_command_at = Some(web_time::Instant::now());
         }
@@ -120,6 +124,7 @@ impl<'a> App<'a> {
                     }
                 }
             }
+            self.follow_open_scenario();
         }
         if had_commands {
             self.redraw_requested = true;
@@ -166,6 +171,7 @@ impl<'a> App<'a> {
                 | UiCommand::DeleteSolid(_)
                 | UiCommand::SaveSolidPreviewToProject
                 | UiCommand::UpdateSolid { .. }
+                | UiCommand::DrawBlastPanels { .. }
                 | UiCommand::SetSolidsTopography { .. }
                 | UiCommand::RecomputeReserveStats(_)
                 | UiCommand::RunPlanningStage(_)
@@ -222,6 +228,10 @@ impl<'a> App<'a> {
             UiCommand::CreateDrillPattern { name, collars, depth, diameter } => self.create_drill_pattern(name, collars, depth, diameter),
             UiCommand::CopyCutsTo(targets) => {
                 self.copy_cuts_to(&targets);
+                Ok(())
+            }
+            UiCommand::DrawBlastPanels { solid, size_m } => {
+                self.draw_blast_panels(solid, size_m);
                 Ok(())
             }
             UiCommand::AddToSequence { rows, blast } => {

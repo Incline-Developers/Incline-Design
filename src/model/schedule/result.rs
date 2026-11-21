@@ -101,6 +101,11 @@ pub(crate) enum IdleReason {
     /// Its bar's next block has not been blasted yet; the span names the
     /// blast. See [`super::drill_blast`].
     WaitingOnBlast,
+    /// Its automatic bar's next block lies under ground still standing.
+    WaitingOnGround,
+    /// Its bar's next block is in an area holding as many other loaders as
+    /// a loader limit allows.
+    LoaderLimit,
 }
 
 /// What drill and blast did in a calculated schedule: every blast with its
@@ -886,6 +891,12 @@ pub(crate) struct CalculatedSchedule {
     pub(crate) idle: Vec<IdleSpan>,
     /// Each dig bar's resolved blocks, in authored order.
     pub(crate) bar_blocks: Vec<(BarId, Vec<DigBlockId>)>,
+    /// Automatic bars' blocks by name as the run captured them: those bars
+    /// name no ground of their own to read a name from.
+    pub(crate) block_names: BTreeMap<DigBlockId, String>,
+    /// Automatic bars' ground in a blast no machine works, dug without
+    /// waiting on it.
+    pub(crate) unblasted: std::collections::BTreeSet<DigBlockId>,
     /// Each reclaim bar's cap, as captured.
     pub(crate) reclaim_caps: Vec<(BarId, Option<f64>)>,
     pub(crate) grades: Vec<(ReserveFieldId, GradeUnit)>,
@@ -962,6 +973,8 @@ pub(crate) struct ScheduleParts {
     pub(crate) piles: Vec<PileTrack>,
     pub(crate) agents: Vec<LoaderAgentId>,
     pub(crate) bar_blocks: Vec<(BarId, Vec<DigBlockId>)>,
+    pub(crate) block_names: BTreeMap<DigBlockId, String>,
+    pub(crate) unblasted: std::collections::BTreeSet<DigBlockId>,
     pub(crate) reclaim_caps: Vec<(BarId, Option<f64>)>,
     pub(crate) grades: Vec<(ReserveFieldId, GradeUnit)>,
     pub(crate) grade_targets: Vec<GradeTargetResult>,
@@ -1053,6 +1066,8 @@ impl CalculatedSchedule {
             piles: parts.piles,
             idle,
             bar_blocks: parts.bar_blocks,
+            block_names: parts.block_names,
+            unblasted: parts.unblasted,
             reclaim_caps: parts.reclaim_caps,
             grades: parts.grades,
             grade_targets: parts.grade_targets,
@@ -1123,7 +1138,7 @@ impl CalculatedSchedule {
         self.by_block.get(&block).map(|index| &self.ground[*index])
     }
 
-    fn blocks_of(&self, bar: BarId) -> Option<&[DigBlockId]> {
+    pub(crate) fn blocks_of(&self, bar: BarId) -> Option<&[DigBlockId]> {
         self.bar_blocks.iter().find(|(id, _)| *id == bar).map(|(_, blocks)| blocks.as_slice())
     }
 

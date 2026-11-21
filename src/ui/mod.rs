@@ -818,6 +818,14 @@ fn draw_ui(
         });
         let console = console_rect.unwrap_or(egui::Rect::NOTHING);
         let setup_group = editor.setup_group;
+        // The scenarios down the left of every page that shows the open one.
+        let scenarios = (editor.is_schedule_gantt() || editor.is_schedule_charts() || editor.is_schedule_calendar())
+            .then(|| elements::schedule_scenarios::draw_island(root_ui, editor, &project.schedule, project.active_session, commands));
+        if scenarios.is_none() {
+            // As for the other optional panels: keep the root auto-id
+            // sequence the same with or without it.
+            root_ui.skip_ahead_auto_ids(1);
+        }
         let planning_layout = if editor.is_schedule_gantt() {
             // The schedule pages arrange islands as the Setup steps do: a
             // toolbar across the top and the page under it, with the Gantt's
@@ -856,12 +864,17 @@ fn draw_ui(
         );
         let ctx = root_ui.ctx();
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
+        let (scenario_regions, scenario_grips) = scenarios.map_or_else(Default::default, |layout| (layout.regions, layout.grips));
         chrome::paint_regions(
             ctx,
-            [viewport_bar_rect, console].into_iter().chain(explorer.regions).chain(planning_layout.regions),
+            [viewport_bar_rect, console]
+                .into_iter()
+                .chain(explorer.regions)
+                .chain(scenario_regions)
+                .chain(planning_layout.regions),
             status_bar_rect,
         );
-        chrome::paint_grips(ctx, planning_layout.grips);
+        chrome::paint_grips(ctx, planning_layout.grips.into_iter().chain(scenario_grips));
         if let Some(tabs) = &planning_tabs {
             tabs.paint(ctx);
         }

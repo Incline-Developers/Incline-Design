@@ -350,7 +350,9 @@ impl crate::app::App<'_> {
             field.name.hash(&mut hasher);
             format!("{:?}", field.aggregation).hash(&mut hasher);
         }
-        for bar in plan.bars() {
+        // The open scenario's bars and those it starts from, which the
+        // Gantt names and the run works.
+        for bar in plan.bars_with_inherited() {
             bar.id.0.hash(&mut hasher);
             for member in bar.members() {
                 member.solid.hash(&mut hasher);
@@ -443,12 +445,12 @@ impl crate::app::App<'_> {
                     excluded: &excluded.0,
                     excluded_index: &excluded.1,
                 };
-                let reports: Vec<BarReport> = document.schedule().bars().iter().map(|bar| report_against(document, bar, Ok(&run))).collect();
+                let reports: Vec<BarReport> = document.schedule().bars_with_inherited().map(|bar| report_against(document, bar, Ok(&run))).collect();
                 (Some(snapshot), ground, index, excluded, None, Arc::new(reports))
             }
             Err(reason) => {
                 let unavailable = reason.describe();
-                let reports: Vec<BarReport> = document.schedule().bars().iter().map(|bar| report_against(document, bar, Err(&reason))).collect();
+                let reports: Vec<BarReport> = document.schedule().bars_with_inherited().map(|bar| report_against(document, bar, Err(&reason))).collect();
                 (
                     None,
                     Arc::default(),
@@ -741,7 +743,7 @@ impl crate::app::App<'_> {
                 let blasts = self
                     .workspace
                     .active_document()
-                    .and_then(|document| document.schedule().bar(report.bar))
+                    .and_then(|document| document.schedule().bars_with_inherited().find(|bar| bar.id == report.bar))
                     .and_then(|bar| bar.blast_order().cloned());
                 let default_name = match (&report.reclaim, blasts) {
                     // A reclaim bar is named by its pile, which is what the user
@@ -1248,6 +1250,11 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
         if order.members.is_empty() {
             report.problems.push(ReadinessProblem::Empty);
         }
+        return report;
+    }
+    // An automatic bar names no ground to resolve or measure: what it digs is
+    // whatever the dig bars leave, dealt as the schedule is calculated.
+    if bar.is_auto() {
         return report;
     }
     if bar.members().is_empty() {

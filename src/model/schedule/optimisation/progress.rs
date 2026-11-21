@@ -133,9 +133,22 @@ impl ImproveProgress {
         self.points.last()
     }
 
-    /// The best schedule's distance below the bound, as a share of the bound.
+    /// The best schedule's distance below the bound: [`relative_gap`].
     pub(crate) fn gap(&self) -> Option<f64> {
         let best = self.best()?;
-        best.bound.filter(|bound| *bound > 0.0).map(|bound| (bound - best.value).max(0.0) / bound)
+        relative_gap(best.value, best.bound?)
     }
+}
+
+/// How far a schedule's value is below a bound on it, as a share of the
+/// smaller of the two: SCIP's own definition, which the gap target is read
+/// by, so the search, the progress card and the published result give one
+/// figure for one schedule. Nothing at or above the bound; no relative size
+/// when they have different signs or either is nothing.
+pub(crate) fn relative_gap(value: f64, bound: f64) -> Option<f64> {
+    if value >= bound && value.is_finite() && bound.is_finite() {
+        return Some(0.0);
+    }
+    let smaller = value.abs().min(bound.abs());
+    (smaller > 0.0 && value.signum() == bound.signum()).then(|| (bound - value).abs() / smaller)
 }

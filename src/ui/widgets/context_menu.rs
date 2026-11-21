@@ -626,6 +626,9 @@ pub(crate) fn paint_check_box(painter: &egui::Painter, visuals: &egui::Visuals, 
     painter.add(egui::Shape::line(points, mark));
 }
 
+/// The tallest a checklist popup's list grows before it scrolls.
+const CHECKLIST_MAX_HEIGHT: f32 = 320.0;
+
 /// A multiple-selection popup opened by a widget the caller drew.
 ///
 /// Unlike a command menu this stays open while rows are ticked - the whole
@@ -638,8 +641,11 @@ pub(crate) fn checklist_popup<R>(response: &egui::Response, title: impl Into<egu
         .width(width)
         .show(|ui| {
             apply_compact_style(ui);
+            // The area holds last frame's size, so without room to grow a
+            // list unfolded in it would scroll inside the old height.
+            ui.set_max_height(CHECKLIST_MAX_HEIGHT + ui.spacing().interact_size.y * 2.0);
             egui::ScrollArea::vertical()
-                .max_height(320.0)
+                .max_height(CHECKLIST_MAX_HEIGHT)
                 .show(ui, |ui| draw_body(ui, &title, width, add_contents))
                 .inner
         })

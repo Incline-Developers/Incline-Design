@@ -128,5 +128,6 @@ pub(crate) fn extract_solution(solved: &Model, columns: &BlendColumns<Var>, canc
         reported_objective: solved.primal_bound(),
         adjustments,
         drill_blast: None,
+        parts: std::collections::BTreeSet::new(),
     }))
 }

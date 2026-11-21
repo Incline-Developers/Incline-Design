@@ -981,6 +981,7 @@ pub(crate) fn draw_rule_editor(
                 &source_views,
                 &stockpiles,
                 ground_only,
+                false,
                 &mut expanded,
             ) && sources != rule.sources
             {
@@ -1528,6 +1529,7 @@ pub(crate) fn movement_sources_row(
     sources: &[SourceScopeView],
     stockpiles: &[destinations::DestinationView],
     ground_only: bool,
+    groups: bool,
     expanded: &mut Vec<(u64, u64, u64)>,
 ) -> Option<MovementSourceSelection> {
     let all = matches!(held, MovementSourceSelection::All);
@@ -1592,11 +1594,35 @@ pub(crate) fn movement_sources_row(
             }
             context_menu_separator(ui);
         }
-        menu::panel_section(ui, tr!("truck-rule-ground"));
+        let ground: Vec<SourceScope> = chosen.iter().filter_map(|scope| scope.ground()).collect();
+        // With groups, Pits and Stockpiles are rows of their own: one tick
+        // takes or drops every pit, or every pile. Both whole is All.
+        let pits: Vec<MovementSourceScope> = sources.iter().filter(|view| view.depth == 0).map(|view| MovementSourceScope::Ground(view.scope)).collect();
+        let piles: Vec<MovementSourceScope> = stockpiles.iter().map(|entry| MovementSourceScope::Stockpile(entry.id)).collect();
+        let whole = |group: &[MovementSourceScope]| all || (!group.is_empty() && group.iter().all(|scope| chosen.contains(scope)));
+        let set_group = |group: &[MovementSourceScope], is_ground: bool, on: bool| -> Option<MovementSourceSelection> {
+            let mut list = if all { everything() } else { chosen.clone() };
+            list.retain(|scope| matches!(scope, MovementSourceScope::Ground(_)) != is_ground);
+            if on {
+                list.extend(group.iter().copied());
+            }
+            if pits.iter().chain(&piles).all(|scope| list.contains(scope)) {
+                return Some(MovementSourceSelection::All);
+            }
+            (!list.is_empty()).then_some(MovementSourceSelection::Only(list))
+        };
+        let depth = usize::from(groups);
+        if groups {
+            let on = whole(&pits);
+            if ChecklistRow::new(&tr!("auto-sources-pits"), Tick::of(on, !on && !ground.is_empty())).show(ui).toggled {
+                next = set_group(&pits, true, !on);
+            }
+        } else {
+            menu::panel_section(ui, tr!("truck-rule-ground"));
+        }
         if sources.is_empty() {
             menu::menu_note(ui, tr!("destination-no-sources"));
         }
-        let ground: Vec<SourceScope> = chosen.iter().filter_map(|scope| scope.ground()).collect();
         for (index, view) in sources.iter().enumerate() {
             if !visible(sources, index, expanded) {
                 continue;
@@ -1606,7 +1632,7 @@ pub(crate) fn movement_sources_row(
             let picked = all || chosen.contains(&scope);
             let descendant = !picked && descendant_selected(sources, index, &ground);
             let acted = ChecklistRow::new(&view.label, Tick::of(picked, descendant))
-                .depth(view.depth)
+                .depth(view.depth + depth)
                 .disclosure(children.then(|| expanded.contains(&scope_key(view.scope))))
                 .show(ui);
             if acted.expanded {
@@ -1623,7 +1649,15 @@ pub(crate) fn movement_sources_row(
             }
         }
         context_menu_separator(ui);
-        menu::panel_section(ui, tr!("truck-rule-stockpiles"));
+        if groups {
+            let on = whole(&piles);
+            let some = chosen.iter().any(|scope| matches!(scope, MovementSourceScope::Stockpile(_)));
+            if ChecklistRow::new(&tr!("auto-sources-stockpiles"), Tick::of(on, !on && some)).show(ui).toggled {
+                next = set_group(&piles, false, !on);
+            }
+        } else {
+            menu::panel_section(ui, tr!("truck-rule-stockpiles"));
+        }
         if ground_only {
             menu::menu_note(ui, tr!("destination-sources-category-note"));
         } else if stockpiles.is_empty() {

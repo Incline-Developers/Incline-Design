@@ -78,7 +78,7 @@
 //! rather than something the solver has to discover, and they tighten the
 //! bilinear relaxation considerably.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::grade::GradeTable;
 use crate::model::schedule::optimisation::{
@@ -523,6 +523,15 @@ impl BlendGradeTarget {
     }
 }
 
+/// Ground no more than `loaders` loaders may dig in the same interval: one
+/// area of an authored loader limit (see
+/// [`crate::model::schedule::loader_limits`]).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LoaderArea {
+    pub(crate) loaders: u32,
+    pub(crate) ground: Vec<GroundId>,
+}
+
 /// Shared scenario input for the blended experiments. Deliberately a separate
 /// contract from the accepted `OptimisationInput`: its stockpile semantics
 /// differ, so reusing the same type would invite comparing objectives that do
@@ -554,6 +563,22 @@ pub(crate) struct BlendInput {
     /// The drill and blast chain, when the project sequences it. Its ground
     /// is dug only once released; see [`super::drill_blast`].
     pub(crate) drill_blast: Option<super::drill_blast::DrillBlastInput>,
+    /// Areas of ground with a limit on the loaders digging there at once.
+    pub(crate) loader_areas: Vec<LoaderArea>,
+    /// What a tonne of the automatic loaders' digging is worth in each
+    /// period of the long-term plan, in that period's money: its loader
+    /// rows' prices, by when each period ends in hours, ascending. Empty
+    /// without a plan. Not part of the model: the hourly dispatch reads it
+    /// as the worth of the digging an hour of reclaim gives up.
+    pub(crate) dig_prices: Vec<(f64, f64)>,
+}
+
+impl BlendInput {
+    /// [`Self::dig_prices`] in the period holding hour `at_h`; zero past
+    /// the plan's end or without one.
+    pub(crate) fn dig_price(&self, at_h: f64) -> f64 {
+        self.dig_prices.iter().find(|(end_h, _)| at_h < *end_h).map_or(0.0, |(_, price)| *price)
+    }
 }
 
 /// Numerical convention for a grade boundary in the captured numeric scale.
@@ -596,6 +621,13 @@ pub(crate) struct BlendInput {
 /// At `m = 1e-6` in mass fraction the band is 0.0001 percentage points of a
 /// percent-unit grade - far below assay precision, but stated because it is
 /// not zero.
+/// How many days ahead an automatic bar's ground is chosen from: each day
+/// the hourly dispatch works the blocks a lookahead over this many days of
+/// each bar's digging chose for it, so an automatic bar may dig a block
+/// while those before it in its sequence come to no more than this many
+/// times its reach.
+pub(crate) const LOOKAHEAD_DAYS: usize = 3;
+
 pub(crate) const GRADE_MARGIN: f64 = 1e-6;
 
 /// The same convention in contained quantity: every model row testing a
@@ -753,6 +785,8 @@ pub(crate) struct OutletIndex {
     needs: BTreeMap<(LoaderId, GroundId), Vec<Vec<DestinationId>>>,
     /// Each block's share of each material it holds, the first listed.
     shares: BTreeMap<(GroundId, MaterialId), f64>,
+    /// The share of each block a loader can send to a crusher.
+    feed: BTreeMap<(LoaderId, GroundId), f64>,
 }
 
 impl OutletIndex {
@@ -781,6 +815,13 @@ impl OutletIndex {
         drop(routes);
         let ground: BTreeMap<GroundId, usize> = input.ground.iter().enumerate().map(|(index, source)| (source.id, index)).collect();
         let mut needs = BTreeMap::new();
+        let mut feed = BTreeMap::new();
+        let crushers: BTreeSet<DestinationId> = input
+            .destinations
+            .iter()
+            .filter(|destination| destination.kind == super::super::DestinationKind::Crusher)
+            .map(|destination| destination.id)
+            .collect();
         // Keys are already sorted. Visit each loader/block once, without a
         // second tree containing every material key.
         for group in digs.chunk_by(|left, right| (left.0.0, left.0.1) == (right.0.0, right.0.1)) {
@@ -790,6 +831,21 @@ impl OutletIndex {
             };
             // Most materials have identical outlets. Deduplicate references
             // first so only the distinct readiness lists are copied.
+            let outlets_of = |material: MaterialId| -> &[DestinationId] {
+                group
+                    .binary_search_by_key(&material, |entry| entry.0.2)
+                    .map(|index| &destinations[group[index].1.clone()])
+                    .unwrap_or_default()
+            };
+            let crushed: f64 = source
+                .material
+                .iter()
+                .filter(|share| share.fraction > 0.0 && outlets_of(share.material).iter().any(|destination| crushers.contains(destination)))
+                .map(|share| share.fraction)
+                .sum();
+            if crushed > 0.0 {
+                feed.insert((loader, block), crushed);
+            }
             let mut sets: Vec<&[DestinationId]> = source
                 .material
                 .iter()
@@ -821,7 +877,13 @@ impl OutletIndex {
             ground,
             needs,
             shares,
+            feed,
         }
+    }
+
+    /// The share of the block `ground` the loader can send to a crusher.
+    pub(crate) fn feed_share(&self, loader: LoaderId, ground: GroundId) -> f64 {
+        self.feed.get(&(loader, ground)).copied().unwrap_or(0.0)
     }
 
     fn destinations(&self, loader: LoaderId, ground: GroundId, material: MaterialId) -> Option<&[DestinationId]> {
@@ -897,6 +959,7 @@ pub(crate) fn task_authorises(task: &Task, candidate: &MovementCandidate) -> boo
     }
     match (&task.kind, candidate.source) {
         (TaskKind::Dig { sequence }, SourceId::Ground(ground)) => candidate.activity == Activity::Dig && sequence.contains(&ground),
+        (TaskKind::Dig { .. }, SourceId::Stockpile(pile)) => candidate.activity == Activity::Reclaim && task.reclaims.contains(&pile),
         (TaskKind::Reclaim { approved_sources, .. }, SourceId::Stockpile(pile)) => candidate.activity == Activity::Reclaim && approved_sources.contains(&pile),
         _ => false,
     }
