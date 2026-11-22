@@ -1011,21 +1011,7 @@ impl crate::app::App<'_> {
             userspace_warn!("{}", tr!("auto-bar-convert-needs-schedule"));
             return;
         }
-        // Ground in a blast no machine works is dug unblasted by automatic
-        // bars, but a dig bar waits on its blast, here for ever, holding up
-        // everything under it: that ground stays the automatic bars'.
-        let unblasted = self.editor.schedule_result.as_ref().map(|schedule| schedule.unblasted.clone()).unwrap_or_default();
-        let kept: Vec<_> = blocks.iter().filter(|id| !unblasted.contains(*id)).filter_map(|id| by_id.get(id)).collect();
-        let left = blocks.len() - kept.len();
-        let members: Vec<_> = kept.into_iter().map(|block| self.dig_block_reference(block)).collect();
-        if left > 0 {
-            crate::userspace_log!("{}", tr!("auto-bar-convert-left-unworked", count = left));
-        }
-        // Every block left to the automatic bars: a dig bar of none would only
-        // ask for blocks.
-        if members.is_empty() {
-            return;
-        }
+        let members: Vec<_> = blocks.iter().filter_map(|id| by_id.get(id)).map(|block| self.dig_block_reference(block)).collect();
         match (until, into) {
             (Some(at_h), Some(scenario)) => self.edit_schedule(|plan| {
                 let held = plan.bar(bar).ok_or(crate::model::schedule::ScheduleError::UnknownBar)?;

@@ -622,7 +622,6 @@ pub(crate) fn publish(
                 .filter(|(block, _)| held.contains(block))
                 .collect()
         },
-        unblasted: identities.unblasted.clone(),
         reclaim_caps: identities.reclaim_caps.clone(),
         grades: identities.grades.iter().map(|(field, _, unit)| (*field, *unit)).collect(),
         grade_targets: replay

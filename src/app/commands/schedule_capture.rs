@@ -170,9 +170,6 @@ pub(crate) struct CaptureIdentities {
     pub(crate) grades: Vec<(ReserveFieldId, String, GradeUnit)>,
     /// Each scoped dig bar's resolved blocks, in authored order.
     pub(crate) bar_blocks: Vec<(BarId, Vec<crate::model::DigBlockId>)>,
-    /// Automatic bars' ground in a blast no machine works, dug without
-    /// waiting on it - which a dig bar would wait on for ever.
-    pub(crate) unblasted: BTreeSet<crate::model::DigBlockId>,
     /// Each scoped dig bar's blocks of no tonnes: its earliest start, how
     /// many of its `bar_blocks` come before the block, and the block.
     pub(crate) empty_blocks: Vec<(BarId, f64, usize, crate::model::DigBlockId)>,
@@ -2582,33 +2579,6 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
     } else {
         None
     };
-    // An automatic bar's ground in a blast no machine bar works is dug
-    // without waiting on it: nobody has sequenced that blast, and ground the
-    // schedule sequences for itself cannot wait on work nobody was given.
-    if let Some(input) = drill_blast.as_mut()
-        && !auto_ids.is_empty()
-    {
-        // Not ground a dig bar names: that bar waits on its blast as ever.
-        let auto_ground: std::collections::HashSet<GroundId> = scoped
-            .iter()
-            .filter(|bar| auto_ids.contains(&bar.bar))
-            .filter_map(|bar| match &bar.work {
-                ScopedWork::Dig { members, .. } => Some(members),
-                _ => None,
-            })
-            .flatten()
-            .filter(|(position, _)| !auto_after.contains_key(position))
-            .filter_map(|(position, _)| block_ground.get(position).copied())
-            .collect();
-        for (index, _) in input.unworked() {
-            for ground in input.blasts[index].releases.iter().filter(|ground| auto_ground.contains(*ground)) {
-                if let Some(block) = identities.ground_blocks.get(ground) {
-                    identities.unblasted.insert(*block);
-                }
-            }
-            input.blasts[index].releases.retain(|ground| !auto_ground.contains(ground));
-        }
-    }
     // Ground the schedule sequences for itself is held until the ground
     // directly above it is dug, whoever digs that: a dependency in the
     // chain beside the blasts, which is what holds ground back everywhere.

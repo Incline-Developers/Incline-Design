@@ -2571,11 +2571,6 @@ auto-bar-convert = Convert to Dig Sequence
 auto-bar-convert-reclaim = Convert to Reclaim Bar
 auto-bar-convert-until = Convert to Dig Sequence up to { $time }
 auto-bar-convert-until-report = Convert to Dig Sequence up to the time
-auto-bar-convert-left-unworked =
-    { $count ->
-        [one] { $count } block in a blast no machine works was left to the automatic bars: a dig bar would wait on that blast.
-       *[other] { $count } blocks in blasts no machine works were left to the automatic bars: a dig bar would wait on those blasts.
-    }
 auto-bar-convert-needs-schedule = Calculate the schedule first: the bar becomes a dig sequence of the blocks it was given.
 gantt-palette-hint = Drag onto a machine's row to add a { $item } bar there.
 gantt-delay-type-title = Delay type
