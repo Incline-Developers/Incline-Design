@@ -940,6 +940,47 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
                 .any(|area| dug_in.get(&(position, *area)).map_or(0, |held| held.iter().filter(|other| **other != loader).count()) >= input.loader_areas[*area].loaders as usize)
         })
     };
+    // Automatic ground held by a blast: none of it is dealt to a bar while
+    // that blast never fires, so an automatic bar with nothing left to dig
+    // waits on it rather than having finished.
+    let sequenced: std::collections::HashSet<crate::model::schedule::optimisation::GroundId> = input
+        .tasks
+        .iter()
+        .filter_map(|task| match &task.kind {
+            TaskKind::Dig { sequence } => Some(sequence),
+            _ => None,
+        })
+        .flatten()
+        .copied()
+        .collect();
+    let held_auto: Vec<(crate::model::schedule::optimisation::GroundId, f64, usize)> = lookup
+        .identities
+        .auto_ground
+        .iter()
+        .filter(|ground| !sequenced.contains(*ground))
+        .filter_map(|ground| releases.get(ground).map(|(at, blast)| (*ground, *at, *blast)))
+        .filter(|(_, _, blast)| *blast < lookup.identities.blasts.len())
+        .collect();
+    let held_blast = |agent: LoaderAgentId, position: usize| -> Option<usize> {
+        if held_auto.is_empty() {
+            return None;
+        }
+        let loader = *loaders.get(&agent)?;
+        let start_h = input.intervals[position].start_h;
+        lookup
+            .identities
+            .auto_dig_tasks
+            .iter()
+            .filter(|(_, held, from, to)| *held == loader && *from <= start_h + 1e-9 && *to > start_h + 1e-9)
+            .flat_map(|(bar, ..)| {
+                let allowed = lookup.identities.auto_allowed.get(bar);
+                held_auto
+                    .iter()
+                    .filter(move |(ground, at, _)| *at > start_h + 1e-9 && allowed.is_none_or(|allowed| allowed.contains(ground)))
+                    .map(|(_, _, blast)| *blast)
+            })
+            .min()
+    };
     let explain = |schedule: &CalculatedSchedule, agent: LoaderAgentId, position: usize| {
         use std::collections::HashSet;
 
@@ -1250,6 +1291,11 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             return (IdleReason::LoaderLimit, Vec::new(), None);
         }
         let (reason, full) = explain(schedule, agent, position);
+        if reason == IdleReason::WorkFinished
+            && let Some(blast) = held_blast(agent, position)
+        {
+            return (IdleReason::WaitingOnBlast, Vec::new(), Some(blast));
+        }
         (reason, full, None)
     });
 }

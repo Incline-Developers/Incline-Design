@@ -188,6 +188,15 @@ pub(crate) struct CaptureIdentities {
     /// The chain's tasks that automatic bars on machines work, by position:
     /// one blast each.
     pub(crate) auto_blast_tasks: Vec<usize>,
+    /// The ground the automatic bars were offered, with drill and blast on,
+    /// and the ground each automatic bar limited to some of it may take:
+    /// what a blast that never fires keeps from them is dealt to no bar,
+    /// and their loaders idle waiting on it.
+    pub(crate) auto_ground: BTreeSet<GroundId>,
+    pub(crate) auto_allowed: BTreeMap<BarId, BTreeSet<GroundId>>,
+    /// Every automatic bar's dig tasks, those dealt nothing included: the
+    /// bar, its loader and the task's window.
+    pub(crate) auto_dig_tasks: Vec<(BarId, LoaderId, f64, f64)>,
     /// Each dig bar's ground in a blast no machine bar will prep, drill or
     /// charge, so its loader waits on it all horizon: the bar, and the
     /// blast with the step nobody works.
@@ -1154,6 +1163,15 @@ fn split_auto_runs(input: &mut BlendInput, identities: &mut CaptureIdentities, a
             });
         }
     }
+    identities.auto_dig_tasks = input
+        .tasks
+        .iter()
+        .filter(|task| matches!(task.kind, TaskKind::Dig { .. }))
+        .filter_map(|task| {
+            let (_, bar, _) = identities.tasks.iter().find(|(id, bar, _)| *id == task.id && auto_ids.contains(bar))?;
+            Some((*bar, task.loader, task.window_start_h, task.window_end_h))
+        })
+        .collect();
     let empty: Vec<TaskId> = input
         .tasks
         .iter()
@@ -2564,6 +2582,7 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
             .flatten()
             .filter_map(|(position, _)| block_ground.get(position).copied())
             .collect();
+        identities.auto_ground = offered.clone();
         capture_drill_blast(
             source,
             horizon_h,
@@ -2701,6 +2720,10 @@ pub(crate) fn build(source: &CaptureSnapshot, saved: Option<&SavedHint>, cancel:
                 let positions = auto_allowed.get(bar)?;
                 Some((*task, positions.iter().filter_map(|position| block_ground.get(position).copied()).collect()))
             })
+            .collect();
+        identities.auto_allowed = auto_allowed
+            .iter()
+            .map(|(bar, positions)| (*bar, positions.iter().filter_map(|position| block_ground.get(position).copied()).collect()))
             .collect();
         let groups: BTreeMap<GroundId, u32> = auto_groups.iter().filter_map(|(position, group)| Some((*block_ground.get(position)?, *group))).collect();
         let not_before_h: BTreeMap<GroundId, f64> = auto_after.iter().filter_map(|(position, after)| Some((*block_ground.get(position)?, *after))).collect();
