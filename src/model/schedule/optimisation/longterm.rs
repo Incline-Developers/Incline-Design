@@ -51,6 +51,12 @@ const SMOOTHING: f64 = 0.7;
 const PRIOR_LEVELS: usize = 200;
 /// Rounds a plan restarted from the last one goes on without bettering it.
 const RESTART_FLAT_ROUNDS: usize = 3;
+/// Rounds over which [`PlanStop::Improvement`] measures what the plan adds:
+/// one split can add nothing yet open the way for the next to add much, so
+/// a single flat round is no sign the plan is done.
+///
+/// [`PlanStop::Improvement`]: crate::model::schedule::experiment::PlanStop::Improvement
+const IMPROVEMENT_ROUNDS: usize = 3;
 /// How many of the crusher feed blocks the plan is surest of, in turn, a
 /// period's next is chosen from for its grade.
 const BLEND_CHOICES: usize = 50;
@@ -1833,9 +1839,9 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         PlanStop::Rounds(most) => (most as usize).min(MAX_ROUNDS),
         _ => MAX_ROUNDS,
     };
-    // The value at the end of the round before, for a plan that stops once a
-    // round adds too little.
-    let mut last_value: Option<f64> = None;
+    // The values at the end of the last rounds, for a plan that stops once
+    // its last rounds add too little.
+    let mut last_values: std::collections::VecDeque<f64> = std::collections::VecDeque::with_capacity(IMPROVEMENT_ROUNDS + 1);
     let restarted = prior_share.is_some();
     let (mut best_value, mut flat) = (f64::NEG_INFINITY, 0);
     // The master's plans, as the groups each digs: what one digs, and so
@@ -2258,13 +2264,16 @@ fn planned_order(input: &BlendInput, request: &PlanRequest<'_>, blocks: &[Block]
         if stop {
             break;
         }
-        // Each round's split can only add to the value; one that adds less
-        // than the setting asks ends the plan.
+        // Each round's split can only add to the value; the last few that
+        // together add less than the setting asks end the plan.
         if let PlanStop::Improvement(least) = request.stop {
-            if last_value.is_some_and(|last| value - last < least * value.abs().max(1.0)) {
+            if last_values.len() == IMPROVEMENT_ROUNDS && last_values.front().is_some_and(|first| value - first < least * value.abs().max(1.0)) {
                 break;
             }
-            last_value = Some(value);
+            if last_values.len() == IMPROVEMENT_ROUNDS {
+                last_values.pop_front();
+            }
+            last_values.push_back(value);
         }
     }
     // How much of each block the plan has dug by the end of each period.
