@@ -405,7 +405,7 @@ borehole-inspector-flag-repeat = تکراری
 borehole-inspector-flagged-holes = گمانه‌های علامت‌گذاری‌شده ({ $count })
 borehole-inspector-flags-first-shown = { $shown } علامت اول از { $count } علامت فهرست شده است.
 borehole-inspector-file-not-where-was-linked = { $file } در جایی که پیوند شده بود نیست.
-borehole-inspector-guessed-name = حدس‌زده‌شده از روی نام
+borehole-inspector-guessed-name = از درون‌ریزی، وگرنه از روی نام
 borehole-inspector-hold-hole-while-you-work = هنگام کار روی گمانه‌های اطراف، این گمانه را نگه دارید.
 borehole-inspector-holding-hole-click-follow-selection = این گمانه نگه داشته شده است. برای دنبال کردن دوباره انتخاب کلیک کنید.
 borehole-inspector-hole-code-not-in-column = در ستون مجموعه نیست
@@ -978,6 +978,7 @@ cmd-selection-deleted-vertex = رأس { $vertex } از چندخطی { $object_id
 cmd-strat-check-checking = در حال بررسی ستون چینه‌شناسی { $name }…
 cmd-strat-check-failed = بررسی ستون چینه‌شناسی ناموفق بود: { $error }
 cmd-strat-check-summary = { $field } از { $name } بررسی شد: { $holes } گمانه، { $flagged } علامت‌گذاری‌شده
+cmd-strat-check-summary-rising = { $field } از { $name } بررسی شد: { $holes } گمانه، { $flagged } علامت‌گذاری‌شده؛ { $rising } گمانه در طول مسیر خود بالا می‌روند و کنار گذاشته شدند
 cmd-strat-check-too-many-codes = { $field } از { $name } کدهای بیش از حد دارد و نمی‌توان آن‌ها را مرتب کرد
 cmd-strat-import-filled = ستون چینه‌شناسی برای { $field } پر شد: { $names } نام؛ { $flagged } گمانه در { $checked } مغایرند. برای مرور، بررسی کنید.
 cmd-strat-import-filled-groups = ستون چینه‌شناسی برای { $field } پر شد: { $names } نام در { $groups } گروه؛ { $flagged } گمانه در { $checked } مغایرند. برای مرور، بررسی کنید.
@@ -1394,8 +1395,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } ستون شیب یا می�
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } ستون عمق کل را دو بار نگاشت می‌کند
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [one] { $file }: { $count } عمق کل خالی، صفر، منفی، مقدار بدون داده یا غیرعددی بود؛ آن دهانه بدون عمق کل نگه داشته می‌شود
-       *[other] { $file }: { $count } عمق کل خالی، صفر، منفی، مقدار بدون داده یا غیرعددی بودند؛ آن دهانه‌ها بدون عمق کل نگه داشته می‌شوند
+        [one] { $file }: { $count } عمق کل خالی یا مقدار بدون داده بود؛ آن دهانه بدون عمق کل نگه داشته می‌شود
+       *[other] { $file }: { $count } عمق کل خالی یا مقدار بدون داده بودند؛ آن دهانه‌ها بدون عمق کل نگه داشته می‌شوند
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [one] { $file }: { $count } عمق کل صفر، منفی یا غیرعددی بود؛ آن دهانه بدون عمق کل نگه داشته می‌شود
+       *[other] { $file }: { $count } عمق کل صفر، منفی یا غیرعددی بودند؛ آن دهانه‌ها بدون عمق کل نگه داشته می‌شوند
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1411,9 +1417,15 @@ csv-drill-hole-row-has-no-geometry = { $file } ردیف { $row } هندسه کا
 csv-drill-hole-row-invalid-interval = { $file } ردیف { $row } بازه نامعتبر { $from }..{ $to } برای DHID '{ $dhid }' دارد
 csv-drill-hole-row-zero-length-segment = { $file } ردیف { $row } یک قطعه با طول صفر در { $depth } برای DHID '{ $dhid }' دارد
 csv-drill-hole-row-unreadable-value = { $file } ردیف { $row } یک مقدار ناخوانا دارد
+csv-drill-hole-row-inconsistent-diameter = قطر ناسازگار برای گمانه '{ $dhid }'
+csv-drill-hole-row-wrong-width = { $file } ردیف { $row } دارای { $found } ستون است؛ { $expected } انتظار می‌رفت
+csv-drill-hole-row-blank-required-value = { $file } ردیف { $row } یک مقدار الزامی خالی دارد
+csv-drill-hole-row-invalid-number = { $file } ردیف { $row } عدد نامعتبر '{ $value }' دارد
 csv-drill-hole-csv-is-wide-text = CSV متن UTF-16 یا UTF-32 است؛ آن را با UTF-8 ذخیره کنید و دوباره وارد کنید
 csv-drill-hole-csv-holds-nul-bytes = CSV در سراسر فایل بایت NUL دارد، پس متن UTF-8 نیست؛ اگر با UTF-16 یا UTF-32 نوشته شده، آن را با UTF-8 ذخیره کنید و دوباره وارد کنید
 csv-drill-hole-overlap-field-summary = { $field } در { $count } گمانه، مثلاً { $examples }
+csv-drill-hole-codes-differ-only-by-case = کدهایی که فقط در بزرگی و کوچکی حروف تفاوت دارند، کدهای جداگانه می‌مانند: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = بالاتر از ۵
 csv-geophysics-below-0-5 = پایین‌تر از ۰٫۵
 csv-geophysics-count-more = (+{ $count } مورد دیگر)
@@ -1423,6 +1435,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = CSV دارای یک فیلد 
 csv-geophysics-curve-file-was-left-out = { $curve } در { $file } کنار گذاشته شد: بیشتر قرائت‌های آن { $side } است، بنابراین میانه آن خارج از ۰٫۵ تا ۵ g/cc است و واحد آن نادرست به نظر می‌رسد (g/cc انتظار می‌رود). Incline واحدی تبدیل نمی‌کند؛ خروجی را اصلاح و دوباره پیوند کنید
 csv-geophysics-file-empty = { $file } خالی است
 csv-geophysics-file-has-no-curve-no = { $file } منحنی ندارد: هیچ ستونی جز شناسه گمانه و عمق عدد ندارد
+csv-geophysics-file-has-two-curves-one-name = { $file } دو ستون منحنی دارد که یک منحنی خوانده می‌شوند، { $first } و { $second }: نام یکی را تغییر دهید و دوباره پیوند دهید
+csv-geophysics-file-has-no-rows-known-holes = { $file } هیچ ردیفی برای هیچ گمانه‌ای از مجموعه داده ندارد: شناسه‌های گمانه را بررسی کنید و دوباره پیوند دهید
 csv-geophysics-file-mapping-has-mapped-columns = نگاشت { $file } دارای { $mapped } ستون است، CSV دارای { $found }
 csv-geophysics-file-no-longer-matches-its = { $file } دیگر با نمایه خود مطابقت ندارد: دوباره پیوند کنید
 csv-geophysics-file-not-grouped-hole-its = { $file } بر اساس گمانه گروه‌بندی نشده است: ردیف‌های گمانه‌های آن در بازه‌های بسیار پراکنده شده‌اند. آن را بر اساس شناسه گمانه و سپس عمق مرتب و دوباره پیوند کنید
@@ -1872,10 +1886,12 @@ files-xy-grid-options = گزینه‌های شبکه XY
 geophysics-checking-geophysics-files = در حال بررسی فایل‌های ژئوفیزیک
 geophysics-downhole-geophysics-name-could-not = ژئوفیزیک درون‌چاهی «{ $name }» پیوند نشد: { $error }
 geophysics-file-changed = فایل ژئوفیزیک از زمان نمایه‌سازی تغییر کرده است
+geophysics-file-cannot-be-opened = { $file } باز نمی‌شود: { $error }
 geophysics-file-unreadable = فایل ژئوفیزیک پیوندشده به «{ $name }» در { $path } قابل خواندن نیست ({ $error })؛ آن را از منوی راست‌کلیک مجموعه‌داده دوباره پیوند کنید
 geophysics-linked-changed-rereading = ژئوفیزیک پیوندشده به «{ $name }» از زمان نمایه‌سازی تغییر کرده است؛ در حال خواندن دوباره
 geophysics-hole-has-size-mib-geophysics = { $hole } دارای { $size } MiB ردیف ژئوفیزیک است، بیش از آنچه یک گمانه در هر بار می‌خواند
 geophysics-hole-needs-size-mib-its = { $hole } برای ژئوفیزیک خود به { $size } MiB نیاز دارد، بیش از آنچه از مرورگر باقی مانده: موارد دیگر را تخلیه کنید، سپس این مجموعه‌داده را تخلیه و دوباره بارگذاری کنید
+geophysics-hole-could-not-be-read = { $hole } خوانده نشد: پرونده ژئوفیزیک آن در دسترس نیست
 geophysics-linking-geophysics-name = در حال پیوند ژئوفیزیک به { $name }
 geophysics-reading-geophysics-hole = در حال خواندن ژئوفیزیک { $hole }
 geophysics-web-could-not-read-name-error = «{ $name }» خوانده نشد: { $error }
@@ -1984,6 +2000,7 @@ io-quality-points-file = پرونده کیفیت
 io-quality-points-help = مقدارهای ترکیبی: یک ردیف برای هر گمانه و لایه با یک ستون برای هر کیفیت، یا یک ردیف برای هر گمانه، لایه و کیفیت با ستون‌های کیفیت و مقدار. هر لایه و کیفیت یک لایه نقطه با ارتفاع = مقدار می‌شود.
 io-quality-points-long = به‌صورت یک ردیف برای هر گمانه، لایه و کیفیت خوانده شد.
 io-quality-points-needs = شناسه گمانه، شرقی / X، شمالی / Y، لایه و یک ستون کیفیت (یا نام کیفیت و مقدار) را نگاشت کنید.
+io-quality-points-short = سطر { $line }، ستون { $column }: ردیف پیش از این سلول تمام می‌شود و هر ردیف به آن نیاز دارد.
 io-quality-points-negative = سطر { $line }، ستون { $column }: { $value } کمتر از 0 است و کیفیت نمی‌تواند منفی باشد.
 io-quality-points-not-a-number = سطر { $line }، ستون { $column }: عدد انتظار می‌رفت، "{ $found }" یافت شد. آن را در پایگاه داده مبدأ پاک کنید.
 io-quality-points-unit-clash = سطر { $line }، ستون { $column }: { $quality } هم به { $first } و هم به { $second } داده شده است.
@@ -1995,7 +2012,7 @@ io-quality-role-unit = یکا
 io-quality-role-value = مقدار
 io-projects = پروژه‌ها
 io-reset = بازنشانی
-io-role-reason-also-collar = این هم شبیه دهانه گمانه است
+io-role-reason-also-collar = شبیه یک فایل دهانه گمانه است
 io-role-reason-collar = یک ردیف برای هر گمانه، با مختصات
 io-role-reason-geophysics = گمانه و عمق با قرائت‌ها در گام ریز
 io-role-reason-interval = گمانه، از و تا
@@ -2027,6 +2044,8 @@ io-worksheet-writes-two-files = برگه را با نامی که انتخاب م
 cmd-file-exported-worksheet-path = برگهٔ تصحیحات به { $path } و تصحیحات کنار آن به { $records } صادر شد
 cmd-file-worksheet-export-failed-error = صادر کردن برگهٔ تصحیحات ناموفق بود: { $error }
 cmd-file-worksheet-no-corrections = { $name } تصحیحی برای صادر کردن ندارد
+cmd-file-worksheet-only-unread-corrections = { $name } تصحیحی ندارد که این نسخه بتواند بخواند: { $count } رکورد تصحیح آن همان‌طور که ذخیره شده نگه داشته می‌شود اما قابل صادر کردن نیست
+cmd-file-worksheet-leaves-out-unread = برگه تصحیحات { $name } تعداد { $count } رکورد تصحیح را که این نسخه نمی‌تواند بخواند کنار می‌گذارد؛ آن‌ها همان‌طور که ذخیره شده در پروژه می‌مانند
 state-export-corrections-worksheet = صادر کردن برگهٔ تصحیحات
 
 ## Jobs strings
@@ -2134,13 +2153,17 @@ object-edit-vertices = رأس‌ها
 omf-element-name-has-count-tie = عنصر «{ $name }» دارای { $count } اتصال است که نام چال‌هایی را دارد که دیگر در آن نیستند
 omf-element-name-has-count-unreadable = عنصر «{ $name }» دارای { $count } بخش کاری ناخوانا است؛ کنار گذاشته شدند
 omf-element-name-has-count-unreadable-strat = عنصر '{ $name }' دارای { $count } ستون چینه‌نگاری ناخوانا است؛ آنها کنار گذاشته شدند
-omf-element-name-has-count-as-logged = عنصر '{ $name }' دارای { $count } مقدار ثبت‌شده اولیه است که خوانده یا جایگذاری نشد؛ آنها کنار گذاشته شدند
+omf-element-name-has-count-as-logged = عنصر '{ $name }' دارای { $count } مقدار ثبت‌شده اولیه است که خوانده یا جایگذاری نشد؛ آنها نگه داشته می‌شوند اما اعمال نمی‌شوند
+omf-element-name-strat-field-unreadable = عنصر «{ $name }» دارای یک فیلد چینه‌شناسی ناخوانا است؛ نادیده گرفته شد
+omf-element-name-color-stops-unreadable = عنصر «{ $name }» نقطه‌های رنگی بسیار کمی برای رسم طیف دارد؛ نقطه‌های پیش‌تنظیم به کار رفتند
+omf-element-name-color-unreadable = عنصر «{ $name }» تنظیمات رنگی دارد که خوانده نشد؛ مجموعه با رنگ‌های پیش‌فرض باز می‌شود و بخش‌های کاری و ستون‌های چینه‌شناسی آن کنار گذاشته شدند
+omf-element-name-geophysics-unreadable = عنصر «{ $name }» دارای پیوند ژئوفیزیکی ناخوانا است؛ نادیده گرفته شد
 omf-element-unsupported-section = عنصر «{ $name }» بخش «{ $section }» را نام می‌برد که در این نسخه نمی‌تواند این نوع مورد را نشان دهد
 omf-element-name-names-unknown-section = عنصر «{ $name }» بخش ناشناخته «{ $section }» را نام می‌برد
 omf-quality-mark-unreadable = نشان کیفیت روی سطح { $name } خوانده نشد؛ به‌صورت سطح ساده باز می‌شود
 omf-layer-quality-mark-unreadable = نشان کیفیت روی لایه { $name } خوانده نشد؛ نقطه‌هایش به‌صورت نقطه ساده باز می‌شوند
 omf-ignoring-colour-map-omf-attribute = نقشهٔ رنگ ویژگی OMF «{ $attribute }» نادیده گرفته می‌شود: { $error }
-omf-correction-records-dropped = { $count } رکورد تصحیح از { $name } خوانده نشد و کنار گذاشته شد
+omf-correction-records-unread = { $count } رکورد اصلاح مربوط به { $name } خوانده نشد: همان‌گونه که ذخیره شده‌اند نگه داشته می‌شوند اما اعمال نمی‌شوند
 omf-corrections-unreadable = رکوردهای تصحیح { $name } خوانده نشد و کنار گذاشته شد
 omf-mining-data-exported-incline = داده‌های معدنی صادرشده توسط Incline
 omf-import = وارد کردن OMF
@@ -4961,6 +4984,7 @@ explorer-selected-count = { $count } انتخاب‌شده
 explorer-show = نمایش
 input-could-not-slice-name-error = { $name } برش نخورد: { $error }
 io-drill-holes = گمانه‌ها
+io-drill-csv-preview-failed = خواندن { $file } ممکن نبود: { $error }
 io-fixed-block-size = اندازهٔ بلوک ثابت
 io-no-column-mapped-these = ستونی به این محورها نگاشت نشده است، پس هر بلوک به‌جای آن از این اندازه استفاده می‌کند.
 menu-build-solid-surfaces = ساخت حجم از سطوح...

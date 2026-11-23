@@ -447,7 +447,7 @@ borehole-inspector-flag-repeat = Tekrarlanan
 borehole-inspector-flagged-holes = İşaretli delikler ({ $count })
 borehole-inspector-flags-first-shown = { $count } işaretin ilk { $shown } tanesi listelendi.
 borehole-inspector-file-not-where-was-linked = { $file }, bağlandığı yerde değil.
-borehole-inspector-guessed-name = Ada göre tahmin edildi
+borehole-inspector-guessed-name = İçe aktarmadan, yoksa ada göre
 borehole-inspector-hold-hole-while-you-work = Çevresindeki deliklerle çalışırken bu deliği sabit tutun.
 borehole-inspector-holding-hole-click-follow-selection = Bu delik sabit tutuluyor. Seçimi yeniden izlemek için tıklayın.
 borehole-inspector-hole-code-not-in-column = Kümenin sütununda yok
@@ -1020,6 +1020,7 @@ cmd-selection-deleted-vertex = { $object_id } çoklu çizgisinden { $vertex } k�
 cmd-strat-check-checking = { $name } stratigrafik sütunu kontrol ediliyor…
 cmd-strat-check-failed = Stratigrafik sütun kontrolü başarısız: { $error }
 cmd-strat-check-summary = { $name } için { $field } kontrol edildi: { $holes } delik, { $flagged } işaretlendi
+cmd-strat-check-summary-rising = { $name } için { $field } kontrol edildi: { $holes } delik, { $flagged } işaretlendi; izi boyunca yukarı çıkan { $rising } delik dışarıda bırakıldı
 cmd-strat-check-too-many-codes = { $name } için { $field } sıraya koymak için çok fazla kod içeriyor
 cmd-strat-import-filled = { $field } için stratigrafik sütun dolduruldu: { $names } ad; { $flagged } delik { $checked } alanında uyuşmuyor. İncelemek için Kontrol Et'i kullanın.
 cmd-strat-import-filled-groups = { $field } için stratigrafik sütun dolduruldu: { $groups } grupta { $names } ad; { $flagged } delik { $checked } alanında uyuşmuyor. İncelemek için Kontrol Et'i kullanın.
@@ -1436,8 +1437,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } bir eğim veya dalım süt
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } bir toplam derinlik sütununu iki kez eşliyor
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [one] { $file }: { $count } toplam derinlik boş, sıfır, negatif, veri yok değeri veya sayı değildi; o kuyu ağzı toplam derinliksiz tutuluyor
-       *[other] { $file }: { $count } toplam derinlik boş, sıfır, negatif, veri yok değeri veya sayı değildi; o kuyu ağızları toplam derinliksiz tutuluyor
+        [one] { $file }: { $count } toplam derinlik boş veya veri yok değeriydi; o kuyu ağzı toplam derinliksiz tutuluyor
+       *[other] { $file }: { $count } toplam derinlik boş veya veri yok değeriydi; o kuyu ağızları toplam derinliksiz tutuluyor
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [one] { $file }: { $count } toplam derinlik sıfır, negatif veya sayı değildi; o kuyu ağzı toplam derinliksiz tutuluyor
+       *[other] { $file }: { $count } toplam derinlik sıfır, negatif veya sayı değildi; o kuyu ağızları toplam derinliksiz tutuluyor
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1453,9 +1459,15 @@ csv-drill-hole-row-has-no-geometry = { $file } satır { $row }: eksiksiz XYZ vey
 csv-drill-hole-row-invalid-interval = { $file } satır { $row }: DHID '{ $dhid }' için geçersiz aralık { $from }..{ $to }
 csv-drill-hole-row-zero-length-segment = { $file } satır { $row }: DHID '{ $dhid }' için { $depth } konumunda sıfır uzunlukta bir parça var
 csv-drill-hole-row-unreadable-value = { $file } satır { $row }: okunamayan bir değer var
+csv-drill-hole-row-inconsistent-diameter = DHID '{ $dhid }' için tutarsız çap
+csv-drill-hole-row-wrong-width = { $file } satır { $row }: { $found } sütun var; { $expected } bekleniyordu
+csv-drill-hole-row-blank-required-value = { $file } satır { $row }: zorunlu bir değer boş
+csv-drill-hole-row-invalid-number = { $file } satır { $row }: geçersiz sayı '{ $value }'
 csv-drill-hole-csv-is-wide-text = CSV, UTF-16 veya UTF-32 metin; UTF-8 olarak kaydedip yeniden içe aktarın
 csv-drill-hole-csv-holds-nul-bytes = CSV baştan sona NUL baytları içeriyor, bu yüzden UTF-8 metin değil; UTF-16 veya UTF-32 olarak yazıldıysa UTF-8 olarak kaydedip yeniden içe aktarın
 csv-drill-hole-overlap-field-summary = { $field }: { $count } sondajda, ör. { $examples }
+csv-drill-hole-codes-differ-only-by-case = Yalnızca büyük/küçük harf bakımından farklı olan kodlar ayrı kodlar olarak korunur: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = 5'in üzerinde
 csv-geophysics-below-0-5 = 0,5'in altında
 csv-geophysics-count-more = (+{ $count } tane daha)
@@ -1465,6 +1477,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = CSV'de kapatılmamış tırna
 csv-geophysics-curve-file-was-left-out = { $file } içindeki { $curve } dışarıda bırakıldı: okumalarının çoğu { $side }, bu yüzden medyanı 0,5 ile 5 g/cc aralığının dışında ve birimi yanlış görünüyor (g/cc bekleniyor). Incline birim dönüştürmez; dışa aktarmayı düzeltip yeniden bağlayın
 csv-geophysics-file-empty = { $file } boş
 csv-geophysics-file-has-no-curve-no = { $file } içinde eğri yok: delik kimliği ve derinlik dışında hiçbir sütunda sayı yok
+csv-geophysics-file-has-two-curves-one-name = { $file } tek eğri olarak okunan iki eğri sütunu içeriyor, { $first } ve { $second }: birini yeniden adlandırın ve yeniden bağlayın
+csv-geophysics-file-has-no-rows-known-holes = { $file } veri kümesinin hiçbir sondajı için satır içermiyor: sondaj kimliklerini denetleyin ve yeniden bağlayın
 csv-geophysics-file-mapping-has-mapped-columns = { $file } eşlemesinde { $mapped } sütun var, CSV'de { $found } var
 csv-geophysics-file-no-longer-matches-its = { $file } artık dizinine uymuyor: yeniden bağlayın
 csv-geophysics-file-not-grouped-hole-its = { $file } delik bazında gruplanmamış: deliklerinin satırları çok fazla bloğa bölünmüş. Önce delik kimliğine, sonra derinliğe göre sıralayıp yeniden bağlayın
@@ -1914,10 +1928,12 @@ files-xy-grid-options = XY Izgara Seçenekleri
 geophysics-checking-geophysics-files = Jeofizik dosyaları denetleniyor
 geophysics-downhole-geophysics-name-could-not = '{ $name }' için kuyu içi jeofizik bağlanamadı: { $error }
 geophysics-file-changed = Jeofizik dosyası dizine eklendikten sonra değişti
+geophysics-file-cannot-be-opened = { $file } açılamıyor: { $error }
 geophysics-file-unreadable = '{ $name }' ile bağlantılı jeofizik dosyası { $path } konumunda okunamıyor ({ $error }); veri kümesinin sağ tık menüsünden yeniden bağlayın
 geophysics-linked-changed-rereading = '{ $name }' ile bağlantılı jeofizik dizine eklendikten sonra değişti; yeniden okunuyor
 geophysics-hole-has-size-mib-geophysics = { $hole } için { $size } MiB jeofizik satırı var; bu, bir deliğin okunabileceğinden fazla
 geophysics-hole-needs-size-mib-its = { $hole } jeofiziği için { $size } MiB gerektiriyor; bu, tarayıcıda kalandan fazla: diğer öğeleri kaldırın, ardından bu veri kümesini kaldırıp yeniden yükleyin
+geophysics-hole-could-not-be-read = { $hole } okunamadı: jeofizik dosyası kullanılamıyor
 geophysics-linking-geophysics-name = { $name } için jeofizik bağlanıyor
 geophysics-reading-geophysics-hole = { $hole } için jeofizik okunuyor
 geophysics-web-could-not-read-name-error = '{ $name }' okunamadı: { $error }
@@ -2026,6 +2042,7 @@ io-quality-points-file = Kalite dosyası
 io-quality-points-help = Birleşik değerler: her kuyu ve damar için kalite başına bir sütunla bir satır, ya da her kuyu, damar ve kalite için Kalite ve Değer sütunlarıyla bir satır. Her damar ve kalite yükseklik = değer olan bir nokta katmanı olur.
 io-quality-points-long = Kuyu, damar ve kalite başına bir satır olarak okundu.
 io-quality-points-needs = Kuyu Kimliği, Doğu / X, Kuzey / Y, Damar ve bir kalite sütunu eşleyin (ya da Kalite adı ve Değer).
+io-quality-points-short = Satır { $line }, sütun { $column }: satır bu hücreden önce bitiyor, oysa her satır onu gerektirir.
 io-quality-points-negative = Satır { $line }, sütun { $column }: { $value } 0'ın altında, oysa bir kalite negatif olamaz.
 io-quality-points-not-a-number = Satır { $line }, sütun { $column }: sayı bekleniyordu, "{ $found }" bulundu. Kaynak veritabanında düzeltin.
 io-quality-points-unit-clash = Satır { $line }, sütun { $column }: { $quality } hem { $first } hem { $second } biriminde verilmiş.
@@ -2037,7 +2054,7 @@ io-quality-role-unit = Birim
 io-quality-role-value = Değer
 io-projects = Projeler
 io-reset = Sıfırla
-io-role-reason-also-collar = Bu da bir ağız gibi görünüyor
+io-role-reason-also-collar = Bir ağız dosyası gibi görünüyor
 io-role-reason-collar = Kuyu başına bir satır, koordinatlarla
 io-role-reason-geophysics = Kuyu ve derinlik, ince adımlı ölçümlerle
 io-role-reason-interval = Kuyu, nereden ve nereye
@@ -2069,6 +2086,8 @@ io-worksheet-writes-two-files = Çizelgeyi seçtiğiniz adla yazar, inceleme iç
 cmd-file-exported-worksheet-path = Düzeltme çizelgesi { $path } konumuna, yanındaki düzeltmeler { $records } konumuna dışa aktarıldı
 cmd-file-worksheet-export-failed-error = Düzeltme çizelgesi dışa aktarımı başarısız oldu: { $error }
 cmd-file-worksheet-no-corrections = { $name } içinde dışa aktarılacak düzeltme yok
+cmd-file-worksheet-only-unread-corrections = { $name } içinde bu sürümün okuyabildiği düzeltme yok: { $count } düzeltme kaydı kaydedildiği gibi korunuyor ancak dışa aktarılamıyor
+cmd-file-worksheet-leaves-out-unread = { $name } düzeltme çalışma sayfası, bu sürümün okuyamadığı { $count } düzeltme kaydını dışarıda bırakıyor; kayıtlar projede kaydedildiği gibi kalıyor
 state-export-corrections-worksheet = Düzeltme Çizelgesini Dışa Aktar
 
 ## Jobs strings
@@ -2176,13 +2195,17 @@ object-edit-vertices = Köşeler
 omf-element-name-has-count-tie = '{ $name }' elemanının artık içermediği delikleri adlandıran { $count } bağlantısı var
 omf-element-name-has-count-unreadable = '{ $name }' öğesinde okunamayan { $count } çalışma damarı var; bunlar dışarıda bırakıldı
 omf-element-name-has-count-unreadable-strat = '{ $name }' öğesinde okunamayan { $count } tabaka sütunu var; bunlar dışarıda bırakıldı
-omf-element-name-has-count-as-logged = '{ $name }' öğesinde okunamayan veya yerleştirilemeyen { $count } kayıt anı değeri var; bunlar dışarıda bırakıldı
+omf-element-name-has-count-as-logged = '{ $name }' öğesinde okunamayan veya yerleştirilemeyen { $count } kayıt anı değeri var; bunlar korunuyor ancak uygulanmıyor
+omf-element-name-strat-field-unreadable = '{ $name }' öğesinde okunamayan bir tabaka alanı var; atlandı
+omf-element-name-color-stops-unreadable = '{ $name }' öğesinde bir renk geçişi çizmek için çok az renk durağı var; ön ayarın durakları kullanıldı
+omf-element-name-color-unreadable = '{ $name }' öğesinde okunamayan renk ayarları var; küme varsayılan renklerle açılır, çalışma bölümleri ve tabaka sütunları atlandı
+omf-element-name-geophysics-unreadable = '{ $name }' öğesinde okunamayan bir jeofizik bağlantısı var; atlandı
 omf-element-unsupported-section = '{ $name }' öğesi, bu derlemede bu tür bir öğeyi gösteremeyen '{ $section }' bölümünü adlandırıyor
 omf-element-name-names-unknown-section = '{ $name }' öğesi bilinmeyen bir '{ $section }' bölümünü adlandırıyor
 omf-quality-mark-unreadable = { $name } yüzeyindeki kalite işareti okunamadı; düz yüzey olarak açılıyor
 omf-layer-quality-mark-unreadable = { $name } katmanındaki kalite işareti okunamadı; noktaları düz nokta olarak açılıyor
 omf-ignoring-colour-map-omf-attribute = OMF '{ $attribute }' özniteliğindeki renk haritası yok sayılıyor: { $error }
-omf-correction-records-dropped = { $name } için { $count } düzeltme kaydı okunamadı ve dışarıda bırakıldı
+omf-correction-records-unread = { $name } öğesinin { $count } düzeltme kaydı okunamadı: kaydedildiği gibi korunuyor ancak uygulanmıyor
 omf-corrections-unreadable = { $name } için düzeltme kayıtları okunamadı ve dışarıda bırakıldı
 omf-mining-data-exported-incline = Incline tarafından dışa aktarılan maden verisi
 omf-import = OMF içe aktarma
@@ -5003,6 +5026,7 @@ explorer-selected-count = { $count } Seçili
 explorer-show = Göster
 input-could-not-slice-name-error = { $name } kırpılamadı: { $error }
 io-drill-holes = Sondaj Delikleri
+io-drill-csv-preview-failed = { $file } okunamadı: { $error }
 io-fixed-block-size = Sabit blok boyutu
 io-no-column-mapped-these = Bu eksenlere eşlenmiş sütun yok - her blok bunun yerine bu boyutu kullanır.
 menu-build-solid-surfaces = Yüzeylerden Katı Oluştur...

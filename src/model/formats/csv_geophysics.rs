@@ -29,7 +29,7 @@ use crate::{
     i18n::tr,
     model::{
         formats::csv_drill_hole::{self, CsvDrillColumnRole, CsvDrillError, CsvDrillFileRole, SKIP_REPORT_LIMIT},
-        geophysics::{ColumnRole, ColumnSet, FileIdentity, GeophysicsLink, HoleLogs, HoleRuns, LinkedColumn, LinkedFile, LogKind, LogTrace, TraceError},
+        geophysics::{ColumnRole, ColumnSet, FileIdentity, GeophysicsLink, HoleLogs, HoleRuns, LinkedColumn, LinkedFile, LogKind, LogTrace, TraceError, same_curve},
     },
     userspace_log, userspace_warn,
 };
@@ -64,7 +64,7 @@ const SPLIT_RUN_FLOOR: usize = 1024;
 const SPLIT_RUNS_PER_HOLE: usize = 4;
 
 /// Most runs past each hole's first a file may have. The index is saved
-/// with the project, which does not reopen past 64 MiB of index; this many
+/// with the project, which does not reopen past 1 GiB of index; this many
 /// runs are a few MiB of it.
 const MAX_SPLIT_RUNS: usize = 50_000;
 
@@ -76,7 +76,7 @@ const PLAUSIBLE_DENSITY: std::ops::RangeInclusive<f64> = 0.5..=5.0;
 
 /// The no-reading values exports write. A drawn curve is never negative, so
 /// there every negative is one; a curve of unknown unit may be.
-const NO_READING: [f64; 3] = [-999.25, -999.0, -9999.0];
+const NO_READING: [f64; 4] = [-999.25, -999.0, -9999.0, -99999.0];
 
 /// How a long read reports progress and learns it should stop.
 #[derive(Clone, Copy)]
@@ -454,6 +454,21 @@ pub(crate) fn index_file(
         .collect::<Vec<_>>();
     if !columns.iter().any(|column| matches!(column.role, ColumnRole::Curve { .. } | ColumnRole::LeftOut { .. })) {
         return Err(CsvDrillError::Invalid(tr!("csv-geophysics-file-has-no-curve-no", file = name.to_string())));
+    }
+    // Two kindless columns that fold to one key would read as one curve.
+    let kindless = columns.iter().filter(|column| column.role == ColumnRole::Curve { kind: None }).collect::<Vec<_>>();
+    for (at, first) in kindless.iter().enumerate() {
+        if let Some(second) = kindless[at + 1..].iter().find(|second| same_curve(&first.header, &second.header)) {
+            return Err(CsvDrillError::Invalid(tr!(
+                "csv-geophysics-file-has-two-curves-one-name",
+                file = name.to_string(),
+                first = first.header.clone().to_string(),
+                second = second.header.clone().to_string()
+            )));
+        }
+    }
+    if holes.is_empty() {
+        return Err(CsvDrillError::Invalid(tr!("csv-geophysics-file-has-no-rows-known-holes", file = name.to_string())));
     }
     let mut curves = ColumnSet::default();
     for (index, column) in columns.iter().enumerate() {

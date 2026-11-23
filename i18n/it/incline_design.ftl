@@ -447,7 +447,7 @@ borehole-inspector-flag-repeat = Ripetuto
 borehole-inspector-flagged-holes = Fori segnalati ({ $count })
 borehole-inspector-flags-first-shown = Sono elencate le prime { $shown } di { $count } segnalazioni.
 borehole-inspector-file-not-where-was-linked = { $file } non si trova nella posizione da cui è stato collegato.
-borehole-inspector-guessed-name = Dedotto dal nome
+borehole-inspector-guessed-name = Dall’import, altrimenti dal nome
 borehole-inspector-hold-hole-while-you-work = Mantieni questo foro mentre lavori su quelli intorno.
 borehole-inspector-holding-hole-click-follow-selection = Foro mantenuto. Fai clic per seguire di nuovo la selezione.
 borehole-inspector-hole-code-not-in-column = Non nella colonna del set
@@ -1028,6 +1028,7 @@ cmd-selection-deleted-vertex = Eliminato il vertice { $vertex } dalla polilinea 
 cmd-strat-check-checking = Verifica della colonna stratigrafica di { $name }…
 cmd-strat-check-failed = Verifica della colonna stratigrafica non riuscita: { $error }
 cmd-strat-check-summary = Verificato { $field } di { $name }: { $holes } foro/i, { $flagged } segnalato/i
+cmd-strat-check-summary-rising = Verificato { $field } di { $name }: { $holes } foro/i, { $flagged } segnalato/i; { $rising } foro/i salgono lungo la loro traccia e sono stati esclusi
 cmd-strat-check-too-many-codes = { $field } di { $name } contiene troppi codici per essere messi in ordine
 cmd-strat-import-filled = Colonna stratigrafica riempita per { $field }: { $names } nomi; { $flagged } fori non concordano su { $checked }. Verifica per esaminare.
 cmd-strat-import-filled-groups = Colonna stratigrafica riempita per { $field }: { $names } nomi in { $groups } gruppi; { $flagged } fori non concordano su { $checked }. Verifica per esaminare.
@@ -1444,8 +1445,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } assegna due volte una colo
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } assegna due volte una colonna di profondità totale
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [one] { $file }: { $count } profondità totale era vuota, zero, negativa, un valore senza dati o non numerica; quel boccaforo è mantenuto senza profondità totale
-       *[other] { $file }: { $count } profondità totali erano vuote, zero, negative, valori senza dati o non numeriche; quei boccafori sono mantenuti senza profondità totale
+        [one] { $file }: { $count } profondità totale era vuota o un valore senza dati; quel boccaforo è mantenuto senza profondità totale
+       *[other] { $file }: { $count } profondità totali erano vuote o valori senza dati; quei boccafori sono mantenuti senza profondità totale
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [one] { $file }: { $count } profondità totale era zero, negativa o non numerica; quel boccaforo è mantenuto senza profondità totale
+       *[other] { $file }: { $count } profondità totali erano zero, negative o non numeriche; quei boccafori sono mantenuti senza profondità totale
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1461,9 +1467,15 @@ csv-drill-hole-row-has-no-geometry = { $file } riga { $row } non ha una geometri
 csv-drill-hole-row-invalid-interval = { $file } riga { $row } ha un intervallo non valido { $from }..{ $to } per il DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } riga { $row } ha un segmento di lunghezza zero a { $depth } per il DHID '{ $dhid }'
 csv-drill-hole-row-unreadable-value = { $file } riga { $row } ha un valore illeggibile
+csv-drill-hole-row-inconsistent-diameter = Diametro incoerente per il DHID '{ $dhid }'
+csv-drill-hole-row-wrong-width = { $file } riga { $row } ha { $found } colonne; ne erano attese { $expected }
+csv-drill-hole-row-blank-required-value = { $file } riga { $row } ha un valore obbligatorio vuoto
+csv-drill-hole-row-invalid-number = { $file } riga { $row } ha il numero non valido '{ $value }'
 csv-drill-hole-csv-is-wide-text = Il CSV è testo UTF-16 o UTF-32; salvalo come UTF-8 e importalo di nuovo
 csv-drill-hole-csv-holds-nul-bytes = Il CSV contiene byte NUL ovunque, quindi non è testo UTF-8; se è stato scritto come UTF-16 o UTF-32, salvalo come UTF-8 e importalo di nuovo
 csv-drill-hole-overlap-field-summary = { $field } in { $count } sondaggio/i, ad es. { $examples }
+csv-drill-hole-codes-differ-only-by-case = I codici che differiscono solo per maiuscole e minuscole restano codici separati: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = sopra 5
 csv-geophysics-below-0-5 = sotto 0,5
 csv-geophysics-count-more = (+{ $count } altri)
@@ -1473,6 +1485,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = Il CSV ha un campo tra virgol
 csv-geophysics-curve-file-was-left-out = { $curve } in { $file } è stata esclusa: la maggior parte delle sue letture è { $side }, quindi la mediana è fuori dall'intervallo 0,5-5 g/cc e l'unità sembra errata (atteso g/cc). Incline non converte unità; correggi l'esportazione e collega di nuovo
 csv-geophysics-file-empty = { $file } è vuoto
 csv-geophysics-file-has-no-curve-no = { $file } non ha curve: nessuna colonna oltre all'ID foro e alla profondità contiene numeri
+csv-geophysics-file-has-two-curves-one-name = { $file } ha due colonne di curva lette come una sola curva, { $first } e { $second }: rinomina una e collega di nuovo
+csv-geophysics-file-has-no-rows-known-holes = { $file } non ha righe per nessun foro del dataset: controlla gli id dei fori e collega di nuovo
 csv-geophysics-file-mapping-has-mapped-columns = La mappatura di { $file } ha { $mapped } colonne, il CSV ne ha { $found }
 csv-geophysics-file-no-longer-matches-its = { $file } non corrisponde più al suo indice: collegalo di nuovo
 csv-geophysics-file-not-grouped-hole-its = { $file } non è raggruppato per foro: le righe dei suoi fori sono divise in troppi tratti. Ordinalo per ID foro, poi per profondità, e collegalo di nuovo
@@ -1922,10 +1936,12 @@ files-xy-grid-options = Opzioni griglia XY
 geophysics-checking-geophysics-files = Verifica dei file di geofisica
 geophysics-downhole-geophysics-name-could-not = Impossibile collegare la geofisica in foro per '{ $name }': { $error }
 geophysics-file-changed = Il file di geofisica è cambiato dopo l'indicizzazione
+geophysics-file-cannot-be-opened = { $file } non può essere aperto: { $error }
 geophysics-file-unreadable = Il file di geofisica collegato a '{ $name }' non può essere letto in { $path } ({ $error }); collegalo di nuovo dal menu contestuale del dataset
 geophysics-linked-changed-rereading = La geofisica collegata a '{ $name }' è cambiata dopo l'indicizzazione; lettura ripetuta
 geophysics-hole-has-size-mib-geophysics = { $hole } ha { $size } MiB di righe di geofisica, più di quante un foro ne legga
 geophysics-hole-needs-size-mib-its = { $hole } richiede { $size } MiB per la sua geofisica, più di quanto resti al browser: scarica altri elementi, poi scarica e ricarica questo dataset
+geophysics-hole-could-not-be-read = Impossibile leggere { $hole }: il suo file di geofisica non è disponibile
 geophysics-linking-geophysics-name = Collegamento della geofisica a { $name }
 geophysics-reading-geophysics-hole = Lettura della geofisica per { $hole }
 geophysics-web-could-not-read-name-error = Impossibile leggere '{ $name }': { $error }
@@ -2034,6 +2050,7 @@ io-quality-points-file = File di qualità
 io-quality-points-help = Valori compositi: una riga per sondaggio e strato con una colonna per qualità, oppure una riga per sondaggio, strato e qualità con colonne Qualità e Valore. Ogni strato e qualità diventa un livello di punti ad altezza = valore.
 io-quality-points-long = Letto come una riga per sondaggio, strato e qualità.
 io-quality-points-needs = Mappa ID sondaggio, Est / X, Nord / Y, Strato e una colonna di qualità (o Nome qualità e Valore).
+io-quality-points-short = Riga { $line }, colonna { $column }: la riga finisce prima di questa cella, e ogni riga la richiede.
 io-quality-points-negative = Riga { $line }, colonna { $column }: { $value } è sotto 0, e una qualità non può essere negativa.
 io-quality-points-not-a-number = Riga { $line }, colonna { $column }: atteso un numero, trovato "{ $found }". Correggilo nel database di origine.
 io-quality-points-unit-clash = Riga { $line }, colonna { $column }: { $quality } è indicato sia in { $first } sia in { $second }.
@@ -2045,7 +2062,7 @@ io-quality-role-unit = Unità
 io-quality-role-value = Valore
 io-projects = Progetti
 io-reset = Ripristina
-io-role-reason-also-collar = Sembra anche una bocca foro
+io-role-reason-also-collar = Sembra un file di bocche foro
 io-role-reason-collar = Una riga per foro, con coordinate
 io-role-reason-geophysics = Foro e profondità con letture a passo fine
 io-role-reason-interval = Foro, da e a
@@ -2077,6 +2094,8 @@ io-worksheet-writes-two-files = Scrive il foglio con il nome scelto, una riga pe
 cmd-file-exported-worksheet-path = Foglio delle correzioni esportato in { $path } e le correzioni accanto in { $records }
 cmd-file-worksheet-export-failed-error = Esportazione del foglio delle correzioni non riuscita: { $error }
 cmd-file-worksheet-no-corrections = { $name } non ha correzioni da esportare
+cmd-file-worksheet-only-unread-corrections = { $name } non ha correzioni che questa versione possa leggere: i suoi { $count } record di correzione sono conservati come salvati ma non possono essere esportati
+cmd-file-worksheet-leaves-out-unread = Il foglio delle correzioni di { $name } omette { $count } record di correzione che questa versione non può leggere; restano nel progetto come salvati
 state-export-corrections-worksheet = Esporta foglio delle correzioni
 
 ## Jobs strings
@@ -2184,13 +2203,17 @@ object-edit-vertices = Vertici
 omf-element-name-has-count-tie = L'elemento '{ $name }' ha { $count } collegamento/i che nominano fori non più presenti
 omf-element-name-has-count-unreadable = L'elemento '{ $name }' ha { $count } sezione/i di lavoro illeggibile/i; sono state escluse
 omf-element-name-has-count-unreadable-strat = L'elemento '{ $name }' ha { $count } colonna/e stratigrafica/he illeggibile/i; sono state escluse
-omf-element-name-has-count-as-logged = L'elemento '{ $name }' ha { $count } valore/i come registrato/i che non si sono potuti leggere o collocare; sono stati esclusi
+omf-element-name-has-count-as-logged = L'elemento '{ $name }' ha { $count } valore/i come registrato/i che non si sono potuti leggere o collocare; sono conservati ma non applicati
+omf-element-name-strat-field-unreadable = L'elemento '{ $name }' ha un campo stratigrafico illeggibile; è stato omesso
+omf-element-name-color-stops-unreadable = L'elemento '{ $name }' ha troppo pochi punti colore per disegnare una rampa; sono stati usati quelli della preimpostazione
+omf-element-name-color-unreadable = L'elemento '{ $name }' ha impostazioni di colore illeggibili; l'insieme si apre con i colori predefiniti e le sue sezioni di lavoro e colonne stratigrafiche sono state omesse
+omf-element-name-geophysics-unreadable = L'elemento '{ $name }' ha un collegamento geofisico illeggibile; è stato omesso
 omf-element-unsupported-section = L'elemento '{ $name }' indica la sezione '{ $section }' che in questa versione non può mostrare questo tipo di elemento
 omf-element-name-names-unknown-section = L'elemento '{ $name }' indica una sezione sconosciuta '{ $section }'
 omf-quality-mark-unreadable = Impossibile leggere il marchio di qualità della superficie { $name }; si apre come superficie semplice
 omf-layer-quality-mark-unreadable = Impossibile leggere il marchio di qualità del livello { $name }; i suoi punti si aprono come punti semplici
 omf-ignoring-colour-map-omf-attribute = Mappa colori ignorata sull'attributo OMF '{ $attribute }': { $error }
-omf-correction-records-dropped = { $count } record di correzione di { $name } non sono stati letti e sono stati esclusi
+omf-correction-records-unread = { $count } record di correzione di { $name } non sono stati letti: restano come salvati ma non vengono applicati
 omf-corrections-unreadable = I record di correzione di { $name } non sono stati letti e sono stati esclusi
 omf-mining-data-exported-incline = Dati minerari esportati da Incline
 omf-import = Importazione OMF
@@ -5011,6 +5034,7 @@ explorer-selected-count = { $count } selezionati
 explorer-show = Mostra
 input-could-not-slice-name-error = impossibile ritagliare { $name }: { $error }
 io-drill-holes = Fori di sondaggio
+io-drill-csv-preview-failed = Impossibile leggere { $file }: { $error }
 io-fixed-block-size = Dimensione fissa del blocco
 io-no-column-mapped-these = Nessuna colonna è associata a questi assi: ogni blocco usa invece questa dimensione.
 menu-build-solid-surfaces = Costruisci solido da superfici...

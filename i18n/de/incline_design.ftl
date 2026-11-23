@@ -446,7 +446,7 @@ borehole-inspector-flag-repeat = Wiederholt
 borehole-inspector-flagged-holes = Markierte Bohrlöcher ({ $count })
 borehole-inspector-flags-first-shown = Die ersten { $shown } von { $count } Markierungen sind aufgeführt.
 borehole-inspector-file-not-where-was-linked = { $file } befindet sich nicht mehr am verknüpften Ort.
-borehole-inspector-guessed-name = Anhand des Namens vermutet
+borehole-inspector-guessed-name = Aus dem Import, sonst nach Namen
 borehole-inspector-hold-hole-while-you-work = Dieses Bohrloch festhalten, während Sie an den umliegenden arbeiten.
 borehole-inspector-holding-hole-click-follow-selection = Dieses Bohrloch wird festgehalten. Klicken, um wieder der Auswahl zu folgen.
 borehole-inspector-hole-code-not-in-column = Nicht in der Säule des Datensatzes
@@ -1027,6 +1027,7 @@ cmd-selection-deleted-vertex = Eckpunkt { $vertex } aus Polylinie { $object_id }
 cmd-strat-check-checking = Die Strat-Säule von { $name } wird geprüft…
 cmd-strat-check-failed = Prüfung der Strat-Säule fehlgeschlagen: { $error }
 cmd-strat-check-summary = { $field } von { $name } geprüft: { $holes } Bohrloch/-löcher, { $flagged } markiert
+cmd-strat-check-summary-rising = { $field } von { $name } geprüft: { $holes } Bohrloch/-löcher, { $flagged } markiert; { $rising } Bohrloch/-löcher steigen entlang ihrer Spur an und wurden ausgelassen
 cmd-strat-check-too-many-codes = { $field } von { $name } enthält zu viele Codes, um sie in eine Reihenfolge zu bringen
 cmd-strat-import-filled = Strat-Säule für { $field } gefüllt: { $names } Namen; { $flagged } Bohrloch/-löcher weichen bei { $checked } ab. Prüfen Sie zur Durchsicht.
 cmd-strat-import-filled-groups = Strat-Säule für { $field } gefüllt: { $names } Namen in { $groups } Gruppen; { $flagged } Bohrloch/-löcher weichen bei { $checked } ab. Prüfen Sie zur Durchsicht.
@@ -1443,8 +1444,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } ordnet eine Fallen- oder N
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } ordnet eine Endteufenspalte doppelt zu
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [one] { $file }: { $count } Endteufe war leer, null, negativ, ein Fehlwert oder keine Zahl; dieser Ansatzpunkt bleibt ohne Endteufe erhalten
-       *[other] { $file }: { $count } Endteufen waren leer, null, negativ, ein Fehlwert oder keine Zahl; diese Ansatzpunkte bleiben ohne Endteufe erhalten
+        [one] { $file }: { $count } Endteufe war leer oder ein Fehlwert; dieser Ansatzpunkt bleibt ohne Endteufe erhalten
+       *[other] { $file }: { $count } Endteufen waren leer oder Fehlwerte; diese Ansatzpunkte bleiben ohne Endteufe erhalten
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [one] { $file }: { $count } Endteufe war null, negativ oder keine Zahl; dieser Ansatzpunkt bleibt ohne Endteufe erhalten
+       *[other] { $file }: { $count } Endteufen waren null, negativ oder keine Zahl; diese Ansatzpunkte bleiben ohne Endteufe erhalten
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1460,9 +1466,15 @@ csv-drill-hole-row-has-no-geometry = { $file } Zeile { $row } hat keine vollstä
 csv-drill-hole-row-invalid-interval = { $file } Zeile { $row } hat ein ungültiges Intervall { $from }..{ $to } für DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } Zeile { $row } hat ein Segment der Länge null bei { $depth } für DHID '{ $dhid }'
 csv-drill-hole-row-unreadable-value = { $file } Zeile { $row } hat einen unlesbaren Wert
+csv-drill-hole-row-inconsistent-diameter = Uneinheitlicher Durchmesser für DHID '{ $dhid }'
+csv-drill-hole-row-wrong-width = { $file } Zeile { $row } hat { $found } Spalten; erwartet { $expected }
+csv-drill-hole-row-blank-required-value = { $file } Zeile { $row } hat einen leeren Pflichtwert
+csv-drill-hole-row-invalid-number = { $file } Zeile { $row } hat die ungültige Zahl '{ $value }'
 csv-drill-hole-csv-is-wide-text = CSV ist UTF-16- oder UTF-32-Text; als UTF-8 speichern und erneut importieren
 csv-drill-hole-csv-holds-nul-bytes = CSV enthält durchgehend NUL-Bytes und ist daher kein UTF-8-Text; falls sie als UTF-16 oder UTF-32 geschrieben wurde, als UTF-8 speichern und erneut importieren
 csv-drill-hole-overlap-field-summary = { $field } in { $count } Bohrung(en), z. B. { $examples }
+csv-drill-hole-codes-differ-only-by-case = Codes, die sich nur in der Groß- und Kleinschreibung unterscheiden, bleiben getrennte Codes: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = über 5
 csv-geophysics-below-0-5 = unter 0,5
 csv-geophysics-count-more = (+{ $count } weitere)
@@ -1472,6 +1484,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = Die CSV hat ein nicht abgesch
 csv-geophysics-curve-file-was-left-out = { $curve } in { $file } wurde ausgelassen: Die meisten Messwerte liegen { $side }, sodass der Median außerhalb von 0,5 bis 5 g/cc liegt und die Einheit falsch wirkt (erwartet: g/cc). Incline rechnet keine Einheiten um; korrigieren Sie den Export und verknüpfen Sie ihn erneut
 csv-geophysics-file-empty = { $file } ist leer
 csv-geophysics-file-has-no-curve-no = { $file } hat keine Kurve: Keine Spalte außer Bohrloch-ID und Tiefe enthält Zahlen
+csv-geophysics-file-has-two-curves-one-name = { $file } hat zwei Kurvenspalten, die als eine Kurve gelesen werden, { $first } und { $second }: eine umbenennen und erneut verknüpfen
+csv-geophysics-file-has-no-rows-known-holes = { $file } hat keine Zeilen für ein Bohrloch des Datensatzes: Bohrloch-IDs prüfen und erneut verknüpfen
 csv-geophysics-file-mapping-has-mapped-columns = Die Zuordnung von { $file } hat { $mapped } Spalten, die CSV hat { $found }
 csv-geophysics-file-no-longer-matches-its = { $file } stimmt nicht mehr mit seinem Index überein: erneut verknüpfen
 csv-geophysics-file-not-grouped-hole-its = { $file } ist nicht nach Bohrloch gruppiert: Die Zeilen der Bohrlöcher sind auf zu viele Abschnitte verteilt. Sortieren Sie nach Bohrloch-ID, dann Tiefe, und verknüpfen Sie erneut
@@ -1921,10 +1935,12 @@ files-xy-grid-options = XY-Raster-Optionen
 geophysics-checking-geophysics-files = Geophysikdateien werden geprüft
 geophysics-downhole-geophysics-name-could-not = Die Bohrlochgeophysik für '{ $name }' konnte nicht verknüpft werden: { $error }
 geophysics-file-changed = Die Geophysikdatei hat sich seit der Indizierung geändert
+geophysics-file-cannot-be-opened = { $file } kann nicht geöffnet werden: { $error }
 geophysics-file-unreadable = Die mit '{ $name }' verknüpfte Geophysikdatei kann unter { $path } nicht gelesen werden ({ $error }); verknüpfen Sie sie erneut über das Kontextmenü des Datensatzes
 geophysics-linked-changed-rereading = Die mit '{ $name }' verknüpfte Geophysik hat sich seit der Indizierung geändert; sie wird erneut gelesen
 geophysics-hole-has-size-mib-geophysics = { $hole } hat { $size } MiB an Geophysikzeilen, mehr als pro Bohrloch gelesen wird
 geophysics-hole-needs-size-mib-its = { $hole } benötigt { $size } MiB für seine Geophysik, mehr als im Browser übrig ist: Entladen Sie andere Elemente, dann entladen Sie diesen Datensatz und laden ihn erneut
+geophysics-hole-could-not-be-read = { $hole } konnte nicht gelesen werden: die Geophysikdatei ist nicht verfügbar
 geophysics-linking-geophysics-name = Geophysik wird mit { $name } verknüpft
 geophysics-reading-geophysics-hole = Geophysik für { $hole } wird gelesen
 geophysics-web-could-not-read-name-error = '{ $name }' konnte nicht gelesen werden: { $error }
@@ -2033,6 +2049,7 @@ io-quality-points-file = Qualitätsdatei
 io-quality-points-help = Zusammengefasste Werte: eine Zeile je Bohrung und Flöz mit einer Spalte je Qualität, oder eine Zeile je Bohrung, Flöz und Qualität mit den Spalten Qualität und Wert. Jedes Flöz und jede Qualität wird zu einer Punktebene mit Höhe = Wert.
 io-quality-points-long = Gelesen als eine Zeile je Bohrung, Flöz und Qualität.
 io-quality-points-needs = Ordnen Sie Bohrungs-ID, Rechtswert / X, Hochwert / Y, Flöz und eine Qualitätsspalte zu (oder Qualitätsname und Wert).
+io-quality-points-short = Zeile { $line }, Spalte { $column }: die Zeile endet vor dieser Zelle, und jede Zeile braucht sie.
 io-quality-points-negative = Zeile { $line }, Spalte { $column }: { $value } liegt unter 0, und eine Qualität kann nicht negativ sein.
 io-quality-points-not-a-number = Zeile { $line }, Spalte { $column }: Zahl erwartet, "{ $found }" gefunden. Bereinigen Sie sie in der Quelldatenbank.
 io-quality-points-unit-clash = Zeile { $line }, Spalte { $column }: { $quality } ist sowohl in { $first } als auch in { $second } angegeben.
@@ -2044,7 +2061,7 @@ io-quality-role-unit = Einheit
 io-quality-role-value = Wert
 io-projects = Projekte
 io-reset = Zurücksetzen
-io-role-reason-also-collar = Sieht ebenfalls wie ein Ansatzpunkt aus
+io-role-reason-also-collar = Sieht nach einer Ansatzpunktdatei aus
 io-role-reason-collar = Eine Zeile pro Bohrloch, mit Koordinaten
 io-role-reason-geophysics = Bohrloch und Teufe mit Messwerten in feinem Abstand
 io-role-reason-interval = Bohrloch, von und bis
@@ -2076,6 +2093,8 @@ io-worksheet-writes-two-files = Schreibt das Arbeitsblatt unter dem gewählten N
 cmd-file-exported-worksheet-path = Korrektur-Arbeitsblatt nach { $path } exportiert und die Korrekturen daneben nach { $records }
 cmd-file-worksheet-export-failed-error = Export des Korrektur-Arbeitsblatts fehlgeschlagen: { $error }
 cmd-file-worksheet-no-corrections = { $name } hat keine Korrekturen zum Exportieren
+cmd-file-worksheet-only-unread-corrections = { $name } hat keine Korrekturen, die diese Version lesen kann: die { $count } Korrektursätze bleiben wie gespeichert erhalten, lassen sich aber nicht exportieren
+cmd-file-worksheet-leaves-out-unread = Das Korrekturarbeitsblatt von { $name } lässt { $count } Korrektursätze aus, die diese Version nicht lesen kann; sie bleiben wie gespeichert im Projekt
 state-export-corrections-worksheet = Korrektur-Arbeitsblatt exportieren
 
 ## Jobs strings
@@ -2183,13 +2202,17 @@ object-edit-vertices = Eckpunkte
 omf-element-name-has-count-tie = Element '{ $name }' hat { $count } Verbindung(en), die Löcher benennen, die es nicht mehr enthält
 omf-element-name-has-count-unreadable = Element '{ $name }' hat { $count } unlesbare(n) Abbauabschnitt(e); sie wurden ausgelassen
 omf-element-name-has-count-unreadable-strat = Element '{ $name }' hat { $count } nicht lesbare Schichtspalte(n); sie wurden weggelassen
-omf-element-name-has-count-as-logged = Element '{ $name }' hat { $count } Wert(e) wie protokolliert, die nicht gelesen oder zugeordnet werden konnten; sie wurden weggelassen
+omf-element-name-has-count-as-logged = Element '{ $name }' hat { $count } Wert(e) wie protokolliert, die nicht gelesen oder zugeordnet werden konnten; sie bleiben erhalten, werden aber nicht angewendet
+omf-element-name-strat-field-unreadable = Element '{ $name }' hat ein unlesbares Schichtfeld; es wurde ausgelassen
+omf-element-name-color-stops-unreadable = Element '{ $name }' hat zu wenige Farbstopps für einen Verlauf; die Stopps der Vorlage wurden verwendet
+omf-element-name-color-unreadable = Element '{ $name }' hat Farbeinstellungen, die nicht gelesen werden konnten; der Satz öffnet mit den Standardfarben, seine Arbeitsabschnitte und Schichtspalten wurden ausgelassen
+omf-element-name-geophysics-unreadable = Element '{ $name }' hat eine unlesbare Geophysik-Verknüpfung; sie wurde ausgelassen
 omf-element-unsupported-section = Element '{ $name }' nennt den Bereich '{ $section }', der diese Art von Element in dieser Version nicht anzeigen kann
 omf-element-name-names-unknown-section = Element '{ $name }' nennt einen unbekannten Bereich '{ $section }'
 omf-quality-mark-unreadable = Die Qualitätsmarke auf Fläche { $name } konnte nicht gelesen werden; sie öffnet als einfache Fläche
 omf-layer-quality-mark-unreadable = Die Qualitätsmarke auf Ebene { $name } konnte nicht gelesen werden; ihre Punkte öffnen als einfache Punkte
 omf-ignoring-colour-map-omf-attribute = Farbtabelle des OMF-Attributs '{ $attribute }' wird ignoriert: { $error }
-omf-correction-records-dropped = { $count } Korrektursätze von { $name } konnten nicht gelesen werden und wurden ausgelassen
+omf-correction-records-unread = { $count } Korrektursätze von { $name } konnten nicht gelesen werden: sie bleiben wie gespeichert erhalten, werden aber nicht angewendet
 omf-corrections-unreadable = Die Korrektursätze von { $name } konnten nicht gelesen werden und wurden ausgelassen
 omf-mining-data-exported-incline = Von Incline exportierte Bergbaudaten
 omf-import = OMF-Import
@@ -5010,6 +5033,7 @@ explorer-selected-count = { $count } gewählt
 explorer-show = Einblenden
 input-could-not-slice-name-error = { $name } konnte nicht beschnitten werden: { $error }
 io-drill-holes = Bohrlöcher
+io-drill-csv-preview-failed = { $file } konnte nicht gelesen werden: { $error }
 io-fixed-block-size = Feste Blockgröße
 io-no-column-mapped-these = Keiner Spalte sind diese Achsen zugeordnet - jeder Block verwendet stattdessen diese Größe.
 menu-build-solid-surfaces = Körper aus Oberflächen erstellen...

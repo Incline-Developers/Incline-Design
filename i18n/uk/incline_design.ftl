@@ -451,7 +451,7 @@ borehole-inspector-flag-repeat = Повторено
 borehole-inspector-flagged-holes = Позначені свердловини ({ $count })
 borehole-inspector-flags-first-shown = Показано перші { $shown } із { $count } позначок.
 borehole-inspector-file-not-where-was-linked = Файлу { $file } немає там, звідки його пов'язано.
-borehole-inspector-guessed-name = Визначено за назвою
+borehole-inspector-guessed-name = З імпорту, інакше за назвою
 borehole-inspector-hold-hole-while-you-work = Утримуйте цю свердловину, поки працюєте з навколишніми.
 borehole-inspector-holding-hole-click-follow-selection = Свердловину утримано. Клацніть, щоб знову стежити за вибором.
 borehole-inspector-hole-code-not-in-column = Немає в колонці набору
@@ -1035,6 +1035,7 @@ cmd-selection-deleted-vertex = Вершину { $vertex } видалено з п
 cmd-strat-check-checking = Перевірка стратиграфічної колонки { $name }…
 cmd-strat-check-failed = Перевірка стратиграфічної колонки не вдалася: { $error }
 cmd-strat-check-summary = Перевірено { $field } у { $name }: свердловин { $holes }, позначено { $flagged }
+cmd-strat-check-summary-rising = Перевірено { $field } у { $name }: свердловин { $holes }, позначено { $flagged }; свердловин, що йдуть угору за траєкторією, виключено: { $rising }
 cmd-strat-check-too-many-codes = { $field } у { $name } містить забагато кодів, щоб упорядкувати їх
 cmd-strat-import-filled = Стратиграфічну колонку заповнено для { $field }: назв { $names }; розходяться свердловин за { $checked }: { $flagged }. Натисніть «Перевірити», щоб переглянути.
 cmd-strat-import-filled-groups = Стратиграфічну колонку заповнено для { $field }: назв { $names } у групах { $groups }; розходяться свердловин за { $checked }: { $flagged }. Натисніть «Перевірити», щоб переглянути.
@@ -1451,8 +1452,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } двічі зіставл�
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } двічі зіставляє стовпець кінцевої глибини
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [1] { $file }: одна кінцева глибина порожня, нульова, від'ємна, дорівнює значенню відсутності даних або не є числом; це гирло збережено без неї
-       *[other] { $file }: порожні, нульові, від'ємні, нечислові або рівні значенню відсутності даних кінцеві глибини: { $count }; ці гирла збережено без них
+        [1] { $file }: одна кінцева глибина порожня або дорівнює значенню відсутності даних; це гирло збережено без неї
+       *[other] { $file }: порожні або рівні значенню відсутності даних кінцеві глибини: { $count }; ці гирла збережено без них
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [1] { $file }: одна кінцева глибина нульова, від'ємна або не є числом; це гирло збережено без неї
+       *[other] { $file }: нульові, від'ємні або нечислові кінцеві глибини: { $count }; ці гирла збережено без них
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1468,9 +1474,15 @@ csv-drill-hole-row-has-no-geometry = { $file }, рядок { $row }: немає 
 csv-drill-hole-row-invalid-interval = { $file }, рядок { $row }: недійсний інтервал { $from }..{ $to } для DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file }, рядок { $row }: сегмент нульової довжини на { $depth } для DHID '{ $dhid }'
 csv-drill-hole-row-unreadable-value = { $file }, рядок { $row }: нечитабельне значення
+csv-drill-hole-row-inconsistent-diameter = Неузгоджений діаметр для DHID '{ $dhid }'
+csv-drill-hole-row-wrong-width = { $file }, рядок { $row }: стовпців { $found }, очікувалося { $expected }
+csv-drill-hole-row-blank-required-value = { $file }, рядок { $row }: порожнє обов'язкове значення
+csv-drill-hole-row-invalid-number = { $file }, рядок { $row }: недійсне число '{ $value }'
 csv-drill-hole-csv-is-wide-text = CSV у кодуванні UTF-16 або UTF-32; збережіть його як UTF-8 та імпортуйте знову
 csv-drill-hole-csv-holds-nul-bytes = CSV по всьому файлу містить байти NUL, тож це не текст UTF-8; якщо його записано як UTF-16 або UTF-32, збережіть його як UTF-8 та імпортуйте знову
 csv-drill-hole-overlap-field-summary = { $field } у { $count } свердл., напр. { $examples }
+csv-drill-hole-codes-differ-only-by-case = Коди, що відрізняються лише регістром, залишаються окремими кодами: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = вище 5
 csv-geophysics-below-0-5 = нижче 0,5
 csv-geophysics-count-more = (ще +{ $count })
@@ -1480,6 +1492,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = У CSV є незакрите 
 csv-geophysics-curve-file-was-left-out = { $curve } у { $file } виключено: більшість його показань { $side }, тому медіана виходить за межі 0,5–5 г/см³, а одиниця виміру виглядає хибною (очікується г/см³). Incline не перетворює одиниці; виправте експорт і пов'яжіть ще раз
 csv-geophysics-file-empty = { $file } порожній
 csv-geophysics-file-has-no-curve-no = У { $file } немає кривої: жоден стовпець, крім ID свердловини та глибини, не містить чисел
+csv-geophysics-file-has-two-curves-one-name = У { $file } два стовпці кривих читаються як одна крива, { $first } і { $second }: перейменуйте один і зв'яжіть знову
+csv-geophysics-file-has-no-rows-known-holes = У { $file } немає рядків жодної свердловини набору: перевірте ідентифікатори свердловин і зв'яжіть знову
 csv-geophysics-file-mapping-has-mapped-columns = Зіставлення { $file } має стовпців: { $mapped }, у CSV: { $found }
 csv-geophysics-file-no-longer-matches-its = { $file } більше не відповідає своєму індексу: пов'яжіть його ще раз
 csv-geophysics-file-not-grouped-hole-its = { $file } не згруповано за свердловинами: рядки його свердловин розкидано по надто багатьох послідовностях. Відсортуйте за ID свердловини, потім за глибиною, і пов'яжіть ще раз
@@ -1929,10 +1943,12 @@ files-xy-grid-options = Параметри сітки XY
 geophysics-checking-geophysics-files = Перевірка файлів геофізики
 geophysics-downhole-geophysics-name-could-not = Не вдалося пов'язати свердловинну геофізику для «{ $name }»: { $error }
 geophysics-file-changed = Файл геофізики змінився після індексації
+geophysics-file-cannot-be-opened = Не вдається відкрити { $file }: { $error }
 geophysics-file-unreadable = Файл геофізики, пов'язаний із «{ $name }», неможливо прочитати за шляхом { $path } ({ $error }); пов'яжіть його ще раз через контекстне меню набору
 geophysics-linked-changed-rereading = Геофізика, пов'язана з «{ $name }», змінилася після індексації; повторне читання
 geophysics-hole-has-size-mib-geophysics = У { $hole } рядків геофізики на { $size } МіБ, це більше, ніж читається для однієї свердловини
 geophysics-hole-needs-size-mib-its = Для геофізики { $hole } потрібно { $size } МіБ, а браузер має менше: вивантажте інші елементи, потім вивантажте й завантажте цей набір ще раз
+geophysics-hole-could-not-be-read = Не вдалося прочитати { $hole }: файл геофізики недоступний
 geophysics-linking-geophysics-name = Зв'язування геофізики з { $name }
 geophysics-reading-geophysics-hole = Читання геофізики для { $hole }
 geophysics-web-could-not-read-name-error = Не вдалося прочитати «{ $name }»: { $error }
@@ -2041,6 +2057,7 @@ io-quality-points-file = Файл якості
 io-quality-points-help = Композитні значення: один рядок на свердловину й пласт зі стовпцем на кожен показник або один рядок на свердловину, пласт і показник зі стовпцями Показник і Значення. Кожен пласт і показник стає шаром точок на висоті = значення.
 io-quality-points-long = Прочитано як один рядок на свердловину, пласт і показник.
 io-quality-points-needs = Зіставте ID свердловини, Схід / X, Північ / Y, Пласт і стовпець показника (або Назву показника й Значення).
+io-quality-points-short = Рядок { $line }, стовпець { $column }: рядок закінчується перед цією коміркою, а кожному рядку вона потрібна.
 io-quality-points-negative = Рядок { $line }, стовпець { $column }: { $value } менше 0, а показник якості не може бути від'ємним.
 io-quality-points-not-a-number = Рядок { $line }, стовпець { $column }: очікувалося число, знайдено "{ $found }". Виправте це у вихідній базі даних.
 io-quality-points-unit-clash = Рядок { $line }, стовпець { $column }: { $quality } задано і в { $first }, і в { $second }.
@@ -2052,7 +2069,7 @@ io-quality-role-unit = Одиниця
 io-quality-role-value = Значення
 io-projects = Проекти
 io-reset = Скинути
-io-role-reason-also-collar = Теж схоже на устя
+io-role-reason-also-collar = Схоже на файл устів свердловин
 io-role-reason-collar = Один рядок на свердловину, з координатами
 io-role-reason-geophysics = Свердловина і глибина із замірами через малий крок
 io-role-reason-interval = Свердловина, від і до
@@ -2084,6 +2101,8 @@ io-worksheet-writes-two-files = Записує відомість під виб�
 cmd-file-exported-worksheet-path = Відомість виправлень експортовано в { $path }, а виправлення поруч із нею в { $records }
 cmd-file-worksheet-export-failed-error = Помилка експорту відомості виправлень: { $error }
 cmd-file-worksheet-no-corrections = У { $name } немає виправлень для експорту
+cmd-file-worksheet-only-unread-corrections = У { $name } немає виправлень, які ця версія може прочитати: { $count } записів виправлень збережено як є, але їх не можна експортувати
+cmd-file-worksheet-leaves-out-unread = До таблиці виправлень { $name } не потрапили { $count } записів виправлень, які ця версія не може прочитати; вони залишаються в проєкті як збережені
 state-export-corrections-worksheet = Експорт відомості виправлень
 
 ## Jobs strings
@@ -2191,13 +2210,17 @@ object-edit-vertices = Вершини
 omf-element-name-has-count-tie = Елемент «{ $name }» містить { $count } з'єднань зі свердловинами, яких у ньому вже немає
 omf-element-name-has-count-unreadable = Елемент «{ $name }» має нечитабельних робочих пластів: { $count }; їх пропущено
 omf-element-name-has-count-unreadable-strat = В елементі '{ $name }' нечитабельних стратиграфічних колонок: { $count }; їх пропущено
-omf-element-name-has-count-as-logged = В елементі '{ $name }' значень як записано, які не вдалося прочитати чи розмістити: { $count }; їх пропущено
+omf-element-name-has-count-as-logged = В елементі '{ $name }' значень як записано, які не вдалося прочитати чи розмістити: { $count }; їх збережено, але не застосовано
+omf-element-name-strat-field-unreadable = В елемента '{ $name }' нечитабельне стратиграфічне поле; його пропущено
+omf-element-name-color-stops-unreadable = В елемента '{ $name }' замало кольорових зупинок для шкали; використано зупинки пресета
+omf-element-name-color-unreadable = В елемента '{ $name }' нечитабельні налаштування кольору; набір відкривається зі стандартними кольорами, а його робочі секції та стратиграфічні колонки пропущено
+omf-element-name-geophysics-unreadable = В елемента '{ $name }' нечитабельний геофізичний зв'язок; його пропущено
 omf-element-unsupported-section = Елемент «{ $name }» посилається на розділ «{ $section }», який у цій збірці не може показувати такий тип елемента
 omf-element-name-names-unknown-section = Елемент «{ $name }» посилається на невідомий розділ «{ $section }»
 omf-quality-mark-unreadable = Не вдалося прочитати мітку показника на поверхні { $name }; вона відкривається як звичайна поверхня
 omf-layer-quality-mark-unreadable = Не вдалося прочитати мітку показника на шарі { $name }; його точки відкриваються як звичайні точки
 omf-ignoring-colour-map-omf-attribute = Кольорову карту атрибута OMF «{ $attribute }» проігноровано: { $error }
-omf-correction-records-dropped = Не вдалося прочитати записів виправлення для { $name }: { $count }; їх пропущено
+omf-correction-records-unread = Не вдалося прочитати записів виправлень у { $name }: { $count }. Їх збережено як є, але не застосовано
 omf-corrections-unreadable = Не вдалося прочитати записи виправлення для { $name }; їх пропущено
 omf-mining-data-exported-incline = Гірничі дані, експортовані Incline
 omf-import = Імпорт OMF
@@ -5078,6 +5101,7 @@ explorer-selected-count = Вибрано: { $count }
 explorer-show = Показати
 input-could-not-slice-name-error = не вдалося обрізати { $name }: { $error }
 io-drill-holes = Свердловини
+io-drill-csv-preview-failed = Не вдалося прочитати { $file }: { $error }
 io-fixed-block-size = Фіксований розмір блока
 io-no-column-mapped-these = Жоден стовпець не зіставлено з цими осями: усі блоки натомість використовують цей розмір.
 menu-build-solid-surfaces = Побудувати тіло з поверхонь...

@@ -28,6 +28,8 @@ pub(crate) const COLLAR_MARKER_FILL_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
 /// How many stops a numeric ramp may carry. A limit on the ramp only: a
 /// categorical field colours every code it has.
 pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
+/// The fewest stops a ramp may carry.
+pub(crate) const MIN_DRILL_COLOR_STOPS: usize = 2;
 /// Distinct codes above which a categorical column is named on load as
 /// likely free text. Nothing is dropped at any count.
 pub(crate) const WIDE_CATEGORY_FIELD_HINT: usize = 256;
@@ -401,6 +403,10 @@ impl CorrectionNote {
 /// The field a floor move names: the to of the interval it is keyed on.
 /// Its before and after are depths.
 pub(crate) const FLOOR_FIELD: &str = "to";
+
+/// How near two depths are to count as one boundary, as the importer joins
+/// rows.
+const TOUCH_TOLERANCE: f64 = 1.0e-9;
 /// The field a roof moved alone names: the from of the interval it is
 /// keyed on.
 pub(crate) const ROOF_FIELD: &str = "from";
@@ -1317,7 +1323,16 @@ pub(crate) struct DrillHoleDataset {
     /// Interval columns an Incline tool wrote and may write again. A column
     /// of the same name that came in with the data is never written over.
     pub(crate) derived_columns: BTreeSet<String>,
-    /// The deletion records of each hole, by index into `corrections`, worked
+    /// Records this build could not read, each after the count of readable
+    /// records saved before it: written back in that place, as saved, never
+    /// applied.
+    pub(crate) unread_corrections: Vec<(usize, serde_json::Value)>,
+    /// As-logged copies this build could not read or place, each with the
+    /// hole key it was saved under: written back apart from the readable
+    /// ones, under their own key, never applied.
+    pub(crate) unread_logged: Vec<(String, serde_json::Value)>,
+    /// The records of each hole that change how deep it was, deletions that
+    /// took out a row and floor moves, by index into `corrections`, worked
     /// out on first use after an edit. Not saved.
     deletions: std::sync::OnceLock<HashMap<String, Vec<usize>>>,
 }
@@ -1340,6 +1355,8 @@ impl DrillHoleDataset {
             corrections: Vec::new(),
             charges: BTreeMap::new(),
             derived_columns: BTreeSet::new(),
+            unread_corrections: Vec::new(),
+            unread_logged: Vec::new(),
             deletions: std::sync::OnceLock::new(),
         };
         // The one gate every importer and project load passes through, so the
@@ -1450,7 +1467,7 @@ impl DrillHoleDataset {
         let Some(name) = name_of(interval) else {
             return Vec::new();
         };
-        let joins = |upper: usize, lower: usize| name_of(lower) == Some(name) && drilled.intervals[lower].from <= drilled.intervals[upper].to + 1.0e-9;
+        let joins = |upper: usize, lower: usize| name_of(lower) == Some(name) && drilled.intervals[lower].from <= drilled.intervals[upper].to + TOUCH_TOLERANCE;
         let mut start = at;
         while start > 0 && joins(order[start - 1], order[start]) && name_of(order[start - 1]) == Some(name) {
             start -= 1;
@@ -1512,7 +1529,7 @@ impl DrillHoleDataset {
     pub(crate) fn interval_below(&self, hole: usize, interval: usize) -> Option<usize> {
         let to = self.holes.get(hole)?.intervals.get(interval)?.to;
         self.table_neighbours(hole, interval)
-            .filter(|(_, other)| other.from == to)
+            .filter(|(_, other)| (other.from - to).abs() <= TOUCH_TOLERANCE)
             .min_by_key(|(_, other)| !holds_data(other, &self.derived_columns))
             .map(|(index, _)| index)
     }
@@ -1522,7 +1539,7 @@ impl DrillHoleDataset {
     pub(crate) fn interval_above(&self, hole: usize, interval: usize) -> Option<usize> {
         let from = self.holes.get(hole)?.intervals.get(interval)?.from;
         self.table_neighbours(hole, interval)
-            .filter(|(_, other)| other.to == from)
+            .filter(|(_, other)| (other.to - from).abs() <= TOUCH_TOLERANCE)
             .min_by_key(|(_, other)| !holds_data(other, &self.derived_columns))
             .map(|(index, _)| index)
     }
@@ -1567,7 +1584,7 @@ impl DrillHoleDataset {
         if !depth.is_finite() || depth == at {
             return Err(BoundaryProblem::Unmoved);
         }
-        let end = drilled.end_depth();
+        let end = self.end_of(drilled);
         if !(0.0..=end).contains(&depth) {
             return Err(BoundaryProblem::OutsideHole { end });
         }
@@ -1886,13 +1903,26 @@ impl DrillHoleDataset {
     }
 
     /// Where `drilled` ends for a correction: its own end, or deeper where a
-    /// row a deletion took out ran on past it, so the ground it freed reads
-    /// as not logged and takes an insertion.
+    /// row a deletion took out, or a floor moved up from, ran on past it, so
+    /// the ground it freed reads as not logged and takes an insertion or a
+    /// move back.
     pub(crate) fn end_of(&self, drilled: &DrillHole) -> f64 {
+        let moved_from = self.moved_floors(&drilled.dhid).filter_map(|record| match record.before {
+            Some(DrillValue::Numeric(depth)) => Some(depth),
+            _ => None,
+        });
         self.deleted_rows(&drilled.dhid)
             .map(|row| row.to)
+            .chain(moved_from)
             .filter(|to| to.is_finite())
             .fold(drilled.end_depth(), f64::max)
+    }
+
+    /// The floor moves recorded for the hole named `dhid`, through the same
+    /// index as its deleted rows.
+    fn moved_floors<'a>(&'a self, dhid: &'a str) -> impl Iterator<Item = &'a Correction> + 'a {
+        self.correction_index(dhid)
+            .filter(move |record| record.kind == CorrectionKind::Boundary && record.field == FLOOR_FIELD && record.hole == dhid)
     }
 
     /// The rows deletions have taken out of hole `hole` that the site had
@@ -1908,26 +1938,28 @@ impl DrillHoleDataset {
     /// Every row deletions have taken out of the hole named `dhid`, oldest
     /// first, read through the index rather than every record.
     fn deleted_rows<'a>(&'a self, dhid: &'a str) -> impl Iterator<Item = &'a DrillInterval> + 'a {
+        self.correction_index(dhid)
+            .filter(move |record| record.kind == CorrectionKind::Deletion && record.hole == dhid)
+            .filter_map(|record| record.removed.as_ref())
+    }
+
+    /// The records of hole `dhid` that change how deep it was: deletions
+    /// that removed a row and floor moves, found through an index built once.
+    fn correction_index<'a>(&'a self, dhid: &'a str) -> impl Iterator<Item = &'a Correction> + 'a {
         let deletions = self.deletions.get_or_init(|| {
             let mut deletions: HashMap<String, Vec<usize>> = HashMap::new();
             for (index, record) in self.corrections.iter().enumerate() {
-                if record.kind == CorrectionKind::Deletion && record.removed.is_some() {
+                if (record.kind == CorrectionKind::Deletion && record.removed.is_some()) || (record.kind == CorrectionKind::Boundary && record.field == FLOOR_FIELD) {
                     deletions.entry(record.hole.clone()).or_default().push(index);
                 }
             }
             deletions
         });
-        deletions
-            .get(dhid)
-            .into_iter()
-            .flatten()
-            .filter_map(|&index| self.corrections.get(index))
-            .filter(move |record| record.kind == CorrectionKind::Deletion && record.hole == dhid)
-            .filter_map(|record| record.removed.as_ref())
+        deletions.get(dhid).into_iter().flatten().filter_map(|&index| self.corrections.get(index))
     }
 
     /// Work out again what is read from the records after they changed: the
-    /// deletions index, and the fields.
+    /// index of deletions and floor moves, and the fields.
     pub(crate) fn records_changed(&mut self) {
         self.deletions = std::sync::OnceLock::new();
         self.refresh_fields();
@@ -2343,6 +2375,16 @@ impl DrillHoleDataset {
                 .values()
                 .map(|charge| size_of::<usize>() + charge.estimated_bytes())
                 .fold(0usize, usize::saturating_add)
+            + self
+                .unread_corrections
+                .iter()
+                .map(|(_, value)| size_of::<(usize, serde_json::Value)>().saturating_add(json_bytes(value)))
+                .fold(0usize, usize::saturating_add)
+            + self
+                .unread_logged
+                .iter()
+                .map(|(key, value)| size_of::<(String, serde_json::Value)>().saturating_add(key.len()).saturating_add(json_bytes(value)))
+                .fold(0usize, usize::saturating_add)
     }
 
     pub(crate) fn field(&self, key: &str) -> Option<&DrillField> {
@@ -2581,14 +2623,15 @@ pub(crate) struct ColumnShift {
 }
 
 impl ColumnShift {
-    /// Each distinct rename the shift makes, old name to new, a name
-    /// replaced by [`UNKNOWN_NAME`] left out: no section or colour follows it.
+    /// Each distinct rename the shift makes, old name to new (an old name
+    /// held by several runs may take several), a name replaced by
+    /// [`UNKNOWN_NAME`] left out: no section or colour follows it.
     pub(crate) fn renames(&self) -> Vec<(String, String)> {
         let mut pairs: Vec<(String, String)> = Vec::new();
         for (_, record) in &self.corrections {
             if let (Some(DrillValue::Category(from)), Some(DrillValue::Category(to))) = (&record.before, &record.after)
                 && to != UNKNOWN_NAME
-                && !pairs.iter().any(|(known, _)| known == from)
+                && !pairs.iter().any(|(known, new)| known == from && new == to)
             {
                 pairs.push((from.clone(), to.clone()));
             }
@@ -2606,18 +2649,22 @@ impl ColumnShift {
 pub(crate) fn sections_after_shift(sections: &[WorkingSection], field: &str, renames: &[(String, String)], remains: impl Fn(&str) -> bool) -> Vec<WorkingSection> {
     let held = |code: &str| sections.iter().any(|section| section.field == field && section.codes.iter().any(|member| member == code));
     let mut after = sections.to_vec();
+    // Names added so far: the first section to take one keeps it.
+    let mut claimed: Vec<&String> = Vec::new();
     for section in after.iter_mut().filter(|section| section.field == field) {
         let mut codes = Vec::with_capacity(section.codes.len());
         for code in &section.codes {
-            match renames.iter().find(|(from, _)| from == code).map(|(_, to)| to) {
-                Some(to) if !held(to) => {
-                    if remains(code) {
-                        codes.push(code.clone());
-                    }
-                    codes.push(to.clone());
+            let mut new: Vec<&String> = Vec::new();
+            for (_, to) in renames.iter().filter(|(from, _)| from == code) {
+                if !held(to) && !claimed.contains(&to) {
+                    claimed.push(to);
+                    new.push(to);
                 }
-                _ => codes.push(code.clone()),
             }
+            if new.is_empty() || remains(code) {
+                codes.push(code.clone());
+            }
+            codes.extend(new.into_iter().cloned());
         }
         section.codes = codes;
     }
@@ -2908,6 +2955,18 @@ fn lenient_strat_field<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Res
     })
 }
 
+/// The codes a strat column keeps: no blank, no unknown, none twice.
+fn kept_strat_codes(codes: Vec<String>) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::with_capacity(codes.len());
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::with_capacity(codes.len());
+    for code in codes {
+        if !code.trim().is_empty() && code != UNKNOWN_NAME && seen.insert(code.clone()) {
+            kept.push(code);
+        }
+    }
+    kept
+}
+
 /// Reads the strat columns a field at a time, so one malformed entry costs
 /// only itself and not the colours saved beside it.
 fn lenient_strat_columns<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<StratColumn>, D::Error> {
@@ -2927,9 +2986,13 @@ fn lenient_strat_columns<'de, D: serde::Deserializer<'de>>(deserializer: D) -> R
         List::Entries(entries) => entries
             .into_iter()
             .filter_map(|entry| match entry {
-                Entry::Column(column) => Some(column),
+                Entry::Column(column) => Some(StratColumn {
+                    codes: kept_strat_codes(column.codes),
+                    ..column
+                }),
                 Entry::Unreadable(_) => None,
             })
+            .filter(|column| !column.codes.is_empty())
             .collect(),
         List::Unreadable(_) => Vec::new(),
     })
@@ -2955,6 +3018,24 @@ pub(crate) fn skipped_strat_columns(color: &serde_json::Value) -> usize {
         Some(serde_json::Value::Array(entries)) => entries.iter().filter(|entry| StratColumn::deserialize(*entry).is_err()).count(),
         Some(_) => 1,
     }
+}
+
+/// Whether a colour state's JSON saved a strat field the reader passes
+/// over: present, not null, and not a non-blank string.
+pub(crate) fn skipped_strat_field(color: &serde_json::Value) -> bool {
+    match color.get("strat_field") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::String(key)) => key.trim().is_empty(),
+        Some(_) => true,
+    }
+}
+
+/// Whether a colour state's JSON saved fewer ramp stops than a ramp needs.
+pub(crate) fn saved_too_few_color_stops(color: &serde_json::Value) -> bool {
+    color
+        .get("stops")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|stops| stops.len() < MIN_DRILL_COLOR_STOPS)
 }
 
 /// A dataset is drawn at its drilled width until someone says otherwise.
@@ -3123,16 +3204,19 @@ impl DrillColorState {
         self.strat_columns.iter().find(|column| column.field == field).map_or(&[], |column| column.codes.as_slice())
     }
 
+    /// A saved ramp with too few stops takes its preset's, so the ramp
+    /// editor never meets an empty one.
+    pub(crate) fn settle_stops(&mut self) {
+        if self.stops.len() < MIN_DRILL_COLOR_STOPS {
+            self.stops = self.preset.stops();
+        }
+    }
+
     /// Replace `field`'s strat column with `codes`, blanks, UNK and
     /// duplicates left out, keeping the field's place among the others. An empty
     /// column is kept as none.
     pub(crate) fn set_strat_column(&mut self, field: &str, codes: Vec<String>) {
-        let mut kept: Vec<String> = Vec::with_capacity(codes.len());
-        for code in codes {
-            if !code.trim().is_empty() && code != UNKNOWN_NAME && !kept.contains(&code) {
-                kept.push(code);
-            }
-        }
+        let kept = kept_strat_codes(codes);
         match self.strat_columns.iter().position(|column| column.field == field) {
             Some(at) if kept.is_empty() => {
                 self.strat_columns.remove(at);
@@ -3466,7 +3550,9 @@ fn write_correction(hole: &mut DrillHole, target: CorrectionTarget, record: &Cor
             hole.intervals[target.interval].to = depth;
         }
         if let Some(below) = target.below {
-            hole.intervals[below].from = depth;
+            // A row joined across a hair's gap gets its own logged roof back.
+            let own = hole.intervals[below].logged.as_ref().map(|logged| logged.from);
+            hole.intervals[below].from = own.filter(|from| !apply && (from - depth).abs() <= TOUCH_TOLERANCE).unwrap_or(depth);
         }
     } else {
         let interval = &mut hole.intervals[target.interval];
@@ -3498,15 +3584,17 @@ fn write_insertion(hole: &mut DrillHole, target: CorrectionTarget, record: &Corr
             if target.interval > hole.intervals.len() {
                 return false;
             }
+            // Adding zero turns a negative zero into a plain one.
+            let (from, to) = (record.logged_from + 0.0, record.logged_to + 0.0);
             hole.intervals.insert(
                 target.interval,
                 DrillInterval {
-                    from: record.logged_from,
-                    to: record.logged_to,
+                    from,
+                    to,
                     values: row.clone(),
                     logged: Some(LoggedInterval {
-                        from: record.logged_from,
-                        to: record.logged_to,
+                        from,
+                        to,
                         values: BTreeMap::new(),
                         never_logged: true,
                     }),
@@ -3696,6 +3784,23 @@ fn shares_table(interval: &DrillInterval, columns: &BTreeSet<&String>) -> bool {
 /// columns, and so could be of any table.
 fn in_table(interval: &DrillInterval, columns: &BTreeSet<&String>, derived: &BTreeSet<String>) -> bool {
     shares_table(interval, columns) || (interval.from.is_finite() && interval.to.is_finite() && interval.values.keys().all(|key| derived.contains(key)))
+}
+
+/// A rough measure of the memory a kept JSON value holds: a node's size each,
+/// plus its text and keys. Map leaves count as full and inner nodes not at all.
+fn json_bytes(value: &serde_json::Value) -> usize {
+    use serde_json::Value;
+    let node = size_of::<Value>();
+    match value {
+        Value::String(text) => node.saturating_add(text.len()),
+        Value::Array(items) => items.iter().fold(node, |sum, item| sum.saturating_add(json_bytes(item))),
+        // The map's B-tree leaves hold 11 slots each, filled or not.
+        Value::Object(map) => map.iter().fold(
+            node.saturating_add(map.len().div_ceil(11).saturating_mul(11 * size_of::<(String, Value)>() + 16)),
+            |sum, (key, item)| sum.saturating_add(key.len()).saturating_add(json_bytes(item).saturating_sub(size_of::<Value>())),
+        ),
+        _ => node,
+    }
 }
 
 /// Roughly how much memory `values` holds: per entry its key, its header

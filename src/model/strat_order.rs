@@ -21,6 +21,9 @@ use crate::model::drill_hole::{DrillFieldKind, DrillHoleDataset, DrillValue, Ope
 /// Most codes a field may hold and still be ordered.
 pub(crate) const MAX_ORDERED_CODES: usize = 1024;
 
+/// Asked now and then by long work: true once the result is no longer wanted.
+pub(crate) type Stop<'a> = &'a (dyn Fn() -> bool + Sync);
+
 /// Largest total size of the per-chunk pair tables, in counters.
 const PAIR_TABLE_BUDGET: usize = 16 * 1024 * 1024;
 
@@ -36,7 +39,8 @@ pub(crate) enum FlagKind {
 }
 
 /// Whether a flag is about the groups (the parent field's values) or about
-/// the names within one group, or within a set with no groups.
+/// the names: within one group, or across the column where there are no
+/// groups or the column splits one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum FlagLevel {
     Group,
@@ -150,14 +154,16 @@ pub(crate) struct Group {
 /// The majority order of a field and the holes that disagree with it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct MajorityOrder {
-    /// Every code the field holds in any hole, top first, repeats aside.
+    /// Every code met in the holes read, top first, repeats aside; a code
+    /// only rising holes hold is left out with them.
     pub(crate) order: Vec<String>,
     /// The holes that disagree with `order`, by hole then depth.
     pub(crate) flags: Vec<HoleFlag>,
     /// Majorities set aside because a stronger chain of majorities ran the
     /// other way.
     pub(crate) overruled: usize,
-    /// Holes holding at least one code of the field.
+    /// Holes holding at least one code of the field, those counted in
+    /// `rising` aside.
     pub(crate) holes: usize,
     /// The parent field the order was built under, if one was found.
     pub(crate) parent: Option<ParentField>,
@@ -166,6 +172,9 @@ pub(crate) struct MajorityOrder {
     pub(crate) groups: Vec<Group>,
     /// Of `overruled`, the majorities between groups.
     pub(crate) group_overruled: usize,
+    /// Holes holding a code of the field whose trace rises, left out of the
+    /// order and the check: their depths do not run down the deposit.
+    pub(crate) rising: usize,
 }
 
 /// One working section of `field` per named group, called after the group
@@ -229,8 +238,8 @@ impl<'a> Tally<'a> {
 type Candidate<'a> = (usize, usize, &'a str, ParentField, HashMap<&'a str, &'a str>);
 
 /// The parent field, and for each code of `field` that has one, its parent
-/// value.
-fn parent_detail<'a>(dataset: &'a DrillHoleDataset, field: &str) -> Option<(ParentField, HashMap<&'a str, &'a str>)> {
+/// value. Gives up early once `stop` says so, for the caller to discard.
+fn parent_detail_until<'a>(dataset: &'a DrillHoleDataset, field: &str, stop: Stop) -> Option<(ParentField, HashMap<&'a str, &'a str>)> {
     let code_of = |interval: &'a crate::model::drill_hole::DrillInterval| -> Option<&'a str> {
         if !interval.from.is_finite() || !interval.to.is_finite() {
             return None;
@@ -244,7 +253,9 @@ fn parent_detail<'a>(dataset: &'a DrillHoleDataset, field: &str) -> Option<(Pare
         .holes
         .par_iter()
         .fold(std::collections::HashSet::<&'a str>::new, |mut set, hole| {
-            set.extend(hole.intervals.iter().filter_map(code_of));
+            if !stop() {
+                set.extend(hole.intervals.iter().filter_map(code_of));
+            }
             set
         })
         .reduce(std::collections::HashSet::new, |mut a, b| {
@@ -262,6 +273,9 @@ fn parent_detail<'a>(dataset: &'a DrillHoleDataset, field: &str) -> Option<(Pare
 
     let mut best: Option<Candidate<'a>> = None;
     for candidate in &dataset.fields {
+        if stop() {
+            return None;
+        }
         if candidate.key == field || is_lithology_key(&candidate.key) || !matches!(candidate.kind, DrillFieldKind::Categorical { .. }) {
             continue;
         }
@@ -272,6 +286,9 @@ fn parent_detail<'a>(dataset: &'a DrillHoleDataset, field: &str) -> Option<(Pare
             .fold(
                 || Tally::new(n),
                 |mut tally, hole| {
+                    if stop() {
+                        return tally;
+                    }
                     for interval in &hole.intervals {
                         let Some(code) = code_of(interval) else { continue };
                         let Some(&at) = map.get(code) else { continue };
@@ -391,6 +408,17 @@ struct Layout<'a> {
 
 const NONE: u32 = u32::MAX;
 
+/// How far, in metres, a trace station may sit above the one before it and
+/// still read as level.
+const RISE_TOLERANCE: f64 = 1.0e-6;
+
+/// Whether `hole`'s trace climbs: a station higher than the one before it
+/// by more than [`RISE_TOLERANCE`]. Depths on such a hole do not run down
+/// the deposit.
+fn trace_rises(hole: &crate::model::drill_hole::DrillHole) -> bool {
+    hole.trace.windows(2).any(|pair| pair[1].position.z > pair[0].position.z + RISE_TOLERANCE)
+}
+
 /// One hole's codes top to bottom as indices, with runs of one code joined
 /// and codes missing from `map` passed over. The flag says one was missing,
 /// UNK and a repeat of a code in `map` aside.
@@ -453,10 +481,28 @@ impl<'a> RepeatRows<'a> {
     }
 }
 
-fn all_codes(dataset: &DrillHoleDataset, field: &str, map: &HashMap<&str, u32>, repeats: &RepeatRows) -> (Vec<Vec<u32>>, bool) {
-    let found: Vec<(Vec<u32>, bool)> = dataset.holes.par_iter().map(|hole| hole_codes(hole, field, map, repeats)).collect();
+/// Every hole's codes, top to bottom, whether one was missing from `map`,
+/// and how many holes with codes were left out for a rising trace. A rising
+/// hole gives an empty sequence, so the indices still match the dataset's.
+fn all_codes(dataset: &DrillHoleDataset, field: &str, map: &HashMap<&str, u32>, repeats: &RepeatRows, stop: Stop) -> (Vec<Vec<u32>>, bool, usize) {
+    let found: Vec<(Vec<u32>, bool, bool)> = dataset
+        .holes
+        .par_iter()
+        .map(|hole| {
+            if stop() {
+                return (Vec::new(), false, false);
+            }
+            let (codes, missing) = hole_codes(hole, field, map, repeats);
+            if trace_rises(hole) {
+                (Vec::new(), false, !codes.is_empty())
+            } else {
+                (codes, missing, false)
+            }
+        })
+        .collect();
     let missing = found.iter().any(|item| item.1);
-    (found.into_iter().map(|item| item.0).collect(), missing)
+    let rising = found.iter().filter(|item| item.2).count();
+    (found.into_iter().map(|item| item.0).collect(), missing, rising)
 }
 
 /// `names` indexed in first-met order, blanks, UNK and repeats of another
@@ -490,48 +536,65 @@ fn collect_names<'a>(dataset: &'a DrillHoleDataset, field: &str) -> (HashMap<&'a
 /// The order most holes agree on for `field`, and the holes that disagree.
 /// `None` when the field holds more than [`MAX_ORDERED_CODES`] codes.
 pub(crate) fn majority_order(dataset: &DrillHoleDataset, field: &str) -> Option<MajorityOrder> {
+    majority_order_until(dataset, field, &|| false)
+}
+
+/// [`majority_order`] that gives up, returning `None`, once `stop` says so.
+pub(crate) fn majority_order_until(dataset: &DrillHoleDataset, field: &str, stop: Stop) -> Option<MajorityOrder> {
     let declared = dataset.field(field).and_then(|found| match &found.kind {
         DrillFieldKind::Categorical { categories } => Some(index_of(categories.iter().map(String::as_str))),
         DrillFieldKind::Numeric { .. } => None,
     });
-    let parent = parent_detail(dataset, field);
+    // Refuse a field with too many codes before the costly parent scan.
+    if declared.as_ref().is_some_and(|(_, names)| names.len() > MAX_ORDERED_CODES) {
+        return None;
+    }
+    let collected = collect_names(dataset, field);
+    if collected.1.len() > MAX_ORDERED_CODES {
+        return None;
+    }
+    let parent = parent_detail_until(dataset, field, stop);
+    if stop() {
+        return None;
+    }
     let repeats = RepeatRows::of(dataset, parent.as_ref().map(|found| &found.0));
     let mut found = None;
     if let Some((map, names)) = declared {
-        if names.len() > MAX_ORDERED_CODES {
-            return None;
-        }
-        let (sequences, missing) = all_codes(dataset, field, &map, &repeats);
+        let (sequences, missing, rising) = all_codes(dataset, field, &map, &repeats, stop);
         if !missing {
-            found = Some((names, sequences));
+            found = Some((names, sequences, rising));
         }
     }
-    let (names, sequences) = match found {
+    let (names, sequences, rising) = match found {
         Some(found) => found,
         None => {
-            let (map, names) = collect_names(dataset, field);
-            if names.len() > MAX_ORDERED_CODES {
-                return None;
-            }
-            let (sequences, _) = all_codes(dataset, field, &map, &repeats);
-            (names, sequences)
+            let (map, names) = collected;
+            let (sequences, _, rising) = all_codes(dataset, field, &map, &repeats, stop);
+            (names, sequences, rising)
         }
     };
     let n = names.len();
 
-    let (above, position_sum, seen, holes) = pair_counts(&sequences, n);
+    let (above, position_sum, seen, holes) = pair_counts(&sequences, n, stop);
+    if stop() {
+        return None;
+    }
     let Some((info, parents)) = parent else {
-        let (order, overruled) = ranked_order(&names, &above, &position_sum, &seen);
+        let (order, overruled) = ranked_order(&names, &above, &position_sum, &seen, stop);
         let mut rank = vec![NONE; n];
         for (place, &code) in order.iter().enumerate() {
             rank[code as usize] = place as u32;
         }
-        let flags = flag_sequences(&sequences, &rank, &names);
+        let flags = flag_sequences(&sequences, &rank, &names, stop);
+        if stop() {
+            return None;
+        }
         return Some(MajorityOrder {
             order: order.iter().map(|&code| names[code as usize].to_owned()).collect(),
             flags,
             overruled,
             holes,
+            rising,
             ..MajorityOrder::default()
         });
     };
@@ -546,8 +609,8 @@ pub(crate) fn majority_order(dataset: &DrillHoleDataset, field: &str) -> Option<
             groups
         })
         .collect();
-    let (g_above, g_position, g_seen, _) = pair_counts(&group_sequences, g);
-    let (group_order, group_overruled) = ranked_order(&labels, &g_above, &g_position, &g_seen);
+    let (g_above, g_position, g_seen, _) = pair_counts(&group_sequences, g, stop);
+    let (group_order, group_overruled) = ranked_order(&labels, &g_above, &g_position, &g_seen, stop);
 
     let mut members: Vec<Vec<u32>> = vec![Vec::new(); g];
     for code in 0..n {
@@ -561,6 +624,9 @@ pub(crate) fn majority_order(dataset: &DrillHoleDataset, field: &str) -> Option<
     let mut order = Vec::new();
     let mut groups = Vec::with_capacity(group_order.len());
     for (place, &id) in group_order.iter().enumerate() {
+        if stop() {
+            return None;
+        }
         group_rank[id as usize] = place as u32;
         let list = &members[id as usize];
         let m = list.len();
@@ -573,7 +639,7 @@ pub(crate) fn majority_order(dataset: &DrillHoleDataset, field: &str) -> Option<
         let sub_names: Vec<&str> = list.iter().map(|&code| names[code as usize]).collect();
         let sub_position: Vec<f64> = list.iter().map(|&code| position_sum[code as usize]).collect();
         let sub_seen: Vec<u32> = list.iter().map(|&code| seen[code as usize]).collect();
-        let (local, set_aside) = ranked_order(&sub_names, &sub_above, &sub_position, &sub_seen);
+        let (local, set_aside) = ranked_order(&sub_names, &sub_above, &sub_position, &sub_seen, stop);
         overruled += set_aside;
         let mut codes = Vec::with_capacity(local.len());
         for (at, &index) in local.iter().enumerate() {
@@ -594,7 +660,10 @@ pub(crate) fn majority_order(dataset: &DrillHoleDataset, field: &str) -> Option<
         code_rank: &code_rank,
         names: &names,
     };
-    let flags = flag_two_level(&sequences, &layout);
+    let flags = flag_two_level(&sequences, &layout, stop);
+    if stop() {
+        return None;
+    }
     Some(MajorityOrder {
         order,
         flags,
@@ -603,23 +672,53 @@ pub(crate) fn majority_order(dataset: &DrillHoleDataset, field: &str) -> Option<
         parent: Some(info),
         groups,
         group_overruled,
+        rising,
     })
+}
+
+/// Whether `field` holds more codes than an order can be read from.
+fn over_code_cap(dataset: &DrillHoleDataset, field: &str) -> bool {
+    let declared = dataset.field(field).and_then(|found| match &found.kind {
+        DrillFieldKind::Categorical { categories } => Some(index_of(categories.iter().map(String::as_str)).1.len()),
+        DrillFieldKind::Numeric { .. } => None,
+    });
+    declared.is_some_and(|count| count > MAX_ORDERED_CODES) || collect_names(dataset, field).1.len() > MAX_ORDERED_CODES
 }
 
 /// The holes that disagree with `column` for `field`. Codes the column does
 /// not hold, repeats it holds and rows of a repeat parent are passed over.
 /// Under a parent field, groups are judged first and the codes within each
-/// group after.
-pub(crate) fn flags_against(dataset: &DrillHoleDataset, field: &str, column: &[String]) -> Vec<HoleFlag> {
+/// group after. Gives up, returning nothing, once `stop` says so.
+pub(crate) fn flags_against_until(dataset: &DrillHoleDataset, field: &str, column: &[String], stop: Stop) -> Vec<HoleFlag> {
+    if over_code_cap(dataset, field) {
+        return Vec::new();
+    }
     let (map, names) = index_of(column.iter().map(String::as_str));
     let rank: Vec<u32> = (0..names.len() as u32).collect();
-    let parent = parent_detail(dataset, field);
+    let parent = parent_detail_until(dataset, field, stop);
     let repeats = RepeatRows::of(dataset, parent.as_ref().map(|found| &found.0));
-    let (sequences, _) = all_codes(dataset, field, &map, &repeats);
+    let (sequences, _, _) = all_codes(dataset, field, &map, &repeats, stop);
     let Some((_, parents)) = parent else {
-        return flag_sequences(&sequences, &rank, &names);
+        let flags = flag_sequences(&sequences, &rank, &names, stop);
+        return if stop() { Vec::new() } else { flags };
     };
     let (group_of, labels, _) = assign_groups(&names, &parents);
+    // A column that splits a group has no group order, so each hole is judged
+    // by its codes alone.
+    let mut met = vec![false; labels.len()];
+    let mut last = NONE;
+    let mut split = false;
+    for &id in &group_of {
+        if id != last {
+            split |= met[id as usize];
+            met[id as usize] = true;
+            last = id;
+        }
+    }
+    if split {
+        let flags = flag_sequences(&sequences, &rank, &names, stop);
+        return if stop() { Vec::new() } else { flags };
+    }
     let mut group_rank = vec![NONE; labels.len()];
     for (code, &id) in group_of.iter().enumerate() {
         group_rank[id as usize] = group_rank[id as usize].min(code as u32);
@@ -631,7 +730,15 @@ pub(crate) fn flags_against(dataset: &DrillHoleDataset, field: &str, column: &[S
         code_rank: &rank,
         names: &names,
     };
-    flag_two_level(&sequences, &layout)
+    let flags = flag_two_level(&sequences, &layout, stop);
+    if stop() { Vec::new() } else { flags }
+}
+
+/// How many holes `flags` name; they come sorted by hole.
+pub(crate) fn flagged_holes(flags: &[HoleFlag]) -> usize {
+    let mut holes = flags.iter().map(|flag| flag.hole).collect::<Vec<_>>();
+    holes.dedup();
+    holes.len()
 }
 
 /// One chunk's or the whole set's counts, see [`pair_counts`].
@@ -640,7 +747,7 @@ type PairCounts = (Vec<u32>, Vec<f64>, Vec<u32>, usize);
 /// For every ordered pair of codes, in how many holes the first is met above
 /// the second; the summed relative position of each code; how often each was
 /// met; and the number of holes holding any code.
-fn pair_counts(sequences: &[Vec<u32>], n: usize) -> PairCounts {
+fn pair_counts(sequences: &[Vec<u32>], n: usize, stop: Stop) -> PairCounts {
     let table = (n * n).max(1);
     let chunks = (rayon::current_num_threads() * 2).min(PAIR_TABLE_BUDGET / table).max(1);
     let size = sequences.len().div_ceil(chunks).max(1);
@@ -654,7 +761,7 @@ fn pair_counts(sequences: &[Vec<u32>], n: usize) -> PairCounts {
             let mut firsts: Vec<u32> = Vec::new();
             let mut holes = 0;
             for (number, codes) in part.iter().enumerate() {
-                if codes.is_empty() {
+                if codes.is_empty() || stop() {
                     continue;
                 }
                 holes += 1;
@@ -698,10 +805,13 @@ fn pair_counts(sequences: &[Vec<u32>], n: usize) -> PairCounts {
 /// Ranked Pairs over the pair counts, then a topological sort that breaks
 /// ties by mean position and natural name. Returns the codes top first and
 /// the number of majorities set aside.
-fn ranked_order(names: &[&str], above: &[u32], position_sum: &[f64], seen: &[u32]) -> (Vec<u32>, usize) {
+fn ranked_order(names: &[&str], above: &[u32], position_sum: &[f64], seen: &[u32], stop: Stop) -> (Vec<u32>, usize) {
     let n = names.len();
     let mut edges: Vec<(u32, u32, u32, u32)> = Vec::new();
     for a in 0..n {
+        if stop() {
+            return (Vec::new(), 0);
+        }
         for b in 0..n {
             let (win, lose) = (above[a * n + b], above[b * n + a]);
             if win > lose {
@@ -717,7 +827,10 @@ fn ranked_order(names: &[&str], above: &[u32], position_sum: &[f64], seen: &[u32
     let mut followers: Vec<Vec<u32>> = vec![Vec::new(); n];
     let mut inbound = vec![0u32; n];
     let mut overruled = 0;
-    for &(a, b, _, _) in &edges {
+    for (done, &(a, b, _, _)) in edges.iter().enumerate() {
+        if done % 1024 == 0 && stop() {
+            return (Vec::new(), 0);
+        }
         let (a, b) = (a as usize, b as usize);
         if bit(&reach[b * words..(b + 1) * words], a) {
             overruled += 1;
@@ -770,23 +883,23 @@ fn ranked_order(names: &[&str], above: &[u32], position_sum: &[f64], seen: &[u32
 
 /// Flags for every hole against `rank`, which gives each code index its place
 /// in the column. Holes are worked in parallel and returned in hole order.
-fn flag_sequences(sequences: &[Vec<u32>], rank: &[u32], names: &[&str]) -> Vec<HoleFlag> {
+fn flag_sequences(sequences: &[Vec<u32>], rank: &[u32], names: &[&str], stop: Stop) -> Vec<HoleFlag> {
     let per_hole: Vec<Vec<HoleFlag>> = sequences
         .par_iter()
         .enumerate()
-        .map(|(hole, codes)| hole_flags(hole, codes, rank, names, FlagLevel::Name))
+        .map(|(hole, codes)| if stop() { Vec::new() } else { hole_flags(hole, codes, rank, names, FlagLevel::Name) })
         .collect();
     per_hole.into_iter().flatten().collect()
 }
 
 /// Two-level flags for every hole: the hole's groups against the group order,
 /// then, group by group, its codes against the order within the group.
-fn flag_two_level(sequences: &[Vec<u32>], layout: &Layout) -> Vec<HoleFlag> {
+fn flag_two_level(sequences: &[Vec<u32>], layout: &Layout, stop: Stop) -> Vec<HoleFlag> {
     let per_hole: Vec<Vec<HoleFlag>> = sequences
         .par_iter()
         .enumerate()
         .map(|(hole, codes)| {
-            if codes.len() < 2 {
+            if codes.len() < 2 || stop() {
                 return Vec::new();
             }
             let mut groups: Vec<u32> = codes.iter().map(|&code| layout.group_of[code as usize]).collect();

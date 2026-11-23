@@ -1234,7 +1234,7 @@ borehole-inspector-flag-repeat = Repeated
 borehole-inspector-flagged-holes = Flagged holes ({ $count })
 borehole-inspector-flags-first-shown = The first { $shown } of { $count } flags are listed.
 borehole-inspector-file-not-where-was-linked = { $file } is not where it was linked from.
-borehole-inspector-guessed-name = Guessed by name
+borehole-inspector-guessed-name = From the import, else by name
 borehole-inspector-hold-hole-while-you-work = Hold this hole while you work on the ones around it.
 borehole-inspector-holding-hole-click-follow-selection = Holding this hole. Click to follow the selection again.
 borehole-inspector-hole-code-not-in-column = Not in the set column
@@ -1901,6 +1901,7 @@ cmd-selection-deleted-vertex = Deleted vertex { $vertex } from polyline { $objec
 cmd-strat-check-checking = Checking the strat column of { $name }…
 cmd-strat-check-failed = Strat column check failed: { $error }
 cmd-strat-check-summary = Checked { $field } of { $name }: { $holes } holes, { $flagged } flagged
+cmd-strat-check-summary-rising = Checked { $field } of { $name }: { $holes } holes, { $flagged } flagged; { $rising } holes rise along their trace and were left out
 cmd-strat-check-too-many-codes = { $field } of { $name } holds too many codes to put in order
 cmd-strat-import-filled = Strat column filled for { $field }: { $names } names; { $flagged } holes disagree on { $checked }. Check to review.
 cmd-strat-import-filled-groups = Strat column filled for { $field }: { $names } names in { $groups } groups; { $flagged } holes disagree on { $checked }. Check to review.
@@ -3371,8 +3372,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } maps a dip or inclination 
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } maps a total depth column twice
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [one] { $file }: { $count } total depth was blank, zero, negative, a no-data value or not a number; that collar is kept without one
-       *[other] { $file }: { $count } total depths were blank, zero, negative, a no-data value or not a number; those collars are kept without one
+        [one] { $file }: { $count } total depth was blank or a no-data value; that collar is kept without one
+       *[other] { $file }: { $count } total depths were blank or no-data values; those collars are kept without one
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [one] { $file }: { $count } total depth was zero, negative or not a number; that collar is kept without one
+       *[other] { $file }: { $count } total depths were zero, negative or not a number; those collars are kept without one
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -3388,9 +3394,15 @@ csv-drill-hole-row-has-no-geometry = { $file } row { $row } has no complete XYZ 
 csv-drill-hole-row-invalid-interval = { $file } row { $row } has invalid interval { $from }..{ $to } for DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } row { $row } has a zero-length segment at { $depth } for DHID '{ $dhid }'
 csv-drill-hole-row-unreadable-value = { $file } row { $row } has an unreadable value
+csv-drill-hole-row-inconsistent-diameter = Inconsistent diameter for DHID '{ $dhid }'
+csv-drill-hole-row-wrong-width = { $file } row { $row } has { $found } columns; expected { $expected }
+csv-drill-hole-row-blank-required-value = { $file } row { $row } has a blank required value
+csv-drill-hole-row-invalid-number = { $file } row { $row } has invalid number '{ $value }'
 csv-drill-hole-csv-is-wide-text = CSV is UTF-16 or UTF-32 text; save it as UTF-8 and import it again
 csv-drill-hole-csv-holds-nul-bytes = CSV holds NUL bytes throughout, so it is not UTF-8 text; if it was written as UTF-16 or UTF-32, save it as UTF-8 and import it again
 csv-drill-hole-overlap-field-summary = { $field } in { $count } hole(s), e.g. { $examples }
+csv-drill-hole-codes-differ-only-by-case = Codes that differ only by case are kept as separate codes: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = above 5
 csv-geophysics-below-0-5 = below 0.5
 csv-geophysics-count-more = (+{ $count } more)
@@ -3400,6 +3412,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = CSV has an unterminated quote
 csv-geophysics-curve-file-was-left-out = { $curve } in { $file } was left out: most of its readings are { $side }, so its median is outside 0.5 to 5 g/cc and its unit looks wrong (g/cc expected). Incline converts no units; correct the export and link it again
 csv-geophysics-file-empty = { $file } is empty
 csv-geophysics-file-has-no-curve-no = { $file } has no curve: no column besides the hole id and depth holds numbers
+csv-geophysics-file-has-two-curves-one-name = { $file } has two curve columns that read as one curve, { $first } and { $second }: rename one and link it again
+csv-geophysics-file-has-no-rows-known-holes = { $file } has no rows for any hole of the dataset: check its hole ids and link it again
 csv-geophysics-file-mapping-has-mapped-columns = { $file } mapping has { $mapped } columns, CSV has { $found }
 csv-geophysics-file-no-longer-matches-its = { $file } no longer matches its index: link it again
 csv-geophysics-file-not-grouped-hole-its = { $file } is not grouped by hole: its holes' rows are split across too many runs. Sort it by hole id, then depth, and link it again
@@ -3879,10 +3893,12 @@ files-xy-grid-options = XY Grid Options
 geophysics-checking-geophysics-files = Checking geophysics files
 geophysics-downhole-geophysics-name-could-not = Downhole geophysics for '{ $name }' could not be linked: { $error }
 geophysics-file-changed = The geophysics file changed since it was indexed
+geophysics-file-cannot-be-opened = { $file } cannot be opened: { $error }
 geophysics-file-unreadable = The geophysics file linked to '{ $name }' cannot be read at { $path } ({ $error }); link it again from the dataset's right-click menu
 geophysics-linked-changed-rereading = The geophysics linked to '{ $name }' changed since it was indexed; reading it again
 geophysics-hole-has-size-mib-geophysics = { $hole } has { $size } MiB of geophysics rows, more than a hole is read at
 geophysics-hole-needs-size-mib-its = { $hole } needs { $size } MiB for its geophysics, more than the browser has left: unload other items, then unload and load this dataset again
+geophysics-hole-could-not-be-read = { $hole } could not be read: its geophysics file is not available
 geophysics-linking-geophysics-name = Linking geophysics to { $name }
 geophysics-reading-geophysics-hole = Reading geophysics for { $hole }
 geophysics-web-could-not-read-name-error = Could not read '{ $name }': { $error }
@@ -3943,6 +3959,7 @@ io-diameter = Diameter
 io-downhole-geophysics = Downhole geophysics
 io-drawing-exchange-format-dxf = Drawing Exchange Format (.dxf)
 io-drill-holes = Drillholes
+io-drill-csv-preview-failed = { $file } could not be read: { $error }
 io-east-x = East / X
 io-elevation-z = Elevation / Z
 io-end-x = End X
@@ -3999,6 +4016,7 @@ io-quality-points-file = Quality file
 io-quality-points-help = Composited values: one row per hole and seam with a column per quality, or one row per hole, seam and quality with Quality and Value columns. Each seam and quality becomes a layer of points at height = value.
 io-quality-points-long = Read as one row per hole, seam and quality.
 io-quality-points-needs = Map Hole ID, East / X, North / Y, Seam and a quality column (or Quality name and Value).
+io-quality-points-short = Line { $line }, column { $column }: the row ends before this cell, and every row needs it.
 io-quality-points-negative = Line { $line }, column { $column }: { $value } is below 0, and a quality cannot be negative.
 io-quality-points-not-a-number = Line { $line }, column { $column }: expected a number, found "{ $found }". Clean it in the source database.
 io-quality-points-unit-clash = Line { $line }, column { $column }: { $quality } is given in both { $first } and { $second }.
@@ -4010,7 +4028,7 @@ io-quality-role-unit = Unit
 io-quality-role-value = Value
 io-projects = Projects
 io-reset = Reset
-io-role-reason-also-collar = Also looks like a collar
+io-role-reason-also-collar = Looks like a collar file
 io-role-reason-collar = One row per hole, with coordinates
 io-role-reason-geophysics = Hole and depth with readings at a fine step
 io-role-reason-interval = Hole, from and to
@@ -4044,6 +4062,8 @@ io-worksheet-writes-two-files = Writes the worksheet under the name you choose, 
 cmd-file-exported-worksheet-path = Exported the corrections worksheet to { $path } and the corrections beside it to { $records }
 cmd-file-worksheet-export-failed-error = Corrections worksheet export failed: { $error }
 cmd-file-worksheet-no-corrections = { $name } has no corrections to export
+cmd-file-worksheet-only-unread-corrections = { $name } has no corrections this build can read: its { $count } correction records are kept as saved but cannot be exported
+cmd-file-worksheet-leaves-out-unread = The corrections worksheet of { $name } leaves out { $count } correction records this build cannot read; they stay in the project as saved
 state-export-corrections-worksheet = Export Corrections Worksheet
 
 ## Jobs strings
@@ -4158,13 +4178,17 @@ object-edit-vertices = Vertices
 omf-element-name-has-count-tie = Element '{ $name }' has { $count } tie-in(s) naming holes it no longer contains
 omf-element-name-has-count-unreadable = Element '{ $name }' has { $count } unreadable working section(s); they were left out
 omf-element-name-has-count-unreadable-strat = Element '{ $name }' has { $count } unreadable strat column(s); they were left out
-omf-element-name-has-count-as-logged = Element '{ $name }' has { $count } as-logged value(s) that could not be read or placed; they were left out
+omf-element-name-has-count-as-logged = Element '{ $name }' has { $count } as-logged value(s) that could not be read or placed; they are kept but not applied
+omf-element-name-strat-field-unreadable = Element '{ $name }' has an unreadable strat field; it was left out
+omf-element-name-color-stops-unreadable = Element '{ $name }' has too few colour stops to draw a ramp; the preset's stops were used
+omf-element-name-color-unreadable = Element '{ $name }' has colour settings that could not be read; the set opens with the default colours, and its working sections and strat columns were left out
+omf-element-name-geophysics-unreadable = Element '{ $name }' has an unreadable geophysics link; it was left out
 omf-element-unsupported-section = Element '{ $name }' names section '{ $section }' which cannot show this kind of item in this build
 omf-element-name-names-unknown-section = Element '{ $name }' names an unknown section '{ $section }'
 omf-quality-mark-unreadable = The quality mark on surface { $name } could not be read; it opens as a plain surface
 omf-layer-quality-mark-unreadable = The quality mark on layer { $name } could not be read; its points open as plain points
 omf-ignoring-colour-map-omf-attribute = Ignoring the colour map on OMF attribute '{ $attribute }': { $error }
-omf-correction-records-dropped = { $count } correction records of { $name } could not be read and were left out
+omf-correction-records-unread = { $count } correction records of { $name } could not be read: they are kept as saved but not applied
 omf-corrections-unreadable = The correction records of { $name } could not be read and were left out
 omf-damaged = This file is damaged or is not an Incline project
 omf-mining-data-exported-incline = Mining data exported by Incline

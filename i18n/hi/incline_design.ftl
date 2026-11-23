@@ -405,7 +405,7 @@ borehole-inspector-flag-repeat = दोहराया गया
 borehole-inspector-flagged-holes = चिह्नित होल ({ $count })
 borehole-inspector-flags-first-shown = { $count } चिह्नों में से पहले { $shown } सूचीबद्ध हैं।
 borehole-inspector-file-not-where-was-linked = { $file } वहाँ नहीं है जहाँ से उसे लिंक किया गया था।
-borehole-inspector-guessed-name = नाम से अनुमानित
+borehole-inspector-guessed-name = आयात से, नहीं तो नाम से
 borehole-inspector-hold-hole-while-you-work = आसपास के होल पर काम करते समय इस होल को रोके रखें।
 borehole-inspector-holding-hole-click-follow-selection = यह होल रोका गया है। चयन का फिर से अनुसरण करने के लिए क्लिक करें।
 borehole-inspector-hole-code-not-in-column = सेट के कॉलम में नहीं
@@ -978,6 +978,7 @@ cmd-selection-deleted-vertex = पॉलीलाइन { $object_id } से �
 cmd-strat-check-checking = { $name } का स्ट्रैट कॉलम जाँचा जा रहा है…
 cmd-strat-check-failed = स्ट्रैट कॉलम की जाँच विफल रही: { $error }
 cmd-strat-check-summary = { $name } का { $field } जाँचा गया: { $holes } होल, { $flagged } चिह्नित
+cmd-strat-check-summary-rising = { $name } का { $field } जाँचा गया: { $holes } होल, { $flagged } चिह्नित; { $rising } होल अपने ट्रेस के साथ ऊपर उठते हैं और छोड़ दिए गए
 cmd-strat-check-too-many-codes = { $name } के { $field } में क्रम में रखने के लिए बहुत ज़्यादा कोड हैं
 cmd-strat-import-filled = { $field } के लिए स्ट्रैट कॉलम भरा गया: { $names } नाम; { $flagged } होल { $checked } पर मेल नहीं खाते। देखने के लिए जाँचें।
 cmd-strat-import-filled-groups = { $field } के लिए स्ट्रैट कॉलम भरा गया: { $groups } समूहों में { $names } नाम; { $flagged } होल { $checked } पर मेल नहीं खाते। देखने के लिए जाँचें।
@@ -1394,8 +1395,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } डिप या झुक
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } कुल गहराई कॉलम को दो बार मैप करता है
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [one] { $file }: { $count } कुल गहराई खाली, शून्य, ऋणात्मक, नो-डेटा मान या गैर-संख्या थी; वह कॉलर बिना कुल गहराई के रखा गया है
-       *[other] { $file }: { $count } कुल गहराइयाँ खाली, शून्य, ऋणात्मक, नो-डेटा मान या गैर-संख्या थीं; वे कॉलर बिना कुल गहराई के रखे गए हैं
+        [one] { $file }: { $count } कुल गहराई खाली या नो-डेटा मान थी; वह कॉलर बिना कुल गहराई के रखा गया है
+       *[other] { $file }: { $count } कुल गहराइयाँ खाली या नो-डेटा मान थीं; वे कॉलर बिना कुल गहराई के रखे गए हैं
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [one] { $file }: { $count } कुल गहराई शून्य, ऋणात्मक या गैर-संख्या थी; वह कॉलर बिना कुल गहराई के रखा गया है
+       *[other] { $file }: { $count } कुल गहराइयाँ शून्य, ऋणात्मक या गैर-संख्या थीं; वे कॉलर बिना कुल गहराई के रखे गए हैं
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1411,9 +1417,15 @@ csv-drill-hole-row-has-no-geometry = { $file } पंक्ति { $row } म�
 csv-drill-hole-row-invalid-interval = { $file } पंक्ति { $row } में DHID '{ $dhid }' के लिए अमान्य अंतराल { $from }..{ $to } है
 csv-drill-hole-row-zero-length-segment = { $file } पंक्ति { $row } में DHID '{ $dhid }' के लिए { $depth } पर शून्य लंबाई का खंड है
 csv-drill-hole-row-unreadable-value = { $file } पंक्ति { $row } में एक अपठनीय मान है
+csv-drill-hole-row-inconsistent-diameter = DHID '{ $dhid }' के लिए व्यास असंगत है
+csv-drill-hole-row-wrong-width = { $file } पंक्ति { $row } में { $found } कॉलम हैं; अपेक्षित { $expected }
+csv-drill-hole-row-blank-required-value = { $file } पंक्ति { $row } में एक आवश्यक मान खाली है
+csv-drill-hole-row-invalid-number = { $file } पंक्ति { $row } में अमान्य संख्या '{ $value }' है
 csv-drill-hole-csv-is-wide-text = CSV UTF-16 या UTF-32 टेक्स्ट है; इसे UTF-8 के रूप में सहेजें और फिर से आयात करें
 csv-drill-hole-csv-holds-nul-bytes = CSV में पूरे में NUL बाइट हैं, इसलिए यह UTF-8 टेक्स्ट नहीं है; यदि इसे UTF-16 या UTF-32 में लिखा गया था, तो इसे UTF-8 के रूप में सहेजें और फिर से आयात करें
 csv-drill-hole-overlap-field-summary = { $field } { $count } छेदों में, जैसे { $examples }
+csv-drill-hole-codes-differ-only-by-case = जो कोड केवल अक्षरों के छोटे-बड़े रूप में भिन्न हैं, वे अलग-अलग कोड ही रहते हैं: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = 5 से ऊपर
 csv-geophysics-below-0-5 = 0.5 से नीचे
 csv-geophysics-count-more = (+{ $count } और)
@@ -1423,6 +1435,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = CSV में एक अध�
 csv-geophysics-curve-file-was-left-out = { $file } में { $curve } छोड़ा गया: इसकी अधिकांश रीडिंग { $side } हैं, इसलिए इसकी माध्यिका 0.5 से 5 g/cc के बाहर है और इसकी इकाई गलत लगती है (g/cc अपेक्षित)। Incline इकाइयाँ नहीं बदलता; निर्यात ठीक करें और फिर से लिंक करें
 csv-geophysics-file-empty = { $file } खाली है
 csv-geophysics-file-has-no-curve-no = { $file } में कोई कर्व नहीं है: होल ID और गहराई के अलावा किसी कॉलम में संख्याएँ नहीं हैं
+csv-geophysics-file-has-two-curves-one-name = { $file } में दो वक्र स्तंभ हैं जो एक ही वक्र के रूप में पढ़े जाते हैं, { $first } और { $second }: एक का नाम बदलें और फिर से लिंक करें
+csv-geophysics-file-has-no-rows-known-holes = { $file } में डेटासेट के किसी भी होल की कोई पंक्ति नहीं है: होल आईडी जाँचें और फिर से लिंक करें
 csv-geophysics-file-mapping-has-mapped-columns = { $file } की मैपिंग में { $mapped } कॉलम हैं, CSV में { $found }
 csv-geophysics-file-no-longer-matches-its = { $file } अब अपने इंडेक्स से मेल नहीं खाती: इसे फिर से लिंक करें
 csv-geophysics-file-not-grouped-hole-its = { $file } होल के अनुसार समूहित नहीं है: इसके होल की पंक्तियाँ बहुत सारे रन में बँटी हैं। इसे होल ID और फिर गहराई के अनुसार क्रमबद्ध करें और फिर से लिंक करें
@@ -1872,10 +1886,12 @@ files-xy-grid-options = XY ग्रिड विकल्प
 geophysics-checking-geophysics-files = जियोफ़िज़िक्स फ़ाइलें जाँची जा रही हैं
 geophysics-downhole-geophysics-name-could-not = '{ $name }' की डाउनहोल जियोफ़िज़िक्स लिंक नहीं हो सकी: { $error }
 geophysics-file-changed = इंडेक्स बनने के बाद जियोफ़िज़िक्स फ़ाइल बदल गई
+geophysics-file-cannot-be-opened = { $file } खोली नहीं जा सकती: { $error }
 geophysics-file-unreadable = '{ $name }' से लिंक की गई जियोफ़िज़िक्स फ़ाइल { $path } पर पढ़ी नहीं जा सकती ({ $error }); डेटासेट के राइट-क्लिक मेनू से इसे फिर से लिंक करें
 geophysics-linked-changed-rereading = '{ $name }' से लिंक की गई जियोफ़िज़िक्स इंडेक्स बनने के बाद बदल गई; इसे फिर से पढ़ा जा रहा है
 geophysics-hole-has-size-mib-geophysics = { $hole } में { $size } MiB जियोफ़िज़िक्स पंक्तियाँ हैं, जो एक होल के पढ़े जाने की सीमा से अधिक हैं
 geophysics-hole-needs-size-mib-its = { $hole } की जियोफ़िज़िक्स के लिए { $size } MiB चाहिए, जो ब्राउज़र के पास शेष से अधिक है: अन्य आइटम अनलोड करें, फिर इस डेटासेट को अनलोड करके दोबारा लोड करें
+geophysics-hole-could-not-be-read = { $hole } पढ़ा नहीं जा सका: इसकी भूभौतिकी फ़ाइल उपलब्ध नहीं है
 geophysics-linking-geophysics-name = { $name } से जियोफ़िज़िक्स लिंक की जा रही है
 geophysics-reading-geophysics-hole = { $hole } की जियोफ़िज़िक्स पढ़ी जा रही है
 geophysics-web-could-not-read-name-error = '{ $name }' पढ़ा नहीं जा सका: { $error }
@@ -1984,6 +2000,7 @@ io-quality-points-file = गुणवत्ता फ़ाइल
 io-quality-points-help = संयुक्त मान: हर बोरहोल और सीम की एक पंक्ति जिसमें हर गुणवत्ता का एक स्तंभ हो, या हर बोरहोल, सीम और गुणवत्ता की एक पंक्ति जिसमें गुणवत्ता और मान स्तंभ हों। हर सीम और गुणवत्ता ऊँचाई = मान पर बिंदुओं की एक परत बनती है।
 io-quality-points-long = हर बोरहोल, सीम और गुणवत्ता की एक पंक्ति के रूप में पढ़ा गया।
 io-quality-points-needs = बोरहोल ID, पूर्व / X, उत्तर / Y, सीम और एक गुणवत्ता स्तंभ (या गुणवत्ता नाम और मान) मैप करें।
+io-quality-points-short = पंक्ति { $line }, स्तंभ { $column }: पंक्ति इस कक्ष से पहले ही समाप्त हो जाती है, जबकि हर पंक्ति को यह चाहिए।
 io-quality-points-negative = पंक्ति { $line }, स्तंभ { $column }: { $value } 0 से कम है, और गुणवत्ता ऋणात्मक नहीं हो सकती।
 io-quality-points-not-a-number = पंक्ति { $line }, स्तंभ { $column }: संख्या अपेक्षित थी, "{ $found }" मिला। इसे स्रोत डेटाबेस में ठीक करें।
 io-quality-points-unit-clash = पंक्ति { $line }, स्तंभ { $column }: { $quality } { $first } और { $second } दोनों में दिया गया है।
@@ -1995,7 +2012,7 @@ io-quality-role-unit = इकाई
 io-quality-role-value = मान
 io-projects = प्रोजेक्ट
 io-reset = रीसेट
-io-role-reason-also-collar = यह भी कॉलर जैसा दिखता है
+io-role-reason-also-collar = कॉलर फ़ाइल जैसा दिखता है
 io-role-reason-collar = हर छेद की एक पंक्ति, निर्देशांकों के साथ
 io-role-reason-geophysics = छेद और गहराई, बारीक अंतराल पर रीडिंग के साथ
 io-role-reason-interval = छेद, से और तक
@@ -2027,6 +2044,8 @@ io-worksheet-writes-two-files = आपके चुने नाम से व�
 cmd-file-exported-worksheet-path = सुधार वर्कशीट { $path } में और उसके पास सुधार { $records } में निर्यात किए गए
 cmd-file-worksheet-export-failed-error = सुधार वर्कशीट निर्यात विफल रहा: { $error }
 cmd-file-worksheet-no-corrections = { $name } में निर्यात के लिए कोई सुधार नहीं है
+cmd-file-worksheet-only-unread-corrections = { $name } में इस बिल्ड द्वारा पढ़े जा सकने वाले कोई सुधार नहीं हैं: इसके { $count } सुधार रिकॉर्ड जैसे सहेजे गए थे वैसे ही रखे गए हैं, पर निर्यात नहीं किए जा सकते
+cmd-file-worksheet-leaves-out-unread = { $name } की सुधार वर्कशीट में { $count } सुधार रिकॉर्ड शामिल नहीं हैं जिन्हें यह बिल्ड नहीं पढ़ सकता; वे प्रोजेक्ट में जैसे सहेजे गए थे वैसे ही रहते हैं
 state-export-corrections-worksheet = सुधार वर्कशीट निर्यात करें
 
 ## Jobs strings
@@ -2134,13 +2153,17 @@ object-edit-vertices = शीर्ष
 omf-element-name-has-count-tie = तत्व '{ $name }' में { $count } टाई-इन हैं जो उन छेदों का नाम लेते हैं जो अब उसमें नहीं हैं
 omf-element-name-has-count-unreadable = तत्व '{ $name }' में { $count } अपठनीय कार्य खंड हैं; उन्हें छोड़ दिया गया
 omf-element-name-has-count-unreadable-strat = तत्व '{ $name }' में { $count } अपठनीय स्तर स्तंभ हैं; उन्हें छोड़ दिया गया
-omf-element-name-has-count-as-logged = तत्व '{ $name }' में { $count } जैसा-दर्ज मान हैं जिन्हें पढ़ा या रखा नहीं जा सका; उन्हें छोड़ दिया गया
+omf-element-name-has-count-as-logged = तत्व '{ $name }' में { $count } जैसा-दर्ज मान हैं जिन्हें पढ़ा या रखा नहीं जा सका; उन्हें सहेजकर रखा गया है, पर लागू नहीं किया गया
+omf-element-name-strat-field-unreadable = तत्व '{ $name }' में एक अपठनीय स्तर-क्रम फ़ील्ड है; उसे छोड़ दिया गया
+omf-element-name-color-stops-unreadable = तत्व '{ $name }' में रैंप बनाने के लिए रंग स्टॉप बहुत कम हैं; प्रीसेट के स्टॉप इस्तेमाल किए गए
+omf-element-name-color-unreadable = तत्व '{ $name }' की रंग सेटिंग पढ़ी नहीं जा सकीं; सेट डिफ़ॉल्ट रंगों के साथ खुलता है, और उसके कार्य खंड तथा स्ट्रैट कॉलम छोड़ दिए गए
+omf-element-name-geophysics-unreadable = तत्व '{ $name }' में एक अपठनीय भूभौतिकी लिंक है; उसे छोड़ दिया गया
 omf-element-unsupported-section = तत्व '{ $name }' खंड '{ $section }' का नाम देता है, जो इस बिल्ड में इस प्रकार का आइटम नहीं दिखा सकता
 omf-element-name-names-unknown-section = तत्व '{ $name }' एक अज्ञात खंड '{ $section }' का नाम देता है
 omf-quality-mark-unreadable = सतह { $name } पर गुणवत्ता चिह्न पढ़ा नहीं जा सका; यह सादी सतह के रूप में खुलती है
 omf-layer-quality-mark-unreadable = परत { $name } पर गुणवत्ता चिह्न पढ़ा नहीं जा सका; इसके बिंदु सादे बिंदुओं के रूप में खुलते हैं
 omf-ignoring-colour-map-omf-attribute = OMF एट्रिब्यूट '{ $attribute }' का रंग मानचित्र अनदेखा किया जा रहा है: { $error }
-omf-correction-records-dropped = { $name } के { $count } सुधार रिकॉर्ड पढ़े नहीं जा सके और छोड़ दिए गए
+omf-correction-records-unread = { $name } के { $count } सुधार रिकॉर्ड पढ़े नहीं जा सके: वे जैसे सहेजे गए थे वैसे ही रखे गए हैं, पर लागू नहीं किए जाते
 omf-corrections-unreadable = { $name } के सुधार रिकॉर्ड पढ़े नहीं जा सके और छोड़ दिए गए
 omf-mining-data-exported-incline = Incline द्वारा निर्यात किया गया खनन डेटा
 omf-import = OMF आयात
@@ -4961,6 +4984,7 @@ explorer-selected-count = { $count } चुने गए
 explorer-show = दिखाएँ
 input-could-not-slice-name-error = { $name } को क्लिप नहीं किया जा सका: { $error }
 io-drill-holes = ड्रिलहोल
+io-drill-csv-preview-failed = { $file } पढ़ी नहीं जा सकी: { $error }
 io-fixed-block-size = निश्चित ब्लॉक आकार
 io-no-column-mapped-these = इन अक्षों पर कोई कॉलम मैप नहीं है: हर ब्लॉक इसके बजाय यही आकार इस्तेमाल करता है।
 menu-build-solid-surfaces = सतहों से ठोस बनाएँ...

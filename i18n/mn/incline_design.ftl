@@ -456,7 +456,7 @@ borehole-inspector-flag-repeat = Давтагдсан
 borehole-inspector-flagged-holes = Тэмдэглэсэн цооногууд ({ $count })
 borehole-inspector-flags-first-shown = { $count } тэмдэглэгээний эхний { $shown }-г жагсаав.
 borehole-inspector-file-not-where-was-linked = { $file } холбогдсон байршилдаа байхгүй байна.
-borehole-inspector-guessed-name = Нэрээр таамагласан
+borehole-inspector-guessed-name = Импортоос, үгүй бол нэрээр
 borehole-inspector-hold-hole-while-you-work = Эргэн тойрных нь цооногууд дээр ажиллах хугацаанд энэ цооногийг түгжиж байна уу.
 borehole-inspector-holding-hole-click-follow-selection = Энэ цооногийг түгжиж байна. Сонголтыг дахин дагахын тулд товшино уу.
 borehole-inspector-hole-code-not-in-column = Багцын баганад байхгүй
@@ -1029,6 +1029,7 @@ cmd-selection-deleted-vertex = { $object_id } полилиниагаас { $vert
 cmd-strat-check-checking = { $name }-ийн страт баганыг тулгаж байна…
 cmd-strat-check-failed = Страт баганын тулгалт амжилтгүй боллоо: { $error }
 cmd-strat-check-summary = { $name }-ийн { $field }-г тулгалаа: { $holes } цооног, { $flagged } тэмдэглэсэн
+cmd-strat-check-summary-rising = { $name }-ийн { $field }-г тулгалаа: { $holes } цооног, { $flagged } тэмдэглэсэн; траектор нь дээшээ өгсөх { $rising } цооногийг хассан
 cmd-strat-check-too-many-codes = { $name }-ийн { $field } дараалалд оруулахад хэт олон кодтой
 cmd-strat-import-filled = { $field }-ийн страт баганыг бөглөлөө: { $names } нэр; { $flagged } цооног { $checked }-д зөрж байна. Хянахын тулд Тулгах дарна уу.
 cmd-strat-import-filled-groups = { $field }-ийн страт баганыг бөглөлөө: { $groups } бүлэгт { $names } нэр; { $flagged } цооног { $checked }-д зөрж байна. Хянахын тулд Тулгах дарна уу.
@@ -1445,8 +1446,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } уналт эсвэл на
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } нийт гүний баганыг хоёр удаа оноосон
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [one] { $file }: { $count } нийт гүн хоосон, тэг, сөрөг, өгөгдөлгүй утга эсвэл тоо биш байсан; тэр амсрыг нийт гүнгүйгээр хадгална
-       *[other] { $file }: { $count } нийт гүн хоосон, тэг, сөрөг, өгөгдөлгүй утга эсвэл тоо биш байсан; тэдгээр амсрыг нийт гүнгүйгээр хадгална
+        [one] { $file }: { $count } нийт гүн хоосон эсвэл өгөгдөлгүй утга байсан; тэр амсрыг нийт гүнгүйгээр хадгална
+       *[other] { $file }: { $count } нийт гүн хоосон эсвэл өгөгдөлгүй утга байсан; тэдгээр амсрыг нийт гүнгүйгээр хадгална
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [one] { $file }: { $count } нийт гүн тэг, сөрөг эсвэл тоо биш байсан; тэр амсрыг нийт гүнгүйгээр хадгална
+       *[other] { $file }: { $count } нийт гүн тэг, сөрөг эсвэл тоо биш байсан; тэдгээр амсрыг нийт гүнгүйгээр хадгална
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1462,9 +1468,15 @@ csv-drill-hole-row-has-no-geometry = { $file } мөр { $row }: бүрэн XYZ �
 csv-drill-hole-row-invalid-interval = { $file } мөр { $row }: DHID '{ $dhid }'-д { $from }..{ $to } интервал буруу
 csv-drill-hole-row-zero-length-segment = { $file } мөр { $row }: DHID '{ $dhid }'-д { $depth }-д тэг урттай хэсэг байна
 csv-drill-hole-row-unreadable-value = { $file } мөр { $row }: уншигдахгүй утга байна
+csv-drill-hole-row-inconsistent-diameter = DHID '{ $dhid }'-ийн диаметр зөрчилтэй байна
+csv-drill-hole-row-wrong-width = { $file } мөр { $row }: { $found } багана байна, { $expected } байх ёстой
+csv-drill-hole-row-blank-required-value = { $file } мөр { $row }: заавал байх утга хоосон байна
+csv-drill-hole-row-invalid-number = { $file } мөр { $row }: '{ $value }' тоо буруу байна
 csv-drill-hole-csv-is-wide-text = CSV нь UTF-16 эсвэл UTF-32 текст байна; UTF-8 болгон хадгалаад дахин импортлоно уу
 csv-drill-hole-csv-holds-nul-bytes = CSV бүхэлдээ NUL байт агуулж байгаа тул UTF-8 текст биш; UTF-16 эсвэл UTF-32-оор бичсэн бол UTF-8 болгон хадгалаад дахин импортлоно уу
 csv-drill-hole-overlap-field-summary = { $field }: { $count } өрөмдлөгийн цооногт, жишээ нь { $examples }
+csv-drill-hole-codes-differ-only-by-case = Зөвхөн том, жижиг үсгээрээ ялгаатай кодууд тусдаа код хэвээр үлдэнэ: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = 5-аас дээш
 csv-geophysics-below-0-5 = 0.5-аас доош
 csv-geophysics-count-more = (+{ $count } илүү)
@@ -1474,6 +1486,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = CSV-д хаагдаагүй �
 csv-geophysics-curve-file-was-left-out = { $file } дахь { $curve }-г хассан: заалтуудынх нь ихэнх нь { $side } тул медиан нь 0.5-аас 5 g/cc-ийн гадна байна, нэгж нь буруу юм шиг харагдаж байна (g/cc хүлээгдэж байсан). Incline нэгж хөрвүүлэхгүй; экспортыг засаад дахин холбоно уу
 csv-geophysics-file-empty = { $file } хоосон байна
 csv-geophysics-file-has-no-curve-no = { $file }-д муруй алга: цооногийн ID болон гүнээс бусад ямар ч баганад тоо байхгүй байна
+csv-geophysics-file-has-two-curves-one-name = { $file } нэг муруй болж уншигдах хоёр муруйн багана агуулж байна, { $first } ба { $second }: аль нэгийнх нь нэрийг солиод дахин холбоно уу
+csv-geophysics-file-has-no-rows-known-holes = { $file } өгөгдлийн багцын ямар ч цооногийн мөр агуулаагүй байна: цооногийн дугааруудыг шалгаад дахин холбоно уу
 csv-geophysics-file-mapping-has-mapped-columns = { $file }-н харгалзуулалтад { $mapped } багана байна, CSV-д { $found }
 csv-geophysics-file-no-longer-matches-its = { $file } индекстэйгээ цаашид таарахгүй байна: дахин холбоно уу
 csv-geophysics-file-not-grouped-hole-its = { $file } цооногоор бүлэглэгдээгүй: цооногуудын мөрүүд хэт олон хэсэгт хуваагдсан байна. Цооногийн ID, дараа нь гүнээр эрэмбэлээд дахин холбоно уу
@@ -1923,10 +1937,12 @@ files-xy-grid-options = XY торны сонголтууд
 geophysics-checking-geophysics-files = Геофизикийн файлуудыг шалгаж байна
 geophysics-downhole-geophysics-name-could-not = '{ $name }'-н цооногийн геофизикийг холбож чадсангүй: { $error }
 geophysics-file-changed = Геофизикийн файл индексжүүлснээс хойш өөрчлөгдсөн
+geophysics-file-cannot-be-opened = { $file } нээж чадсангүй: { $error }
 geophysics-file-unreadable = '{ $name }'-д холбосон геофизикийн файлыг { $path } дээр унших боломжгүй ({ $error }); өгөгдлийн багцын баруун товчийн цэсээс дахин холбоно уу
 geophysics-linked-changed-rereading = '{ $name }'-д холбосон геофизик индексжүүлснээс хойш өөрчлөгдсөн; дахин уншиж байна
 geophysics-hole-has-size-mib-geophysics = { $hole }-д { $size } MiB геофизикийн мөр байна, нэг цооногоор уншихаас их байна
 geophysics-hole-needs-size-mib-its = { $hole }-н геофизикт { $size } MiB хэрэгтэй, хөтчид үлдсэнээс их байна: бусад зүйлийг буулгаад энэ өгөгдлийн багцыг буулгаж дахин ачаална уу
+geophysics-hole-could-not-be-read = { $hole }-г уншиж чадсангүй: геофизикийн файл нь байхгүй байна
 geophysics-linking-geophysics-name = { $name }-д геофизик холбож байна
 geophysics-reading-geophysics-hole = { $hole }-н геофизикийг уншиж байна
 geophysics-web-could-not-read-name-error = '{ $name }'-г унших боломжгүй: { $error }
@@ -2035,6 +2051,7 @@ io-quality-points-file = Чанарын файл
 io-quality-points-help = Нийлмэл утгууд: цооног, үе бүрт нэг мөр, чанар бүрт нэг багана; эсвэл цооног, үе, чанар бүрт Чанар ба Утга баганатай нэг мөр. Үе, чанар бүр өндөр = утга бүхий цэгийн давхарга болно.
 io-quality-points-long = Цооног, үе, чанар бүрт нэг мөр гэж уншив.
 io-quality-points-needs = Цооногийн ID, Зүүн / X, Хойд / Y, Үе болон чанарын багана (эсвэл Чанарын нэр ба Утга)-г харгалзуулна уу.
+io-quality-points-short = { $line }-р мөр, { $column } багана: мөр энэ нүдний өмнө дуусч байна, гэтэл мөр бүрт энэ нүд хэрэгтэй.
 io-quality-points-negative = { $line }-р мөр, { $column } багана: { $value } нь 0-ээс бага, чанар сөрөг байж болохгүй.
 io-quality-points-not-a-number = { $line }-р мөр, { $column } багана: тоо хүлээгдсэн, "{ $found }" олдов. Эх өгөгдлийн санд засна уу.
 io-quality-points-unit-clash = { $line }-р мөр, { $column } багана: { $quality }-г { $first } болон { $second }-ээр хоёуланг нь өгсөн.
@@ -2046,7 +2063,7 @@ io-quality-role-unit = Нэгж
 io-quality-role-value = Утга
 io-projects = Төслүүд
 io-reset = Дахин тохируулах
-io-role-reason-also-collar = Мөн амсар шиг харагдаж байна
+io-role-reason-also-collar = Амсрын файл шиг харагдаж байна
 io-role-reason-collar = Цооног бүрт нэг мөр, координаттай
 io-role-reason-geophysics = Цооног ба гүн, нарийн алхамтай хэмжилттэй
 io-role-reason-interval = Цооног, эхлэх ба дуусах
@@ -2078,6 +2095,8 @@ io-worksheet-writes-two-files = Таны сонгосон нэрээр хүсн�
 cmd-file-exported-worksheet-path = Залруулгын хүснэгтийг { $path } руу, хажууд нь залруулгыг { $records } руу экспортоллоо
 cmd-file-worksheet-export-failed-error = Залруулгын хүснэгтийн экспорт амжилтгүй боллоо: { $error }
 cmd-file-worksheet-no-corrections = { $name }-д экспортлох залруулга алга
+cmd-file-worksheet-only-unread-corrections = { $name }-д энэ хувилбарын уншиж чадах залруулга алга: түүний { $count } залруулгын бичлэг хадгалсан хэвээрээ байгаа ч экспортлох боломжгүй
+cmd-file-worksheet-leaves-out-unread = { $name }-ийн залруулгын хуудаснаас энэ хувилбарын уншиж чадахгүй { $count } залруулгын бичлэг орхигдсон; тэд хадгалсан хэвээрээ төсөлд үлдэнэ
 state-export-corrections-worksheet = Залруулгын хүснэгт экспортлох
 
 ## Jobs strings
@@ -2185,13 +2204,17 @@ object-edit-vertices = Орой цэгүүд
 omf-element-name-has-count-tie = '{ $name }' элемент цаашид агуулаагүй цооногуудыг нэрлэсэн { $count } холболт агуулж байна
 omf-element-name-has-count-unreadable = '{ $name }' элементэд уншигдахгүй { $count } ажлын үе байна; тэдгээрийг хассан
 omf-element-name-has-count-unreadable-strat = '{ $name }' элемент уншигдахгүй { $count } давхраажилтын багана агуулсан тул орхигдуулав
-omf-element-name-has-count-as-logged = '{ $name }' элемент уншиж эсвэл байрлуулж чадаагүй { $count } анхны бүртгэлийн утга агуулсан тул орхигдуулав
+omf-element-name-has-count-as-logged = '{ $name }' элемент уншиж эсвэл байрлуулж чадаагүй { $count } анхны бүртгэлийн утга агуулсан; тэдгээрийг хадгалсан боловч ашиглаагүй
+omf-element-name-strat-field-unreadable = '{ $name }' элемент уншигдахгүй давхрагийн талбартай тул түүнийг алгассан
+omf-element-name-color-stops-unreadable = '{ $name }' элемент өнгөний градиент зурахад хэт цөөн өнгөний цэгтэй тул урьдчилсан тохиргооны цэгүүдийг ашигласан
+omf-element-name-color-unreadable = '{ $name }' элемент уншигдахгүй өнгөний тохиргоотой тул олонлог үндсэн өнгөөр нээгдэх бөгөөд ажлын хэсгүүд болон давхрагын баганыг алгассан
+omf-element-name-geophysics-unreadable = '{ $name }' элемент уншигдахгүй геофизикийн холбоостой тул түүнийг алгассан
 omf-element-unsupported-section = '{ $name }' элемент '{ $section }' хэсгийг нэрлэсэн бөгөөд энэ хувилбар ийм төрлийн зүйлийг харуулж чадахгүй
 omf-element-name-names-unknown-section = '{ $name }' элемент тодорхойгүй '{ $section }' хэсгийг нэрлэсэн байна
 omf-quality-mark-unreadable = { $name } гадаргуу дээрх чанарын тэмдгийг уншиж чадсангүй; энгийн гадаргуу болж нээгдэнэ
 omf-layer-quality-mark-unreadable = { $name } давхарга дээрх чанарын тэмдгийг уншиж чадсангүй; цэгүүд нь энгийн цэг болж нээгдэнэ
 omf-ignoring-colour-map-omf-attribute = OMF-н '{ $attribute }' аттрибут дээрх өнгийн зургийг үл хэрэгсэж байна: { $error }
-omf-correction-records-dropped = { $name }-н залруулгын { $count } бичлэгийг уншиж чадаагүй тул хассан
+omf-correction-records-unread = { $name }-ийн { $count } залруулгын бүртгэл уншигдсангүй: тэдгээр хадгалагдсан хэвээрээ үлдэх боловч хэрэгжихгүй
 omf-corrections-unreadable = { $name }-н залруулгын бичлэгүүдийг уншиж чадаагүй тул хассан
 omf-mining-data-exported-incline = Incline-с экспортолсон уул уурхайн өгөгдөл
 omf-import = OMF импорт
@@ -5012,6 +5035,7 @@ explorer-selected-count = { $count } сонгосон
 explorer-show = Харуулах
 input-could-not-slice-name-error = { $name }-г тайрч чадсангүй: { $error }
 io-drill-holes = Цооногууд
+io-drill-csv-preview-failed = { $file } файлыг унших боломжгүй байна: { $error }
 io-fixed-block-size = Тогтмол блокийн хэмжээ
 io-no-column-mapped-these = Эдгээр тэнхлэгт багана харгалзуулаагүй - блок бүр оронд нь энэ хэмжээг ашиглана.
 menu-build-solid-surfaces = Гадаргуунаас хатуу биет бүтээх...

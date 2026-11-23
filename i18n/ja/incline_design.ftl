@@ -434,7 +434,7 @@ borehole-inspector-flag-repeat = 反復
 borehole-inspector-flagged-holes = フラグ付きの孔 ({ $count })
 borehole-inspector-flags-first-shown = フラグ { $count } 件のうち最初の { $shown } 件を表示しています。
 borehole-inspector-file-not-where-was-linked = { $file } はリンク元の場所にありません。
-borehole-inspector-guessed-name = 名前から推測
+borehole-inspector-guessed-name = インポート元から、なければ名前から
 borehole-inspector-hold-hole-while-you-work = 周囲の孔を操作している間、この孔を固定します。
 borehole-inspector-holding-hole-click-follow-selection = この孔を固定中です。クリックすると再び選択に追従します。
 borehole-inspector-hole-code-not-in-column = セットの層序列にない
@@ -1007,6 +1007,7 @@ cmd-selection-deleted-vertex = ポリライン { $object_id } から頂点 { $ve
 cmd-strat-check-checking = { $name } の層序列を確認中…
 cmd-strat-check-failed = 層序列の確認に失敗しました: { $error }
 cmd-strat-check-summary = { $name } の { $field } を確認しました: { $holes } 孔、{ $flagged } 孔にフラグ
+cmd-strat-check-summary-rising = { $name } の { $field } を確認しました: { $holes } 孔、{ $flagged } 孔にフラグ。軌跡が上向きの { $rising } 孔は対象外としました
 cmd-strat-check-too-many-codes = { $name } の { $field } はコードが多すぎて順序付けできません
 cmd-strat-import-filled = { $field } の層序列を作成しました: 名前 { $names } 件、{ $checked } で { $flagged } 孔が一致しません。確認して内容を見直してください。
 cmd-strat-import-filled-groups = { $field } の層序列を作成しました: { $groups } グループに名前 { $names } 件、{ $checked } で { $flagged } 孔が一致しません。確認して内容を見直してください。
@@ -1423,8 +1424,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } は傾斜または伏角�
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } は総深度の列を 2 回割り当てています
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [1] { $file }: 総深度 { $count } 件が空欄、ゼロ、負、データなし値、または数値ではありませんでした。その孔口は総深度なしで保持されます
-       *[other] { $file }: 総深度 { $count } 件が空欄、ゼロ、負、データなし値、または数値ではありませんでした。それらの孔口は総深度なしで保持されます
+        [1] { $file }: 総深度 { $count } 件が空欄またはデータなし値でした。その孔口は総深度なしで保持されます
+       *[other] { $file }: 総深度 { $count } 件が空欄またはデータなし値でした。それらの孔口は総深度なしで保持されます
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [1] { $file }: 総深度 { $count } 件がゼロ、負、または数値ではありませんでした。その孔口は総深度なしで保持されます
+       *[other] { $file }: 総深度 { $count } 件がゼロ、負、または数値ではありませんでした。それらの孔口は総深度なしで保持されます
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1440,9 +1446,15 @@ csv-drill-hole-row-has-no-geometry = { $file } の { $row } 行目: XYZ また�
 csv-drill-hole-row-invalid-interval = { $file } の { $row } 行目: DHID '{ $dhid }' の区間 { $from }..{ $to } が無効です
 csv-drill-hole-row-zero-length-segment = { $file } の { $row } 行目: DHID '{ $dhid }' の { $depth } に長さゼロの区間があります
 csv-drill-hole-row-unreadable-value = { $file } の { $row } 行目: 読み取れない値があります
+csv-drill-hole-row-inconsistent-diameter = DHID '{ $dhid }' の孔径が一致しません
+csv-drill-hole-row-wrong-width = { $file } の { $row } 行目: 列数が { $found } です（期待値 { $expected }）
+csv-drill-hole-row-blank-required-value = { $file } の { $row } 行目: 必須の値が空です
+csv-drill-hole-row-invalid-number = { $file } の { $row } 行目: 数値 '{ $value }' が無効です
 csv-drill-hole-csv-is-wide-text = CSV が UTF-16 または UTF-32 のテキストです。UTF-8 で保存してからもう一度インポートしてください
 csv-drill-hole-csv-holds-nul-bytes = CSV 全体に NUL バイトが含まれているため、UTF-8 テキストではありません。UTF-16 または UTF-32 で書かれた場合は、UTF-8 で保存してからもう一度インポートしてください
 csv-drill-hole-overlap-field-summary = { $field }: { $count } 孔、例: { $examples }
+csv-drill-hole-codes-differ-only-by-case = 大文字と小文字だけが異なるコードは、別のコードのまま残ります: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = 5超
 csv-geophysics-below-0-5 = 0.5未満
 csv-geophysics-count-more = (ほか { $count } 件)
@@ -1452,6 +1464,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = CSVに閉じられていな�
 csv-geophysics-curve-file-was-left-out = { $file } の { $curve } を除外しました: 読み取り値の大半が { $side } のため、中央値が0.5～5 g/ccの範囲外で、単位が誤っている可能性があります（g/cc が想定されます）。Incline は単位変換を行いません。エクスポートを修正して再度リンクしてください
 csv-geophysics-file-empty = { $file } は空です
 csv-geophysics-file-has-no-curve-no = { $file } にカーブがありません: 孔IDと深度以外に数値を持つ列がありません
+csv-geophysics-file-has-two-curves-one-name = { $file } には1本の曲線として読まれる曲線列が2つあります、{ $first } と { $second }。どちらかの名前を変えてもう一度リンクしてください
+csv-geophysics-file-has-no-rows-known-holes = { $file } にはデータセットのどの孔の行もありません。孔IDを確認してもう一度リンクしてください
 csv-geophysics-file-mapping-has-mapped-columns = { $file } のマッピングは { $mapped } 列ですが、CSVは { $found } 列です
 csv-geophysics-file-no-longer-matches-its = { $file } はインデックスと一致しなくなりました。再度リンクしてください
 csv-geophysics-file-not-grouped-hole-its = { $file } は孔ごとにグループ化されていません。孔の行が多くの連続区間に分かれています。孔ID、深度の順に並べ替えて再度リンクしてください
@@ -1901,10 +1915,12 @@ files-xy-grid-options = XYグリッドオプション
 geophysics-checking-geophysics-files = 物理検層ファイルを確認中
 geophysics-downhole-geophysics-name-could-not = '{ $name }' の孔内物理検層をリンクできませんでした: { $error }
 geophysics-file-changed = 物理検層ファイルはインデックス作成後に変更されました
+geophysics-file-cannot-be-opened = { $file } を開けません: { $error }
 geophysics-file-unreadable = '{ $name }' にリンクされた物理検層ファイルを { $path } で読み取れません（{ $error }）。データセットの右クリックメニューから再度リンクしてください
 geophysics-linked-changed-rereading = '{ $name }' にリンクされた物理検層はインデックス作成後に変更されました。再読み込みします
 geophysics-hole-has-size-mib-geophysics = { $hole } の物理検層の行は { $size } MiB あり、1孔として読み込める量を超えています
 geophysics-hole-needs-size-mib-its = { $hole } の物理検層には { $size } MiB が必要ですが、ブラウザーの残りメモリを超えています。他の項目をアンロードしてから、このデータセットをアンロードして再度読み込んでください
+geophysics-hole-could-not-be-read = { $hole } を読み込めません: 物理探査ファイルを利用できません
 geophysics-linking-geophysics-name = { $name } に物理検層をリンク中
 geophysics-reading-geophysics-hole = { $hole } の物理検層を読み込み中
 geophysics-web-could-not-read-name-error = '{ $name }' を読み込めませんでした: { $error }
@@ -2013,6 +2029,7 @@ io-quality-points-file = 品質ファイル
 io-quality-points-help = 合成値: 孔と炭層ごとに1行で品質ごとに1列、または孔・炭層・品質ごとに1行で品質と値の列。炭層と品質ごとに、高さ = 値の点レイヤーになります。
 io-quality-points-long = 孔・炭層・品質ごとに1行として読み込みました。
 io-quality-points-needs = 孔ID、東距 / X、北距 / Y、炭層、品質列 (または品質名と値) をマッピングしてください。
+io-quality-points-short = { $line } 行目、{ $column } 列: 行がこのセルの前で終わっています。どの行にもこのセルが必要です。
 io-quality-points-negative = { $line } 行目、{ $column } 列: { $value } は 0 未満です。品質は負になりません。
 io-quality-points-not-a-number = { $line } 行目、{ $column } 列: 数値が必要ですが "{ $found }" でした。元のデータベースで修正してください。
 io-quality-points-unit-clash = { $line } 行目、{ $column } 列: { $quality } が { $first } と { $second } の両方で与えられています。
@@ -2024,7 +2041,7 @@ io-quality-role-unit = 単位
 io-quality-role-value = 値
 io-projects = プロジェクト
 io-reset = リセット
-io-role-reason-also-collar = これも孔口のように見えます
+io-role-reason-also-collar = 孔口ファイルのように見えます
 io-role-reason-collar = 孔ごとに1行、座標付き
 io-role-reason-geophysics = 孔と深度、細かい間隔の測定値付き
 io-role-reason-interval = 孔、開始と終了
@@ -2056,6 +2073,8 @@ io-worksheet-writes-two-files = 選択した名前でワークシートを書き
 cmd-file-exported-worksheet-path = 訂正ワークシートを { $path } に、その隣の訂正を { $records } にエクスポートしました
 cmd-file-worksheet-export-failed-error = 訂正ワークシートのエクスポートに失敗しました: { $error }
 cmd-file-worksheet-no-corrections = { $name } にはエクスポートする訂正がありません
+cmd-file-worksheet-only-unread-corrections = { $name } には、このビルドで読める訂正がありません。{ $count } 件の訂正レコードは保存されたまま保持されますが、エクスポートできません
+cmd-file-worksheet-leaves-out-unread = { $name } の訂正ワークシートには、このビルドで読めない訂正レコード { $count } 件が含まれません。それらは保存されたままプロジェクトに残ります
 state-export-corrections-worksheet = 訂正ワークシートをエクスポート
 
 ## Jobs strings
@@ -2163,13 +2182,17 @@ object-edit-vertices = 頂点
 omf-element-name-has-count-tie = 要素「{ $name }」には、既に含まれていない孔を参照する結線が { $count } 件あります
 omf-element-name-has-count-unreadable = 要素 '{ $name }' には読み取れない作業セクションが { $count } 件あり、除外されました
 omf-element-name-has-count-unreadable-strat = 要素 '{ $name }' に読み取れない層序列が { $count } 件あり、除外されました
-omf-element-name-has-count-as-logged = 要素 '{ $name }' に読み取れない、または配置できない記録時の値が { $count } 件あり、除外されました
+omf-element-name-has-count-as-logged = 要素 '{ $name }' に読み取れない、または配置できない記録時の値が { $count } 件あります。値は保持されますが、適用されません
+omf-element-name-strat-field-unreadable = 要素 '{ $name }' には読み取れない層序フィールドがあり、除外されました
+omf-element-name-color-stops-unreadable = 要素 '{ $name }' はカラーランプを描くには色の停止点が少なすぎるため、プリセットの停止点を使いました
+omf-element-name-color-unreadable = 要素 '{ $name }' には読み取れない色設定があり、セットは既定の色で開き、作業セクションと層序列は除外されました
+omf-element-name-geophysics-unreadable = 要素 '{ $name }' には読み取れない物理探査リンクがあり、除外されました
 omf-element-unsupported-section = 要素 '{ $name }' はセクション '{ $section }' を指定していますが、このビルドではこの種類の項目を表示できません
 omf-element-name-names-unknown-section = 要素 '{ $name }' は不明なセクション '{ $section }' を指定しています
 omf-quality-mark-unreadable = 面 { $name } の品質マークを読めませんでした。通常の面として開きます
 omf-layer-quality-mark-unreadable = レイヤー { $name } の品質マークを読めませんでした。点は通常の点として開きます
 omf-ignoring-colour-map-omf-attribute = OMF属性「{ $attribute }」のカラーマップを無視します: { $error }
-omf-correction-records-dropped = { $name } の訂正レコード { $count } 件を読み取れなかったため除外しました
+omf-correction-records-unread = { $name } の訂正レコード { $count } 件を読み取れませんでした。保存されたまま保持されますが、適用されません
 omf-corrections-unreadable = { $name } の訂正レコードを読み取れなかったため除外しました
 omf-mining-data-exported-incline = Incline によってエクスポートされた鉱山データ
 omf-import = OMFインポート
@@ -4990,6 +5013,7 @@ explorer-selected-count = { $count } 件選択中
 explorer-show = 表示
 input-could-not-slice-name-error = { $name } をクリップできませんでした: { $error }
 io-drill-holes = 削孔
+io-drill-csv-preview-failed = { $file } を読み込めませんでした: { $error }
 io-fixed-block-size = 固定ブロックサイズ
 io-no-column-mapped-these = これらの軸に対応付けられた列がありません。すべてのブロックがこのサイズを使用します。
 menu-build-solid-surfaces = 曲面からソリッドを構築...

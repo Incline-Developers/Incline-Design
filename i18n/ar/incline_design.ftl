@@ -405,7 +405,7 @@ borehole-inspector-flag-repeat = مكرر
 borehole-inspector-flagged-holes = الثقوب الموسومة ({ $count })
 borehole-inspector-flags-first-shown = تُسرد أول { $shown } من { $count } علامة.
 borehole-inspector-file-not-where-was-linked = { $file } ليس في المكان الذي رُبط منه.
-borehole-inspector-guessed-name = مخمَّن بالاسم
+borehole-inspector-guessed-name = من الاستيراد، وإلا بالاسم
 borehole-inspector-hold-hole-while-you-work = أبقِ هذا الثقب مثبتًا أثناء عملك على الثقوب المحيطة به.
 borehole-inspector-holding-hole-click-follow-selection = هذا الثقب مثبت. انقر لمتابعة التحديد مرة أخرى.
 borehole-inspector-hole-code-not-in-column = ليس في عمود المجموعة
@@ -990,6 +990,7 @@ cmd-selection-deleted-vertex = تم حذف الرأس { $vertex } من الخط 
 cmd-strat-check-checking = جارٍ فحص عمود الطبقات لـ { $name }…
 cmd-strat-check-failed = فشل فحص عمود الطبقات: { $error }
 cmd-strat-check-summary = تم فحص { $field } لـ { $name }: { $holes } ثقبًا، { $flagged } موسومة
+cmd-strat-check-summary-rising = تم فحص { $field } لـ { $name }: { $holes } ثقبًا، { $flagged } موسومة؛ { $rising } ثقبًا يصعد مساره وتُرك خارج الفحص
 cmd-strat-check-too-many-codes = يحتوي { $field } لـ { $name } على رموز أكثر من أن تُرتَّب
 cmd-strat-import-filled = مُلئ عمود الطبقات لـ { $field }: { $names } اسمًا؛ { $flagged } ثقبًا تخالفه في { $checked }. افحص للمراجعة.
 cmd-strat-import-filled-groups = مُلئ عمود الطبقات لـ { $field }: { $names } اسمًا في { $groups } مجموعة؛ { $flagged } ثقبًا تخالفه في { $checked }. افحص للمراجعة.
@@ -1406,8 +1407,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } يربط عمود المي
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } يربط عمود العمق الكلي مرتين
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [one] { $file }: عمق كلي واحد كان فارغًا أو صفرًا أو سالبًا أو قيمة انعدام بيانات أو ليس رقمًا؛ تُبقى تلك الفوهة بلا عمق كلي
-       *[other] { $file }: الأعماق الكلية الفارغة أو الصفرية أو السالبة أو ذات قيمة انعدام البيانات أو غير الرقمية: { $count }؛ تُبقى تلك الفوهات بلا عمق كلي
+        [one] { $file }: عمق كلي واحد كان فارغًا أو قيمة انعدام بيانات؛ تُبقى تلك الفوهة بلا عمق كلي
+       *[other] { $file }: الأعماق الكلية الفارغة أو ذات قيمة انعدام البيانات: { $count }؛ تُبقى تلك الفوهات بلا عمق كلي
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [one] { $file }: عمق كلي واحد كان صفرًا أو سالبًا أو ليس رقمًا؛ تُبقى تلك الفوهة بلا عمق كلي
+       *[other] { $file }: الأعماق الكلية الصفرية أو السالبة أو غير الرقمية: { $count }؛ تُبقى تلك الفوهات بلا عمق كلي
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1423,9 +1429,15 @@ csv-drill-hole-row-has-no-geometry = { $file } الصف { $row } لا يحتوي
 csv-drill-hole-row-invalid-interval = { $file } الصف { $row } فيه فترة غير صالحة { $from }..{ $to } لـ DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } الصف { $row } فيه مقطع طوله صفر عند { $depth } لـ DHID '{ $dhid }'
 csv-drill-hole-row-unreadable-value = { $file } الصف { $row } فيه قيمة غير مقروءة
+csv-drill-hole-row-inconsistent-diameter = قطر غير متسق للثقب '{ $dhid }'
+csv-drill-hole-row-wrong-width = { $file } الصف { $row } فيه { $found } أعمدة؛ المتوقع { $expected }
+csv-drill-hole-row-blank-required-value = { $file } الصف { $row } فيه قيمة مطلوبة فارغة
+csv-drill-hole-row-invalid-number = { $file } الصف { $row } فيه الرقم غير الصالح '{ $value }'
 csv-drill-hole-csv-is-wide-text = ملف CSV نص UTF-16 أو UTF-32؛ احفظه بترميز UTF-8 واستورده مرة أخرى
 csv-drill-hole-csv-holds-nul-bytes = ملف CSV يحتوي على بايتات NUL في كل مكان، لذا فهو ليس نص UTF-8؛ إذا كُتب بترميز UTF-16 أو UTF-32، فاحفظه بترميز UTF-8 واستورده مرة أخرى
 csv-drill-hole-overlap-field-summary = { $field } في { $count } بئر/آبار، مثل { $examples }
+csv-drill-hole-codes-differ-only-by-case = رموز تختلف في حالة الأحرف فقط وتبقى رموزًا منفصلة: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = فوق 5
 csv-geophysics-below-0-5 = دون 0.5
 csv-geophysics-count-more = (+{ $count } أخرى)
@@ -1435,6 +1447,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = يحتوي CSV على حقل 
 csv-geophysics-curve-file-was-left-out = تم استبعاد { $curve } في { $file }: معظم قراءاته { $side }، فوسيطه خارج النطاق من 0.5 إلى 5 g/cc ووحدته تبدو خاطئة (المتوقع g/cc). لا يحوّل Incline الوحدات؛ صحّح التصدير واربطه مرة أخرى
 csv-geophysics-file-empty = { $file } فارغ
 csv-geophysics-file-has-no-curve-no = لا يحتوي { $file } على منحنى: لا يوجد عمود غير معرّف الثقب والعمق يحمل أرقامًا
+csv-geophysics-file-has-two-curves-one-name = يحتوي { $file } على عمودي منحنى يُقرآن كمنحنى واحد، { $first } و { $second }: أعد تسمية أحدهما وأعد الربط
+csv-geophysics-file-has-no-rows-known-holes = لا يحتوي { $file } على أي صفوف لأي حفرة في مجموعة البيانات: تحقق من معرّفات الحفر وأعد الربط
 csv-geophysics-file-mapping-has-mapped-columns = تعيين { $file } يحتوي على { $mapped } عمودًا، وCSV يحتوي على { $found }
 csv-geophysics-file-no-longer-matches-its = لم يعد { $file } يطابق فهرسه: اربطه مرة أخرى
 csv-geophysics-file-not-grouped-hole-its = { $file } غير مجمَّع حسب الثقب: صفوف ثقوبه موزعة على مقاطع كثيرة. رتّبه حسب معرّف الثقب ثم العمق، ثم اربطه مرة أخرى
@@ -1884,10 +1898,12 @@ files-xy-grid-options = خيارات شبكة XY
 geophysics-checking-geophysics-files = جارٍ فحص ملفات الجيوفيزياء
 geophysics-downhole-geophysics-name-could-not = تعذر ربط الجيوفيزياء داخل الثقب لـ «{ $name }»: { $error }
 geophysics-file-changed = تغيّر ملف الجيوفيزياء منذ فهرسته
+geophysics-file-cannot-be-opened = تعذّر فتح { $file }: { $error }
 geophysics-file-unreadable = تعذرت قراءة ملف الجيوفيزياء المرتبط بـ «{ $name }» في { $path } ({ $error })؛ اربطه مرة أخرى من قائمة النقر بزر الماوس الأيمن لمجموعة البيانات
 geophysics-linked-changed-rereading = تغيّرت الجيوفيزياء المرتبطة بـ «{ $name }» منذ فهرستها؛ جارٍ قراءتها مرة أخرى
 geophysics-hole-has-size-mib-geophysics = { $hole } فيه { $size } MiB من صفوف الجيوفيزياء، أكثر مما يُقرأ للثقب الواحد
 geophysics-hole-needs-size-mib-its = يحتاج { $hole } إلى { $size } MiB لجيوفيزيائه، أكثر مما تبقى للمتصفح: ألغِ تحميل عناصر أخرى، ثم ألغِ تحميل مجموعة البيانات هذه وحمّلها مرة أخرى
+geophysics-hole-could-not-be-read = تعذّرت قراءة { $hole }: ملف الجيوفيزياء غير متاح
 geophysics-linking-geophysics-name = جارٍ ربط الجيوفيزياء بـ { $name }
 geophysics-reading-geophysics-hole = جارٍ قراءة الجيوفيزياء لـ { $hole }
 geophysics-web-could-not-read-name-error = تعذرت قراءة «{ $name }»: { $error }
@@ -1996,6 +2012,7 @@ io-quality-points-file = ملف الجودة
 io-quality-points-help = قيم مركّبة: صف لكل بئر وعرق مع عمود لكل جودة، أو صف لكل بئر وعرق وجودة مع عمودي الجودة والقيمة. يصبح كل عرق وجودة طبقة نقاط على ارتفاع = القيمة.
 io-quality-points-long = قُرئ صفًا لكل بئر وعرق وجودة.
 io-quality-points-needs = عيّن معرّف البئر والشرق / X والشمال / Y والعرق وعمود جودة (أو اسم الجودة والقيمة).
+io-quality-points-short = السطر { $line }، العمود { $column }: ينتهي الصف قبل هذه الخلية، وكل صف يحتاج إليها.
 io-quality-points-negative = السطر { $line }، العمود { $column }: { $value } أقل من 0، ولا يمكن أن تكون الجودة سالبة.
 io-quality-points-not-a-number = السطر { $line }، العمود { $column }: يُتوقع رقم، ووُجد "{ $found }". نظّفه في قاعدة البيانات المصدر.
 io-quality-points-unit-clash = السطر { $line }، العمود { $column }: أُعطيت { $quality } بوحدتي { $first } و { $second } معًا.
@@ -2007,7 +2024,7 @@ io-quality-role-unit = الوحدة
 io-quality-role-value = القيمة
 io-projects = المشاريع
 io-reset = إعادة تعيين
-io-role-reason-also-collar = يبدو أيضاً كفوهة ثقب
+io-role-reason-also-collar = يبدو كملف فوهات ثقوب
 io-role-reason-collar = صف واحد لكل ثقب، مع الإحداثيات
 io-role-reason-geophysics = ثقب وعمق مع قراءات بخطوة دقيقة
 io-role-reason-interval = ثقب، من وإلى
@@ -2039,6 +2056,8 @@ io-worksheet-writes-two-files = يكتب الورقة بالاسم الذي تخ
 cmd-file-exported-worksheet-path = تم تصدير ورقة التصحيحات إلى { $path } والتصحيحات بجانبها إلى { $records }
 cmd-file-worksheet-export-failed-error = فشل تصدير ورقة التصحيحات: { $error }
 cmd-file-worksheet-no-corrections = لا توجد في { $name } تصحيحات للتصدير
+cmd-file-worksheet-only-unread-corrections = لا توجد في { $name } تصحيحات يمكن لهذا الإصدار قراءتها: سجلات التصحيح الـ { $count } محفوظة كما هي لكن لا يمكن تصديرها
+cmd-file-worksheet-leaves-out-unread = ورقة تصحيحات { $name } تستثني { $count } من سجلات التصحيح التي لا يستطيع هذا الإصدار قراءتها؛ وتبقى في المشروع كما حُفظت
 state-export-corrections-worksheet = تصدير ورقة التصحيحات
 
 ## Jobs strings
@@ -2146,13 +2165,17 @@ object-edit-vertices = الرؤوس
 omf-element-name-has-count-tie = العنصر «{ $name }» لديه { $count } توصيلات تشير إلى ثقوب لم يعد يحتويها
 omf-element-name-has-count-unreadable = العنصر «{ $name }» فيه { $count } من مقاطع العمل غير القابلة للقراءة؛ تم استبعادها
 omf-element-name-has-count-unreadable-strat = يحتوي العنصر '{ $name }' على { $count } من أعمدة الطبقات غير القابلة للقراءة؛ تم استبعادها
-omf-element-name-has-count-as-logged = يحتوي العنصر '{ $name }' على { $count } من قيم التسجيل الأصلي التي تعذرت قراءتها أو وضعها؛ تم استبعادها
+omf-element-name-has-count-as-logged = يحتوي العنصر '{ $name }' على { $count } من قيم التسجيل الأصلي التي تعذرت قراءتها أو وضعها؛ تم الاحتفاظ بها دون تطبيقها
+omf-element-name-strat-field-unreadable = العنصر «{ $name }» فيه حقل طبقات غير قابل للقراءة؛ تم استبعاده
+omf-element-name-color-stops-unreadable = العنصر «{ $name }» فيه عدد قليل جدًا من نقاط الألوان لرسم تدرّج؛ استُخدمت نقاط الإعداد المسبق
+omf-element-name-color-unreadable = العنصر «{ $name }» فيه إعدادات ألوان لا يمكن قراءتها؛ تُفتح المجموعة بالألوان الافتراضية، واستُبعدت أقسام العمل وأعمدة الطبقات الخاصة بها
+omf-element-name-geophysics-unreadable = العنصر «{ $name }» فيه رابط جيوفيزيائي غير قابل للقراءة؛ تم استبعاده
 omf-element-unsupported-section = العنصر «{ $name }» يسمّي القسم «{ $section }» الذي لا يمكنه عرض هذا النوع من العناصر في هذا الإصدار
 omf-element-name-names-unknown-section = العنصر «{ $name }» يسمّي قسمًا غير معروف «{ $section }»
 omf-quality-mark-unreadable = تعذّرت قراءة علامة الجودة على السطح { $name }؛ يُفتح سطحًا عاديًا
 omf-layer-quality-mark-unreadable = تعذّرت قراءة علامة الجودة على الطبقة { $name }؛ تُفتح نقاطها نقاطًا عادية
 omf-ignoring-colour-map-omf-attribute = سيتم تجاهل خريطة الألوان في سمة OMF «{ $attribute }»: { $error }
-omf-correction-records-dropped = تعذّرت قراءة { $count } من سجلات التصحيح الخاصة بـ { $name } وتم استبعادها
+omf-correction-records-unread = تعذّرت قراءة { $count } من سجلات التصحيح الخاصة بـ { $name }: تُحفظ كما حُفظت لكنها لا تُطبَّق
 omf-corrections-unreadable = تعذّرت قراءة سجلات التصحيح الخاصة بـ { $name } وتم استبعادها
 omf-mining-data-exported-incline = بيانات تعدين صدّرها Incline
 omf-import = استيراد OMF
@@ -5009,6 +5032,7 @@ explorer-selected-count = { $count } محدد
 explorer-show = إظهار
 input-could-not-slice-name-error = تعذّر اقتطاع { $name }: { $error }
 io-drill-holes = ثقوب الحفر
+io-drill-csv-preview-failed = تعذّر فتح { $file }: { $error }
 io-fixed-block-size = حجم كتلة ثابت
 io-no-column-mapped-these = لا يوجد عمود مربوط بهذين المحورين، لذا تستخدم كل كتلة هذا الحجم بدلًا منه.
 menu-build-solid-surfaces = بناء مجسّم من الأسطح...

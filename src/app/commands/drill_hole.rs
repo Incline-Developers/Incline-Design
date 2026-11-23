@@ -7,8 +7,9 @@ use crate::{
         Command, ItemRef, ItemStyle, MemberKind, OpenItem, SceneEntityId,
         drill_hole::{
             BoundaryMove, BoundarySide, CorrectionNote, DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef,
-            DrillHoleSource, DrillHoleStyle, DrillValue, IntervalDelete, IntervalInsert, LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource,
-            RenameScope, ShiftDirection, TraceStation, WIDE_CATEGORY_FIELD_HINT, clamp_disc_diameter, clamp_string_pixel_width, name_is_code_message,
+            DrillHoleSource, DrillHoleStyle, DrillValue, IntervalDelete, IntervalInsert, LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, MIN_DRILL_COLOR_STOPS,
+            OpenDrillHoleDataset, OrientationSource, RenameScope, ShiftDirection, TraceStation, WIDE_CATEGORY_FIELD_HINT, clamp_disc_diameter, clamp_string_pixel_width,
+            name_is_code_message,
         },
         formats::{csv_drill_hole, csv_geophysics::StreamControl},
     },
@@ -477,7 +478,7 @@ impl<'a> App<'a> {
         for stop in &mut stops {
             stop.t = stop.t.clamp(0.0, 1.0);
         }
-        if (2..=MAX_DRILL_COLOR_STOPS).contains(&stops.len()) {
+        if (MIN_DRILL_COLOR_STOPS..=MAX_DRILL_COLOR_STOPS).contains(&stops.len()) {
             self.set_drill_hole_color(id, |_, color| color.stops = stops);
         }
     }
@@ -494,7 +495,7 @@ impl<'a> App<'a> {
     /// colour carried to its new name. The records carry no author yet: the
     /// project holds no current author to name.
     pub(crate) fn rename_seam(&mut self, id: DrillHoleId, field: String, from: String, to: String, scope: RenameScope, reason: String) {
-        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id && item.state.loaded) else {
             return;
         };
         if let Some(section) = crate::model::drill_hole::section_named_apart(&dataset.color.working_sections, &field, &to) {
@@ -547,7 +548,7 @@ impl<'a> App<'a> {
     /// A move the depth rules refuse, or one whose hole or boundary is no
     /// longer where the dialog found it, is reported and changes nothing.
     pub(crate) fn move_boundary(&mut self, id: DrillHoleId, edit: BoundaryMove, reason: String) {
-        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id && item.state.loaded) else {
             return;
         };
         let at = dataset
@@ -590,7 +591,7 @@ impl<'a> App<'a> {
     /// code named like a working section that does not hold it, as a rename
     /// is guarded, is reported and changes nothing.
     pub(crate) fn insert_interval(&mut self, id: DrillHoleId, edit: IntervalInsert, reason: String) {
-        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id && item.state.loaded) else {
             return;
         };
         if let Some((section, code)) = crate::model::drill_hole::insertion_named_apart(&dataset.color.working_sections, &edit) {
@@ -628,7 +629,7 @@ impl<'a> App<'a> {
     /// single undo step. One whose hole or row is no longer what the dialog
     /// picked is reported and changes nothing: no record, no undo step.
     pub(crate) fn delete_interval(&mut self, id: DrillHoleId, edit: &IntervalDelete, reason: String) {
-        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id && item.state.loaded) else {
             return;
         };
         let note = CorrectionNote::now(reason);
@@ -677,7 +678,7 @@ impl<'a> App<'a> {
     /// counted. Working sections follow each rename as they follow a seam
     /// rename.
     pub(crate) fn shift_strat_column(&mut self, id: DrillHoleId, hole: usize, field: String, direction: ShiftDirection, from: Option<usize>, reason: String) {
-        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id && item.state.loaded) else {
             return;
         };
         let Some(dhid) = dataset.dataset.holes.get(hole).map(|hole| hole.dhid.clone()) else {

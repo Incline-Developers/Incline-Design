@@ -405,7 +405,7 @@ borehole-inspector-flag-repeat = 重复
 borehole-inspector-flagged-holes = 已标记的钻孔（{ $count }）
 borehole-inspector-flags-first-shown = 共 { $count } 个标记，列出前 { $shown } 个。
 borehole-inspector-file-not-where-was-linked = { $file } 已不在关联时的位置。
-borehole-inspector-guessed-name = 按名称推测
+borehole-inspector-guessed-name = 取自导入，否则按名称
 borehole-inspector-hold-hole-while-you-work = 在处理周围钻孔时保持显示此孔。
 borehole-inspector-holding-hole-click-follow-selection = 正在保持此孔。点击以恢复跟随选择。
 borehole-inspector-hole-code-not-in-column = 不在数据集的地层柱中
@@ -978,6 +978,7 @@ cmd-selection-deleted-vertex = 已从折线 { $object_id } 删除顶点 { $verte
 cmd-strat-check-checking = 正在核对 { $name } 的地层柱…
 cmd-strat-check-failed = 地层柱核对失败：{ $error }
 cmd-strat-check-summary = 已核对 { $name } 的 { $field }：{ $holes } 个钻孔，已标记 { $flagged } 个
+cmd-strat-check-summary-rising = 已核对 { $name } 的 { $field }：{ $holes } 个钻孔，已标记 { $flagged } 个；{ $rising } 个钻孔的轨迹向上，已排除
 cmd-strat-check-too-many-codes = { $name } 的 { $field } 代码过多，无法排序
 cmd-strat-import-filled = 已为 { $field } 填充地层柱：{ $names } 个名称；{ $flagged } 个钻孔在 { $checked } 上不一致。请点击核对进行查看。
 cmd-strat-import-filled-groups = 已为 { $field } 填充地层柱：{ $groups } 组共 { $names } 个名称；{ $flagged } 个钻孔在 { $checked } 上不一致。请点击核对进行查看。
@@ -1394,8 +1395,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } 将倾角或倾斜列映�
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } 将总深度列映射了两次
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [1] { $file }：{ $count } 个总深度为空、为零、为负、为无数据值或不是数字；该孔口保留，但没有总深度
-       *[other] { $file }：{ $count } 个总深度为空、为零、为负、为无数据值或不是数字；这些孔口保留，但没有总深度
+        [1] { $file }：{ $count } 个总深度为空或为无数据值；该孔口保留，但没有总深度
+       *[other] { $file }：{ $count } 个总深度为空或为无数据值；这些孔口保留，但没有总深度
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [1] { $file }：{ $count } 个总深度为零、为负或不是数字；该孔口保留，但没有总深度
+       *[other] { $file }：{ $count } 个总深度为零、为负或不是数字；这些孔口保留，但没有总深度
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1411,9 +1417,15 @@ csv-drill-hole-row-has-no-geometry = { $file } 第 { $row } 行：缺少完整�
 csv-drill-hole-row-invalid-interval = { $file } 第 { $row } 行：DHID '{ $dhid }' 的区间 { $from }..{ $to } 无效
 csv-drill-hole-row-zero-length-segment = { $file } 第 { $row } 行：DHID '{ $dhid }' 在 { $depth } 处有零长度段
 csv-drill-hole-row-unreadable-value = { $file } 第 { $row } 行：存在无法读取的值
+csv-drill-hole-row-inconsistent-diameter = DHID '{ $dhid }' 的孔径不一致
+csv-drill-hole-row-wrong-width = { $file } 第 { $row } 行：有 { $found } 列，应为 { $expected } 列
+csv-drill-hole-row-blank-required-value = { $file } 第 { $row } 行：必填值为空
+csv-drill-hole-row-invalid-number = { $file } 第 { $row } 行：数字 '{ $value }' 无效
 csv-drill-hole-csv-is-wide-text = CSV 是 UTF-16 或 UTF-32 文本；请另存为 UTF-8 后重新导入
 csv-drill-hole-csv-holds-nul-bytes = CSV 中到处是 NUL 字节，因此不是 UTF-8 文本；如果它是以 UTF-16 或 UTF-32 写入的，请另存为 UTF-8 后重新导入
 csv-drill-hole-overlap-field-summary = { $field }：{ $count } 个钻孔，例如 { $examples }
+csv-drill-hole-codes-differ-only-by-case = 仅大小写不同的代码会作为独立代码保留：{ $summary }
+csv-drill-hole-case-twin-field-summary = { $field }：{ $codes }
 csv-geophysics-above-5 = 高于 5
 csv-geophysics-below-0-5 = 低于 0.5
 csv-geophysics-count-more = （另有 { $count } 个）
@@ -1423,6 +1435,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = CSV 中有未结束的引号�
 csv-geophysics-curve-file-was-left-out = { $file } 中的 { $curve } 已被排除：其大部分读数{ $side }，因此中位数超出 0.5 至 5 g/cc，单位似乎有误（应为 g/cc）。Incline 不做单位换算；请修正导出文件后重新关联
 csv-geophysics-file-empty = { $file } 为空
 csv-geophysics-file-has-no-curve-no = { $file } 没有曲线：除孔号和深度外，没有任何列包含数值
+csv-geophysics-file-has-two-curves-one-name = { $file } 有两个会被读成同一条曲线的曲线列，{ $first } 和 { $second }：请重命名其中一个后重新链接
+csv-geophysics-file-has-no-rows-known-holes = { $file } 没有数据集中任何钻孔的行：请检查其钻孔编号后重新链接
 csv-geophysics-file-mapping-has-mapped-columns = { $file } 的映射有 { $mapped } 列，而 CSV 有 { $found } 列
 csv-geophysics-file-no-longer-matches-its = { $file } 与其索引不再匹配：请重新关联
 csv-geophysics-file-not-grouped-hole-its = { $file } 未按钻孔分组：各钻孔的行被分散在过多的段中。请按孔号再按深度排序后重新关联
@@ -1872,10 +1886,12 @@ files-xy-grid-options = XY 网格选项
 geophysics-checking-geophysics-files = 正在检查地球物理文件
 geophysics-downhole-geophysics-name-could-not = 无法为“{ $name }”关联井下地球物理数据：{ $error }
 geophysics-file-changed = 地球物理文件在建立索引之后已更改
+geophysics-file-cannot-be-opened = 无法打开 { $file }：{ $error }
 geophysics-file-unreadable = 与“{ $name }”关联的地球物理文件无法在 { $path } 读取（{ $error }）；请通过数据集的右键菜单重新关联
 geophysics-linked-changed-rereading = 与“{ $name }”关联的地球物理数据在建立索引之后已更改；正在重新读取
 geophysics-hole-has-size-mib-geophysics = { $hole } 有 { $size } MiB 的地球物理数据行，超过单个钻孔的读取上限
 geophysics-hole-needs-size-mib-its = { $hole } 的地球物理数据需要 { $size } MiB，超过浏览器剩余内存：请卸载其他项目，然后卸载并重新加载此数据集
+geophysics-hole-could-not-be-read = 无法读取 { $hole }：其地球物理文件不可用
 geophysics-linking-geophysics-name = 正在将地球物理数据关联到 { $name }
 geophysics-reading-geophysics-hole = 正在读取 { $hole } 的地球物理数据
 geophysics-web-could-not-read-name-error = 无法读取“{ $name }”：{ $error }
@@ -1984,6 +2000,7 @@ io-quality-points-file = 品质文件
 io-quality-points-help = 组合值:每个钻孔和煤层一行、每种品质一列,或每个钻孔、煤层和品质一行、含品质和值两列。每个煤层和品质成为一个高度 = 值的点图层。
 io-quality-points-long = 按每个钻孔、煤层和品质一行读取。
 io-quality-points-needs = 请映射钻孔 ID、东 / X、北 / Y、煤层和一个品质列(或品质名称和值)。
+io-quality-points-short = 第 { $line } 行,{ $column } 列:该行在此单元格之前就结束了,而每一行都需要它。
 io-quality-points-negative = 第 { $line } 行,{ $column } 列:{ $value } 小于 0,而品质不能为负。
 io-quality-points-not-a-number = 第 { $line } 行,{ $column } 列:应为数字,却是 "{ $found }"。请在源数据库中清理。
 io-quality-points-unit-clash = 第 { $line } 行,{ $column } 列:{ $quality } 同时以 { $first } 和 { $second } 给出。
@@ -1995,7 +2012,7 @@ io-quality-role-unit = 单位
 io-quality-role-value = 值
 io-projects = 项目
 io-reset = 重置
-io-role-reason-also-collar = 也像孔口
+io-role-reason-also-collar = 看起来像孔口文件
 io-role-reason-collar = 每孔一行，带坐标
 io-role-reason-geophysics = 孔与深度，读数间隔细密
 io-role-reason-interval = 孔，起止深度
@@ -2027,6 +2044,8 @@ io-worksheet-writes-two-files = 以所选名称写入工作表，每组相同的
 cmd-file-exported-worksheet-path = 已将订正工作表导出到 { $path }，并将旁边的订正导出到 { $records }
 cmd-file-worksheet-export-failed-error = 订正工作表导出失败：{ $error }
 cmd-file-worksheet-no-corrections = { $name } 没有可导出的订正
+cmd-file-worksheet-only-unread-corrections = { $name } 没有此版本能够读取的订正：其 { $count } 条订正记录按原样保留，但无法导出
+cmd-file-worksheet-leaves-out-unread = { $name } 的订正工作表遗漏了 { $count } 条此版本无法读取的订正记录；它们按原样保留在项目中
 state-export-corrections-worksheet = 导出订正工作表
 
 ## Jobs strings
@@ -2134,13 +2153,17 @@ object-edit-vertices = 顶点
 omf-element-name-has-count-tie = 元素“{ $name }”有 { $count } 个连接指向其已不包含的炮孔
 omf-element-name-has-count-unreadable = 元素“{ $name }”有 { $count } 个无法读取的工作层段；已被排除
 omf-element-name-has-count-unreadable-strat = 元素 '{ $name }' 有 { $count } 个无法读取的地层列，已被略去
-omf-element-name-has-count-as-logged = 元素 '{ $name }' 有 { $count } 个无法读取或放置的原始记录值，已被略去
+omf-element-name-has-count-as-logged = 元素 '{ $name }' 有 { $count } 个无法读取或放置的原始记录值，已保留但不会应用
+omf-element-name-strat-field-unreadable = 元素 '{ $name }' 有一个无法读取的地层字段;已略过
+omf-element-name-color-stops-unreadable = 元素 '{ $name }' 的色标停靠点太少,无法绘制色带;已使用预设的停靠点
+omf-element-name-color-unreadable = 元素 '{ $name }' 的颜色设置无法读取;该集合以默认颜色打开,其工作分段和地层列已略过
+omf-element-name-geophysics-unreadable = 元素 '{ $name }' 有一个无法读取的地球物理链接;已略过
 omf-element-unsupported-section = 元素“{ $name }”指定的分区“{ $section }”在此版本中无法显示这类项目
 omf-element-name-names-unknown-section = 元素“{ $name }”指定了未知分区“{ $section }”
 omf-quality-mark-unreadable = 无法读取表面 { $name } 上的品质标记;它以普通表面打开
 omf-layer-quality-mark-unreadable = 无法读取图层 { $name } 上的品质标记;其点以普通点打开
 omf-ignoring-colour-map-omf-attribute = 忽略 OMF 属性“{ $attribute }”上的色彩图：{ $error }
-omf-correction-records-dropped = { $name } 的 { $count } 条订正记录无法读取，已被排除
+omf-correction-records-unread = { $name } 的 { $count } 条修正记录无法读取:它们按保存时的样子保留,但不会被应用
 omf-corrections-unreadable = { $name } 的订正记录无法读取，已被排除
 omf-mining-data-exported-incline = 由 Incline 导出的采矿数据
 omf-import = OMF 导入
@@ -4961,6 +4984,7 @@ explorer-selected-count = 已选 { $count } 项
 explorer-show = 显示
 input-could-not-slice-name-error = 无法裁剪 { $name }：{ $error }
 io-drill-holes = 钻孔
+io-drill-csv-preview-failed = 无法读取 { $file }:{ $error }
 io-fixed-block-size = 固定块尺寸
 io-no-column-mapped-these = 没有列映射到这些轴 - 每个块都改用此尺寸。
 menu-build-solid-surfaces = 由曲面构建实体...

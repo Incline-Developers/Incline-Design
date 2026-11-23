@@ -158,7 +158,7 @@ None beyond the **Dataset** list, which starts on the first loaded set.
 ## 7. Export Corrections Worksheet
 
 ### What it does
-Writes a set's corrections as a worksheet for review, and beside it a file with every correction record.
+Writes a set's corrections as a worksheet for review, and beside it a file with every correction record this build can read.
 ### Why a geologist uses it
 A senior can read the changes as a short list, one line per group of alike changes, and write a decision on each line. The logged values are never touched.
 ### Where it is
@@ -176,7 +176,8 @@ On the web build the two files are separate browser downloads with the same name
 ### Options and defaults
 None beyond the **Dataset** list, which starts on the first loaded set.
 ### What it refuses and why
-- **Export** stays greyed while the set has no corrections, and the window says "This set has no corrections to review." If they are undone while the save dialog is open, an alert says the set's name and "has no corrections to export".
+- **Export** stays greyed while the set has no corrections, and the window says "This set has no corrections to review." If they are undone while the save dialog is open, an alert says the set's name and "has no corrections to export", or "has no corrections this build can read" when the set holds only records this build cannot read.
+- Correction records this build cannot read, from a later build or a damaged file, are kept in the project as saved but are not exported: after the files are written an alert says "The corrections worksheet of" the set "leaves out" their number.
 - An alert says "Corrections worksheet export failed:" and the reason, when a file cannot be written.
 ### Related tools
 [Move Roof and Move Floor](#3-move-roof-and-move-floor), [Export CSV Drillholes](#6-export-csv-drillholes).

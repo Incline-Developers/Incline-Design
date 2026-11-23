@@ -432,7 +432,7 @@ borehole-inspector-flag-repeat = Lặp lại
 borehole-inspector-flagged-holes = Lỗ khoan bị đánh dấu ({ $count })
 borehole-inspector-flags-first-shown = Liệt kê { $shown } trong tổng số { $count } dấu đánh dấu đầu tiên.
 borehole-inspector-file-not-where-was-linked = { $file } không còn ở vị trí đã liên kết.
-borehole-inspector-guessed-name = Đoán theo tên
+borehole-inspector-guessed-name = Từ lần nhập, nếu không thì theo tên
 borehole-inspector-hold-hole-while-you-work = Giữ lỗ khoan này trong khi bạn làm việc với các lỗ xung quanh.
 borehole-inspector-holding-hole-click-follow-selection = Đang giữ lỗ khoan này. Nhấp để theo dõi vùng chọn trở lại.
 borehole-inspector-hole-code-not-in-column = Không có trong cột của bộ
@@ -1005,6 +1005,7 @@ cmd-selection-deleted-vertex = Đã xóa đỉnh { $vertex } khỏi đường đ
 cmd-strat-check-checking = Đang kiểm tra cột địa tầng của { $name }…
 cmd-strat-check-failed = Kiểm tra cột địa tầng thất bại: { $error }
 cmd-strat-check-summary = Đã kiểm tra { $field } của { $name }: { $holes } lỗ khoan, { $flagged } bị đánh dấu
+cmd-strat-check-summary-rising = Đã kiểm tra { $field } của { $name }: { $holes } lỗ khoan, { $flagged } bị đánh dấu; { $rising } lỗ khoan đi lên dọc theo quỹ đạo và đã bị loại
 cmd-strat-check-too-many-codes = { $field } của { $name } chứa quá nhiều mã để sắp thứ tự
 cmd-strat-import-filled = Đã điền cột địa tầng cho { $field }: { $names } tên; { $flagged } lỗ khoan không khớp trên { $checked }. Hãy Kiểm tra để xem lại.
 cmd-strat-import-filled-groups = Đã điền cột địa tầng cho { $field }: { $names } tên trong { $groups } nhóm; { $flagged } lỗ khoan không khớp trên { $checked }. Hãy Kiểm tra để xem lại.
@@ -1421,8 +1422,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } ánh xạ cột góc dốc
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } ánh xạ cột tổng độ sâu hai lần
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [1] { $file }: { $count } tổng độ sâu bị trống, bằng không, âm, là giá trị không có dữ liệu hoặc không phải số; miệng lỗ đó được giữ lại mà không có tổng độ sâu
-       *[other] { $file }: { $count } tổng độ sâu bị trống, bằng không, âm, là giá trị không có dữ liệu hoặc không phải số; các miệng lỗ đó được giữ lại mà không có tổng độ sâu
+        [1] { $file }: { $count } tổng độ sâu bị trống hoặc là giá trị không có dữ liệu; miệng lỗ đó được giữ lại mà không có tổng độ sâu
+       *[other] { $file }: { $count } tổng độ sâu bị trống hoặc là giá trị không có dữ liệu; các miệng lỗ đó được giữ lại mà không có tổng độ sâu
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [1] { $file }: { $count } tổng độ sâu bằng không, âm hoặc không phải số; miệng lỗ đó được giữ lại mà không có tổng độ sâu
+       *[other] { $file }: { $count } tổng độ sâu bằng không, âm hoặc không phải số; các miệng lỗ đó được giữ lại mà không có tổng độ sâu
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1438,9 +1444,15 @@ csv-drill-hole-row-has-no-geometry = { $file } dòng { $row } không có hình h
 csv-drill-hole-row-invalid-interval = { $file } dòng { $row } có khoảng không hợp lệ { $from }..{ $to } cho DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } dòng { $row } có đoạn dài bằng không tại { $depth } cho DHID '{ $dhid }'
 csv-drill-hole-row-unreadable-value = { $file } dòng { $row } có giá trị không đọc được
+csv-drill-hole-row-inconsistent-diameter = Đường kính không nhất quán cho DHID '{ $dhid }'
+csv-drill-hole-row-wrong-width = { $file } dòng { $row } có { $found } cột; cần { $expected }
+csv-drill-hole-row-blank-required-value = { $file } dòng { $row } có một giá trị bắt buộc bị để trống
+csv-drill-hole-row-invalid-number = { $file } dòng { $row } có số không hợp lệ '{ $value }'
 csv-drill-hole-csv-is-wide-text = CSV là văn bản UTF-16 hoặc UTF-32; hãy lưu dưới dạng UTF-8 rồi nhập lại
 csv-drill-hole-csv-holds-nul-bytes = CSV chứa byte NUL khắp tệp nên không phải văn bản UTF-8; nếu được ghi dưới dạng UTF-16 hoặc UTF-32, hãy lưu dưới dạng UTF-8 rồi nhập lại
 csv-drill-hole-overlap-field-summary = { $field } trong { $count } lỗ khoan, ví dụ { $examples }
+csv-drill-hole-codes-differ-only-by-case = Các mã chỉ khác nhau về chữ hoa và chữ thường vẫn được giữ là các mã riêng biệt: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = trên 5
 csv-geophysics-below-0-5 = dưới 0.5
 csv-geophysics-count-more = (+{ $count } nữa)
@@ -1450,6 +1462,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = CSV có trường trích dẫ
 csv-geophysics-curve-file-was-left-out = { $curve } trong { $file } đã bị loại: phần lớn số đọc của nó { $side }, nên trung vị nằm ngoài khoảng 0.5 đến 5 g/cc và đơn vị có vẻ sai (cần g/cc). Incline không chuyển đổi đơn vị; hãy sửa tệp xuất và liên kết lại
 csv-geophysics-file-empty = { $file } trống
 csv-geophysics-file-has-no-curve-no = { $file } không có đường cong: không có cột nào ngoài mã lỗ khoan và độ sâu chứa số
+csv-geophysics-file-has-two-curves-one-name = { $file } có hai cột đường cong được đọc như một đường cong, { $first } và { $second }: hãy đổi tên một cột rồi liên kết lại
+csv-geophysics-file-has-no-rows-known-holes = { $file } không có hàng nào cho bất kỳ lỗ khoan nào của bộ dữ liệu: hãy kiểm tra mã lỗ khoan rồi liên kết lại
 csv-geophysics-file-mapping-has-mapped-columns = Ánh xạ của { $file } có { $mapped } cột, CSV có { $found }
 csv-geophysics-file-no-longer-matches-its = { $file } không còn khớp với chỉ mục của nó: hãy liên kết lại
 csv-geophysics-file-not-grouped-hole-its = { $file } không được nhóm theo lỗ khoan: các hàng của lỗ khoan bị chia thành quá nhiều đoạn. Hãy sắp xếp theo mã lỗ khoan rồi độ sâu, và liên kết lại
@@ -1899,10 +1913,12 @@ files-xy-grid-options = Tùy chọn lưới XY
 geophysics-checking-geophysics-files = Đang kiểm tra các tệp địa vật lý
 geophysics-downhole-geophysics-name-could-not = Không thể liên kết địa vật lý lỗ khoan cho '{ $name }': { $error }
 geophysics-file-changed = Tệp địa vật lý đã thay đổi kể từ khi được lập chỉ mục
+geophysics-file-cannot-be-opened = Không thể mở { $file }: { $error }
 geophysics-file-unreadable = Không đọc được tệp địa vật lý liên kết với '{ $name }' tại { $path } ({ $error }); hãy liên kết lại từ menu chuột phải của bộ dữ liệu
 geophysics-linked-changed-rereading = Địa vật lý liên kết với '{ $name }' đã thay đổi kể từ khi được lập chỉ mục; đang đọc lại
 geophysics-hole-has-size-mib-geophysics = { $hole } có { $size } MiB hàng địa vật lý, nhiều hơn mức một lỗ khoan được đọc
 geophysics-hole-needs-size-mib-its = { $hole } cần { $size } MiB cho địa vật lý của nó, nhiều hơn dung lượng trình duyệt còn lại: hãy gỡ tải các mục khác, rồi gỡ tải và tải lại bộ dữ liệu này
+geophysics-hole-could-not-be-read = Không thể đọc { $hole }: tệp địa vật lý không khả dụng
 geophysics-linking-geophysics-name = Đang liên kết địa vật lý với { $name }
 geophysics-reading-geophysics-hole = Đang đọc địa vật lý của { $hole }
 geophysics-web-could-not-read-name-error = Không thể đọc '{ $name }': { $error }
@@ -2011,6 +2027,7 @@ io-quality-points-file = Tệp chất lượng
 io-quality-points-help = Giá trị tổng hợp: mỗi lỗ khoan và vỉa một hàng với một cột cho mỗi chỉ tiêu, hoặc mỗi lỗ khoan, vỉa và chỉ tiêu một hàng với cột Chỉ tiêu và Giá trị. Mỗi vỉa và chỉ tiêu thành một lớp điểm có độ cao = giá trị.
 io-quality-points-long = Đọc theo mỗi lỗ khoan, vỉa và chỉ tiêu một hàng.
 io-quality-points-needs = Hãy ánh xạ ID lỗ khoan, Đông / X, Bắc / Y, Vỉa và một cột chỉ tiêu (hoặc Tên chỉ tiêu và Giá trị).
+io-quality-points-short = Dòng { $line }, cột { $column }: hàng kết thúc trước ô này, mà mỗi hàng đều cần ô đó.
 io-quality-points-negative = Dòng { $line }, cột { $column }: { $value } nhỏ hơn 0, mà chỉ tiêu chất lượng không thể âm.
 io-quality-points-not-a-number = Dòng { $line }, cột { $column }: cần một số, nhưng gặp "{ $found }". Hãy sửa trong cơ sở dữ liệu nguồn.
 io-quality-points-unit-clash = Dòng { $line }, cột { $column }: { $quality } được cho cả bằng { $first } và { $second }.
@@ -2022,7 +2039,7 @@ io-quality-role-unit = Đơn vị
 io-quality-role-value = Giá trị
 io-projects = Dự án
 io-reset = Đặt lại
-io-role-reason-also-collar = Cũng giống miệng lỗ
+io-role-reason-also-collar = Trông giống tệp miệng lỗ
 io-role-reason-collar = Một dòng mỗi lỗ, có tọa độ
 io-role-reason-geophysics = Lỗ và độ sâu với số đo theo bước nhỏ
 io-role-reason-interval = Lỗ, từ và đến
@@ -2054,6 +2071,8 @@ io-worksheet-writes-two-files = Ghi bảng theo tên bạn chọn, mỗi nhóm h
 cmd-file-exported-worksheet-path = Đã xuất bảng hiệu chỉnh sang { $path } và các hiệu chỉnh bên cạnh sang { $records }
 cmd-file-worksheet-export-failed-error = Xuất bảng hiệu chỉnh thất bại: { $error }
 cmd-file-worksheet-no-corrections = { $name } không có hiệu chỉnh nào để xuất
+cmd-file-worksheet-only-unread-corrections = { $name } không có hiệu chỉnh nào mà bản này đọc được: { $count } bản ghi hiệu chỉnh của nó được giữ nguyên như đã lưu nhưng không thể xuất
+cmd-file-worksheet-leaves-out-unread = Bảng hiệu chỉnh của { $name } bỏ qua { $count } bản ghi hiệu chỉnh mà bản này không đọc được; chúng vẫn nằm trong dự án như đã lưu
 state-export-corrections-worksheet = Xuất bảng hiệu chỉnh
 
 ## Jobs strings
@@ -2161,13 +2180,17 @@ object-edit-vertices = Đỉnh
 omf-element-name-has-count-tie = Phần tử '{ $name }' có { $count } đấu nối đặt tên các lỗ khoan mà nó không còn chứa
 omf-element-name-has-count-unreadable = Phần tử '{ $name }' có { $count } phân đoạn làm việc không đọc được; chúng đã bị bỏ qua
 omf-element-name-has-count-unreadable-strat = Phần tử '{ $name }' có { $count } cột địa tầng không đọc được; chúng đã bị bỏ qua
-omf-element-name-has-count-as-logged = Phần tử '{ $name }' có { $count } giá trị như đã ghi không đọc hoặc đặt được; chúng đã bị bỏ qua
+omf-element-name-has-count-as-logged = Phần tử '{ $name }' có { $count } giá trị như đã ghi không đọc hoặc đặt được; chúng được giữ lại nhưng không áp dụng
+omf-element-name-strat-field-unreadable = Phần tử '{ $name }' có một trường địa tầng không đọc được; nó đã bị bỏ qua
+omf-element-name-color-stops-unreadable = Phần tử '{ $name }' có quá ít điểm dừng màu để vẽ dải màu; đã dùng các điểm dừng của mẫu đặt sẵn
+omf-element-name-color-unreadable = Phần tử '{ $name }' có cài đặt màu không đọc được; bộ mở với màu mặc định, còn các phần làm việc và cột địa tầng của nó đã bị bỏ qua
+omf-element-name-geophysics-unreadable = Phần tử '{ $name }' có một liên kết địa vật lý không đọc được; nó đã bị bỏ qua
 omf-element-unsupported-section = Phần tử '{ $name }' chỉ định phần '{ $section }' không thể hiển thị loại mục này trong bản dựng này
 omf-element-name-names-unknown-section = Phần tử '{ $name }' chỉ định một phần không xác định '{ $section }'
 omf-quality-mark-unreadable = Không đọc được dấu chỉ tiêu trên bề mặt { $name }; nó mở như bề mặt thường
 omf-layer-quality-mark-unreadable = Không đọc được dấu chỉ tiêu trên lớp { $name }; các điểm của nó mở như điểm thường
 omf-ignoring-colour-map-omf-attribute = Bỏ qua bảng màu trên thuộc tính OMF '{ $attribute }': { $error }
-omf-correction-records-dropped = Không đọc được { $count } bản ghi hiệu chỉnh của { $name } và chúng đã bị bỏ qua
+omf-correction-records-unread = Không đọc được { $count } bản ghi hiệu chỉnh của { $name }: chúng được giữ nguyên như đã lưu nhưng không được áp dụng
 omf-corrections-unreadable = Không đọc được các bản ghi hiệu chỉnh của { $name } và chúng đã bị bỏ qua
 omf-mining-data-exported-incline = Dữ liệu khai thác được xuất bởi Incline
 omf-import = Nhập OMF
@@ -4988,6 +5011,7 @@ explorer-selected-count = Đã chọn { $count }
 explorer-show = Hiện
 input-could-not-slice-name-error = không thể xén { $name }: { $error }
 io-drill-holes = Lỗ khoan
+io-drill-csv-preview-failed = Không đọc được { $file }: { $error }
 io-fixed-block-size = Kích thước khối cố định
 io-no-column-mapped-these = Không có cột nào được ánh xạ vào các trục này - mọi khối dùng kích thước này thay thế.
 menu-build-solid-surfaces = Dựng khối đặc từ các mặt...

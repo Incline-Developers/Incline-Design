@@ -9,7 +9,7 @@ use crate::{
     i18n::tr,
     model::{
         drill_hole::{DrillFieldKind, DrillHoleDataset, DrillHoleId, WorkingSection, tidy_working_sections},
-        strat_order::{HoleFlag, MajorityOrder, default_strat_field, flags_against, majority_order, seeded_sections},
+        strat_order::{HoleFlag, MajorityOrder, Stop, default_strat_field, flagged_holes, flags_against_until, majority_order, majority_order_until, seeded_sections},
     },
     ui::state::StratCheckReport,
     userspace_log, userspace_warn,
@@ -23,24 +23,23 @@ const INLINE_CHECK_INTERVALS: usize = 20_000;
 struct StratCheckOutcome {
     majority: Option<MajorityOrder>,
     /// The holes that disagree with the column as it stood; empty when the
-    /// column was empty or already the majority order.
+    /// column was empty or already the majority order, or the field holds
+    /// too many codes to check.
     column_flags: Vec<HoleFlag>,
 }
 
 /// The majority order of `field` and the holes that disagree with it and
-/// with `column`. Logs nothing: it may run on a worker thread.
-fn run_strat_check(dataset: &DrillHoleDataset, field: &str, column: &[String]) -> StratCheckOutcome {
-    let majority = majority_order(dataset, field);
+/// with `column`, cut short when `stop` says so. Logs nothing: it may run on
+/// a worker thread.
+fn run_strat_check(dataset: &DrillHoleDataset, field: &str, column: &[String], stop: Stop) -> StratCheckOutcome {
+    let majority = majority_order_until(dataset, field, stop);
     let same = majority.as_ref().is_some_and(|found| found.order == column);
-    let column_flags = if column.is_empty() || same { Vec::new() } else { flags_against(dataset, field, column) };
+    let column_flags = if column.is_empty() || same {
+        Vec::new()
+    } else {
+        flags_against_until(dataset, field, column, stop)
+    };
     StratCheckOutcome { majority, column_flags }
-}
-
-/// How many holes `flags` name; they come sorted by hole.
-fn flagged_holes(flags: &[HoleFlag]) -> usize {
-    let mut holes = flags.iter().map(|flag| flag.hole).collect::<Vec<_>>();
-    holes.dedup();
-    holes.len()
 }
 
 /// What an import works out for its new set: the field it orders, the order
@@ -106,7 +105,7 @@ pub(crate) fn imported_strat(dataset: &DrillHoleDataset) -> Option<ImportedStrat
             } else {
                 Vec::new()
             };
-            let outcome = run_strat_check(dataset, &shown.key, &column);
+            let outcome = run_strat_check(dataset, &shown.key, &column, &|| false);
             ShownCheck {
                 field: shown.key.clone(),
                 column,
@@ -238,7 +237,7 @@ impl<'a> App<'a> {
         let column = open.color.strat_column(&field).to_vec();
         let intervals: usize = dataset.holes.iter().map(|hole| hole.intervals.len()).sum();
         if intervals <= INLINE_CHECK_INTERVALS {
-            let outcome = run_strat_check(&dataset, &field, &column);
+            let outcome = run_strat_check(&dataset, &field, &column, &|| false);
             self.finish_strat_check(id, field, &dataset, column, outcome);
             return;
         }
@@ -249,7 +248,11 @@ impl<'a> App<'a> {
         self.spawn_job(
             label,
             vec![crate::app::jobs::JobKey::DrillHole(id)],
-            move |_cancel| Ok(run_strat_check(&worked, &read_field, &read_column)),
+            move |cancel| {
+                let outcome = run_strat_check(&worked, &read_field, &read_column, &|| cancel.is_cancelled());
+                anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
+                Ok(outcome)
+            },
             move |app: &mut App<'a>, result: anyhow::Result<StratCheckOutcome>| match result {
                 Ok(outcome) => app.finish_strat_check(id, field, &dataset, column, outcome),
                 Err(error) => userspace_warn!("{}", tr!("cmd-strat-check-failed", error = format!("{error:#}"))),
@@ -284,22 +287,37 @@ impl<'a> App<'a> {
         };
         let filled = current.is_empty() && !majority.order.is_empty();
         let comparing = !filled && !current.is_empty() && current != majority.order;
-        userspace_log!(
-            "{}",
-            tr!(
-                "cmd-strat-check-summary",
-                field = field.clone(),
-                name = name,
-                holes = majority.holes.to_string(),
-                // Counted against the column as it stood, as the Column tab counts.
-                flagged = flagged_holes(if column.is_empty() || column == majority.order {
-                    &majority.flags
-                } else {
-                    &column_flags
-                })
-                .to_string()
-            )
-        );
+        // Counted against the column as it stood, as the Column tab counts.
+        let flagged = flagged_holes(if column.is_empty() || column == majority.order {
+            &majority.flags
+        } else {
+            &column_flags
+        })
+        .to_string();
+        if majority.rising > 0 {
+            userspace_log!(
+                "{}",
+                tr!(
+                    "cmd-strat-check-summary-rising",
+                    field = field.clone(),
+                    name = name,
+                    holes = majority.holes.to_string(),
+                    flagged = flagged,
+                    rising = majority.rising.to_string()
+                )
+            );
+        } else {
+            userspace_log!(
+                "{}",
+                tr!(
+                    "cmd-strat-check-summary",
+                    field = field.clone(),
+                    name = name,
+                    holes = majority.holes.to_string(),
+                    flagged = flagged
+                )
+            );
+        }
         if filled {
             self.set_strat_column(id, field.clone(), majority.order.clone());
         }

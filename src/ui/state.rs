@@ -2847,14 +2847,14 @@ pub(crate) struct EditorState {
     /// Which tab of the Borehole Inspector panel is showing. Transient: not
     /// persisted, always starts back on [`BoreholeInspectorTab::Data`].
     pub(crate) borehole_inspector_tab: BoreholeInspectorTab,
-    /// The field the Log tab's strat column reads and the dataset it was
-    /// chosen for: a choice about one set's columns says nothing about
-    /// another's. `None` guesses by name. Transient, like the tab.
-    pub(crate) borehole_log_strat_field: Option<(DrillHoleId, String)>,
-    /// What the Log tab's left, then right, trace column shows, and the
-    /// dataset it was chosen for; `None` shows the defaults. Transient, like
-    /// the strat field.
-    pub(crate) borehole_log_curves: Option<(DrillHoleId, [crate::ui::widgets::log_traces::ColumnCurve<String>; 2])>,
+    /// The field the Log tab's strat column reads, for each dataset it was
+    /// chosen on: a choice about one set's columns says nothing about
+    /// another's. A set with none reads its default. Transient, like the tab.
+    pub(crate) borehole_log_strat_field: HashMap<DrillHoleId, String>,
+    /// What the Log tab's left, then right, trace column shows, for each
+    /// dataset it was chosen on; a set with none shows the defaults.
+    /// Transient, like the strat field.
+    pub(crate) borehole_log_curves: HashMap<DrillHoleId, [crate::ui::widgets::log_traces::ColumnCurve<String>; 2]>,
     /// The last strat column check of each set and field, for the Column
     /// tab. Transient: an import or Check makes one; a project opened
     /// starts with none.
@@ -4956,8 +4956,8 @@ impl EditorState {
         self.selected_drill_holes.clear();
         self.selected_tie_ins.clear();
         self.inspected_hole = None;
-        self.borehole_log_strat_field = None;
-        self.borehole_log_curves = None;
+        self.borehole_log_strat_field.clear();
+        self.borehole_log_curves.clear();
         self.strat_checks.clear();
         self.borehole_inspector_locked = false;
         self.hidden_handles.clear();
@@ -5310,8 +5310,8 @@ impl EditorState {
             show_borehole_inspector: false,
             show_schedule_inspector: true,
             borehole_inspector_tab: BoreholeInspectorTab::default(),
-            borehole_log_strat_field: None,
-            borehole_log_curves: None,
+            borehole_log_strat_field: HashMap::new(),
+            borehole_log_curves: HashMap::new(),
             strat_checks: Vec::new(),
             well_log_style: Default::default(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
@@ -6122,12 +6122,8 @@ impl EditorState {
     /// what the inspector reads, the context menu's hole, and the strat
     /// field and curves the log was set to for a dataset it drops.
     pub(crate) fn retain_drill_hole_datasets(&mut self, keep: impl Fn(DrillHoleId) -> bool) {
-        if self.borehole_log_strat_field.as_ref().is_some_and(|(id, _)| !keep(*id)) {
-            self.borehole_log_strat_field = None;
-        }
-        if self.borehole_log_curves.as_ref().is_some_and(|(id, _)| !keep(*id)) {
-            self.borehole_log_curves = None;
-        }
+        self.borehole_log_strat_field.retain(|id, _| keep(*id));
+        self.borehole_log_curves.retain(|id, _| keep(*id));
         self.selected_drill_holes.retain(|hole| keep(hole.dataset));
         self.selected_tie_ins.retain(|tie| keep(tie.dataset));
         self.inspected_hole = self.inspected_hole.filter(|hole| keep(hole.dataset));
@@ -12565,7 +12561,8 @@ pub(crate) fn typed_depth(text: &str) -> TypedDepth {
     }
     let number = text.strip_suffix('m').map_or(text, str::trim_end);
     match number.parse::<f64>() {
-        Ok(depth) if depth.is_finite() => TypedDepth::Depth(depth),
+        // Adding zero turns "-0" into a plain zero.
+        Ok(depth) if depth.is_finite() => TypedDepth::Depth(depth + 0.0),
         _ => TypedDepth::NotADepth,
     }
 }
@@ -12610,11 +12607,11 @@ pub(crate) struct StratCheckReport {
 
 impl StratCheckReport {
     /// The holes that disagree with `column`, when this check read them;
-    /// `None` when the column has changed since.
+    /// `None` when the column has changed since or the check was refused.
     pub(crate) fn flags_for(&self, column: &[String]) -> Option<&[crate::model::strat_order::HoleFlag]> {
         if self.order.as_deref() == Some(column) {
             Some(&self.order_flags)
-        } else if self.column == column {
+        } else if self.order.is_some() && self.column == column {
             Some(&self.column_flags)
         } else {
             None

@@ -80,7 +80,7 @@ impl App<'_> {
             userspace_warn!("{}", tr!("cmd-quality-points-project-changed"));
             return;
         }
-        let known = self
+        let mut known = self
             .drill_holes
             .iter()
             .flat_map(|dataset| &dataset.color.strat_columns)
@@ -89,6 +89,14 @@ impl App<'_> {
         if known.is_empty() {
             userspace_log!("{}", tr!("cmd-quality-points-no-strat-column"));
         } else {
+            // A working section's name is a seam too, as the strat
+            // column's codes are.
+            known.extend(
+                self.drill_holes
+                    .iter()
+                    .flat_map(|dataset| &dataset.color.working_sections)
+                    .map(|section| section.name.as_str()),
+            );
             let unknown = unknown_seams(&parsed.sets, &known);
             if !unknown.is_empty() {
                 userspace_warn!("{}", tr!("cmd-quality-points-unknown-seams", seams = unknown.join(", ")));

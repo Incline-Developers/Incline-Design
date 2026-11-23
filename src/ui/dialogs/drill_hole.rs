@@ -2,8 +2,8 @@ use crate::{
     i18n::tr,
     model::drill_hole::{
         BoundaryProblem, BoundarySide, ColorRow, CorrectionKind, CorrectionNote, DrillCategoryColor, DrillColorPreset, DrillFieldKind, DrillHoleId, DrillHoleStyle, DrillInterval,
-        IntervalDelete, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, RenameScope, SectionProblem, ShiftDirection, WorkingSection, default_category_colors, holds_value,
-        insertion_named_apart, name_is_code_message, same_interval, shown_depth, suggested_working_sections, value_name, working_section_name_problem,
+        IntervalDelete, MAX_DRILL_COLOR_STOPS, MIN_DRILL_COLOR_STOPS, OpenDrillHoleDataset, RenameScope, SectionProblem, ShiftDirection, WorkingSection, default_category_colors,
+        holds_value, insertion_named_apart, name_is_code_message, same_interval, shown_depth, suggested_working_sections, value_name, working_section_name_problem,
     },
     ui::{
         elements::properties::read_only_row,
@@ -824,8 +824,13 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                 let mut stops = dataset.color.stops.clone();
                 let mut changed = false;
                 let mut remove = None;
-                let can_remove = stops.len() > 2;
+                let can_remove = stops.len() > MIN_DRILL_COLOR_STOPS;
+                // The slider spans the whole ramp; a stop is held between its
+                // neighbours, so the ramp's order never changes under a drag.
+                let positions: Vec<f32> = stops.iter().map(|stop| stop.t).collect();
                 for (index, stop) in stops.iter_mut().enumerate() {
+                    let low = index.checked_sub(1).map_or(0.0, |before| positions[before]);
+                    let high = positions.get(index + 1).copied().unwrap_or(1.0);
                     MenuField::new(tr!("drill-hole-colour-stop", index = ((index + 1) as u32))).show(ui, |ui, _, _| {
                         changed |= crate::ui::widgets::color::edit_rgb(ui, &mut stop.color).changed();
                         let actual = if (*max - *min).abs() <= f64::EPSILON {
@@ -834,9 +839,13 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                             *min + f64::from(stop.t) * (*max - *min)
                         };
                         ui.monospace(format!("{actual:.6}"));
-                        changed |= ui
+                        let moved = ui
                             .add_sized([145.0, ui.spacing().interact_size.y], egui::Slider::new(&mut stop.t, 0.0..=1.0).show_value(false))
                             .changed();
+                        if moved && low <= high {
+                            stop.t = stop.t.clamp(low, high);
+                        }
+                        changed |= moved;
                         if can_remove && ui.small_button(tr!("common-minus-sign")).clicked() {
                             remove = Some(index);
                         }
@@ -909,8 +918,26 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                     });
                 };
                 // Inline: the dialog already scrolls, so a list scroll would nest.
-                for row in &shown_rows {
-                    draw_row(ui, row);
+                // The first row sets the pitch; only rows the scroll shows are
+                // drawn after it, the rest as blank space.
+                if let Some((first, rest)) = shown_rows.split_first() {
+                    let top = ui.cursor().min.y;
+                    draw_row(ui, first);
+                    let pitch = ui.cursor().min.y - top;
+                    let clip = ui.clip_rect();
+                    let visible = visible_rows(ui.cursor().min.y, pitch, (clip.min.y, clip.max.y), rest.len());
+                    if visible.start > 0 {
+                        ui.add_space(visible.start as f32 * pitch);
+                    }
+                    // Skipped rows still take ids, so each row keeps its own.
+                    ui.skip_ahead_auto_ids(visible.start);
+                    for row in &rest[visible.clone()] {
+                        draw_row(ui, row);
+                    }
+                    if visible.end < rest.len() {
+                        ui.add_space((rest.len() - visible.end) as f32 * pitch);
+                    }
+                    ui.skip_ahead_auto_ids(rest.len() - visible.end);
                 }
                 if let Some(table) = table {
                     commands.push(UiCommand::SetDrillHoleCategoryColors { id, categories: table });
@@ -935,6 +962,17 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
     if let DrillFieldKind::Categorical { categories } = &field.kind {
         draw_working_sections(ui, dataset, field, categories, commands);
     }
+}
+
+/// The rows of an evenly spaced list, the first starting at `top`, that
+/// meet the vertical `clip` span: all of them when the pitch is unknown.
+fn visible_rows(top: f32, pitch: f32, clip: (f32, f32), count: usize) -> std::ops::Range<usize> {
+    if pitch <= 0.0 || !pitch.is_finite() {
+        return 0..count;
+    }
+    let first = (((clip.0 - top) / pitch).floor().max(0.0) as usize).min(count);
+    let end = (((clip.1 - top) / pitch).ceil().max(0.0) as usize).clamp(first, count);
+    first..end
 }
 
 /// Draft state for the "add a working section" builder: kept in egui memory,

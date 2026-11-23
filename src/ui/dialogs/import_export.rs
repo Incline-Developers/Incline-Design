@@ -585,7 +585,7 @@ fn draw_import_quality_points(ui: &mut egui::Ui, editor: &mut EditorState, comma
                         .selected_text(selected.label(long))
                         .width(105.0)
                         .show_ui(ui, |ui| {
-                            for role in QualityColumnRole::ALL {
+                            for role in QualityColumnRole::ALL.into_iter().filter(|role| long || *role != QualityColumnRole::Unit) {
                                 ui.selectable_value(selected, role, role.label(long));
                             }
                         });

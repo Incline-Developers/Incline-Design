@@ -243,7 +243,11 @@ impl<'a> App<'a> {
         let indexed_runs: Vec<(usize, [u64; 2])> = link.runs_of(&dhid).collect();
         let mut files = Vec::with_capacity(indexed_runs.len());
         for (index, _) in &indexed_runs {
-            let Some(linked) = link.files.get(*index) else { return };
+            let Some(linked) = link.files.get(*index) else {
+                self.well_logs
+                    .finish_read(id, generation, dhid.clone(), Err(tr!("geophysics-hole-could-not-be-read", hole = dhid.clone().to_string())));
+                return;
+            };
             match self.geophysics_files.iter().find(|(held, _)| held.matches(&linked.identity)) {
                 Some((_, file)) => files.push(file.clone()),
                 None => {
@@ -253,7 +257,11 @@ impl<'a> App<'a> {
                 }
             }
         }
-        let Some(proxy) = self.web_event_loop_proxy.clone() else { return };
+        let Some(proxy) = self.web_event_loop_proxy.clone() else {
+            self.well_logs
+                .finish_read(id, generation, dhid.clone(), Err(tr!("geophysics-hole-could-not-be-read", hole = dhid.clone().to_string())));
+            return;
+        };
         let runs: Vec<[u64; 2]> = indexed_runs.into_iter().map(|(_, run)| run).collect();
         wasm_bindgen_futures::spawn_local(async move {
             let mut bytes = Vec::with_capacity(files.len());
@@ -298,7 +306,11 @@ impl<'a> App<'a> {
                 return;
             }
         };
-        let Some(link) = self.geophysics_link(id) else { return };
+        let Some(link) = self.geophysics_link(id) else {
+            self.well_logs
+                .finish_read(id, generation, dhid.clone(), Err(tr!("geophysics-hole-could-not-be-read", hole = dhid.clone().to_string())));
+            return;
+        };
         self.spawn_hole_parse(id, generation, link, dhid, reservation, move |_, _| Ok(runs));
     }
 

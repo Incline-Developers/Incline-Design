@@ -405,7 +405,7 @@ borehole-inspector-flag-repeat = Berulang
 borehole-inspector-flagged-holes = Lubang yang ditandai ({ $count })
 borehole-inspector-flags-first-shown = { $shown } tanda pertama dari { $count } tanda dicantumkan.
 borehole-inspector-file-not-where-was-linked = { $file } tidak berada di lokasi saat ditautkan.
-borehole-inspector-guessed-name = Diduga dari nama
+borehole-inspector-guessed-name = Dari impor, jika tidak menurut nama
 borehole-inspector-hold-hole-while-you-work = Tahan lubang ini selagi Anda mengerjakan lubang di sekitarnya.
 borehole-inspector-holding-hole-click-follow-selection = Lubang ini ditahan. Klik untuk kembali mengikuti pilihan.
 borehole-inspector-hole-code-not-in-column = Tidak ada di kolom set
@@ -978,6 +978,7 @@ cmd-selection-deleted-vertex = Verteks { $vertex } dihapus dari poligaris { $obj
 cmd-strat-check-checking = Memeriksa kolom strat { $name }…
 cmd-strat-check-failed = Pemeriksaan kolom strat gagal: { $error }
 cmd-strat-check-summary = { $field } dari { $name } diperiksa: { $holes } lubang, { $flagged } ditandai
+cmd-strat-check-summary-rising = { $field } dari { $name } diperiksa: { $holes } lubang, { $flagged } ditandai; { $rising } lubang naik sepanjang jejaknya dan dikecualikan
 cmd-strat-check-too-many-codes = { $field } dari { $name } memuat terlalu banyak kode untuk diurutkan
 cmd-strat-import-filled = Kolom strat diisi untuk { $field }: { $names } nama; { $flagged } lubang tidak sesuai pada { $checked }. Periksa untuk meninjau.
 cmd-strat-import-filled-groups = Kolom strat diisi untuk { $field }: { $names } nama dalam { $groups } grup; { $flagged } lubang tidak sesuai pada { $checked }. Periksa untuk meninjau.
@@ -1394,8 +1395,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } memetakan kolom dip atau i
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } memetakan kolom kedalaman total dua kali
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [1] { $file }: { $count } kedalaman total kosong, nol, negatif, nilai tanpa data, atau bukan angka; collar itu tetap disimpan tanpa kedalaman total
-       *[other] { $file }: { $count } kedalaman total kosong, nol, negatif, nilai tanpa data, atau bukan angka; collar-collar itu tetap disimpan tanpa kedalaman total
+        [1] { $file }: { $count } kedalaman total kosong atau nilai tanpa data; collar itu tetap disimpan tanpa kedalaman total
+       *[other] { $file }: { $count } kedalaman total kosong atau nilai tanpa data; collar-collar itu tetap disimpan tanpa kedalaman total
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [1] { $file }: { $count } kedalaman total nol, negatif, atau bukan angka; collar itu tetap disimpan tanpa kedalaman total
+       *[other] { $file }: { $count } kedalaman total nol, negatif, atau bukan angka; collar-collar itu tetap disimpan tanpa kedalaman total
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1411,9 +1417,15 @@ csv-drill-hole-row-has-no-geometry = { $file } baris { $row } tidak memiliki geo
 csv-drill-hole-row-invalid-interval = { $file } baris { $row } memiliki interval tidak valid { $from }..{ $to } untuk DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } baris { $row } memiliki segmen sepanjang nol pada { $depth } untuk DHID '{ $dhid }'
 csv-drill-hole-row-unreadable-value = { $file } baris { $row } memiliki nilai yang tidak terbaca
+csv-drill-hole-row-inconsistent-diameter = Diameter tidak konsisten untuk DHID '{ $dhid }'
+csv-drill-hole-row-wrong-width = { $file } baris { $row } memiliki { $found } kolom; diharapkan { $expected }
+csv-drill-hole-row-blank-required-value = { $file } baris { $row } memiliki nilai wajib yang kosong
+csv-drill-hole-row-invalid-number = { $file } baris { $row } memiliki angka tidak valid '{ $value }'
 csv-drill-hole-csv-is-wide-text = CSV berupa teks UTF-16 atau UTF-32; simpan sebagai UTF-8 lalu impor lagi
 csv-drill-hole-csv-holds-nul-bytes = CSV berisi byte NUL di seluruh isinya, jadi bukan teks UTF-8; jika ditulis sebagai UTF-16 atau UTF-32, simpan sebagai UTF-8 lalu impor lagi
 csv-drill-hole-overlap-field-summary = { $field } di { $count } lubang bor, mis. { $examples }
+csv-drill-hole-codes-differ-only-by-case = Kode yang hanya berbeda huruf besar dan kecilnya tetap menjadi kode terpisah: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = di atas 5
 csv-geophysics-below-0-5 = di bawah 0,5
 csv-geophysics-count-more = (+{ $count } lagi)
@@ -1423,6 +1435,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = CSV memiliki bidang bertanda 
 csv-geophysics-curve-file-was-left-out = { $curve } di { $file } dikecualikan: sebagian besar pembacaannya { $side }, sehingga mediannya di luar 0,5 hingga 5 g/cc dan satuannya tampak salah (diharapkan g/cc). Incline tidak mengonversi satuan; perbaiki ekspor lalu tautkan lagi
 csv-geophysics-file-empty = { $file } kosong
 csv-geophysics-file-has-no-curve-no = { $file } tidak memiliki kurva: tidak ada kolom selain ID lubang dan kedalaman yang berisi angka
+csv-geophysics-file-has-two-curves-one-name = { $file } memiliki dua kolom kurva yang terbaca sebagai satu kurva, { $first } dan { $second }: ganti nama salah satunya lalu tautkan lagi
+csv-geophysics-file-has-no-rows-known-holes = { $file } tidak memiliki baris untuk lubang mana pun dalam set data: periksa id lubangnya lalu tautkan lagi
 csv-geophysics-file-mapping-has-mapped-columns = Pemetaan { $file } memiliki { $mapped } kolom, CSV memiliki { $found }
 csv-geophysics-file-no-longer-matches-its = { $file } tidak lagi cocok dengan indeksnya: tautkan lagi
 csv-geophysics-file-not-grouped-hole-its = { $file } tidak dikelompokkan per lubang: baris tiap lubang tersebar di terlalu banyak rangkaian. Urutkan menurut ID lubang, lalu kedalaman, dan tautkan lagi
@@ -1872,10 +1886,12 @@ files-xy-grid-options = Opsi Grid XY
 geophysics-checking-geophysics-files = Memeriksa file geofisika
 geophysics-downhole-geophysics-name-could-not = Geofisika lubang bor untuk '{ $name }' tidak dapat ditautkan: { $error }
 geophysics-file-changed = File geofisika berubah sejak diindeks
+geophysics-file-cannot-be-opened = { $file } tidak dapat dibuka: { $error }
 geophysics-file-unreadable = File geofisika yang ditautkan ke '{ $name }' tidak dapat dibaca di { $path } ({ $error }); tautkan lagi dari menu klik kanan set data
 geophysics-linked-changed-rereading = Geofisika yang ditautkan ke '{ $name }' berubah sejak diindeks; membaca ulang
 geophysics-hole-has-size-mib-geophysics = { $hole } memiliki { $size } MiB baris geofisika, lebih besar dari ukuran yang dibaca per lubang
 geophysics-hole-needs-size-mib-its = { $hole } memerlukan { $size } MiB untuk geofisikanya, melebihi sisa memori peramban: bongkar item lain, lalu bongkar dan muat ulang set data ini
+geophysics-hole-could-not-be-read = { $hole } tidak dapat dibaca: berkas geofisikanya tidak tersedia
 geophysics-linking-geophysics-name = Menautkan geofisika ke { $name }
 geophysics-reading-geophysics-hole = Membaca geofisika untuk { $hole }
 geophysics-web-could-not-read-name-error = Tidak dapat membaca '{ $name }': { $error }
@@ -1984,6 +2000,7 @@ io-quality-points-file = Berkas kualitas
 io-quality-points-help = Nilai komposit: satu baris per lubang dan lapisan dengan satu kolom per kualitas, atau satu baris per lubang, lapisan, dan kualitas dengan kolom Kualitas dan Nilai. Setiap lapisan dan kualitas menjadi lapisan titik pada ketinggian = nilai.
 io-quality-points-long = Dibaca sebagai satu baris per lubang, lapisan, dan kualitas.
 io-quality-points-needs = Petakan ID Lubang, Timur / X, Utara / Y, Lapisan, dan satu kolom kualitas (atau Nama kualitas dan Nilai).
+io-quality-points-short = Baris { $line }, kolom { $column }: baris berakhir sebelum sel ini, padahal setiap baris memerlukannya.
 io-quality-points-negative = Baris { $line }, kolom { $column }: { $value } di bawah 0, dan kualitas tidak boleh negatif.
 io-quality-points-not-a-number = Baris { $line }, kolom { $column }: diharapkan angka, ditemukan "{ $found }". Bersihkan di basis data sumber.
 io-quality-points-unit-clash = Baris { $line }, kolom { $column }: { $quality } diberikan dalam { $first } dan juga { $second }.
@@ -1995,7 +2012,7 @@ io-quality-role-unit = Satuan
 io-quality-role-value = Nilai
 io-projects = Proyek
 io-reset = Atur ulang
-io-role-reason-also-collar = Juga tampak seperti mulut lubang
+io-role-reason-also-collar = Tampak seperti berkas mulut lubang
 io-role-reason-collar = Satu baris per lubang, dengan koordinat
 io-role-reason-geophysics = Lubang dan kedalaman dengan pembacaan berjarak rapat
 io-role-reason-interval = Lubang, dari dan sampai
@@ -2027,6 +2044,8 @@ io-worksheet-writes-two-files = Menulis lembar dengan nama yang Anda pilih, satu
 cmd-file-exported-worksheet-path = Lembar koreksi diekspor ke { $path } dan koreksi di sampingnya ke { $records }
 cmd-file-worksheet-export-failed-error = Ekspor lembar koreksi gagal: { $error }
 cmd-file-worksheet-no-corrections = { $name } tidak memiliki koreksi untuk diekspor
+cmd-file-worksheet-only-unread-corrections = { $name } tidak memiliki koreksi yang dapat dibaca versi ini: { $count } catatan koreksinya disimpan apa adanya tetapi tidak dapat diekspor
+cmd-file-worksheet-leaves-out-unread = Lembar koreksi { $name } tidak menyertakan { $count } catatan koreksi yang tidak dapat dibaca versi ini; catatan itu tetap di proyek apa adanya
 state-export-corrections-worksheet = Ekspor Lembar Koreksi
 
 ## Jobs strings
@@ -2134,13 +2153,17 @@ object-edit-vertices = Verteks
 omf-element-name-has-count-tie = Elemen '{ $name }' memiliki { $count } sambungan yang menyebut lubang yang tidak lagi dimilikinya
 omf-element-name-has-count-unreadable = Elemen '{ $name }' memiliki { $count } working section yang tidak terbaca; working section tersebut dikecualikan
 omf-element-name-has-count-unreadable-strat = Elemen '{ $name }' memiliki { $count } kolom stratigrafi yang tidak terbaca; kolom itu dilewati
-omf-element-name-has-count-as-logged = Elemen '{ $name }' memiliki { $count } nilai as-logged yang tidak dapat dibaca atau ditempatkan; nilai itu dilewati
+omf-element-name-has-count-as-logged = Elemen '{ $name }' memiliki { $count } nilai as-logged yang tidak dapat dibaca atau ditempatkan; nilai itu disimpan tetapi tidak diterapkan
+omf-element-name-strat-field-unreadable = Elemen '{ $name }' memiliki bidang stratigrafi yang tidak terbaca; bidang itu dilewati
+omf-element-name-color-stops-unreadable = Elemen '{ $name }' memiliki terlalu sedikit titik warna untuk menggambar rampa; titik warna dari preset digunakan
+omf-element-name-color-unreadable = Elemen '{ $name }' memiliki pengaturan warna yang tidak dapat dibaca; set dibuka dengan warna bawaan, dan bagian kerja serta kolom strat-nya dilewati
+omf-element-name-geophysics-unreadable = Elemen '{ $name }' memiliki tautan geofisika yang tidak terbaca; tautan itu dilewati
 omf-element-unsupported-section = Elemen '{ $name }' menyebut seksi '{ $section }' yang tidak dapat menampilkan jenis item ini pada build ini
 omf-element-name-names-unknown-section = Elemen '{ $name }' menyebut seksi tidak dikenal '{ $section }'
 omf-quality-mark-unreadable = Tanda kualitas pada permukaan { $name } tidak dapat dibaca; permukaan dibuka sebagai permukaan biasa
 omf-layer-quality-mark-unreadable = Tanda kualitas pada lapisan { $name } tidak dapat dibaca; titiknya dibuka sebagai titik biasa
 omf-ignoring-colour-map-omf-attribute = Mengabaikan peta warna pada atribut OMF '{ $attribute }': { $error }
-omf-correction-records-dropped = { $count } catatan koreksi dari { $name } tidak dapat dibaca dan dikecualikan
+omf-correction-records-unread = { $count } catatan koreksi milik { $name } tidak dapat dibaca: disimpan apa adanya tetapi tidak diterapkan
 omf-corrections-unreadable = Catatan koreksi dari { $name } tidak dapat dibaca dan dikecualikan
 omf-mining-data-exported-incline = Data pertambangan yang diekspor oleh Incline
 omf-import = Impor OMF
@@ -4961,6 +4984,7 @@ explorer-selected-count = { $count } Dipilih
 explorer-show = Tampilkan
 input-could-not-slice-name-error = tidak dapat meng-clip { $name }: { $error }
 io-drill-holes = Lubang bor
+io-drill-csv-preview-failed = { $file } tidak dapat dibaca: { $error }
 io-fixed-block-size = Ukuran blok tetap
 io-no-column-mapped-these = Tidak ada kolom yang dipetakan ke sumbu ini: setiap blok memakai ukuran ini sebagai gantinya.
 menu-build-solid-surfaces = Bangun Solid dari Permukaan...

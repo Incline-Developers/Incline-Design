@@ -30,8 +30,8 @@ use crate::{
             StoredColorTransferFunction, compute_world_bounds, opaque_irregular_surface_block_count, opaque_surface_block_count,
         },
         drill_hole::{
-            DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset, OrientationSource, skipped_strat_columns,
-            skipped_working_sections,
+            DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset, OrientationSource, saved_too_few_color_stops,
+            skipped_strat_columns, skipped_strat_field, skipped_working_sections,
         },
         formats::{
             block_column::{BlockColumn, BlockColumnBuilder},
@@ -98,6 +98,10 @@ const META_ORIENTATION_SOURCES: &str = "incline:orientation_sources";
 /// As-logged values of corrected intervals, keyed like the render ranges: per
 /// hole, pairs of interval index and what the site sent.
 const META_LOGGED_INTERVALS: &str = "incline:logged_intervals";
+/// As-logged values a build could not read or place, apart from the logged
+/// intervals so no build applies them to a row: each the hole key it was saved
+/// under and the value as saved.
+const META_UNREAD_LOGGED: &str = "incline:unread_logged_intervals";
 /// The dataset's correction records, whatever their status.
 const META_CORRECTIONS: &str = "incline:corrections";
 /// The category on every drillhole row naming the hole it belongs to.
@@ -158,6 +162,7 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_RENDER_RANGES,
     META_ORIENTATION_SOURCES,
     META_LOGGED_INTERVALS,
+    META_UNREAD_LOGGED,
     META_CORRECTIONS,
     META_TIE_INS,
     META_CHARGES,
@@ -1571,7 +1576,8 @@ fn lattice_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
 /// as one line set, and intervals as one line set whose segments are the
 /// intervals themselves. Every row carries a `Hole` category naming its hole,
 /// so the dataset regroups exactly, and the arrays are the only copy of the
-/// data - nothing is repeated in metadata.
+/// data. Metadata holds what the arrays cannot, such as corrections, never
+/// a second copy of a row.
 fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenDrillHoleDataset) -> Result<Option<omf_crate::Element>> {
     use omf_crate::{Attribute, Element, LineSet, Location, PointSet};
 
@@ -1747,8 +1753,23 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     if !logged_intervals.is_empty() {
         put(&mut element, META_LOGGED_INTERVALS, Value::Object(logged_intervals));
     }
-    if !open.dataset.corrections.is_empty() {
-        put(&mut element, META_CORRECTIONS, serde_json::to_value(&open.dataset.corrections)?);
+    if !open.dataset.unread_logged.is_empty() {
+        let kept = open.dataset.unread_logged.iter().map(|(key, value)| json!([key, value])).collect();
+        put(&mut element, META_UNREAD_LOGGED, Value::Array(kept));
+    }
+    if !open.dataset.corrections.is_empty() || !open.dataset.unread_corrections.is_empty() {
+        // Unread records go back where they were saved: before the readable
+        // record whose index is at least their count, else at the end.
+        let mut unread = open.dataset.unread_corrections.iter().peekable();
+        let mut records = Vec::new();
+        for (index, correction) in open.dataset.corrections.iter().enumerate() {
+            while let Some((_, record)) = unread.next_if(|(count, _)| *count <= index) {
+                records.push(record.clone());
+            }
+            records.push(serde_json::to_value(correction)?);
+        }
+        records.extend(unread.map(|(_, record)| record.clone()));
+        put(&mut element, META_CORRECTIONS, Value::Array(records));
     }
     if !open.dataset.derived_columns.is_empty() {
         put(&mut element, META_DERIVED_COLUMNS, serde_json::to_value(&open.dataset.derived_columns)?);
@@ -2580,12 +2601,15 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
 
     /// Warn once when a drill-hole dataset's saved `incline:style` JSON named
     /// working sections the lenient reader had to pass over, so a malformed
-    /// entry stays visible without resetting the colours saved beside it.
+    /// entry stays visible without resetting the colours saved beside it. A
+    /// colour state unreadable as a whole is reported by the next function.
     /// Shared by the deferred and resident drill-hole read paths: `walk`
     /// sends a given element through exactly one of them per decode, so
     /// calling this from both never doubles the warning for one load.
     fn warn_skipped_working_sections(&mut self, name: &str, style: Option<&Value>) {
-        let Some(color) = style.and_then(|style| style.get("color")) else { return };
+        let Some(color) = style.and_then(|style| style.get("color")).filter(|color| !drill_color_unreadable(color)) else {
+            return;
+        };
         let count = skipped_working_sections(color);
         if count > 0 {
             self.bundle
@@ -2597,6 +2621,28 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             self.bundle
                 .warnings
                 .push(tr!("omf-element-name-has-count-unreadable-strat", name = name.to_string(), count = count.to_string()));
+        }
+    }
+
+    /// Warn for each other part of a drill-hole dataset's saved style the
+    /// lenient readers had to pass over or replace, once per load as above.
+    fn warn_unreadable_style_parts(&mut self, name: &str, style: Option<&Value>) {
+        let name = name.to_string();
+        if let Some(color) = style.and_then(|style| style.get("color")) {
+            // A state lost as a whole is said once, not part by part.
+            if drill_color_unreadable(color) {
+                self.bundle.warnings.push(tr!("omf-element-name-color-unreadable", name = name.clone()));
+            } else {
+                if skipped_strat_field(color) {
+                    self.bundle.warnings.push(tr!("omf-element-name-strat-field-unreadable", name = name.clone()));
+                }
+                if saved_too_few_color_stops(color) {
+                    self.bundle.warnings.push(tr!("omf-element-name-color-stops-unreadable", name = name.clone()));
+                }
+            }
+        }
+        if geophysics_unreadable(style) {
+            self.bundle.warnings.push(tr!("omf-element-name-geophysics-unreadable", name = name));
         }
     }
 
@@ -2657,6 +2703,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             let section = self.element_section(element, MemberKind::DrillHole);
             let folder = self.element_folder(element, section);
             self.warn_skipped_working_sections(&name, style);
+            self.warn_unreadable_style_parts(&name, style);
             self.bundle.drill_holes.push(ImportedDrillHoles {
                 preferred_id,
                 source_name,
@@ -2674,7 +2721,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     name,
                     dataset: Arc::new(DrillHoleDataset::new(Vec::new())),
                 },
-                color: style_value(style, "color").unwrap_or_else(crate::model::drill_hole::DrillColorState::for_logged_holes),
+                color: style_drill_color(style),
                 geophysics: style_geophysics(style),
                 folder,
                 section,
@@ -4122,53 +4169,63 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 }
             }
         }
-        // What cannot be read or placed is counted and reported once.
-        let mut unplaced_logged = 0_usize;
+        // What cannot be read or placed is kept with its hole key and never
+        // applied. A save writes it back apart from the readable pairs, under
+        // its own key, so no slot is ever applied to a row and the value
+        // comes back word for word.
+        let mut unread_logged: Vec<(String, Value)> = Vec::new();
         if let Some(logged) = element.metadata.get(META_LOGGED_INTERVALS) {
             match logged.as_object() {
-                None => unplaced_logged += 1,
+                None => unread_logged.push((String::new(), logged.clone())),
                 Some(logged) => {
                     for (index, pairs) in logged {
-                        let Some(pairs) = pairs.as_array() else {
-                            unplaced_logged += 1;
+                        let Some(list) = pairs.as_array() else {
+                            unread_logged.push((index.clone(), pairs.clone()));
                             continue;
                         };
                         let Some(hole) = index.parse::<usize>().ok().and_then(|index| holes.get_mut(index)) else {
-                            unplaced_logged += pairs.len();
+                            unread_logged.extend(list.iter().map(|pair| (index.clone(), pair.clone())));
                             continue;
                         };
-                        for pair in pairs {
+                        for pair in list {
                             match <(usize, crate::model::drill_hole::LoggedInterval)>::deserialize(pair) {
                                 Ok((slot, logged)) if slot < hole.intervals.len() => hole.intervals[slot].logged = Some(logged),
-                                _ => unplaced_logged += 1,
+                                _ => unread_logged.push((index.clone(), pair.clone())),
                             }
                         }
                     }
                 }
             }
         }
-        if unplaced_logged > 0 {
-            self.bundle.warnings.push(tr!(
-                "omf-element-name-has-count-as-logged",
-                name = element.name.to_string(),
-                count = unplaced_logged.to_string()
-            ));
+        // Values an earlier build kept: carried over as read, never applied.
+        // An entry of another shape, or a value that is no list, is kept whole
+        // under the empty key and goes back as `["", entry]`.
+        match element.metadata.get(META_UNREAD_LOGGED) {
+            None => {}
+            Some(Value::Array(kept)) => {
+                for entry in kept {
+                    match <(String, Value)>::deserialize(entry) {
+                        Ok(entry) => unread_logged.push(entry),
+                        Err(_) => unread_logged.push((String::new(), entry.clone())),
+                    }
+                }
+            }
+            Some(whole) => unread_logged.push((String::new(), whole.clone())),
         }
         if holes.is_empty() {
             return Ok(None);
         }
         let mut dataset = DrillHoleDataset::new(holes);
-        // Read record by record: one that cannot be read is left out and
-        // counted, never the whole list with it.
+        dataset.unread_logged = unread_logged;
+        // Read record by record: one that cannot be read is kept as saved,
+        // never applied, and never costs the list the others.
         match element.metadata.get(META_CORRECTIONS).map(Value::as_array) {
             Some(Some(stored)) => {
-                let read: Vec<_> = stored.iter().map(crate::model::drill_hole::Correction::deserialize).collect();
-                let dropped = read.iter().filter(|record| record.is_err()).count();
-                dataset.corrections = read.into_iter().filter_map(Result::ok).collect();
-                if dropped > 0 {
-                    self.bundle
-                        .warnings
-                        .push(crate::i18n::tr!("omf-correction-records-dropped", count = dropped.to_string(), name = element.name.clone()));
+                for record in stored {
+                    match crate::model::drill_hole::Correction::deserialize(record) {
+                        Ok(correction) => dataset.corrections.push(correction),
+                        Err(_) => dataset.unread_corrections.push((dataset.corrections.len(), record.clone())),
+                    }
                 }
             }
             // Corrections that are not a list cannot be counted: all are lost.
@@ -4214,6 +4271,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let folder = self.element_folder(element, section);
         let style = element.metadata.get(META_STYLE);
         self.warn_skipped_working_sections(element_name(element), style);
+        self.warn_unreadable_style_parts(element_name(element), style);
         Ok(Some(ImportedDrillHoles {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
@@ -4228,7 +4286,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             },
             deferred: None,
             is_loaded: style_loaded(style),
-            color: style_value(style, "color").unwrap_or_else(crate::model::drill_hole::DrillColorState::for_logged_holes),
+            color: style_drill_color(style),
             geophysics: style_geophysics(style),
             folder,
             section,
@@ -4788,6 +4846,26 @@ fn style_f32(style: Option<&Value>, key: &str) -> Option<f32> {
 
 fn style_value<T: serde::de::DeserializeOwned>(style: Option<&Value>, key: &str) -> Option<T> {
     T::deserialize(style?.get(key)?).ok()
+}
+
+/// A drill-hole dataset's colour state, its ramp never left with too few
+/// stops to edit.
+fn style_drill_color(style: Option<&Value>) -> crate::model::drill_hole::DrillColorState {
+    let mut color = style_value(style, "color").unwrap_or_else(crate::model::drill_hole::DrillColorState::for_logged_holes);
+    color.settle_stops();
+    color
+}
+
+/// Whether a saved colour state is present but cannot be read as a whole.
+fn drill_color_unreadable(color: &Value) -> bool {
+    !color.is_null() && crate::model::drill_hole::DrillColorState::deserialize(color).is_err()
+}
+
+/// Whether the style saved a geophysics link that cannot be read.
+fn geophysics_unreadable(style: Option<&Value>) -> bool {
+    style
+        .and_then(|style| style.get("geophysics"))
+        .is_some_and(|saved| !saved.is_null() && crate::model::geophysics::GeophysicsLink::deserialize(saved).is_err())
 }
 
 /// A drill-hole dataset's geophysics link; a project saved before links has

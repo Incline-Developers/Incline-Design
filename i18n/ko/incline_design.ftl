@@ -439,7 +439,7 @@ borehole-inspector-flag-repeat = 반복됨
 borehole-inspector-flagged-holes = 표시된 시추공 ({ $count })
 borehole-inspector-flags-first-shown = 표시 { $count }개 중 처음 { $shown }개를 나열했습니다.
 borehole-inspector-file-not-where-was-linked = { $file }이(가) 연결된 위치에 없습니다.
-borehole-inspector-guessed-name = 이름으로 추정됨
+borehole-inspector-guessed-name = 가져오기 값, 없으면 이름으로
 borehole-inspector-hold-hole-while-you-work = 주변 시추공을 작업하는 동안 이 시추공을 고정합니다.
 borehole-inspector-holding-hole-click-follow-selection = 이 시추공을 고정 중입니다. 클릭하면 다시 선택을 따라갑니다.
 borehole-inspector-hole-code-not-in-column = 세트의 층서 열에 없음
@@ -1012,6 +1012,7 @@ cmd-selection-deleted-vertex = 폴리라인 { $object_id }에서 정점 { $verte
 cmd-strat-check-checking = { $name }의 층서 열을 검증하는 중…
 cmd-strat-check-failed = 층서 열 검증 실패: { $error }
 cmd-strat-check-summary = { $name }의 { $field }을(를) 검증했습니다: 시추공 { $holes }개, 표시됨 { $flagged }개
+cmd-strat-check-summary-rising = { $name }의 { $field }을(를) 검증했습니다: 시추공 { $holes }개, 표시됨 { $flagged }개. 궤적이 위로 향하는 시추공 { $rising }개는 제외했습니다
 cmd-strat-check-too-many-codes = { $name }의 { $field }에는 순서를 매기기에 코드가 너무 많습니다
 cmd-strat-import-filled = { $field }의 층서 열을 채웠습니다: 이름 { $names }개, { $checked }에서 시추공 { $flagged }개가 맞지 않습니다. 검증을 눌러 확인하세요.
 cmd-strat-import-filled-groups = { $field }의 층서 열을 채웠습니다: { $groups }개 그룹에 이름 { $names }개, { $checked }에서 시추공 { $flagged }개가 맞지 않습니다. 검증을 눌러 확인하세요.
@@ -1428,8 +1429,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file }가 경사 또는 경사각
 csv-drill-hole-file-has-more-than-one-total-depth = { $file }가 총 심도 열을 두 번 지정합니다
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [1] { $file }: 총 심도 { $count }개가 비어 있거나 0, 음수, 데이터 없음 값 또는 숫자가 아니었습니다. 해당 공구는 총 심도 없이 유지됩니다
-       *[other] { $file }: 총 심도 { $count }개가 비어 있거나 0, 음수, 데이터 없음 값 또는 숫자가 아니었습니다. 해당 공구들은 총 심도 없이 유지됩니다
+        [1] { $file }: 총 심도 { $count }개가 비어 있거나 데이터 없음 값이었습니다. 해당 공구는 총 심도 없이 유지됩니다
+       *[other] { $file }: 총 심도 { $count }개가 비어 있거나 데이터 없음 값이었습니다. 해당 공구들은 총 심도 없이 유지됩니다
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [1] { $file }: 총 심도 { $count }개가 0, 음수 또는 숫자가 아니었습니다. 해당 공구는 총 심도 없이 유지됩니다
+       *[other] { $file }: 총 심도 { $count }개가 0, 음수 또는 숫자가 아니었습니다. 해당 공구들은 총 심도 없이 유지됩니다
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1445,9 +1451,15 @@ csv-drill-hole-row-has-no-geometry = { $file } { $row }행: 완전한 XYZ 또는
 csv-drill-hole-row-invalid-interval = { $file } { $row }행: DHID '{ $dhid }'의 구간 { $from }..{ $to }이(가) 잘못되었습니다
 csv-drill-hole-row-zero-length-segment = { $file } { $row }행: DHID '{ $dhid }'의 { $depth } 위치에 길이가 0인 구간이 있습니다
 csv-drill-hole-row-unreadable-value = { $file } { $row }행: 읽을 수 없는 값이 있습니다
+csv-drill-hole-row-inconsistent-diameter = DHID '{ $dhid }'의 직경이 일치하지 않습니다
+csv-drill-hole-row-wrong-width = { $file } { $row }행: 열이 { $found }개입니다(필요 { $expected }개)
+csv-drill-hole-row-blank-required-value = { $file } { $row }행: 필수 값이 비어 있습니다
+csv-drill-hole-row-invalid-number = { $file } { $row }행: 숫자 '{ $value }'이(가) 올바르지 않습니다
 csv-drill-hole-csv-is-wide-text = CSV가 UTF-16 또는 UTF-32 텍스트입니다. UTF-8로 저장한 후 다시 가져오세요
 csv-drill-hole-csv-holds-nul-bytes = CSV 전체에 NUL 바이트가 있어 UTF-8 텍스트가 아닙니다. UTF-16 또는 UTF-32로 작성된 경우 UTF-8로 저장한 후 다시 가져오세요
 csv-drill-hole-overlap-field-summary = { $field }: { $count }개 시추공, 예: { $examples }
+csv-drill-hole-codes-differ-only-by-case = 대소문자만 다른 코드는 별도의 코드로 유지됩니다: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = 5 초과
 csv-geophysics-below-0-5 = 0.5 미만
 csv-geophysics-count-more = (+{ $count }개 더)
@@ -1457,6 +1469,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = CSV에 닫히지 않은 따�
 csv-geophysics-curve-file-was-left-out = { $file }의 { $curve }이(가) 제외되었습니다. 측정값 대부분이 { $side }이어서 중앙값이 0.5~5 g/cc 범위를 벗어나며 단위가 잘못된 것으로 보입니다(g/cc 필요). Incline은 단위를 변환하지 않습니다. 내보내기를 수정한 후 다시 연결하세요
 csv-geophysics-file-empty = { $file }이(가) 비어 있습니다
 csv-geophysics-file-has-no-curve-no = { $file }에 곡선이 없습니다. 시추공 ID와 심도 외에 숫자가 있는 열이 없습니다
+csv-geophysics-file-has-two-curves-one-name = { $file }에 하나의 곡선으로 읽히는 곡선 열이 두 개 있습니다, { $first }와 { $second }: 하나의 이름을 바꾼 뒤 다시 연결하세요
+csv-geophysics-file-has-no-rows-known-holes = { $file }에 데이터셋의 어느 시추공에 대한 행도 없습니다: 시추공 ID를 확인한 뒤 다시 연결하세요
 csv-geophysics-file-mapping-has-mapped-columns = { $file } 매핑에는 열이 { $mapped }개 있고, CSV에는 { $found }개 있습니다
 csv-geophysics-file-no-longer-matches-its = { $file }이(가) 더 이상 인덱스와 일치하지 않습니다. 다시 연결하세요
 csv-geophysics-file-not-grouped-hole-its = { $file }이(가) 시추공별로 그룹화되어 있지 않습니다. 시추공의 행이 너무 많은 구간으로 나뉘어 있습니다. 시추공 ID, 심도 순으로 정렬한 후 다시 연결하세요
@@ -1906,10 +1920,12 @@ files-xy-grid-options = XY 그리드 옵션
 geophysics-checking-geophysics-files = 물리탐사 파일 확인 중
 geophysics-downhole-geophysics-name-could-not = '{ $name }'의 공내 물리탐사를 연결할 수 없습니다: { $error }
 geophysics-file-changed = 인덱스를 만든 이후 물리탐사 파일이 변경되었습니다
+geophysics-file-cannot-be-opened = { $file }을(를) 열 수 없습니다: { $error }
 geophysics-file-unreadable = '{ $name }'에 연결된 물리탐사 파일을 { $path }에서 읽을 수 없습니다({ $error }). 데이터 세트의 우클릭 메뉴에서 다시 연결하세요
 geophysics-linked-changed-rereading = '{ $name }'에 연결된 물리탐사 데이터가 인덱스를 만든 이후 변경되어 다시 읽는 중입니다
 geophysics-hole-has-size-mib-geophysics = { $hole }의 물리탐사 행이 { $size } MiB로, 시추공 하나를 읽을 수 있는 한도를 초과합니다
 geophysics-hole-needs-size-mib-its = { $hole }의 물리탐사에 { $size } MiB가 필요하지만 브라우저의 남은 메모리가 부족합니다. 다른 항목을 언로드한 후 이 데이터 세트를 언로드했다가 다시 불러오세요
+geophysics-hole-could-not-be-read = { $hole }을(를) 읽을 수 없습니다: 지구물리 파일을 사용할 수 없습니다
 geophysics-linking-geophysics-name = { $name }에 물리탐사 연결 중
 geophysics-reading-geophysics-hole = { $hole }의 물리탐사 읽는 중
 geophysics-web-could-not-read-name-error = '{ $name }'을(를) 읽을 수 없습니다: { $error }
@@ -2018,6 +2034,7 @@ io-quality-points-file = 품질 파일
 io-quality-points-help = 합성값: 시추공과 탄층마다 한 행에 품질마다 한 열, 또는 시추공·탄층·품질마다 한 행에 품질과 값 열. 탄층과 품질마다 높이 = 값인 점 레이어가 됩니다.
 io-quality-points-long = 시추공·탄층·품질마다 한 행으로 읽었습니다.
 io-quality-points-needs = 시추공 ID, 동거 / X, 북거 / Y, 탄층과 품질 열(또는 품질 이름과 값)을 매핑하세요.
+io-quality-points-short = { $line }행, { $column }열: 이 셀 앞에서 행이 끝납니다. 모든 행에 이 셀이 필요합니다.
 io-quality-points-negative = { $line }행, { $column }열: { $value }는 0보다 작습니다. 품질은 음수가 될 수 없습니다.
 io-quality-points-not-a-number = { $line }행, { $column }열: 숫자가 필요한데 "{ $found }"입니다. 원본 데이터베이스에서 고치세요.
 io-quality-points-unit-clash = { $line }행, { $column }열: { $quality }가 { $first }와 { $second } 양쪽으로 주어졌습니다.
@@ -2029,7 +2046,7 @@ io-quality-role-unit = 단위
 io-quality-role-value = 값
 io-projects = 프로젝트
 io-reset = 재설정
-io-role-reason-also-collar = 이것도 공구처럼 보입니다
+io-role-reason-also-collar = 공구 파일처럼 보입니다
 io-role-reason-collar = 공마다 한 행, 좌표 포함
 io-role-reason-geophysics = 공과 심도, 촘촘한 간격의 측정값
 io-role-reason-interval = 공, 시작과 끝
@@ -2061,6 +2078,8 @@ io-worksheet-writes-two-files = 선택한 이름으로 워크시트를 기록합
 cmd-file-exported-worksheet-path = 정정 워크시트를 { $path }(으)로, 그 옆의 정정을 { $records }(으)로 내보냈습니다
 cmd-file-worksheet-export-failed-error = 정정 워크시트 내보내기 실패: { $error }
 cmd-file-worksheet-no-corrections = { $name }에 내보낼 정정이 없습니다
+cmd-file-worksheet-only-unread-corrections = { $name }에는 이 빌드에서 읽을 수 있는 정정이 없습니다. 정정 기록 { $count }개는 저장된 그대로 보관되지만 내보낼 수 없습니다
+cmd-file-worksheet-leaves-out-unread = { $name }의 정정 워크시트에서 이 빌드가 읽을 수 없는 정정 기록 { $count }개가 제외되었습니다. 해당 기록은 저장된 그대로 프로젝트에 남아 있습니다
 state-export-corrections-worksheet = 정정 워크시트 내보내기
 
 ## Jobs strings
@@ -2168,13 +2187,17 @@ object-edit-vertices = 정점
 omf-element-name-has-count-tie = 요소 '{ $name }'에 더 이상 포함되지 않는 발파공을 지정하는 연결 { $count }개가 있습니다
 omf-element-name-has-count-unreadable = 요소 '{ $name }'에 읽을 수 없는 작업 구간이 { $count }개 있어 제외했습니다
 omf-element-name-has-count-unreadable-strat = 요소 '{ $name }'에 읽을 수 없는 층서 열이 { $count }개 있어 제외되었습니다
-omf-element-name-has-count-as-logged = 요소 '{ $name }'에 읽거나 배치할 수 없는 원본 기록 값이 { $count }개 있어 제외되었습니다
+omf-element-name-has-count-as-logged = 요소 '{ $name }'에 읽거나 배치할 수 없는 원본 기록 값이 { $count }개 있습니다. 값은 보존되지만 적용되지 않습니다
+omf-element-name-strat-field-unreadable = 요소 '{ $name }'에 읽을 수 없는 층서 필드가 있어 제외되었습니다
+omf-element-name-color-stops-unreadable = 요소 '{ $name }'의 색상 정지점이 너무 적어 색상 램프를 그릴 수 없어 프리셋의 정지점을 사용했습니다
+omf-element-name-color-unreadable = 요소 '{ $name }'에 읽을 수 없는 색상 설정이 있어 세트는 기본 색상으로 열리며 작업 구간과 층서 열은 제외되었습니다
+omf-element-name-geophysics-unreadable = 요소 '{ $name }'에 읽을 수 없는 물리탐사 링크가 있어 제외되었습니다
 omf-element-unsupported-section = 요소 '{ $name }'이(가) 이 빌드에서 해당 종류의 항목을 표시할 수 없는 섹션 '{ $section }'을(를) 지정합니다
 omf-element-name-names-unknown-section = 요소 '{ $name }'이(가) 알 수 없는 섹션 '{ $section }'을(를) 지정합니다
 omf-quality-mark-unreadable = 면 { $name }의 품질 표시를 읽지 못했습니다. 일반 면으로 엽니다
 omf-layer-quality-mark-unreadable = 레이어 { $name }의 품질 표시를 읽지 못했습니다. 점은 일반 점으로 엽니다
 omf-ignoring-colour-map-omf-attribute = OMF 속성 '{ $attribute }'의 색상 맵을 무시합니다: { $error }
-omf-correction-records-dropped = { $name }의 정정 레코드 { $count }개를 읽을 수 없어 제외했습니다
+omf-correction-records-unread = { $name }의 수정 기록 { $count }개를 읽을 수 없습니다. 저장된 그대로 보관되지만 적용되지는 않습니다
 omf-corrections-unreadable = { $name }의 정정 레코드를 읽을 수 없어 제외했습니다
 omf-mining-data-exported-incline = Incline에서 내보낸 마이닝 데이터
 omf-import = OMF 가져오기
@@ -4995,6 +5018,7 @@ explorer-selected-count = { $count }개 선택됨
 explorer-show = 표시
 input-could-not-slice-name-error = { $name }을(를) 클립할 수 없습니다: { $error }
 io-drill-holes = 시추공
+io-drill-csv-preview-failed = { $file }을(를) 읽을 수 없습니다: { $error }
 io-fixed-block-size = 고정 블록 크기
 io-no-column-mapped-these = 이 축에 매핑된 열이 없습니다. 모든 블록이 대신 이 크기를 사용합니다.
 menu-build-solid-surfaces = 표면으로 솔리드 생성...

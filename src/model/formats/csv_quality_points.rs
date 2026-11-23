@@ -234,6 +234,8 @@ pub(crate) fn auto_mapping(headers: &[String]) -> QualityMapping {
     let unclaimed = if long { Role::Ignore } else { Role::Value };
     let roles = (0..headers.len())
         .map(|column| match aliases[column] {
+            // A wide file takes its units from the header brackets.
+            Some((Role::Unit, _)) if !long => Role::Ignore,
             Some((role, _)) if best.get(&role).is_some_and(|(_, chosen)| *chosen == column) => role,
             Some(_) => Role::Ignore,
             None if headers[column].trim().is_empty() => Role::Ignore,
@@ -461,6 +463,12 @@ pub(crate) fn parse(bytes: &[u8], mapping: &QualityMapping) -> Result<ParsedQual
         };
         if record.iter().all(|field| field.trim().is_empty()) {
             return Ok(());
+        }
+        // A row that ends before a column it needs is cut short; the Unit
+        // is optional, so a row may end before it.
+        let used = [hole, east, north, seam].into_iter().chain(quality).chain(values.iter().copied());
+        if let Some(missing) = used.filter(|index| *index >= record.len()).min() {
+            return Err(invalid(tr!("io-quality-points-short", line = line.to_string(), column = headers[missing].clone())));
         }
         let cell = |index: usize| record.get(index).unwrap_or("");
         let hole_id = key_text(cell(hole), line, &headers[hole])?;

@@ -354,7 +354,7 @@ impl<'a> DataTable<'a> {
 
 /// The rows measured for the column widths: the first [`WIDTH_SAMPLE`], then
 /// the last `last` of the rest, capped the same, each once.
-fn measured_rows(row_count: usize, last: usize) -> impl Iterator<Item = usize> {
+pub(crate) fn measured_rows(row_count: usize, last: usize) -> impl Iterator<Item = usize> {
     let first = row_count.min(WIDTH_SAMPLE);
     (0..first).chain(row_count.saturating_sub(last.min(WIDTH_SAMPLE)).max(first)..row_count)
 }

@@ -437,7 +437,7 @@ borehole-inspector-flag-repeat = Imerudiwa
 borehole-inspector-flagged-holes = Mashimo yaliyowekewa alama ({ $count })
 borehole-inspector-flags-first-shown = Alama za kwanza { $shown } kati ya { $count } zimeorodheshwa.
 borehole-inspector-file-not-where-was-linked = { $file } haipo mahali ilipounganishwa kutoka.
-borehole-inspector-guessed-name = Imekisiwa kwa jina
+borehole-inspector-guessed-name = Kutoka uagizaji, la sivyo kwa jina
 borehole-inspector-hold-hole-while-you-work = Shikilia shimo hili unapofanya kazi kwenye yale yanayolizunguka.
 borehole-inspector-holding-hole-click-follow-selection = Shimo hili limeshikiliwa. Bofya ili kufuata uteuzi tena.
 borehole-inspector-hole-code-not-in-column = Haipo kwenye safu wima ya seti
@@ -1010,6 +1010,7 @@ cmd-selection-deleted-vertex = Kipeo { $vertex } kimefutwa kutoka mstari wa poin
 cmd-strat-check-checking = Inakagua safu wima ya stratigrafia ya { $name }…
 cmd-strat-check-failed = Ukaguzi wa safu wima ya stratigrafia umeshindwa: { $error }
 cmd-strat-check-summary = { $field } ya { $name } imekaguliwa: mashimo { $holes }, { $flagged } yamewekewa alama
+cmd-strat-check-summary-rising = { $field } ya { $name } imekaguliwa: mashimo { $holes }, { $flagged } yamewekewa alama; mashimo { $rising } yanapanda juu kwenye njia yake na yameachwa nje
 cmd-strat-check-too-many-codes = { $field } ya { $name } ina misimbo mingi mno ya kupangwa
 cmd-strat-import-filled = Safu wima ya stratigrafia imejazwa kwa { $field }: majina { $names }; mashimo { $flagged } yanatofautiana kwenye { $checked }. Kagua ili kupitia.
 cmd-strat-import-filled-groups = Safu wima ya stratigrafia imejazwa kwa { $field }: majina { $names } katika vikundi { $groups }; mashimo { $flagged } yanatofautiana kwenye { $checked }. Kagua ili kupitia.
@@ -1426,8 +1427,13 @@ csv-drill-hole-file-maps-dip-column-twice = { $file } inapanga safu wima ya mter
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } inapanga safu wima ya kina cha jumla mara mbili
 csv-drill-hole-total-depths-left-out =
     { $count ->
-        [one] { $file }: kina cha jumla { $count } kilikuwa tupu, sifuri, hasi, thamani ya kukosa data au si namba; mdomo huo unahifadhiwa bila kina cha jumla
-       *[other] { $file }: vina vya jumla { $count } vilikuwa tupu, sifuri, hasi, thamani za kukosa data au si namba; midomo hiyo inahifadhiwa bila kina cha jumla
+        [one] { $file }: kina cha jumla { $count } kilikuwa tupu au thamani ya kukosa data; mdomo huo unahifadhiwa bila kina cha jumla
+       *[other] { $file }: vina vya jumla { $count } vilikuwa tupu au thamani za kukosa data; midomo hiyo inahifadhiwa bila kina cha jumla
+    }
+csv-drill-hole-total-depths-unusable =
+    { $count ->
+        [one] { $file }: kina cha jumla { $count } kilikuwa sifuri, hasi au si namba; mdomo huo unahifadhiwa bila kina cha jumla
+       *[other] { $file }: vina vya jumla { $count } vilikuwa sifuri, hasi au si namba; midomo hiyo inahifadhiwa bila kina cha jumla
     }
 csv-drill-hole-logged-below-total-depth =
     { $count ->
@@ -1443,9 +1449,15 @@ csv-drill-hole-row-has-no-geometry = { $file } safu { $row } haina jiometri kami
 csv-drill-hole-row-invalid-interval = { $file } safu { $row } ina kipindi batili { $from }..{ $to } kwa DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } safu { $row } ina sehemu yenye urefu sifuri kwenye { $depth } kwa DHID '{ $dhid }'
 csv-drill-hole-row-unreadable-value = { $file } safu { $row } ina thamani isiyosomeka
+csv-drill-hole-row-inconsistent-diameter = Kipenyo kisichoendana kwa DHID '{ $dhid }'
+csv-drill-hole-row-wrong-width = { $file } safu { $row } ina safu wima { $found }; zilitarajiwa { $expected }
+csv-drill-hole-row-blank-required-value = { $file } safu { $row } ina thamani inayohitajika iliyo tupu
+csv-drill-hole-row-invalid-number = { $file } safu { $row } ina namba batili '{ $value }'
 csv-drill-hole-csv-is-wide-text = CSV ni maandishi ya UTF-16 au UTF-32; ihifadhi kama UTF-8 kisha uiingize tena
 csv-drill-hole-csv-holds-nul-bytes = CSV ina baiti za NUL kote, kwa hiyo si maandishi ya UTF-8; ikiwa iliandikwa kama UTF-16 au UTF-32, ihifadhi kama UTF-8 kisha uiingize tena
 csv-drill-hole-overlap-field-summary = { $field } katika visima { $count }, k.m. { $examples }
+csv-drill-hole-codes-differ-only-by-case = Misimbo inayotofautiana kwa herufi kubwa na ndogo pekee inabaki kama misimbo tofauti: { $summary }
+csv-drill-hole-case-twin-field-summary = { $field }: { $codes }
 csv-geophysics-above-5 = juu ya 5
 csv-geophysics-below-0-5 = chini ya 0.5
 csv-geophysics-count-more = (+{ $count } zaidi)
@@ -1455,6 +1467,8 @@ csv-geophysics-csv-has-unterminated-quoted-field = CSV ina sehemu iliyo ndani ya
 csv-geophysics-curve-file-was-left-out = { $curve } katika { $file } iliachwa: usomaji wake mwingi ni { $side }, kwa hivyo wastani wake uko nje ya 0.5 hadi 5 g/cc na kipimo chake kinaonekana si sahihi (g/cc inatarajiwa). Incline haibadilishi vipimo; sahihisha uhamishaji kisha uunganishe tena
 csv-geophysics-file-empty = { $file } ni tupu
 csv-geophysics-file-has-no-curve-no = { $file } haina mkunjo: hakuna safu wima mbali na kitambulisho cha shimo na kina yenye nambari
+csv-geophysics-file-has-two-curves-one-name = { $file } ina safu mbili za mkunjo zinazosomwa kama mkunjo mmoja, { $first } na { $second }: badilisha jina la moja kisha unganisha tena
+csv-geophysics-file-has-no-rows-known-holes = { $file } haina safu za shimo lolote la seti ya data: angalia vitambulisho vya mashimo kisha unganisha tena
 csv-geophysics-file-mapping-has-mapped-columns = Uoanishaji wa { $file } una safu wima { $mapped }, CSV ina { $found }
 csv-geophysics-file-no-longer-matches-its = { $file } hailingani tena na kielezo chake: iunganishe tena
 csv-geophysics-file-not-grouped-hole-its = { $file } haijapangwa kwa shimo: safu za mashimo yake zimegawanywa katika mfululizo mwingi mno. Ipange kwa kitambulisho cha shimo, kisha kina, na uiunganishe tena
@@ -1904,10 +1918,12 @@ files-xy-grid-options = Chaguzi za Gridi ya XY
 geophysics-checking-geophysics-files = Inakagua faili za jiofizikia
 geophysics-downhole-geophysics-name-could-not = Jiofizikia ya ndani ya shimo ya '{ $name }' haikuweza kuunganishwa: { $error }
 geophysics-file-changed = Faili ya jiofizikia imebadilika tangu kielezo chake kilipotengenezwa
+geophysics-file-cannot-be-opened = { $file } haiwezi kufunguliwa: { $error }
 geophysics-file-unreadable = Faili ya jiofizikia iliyounganishwa na '{ $name }' haiwezi kusomwa kwenye { $path } ({ $error }); iunganishe tena kutoka menyu ya kubofya kulia ya seti ya data
 geophysics-linked-changed-rereading = Jiofizikia iliyounganishwa na '{ $name }' imebadilika tangu kielezo chake kilipotengenezwa; inaisoma tena
 geophysics-hole-has-size-mib-geophysics = { $hole } ina MiB { $size } za safu za jiofizikia, zaidi ya kiasi ambacho shimo husomwa
 geophysics-hole-needs-size-mib-its = { $hole } inahitaji MiB { $size } kwa jiofizikia yake, zaidi ya kilichobaki kwenye kivinjari: ondoa vipengele vingine, kisha ondoa na upakie seti hii ya data tena
+geophysics-hole-could-not-be-read = { $hole } haikuweza kusomwa: faili yake ya jiofizikia haipatikani
 geophysics-linking-geophysics-name = Inaunganisha jiofizikia na { $name }
 geophysics-reading-geophysics-hole = Inasoma jiofizikia ya { $hole }
 geophysics-web-could-not-read-name-error = Imeshindwa kusoma '{ $name }': { $error }
@@ -2016,6 +2032,7 @@ io-quality-points-file = Faili ya ubora
 io-quality-points-help = Thamani zilizojumuishwa: safu moja kwa kila kisima na mshipa yenye safu wima kwa kila ubora, au safu moja kwa kila kisima, mshipa na ubora zenye safu wima Ubora na Thamani. Kila mshipa na ubora huwa tabaka la pointi kwenye urefu = thamani.
 io-quality-points-long = Imesomwa kama safu moja kwa kila kisima, mshipa na ubora.
 io-quality-points-needs = Panga Kitambulisho cha Kisima, Mashariki / X, Kaskazini / Y, Mshipa na safu wima ya ubora (au Jina la ubora na Thamani).
+io-quality-points-short = Mstari { $line }, safu wima { $column }: safu inaisha kabla ya seli hii, na kila safu inaihitaji.
 io-quality-points-negative = Mstari { $line }, safu wima { $column }: { $value } iko chini ya 0, na ubora hauwezi kuwa hasi.
 io-quality-points-not-a-number = Mstari { $line }, safu wima { $column }: namba ilitarajiwa, imepatikana "{ $found }". Isafishe katika hifadhidata ya chanzo.
 io-quality-points-unit-clash = Mstari { $line }, safu wima { $column }: { $quality } imetolewa kwa { $first } na pia { $second }.
@@ -2027,7 +2044,7 @@ io-quality-role-unit = Kipimo
 io-quality-role-value = Thamani
 io-projects = Miradi
 io-reset = Weka upya
-io-role-reason-also-collar = Pia inaonekana kama kola
+io-role-reason-also-collar = Inaonekana kama faili ya kola
 io-role-reason-collar = Safu moja kwa kila shimo, pamoja na viwianishi
 io-role-reason-geophysics = Shimo na kina pamoja na vipimo kwa hatua ndogo
 io-role-reason-interval = Shimo, kutoka na hadi
@@ -2059,6 +2076,8 @@ io-worksheet-writes-two-files = Huandika karatasi kwa jina unalochagua, mstari m
 cmd-file-exported-worksheet-path = Karatasi ya masahihisho imehamishwa kwenda { $path } na masahihisho kando yake kwenda { $records }
 cmd-file-worksheet-export-failed-error = Kuhamisha karatasi ya masahihisho kumeshindwa: { $error }
 cmd-file-worksheet-no-corrections = { $name } haina masahihisho ya kuhamisha
+cmd-file-worksheet-only-unread-corrections = { $name } haina masahihisho ambayo toleo hili linaweza kusoma: rekodi zake { $count } za masahihisho zimehifadhiwa kama zilivyohifadhiwa lakini haziwezi kuhamishwa
+cmd-file-worksheet-leaves-out-unread = Jedwali la masahihisho la { $name } linaacha rekodi { $count } za masahihisho ambazo toleo hili haliwezi kusoma; zinabaki kwenye mradi kama zilivyohifadhiwa
 state-export-corrections-worksheet = Hamisha Karatasi ya Masahihisho
 
 ## Jobs strings
@@ -2166,13 +2185,17 @@ object-edit-vertices = Vipeo
 omf-element-name-has-count-tie = Kipengele '{ $name }' kina viunganishi { $count } vinavyotaja mashimo ambayo hakina tena
 omf-element-name-has-count-unreadable = Kipengele '{ $name }' kina sehemu { $count } za kazi zisizosomeka; ziliachwa
 omf-element-name-has-count-unreadable-strat = Kipengele '{ $name }' kina safu wima { $count } za tabaka zisizosomeka; ziliachwa
-omf-element-name-has-count-as-logged = Kipengele '{ $name }' kina thamani { $count } za jinsi zilivyorekodiwa ambazo hazikuweza kusomwa au kuwekwa; ziliachwa
+omf-element-name-has-count-as-logged = Kipengele '{ $name }' kina thamani { $count } za jinsi zilivyorekodiwa ambazo hazikuweza kusomwa au kuwekwa; zimehifadhiwa lakini hazitumiki
+omf-element-name-strat-field-unreadable = Kipengele '{ $name }' kina sehemu ya tabaka isiyosomeka; imeachwa
+omf-element-name-color-stops-unreadable = Kipengele '{ $name }' kina vituo vichache mno vya rangi kuchora mteremko; vituo vya mpangilio awali vilitumika
+omf-element-name-color-unreadable = Kipengele '{ $name }' kina mipangilio ya rangi isiyosomeka; seti hufunguka na rangi chaguomsingi, na sehemu zake za kazi na safu wima za tabaka ziliachwa
+omf-element-name-geophysics-unreadable = Kipengele '{ $name }' kina kiungo cha jiofizikia kisichosomeka; kimeachwa
 omf-element-unsupported-section = Kipengele '{ $name }' kinataja sehemu '{ $section }' ambayo haiwezi kuonyesha aina hii ya kipengele katika toleo hili
 omf-element-name-names-unknown-section = Kipengele '{ $name }' kinataja sehemu isiyojulikana '{ $section }'
 omf-quality-mark-unreadable = Alama ya ubora kwenye uso { $name } haikusomeka; unafunguka kama uso wa kawaida
 omf-layer-quality-mark-unreadable = Alama ya ubora kwenye tabaka { $name } haikusomeka; pointi zake zinafunguka kama pointi za kawaida
 omf-ignoring-colour-map-omf-attribute = Inapuuza ramani ya rangi kwenye sifa ya OMF '{ $attribute }': { $error }
-omf-correction-records-dropped = Rekodi { $count } za sahihisho za { $name } hazikuweza kusomwa na ziliachwa
+omf-correction-records-unread = Rekodi { $count } za marekebisho za { $name } hazikuweza kusomwa: zimehifadhiwa kama zilivyohifadhiwa lakini hazitumiki
 omf-corrections-unreadable = Rekodi za sahihisho za { $name } hazikuweza kusomwa na ziliachwa
 omf-mining-data-exported-incline = Data ya madini iliyohamishwa na Incline
 omf-import = Uingizaji wa OMF
@@ -4993,6 +5016,7 @@ explorer-selected-count = { $count } Zimechaguliwa
 explorer-show = Onyesha
 input-could-not-slice-name-error = haikuweza kukata { $name }: { $error }
 io-drill-holes = Mashimo ya uchimbaji
+io-drill-csv-preview-failed = Faili { $file } haikuweza kusomwa: { $error }
 io-fixed-block-size = Ukubwa thabiti wa kitalu
 io-no-column-mapped-these = Hakuna safu wima iliyolinganishwa na shoka hizi - kila kitalu hutumia ukubwa huu badala yake.
 menu-build-solid-surfaces = Jenga Kigumu kutoka kwenye Nyuso...
