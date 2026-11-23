@@ -657,6 +657,38 @@ pub(crate) fn panel_grid(rings: &[Vec<DVec2>], size: f64) -> Vec<Vec<DVec2>> {
     columns.chain(rows).collect()
 }
 
+/// Which edges of `faces`' rings are the panel grid's: those along a grid
+/// line `size` apart with some face on both sides, so neither the ground's
+/// own edge where it happens to fall on a grid line nor an edge of ground
+/// left out of `faces`. Per face, per ring, per edge from each point to the
+/// next.
+pub(crate) fn panel_edges(faces: &[Face], size: f64) -> Vec<Vec<Vec<bool>>> {
+    /// How near a grid line an edge must lie, and how far either side of it
+    /// the ground is looked for, in metres.
+    const ON_LINE_M: f64 = 1e-3;
+    const SIDE_M: f64 = 0.05;
+    let on_grid = |value: f64| ((value / size).round() * size - value).abs() < ON_LINE_M;
+    let covered = |point: DVec2| faces.iter().any(|face| point_in_face(face, point));
+    faces
+        .iter()
+        .map(|face| {
+            face.iter()
+                .map(|ring| {
+                    (0..ring.len())
+                        .map(|index| {
+                            let (a, b) = (ring[index], ring[(index + 1) % ring.len()]);
+                            let along = (a.x - b.x).abs() < ON_LINE_M && on_grid(a.x) && on_grid(b.x) || (a.y - b.y).abs() < ON_LINE_M && on_grid(a.y) && on_grid(b.y);
+                            let Some(normal) = (b - a).try_normalize().map(DVec2::perp) else { return false };
+                            let middle = (a + b) * 0.5;
+                            along && covered(middle + normal * SIDE_M) && covered(middle - normal * SIDE_M)
+                        })
+                        .collect()
+                })
+                .collect()
+        })
+        .collect()
+}
+
 pub(crate) fn cut_lines(objects: &[crate::model::Object]) -> Vec<Vec<DVec2>> {
     objects
         .iter()

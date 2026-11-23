@@ -597,6 +597,10 @@ pub(crate) struct BlastOutline {
     pub(crate) blast: Option<String>,
     /// Out of mining, on its own or with the bench or blast it lies in.
     pub(crate) excluded: bool,
+    /// Per ring, whether each edge (from each point to the next) is the
+    /// panel grid's rather than a drawn cut's or the ground's edge, so it is
+    /// drawn as automatic. Empty where the bench has no panels.
+    pub(crate) panel_edges: Vec<Vec<bool>>,
 }
 
 /// What the Blasting step borrows from the rest of the editor while it is

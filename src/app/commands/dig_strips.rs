@@ -441,6 +441,7 @@ impl crate::app::App<'_> {
                     blast,
                     excluded,
                     rings: face.iter().map(|ring| ring.iter().map(|p| DVec3::new(p.x, p.y, item.top)).collect()).collect(),
+                    panel_edges: Vec::new(),
                 });
             }
             // Grouped by blast, numbered blasts in number order, as the
