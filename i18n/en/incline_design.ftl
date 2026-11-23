@@ -2061,11 +2061,10 @@ planning-copy-cuts-title-benches = Copy lines to benches
 planning-copy-cuts-title-flitches = Copy lines to flitches
 planning-copy-cuts-confirm = Copy to { $count }
 planning-panel-size = Panel size
-planning-draw-panels = Draw Panels on Undrawn Benches
-planning-panels-help = Draws a square grid of cut lines this far apart on every bench of this solid that has no cut lines, so each panel is a blast a long-term schedule can order. They are ordinary cut lines, edited and undone like any other.
-planning-panels-not-ready = Panels are drawn over the dig blocks, so the Solids pipeline has to have run first.
-planning-panels-none = Every bench with ground already has cut lines.
-planning-panels-done = Drew { $lines } cut lines on { $benches } benches.
+planning-panels = Panels
+planning-panels-all-on = Panels on Every Bench
+planning-panels-all-off = Panels off Every Bench
+planning-panels-help = How far apart the panel grid's lines are, on every bench of this solid with Panels on. The grid divides each blast your cuts make into square panels, so a long-term schedule has blasts to order rather than whole benches. It is kept apart from your cuts: a blast out of mining is left whole, and taking one panel out of mining takes out the blast it lies in.
 planning-copy-cuts-done-benches =
     { $targets ->
         [one] Copied { $lines } lines to { $targets } bench

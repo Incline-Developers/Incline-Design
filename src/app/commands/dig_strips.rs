@@ -15,6 +15,45 @@ use crate::{
 /// Plan faces, each with a point inside it.
 pub(crate) type AnchoredFaces = Vec<(arrangement::Face, DVec2)>;
 
+/// What divides a bench into blasts: the cuts drawn on it, and its panel
+/// grid's size when it has panels on.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct BenchCuts<'a> {
+    pub(crate) cuts: &'a [Object],
+    pub(crate) panels_m: Option<f64>,
+}
+
+impl<'a> BenchCuts<'a> {
+    pub(crate) fn of(solid: &'a crate::model::Solid, base: f64) -> Self {
+        Self {
+            cuts: solid.blasting.bench(base).map(|entry| entry.cuts.as_slice()).unwrap_or_default(),
+            panels_m: solid.blasting.bench_panels(base),
+        }
+    }
+
+    /// Every line dividing ground within `footprint`: the cuts, then the
+    /// panel grid over it.
+    ///
+    /// Below the bench, ground in a blast out of mining is divided by the
+    /// grid too, though the blast itself is not: its pieces are out with it,
+    /// and each still lies within one blast.
+    pub(crate) fn lines(&self, footprint: &[Vec<DVec2>]) -> Vec<Vec<DVec2>> {
+        let mut lines = arrangement::cut_lines(self.cuts);
+        if let Some(size) = self.panels_m {
+            lines.extend(arrangement::panel_grid(footprint, size));
+        }
+        lines
+    }
+
+    /// Stands for the cuts' geometry and the panel size.
+    pub(crate) fn key(&self) -> u64 {
+        let mut key = DefaultHasher::new();
+        lines_key(&[self.cuts]).hash(&mut key);
+        self.panels_m.map(f64::to_bits).hash(&mut key);
+        key.finish()
+    }
+}
+
 /// The plan faces one flitch's ground is divided into, north-west first.
 ///
 /// A flitch is cut by its own strips *and* by the blast boundaries of the bench
@@ -26,8 +65,8 @@ pub(crate) type AnchoredFaces = Vec<(arrangement::Face, DVec2)>;
 /// Shared by the derivation the panel reads and the geometry job that cuts the
 /// flitch solid apart, so the blocks drawn and the blocks measured are the same
 /// blocks.
-pub(crate) fn dig_block_faces(footprint: &[Vec<DVec2>], strips: &[Object], bench_cuts: &[Object]) -> AnchoredFaces {
-    let mut faces: Vec<_> = arrangement::subdivide(footprint, &dig_block_cuts(strips, bench_cuts))
+pub(crate) fn dig_block_faces(footprint: &[Vec<DVec2>], strips: &[Object], bench_cuts: BenchCuts<'_>) -> AnchoredFaces {
+    let mut faces: Vec<_> = arrangement::subdivide(footprint, &dig_block_cuts(footprint, strips, bench_cuts))
         .into_iter()
         .filter_map(|face| arrangement::representative_point(&face).map(|anchor| (face, anchor)))
         .collect();
@@ -40,15 +79,23 @@ pub(crate) fn dig_block_faces(footprint: &[Vec<DVec2>], strips: &[Object], bench
 /// [`dig_block_faces`] for the committed body `cache` holds, worked out once
 /// for the lines given and kept with the body: opening Dig Strips again, or
 /// editing one flitch's strips, derives nothing for the other flitches.
-pub(crate) fn cached_dig_block_faces(cache: &FlitchFaceCache, flitch: f64, footprint: &[Vec<DVec2>], strips: &[Object], bench_cuts: &[Object]) -> Arc<AnchoredFaces> {
-    cache.faces(flitch, true, lines_key(&[strips, bench_cuts]), || dig_block_faces(footprint, strips, bench_cuts))
+pub(crate) fn cached_dig_block_faces(cache: &FlitchFaceCache, flitch: f64, footprint: &[Vec<DVec2>], strips: &[Object], bench_cuts: BenchCuts<'_>) -> Arc<AnchoredFaces> {
+    cache.faces(flitch, true, flitch_key(strips, bench_cuts), || dig_block_faces(footprint, strips, bench_cuts))
+}
+
+/// Stands for every line dividing a flitch: its strips and its bench's cuts.
+pub(crate) fn flitch_key(strips: &[Object], bench_cuts: BenchCuts<'_>) -> u64 {
+    let mut key = DefaultHasher::new();
+    lines_key(&[strips]).hash(&mut key);
+    bench_cuts.key().hash(&mut key);
+    key.finish()
 }
 
 /// A flitch's ground divided by its bench's cuts alone, so its part of each
 /// blast, with a point inside each; kept like [`cached_dig_block_faces`].
-pub(crate) fn cached_blast_faces(cache: &FlitchFaceCache, flitch: f64, footprint: &[Vec<DVec2>], bench_cuts: &[Object]) -> Arc<AnchoredFaces> {
-    cache.faces(flitch, false, lines_key(&[bench_cuts]), || {
-        arrangement::subdivide(footprint, &arrangement::cut_lines(bench_cuts))
+pub(crate) fn cached_blast_faces(cache: &FlitchFaceCache, flitch: f64, footprint: &[Vec<DVec2>], bench_cuts: BenchCuts<'_>) -> Arc<AnchoredFaces> {
+    cache.faces(flitch, false, bench_cuts.key(), || {
+        arrangement::subdivide(footprint, &bench_cuts.lines(footprint))
             .into_iter()
             .filter_map(|face| arrangement::representative_point(&face).map(|anchor| (face, anchor)))
             .collect()
@@ -66,11 +113,11 @@ pub(crate) fn lines_key(lines: &[&[Object]]) -> u64 {
     key.finish()
 }
 
-/// The lines a flitch's ground is divided along: its own strips and its
-/// bench's cuts.
-pub(crate) fn dig_block_cuts(strips: &[Object], bench_cuts: &[Object]) -> Vec<Vec<DVec2>> {
+/// The lines a flitch's ground within `footprint` is divided along: its own
+/// strips and its bench's cuts and panels.
+pub(crate) fn dig_block_cuts(footprint: &[Vec<DVec2>], strips: &[Object], bench_cuts: BenchCuts<'_>) -> Vec<Vec<DVec2>> {
     let mut cuts = arrangement::cut_lines(strips);
-    cuts.extend(arrangement::cut_lines(bench_cuts));
+    cuts.extend(bench_cuts.lines(footprint));
     cuts
 }
 
@@ -126,10 +173,10 @@ fn dig_count_key(solids: &[crate::model::Solid], caches: &std::collections::Hash
         let Some(footprints) = cache.flitch_footprints() else { continue };
         (solid.id, cache.body_attempt(), cache.blasting_product().is_some()).hash(&mut key);
         for bench in solid.benching.benches() {
-            let bench_cuts = solid.blasting.bench(bench.base).map(|entry| entry.cuts.as_slice()).unwrap_or_default();
+            let bench_cuts = BenchCuts::of(solid, bench.base);
             for flitch in bench.flitches.iter().filter(|flitch| footprints.contains_key(&flitch.base.to_bits())) {
                 let strips = solid.blasting.drawing(flitch.base, true).map_or(&[][..], |drawing| &drawing.cuts);
-                (flitch.base.to_bits(), lines_key(&[strips, bench_cuts])).hash(&mut key);
+                (flitch.base.to_bits(), flitch_key(strips, bench_cuts)).hash(&mut key);
             }
         }
     }
@@ -154,7 +201,7 @@ fn count_dig_blocks(solids: &[DigCountSolid], cancel: &crate::app::jobs::CancelF
     for item in solids {
         let solid = &item.solid;
         for bench in solid.benching.benches() {
-            let bench_cuts = solid.blasting.bench(bench.base).map(|entry| entry.cuts.as_slice()).unwrap_or_default();
+            let bench_cuts = BenchCuts::of(solid, bench.base);
             let excluded_blasts = item.blasting.as_ref().is_some_and(|blasting| {
                 blasting
                     .blast_faces
@@ -283,7 +330,7 @@ impl crate::app::App<'_> {
             flitch: f64,
             top: f64,
             footprint: Option<&'a Vec<Vec<DVec2>>>,
-            bench_cuts: &'a [Object],
+            bench_cuts: BenchCuts<'a>,
             excluded_blasts: std::sync::Arc<Vec<Vec<Vec<DVec2>>>>,
         }
         let mut flitches = Vec::new();
@@ -294,7 +341,7 @@ impl crate::app::App<'_> {
                 continue;
             };
             for bench in solid.benching.benches() {
-                let bench_cuts = solid.blasting.bench(bench.base).map(|entry| entry.cuts.as_slice()).unwrap_or_default();
+                let bench_cuts = BenchCuts::of(solid, bench.base);
                 let excluded_blasts: std::sync::Arc<Vec<Vec<Vec<DVec2>>>> = std::sync::Arc::new(
                     self.editor
                         .blasting_outlines

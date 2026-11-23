@@ -171,7 +171,6 @@ impl<'a> App<'a> {
                 | UiCommand::DeleteSolid(_)
                 | UiCommand::SaveSolidPreviewToProject
                 | UiCommand::UpdateSolid { .. }
-                | UiCommand::DrawBlastPanels { .. }
                 | UiCommand::SetSolidsTopography { .. }
                 | UiCommand::RecomputeReserveStats(_)
                 | UiCommand::RunPlanningStage(_)
@@ -228,10 +227,6 @@ impl<'a> App<'a> {
             UiCommand::CreateDrillPattern { name, collars, depth, diameter } => self.create_drill_pattern(name, collars, depth, diameter),
             UiCommand::CopyCutsTo(targets) => {
                 self.copy_cuts_to(&targets);
-                Ok(())
-            }
-            UiCommand::DrawBlastPanels { solid, size_m } => {
-                self.draw_blast_panels(solid, size_m);
                 Ok(())
             }
             UiCommand::AddToSequence { rows, blast } => {

@@ -764,7 +764,12 @@ impl crate::app::App<'_> {
                     .collect();
                 // A blast under the minimum takes no name, and naming is this
                 // stage's work.
-                (solid.id.0, cuts, solid.exclusions.min_blast_area.to_bits())
+                (
+                    solid.id.0,
+                    cuts,
+                    solid.exclusions.min_blast_area.to_bits(),
+                    crate::app::commands::solids_view::panels_key(solid),
+                )
             })
             .collect();
         let blasting_stage = hash_of((benching_stage, blasting));

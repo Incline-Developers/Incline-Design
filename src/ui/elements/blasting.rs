@@ -15,7 +15,7 @@ use crate::{
         state::{BlastShapeRef, RenameTarget, UiCommand},
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
-            data_grid::{DataGrid, grid_add_action_row, grid_cell_entry, grid_columns_row, grid_empty_state, grid_group_row},
+            data_grid::{DataGrid, grid_add_action_row, grid_cell_entry, grid_checkbox_row, grid_columns_row, grid_empty_state, grid_group_row},
             hint::Hint,
             island::{Island, IslandResponse, Side},
         },
@@ -72,18 +72,26 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                                     }),
                                 });
                             }
-                            // Panels for the benches nobody has drawn on.
+                            // Panels: one size for the solid, on or off per bench.
                             let (response, cells) = grid_columns_row(ui, &FRACTIONS, &[&tr!("planning-panel-size"), ""], false);
                             response.hint(tr!("planning-panels-help"));
-                            let mut size = editor.blast_panel_size_m;
+                            let mut size = solid.blasting.panel_size();
                             if grid_cell_entry(ui, ("planning_panel_size", outline.solid), cells[1], &mut size, "m") && size.is_finite() && size > 0.0 {
-                                editor.blast_panel_size_m = size;
-                            }
-                            if grid_add_action_row(ui, &tr!("planning-draw-panels")) {
-                                commands.push(UiCommand::DrawBlastPanels {
+                                let mut blasting = solid.blasting.clone();
+                                blasting.panel_size_m = Some(size);
+                                commands.push(UiCommand::UpdateSolid {
                                     solid: solid.id,
-                                    size_m: editor.blast_panel_size_m,
+                                    edit: crate::model::SolidEdit::Blasting(blasting),
                                 });
+                            }
+                            for (label, on) in [(tr!("planning-panels-all-on"), true), (tr!("planning-panels-all-off"), false)] {
+                                if grid_add_action_row(ui, &label) {
+                                    let benches = solid.benching.benches().iter().map(|bench| bench.base).collect::<Vec<_>>();
+                                    commands.push(UiCommand::UpdateSolid {
+                                        solid: solid.id,
+                                        edit: crate::model::SolidEdit::Blasting(solid.blasting.with_panels(benches, on)),
+                                    });
+                                }
                             }
                         }
                     }
@@ -111,6 +119,15 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                             &detail,
                             1,
                         );
+                        if bench_open && let Some(solid) = document.solid(outline.solid) {
+                            let mut panels = solid.blasting.bench_panels(outline.bench_base).is_some();
+                            if grid_checkbox_row(ui, &tr!("planning-panels"), &mut panels, 2) {
+                                commands.push(UiCommand::UpdateSolid {
+                                    solid: solid.id,
+                                    edit: crate::model::SolidEdit::Blasting(solid.blasting.with_panels([outline.bench_base], panels)),
+                                });
+                            }
+                        }
                     }
                     if !bench_open || outline.name.is_empty() {
                         continue;

@@ -622,6 +622,41 @@ pub(crate) fn typical_spacing(lines: &[Vec<DVec2>]) -> f64 {
     median(&mut spacings).unwrap_or(0.0)
 }
 
+/// Most grid lines a panel grid draws each way; a size small enough to need
+/// more is refused rather than cutting a bench into dust.
+const MAX_PANEL_LINES: i64 = 2_000;
+
+/// A square grid of lines `size` apart over `rings`, on whole multiples of
+/// `size` so the grid over any part of a bench is the grid over all of it,
+/// and each line running a whole size past the rings' extent either side.
+pub(crate) fn panel_grid(rings: &[Vec<DVec2>], size: f64) -> Vec<Vec<DVec2>> {
+    let Some((min, max)) = rings.iter().flatten().fold(None, |bounds: Option<(DVec2, DVec2)>, point| {
+        Some(bounds.map_or((*point, *point), |(min, max)| (min.min(*point), max.max(*point))))
+    }) else {
+        return Vec::new();
+    };
+    if !size.is_finite() || size <= 0.0 {
+        return Vec::new();
+    }
+    // Lines strictly inside the extent: one along its edge divides nothing.
+    let span = |low: f64, high: f64| ((low / size).floor() as i64 + 1, (high / size).ceil() as i64);
+    let (x_first, x_end) = span(min.x, max.x);
+    let (y_first, y_end) = span(min.y, max.y);
+    if x_end - x_first > MAX_PANEL_LINES || y_end - y_first > MAX_PANEL_LINES {
+        return Vec::new();
+    }
+    let (low, high) = (min - DVec2::splat(size), max + DVec2::splat(size));
+    let columns = (x_first..x_end).map(|index| {
+        let x = index as f64 * size;
+        vec![DVec2::new(x, low.y), DVec2::new(x, high.y)]
+    });
+    let rows = (y_first..y_end).map(|index| {
+        let y = index as f64 * size;
+        vec![DVec2::new(low.x, y), DVec2::new(high.x, y)]
+    });
+    columns.chain(rows).collect()
+}
+
 pub(crate) fn cut_lines(objects: &[crate::model::Object]) -> Vec<Vec<DVec2>> {
     objects
         .iter()

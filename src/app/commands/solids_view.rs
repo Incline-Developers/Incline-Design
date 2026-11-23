@@ -132,6 +132,7 @@ type CarvedLevel = Vec<(Arc<Face>, Option<usize>)>;
 struct FlitchOutlines {
     strips: Vec<Object>,
     bench_cuts: Vec<Object>,
+    panels_m: Option<f64>,
     faces: Vec<(Arc<Face>, DVec2)>,
     plans: Vec<Face>,
 }
@@ -769,6 +770,20 @@ fn blasting_key(body: u64, solid: &Solid) -> u64 {
         for cut in &bench.cuts {
             cut.geometry_hash().hash(&mut key);
         }
+    }
+    panels_key(solid).hash(&mut key);
+    key.finish()
+}
+
+/// What panels add to a solid's blast partition: which benches have them,
+/// their size, and - since a blast out of mining is left whole - what is out.
+pub(crate) fn panels_key(solid: &Solid) -> u64 {
+    let mut key = DefaultHasher::new();
+    let paneled: Vec<u64> = solid.blasting.benches.iter().filter(|bench| bench.panels).map(|bench| bench.base.to_bits()).collect();
+    if !paneled.is_empty() {
+        paneled.hash(&mut key);
+        solid.blasting.panel_size().to_bits().hash(&mut key);
+        solid.exclusions.hash_content(&mut key);
     }
     key.finish()
 }
@@ -2345,23 +2360,41 @@ fn build_solid_blasting(solid: &Solid, body: &SolidBody, cancel: &crate::app::jo
             let Some(outline) = body.bench_footprints.get(&part.band.selection.base.to_bits()) else {
                 return Ok(Vec::new());
             };
-            let cuts = solid
-                .blasting
-                .bench(part.band.selection.base)
-                .map(|bench| arrangement::cut_lines(&bench.cuts))
-                .unwrap_or_default();
-            Ok(arrangement::subdivide(outline, &cuts)
-                .into_iter()
-                .filter_map(|face| {
-                    let anchor = arrangement::representative_point(&face)?;
-                    Some(BlastFace {
-                        bench: part.band.selection,
-                        area: arrangement::face_area(&face),
-                        face,
-                        anchor: anchor.to_array(),
-                    })
+            let base = part.band.selection.base;
+            let cuts = solid.blasting.bench(base).map(|bench| arrangement::cut_lines(&bench.cuts)).unwrap_or_default();
+            let face_of = |face: Face, anchor: Option<[f64; 2]>| {
+                let anchor = anchor.or_else(|| arrangement::representative_point(&face).map(|point| point.to_array()))?;
+                Some(BlastFace {
+                    bench: part.band.selection,
+                    area: arrangement::face_area(&face),
+                    face,
+                    anchor,
                 })
-                .collect())
+            };
+            let drawn = arrangement::subdivide(outline, &cuts);
+            let Some(size) = solid.blasting.bench_panels(base) else {
+                return Ok(drawn.into_iter().filter_map(|face| face_of(face, None)).collect());
+            };
+            // Panels divide each blast the cuts make that is to be mined. One
+            // out of mining stays whole, named by the point it was taken out
+            // at, so taking out one panel takes out the blast it lies in, and
+            // the anchor matches the entry exactly wherever it is read.
+            let mut faces = Vec::new();
+            for face in drawn {
+                if solid.exclusions.blast_face_excluded(base, &face) {
+                    let anchor = solid
+                        .exclusions
+                        .blasts
+                        .iter()
+                        .find(|entry| (entry.base - base).abs() <= 1e-6 && arrangement::point_in_face(&face, DVec2::from_array(entry.anchor)))
+                        .map(|entry| entry.anchor);
+                    faces.extend(face_of(face, anchor));
+                } else {
+                    let grid = arrangement::panel_grid(&face, size);
+                    faces.extend(arrangement::subdivide(&face, &grid).into_iter().filter_map(|panel| face_of(panel, None)));
+                }
+            }
+            Ok(faces)
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     Ok(SolidBlasting {
@@ -2432,20 +2465,21 @@ fn build_solid_partition(
             let band = flitch.band;
             let key = band.selection.base.to_bits();
             let strips = solid.blasting.drawing(band.selection.base, true).map_or(&[][..], |drawing| &drawing.cuts);
-            let bench_cuts = solid.blasting.bench(flitch.bench.base).map_or(&[][..], |entry| &entry.cuts);
+            let bench_cuts = super::dig_strips::BenchCuts::of(solid, flitch.bench.base);
             let footprint = body.flitch_footprints.get(&key).map_or(&[][..], Vec::as_slice);
             let drawn = earlier_outlines
                 .and_then(|outlines| outlines.get(&key))
-                .filter(|drawn| drawn.strips == strips && drawn.bench_cuts == bench_cuts)
+                .filter(|drawn| drawn.strips == strips && drawn.bench_cuts == bench_cuts.cuts && drawn.panels_m == bench_cuts.panels_m)
                 .cloned();
             let outlines = match drawn {
                 Some(drawn) => drawn,
                 None => {
                     let faces = super::dig_strips::dig_block_faces(footprint, strips, bench_cuts);
-                    let plans = super::dig_strips::dig_block_plans(&faces, &super::dig_strips::dig_block_cuts(strips, bench_cuts));
+                    let plans = super::dig_strips::dig_block_plans(&faces, &super::dig_strips::dig_block_cuts(footprint, strips, bench_cuts));
                     Arc::new(FlitchOutlines {
                         strips: strips.to_vec(),
-                        bench_cuts: bench_cuts.to_vec(),
+                        bench_cuts: bench_cuts.cuts.to_vec(),
+                        panels_m: bench_cuts.panels_m,
                         faces: faces.into_iter().map(|(face, anchor)| (Arc::new(face), anchor)).collect(),
                         plans,
                     })
@@ -2905,11 +2939,11 @@ fn dig_strips_ground(solid: &Solid, cache: &ViewSolid, part: &SolidPart) -> Opti
     }
     let flitch = part.band.selection.base;
     let footprint = cache.flitch_footprints()?.get(&flitch.to_bits())?;
-    let cuts = solid.blasting.bench(bench).map(|entry| entry.cuts.as_slice()).unwrap_or_default();
+    let cuts = super::dig_strips::BenchCuts::of(solid, bench);
     // The blasts are the bench's cuts' own faces, so the cuts and which of
     // those faces are out say everything the ground is cut from.
     let mut key = DefaultHasher::new();
-    super::dig_strips::lines_key(&[cuts]).hash(&mut key);
+    cuts.key().hash(&mut key);
     blast_faces.len().hash(&mut key);
     excluded.hash(&mut key);
     let faces = cache.face_cache();

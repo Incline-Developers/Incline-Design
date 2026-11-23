@@ -2549,8 +2549,6 @@ pub(crate) struct EditorState {
     pub(crate) cut_clipboard: (bool, Vec<crate::model::Object>),
     /// The open Copy To dialog of a cut step.
     pub(crate) copy_cuts_dialog: Option<CopyCutsDialog>,
-    /// How far apart the Blasting step draws panels on undrawn benches.
-    pub(crate) blast_panel_size_m: f64,
     pub(crate) selected_blast: Option<BlastShapeRef>,
     pub(crate) scroll_to_blast: bool,
     pub(crate) blast_labels: Vec<(String, (f32, f32), bool)>,
@@ -4320,7 +4318,6 @@ impl EditorState {
             selected_dig_block_infos: Vec::new(),
             cut_clipboard: (false, Vec::new()),
             copy_cuts_dialog: None,
-            blast_panel_size_m: 100.0,
             selected_blast: None,
             scroll_to_blast: false,
             blast_labels: Vec::new(),
@@ -5415,12 +5412,6 @@ pub(crate) enum UiCommand {
     },
     /// Copy the cut lines selected on a cut step to these benches or flitches.
     CopyCutsTo(Vec<(crate::model::SolidId, BenchSelection)>),
-    /// Draw a square grid of cut lines, `size_m` apart, on every bench of a
-    /// solid that has no cut lines.
-    DrawBlastPanels {
-        solid: crate::model::SolidId,
-        size_m: f64,
-    },
     SetFlyModeEnabled(bool),
     SetSliceModeEnabled(bool),
     #[cfg(not(target_arch = "wasm32"))]
@@ -6302,7 +6293,6 @@ impl UiCommand {
             | Self::ClearSelection
             | Self::AddToSequence { .. }
             | Self::CopyCutsTo(_)
-            | Self::DrawBlastPanels { .. }
             | Self::CloseStartupDialog
             | Self::CancelCloseProject
             | Self::CancelExit
