@@ -2934,6 +2934,17 @@ pub(crate) fn skipped_working_sections(color: &serde_json::Value) -> usize {
     }
 }
 
+/// How many saved strat columns the reader passes over in a colour state's
+/// JSON, counted as [`skipped_working_sections`] counts: each list entry
+/// that is not a column, or one for a value that is not a list.
+pub(crate) fn skipped_strat_columns(color: &serde_json::Value) -> usize {
+    match color.get("strat_columns") {
+        None | Some(serde_json::Value::Null) => 0,
+        Some(serde_json::Value::Array(entries)) => entries.iter().filter(|entry| StratColumn::deserialize(*entry).is_err()).count(),
+        Some(_) => 1,
+    }
+}
+
 /// A dataset is drawn at its drilled width until someone says otherwise.
 pub(crate) fn default_radius_scale() -> f64 {
     1.0

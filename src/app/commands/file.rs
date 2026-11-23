@@ -2007,11 +2007,7 @@ impl<'a> App<'a> {
     /// (see [`corrections_path_beside`]).
     #[cfg(not(target_arch = "wasm32"))]
     fn export_corrections_worksheet_to_path(&mut self, id: DrillHoleId, mut path: PathBuf) -> Result<()> {
-        let dataset = self
-            .drill_holes
-            .iter()
-            .find(|item| item.id == id)
-            .context("The selected drillhole dataset is no longer loaded")?;
+        let dataset = self.drill_holes.iter().find(|item| item.id == id).with_context(|| tr!("err-file-drillhole-not-loaded"))?;
         // The records may have been undone while the save dialog was open.
         if dataset.dataset.corrections.is_empty() {
             userspace_warn!("{}", tr!("cmd-file-worksheet-no-corrections", name = dataset.name.clone()));
@@ -2047,7 +2043,7 @@ impl<'a> App<'a> {
             .iter()
             .find(|item| item.id == id)
             .cloned()
-            .context("The selected drillhole dataset is no longer loaded")
+            .with_context(|| tr!("err-file-drillhole-not-loaded"))
     }
 
     /// Write the tables `tables` makes of one drillhole dataset in the

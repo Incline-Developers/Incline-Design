@@ -7998,7 +7998,6 @@ impl UiCommand {
             | Self::TransformSurveySelection
             | Self::ToggleViewOption(_)
             | Self::ToggleSectionSurfaceLines
-            | Self::SaveSectionSurfaceLines
             | Self::SetInitiation { .. }
             | Self::ChargeSelectedHoles { .. }
             | Self::BeginRenameItem(_)
@@ -8091,7 +8090,6 @@ impl UiCommand {
             | Self::SetDrillHoleColorStops { .. }
             | Self::SetDrillHoleCategoryColors { .. }
             | Self::SetDrillHoleWorkingSections { .. }
-            | Self::SetStratColumn { .. }
             | Self::CheckStratColumn { .. }
             | Self::OpenDrillHoleColorDialog(_)
             | Self::LinkGeophysics(_)
@@ -8523,6 +8521,11 @@ impl UiCommand {
                     (crate::model::drill_hole::ShiftDirection::Down, Some(_)) => tr!("state-shift-names-down-from-here", field = field.clone()),
                 },
             ),
+            Self::SetStratColumn { field, codes, .. } => report(
+                tr!("state-set-strat-column"),
+                tr!("state-field-strat-names", field = field.clone(), count = codes.len().to_string()),
+            ),
+            Self::SaveSectionSurfaceLines => report(tr!("ws-menubar-geology-save-surface-lines"), tr!("state-section-surface-lines")),
             Self::BuildReferenceSurface { points, controls, extent, .. } => report(
                 tr!("common-build-surface"),
                 match extent {

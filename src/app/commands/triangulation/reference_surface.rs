@@ -1114,7 +1114,7 @@ fn surface_mesh(
     let mut fitted = Vec::new();
     fitted
         .try_reserve_exact(picks.len() + fit_controls.len())
-        .context("Not enough memory for the surface points")?;
+        .with_context(|| tr!("cmd-reference-surface-no-memory-points"))?;
     let kept = picks.len();
     fitted.extend(picks);
     fitted.extend(fit_controls.iter().copied());
@@ -1134,7 +1134,9 @@ fn surface_mesh(
         (None, Some(_)) => {
             let picked = fitted.len() - fit_controls.len();
             let mut whole = Vec::new();
-            whole.try_reserve_exact(picked + entered.len()).context("Not enough memory for the outline")?;
+            whole
+                .try_reserve_exact(picked + entered.len())
+                .with_context(|| tr!("cmd-reference-surface-no-memory-outline"))?;
             whole.extend_from_slice(&fitted[..picked]);
             whole.extend(entered.iter().copied());
             buffered_outline(&whole)?
@@ -1707,7 +1709,7 @@ fn plan_box(positions: impl Iterator<Item = DVec2>) -> (DVec2, DVec2) {
 /// fit will refuse still has an outline to size the grid by.
 fn plan_hull(points: &[DVec3]) -> Result<Vec<DVec2>> {
     let mut sorted: Vec<DVec2> = Vec::new();
-    sorted.try_reserve_exact(points.len()).context("Not enough memory for the outline")?;
+    sorted.try_reserve_exact(points.len()).with_context(|| tr!("cmd-reference-surface-no-memory-outline"))?;
     sorted.extend(points.iter().map(|point| point.truncate()));
     sorted.sort_unstable_by(plan_order);
     sorted.dedup();
@@ -1715,7 +1717,7 @@ fn plan_hull(points: &[DVec3]) -> Result<Vec<DVec2>> {
         return Ok(sorted);
     }
     let mut hull: Vec<DVec2> = Vec::new();
-    hull.try_reserve_exact(sorted.len() + 1).context("Not enough memory for the outline")?;
+    hull.try_reserve_exact(sorted.len() + 1).with_context(|| tr!("cmd-reference-surface-no-memory-outline"))?;
     // The lower chain left to right, then the upper one back; a vertex
     // that does not turn left is dropped.
     let turns_left = |hull: &[DVec2], at: DVec2| kernel::orient2d(hull[hull.len() - 2], hull[hull.len() - 1], at) > 0.0;
@@ -1753,7 +1755,7 @@ fn buffered_outline(points: &[DVec3]) -> Result<Vec<DVec2>> {
         count * ((std::f64::consts::PI / step).ceil() as usize + 2)
     };
     let mut ring: Vec<DVec2> = Vec::new();
-    ring.try_reserve_exact(most).context("Not enough memory for the outline")?;
+    ring.try_reserve_exact(most).with_context(|| tr!("cmd-reference-surface-no-memory-outline"))?;
     let mut push = |at: DVec2| {
         if ring.last().is_none_or(|last| last.distance(at) > kernel::XY_TOL) {
             ring.push(at);
@@ -1827,7 +1829,7 @@ fn picks_off_controls(points: &[DVec3], controls: &[Vec<DVec3>], cancelled: &dyn
     );
     let reach = DVec2::splat(MERGE_DISTANCE);
     let (mut kept, mut overridden, mut left_out) = (Vec::new(), Vec::new(), 0usize);
-    kept.try_reserve_exact(points.len()).context("Not enough memory for the surface points")?;
+    kept.try_reserve_exact(points.len()).with_context(|| tr!("cmd-reference-surface-no-memory-points"))?;
     let mut near = Vec::new();
     for point in points {
         stop_if_cancelled(cancelled)?;
@@ -2274,7 +2276,9 @@ fn grid_mesh(plan: &GridPlan, heights: &[f64], spline: &RbfSurface, cancelled: &
             .ok_or_else(|| anyhow::anyhow!("{}", cut_failed(lattice.node(column, row))))
     };
     let mut index_of: Vec<u32> = Vec::new();
-    index_of.try_reserve_exact(lattice.node_count()).context("Not enough memory for the surface nodes")?;
+    index_of
+        .try_reserve_exact(lattice.node_count())
+        .with_context(|| tr!("cmd-reference-surface-no-memory-nodes"))?;
     index_of.resize(lattice.node_count(), UNUSED);
     let mut face_count = plan.edge_faces.len();
     for row in 0..plan.whole.rows() {
@@ -2297,7 +2301,9 @@ fn grid_mesh(plan: &GridPlan, heights: &[f64], spline: &RbfSurface, cancelled: &
         }
     };
     let mut extra: Vec<DVec2> = Vec::new();
-    extra.try_reserve_exact(3 * plan.edge_faces.len()).context("Not enough memory for the surface nodes")?;
+    extra
+        .try_reserve_exact(3 * plan.edge_faces.len())
+        .with_context(|| tr!("cmd-reference-surface-no-memory-nodes"))?;
     for &corner in plan.edge_faces.iter().flatten() {
         match node_of(corner)? {
             Some(index) => index_of[index] = 0,
@@ -2308,8 +2314,10 @@ fn grid_mesh(plan: &GridPlan, heights: &[f64], spline: &RbfSurface, cancelled: &
     extra.dedup();
     let used = index_of.iter().filter(|&&index| index != UNUSED).count();
     let (mut vertices, mut faces) = (Vec::new(), Vec::new());
-    vertices.try_reserve_exact(used + extra.len()).context("Not enough memory for the surface nodes")?;
-    faces.try_reserve_exact(face_count).context("Not enough memory for the surface faces")?;
+    vertices
+        .try_reserve_exact(used + extra.len())
+        .with_context(|| tr!("cmd-reference-surface-no-memory-nodes"))?;
+    faces.try_reserve_exact(face_count).with_context(|| tr!("cmd-reference-surface-no-memory-faces"))?;
     for ((slot, at), &height) in index_of.iter_mut().zip(lattice.nodes()).zip(heights) {
         if *slot != UNUSED {
             *slot = vertices.len() as u32;
@@ -2412,7 +2420,7 @@ fn snap_to_lattice(at: DVec2, spacing: f64) -> DVec2 {
 /// starts.
 fn mask_outline(ring: &[DVec2], spacing: f64, cancelled: &dyn Fn() -> bool) -> Result<Vec<DVec2>> {
     let mut snapped: Vec<DVec2> = Vec::new();
-    snapped.try_reserve_exact(ring.len()).context("Not enough memory for the extent")?;
+    snapped.try_reserve_exact(ring.len()).with_context(|| tr!("cmd-reference-surface-no-memory-extent"))?;
     snapped.extend(ring.iter().map(|&vertex| snap_to_lattice(vertex, spacing)));
     snapped.dedup();
     while snapped.len() > 1 && snapped.first() == snapped.last() {
@@ -2428,13 +2436,13 @@ fn mask_outline(ring: &[DVec2], spacing: f64, cancelled: &dyn Fn() -> bool) -> R
     };
     let most = (0..count).map(|index| bound(edge(index))).fold(count, usize::saturating_add);
     let mut outline: Vec<DVec2> = Vec::new();
-    outline.try_reserve_exact(most).context("Not enough memory for the extent")?;
+    outline.try_reserve_exact(most).with_context(|| tr!("cmd-reference-surface-no-memory-extent"))?;
     let mut events: Vec<(f64, DVec2)> = Vec::new();
     for index in 0..count {
         stop_if_cancelled(cancelled)?;
         let (start, end) = edge(index);
         events.clear();
-        events.try_reserve(bound((start, end))).context("Not enough memory for the extent")?;
+        events.try_reserve(bound((start, end))).with_context(|| tr!("cmd-reference-surface-no-memory-extent"))?;
         let forward = plan_order(&start, &end).is_le();
         let (low, high) = if forward { (start, end) } else { (end, start) };
         edge_events(low, high, spacing, &mut events);
@@ -2522,7 +2530,7 @@ fn cut_cells(outline: &[DVec2], lattice: &LatticeBox, bands: &RingBands, cancell
     };
     let count = outline.len();
     let mut touches: Vec<(CellAt, Touch)> = Vec::new();
-    touches.try_reserve_exact(3 * count).context("Not enough memory for the extent")?;
+    touches.try_reserve_exact(3 * count).with_context(|| tr!("cmd-reference-surface-no-memory-extent"))?;
     for index in 0..count {
         let (start, end) = (outline[index], outline[(index + 1) % count]);
         let ((column, on_column), (row, on_row)) = (gridline_below(start.x, spacing), gridline_below(start.y, spacing));
@@ -2605,8 +2613,8 @@ fn cut_cells(outline: &[DVec2], lattice: &LatticeBox, bands: &RingBands, cancell
                 .find(|order| order.is_ne())
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        cut.try_reserve(1).context("Not enough memory for the surface cells")?;
-        faces.try_reserve(kept.len()).context("Not enough memory for the surface faces")?;
+        cut.try_reserve(1).with_context(|| tr!("cmd-reference-surface-no-memory-cells"))?;
+        faces.try_reserve(kept.len()).with_context(|| tr!("cmd-reference-surface-no-memory-faces"))?;
         cut.push(found);
         faces.extend_from_slice(&kept);
     }

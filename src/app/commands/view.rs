@@ -279,7 +279,7 @@ impl<'a> App<'a> {
     /// of the config; no project is touched, so nothing turns dirty.
     pub(crate) fn note_recent_function(&mut self, row: crate::ui::elements::main_menu::MenuRow) -> anyhow::Result<()> {
         // Asked after the row's own command ran, which decided a tool's toggle.
-        if !row.was_used(&self.editor) || !note_recent(&mut self.editor.recent_functions, row) {
+        if !row.kept_as_recent(&self.editor, self.workspace.has_active_project()) || !note_recent(&mut self.editor.recent_functions, row) {
             return Ok(());
         }
         crate::app::io::save_config(&config_from(

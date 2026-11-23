@@ -1608,8 +1608,10 @@ impl App<'_> {
                     .cell_selection
                     .as_ref()
                     .filter(|selection| selection.entity == item.entity_id() && Arc::ptr_eq(&selection.grid, &item.grid));
+                // Scanned once for the grid, not once per crossing.
+                let regular = item.grid.lattice.is_regular();
                 cut.push(SectionCellsOfGrid {
-                    colors: crossings.iter().map(|crossing| section_colors(item, crossing)).collect(),
+                    colors: crossings.iter().map(|crossing| section_colors_with(item, crossing, regular)).collect(),
                     selected: crossings.iter().map(|crossing| held.is_some_and(|selection| selection.cells[crossing.cell])).collect(),
                     crossings,
                 });
@@ -1669,11 +1671,12 @@ fn section_cells_key(editor: &EditorState, slab: Option<SectionSlab>, grids: &[O
 /// are made from: a value gives the cell one colour, thickness each point its
 /// own. The grid's own colour, opaque, where the body draws flat or the cell
 /// has no value.
-fn section_colors(item: &OpenPrismoidGrid, crossing: &SectionCrossing) -> Vec<[f32; 4]> {
+/// `regular` is whether the grid's lattice is regular, read once per grid.
+fn section_colors_with(item: &OpenPrismoidGrid, crossing: &SectionCrossing, regular: bool) -> Vec<[f32; 4]> {
     let [red, green, blue, _] = item.color;
     let flat = vec![[red, green, blue, 1.0]; crossing.points.len()];
     let (index, range) = map_inputs(item);
-    let Some((min, max)) = range.filter(|_| item.grid.lattice.is_regular()) else {
+    let Some((min, max)) = range.filter(|_| regular) else {
         return flat;
     };
     let preset = item.color_by.preset;

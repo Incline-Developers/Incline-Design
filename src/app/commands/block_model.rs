@@ -694,7 +694,7 @@ impl<'a> App<'a> {
                     userspace_warn!("{}", tr!("cmd-prismoid-grid-regular-no-density", count = counts.no_density.to_string()));
                 }
             }
-            Err(error) if error.to_string() != "Cancelled" => {
+            Err(error) if !crate::app::jobs::is_cancelled(&error) => {
                 userspace_warn!("{}", tr!("cmd-block-model-could-not-create-block-model", error = format!("{error:#}")))
             }
             Err(_) => {}
@@ -1336,7 +1336,7 @@ fn regular_refusal(refusal: RegularRefusal, grids: &[(&PrismoidGrid, &str, &str)
                 other = grids[second_grid].1.to_owned()
             )
         ),
-        RegularRefusal::Cancelled => anyhow::anyhow!("Cancelled"),
+        RegularRefusal::Cancelled => anyhow::Error::new(crate::app::jobs::Cancelled),
     }
 }
 

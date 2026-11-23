@@ -18,8 +18,8 @@ use glam::{DVec2, DVec3};
 use super::{Cancelled, stop_if};
 use crate::model::{
     control_checks::{
-        BoxGrid, CONTROL_AGREEMENT, MINIMUM_CONTROL_VERTICES, MisshapenControls, canonical_order, control_crossings, control_points, crossing_side, segment_box, turning_back,
-        validate_controls,
+        BoxGrid, CONTROL_AGREEMENT, MINIMUM_CONTROL_VERTICES, MisshapenControls, canonical_order, control_crossings, control_points, crossing_side, pieces_along, segment_box,
+        turning_back, validate_controls,
     },
     kernel::{self, SegSeg},
     rbf::{DEFAULT_SPACING, MERGE_DISTANCE},
@@ -488,7 +488,9 @@ fn pair_clash(first: [DVec3; 2], second: [DVec3; 2]) -> Option<Clash> {
 /// by one point each side. An empty span gives no points.
 fn windowed_points(segment: &[DVec3; 2], window: Option<(f64, f64)>) -> Vec<DVec3> {
     let (start, end) = (segment[0], segment[1]);
-    let pieces = segment_pieces(start, end);
+    let Some(pieces) = segment_pieces(start, end) else {
+        return Vec::new();
+    };
     let (low, high) = match window {
         None => (0, pieces),
         Some((from, to)) if from > to => return Vec::new(),
@@ -503,9 +505,10 @@ fn windowed_points(segment: &[DVec3; 2], window: Option<(f64, f64)>) -> Vec<DVec
     (low..=high).map(|step| point_along(start, end, pieces, step)).collect()
 }
 
-/// How many parts the build cuts a segment into, at the grid spacing.
-fn segment_pieces(start: DVec3, end: DVec3) -> usize {
-    (start.truncate().distance(end.truncate()) / DEFAULT_SPACING).ceil().max(1.0) as usize
+/// How many parts the build cuts a segment into, at the grid spacing; `None`
+/// for a segment it refuses as too long, which has no points here.
+fn segment_pieces(start: DVec3, end: DVec3) -> Option<usize> {
+    pieces_along(start, end, DEFAULT_SPACING)
 }
 
 /// The `step`th of `pieces` points along a segment, ends included.
@@ -582,7 +585,9 @@ fn first_clash(string: &[DVec3]) -> Option<Clash> {
     let mut points: Vec<DVec3> = vec![string[0]];
     for segment in string.windows(2) {
         let (start, end) = (segment[0], segment[1]);
-        let pieces = segment_pieces(start, end);
+        // The build refuses a segment too long to cut; that reaches the
+        // report as its own refusal, with no points to look through here.
+        let pieces = segment_pieces(start, end)?;
         points.extend((1..=pieces).map(|step| point_along(start, end, pieces, step)));
     }
     clash_in(&[points], &[])

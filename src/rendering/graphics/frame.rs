@@ -66,6 +66,12 @@ struct EditorSceneState {
     debug_point_cloud_chunks: bool,
     /// The model envelope's outline is rebuilt by the scene pass too.
     model_envelope: Option<[u64; 7]>,
+    /// The revision of the picked prismoids' outline, which the scene pass
+    /// rebuilds; only in Geology, where it is drawn.
+    cell_selection: Option<u64>,
+    /// The key of the outline round the prismoids masked by hand, rebuilt by
+    /// the scene pass as well.
+    masked_cell_outline: Option<u64>,
 }
 
 impl EditorSceneState {
@@ -84,6 +90,12 @@ impl EditorSceneState {
             debug_surface_chunks: editor.debug_surface_chunks,
             debug_point_cloud_chunks: editor.debug_point_cloud_chunks,
             model_envelope: passes::shown_model_envelope(editor).map(|envelope| envelope.bits()),
+            cell_selection: editor
+                .cell_selection
+                .as_ref()
+                .filter(|_| editor.active_workspace == crate::ui::state::Workspace::Geology)
+                .map(|selection| selection.revision),
+            masked_cell_outline: editor.masked_cell_outline.as_ref().map(|(key, _)| *key),
         }
     }
 }

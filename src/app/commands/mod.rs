@@ -205,6 +205,14 @@ impl<'a> App<'a> {
                 | UiCommand::MakeSeamSurface { .. }
                 | UiCommand::OpenCutTriangulationToSurface
                 | UiCommand::ExecuteCutTriangulationToSurface { .. }
+                | UiCommand::OpenSmoothSurface
+                | UiCommand::ExecuteSmoothSurface { .. }
+                | UiCommand::OpenCleanSurface
+                | UiCommand::ExecuteCleanSurface { .. }
+                | UiCommand::OpenDifferenceSurfaces
+                | UiCommand::ExecuteDifferenceSurfaces { .. }
+                | UiCommand::OpenMergeSurfaces
+                | UiCommand::ExecuteMergeSurfaces { .. }
                 | UiCommand::OpenBuildPrismoidGrid
                 | UiCommand::ExecuteBuildPrismoidGrid { .. }
                 | UiCommand::OpenBuildStrata

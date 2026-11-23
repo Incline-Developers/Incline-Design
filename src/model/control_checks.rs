@@ -118,6 +118,18 @@ pub(crate) fn control_points(controls: &[Vec<DVec3>], names: &[usize], crossings
     control_points_spaced(controls, names, crossings, DEFAULT_SPACING, cancelled)
 }
 
+/// The most points one segment is cut into. At the grid spacing that is a
+/// segment 500 km long, longer than any control or seam string, and the fit
+/// takes far fewer points than that, so a segment needing more is a stray.
+pub(crate) const MOST_PIECES: usize = 100_000;
+
+/// How many parts a segment is cut into at `spacing` in plan; `None` when
+/// that is more than [`MOST_PIECES`], before any point is made.
+pub(crate) fn pieces_along(start: DVec3, end: DVec3, spacing: f64) -> Option<usize> {
+    let pieces = (start.truncate().distance(end.truncate()) / spacing).ceil().max(1.0);
+    (pieces <= MOST_PIECES as f64).then_some(pieces as usize)
+}
+
 /// [`control_points`] with the segments densified at `spacing` in plan;
 /// an infinite spacing enters the crossings and the vertices alone.
 pub(crate) fn control_points_spaced(controls: &[Vec<DVec3>], names: &[usize], crossings: &[Crossing], spacing: f64, cancelled: &dyn Fn() -> bool) -> Result<Vec<DVec3>> {
@@ -144,7 +156,18 @@ pub(crate) fn control_points_spaced(controls: &[Vec<DVec3>], names: &[usize], cr
         for segment in control.windows(2) {
             stop_if_cancelled(cancelled)?;
             let (start, end) = (segment[0], segment[1]);
-            let pieces = (start.truncate().distance(end.truncate()) / spacing).ceil().max(1.0) as usize;
+            let Some(pieces) = pieces_along(start, end, spacing) else {
+                let length = start.truncate().distance(end.truncate());
+                anyhow::bail!(
+                    "{}",
+                    tr!(
+                        "cmd-reference-surface-control-string-index-has-segment",
+                        index = (names[index] + 1).to_string(),
+                        length = format!("{length:.0}"),
+                        most = MOST_PIECES.to_string()
+                    )
+                );
+            };
             for step in 1..pieces {
                 // A stray segment kilometres long enters millions of points.
                 if step % CANCEL_POLL_STEPS == 0 {

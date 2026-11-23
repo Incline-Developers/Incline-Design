@@ -16,6 +16,7 @@ use rayon::prelude::*;
 
 use crate::{
     app::jobs::CancelFlag,
+    i18n::tr,
     model::{progress::Phase, rbf::NODE_BUDGET},
 };
 
@@ -39,17 +40,17 @@ impl LatticeBox {
     /// arithmetic and its guard on index magnitude.
     pub(crate) fn covering(lower: DVec2, upper: DVec2, spacing: f64) -> Result<Self> {
         if !lower.is_finite() || !upper.is_finite() || lower.cmpgt(upper).any() {
-            anyhow::bail!("Grid extent must be finite, with its lower corner below its upper");
+            anyhow::bail!("{}", tr!("cmd-reference-surface-grid-extent-not-finite"));
         }
         if !spacing.is_finite() || spacing <= 0.0 {
-            anyhow::bail!("Grid spacing must be a positive number of metres");
+            anyhow::bail!("{}", tr!("cmd-reference-surface-grid-spacing-not-positive"));
         }
         let first = (lower / spacing).floor();
         let last = (upper / spacing).ceil();
         // Node indices must stay integers that f64 holds exactly.
         const INDEX_LIMIT: f64 = 4.0e15;
         if first.abs().max_element() > INDEX_LIMIT || last.abs().max_element() > INDEX_LIMIT {
-            anyhow::bail!("Grid extent is too far from the origin for a spacing of {spacing} m");
+            anyhow::bail!("{}", tr!("cmd-reference-surface-grid-extent-too-far", spacing = spacing.to_string()));
         }
         let columns = last.x - first.x + 1.0;
         let rows = last.y - first.y + 1.0;
@@ -57,8 +58,14 @@ impl LatticeBox {
             // A snapped side has at most ceil(extent / spacing) + 2 nodes.
             let longest = (upper - lower).max_element();
             anyhow::bail!(
-                "The grid spans {columns} x {rows} nodes, over {NODE_BUDGET} along a side; a spacing of {} m or more fits",
-                (10.0 * longest / (NODE_BUDGET - 2) as f64).ceil() / 10.0
+                "{}",
+                tr!(
+                    "cmd-reference-surface-grid-spans-over-budget",
+                    columns = columns.to_string(),
+                    rows = rows.to_string(),
+                    budget = NODE_BUDGET.to_string(),
+                    spacing = ((10.0 * longest / (NODE_BUDGET - 2) as f64).ceil() / 10.0).to_string()
+                )
             );
         }
         Ok(Self {
@@ -119,11 +126,11 @@ impl RowRuns {
             .map(|piece| -> Result<(Vec<usize>, Vec<[u32; 2]>)> {
                 let rows = piece * chunk..rows.min((piece + 1) * chunk);
                 let mut counts = Vec::new();
-                counts.try_reserve_exact(rows.len()).context("Not enough memory for the grid rows")?;
+                counts.try_reserve_exact(rows.len()).with_context(|| tr!("cmd-reference-surface-no-memory-grid-rows"))?;
                 let mut runs = Vec::new();
                 for row in rows {
                     if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
+                        anyhow::bail!(crate::app::jobs::Cancelled);
                     }
                     let before = runs.len();
                     runs_of(row, &mut runs)?;
@@ -134,9 +141,9 @@ impl RowRuns {
             .collect::<Result<Vec<_>>>()?;
         let total = pieces.iter().map(|(_, runs)| runs.len()).sum();
         let mut starts = Vec::new();
-        starts.try_reserve_exact(rows + 1).context("Not enough memory for the grid rows")?;
+        starts.try_reserve_exact(rows + 1).with_context(|| tr!("cmd-reference-surface-no-memory-grid-rows"))?;
         let mut runs = Vec::new();
-        runs.try_reserve_exact(total).context("Not enough memory for the grid rows")?;
+        runs.try_reserve_exact(total).with_context(|| tr!("cmd-reference-surface-no-memory-grid-rows"))?;
         starts.push(0);
         for (counts, piece) in pieces {
             for count in counts {
@@ -180,14 +187,14 @@ impl SpanLattice {
     /// same extent, `ring`, fits.
     pub(crate) fn new(bounds: LatticeBox, runs: RowRuns, ring: &[DVec2]) -> Result<Self> {
         if runs.rows() != bounds.rows {
-            anyhow::bail!("Grid runs do not match the grid's rows");
+            anyhow::bail!("{}", tr!("cmd-reference-surface-grid-runs-mismatch"));
         }
         let mut count = 0usize;
         for row in 0..runs.rows() {
             let mut end = 0;
             for (index, &[start, stop]) in runs.row(row).iter().enumerate() {
                 if start >= stop || (index > 0 && start <= end) || stop as usize > bounds.columns {
-                    anyhow::bail!("Grid runs are out of order in row {row}");
+                    anyhow::bail!("{}", tr!("cmd-reference-surface-grid-runs-out-of-order", row = row.to_string()));
                 }
                 end = stop;
                 count = count.saturating_add((stop - start) as usize);
@@ -195,12 +202,19 @@ impl SpanLattice {
         }
         if count > NODE_BUDGET {
             anyhow::bail!(
-                "The grid needs {count} nodes inside the extent, over the budget of {NODE_BUDGET}; a spacing of {} m or more fits",
-                fitting_spacing(ring, NODE_BUDGET)
+                "{}",
+                tr!(
+                    "cmd-reference-surface-grid-nodes-over-budget",
+                    count = count.to_string(),
+                    budget = NODE_BUDGET.to_string(),
+                    spacing = fitting_spacing(ring, NODE_BUDGET).to_string()
+                )
             );
         }
         let mut run_starts = Vec::new();
-        run_starts.try_reserve_exact(runs.runs.len()).context("Not enough memory for the grid rows")?;
+        run_starts
+            .try_reserve_exact(runs.runs.len())
+            .with_context(|| tr!("cmd-reference-surface-no-memory-grid-rows"))?;
         let mut next = 0;
         for &[start, stop] in &runs.runs {
             run_starts.push(next);
@@ -215,18 +229,6 @@ impl SpanLattice {
 
     pub(crate) fn spacing(&self) -> f64 {
         self.bounds.spacing
-    }
-
-    /// Columns of the box, needed or not.
-    #[allow(dead_code)]
-    pub(crate) fn columns(&self) -> usize {
-        self.bounds.columns
-    }
-
-    /// Rows of the box, needed or not.
-    #[allow(dead_code)]
-    pub(crate) fn rows(&self) -> usize {
-        self.bounds.rows
     }
 
     pub(crate) fn node(&self, column: usize, row: usize) -> DVec2 {
@@ -271,7 +273,7 @@ impl SpanLattice {
         let mut heights = Vec::new();
         heights
             .try_reserve_exact(count)
-            .with_context(|| format!("Not enough memory to allocate {count} grid nodes"))?;
+            .with_context(|| tr!("cmd-reference-surface-no-memory-grid-nodes", count = count.to_string()))?;
         heights.resize(count, f64::NAN);
         let task_count = rayon::current_num_threads().saturating_mul(4).max(1);
         let chunk_size = count.div_ceil(task_count).max(1);
@@ -284,7 +286,7 @@ impl SpanLattice {
             let mut column = self.runs.runs[run][0] as usize + (base - self.run_starts[run]);
             for slice in chunk.chunks_mut(PROGRESS_STRIDE) {
                 if cancel.is_cancelled() {
-                    anyhow::bail!("Cancelled");
+                    anyhow::bail!(crate::app::jobs::Cancelled);
                 }
                 for slot in slice.iter_mut() {
                     while column == self.runs.runs[run][1] as usize {

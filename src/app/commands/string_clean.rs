@@ -793,13 +793,14 @@ impl<'a> App<'a> {
             return;
         };
         let label = tr!("cmd-string-clean-cleaning-strings");
-        self.begin_run(&label, jobs.iter().map(|job| job.ids.len()).sum(), jobs.len());
+        // The job's label trails off; the lines naming the run do not.
+        let run_label = label.trim_end_matches('\u{2026}').to_owned();
+        self.begin_run(&run_label, jobs.iter().map(|job| job.ids.len()).sum(), jobs.len());
         let compute = move |cancel: &CancelFlag, progress: &Progress| {
             let cleaned = compute_clean(&jobs, &|| cancel.is_cancelled(), &|done, total| progress.set_items(done as u64, total as u64))
                 .map_err(|_| anyhow::Error::new(crate::app::jobs::Cancelled))?;
             Ok((jobs, cleaned))
         };
-        let run_label = label.clone();
         let apply = move |app: &mut App, result: anyhow::Result<(Vec<LayerJob>, Vec<Option<LayerClean>>)>| {
             let (jobs, cleaned) = match result {
                 Ok(done) => done,
@@ -851,13 +852,14 @@ impl<'a> App<'a> {
             return;
         };
         let label = tr!("cmd-string-clean-joining-strings");
-        self.begin_run(&label, with_at.iter().map(|(job, _)| job.ids.len()).sum(), with_at.len());
+        // The job's label trails off; the lines naming the run do not.
+        let run_label = label.trim_end_matches('\u{2026}').to_owned();
+        self.begin_run(&run_label, with_at.iter().map(|(job, _)| job.ids.len()).sum(), with_at.len());
         let compute = move |cancel: &CancelFlag, progress: &Progress| {
             let joined = compute_join(&with_at, &|| cancel.is_cancelled(), &|done, total| progress.set_items(done as u64, total as u64))
                 .map_err(|_| anyhow::Error::new(crate::app::jobs::Cancelled))?;
             Ok((with_at, joined))
         };
-        let run_label = label.clone();
         let apply = move |app: &mut App, result: anyhow::Result<(Vec<JoinJob>, Vec<Option<string_clean::LayerJoin>>)>| {
             let (with_at, joined) = match result {
                 Ok(done) => done,

@@ -29,7 +29,10 @@ use crate::{
             BlockBounds, BlockBoundsSource, BlockGeometry, BlockGeometryBuilder, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices,
             StoredColorTransferFunction, compute_world_bounds, opaque_irregular_surface_block_count, opaque_surface_block_count,
         },
-        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset, OrientationSource, skipped_working_sections},
+        drill_hole::{
+            DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset, OrientationSource, skipped_strat_columns,
+            skipped_working_sections,
+        },
         formats::{
             block_column::{BlockColumn, BlockColumnBuilder},
             block_model_data::{BlockModelColumn, BlockModelData},
@@ -2540,6 +2543,12 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 .warnings
                 .push(tr!("omf-element-name-has-count-unreadable", name = name.to_string(), count = count.to_string()));
         }
+        let count = skipped_strat_columns(color);
+        if count > 0 {
+            self.bundle
+                .warnings
+                .push(tr!("omf-element-name-has-count-unreadable-strat", name = name.to_string(), count = count.to_string()));
+        }
     }
 
     /// Construct only explorer metadata. In particular, do not read any
@@ -3822,15 +3831,20 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         if let Some(None) = built_from {
             self.bundle.warnings.push(tr!("omf-prismoid-record-dropped", name = name.to_string()));
         }
+        let (color_by, shaded) = (style_value::<PrismoidColorBy>(style, "color_by"), style_value::<bool>(style, "shaded"));
+        let present = |key: &str| style.and_then(|style| style.get(key)).is_some();
+        if (color_by.is_none() && present("color_by")) || (shaded.is_none() && present("shaded")) {
+            self.bundle.warnings.push(tr!("omf-prismoid-style-dropped", name = name.to_string()));
+        }
         Ok(LoadedPrismoidGrid {
             name: name.to_owned(),
             color: style_value(style, "color").unwrap_or_else(|| element_color(element, DEFAULT_PRISMOID_GRID_COLOR)),
             summary: grid.summary(),
             grid: Arc::new(grid),
-            color_by: style_value(style, "color_by").unwrap_or_default(),
+            color_by: color_by.unwrap_or_default(),
             stratum: stratum.flatten(),
             built_from: built_from.flatten(),
-            shaded: style_value(style, "shaded").unwrap_or(false),
+            shaded: shaded.unwrap_or(false),
         })
     }
 
@@ -4044,19 +4058,37 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 }
             }
         }
-        if let Some(logged) = element.metadata.get(META_LOGGED_INTERVALS).and_then(Value::as_object) {
-            for (index, pairs) in logged {
-                let (Some(hole), Some(pairs)) = (index.parse::<usize>().ok().and_then(|index| holes.get_mut(index)), pairs.as_array()) else {
-                    continue;
-                };
-                for pair in pairs {
-                    if let Ok((slot, logged)) = <(usize, crate::model::drill_hole::LoggedInterval)>::deserialize(pair)
-                        && let Some(interval) = hole.intervals.get_mut(slot)
-                    {
-                        interval.logged = Some(logged);
+        // What cannot be read or placed is counted and reported once.
+        let mut unplaced_logged = 0_usize;
+        if let Some(logged) = element.metadata.get(META_LOGGED_INTERVALS) {
+            match logged.as_object() {
+                None => unplaced_logged += 1,
+                Some(logged) => {
+                    for (index, pairs) in logged {
+                        let Some(pairs) = pairs.as_array() else {
+                            unplaced_logged += 1;
+                            continue;
+                        };
+                        let Some(hole) = index.parse::<usize>().ok().and_then(|index| holes.get_mut(index)) else {
+                            unplaced_logged += pairs.len();
+                            continue;
+                        };
+                        for pair in pairs {
+                            match <(usize, crate::model::drill_hole::LoggedInterval)>::deserialize(pair) {
+                                Ok((slot, logged)) if slot < hole.intervals.len() => hole.intervals[slot].logged = Some(logged),
+                                _ => unplaced_logged += 1,
+                            }
+                        }
                     }
                 }
             }
+        }
+        if unplaced_logged > 0 {
+            self.bundle.warnings.push(tr!(
+                "omf-element-name-has-count-as-logged",
+                name = element.name.to_string(),
+                count = unplaced_logged.to_string()
+            ));
         }
         if holes.is_empty() {
             return Ok(None);
