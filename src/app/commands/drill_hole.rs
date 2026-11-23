@@ -820,6 +820,7 @@ impl<'a> App<'a> {
     /// A closed dataset gives back the geophysics read from its linked files
     /// and the memory it held; the link stays with it.
     pub(crate) fn release_drillhole_runtime(&mut self, id: DrillHoleId) {
+        self.keep_thickness_runs_through_unload(id);
         self.cancel_collar_move_touching(id);
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::DrillHole(id));
         let entity = SceneEntityId::DrillHole(id);
@@ -899,17 +900,19 @@ impl<'a> App<'a> {
     /// derived from the holes and never edited; running again makes another
     /// layer, so a corrected pick shows up as a new set beside the old.
     ///
-    /// Runs on the holes the dialog holds, which may span datasets.
+    /// Runs on the holes the dialog holds, which may span datasets. Whether
+    /// it made the layer.
     pub(crate) fn build_reference_points(
         &mut self,
         holes: Vec<DrillHoleRef>,
         field: String,
         target: crate::model::drill_hole::ReferenceTarget,
         side: crate::model::drill_hole::ReferenceSide,
-    ) {
+    ) -> bool {
         let value = target.name().to_owned();
         let mut picks = Vec::new();
         let mut absent = 0usize;
+        let mut off_trace = 0usize;
         let mut flagged: Vec<String> = Vec::new();
         let mut involved: Vec<&OpenDrillHoleDataset> = Vec::new();
         for reference in &holes {
@@ -940,20 +943,42 @@ impl<'a> App<'a> {
                 absent += 1;
                 continue;
             };
+            match hole.position_on_trace(depth) {
+                Some(position) => picks.push(position),
+                // With no trace at all the hole has nowhere to place a pick.
+                None if hole.trace.is_empty() => {
+                    absent += 1;
+                    continue;
+                }
+                None => {
+                    off_trace += 1;
+                    continue;
+                }
+            }
             if pick.runs > 1 {
                 flagged.push(hole.dhid.clone());
             }
-            match hole.position_at_depth(depth) {
-                Some(position) => picks.push(position),
-                None => absent += 1,
-            }
+        }
+        if off_trace > 0 {
+            userspace_warn!(
+                "{}",
+                tr!(
+                    "cmd-drill-hole-reference-points-off-trace",
+                    count = off_trace.to_string(),
+                    value = target.label().to_string()
+                )
+            );
+        }
+        // Holes logging it where their traces do not reach were named above.
+        if picks.is_empty() && off_trace > 0 {
+            return false;
         }
         if picks.is_empty() {
             userspace_warn!("{}", tr!("cmd-drill-hole-no-hole-holds-value-field", value = target.label().to_string()));
-            return;
+            return false;
         }
         let Some(project) = self.workspace.active_project_mut() else {
-            return;
+            return false;
         };
         let runtime_id = project.runtime_id;
         let document = &mut project.project.document;
@@ -1003,12 +1028,14 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr!("cmd-drill-hole-uppermost-run-used-flagged-holes", holes = flagged.join(", ").to_string()));
         }
         self.invalidate_geometry();
+        true
     }
 
     /// One point per hole at its collar, as a new layer of points: what a
     /// ground surface is built from where the project has no topography.
     /// Like the reference points, derived from the holes and never edited.
-    pub(crate) fn build_collar_points(&mut self, holes: Vec<DrillHoleRef>) {
+    /// Whether it made the layer.
+    pub(crate) fn build_collar_points(&mut self, holes: Vec<DrillHoleRef>) -> bool {
         let mut collars = Vec::new();
         let mut absent = 0usize;
         for reference in &holes {
@@ -1024,10 +1051,10 @@ impl<'a> App<'a> {
         }
         if collars.is_empty() {
             userspace_warn!("{}", tr!("cmd-drill-hole-no-collars"));
-            return;
+            return false;
         }
         let Some(project) = self.workspace.active_project_mut() else {
-            return;
+            return false;
         };
         let document = &mut project.project.document;
         let layer_id = document.allocate_layer_id();
@@ -1059,6 +1086,7 @@ impl<'a> App<'a> {
         self.select_only(made.into_iter().map(SceneEntityId::Object));
         userspace_log!("{}", tr!("cmd-drill-hole-collar-points", used = used.to_string(), absent = absent.to_string()));
         self.invalidate_geometry();
+        true
     }
 }
 

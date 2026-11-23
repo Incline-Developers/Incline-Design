@@ -61,8 +61,10 @@ Drill holes are loaded, with the seam logged in a categorical field. The entry i
 
 ### What it refuses and why
 - The entry is always enabled. With no hole selected the **Holes** row reads "No holes selected"; **Pick** fills it.
+- **Make** greyed: no holes to place points on, as after **Pick** then **Clear** or when their set is closed: "Pick the holes to place points on".
 - **Make** greyed: no working section is chosen, as when the holes have no categorical field ("No categorical field") or the field holds no values ("No values").
 - Warning alert "No hole holds", the chosen seam, "in that field", for example "No hole holds 'A' in that field": none of the holes logs that value; nothing is made.
+- Warning, for example "1 holes log 'A' where their trace does not reach, and are left out of the reference points": a hole logs the seam above where its trace starts or below its last station, so it has no place for a point. When every hole holding the seam is like that, this warning comes alone, without "No hole holds".
 - A hole that logs the seam twice gives its upper run and is named, for example "Uppermost run used, flagged: H2". Two or more datasets whose working sections of one name differ: "Working section", the name, "is not the same in every selected dataset; each dataset's own was used." Each is a warning: an alert titled **Build Reference Points** opens, listing every line of the run.
 - The result line, in the console under **Build Reference Points**, reads, for example, "Reference points: 3 holes placed, 0 without 'A', 0 flagged as possible fault repeats". For **The collars** it reads "Collar points:", then the holes placed and the holes without a collar; with no collar to place, the warning is "None of the holes has a collar to place a point at".
 ### Related tools
@@ -82,7 +84,7 @@ A project is open. The entry is always enabled. Selecting the points and, if you
 1. Open **Modelling > Build Surface...** The dialog **Build Surface** shows what it builds from. **Points** gives the count and the layer, for example "3 point(s) on 'Roof points'". **Controls** gives the open strings, for example "1 control polyline(s) on 'Roof controls'", or "No control polylines". **Extent** reads "No extent" when no closed string is selected. Under them are **Grid spacing**, with the number of grid nodes it gives, and the settings line with "Change these in Preferences, Modelling" under it.
 2. Check **Output name**. For points made by **Reference Points** in this session it offers the seam's roof or floor name, for example `A Roof`; otherwise the name of the points' layer when they sit on one layer, else `Surface`. Type another name if you want one.
 3. Press **Make**. A progress line "Building surface…" runs, then a new surface appears.
-4. Read the result in the console, on the row **Build Surface**. Its last line is "Created triangulation", with the surface's name and counts. The run record reads "Run record:", then the points used, the picks given, the picks merged and the picks left out under control strings, then the method, the spacing, who built it and when. With no extent the run warns "No mask selected; the surface is clipped to the points' outline plus 25 m". When the run warns, an alert titled **Build Surface** opens as it ends, listing every line of the run in order.
+4. Read the result in the console, on the row **Build Surface**. Its last line is "Created triangulation", with the surface's name and counts. The run record reads "Run record:", then the points used, the picks given, the picks merged and the picks left out under control strings, then the method, the spacing, who built it and when. With no extent the console notes "No mask selected; the surface is clipped to the points' outline plus 25 m". When the run warns, an alert titled **Build Surface** opens as it ends, listing every line of the run in order.
 5. To clip, draw a closed string round the holes, select it with the points and build again: each build adds a surface, nothing is replaced.
 
 A pick that lies on a control string in plan, within 1 cm of it, is left out and the string's height is used there. Where the two heights differ by more than 0.05 m the run warns and gives both, for example "Control polyline overrides the pick at (1000.000, 1000.000): pick 80.00 m, control 79.50 m, difference -0.50 m", the difference being the string's height less the pick's. Within 0.05 m the pick is left out without a warning.
@@ -165,8 +167,8 @@ Open a project. Without one the tab reads "No open project".
 | **Steep-pair angle** | 80 degrees | Pairs steeper than this are named when a build succeeds. |
 
 ### What it refuses and why
-- Distance must be above 0: "The steep-pair distance must be a positive number of metres".
+- Distance must be at least 0.01 m, the least the summary shows as more than 0: "The steep-pair distance must be a number of metres, at least 0.01".
 - Angle must be above 0 and at most 90: "The steep-pair angle must be more than 0 and at most 90 degrees".
-- The two fields hold their values inside these limits, so an invalid set is never sent; a project that stores one stops a build with the same words, in a **Build Surface** error alert.
+- The two fields hold their values inside these limits, so an invalid set is never sent; a project saved with one opens with every modelling setting at its default and the warning "Project modelling settings could not be read; the defaults are used".
 ### Related tools
 [Build Surface](#3-build-surface).

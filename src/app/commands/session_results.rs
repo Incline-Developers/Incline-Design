@@ -1,9 +1,11 @@
 //! What thickness work leaves behind for the session, in one place.
 //!
-//! Six maps share one lifetime: held until the project changes or the layer
-//! or surface they belong to is gone. They are results, not editor state, so
-//! they live on `App`; the explorer reads which entries exist through
-//! `UiProjectView` and asks for a table by command.
+//! The maps share one lifetime: held until the project changes or the layer
+//! or surface they belong to is gone; a run's reads go when the run lands,
+//! or with the project when its result is dropped unapplied.
+//! They are results, not editor state, so they live on `App`; the explorer
+//! reads which entries exist through `UiProjectView` and asks for a table by
+//! command.
 
 use std::{
     collections::HashMap,
@@ -12,10 +14,24 @@ use std::{
 };
 
 use crate::{
-    app::commands::{thickness_points::ReferenceSource, triangulation::reference_surface::seam::ThicknessRunRecord},
-    model::{LayerId, triangulation::TriangulationId},
+    app::commands::{
+        thickness_points::ReferenceSource,
+        triangulation::reference_surface::seam::{HolesRead, ThicknessRunRecord},
+    },
+    model::{
+        LayerId,
+        drill_hole::{DrillHoleId, ReferenceTarget},
+        triangulation::TriangulationId,
+    },
     ui::state::{HoleMisfitTable, SeamTable, ThicknessTable},
 };
+
+/// What a thickness points run that is still computing read of its datasets.
+pub(crate) struct RunReads {
+    pub(crate) field: String,
+    pub(crate) target: ReferenceTarget,
+    pub(crate) holes: Vec<(DrillHoleId, HolesRead)>,
+}
 
 /// Session-only results of Reference Points, Thickness Points and Thickness
 /// Surfaces. Keys are a project's runtime id with a layer, or a surface id.
@@ -30,6 +46,12 @@ pub(crate) struct SessionResults {
     /// The latest thickness points measured against each surface, held for
     /// its thickness grid.
     pub(crate) thickness_runs: HashMap<TriangulationId, ThicknessRunRecord>,
+    /// The reads of each thickness points run still computing, by run number,
+    /// so an unload meanwhile can bring them up to date as it does the
+    /// finished runs'.
+    pub(crate) thickness_reads_in_flight: HashMap<u64, RunReads>,
+    /// The number the next thickness points run takes.
+    pub(crate) thickness_run_count: u64,
     /// Every thickness points layer's table made this session, by project
     /// runtime id and layer, to show again from the explorer.
     pub(crate) thickness_tables: HashMap<(u32, LayerId), Arc<ThicknessTable>>,
@@ -41,9 +63,13 @@ pub(crate) struct SessionResults {
 }
 
 impl SessionResults {
-    /// Forget everything, for ids that restart with a new project.
+    /// Forget everything, for ids that restart with a new project; run
+    /// numbers go on counting, so a run of the old project never takes a
+    /// new one's reads.
     pub(crate) fn clear(&mut self) {
+        let count = self.thickness_run_count;
         *self = Self::default();
+        self.thickness_run_count = count;
     }
 
     /// Drop the entries of a layer or surface that no longer exists.

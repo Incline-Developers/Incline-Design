@@ -82,25 +82,40 @@ impl GridSurface {
         if cells < 2 || cells * 4 < mesh.face_count() {
             return Err(NotAGrid::NoCells);
         }
-        let offset = DVec2::new(corner.x - spacing * (corner.x / spacing).floor(), corner.y - spacing * (corner.y / spacing).floor());
+        // The leg is only as exact as the coordinates, about a unit in the
+        // last place of the largest one, so counted from the corner a node
+        // may drift that much further off for every spacing.
+        let reach = vertices.iter().fold(0.0_f64, |reach, vertex| reach.max(vertex.x.abs()).max(vertex.y.abs()));
+        let drift = 4.0 * f64::EPSILON * reach / spacing;
         let index_of = |at: DVec2| -> Option<[i64; 2]> {
-            let local = (at - offset) / spacing;
+            let local = (at - corner) / spacing;
             let rounded = local.round();
-            ((local - rounded).abs().max_element() <= NODE_TOLERANCE).then_some([rounded.x as i64, rounded.y as i64])
+            let tolerance = (NODE_TOLERANCE + drift * (1.0 + rounded.abs().max_element())).min(0.1);
+            ((local - rounded).abs().max_element() <= tolerance).then_some([rounded.x as i64, rounded.y as i64])
         };
-        let found: Vec<([i64; 2], f64)> = vertices
+        let found: Vec<([i64; 2], DVec2, f64)> = vertices
             .iter()
-            .filter_map(|vertex| index_of(DVec2::new(vertex.x, vertex.y)).map(|index| (index, vertex.z)))
+            .filter_map(|vertex| {
+                let at = DVec2::new(vertex.x, vertex.y);
+                index_of(at).map(|index| (index, at - corner, vertex.z))
+            })
             .collect();
-        let low = found.iter().fold([i64::MAX; 2], |low, (index, _)| [low[0].min(index[0]), low[1].min(index[1])]);
-        let high = found.iter().fold([i64::MIN; 2], |high, (index, _)| [high[0].max(index[0]), high[1].max(index[1])]);
+        // The spacing made exact from the node furthest from the corner.
+        let spacing = found
+            .iter()
+            .flat_map(|&(index, along, _)| [(index[0], along.x), (index[1], along.y)])
+            .filter(|&(steps, _)| steps != 0)
+            .max_by_key(|&(steps, _)| steps.unsigned_abs())
+            .map_or(spacing, |(steps, along)| along / steps as f64);
+        let low = found.iter().fold([i64::MAX; 2], |low, (index, ..)| [low[0].min(index[0]), low[1].min(index[1])]);
+        let high = found.iter().fold([i64::MIN; 2], |high, (index, ..)| [high[0].max(index[0]), high[1].max(index[1])]);
         let columns = usize::try_from(high[0] - low[0] + 1).map_err(|_| NotAGrid::NoCells)?;
         let rows = usize::try_from(high[1] - low[1] + 1).map_err(|_| NotAGrid::NoCells)?;
         let count = columns.checked_mul(rows).filter(|&count| count <= NODE_BUDGET).ok_or(NotAGrid::TooLarge)?;
         let mut heights = Vec::new();
         heights.try_reserve_exact(count).map_err(|_| NotAGrid::TooLarge)?;
         heights.resize(count, f64::NAN);
-        for (index, z) in found {
+        for (index, _, z) in found {
             let slot = (index[1] - low[1]) as usize * columns + (index[0] - low[0]) as usize;
             let height = &mut heights[slot];
             if height.is_nan() {
@@ -110,7 +125,7 @@ impl GridSurface {
             }
         }
         Ok(Self {
-            origin: offset + DVec2::new(low[0] as f64, low[1] as f64) * spacing,
+            origin: corner + DVec2::new(low[0] as f64, low[1] as f64) * spacing,
             spacing,
             columns,
             rows,
@@ -142,6 +157,9 @@ impl GridSurface {
 
     /// The column and row of the node at `at`, when `at` is one.
     pub(crate) fn node_at(&self, at: DVec2) -> Option<(usize, usize)> {
+        if !at.is_finite() {
+            return None;
+        }
         let local = (at - self.origin) / self.spacing;
         let rounded = local.round();
         if (local - rounded).abs().max_element() > NODE_TOLERANCE || rounded.min_element() < 0.0 {
@@ -172,7 +190,7 @@ impl GridSurface {
     /// Height at `at` read bilinearly off the four nodes of the lattice cell
     /// under it, when the surface has all four.
     pub(crate) fn bilinear(&self, at: DVec2) -> Option<f64> {
-        if self.columns < 2 || self.rows < 2 {
+        if self.columns < 2 || self.rows < 2 || !at.is_finite() {
             return None;
         }
         let local = (at - self.origin) / self.spacing;

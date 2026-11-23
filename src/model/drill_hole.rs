@@ -1193,6 +1193,18 @@ impl DrillHole {
         Some(a.position.lerp(b.position, t))
     }
 
+    /// Where the trace stands at `depth`, or `None` where the trace does not
+    /// reach it: above its first station, past its toe, at a depth that is
+    /// not a number, or with no trace at all. A pick there has no place, so
+    /// it is not put at the nearer end.
+    pub(crate) fn position_on_trace(&self, depth: f64) -> Option<DVec3> {
+        let (first, toe) = (self.trace.first()?, self.trace.last()?);
+        if depth.is_nan() || depth < first.depth - 1e-9 || depth > toe.depth + 1e-9 {
+            return None;
+        }
+        self.position_at_depth(depth)
+    }
+
     /// The straight pieces the trace is drawn in between depths `from` and
     /// `to`, clamped to the trace: cut at every station, at the ends of
     /// `render_ranges`, and at `cuts`. A piece whose middle lies outside

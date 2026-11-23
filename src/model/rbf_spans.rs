@@ -99,8 +99,8 @@ impl LatticeBox {
 
     /// The column and row of the node at exactly `at`, if the box has one.
     pub(crate) fn node_at(&self, at: DVec2) -> Option<(usize, usize)> {
-        let column = usize::try_from((at.x / self.spacing).round() as i64 - self.first[0]).ok()?;
-        let row = usize::try_from((at.y / self.spacing).round() as i64 - self.first[1]).ok()?;
+        let column = usize::try_from(((at.x / self.spacing).round() as i64).checked_sub(self.first[0])?).ok()?;
+        let row = usize::try_from(((at.y / self.spacing).round() as i64).checked_sub(self.first[1])?).ok()?;
         (column < self.columns && row < self.rows && self.node(column, row) == at).then_some((column, row))
     }
 }

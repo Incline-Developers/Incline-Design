@@ -297,6 +297,10 @@ pub(crate) enum SurfaceMethod {
     ThinPlateSpline,
 }
 
+/// The least steep-pair distance, in metres: the smallest the settings line
+/// shows as more than zero (it shows two places).
+pub(crate) const MIN_STEEP_DISTANCE: f64 = 0.01;
+
 /// The project-level settings for Build Surface, under Preferences,
 /// Modelling. The defaults build the exact spline; an unknown field is
 /// ignored on read.
@@ -337,8 +341,8 @@ impl ModellingSettings {
 
     /// Why these settings cannot be built with, or `None` when they can.
     pub(crate) fn problem(&self) -> Option<String> {
-        if !(self.steep_distance.is_finite() && self.steep_distance > 0.0) {
-            return Some(tr!("project-steep-pair-distance-positive"));
+        if !(self.steep_distance.is_finite() && self.steep_distance >= MIN_STEEP_DISTANCE) {
+            return Some(tr!("project-steep-pair-distance-least"));
         }
         if !(self.steep_degrees.is_finite() && self.steep_degrees > 0.0 && self.steep_degrees <= 90.0) {
             return Some(tr!("project-steep-pair-angle-range"));

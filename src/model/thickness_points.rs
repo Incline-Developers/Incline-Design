@@ -5,7 +5,8 @@
 //! True thickness is the roof-to-floor vector taken on the bedding normal,
 //! one formula for every hole whatever its angle to the seam [Dennison 1968;
 //! Heckscher & Saunders, "Precision in the dip"]. The bedding is the
-//! reference surface's slope at the roof, read off its own grid nodes, so a
+//! reference surface's slope at the pick it passes through (the roof for a
+//! roof surface, the floor for a floor one), read off its own grid nodes, so a
 //! surface from a saved project measures as well as one built this session.
 //!
 //! Beside them, the misfit of a prismoid grid at the same picks and at
@@ -18,7 +19,7 @@ use crate::{
     i18n::tr,
     model::{
         Command,
-        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleId, DrillValue, section_run},
+        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleId, DrillValue, ReferenceSide, section_run},
         grid_surface::GridSurface,
         prismoid_grid::{PlanMiss, PrismoidGrid},
         rbf::Dip,
@@ -55,7 +56,7 @@ pub(crate) enum LeftOutReason {
     NoFloor,
     /// The floor lies above the roof: overturned, out of scope.
     Overturned,
-    /// The roof's plan position is off the reference surface.
+    /// The plan position of the side the surface was built on is off it.
     OutsideSurface,
     /// A measured pair with a blank or non-numeric coordinate.
     MissingValue,
@@ -70,7 +71,8 @@ pub(crate) struct LeftOut {
     pub(crate) reason: LeftOutReason,
 }
 
-/// One measured thickness, placed at its roof.
+/// One measured thickness, read at the pick the reference surface passes
+/// through.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ThicknessPoint {
     pub(crate) source: InterceptSource,
@@ -82,7 +84,7 @@ pub(crate) struct ThicknessPoint {
     pub(crate) vertical_thickness: f64,
     /// The straight distance from roof to floor.
     pub(crate) along_hole: f64,
-    /// The reference surface's dip and dip direction at the roof.
+    /// The reference surface's dip and dip direction where it was read.
     pub(crate) dip: Dip,
     pub(crate) repeated: bool,
 }
@@ -117,7 +119,9 @@ pub(crate) fn true_thickness(roof: DVec3, floor: DVec3, gradient: DVec2) -> (f64
 }
 
 /// The roof and floor of the section `codes` names in `field`, on the
-/// hole's trace; `None` where the hole never holds it.
+/// hole's trace; `None` where the hole never holds it. A roof, or a logged
+/// floor, where the trace does not reach leaves the hole out: the ends of
+/// the trace are not the places a depth beyond them stands.
 pub(crate) fn hole_intercept(hole: &DrillHole, field: &str, codes: &[String]) -> Option<Result<Intercept, LeftOut>> {
     let run = section_run(hole, field, codes)?;
     let hole_source = |floor_depth| InterceptSource::Hole {
@@ -125,15 +129,23 @@ pub(crate) fn hole_intercept(hole: &DrillHole, field: &str, codes: &[String]) ->
         roof_depth: run.top,
         floor_depth,
     };
-    let Some(roof) = hole.position_at_depth(run.top) else {
-        return Some(Err(LeftOut {
+    let no_trace = || {
+        Some(Err(LeftOut {
             source: hole_source(Some(run.base)),
             reason: LeftOutReason::NoTrace,
-        }));
+        }))
     };
-    // A floor past the last station would be the toe again, not a floor.
-    let traced = hole.trace.last().is_some_and(|toe| run.base <= toe.depth + 1e-9);
-    let floor = if run.closed && traced { hole.position_at_depth(run.base) } else { None };
+    let Some(roof) = hole.position_on_trace(run.top) else {
+        return no_trace();
+    };
+    let floor = if run.closed {
+        let Some(floor) = hole.position_on_trace(run.base) else {
+            return no_trace();
+        };
+        Some(floor)
+    } else {
+        None
+    };
     let source = hole_source(floor.map(|_| run.base));
     Some(Ok(Intercept {
         source,
@@ -275,8 +287,11 @@ pub(crate) fn thickness_column_edit(
     Ok(Some((command, summary)))
 }
 
-/// Measure every intercept against `reference`. Fails only when cancelled.
-pub(crate) fn thickness_points(intercepts: Vec<Intercept>, reference: &GridSurface, cancel: &CancelFlag) -> anyhow::Result<ThicknessRun> {
+/// Measure every intercept against `reference`, which passes through the
+/// `side` of the seam: its coverage, slope and dip are read where that side
+/// was picked, the roof for a roof surface and the floor for a floor one.
+/// Fails only when cancelled.
+pub(crate) fn thickness_points_on(intercepts: Vec<Intercept>, reference: &GridSurface, side: ReferenceSide, cancel: &CancelFlag) -> anyhow::Result<ThicknessRun> {
     let mut run = ThicknessRun::default();
     for (index, intercept) in intercepts.into_iter().enumerate() {
         if index % 256 == 0 && cancel.is_cancelled() {
@@ -286,7 +301,7 @@ pub(crate) fn thickness_points(intercepts: Vec<Intercept>, reference: &GridSurfa
         let reason = match floor {
             None => Some(LeftOutReason::NoFloor),
             Some(floor) if floor.z > roof.z => Some(LeftOutReason::Overturned),
-            Some(_) if !reference.covers(roof.truncate()) => Some(LeftOutReason::OutsideSurface),
+            Some(floor) if !reference.covers(picked(roof, floor, side).truncate()) => Some(LeftOutReason::OutsideSurface),
             Some(_) => None,
         };
         let (Some(floor), None) = (floor, reason) else {
@@ -296,7 +311,7 @@ pub(crate) fn thickness_points(intercepts: Vec<Intercept>, reference: &GridSurfa
             });
             continue;
         };
-        let at = roof.truncate();
+        let at = picked(roof, floor, side).truncate();
         let gradient = reference.slope(at);
         let dip = reference.dip(at);
         let (true_thickness, vertical_thickness) = true_thickness(roof, floor, gradient);
@@ -312,6 +327,15 @@ pub(crate) fn thickness_points(intercepts: Vec<Intercept>, reference: &GridSurfa
         });
     }
     Ok(run)
+}
+
+/// The pick of `side`: the one a reference surface on that side passes
+/// through.
+pub(crate) fn picked(roof: DVec3, floor: DVec3, side: ReferenceSide) -> DVec3 {
+    match side {
+        ReferenceSide::Roof => roof,
+        ReferenceSide::Floor => floor,
+    }
 }
 
 /// What one misfit row measures.

@@ -7,8 +7,11 @@ use crate::{
     i18n::tr,
     model::drill_hole::{DrillField, DrillFieldKind, DrillHole, DrillHoleRef, DrillValue, OpenDrillHoleDataset, ReferenceSide, ReferenceTarget},
     ui::{
-        state::{EditorState, SeamChoice, SelectionPickTool, UiCommand},
-        widgets::menu::{DragableMenu, MenuButton, MenuFieldCombo, picked_selection_field},
+        state::{CodesRead, EditorState, SeamChoice, SelectionPickTool, UiCommand},
+        widgets::{
+            hint::Hint,
+            menu::{self, DragableMenu, MenuButton, MenuFieldCombo, picked_selection_field},
+        },
     },
 };
 
@@ -47,16 +50,17 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
     };
     // The values the selected holes actually log, not every value the
     // datasets declare: a section none of these holes hold has no points to
-    // place.
-    let categories = draft
-        .seam
-        .field
-        .as_deref()
-        .map(|key| logged_codes(draft.holes.iter().filter_map(|reference| hole_of(&involved, *reference)), key))
-        .unwrap_or_default();
+    // place. Read again only when the field or the datasets change.
+    if let Some(field) = draft.seam.field.clone()
+        && !codes_current(draft.codes.as_ref(), &field, &involved)
+    {
+        let codes = logged_codes(draft.holes.iter().filter_map(|reference| hole_of(&involved, *reference)), &field);
+        draft.codes = Some((codes_read(field, &involved), codes));
+    }
+    let categories = draft.codes.as_ref().map(|(_, codes)| codes.clone()).unwrap_or_default();
     let mut open = true;
-    let mut build = None;
-    let mut collars = false;
+    let mut make = false;
+    let mut cancel = false;
     DragableMenu::new("reference_points_dialog", tr!("reference-points-reference-points"))
         .open(&mut open)
         .min_width(380.0)
@@ -80,40 +84,51 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
             .show(ui);
             if draft.collars {
                 ui.small(tr!("reference-points-one-point-per-hole-collar"));
-                if ui.add(MenuButton::new(tr!("reference-points-make")).primary()).clicked() {
-                    collars = true;
+            } else {
+                seam_controls(ui, "reference_points", &involved, &categories, &mut draft.seam);
+                ui.small(tr!("reference-points-one-point-per-hole-boundary"));
+            }
+            let has_holes = draft.holes.iter().any(|reference| hole_of(&involved, *reference).is_some());
+            let blocker = reference_points_blocker(has_holes, draft.collars, draft.seam.value.is_some());
+            menu::menu_actions(ui, |ui| {
+                let confirm = blocker.is_none() && menu::dialog_confirmed(ui.ctx());
+                let button = ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(blocker.is_none()));
+                if let Some(reason) = &blocker {
+                    button.hint(reason);
+                } else if button.clicked() || confirm {
+                    make = true;
                 }
-                return;
-            }
-
-            seam_controls(ui, "reference_points", &involved, &categories, &mut draft.seam);
-
-            ui.small(tr!("reference-points-one-point-per-hole-boundary"));
-            if ui
-                .add(MenuButton::new(tr!("reference-points-make")).primary().enabled(draft.seam.value.is_some()))
-                .clicked()
-                && let (Some(field), Some(target)) = (draft.seam.field.clone(), draft.seam.value.clone())
-            {
-                build = Some((field, target, draft.seam.side));
-            }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    cancel = true;
+                }
+            });
         });
-    if collars {
-        commands.push(UiCommand::BuildCollarPoints { holes: draft.holes.clone() });
-        open = false;
+    // Closed by the command once the points are made.
+    if make {
+        if draft.collars {
+            commands.push(UiCommand::BuildCollarPoints { holes: draft.holes.clone() });
+        } else if let (Some(field), Some(target)) = (draft.seam.field.clone(), draft.seam.value.clone()) {
+            editor.last_seam = Some(draft.seam.clone());
+            commands.push(UiCommand::BuildReferencePoints {
+                holes: draft.holes.clone(),
+                field,
+                target,
+                side: draft.seam.side,
+            });
+        }
     }
-    if let Some((field, target, side)) = build {
-        editor.last_seam = Some(draft.seam.clone());
-        commands.push(UiCommand::BuildReferencePoints {
-            holes: draft.holes.clone(),
-            field,
-            target,
-            side,
-        });
-        open = false;
-    }
-    if !open {
+    if !open || cancel {
         editor.reference_points_dialog = None;
     }
+}
+
+/// Why Make waits, if it does: holes to place points on, and for points at
+/// a logged pick a section or code to place them on.
+fn reference_points_blocker(has_holes: bool, collars: bool, has_section: bool) -> Option<String> {
+    if !has_holes {
+        return Some(tr!("reference-points-blocker-no-holes"));
+    }
+    (!collars && !has_section).then(|| tr!("reference-points-blocker-no-section"))
 }
 
 /// Where the points go: at a logged pick, or at the collars.
@@ -131,6 +146,18 @@ pub(crate) fn hole_of<'a>(involved: &[&'a OpenDrillHoleDataset], reference: Dril
         .iter()
         .find(|dataset| dataset.id == reference.dataset)
         .and_then(|dataset| dataset.dataset.holes.get(reference.hole))
+}
+
+/// What codes logged in `field` are read from: the field and the datasets
+/// `involved` as they stand.
+pub(crate) fn codes_read(field: String, involved: &[&OpenDrillHoleDataset]) -> CodesRead {
+    (field, involved.iter().map(|dataset| (dataset.id, dataset.state.revision())).collect())
+}
+
+/// Whether `codes` were read from `field` and the datasets `involved` as
+/// they stand now.
+pub(crate) fn codes_current(codes: Option<&(CodesRead, Vec<String>)>, field: &str, involved: &[&OpenDrillHoleDataset]) -> bool {
+    codes.is_some_and(|((read, datasets), _)| read == field && datasets.iter().copied().eq(involved.iter().map(|dataset| (dataset.id, dataset.state.revision()))))
 }
 
 /// Every code `holes` log in `field`, once each, sorted.

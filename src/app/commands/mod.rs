@@ -55,6 +55,7 @@ impl<'a> App<'a> {
         if self.editor.end_string_rework_for_history_step() {
             self.invalidate_geometry();
         }
+        let seam_surface_ready = self.seam_surface_dialog_ready();
         if self.restore_history_step(undo) {
             return;
         }
@@ -95,6 +96,10 @@ impl<'a> App<'a> {
         // references dangling. Both are settled by the same sweep.
         self.drop_editor_references_to_missing_items();
         self.apply_step_effects(effects);
+        // A step can stale a ready Thickness Surfaces dialog's run.
+        if seam_surface_ready {
+            self.refresh_seam_surface_dialog(true);
+        }
         // An open Thin Strings dialog previews the strings as they were.
         self.refresh_thin_preview(true);
         // A copy's first pick is a vertex number on a string the step may
@@ -1034,13 +1039,19 @@ impl<'a> App<'a> {
                 side,
                 pairs,
                 then_surface,
-            } => self.make_thickness_points(
-                surface,
-                holes,
-                crate::app::commands::thickness_points::ReferenceSeam { field, target, side },
-                pairs,
-                then_surface,
-            ),
+            } => {
+                let result = self.make_thickness_points(
+                    surface,
+                    holes,
+                    crate::app::commands::thickness_points::ReferenceSeam { field, target, side },
+                    pairs,
+                    then_surface,
+                );
+                if result.is_ok() {
+                    self.editor.thickness_points_dialog = None;
+                }
+                result
+            }
             UiCommand::OpenSeamSurface => {
                 self.open_seam_surface();
                 Ok(())
@@ -1057,9 +1068,20 @@ impl<'a> App<'a> {
                 self.editor.hole_misfit_table = self.session.misfit_tables.get(&(runtime_id, layer)).cloned();
                 Ok(())
             }
-            UiCommand::MakeSeamSurface { surface } => self.make_seam_surface(surface),
+            UiCommand::MakeSeamSurface { surface } => {
+                let result = self.make_seam_surface(surface);
+                if result.is_ok() {
+                    self.editor.seam_surface_dialog = None;
+                } else {
+                    // Kept open on the reason, so Make greys and says why.
+                    self.set_seam_surface(surface);
+                }
+                result
+            }
             UiCommand::BuildCollarPoints { holes } => {
-                self.build_collar_points(holes);
+                if self.build_collar_points(holes) {
+                    self.editor.reference_points_dialog = None;
+                }
                 Ok(())
             }
             UiCommand::SetModellingSettings(settings) => {
@@ -1079,7 +1101,9 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::BuildReferencePoints { holes, field, target, side } => {
-                self.build_reference_points(holes, field, target, side);
+                if self.build_reference_points(holes, field, target, side) {
+                    self.editor.reference_points_dialog = None;
+                }
                 Ok(())
             }
             UiCommand::InspectDrillHole(hole) => self.inspect_drill_hole(hole),
@@ -1696,9 +1720,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::DeleteRingVertex { id, vertex } => {
-                if self.editor.canvas_edits_object(self.active_document(), id) {
-                    self.delete_ring_vertex(id, vertex);
-                }
+                self.delete_ring_vertex(id, vertex);
                 Ok(())
             }
             UiCommand::ApplyObjectEdit { id, object, close } => {

@@ -914,8 +914,13 @@ impl<'a> App<'a> {
 
     /// Delete the vertex a ring names through the canvas Delete Vertex's own
     /// path, one undo step, and update the rings; said and left alone when
-    /// the string is at its fewest vertices.
+    /// the vertex is gone, the string is locked or hidden, or it is at its
+    /// fewest vertices.
     pub(crate) fn delete_ring_vertex(&mut self, id: ObjectId, vertex: usize) {
+        if let Some(reason) = ring_vertex_refusal(&self.editor, self.active_document(), id, vertex) {
+            userspace_warn!("{}", reason);
+            return;
+        }
         if self.delete_polyline_vertex(id, vertex) {
             self.editor.forget_deleted_ring_vertex(id, vertex);
             self.redraw_requested = true;
@@ -928,4 +933,19 @@ impl<'a> App<'a> {
             }
         }
     }
+}
+
+/// Why a ring's Delete Vertex is refused before the string is looked at for
+/// its fewest vertices: the vertex is gone, the string is locked, or hidden.
+fn ring_vertex_refusal(editor: &crate::ui::state::EditorState, document: &crate::model::Document, id: ObjectId, vertex: usize) -> Option<String> {
+    let handle = SceneEntityId::Object(id);
+    let layer = match document.get_object(id) {
+        Some(Object::Polyline { verts, layer, .. }) if vertex < verts.len() => *layer,
+        _ => return Some(tr!("object-edit-ring-vertex-gone")),
+    };
+    if editor.locked_layers.contains(&layer) || editor.frozen_handles.contains(&handle) {
+        return Some(tr!("object-edit-ring-string-locked"));
+    }
+    let shown = document.layer(layer).is_some_and(crate::model::Layer::is_visible) && !document.is_object_hidden(id) && !editor.hidden_handles.contains(&handle);
+    (!shown).then(|| tr!("object-edit-ring-string-hidden"))
 }

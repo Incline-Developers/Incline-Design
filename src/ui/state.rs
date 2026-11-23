@@ -5203,6 +5203,7 @@ impl EditorState {
         self.regular_block_model_grids.clear();
         // Snapshotted object ids, and a hold on the selection while it is up:
         // neither can outlive the project they were taken from.
+        self.reference_points_dialog = None;
         self.reference_surface_dialog = None;
         self.thickness_points_dialog = None;
         self.thickness_table = None;
@@ -12235,9 +12236,9 @@ pub(crate) struct ThicknessPointsDraft {
     /// The holes picked; none means every loaded hole holding the section.
     pub(crate) holes: Vec<DrillHoleRef>,
     pub(crate) seam: SeamChoice,
-    /// The codes the holes log in a field, read once each time the field
-    /// changes rather than every frame.
-    pub(crate) codes: Option<(String, Vec<String>)>,
+    /// The codes the holes log in a field, read again only when the field
+    /// or what [`CodesRead`] keeps of their datasets changes.
+    pub(crate) codes: Option<(CodesRead, Vec<String>)>,
     pub(crate) pairs: Option<PairsFile>,
     /// Make the seam's other surface as soon as the points are made.
     pub(crate) then_surface: bool,
@@ -12305,7 +12306,7 @@ pub(crate) struct HoleMisfitDraft {
     /// The side is unused.
     pub(crate) seam: SeamChoice,
     /// As [`ThicknessPointsDraft::codes`].
-    pub(crate) codes: Option<(String, Vec<String>)>,
+    pub(crate) codes: Option<(CodesRead, Vec<String>)>,
 }
 
 /// One misfit run as its table shows it.
@@ -12628,9 +12629,17 @@ impl EditorState {
 pub(crate) struct ReferencePointsDraft {
     pub(crate) holes: Vec<DrillHoleRef>,
     pub(crate) seam: SeamChoice,
+    /// The codes the holes log in a field, read again only when the field
+    /// or what [`CodesRead`] keeps of their datasets changes.
+    pub(crate) codes: Option<(CodesRead, Vec<String>)>,
     /// Points at the holes' collars instead of at a logged pick.
     pub(crate) collars: bool,
 }
+
+/// What a dialog's codes were read from: the field, and each dataset read by
+/// its id and revision, so a correction, its undo, or a set unloaded or
+/// loaded reads them again.
+pub(crate) type CodesRead = (String, Vec<(crate::model::drill_hole::DrillHoleId, u64)>);
 
 /// The seam a tool works on, as its dialog chooses it: the categorical
 /// field carrying the working section, the section or code, and the side.

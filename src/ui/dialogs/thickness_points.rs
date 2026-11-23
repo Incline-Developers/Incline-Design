@@ -3,7 +3,7 @@
 //! what they made.
 
 use super::{
-    reference_points::{hole_of, logged_codes, seam_controls, seam_value_controls},
+    reference_points::{codes_current, codes_read, hole_of, logged_codes, seam_controls, seam_value_controls},
     triangulation::{prismoid_grid_field, subject_surface_field},
 };
 use crate::{
@@ -17,6 +17,7 @@ use crate::{
         widgets::{
             collapsible_section::CollapsibleSection,
             data_table::DataTable,
+            hint::Hint,
             menu::{self, DragableMenu, MenuButton, picked_selection_field, selected_source_field},
         },
     },
@@ -44,14 +45,14 @@ pub(crate) fn draw_thickness_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
         (count, involved) => tr!("reference-points-holes-from-datasets", count = count.to_string(), datasets = involved.len().to_string()),
     };
     if let Some(field) = draft.seam.field.clone()
-        && draft.codes.as_ref().is_none_or(|(read, _)| *read != field)
+        && !codes_current(draft.codes.as_ref(), &field, &involved)
     {
         let codes = if draft.holes.is_empty() {
             logged_codes(involved.iter().flat_map(|dataset| dataset.dataset.holes.iter()), &field)
         } else {
             logged_codes(draft.holes.iter().filter_map(|reference| hole_of(&involved, *reference)), &field)
         };
-        draft.codes = Some((field, codes));
+        draft.codes = Some((codes_read(field, &involved), codes));
     }
     let codes = draft.codes.as_ref().map(|(_, codes)| codes.clone()).unwrap_or_default();
     let mut open = true;
@@ -99,9 +100,12 @@ pub(crate) fn draw_thickness_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 grid_note(ui, &draft.grid);
             }
             menu::menu_actions(ui, |ui| {
-                let ready = surface.is_some() && draft.seam.value.is_some() && draft.grid == GridCheck::Grid;
-                let confirm = ready && menu::dialog_confirmed(ui.ctx());
-                if ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(ready)).clicked() || confirm {
+                let blocker = thickness_points_blocker(surface.is_some(), draft.seam.value.is_some(), &draft.grid);
+                let confirm = blocker.is_none() && menu::dialog_confirmed(ui.ctx());
+                let button = ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(blocker.is_none()));
+                if let Some(reason) = &blocker {
+                    button.hint(reason);
+                } else if button.clicked() || confirm {
                     make = true;
                 }
                 if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
@@ -120,12 +124,32 @@ pub(crate) fn draw_thickness_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
             pairs: draft.pairs.clone(),
             then_surface: draft.then_surface,
         });
-        open = false;
     }
     if !open || cancel {
         editor.thickness_points_dialog = None;
     } else if pick_surface {
         editor.triangulation_pick_target = Some(TriangulationPickTarget::ThicknessSurface);
+    }
+}
+
+/// Why Make waits, if it does: the first of a surface to measure against, a
+/// section to measure, and a surface that is one regular grid.
+fn thickness_points_blocker(has_surface: bool, has_section: bool, grid: &GridCheck) -> Option<String> {
+    if !has_surface {
+        return Some(tr!("thickness-points-blocker-no-surface"));
+    }
+    if !has_section {
+        return Some(tr!("reference-points-blocker-no-section"));
+    }
+    grid_blocker(grid)
+}
+
+/// Why Make waits on the surface's grid check, if it does.
+fn grid_blocker(grid: &GridCheck) -> Option<String> {
+    match grid {
+        GridCheck::Checking => Some(tr!("thickness-points-checking-surface")),
+        GridCheck::Grid => None,
+        GridCheck::Refused(reason) => Some(reason.clone()),
     }
 }
 
@@ -248,14 +272,14 @@ pub(crate) fn draw_hole_misfit_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
         (count, involved) => tr!("reference-points-holes-from-datasets", count = count.to_string(), datasets = involved.len().to_string()),
     };
     if let Some(field) = draft.seam.field.clone()
-        && draft.codes.as_ref().is_none_or(|(read, _)| *read != field)
+        && !codes_current(draft.codes.as_ref(), &field, &involved)
     {
         let codes = if draft.holes.is_empty() {
             logged_codes(involved.iter().flat_map(|dataset| dataset.dataset.holes.iter()), &field)
         } else {
             logged_codes(draft.holes.iter().filter_map(|reference| hole_of(&involved, *reference)), &field)
         };
-        draft.codes = Some((field, codes));
+        draft.codes = Some((codes_read(field, &involved), codes));
     }
     let codes = draft.codes.as_ref().map(|(_, codes)| codes.clone()).unwrap_or_default();
     // Quality points need no seam: with no hole chosen they compare alone.
@@ -438,15 +462,18 @@ pub(crate) fn draw_seam_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
             }
             menu::menu_note(ui, tr!("seam-surface-note"));
             if let Some(problem) = draft.problem.as_ref().filter(|_| surface.is_some()) {
-                ui.colored_label(egui::Color32::from_rgb(200, 70, 70), problem);
+                ui.colored_label(ui.visuals().error_fg_color, problem);
             }
             if usable {
                 grid_note(ui, &draft.grid);
             }
             menu::menu_actions(ui, |ui| {
-                let ready = usable && draft.grid == GridCheck::Grid;
-                let confirm = ready && menu::dialog_confirmed(ui.ctx());
-                if ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(ready)).clicked() || confirm {
+                let blocker = seam_surface_blocker(surface.is_some(), draft.problem.as_deref(), &draft.grid);
+                let confirm = blocker.is_none() && menu::dialog_confirmed(ui.ctx());
+                let button = ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(blocker.is_none()));
+                if let Some(reason) = &blocker {
+                    button.hint(reason);
+                } else if button.clicked() || confirm {
                     make = true;
                 }
                 if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
@@ -456,13 +483,24 @@ pub(crate) fn draw_seam_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
         });
     if make && let Some(surface) = surface {
         commands.push(UiCommand::MakeSeamSurface { surface });
-        open = false;
     }
     if !open || cancel {
         editor.seam_surface_dialog = None;
     } else if pick_surface {
         editor.triangulation_pick_target = Some(TriangulationPickTarget::SeamSurface);
     }
+}
+
+/// Why Make waits, if it does: the first of a surface to work on, the
+/// problem found with its run, and a surface that is one regular grid.
+fn seam_surface_blocker(has_surface: bool, problem: Option<&str>, grid: &GridCheck) -> Option<String> {
+    if !has_surface {
+        return Some(tr!("thickness-points-blocker-no-surface"));
+    }
+    if let Some(problem) = problem {
+        return Some(problem.to_owned());
+    }
+    grid_blocker(grid)
 }
 
 /// The thickness grid's table shown, one row per node of the surface.

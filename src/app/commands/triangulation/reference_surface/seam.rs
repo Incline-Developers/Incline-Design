@@ -19,12 +19,13 @@ use crate::{
     app::jobs::CancelFlag,
     i18n::tr,
     model::{
-        drill_hole::ReferenceSide,
+        drill_hole::{DrillHoleId, ReferenceSide, ReferenceTarget},
         formats::mesh_data,
         grid_surface::GridSurface,
         kernel::{self, PolyContainment},
         progress::Progress,
         rbf::{MERGE_DISTANCE, MERGE_HEIGHT, RbfSurface},
+        triangulation::GeometryVersion,
     },
 };
 
@@ -51,31 +52,61 @@ pub(crate) struct ThicknessSample {
 /// its grid.
 #[derive(Debug)]
 pub(crate) struct ThicknessRunRecord {
-    /// The surface's revision when the points were measured.
-    pub(crate) revision: u64,
+    /// The surface's geometry when the points were measured, which colours,
+    /// the eye and loading leave as it was.
+    pub(crate) geometry: GeometryVersion,
     /// The point layer the run made.
     pub(crate) name: String,
     /// The working section measured, and the side the surface was built on.
     pub(crate) seam: String,
     pub(crate) side: ReferenceSide,
     pub(crate) samples: Vec<ThicknessSample>,
+    /// The field and the section or code measured, which what the run read
+    /// of each dataset is taken on.
+    pub(crate) field: String,
+    pub(crate) target: ReferenceTarget,
+    /// Each drillhole dataset the run read, with what it read of it once the
+    /// run had saved its values to it.
+    pub(crate) holes: Vec<(DrillHoleId, HolesRead)>,
+}
+
+/// What a run read of one drillhole dataset: a stamp that moves only with
+/// each hole's name, collar and trace, its intervals in the seam's field
+/// with their values, and the codes the section stands for; and the
+/// dataset's epoch, which judges it while its holes are not in memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HolesRead {
+    pub(crate) stamp: u64,
+    pub(crate) epoch: u64,
 }
 
 /// Why a surface has no thickness run to grid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RunProblem {
     Missing,
-    /// The run was measured against an earlier revision of the surface.
+    /// The run was measured against other geometry of the surface.
     Stale,
+    /// What the run read of a dataset of holes has changed since, or the
+    /// dataset is gone.
+    HolesChanged,
 }
 
-/// The run to grid against a surface at `revision`: the latest, and only
-/// when it was measured against that revision.
-pub(crate) fn current_run(revision: u64, run: Option<&ThicknessRunRecord>) -> Result<&ThicknessRunRecord, RunProblem> {
+/// The run to grid against a surface of `geometry`: the latest, and only
+/// when it was measured against that geometry.
+pub(crate) fn current_run(geometry: GeometryVersion, run: Option<&ThicknessRunRecord>) -> Result<&ThicknessRunRecord, RunProblem> {
     match run {
         None => Err(RunProblem::Missing),
-        Some(run) if run.revision != revision => Err(RunProblem::Stale),
+        Some(run) if run.geometry != geometry => Err(RunProblem::Stale),
         Some(run) => Ok(run),
+    }
+}
+
+/// Whether the holes `run` read are as it left them: `as_read` says whether
+/// a dataset still holds what the run read of it, false where it is gone.
+pub(crate) fn current_holes(run: &ThicknessRunRecord, as_read: impl Fn(DrillHoleId, &HolesRead) -> bool) -> Result<(), RunProblem> {
+    match run.holes.iter().all(|(dataset, read)| as_read(*dataset, read)) {
+        true => Ok(()),
+        false => Err(RunProblem::HolesChanged),
     }
 }
 

@@ -10,7 +10,7 @@ use crate::{
         block_model::{BlockModelId, OpenBlockModel},
         drill_hole::DrillColorPreset,
         prismoid_grid::{PrismoidColorBy, PrismoidGridId, ValueSpread},
-        project::{LATTICE_UNIT, ModelEnvelope, ModellingSettings},
+        project::{LATTICE_UNIT, MIN_STEEP_DISTANCE, ModelEnvelope, ModellingSettings},
     },
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
@@ -835,7 +835,7 @@ fn draw_modelling_settings(ui: &mut egui::Ui, modelling: Option<(u32, &Modelling
     let responses = [
         // Every range here is exactly what `ModellingSettings::problem` accepts:
         // a narrower one would clamp a loaded value just by being drawn.
-        MenuFieldF64::new(tr!("properties-steep-pair-distance"), &mut settings.steep_distance, f64::MIN_POSITIVE..=f64::MAX)
+        MenuFieldF64::new(tr!("properties-steep-pair-distance"), &mut settings.steep_distance, MIN_STEEP_DISTANCE..=f64::MAX)
             .suffix(" m")
             .max_decimals(2)
             .help_text(tr!("properties-steep-pair-distance-help"))

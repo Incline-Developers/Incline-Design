@@ -1628,6 +1628,7 @@ impl<'a> App<'a> {
         for id in effects.block_model_decodes {
             self.spawn_block_model_values_decode(id);
         }
+        self.refresh_seam_surface_dialog(false);
         self.redraw_requested = true;
     }
 

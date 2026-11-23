@@ -377,7 +377,7 @@ impl<'a> App<'a> {
         // outline of the points' own, which may not be the ground the
         // geologist meant.
         if ring.is_none() {
-            userspace_warn!("{}", tr!("cmd-reference-surface-no-mask-selected-surface-outline", buffer = OUTLINE_BUFFER.to_string()));
+            userspace_log!("{}", tr!("cmd-reference-surface-no-mask-selected-surface-outline", buffer = OUTLINE_BUFFER.to_string()));
         }
         let stamp = RunStamp::now();
         let keys: Vec<u64> = control_ids.iter().map(|id| id.0).collect();
@@ -669,7 +669,13 @@ pub(crate) struct PlanExtent {
 
 impl PlanExtent {
     fn of_ring(ring: &[DVec2]) -> Self {
-        let (lower, upper) = plan_box(ring.iter().copied());
+        let (lower, upper) = plan_box(ring.iter().copied().filter(|at| at.is_finite()));
+        if lower.x > upper.x {
+            return Self {
+                lower: DVec2::ZERO,
+                upper: DVec2::ZERO,
+            };
+        }
         Self { lower, upper }
     }
 
@@ -772,6 +778,9 @@ fn grid_surface_from_points(
 ) -> Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>, Vec<Meeting>)> {
     let mut surface = surface_mesh(&points, controls, extent.as_deref(), spacing, settings, cancel, progress)?;
     let held = if quality.is_some() { held_at_zero(&mut surface.vertices) } else { 0 };
+    if held > 0 {
+        surface.vertical_box = vertical_box_of(&surface.vertices);
+    }
     if let Some(envelope) = heights_within {
         let (low, high) = surface
             .vertices
@@ -904,6 +913,7 @@ pub(crate) fn surface_quality<'m>(marks: impl IntoIterator<Item = Option<&'m Qua
     let mut units: Vec<&str> = Vec::new();
     for mark in marks {
         if let Some(mark) = mark
+            && !mark.unit.is_empty()
             && !units.contains(&mark.unit.as_str())
         {
             units.push(&mark.unit);
@@ -922,7 +932,7 @@ pub(crate) fn surface_quality<'m>(marks: impl IntoIterator<Item = Option<&'m Qua
     };
     let mark = QualityMark {
         name: first.name.clone(),
-        unit: units.iter().find(|unit| !unit.is_empty()).map_or_else(String::new, |unit| (*unit).to_owned()),
+        unit: units.first().map_or_else(String::new, |unit| (*unit).to_owned()),
     };
     let clash = (units.len() > 1).then(|| {
         let given = units.iter().map(|unit| unit_label(unit)).collect::<Vec<_>>().join(", ");
@@ -1164,10 +1174,7 @@ fn surface_mesh(
     if faces.is_empty() {
         anyhow::bail!("{}", tr!("cmd-reference-surface-no-part-surface-falls-inside"));
     }
-    let vertical_box = vertical_extent(
-        vertices.iter().fold(f64::INFINITY, |low, vertex| low.min(vertex.z)),
-        vertices.iter().fold(f64::NEG_INFINITY, |high, vertex| high.max(vertex.z)),
-    );
+    let vertical_box = vertical_box_of(&vertices);
     progress.phase(0.95, 1.0).finish();
     Ok(SurfaceMesh {
         vertices,
@@ -1204,7 +1211,15 @@ fn surface_mesh(
 /// one spacing for the whole build. Refused, naming the counts, when even
 /// the vertices kept at the last tolerance do not fit.
 fn within_budget(controls: &[Vec<DVec3>], names: &[usize], crossings: &[Crossing], picks: usize, cancelled: &dyn Fn() -> bool) -> Result<(Vec<DVec3>, Thinning)> {
-    let room = POINT_BUDGET.saturating_sub(picks);
+    // Counted before merging, as the caller counts: the controls cannot fit
+    // beside picks that fill the budget alone.
+    if picks > POINT_BUDGET {
+        anyhow::bail!(
+            "{}",
+            tr!("cmd-reference-surface-picks-over-budget", budget = POINT_BUDGET.to_string(), picks = picks.to_string())
+        );
+    }
+    let room = POINT_BUDGET - picks;
     let mut fewest = 0;
     for &tolerance in &SHAPE_TOLERANCES {
         stop_if_cancelled(cancelled)?;
@@ -2129,6 +2144,14 @@ impl<'a> RingBands<'a> {
             % 2
             == 1
     }
+}
+
+/// The vertical box of the nodes as they stand.
+fn vertical_box_of(vertices: &[mesh_data::Vertex]) -> (f64, f64) {
+    vertical_extent(
+        vertices.iter().fold(f64::INFINITY, |low, vertex| low.min(vertex.z)),
+        vertices.iter().fold(f64::NEG_INFINITY, |high, vertex| high.max(vertex.z)),
+    )
 }
 
 /// The vertical box the surface is modelled in: the surface's own range R

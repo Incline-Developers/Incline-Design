@@ -577,11 +577,19 @@ impl App<'_> {
         // layer's points and the flagged list in a settled order.
         holes.sort_unstable_by_key(|hole| (hole.dataset.0, hole.hole));
         match self.editor.reference_points_dialog.as_mut() {
-            Some(draft) => draft.holes = holes,
+            Some(draft) => {
+                draft.holes = holes;
+                draft.codes = None;
+            }
             None => {
                 // The seam last chosen comes back, so it is chosen once.
                 let seam = self.editor.last_seam.clone().unwrap_or_default();
-                self.editor.reference_points_dialog = Some(ReferencePointsDraft { holes, seam, collars: false });
+                self.editor.reference_points_dialog = Some(ReferencePointsDraft {
+                    holes,
+                    seam,
+                    codes: None,
+                    collars: false,
+                });
             }
         }
     }
