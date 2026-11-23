@@ -478,8 +478,9 @@ pub(crate) struct App<'a> {
     /// The same for rasters: the project's and the thickness maps.
     prismoid_rasters: Vec<OpenRasterTexture>,
     prismoid_scene_key: Option<u64>,
-    /// Grids that will not be drawn this session: one warning each.
-    prismoid_refused: std::collections::HashSet<crate::model::prismoid_grid::PrismoidGridId>,
+    /// Grids that will not be drawn as they are, each with why: one warning
+    /// each, until the refusal no longer holds for the grid.
+    prismoid_refused: std::collections::HashMap<crate::model::prismoid_grid::PrismoidGridId, commands::prismoid_grid::DrawRefusal>,
     next_prismoid_grid_id: u64,
     empty_document: Document,
     scene_document: Document,
@@ -812,7 +813,7 @@ impl<'a> Default for App<'a> {
             prismoid_scene: Vec::new(),
             prismoid_rasters: Vec::new(),
             prismoid_scene_key: None,
-            prismoid_refused: std::collections::HashSet::new(),
+            prismoid_refused: std::collections::HashMap::new(),
             next_prismoid_grid_id: 0,
             empty_document: Document::new(),
             scene_document: Document::new(),

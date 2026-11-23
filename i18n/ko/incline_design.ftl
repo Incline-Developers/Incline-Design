@@ -179,7 +179,7 @@ pick-selection-objects-help = 이동할 객체입니다. 선택을 누르면 뷰
 pick-selection-polylines-help = 점을 삽입할 폴리라인입니다. 선택을 누르면 뷰포트에서 고릅니다.
 pick-selection-edges-help = 삼각화할 객체입니다. 선택을 누르면 뷰포트에서 고릅니다.
 pick-selection-misfit-prompt = 비교할 시추공과 품질 점을 선택하세요.
-pick-selection-prismoids-prompt = 마스크하거나 마스크를 해제할 프리즈모이드를 선택하세요.
+pick-selection-prismoids-prompt = 프리즈모이드를 선택하세요: 마스크되지 않은 것이 하나라도 있는 선택은 마스크되고, 모두 마스크된 선택은 마스크가 해제됩니다.
 pick-selection-prismoids-selected = 프리즈모이드 { $count }개 선택됨
 pick-selection-thickness-holes-prompt = 두께를 측정할 시추공을 선택하세요.
 pick-selection-reverse-prompt = 방향을 뒤집을 폴리라인을 선택하세요.
@@ -832,7 +832,9 @@ cmd-prismoid-grid-unmasked = '{ $grid }'에서 마스크를 해제한 프리즈�
 cmd-prismoid-grid-mask-nothing = 프리즈모이드 격자 '{ $grid }'에는 마스크할 프리즈모이드가 없었습니다
 cmd-prismoid-grid-mask-leaves-none = 마스크하면 '{ $grid }'에 활성 프리즈모이드가 남지 않으므로 아무것도 마스크하지 않았습니다
 cmd-prismoid-grid-changed-while-masking = 마스크하는 동안 프리즈모이드 격자 '{ $grid }'가 바뀌었습니다. 아무것도 마스크하지 않았습니다. 다시 마스크하세요.
+cmd-prismoid-grid-changed-while-unmasking = 마스크를 해제하는 동안 프리즈모이드 격자 '{ $grid }'가 바뀌었습니다. 아무것도 마스크를 해제하지 않았습니다. 다시 마스크를 해제하세요.
 cmd-prismoid-grid-mask-discarded = 프리즈모이드 격자 '{ $grid }'의 마스크를 버렸습니다: 격자가 제거되었거나 프로젝트가 더는 활성이 아닙니다. 다시 마스크하세요.
+cmd-prismoid-grid-unmask-discarded = 프리즈모이드 격자 '{ $grid }'의 마스크 해제를 버렸습니다: 격자가 제거되었거나 프로젝트가 더는 활성이 아닙니다. 다시 마스크를 해제하세요.
 cmd-prismoid-grid-mask-rederive = 마스크를 블록 모델로 옮기려면 프리즈모이드 격자에서 블록 모델 만들기를 다시 하세요
 cmd-prismoid-grid-unmask-nothing = '{ $grid }'에는 마스크를 해제할 프리즈모이드가 없었습니다
 cmd-prismoid-grid-trimming = 프리즈모이드 격자를 자르는 중…
@@ -849,7 +851,11 @@ cmd-prismoid-grid-trim-touching = 상반 또는 하반에서 { $allowance } m �
 cmd-prismoid-grid-trim-nothing = '{ $grid }'의 지반 중 '{ $surface }' { $relation }에 있는 것이 없습니다; 격자를 만들지 않았습니다
 cmd-prismoid-grid-trim-interval-none = 구간 '{ $interval }'에는 '{ $surface }' { $relation }의 지반이 없어 건너뛰었습니다
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: 자르지 않았습니다. 상반이 { $surface }에서 만들어졌습니다
-cmd-prismoid-grid-trim-folded = '{ $surface }'은(는) '{ $grid }' 위에서 높이가 두 개이며, 첫 번째는 { $x }, { $y }입니다: 그곳에서 면이 접혀 겹치거나 수직으로 서 있습니다. 높이가 두 개인 점: { $count }. 아무것도 자르지 않았습니다.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }'은(는) '{ $grid }' 위에서 접혀 겹치며 { $count ->
+        [1] 프리즈모이드 { $count }개의 일부를 두 번 덮습니다. 중심은 { $x }, { $y }입니다.
+       *[other] 프리즈모이드 { $count }개의 일부를 두 번 덮습니다. 첫 번째는 { $x }, { $y }이(가) 중심입니다.
+    } 아무것도 자르지 않았습니다.
 cmd-prismoid-grid-trim-too-many-cuts = '{ $grid }'을(를) '{ $surface }'을(를) 따라 자르려면 삼각형이 { $budget }개를 넘게 필요해 프리즈모이드 격자가 담을 수 있는 양을 넘습니다. 아무것도 자르지 않았습니다. 더 거친 지형이면 이 범위 안에서 자릅니다.
 cmd-prismoid-grid-changed-while-trimming = 자르는 동안 프리즈모이드 격자 '{ $grid }'이(가) 변경되어 그로부터 격자를 만들지 않았습니다. 다시 자르세요.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }'은(는) 체크한 프리즈모이드 격자 어디에도 닿지 않습니다; 아무것도 자르지 않았습니다.
@@ -876,7 +882,7 @@ cmd-prismoid-grid-difference-reserved = 차이의 이름을 { $quality }(으)로
 cmd-prismoid-grid-creating-regular-block-model = 프리즈모이드 격자에서 규칙 블록 모델을 만드는 중…
 cmd-prismoid-grid-created-regular-block-model = 블록 모델 '{ $name }'을(를) 만들었습니다: 블록 { $boxes }개 중 { $blocks }개에 모델링된 지반이 있으며, 합계 { $volume } m³
 cmd-prismoid-grid-regular-no-density = 밀도가 0보다 크지 않은 지반을 가지고 밀도가 없는 블록: { $count }. 피트 최적화는 이런 블록에 모델링된 부분이 아니라 블록 전체로 시나리오의 기본 밀도로 가중치를 주고, 매장량은 그 톤을 누락으로 계산합니다. 이를 피하려면 모든 프리즈모이드에 0보다 큰 밀도가 필요합니다. 격자 전체를 덮지 않는 밀도 면은 일부 프리즈모이드를 밀도 없이 남깁니다.
-cmd-prismoid-grid-regular-overlap = 부피보다 더 채워진 블록: { $count }. 그곳에서 격자가 겹쳐 그 지반이 두 번 계산됩니다. 부피보다 더 채워지지 않은 블록의 겹침은 여기서 세지 않습니다
+cmd-prismoid-grid-regular-overlap = 둘 이상의 격자가 같은 지반을 덮는 블록: { $count }. 그 지반은 각 격자에서 계산됩니다
 cmd-prismoid-grid-regular-mixed = 구간이 둘 이상인 블록: { $count }. 각각 비율이 가장 큰 구간의 범주를 가지며, 같으면 대화 상자 목록에서 위에 있는 구간을 가집니다. 비율 열이 각 구간의 몫을 보여 줍니다
 cmd-prismoid-grid-regular-changed = 규칙 블록 모델을 만드는 동안 프리즈모이드 격자 '{ $grid }'이(가) 변경되어 아무것도 추가하지 않았습니다. 다시 만드세요.
 cmd-prismoid-grid-regular-envelope-changed = 규칙 블록 모델을 만드는 동안 모델 외곽이 변경되어 아무것도 추가하지 않았습니다. 다시 만드세요.
@@ -896,6 +902,8 @@ cmd-prismoid-grid-block-model-overlap = 체크한 다른 격자가 같은 자리
 cmd-prismoid-grid-block-model-left-blank = 그것이 없는 각 구간의 블록에서는 비워 두며 채워지지 않습니다: { $columns }. 매장량은 빈 값을 누락으로 계산합니다. 일정은 추적 품질이 빈 지반을 거부하고, 밀도가 빈 곳에서는 톤을 세지 않습니다.
 cmd-prismoid-grid-block-model-over-budget = 체크한 격자의 프리즈모이드: { $count }, 블록 모델 하나의 한도 { $budget }블록을 넘습니다: 체크하는 격자를 줄이거나 더 큰 셀 크기로 만드세요
 cmd-prismoid-grid-block-model-not-loaded = 프리즈모이드 격자 '{ $grid }'을(를) 불러오지 않았습니다: 불러온 뒤 다시 체크하세요
+cmd-prismoid-grid-block-model-changed = 블록 모델을 만드는 동안 프리즈모이드 격자 '{ $grid }'이(가) 변경되어 아무것도 추가하지 않았습니다. 다시 만드세요.
+cmd-prismoid-grid-block-model-envelope-changed = 블록 모델을 만드는 동안 모델 외곽이 변경되어 아무것도 추가하지 않았습니다. 다시 만드세요.
 cmd-products-added-product-delay-ms-ms = 제품을 추가했습니다: { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = 제품을 삭제했습니다: { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = 제품을 저장하지 못했습니다: { $error }
@@ -1869,6 +1877,7 @@ explorer-prismoid-grid-envelope-moved = 모델 외곽이 생성 당시의 외곽
 explorer-prismoid-grid-source-gone = { $name }이(가) 더 이상 프로젝트에 없습니다
 explorer-prismoid-grid-holes-changed = 이 격자 안의 수정 기록이 생성 후 바뀌었습니다
 explorer-prismoid-grid-no-grid-named = 프로젝트에 { $name }(이)라는 격자가 없습니다
+explorer-prismoid-grid-hole-set-gone = 프로젝트에 { $name }(이)라는 시추공 세트가 없습니다
 explorer-load = 불러오기
 explorer-lock = 잠금
 explorer-new-collection = 새 컬렉션
@@ -2838,6 +2847,7 @@ tri-strata-needs-two = 층준을 두 개 이상 나열하세요
 tri-strata-needs-surfaces = 각 행에서 불러온 면을 고르되, 같은 면은 한 번만 쓰세요
 tri-strata-needs-horizons = 각 층준에 이름을 붙이되, 같은 이름은 한 번만 쓰세요
 tri-strata-needs-intervals = 각 구간에 이름을 붙이세요
+tri-strata-needs-intervals-once = 각 구간의 이름은 한 번만 쓰세요. 대소문자만 다른 이름은 같은 이름입니다
 tri-strata-needs-name = 층군 이름을 입력하세요
 tri-add-prismoid-qualities = 품질 추가
 tri-add-prismoid-qualities-help = 체크한 각 품질 면을 프리즈모이드 격자의 셀로 읽습니다: 면이 격자를 공유하는 곳은 프리즈모이드 네 모서리의 평균, 그 밖에는 셀 중심의 값. 면이 덮지 않는 셀은 값이 없습니다.
@@ -2886,6 +2896,9 @@ tri-prismoid-grid-name-hint = 상부 탄층 격자
 tri-prismoid-needs-surfaces = 상반과 하반으로 불러온 면 두 개를 고르세요
 tri-prismoid-needs-name = 출력 이름을 입력하세요
 tri-prismoid-needs-grids = 이 격자와 다른 격자로 불러온 프리즈모이드 격자 두 개를 고르세요
+tri-prismoid-needs-grid = 불러온 프리즈모이드 격자를 고르세요
+tri-prismoid-qualities-needs-surfaces = 품질 면을 하나 이상 체크하세요
+tri-mask-needs-polyline = 뷰포트에서 닫힌 폴리라인을 고르세요
 
 ## Ui strings
 

@@ -315,9 +315,9 @@ pub(crate) enum SurfaceAt {
     Beyond,
     /// One height, sheets touching there within `HEIGHT_TOLERANCE`.
     At(f64),
-    /// Two or more heights: the surface folds over itself or stands
-    /// upright there.
-    Folded,
+    /// Two or more heights, the lowest and the highest: the surface folds
+    /// over itself or stands upright there.
+    Folded { lowest: f64, highest: f64 },
 }
 
 /// The surface at `point`, telling where it ends from where it folds.
@@ -364,7 +364,7 @@ pub(crate) fn surface_at(mesh: &mesh_data::Triangulation, spatial: &TriangleBvh,
     });
     match (held, near) {
         (Some((lowest, highest)), _) if highest - lowest <= HEIGHT_TOLERANCE => SurfaceAt::At(lowest),
-        (Some(_), _) => SurfaceAt::Folded,
+        (Some((lowest, highest)), _) => SurfaceAt::Folded { lowest, highest },
         (None, Some((.., z))) => SurfaceAt::At(z),
         (None, None) => SurfaceAt::Beyond,
     }

@@ -116,7 +116,7 @@ pick-selection-objects-help = الكائنات التي تُنقل. يحددها
 pick-selection-polylines-help = الخطوط المتعددة المقاطع التي تُدرج النقاط عليها. يحددها «اختيار» في منفذ العرض.
 pick-selection-edges-help = الكائنات التي يجري تثليثها. يحددها «اختيار» في منفذ العرض.
 pick-selection-misfit-prompt = حدد الثقوب ونقاط الجودة المراد مقارنتها.
-pick-selection-prismoids-prompt = حدد أشباه المنشورات المراد حجبها أو إلغاء حجبها.
+pick-selection-prismoids-prompt = حدد أشباه المنشورات: التحديد الذي يضم شبه منشور غير محجوب يُحجب، والذي كله محجوب يُرفع حجبه.
 pick-selection-prismoids-selected = تم اختيار { $count } من أشباه المنشورات
 pick-selection-thickness-holes-prompt = حدد الثقوب المراد قياس السماكة عندها.
 pick-selection-reverse-prompt = حدد الخطوط المتعددة المقاطع المراد عكسها.
@@ -806,7 +806,9 @@ cmd-prismoid-grid-unmasked = أشباه المنشورات المرفوع حجب
 cmd-prismoid-grid-mask-nothing = لا يحتاج أي شبه منشور في '{ $grid }' إلى الحجب
 cmd-prismoid-grid-mask-leaves-none = سيترك الحجب '{ $grid }' بلا أي شبه منشور نشط؛ لم يُحجب شيء
 cmd-prismoid-grid-changed-while-masking = تغيّرت شبكة شبه المنشورات '{ $grid }' أثناء حجبها؛ لم يُحجب شيء. احجبها مرة أخرى.
+cmd-prismoid-grid-changed-while-unmasking = تغيّرت شبكة شبه المنشورات '{ $grid }' أثناء رفع حجبها؛ لم يُرفع حجب شيء. ارفع حجبها مرة أخرى.
 cmd-prismoid-grid-mask-discarded = تم تجاهل الحجب على شبكة شبه المنشورات '{ $grid }': أُزيلت الشبكة أو لم يعد مشروعها نشطًا. احجبها مرة أخرى.
+cmd-prismoid-grid-unmask-discarded = تم تجاهل رفع الحجب على شبكة شبه المنشورات '{ $grid }': أُزيلت الشبكة أو لم يعد مشروعها نشطًا. ارفع حجبها مرة أخرى.
 cmd-prismoid-grid-mask-rederive = أنشئ نموذج الكتل من شبكة شبه المنشورات مرة أخرى لنقل الحجب إلى نموذج كتل
 cmd-prismoid-grid-unmask-nothing = لا يحتاج أي شبه منشور في '{ $grid }' إلى رفع الحجب
 cmd-prismoid-grid-trimming = جارٍ قص شبكات شبه المنشورات…
@@ -823,7 +825,15 @@ cmd-prismoid-grid-trim-touching = اعتُبر '{ $surface }' ضمن { $allowanc
 cmd-prismoid-grid-trim-nothing = لا تقع أي أرض من '{ $grid }' { $relation } '{ $surface }'؛ لم تُنشأ أي شبكة
 cmd-prismoid-grid-trim-interval-none = الفترة '{ $interval }' لا أرض فيها { $relation } '{ $surface }' وقد تم تخطيها
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: لم تُقص، فقد بُني سقفها من { $surface }
-cmd-prismoid-grid-trim-folded = يعطي '{ $surface }' ارتفاعين فوق '{ $grid }'، أولهما عند { $x }، { $y }: هناك ينطوي على نفسه أو يقف رأسيًا. نقاط ذات ارتفاعين: { $count }. لم يُقص شيء.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' تنطوي على نفسها فوق '{ $grid }' وتغطي جزءًا من { $count ->
+        [zero] { $count } من شبه المنشورات مرتين، أولها متمركز عند { $x }، { $y }
+        [one] { $count } شبه منشور مرتين، متمركز عند { $x }، { $y }
+        [two] { $count } من شبه المنشورين مرتين، أولهما متمركز عند { $x }، { $y }
+        [few] { $count } من شبه المنشورات مرتين، أولها متمركز عند { $x }، { $y }
+        [many] { $count } شبه منشور مرتين، أولها متمركز عند { $x }، { $y }
+       *[other] { $count } من شبه المنشورات مرتين، أولها متمركز عند { $x }، { $y }
+    }. لم يُقص شيء.
 cmd-prismoid-grid-trim-too-many-cuts = قطع '{ $grid }' على امتداد '{ $surface }' يتطلب أكثر من { $budget } مثلث، أكثر مما تتسع له شبكة شبه منشورات. لم يُقص شيء. تضاريس أخشن تقص ضمن هذا الحد.
 cmd-prismoid-grid-changed-while-trimming = تغيّرت شبكة شبه المنشورات '{ $grid }' أثناء قصّها؛ لم تُنشأ منها أي شبكة. قصّها مرة أخرى.
 cmd-prismoid-grid-trim-reaches-none = لا يصل '{ $surface }' إلى أي من شبكات شبه المنشورات المحدّدة؛ لم يُقص شيء.
@@ -850,7 +860,7 @@ cmd-prismoid-grid-difference-reserved = لا يمكن تسمية الفرق { $q
 cmd-prismoid-grid-creating-regular-block-model = جارٍ إنشاء نموذج كتل منتظم من شبكات شبه المنشورات…
 cmd-prismoid-grid-created-regular-block-model = تم إنشاء نموذج الكتل '{ $name }': { $blocks } من { $boxes } كتلة تحوي أرضًا منمذجة، { $volume } م³ إجمالًا
 cmd-prismoid-grid-regular-no-density = كتل تحوي أرضًا بلا كثافة أكبر من 0 ولا تحمل كثافة: { $count }. يزن تحسين الحفرة مثل هذه الكتلة بالكثافة الافتراضية للسيناريو على الكتلة كلها لا على جزئها المنمذج، وتعدّ الاحتياطيات أطنانها مفقودة. يحتاج كل شبه منشور إلى كثافة أكبر من 0 لتجنّب ذلك؛ وسطح الكثافة الذي لا يغطي شبكة كاملة يترك بعض أشباه المنشورات بلا كثافة.
-cmd-prismoid-grid-regular-overlap = كتل ممتلئة بأكثر من حجمها: { $count }. تتداخل الشبكات هناك وتُحسب تلك الأرض مرتين؛ ولا يُحسب هنا التداخل في كتلة غير ممتلئة بأكثر من حجمها
+cmd-prismoid-grid-regular-overlap = كتل تقع حيث تغطي شبكتان أو أكثر الأرض نفسها، وتُحسب في كل منها: { $count }
 cmd-prismoid-grid-regular-mixed = كتل تحوي أكثر من فترة: { $count }. تأخذ كل منها فئة الفترة ذات الحصة الأكبر، وعند التعادل الأعلى في قائمة مربع الحوار؛ وتعطي أعمدة الحصص جزء كل فترة
 cmd-prismoid-grid-regular-changed = تغيّرت شبكة شبه المنشورات '{ $grid }' أثناء إنشاء نموذج الكتل المنتظم الخاص بها؛ لم يُضف شيء. أنشئه مرة أخرى.
 cmd-prismoid-grid-regular-envelope-changed = تغيّر غلاف النموذج أثناء إنشاء نموذج الكتل المنتظم؛ لم يُضف شيء. أنشئه مرة أخرى.
@@ -870,6 +880,8 @@ cmd-prismoid-grid-block-model-overlap = كتل تقع فوق أرض تحويها
 cmd-prismoid-grid-block-model-left-blank = تُركت فارغة، ولا تُملأ أبدًا، على كتل كل فترة تفتقر إليها: { $columns }. تعدّ الاحتياطيات القيمة الفارغة مفقودة؛ ويرفض الجدول الزمني الأرض التي جودتها المتتبَّعة فارغة ولا يحسب أطنانًا حيث الكثافة فارغة.
 cmd-prismoid-grid-block-model-over-budget = أشباه منشورات في الشبكات المحدّدة: { $count }، فوق ميزانية { $budget } كتلة لنموذج كتل واحد: حدّد شبكات أقل أو ابنها بحجم خلية أكبر
 cmd-prismoid-grid-block-model-not-loaded = شبكة شبه المنشورات '{ $grid }' غير محمّلة: حمّلها وحدّدها مرة أخرى
+cmd-prismoid-grid-block-model-changed = تغيّرت شبكة شبه المنشورات '{ $grid }' أثناء إنشاء نموذج الكتل الخاص بها؛ لم يُضف شيء. أنشئه مرة أخرى.
+cmd-prismoid-grid-block-model-envelope-changed = تغيّر غلاف النموذج أثناء إنشاء نموذج الكتل؛ لم يُضف شيء. أنشئه مرة أخرى.
 cmd-products-added-product-delay-ms-ms = تمت إضافة المنتج { $delay_ms } مللي ثانية { $name }
 cmd-products-deleted-product-delay-ms-ms = تم حذف المنتج { $delay_ms } مللي ثانية { $name }
 cmd-products-failed-save-products-error = تعذر حفظ المنتجات: { $error }
@@ -1843,6 +1855,7 @@ explorer-prismoid-grid-envelope-moved = غلاف النموذج ليس الذي 
 explorer-prismoid-grid-source-gone = { $name } لم يعد في المشروع
 explorer-prismoid-grid-holes-changed = تغيّرت سجلات التصحيح داخل هذه الشبكة منذ بنائها
 explorer-prismoid-grid-no-grid-named = لا توجد شبكة باسم { $name } في المشروع
+explorer-prismoid-grid-hole-set-gone = لا توجد مجموعة حفر باسم { $name } في المشروع
 explorer-load = تحميل
 explorer-lock = قفل
 explorer-new-collection = مجموعة جديدة
@@ -2812,6 +2825,7 @@ tri-strata-needs-two = أدرج أفقين على الأقل
 tri-strata-needs-surfaces = اختر سطحًا محمّلًا في كل صف، كل سطح مرة واحدة
 tri-strata-needs-horizons = سمِّ كل أفق، كل اسم مرة واحدة
 tri-strata-needs-intervals = سمِّ كل فترة
+tri-strata-needs-intervals-once = سمِّ كل فترة مرة واحدة؛ الأسماء التي تختلف في حالة الأحرف فقط هي اسم واحد
 tri-strata-needs-name = اكتب اسمًا للطبقات
 tri-add-prismoid-qualities = إضافة جودات
 tri-add-prismoid-qualities-help = يقرأ كل سطح جودة محدد في خلايا شبكة شبه المنشورات: متوسط الزوايا الأربع لشبه المنشور حيث يشارك السطح شبكته، وإلا فالقيمة عند مركز الخلية. الخلايا التي لا يغطيها السطح لا تأخذ قيمة.
@@ -2860,6 +2874,9 @@ tri-prismoid-grid-name-hint = شبكة الطبقة العليا
 tri-prismoid-needs-surfaces = اختر سقفًا وقاعًا، سطحين محمّلين
 tri-prismoid-needs-name = اكتب اسمًا للناتج
 tri-prismoid-needs-grids = اختر هذه الشبكة والشبكة الأخرى، شبكتي شبه منشورات محمّلتين
+tri-prismoid-needs-grid = اختر شبكة شبه منشورات محمّلة
+tri-prismoid-qualities-needs-surfaces = حدّد سطح جودة واحدًا أو أكثر
+tri-mask-needs-polyline = اختر خطًا متعدد المقاطع مغلقًا في منفذ العرض
 
 ## Ui strings
 

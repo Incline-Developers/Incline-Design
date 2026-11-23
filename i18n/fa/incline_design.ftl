@@ -116,7 +116,7 @@ pick-selection-objects-help = اشیایی که جابه‌جا می‌شوند.
 pick-selection-polylines-help = چندخطی‌هایی که نقاط روی آن‌ها درج می‌شود. «انتخاب» آن‌ها را در نمای دید برمی‌گزیند.
 pick-selection-edges-help = اشیایی که مثلث‌بندی می‌شوند. «انتخاب» آن‌ها را در نمای دید برمی‌گزیند.
 pick-selection-misfit-prompt = گمانه‌ها و نقطه‌های کیفیت را برای مقایسه انتخاب کنید.
-pick-selection-prismoids-prompt = منشورگون‌هایی را که باید ماسک یا از ماسک خارج شوند انتخاب کنید.
+pick-selection-prismoids-prompt = منشورگون‌ها را انتخاب کنید: انتخابی که حتی یک منشورگون بدون ماسک دارد ماسک می‌شود و انتخابی که همه‌اش ماسک است از ماسک خارج می‌شود.
 pick-selection-prismoids-selected = { $count } منشورگون انتخاب شد
 pick-selection-thickness-holes-prompt = گمانه‌هایی را که ضخامت در آن‌ها اندازه‌گیری می‌شود انتخاب کنید.
 pick-selection-reverse-prompt = چندخطی‌هایی را که باید وارونه شوند انتخاب کنید.
@@ -798,7 +798,9 @@ cmd-prismoid-grid-unmasked = منشورگون‌های ماسک‌برداشته
 cmd-prismoid-grid-mask-nothing = هیچ منشورگونی از '{ $grid }' نیاز به ماسک نداشت
 cmd-prismoid-grid-mask-leaves-none = ماسک کردن '{ $grid }' را بدون منشورگون فعال می‌گذارد؛ چیزی ماسک نشد
 cmd-prismoid-grid-changed-while-masking = شبکه منشورگون '{ $grid }' هنگام ماسک شدن تغییر کرد؛ چیزی ماسک نشد. دوباره ماسکش کنید.
+cmd-prismoid-grid-changed-while-unmasking = شبکه منشورگون '{ $grid }' هنگام برداشتن ماسک تغییر کرد؛ ماسک چیزی برداشته نشد. دوباره ماسک را بردارید.
 cmd-prismoid-grid-mask-discarded = ماسک شبکه منشورگون '{ $grid }' کنار گذاشته شد: شبکه حذف شده یا پروژه‌اش دیگر فعال نیست. دوباره ماسکش کنید.
+cmd-prismoid-grid-unmask-discarded = برداشتن ماسک شبکه منشورگون '{ $grid }' کنار گذاشته شد: شبکه حذف شده یا پروژه‌اش دیگر فعال نیست. دوباره ماسک را بردارید.
 cmd-prismoid-grid-mask-rederive = برای بردن ماسک به مدل بلوکی، ساخت مدل بلوکی از شبکه منشورگون را دوباره اجرا کنید
 cmd-prismoid-grid-unmask-nothing = هیچ منشورگونی از '{ $grid }' نیاز به برداشتن ماسک نداشت
 cmd-prismoid-grid-trimming = در حال کوتاه کردن شبکه‌های منشورگون…
@@ -815,7 +817,11 @@ cmd-prismoid-grid-trim-touching = '{ $surface }' در فاصله { $allowance } 
 cmd-prismoid-grid-trim-nothing = هیچ زمینی از '{ $grid }' { $relation } '{ $surface }' قرار ندارد؛ شبکه‌ای ساخته نشد
 cmd-prismoid-grid-trim-interval-none = بازه '{ $interval }' زمینی { $relation } '{ $surface }' ندارد و رد شد
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: کوتاه نشد، سقف آن از { $surface } ساخته شده است
-cmd-prismoid-grid-trim-folded = '{ $surface }' روی '{ $grid }' دو ارتفاع می‌دهد، نخستین در { $x }، { $y }: آنجا روی خود تا می‌شود یا قائم می‌ایستد. نقاط دارای دو ارتفاع: { $count }. چیزی کوتاه نشد.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' روی '{ $grid }' روی خود تا می‌شود و بخشی از { $count ->
+        [one] { $count } منشورگون را دو بار می‌پوشاند، با مرکز در { $x }، { $y }
+       *[other] { $count } منشورگون را دو بار می‌پوشاند، نخستین با مرکز در { $x }، { $y }
+    }. چیزی کوتاه نشد.
 cmd-prismoid-grid-trim-too-many-cuts = بریدن '{ $grid }' در امتداد '{ $surface }' بیش از { $budget } مثلث می‌خواهد، بیش از آنچه یک شبکه منشورگون جا دارد. چیزی کوتاه نشد. یک توپوگرافی درشت‌تر در این حد کوتاه می‌کند.
 cmd-prismoid-grid-changed-while-trimming = شبکه منشورگون '{ $grid }' هنگام کوتاه شدن تغییر کرد؛ شبکه‌ای از آن ساخته نشد. دوباره کوتاهش کنید.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' به هیچ‌یک از شبکه‌های منشورگون تیک‌خورده نمی‌رسد؛ چیزی کوتاه نشد.
@@ -842,7 +848,7 @@ cmd-prismoid-grid-difference-reserved = تفاضل نمی‌تواند { $qualit
 cmd-prismoid-grid-creating-regular-block-model = در حال ساخت مدل بلوکی منظم از شبکه‌های منشورگون…
 cmd-prismoid-grid-created-regular-block-model = مدل بلوکی '{ $name }' ساخته شد: { $blocks } از { $boxes } بلوک زمین مدل‌شده دارند، در مجموع { $volume } m³
 cmd-prismoid-grid-regular-no-density = بلوک‌هایی با زمین بدون چگالی بیشتر از 0 که چگالی ندارند: { $count }. بهینه‌سازی پیت چنین بلوکی را با چگالی پیش‌فرض سناریو بر کل بلوک، نه بخش مدل‌شده‌اش، وزن می‌دهد و ذخایر تناژ آن را گم‌شده حساب می‌کنند. برای پرهیز از این، هر منشورگون به چگالی بیشتر از 0 نیاز دارد؛ سطح چگالی‌ای که کل یک شبکه را نپوشاند برخی منشورگون‌ها را بی‌چگالی می‌گذارد.
-cmd-prismoid-grid-regular-overlap = بلوک‌هایی که بیش از حجمشان پر شده‌اند: { $count }. شبکه‌ها آنجا هم‌پوشانی دارند و آن زمین دو بار شمرده می‌شود؛ هم‌پوشانی در بلوکی که بیش از حجمش پر نشده اینجا شمرده نمی‌شود
+cmd-prismoid-grid-regular-overlap = بلوک‌هایی که در آن‌ها دو شبکه یا بیشتر همان زمین را می‌پوشانند و در هر یک شمرده می‌شود: { $count }
 cmd-prismoid-grid-regular-mixed = بلوک‌هایی با بیش از یک بازه: { $count }. هر کدام دسته بازه دارای بیشترین سهم را می‌گیرد، در تساوی آنکه در فهرست پنجره بالاتر است؛ ستون‌های سهم بخش هر بازه را می‌دهند
 cmd-prismoid-grid-regular-changed = شبکه منشورگون '{ $grid }' هنگام ساخت مدل بلوکی منظم آن تغییر کرد؛ چیزی افزوده نشد. دوباره بسازیدش.
 cmd-prismoid-grid-regular-envelope-changed = پوسته مدل هنگام ساخت مدل بلوکی منظم تغییر کرد؛ چیزی افزوده نشد. دوباره بسازیدش.
@@ -862,6 +868,8 @@ cmd-prismoid-grid-block-model-overlap = بلوک‌هایی روی زمینی ک
 cmd-prismoid-grid-block-model-left-blank = خالی گذاشته شد و هرگز پر نمی‌شود، روی بلوک‌های هر بازه‌ای که آن را ندارد: { $columns }. ذخایر مقدار خالی را گم‌شده حساب می‌کنند؛ برنامه زمانی زمینی را که کیفیت پیگیری‌شده‌اش خالی است رد می‌کند و جایی که چگالی خالی است تناژی نمی‌شمارد.
 cmd-prismoid-grid-block-model-over-budget = منشورگون‌ها در شبکه‌های تیک‌خورده: { $count }، بیش از بودجه { $budget } بلوک برای یک مدل بلوکی: شبکه‌های کمتری تیک بزنید یا آن‌ها را با اندازه سلول بزرگ‌تر بسازید
 cmd-prismoid-grid-block-model-not-loaded = شبکه منشورگون '{ $grid }' بارگذاری نشده است: بارگذاری‌اش کنید و دوباره تیکش بزنید
+cmd-prismoid-grid-block-model-changed = شبکه منشورگون '{ $grid }' هنگام ساخت مدل بلوکی آن تغییر کرد؛ چیزی افزوده نشد. دوباره بسازیدش.
+cmd-prismoid-grid-block-model-envelope-changed = پوسته مدل هنگام ساخت مدل بلوکی تغییر کرد؛ چیزی افزوده نشد. دوباره بسازیدش.
 cmd-products-added-product-delay-ms-ms = محصول { $delay_ms } میلی‌ثانیه { $name } افزوده شد
 cmd-products-deleted-product-delay-ms-ms = محصول { $delay_ms } میلی‌ثانیه { $name } حذف شد
 cmd-products-failed-save-products-error = ذخیره محصولات ناموفق بود: { $error }
@@ -1835,6 +1843,7 @@ explorer-prismoid-grid-envelope-moved = پوسته مدل همانی نیست ک
 explorer-prismoid-grid-source-gone = { $name } دیگر در پروژه نیست
 explorer-prismoid-grid-holes-changed = سوابق اصلاح درون این شبکه از زمان ساخت آن تغییر کرده‌اند
 explorer-prismoid-grid-no-grid-named = هیچ شبکه‌ای به نام { $name } در پروژه نیست
+explorer-prismoid-grid-hole-set-gone = هیچ مجموعه گمانه‌ای به نام { $name } در پروژه نیست
 explorer-load = بارگذاری
 explorer-lock = قفل
 explorer-new-collection = مجموعه جدید
@@ -2804,6 +2813,7 @@ tri-strata-needs-two = دست‌کم دو افق فهرست کنید
 tri-strata-needs-surfaces = در هر ردیف یک سطح بارگذاری‌شده انتخاب کنید، هر سطح یک بار
 tri-strata-needs-horizons = هر افق را نام بدهید، هر نام یک بار
 tri-strata-needs-intervals = هر بازه را نام بدهید
+tri-strata-needs-intervals-once = هر بازه را یک بار نام بدهید؛ نام‌هایی که فقط در بزرگی و کوچکی حروف فرق دارند یک نام‌اند
 tri-strata-needs-name = نامی برای چینه‌ها بنویسید
 tri-add-prismoid-qualities = افزودن کیفیت
 tri-add-prismoid-qualities-help = هر سطح کیفیت تیک‌خورده را در سلول‌های شبکه منشورگون می‌خواند: میانگین چهار گوشه منشورگون جایی که سطح شبکه‌اش را شریک است، وگرنه مقدار در مرکز سلول. سلول‌هایی که سطح نمی‌پوشاند مقداری نمی‌گیرند.
@@ -2852,6 +2862,9 @@ tri-prismoid-grid-name-hint = شبکه لایه بالایی
 tri-prismoid-needs-surfaces = یک سقف و یک کف، دو سطح بارگذاری‌شده، انتخاب کنید
 tri-prismoid-needs-name = نامی برای خروجی بنویسید
 tri-prismoid-needs-grids = این شبکه و شبکه دیگر، دو شبکه منشورگون بارگذاری‌شده، را انتخاب کنید
+tri-prismoid-needs-grid = یک شبکه منشورگون بارگذاری‌شده را انتخاب کنید
+tri-prismoid-qualities-needs-surfaces = یک یا چند سطح کیفیت را تیک بزنید
+tri-mask-needs-polyline = یک چندخطی بسته را در نمای دید انتخاب کنید
 
 ## Ui strings
 

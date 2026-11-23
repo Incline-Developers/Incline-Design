@@ -115,7 +115,7 @@ pick-selection-objects-help = Los objetos que se mueven. Seleccionar los elige e
 pick-selection-polylines-help = Las polilíneas en las que se insertan los puntos. Seleccionar las elige en la vista.
 pick-selection-edges-help = Los objetos que se trianguran. Seleccionar los elige en la vista.
 pick-selection-misfit-prompt = Seleccione los sondajes y puntos de calidad que comparar.
-pick-selection-prismoids-prompt = Seleccione los prismoides que enmascarar o desenmascarar.
+pick-selection-prismoids-prompt = Seleccione los prismoides: una selección con algún prismoide sin enmascarar se enmascara; una totalmente enmascarada se desenmascara.
 pick-selection-prismoids-selected = { $count } prismoide(s) seleccionado(s)
 pick-selection-thickness-holes-prompt = Seleccione los sondajes en los que medir el espesor.
 pick-selection-reverse-prompt = Seleccione las polilíneas que invertir.
@@ -804,7 +804,9 @@ cmd-prismoid-grid-unmasked = Prismoides desenmascarados en '{ $grid }': { $count
 cmd-prismoid-grid-mask-nothing = Ningún prismoide de '{ $grid }' necesitaba enmascararse
 cmd-prismoid-grid-mask-leaves-none = Enmascarar dejaría '{ $grid }' sin ningún prismoide activo; no se enmascaró nada
 cmd-prismoid-grid-changed-while-masking = La malla de prismoides '{ $grid }' cambió mientras se enmascaraba; no se enmascaró nada. Enmascárela de nuevo.
+cmd-prismoid-grid-changed-while-unmasking = La malla de prismoides '{ $grid }' cambió mientras se desenmascaraba; no se desenmascaró nada. Desenmascárela de nuevo.
 cmd-prismoid-grid-mask-discarded = Se descartó la máscara de la malla de prismoides '{ $grid }': la malla se eliminó o su proyecto ya no está activo. Enmascárela de nuevo.
+cmd-prismoid-grid-unmask-discarded = Se descartó el desenmascarado de la malla de prismoides '{ $grid }': la malla se eliminó o su proyecto ya no está activo. Desenmascárela de nuevo.
 cmd-prismoid-grid-mask-rederive = Vuelva a usar Crear modelo de bloques a partir de malla de prismoides para llevar la máscara a un modelo de bloques
 cmd-prismoid-grid-unmask-nothing = Ningún prismoide de '{ $grid }' necesitaba desenmascararse
 cmd-prismoid-grid-trimming = Recortando mallas de prismoides…
@@ -821,7 +823,11 @@ cmd-prismoid-grid-trim-touching = '{ $surface }' a menos de { $allowance } m de 
 cmd-prismoid-grid-trim-nothing = Ningún terreno de '{ $grid }' queda { $relation } de '{ $surface }'; no se creó ninguna malla
 cmd-prismoid-grid-trim-interval-none = El intervalo '{ $interval }' no tiene terreno { $relation } de '{ $surface }' y se omitió
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: no recortada, su techo se construyó a partir de { $surface }
-cmd-prismoid-grid-trim-folded = '{ $surface }' da dos alturas sobre '{ $grid }', la primera en { $x }, { $y }: se pliega sobre sí misma o está vertical allí. Puntos con dos alturas: { $count }. No se recortó nada.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' se pliega sobre sí misma sobre '{ $grid }' y cubre dos veces parte de { $count ->
+        [one] { $count } prismoide, centrado en { $x }, { $y }
+       *[other] { $count } prismoides, el primero centrado en { $x }, { $y }
+    }. No se recortó nada.
 cmd-prismoid-grid-trim-too-many-cuts = Cortar '{ $grid }' a lo largo de '{ $surface }' requiere más de { $budget } triángulos, más de lo que una malla de prismoides puede contener. No se recortó nada. Una topografía más gruesa recorta dentro de ese límite.
 cmd-prismoid-grid-changed-while-trimming = La malla de prismoides '{ $grid }' cambió mientras se recortaba; no se creó ninguna malla a partir de ella. Recórtela de nuevo.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' no alcanza ninguna de las mallas de prismoides marcadas; no se recortó nada.
@@ -848,7 +854,7 @@ cmd-prismoid-grid-difference-reserved = Una diferencia no puede llamarse { $qual
 cmd-prismoid-grid-creating-regular-block-model = Creando modelo de bloques regular a partir de mallas de prismoides…
 cmd-prismoid-grid-created-regular-block-model = Modelo de bloques '{ $name }' creado: { $blocks } de { $boxes } bloques contienen terreno modelado, { $volume } m³ en total
 cmd-prismoid-grid-regular-no-density = { $count } bloques contienen terreno sin densidad mayor que 0 y no llevan ninguna: la optimización de pit pondera ese bloque con la densidad por defecto del escenario sobre todo el bloque, no su parte modelada, y las reservas cuentan sus toneladas como faltantes. Cada prismoide necesita una densidad mayor que 0 para evitarlo; una superficie de densidad que no cubre toda una malla deja algunos prismoides sin ella.
-cmd-prismoid-grid-regular-overlap = { $count } bloques están llenos más allá de su volumen: las mallas se superponen allí y ese terreno se cuenta dos veces; la superposición en un bloque no lleno más allá de su volumen no se cuenta aquí
+cmd-prismoid-grid-regular-overlap = { $count } bloques están donde dos o más mallas cubren el mismo terreno, que se cuenta en cada una
 cmd-prismoid-grid-regular-mixed = { $count } bloques contienen más de un intervalo: cada uno toma como categoría el de mayor parte, en empate el más arriba en la lista del diálogo; las columnas de parte dan la porción de cada intervalo
 cmd-prismoid-grid-regular-changed = La malla de prismoides '{ $grid }' cambió mientras se creaba su modelo de bloques regular; no se añadió nada. Créelo de nuevo.
 cmd-prismoid-grid-regular-envelope-changed = La envolvente del modelo cambió mientras se creaba el modelo de bloques regular; no se añadió nada. Créelo de nuevo.
@@ -868,6 +874,8 @@ cmd-prismoid-grid-block-model-overlap = { $count } bloques quedan sobre terreno 
 cmd-prismoid-grid-block-model-left-blank = Dejado en blanco, nunca rellenado, en los bloques de cada intervalo que carece de ello: { $columns }. Las reservas cuentan un valor en blanco como faltante; un programa rechaza el terreno cuya calidad seguida está en blanco y no cuenta toneladas donde la densidad está en blanco.
 cmd-prismoid-grid-block-model-over-budget = { $count } prismoides en las mallas marcadas, por encima del presupuesto de { $budget } bloques para un modelo de bloques: marque menos mallas o constrúyalas con un tamaño de celda mayor
 cmd-prismoid-grid-block-model-not-loaded = La malla de prismoides '{ $grid }' no está cargada: cárguela y márquela de nuevo
+cmd-prismoid-grid-block-model-changed = La malla de prismoides '{ $grid }' cambió mientras se creaba su modelo de bloques; no se añadió nada. Créelo de nuevo.
+cmd-prismoid-grid-block-model-envelope-changed = La envolvente del modelo cambió mientras se creaba el modelo de bloques; no se añadió nada. Créelo de nuevo.
 cmd-products-added-product-delay-ms-ms = Se añadió el producto { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Se eliminó el producto { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = No se pudieron guardar los productos: { $error }
@@ -1841,6 +1849,7 @@ explorer-prismoid-grid-envelope-moved = La envolvente del modelo no es aquella e
 explorer-prismoid-grid-source-gone = { $name } ya no está en el proyecto
 explorer-prismoid-grid-holes-changed = Los registros de corrección dentro de esta malla cambiaron desde que se construyó
 explorer-prismoid-grid-no-grid-named = No hay ninguna malla llamada { $name } en el proyecto
+explorer-prismoid-grid-hole-set-gone = No hay ningún conjunto de sondeos llamado { $name } en el proyecto
 explorer-load = Cargar
 explorer-lock = Bloquear
 explorer-new-collection = Colección nueva
@@ -2810,6 +2819,7 @@ tri-strata-needs-two = Liste al menos dos horizontes
 tri-strata-needs-surfaces = Elija una superficie cargada en cada fila, cada superficie una vez
 tri-strata-needs-horizons = Nombre cada horizonte, cada nombre una vez
 tri-strata-needs-intervals = Nombre cada intervalo
+tri-strata-needs-intervals-once = Nombre cada intervalo una sola vez; los nombres que solo difieren en mayúsculas son un mismo nombre
 tri-strata-needs-name = Escriba un nombre para los estratos
 tri-add-prismoid-qualities = Añadir calidades
 tri-add-prismoid-qualities-help = Lee cada superficie de calidad marcada en las celdas de la malla de prismoides: la media de las cuatro esquinas de un prismoide donde la superficie comparte su malla, si no el valor en el centro de la celda. Las celdas que la superficie no cubre quedan sin valor.
@@ -2858,6 +2868,9 @@ tri-prismoid-grid-name-hint = malla del manto superior
 tri-prismoid-needs-surfaces = Elija un techo y un muro, dos superficies cargadas
 tri-prismoid-needs-name = Escriba un nombre para la salida
 tri-prismoid-needs-grids = Elija esta malla y la otra malla, dos mallas de prismoides cargadas
+tri-prismoid-needs-grid = Elija una malla de prismoides cargada
+tri-prismoid-qualities-needs-surfaces = Marque una o más superficies de calidad
+tri-mask-needs-polyline = Elija una polilínea cerrada en la vista
 
 ## Ui strings
 

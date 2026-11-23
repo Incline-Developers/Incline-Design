@@ -185,7 +185,7 @@ pick-selection-objects-help = Об'єкти, що переміщуються. «
 pick-selection-polylines-help = Полілінії, на які вставляються точки. «Вибрати» обирає їх в області перегляду.
 pick-selection-edges-help = Об'єкти, що тріангулюються. «Вибрати» обирає їх в області перегляду.
 pick-selection-misfit-prompt = Виберіть свердловини й точки показників для порівняння.
-pick-selection-prismoids-prompt = Виберіть призмоїди, які потрібно замаскувати або розмаскувати.
+pick-selection-prismoids-prompt = Виберіть призмоїди: виділення, де є незамаскований призмоїд, маскується, а повністю замасковане розмаскується.
 pick-selection-prismoids-selected = Вибрано призмоїдів: { $count }
 pick-selection-thickness-holes-prompt = Виберіть свердловини, у яких вимірюється потужність.
 pick-selection-reverse-prompt = Виберіть полілінії для обернення.
@@ -852,7 +852,9 @@ cmd-prismoid-grid-unmasked = Знято маску з призмоїдів у '{
 cmd-prismoid-grid-mask-nothing = Жоден призмоїд сітки '{ $grid }' не потрібно було маскувати
 cmd-prismoid-grid-mask-leaves-none = Після маскування в сітці '{ $grid }' не лишилося б активних призмоїдів; нічого не замасковано
 cmd-prismoid-grid-changed-while-masking = Сітка призмоїдів '{ $grid }' змінилася під час маскування; нічого не замасковано. Замаскуйте її знову.
+cmd-prismoid-grid-changed-while-unmasking = Сітка призмоїдів '{ $grid }' змінилася під час зняття маски; маску ніде не знято. Зніміть маску знову.
 cmd-prismoid-grid-mask-discarded = Маску сітки призмоїдів '{ $grid }' відкинуто: сітку видалено або її проєкт більше не активний. Замаскуйте її знову.
+cmd-prismoid-grid-unmask-discarded = Зняття маски із сітки призмоїдів '{ $grid }' відкинуто: сітку видалено або її проєкт більше не активний. Зніміть маску знову.
 cmd-prismoid-grid-mask-rederive = Знову виконайте Створити блокову модель із сітки призмоїдів, щоб перенести маску в блокову модель
 cmd-prismoid-grid-unmask-nothing = З жодного призмоїда сітки '{ $grid }' не потрібно було знімати маску
 cmd-prismoid-grid-trimming = Обрізання сіток призмоїдів…
@@ -869,7 +871,14 @@ cmd-prismoid-grid-trim-touching = '{ $surface }' у межах { $allowance } м
 cmd-prismoid-grid-trim-nothing = Жоден ґрунт сітки '{ $grid }' не лежить { $relation } '{ $surface }'; сітку не створено
 cmd-prismoid-grid-trim-interval-none = Інтервал '{ $interval }' не має ґрунту { $relation } '{ $surface }', його пропущено
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: не обрізано, її покрівлю побудовано з { $surface }
-cmd-prismoid-grid-trim-folded = '{ $surface }' дає дві висоти над '{ $grid }', першу в { $x }, { $y }: там вона загинається на себе або стоїть вертикально. Точок із двома висотами: { $count }. Нічого не обрізано.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' загинається на себе над '{ $grid }' і двічі покриває частину { $count ->
+        [1] { $count } призмоїда, із центром у { $x }, { $y }
+        [one] { $count } призмоїда, перший із центром у { $x }, { $y }
+        [few] { $count } призмоїдів, перший із центром у { $x }, { $y }
+        [many] { $count } призмоїдів, перший із центром у { $x }, { $y }
+       *[other] { $count } призмоїдів, перший із центром у { $x }, { $y }
+    }. Нічого не обрізано.
 cmd-prismoid-grid-trim-too-many-cuts = Розріз '{ $grid }' уздовж '{ $surface }' потребує понад { $budget } трикутників, більше, ніж може вмістити сітка призмоїдів. Нічого не обрізано. Грубіша топографія обрізає в цих межах.
 cmd-prismoid-grid-changed-while-trimming = Сітка призмоїдів '{ $grid }' змінилася під час обрізання; сітку з неї не створено. Обріжте її знову.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' не сягає жодної з позначених сіток призмоїдів; нічого не обрізано.
@@ -896,7 +905,7 @@ cmd-prismoid-grid-difference-reserved = Різниця не може назив�
 cmd-prismoid-grid-creating-regular-block-model = Створення регулярної блокової моделі із сіток призмоїдів…
 cmd-prismoid-grid-created-regular-block-model = Створено блокову модель '{ $name }': { $blocks } з { $boxes } блоків містять змодельований ґрунт, усього { $volume } м³
 cmd-prismoid-grid-regular-no-density = Блоків із ґрунтом без густини понад 0, які не мають густини: { $count }. Оптимізація кар'єру зважує такий блок за типовою густиною сценарію на весь блок, а не на змодельовану частину, а запаси рахують його тонни як відсутні. Щоб цього уникнути, кожному призмоїду потрібна густина понад 0; поверхня густини, що не покриває всю сітку, залишає частину призмоїдів без неї.
-cmd-prismoid-grid-regular-overlap = Блоків, заповнених понад свій об'єм: { $count }. Там сітки перекриваються, і цей ґрунт рахується двічі; перекриття в блоці, не заповненому понад об'єм, тут не рахується
+cmd-prismoid-grid-regular-overlap = Блоків, де дві сітки або більше покривають той самий ґрунт: { $count }. Він рахується в кожній
 cmd-prismoid-grid-regular-mixed = Блоків із кількома інтервалами: { $count }. Кожен отримує категорію інтервалу з найбільшою часткою, за рівності того, що вище в списку діалогу; стовпці часток дають частину кожного інтервалу
 cmd-prismoid-grid-regular-changed = Сітка призмоїдів '{ $grid }' змінилася під час створення її регулярної блокової моделі; нічого не додано. Створіть її знову.
 cmd-prismoid-grid-regular-envelope-changed = Оболонка моделі змінилася під час створення регулярної блокової моделі; нічого не додано. Створіть її знову.
@@ -916,6 +925,8 @@ cmd-prismoid-grid-block-model-overlap = Блоків поверх ґрунту, 
 cmd-prismoid-grid-block-model-left-blank = Залишено порожніми, ніколи не заповнюються, на блоках кожного інтервалу, де їх немає: { $columns }. Запаси рахують порожнє значення як відсутнє; графік відхиляє ґрунт, у якого відстежуваний показник порожній, і не рахує тонни там, де порожня густина.
 cmd-prismoid-grid-block-model-over-budget = Призмоїдів у позначених сітках: { $count }, понад бюджет { $budget } блоків на одну блокову модель: позначте менше сіток або побудуйте їх із більшою коміркою
 cmd-prismoid-grid-block-model-not-loaded = Сітку призмоїдів '{ $grid }' не завантажено: завантажте її й позначте знову
+cmd-prismoid-grid-block-model-changed = Сітка призмоїдів '{ $grid }' змінилася під час створення її блокової моделі; нічого не додано. Створіть її знову.
+cmd-prismoid-grid-block-model-envelope-changed = Оболонка моделі змінилася під час створення блокової моделі; нічого не додано. Створіть її знову.
 cmd-products-added-product-delay-ms-ms = Додано засіб { $delay_ms } мс { $name }
 cmd-products-deleted-product-delay-ms-ms = Видалено засіб { $delay_ms } мс { $name }
 cmd-products-failed-save-products-error = Не вдалося зберегти засоби: { $error }
@@ -1889,6 +1900,7 @@ explorer-prismoid-grid-envelope-moved = Оболонка моделі не та,
 explorer-prismoid-grid-source-gone = { $name } більше немає в проєкті
 explorer-prismoid-grid-holes-changed = Записи виправлень у цій сітці змінилися від часу її побудови
 explorer-prismoid-grid-no-grid-named = У проєкті немає сітки з назвою { $name }
+explorer-prismoid-grid-hole-set-gone = У проєкті немає набору свердловин з назвою { $name }
 explorer-load = Завантажити
 explorer-lock = Заблокувати
 explorer-new-collection = Нова колекція
@@ -2858,6 +2870,7 @@ tri-strata-needs-two = Укажіть щонайменше два горизон
 tri-strata-needs-surfaces = Виберіть завантажену поверхню в кожному рядку, кожну поверхню один раз
 tri-strata-needs-horizons = Назвіть кожен горизонт, кожну назву один раз
 tri-strata-needs-intervals = Назвіть кожен інтервал
+tri-strata-needs-intervals-once = Назвіть кожен інтервал один раз; назви, що відрізняються лише регістром, вважаються однією назвою
 tri-strata-needs-name = Введіть назву пачки
 tri-add-prismoid-qualities = Додати показники
 tri-add-prismoid-qualities-help = Зчитує кожну позначену поверхню показника в комірки сітки призмоїдів: середнє чотирьох кутів призмоїда там, де поверхня лежить на його сітці, інакше значення в центрі комірки. Комірки, які поверхня не покриває, лишаються без значення.
@@ -2906,6 +2919,9 @@ tri-prismoid-grid-name-hint = сітка верхнього пласта
 tri-prismoid-needs-surfaces = Виберіть покрівлю й підошву, дві завантажені поверхні
 tri-prismoid-needs-name = Введіть назву результату
 tri-prismoid-needs-grids = Виберіть цю сітку й іншу сітку, дві завантажені сітки призмоїдів
+tri-prismoid-needs-grid = Виберіть завантажену сітку призмоїдів
+tri-prismoid-qualities-needs-surfaces = Позначте одну або кілька поверхонь показників
+tri-mask-needs-polyline = Виберіть замкнену полілінію у вікні перегляду
 
 ## Ui strings
 

@@ -180,7 +180,7 @@ pick-selection-objects-help = Các đối tượng được di chuyển. Chọn 
 pick-selection-polylines-help = Các đường đa tuyến mà điểm được chèn lên. Chọn sẽ chọn chúng trong khung nhìn.
 pick-selection-edges-help = Các đối tượng được tạo tam giác. Chọn sẽ chọn chúng trong khung nhìn.
 pick-selection-misfit-prompt = Chọn các lỗ khoan và điểm chỉ tiêu để so sánh.
-pick-selection-prismoids-prompt = Chọn các prismoid cần che hoặc bỏ che.
+pick-selection-prismoids-prompt = Chọn các prismoid: vùng chọn có prismoid chưa che sẽ được che, vùng chọn đã che hết sẽ được bỏ che.
 pick-selection-prismoids-selected = Đã chọn { $count } prismoid
 pick-selection-thickness-holes-prompt = Chọn các lỗ khoan để đo chiều dày.
 pick-selection-reverse-prompt = Chọn các đường đa tuyến cần đảo chiều.
@@ -825,7 +825,9 @@ cmd-prismoid-grid-unmasked = Prismoid đã bỏ che trong '{ $grid }': { $count 
 cmd-prismoid-grid-mask-nothing = Không prismoid nào của lưới prismoid '{ $grid }' cần che
 cmd-prismoid-grid-mask-leaves-none = Che sẽ khiến '{ $grid }' không còn prismoid hoạt động nào; không có gì được che
 cmd-prismoid-grid-changed-while-masking = Lưới prismoid '{ $grid }' đã thay đổi khi đang che; không có gì được che. Hãy che lại.
+cmd-prismoid-grid-changed-while-unmasking = Lưới prismoid '{ $grid }' đã thay đổi khi đang bỏ che; không có gì được bỏ che. Hãy bỏ che lại.
 cmd-prismoid-grid-mask-discarded = Phần che của lưới prismoid '{ $grid }' đã bị bỏ: lưới đã bị xóa hoặc dự án của nó không còn hoạt động. Hãy che lại.
+cmd-prismoid-grid-unmask-discarded = Việc bỏ che lưới prismoid '{ $grid }' đã bị bỏ: lưới đã bị xóa hoặc dự án của nó không còn hoạt động. Hãy bỏ che lại.
 cmd-prismoid-grid-mask-rederive = Hãy Tạo mô hình khối từ lưới prismoid lại để đưa phần che vào mô hình khối
 cmd-prismoid-grid-unmask-nothing = Không prismoid nào của '{ $grid }' cần bỏ che
 cmd-prismoid-grid-trimming = Đang xén lưới prismoid…
@@ -842,7 +844,11 @@ cmd-prismoid-grid-trim-touching = '{ $surface }' trong phạm vi { $allowance } 
 cmd-prismoid-grid-trim-nothing = Không phần đất nào của '{ $grid }' nằm { $relation } '{ $surface }'; không lưới nào được tạo
 cmd-prismoid-grid-trim-interval-none = Khoảng '{ $interval }' không có đất { $relation } '{ $surface }' và đã bị bỏ qua
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: không xén, vách trên của nó được tạo từ { $surface }
-cmd-prismoid-grid-trim-folded = '{ $surface }' cho hai độ cao trên '{ $grid }', điểm đầu tiên tại { $x }, { $y }: tại đó nó gập lên chính nó hoặc dựng thẳng đứng. Số điểm có hai độ cao: { $count }. Không có gì được xén.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' gập lên chính nó phía trên '{ $grid }', phủ hai lần một phần của { $count ->
+        [1] { $count } prismoid, có tâm tại { $x }, { $y }
+       *[other] { $count } prismoid, prismoid đầu tiên có tâm tại { $x }, { $y }
+    }. Không có gì được xén.
 cmd-prismoid-grid-trim-too-many-cuts = Cắt '{ $grid }' dọc '{ $surface }' cần hơn { $budget } tam giác, nhiều hơn một lưới prismoid có thể chứa. Không có gì được xén. Một địa hình thô hơn sẽ xén trong giới hạn đó.
 cmd-prismoid-grid-changed-while-trimming = Lưới prismoid '{ $grid }' đã thay đổi trong khi xén; không lưới nào được tạo từ nó. Hãy xén lại.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' không chạm tới lưới prismoid nào được đánh dấu; không có gì được xén.
@@ -869,7 +875,7 @@ cmd-prismoid-grid-difference-reserved = Chênh lệch không thể đặt tên {
 cmd-prismoid-grid-creating-regular-block-model = Đang tạo mô hình khối đều từ lưới prismoid…
 cmd-prismoid-grid-created-regular-block-model = Đã tạo mô hình khối '{ $name }': { $blocks } trên { $boxes } khối chứa đất đã mô hình hóa, tổng cộng { $volume } m³
 cmd-prismoid-grid-regular-no-density = Số khối chứa đất không có tỷ trọng trên 0 và không mang tỷ trọng: { $count }. Tối ưu hóa moong tính trọng số một khối như vậy bằng tỷ trọng mặc định của kịch bản trên toàn khối, không phải phần đã mô hình hóa, và trữ lượng tính số tấn của nó là thiếu. Mỗi prismoid cần tỷ trọng trên 0 để tránh điều này; một bề mặt tỷ trọng không phủ hết một lưới sẽ để một số prismoid không có tỷ trọng.
-cmd-prismoid-grid-regular-overlap = Số khối được lấp quá thể tích của nó: { $count }. Các lưới chồng lên nhau ở đó và phần đất đó bị tính hai lần; chồng lấn trong khối không lấp quá thể tích không được tính ở đây
+cmd-prismoid-grid-regular-overlap = Số khối mà hai lưới trở lên phủ cùng một phần đất: { $count }. Phần đất đó được tính trong từng lưới
 cmd-prismoid-grid-regular-mixed = Số khối chứa hơn một khoảng: { $count }. Mỗi khối lấy danh mục của khoảng có phần lớn nhất, nếu bằng nhau thì khoảng cao hơn trong danh sách của hộp thoại; các cột phần cho biết phần của mỗi khoảng
 cmd-prismoid-grid-regular-changed = Lưới prismoid '{ $grid }' đã thay đổi trong khi tạo mô hình khối đều của nó; không có gì được thêm. Hãy tạo lại.
 cmd-prismoid-grid-regular-envelope-changed = Bao mô hình đã thay đổi trong khi tạo mô hình khối đều; không có gì được thêm. Hãy tạo lại.
@@ -889,6 +895,8 @@ cmd-prismoid-grid-block-model-overlap = Số khối nằm trên phần đất m�
 cmd-prismoid-grid-block-model-left-blank = Để trống, không bao giờ điền, trên các khối của mỗi khoảng thiếu chúng: { $columns }. Trữ lượng tính giá trị trống là thiếu; lịch trình từ chối đất có chỉ tiêu theo dõi bị trống và không tính tấn nơi tỷ trọng trống.
 cmd-prismoid-grid-block-model-over-budget = Số prismoid trong các lưới được đánh dấu: { $count }, vượt ngân sách { $budget } khối cho một mô hình khối: hãy đánh dấu ít lưới hơn hoặc tạo chúng với kích thước ô lớn hơn
 cmd-prismoid-grid-block-model-not-loaded = Lưới prismoid '{ $grid }' chưa được tải: hãy tải và đánh dấu lại
+cmd-prismoid-grid-block-model-changed = Lưới prismoid '{ $grid }' đã thay đổi trong khi tạo mô hình khối của nó; không có gì được thêm. Hãy tạo lại.
+cmd-prismoid-grid-block-model-envelope-changed = Bao mô hình đã thay đổi trong khi tạo mô hình khối; không có gì được thêm. Hãy tạo lại.
 cmd-products-added-product-delay-ms-ms = Đã thêm sản phẩm { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Đã xóa sản phẩm { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = Lưu sản phẩm thất bại: { $error }
@@ -1862,6 +1870,7 @@ explorer-prismoid-grid-envelope-moved = Bao mô hình không phải bao đã dù
 explorer-prismoid-grid-source-gone = { $name } không còn trong dự án
 explorer-prismoid-grid-holes-changed = Các bản ghi hiệu chỉnh trong lưới này đã thay đổi từ khi tạo lưới
 explorer-prismoid-grid-no-grid-named = Không có lưới nào tên { $name } trong dự án
+explorer-prismoid-grid-hole-set-gone = Không có bộ lỗ khoan nào tên { $name } trong dự án
 explorer-load = Tải
 explorer-lock = Khóa
 explorer-new-collection = Bộ sưu tập mới
@@ -2831,6 +2840,7 @@ tri-strata-needs-two = Liệt kê ít nhất hai ranh giới
 tri-strata-needs-surfaces = Chọn một bề mặt đã tải ở mỗi hàng, mỗi bề mặt một lần
 tri-strata-needs-horizons = Đặt tên cho mỗi ranh giới, mỗi tên một lần
 tri-strata-needs-intervals = Đặt tên cho mỗi khoảng
+tri-strata-needs-intervals-once = Đặt tên mỗi khoảng một lần; các tên chỉ khác chữ hoa chữ thường là một tên
 tri-strata-needs-name = Nhập tên cho tầng
 tri-add-prismoid-qualities = Thêm chỉ tiêu
 tri-add-prismoid-qualities-help = Đọc từng bề mặt chỉ tiêu được đánh dấu vào các ô của lưới prismoid: trung bình bốn góc của prismoid nơi bề mặt dùng chung lưới, nếu không thì giá trị tại tâm ô. Ô mà bề mặt không phủ sẽ không có giá trị.
@@ -2879,6 +2889,9 @@ tri-prismoid-grid-name-hint = lưới vỉa trên
 tri-prismoid-needs-surfaces = Chọn một vách trên và một vách dưới, hai bề mặt đã tải
 tri-prismoid-needs-name = Nhập tên cho đầu ra
 tri-prismoid-needs-grids = Chọn lưới này và lưới kia, hai lưới prismoid đã tải
+tri-prismoid-needs-grid = Chọn một lưới prismoid đã tải
+tri-prismoid-qualities-needs-surfaces = Đánh dấu một hoặc nhiều bề mặt chỉ tiêu
+tri-mask-needs-polyline = Chọn một đường đa tuyến kín trong khung nhìn
 
 ## Ui strings
 

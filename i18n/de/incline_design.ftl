@@ -187,7 +187,7 @@ pick-selection-objects-help = Die Objekte, die verschoben werden. „Auswählen�
 pick-selection-polylines-help = Die Polylinien, auf denen die Punkte eingefügt werden. „Auswählen“ wählt sie im Ansichtsfenster aus.
 pick-selection-edges-help = Die Objekte, die trianguliert werden. „Auswählen“ wählt sie im Ansichtsfenster aus.
 pick-selection-misfit-prompt = Wählen Sie die Bohrlöcher und Qualitätspunkte zum Vergleichen aus.
-pick-selection-prismoids-prompt = Wählen Sie die Prismoide zum Maskieren oder Demaskieren aus.
+pick-selection-prismoids-prompt = Wählen Sie die Prismoide aus: Eine Auswahl mit einem nicht maskierten Prismoid wird maskiert, eine ganz maskierte demaskiert.
 pick-selection-prismoids-selected = { $count } Prismoid(e) ausgewählt
 pick-selection-thickness-holes-prompt = Wählen Sie die Bohrlöcher aus, an denen die Mächtigkeit gemessen wird.
 pick-selection-reverse-prompt = Wählen Sie die Polylinien zum Umkehren aus.
@@ -847,7 +847,9 @@ cmd-prismoid-grid-unmasked = Demaskierte Prismoide in '{ $grid }': { $count }; {
 cmd-prismoid-grid-mask-nothing = Kein Prismoid von '{ $grid }' musste maskiert werden
 cmd-prismoid-grid-mask-leaves-none = Durch das Maskieren bliebe in '{ $grid }' kein aktives Prismoid übrig; es wurde nichts maskiert
 cmd-prismoid-grid-changed-while-masking = Das Prismoidgitter '{ $grid }' hat sich beim Maskieren geändert; es wurde nichts maskiert. Maskieren Sie es erneut.
+cmd-prismoid-grid-changed-while-unmasking = Das Prismoidgitter '{ $grid }' hat sich beim Demaskieren geändert; es wurde nichts demaskiert. Demaskieren Sie es erneut.
 cmd-prismoid-grid-mask-discarded = Die Maske des Prismoidgitters '{ $grid }' wurde verworfen: Das Gitter wurde entfernt oder sein Projekt ist nicht mehr aktiv. Maskieren Sie es erneut.
+cmd-prismoid-grid-unmask-discarded = Das Demaskieren des Prismoidgitters '{ $grid }' wurde verworfen: Das Gitter wurde entfernt oder sein Projekt ist nicht mehr aktiv. Demaskieren Sie es erneut.
 cmd-prismoid-grid-mask-rederive = Erstellen Sie das Blockmodell aus dem Prismoidgitter erneut, um die Maske in ein Blockmodell zu übernehmen
 cmd-prismoid-grid-unmask-nothing = Kein Prismoid von '{ $grid }' musste demaskiert werden
 cmd-prismoid-grid-trimming = Prismoidgitter werden gekappt…
@@ -864,7 +866,11 @@ cmd-prismoid-grid-trim-touching = '{ $surface }' innerhalb { $allowance } m eine
 cmd-prismoid-grid-trim-nothing = Kein Gebirge von '{ $grid }' liegt { $relation } '{ $surface }'; kein Gitter wurde erstellt
 cmd-prismoid-grid-trim-interval-none = Intervall '{ $interval }' hat kein Gebirge { $relation } '{ $surface }' und wurde übersprungen
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: nicht gekappt, sein Hangendes wurde aus { $surface } erstellt
-cmd-prismoid-grid-trim-folded = '{ $surface }' gibt über '{ $grid }' zwei Höhen, die erste bei { $x }, { $y }: Sie faltet sich dort über sich selbst oder steht senkrecht. Punkte mit zwei Höhen: { $count }. Nichts wurde gekappt.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' faltet sich über '{ $grid }' über sich selbst und deckt { $count ->
+        [one] { $count } Prismoid teilweise doppelt ab, mit der Mitte bei { $x }, { $y }
+       *[other] { $count } Prismoide teilweise doppelt ab, das erste mit der Mitte bei { $x }, { $y }
+    }. Nichts wurde gekappt.
 cmd-prismoid-grid-trim-too-many-cuts = Das Schneiden von '{ $grid }' entlang '{ $surface }' braucht mehr als { $budget } Dreiecke, mehr als ein Prismoidgitter fassen kann. Nichts wurde gekappt. Eine gröbere Topografie kappt innerhalb davon.
 cmd-prismoid-grid-changed-while-trimming = Prismoidgitter '{ $grid }' hat sich beim Kappen geändert; kein Gitter wurde daraus erstellt. Kappen Sie es erneut.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' erreicht keines der angehakten Prismoidgitter; nichts wurde gekappt.
@@ -891,7 +897,7 @@ cmd-prismoid-grid-difference-reserved = Eine Differenz kann nicht { $quality } h
 cmd-prismoid-grid-creating-regular-block-model = Regelmäßiges Blockmodell aus Prismoidgittern wird erstellt…
 cmd-prismoid-grid-created-regular-block-model = Blockmodell '{ $name }' erstellt: { $blocks } von { $boxes } Blöcken enthalten modelliertes Gebirge, insgesamt { $volume } m³
 cmd-prismoid-grid-regular-no-density = { $count } Blöcke enthalten Gebirge ohne Dichte über 0 und tragen keine: Die Grubenoptimierung gewichtet einen solchen Block mit der Standarddichte des Szenarios über den ganzen Block, nicht nur seinen modellierten Teil, und die Vorräte zählen seine Tonnen als fehlend. Jedes Prismoid braucht eine Dichte über 0, um das zu vermeiden; eine Dichteoberfläche, die ein Gitter nicht ganz abdeckt, lässt einige Prismoide ohne.
-cmd-prismoid-grid-regular-overlap = { $count } Blöcke sind über ihr Volumen hinaus gefüllt: Gitter überlappen dort und dieses Gebirge wird doppelt gezählt; Überlappung in einem nicht überfüllten Block wird hier nicht gezählt
+cmd-prismoid-grid-regular-overlap = { $count } Blöcke liegen dort, wo zwei oder mehr Gitter dasselbe Gebirge abdecken; es wird in jedem gezählt
 cmd-prismoid-grid-regular-mixed = { $count } Blöcke enthalten mehr als ein Intervall: Jeder erhält als Kategorie das mit dem größten Anteil, bei Gleichstand das weiter oben in der Liste des Dialogs; die Anteilsspalten geben den Teil jedes Intervalls
 cmd-prismoid-grid-regular-changed = Prismoidgitter '{ $grid }' hat sich geändert, während sein regelmäßiges Blockmodell erstellt wurde; nichts wurde hinzugefügt. Erstellen Sie es erneut.
 cmd-prismoid-grid-regular-envelope-changed = Die Modellhülle hat sich geändert, während das regelmäßige Blockmodell erstellt wurde; nichts wurde hinzugefügt. Erstellen Sie es erneut.
@@ -911,6 +917,8 @@ cmd-prismoid-grid-block-model-overlap = { $count } Blöcke liegen über Gebirge,
 cmd-prismoid-grid-block-model-left-blank = Leer gelassen, nie gefüllt, auf den Blöcken jedes Intervalls, dem sie fehlen: { $columns }. Die Vorräte zählen einen leeren Wert als fehlend; ein Zeitplan weist Gebirge zurück, dessen verfolgte Qualität leer ist, und zählt keine Tonnen, wo die Dichte leer ist.
 cmd-prismoid-grid-block-model-over-budget = { $count } Prismoide in den angehakten Gittern, über dem Budget von { $budget } Blöcken für ein Blockmodell: Weniger Gitter anhaken oder sie mit größerer Zellgröße erstellen
 cmd-prismoid-grid-block-model-not-loaded = Prismoidgitter '{ $grid }' ist nicht geladen: Laden Sie es und haken Sie es erneut an
+cmd-prismoid-grid-block-model-changed = Prismoidgitter '{ $grid }' hat sich geändert, während sein Blockmodell erstellt wurde; nichts wurde hinzugefügt. Erstellen Sie es erneut.
+cmd-prismoid-grid-block-model-envelope-changed = Die Modellhülle hat sich geändert, während das Blockmodell erstellt wurde; nichts wurde hinzugefügt. Erstellen Sie es erneut.
 cmd-products-added-product-delay-ms-ms = Produkt { $delay_ms } ms { $name } hinzugefügt
 cmd-products-deleted-product-delay-ms-ms = Produkt { $delay_ms } ms { $name } gelöscht
 cmd-products-failed-save-products-error = Produkte konnten nicht gespeichert werden: { $error }
@@ -1884,6 +1892,7 @@ explorer-prismoid-grid-envelope-moved = Die Modellhülle ist nicht die, in der e
 explorer-prismoid-grid-source-gone = { $name } ist nicht mehr im Projekt
 explorer-prismoid-grid-holes-changed = Korrekturprotokolle in diesem Gitter haben sich seit seiner Erstellung geändert
 explorer-prismoid-grid-no-grid-named = Kein Gitter namens { $name } ist im Projekt
+explorer-prismoid-grid-hole-set-gone = Kein Bohrlochsatz namens { $name } ist im Projekt
 explorer-load = Laden
 explorer-lock = Sperren
 explorer-new-collection = Neue Sammlung
@@ -2853,6 +2862,7 @@ tri-strata-needs-two = Mindestens zwei Horizonte aufführen
 tri-strata-needs-surfaces = In jeder Zeile eine geladene Oberfläche wählen, jede Oberfläche einmal
 tri-strata-needs-horizons = Jeden Horizont benennen, jeden Namen einmal
 tri-strata-needs-intervals = Jedes Intervall benennen
+tri-strata-needs-intervals-once = Jedes Intervall nur einmal benennen; Namen, die sich nur in der Groß- und Kleinschreibung unterscheiden, sind ein Name
 tri-strata-needs-name = Einen Namen für die Schichtfolge eingeben
 tri-add-prismoid-qualities = Qualitäten hinzufügen
 tri-add-prismoid-qualities-help = Liest jede angehakte Qualitätsfläche in die Zellen des Prismoidgitters: das Mittel der vier Ecken eines Prismoids, wo die Fläche sein Gitter teilt, sonst den Wert in der Zellmitte. Zellen, die die Fläche nicht abdeckt, erhalten keinen Wert.
@@ -2901,6 +2911,9 @@ tri-prismoid-grid-name-hint = Gitter oberes Flöz
 tri-prismoid-needs-surfaces = Ein Hangendes und ein Liegendes wählen, zwei geladene Oberflächen
 tri-prismoid-needs-name = Einen Namen für die Ausgabe eingeben
 tri-prismoid-needs-grids = Dieses Gitter und das andere Gitter wählen, zwei geladene Prismoidgitter
+tri-prismoid-needs-grid = Ein geladenes Prismoidgitter wählen
+tri-prismoid-qualities-needs-surfaces = Eine oder mehrere Qualitätsflächen anhaken
+tri-mask-needs-polyline = Eine geschlossene Polylinie im Ansichtsfenster wählen
 
 ## Ui strings
 

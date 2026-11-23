@@ -183,7 +183,7 @@ pick-selection-objects-help = Перемещаемые объекты. Кноп�
 pick-selection-polylines-help = Полилинии, на которые вставляются точки. Кнопка «Выбрать» выбирает их в области просмотра.
 pick-selection-edges-help = Объекты, которые триангулируются. Кнопка «Выбрать» выбирает их в области просмотра.
 pick-selection-misfit-prompt = Выберите скважины и точки показателей для сравнения.
-pick-selection-prismoids-prompt = Выберите призмоиды, которые нужно замаскировать или размаскировать.
+pick-selection-prismoids-prompt = Выберите призмоиды: выделение, где есть незамаскированный призмоид, маскируется, а полностью замаскированное размаскируется.
 pick-selection-prismoids-selected = Выбрано призмоидов: { $count }
 pick-selection-thickness-holes-prompt = Выберите скважины, в которых измеряется мощность.
 pick-selection-reverse-prompt = Выберите полилинии для обращения.
@@ -857,7 +857,9 @@ cmd-prismoid-grid-unmasked = Снята маска с призмоидов в '{
 cmd-prismoid-grid-mask-nothing = Ни один призмоид сетки '{ $grid }' не нужно было маскировать
 cmd-prismoid-grid-mask-leaves-none = После маскирования в сетке '{ $grid }' не осталось бы активных призмоидов; ничего не замаскировано
 cmd-prismoid-grid-changed-while-masking = Сетка призмоидов '{ $grid }' изменилась во время маскирования; ничего не замаскировано. Замаскируйте её снова.
+cmd-prismoid-grid-changed-while-unmasking = Сетка призмоидов '{ $grid }' изменилась во время снятия маски; маска нигде не снята. Снимите маску снова.
 cmd-prismoid-grid-mask-discarded = Маска сетки призмоидов '{ $grid }' отброшена: сетка удалена или её проект больше не активен. Замаскируйте её снова.
+cmd-prismoid-grid-unmask-discarded = Снятие маски с сетки призмоидов '{ $grid }' отброшено: сетка удалена или её проект больше не активен. Снимите маску снова.
 cmd-prismoid-grid-mask-rederive = Снова выполните Создать блочную модель из сетки призмоидов, чтобы перенести маску в блочную модель
 cmd-prismoid-grid-unmask-nothing = Ни с одного призмоида сетки '{ $grid }' не нужно было снимать маску
 cmd-prismoid-grid-trimming = Обрезка сеток призмоидов…
@@ -874,7 +876,14 @@ cmd-prismoid-grid-trim-touching = '{ $surface }' в пределах { $allowanc
 cmd-prismoid-grid-trim-nothing = Никакой грунт сетки '{ $grid }' не лежит { $relation } '{ $surface }'; сетка не создана
 cmd-prismoid-grid-trim-interval-none = У интервала '{ $interval }' нет грунта { $relation } '{ $surface }', он пропущен
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: не обрезана, её кровля построена из { $surface }
-cmd-prismoid-grid-trim-folded = '{ $surface }' даёт две высоты над '{ $grid }', первую в { $x }, { $y }: там она загибается на себя или стоит вертикально. Точек с двумя высотами: { $count }. Ничего не обрезано.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' загибается на себя над '{ $grid }' и дважды покрывает часть { $count ->
+        [1] { $count } призмоида, с центром в { $x }, { $y }
+        [one] { $count } призмоида, первый с центром в { $x }, { $y }
+        [few] { $count } призмоидов, первый с центром в { $x }, { $y }
+        [many] { $count } призмоидов, первый с центром в { $x }, { $y }
+       *[other] { $count } призмоидов, первый с центром в { $x }, { $y }
+    }. Ничего не обрезано.
 cmd-prismoid-grid-trim-too-many-cuts = Разрез '{ $grid }' вдоль '{ $surface }' требует более { $budget } треугольников, больше, чем может вместить сетка призмоидов. Ничего не обрезано. Более грубая топография обрезает в этих пределах.
 cmd-prismoid-grid-changed-while-trimming = Сетка призмоидов '{ $grid }' изменилась во время обрезки; сетка из неё не создана. Обрежьте её снова.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' не достигает ни одной из отмеченных сеток призмоидов; ничего не обрезано.
@@ -901,7 +910,7 @@ cmd-prismoid-grid-difference-reserved = Разность не может наз�
 cmd-prismoid-grid-creating-regular-block-model = Создание регулярной блочной модели из сеток призмоидов…
 cmd-prismoid-grid-created-regular-block-model = Создана блочная модель '{ $name }': { $blocks } из { $boxes } блоков содержат смоделированный грунт, всего { $volume } м³
 cmd-prismoid-grid-regular-no-density = Блоков с грунтом без плотности выше 0, не несущих плотности: { $count }. Оптимизация карьера взвешивает такой блок по плотности сценария по умолчанию на весь блок, а не на смоделированную часть, а запасы считают его тонны отсутствующими. Чтобы этого избежать, каждому призмоиду нужна плотность выше 0; поверхность плотности, не покрывающая всю сетку, оставляет часть призмоидов без неё.
-cmd-prismoid-grid-regular-overlap = Блоков, заполненных сверх своего объёма: { $count }. Там сетки перекрываются, и этот грунт считается дважды; перекрытие в блоке, не заполненном сверх объёма, здесь не считается
+cmd-prismoid-grid-regular-overlap = Блоков, где две сетки или больше покрывают один и тот же грунт: { $count }. Он считается в каждой
 cmd-prismoid-grid-regular-mixed = Блоков с несколькими интервалами: { $count }. Каждый получает категорию интервала с наибольшей долей, при равенстве того, что выше в списке диалога; столбцы долей дают часть каждого интервала
 cmd-prismoid-grid-regular-changed = Сетка призмоидов '{ $grid }' изменилась во время создания её регулярной блочной модели; ничего не добавлено. Создайте её снова.
 cmd-prismoid-grid-regular-envelope-changed = Оболочка модели изменилась во время создания регулярной блочной модели; ничего не добавлено. Создайте её снова.
@@ -921,6 +930,8 @@ cmd-prismoid-grid-block-model-overlap = Блоков поверх грунта, 
 cmd-prismoid-grid-block-model-left-blank = Оставлены пустыми, никогда не заполняются, на блоках каждого интервала, где их нет: { $columns }. Запасы считают пустое значение отсутствующим; график отклоняет грунт, у которого отслеживаемый показатель пуст, и не считает тонны там, где пуста плотность.
 cmd-prismoid-grid-block-model-over-budget = Призмоидов в отмеченных сетках: { $count }, сверх бюджета { $budget } блоков на одну блочную модель: отметьте меньше сеток или постройте их с более крупной ячейкой
 cmd-prismoid-grid-block-model-not-loaded = Сетка призмоидов '{ $grid }' не загружена: загрузите её и отметьте снова
+cmd-prismoid-grid-block-model-changed = Сетка призмоидов '{ $grid }' изменилась во время создания её блочной модели; ничего не добавлено. Создайте её снова.
+cmd-prismoid-grid-block-model-envelope-changed = Оболочка модели изменилась во время создания блочной модели; ничего не добавлено. Создайте её снова.
 cmd-products-added-product-delay-ms-ms = Добавлен продукт { $delay_ms } мс { $name }
 cmd-products-deleted-product-delay-ms-ms = Удалён продукт { $delay_ms } мс { $name }
 cmd-products-failed-save-products-error = Не удалось сохранить продукты: { $error }
@@ -1895,6 +1906,7 @@ explorer-prismoid-grid-envelope-moved = Оболочка модели не та,
 explorer-prismoid-grid-source-gone = { $name } больше нет в проекте
 explorer-prismoid-grid-holes-changed = Записи исправлений в этой сетке изменились с момента её построения
 explorer-prismoid-grid-no-grid-named = В проекте нет сетки с именем { $name }
+explorer-prismoid-grid-hole-set-gone = В проекте нет набора скважин с именем { $name }
 explorer-load = Загрузить
 explorer-lock = Заблокировать
 explorer-new-collection = Новая коллекция
@@ -2864,6 +2876,7 @@ tri-strata-needs-two = Укажите не менее двух горизонт�
 tri-strata-needs-surfaces = Выберите загруженную поверхность в каждой строке, каждую поверхность один раз
 tri-strata-needs-horizons = Назовите каждый горизонт, каждое имя один раз
 tri-strata-needs-intervals = Назовите каждый интервал
+tri-strata-needs-intervals-once = Назовите каждый интервал один раз; имена, различающиеся только регистром, считаются одним именем
 tri-strata-needs-name = Введите имя пачки
 tri-add-prismoid-qualities = Добавить показатели
 tri-add-prismoid-qualities-help = Считывает каждую отмеченную поверхность показателя в ячейки сетки призмоидов: среднее четырёх углов призмоида там, где поверхность лежит на его сетке, иначе значение в центре ячейки. Ячейки, которые поверхность не покрывает, остаются без значения.
@@ -2912,6 +2925,9 @@ tri-prismoid-grid-name-hint = сетка верхнего пласта
 tri-prismoid-needs-surfaces = Выберите кровлю и почву, две загруженные поверхности
 tri-prismoid-needs-name = Введите имя результата
 tri-prismoid-needs-grids = Выберите эту сетку и другую сетку, две загруженные сетки призмоидов
+tri-prismoid-needs-grid = Выберите загруженную сетку призмоидов
+tri-prismoid-qualities-needs-surfaces = Отметьте одну или несколько поверхностей показателей
+tri-mask-needs-polyline = Выберите замкнутую полилинию в окне просмотра
 
 ## Ui strings
 

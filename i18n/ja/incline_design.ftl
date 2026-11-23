@@ -182,7 +182,7 @@ pick-selection-objects-help = 移動するオブジェクトです。「選択�
 pick-selection-polylines-help = 点を挿入するポリラインです。「選択」でビューポート内から選びます。
 pick-selection-edges-help = 三角網化するオブジェクトです。「選択」でビューポート内から選びます。
 pick-selection-misfit-prompt = 比較する孔と品質点を選択してください。
-pick-selection-prismoids-prompt = マスクまたはマスク解除するプリズモイドを選択してください。
+pick-selection-prismoids-prompt = プリズモイドを選択してください: マスクされていないものを含む選択はマスクされ、すべてマスク済みの選択はマスク解除されます。
 pick-selection-prismoids-selected = { $count } 個のプリズモイドを選択中
 pick-selection-thickness-holes-prompt = 層厚を測る孔を選択してください。
 pick-selection-reverse-prompt = 向きを反転するポリラインを選択してください。
@@ -827,7 +827,9 @@ cmd-prismoid-grid-unmasked = '{ $grid }' でマスクを解除したプリズモ
 cmd-prismoid-grid-mask-nothing = プリズモイドグリッド '{ $grid }' にマスクが必要なプリズモイドはありませんでした
 cmd-prismoid-grid-mask-leaves-none = マスクすると '{ $grid }' にアクティブなプリズモイドが残らないため、何もマスクしませんでした
 cmd-prismoid-grid-changed-while-masking = マスク中にプリズモイドグリッド '{ $grid }' が変わりました。何もマスクしていません。もう一度マスクしてください。
+cmd-prismoid-grid-changed-while-unmasking = マスク解除中にプリズモイドグリッド '{ $grid }' が変わりました。何もマスク解除していません。もう一度マスク解除してください。
 cmd-prismoid-grid-mask-discarded = プリズモイドグリッド '{ $grid }' のマスクを破棄しました: グリッドが削除されたか、プロジェクトがアクティブではありません。もう一度マスクしてください。
+cmd-prismoid-grid-unmask-discarded = プリズモイドグリッド '{ $grid }' のマスク解除を破棄しました: グリッドが削除されたか、プロジェクトがアクティブではありません。もう一度マスク解除してください。
 cmd-prismoid-grid-mask-rederive = マスクをブロックモデルへ反映するには、プリズモイドグリッドからブロックモデルを作成をもう一度実行してください
 cmd-prismoid-grid-unmask-nothing = '{ $grid }' にマスク解除が必要なプリズモイドはありませんでした
 cmd-prismoid-grid-trimming = プリズモイドグリッドをトリムしています…
@@ -844,7 +846,11 @@ cmd-prismoid-grid-trim-touching = 上盤または下盤から { $allowance } m �
 cmd-prismoid-grid-trim-nothing = '{ $grid }' の地盤は '{ $surface }' の{ $relation }にありません。グリッドは作成されませんでした
 cmd-prismoid-grid-trim-interval-none = 区間 '{ $interval }' には '{ $surface }' の{ $relation }の地盤がないため、スキップしました
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: トリムしていません。その上盤は { $surface } から作成されています
-cmd-prismoid-grid-trim-folded = '{ $surface }' は '{ $grid }' の上で 2 つの高さを持ちます。最初は { $x }、{ $y }: そこで面が折り重なっているか鉛直に立っています。2 つの高さを持つ点: { $count }。何もトリムしていません。
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' は '{ $grid }' の上で折り重なり、{ $count ->
+        [1] { $count } 個のプリズモイドの一部を 2 回覆っています。中心は { $x }、{ $y } です。
+       *[other] { $count } 個のプリズモイドの一部を 2 回覆っています。最初のものは { $x }、{ $y } が中心です。
+    }何もトリムしていません。
 cmd-prismoid-grid-trim-too-many-cuts = '{ $grid }' を '{ $surface }' に沿って切断するには { $budget } を超える三角形が必要で、プリズモイドグリッドが保持できる量を超えます。何もトリムしていません。より粗い地形ならこの範囲内でトリムできます。
 cmd-prismoid-grid-changed-while-trimming = プリズモイドグリッド '{ $grid }' がトリム中に変更されたため、そこからグリッドは作成されませんでした。もう一度トリムしてください。
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' はチェックしたどのプリズモイドグリッドにも届きません。何もトリムしていません。
@@ -871,7 +877,7 @@ cmd-prismoid-grid-difference-reserved = 差に { $quality } という名前は�
 cmd-prismoid-grid-creating-regular-block-model = プリズモイドグリッドから規則ブロックモデルを作成しています…
 cmd-prismoid-grid-created-regular-block-model = ブロックモデル '{ $name }' を作成しました: { $boxes } ブロック中 { $blocks } がモデル化された地盤を含み、合計 { $volume } m³
 cmd-prismoid-grid-regular-no-density = 密度が 0 を超えない地盤を含み、密度を持たないブロック: { $count }。ピット最適化はそのようなブロックに、モデル化部分ではなくブロック全体でシナリオの既定密度による重みを付け、埋蔵量はそのトンを欠損として数えます。これを避けるには、すべてのプリズモイドに 0 を超える密度が必要です。グリッド全体を覆わない密度面は、一部のプリズモイドを密度なしのまま残します。
-cmd-prismoid-grid-regular-overlap = 体積を超えて充填されたブロック: { $count }。そこではグリッドが重なり、その地盤は 2 回数えられています。体積を超えて充填されていないブロック内の重なりはここでは数えません
+cmd-prismoid-grid-regular-overlap = 2 つ以上のグリッドが同じ地盤を覆うブロック: { $count }。その地盤はそれぞれで数えられます
 cmd-prismoid-grid-regular-mixed = 複数の区間を含むブロック: { $count }。それぞれ割合が最大の区間のカテゴリを取り、同率ならダイアログのリストで上にある区間を取ります。割合の列が各区間の部分を示します
 cmd-prismoid-grid-regular-changed = 規則ブロックモデルの作成中にプリズモイドグリッド '{ $grid }' が変更されたため、何も追加されませんでした。もう一度作成してください。
 cmd-prismoid-grid-regular-envelope-changed = 規則ブロックモデルの作成中にモデル外枠が変更されたため、何も追加されませんでした。もう一度作成してください。
@@ -891,6 +897,8 @@ cmd-prismoid-grid-block-model-overlap = チェックした別のグリッドが�
 cmd-prismoid-grid-block-model-left-blank = それを欠く各区間のブロックでは空欄のまま、決して埋められません: { $columns }。埋蔵量は空欄の値を欠損として数えます。スケジュールは追跡品質が空欄の地盤を拒否し、密度が空欄の所ではトンを数えません。
 cmd-prismoid-grid-block-model-over-budget = チェックしたグリッドのプリズモイドは { $count } 個で、1 つのブロックモデルの上限 { $budget } ブロックを超えています: チェックするグリッドを減らすか、より大きなセルサイズで作成してください
 cmd-prismoid-grid-block-model-not-loaded = プリズモイドグリッド '{ $grid }' は読み込まれていません: 読み込んでからもう一度チェックしてください
+cmd-prismoid-grid-block-model-changed = ブロックモデルの作成中にプリズモイドグリッド '{ $grid }' が変更されたため、何も追加されませんでした。もう一度作成してください。
+cmd-prismoid-grid-block-model-envelope-changed = ブロックモデルの作成中にモデル外枠が変更されたため、何も追加されませんでした。もう一度作成してください。
 cmd-products-added-product-delay-ms-ms = 製品を追加しました: { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = 製品を削除しました: { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = 製品の保存に失敗しました: { $error }
@@ -1864,6 +1872,7 @@ explorer-prismoid-grid-envelope-moved = モデル外枠が作成時のもので�
 explorer-prismoid-grid-source-gone = { $name } はもうプロジェクトにありません
 explorer-prismoid-grid-holes-changed = このグリッド内の修正記録が作成後に変わりました
 explorer-prismoid-grid-no-grid-named = { $name } という名前のグリッドはプロジェクトにありません
+explorer-prismoid-grid-hole-set-gone = { $name } という名前のボーリング孔セットはプロジェクトにありません
 explorer-load = 読み込み
 explorer-lock = ロック
 explorer-new-collection = 新しいコレクション
@@ -2833,6 +2842,7 @@ tri-strata-needs-two = 層準を 2 つ以上並べてください
 tri-strata-needs-surfaces = 各行で読み込み済みの面を選び、同じ面は 1 回だけにしてください
 tri-strata-needs-horizons = 各層準に名前を付け、同じ名前は 1 回だけにしてください
 tri-strata-needs-intervals = 各区間に名前を付けてください
+tri-strata-needs-intervals-once = 各区間の名前は 1 回だけにしてください。大文字と小文字の違いだけの名前は同じ名前です
 tri-strata-needs-name = 層群の名前を入力してください
 tri-add-prismoid-qualities = 品質を追加
 tri-add-prismoid-qualities-help = チェックした各品質面をプリズモイドグリッドのセルに読み込みます: 面がグリッドを共有する所ではプリズモイドの4つの角の平均、それ以外ではセル中心の値。面が覆わないセルは値なしです。
@@ -2881,6 +2891,9 @@ tri-prismoid-grid-name-hint = 上部炭層グリッド
 tri-prismoid-needs-surfaces = 上盤と下盤として、読み込み済みの面を 2 つ選んでください
 tri-prismoid-needs-name = 出力の名前を入力してください
 tri-prismoid-needs-grids = このグリッドともう一方のグリッドとして、読み込み済みのプリズモイドグリッドを 2 つ選んでください
+tri-prismoid-needs-grid = 読み込み済みのプリズモイドグリッドを選んでください
+tri-prismoid-qualities-needs-surfaces = 品質面を 1 つ以上チェックしてください
+tri-mask-needs-polyline = ビューポートで閉じたポリラインを選んでください
 
 ## Ui strings
 

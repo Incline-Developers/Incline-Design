@@ -116,7 +116,7 @@ pick-selection-objects-help = 被移动的对象。“选择”可在视口中�
 pick-selection-polylines-help = 点所插入的多段线。“选择”可在视口中选取它们。
 pick-selection-edges-help = 被三角剖分的对象。“选择”可在视口中选取它们。
 pick-selection-misfit-prompt = 选择要比较的钻孔和品质点。
-pick-selection-prismoids-prompt = 选择要屏蔽或取消屏蔽的拟柱体。
+pick-selection-prismoids-prompt = 选择拟柱体:含有未屏蔽拟柱体的选择会被屏蔽,全部已屏蔽的选择会被取消屏蔽。
 pick-selection-prismoids-selected = 已选择 { $count } 个拟柱体
 pick-selection-thickness-holes-prompt = 选择要测量厚度的钻孔。
 pick-selection-reverse-prompt = 选择要反转的多段线。
@@ -798,7 +798,9 @@ cmd-prismoid-grid-unmasked = '{ $grid }' 中已取消屏蔽的拟柱体：{ $cou
 cmd-prismoid-grid-mask-nothing = 拟柱体网格 '{ $grid }' 没有需要屏蔽的拟柱体
 cmd-prismoid-grid-mask-leaves-none = 屏蔽后 '{ $grid }' 将没有有效拟柱体,因此未屏蔽任何内容
 cmd-prismoid-grid-changed-while-masking = 屏蔽时拟柱体网格 '{ $grid }' 已改变;未屏蔽任何内容。请重新屏蔽。
+cmd-prismoid-grid-changed-while-unmasking = 取消屏蔽时拟柱体网格 '{ $grid }' 已改变;未取消屏蔽任何内容。请重新取消屏蔽。
 cmd-prismoid-grid-mask-discarded = 已舍弃拟柱体网格 '{ $grid }' 的屏蔽:网格已移除或其项目已不再处于活动状态。请重新屏蔽。
+cmd-prismoid-grid-unmask-discarded = 已舍弃拟柱体网格 '{ $grid }' 的取消屏蔽:网格已移除或其项目已不再处于活动状态。请重新取消屏蔽。
 cmd-prismoid-grid-mask-rederive = 请重新从拟柱体网格创建块体模型,以将屏蔽带入块体模型
 cmd-prismoid-grid-unmask-nothing = 拟柱体网格 '{ $grid }' 没有需要取消屏蔽的拟柱体
 cmd-prismoid-grid-trimming = 正在修剪拟柱体网格…
@@ -815,7 +817,11 @@ cmd-prismoid-grid-trim-touching = 距顶板或底板 { $allowance } m 以内的 
 cmd-prismoid-grid-trim-nothing = '{ $grid }' 没有位于 '{ $surface }' { $relation }的地层；未创建网格
 cmd-prismoid-grid-trim-interval-none = 区间 '{ $interval }' 没有位于 '{ $surface }' { $relation }的地层，已跳过
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }：未修剪，其顶板由 { $surface } 构建
-cmd-prismoid-grid-trim-folded = '{ $surface }' 在 '{ $grid }' 上方给出两个高度，第一个位于 { $x }，{ $y }：该处曲面自身折叠或竖直。具有两个高度的点：{ $count }。未修剪任何内容。
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' 在 '{ $grid }' 上方自身折叠，两次覆盖 { $count ->
+        [1] { $count } 个拟柱体的一部分，以 { $x }，{ $y } 为中心
+       *[other] { $count } 个拟柱体的一部分，第一个以 { $x }，{ $y } 为中心
+    }。未修剪任何内容。
 cmd-prismoid-grid-trim-too-many-cuts = 沿 '{ $surface }' 切割 '{ $grid }' 需要超过 { $budget } 个三角形，超出拟柱体网格的容量。未修剪任何内容。更粗的地形可在此范围内修剪。
 cmd-prismoid-grid-changed-while-trimming = 拟柱体网格 '{ $grid }' 在修剪期间发生变化；未由其创建网格。请重新修剪。
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' 未触及任何勾选的拟柱体网格；未修剪任何内容。
@@ -842,7 +848,7 @@ cmd-prismoid-grid-difference-reserved = 差值不能命名为 { $quality }，这
 cmd-prismoid-grid-creating-regular-block-model = 正在从拟柱体网格创建规则块体模型…
 cmd-prismoid-grid-created-regular-block-model = 已创建块体模型 '{ $name }'：{ $boxes } 个块中有 { $blocks } 个含已建模地层，共 { $volume } m³
 cmd-prismoid-grid-regular-no-density = 含密度不大于 0 的地层且不带密度的块：{ $count }。矿坑优化按场景的默认密度对此类块的整个块（而非其已建模部分）加权，储量则把它的吨数计为缺失。要避免这种情况，每个拟柱体都需要大于 0 的密度；未覆盖整个网格的密度曲面会使部分拟柱体没有密度。
-cmd-prismoid-grid-regular-overlap = 填充超出自身体积的块：{ $count }。该处网格重叠，这部分地层被计算两次；未超出自身体积的块中的重叠不在此计数
+cmd-prismoid-grid-regular-overlap = 两个或更多网格覆盖同一地层的块：{ $count }。该地层在每个网格中都计数
 cmd-prismoid-grid-regular-mixed = 含多个区间的块：{ $count }。每个块取份额最大的区间作为类别，相同时取对话框列表中靠上的区间；份额列给出每个区间所占部分
 cmd-prismoid-grid-regular-changed = 拟柱体网格 '{ $grid }' 在创建其规则块体模型期间发生变化；未添加任何内容。请重新创建。
 cmd-prismoid-grid-regular-envelope-changed = 模型包络在创建规则块体模型期间发生变化；未添加任何内容。请重新创建。
@@ -862,6 +868,8 @@ cmd-prismoid-grid-block-model-overlap = 位于另一勾选网格在同一位置�
 cmd-prismoid-grid-block-model-left-blank = 在缺少它们的每个区间的块上留空，永不填充：{ $columns }。储量把空值计为缺失；排程会拒绝所跟踪品质为空的地层，且在密度为空处不计吨数。
 cmd-prismoid-grid-block-model-over-budget = 勾选网格中的拟柱体：{ $count }，超出单个块体模型 { $budget } 个块的预算：请少勾选一些网格，或以更大的单元大小构建
 cmd-prismoid-grid-block-model-not-loaded = 拟柱体网格 '{ $grid }' 未加载：请加载后重新勾选
+cmd-prismoid-grid-block-model-changed = 拟柱体网格 '{ $grid }' 在创建其块体模型期间发生变化；未添加任何内容。请重新创建。
+cmd-prismoid-grid-block-model-envelope-changed = 模型包络在创建块体模型期间发生变化；未添加任何内容。请重新创建。
 cmd-products-added-product-delay-ms-ms = 已添加产品 { $delay_ms } 毫秒 { $name }
 cmd-products-deleted-product-delay-ms-ms = 已删除产品 { $delay_ms } 毫秒 { $name }
 cmd-products-failed-save-products-error = 无法保存产品：{ $error }
@@ -1835,6 +1843,7 @@ explorer-prismoid-grid-envelope-moved = 模型包络不是构建时所在的包�
 explorer-prismoid-grid-source-gone = { $name } 已不在项目中
 explorer-prismoid-grid-holes-changed = 本网格内的修正记录自构建以来已更改
 explorer-prismoid-grid-no-grid-named = 项目中没有名为 { $name } 的网格
+explorer-prismoid-grid-hole-set-gone = 项目中没有名为 { $name } 的钻孔集
 explorer-load = 加载
 explorer-lock = 锁
 explorer-new-collection = 新建集合
@@ -2804,6 +2813,7 @@ tri-strata-needs-two = 请至少列出两个层位
 tri-strata-needs-surfaces = 请在每一行选择一个已加载的曲面，每个曲面只用一次
 tri-strata-needs-horizons = 请为每个层位命名，每个名称只用一次
 tri-strata-needs-intervals = 请为每个区间命名
+tri-strata-needs-intervals-once = 每个区间的名称只用一次；仅大小写不同的名称视为同一个名称
 tri-strata-needs-name = 请输入地层组的名称
 tri-add-prismoid-qualities = 添加品质
 tri-add-prismoid-qualities-help = 将每个勾选的品质表面读入拟柱体网格的单元:表面与网格共享节点处取拟柱体四个角点的平均值,否则取单元中心的值。表面未覆盖的单元无值。
@@ -2852,6 +2862,9 @@ tri-prismoid-grid-name-hint = 上部煤层网格
 tri-prismoid-needs-surfaces = 请选择顶板和底板，两个已加载的曲面
 tri-prismoid-needs-name = 请输入输出的名称
 tri-prismoid-needs-grids = 请选择此网格和另一网格，两个已加载的拟柱体网格
+tri-prismoid-needs-grid = 请选择一个已加载的拟柱体网格
+tri-prismoid-qualities-needs-surfaces = 请勾选一个或多个品质表面
+tri-mask-needs-polyline = 请在视口中选择一条闭合多段线
 
 ## Ui strings
 

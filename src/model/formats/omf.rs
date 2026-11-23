@@ -46,7 +46,7 @@ use crate::{
         progress::Phase,
         project::{self, ModellingSettings, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
-        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, QualityMark, spatial_surface_face_order},
+        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, QualityMark, quality_key, same_quality_name, spatial_surface_face_order},
     },
     rendering::color::{linear_to_srgb_byte, rgb_bytes_to_linear_rgba},
 };
@@ -1413,16 +1413,60 @@ fn write_block_model_arrays<W: Write + Seek + Send>(writer: &mut omf_crate::file
     Ok(element)
 }
 
+/// Whether a validation warning only says a prismoid roof's hand mask and a
+/// value saved under the same name before it was reserved share the name
+/// `masked`; reading renames the value.
+fn is_prismoid_mask_name_repeat(elements: &[omf_crate::Element], problem: &omf_crate::validate::Problem) -> bool {
+    if problem.reason != omf_crate::validate::Reason::SoftNotUnique("\"masked\"".to_owned()) {
+        return false;
+    }
+    elements.iter().any(|element| {
+        let omf_crate::Geometry::Composite(composite) = &element.geometry else { return false };
+        composite.elements.iter().any(|roof| {
+            let is_mask = |attribute: &omf_crate::Attribute| matches!(attribute.data, omf_crate::AttributeData::Boolean { .. }) && attribute.name == "masked";
+            let is_values = |attribute: &omf_crate::Attribute| matches!(attribute.data, omf_crate::AttributeData::Number { .. }) && attribute.name == "masked";
+            kind(roof) == Some("prismoid_roof")
+                && Some(roof.name.as_str()) == problem.name.as_deref()
+                && roof.attributes.iter().filter(|attribute| attribute.name == "masked").count() == 2
+                && roof.attributes.iter().any(is_mask)
+                && roof.attributes.iter().any(is_values)
+        })
+    })
+}
+
+/// Rename a value a file saved before the name was reserved holds as `masked`
+/// to the first free "name (2)", "name (3)", ... by quality key. Returns the
+/// name given, as at most one value of a grid that passes `check` is so named.
+fn rename_values_named_as_the_mask(cell_values: &mut [CellValues]) -> Option<String> {
+    let mut renamed = None;
+    let mut taken = cell_values.iter().map(|values| quality_key(&values.name)).collect::<BTreeSet<_>>();
+    for values in cell_values.iter_mut().filter(|values| same_quality_name(&values.name, "masked")) {
+        let base = values.name.trim().to_owned();
+        let free = (2u64..).map(|suffix| format!("{base} ({suffix})")).find(|name| !taken.contains(&quality_key(name)));
+        if let Some(name) = free {
+            taken.insert(quality_key(&name));
+            values.name = name.clone();
+            renamed = Some(name);
+        }
+    }
+    renamed
+}
+
 /// Write a prismoid grid as standard OMF elements under one composite: the
 /// roof and the floor as grid surfaces on the one lattice, each carrying the
 /// active-cell mask, and the walls round the active cells as a surface. The
 /// cells masked by hand, when any is, and the cell values ride on the roof,
 /// each set of values with its unit.
 fn write_prismoid_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenPrismoidGrid) -> Result<omf_crate::Element> {
+    open.grid.check().with_context(|| tr!("err-omf-prismoid-grid", name = open.name.clone()))?;
+    prismoid_grid_element(writer, open)
+}
+
+/// The elements of a grid already checked, as [`write_prismoid_grid`] writes.
+fn prismoid_grid_element<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenPrismoidGrid) -> Result<omf_crate::Element> {
     use omf_crate::{Attribute, Element, GridSurface, Location, Orient2, Surface};
 
     let grid = &open.grid;
-    grid.check().with_context(|| tr!("err-omf-prismoid-grid", name = open.name.clone()))?;
     let lattice = &grid.lattice;
     let horizontal = |plan: DVec2| [plan.x, plan.y, 0.0];
     let orient = Orient2::new(horizontal(lattice.origin), horizontal(lattice.u), horizontal(lattice.v));
@@ -2274,6 +2318,11 @@ fn read_container<R: omf_crate::file::ReadAt>(source_name: &str, archive: R, bac
             .warnings
             .push(tr!("omf-unsupported-metadata-keys", keys = unsupported_project_metadata.join(", ").to_string()));
     }
+    let problems = problems
+        .into_vec()
+        .into_iter()
+        .filter(|problem| !is_prismoid_mask_name_repeat(&project.elements, problem))
+        .collect::<Vec<_>>();
     if !problems.is_empty() {
         bundle.warnings.push(tr!("omf-validation-warnings", warnings = format!("{problems:?}")));
     }
@@ -3812,6 +3861,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             Some(cut) => self.read_prismoid_cut(cut, &lattice, name)?,
             None => CutPrismoids::default(),
         };
+        let renamed = rename_values_named_as_the_mask(&mut cell_values);
         let grid = PrismoidGrid {
             lattice,
             roof: elevations(roof_heights),
@@ -3827,11 +3877,25 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         if let Some(None) = stratum {
             self.bundle.warnings.push(tr!("omf-prismoid-stratum-dropped", name = name.to_string()));
         }
-        let built_from = element.metadata.get(META_BUILT_FROM).map(|record| BuildRecord::deserialize(record).ok());
+        let mut built_from = element.metadata.get(META_BUILT_FROM).map(|record| BuildRecord::deserialize(record).ok());
         if let Some(None) = built_from {
             self.bundle.warnings.push(tr!("omf-prismoid-record-dropped", name = name.to_string()));
         }
-        let (color_by, shaded) = (style_value::<PrismoidColorBy>(style, "color_by"), style_value::<bool>(style, "shaded"));
+        let (mut color_by, shaded) = (style_value::<PrismoidColorBy>(style, "color_by"), style_value::<bool>(style, "shaded"));
+        if let Some(new) = &renamed {
+            // The colour choice and the record named the value before its rename.
+            let renamed_value = |value: &mut String| {
+                if same_quality_name(value, "masked") {
+                    value.clone_from(new);
+                }
+            };
+            color_by.iter_mut().filter_map(|color| color.value.as_mut()).for_each(renamed_value);
+            built_from
+                .iter_mut()
+                .flatten()
+                .flat_map(|record| record.values.iter_mut())
+                .for_each(|source| renamed_value(&mut source.value));
+        }
         let present = |key: &str| style.and_then(|style| style.get(key)).is_some();
         if (color_by.is_none() && present("color_by")) || (shaded.is_none() && present("shaded")) {
             self.bundle.warnings.push(tr!("omf-prismoid-style-dropped", name = name.to_string()));

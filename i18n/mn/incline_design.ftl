@@ -187,7 +187,7 @@ pick-selection-objects-help = Зөөгдөх объектууд. Сонгох н
 pick-selection-polylines-help = Цэгүүд оруулагдах полилинианууд. Сонгох нь тэдгээрийг харагдах цонхонд сонгоно.
 pick-selection-edges-help = Триангуляц хийгдэх объектууд. Сонгох нь тэдгээрийг харагдах цонхонд сонгоно.
 pick-selection-misfit-prompt = Харьцуулах цооног болон чанарын цэгүүдийг сонгоно уу.
-pick-selection-prismoids-prompt = Масклах эсвэл маскийг арилгах призмоидуудыг сонгоно уу.
+pick-selection-prismoids-prompt = Призмоидуудыг сонгоно уу: масклаагүй призмоид агуулсан сонголтыг масклана, бүгд масклагдсан сонголтын маскийг арилгана.
 pick-selection-prismoids-selected = { $count } призмоид сонгогдсон
 pick-selection-thickness-holes-prompt = Зузаан хэмжих цооногуудыг сонгоно уу.
 pick-selection-reverse-prompt = Эргүүлэх полилиниануудыг сонгоно уу.
@@ -849,7 +849,9 @@ cmd-prismoid-grid-unmasked = '{ $grid }' дахь маск авсан призм
 cmd-prismoid-grid-mask-nothing = '{ $grid }' торын нэг ч призмоидыг масклах шаардлагагүй байв
 cmd-prismoid-grid-mask-leaves-none = Масклавал '{ $grid }' торонд идэвхтэй призмоид үлдэхгүй; юуг ч масклаагүй
 cmd-prismoid-grid-changed-while-masking = Призмоид тор '{ $grid }' масклах явцад өөрчлөгдсөн; юуг ч масклаагүй. Дахин масклана уу.
+cmd-prismoid-grid-changed-while-unmasking = Призмоид тор '{ $grid }' маскийг авах явцад өөрчлөгдсөн; юуны ч маскийг аваагүй. Дахин маскийг авна уу.
 cmd-prismoid-grid-mask-discarded = Призмоид тор '{ $grid }'-ийн маскийг хаяв: тор устгагдсан эсвэл түүний төсөл идэвхгүй болсон. Дахин масклана уу.
+cmd-prismoid-grid-unmask-discarded = Призмоид тор '{ $grid }'-ийн маскийг авахыг хаяв: тор устгагдсан эсвэл түүний төсөл идэвхгүй болсон. Дахин маскийг авна уу.
 cmd-prismoid-grid-mask-rederive = Маскийг блок загварт шилжүүлэхийн тулд Призмоид тороос блок загвар үүсгэх командыг дахин ажиллуулна уу
 cmd-prismoid-grid-unmask-nothing = '{ $grid }' торын нэг ч призмоидын маскийг авах шаардлагагүй байв
 cmd-prismoid-grid-trimming = Призмоид торуудыг тайрч байна…
@@ -866,7 +868,11 @@ cmd-prismoid-grid-trim-touching = Дээвэр эсвэл шалнаас { $allo
 cmd-prismoid-grid-trim-nothing = '{ $grid }'-ийн хөрс '{ $surface }'-ээс { $relation } байхгүй; тор үүсгээгүй
 cmd-prismoid-grid-trim-interval-none = '{ $interval }' завсарт '{ $surface }'-ээс { $relation } хөрс байхгүй тул алгаслаа
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: тайраагүй, түүний дээврийг { $surface }-ээс үүсгэсэн
-cmd-prismoid-grid-trim-folded = '{ $surface }' нь '{ $grid }'-ийн дээр хоёр өндөр өгч байна, эхнийх нь { $x }, { $y }-д: тэнд өөр дээрээ нугалагдсан эсвэл босоо байна. Хоёр өндөртэй цэг: { $count }. Юу ч тайраагүй.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' нь '{ $grid }'-ийн дээр өөр дээрээ нугалагдаж, { $count ->
+        [one] { $count } призмоидын нэг хэсгийг хоёр удаа хамарч байна, { $x }, { $y }-д төвтэй
+       *[other] { $count } призмоидын нэг хэсгийг хоёр удаа хамарч байна, эхнийх нь { $x }, { $y }-д төвтэй
+    }. Юу ч тайраагүй.
 cmd-prismoid-grid-trim-too-many-cuts = '{ $grid }'-г '{ $surface }'-ийн дагуу зүсэхэд { $budget }-ээс олон гурвалжин шаардлагатай, призмоид торын багтаах хэмжээнээс их. Юу ч тайраагүй. Илүү бүдүүн топограф энэ хязгаарт тайрна.
 cmd-prismoid-grid-changed-while-trimming = '{ $grid }' призмоид тор тайрах үед өөрчлөгдсөн; түүнээс тор үүсгээгүй. Дахин тайрна уу.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' чагтлагдсан призмоид торуудын алинд нь ч хүрэхгүй; юу ч тайраагүй.
@@ -893,7 +899,7 @@ cmd-prismoid-grid-difference-reserved = Зөрүүг { $quality } гэж нэр�
 cmd-prismoid-grid-creating-regular-block-model = Призмоид торуудаас тогтмол блок загвар үүсгэж байна…
 cmd-prismoid-grid-created-regular-block-model = '{ $name }' блок загвар үүслээ: { $boxes } блокоос { $blocks } нь загварчилсан хөрстэй, нийт { $volume } м³
 cmd-prismoid-grid-regular-no-density = 0-ээс их нягтгүй хөрстэй, нягт агуулаагүй блок: { $count }. Карьерын оновчлол ийм блокийг загварчилсан хэсгээр бус бүх блокоор хувилбарын өгөгдмөл нягтаар жигнэж, нөөц түүний тоннуудыг дутуу гэж тооцно. Үүнээс зайлсхийхийн тулд призмоид бүрт 0-ээс их нягт хэрэгтэй; торыг бүхэлд нь хамраагүй нягтын гадаргуу зарим призмоидыг нягтгүй үлдээнэ.
-cmd-prismoid-grid-regular-overlap = Эзлэхүүнээсээ илүү дүүрсэн блок: { $count }. Тэнд торууд давхцаж, тэр хөрсийг хоёр удаа тооцно; эзлэхүүнээсээ илүү дүүрээгүй блок дахь давхцлыг энд тооцохгүй
+cmd-prismoid-grid-regular-overlap = Хоёр ба түүнээс олон тор нэг хөрсийг бүрхсэн блок: { $count }. Тэр хөрсийг тор бүрд тооцно
 cmd-prismoid-grid-regular-mixed = Нэгээс олон завсартай блок: { $count }. Тус бүр хамгийн их хувьтай завсрын ангиллыг авна, тэнцвэл харилцах цонхны жагсаалтад дээр байгааг авна; хувийн баганууд завсар бүрийн хэсгийг өгнө
 cmd-prismoid-grid-regular-changed = '{ $grid }' призмоид тор тогтмол блок загвар нь үүсэх үед өөрчлөгдсөн; юу ч нэмээгүй. Дахин үүсгэнэ үү.
 cmd-prismoid-grid-regular-envelope-changed = Тогтмол блок загвар үүсэх үед загварын бүрхүүл өөрчлөгдсөн; юу ч нэмээгүй. Дахин үүсгэнэ үү.
@@ -913,6 +919,8 @@ cmd-prismoid-grid-block-model-overlap = Өөр чагтлагдсан торын
 cmd-prismoid-grid-block-model-left-blank = Байхгүй завсар бүрийн блокууд дээр хоосон үлдээсэн, хэзээ ч дүүргэхгүй: { $columns }. Нөөц хоосон утгыг дутуу гэж тооцно; хуваарь мөрдөж буй чанар нь хоосон хөрсийг татгалзаж, нягт хоосон газарт тонн тооцохгүй.
 cmd-prismoid-grid-block-model-over-budget = Чагтлагдсан торууд дахь призмоид: { $count }, нэг блок загварт ногдох { $budget } блокийн төсвөөс давсан: цөөн тор чагтлах эсвэл тэдгээрийг илүү том нүдээр бүтээнэ үү
 cmd-prismoid-grid-block-model-not-loaded = '{ $grid }' призмоид тор ачаалагдаагүй: ачаалаад дахин чагтална уу
+cmd-prismoid-grid-block-model-changed = '{ $grid }' призмоид тор блок загвар үүсэх үед өөрчлөгдсөн; юу ч нэмээгүй. Дахин үүсгэнэ үү.
+cmd-prismoid-grid-block-model-envelope-changed = Блок загвар үүсэх үед загварын бүрхүүл өөрчлөгдсөн; юу ч нэмээгүй. Дахин үүсгэнэ үү.
 cmd-products-added-product-delay-ms-ms = { $delay_ms } мс { $name } бүтээгдэхүүнийг нэмлээ
 cmd-products-deleted-product-delay-ms-ms = { $delay_ms } мс { $name } бүтээгдэхүүнийг устгалаа
 cmd-products-failed-save-products-error = Бүтээгдэхүүнийг хадгалж чадсангүй: { $error }
@@ -1886,6 +1894,7 @@ explorer-prismoid-grid-envelope-moved = Загварын бүрхүүл нь ү�
 explorer-prismoid-grid-source-gone = { $name } төсөлд байхаа больсон
 explorer-prismoid-grid-holes-changed = Энэ тор доторх засварын бүртгэлүүд үүсгэснээс хойш өөрчлөгдсөн
 explorer-prismoid-grid-no-grid-named = Төсөлд { $name } нэртэй тор алга
+explorer-prismoid-grid-hole-set-gone = Төсөлд { $name } нэртэй өрмийн цооногийн багц алга
 explorer-load = Ачаалах
 explorer-lock = Түгжих
 explorer-new-collection = Шинэ цуглуулга
@@ -2855,6 +2864,7 @@ tri-strata-needs-two = Хамгийн багадаа хоёр хил жагса�
 tri-strata-needs-surfaces = Мөр бүрт ачаалсан гадаргуу сонгоно уу, гадаргуу бүрийг нэг удаа
 tri-strata-needs-horizons = Хил бүрийг нэрлэнэ үү, нэр бүрийг нэг удаа
 tri-strata-needs-intervals = Завсар бүрийг нэрлэнэ үү
+tri-strata-needs-intervals-once = Завсар бүрийг нэг удаа нэрлэнэ үү; зөвхөн жижиг, том үсгээр ялгаатай нэрс нэг нэр болно
 tri-strata-needs-name = Давхаргын багцын нэр бичнэ үү
 tri-add-prismoid-qualities = Чанар нэмэх
 tri-add-prismoid-qualities-help = Тэмдэглэсэн чанарын гадаргуу бүрийг призмоид торын нүдэнд уншина: гадаргуу торыг нь хуваалцдаг газарт призмоидын дөрвөн булангийн дундаж, бусад газарт нүдний төвийн утга. Гадаргуу бүрхээгүй нүдэнд утга өгөхгүй.
@@ -2903,6 +2913,9 @@ tri-prismoid-grid-name-hint = дээд давхаргын тор
 tri-prismoid-needs-surfaces = Дээвэр ба шал, ачаалсан хоёр гадаргуу сонгоно уу
 tri-prismoid-needs-name = Гаралтын нэр бичнэ үү
 tri-prismoid-needs-grids = Энэ тор ба нөгөө торыг, ачаалсан хоёр призмоид тор сонгоно уу
+tri-prismoid-needs-grid = Ачаалсан призмоид торыг сонгоно уу
+tri-prismoid-qualities-needs-surfaces = Нэг буюу хэд хэдэн чанарын гадаргууг чагтална уу
+tri-mask-needs-polyline = Харагдах цонхноос хаалттай полилиниа сонгоно уу
 
 ## Ui strings
 

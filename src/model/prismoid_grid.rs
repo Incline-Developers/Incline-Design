@@ -68,6 +68,13 @@ impl PrismoidColorBy {
     }
 }
 
+/// Whether no two of `names` are one name, as qualities are compared; a
+/// blank one is no name and is not counted.
+pub(crate) fn names_once<'a>(names: impl IntoIterator<Item = &'a str>) -> bool {
+    let keys: Vec<String> = names.into_iter().map(quality_key).filter(|key| !key.is_empty()).collect();
+    keys.iter().enumerate().all(|(index, key)| !keys[..index].contains(key))
+}
+
 /// Where a prismoid grid sits in the strata it was built in: the stack as
 /// the user stated it, top first.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -81,7 +88,7 @@ pub(crate) struct Stratum {
 
 impl Stratum {
     /// One more horizon than intervals, this grid among them, and every
-    /// name given.
+    /// name given. A name may repeat: a saved record is read as it was kept.
     pub(crate) fn is_whole(&self) -> bool {
         let blank = |name: &String| name.trim().is_empty();
         self.horizons.len() == self.intervals.len() + 1
@@ -225,10 +232,16 @@ impl Lattice {
 
     /// The plan position of every corner, in corner order.
     pub(crate) fn corners(&self) -> Vec<DVec2> {
+        self.corners_from(self.origin)
+    }
+
+    /// The corners as `corners` gives them, with `base` for the origin: with
+    /// zero, relative to the origin, exact where world coordinates are not.
+    fn corners_from(&self, base: DVec2) -> Vec<DVec2> {
         let (u_edges, v_edges) = (edges(&self.u_sizes), edges(&self.v_sizes));
         v_edges
             .iter()
-            .flat_map(|along_v| u_edges.iter().map(move |along_u| self.origin + self.u * *along_u + self.v * *along_v))
+            .flat_map(|along_v| u_edges.iter().map(move |along_u| base + self.u * *along_u + self.v * *along_v))
             .collect()
     }
 
@@ -244,11 +257,13 @@ impl Lattice {
         let DVec2 { x: s, y: t } = self.to_lattice(at);
         let find = |edges: &[f64], along: f64| {
             let total = edges[edges.len() - 1];
-            // Written so NaN is outside.
-            if !(0.0..=total).contains(&along) {
+            // Written so NaN is outside; either edge as `corners` computes
+            // it may lie a rounding error of the world coordinates away.
+            let slack = (self.origin.abs().max_element() + total) * 64.0 * f64::EPSILON;
+            if !(-slack..=total + slack).contains(&along) {
                 return None;
             }
-            Some((edges.partition_point(|edge| *edge <= along) - 1).min(edges.len() - 2))
+            Some(edges.partition_point(|edge| *edge <= along).saturating_sub(1).min(edges.len() - 2))
         };
         Some((find(u_edges, s)?, find(v_edges, t)?))
     }
@@ -257,7 +272,12 @@ impl Lattice {
     /// inverse of `corners`, also for axes `check` admits a hair off unit and
     /// perpendicular.
     pub(crate) fn to_lattice(&self, at: DVec2) -> DVec2 {
-        DMat2::from_cols(self.u, self.v).inverse() * (at - self.origin)
+        self.to_lattice_from_origin(at - self.origin)
+    }
+
+    /// [`Self::to_lattice`] of a plan point given relative to the origin.
+    fn to_lattice_from_origin(&self, at: DVec2) -> DVec2 {
+        DMat2::from_cols(self.u, self.v).inverse() * at
     }
 
     /// A point in the lattice frame (distances along `u` and `v` from the
@@ -477,15 +497,22 @@ impl CutPrismoids {
             let mut at = Vec::with_capacity(points.len());
             for point in &points {
                 let key = ((point.plan.x / quantum).round() as i64, (point.plan.y / quantum).round() as i64);
-                let held = welded.entry(key).or_default();
-                let same = held.iter().copied().find(|index| {
-                    let other = cut.points[*index as usize];
-                    (other.roof - point.roof).abs() <= quantum && (other.floor - point.floor).abs() <= quantum
-                });
+                // The first held point within the tolerance, in any of the
+                // buckets the point could straddle.
+                let same = (-1..=1)
+                    .flat_map(|along_x| (-1..=1).map(move |along_y| (key.0.saturating_add(along_x), key.1.saturating_add(along_y))))
+                    .filter_map(|near| welded.get(&near))
+                    .flatten()
+                    .copied()
+                    .filter(|index| {
+                        let other = cut.points[*index as usize];
+                        (other.plan - point.plan).abs().max_element() <= quantum && (other.roof - point.roof).abs() <= quantum && (other.floor - point.floor).abs() <= quantum
+                    })
+                    .min();
                 let index = same.unwrap_or_else(|| {
                     cut.points.push(*point);
                     let index = (cut.points.len() - 1) as u32;
-                    held.push(index);
+                    welded.entry(key).or_default().push(index);
                     index
                 });
                 at.push(index);
@@ -1747,9 +1774,31 @@ impl PrismoidGrid {
     /// trim took away; why not, off the lattice or on a cell that is not
     /// active.
     pub(crate) fn reading_at(&self, plan: DVec2) -> std::result::Result<PlanReading, PlanMiss> {
+        let (u_edges, v_edges) = self.plan_edges();
+        let (cell, roof, floor) = self.read_in(plan, &u_edges, &v_edges)?;
+        Ok(PlanReading {
+            cell,
+            roof,
+            floor,
+            roof_slope: self.roof_slope_in(cell, plan, &u_edges, &v_edges),
+        })
+    }
+
+    /// The lattice's edge distances, for [`Self::heights_in`] on many points.
+    pub(crate) fn plan_edges(&self) -> (Vec<f64>, Vec<f64>) {
+        (edges(&self.lattice.u_sizes), edges(&self.lattice.v_sizes))
+    }
+
+    /// The roof and floor of [`Self::reading_at`] from the lattice's edge
+    /// distances, without the slope.
+    pub(crate) fn heights_in(&self, plan: DVec2, u_edges: &[f64], v_edges: &[f64]) -> std::result::Result<(f64, f64), PlanMiss> {
+        self.read_in(plan, u_edges, v_edges).map(|(_, roof, floor)| (roof, floor))
+    }
+
+    /// The cell, roof and floor over a plan point, or why not.
+    fn read_in(&self, plan: DVec2, u_edges: &[f64], v_edges: &[f64]) -> std::result::Result<(usize, f64, f64), PlanMiss> {
         let lattice = &self.lattice;
-        let (u_edges, v_edges) = (edges(&lattice.u_sizes), edges(&lattice.v_sizes));
-        let (column, row) = lattice.cell_at_in(plan, &u_edges, &v_edges).ok_or(PlanMiss::Outside)?;
+        let (column, row) = lattice.cell_at_in(plan, u_edges, v_edges).ok_or(PlanMiss::Outside)?;
         let cell = row * lattice.columns() + column;
         if self.masked[cell] {
             return Err(PlanMiss::Masked);
@@ -1760,13 +1809,13 @@ impl PrismoidGrid {
         if self.cut_misses(cell, plan) {
             return Err(PlanMiss::Inactive);
         }
-        let (roof, floor) = self.heights_at(cell, plan, &u_edges, &v_edges);
-        Ok(PlanReading {
-            cell,
-            roof,
-            floor,
-            roof_slope: self.roof_slope_in(cell, plan, &u_edges, &v_edges),
-        })
+        let (roof, floor) = self.heights_at(cell, plan, u_edges, v_edges);
+        Ok((cell, roof, floor))
+    }
+
+    /// The centres of the cells that are active and not masked.
+    pub(crate) fn ground_centres(&self) -> impl Iterator<Item = DVec2> + '_ {
+        self.cell_centres().filter(|(cell, _)| self.active[*cell] && !self.masked[*cell]).map(|(_, centre)| centre)
     }
 
     /// The active cell a point on a section lies in, between the floor and
@@ -2191,10 +2240,12 @@ impl PrismoidGrid {
 
     /// A copy trimmed to a surface, cut exactly along it. `read` gives the
     /// surface at a plan point (with a search stack of its own per thread),
-    /// and `overlaps` hands its visitor each face of the surface over a
-    /// world plan triangle with the exact plan overlap of the two (its
-    /// points' heights mean nothing). A plan overlap may exceed its triangle
-    /// by `slack` of area before it is a fold.
+    /// and `overlaps` hands its visitor each face of the surface over a plan
+    /// triangle with the exact plan overlap of the two (its points' heights
+    /// mean nothing). The triangle and what the visitor gets are relative to
+    /// the lattice origin, which `overlaps` takes first: small cells far from
+    /// the world origin keep their precision. A plan overlap may exceed its
+    /// triangle by `slack` of area before it is a fold.
     ///
     /// The surface is read at every corner node, held between the floor and
     /// the roof, and taken as the roof with `keep_below`, else as the floor.
@@ -2204,8 +2255,9 @@ impl PrismoidGrid {
     /// where the surface keeps none of it, kept as it was where it keeps
     /// all, and otherwise cut, its kept roof (or floor) following the
     /// surface inside it. The two sides' kept thicknesses add up to the
-    /// source's at every point. Any plan point where the surface gives two
-    /// heights, or a cut grid past `budget` triangles, refuses the whole trim.
+    /// source's at every point. A cell the surface covers twice over (it folds
+    /// there), or a cut grid past `budget` triangles, refuses the whole trim;
+    /// a step standing upright on a node line does not.
     ///
     /// Where the surface lies within `allowance` metres of a roof or floor it
     /// is taken as exactly on it (the nearer one where two are that close),
@@ -2215,7 +2267,7 @@ impl PrismoidGrid {
     pub(crate) fn trimmed(
         &self,
         read: impl Fn(&mut Vec<usize>, DVec2) -> SurfaceAt + Sync,
-        overlaps: impl Fn(&mut Vec<usize>, &mut Vec<DVec3>, [DVec2; 3], &mut dyn FnMut([DVec3; 3], &[DVec3])) + Sync,
+        overlaps: impl Fn(DVec2, &mut Vec<usize>, &mut Vec<DVec3>, [DVec2; 3], &mut dyn FnMut([DVec3; 3], &[DVec3])) + Sync,
         slack: f64,
         keep_below: bool,
         allowance: f64,
@@ -2229,17 +2281,26 @@ impl PrismoidGrid {
         let lattice = &self.lattice;
         let (columns, rows, cells) = (lattice.columns(), lattice.rows(), lattice.cell_count());
         let plan = lattice.corners();
+        let relative = lattice.corners_from(DVec2::ZERO);
         let taken = self.taken();
         let nodes = self.read_trim_nodes(&read, &taken, &plan, cancel)?;
         progress.set_fraction(0.1);
         let (mut roof, mut floor) = (self.roof.clone(), self.floor.clone());
         for (node, at) in nodes.iter().enumerate() {
-            if let Some(SurfaceAt::At(z)) = at {
+            // Where the surface gives two heights the node takes the one that
+            // leaves the whole cells beside it as they were: the highest to
+            // keep below, the lowest to keep above.
+            let level = match at {
+                Some(SurfaceAt::At(z)) => Some(*z),
+                Some(SurfaceAt::Folded { lowest, highest }) => Some(if keep_below { *highest } else { *lowest }),
+                _ => None,
+            };
+            if let Some(z) = level {
                 let (node_roof, node_floor) = (self.roof[node], self.floor[node]);
                 let height = if allowance > 0.0 {
-                    Snap::of(*z, node_roof, node_floor, allowance).level_of(*z, node_roof, node_floor)
+                    Snap::of(z, node_roof, node_floor, allowance).level_of(z, node_roof, node_floor)
                 } else {
-                    *z
+                    z
                 };
                 let height = height.clamp(node_floor, node_roof);
                 if keep_below {
@@ -2249,7 +2310,6 @@ impl PrismoidGrid {
                 }
             }
         }
-        let folded_nodes: Vec<DVec2> = nodes.iter().zip(&plan).filter(|(at, _)| **at == Some(SurfaceAt::Folded)).map(|(_, point)| *point).collect();
         let (stop, stored, swept) = (AtomicBool::new(false), AtomicUsize::new(0), AtomicUsize::new(0));
         let sweep = progress.phase(0.1, 0.9);
         let swept_rows: Option<Vec<Vec<(usize, CellCut, f64)>>> = (0..rows)
@@ -2265,7 +2325,7 @@ impl PrismoidGrid {
                     let outcome = if beyond {
                         CellCut::Beyond
                     } else {
-                        self.cut_cell(cell, &plan, &overlaps, slack, keep_below, allowance, scratch)
+                        self.cut_cell(cell, &relative, &overlaps, slack, keep_below, allowance, scratch)
                     };
                     let held = match &outcome {
                         CellCut::Whole => self.cut.cell_index(cell).map_or(0, |index| (self.cut.starts[index + 1] - self.cut.starts[index]) as usize),
@@ -2291,7 +2351,7 @@ impl PrismoidGrid {
             .flatten()
             .filter(|(_, outcome, _)| matches!(outcome, CellCut::Folded))
             .map(|(cell, _, _)| *cell);
-        let mut folds = folded_nodes.into_iter().chain(folded_cells.map(|cell| lattice.cell_centre(cell % columns, cell / columns)));
+        let mut folds = folded_cells.map(|cell| lattice.cell_centre(cell % columns, cell / columns));
         if let Some(first) = folds.next() {
             return Err(TrimRefusal::Folded { count: folds.count() + 1, first });
         }
@@ -2382,13 +2442,14 @@ impl PrismoidGrid {
     /// faces, then whole, gone or cut by what height the surface keeps at
     /// their points. With an `allowance` above 0 the surface is first taken
     /// as on a roof or floor within that distance (see [`Snap`]), and the plan
-    /// area so taken is left in `scratch.touching`.
+    /// area so taken is left in `scratch.touching`. `plan` holds the corners
+    /// relative to the lattice origin, and the work is done there.
     #[allow(clippy::too_many_arguments)]
     fn cut_cell(
         &self,
         cell: usize,
         plan: &[DVec2],
-        overlaps: &(impl Fn(&mut Vec<usize>, &mut Vec<DVec3>, [DVec2; 3], &mut dyn FnMut([DVec3; 3], &[DVec3])) + Sync),
+        overlaps: &(impl Fn(DVec2, &mut Vec<usize>, &mut Vec<DVec3>, [DVec2; 3], &mut dyn FnMut([DVec3; 3], &[DVec3])) + Sync),
         slack: f64,
         keep_below: bool,
         allowance: f64,
@@ -2408,7 +2469,7 @@ impl PrismoidGrid {
         polys.clear();
         match self.cut.triangles_of(cell) {
             Some(triangles) => pieces.extend(triangles.map(|triangle| Piece {
-                plan: triangle.map(|point| lattice.origin + lattice.u * point.plan.x + lattice.v * point.plan.y),
+                plan: triangle.map(|point| lattice.u * point.plan.x + lattice.v * point.plan.y),
                 roof: triangle.map(|point| point.roof),
                 floor: triangle.map(|point| point.floor),
             })),
@@ -2426,7 +2487,7 @@ impl PrismoidGrid {
         for (index, piece) in pieces.iter().enumerate() {
             let area = ((piece.plan[1] - piece.plan[0]).perp_dot(piece.plan[2] - piece.plan[0]) / 2.0).abs();
             let mut covered = 0.0;
-            overlaps(stack, overlap, piece.plan, &mut |ground, shared| {
+            overlaps(lattice.origin, stack, overlap, piece.plan, &mut |ground, shared| {
                 let ground_plan = ground.map(|point| point.truncate());
                 let ground_z = ground.map(|point| point.z);
                 let start = verts.len();
@@ -2510,7 +2571,7 @@ impl PrismoidGrid {
         let kept = |vert: &Vert, snap: Snap| {
             let level = snap.level(vert);
             CutPoint {
-                plan: lattice.to_lattice(vert.plan),
+                plan: lattice.to_lattice_from_origin(vert.plan),
                 roof: pick(vert.roof, level),
                 floor: pick(vert.floor, level),
             }
@@ -2552,6 +2613,11 @@ impl PrismoidGrid {
                 }
             }
         }
+        // The strings are drawn in the world.
+        let world = lattice.origin.extend(0.0);
+        for end in contacts.roof.iter_mut().chain(&mut contacts.floor).flatten() {
+            *end += world;
+        }
         if triangles.is_empty() {
             CellCut::Gone
         } else {
@@ -2578,7 +2644,8 @@ struct Contacts {
     floor: Vec<[DVec3; 2]>,
 }
 
-/// One triangle of a cell in world plan, with the roof and floor at its points.
+/// One triangle of a cell in plan, relative to the lattice origin, with the
+/// roof and floor at its points.
 struct Piece {
     plan: [DVec2; 3],
     roof: [f64; 3],
@@ -2844,8 +2911,8 @@ pub(crate) struct Trimmed {
 /// Why a grid is not trimmed to a surface.
 #[derive(Debug)]
 pub(crate) enum TrimRefusal {
-    /// The surface gives two heights at `count` points, the first at `first`
-    /// in plan.
+    /// The surface covers part of `count` cells twice, folding over itself
+    /// there; `first` is the first such cell's centre in plan.
     Folded {
         count: usize,
         first: DVec2,
@@ -2953,9 +3020,10 @@ fn texel_world_to_uv(lattice: &Lattice, (column_step, width): (usize, usize), (r
 }
 
 /// `value` as a position from 0 to 1 across `(min, max)`, 0.5 where the
-/// range is flat.
+/// range is flat, which is to say within `1e-9` of its own size, well above
+/// the rounding left by subtracting heights.
 pub(crate) fn ramp_position(value: f64, (min, max): (f64, f64)) -> f32 {
-    if (max - min).abs() <= HEIGHT_TOLERANCE {
+    if (max - min).abs() <= 1e-9 * min.abs().max(max.abs()) {
         0.5
     } else {
         ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
@@ -3267,7 +3335,7 @@ pub(crate) enum ValuesRefusal {
 }
 
 /// Names the derived block model and the file keep for their own columns.
-const RESERVED_NAMES: [&str; 4] = ["volume", "vertical_thickness", "prismoid_grid", "active"];
+const RESERVED_NAMES: [&str; 5] = ["volume", "vertical_thickness", "prismoid_grid", "active", "masked"];
 
 /// The derived block model's columns holding each block's prismoid: roof,
 /// then floor RL at corners a, b, c, d, anticlockwise from above with a at
@@ -3371,9 +3439,10 @@ impl PrismoidGrid {
     /// This grid less `other`, cell by cell, as values named `name` in
     /// `unit`: for each active cell with an active counterpart on the shared
     /// lattice, the box height less the box height, or the value less the
-    /// value where both are finite. Cells without a counterpart or a value
-    /// on either side get none and are counted. `Ok(None)` when no cell
-    /// compares; `Err` for two lattices or on cancel, checked once per row.
+    /// value where both are finite, exactly 0 where the two agree within 1e-9
+    /// of the larger. Cells without a counterpart or a value on either side
+    /// get none and are counted. `Ok(None)` when no cell compares; `Err` for
+    /// two lattices or on cancel, checked once per row.
     pub(crate) fn difference(
         &self,
         other: &PrismoidGrid,
@@ -3438,7 +3507,8 @@ impl PrismoidGrid {
                 }
                 match their.and_then(|their| read(self, &my_frame, mine, cell).zip(read(other, &their_frame, theirs, their))) {
                     Some(((a, a_volume), (b, b_volume))) => {
-                        let difference = a - b;
+                        // Values agreeing to within rounding differ by nothing.
+                        let difference = if (a - b).abs() <= 1e-9 * a.abs().max(b.abs()) { 0.0 } else { a - b };
                         values[cell] = Some(difference);
                         report.compared += 1;
                         report.low = report.low.min(difference);
@@ -3503,7 +3573,12 @@ impl PrismoidGrid {
 pub(crate) fn check_marks(held: &[(&str, CellValueRole)], added: &[ValuesMark<'_>]) -> Result<(), ValuesRefusal> {
     for one in added {
         let reserved = RESERVED_NAMES.iter().chain(&CORNER_HEIGHT_COLUMNS).any(|name| same_quality_name(name, one.name));
-        if reserved || (same_quality_name(one.name, "density") && one.role != CellValueRole::Density) {
+        // A quality may not replace the held density by taking its name.
+        // A batch that adds a density replaces the held one, whatever its name.
+        let takes_density = one.role != CellValueRole::Density
+            && !added.iter().any(|other| other.role == CellValueRole::Density)
+            && held.iter().any(|(name, role)| *role == CellValueRole::Density && same_quality_name(name, one.name));
+        if reserved || takes_density || (same_quality_name(one.name, "density") && one.role != CellValueRole::Density) {
             return Err(ValuesRefusal::Reserved {
                 surface: one.surface.to_owned(),
                 quality: one.name.to_owned(),
@@ -3544,15 +3619,8 @@ pub(crate) fn check_marks(held: &[(&str, CellValueRole)], added: &[ValuesMark<'_
 
 /// The refusal a difference named `name` meets against the grid's `held`
 /// names and roles, `other` the grid compared with: what [`check_marks`]
-/// refuses a quality, and the name of the held density, which the
-/// difference would replace as a quality and so take the tonnes away.
+/// refuses a quality of that name, the name of the held density included.
 pub(crate) fn check_difference_name(held: &[(&str, CellValueRole)], other: &str, name: &str) -> Result<(), ValuesRefusal> {
-    if held.iter().any(|(held, role)| *role == CellValueRole::Density && same_quality_name(held, name)) {
-        return Err(ValuesRefusal::Reserved {
-            surface: other.to_owned(),
-            quality: name.to_owned(),
-        });
-    }
     let mark = ValuesMark {
         surface: other,
         name,
@@ -3671,6 +3739,8 @@ pub(crate) enum Gone {
     Surface(String),
     /// No grid of this name: a difference names its other grid only.
     Grid(String),
+    /// No drill-hole set of this name, loaded or not.
+    HoleSet(String),
 }
 
 /// What has become of a grid's recorded sources since its build.
@@ -3681,8 +3751,8 @@ pub(crate) struct Staleness {
 }
 
 /// The project a grid's sources are looked for in: every surface by name
-/// and geometry token, loaded or not, the loaded drill-hole sets' records,
-/// every grid's name and the model envelope.
+/// and geometry token, loaded or not, every drill-hole set with the loaded
+/// ones' records, every grid's name and the model envelope.
 pub(crate) struct ProjectSources<'a> {
     pub(crate) surfaces: Vec<(&'a str, GeometryVersion)>,
     pub(crate) drill_holes: Vec<HoleRecords<'a>>,
@@ -3694,6 +3764,8 @@ pub(crate) struct ProjectSources<'a> {
 /// box in plan, worked out once for every grid checked against them.
 pub(crate) struct HoleRecords<'a> {
     pub(crate) set: &'a str,
+    /// Whether the set is loaded; an unloaded one holds no records here.
+    pub(crate) loaded: bool,
     pub(crate) records: Vec<HoleRecord<'a>>,
 }
 
@@ -3728,7 +3800,16 @@ impl<'a> HoleRecords<'a> {
                 })
             })
             .collect();
-        Self { set, records }
+        Self { set, loaded: true, records }
+    }
+
+    /// The set `set`, in the project but not loaded.
+    pub(crate) fn unloaded(set: &'a str) -> Self {
+        Self {
+            set,
+            loaded: false,
+            records: Vec::new(),
+        }
     }
 }
 
@@ -3778,7 +3859,7 @@ fn set_print(set: &str, records: &[&HoleRecord<'_>]) -> SetPrint {
 /// The print, per loaded set, of the correction records whose hole meets a
 /// grid's plan rectangle: kept on the record at the build.
 pub(crate) fn hole_prints(lattice: &Lattice, holes: &[HoleRecords<'_>]) -> Vec<SetPrint> {
-    holes.iter().map(|set| set_print(set.set, &records_inside(lattice, set))).collect()
+    holes.iter().filter(|set| set.loaded).map(|set| set_print(set.set, &records_inside(lattice, set))).collect()
 }
 
 fn records_inside<'s, 'a>(lattice: &Lattice, set: &'s HoleRecords<'a>) -> Vec<&'s HoleRecord<'a>> {
@@ -3806,7 +3887,7 @@ pub(crate) fn staleness(record: &BuildRecord, lattice: &Lattice, project: &Proje
     let mut found = Staleness::default();
     let built = chrono::DateTime::parse_from_rfc3339(&record.built).ok();
     let (mut holes, mut latest, mut changed) = (HashSet::new(), None, false);
-    for (index, set) in project.drill_holes.iter().enumerate() {
+    for (index, set) in project.drill_holes.iter().enumerate().filter(|(_, set)| set.loaded) {
         let inside = records_inside(lattice, set);
         let later: Vec<_> = inside.iter().filter(|held| built.zip(held.when).is_none_or(|(built, when)| when > built)).collect();
         let kept = record.holes.as_ref().and_then(|prints| prints.iter().find(|print| print.set == set.set));
@@ -3846,6 +3927,11 @@ pub(crate) fn staleness(record: &BuildRecord, lattice: &Lattice, project: &Proje
             found.moved.push(Moved::Surface(stamp.name.clone()));
         } else {
             found.gone.push(Gone::Surface(stamp.name.clone()));
+        }
+    }
+    for print in record.holes.iter().flatten() {
+        if !project.drill_holes.iter().any(|set| set.set == print.set) {
+            found.gone.push(Gone::HoleSet(print.set.clone()));
         }
     }
     if record.envelope != project.envelope {

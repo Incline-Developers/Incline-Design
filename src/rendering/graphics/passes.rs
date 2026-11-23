@@ -952,7 +952,7 @@ impl<'a> Graphics<'a> {
         }
         let mut unused_fill_vertices = Vec::new();
         let mut unused_fill_indices = Vec::new();
-        let buffer_limit = (self.device.limits().max_buffer_size as usize).min(TARGET_CHUNK_BYTES);
+        let buffer_limit = usize::try_from(self.device.limits().max_buffer_size).unwrap_or(usize::MAX).min(TARGET_CHUNK_BYTES);
         let per_chunk = (buffer_limit / size_of::<crate::rendering::StrokeInstance>()).max(1);
         let chunks = chunk_strokes(
             segments,

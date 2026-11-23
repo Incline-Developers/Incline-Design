@@ -116,7 +116,7 @@ pick-selection-objects-help = Objek yang dipindahkan. Pilih memilihnya di viewpo
 pick-selection-polylines-help = Polyline tempat titik disisipkan. Pilih memilihnya di viewport.
 pick-selection-edges-help = Objek yang ditriangulasi. Pilih memilihnya di viewport.
 pick-selection-misfit-prompt = Pilih lubang bor dan titik kualitas yang akan dibandingkan.
-pick-selection-prismoids-prompt = Pilih prismoid yang akan dimasker atau dibuka maskernya.
+pick-selection-prismoids-prompt = Pilih prismoid: pilihan yang berisi prismoid tanpa masker akan dimasker, pilihan yang semuanya bermasker akan dilepas maskernya.
 pick-selection-prismoids-selected = { $count } prismoid dipilih
 pick-selection-thickness-holes-prompt = Pilih lubang bor tempat ketebalan diukur.
 pick-selection-reverse-prompt = Pilih polyline yang akan dibalik.
@@ -798,7 +798,9 @@ cmd-prismoid-grid-unmasked = Prismoid dilepas maskernya di '{ $grid }': { $count
 cmd-prismoid-grid-mask-nothing = Tidak ada prismoid pada '{ $grid }' yang perlu dimasker
 cmd-prismoid-grid-mask-leaves-none = Masker akan membuat '{ $grid }' tanpa prismoid aktif; tidak ada yang dimasker
 cmd-prismoid-grid-changed-while-masking = Grid prismoid '{ $grid }' berubah saat dimasker; tidak ada yang dimasker. Masker lagi.
+cmd-prismoid-grid-changed-while-unmasking = Grid prismoid '{ $grid }' berubah saat dilepas maskernya; tidak ada yang dilepas maskernya. Lepas masker lagi.
 cmd-prismoid-grid-mask-discarded = Masker pada grid prismoid '{ $grid }' dibuang: grid dihapus atau proyeknya tidak lagi aktif. Masker lagi.
+cmd-prismoid-grid-unmask-discarded = Pelepasan masker pada grid prismoid '{ $grid }' dibuang: grid dihapus atau proyeknya tidak lagi aktif. Lepas masker lagi.
 cmd-prismoid-grid-mask-rederive = Buat Model Blok dari Grid Prismoid lagi untuk membawa masker ke model blok
 cmd-prismoid-grid-unmask-nothing = Tidak ada prismoid pada '{ $grid }' yang perlu dilepas maskernya
 cmd-prismoid-grid-trimming = Memangkas grid prismoid…
@@ -815,7 +817,11 @@ cmd-prismoid-grid-trim-touching = '{ $surface }' dalam { $allowance } m dari ata
 cmd-prismoid-grid-trim-nothing = Tidak ada tanah '{ $grid }' yang terletak { $relation } '{ $surface }'; tidak ada grid yang dibuat
 cmd-prismoid-grid-trim-interval-none = Interval '{ $interval }' tidak punya tanah { $relation } '{ $surface }' dan dilewati
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: tidak dipangkas, atapnya dibangun dari { $surface }
-cmd-prismoid-grid-trim-folded = '{ $surface }' memberi dua tinggi di atas '{ $grid }', yang pertama di { $x }, { $y }: di sana permukaan terlipat ke dirinya sendiri atau berdiri tegak. Titik dengan dua tinggi: { $count }. Tidak ada yang dipangkas.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' terlipat ke dirinya sendiri di atas '{ $grid }', menutupi sebagian { $count ->
+        [1] { $count } prismoid dua kali, berpusat di { $x }, { $y }
+       *[other] { $count } prismoid dua kali, yang pertama berpusat di { $x }, { $y }
+    }. Tidak ada yang dipangkas.
 cmd-prismoid-grid-trim-too-many-cuts = Memotong '{ $grid }' di sepanjang '{ $surface }' memerlukan lebih dari { $budget } segitiga, lebih dari yang dapat ditampung grid prismoid. Tidak ada yang dipangkas. Topografi yang lebih kasar memangkas dalam batas itu.
 cmd-prismoid-grid-changed-while-trimming = Grid prismoid '{ $grid }' berubah saat dipangkas; tidak ada grid yang dibuat darinya. Pangkas lagi.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' tidak mencapai satu pun grid prismoid yang dicentang; tidak ada yang dipangkas.
@@ -842,7 +848,7 @@ cmd-prismoid-grid-difference-reserved = Selisih tidak dapat dinamai { $quality }
 cmd-prismoid-grid-creating-regular-block-model = Membuat model blok reguler dari grid prismoid…
 cmd-prismoid-grid-created-regular-block-model = Model blok '{ $name }' dibuat: { $blocks } dari { $boxes } blok berisi tanah termodelkan, total { $volume } m³
 cmd-prismoid-grid-regular-no-density = Blok berisi tanah tanpa densitas di atas 0 yang tidak membawa densitas: { $count }. Optimisasi pit membobot blok seperti itu dengan densitas bawaan skenario untuk seluruh blok, bukan bagian termodelkannya, dan cadangan menghitung tonnya sebagai hilang. Setiap prismoid memerlukan densitas di atas 0 untuk menghindarinya; permukaan densitas yang tidak menutupi seluruh grid membiarkan sebagian prismoid tanpa densitas.
-cmd-prismoid-grid-regular-overlap = Blok yang terisi melebihi volumenya: { $count }. Grid bertumpang tindih di sana dan tanah itu dihitung dua kali; tumpang tindih dalam blok yang tidak terisi melebihi volumenya tidak dihitung di sini
+cmd-prismoid-grid-regular-overlap = Blok tempat dua grid atau lebih menutupi tanah yang sama, dihitung di masing-masing: { $count }
 cmd-prismoid-grid-regular-mixed = Blok berisi lebih dari satu interval: { $count }. Masing-masing mengambil kategori interval dengan bagian terbesar, jika seri yang lebih atas dalam daftar dialog; kolom bagian memberi porsi tiap interval
 cmd-prismoid-grid-regular-changed = Grid prismoid '{ $grid }' berubah saat model blok regulernya dibuat; tidak ada yang ditambahkan. Buat lagi.
 cmd-prismoid-grid-regular-envelope-changed = Selubung model berubah saat model blok reguler dibuat; tidak ada yang ditambahkan. Buat lagi.
@@ -862,6 +868,8 @@ cmd-prismoid-grid-block-model-overlap = Blok yang terletak di atas tanah yang ju
 cmd-prismoid-grid-block-model-left-blank = Dibiarkan kosong, tidak pernah diisi, pada blok setiap interval yang tidak memilikinya: { $columns }. Cadangan menghitung nilai kosong sebagai hilang; jadwal menolak tanah yang kualitas terlacaknya kosong dan tidak menghitung ton di mana densitas kosong.
 cmd-prismoid-grid-block-model-over-budget = Prismoid dalam grid yang dicentang: { $count }, melebihi anggaran { $budget } blok untuk satu model blok: centang lebih sedikit grid atau bangun dengan ukuran sel lebih besar
 cmd-prismoid-grid-block-model-not-loaded = Grid prismoid '{ $grid }' tidak dimuat: muat lalu centang lagi
+cmd-prismoid-grid-block-model-changed = Grid prismoid '{ $grid }' berubah saat model bloknya dibuat; tidak ada yang ditambahkan. Buat lagi.
+cmd-prismoid-grid-block-model-envelope-changed = Selubung model berubah saat model blok dibuat; tidak ada yang ditambahkan. Buat lagi.
 cmd-products-added-product-delay-ms-ms = Produk { $delay_ms } md { $name } telah ditambahkan
 cmd-products-deleted-product-delay-ms-ms = Produk { $delay_ms } md { $name } telah dihapus
 cmd-products-failed-save-products-error = Gagal menyimpan produk: { $error }
@@ -1835,6 +1843,7 @@ explorer-prismoid-grid-envelope-moved = Selubung model bukan yang dipakai saat d
 explorer-prismoid-grid-source-gone = { $name } tidak lagi ada di proyek
 explorer-prismoid-grid-holes-changed = Catatan koreksi di dalam grid ini berubah sejak grid dibangun
 explorer-prismoid-grid-no-grid-named = Tidak ada grid bernama { $name } di proyek
+explorer-prismoid-grid-hole-set-gone = Tidak ada kumpulan lubang bor bernama { $name } di proyek
 explorer-load = Muat
 explorer-lock = Kunci
 explorer-new-collection = Koleksi Baru
@@ -2804,6 +2813,7 @@ tri-strata-needs-two = Daftarkan setidaknya dua horizon
 tri-strata-needs-surfaces = Pilih permukaan yang dimuat di setiap baris, tiap permukaan sekali
 tri-strata-needs-horizons = Namai setiap horizon, tiap nama sekali
 tri-strata-needs-intervals = Namai setiap interval
+tri-strata-needs-intervals-once = Namai setiap interval sekali saja; nama yang hanya beda huruf besar-kecil dianggap satu nama
 tri-strata-needs-name = Ketik nama untuk strata
 tri-add-prismoid-qualities = Tambah Kualitas
 tri-add-prismoid-qualities-help = Membaca setiap permukaan kualitas yang dicentang ke sel grid prismoid: rata-rata empat sudut prismoid bila permukaan berbagi gridnya, selain itu nilai di pusat sel. Sel yang tidak tercakup permukaan tidak mendapat nilai.
@@ -2852,6 +2862,9 @@ tri-prismoid-grid-name-hint = grid lapisan atas
 tri-prismoid-needs-surfaces = Pilih atap dan lantai, dua permukaan yang dimuat
 tri-prismoid-needs-name = Ketik nama untuk output
 tri-prismoid-needs-grids = Pilih grid ini dan grid lainnya, dua grid prismoid yang dimuat
+tri-prismoid-needs-grid = Pilih grid prismoid yang dimuat
+tri-prismoid-qualities-needs-surfaces = Centang satu atau lebih permukaan kualitas
+tri-mask-needs-polyline = Pilih polyline tertutup di viewport
 
 ## Ui strings
 

@@ -178,7 +178,7 @@ pick-selection-objects-help = Vitu vinavyohamishwa. Chagua huvichagua kwenye mwo
 pick-selection-polylines-help = Mistari ya pointi nyingi ambayo vidokezo huingizwa juu yake. Chagua huichagua kwenye mwonekano.
 pick-selection-edges-help = Vitu vinavyotatuliwa kuwa pembetatu. Chagua huvichagua kwenye mwonekano.
 pick-selection-misfit-prompt = Chagua mashimo na pointi za ubora za kulinganisha.
-pick-selection-prismoids-prompt = Chagua prismoidi za kuwekea au kuondolea kinyago.
+pick-selection-prismoids-prompt = Chagua prismoidi: uteuzi wenye prismoidi isiyo na kinyago huwekewa kinyago, na ule wote wenye kinyago huondolewa kinyago.
 pick-selection-prismoids-selected = Prismoidi { $count } zimechaguliwa
 pick-selection-thickness-holes-prompt = Chagua mashimo ya kupimia unene.
 pick-selection-reverse-prompt = Chagua mistari ya pointi nyingi ya kugeuza.
@@ -830,7 +830,9 @@ cmd-prismoid-grid-unmasked = Prismoidi zilizoondolewa kinyago katika '{ $grid }'
 cmd-prismoid-grid-mask-nothing = Hakuna prismoidi ya '{ $grid }' iliyohitaji kinyago
 cmd-prismoid-grid-mask-leaves-none = Kuweka kinyago kungeiacha '{ $grid }' bila prismoidi hai; hakuna kinyago kilichowekwa
 cmd-prismoid-grid-changed-while-masking = Gridi ya prismoidi '{ $grid }' ilibadilika wakati kinyago kikiwekwa; hakuna kinyago kilichowekwa. Iwekee kinyago tena.
+cmd-prismoid-grid-changed-while-unmasking = Gridi ya prismoidi '{ $grid }' ilibadilika wakati kinyago kikiondolewa; hakuna kinyago kilichoondolewa. Iondolee kinyago tena.
 cmd-prismoid-grid-mask-discarded = Kinyago cha gridi ya prismoidi '{ $grid }' kimeachwa: gridi iliondolewa au mradi wake haujahai tena. Iwekee kinyago tena.
+cmd-prismoid-grid-unmask-discarded = Kuondoa kinyago cha gridi ya prismoidi '{ $grid }' kumeachwa: gridi iliondolewa au mradi wake haujahai tena. Iondolee kinyago tena.
 cmd-prismoid-grid-mask-rederive = Unda Modeli ya Vitalu kutoka Gridi ya Prismoidi tena ili kupeleka kinyago kwenye modeli ya vitalu
 cmd-prismoid-grid-unmask-nothing = Hakuna prismoidi ya '{ $grid }' iliyohitaji kuondolewa kinyago
 cmd-prismoid-grid-trimming = Inapunguza gridi za prismoidi…
@@ -847,7 +849,11 @@ cmd-prismoid-grid-trim-touching = '{ $surface }' ndani ya { $allowance } m ya pa
 cmd-prismoid-grid-trim-nothing = Hakuna ardhi ya '{ $grid }' iliyo { $relation } '{ $surface }'; hakuna gridi iliyoundwa
 cmd-prismoid-grid-trim-interval-none = Kipindi '{ $interval }' hakina ardhi { $relation } '{ $surface }' na kimerukwa
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: haijapunguzwa, paa lake lilijengwa kutoka { $surface }
-cmd-prismoid-grid-trim-folded = '{ $surface }' inatoa urefu miwili juu ya '{ $grid }', wa kwanza kwenye { $x }, { $y }: hapo inajikunja juu yake yenyewe au imesimama wima. Nukta zenye urefu miwili: { $count }. Hakuna kilichopunguzwa.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' inajikunja juu yake yenyewe juu ya '{ $grid }', ikifunika sehemu ya { $count ->
+        [one] prismoidi { $count } mara mbili, ikiwa na kitovu kwenye { $x }, { $y }
+       *[other] prismoidi { $count } mara mbili, ya kwanza ikiwa na kitovu kwenye { $x }, { $y }
+    }. Hakuna kilichopunguzwa.
 cmd-prismoid-grid-trim-too-many-cuts = Kukata '{ $grid }' kando ya '{ $surface }' kunahitaji zaidi ya pembetatu { $budget }, zaidi ya kile gridi ya prismoidi inaweza kubeba. Hakuna kilichopunguzwa. Topografia isiyo na undani mwingi hupunguza ndani ya kikomo hicho.
 cmd-prismoid-grid-changed-while-trimming = Gridi ya prismoidi '{ $grid }' ilibadilika ilipokuwa ikipunguzwa; hakuna gridi iliyoundwa kutoka kwayo. Ipunguze tena.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' haifikii yoyote kati ya gridi za prismoidi zilizotiwa alama; hakuna kilichopunguzwa.
@@ -874,7 +880,7 @@ cmd-prismoid-grid-difference-reserved = Tofauti haiwezi kuitwa { $quality }, jin
 cmd-prismoid-grid-creating-regular-block-model = Inaunda modeli ya vitalu ya kawaida kutoka gridi za prismoidi…
 cmd-prismoid-grid-created-regular-block-model = Modeli ya vitalu '{ $name }' imeundwa: vitalu { $blocks } kati ya { $boxes } vina ardhi iliyoigwa, jumla { $volume } m³
 cmd-prismoid-grid-regular-no-density = Vitalu vyenye ardhi isiyo na msongamano zaidi ya 0 na visivyobeba msongamano: { $count }. Uboreshaji wa shimo hupima kitalu kama hicho kwa msongamano chaguo-msingi wa hali kwa kitalu kizima, si sehemu yake iliyoigwa, na akiba huhesabu tani zake kama zinazokosekana. Kila prismoidi inahitaji msongamano zaidi ya 0 ili kuepuka hili; uso wa msongamano usiofunika gridi nzima huacha baadhi ya prismoidi bila msongamano.
-cmd-prismoid-grid-regular-overlap = Vitalu vilivyojazwa kupita ujazo wake: { $count }. Gridi zinapishana hapo na ardhi hiyo huhesabiwa mara mbili; mpishano katika kitalu kisichojazwa kupita ujazo wake hauhesabiwi hapa
+cmd-prismoid-grid-regular-overlap = Vitalu ambapo gridi mbili au zaidi zinafunika ardhi ileile: { $count }. Ardhi hiyo huhesabiwa katika kila moja
 cmd-prismoid-grid-regular-mixed = Vitalu vyenye zaidi ya kipindi kimoja: { $count }. Kila kimoja huchukua kama kategoria kile chenye sehemu kubwa zaidi, ikiwa sawa kile kilicho juu zaidi katika orodha ya kidirisha; safu za sehemu hutoa sehemu ya kila kipindi
 cmd-prismoid-grid-regular-changed = Gridi ya prismoidi '{ $grid }' ilibadilika wakati modeli yake ya vitalu ya kawaida ilipokuwa ikiundwa; hakuna kilichoongezwa. Iunde tena.
 cmd-prismoid-grid-regular-envelope-changed = Bahasha ya modeli ilibadilika wakati modeli ya vitalu ya kawaida ilipokuwa ikiundwa; hakuna kilichoongezwa. Iunde tena.
@@ -894,6 +900,8 @@ cmd-prismoid-grid-block-model-overlap = Vitalu vilivyo juu ya ardhi ambayo gridi
 cmd-prismoid-grid-block-model-left-blank = Zimeachwa tupu, hazijazwi kamwe, kwenye vitalu vya kila kipindi kisichokuwa nazo: { $columns }. Akiba huhesabu thamani tupu kama inayokosekana; ratiba hukataa ardhi ambayo ubora wake unaofuatiliwa ni tupu na haihesabu tani pale msongamano ni tupu.
 cmd-prismoid-grid-block-model-over-budget = Prismoidi katika gridi zilizotiwa alama: { $count }, juu ya bajeti ya vitalu { $budget } kwa modeli moja ya vitalu: tia alama gridi chache zaidi au zijenge kwa ukubwa mkubwa zaidi wa seli
 cmd-prismoid-grid-block-model-not-loaded = Gridi ya prismoidi '{ $grid }' haijapakiwa: ipakie na uitie alama tena
+cmd-prismoid-grid-block-model-changed = Gridi ya prismoidi '{ $grid }' ilibadilika wakati modeli yake ya vitalu ilipokuwa ikiundwa; hakuna kilichoongezwa. Iunde tena.
+cmd-prismoid-grid-block-model-envelope-changed = Bahasha ya modeli ilibadilika wakati modeli ya vitalu ilipokuwa ikiundwa; hakuna kilichoongezwa. Iunde tena.
 cmd-products-added-product-delay-ms-ms = Umeongeza bidhaa { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Umefuta bidhaa { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = Imeshindwa kuhifadhi bidhaa: { $error }
@@ -1867,6 +1875,7 @@ explorer-prismoid-grid-envelope-moved = Bahasha ya modeli si ile iliyojengwa nda
 explorer-prismoid-grid-source-gone = { $name } haiko tena katika mradi
 explorer-prismoid-grid-holes-changed = Rekodi za masahihisho ndani ya gridi hii zimebadilika tangu ilipojengwa
 explorer-prismoid-grid-no-grid-named = Hakuna gridi iitwayo { $name } katika mradi
+explorer-prismoid-grid-hole-set-gone = Hakuna seti ya mashimo ya uchimbaji iitwayo { $name } katika mradi
 explorer-load = Pakia
 explorer-lock = Funga
 explorer-new-collection = Mkusanyiko Mpya
@@ -2836,6 +2845,7 @@ tri-strata-needs-two = Orodhesha angalau upeo miwili
 tri-strata-needs-surfaces = Chagua uso uliopakiwa kwenye kila safu, kila uso mara moja
 tri-strata-needs-horizons = Taja kila upeo, kila jina mara moja
 tri-strata-needs-intervals = Taja kila kipindi
+tri-strata-needs-intervals-once = Taja kila kipindi mara moja; majina yanayotofautiana kwa herufi kubwa na ndogo tu ni jina moja
 tri-strata-needs-name = Andika jina la matabaka
 tri-add-prismoid-qualities = Ongeza Ubora
 tri-add-prismoid-qualities-help = Husoma kila uso wa ubora uliowekwa alama kwenye seli za gridi ya prismoidi: wastani wa pembe nne za prismoidi pale uso unaposhiriki gridi yake, vinginevyo thamani kwenye kitovu cha seli. Seli ambazo uso haufuniki hazipati thamani.
@@ -2884,6 +2894,9 @@ tri-prismoid-grid-name-hint = gridi ya tabaka la juu
 tri-prismoid-needs-surfaces = Chagua paa na sakafu, nyuso mbili zilizopakiwa
 tri-prismoid-needs-name = Andika jina la matokeo
 tri-prismoid-needs-grids = Chagua gridi hii na gridi nyingine, gridi mbili za prismoidi zilizopakiwa
+tri-prismoid-needs-grid = Chagua gridi ya prismoidi iliyopakiwa
+tri-prismoid-qualities-needs-surfaces = Tia alama nyuso moja au zaidi za ubora
+tri-mask-needs-polyline = Chagua mstari wa pointi nyingi uliofungwa kwenye kiona
 
 ## Ui strings
 

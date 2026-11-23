@@ -115,7 +115,7 @@ pick-selection-objects-help = Os objetos que são movidos. Escolher seleciona-os
 pick-selection-polylines-help = As polilinhas onde os pontos são inseridos. Escolher seleciona-as na janela de visualização.
 pick-selection-edges-help = Os objetos que são triangulados. Escolher seleciona-os na janela de visualização.
 pick-selection-misfit-prompt = Selecione os furos e os pontos de qualidade a comparar.
-pick-selection-prismoids-prompt = Selecione os prismoides a mascarar ou desmascarar.
+pick-selection-prismoids-prompt = Selecione os prismoides: uma seleção com algum prismoide sem máscara é mascarada, e uma toda mascarada é desmascarada.
 pick-selection-prismoids-selected = { $count } prismoide(s) selecionado(s)
 pick-selection-thickness-holes-prompt = Selecione os furos onde medir a espessura.
 pick-selection-reverse-prompt = Selecione as polilinhas a inverter.
@@ -804,7 +804,9 @@ cmd-prismoid-grid-unmasked = Prismoides desmascarados em '{ $grid }': { $count }
 cmd-prismoid-grid-mask-nothing = Nenhum prismoide de '{ $grid }' precisava ser mascarado
 cmd-prismoid-grid-mask-leaves-none = Mascarar deixaria '{ $grid }' sem nenhum prismoide ativo; nada foi mascarado
 cmd-prismoid-grid-changed-while-masking = A grade de prismoides '{ $grid }' mudou durante o mascaramento; nada foi mascarado. Mascare-a novamente.
+cmd-prismoid-grid-changed-while-unmasking = A grade de prismoides '{ $grid }' mudou durante o desmascaramento; nada foi desmascarado. Desmascare-a novamente.
 cmd-prismoid-grid-mask-discarded = A máscara da grade de prismoides '{ $grid }' foi descartada: a grade foi removida ou seu projeto não está mais ativo. Mascare-a novamente.
+cmd-prismoid-grid-unmask-discarded = O desmascaramento da grade de prismoides '{ $grid }' foi descartado: a grade foi removida ou seu projeto não está mais ativo. Desmascare-a novamente.
 cmd-prismoid-grid-mask-rederive = Use Criar modelo de blocos a partir de grade de prismoides novamente para levar a máscara a um modelo de blocos
 cmd-prismoid-grid-unmask-nothing = Nenhum prismoide de '{ $grid }' precisava ser desmascarado
 cmd-prismoid-grid-trimming = Aparando grades de prismoides…
@@ -821,7 +823,11 @@ cmd-prismoid-grid-trim-touching = '{ $surface }' a menos de { $allowance } m de 
 cmd-prismoid-grid-trim-nothing = Nenhum terreno de '{ $grid }' fica { $relation } '{ $surface }'; nenhuma grade foi criada
 cmd-prismoid-grid-trim-interval-none = O intervalo '{ $interval }' não tem terreno { $relation } '{ $surface }' e foi ignorado
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: não aparada, o seu teto foi construído a partir de { $surface }
-cmd-prismoid-grid-trim-folded = '{ $surface }' dá duas alturas sobre '{ $grid }', a primeira em { $x }, { $y }: dobra-se sobre si mesma ou fica vertical ali. Pontos com duas alturas: { $count }. Nada foi aparado.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' dobra-se sobre si mesma acima de '{ $grid }' e cobre duas vezes parte de { $count ->
+        [one] { $count } prismoide, centrado em { $x }, { $y }
+       *[other] { $count } prismoides, o primeiro centrado em { $x }, { $y }
+    }. Nada foi aparado.
 cmd-prismoid-grid-trim-too-many-cuts = Cortar '{ $grid }' ao longo de '{ $surface }' exige mais de { $budget } triângulos, mais do que uma grade de prismoides consegue conter. Nada foi aparado. Uma topografia mais grosseira apara dentro desse limite.
 cmd-prismoid-grid-changed-while-trimming = A grade de prismoides '{ $grid }' mudou enquanto era aparada; nenhuma grade foi criada a partir dela. Apare-a novamente.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' não alcança nenhuma das grades de prismoides marcadas; nada foi aparado.
@@ -848,7 +854,7 @@ cmd-prismoid-grid-difference-reserved = Uma diferença não pode chamar-se { $qu
 cmd-prismoid-grid-creating-regular-block-model = Criando modelo de blocos regular a partir de grades de prismoides…
 cmd-prismoid-grid-created-regular-block-model = Modelo de blocos '{ $name }' criado: { $blocks } de { $boxes } blocos contêm terreno modelado, { $volume } m³ no total
 cmd-prismoid-grid-regular-no-density = { $count } blocos contêm terreno sem densidade acima de 0 e não levam nenhuma: a otimização da cava pondera esse bloco pela densidade padrão do cenário sobre o bloco inteiro, não a sua parte modelada, e as reservas contam as suas toneladas como em falta. Cada prismoide precisa de uma densidade acima de 0 para o evitar; uma superfície de densidade que não cobre uma grade inteira deixa alguns prismoides sem densidade.
-cmd-prismoid-grid-regular-overlap = { $count } blocos estão preenchidos além do seu volume: as grades sobrepõem-se ali e esse terreno é contado duas vezes; a sobreposição num bloco não preenchido além do seu volume não é contada aqui
+cmd-prismoid-grid-regular-overlap = { $count } blocos estão onde duas ou mais grades cobrem o mesmo terreno, contado em cada uma
 cmd-prismoid-grid-regular-mixed = { $count } blocos contêm mais de um intervalo: cada um toma como categoria o de maior parcela, em empate o mais acima na lista do diálogo; as colunas de parcela dão a parte de cada intervalo
 cmd-prismoid-grid-regular-changed = A grade de prismoides '{ $grid }' mudou enquanto o seu modelo de blocos regular era criado; nada foi adicionado. Crie-o novamente.
 cmd-prismoid-grid-regular-envelope-changed = O envelope do modelo mudou enquanto o modelo de blocos regular era criado; nada foi adicionado. Crie-o novamente.
@@ -868,6 +874,8 @@ cmd-prismoid-grid-block-model-overlap = { $count } blocos ficam sobre terreno qu
 cmd-prismoid-grid-block-model-left-blank = Deixado em branco, nunca preenchido, nos blocos de cada intervalo que não o tem: { $columns }. As reservas contam um valor em branco como em falta; um cronograma recusa terreno cuja qualidade acompanhada está em branco e não conta toneladas onde a densidade está em branco.
 cmd-prismoid-grid-block-model-over-budget = { $count } prismoides nas grades marcadas, acima do orçamento de { $budget } blocos para um modelo de blocos: marque menos grades ou construa-as com um tamanho de célula maior
 cmd-prismoid-grid-block-model-not-loaded = A grade de prismoides '{ $grid }' não está carregada: carregue-a e marque-a novamente
+cmd-prismoid-grid-block-model-changed = A grade de prismoides '{ $grid }' mudou enquanto o seu modelo de blocos era criado; nada foi adicionado. Crie-o novamente.
+cmd-prismoid-grid-block-model-envelope-changed = O envelope do modelo mudou enquanto o modelo de blocos era criado; nada foi adicionado. Crie-o novamente.
 cmd-products-added-product-delay-ms-ms = Produto adicionado: { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Produto eliminado: { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = Falha ao guardar os produtos: { $error }
@@ -1841,6 +1849,7 @@ explorer-prismoid-grid-envelope-moved = O envelope do modelo não é aquele em q
 explorer-prismoid-grid-source-gone = { $name } já não está no projeto
 explorer-prismoid-grid-holes-changed = Os registos de correção dentro desta grade mudaram desde a sua construção
 explorer-prismoid-grid-no-grid-named = Não há nenhuma grade chamada { $name } no projeto
+explorer-prismoid-grid-hole-set-gone = Não há nenhum conjunto de furos de sondagem chamado { $name } no projeto
 explorer-load = Carregar
 explorer-lock = Bloquear
 explorer-new-collection = Nova coleção
@@ -2810,6 +2819,7 @@ tri-strata-needs-two = Liste pelo menos dois horizontes
 tri-strata-needs-surfaces = Escolha uma superfície carregada em cada linha, cada superfície uma vez
 tri-strata-needs-horizons = Dê nome a cada horizonte, cada nome uma vez
 tri-strata-needs-intervals = Dê nome a cada intervalo
+tri-strata-needs-intervals-once = Dê nome a cada intervalo uma só vez; nomes que diferem apenas em maiúsculas são o mesmo nome
 tri-strata-needs-name = Digite um nome para os estratos
 tri-add-prismoid-qualities = Adicionar qualidades
 tri-add-prismoid-qualities-help = Lê cada superfície de qualidade marcada nas células da grade de prismoides: a média dos quatro cantos de um prismoide onde a superfície partilha a sua grade, senão o valor no centro da célula. As células que a superfície não cobre ficam sem valor.
@@ -2858,6 +2868,9 @@ tri-prismoid-grid-name-hint = grade da camada superior
 tri-prismoid-needs-surfaces = Escolha um teto e um muro, duas superfícies carregadas
 tri-prismoid-needs-name = Digite um nome para a saída
 tri-prismoid-needs-grids = Escolha esta grade e a outra grade, duas grades de prismoides carregadas
+tri-prismoid-needs-grid = Escolha uma grade de prismoides carregada
+tri-prismoid-qualities-needs-surfaces = Marque uma ou mais superfícies de qualidade
+tri-mask-needs-polyline = Escolha uma polilinha fechada na vista
 
 ## Ui strings
 

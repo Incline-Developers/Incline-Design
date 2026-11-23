@@ -186,7 +186,7 @@ pick-selection-objects-help = Taşınan nesneler. Seç, bunları görüntü alan
 pick-selection-polylines-help = Noktaların eklendiği çoklu çizgiler. Seç, bunları görüntü alanında seçer.
 pick-selection-edges-help = Üçgenlenen nesneler. Seç, bunları görüntü alanında seçer.
 pick-selection-misfit-prompt = Karşılaştırılacak delikleri ve kalite noktalarını seçin.
-pick-selection-prismoids-prompt = Maskelenecek veya maskesi kaldırılacak prizmoidleri seçin.
+pick-selection-prismoids-prompt = Prizmoidleri seçin: maskesiz prizmoid içeren seçim maskelenir, tamamı maskeli olan seçimin maskesi kaldırılır.
 pick-selection-prismoids-selected = { $count } prizmoid seçildi
 pick-selection-thickness-holes-prompt = Kalınlığın ölçüleceği delikleri seçin.
 pick-selection-reverse-prompt = Ters çevrilecek çoklu çizgileri seçin.
@@ -840,7 +840,9 @@ cmd-prismoid-grid-unmasked = '{ $grid }' içinde maskesi kaldırılan prizmoidle
 cmd-prismoid-grid-mask-nothing = '{ $grid }' ızgarasının hiçbir prizmoidinin maskelenmesi gerekmedi
 cmd-prismoid-grid-mask-leaves-none = Maskeleme '{ $grid }' ızgarasında etkin prizmoid bırakmayacaktı; hiçbir şey maskelenmedi
 cmd-prismoid-grid-changed-while-masking = '{ $grid }' prizmoid ızgarası maskelenirken değişti; hiçbir şey maskelenmedi. Yeniden maskeleyin.
+cmd-prismoid-grid-changed-while-unmasking = '{ $grid }' prizmoid ızgarası maskesi kaldırılırken değişti; hiçbir şeyin maskesi kaldırılmadı. Maskeyi yeniden kaldırın.
 cmd-prismoid-grid-mask-discarded = '{ $grid }' prizmoid ızgarasının maskesi atıldı: ızgara kaldırıldı ya da projesi artık etkin değil. Yeniden maskeleyin.
+cmd-prismoid-grid-unmask-discarded = '{ $grid }' prizmoid ızgarasının maske kaldırma işlemi atıldı: ızgara kaldırıldı ya da projesi artık etkin değil. Maskeyi yeniden kaldırın.
 cmd-prismoid-grid-mask-rederive = Maskeyi bir blok modele taşımak için Prizmoid Izgarasından Blok Modeli Oluştur'u yeniden çalıştırın
 cmd-prismoid-grid-unmask-nothing = '{ $grid }' ızgarasının hiçbir prizmoidinin maskesinin kaldırılması gerekmedi
 cmd-prismoid-grid-trimming = Prizmoid ızgaraları kırpılıyor…
@@ -857,7 +859,11 @@ cmd-prismoid-grid-trim-touching = Bir tavan veya tabana { $allowance } m içinde
 cmd-prismoid-grid-trim-nothing = '{ $grid }' zemininin hiçbir kısmı '{ $surface }' yüzeyine { $relation } değil; ızgara oluşturulmadı
 cmd-prismoid-grid-trim-interval-none = '{ $interval }' aralığının '{ $surface }' yüzeyine { $relation } zemini yok ve atlandı
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: kırpılmadı, tavanı { $surface } yüzeyinden oluşturuldu
-cmd-prismoid-grid-trim-folded = '{ $surface }', '{ $grid }' üzerinde iki yükseklik veriyor, ilki { $x }, { $y } noktasında: orada kendi üzerine katlanıyor veya dik duruyor. İki yükseklikli noktalar: { $count }. Hiçbir şey kırpılmadı.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }', '{ $grid }' üzerinde kendi üzerine katlanıyor ve { $count ->
+        [one] { $count } prizmoidin bir kısmını iki kez kaplıyor, merkezi { $x }, { $y } noktasında
+       *[other] { $count } prizmoidin bir kısmını iki kez kaplıyor, ilkinin merkezi { $x }, { $y } noktasında
+    }. Hiçbir şey kırpılmadı.
 cmd-prismoid-grid-trim-too-many-cuts = '{ $grid }' ızgarasını '{ $surface }' boyunca kesmek { $budget } üçgenden fazlasını gerektiriyor, bir prizmoid ızgarasının tutabileceğinden fazla. Hiçbir şey kırpılmadı. Daha kaba bir topografya bu sınır içinde kırpar.
 cmd-prismoid-grid-changed-while-trimming = '{ $grid }' prizmoid ızgarası kırpılırken değişti; ondan ızgara oluşturulmadı. Yeniden kırpın.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' işaretli prizmoid ızgaralarının hiçbirine ulaşmıyor; hiçbir şey kırpılmadı.
@@ -884,7 +890,7 @@ cmd-prismoid-grid-difference-reserved = Bir fark { $quality } olarak adlandırı
 cmd-prismoid-grid-creating-regular-block-model = Prizmoid ızgaralarından düzenli blok modeli oluşturuluyor…
 cmd-prismoid-grid-created-regular-block-model = '{ $name }' blok modeli oluşturuldu: { $boxes } bloğun { $blocks } tanesi modellenmiş zemin içeriyor, toplam { $volume } m³
 cmd-prismoid-grid-regular-no-density = Yoğunluğu 0'ın üzerinde olmayan zemin içeren ve yoğunluk taşımayan bloklar: { $count }. Ocak optimizasyonu böyle bir bloğu modellenmiş kısmıyla değil, tüm blok üzerinden senaryonun varsayılan yoğunluğuyla ağırlıklandırır ve rezervler tonlarını eksik sayar. Bundan kaçınmak için her prizmoidin 0'ın üzerinde bir yoğunluğa ihtiyacı vardır; bir ızgarayı tamamen kaplamayan bir yoğunluk yüzeyi bazı prizmoidleri yoğunluksuz bırakır.
-cmd-prismoid-grid-regular-overlap = Hacminin ötesinde dolmuş bloklar: { $count }. Orada ızgaralar örtüşür ve o zemin iki kez sayılır; hacminin ötesinde dolmamış bir bloktaki örtüşme burada sayılmaz
+cmd-prismoid-grid-regular-overlap = İki veya daha fazla ızgaranın aynı zemini kapladığı bloklar: { $count }. Zemin her birinde sayılır
 cmd-prismoid-grid-regular-mixed = Birden fazla aralık içeren bloklar: { $count }. Her biri kategori olarak en büyük paya sahip olanı, eşitlikte iletişim kutusunun listesinde daha yukarıda olanı alır; pay sütunları her aralığın kısmını verir
 cmd-prismoid-grid-regular-changed = '{ $grid }' prizmoid ızgarası, düzenli blok modeli oluşturulurken değişti; hiçbir şey eklenmedi. Yeniden oluşturun.
 cmd-prismoid-grid-regular-envelope-changed = Düzenli blok modeli oluşturulurken model zarfı değişti; hiçbir şey eklenmedi. Yeniden oluşturun.
@@ -904,6 +910,8 @@ cmd-prismoid-grid-block-model-overlap = Başka bir işaretli ızgaranın aynı y
 cmd-prismoid-grid-block-model-left-blank = Eksik olduğu her aralığın bloklarında boş bırakıldı, hiç doldurulmadı: { $columns }. Rezervler boş bir değeri eksik sayar; bir çizelge izlenen kalitesi boş olan zemini reddeder ve yoğunluğun boş olduğu yerde ton saymaz.
 cmd-prismoid-grid-block-model-over-budget = İşaretli ızgaralarda { $count } prizmoid var, tek bir blok modeli için { $budget } blok bütçesinin üzerinde: daha az ızgara işaretleyin veya onları daha büyük hücre boyutuyla oluşturun
 cmd-prismoid-grid-block-model-not-loaded = '{ $grid }' prizmoid ızgarası yüklü değil: yükleyin ve yeniden işaretleyin
+cmd-prismoid-grid-block-model-changed = '{ $grid }' prizmoid ızgarası, blok modeli oluşturulurken değişti; hiçbir şey eklenmedi. Yeniden oluşturun.
+cmd-prismoid-grid-block-model-envelope-changed = Blok modeli oluşturulurken model zarfı değişti; hiçbir şey eklenmedi. Yeniden oluşturun.
 cmd-products-added-product-delay-ms-ms = { $delay_ms } ms { $name } ürünü eklendi
 cmd-products-deleted-product-delay-ms-ms = { $delay_ms } ms { $name } ürünü silindi
 cmd-products-failed-save-products-error = Ürünler kaydedilemedi: { $error }
@@ -1877,6 +1885,7 @@ explorer-prismoid-grid-envelope-moved = Model zarfı, oluşturulduğu zarf deği
 explorer-prismoid-grid-source-gone = { $name } artık projede değil
 explorer-prismoid-grid-holes-changed = Bu ızgara içindeki düzeltme kayıtları oluşturulduğundan beri değişti
 explorer-prismoid-grid-no-grid-named = Projede { $name } adlı ızgara yok
+explorer-prismoid-grid-hole-set-gone = Projede { $name } adlı sondaj kuyusu kümesi yok
 explorer-load = Yükle
 explorer-lock = Kilitle
 explorer-new-collection = Yeni Koleksiyon
@@ -2846,6 +2855,7 @@ tri-strata-needs-two = En az iki ufuk listeleyin
 tri-strata-needs-surfaces = Her satırda yüklü bir yüzey seçin, her yüzey bir kez
 tri-strata-needs-horizons = Her ufku adlandırın, her ad bir kez
 tri-strata-needs-intervals = Her aralığı adlandırın
+tri-strata-needs-intervals-once = Her aralığı bir kez adlandırın; yalnızca büyük/küçük harfle ayrılan adlar aynı addır
 tri-strata-needs-name = Katmanlar için bir ad yazın
 tri-add-prismoid-qualities = Kalite Ekle
 tri-add-prismoid-qualities-help = İşaretli her kalite yüzeyini prizmoid ızgarasının hücrelerine okur: yüzey ızgarasını paylaştığı yerde bir prizmoidin dört köşesinin ortalaması, aksi halde hücre merkezindeki değer. Yüzeyin kapsamadığı hücreler değer almaz.
@@ -2894,6 +2904,9 @@ tri-prismoid-grid-name-hint = üst damar ızgarası
 tri-prismoid-needs-surfaces = Bir tavan ve bir taban seçin, iki yüklü yüzey
 tri-prismoid-needs-name = Çıktı için bir ad yazın
 tri-prismoid-needs-grids = Bu ızgarayı ve diğer ızgarayı seçin, iki yüklü prizmoid ızgarası
+tri-prismoid-needs-grid = Yüklü bir prizmoid ızgarası seçin
+tri-prismoid-qualities-needs-surfaces = Bir veya daha fazla kalite yüzeyini işaretleyin
+tri-mask-needs-polyline = Görünümde kapalı bir çoklu çizgi seçin
 
 ## Ui strings
 

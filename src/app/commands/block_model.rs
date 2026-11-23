@@ -589,6 +589,9 @@ impl<'a> App<'a> {
             }
         }
         let envelope = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
+        // The grids as read, so one replaced while the job runs is seen at apply.
+        let sources: Vec<(PrismoidGridId, std::sync::Arc<PrismoidGrid>, String)> =
+            items.iter().map(|item| (item.id, std::sync::Arc::clone(&item.grid), item.name.clone())).collect();
         let compute = move |cancel: &crate::app::jobs::CancelFlag, _: &crate::model::progress::Progress| -> Result<(LoadedBlockModel, StackCounts)> {
             if cancel.is_cancelled() {
                 anyhow::bail!(crate::app::jobs::Cancelled);
@@ -601,6 +604,11 @@ impl<'a> App<'a> {
         };
         let apply = move |app: &mut App, result: Result<(LoadedBlockModel, StackCounts)>| match result {
             Ok((loaded, counts)) => {
+                let now = app.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
+                if let Some(changed) = block_model_inputs_changed(&sources, &app.prismoid_grids, envelope, now) {
+                    userspace_warn!("{changed}");
+                    return;
+                }
                 for line in created_lines(&loaded, &grid_names, counts).into_iter().chain(carried) {
                     userspace_log!("{line}");
                 }
@@ -1212,22 +1220,135 @@ fn follow_regular_ticks(editor: &mut crate::ui::state::EditorState, items: &[&Op
     }
 }
 
+/// An input a model was made from that no longer stands.
+enum InputChanged {
+    /// A grid, by name, removed or changed in place.
+    Grid(String),
+    /// The model envelope moved.
+    Envelope,
+}
+
+/// Which input of a model made from `sources` across `envelope` no longer
+/// stands for the project's `grids` and envelope `now`, if any.
+fn changed_input(
+    sources: &[(PrismoidGridId, std::sync::Arc<PrismoidGrid>, String)],
+    grids: &[OpenPrismoidGrid],
+    envelope: impl Into<Option<ModelEnvelope>>,
+    now: Option<ModelEnvelope>,
+) -> Option<InputChanged> {
+    let changed = sources
+        .iter()
+        .find(|(id, grid, _)| !grids.iter().any(|item| item.id == *id && std::sync::Arc::ptr_eq(&item.grid, grid)));
+    if let Some((_, _, name)) = changed {
+        return Some(InputChanged::Grid(name.clone()));
+    }
+    (now != envelope.into()).then_some(InputChanged::Envelope)
+}
+
 /// Why a regular block model measured from `sources` across `envelope` no
 /// longer stands for the project's `grids` and envelope `now`: a grid
 /// removed or changed in place while it was made, or the envelope moved.
 fn regular_inputs_changed(
     sources: &[(PrismoidGridId, std::sync::Arc<PrismoidGrid>, String)],
     grids: &[OpenPrismoidGrid],
-    envelope: ModelEnvelope,
+    envelope: impl Into<Option<ModelEnvelope>>,
     now: Option<ModelEnvelope>,
 ) -> Option<String> {
-    let changed = sources
-        .iter()
-        .find(|(id, grid, _)| !grids.iter().any(|item| item.id == *id && std::sync::Arc::ptr_eq(&item.grid, grid)));
-    if let Some((_, _, name)) = changed {
-        return Some(tr!("cmd-prismoid-grid-regular-changed", grid = name.clone()));
+    changed_input(sources, grids, envelope, now).map(|changed| match changed {
+        InputChanged::Grid(grid) => tr!("cmd-prismoid-grid-regular-changed", grid = grid),
+        InputChanged::Envelope => tr!("cmd-prismoid-grid-regular-envelope-changed"),
+    })
+}
+
+/// As [`regular_inputs_changed`], worded for Create Block Model from Prismoid
+/// Grid, which makes one block per prismoid.
+fn block_model_inputs_changed(
+    sources: &[(PrismoidGridId, std::sync::Arc<PrismoidGrid>, String)],
+    grids: &[OpenPrismoidGrid],
+    envelope: impl Into<Option<ModelEnvelope>>,
+    now: Option<ModelEnvelope>,
+) -> Option<String> {
+    changed_input(sources, grids, envelope, now).map(|changed| match changed {
+        InputChanged::Grid(grid) => tr!("cmd-prismoid-grid-block-model-changed", grid = grid),
+        InputChanged::Envelope => tr!("cmd-prismoid-grid-block-model-envelope-changed"),
+    })
+}
+
+/// Boxes of the regular frame where two grids hold the same ground in height
+/// at a cell centre of either lying in the box; overlap between such points
+/// can be missed. Cells that are not ground in their own grid add no point.
+fn regular_height_overlaps(
+    grids: &[(&PrismoidGrid, &str, &str)],
+    envelope: &ModelEnvelope,
+    size: f64,
+    cancel: &crate::app::jobs::CancelFlag,
+    progress: &crate::model::progress::Phase,
+) -> anyhow::Result<usize> {
+    use rayon::prelude::*;
+    if grids.len() < 2 {
+        return Ok(0);
     }
-    (now != Some(envelope)).then(|| tr!("cmd-prismoid-grid-regular-envelope-changed"))
+    let (lower, upper) = crate::model::prismoid_grid::regular_frame(envelope, size);
+    let Ok([columns, rows, layers]) = (crate::model::kriging::KrigingGrid {
+        lower,
+        upper,
+        cell: glam::DVec3::splat(size),
+    })
+    .dimensions() else {
+        return Ok(0);
+    };
+    let tolerance = 1e-9 * size;
+    let edges: Vec<_> = grids.iter().map(|(grid, _, _)| grid.plan_edges()).collect();
+    let mut found: std::collections::HashSet<[usize; 3]> = std::collections::HashSet::new();
+    let counter = progress.counter(grids.iter().map(|(grid, _, _)| grid.ground_centres().count()).sum());
+    for (grid, _, _) in grids {
+        let centres: Vec<glam::DVec2> = grid.ground_centres().collect();
+        let boxes = centres
+            .par_iter()
+            .fold(std::collections::HashSet::new, |mut found: std::collections::HashSet<[usize; 3]>, centre| {
+                if cancel.is_cancelled() {
+                    return found;
+                }
+                counter.advance_by(1);
+                let at = (*centre - lower.truncate()) / size;
+                let (column, row) = (at.x.floor(), at.y.floor());
+                if column < 0.0 || row < 0.0 || column >= columns as f64 || row >= rows as f64 {
+                    return found;
+                }
+                let heights: Vec<(f64, f64)> = grids
+                    .iter()
+                    .zip(&edges)
+                    .filter_map(|((other, _, _), (u_edges, v_edges))| other.heights_in(*centre, u_edges, v_edges).ok())
+                    .collect();
+                for (index, (roof_a, floor_a)) in heights.iter().enumerate() {
+                    for (roof_b, floor_b) in &heights[index + 1..] {
+                        let (top, bottom) = (roof_a.min(*roof_b), floor_a.max(*floor_b));
+                        if top - bottom <= tolerance {
+                            continue;
+                        }
+                        let first = ((bottom - lower.z) / size).floor().max(0.0) as usize;
+                        let last = (((top - lower.z) / size).ceil().max(0.0) as usize).min(layers);
+                        for layer in first..last {
+                            let slab = lower.z + layer as f64 * size;
+                            if top.min(slab + size) - bottom.max(slab) > tolerance {
+                                found.insert([column as usize, row as usize, layer]);
+                            }
+                        }
+                    }
+                }
+                found
+            })
+            .reduce(std::collections::HashSet::new, |mut all, part| {
+                all.extend(part);
+                all
+            });
+        if cancel.is_cancelled() {
+            anyhow::bail!(crate::app::jobs::Cancelled);
+        }
+        found.extend(boxes);
+    }
+    progress.finish();
+    Ok(found.len())
 }
 
 /// What a regular block model's created lines count beside its blocks.
@@ -1238,7 +1359,7 @@ struct RegularCounts {
     /// Blocks holding ground without a density: every block where no grid
     /// has one.
     no_density: usize,
-    /// Blocks filled beyond their volume.
+    /// Blocks where two grids hold the same ground in height.
     overlap: usize,
     /// Blocks holding ground of more than one category.
     mixed: usize,
@@ -1398,7 +1519,13 @@ fn regular_block_model(
         }
     }
     let measured: Vec<(&PrismoidGrid, &str)> = grids.iter().map(|(grid, _, category)| (*grid, *category)).collect();
-    let boxes = regular_boxes(&measured, envelope, size, cancel, progress).map_err(|refusal| regular_refusal(refusal, grids))?;
+    // Two or more grids add an overlap pass after the boxes: share the bar.
+    let (boxes_bar, overlap_bar) = if grids.len() > 1 {
+        (progress.phase(0.0, 0.5), progress.phase(0.5, 1.0))
+    } else {
+        (progress.clone(), progress.clone())
+    };
+    let boxes = regular_boxes(&measured, envelope, size, cancel, &boxes_bar).map_err(|refusal| regular_refusal(refusal, grids))?;
     if boxes.at.is_empty() {
         anyhow::bail!("{}", tr!("cmd-prismoid-grid-regular-empty"));
     }
@@ -1466,7 +1593,7 @@ fn regular_block_model(
     let counts = RegularCounts {
         boxes: boxes.dims.iter().product(),
         no_density: order.iter().filter(|index| boxes.mass(**index).is_nan()).count(),
-        overlap: order.iter().filter(|index| boxes.volume(**index) > whole * (1.0 + 1e-9)).count(),
+        overlap: regular_height_overlaps(grids, envelope, size, cancel, &overlap_bar)?,
         mixed: order
             .iter()
             .filter(|index| boxes.label_volumes(**index).iter().filter(|volume| **volume > 1e-9 * whole).count() > 1)

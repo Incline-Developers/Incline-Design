@@ -115,7 +115,7 @@ pick-selection-objects-help = Les objets qui sont déplacés. Choisir les sélec
 pick-selection-polylines-help = Les polylignes sur lesquelles les points sont insérés. Choisir les sélectionne dans la vue.
 pick-selection-edges-help = Les objets qui sont triangulés. Choisir les sélectionne dans la vue.
 pick-selection-misfit-prompt = Sélectionnez les sondages et les points de qualité à comparer.
-pick-selection-prismoids-prompt = Sélectionnez les prismoïdes à exclure ou à réintégrer.
+pick-selection-prismoids-prompt = Sélectionnez les prismoïdes : une sélection contenant un prismoïde non exclu est exclue, une sélection entièrement exclue est réintégrée.
 pick-selection-prismoids-selected = { $count } prismoïde(s) sélectionné(s)
 pick-selection-thickness-holes-prompt = Sélectionnez les sondages où mesurer l'épaisseur.
 pick-selection-reverse-prompt = Sélectionnez les polylignes à inverser.
@@ -806,7 +806,9 @@ cmd-prismoid-grid-unmasked = Prismoïdes réintégrés dans '{ $grid }' : { $cou
 cmd-prismoid-grid-mask-nothing = Aucun prismoïde de '{ $grid }' n'avait à être exclu
 cmd-prismoid-grid-mask-leaves-none = L'exclusion ne laisserait aucun prismoïde actif dans '{ $grid }' ; rien n'a été exclu
 cmd-prismoid-grid-changed-while-masking = La grille de prismoïdes '{ $grid }' a changé pendant l'exclusion ; rien n'a été exclu. Recommencez l'exclusion.
+cmd-prismoid-grid-changed-while-unmasking = La grille de prismoïdes '{ $grid }' a changé pendant la réintégration ; rien n'a été réintégré. Recommencez la réintégration.
 cmd-prismoid-grid-mask-discarded = L'exclusion appliquée à la grille de prismoïdes '{ $grid }' a été abandonnée : la grille a été supprimée ou son projet n'est plus actif. Recommencez l'exclusion.
+cmd-prismoid-grid-unmask-discarded = La réintégration appliquée à la grille de prismoïdes '{ $grid }' a été abandonnée : la grille a été supprimée ou son projet n'est plus actif. Recommencez la réintégration.
 cmd-prismoid-grid-mask-rederive = Recommencez Créer un modèle de blocs à partir d'une grille de prismoïdes pour reporter le masque dans un modèle de blocs
 cmd-prismoid-grid-unmask-nothing = Aucun prismoïde de '{ $grid }' n'avait à être réintégré
 cmd-prismoid-grid-trimming = Rognage des grilles de prismoïdes…
@@ -823,7 +825,11 @@ cmd-prismoid-grid-trim-touching = '{ $surface }' à moins de { $allowance } m d'
 cmd-prismoid-grid-trim-nothing = Aucun terrain de '{ $grid }' ne se trouve { $relation } '{ $surface }' ; aucune grille n'a été créée
 cmd-prismoid-grid-trim-interval-none = L'intervalle '{ $interval }' n'a aucun terrain { $relation } '{ $surface }' et a été ignoré
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid } : non rognée, son toit a été construit à partir de { $surface }
-cmd-prismoid-grid-trim-folded = '{ $surface }' donne deux hauteurs au-dessus de '{ $grid }', la première en { $x }, { $y } : elle se replie sur elle-même ou se dresse à la verticale à cet endroit. Points à deux hauteurs : { $count }. Rien n'a été rogné.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' se replie sur elle-même au-dessus de '{ $grid }' et recouvre deux fois une partie de { $count ->
+        [one] { $count } prismoïde, centré en { $x }, { $y }
+       *[other] { $count } prismoïdes, le premier centré en { $x }, { $y }
+    }. Rien n'a été rogné.
 cmd-prismoid-grid-trim-too-many-cuts = Couper '{ $grid }' le long de '{ $surface }' demande plus de { $budget } triangles, plus qu'une grille de prismoïdes ne peut en contenir. Rien n'a été rogné. Une topographie plus grossière rogne dans cette limite.
 cmd-prismoid-grid-changed-while-trimming = La grille de prismoïdes '{ $grid }' a changé pendant son rognage ; aucune grille n'en a été créée. Rognez-la à nouveau.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' n'atteint aucune des grilles de prismoïdes cochées ; rien n'a été rogné.
@@ -850,7 +856,7 @@ cmd-prismoid-grid-difference-reserved = Une différence ne peut pas s'appeler { 
 cmd-prismoid-grid-creating-regular-block-model = Création du modèle de blocs régulier à partir des grilles de prismoïdes…
 cmd-prismoid-grid-created-regular-block-model = Modèle de blocs '{ $name }' créé : { $blocks } blocs sur { $boxes } contiennent du terrain modélisé, { $volume } m³ au total
 cmd-prismoid-grid-regular-no-density = { $count } blocs contiennent du terrain sans densité supérieure à 0 et n'en portent aucune : l'optimisation de fosse pondère un tel bloc par la densité par défaut du scénario sur tout le bloc, pas sur sa partie modélisée, et les réserves comptent ses tonnes comme manquantes. Chaque prismoïde a besoin d'une densité supérieure à 0 pour l'éviter ; une surface de densité qui ne couvre pas toute une grille laisse certains prismoïdes sans densité.
-cmd-prismoid-grid-regular-overlap = { $count } blocs sont remplis au-delà de leur volume : des grilles s'y chevauchent et ce terrain est compté deux fois ; un chevauchement dans un bloc non rempli au-delà de son volume n'est pas compté ici
+cmd-prismoid-grid-regular-overlap = { $count } blocs se trouvent où au moins deux grilles couvrent le même terrain, compté dans chacune
 cmd-prismoid-grid-regular-mixed = { $count } blocs contiennent plus d'un intervalle : chacun prend pour catégorie celui de plus grande part, en cas d'égalité celui placé le plus haut dans la liste de la boîte de dialogue ; les colonnes de part donnent la part de chaque intervalle
 cmd-prismoid-grid-regular-changed = La grille de prismoïdes '{ $grid }' a changé pendant la création de son modèle de blocs régulier ; rien n'a été ajouté. Créez-le à nouveau.
 cmd-prismoid-grid-regular-envelope-changed = L'enveloppe du modèle a changé pendant la création du modèle de blocs régulier ; rien n'a été ajouté. Créez-le à nouveau.
@@ -870,6 +876,8 @@ cmd-prismoid-grid-block-model-overlap = { $count } blocs recouvrent du terrain q
 cmd-prismoid-grid-block-model-left-blank = Laissé vide, jamais rempli, sur les blocs de chaque intervalle qui en manque : { $columns }. Les réserves comptent une valeur vide comme manquante ; un planning refuse le terrain dont la qualité suivie est vide et ne compte aucune tonne là où la densité est vide.
 cmd-prismoid-grid-block-model-over-budget = { $count } prismoïdes dans les grilles cochées, au-delà du budget de { $budget } blocs pour un modèle de blocs : cochez moins de grilles ou construisez-les avec une taille de cellule plus grande
 cmd-prismoid-grid-block-model-not-loaded = La grille de prismoïdes '{ $grid }' n'est pas chargée : chargez-la et cochez-la à nouveau
+cmd-prismoid-grid-block-model-changed = La grille de prismoïdes '{ $grid }' a changé pendant la création de son modèle de blocs ; rien n'a été ajouté. Créez-le à nouveau.
+cmd-prismoid-grid-block-model-envelope-changed = L'enveloppe du modèle a changé pendant la création du modèle de blocs ; rien n'a été ajouté. Créez-le à nouveau.
 cmd-products-added-product-delay-ms-ms = Produit ajouté : { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Produit supprimé : { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = Échec de l’enregistrement des produits : { $error }
@@ -1843,6 +1851,7 @@ explorer-prismoid-grid-envelope-moved = L'enveloppe du modèle n'est pas celle d
 explorer-prismoid-grid-source-gone = { $name } n'est plus dans le projet
 explorer-prismoid-grid-holes-changed = Les enregistrements de correction dans cette grille ont changé depuis sa construction
 explorer-prismoid-grid-no-grid-named = Aucune grille nommée { $name } dans le projet
+explorer-prismoid-grid-hole-set-gone = Aucun ensemble de forages nommé { $name } dans le projet
 explorer-load = Charger
 explorer-lock = Verrouillage
 explorer-new-collection = Nouvelle collection
@@ -2812,6 +2821,7 @@ tri-strata-needs-two = Listez au moins deux horizons
 tri-strata-needs-surfaces = Choisissez une surface chargée sur chaque ligne, chaque surface une fois
 tri-strata-needs-horizons = Nommez chaque horizon, chaque nom une fois
 tri-strata-needs-intervals = Nommez chaque intervalle
+tri-strata-needs-intervals-once = Nommez chaque intervalle une seule fois; deux noms qui ne diffèrent que par la casse sont un seul nom
 tri-strata-needs-name = Saisissez un nom pour les strates
 tri-add-prismoid-qualities = Ajouter des qualités
 tri-add-prismoid-qualities-help = Lit chaque surface de qualité cochée dans les cellules de la grille de prismoïdes : la moyenne des quatre coins d'un prismoïde là où la surface partage sa grille, sinon la valeur au centre de la cellule. Les cellules que la surface ne couvre pas n'ont pas de valeur.
@@ -2860,6 +2870,9 @@ tri-prismoid-grid-name-hint = grille de la veine supérieure
 tri-prismoid-needs-surfaces = Choisissez un toit et un mur, deux surfaces chargées
 tri-prismoid-needs-name = Saisissez un nom pour la sortie
 tri-prismoid-needs-grids = Choisissez cette grille et l'autre grille, deux grilles de prismoïdes chargées
+tri-prismoid-needs-grid = Choisissez une grille de prismoïdes chargée
+tri-prismoid-qualities-needs-surfaces = Cochez une ou plusieurs surfaces de qualité
+tri-mask-needs-polyline = Choisissez une polyligne fermée dans la vue
 
 ## Ui strings
 

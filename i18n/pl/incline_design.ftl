@@ -190,7 +190,7 @@ pick-selection-objects-help = Obiekty, które są przesuwane. Wybierz zaznacza j
 pick-selection-polylines-help = Polilinie, na których wstawiane są punkty. Wybierz zaznacza je w widoku.
 pick-selection-edges-help = Obiekty, które są triangulowane. Wybierz zaznacza je w widoku.
 pick-selection-misfit-prompt = Wybierz otwory i punkty jakości do porównania.
-pick-selection-prismoids-prompt = Wybierz prizmoidy do zamaskowania lub odmaskowania.
+pick-selection-prismoids-prompt = Wybierz prizmoidy: zaznaczenie z choć jednym niezamaskowanym prizmoidem jest maskowane, a całkowicie zamaskowane odmaskowywane.
 pick-selection-prismoids-selected = Wybrano prizmoidów: { $count }
 pick-selection-thickness-holes-prompt = Wybierz otwory, w których ma zostać zmierzona miąższość.
 pick-selection-reverse-prompt = Wybierz polilinie do odwrócenia.
@@ -874,7 +874,9 @@ cmd-prismoid-grid-unmasked = Odmaskowane prizmoidy w '{ $grid }': { $count }; ak
 cmd-prismoid-grid-mask-nothing = Żaden prizmoid siatki '{ $grid }' nie wymagał maskowania
 cmd-prismoid-grid-mask-leaves-none = Maskowanie zostawiłoby siatkę '{ $grid }' bez aktywnego prizmoidu; nic nie zamaskowano
 cmd-prismoid-grid-changed-while-masking = Siatka prizmoidów '{ $grid }' zmieniła się podczas maskowania; nic nie zamaskowano. Zamaskuj ją ponownie.
+cmd-prismoid-grid-changed-while-unmasking = Siatka prizmoidów '{ $grid }' zmieniła się podczas odmaskowania; nic nie odmaskowano. Odmaskuj ją ponownie.
 cmd-prismoid-grid-mask-discarded = Maska siatki prizmoidów '{ $grid }' została odrzucona: siatkę usunięto albo jej projekt nie jest już aktywny. Zamaskuj ją ponownie.
+cmd-prismoid-grid-unmask-discarded = Odmaskowanie siatki prizmoidów '{ $grid }' zostało odrzucone: siatkę usunięto albo jej projekt nie jest już aktywny. Odmaskuj ją ponownie.
 cmd-prismoid-grid-mask-rederive = Utwórz model blokowy z siatki prizmoidów jeszcze raz, aby przenieść maskę do modelu blokowego
 cmd-prismoid-grid-unmask-nothing = Żaden prizmoid siatki '{ $grid }' nie wymagał odmaskowania
 cmd-prismoid-grid-trimming = Przycinanie siatek prizmoidów…
@@ -891,7 +893,13 @@ cmd-prismoid-grid-trim-touching = '{ $surface }' w odległości do { $allowance 
 cmd-prismoid-grid-trim-nothing = Żaden grunt siatki '{ $grid }' nie leży { $relation } '{ $surface }'; nie utworzono siatki
 cmd-prismoid-grid-trim-interval-none = Interwał '{ $interval }' nie ma gruntu { $relation } '{ $surface }' i został pominięty
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: nie przycięto, jej strop zbudowano z { $surface }
-cmd-prismoid-grid-trim-folded = '{ $surface }' daje dwie wysokości nad '{ $grid }', pierwszą w { $x }, { $y }: zagina się tam na siebie lub stoi pionowo. Punkty z dwiema wysokościami: { $count }. Niczego nie przycięto.
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' zagina się na siebie nad '{ $grid }' i dwukrotnie pokrywa część { $count ->
+        [one] { $count } prizmoidu, o środku w { $x }, { $y }
+        [few] { $count } prizmoidów, pierwszy ma środek w { $x }, { $y }
+        [many] { $count } prizmoidów, pierwszy ma środek w { $x }, { $y }
+       *[other] { $count } prizmoidów, pierwszy ma środek w { $x }, { $y }
+    }. Niczego nie przycięto.
 cmd-prismoid-grid-trim-too-many-cuts = Przecięcie '{ $grid }' wzdłuż '{ $surface }' wymaga ponad { $budget } trójkątów, więcej niż siatka prizmoidów może pomieścić. Niczego nie przycięto. Grubsza topografia przycina w tym limicie.
 cmd-prismoid-grid-changed-while-trimming = Siatka prizmoidów '{ $grid }' zmieniła się podczas przycinania; nie utworzono z niej siatki. Przytnij ją ponownie.
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' nie sięga żadnej z zaznaczonych siatek prizmoidów; niczego nie przycięto.
@@ -918,7 +926,7 @@ cmd-prismoid-grid-difference-reserved = Różnica nie może nazywać się { $qua
 cmd-prismoid-grid-creating-regular-block-model = Tworzenie regularnego modelu blokowego z siatek prizmoidów…
 cmd-prismoid-grid-created-regular-block-model = Utworzono model blokowy '{ $name }': { $blocks } z { $boxes } bloków zawiera modelowany grunt, łącznie { $volume } m³
 cmd-prismoid-grid-regular-no-density = Bloki z gruntem bez gęstości powyżej 0, które jej nie mają: { $count }. Optymalizacja wyrobiska waży taki blok domyślną gęstością scenariusza na cały blok, nie na jego modelowaną część, a zasoby liczą jego tony jako brakujące. Każdy prizmoid potrzebuje gęstości powyżej 0, aby tego uniknąć; powierzchnia gęstości, która nie pokrywa całej siatki, zostawia niektóre prizmoidy bez niej.
-cmd-prismoid-grid-regular-overlap = Bloki wypełnione ponad swoją objętość: { $count }. Siatki nakładają się tam i ten grunt liczony jest dwa razy; nakładanie w bloku niewypełnionym ponad objętość nie jest tu liczone
+cmd-prismoid-grid-regular-overlap = Bloki, w których co najmniej dwie siatki obejmują ten sam grunt: { $count }. Grunt liczony jest w każdej z nich
 cmd-prismoid-grid-regular-mixed = Bloki z więcej niż jednym interwałem: { $count }. Każdy przyjmuje jako kategorię ten o największym udziale, przy remisie ten wyżej na liście okna; kolumny udziałów podają część każdego interwału
 cmd-prismoid-grid-regular-changed = Siatka prizmoidów '{ $grid }' zmieniła się podczas tworzenia jej regularnego modelu blokowego; niczego nie dodano. Utwórz go ponownie.
 cmd-prismoid-grid-regular-envelope-changed = Obwiednia modelu zmieniła się podczas tworzenia regularnego modelu blokowego; niczego nie dodano. Utwórz go ponownie.
@@ -938,6 +946,8 @@ cmd-prismoid-grid-block-model-overlap = Bloki leżące na gruncie, który inna z
 cmd-prismoid-grid-block-model-left-blank = Pozostawione puste, nigdy niewypełnione, na blokach każdego interwału, któremu ich brakuje: { $columns }. Zasoby liczą pustą wartość jako brakującą; harmonogram odrzuca grunt, którego śledzona jakość jest pusta, i nie liczy ton tam, gdzie gęstość jest pusta.
 cmd-prismoid-grid-block-model-over-budget = Prizmoidy w zaznaczonych siatkach: { $count }, ponad budżet { $budget } bloków na jeden model blokowy: zaznacz mniej siatek lub zbuduj je z większym rozmiarem komórki
 cmd-prismoid-grid-block-model-not-loaded = Siatka prizmoidów '{ $grid }' nie jest wczytana: wczytaj ją i zaznacz ponownie
+cmd-prismoid-grid-block-model-changed = Siatka prizmoidów '{ $grid }' zmieniła się podczas tworzenia jej modelu blokowego; niczego nie dodano. Utwórz go ponownie.
+cmd-prismoid-grid-block-model-envelope-changed = Obwiednia modelu zmieniła się podczas tworzenia modelu blokowego; niczego nie dodano. Utwórz go ponownie.
 cmd-products-added-product-delay-ms-ms = Dodano produkt { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Usunięto produkt { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = Nie udało się zapisać produktów: { $error }
@@ -1911,6 +1921,7 @@ explorer-prismoid-grid-envelope-moved = Obwiednia modelu nie jest tą, w której
 explorer-prismoid-grid-source-gone = { $name } nie ma już w projekcie
 explorer-prismoid-grid-holes-changed = Zapisy poprawek w tej siatce zmieniły się od jej zbudowania
 explorer-prismoid-grid-no-grid-named = W projekcie nie ma siatki o nazwie { $name }
+explorer-prismoid-grid-hole-set-gone = W projekcie nie ma zestawu otworów wiertniczych o nazwie { $name }
 explorer-load = Wczytaj
 explorer-lock = Zablokuj
 explorer-new-collection = Nowa kolekcja
@@ -2880,6 +2891,7 @@ tri-strata-needs-two = Wymień co najmniej dwa horyzonty
 tri-strata-needs-surfaces = Wybierz wczytaną powierzchnię w każdym wierszu, każdą powierzchnię raz
 tri-strata-needs-horizons = Nazwij każdy horyzont, każdą nazwę raz
 tri-strata-needs-intervals = Nazwij każdy interwał
+tri-strata-needs-intervals-once = Nazwij każdy interwał tylko raz; nazwy różniące się tylko wielkością liter to jedna nazwa
 tri-strata-needs-name = Wpisz nazwę warstw
 tri-add-prismoid-qualities = Dodaj jakości
 tri-add-prismoid-qualities-help = Wczytuje każdą zaznaczoną powierzchnię jakości do komórek siatki prizmoidów: średnią czterech narożników prizmoidu tam, gdzie powierzchnia dzieli jego siatkę, a w przeciwnym razie wartość w środku komórki. Komórki, których powierzchnia nie pokrywa, nie dostają wartości.
@@ -2928,6 +2940,9 @@ tri-prismoid-grid-name-hint = siatka górnego pokładu
 tri-prismoid-needs-surfaces = Wybierz strop i spąg, dwie wczytane powierzchnie
 tri-prismoid-needs-name = Wpisz nazwę wyniku
 tri-prismoid-needs-grids = Wybierz tę siatkę i drugą siatkę, dwie wczytane siatki prizmoidów
+tri-prismoid-needs-grid = Wybierz wczytaną siatkę prizmoidów
+tri-prismoid-qualities-needs-surfaces = Zaznacz co najmniej jedną powierzchnię jakości
+tri-mask-needs-polyline = Wybierz zamkniętą polilinię w widoku
 
 ## Ui strings
 

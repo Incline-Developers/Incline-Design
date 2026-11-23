@@ -1743,6 +1743,8 @@ fn strata_build_blocker(
         Some(tr!("tri-strata-needs-horizons"))
     } else if intervals.iter().any(|interval| interval.name.trim().is_empty()) {
         Some(tr!("tri-strata-needs-intervals"))
+    } else if !crate::model::prismoid_grid::names_once(intervals.iter().map(|interval| interval.name.as_str())) {
+        Some(tr!("tri-strata-needs-intervals-once"))
     } else if name.trim().is_empty() {
         Some(tr!("tri-strata-needs-name"))
     } else {
@@ -1881,10 +1883,15 @@ pub(crate) fn draw_add_prismoid_qualities_dialog(ui: &mut egui::Ui, editor: &mut
             ui.add_space(6.0);
             ui.separator();
 
-            let can_run = grid.is_some() && !ticked.is_empty() && refusal.is_none();
+            let blocker = add_qualities_blocker(grid.is_some(), ticked.len(), refusal.as_deref());
+            let can_run = blocker.is_none();
             menu::menu_actions(ui, |ui| {
                 let confirm = menu::dialog_confirmed(ui.ctx());
-                if (ui.add(MenuButton::new(tr!("tri-add")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                let mut add = ui.add(MenuButton::new(tr!("tri-add")).primary().enabled(can_run));
+                if let Some(reason) = blocker.as_deref() {
+                    add = add.hint(reason);
+                }
+                if (add.clicked() || (confirm && can_run))
                     && let Some(grid) = editor.tri_prismoid_qualities_grid
                 {
                     commands.push(UiCommand::ExecuteAddPrismoidQualities {
@@ -1901,6 +1908,39 @@ pub(crate) fn draw_add_prismoid_qualities_dialog(ui: &mut egui::Ui, editor: &mut
 
     if !open {
         editor.tri_prismoid_qualities_open = false;
+    }
+}
+
+/// Why Add Qualities cannot run yet, from whether a loaded grid is chosen,
+/// how many quality surfaces are ticked and the `refusal` of their marks;
+/// `None` when it can.
+fn add_qualities_blocker(grid: bool, ticked: usize, refusal: Option<&str>) -> Option<String> {
+    if !grid {
+        Some(tr!("tri-prismoid-needs-grid"))
+    } else if ticked == 0 {
+        Some(tr!("tri-prismoid-qualities-needs-surfaces"))
+    } else {
+        refusal.map(str::to_owned)
+    }
+}
+
+/// Why Prismoid Grid to Surface cannot run yet, from whether a loaded grid is
+/// chosen and the name; `None` when it can.
+fn prismoid_surface_blocker(grid: bool, name: &str) -> Option<String> {
+    if !grid {
+        Some(tr!("tri-prismoid-needs-grid"))
+    } else {
+        name.trim().is_empty().then(|| tr!("tri-prismoid-needs-name"))
+    }
+}
+
+/// Why Mask Prismoid Grid by Polyline cannot run yet, from whether a loaded
+/// grid and a closed polyline are chosen; `None` when it can.
+fn mask_blocker(grid: bool, polyline: bool) -> Option<String> {
+    if !grid {
+        Some(tr!("tri-prismoid-needs-grid"))
+    } else {
+        (!polyline).then(|| tr!("tri-mask-needs-polyline"))
     }
 }
 
@@ -1975,10 +2015,15 @@ pub(crate) fn draw_prismoid_grid_surface_dialog(ui: &mut egui::Ui, editor: &mut 
             ui.add_space(6.0);
             ui.separator();
 
-            let can_run = grid.is_some() && !editor.tri_prismoid_surface_name_input.trim().is_empty();
+            let blocker = prismoid_surface_blocker(grid.is_some(), &editor.tri_prismoid_surface_name_input);
+            let can_run = blocker.is_none();
             menu::menu_actions(ui, |ui| {
                 let confirm = menu::dialog_confirmed(ui.ctx());
-                if (ui.add(MenuButton::new(tr!("common-ok")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                let mut ok = ui.add(MenuButton::new(tr!("common-ok")).primary().enabled(can_run));
+                if let Some(reason) = blocker.as_deref() {
+                    ok = ok.hint(reason);
+                }
+                if (ok.clicked() || (confirm && can_run))
                     && let Some(grid) = editor.tri_prismoid_surface_grid
                 {
                     commands.push(UiCommand::ExecutePrismoidGridToSurface {
@@ -2260,11 +2305,16 @@ pub(crate) fn draw_mask_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut Edi
             ui.add_space(6.0);
             ui.separator();
 
-            let can_run = grid.is_some() && editor.tri_prismoid_mask_object_id.is_some();
+            let blocker = mask_blocker(grid.is_some(), editor.tri_prismoid_mask_object_id.is_some());
+            let can_run = blocker.is_none();
             let run_label = if editor.tri_prismoid_mask_unmask { tr!("tri-unmask") } else { tr!("tri-mask") };
             menu::menu_actions(ui, |ui| {
                 let confirm = menu::dialog_confirmed(ui.ctx());
-                if (ui.add(MenuButton::new(run_label).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                let mut run = ui.add(MenuButton::new(run_label).primary().enabled(can_run));
+                if let Some(reason) = blocker.as_deref() {
+                    run = run.hint(reason);
+                }
+                if (run.clicked() || (confirm && can_run))
                     && let (Some(grid), Some(polyline_id)) = (editor.tri_prismoid_mask_grid, editor.tri_prismoid_mask_object_id)
                 {
                     commands.push(UiCommand::ExecuteMaskPrismoidGridByPolyline {

@@ -9,6 +9,7 @@ use crate::{
         Document, FillStyle, ObjectColor, ObjectId, SceneEntityId,
         block_model::{BlockModelId, OpenBlockModel},
         drill_hole::DrillColorPreset,
+        numbers::format_quantity,
         prismoid_grid::{PrismoidColorBy, PrismoidGridId, ValueSpread},
         project::{LATTICE_UNIT, MIN_STEEP_DISTANCE, ModelEnvelope, ModellingSettings},
     },
@@ -239,7 +240,7 @@ enum PrismoidKeyBar {
 /// The key's words for the value a grid is coloured by, or for its vertical
 /// thickness with `None`.
 fn prismoid_key_text(spread: Option<&ValueSpread>, thickness: (f64, f64)) -> PrismoidKeyText {
-    let ends = |(min, max): (f64, f64)| PrismoidKeyBar::Ends(format!("{min:.2}"), format!("{max:.2}"));
+    let ends = |(min, max): (f64, f64)| PrismoidKeyBar::Ends(format_quantity(min, 2), format_quantity(max, 2));
     let Some(spread) = spread else {
         return PrismoidKeyText {
             title: tr!("viewport-prismoid-value-unit", value = tr!("thickness-points-column-vertical"), unit = "m".to_owned()),

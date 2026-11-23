@@ -116,7 +116,7 @@ pick-selection-objects-help = जो ऑब्जेक्ट हिलाए �
 pick-selection-polylines-help = वे पॉलीलाइनें जिन पर बिंदु डाले जाते हैं। चुनें उन्हें व्यूपोर्ट में चुनता है।
 pick-selection-edges-help = जो ऑब्जेक्ट त्रिभुजित किए जाते हैं। चुनें उन्हें व्यूपोर्ट में चुनता है।
 pick-selection-misfit-prompt = तुलना के लिए होल और गुणवत्ता बिंदु चुनें।
-pick-selection-prismoids-prompt = मास्क करने या मास्क हटाने के लिए प्रिज़्मॉइड चुनें।
+pick-selection-prismoids-prompt = प्रिज़्मॉइड चुनें: जिस चयन में कोई भी बिना मास्क वाला प्रिज़्मॉइड हो उसे मास्क किया जाता है, और जिसमें सब मास्क हों उसका मास्क हटाया जाता है।
 pick-selection-prismoids-selected = { $count } प्रिज़्मॉइड चयनित
 pick-selection-thickness-holes-prompt = वे होल चुनें जिन पर मोटाई मापनी है।
 pick-selection-reverse-prompt = उलटने के लिए पॉलीलाइनें चुनें।
@@ -798,7 +798,9 @@ cmd-prismoid-grid-unmasked = '{ $grid }' में मास्क हटाए 
 cmd-prismoid-grid-mask-nothing = '{ $grid }' के किसी प्रिज़्मॉइड को मास्क करने की ज़रूरत नहीं थी
 cmd-prismoid-grid-mask-leaves-none = मास्क करने पर '{ $grid }' में कोई सक्रिय प्रिज़्मॉइड नहीं बचेगा; कुछ मास्क नहीं किया गया
 cmd-prismoid-grid-changed-while-masking = प्रिज़्मॉइड ग्रिड '{ $grid }' मास्क होते समय बदल गया; कुछ मास्क नहीं किया गया। इसे फिर से मास्क करें।
+cmd-prismoid-grid-changed-while-unmasking = प्रिज़्मॉइड ग्रिड '{ $grid }' मास्क हटाते समय बदल गया; किसी का मास्क नहीं हटाया गया। मास्क फिर से हटाएँ।
 cmd-prismoid-grid-mask-discarded = प्रिज़्मॉइड ग्रिड '{ $grid }' का मास्क छोड़ दिया गया: ग्रिड हटा दिया गया या उसका प्रोजेक्ट अब सक्रिय नहीं है। इसे फिर से मास्क करें।
+cmd-prismoid-grid-unmask-discarded = प्रिज़्मॉइड ग्रिड '{ $grid }' का मास्क हटाना छोड़ दिया गया: ग्रिड हटा दिया गया या उसका प्रोजेक्ट अब सक्रिय नहीं है। मास्क फिर से हटाएँ।
 cmd-prismoid-grid-mask-rederive = मास्क को ब्लॉक मॉडल में ले जाने के लिए प्रिज़्मॉइड ग्रिड से ब्लॉक मॉडल फिर से बनाएँ
 cmd-prismoid-grid-unmask-nothing = '{ $grid }' के किसी प्रिज़्मॉइड का मास्क हटाने की ज़रूरत नहीं थी
 cmd-prismoid-grid-trimming = प्रिज़्मॉइड ग्रिड ट्रिम किए जा रहे हैं…
@@ -815,7 +817,11 @@ cmd-prismoid-grid-trim-touching = किसी रूफ़ या फ़्ल�
 cmd-prismoid-grid-trim-nothing = '{ $grid }' की कोई ज़मीन '{ $surface }' के { $relation } नहीं है; कोई ग्रिड नहीं बनाया गया
 cmd-prismoid-grid-trim-interval-none = अंतराल '{ $interval }' में '{ $surface }' के { $relation } कोई ज़मीन नहीं है और इसे छोड़ा गया
 cmd-prismoid-grid-trim-interval-roof-is-surface = { $grid }: ट्रिम नहीं किया, इसकी रूफ़ { $surface } से बनी थी
-cmd-prismoid-grid-trim-folded = '{ $surface }' '{ $grid }' के ऊपर दो ऊँचाइयाँ देता है, पहली { $x }, { $y } पर: वहाँ यह स्वयं पर मुड़ता है या सीधा खड़ा है। दो ऊँचाइयों वाले बिंदु: { $count }। कुछ भी ट्रिम नहीं हुआ।
+cmd-prismoid-grid-trim-folded =
+    '{ $surface }' '{ $grid }' के ऊपर स्वयं पर मुड़ता है और { $count ->
+        [one] { $count } प्रिज़्मॉइड के एक हिस्से को दो बार ढकता है, जो { $x }, { $y } पर केंद्रित है
+       *[other] { $count } प्रिज़्मॉइडों के एक हिस्से को दो बार ढकता है, पहला { $x }, { $y } पर केंद्रित है
+    }। कुछ भी ट्रिम नहीं हुआ।
 cmd-prismoid-grid-trim-too-many-cuts = '{ $grid }' को '{ $surface }' के साथ काटने में { $budget } से अधिक त्रिभुज लगते हैं, एक प्रिज़्मॉइड ग्रिड जितने रख सकता है उससे अधिक। कुछ भी ट्रिम नहीं हुआ। एक मोटी टोपोग्राफ़ी इस सीमा में ट्रिम करती है।
 cmd-prismoid-grid-changed-while-trimming = प्रिज़्मॉइड ग्रिड '{ $grid }' ट्रिम होते समय बदल गया; उससे कोई ग्रिड नहीं बना। इसे फिर से ट्रिम करें।
 cmd-prismoid-grid-trim-reaches-none = '{ $surface }' किसी भी चिह्नित प्रिज़्मॉइड ग्रिड तक नहीं पहुँचता; कुछ भी ट्रिम नहीं हुआ।
@@ -842,7 +848,7 @@ cmd-prismoid-grid-difference-reserved = अंतर का नाम { $quality
 cmd-prismoid-grid-creating-regular-block-model = प्रिज़्मॉइड ग्रिड से नियमित ब्लॉक मॉडल बनाया जा रहा है…
 cmd-prismoid-grid-created-regular-block-model = ब्लॉक मॉडल '{ $name }' बनाया गया: { $boxes } में से { $blocks } ब्लॉक में मॉडल की गई ज़मीन है, कुल { $volume } m³
 cmd-prismoid-grid-regular-no-density = 0 से अधिक घनत्व के बिना ज़मीन वाले और कोई घनत्व न रखने वाले ब्लॉक: { $count }। पिट ऑप्टिमाइज़ेशन ऐसे ब्लॉक को उसके मॉडल किए गए भाग के बजाय पूरे ब्लॉक पर परिदृश्य के डिफ़ॉल्ट घनत्व से तौलता है, और भंडार उसके टन गायब गिनते हैं। इससे बचने के लिए हर प्रिज़्मॉइड को 0 से अधिक घनत्व चाहिए; जो घनत्व सतह पूरे ग्रिड को नहीं ढकती वह कुछ प्रिज़्मॉइड को बिना घनत्व छोड़ देती है।
-cmd-prismoid-grid-regular-overlap = अपने आयतन से अधिक भरे ब्लॉक: { $count }। वहाँ ग्रिड एक-दूसरे पर चढ़ते हैं और वह ज़मीन दो बार गिनी जाती है; जो ब्लॉक अपने आयतन से अधिक नहीं भरा उसमें अतिव्यापन यहाँ नहीं गिना जाता
+cmd-prismoid-grid-regular-overlap = वे ब्लॉक जहाँ दो या अधिक ग्रिड एक ही ज़मीन को ढकते हैं और वह हर एक में गिनी जाती है: { $count }
 cmd-prismoid-grid-regular-mixed = एक से अधिक अंतराल वाले ब्लॉक: { $count }। हर एक सबसे बड़े हिस्से वाले अंतराल की श्रेणी लेता है, बराबरी पर डायलॉग की सूची में ऊपर वाले की; हिस्से के स्तंभ हर अंतराल का भाग देते हैं
 cmd-prismoid-grid-regular-changed = प्रिज़्मॉइड ग्रिड '{ $grid }' उसका नियमित ब्लॉक मॉडल बनते समय बदल गया; कुछ नहीं जोड़ा गया। इसे फिर से बनाएँ।
 cmd-prismoid-grid-regular-envelope-changed = नियमित ब्लॉक मॉडल बनते समय मॉडल आवरण बदल गया; कुछ नहीं जोड़ा गया। इसे फिर से बनाएँ।
@@ -862,6 +868,8 @@ cmd-prismoid-grid-block-model-overlap = उस ज़मीन पर पड़�
 cmd-prismoid-grid-block-model-left-blank = जिस अंतराल में ये नहीं हैं उसके ब्लॉकों पर खाली छोड़े गए, कभी नहीं भरे जाते: { $columns }। भंडार खाली मान को गायब गिनते हैं; शेड्यूल उस ज़मीन को अस्वीकार करता है जिसकी ट्रैक की गई गुणवत्ता खाली है और जहाँ घनत्व खाली है वहाँ टन नहीं गिनता।
 cmd-prismoid-grid-block-model-over-budget = चिह्नित ग्रिड में प्रिज़्मॉइड: { $count }, एक ब्लॉक मॉडल के लिए { $budget } ब्लॉक के बजट से अधिक: कम ग्रिड चिह्नित करें या उन्हें बड़े सेल आकार पर बनाएँ
 cmd-prismoid-grid-block-model-not-loaded = प्रिज़्मॉइड ग्रिड '{ $grid }' लोड नहीं है: इसे लोड करें और फिर से चिह्नित करें
+cmd-prismoid-grid-block-model-changed = प्रिज़्मॉइड ग्रिड '{ $grid }' उसका ब्लॉक मॉडल बनते समय बदल गया; कुछ नहीं जोड़ा गया। इसे फिर से बनाएँ।
+cmd-prismoid-grid-block-model-envelope-changed = ब्लॉक मॉडल बनते समय मॉडल आवरण बदल गया; कुछ नहीं जोड़ा गया। इसे फिर से बनाएँ।
 cmd-products-added-product-delay-ms-ms = उत्पाद { $delay_ms } मि.से. { $name } जोड़ा गया
 cmd-products-deleted-product-delay-ms-ms = उत्पाद { $delay_ms } मि.से. { $name } हटाया गया
 cmd-products-failed-save-products-error = उत्पाद सहेजे नहीं जा सके: { $error }
@@ -1835,6 +1843,7 @@ explorer-prismoid-grid-envelope-moved = मॉडल आवरण वह नह�
 explorer-prismoid-grid-source-gone = { $name } अब प्रोजेक्ट में नहीं है
 explorer-prismoid-grid-holes-changed = इस ग्रिड के भीतर सुधार रिकॉर्ड इसके बनने के बाद से बदल गए हैं
 explorer-prismoid-grid-no-grid-named = प्रोजेक्ट में { $name } नाम का कोई ग्रिड नहीं है
+explorer-prismoid-grid-hole-set-gone = प्रोजेक्ट में { $name } नाम का कोई ड्रिल-होल समूह नहीं है
 explorer-load = लोड करें
 explorer-lock = ताला
 explorer-new-collection = नया संग्रह
@@ -2804,6 +2813,7 @@ tri-strata-needs-two = कम से कम दो क्षितिज सू�
 tri-strata-needs-surfaces = हर पंक्ति में एक लोड की गई सतह चुनें, हर सतह एक बार
 tri-strata-needs-horizons = हर क्षितिज को नाम दें, हर नाम एक बार
 tri-strata-needs-intervals = हर अंतराल को नाम दें
+tri-strata-needs-intervals-once = हर अंतराल को एक ही बार नाम दें; केवल अक्षर-रूप (बड़े/छोटे) में भिन्न नाम एक ही नाम हैं
 tri-strata-needs-name = स्तर समूह के लिए नाम लिखें
 tri-add-prismoid-qualities = गुणवत्ताएँ जोड़ें
 tri-add-prismoid-qualities-help = हर चिह्नित गुणवत्ता सतह को प्रिज़्मॉइड ग्रिड के सेल में पढ़ता है: जहाँ सतह उसका ग्रिड साझा करती है वहाँ प्रिज़्मॉइड के चार कोनों का औसत, नहीं तो सेल के केंद्र का मान। जिन सेल को सतह नहीं ढकती उन्हें कोई मान नहीं मिलता।
@@ -2852,6 +2862,9 @@ tri-prismoid-grid-name-hint = ऊपरी सीम ग्रिड
 tri-prismoid-needs-surfaces = एक रूफ़ और एक फ़्लोर चुनें, दो लोड की गई सतहें
 tri-prismoid-needs-name = आउटपुट के लिए नाम लिखें
 tri-prismoid-needs-grids = यह ग्रिड और दूसरा ग्रिड चुनें, दो लोड किए गए प्रिज़्मॉइड ग्रिड
+tri-prismoid-needs-grid = एक लोड किया हुआ प्रिज़्मॉइड ग्रिड चुनें
+tri-prismoid-qualities-needs-surfaces = एक या अधिक गुणवत्ता सतहें चिह्नित करें
+tri-mask-needs-polyline = व्यूपोर्ट में एक बंद पॉलीलाइन चुनें
 
 ## Ui strings
 

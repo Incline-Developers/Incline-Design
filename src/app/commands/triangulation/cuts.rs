@@ -1341,9 +1341,14 @@ impl FaceClipper<'_> {
 /// Each face of `mesh` over `target` in plan, faces upright in plan (no more
 /// plan area than `upright`) aside, with the exact overlap of the two:
 /// [`FaceClipper::clip`]'s loop without its cut, for callers that cut
-/// against the face themselves.
-pub(crate) fn for_each_plan_overlap(
-    target: [mesh_data::Vertex; 3],
+/// against the face themselves. `target` is given relative to `origin`, and
+/// the faces and the overlap come back relative to it too: the clipping is
+/// done on small numbers, where the rounding of map coordinates would swamp
+/// small triangles.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn for_each_plan_overlap_about(
+    origin: glam::DVec2,
+    target: [glam::DVec2; 3],
     mesh: &mesh_data::Triangulation,
     spatial: &TriangleBvh,
     upright: f64,
@@ -1351,11 +1356,14 @@ pub(crate) fn for_each_plan_overlap(
     overlap: &mut Vec<glam::DVec3>,
     mut visit: impl FnMut([mesh_data::Vertex; 3], &[glam::DVec3]),
 ) {
+    let target = target.map(|point| mesh_data::Vertex::new(point.x, point.y, 0.0));
     let bounds = triangle_xy_bounds(target);
     let vertices = mesh.vertices();
-    spatial.for_each_xy_bounds_candidate_index_with_stack(bounds.0, bounds.1, stack, |face| {
+    spatial.for_each_xy_bounds_candidate_index_with_stack(bounds.0 + origin, bounds.1 + origin, stack, |face| {
         let Some(indices) = mesh.face_vertex_indices(face) else { return };
-        let ground = indices.map(|index| vertices[index]);
+        let ground = indices
+            .map(|index| vertices[index])
+            .map(|vertex| mesh_data::Vertex::new(vertex.x - origin.x, vertex.y - origin.y, vertex.z));
         if triangle_xy_area(ground).abs() <= upright {
             return;
         }
