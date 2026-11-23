@@ -1655,7 +1655,7 @@ destination-rule-sources-count = { $count ->
     }
 
 # Run Period and Run All Periods - the schedule optimiser's explicit runs
-schedule-run-period-note = Run Period: schedule one more day.
+schedule-run-period-note = Run Period: schedule one more period.
 schedule-run-whole-note = Run All Periods: schedule through the planning end day.
 schedule-improve-note = Improve: search for a better schedule, until it stops finding better ones or reaches the solve time limit, if one is set.
 schedule-improving-note = Looking for a better schedule.

@@ -492,6 +492,16 @@ impl crate::app::App<'_> {
         })
     }
 
+    /// The end of the open scenario's period that `from_h` falls in: Run
+    /// Period adds one period of the unit the schedule is read in, so a
+    /// month under months, not a day.
+    fn next_period_end_h(&self, from_h: f64) -> f64 {
+        let scale = self.workspace.active_document().map(|document| document.schedule().period_scale());
+        let day = (from_h / SCHEDULE_PERIOD_H + 1e-9).floor().max(0.0) as u32;
+        let next = scale.map_or(day + 1, |scale| scale.first_day(scale.period_of_day(day).saturating_add(1)));
+        f64::from(next) * SCHEDULE_PERIOD_H
+    }
+
     /// Whether the held result still describes the project as it stands.
     pub(crate) fn schedule_calculation_is_current(&self) -> bool {
         let Some(calculation) = self.schedule_calculation.as_ref() else {
@@ -594,8 +604,8 @@ impl crate::app::App<'_> {
                     crate::userspace_log!("{}", tr!("schedule-run-at-end", day = day_of(end_h).to_string()));
                     return;
                 }
-                Some(held) => (held.requested_end_h + SCHEDULE_PERIOD_H).min(end_h),
-                None => SCHEDULE_PERIOD_H.min(end_h),
+                Some(held) => self.next_period_end_h(held.requested_end_h).min(end_h),
+                None => self.next_period_end_h(0.0).min(end_h),
             },
         };
         let snapshot = match self.capture_schedule_snapshot(requested_end_h) {
