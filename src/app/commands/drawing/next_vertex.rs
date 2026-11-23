@@ -93,6 +93,10 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn add_typed_stroke_vertex(&mut self, world: DVec3) {
+        let section = self.drawing_section();
+        if typed_vertex_blocker(&self.editor, self.editing_ready(), self.active_layer().is_some(), world, section.as_ref()).is_some() {
+            return;
+        }
         let world = self.onto_drawing_section(world);
         self.add_stroke_vertex(world);
     }
@@ -100,7 +104,12 @@ impl<'a> App<'a> {
     /// Add the vertex `distance` metres on the level from the last along
     /// `bearing`, rising at `dip`. On a section the bearing is the section's.
     pub(crate) fn add_stroke_vertex_along_bearing(&mut self, bearing: f64, distance: f64, dip: f64) {
-        let Some(&last) = self.editor.pending_stroke.last() else {
+        let bearing = wrapped_bearing(bearing);
+        let last = self.editor.pending_stroke.last().copied();
+        if self.next_vertex_blocker(last.map(|last| along_bearing(last, bearing, distance, dip))).is_some() {
+            return;
+        }
+        let Some(last) = last else {
             return;
         };
         let bearing = self.drawing_section().map_or(bearing, |slab| {
@@ -110,6 +119,12 @@ impl<'a> App<'a> {
         });
         let world = self.onto_drawing_section(along_bearing(last, bearing, distance, dip));
         self.add_stroke_vertex(world);
+    }
+
+    /// What stops the Next Vertex panel adding `point` now, as the panel's
+    /// Add Vertex buttons are told.
+    fn next_vertex_blocker(&self, point: Option<DVec3>) -> Option<NextVertexBlocker> {
+        next_vertex_blocker(&self.editor, self.editing_ready(), self.active_layer().is_some(), point)
     }
 
     fn add_stroke_vertex(&mut self, world: DVec3) {
@@ -161,7 +176,13 @@ impl<'a> App<'a> {
             self.cancel_copy_along();
             return;
         };
-        match copy.first {
+        // The first pick is read again against its string: an edit since
+        // (a reverse, say) may have moved the vertex it marked.
+        let first = copy.first.and_then(|(id, at, marked)| match self.scene_document.get_object(id) {
+            Some(Object::Polyline { verts, .. }) => resolved_first_pick(verts, at, marked).map(|at| (id, at)),
+            _ => None,
+        });
+        match first {
             None => {
                 let Some((SceneEntityId::Object(id), _)) = self.pick_copy_source() else {
                     return;
@@ -175,7 +196,7 @@ impl<'a> App<'a> {
                 });
                 self.invalidate_overlay();
             }
-            Some((id, first, _)) => {
+            Some((id, first)) => {
                 let Some((second, _)) = self.string_vertex_under_cursor(id, Some(first)) else {
                     return;
                 };
@@ -190,6 +211,25 @@ impl<'a> App<'a> {
                 self.append_copied_run(run);
             }
         }
+    }
+
+    /// Keep Copy Along's first pick on the vertex it marked after an edit
+    /// to its string, or drop the pick when that vertex is gone.
+    pub(crate) fn refresh_copy_along_pick(&mut self) {
+        let Some(CopyAlong {
+            first: Some((id, at, marked)), ..
+        }) = self.editor.copy_along
+        else {
+            return;
+        };
+        let found = match self.workspace.active_document().and_then(|document| document.get_object(id)) {
+            Some(Object::Polyline { verts, .. }) => resolved_first_pick(verts, at, marked),
+            _ => None,
+        };
+        if let Some(copy) = self.editor.copy_along.as_mut() {
+            copy.first = found.map(|at| (id, at, marked));
+        }
+        self.invalidate_overlay();
     }
 
     /// Start Carry On a String: the next click picks the string, and the
@@ -284,6 +324,20 @@ impl<'a> App<'a> {
     /// onto the string, closed or not, as one undo step. False when none is
     /// under way, so the stroke is saved as a string of its own.
     pub(crate) fn finish_carry_on(&mut self, closed: bool) -> bool {
+        // A carry on or redraw left behind by a workspace switch is over: its
+        // stroke goes with it, not saved as a string of its own.
+        if self.editor.string_rework.is_some() && string_rework_live(&self.editor).is_none() {
+            self.editor.string_rework = None;
+            let dropped = self.editor.pending_stroke.len().saturating_sub(1);
+            if dropped > 0 {
+                userspace_warn!("{}", tr!("cmd-string-rework-dropped", count = dropped.to_string()));
+            }
+            self.editor.pending_stroke.clear();
+            self.editor.poly_finish_dialog = false;
+            self.editor.poly_finish_dialog_px = None;
+            self.invalidate_geometry();
+            return true;
+        }
         if self.redraw_holds_stroke() {
             return true;
         }
@@ -474,6 +528,75 @@ impl<'a> App<'a> {
     }
 }
 
+/// What stops the Next Vertex panel adding a vertex.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NextVertexBlocker {
+    NotReady,
+    FinishDialog,
+    NoLayer,
+    Picking,
+    NoStart,
+    NotFinite,
+    OnLastVertex,
+}
+
+impl NextVertexBlocker {
+    /// The reason, as the grey button says it.
+    pub(crate) fn reason(self) -> String {
+        match self {
+            Self::NotReady => tr!("edit-next-vertex-blocked-not-ready"),
+            Self::FinishDialog => tr!("edit-next-vertex-blocked-finish-dialog"),
+            Self::NoLayer => tr!("edit-next-vertex-blocked-no-layer"),
+            Self::Picking => tr!("edit-next-vertex-blocked-picking"),
+            Self::NoStart => tr!("edit-next-vertex-blocked-no-start"),
+            Self::NotFinite => tr!("edit-next-vertex-blocked-not-finite"),
+            Self::OnLastVertex => tr!("edit-next-vertex-blocked-on-last"),
+        }
+    }
+}
+
+/// Whether `layer` is a layer of `document` that draws, which a string needs
+/// to be added on: the test the commands make of the active layer.
+pub(crate) fn layer_takes_strings(document: &crate::model::Document, layer: Option<crate::model::LayerId>) -> bool {
+    layer.and_then(|layer| document.layer(layer)).is_some_and(crate::model::Layer::is_visible)
+}
+
+/// The first need unmet before the Next Vertex panel can add `point` to the
+/// stroke, or None when it can. `point` is None when there is nothing to step
+/// from yet; `ready` and `has_layer` say the project can be edited and has a
+/// visible active layer.
+pub(crate) fn next_vertex_blocker(editor: &EditorState, ready: bool, has_layer: bool, point: Option<DVec3>) -> Option<NextVertexBlocker> {
+    if !ready {
+        return Some(NextVertexBlocker::NotReady);
+    }
+    if editor.poly_finish_dialog {
+        return Some(NextVertexBlocker::FinishDialog);
+    }
+    if !has_layer {
+        return Some(NextVertexBlocker::NoLayer);
+    }
+    if matches!(string_rework_live(editor), Some(StringRework::Picking | StringRework::PickingRun)) {
+        return Some(NextVertexBlocker::Picking);
+    }
+    let point = point.ok_or(NextVertexBlocker::NoStart);
+    match point {
+        Err(blocker) => Some(blocker),
+        Ok(point) if !point.is_finite() => Some(NextVertexBlocker::NotFinite),
+        Ok(point) => ends_stroke(&editor.pending_stroke, point).then_some(NextVertexBlocker::OnLastVertex),
+    }
+}
+
+/// What stops the Next Vertex panel adding the typed point `typed`, tested
+/// where it lands: on `section`, its projection onto the plane.
+pub(crate) fn typed_vertex_blocker(editor: &EditorState, ready: bool, has_layer: bool, typed: DVec3, section: Option<&SectionSlab>) -> Option<NextVertexBlocker> {
+    next_vertex_blocker(editor, ready, has_layer, Some(section.map_or(typed, |slab| onto_section(slab, typed))))
+}
+
+/// A typed bearing as a compass bearing: any number of turns, so -90 is 270.
+pub(crate) fn wrapped_bearing(bearing: f64) -> f64 {
+    if bearing.is_finite() { bearing.rem_euclid(360.0) } else { bearing }
+}
+
 /// Whether `point` is where the stroke already ends, by the coincidence test
 /// the polyline tool uses for a string brought back to its first vertex.
 fn ends_stroke(stroke: &[DVec3], point: DVec3) -> bool {
@@ -505,8 +628,9 @@ pub(crate) fn carried_on(verts: &[PolyVertex], start: usize, added: &[DVec3], cl
     };
     if closed {
         // A last point drawn on the far end closes there, not doubled: that
-        // new point goes, never the old far end and its arc.
-        if verts.len() > 3
+        // new point goes, never the old far end and its arc. Fewer than three
+        // distinct vertices make no ring: the caller leaves it open.
+        if verts.len() > 2
             && verts
                 .first()
                 .zip(verts.last())
@@ -551,6 +675,16 @@ pub(crate) fn redrawn(verts: &[PolyVertex], closed: bool, first: usize, last: us
     let at = if start < end { start + 1 } else { start - end + 1 };
     verts.splice(at..at, drawn.into_iter().map(PolyVertex::straight));
     Some(verts)
+}
+
+/// Where Copy Along's first pick now is on a string: `first` when that
+/// vertex still sits at `marked`, else the vertex that does; None when none.
+pub(crate) fn resolved_first_pick(verts: &[PolyVertex], first: usize, marked: DVec3) -> Option<usize> {
+    let at = |vertex: &PolyVertex| vertex.pos.distance_squared(marked) <= 1.0e-16;
+    match verts.get(first) {
+        Some(vertex) if at(vertex) => Some(first),
+        _ => verts.iter().position(at),
+    }
 }
 
 /// Drop the stroke's last vertex; false when there is none to give back or

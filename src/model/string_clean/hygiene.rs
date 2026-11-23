@@ -16,7 +16,8 @@ enum Outcome {
     /// A fix was made.
     Applied,
     /// A fix was due but would leave too little of the string, or cut too
-    /// much of it: the string is left as it is.
+    /// much of it: that fix is not made. A refused loop is passed over and
+    /// the string is cleaned on; any other refusal ends its cleaning.
     Refused,
 }
 
@@ -26,34 +27,51 @@ enum Outcome {
 /// so.
 ///
 /// Each round merges repeats, then fixes every turn in one forward pass, then
-/// cuts the first loop. A string still holding repeats too far apart in
-/// height to merge is fixed one turn at a time instead, each fix followed
-/// by a new merge, as a fix there can change what merges.
+/// cuts the first loop that may be cut, passing over those refused. A string
+/// still holding repeats too far apart in height to merge is fixed one turn
+/// at a time instead, each fix followed by a new merge, as a fix there can
+/// change what merges.
 pub(super) fn clean_string(source: usize, verts: &mut Vec<DVec3>, changes: &mut Vec<Change>, cancelled: &dyn Fn() -> bool) -> Result<(), Cancelled> {
+    // The first segment a loop may start on: those before it began loops
+    // that were refused.
+    let mut from = 0;
     loop {
         stop_if(cancelled)?;
         let mut merged = merge_repeats(source, verts, changes);
+        if merged {
+            from = 0;
+        }
+        let mut tried = from;
         let outcome = if has_repeats(verts) {
             let plan = plan_of(verts);
             match turning_back(&plan) {
                 Some(turn) => fix_turn(source, verts, &plan, turn, changes),
-                None => cut_loop(source, verts, &plan, changes),
+                None => cut_loop_from(source, verts, &plan, &mut from, changes),
             }
         } else {
             match fix_turns(source, verts, changes, cancelled)? {
-                Sweep::Joined => continue,
+                Sweep::Joined => {
+                    from = 0;
+                    continue;
+                }
                 Sweep::Fixed(fixed) => {
                     // A fixed string would have been merged again before
                     // the loop is looked for, with nothing to merge.
                     merged &= !fixed;
+                    if fixed {
+                        from = 0;
+                        tried = 0;
+                    }
                     let plan = plan_of(verts);
-                    cut_loop(source, verts, &plan, changes)
+                    cut_loop_from(source, verts, &plan, &mut from, changes)
                 }
             }
         };
         match outcome {
+            // A refused loop is passed over; any other refusal ends it.
+            Outcome::Refused if from > tried => {}
             Outcome::Refused => return Ok(()),
-            Outcome::Applied => {}
+            Outcome::Applied => from = 0,
             Outcome::Nothing if merged => {}
             Outcome::Nothing => return Ok(()),
         }
@@ -279,12 +297,13 @@ fn fix_turn(source: usize, verts: &mut Vec<DVec3>, plan: &[DVec2], turn: usize, 
 /// Where a string first meets itself, segments taken in order along it, as
 /// [`self_intersection`] finds it but leaving out the touch of a segment by
 /// the one after the next across a zero-length segment between them: that
-/// is a repeated point, not a loop.
-fn first_self_contact(plan: &[DVec2]) -> Option<SelfContact> {
+/// is a repeated point, not a loop. Only segments from `from` on are taken
+/// as the first of the two that meet.
+fn first_self_contact_from(plan: &[DVec2], from: usize) -> Option<SelfContact> {
     let segments = plan.len().saturating_sub(1);
     let grid = BoxGrid::new((0..segments).map(|segment| segment_box(plan[segment], plan[segment + 1])).collect());
     let mut near = Vec::new();
-    (0..segments).find_map(|first| {
+    (from..segments).find_map(|first| {
         let (low, high) = segment_box(plan[first], plan[first + 1]);
         grid.overlapping(low, high, &mut near);
         near.iter()
@@ -309,11 +328,18 @@ fn is_repeat_touch(plan: &[DVec2], first: usize, second: usize) -> bool {
     second == first + 2 && plan[first + 1].distance(plan[first + 2]) < MERGE_DISTANCE
 }
 
+/// Refuse the loop starting on `segment`, so the next look begins after it.
+fn pass_over(from: &mut usize, segment: usize) -> Outcome {
+    *from = segment + 1;
+    Outcome::Refused
+}
+
 /// Cut out the loop where the string first meets itself, putting the
 /// meeting point in its place, unless the loop is longer than half the
-/// string.
-fn cut_loop(source: usize, verts: &mut Vec<DVec3>, plan: &[DVec2], changes: &mut Vec<Change>) -> Outcome {
-    let Some(contact) = first_self_contact(plan) else {
+/// string. Only loops starting on segment `from` or later are looked at; a
+/// refused loop moves `from` past the segment it starts on.
+fn cut_loop_from(source: usize, verts: &mut Vec<DVec3>, plan: &[DVec2], from: &mut usize, changes: &mut Vec<Change>) -> Outcome {
+    let Some(contact) = first_self_contact_from(plan, *from) else {
         return Outcome::Nothing;
     };
     let i = contact.segment;
@@ -331,20 +357,20 @@ fn cut_loop(source: usize, verts: &mut Vec<DVec3>, plan: &[DVec2], changes: &mut
         break;
     }
     let Some((j, second)) = meeting else {
-        return Outcome::Refused;
+        return pass_over(from, contact.segment);
     };
     let length = |from: usize, to: usize| plan[from..=to].windows(2).map(|pair| pair[0].distance(pair[1])).sum::<f64>();
     let whole = length(0, plan.len() - 1);
     let loop_length = contact.point.distance(plan[i + 1]) + length(i + 1, j) + plan[j].distance(second);
     if loop_length > whole / 2.0 {
-        return Outcome::Refused;
+        return pass_over(from, contact.segment);
     }
     let z = elevation_along(verts[i], verts[i + 1], contact.along);
     let point = contact.point.extend(z);
     let put_in = contact.point.distance(plan[i]) >= MERGE_DISTANCE && contact.point.distance(plan[j + 1]) >= MERGE_DISTANCE;
     let left = i + 1 + usize::from(put_in) + (verts.len() - j - 1);
     if left < 2 {
-        return Outcome::Refused;
+        return pass_over(from, contact.segment);
     }
     let mut cut: Vec<DVec3> = verts[..=i].to_vec();
     if put_in {

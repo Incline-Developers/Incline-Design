@@ -2,7 +2,7 @@
 
 use glam::{DVec2, DVec3};
 
-use super::{Cancelled, Change, ChangeKind, Piece, REPEAT_HEIGHTS, stop_if};
+use super::{Cancelled, Change, ChangeKind, JOIN_AUTOMATIC, Piece, REPEAT_HEIGHTS, stop_if};
 use crate::model::{
     control_checks::{BoxGrid, elevation_along, segment_box},
     kernel::{self, SegSeg},
@@ -18,7 +18,9 @@ struct Covered {
     winner: usize,
 }
 
-/// Cut every stretch two strings share out of the shorter of the two.
+/// Cut every stretch two strings share out of the shorter of the two, where
+/// their heights agree within [`JOIN_AUTOMATIC`] at both ends of the stretch.
+/// A stretch at different heights is left as it is, for the final check.
 /// `Err` once `cancelled` says so, nothing cut.
 pub(super) fn cut_shared_stretches(pieces: &mut Vec<Piece>, changes: &mut Vec<Change>, cancelled: &dyn Fn() -> bool) -> Result<(), Cancelled> {
     let walks: Vec<Walk> = pieces.iter().map(|piece| Walk::new(&piece.verts)).collect();
@@ -134,7 +136,9 @@ fn covered_stretches(pieces: &[Piece], walks: &[Walk], cancelled: &dyn Fn() -> b
             let (loser_segment, winner_segment) = if loser == left { (a, b) } else { (b, a) };
             let (start, end) = plan(loser, loser_segment);
             let (other_start, other_end) = plan(winner, winner_segment);
-            if let SegSeg::CollinearOverlap { t0, t1 } = kernel::segment_segment(start, end, other_start, other_end) {
+            if let SegSeg::CollinearOverlap { t0, t1 } = kernel::segment_segment(start, end, other_start, other_end)
+                && heights_agree(pieces, (loser, loser_segment), (winner, winner_segment), t0, t1)
+            {
                 let length = start.distance(end);
                 let base = walks[loser].at[loser_segment];
                 covered[loser].push(Covered {
@@ -146,6 +150,22 @@ fn covered_stretches(pieces: &[Piece], walks: &[Walk], cancelled: &dyn Fn() -> b
         }
     }
     Ok(covered)
+}
+
+/// Whether two segments running along each other are at the same height over
+/// the stretch they share, within [`JOIN_AUTOMATIC`] at both ends of it:
+/// further apart they are two strings at different heights, left alone.
+/// `t0..t1` is the shared stretch as fractions of the first segment.
+fn heights_agree(pieces: &[Piece], first: (usize, usize), second: (usize, usize), t0: f64, t1: f64) -> bool {
+    let segment = |(piece, at): (usize, usize)| (pieces[piece].verts[at], pieces[piece].verts[at + 1]);
+    let (start, end) = segment(first);
+    let (other_start, other_end) = segment(second);
+    let (other_plan, other_span) = (other_start.truncate(), other_end.truncate() - other_start.truncate());
+    [t0, t1].into_iter().all(|t| {
+        let plan = start.truncate().lerp(end.truncate(), t);
+        let share = ((plan - other_plan).dot(other_span) / other_span.length_squared()).clamp(0.0, 1.0);
+        (elevation_along(start, end, t) - elevation_along(other_start, other_end, share)).abs() <= JOIN_AUTOMATIC
+    })
 }
 
 /// Whether `left` is the one to lose against `right`: the shorter in plan,

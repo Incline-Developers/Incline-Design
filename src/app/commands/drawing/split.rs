@@ -8,7 +8,7 @@ use crate::{
     app::{App, PICK_THRESHOLD_PX},
     i18n::tr,
     logging::CommandReportSpec,
-    model::{Command, Object, ObjectId, PolyVertex, SceneEntityId},
+    model::{Command, Object, ObjectId, PolyVertex, SceneEntityId, kernel::XY_TOL},
     rendering::pick,
     ui::state::ActiveTool,
     userspace_log, userspace_warn,
@@ -519,7 +519,11 @@ pub(super) fn split_at_crossings(verts: &[PolyVertex], closed: bool, vertices: &
         [] => Vec::new(),
         [cut] => {
             let mut opened = ring_slice(&verts, cut, (cut + verts.len() - 1) % verts.len());
-            opened.push(verts[cut]);
+            // A ring stored with its first vertex again at its end is already
+            // back where it was cut.
+            if opened.last().is_none_or(|last| last.pos.distance(verts[cut].pos) > XY_TOL) {
+                opened.push(verts[cut]);
+            }
             vec![with_straight_closing_edge(opened)]
         }
         _ => (0..cuts.len())

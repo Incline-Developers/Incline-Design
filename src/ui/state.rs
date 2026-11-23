@@ -2259,7 +2259,7 @@ impl EditorState {
 
 /// What the Next Vertex panel holds: a point to add as typed, and a step
 /// from the last vertex by bearing, level distance and dip.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct NextVertexPanel {
     pub(crate) point: [f64; 3],
     /// Degrees clockwise from grid north.
@@ -2267,6 +2267,9 @@ pub(crate) struct NextVertexPanel {
     pub(crate) distance: f64,
     /// Degrees above level; 0 keeps the last vertex's height.
     pub(crate) dip: f64,
+    /// The section up while the panel is open, set each frame, so a typed
+    /// point is tested where it would land on it.
+    pub(crate) section: Option<crate::rendering::camera::SectionSlab>,
 }
 
 /// Transient state for the centre-to-radius phase of MakeCircle.
@@ -4905,15 +4908,28 @@ impl EditorState {
         nearest_ring_within(&self.string_rings_screen_px, px, radius_px).filter(|&index| index < self.string_rings.len())
     }
 
-    /// After a vertex of a string was deleted: see [`forget_deleted_vertex`].
-    /// The cache drops the vertex too, so the next frame finds the string
-    /// as the rings now describe it and does not carry them a second time.
-    pub(crate) fn forget_deleted_ring_vertex(&mut self, id: ObjectId, vertex: usize) {
-        forget_deleted_vertex(&mut self.string_rings, &mut self.string_rings_screen_px, id, vertex);
-        if let Some(verts) = self.string_ring_cache.string_mut(id).and_then(|string| string.verts.as_mut())
-            && vertex < verts.len()
-        {
-            verts.remove(vertex);
+    /// After a vertex of a string that is `closed` or open was deleted: the
+    /// rings are carried across the deletion as [`carry_rings_across_edit`]
+    /// does, so a ring on a segment the deletion removed goes too; a string
+    /// the cache does not hold falls back to [`forget_deleted_vertex`]. The
+    /// cache drops the vertex too, so the next frame finds the string as the
+    /// rings now describe it and does not carry them a second time.
+    pub(crate) fn forget_deleted_ring_vertex_of(&mut self, id: ObjectId, vertex: usize, closed: bool) {
+        match self.string_ring_cache.string_mut(id).and_then(|string| string.verts.as_mut()) {
+            Some(verts) if vertex < verts.len() => {
+                let old = verts.clone();
+                verts.remove(vertex);
+                carry_rings_across_edit(
+                    &mut self.string_rings,
+                    &mut self.string_rings_screen_px,
+                    &mut self.canvas_context_menu_ring,
+                    id,
+                    &old,
+                    verts,
+                    closed,
+                );
+            }
+            _ => forget_deleted_vertex(&mut self.string_rings, &mut self.string_rings_screen_px, id, vertex),
         }
         self.string_ring_cache.view_key = None;
         self.canvas_context_menu_ring = None;
@@ -5180,6 +5196,7 @@ impl EditorState {
         self.tri_create_diagnostic_markers_screen_px.clear();
         self.tri_create_diagnostic_segments_screen_px.clear();
         self.clear_string_rings();
+        self.string_numbers.clear();
         self.triangulation_pick_target = None;
         self.selection_pick = None;
         self.viewport_pick_hover_label = None;
@@ -8002,7 +8019,6 @@ impl UiCommand {
             | Self::SelectExplorerRow(_)
             | Self::TransformSurveySelection
             | Self::ToggleViewOption(_)
-            | Self::ToggleSectionSurfaceLines
             | Self::SetInitiation { .. }
             | Self::ChargeSelectedHoles { .. }
             | Self::BeginRenameItem(_)
@@ -8399,6 +8415,8 @@ impl UiCommand {
             Self::ToggleRotationCentre => report(tr!("state-centre-rotation"), tr!("state-fix-release-centre-both-views")),
             Self::SetTopologyWireframes(enabled) => report(tr!("state-set-topology-wireframes"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::SetTopologyContours(enabled) => report(tr!("state-set-topology-contours"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
+            Self::ToggleSectionSurfaceLines => report(tr!("ws-menubar-geology-surface-lines"), tr!("state-show-hide-section-surface-lines")),
+            Self::SaveSectionSurfaceLines => report(tr!("ws-menubar-geology-save-surface-lines"), tr!("state-save-section-surface-lines-as-strings")),
             Self::SetGridShown(shown) => report(tr!("state-set-grid"), if *shown { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::SetShowPoints(enabled) => report(tr!("state-set-point-visibility"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             #[cfg(not(target_arch = "wasm32"))]
@@ -8530,7 +8548,6 @@ impl UiCommand {
                 tr!("state-set-strat-column"),
                 tr!("state-field-strat-names", field = field.clone(), count = codes.len().to_string()),
             ),
-            Self::SaveSectionSurfaceLines => report(tr!("ws-menubar-geology-save-surface-lines"), tr!("state-section-surface-lines")),
             Self::BuildReferenceSurface { points, controls, extent, .. } => report(
                 tr!("common-build-surface"),
                 match extent {

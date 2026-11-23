@@ -322,6 +322,22 @@ impl TriangleBvh {
         self.tree.get_or_init(|| built)
     }
 
+    /// Whether the tree can answer now, without starting a build.
+    pub(crate) fn is_built(&self) -> bool {
+        self.tree.get().is_some()
+    }
+
+    /// Claim the background build for the caller, so a query that asks for
+    /// one does not start a second. None when one is claimed already. A
+    /// claim dropped with no tree built, as by a job cancelled before it
+    /// ran, is handed back for the next ask.
+    pub(crate) fn claim_build(&self) -> Option<BuildClaim> {
+        (!self.building.swap(true, std::sync::atomic::Ordering::Relaxed)).then(|| BuildClaim {
+            tree: self.tree.clone(),
+            building: self.building.clone(),
+        })
+    }
+
     /// Build it now, ahead of work that would otherwise have every thread
     /// asking for it at once and each building its own.
     pub(crate) fn ensure_built(&self) {
@@ -390,6 +406,20 @@ impl TriangleBvh {
     /// plane through `point` with horizontal unit `normal`.
     pub(crate) fn for_each_vertical_plane_candidate_index(&self, point: DVec3, normal: DVec3, visit: impl FnMut(usize)) {
         self.tree().for_each_vertical_plane_candidate_index(point, normal, visit);
+    }
+}
+
+/// A tree's background build, claimed by [`TriangleBvh::claim_build`].
+pub(crate) struct BuildClaim {
+    tree: std::sync::Arc<std::sync::OnceLock<TriangleTree>>,
+    building: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for BuildClaim {
+    fn drop(&mut self) {
+        if self.tree.get().is_none() {
+            self.building.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 }
 

@@ -331,6 +331,7 @@ impl<'a> App<'a> {
                     // After `update`, which walks and turns the section.
                     self.refresh_section_surface_lines();
                     self.refresh_section_prismoid_cells();
+                    self.poll_drape_waiting_elsewhere();
                     if let Some(graphics) = self.graphics.as_mut() {
                         self.editor.can_undo = self.history.can_undo();
                         self.editor.can_redo = self.history.can_redo();

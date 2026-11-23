@@ -122,6 +122,19 @@ fn side(strings: &[Vec<DVec3>], piece: usize, at: DVec2) -> Side {
     }
 }
 
+/// As [`side`] for a place on a read segment: only the two vertices of the
+/// string as stored that the segment runs between are looked at, the nearer
+/// within the merge distance (the earlier on a tie).
+fn side_on_segment(strings: &[Vec<DVec3>], places: &[Vec<usize>], piece: usize, segment: usize, at: DVec2) -> Side {
+    let vertex = [places[piece][segment], places[piece][segment + 1]]
+        .into_iter()
+        .map(|index| (index, strings[piece][index].truncate().distance(at)))
+        .filter(|&(_, distance)| distance < MERGE_DISTANCE)
+        .min_by(|left, right| left.1.total_cmp(&right.1))
+        .map(|(index, _)| index);
+    Side { piece, vertex, height: None }
+}
+
 /// Everything Build Surface's checks find in `strings`, each place once:
 /// the crossings biggest miss first, then the rest in the order found.
 /// `Err` once `cancelled` says so.
@@ -233,6 +246,7 @@ fn meetings(strings: &[Vec<DVec3>], read: &[Vec<DVec3>], cancelled: &dyn Fn() ->
             .map(|&(piece, segment)| segment_box(read[piece][segment].truncate(), read[piece][segment + 1].truncate()))
             .collect(),
     );
+    let places: Vec<Vec<usize>> = strings.iter().map(|string| as_read(string).1).collect();
     let mut found: Vec<Problem> = Vec::new();
     let mut along: HashSet<(usize, usize)> = HashSet::new();
     let mut crossed = PlaceSet::default();
@@ -279,11 +293,11 @@ fn meetings(strings: &[Vec<DVec3>], read: &[Vec<DVec3>], cancelled: &dyn Fn() ->
                         sides: vec![
                             Side {
                                 height: Some(za),
-                                ..side(strings, a, point)
+                                ..side_on_segment(strings, &places, a, i, point)
                             },
                             Side {
                                 height: Some(zb),
-                                ..side(strings, b, point)
+                                ..side_on_segment(strings, &places, b, j, point)
                             },
                         ],
                     }
@@ -352,8 +366,10 @@ pub(super) fn crossing_places(strings: &[Vec<DVec3>], cancelled: &dyn Fn() -> bo
 /// Points of one string too near another string's, at another height,
 /// where the two do not meet: the build's points check applied to each pair
 /// of segments of two strings that come within the merge distance, both
-/// strings sound on their own and not already found meeting at two
-/// heights. One problem per pair of strings and place.
+/// strings sound on their own and not found running along each other. A
+/// pair of segments that both lie within reach of a place where the two
+/// strings were found crossing at two heights is not looked at. One problem
+/// per pair of strings and place.
 fn near_misses(
     strings: &[Vec<DVec3>],
     read: &[Vec<DVec3>],
@@ -374,24 +390,66 @@ fn near_misses(
         (low - reach, high + reach)
     };
     let grid = BoxGrid::new(segments.iter().map(|&(piece, segment)| widened(piece, segment)).collect());
-    let mut met: HashSet<(usize, usize)> = HashSet::new();
+    // Strings found along each other are met all the way; strings found
+    // crossing are met at the crossing only, so a pass-close elsewhere
+    // between the same two is still looked for.
+    let mut along: HashSet<(usize, usize)> = HashSet::new();
+    let mut crossed: HashMap<(usize, usize), Vec<DVec2>> = HashMap::new();
     for problem in found.iter().filter(|problem| matches!(problem.kind, ProblemKind::Crossing { .. } | ProblemKind::Along)) {
         for (index, one) in problem.sides.iter().enumerate() {
             for other in &problem.sides[index + 1..] {
-                met.insert((one.piece.min(other.piece), one.piece.max(other.piece)));
+                let pair = (one.piece.min(other.piece), one.piece.max(other.piece));
+                if matches!(problem.kind, ProblemKind::Along) {
+                    along.insert(pair);
+                } else {
+                    crossed.entry(pair).or_default().push(problem.at.truncate());
+                }
+            }
+        }
+    }
+    // Pairs of segments, of the two strings of a crossing, that both lie
+    // within reach of that crossing.
+    let mut beside_crossing: HashSet<(usize, usize)> = HashSet::new();
+    let near_reach = DVec2::splat(NEAR_REACH);
+    let mut around = Vec::new();
+    let mut of_first = Vec::new();
+    let mut of_second = Vec::new();
+    for (&(a, b), places) in &crossed {
+        for &at in places {
+            stop_if(cancelled)?;
+            grid.overlapping(at - near_reach, at + near_reach, &mut around);
+            of_first.clear();
+            of_second.clear();
+            for &index in &around {
+                let (piece, segment) = segments[index];
+                let (nearest, _) = kernel::project_onto_segment(at, read[piece][segment].truncate(), read[piece][segment + 1].truncate());
+                let near = nearest.distance(at) <= NEAR_REACH;
+                if near && piece == a {
+                    of_first.push(index);
+                } else if near && piece == b {
+                    of_second.push(index);
+                }
+            }
+            for &first in &of_first {
+                for &second in &of_second {
+                    beside_crossing.insert((first, second));
+                }
             }
         }
     }
     let mut misses: Vec<Problem> = Vec::new();
     let mut seen = PlaceSet::default();
     let mut near = Vec::new();
-    for &(a, i) in &segments {
+    for (first, &(a, i)) in segments.iter().enumerate() {
         stop_if(cancelled)?;
         let (low, high) = widened(a, i);
         grid.overlapping(low, high, &mut near);
         for &other in &near {
             let (b, j) = segments[other];
-            if b <= a || met.contains(&(a, b)) {
+            if b <= a || along.contains(&(a, b)) {
+                continue;
+            }
+            if beside_crossing.contains(&(first, other)) {
                 continue;
             }
             let Some(clash) = pair_clash(read, crossings, (a, i), (b, j)) else {

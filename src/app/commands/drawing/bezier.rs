@@ -5,7 +5,7 @@ use crate::{
     app::{App, PICK_THRESHOLD_PX},
     i18n::tr,
     logging::CommandReportSpec,
-    model::{Command, Object, ObjectId, PolyVertex, SceneEntityId, geometry::tessellate_bulge_segment},
+    model::{Command, Object, ObjectId, PolyVertex, SceneEntityId, geometry::tessellate_bulge_segment, kernel::XY_TOL},
     rendering::pick,
     ui::{dialogs::SmoothStringsDialog, state::ActiveTool},
     userspace_warn,
@@ -417,7 +417,7 @@ pub(crate) fn smooth_corners(verts: &[PolyVertex], closed: bool, tolerance: f64)
         rounded += 1;
         for sample in samples {
             // Two half-edge cuts meet at the edge's midpoint.
-            if out.last().is_some_and(|&(last, blend)| blend && last.pos.distance(sample) < 1.0e-9) {
+            if out.last().is_some_and(|&(last, blend)| blend && last.pos.distance(sample) <= XY_TOL) {
                 continue;
             }
             out.push((PolyVertex::straight(sample), true));
@@ -425,7 +425,7 @@ pub(crate) fn smooth_corners(verts: &[PolyVertex], closed: bool, tolerance: f64)
     }
     if closed && out.len() > 1 {
         let (first, last) = (out[0], out[out.len() - 1]);
-        if first.1 && last.1 && first.0.pos.distance(last.0.pos) < 1.0e-9 {
+        if first.1 && last.1 && first.0.pos.distance(last.0.pos) <= XY_TOL {
             out.pop();
         }
     }

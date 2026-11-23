@@ -768,12 +768,13 @@ pub(crate) fn segment_box(start: DVec2, end: DVec2) -> (DVec2, DVec2) {
 /// query instead.
 const MOST_CELLS_PER_BOX: u64 = 64;
 
-/// Boxes filed on a grid of square cells, each about as wide as a typical
-/// box, the cells hashed into as many buckets as there are boxes, so only
+/// Boxes filed on a grid of cells, each about the size of a typical box,
+/// the cells hashed into as many buckets as there are boxes, so only
 /// boxes sharing a bucket are compared and far-off boxes cost no empty cells.
 pub(crate) struct BoxGrid {
     low: DVec2,
-    cell: f64,
+    /// A cell's width and height.
+    cell: DVec2,
     /// Where each bucket's run of `members` starts, one more than the buckets.
     starts: Vec<usize>,
     members: Vec<usize>,
@@ -782,18 +783,36 @@ pub(crate) struct BoxGrid {
     boxes: Vec<(DVec2, DVec2)>,
 }
 
+/// The size nine in ten boxes come within, measured by `size`, so they
+/// span a few cells at most; infinite when no box has a finite size.
+fn typical_size(boxes: &[(DVec2, DVec2)], size: fn(DVec2) -> f64) -> f64 {
+    let mut sizes: Vec<f64> = boxes.iter().map(|(from, to)| size(*to - *from)).collect();
+    sizes.sort_unstable_by(f64::total_cmp);
+    sizes
+        .get(sizes.len() * 9 / 10)
+        .copied()
+        .filter(|cell| cell.is_finite() && *cell > 0.0)
+        .unwrap_or(f64::INFINITY)
+}
+
 impl BoxGrid {
     pub(crate) fn new(boxes: Vec<(DVec2, DVec2)>) -> Self {
+        let cell = typical_size(&boxes, DVec2::max_element);
+        Self::filed(boxes, DVec2::splat(cell))
+    }
+
+    /// As [`BoxGrid::new`], with a cell's width and height taken from the
+    /// boxes' widths and heights apart, so long thin boxes side by side (the
+    /// edges of a dense zigzag) each fall in few cells and share them with
+    /// few others.
+    pub(crate) fn fitted(boxes: Vec<(DVec2, DVec2)>) -> Self {
+        let cell = DVec2::new(typical_size(&boxes, |size| size.x), typical_size(&boxes, |size| size.y));
+        Self::filed(boxes, cell)
+    }
+
+    fn filed(boxes: Vec<(DVec2, DVec2)>, cell: DVec2) -> Self {
         let low = boxes.iter().fold(DVec2::INFINITY, |low, (from, _)| low.min(*from));
         let low = if boxes.is_empty() { DVec2::ZERO } else { low };
-        // Nine in ten boxes then span a few cells at most.
-        let mut extents: Vec<f64> = boxes.iter().map(|(from, to)| (*to - *from).max_element()).collect();
-        extents.sort_unstable_by(f64::total_cmp);
-        let cell = extents
-            .get(extents.len() * 9 / 10)
-            .copied()
-            .filter(|cell| cell.is_finite() && *cell > 0.0)
-            .unwrap_or(f64::INFINITY);
         let buckets = boxes.len().max(1);
         let mut grid = Self {
             low,

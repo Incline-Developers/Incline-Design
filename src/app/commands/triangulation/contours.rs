@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::{
     cuts::{lerp_at_z, point_in_triangle_bary_z},
@@ -292,13 +292,18 @@ pub(crate) fn section_surface_lines(
         slab.signed_distance(glam::DVec3::new(vertex.x, vertex.y, vertex.z))
     };
     let mut segments = Vec::new();
+    // An edge in the plane is given by both triangles that share it when they
+    // lie on its positive side: chained, it would double back on itself.
+    let mut taken = HashSet::new();
     spatial.for_each_vertical_plane_candidate_index(slab.point, slab.normal, |face_index| {
         let Some(face) = mesh.face_vertex_indices(face_index) else {
             return;
         };
         let distance = face.map(distance_of);
         if let Some(segment) = triangle_section_segment(face.map(|index| vertices[index]), distance)
-            && contour_point_key(segment[0]) != contour_point_key(segment[1])
+            && let (first, second) = (contour_point_key(segment[0]), contour_point_key(segment[1]))
+            && first != second
+            && taken.insert((first.min(second), first.max(second)))
         {
             segments.push(segment);
         }

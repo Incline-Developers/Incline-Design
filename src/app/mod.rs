@@ -435,6 +435,18 @@ pub(crate) struct App<'a> {
     section_surface_lines_key: Option<u64>,
     /// The colours those lines were last drawn in, one per shown surface.
     section_surface_colors: Vec<[f32; 4]>,
+    /// The surfaces a confirmed Drape Following Triangles waits on for
+    /// their trees; empty while none waits.
+    drape_waiting_on: Vec<TriangulationId>,
+    /// Whether that drape waits on a tree another builder claimed, which no
+    /// job of its own reports.
+    drape_waits_elsewhere: bool,
+    /// The status row kept up while the drape waits on a tree a query is
+    /// building in the background.
+    drape_wait_shown: Option<BackgroundTaskTicket>,
+    /// The status row kept up while the section lines wait on a tree a query
+    /// is building in the background.
+    section_lines_wait_shown: Option<BackgroundTaskTicket>,
     /// What the section's prismoid cells were last cut from, `None` while
     /// none are drawn.
     section_cells_key: Option<u64>,
@@ -774,6 +786,10 @@ impl<'a> Default for App<'a> {
             last_snap_poll_instant: None,
             section_surface_lines_key: None,
             section_surface_colors: Vec::new(),
+            drape_waiting_on: Vec::new(),
+            drape_waits_elsewhere: false,
+            drape_wait_shown: None,
+            section_lines_wait_shown: None,
             section_cells_key: None,
             editor: EditorState::new(),
             workspace: ProjectStore::default(),

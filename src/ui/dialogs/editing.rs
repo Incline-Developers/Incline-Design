@@ -1862,15 +1862,27 @@ pub(crate) fn draw_fill_segment_panel(ui: &mut egui::Ui, editor: &EditorState, s
 /// Draw the Next Vertex panel beside a string being drawn: a point to add as
 /// typed, and a step from the last vertex by bearing, level distance and dip.
 /// Enter in a field adds from that part; it never finishes the string.
-pub(crate) fn draw_next_vertex_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
+pub(crate) fn draw_next_vertex_panel(ui: &mut egui::Ui, editor: &mut EditorState, has_layer: bool, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
+    use crate::{
+        app::commands::drawing::next_vertex::{along_bearing, next_vertex_blocker, typed_vertex_blocker, wrapped_bearing},
+        ui::widgets::hint::Hint,
+    };
+
     // The panel goes down with the tool that drew it.
     if !matches!(editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly) || !editor.active_workspace.has_drawing_aids() {
         editor.next_vertex_panel = None;
         return;
     }
     let on_section = editor.slice_mode_enabled && editor.active_workspace.edits_in_slice_view();
-    let can_add = !editor.poly_finish_dialog;
-    let can_step = can_add && !editor.pending_stroke.is_empty();
+    // The buttons grey with their reason, from the panel as the last frame
+    // left it. `has_layer`: the active layer exists and draws.
+    let Some((point, bearing, distance, dip)) = editor.next_vertex_panel.as_ref().map(|panel| (panel.point, panel.bearing, panel.distance, panel.dip)) else {
+        return;
+    };
+    let section = editor.next_vertex_panel.as_ref().and_then(|panel| panel.section).filter(|_| on_section);
+    let add_blocker = typed_vertex_blocker(editor, !editor.fly_mode_enabled, has_layer, glam::DVec3::from(point), section.as_ref());
+    let step_to = editor.pending_stroke.last().map(|&last| along_bearing(last, wrapped_bearing(bearing), distance, dip));
+    let step_blocker = next_vertex_blocker(editor, !editor.fly_mode_enabled, has_layer, step_to);
     let Some(panel) = editor.next_vertex_panel.as_mut() else {
         return;
     };
@@ -1891,9 +1903,13 @@ pub(crate) fn draw_next_vertex_panel(ui: &mut egui::Ui, editor: &mut EditorState
             }
             ui.add_space(4.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                add_point |= ui.add(MenuButton::new(tr!("edit-next-vertex-add")).primary().enabled(can_add)).clicked();
+                let mut add = ui.add(MenuButton::new(tr!("edit-next-vertex-add")).primary().enabled(add_blocker.is_none()));
+                if let Some(blocker) = add_blocker {
+                    add = add.hint(blocker.reason());
+                }
+                add_point |= add.clicked();
             });
-            if add_point && can_add {
+            if add_point && add_blocker.is_none() {
                 commands.push(UiCommand::AddTypedStrokeVertex(glam::DVec3::from(panel.point)));
             }
 
@@ -1902,10 +1918,14 @@ pub(crate) fn draw_next_vertex_panel(ui: &mut egui::Ui, editor: &mut EditorState
             if on_section {
                 ui.label(tr!("edit-next-vertex-section-bearing"));
             } else {
-                let response = MenuFieldF64::new(tr!("edit-next-vertex-bearing"), &mut panel.bearing, 0.0..=360.0)
+                let response = MenuFieldF64::new(tr!("edit-next-vertex-bearing"), &mut panel.bearing, f64::MIN..=f64::MAX)
                     .help_text(tr!("edit-next-vertex-bearing-help"))
                     .speed(0.25)
                     .show(ui);
+                // Left alone while it is being typed or dragged.
+                if !response.has_focus() && !response.dragged() {
+                    panel.bearing = wrapped_bearing(panel.bearing);
+                }
                 add_step |= submitted(ui, &response);
             }
             let response = MenuFieldF64::new(tr!("edit-distance"), &mut panel.distance, f64::MIN..=f64::MAX)
@@ -1924,9 +1944,13 @@ pub(crate) fn draw_next_vertex_panel(ui: &mut egui::Ui, editor: &mut EditorState
                 if ui.add(MenuButton::new(tr!("common-close"))).clicked() {
                     close = true;
                 }
-                add_step |= ui.add(MenuButton::new(tr!("edit-next-vertex-add")).primary().enabled(can_step)).clicked();
+                let mut add = ui.add(MenuButton::new(tr!("edit-next-vertex-add")).primary().enabled(step_blocker.is_none()));
+                if let Some(blocker) = step_blocker {
+                    add = add.hint(blocker.reason());
+                }
+                add_step |= add.clicked();
             });
-            if add_step && can_step {
+            if add_step && step_blocker.is_none() {
                 commands.push(UiCommand::AddStrokeVertexAlongBearing {
                     bearing: panel.bearing,
                     distance: panel.distance,

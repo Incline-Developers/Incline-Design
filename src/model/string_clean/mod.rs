@@ -10,7 +10,8 @@
 //! 2. bad heights, string by string: a vertex at z = 0 in a string that is
 //!    not all at z = 0, and a single height far off its neighbours;
 //! 3. strings running along each other: the shared stretch is cut out of the
-//!    shorter;
+//!    shorter where the two are within [`JOIN_AUTOMATIC`] in height at both
+//!    ends of it, and left for the final check where they are further apart;
 //! 4. crossings: a shared vertex at every place two strings meet, on both,
 //!    joined at the halfway height when they miss by [`JOIN_AUTOMATIC`] or
 //!    less;
@@ -222,7 +223,12 @@ fn clean_steps(strings: &[Vec<DVec3>], cancelled: &dyn Fn() -> bool) -> Result<(
     }
     for piece in &mut pieces {
         stop_if(cancelled)?;
+        let count = piece.verts.len();
         heights::drop_bad_heights(piece.source, &mut piece.verts, &mut changes);
+        // Dropping a height can leave a turn-back or a loop behind.
+        if piece.verts.len() != count {
+            hygiene::clean_string(piece.source, &mut piece.verts, &mut changes, cancelled)?;
+        }
     }
     // Steps 3 and 4 take turns until a round cuts nothing more: a shared
     // vertex put at a cut end can lay the next segment along the other

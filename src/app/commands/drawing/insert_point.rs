@@ -10,6 +10,7 @@ use crate::{
     logging::CommandReportSpec,
     model::{
         Command, Object, ObjectId, PolyVertex, SceneEntityId,
+        control_checks::{BoxGrid, segment_box},
         kernel::{self, SegSeg, XY_TOL},
         project::ModellingSettings,
         rbf::DEFAULT_SPACING,
@@ -204,7 +205,7 @@ impl<'a> App<'a> {
         let updated = match fill_segment(&verts, closed, edge, spacing) {
             SegmentFill::Filled(updated) => updated,
             SegmentFill::Short => {
-                userspace_warn!("{}", tr!("cmd-string-fill-short"));
+                userspace_log!("{}", tr!("cmd-string-fill-short"));
                 return;
             }
             SegmentFill::TooMany(count) => {
@@ -473,7 +474,8 @@ pub(crate) type CrossingCuts = (Vec<usize>, Vec<Vec<f64>>);
 /// Where `cutters` cross string `target`: the vertices of `target` they
 /// cross on, and the parameters inside each edge that
 /// [`insert_parameters`] takes. In plan, or with a section up, in the
-/// section's plane among the parts its slab draws.
+/// section's plane among the parts its slab draws. An open string is not cut
+/// at its ends.
 pub(super) fn crossing_cuts(target: (&[PolyVertex], bool), cutters: &[(&[PolyVertex], bool)], slab: Option<SectionSlab>) -> CrossingCuts {
     let (verts, closed) = target;
     let mut vertices = Vec::new();
@@ -499,42 +501,65 @@ pub(super) fn crossing_cuts(target: (&[PolyVertex], bool), cutters: &[(&[PolyVer
             })
         })
         .collect();
+    // Filed on grids, so an edge is tried only against the cutter edges near
+    // it, in the order a walk over all of them would meet them.
+    let edge_grid = BoxGrid::fitted(cutter_edges.iter().map(|&(_, bounds)| bounds).collect());
+    let run_grid = BoxGrid::fitted(cutter_runs.iter().map(|&(c, d, ..)| segment_box(c, d)).collect());
+    let mut near = Vec::new();
     for edge in 0..parameters.len() {
         let (start, end) = (verts[edge], verts[(edge + 1) % verts.len()]);
         let curve = Curve::from_vertices(start, end);
-        let crossings: Vec<f64> = match slab {
+        let mut crossings: Vec<f64> = Vec::new();
+        match slab {
             None => {
-                let edge_bounds = plan_bounds(&[start, end], false);
-                cutter_edges
-                    .iter()
-                    .filter(|(_, other)| edge_bounds.is_some_and(|edge_bounds| bounds_overlap(edge_bounds, *other)))
-                    .flat_map(|&(other, _)| curve_intersections(curve, other))
-                    .map(|(_, t, _)| t)
-                    .collect()
+                if let Some((low, high)) = plan_bounds(&[start, end], false) {
+                    edge_grid.overlapping(low, high, &mut near);
+                    crossings.extend(near.iter().flat_map(|&other| curve_intersections(curve, cutter_edges[other].0)).map(|(_, t, _)| t));
+                }
             }
-            Some(slab) => slab_runs(verts, edge, slab)
-                .into_iter()
-                .flat_map(|(a, b, from, to)| {
-                    cutter_runs.iter().filter_map(move |&(c, d, ..)| match kernel::segment_segment(a, b, c, d) {
-                        SegSeg::Crossing { t, .. } | SegSeg::Touching { t, .. } => Some(from + (to - from) * t),
-                        SegSeg::Disjoint | SegSeg::CollinearOverlap { .. } => None,
-                    })
-                })
-                .collect(),
-        };
+            Some(slab) => {
+                for (a, b, from, to) in slab_runs(verts, edge, slab) {
+                    let (low, high) = segment_box(a, b);
+                    run_grid.overlapping(low, high, &mut near);
+                    crossings.extend(near.iter().filter_map(|&other| {
+                        let (c, d, ..) = cutter_runs[other];
+                        match kernel::segment_segment(a, b, c, d) {
+                            SegSeg::Crossing { t, .. } | SegSeg::Touching { t, .. } => Some(from + (to - from) * t),
+                            SegSeg::Disjoint | SegSeg::CollinearOverlap { .. } => None,
+                        }
+                    }));
+                }
+            }
+        }
         // Unlike an insert, a crossing on a vertex cuts there too.
         for t in crossings {
             if is_interior_parameter(curve, t) {
                 push_interior_parameter(&mut parameters[edge], curve, t);
             } else {
                 let vertex = if t < 0.5 { edge } else { (edge + 1) % verts.len() };
-                if !vertices.contains(&vertex) {
+                if cuts_on_vertex(verts, closed, &vertices, vertex) {
                     vertices.push(vertex);
                 }
             }
         }
     }
     (vertices, parameters)
+}
+
+/// Whether a crossing on `vertex` cuts there, beside the cuts already made:
+/// once for a vertex repeated at one place, and never at an open string's
+/// end, nor at a vertex repeated at an end.
+fn cuts_on_vertex(verts: &[PolyVertex], closed: bool, cuts: &[usize], vertex: usize) -> bool {
+    let at_end = !closed && (one_place(verts, closed, vertex, 0) || one_place(verts, closed, vertex, verts.len() - 1));
+    !at_end && !cuts.iter().any(|&cut| one_place(verts, closed, cut, vertex))
+}
+
+/// Whether vertices `a` and `b` are one place on the string: the same
+/// vertex, or two ends of a run of vertices repeated at one point.
+fn one_place(verts: &[PolyVertex], closed: bool, a: usize, b: usize) -> bool {
+    let same = |index: usize| verts[index].pos.distance(verts[a].pos) <= XY_TOL;
+    let (low, high) = (a.min(b), a.max(b));
+    (low..=high).all(same) || (closed && (high..verts.len()).chain(0..=low).all(same))
 }
 
 /// Edge `edge` of `verts` as straight runs in `slab`'s frame, an arc as
