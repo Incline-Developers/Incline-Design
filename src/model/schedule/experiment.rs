@@ -29,8 +29,9 @@ use crate::{i18n::tr, model::ReserveFieldId};
 /// Default planning horizon, in whole schedule periods (days): a week, so a
 /// new project's first schedule shows more than a single day.
 pub(crate) const DEFAULT_END_DAY: u32 = 7;
-/// Default calendar discretisation.
-pub(crate) const DEFAULT_INTERVAL_H: f64 = 1.0;
+/// Default calendar step: a day. A finer step multiplies the model for little
+/// a new project needs; every project keeps the step it was saved with.
+pub(crate) const DEFAULT_INTERVAL_H: f64 = 24.0;
 /// The finest calendar step offered: one minute. Anything finer is noise in
 /// a mine schedule and only multiplies the model.
 pub(crate) const MIN_INTERVAL_H: f64 = 1.0 / 60.0;
