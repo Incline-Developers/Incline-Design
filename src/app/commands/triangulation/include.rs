@@ -2265,6 +2265,25 @@ fn build_shape_cell_coverage(
     })
 }
 
+/// The plane cut by `topology`'s own rim edges, each cell covered where the
+/// topology lies under it. No ring is walked, so a pinched rim is kept.
+/// Cracks and T-junctions inside the surface, covered on both sides, are
+/// dropped from the edges first, as the include does; so is the rim of a
+/// gap 1 mm or less across, and the gap usually counts as covered.
+pub(super) fn build_presence_coverage(
+    topology: &mesh_data::Triangulation,
+    topology_spatial: &crate::model::spatial::TriangleBvh,
+    boundary_edges: Vec<[usize; 2]>,
+) -> Result<RingCoverage> {
+    let boundary_edges = filter_presence_boundary_edges(boundary_edges, topology, topology_spatial);
+    let ShapeCellCoverage { triangles, present, spatial, .. } = build_shape_cell_coverage(&[], topology, topology_spatial, &boundary_edges)?;
+    Ok(RingCoverage {
+        triangles,
+        covered: present,
+        spatial,
+    })
+}
+
 /// If the clip kept the shape face in its entirety, replace the per-topology-
 /// triangle fragments with the original face. The clip emits one piece per
 /// covering topology triangle, so a face wholly on the retained side comes

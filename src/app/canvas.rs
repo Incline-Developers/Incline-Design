@@ -255,7 +255,7 @@ impl<'a> App<'a> {
                 if self.editor.tri_difference_lower_id == Some(id) {
                     self.editor.tri_difference_lower_id = None;
                 }
-                update_auto_derived_name(
+                update_auto_surface_name(
                     &mut self.editor.tri_difference_name_input,
                     self.editor.tri_difference_name_auto,
                     name,
@@ -266,6 +266,9 @@ impl<'a> App<'a> {
                 self.editor.tri_difference_lower_id = Some(id);
                 if self.editor.tri_difference_upper_id == Some(id) {
                     self.editor.tri_difference_upper_id = None;
+                    if self.editor.tri_difference_name_auto {
+                        self.editor.tri_difference_name_input.clear();
+                    }
                 }
             }
             TriangulationPickTarget::MergeFirst => {
@@ -273,12 +276,15 @@ impl<'a> App<'a> {
                 if self.editor.tri_merge_second_id == Some(id) {
                     self.editor.tri_merge_second_id = None;
                 }
-                update_auto_derived_name(&mut self.editor.tri_merge_name_input, self.editor.tri_merge_name_auto, name, &tr!("cmd-commands-merged"));
+                update_auto_surface_name(&mut self.editor.tri_merge_name_input, self.editor.tri_merge_name_auto, name, &tr!("cmd-commands-merged"));
             }
             TriangulationPickTarget::MergeSecond => {
                 self.editor.tri_merge_second_id = Some(id);
                 if self.editor.tri_merge_first_id == Some(id) {
                     self.editor.tri_merge_first_id = None;
+                    if self.editor.tri_merge_name_auto {
+                        self.editor.tri_merge_name_input.clear();
+                    }
                 }
             }
             TriangulationPickTarget::SolidDesign => {
@@ -299,7 +305,7 @@ impl<'a> App<'a> {
                 if self.editor.tri_prismoid_floor_id == Some(id) {
                     self.editor.tri_prismoid_floor_id = None;
                 }
-                update_auto_derived_name(
+                update_auto_surface_name(
                     &mut self.editor.tri_prismoid_name_input,
                     self.editor.tri_prismoid_name_auto,
                     name,
@@ -310,6 +316,9 @@ impl<'a> App<'a> {
                 self.editor.tri_prismoid_floor_id = Some(id);
                 if self.editor.tri_prismoid_roof_id == Some(id) {
                     self.editor.tri_prismoid_roof_id = None;
+                    if self.editor.tri_prismoid_name_auto {
+                        self.editor.tri_prismoid_name_input.clear();
+                    }
                 }
             }
             // The dialog names the grid from the topography while the name
@@ -1030,6 +1039,19 @@ impl<'a> App<'a> {
 pub(crate) fn derived_triangulation_name(name: &str, suffix: &str) -> String {
     let stem = std::path::Path::new(name).file_stem().and_then(|value| value.to_str()).unwrap_or(name).trim();
     if stem.is_empty() { name.to_owned() } else { format!("{stem} {suffix}") }
+}
+
+/// Name for a surface derived from another: the whole name, a dot inside it
+/// kept (`"Roof 12.5 m"` is not a file), then the operation word.
+pub(crate) fn derived_surface_name(name: &str, suffix: &str) -> String {
+    let whole = name.trim();
+    if whole.is_empty() { name.to_owned() } else { format!("{whole} {suffix}") }
+}
+
+fn update_auto_surface_name(output: &mut String, is_auto: bool, source: &str, suffix: &str) {
+    if is_auto {
+        *output = derived_surface_name(source, suffix);
+    }
 }
 
 fn update_auto_derived_name(output: &mut String, is_auto: bool, source: &str, suffix: &str) {

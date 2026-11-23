@@ -432,7 +432,7 @@ impl<'a> App<'a> {
                 surface_type,
                 quality,
             } = built;
-            let (state, _) = quality_insert(state, quality.as_ref(), false);
+            let state = quality_insert(state, quality.as_ref());
             let id = TriangulationId(self.next_triangulation_id);
             self.next_triangulation_id += 1;
             let name = crate::model::project::unique_item_name(name, self.triangulations.iter().map(|item| item.name.as_str()).chain(names.iter().map(String::as_str)));
@@ -531,17 +531,12 @@ impl<'a> App<'a> {
     }
 }
 
-/// A quality surface's state and selection: hidden, and left unselected, as
-/// its height is not an RL.
-fn quality_insert(
-    mut state: crate::model::project::ProjectItemState,
-    quality: Option<&crate::model::triangulation::QualityMark>,
-    select: bool,
-) -> (crate::model::project::ProjectItemState, bool) {
+/// A quality surface's state: hidden, as its height is not an RL.
+fn quality_insert(mut state: crate::model::project::ProjectItemState, quality: Option<&crate::model::triangulation::QualityMark>) -> crate::model::project::ProjectItemState {
     if quality.is_some() {
         state.hidden = true;
     }
-    (state, select && quality.is_none())
+    state
 }
 
 /// Refuse a quality surface where a tool takes RLs.
@@ -553,14 +548,16 @@ pub(crate) fn refuse_quality(name: &str, quality: Option<&crate::model::triangul
 }
 
 /// The mark a surface made from two others carries: the first's, when both
-/// are heights or both one quality; refused when they differ.
+/// are heights or both one quality in one unit; refused when they differ. A
+/// blank unit is not known, so it agrees with any, and the unit given is kept.
 pub(crate) fn shared_quality(
     (first, first_mark): (&str, Option<&crate::model::triangulation::QualityMark>),
     (second, second_mark): (&str, Option<&crate::model::triangulation::QualityMark>),
 ) -> Result<Option<crate::model::triangulation::QualityMark>> {
     match (first_mark, second_mark) {
         (None, None) => Ok(None),
-        (Some(mark), Some(other)) if mark.same_quality(other) => Ok(Some(mark.clone())),
+        (Some(mark), Some(other)) if mark.same_quality(other) && (mark.unit.trim() == other.unit.trim() || other.unit.trim().is_empty()) => Ok(Some(mark.clone())),
+        (Some(mark), Some(other)) if mark.same_quality(other) && mark.unit.trim().is_empty() => Ok(Some(other.clone())),
         (Some(mark), _) => anyhow::bail!(
             "{}",
             tr!("cmd-session-mixed-qualities", name = first.to_owned(), quality = mark.label(), other = second.to_owned())

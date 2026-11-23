@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use rayon::prelude::*;
 
-use super::cuts::{PreparedReferenceSurface, for_each_plan_overlap, reference_xy_overlap_area_tolerance};
+use super::cuts::{PreparedReferenceSurface, for_each_plan_overlap, prepare_reference_surface_relaxed, reference_xy_overlap_area_tolerance};
 use crate::{
     app::{
         App,
@@ -12,6 +12,7 @@ use crate::{
     i18n::tr,
     model::{
         formats::mesh_data,
+        geometry::triangle_xy_area,
         progress::{Phase, Progress},
         triangulation::{GeneratedTriangulationLog, TriangulationId},
     },
@@ -47,6 +48,25 @@ pub(super) fn difference_mesh(
     cancel: &CancelFlag,
     progress: &Phase,
 ) -> Result<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>)> {
+    // Far from the origin the last bits of a coordinate are worth nanometres,
+    // enough for two copies of one crossing point to weld apart, so both
+    // surfaces are measured about the middle of their overlap and the result
+    // moved back.
+    let (above, below) = (upper.mesh.bounds(), lower.mesh.bounds());
+    let origin = (
+        (above.min.x.max(below.min.x) + above.max.x.min(below.max.x)) / 2.0,
+        (above.min.y.max(below.min.y) + above.max.y.min(below.max.y)) / 2.0,
+    );
+    let near = |surface: &PreparedReferenceSurface| -> Result<PreparedReferenceSurface> {
+        let vertices = surface
+            .mesh
+            .vertices()
+            .iter()
+            .map(|vertex| mesh_data::Vertex::new(vertex.x - origin.0, vertex.y - origin.1, vertex.z))
+            .collect();
+        prepare_reference_surface_relaxed(&mesh_data::Triangulation::from_vertices_and_faces(vertices, surface.mesh.face_indices().collect())?)
+    };
+    let (upper, lower) = (&near(upper)?, &near(lower)?);
     let upright = reference_xy_overlap_area_tolerance(&lower.mesh);
     let task_count = rayon::current_num_threads().saturating_mul(4).max(1);
     let chunk_size = upper.triangles.len().div_ceil(task_count).max(1);
@@ -87,6 +107,9 @@ pub(super) fn difference_mesh(
     let mut faces: Vec<[u32; 3]> = Vec::new();
     let mut welded: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
     for partial in partials {
+        if cancel.is_cancelled() {
+            anyhow::bail!(crate::app::jobs::Cancelled);
+        }
         for piece in partial? {
             let face = piece.map(|point| {
                 let key = ((point[0] / WELD).round() as i64, (point[1] / WELD).round() as i64);
@@ -95,8 +118,8 @@ pub(super) fn difference_mesh(
                     return found;
                 }
                 vertices.push(mesh_data::Vertex {
-                    x: point[0],
-                    y: point[1],
+                    x: point[0] + origin.0,
+                    y: point[1] + origin.1,
                     z: point[2],
                 });
                 sharing.push((vertices.len() - 1) as u32);
@@ -108,6 +131,19 @@ pub(super) fn difference_mesh(
         }
     }
     Ok((vertices, faces))
+}
+
+/// `mesh` ready to measure, or why it cannot be: no face with area in plan,
+/// or a fold.
+fn measured(mesh: &mesh_data::Triangulation, surface: &str) -> Result<PreparedReferenceSurface> {
+    let tolerance = reference_xy_overlap_area_tolerance(mesh);
+    if !mesh
+        .face_indices()
+        .any(|face| triangle_xy_area(face.map(|index| mesh.vertices()[index as usize])).abs() > tolerance)
+    {
+        anyhow::bail!(tr!("err-surf-difference-no-faces", surface = surface.to_owned()));
+    }
+    super::cuts::validate_reference_surface(mesh).map_err(|_| anyhow::anyhow!(tr!("err-surf-difference-folds", surface = surface.to_owned())))
 }
 
 impl App<'_> {
@@ -123,7 +159,7 @@ impl App<'_> {
             && let Some(surface) = self.triangulations.iter().find(|surface| surface.id == id && surface.state.loaded)
         {
             self.editor.tri_difference_upper_id = Some(id);
-            self.editor.tri_difference_name_input = crate::app::canvas::derived_triangulation_name(&surface.name, &tr!("cmd-commands-difference"));
+            self.editor.tri_difference_name_input = crate::app::canvas::derived_surface_name(&surface.name, &tr!("cmd-commands-difference"));
         }
     }
 
@@ -150,9 +186,8 @@ impl App<'_> {
         let quantity = mark.name.clone();
 
         let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<GeneratedTriangulationLog> {
-            let folds = |surface: &str| anyhow::anyhow!(tr!("err-surf-difference-folds", surface = surface.to_owned()));
-            let upper = super::cuts::validate_reference_surface(&upper_mesh).map_err(|_| folds(&upper_name))?;
-            let lower = super::cuts::validate_reference_surface(&lower_mesh).map_err(|_| folds(&lower_name))?;
+            let upper = measured(&upper_mesh, &upper_name)?;
+            let lower = measured(&lower_mesh, &lower_name)?;
             if cancel.is_cancelled() {
                 anyhow::bail!(crate::app::jobs::Cancelled);
             }
@@ -163,9 +198,13 @@ impl App<'_> {
             if faces.is_empty() {
                 anyhow::bail!(tr!("err-surf-difference-no-overlap", upper = upper_name, lower = lower_name));
             }
-            let (thinnest, thickest) = vertices
+            // Over the points the faces use: a piece too thin to keep leaves
+            // its points behind.
+            let (thinnest, thickest) = faces
                 .iter()
-                .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), vertex| (low.min(vertex.z), high.max(vertex.z)));
+                .flatten()
+                .map(|&index| vertices[index as usize].z)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), z| (low.min(z), high.max(z)));
             let generated = super::session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, |_| Vec::new())?.with_quality(Some(mark));
             Ok(GeneratedTriangulationLog {
                 generated,

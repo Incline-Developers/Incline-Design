@@ -284,7 +284,7 @@ impl<'a> App<'a> {
             && let Some(surface) = self.triangulations.iter().find(|surface| surface.id == id && surface.state.loaded)
         {
             self.editor.tri_merge_first_id = Some(id);
-            self.editor.tri_merge_name_input = crate::app::canvas::derived_triangulation_name(&surface.name, &tr!("cmd-commands-merged"));
+            self.editor.tri_merge_name_input = crate::app::canvas::derived_surface_name(&surface.name, &tr!("cmd-commands-merged"));
         }
     }
 
@@ -362,11 +362,27 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    /// Keep a depth below ground with the project once a run has made
+    /// surfaces with it; a run that cuts nothing leaves it as it was.
+    fn keep_cut_depth(&mut self, depth: Option<f64>, outcome: &ToSurfaceOutcome) {
+        if let (Some(depth), ToSurfaceOutcome::Made { .. }) = (depth, outcome) {
+            let changed = self.workspace.active_project_mut().is_some_and(|project| {
+                let modelling = &mut project.project.metadata.modelling;
+                let changed = modelling.cut_depth != Some(depth);
+                modelling.cut_depth = Some(depth);
+                changed
+            });
+            if changed {
+                self.touch_active_project_content();
+            }
+        }
+    }
+
     /// Clip the seam whose roof and floor are `targets` to the limits
     /// given, Keep below first, into a new roof, floor and solid between
     /// them under Triangulations, selected when made; the originals stay
     /// as they are. A depth below ground is kept with the project, since it
-    /// is the deposit's.
+    /// is the deposit's, once a run has made surfaces with it.
     pub(crate) fn cut_triangulation_to_surface(&mut self, targets: Vec<TriangulationId>, upper: Option<TriUpperCut>, lower: Option<TriLowerCut>) -> Result<()> {
         if seam_targets(&targets).is_none() {
             anyhow::bail!("{}", tr!("cmd-cuts-to-surface-select-seam"));
@@ -389,6 +405,13 @@ impl<'a> App<'a> {
         }
         if [upper_id, lower_id].into_iter().flatten().any(|id| targets.contains(&id)) {
             anyhow::bail!("{}", tr!("cmd-cuts-to-surface-cuts-itself"));
+        }
+        // A depth below the surface Keep below follows is a second limit; the
+        // surface itself twice is none.
+        if let (Some(TriUpperCut::Surface(above)), Some(TriLowerCut::Surface(below))) = (upper, lower)
+            && above == below
+        {
+            anyhow::bail!("{}", tr!("cmd-cuts-to-surface-same-limit"));
         }
         let depth = match lower {
             Some(TriLowerCut::Depth { depth, .. }) if !(depth.is_finite() && depth > 0.0) => anyhow::bail!("{}", tr!("project-cut-depth-positive")),
@@ -413,17 +436,6 @@ impl<'a> App<'a> {
             lower_level,
             depth,
         );
-        if let Some(depth) = depth {
-            let changed = self.workspace.active_project_mut().is_some_and(|project| {
-                let modelling = &mut project.project.metadata.modelling;
-                let changed = modelling.cut_depth != Some(depth);
-                modelling.cut_depth = Some(depth);
-                changed
-            });
-            if changed {
-                self.touch_active_project_content();
-            }
-        }
         let mut keys = Vec::new();
         if let Some(project) = self.workspace.active_project() {
             keys.push(crate::app::jobs::JobKey::Project {
@@ -438,82 +450,19 @@ impl<'a> App<'a> {
                 .chain(lower_id.iter())
                 .map(|&id| crate::app::jobs::JobKey::Triangulation(id)),
         );
-        let compute = move |cancel: &CancelFlag, progress: &crate::model::progress::Progress| -> Result<ToSurfaceOutcome> {
-            let upper_surface = upper_read.map(|(_, mesh, spatial)| CutReader::new(mesh, spatial)).transpose()?;
-            let ground = lower_read.map(|(_, mesh, spatial)| CutReader::new(mesh, spatial)).transpose()?;
-            let upper = match (upper_surface.as_ref(), upper_level) {
-                (Some(surface), _) => Some(UpperCut::Surface(surface)),
-                (None, Some(level)) => Some(UpperCut::Level(level)),
-                (None, None) => None,
-            };
-            let lower = match (ground.as_ref(), depth, lower_level) {
-                (Some(ground), Some(depth), _) => Some(LowerCut::Depth { ground, depth }),
-                (Some(ground), None, _) => Some(LowerCut::Surface(ground)),
-                (None, _, Some(level)) => Some(LowerCut::Level(level)),
-                (None, _, None) => None,
-            };
-            let mut grids = Vec::with_capacity(2);
-            for (name, mesh, spatial) in surfaces {
-                match GridSurface::read(mesh, spatial) {
-                    Ok(grid) => grids.push((name, grid)),
-                    Err(problem) => return Ok(ToSurfaceOutcome::Refused(crate::app::commands::thickness_points::not_a_grid(&name, problem))),
-                }
-            }
-            let [(first_name, first), (second_name, second)] = <[_; 2]>::try_from(grids).map_err(|_| anyhow::anyhow!("{}", tr!("cmd-cuts-to-surface-select-seam")))?;
-            let mut cut = clip_seam_by_cuts(&first, &second, upper.as_ref(), lower.as_ref(), cancel, &progress.phase(0.0, 0.6))?;
-            let (roof_name, floor_name) = if cut.swapped { (second_name, first_name) } else { (first_name, second_name) };
-            let seam = tr!("cmd-cuts-to-surface-seam", roof = roof_name.clone(), floor = floor_name.clone());
-            if !cut.changed {
-                return Ok(ToSurfaceOutcome::NotCut { seam, cut });
-            }
-            let named = |name: &str, word: String| crate::app::canvas::derived_triangulation_name(name, &word);
-            let faces = std::mem::take(&mut cut.faces);
-            let roof = session::build_generated_triangulation(
-                named(&roof_name, tr!("common-cut")),
-                std::mem::take(&mut cut.roof),
-                faces.clone(),
-                TriSurfaceType::Surface,
-                |_| Vec::new(),
-            )?;
-            let floor = session::build_generated_triangulation(
-                named(&floor_name, tr!("common-cut")),
-                std::mem::take(&mut cut.floor),
-                faces,
-                TriSurfaceType::Surface,
-                |_| Vec::new(),
-            )?;
-            let solid = seam_solid_or_refusal(
-                named(&roof_name, tr!("cmd-cuts-to-surface-solid")),
-                &roof.mesh,
-                &floor.mesh,
-                cancel,
-                &progress.phase(0.6, 1.0),
-            )?;
-            let mut generated = vec![roof, floor];
-            let (volume, refused) = match solid {
-                SeamSolid::Built(solid, volume) => {
-                    generated.push(solid);
-                    (Some(volume), None)
-                }
-                SeamSolid::Refused(reason) => (None, Some(reason)),
-            };
-            Ok(ToSurfaceOutcome::Made {
-                seam,
-                generated,
-                volume,
-                refused,
-                cut,
-            })
+        let compute = move |cancel: &CancelFlag, progress: &crate::model::progress::Progress| {
+            clip_seam_to_limits(surfaces, upper_read, lower_read, upper_level, lower_level, depth, cancel, progress)
         };
         let apply = move |app: &mut App, result: Result<ToSurfaceOutcome>| {
             let outcome = match result {
                 Ok(outcome) => outcome,
                 Err(error) if !crate::app::jobs::is_cancelled(&error) => {
-                    userspace_warn!("{}", tr!("cmd-session-triangulation-failed", message = format!("{error:#}")));
+                    crate::userspace_error!("{}", tr!("cmd-session-triangulation-failed", message = format!("{error:#}")));
                     return;
                 }
                 Err(_) => return,
             };
+            app.keep_cut_depth(depth, &outcome);
             match outcome {
                 ToSurfaceOutcome::Made {
                     seam,
@@ -522,11 +471,13 @@ impl<'a> App<'a> {
                     refused,
                     cut,
                 } => {
-                    let mut made = Vec::new();
-                    for generated in generated {
-                        app.insert_generated_triangulation(generated);
-                        made.extend(app.active_triangulation);
-                    }
+                    // Roof, floor and solid are one step to undo.
+                    let section = SectionKind::natural_for(MemberKind::Triangulation);
+                    let made = app.add_generated_triangulations(
+                        generated.into_iter().map(|generated| session::new_triangulation(generated, section)).collect(),
+                        Vec::new(),
+                        true,
+                    );
                     let name_of = |index: usize| {
                         made.get(index)
                             .and_then(|id| app.triangulations.iter().find(|item| item.id == *id))
@@ -3124,10 +3075,28 @@ fn to_surface_cuts_label(upper: Option<&str>, upper_level: Option<f64>, lower: O
     [upper, lower].into_iter().flatten().collect::<Vec<_>>().join(", ")
 }
 
-/// Nodes with no cut under them are never passed over in silence.
+/// Nodes with no cut under them, and faces left out for want of a node on
+/// the other surface or a corner on the lattice, are never passed over in
+/// silence.
 fn warn_uncovered(seam: &str, cut: &SeamCut) {
     if cut.uncovered > 0 {
         userspace_warn!("{}", tr!("cmd-cuts-to-surface-uncovered", surface = seam.to_owned(), count = cut.uncovered.to_string()));
+    }
+    if cut.faces_left_out > 0 {
+        userspace_warn!(
+            "{}",
+            tr!("cmd-cuts-to-surface-faces-left-out", surface = seam.to_owned(), count = cut.faces_left_out.to_string())
+        );
+    }
+    if cut.faces_off_lattice > 0 {
+        userspace_warn!(
+            "{}",
+            tr!(
+                "cmd-cuts-to-surface-faces-off-lattice",
+                surface = seam.to_owned(),
+                count = cut.faces_off_lattice.to_string()
+            )
+        );
     }
 }
 
@@ -3255,6 +3224,14 @@ pub(super) struct SeamCut {
     pub(super) uncovered: usize,
     /// Nodes where the upper cut lies below the lower cut.
     pub(super) crossed: usize,
+    /// Faces of either surface with a corner the other has no node under,
+    /// left out of both.
+    pub(super) faces_left_out: usize,
+    /// Faces with a corner off their own surface's lattice, left out of both.
+    /// A second-surface face is not counted again when its off-lattice
+    /// corners are all, bit for bit, off-lattice corners of the first and
+    /// every other corner is a node of the first.
+    pub(super) faces_off_lattice: usize,
     /// Whether any node moved or went; false means "not cut", no surface is
     /// made.
     pub(super) changed: bool,
@@ -3263,6 +3240,35 @@ pub(super) struct SeamCut {
 }
 
 const REMOVED: u8 = 16;
+
+/// Why a face of one grid has no counterpart on the other.
+enum LeftOut {
+    /// A corner is not a node of the face's own grid.
+    OffLattice,
+    /// A corner has no node with a height under it on the other grid.
+    NoNodeUnder,
+}
+
+/// The plan positions of `face`'s corners that are not nodes of `own`.
+fn off_lattice_corners(own: &GridSurface, face: [usize; 3]) -> impl Iterator<Item = [u64; 2]> + '_ {
+    let vertices = own.mesh().vertices();
+    face.into_iter()
+        .filter(|&index| own.node_at(DVec2::new(vertices[index].x, vertices[index].y)).is_none())
+        .map(move |index| [vertices[index].x.to_bits(), vertices[index].y.to_bits()])
+}
+
+/// Why `face` of `own` is left out against `other`, if it is.
+fn left_out_reason(own: &GridSurface, other: &GridSurface, face: [usize; 3]) -> Option<LeftOut> {
+    let vertices = own.mesh().vertices();
+    let corners = face.map(|index| DVec2::new(vertices[index].x, vertices[index].y));
+    if corners.iter().any(|&at| own.node_at(at).is_none()) {
+        Some(LeftOut::OffLattice)
+    } else if corners.iter().any(|&at| other.node_at(at).and_then(|(column, row)| other.height(column, row)).is_none()) {
+        Some(LeftOut::NoNodeUnder)
+    } else {
+        None
+    }
+}
 
 /// Clip the seam whose roof and floor are `first` and `second`, in either
 /// order (the roof is the higher on average), to the cuts: per node, Keep
@@ -3295,8 +3301,20 @@ pub(super) fn clip_seam_by_cuts(
     let no_memory = || anyhow::anyhow!("{}", tr!("cmd-cuts-to-surface-no-memory"));
     let mut slot: std::collections::HashMap<(usize, usize), u32> = std::collections::HashMap::new();
     let (mut plan, mut top, mut bottom, mut faces) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for face in first.mesh().face_vertex_indices_iter() {
+    let (mut faces_left_out, mut faces_off_lattice) = (0, 0);
+    let mut first_off_lattice: std::collections::HashSet<[u64; 2]> = std::collections::HashSet::new();
+    for (position, face) in first.mesh().face_vertex_indices_iter().enumerate() {
+        if position % CANCEL_STRIDE == 0 && cancel.is_cancelled() {
+            anyhow::bail!(crate::app::jobs::Cancelled);
+        }
         let Some(corners) = face.iter().map(|&index| shared(index)).collect::<Option<Vec<_>>>() else {
+            match left_out_reason(first, second, face) {
+                Some(LeftOut::OffLattice) => {
+                    faces_off_lattice += 1;
+                    first_off_lattice.extend(off_lattice_corners(first, face));
+                }
+                _ => faces_left_out += 1,
+            }
             continue;
         };
         let mut indices = [0u32; 3];
@@ -3313,6 +3331,26 @@ pub(super) fn clip_seam_by_cuts(
     }
     if faces.is_empty() {
         anyhow::bail!("{}", tr!("cmd-cuts-to-surface-not-one-lattice"));
+    }
+    // The second surface's faces the first cannot match are left out too.
+    for (position, face) in second.mesh().face_vertex_indices_iter().enumerate() {
+        if position % CANCEL_STRIDE == 0 && cancel.is_cancelled() {
+            anyhow::bail!(crate::app::jobs::Cancelled);
+        }
+        match left_out_reason(second, first, face) {
+            Some(LeftOut::OffLattice) => {
+                let vertices = second.mesh().vertices();
+                let over_ground_the_first_lacks = face
+                    .iter()
+                    .map(|&index| DVec2::new(vertices[index].x, vertices[index].y))
+                    .any(|at| second.node_at(at).is_some() && first.node_at(at).is_none());
+                if over_ground_the_first_lacks || !off_lattice_corners(second, face).all(|at| first_off_lattice.contains(&at)) {
+                    faces_off_lattice += 1;
+                }
+            }
+            Some(LeftOut::NoNodeUnder) => faces_left_out += 1,
+            None => {}
+        }
     }
     let mean_gap = top.iter().zip(&bottom).map(|(a, b)| a - b).sum::<f64>() / top.len() as f64;
     let swapped = mean_gap < 0.0;
@@ -3375,7 +3413,10 @@ pub(super) fn clip_seam_by_cuts(
     let mut renumber = vec![u32::MAX; plan.len()];
     let mut kept_nodes = Vec::new();
     let mut kept = Vec::new();
-    for face in faces {
+    for (position, face) in faces.into_iter().enumerate() {
+        if position % CANCEL_STRIDE == 0 && cancel.is_cancelled() {
+            anyhow::bail!(crate::app::jobs::Cancelled);
+        }
         if face.iter().any(|&index| flags[index as usize] & REMOVED != 0) {
             continue;
         }
@@ -3411,8 +3452,99 @@ pub(super) fn clip_seam_by_cuts(
         removed,
         uncovered,
         crossed,
+        faces_left_out,
+        faces_off_lattice,
         changed,
         swapped,
+    })
+}
+
+/// Read the seam and its limits, clip the seam to them and build the surfaces
+/// and solid, polling `cancel` between the reads.
+#[allow(clippy::too_many_arguments)]
+fn clip_seam_to_limits(
+    surfaces: Vec<(String, Arc<mesh_data::Triangulation>, Arc<TriangleBvh>)>,
+    upper_read: Option<(String, Arc<mesh_data::Triangulation>, Arc<TriangleBvh>)>,
+    lower_read: Option<(String, Arc<mesh_data::Triangulation>, Arc<TriangleBvh>)>,
+    upper_level: Option<f64>,
+    lower_level: Option<f64>,
+    depth: Option<f64>,
+    cancel: &CancelFlag,
+    progress: &crate::model::progress::Progress,
+) -> Result<ToSurfaceOutcome> {
+    let upper_surface = upper_read.map(|(_, mesh, spatial)| CutReader::new(mesh, spatial)).transpose()?;
+    if cancel.is_cancelled() {
+        anyhow::bail!(crate::app::jobs::Cancelled);
+    }
+    let ground = lower_read.map(|(_, mesh, spatial)| CutReader::new(mesh, spatial)).transpose()?;
+    if cancel.is_cancelled() {
+        anyhow::bail!(crate::app::jobs::Cancelled);
+    }
+    let upper = match (upper_surface.as_ref(), upper_level) {
+        (Some(surface), _) => Some(UpperCut::Surface(surface)),
+        (None, Some(level)) => Some(UpperCut::Level(level)),
+        (None, None) => None,
+    };
+    let lower = match (ground.as_ref(), depth, lower_level) {
+        (Some(ground), Some(depth), _) => Some(LowerCut::Depth { ground, depth }),
+        (Some(ground), None, _) => Some(LowerCut::Surface(ground)),
+        (None, _, Some(level)) => Some(LowerCut::Level(level)),
+        (None, _, None) => None,
+    };
+    let mut grids = Vec::with_capacity(2);
+    for (name, mesh, spatial) in surfaces {
+        match GridSurface::read(mesh, spatial) {
+            Ok(grid) => grids.push((name, grid)),
+            Err(problem) => return Ok(ToSurfaceOutcome::Refused(crate::app::commands::thickness_points::not_a_grid(&name, problem))),
+        }
+        if cancel.is_cancelled() {
+            anyhow::bail!(crate::app::jobs::Cancelled);
+        }
+    }
+    let [(first_name, first), (second_name, second)] = <[_; 2]>::try_from(grids).map_err(|_| anyhow::anyhow!("{}", tr!("cmd-cuts-to-surface-select-seam")))?;
+    let mut cut = clip_seam_by_cuts(&first, &second, upper.as_ref(), lower.as_ref(), cancel, &progress.phase(0.0, 0.6))?;
+    let (roof_name, floor_name) = if cut.swapped { (second_name, first_name) } else { (first_name, second_name) };
+    let seam = tr!("cmd-cuts-to-surface-seam", roof = roof_name.clone(), floor = floor_name.clone());
+    if !cut.changed {
+        return Ok(ToSurfaceOutcome::NotCut { seam, cut });
+    }
+    let named = |name: &str, word: String| crate::app::canvas::derived_surface_name(name, &word);
+    let faces = std::mem::take(&mut cut.faces);
+    let roof = session::build_generated_triangulation(
+        named(&roof_name, tr!("common-cut")),
+        std::mem::take(&mut cut.roof),
+        faces.clone(),
+        TriSurfaceType::Surface,
+        |_| Vec::new(),
+    )?;
+    let floor = session::build_generated_triangulation(
+        named(&floor_name, tr!("common-cut")),
+        std::mem::take(&mut cut.floor),
+        faces,
+        TriSurfaceType::Surface,
+        |_| Vec::new(),
+    )?;
+    let solid = seam_solid_or_refusal(
+        named(&roof_name, tr!("cmd-cuts-to-surface-solid")),
+        &roof.mesh,
+        &floor.mesh,
+        cancel,
+        &progress.phase(0.6, 1.0),
+    )?;
+    let mut generated = vec![roof, floor];
+    let (volume, refused) = match solid {
+        SeamSolid::Built(solid, volume) => {
+            generated.push(solid);
+            (Some(volume), None)
+        }
+        SeamSolid::Refused(reason) => (None, Some(reason)),
+    };
+    Ok(ToSurfaceOutcome::Made {
+        seam,
+        generated,
+        volume,
+        refused,
+        cut,
     })
 }
 
@@ -3549,9 +3681,9 @@ pub(super) fn merge_meshes(
     check()?;
     let second_over = drop_faces_over(second_over, &first_over);
     check()?;
-    let first_alone = outside_footprint(&first.mesh, &second.mesh, &progress.phase(0.5, 0.65))?;
+    let first_alone = outside_footprint(&first.mesh, second, &progress.phase(0.5, 0.65), cancel)?;
     check()?;
-    let second_alone = outside_footprint(&second.mesh, &first.mesh, &progress.phase(0.65, 0.8))?;
+    let second_alone = outside_footprint(&second.mesh, first, &progress.phase(0.65, 0.8), cancel)?;
     check()?;
 
     let mut vertices = Vec::new();
@@ -3643,21 +3775,31 @@ fn drop_faces_over(sheet: MergedSheet, over: &MergedSheet) -> MergedSheet {
 
 /// The part of `part` that lies outside `other`'s plan footprint: the faces
 /// clear of it whole, the faces across its rim as the pieces outside it.
-fn outside_footprint(part: &mesh_data::Triangulation, other: &mesh_data::Triangulation, progress: &crate::model::progress::Phase) -> Result<MergedSheet> {
-    let other_vertices = other.vertices();
-    let segments: Vec<[mesh_data::Vertex; 2]> = super::include::topology_boundary_edges(other)
-        .into_iter()
-        .map(|[from, to]| [other_vertices[from], other_vertices[to]])
-        .collect();
+///
+/// The footprint is where `other` has a face. Its rim edges themselves cut
+/// the plan into cells, and a cell is covered when `other` lies under its
+/// middle, so a hole is not footprint while an island in one is. A hole or
+/// gap 1 mm or less across loses its rim to the presence filter
+/// (`filter_presence_boundary_edges`) and is usually footprint.
+fn outside_footprint(part: &mesh_data::Triangulation, other: &PreparedReferenceSurface, progress: &crate::model::progress::Phase, cancel: &CancelFlag) -> Result<MergedSheet> {
+    let edges = super::include::topology_boundary_edges(&other.mesh);
     let mut vertices = part.vertices().to_vec();
     let mut faces: Vec<[u32; 3]> = Vec::new();
-    if segments.is_empty() {
+    if edges.is_empty() {
         faces.extend(part.face_indices());
         return Ok((vertices, faces));
     }
-    let rings = super::include::rings_from_boundary_segments_bridged(&segments, None).map_err(|_| anyhow::anyhow!(tr!("err-surf-merge-rim")))?;
-    let coverage = super::include::build_ring_coverage(&rings)?;
+    let cancelled = || -> Result<()> {
+        if cancel.is_cancelled() {
+            anyhow::bail!(crate::app::jobs::Cancelled);
+        }
+        Ok(())
+    };
+    cancelled()?;
+    let coverage = super::include::build_presence_coverage(&other.mesh, &other.spatial, edges)?;
+    cancelled()?;
     let affected = super::include::fragment_topology_faces_by_coverage(part, &coverage, progress);
+    cancelled()?;
     let mut cursor = 0usize;
     for (index, face) in part.face_indices().enumerate() {
         if affected.get(cursor).map(|(affected, _)| *affected) != Some(index) {

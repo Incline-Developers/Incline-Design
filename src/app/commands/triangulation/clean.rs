@@ -35,6 +35,10 @@ pub(super) enum HoleReason {
     /// Faces with no plan area were left out of the surface, so no hole is
     /// filled.
     FacesLeftOut,
+    /// A separate piece of the surface lies inside it.
+    Island,
+    /// Its edges do not close into one loop.
+    Unclosed,
 }
 
 /// A hole the clean left open.
@@ -88,24 +92,18 @@ pub(super) fn clean_mesh(mesh: &mesh_data::Triangulation, keep: FoldLayer, cance
         Ok(())
     };
 
-    let mut vertices = mesh.vertices().to_vec();
-    let weld = Weld::of(&vertices);
-    let all: Vec<usize> = (0..vertices.len()).collect();
-    merge_coincident(&mut vertices, &all, weld);
+    let (points, remap) = welded_points(mesh.vertices());
     check()?;
     progress.set_fraction(0.2);
-    let mut kept: HashMap<[u64; 3], u32> = HashMap::new();
-    let mut points = Vec::new();
-    let mut remap = Vec::with_capacity(vertices.len());
-    for vertex in &vertices {
-        // Adding zero turns -0.0 into 0.0, so the two are one point.
-        let key = [vertex.x, vertex.y, vertex.z].map(|value| (value + 0.0).to_bits());
-        remap.push(*kept.entry(key).or_insert_with(|| {
-            points.push(*vertex);
-            points.len() as u32 - 1
-        }));
+    // Only points a face uses count: a stray copy no face uses is just left
+    // out.
+    let mut used = vec![false; remap.len()];
+    let mut used_welded = vec![false; points.len()];
+    for index in mesh.face_indices().flatten() {
+        used[index as usize] = true;
+        used_welded[remap[index as usize] as usize] = true;
     }
-    report.points_welded = vertices.len() - points.len();
+    report.points_welded = used.iter().filter(|&&used| used).count() - used_welded.iter().filter(|&&used| used).count();
     let mut faces: Vec<[u32; 3]> = mesh.face_indices().map(|face| face.map(|index| remap[index as usize])).collect();
     let before = faces.len();
     faces.retain(|face| !collapsed(&face.map(|index| points[index as usize])));
@@ -117,8 +115,6 @@ pub(super) fn clean_mesh(mesh: &mesh_data::Triangulation, keep: FoldLayer, cance
     }
 
     let welded = mesh_data::Triangulation::from_vertices_and_faces(points, faces)?;
-    let (prepared, repaired) = single_valued_surface(&welded, keep)?;
-    report.repaired = repaired;
     // The faces with no plan area are left out, counted on the welded input,
     // since a repair is built from the faces with plan area and counts none.
     let tolerance = reference_xy_overlap_area_tolerance(&welded);
@@ -126,6 +122,11 @@ pub(super) fn clean_mesh(mesh: &mesh_data::Triangulation, keep: FoldLayer, cance
         .face_indices()
         .filter(|face| triangle_xy_area(face.map(|index| welded.vertices()[index as usize])).abs() <= tolerance)
         .count();
+    if report.vertical_faces_left_out == welded.face_count() {
+        anyhow::bail!(tr!("err-surf-clean-all-vertical"));
+    }
+    let (prepared, repaired) = single_valued_surface(&welded, keep)?;
+    report.repaired = repaired;
     check()?;
     progress.set_fraction(0.8);
     let vertices = prepared.mesh.vertices().to_vec();
@@ -140,8 +141,29 @@ pub(super) fn clean_mesh(mesh: &mesh_data::Triangulation, keep: FoldLayer, cance
     Ok(CleanedSurface { vertices, faces, report })
 }
 
+/// The points of `vertices` with coincident ones welded, and for each vertex
+/// the index of its point.
+pub(super) fn welded_points(vertices: &[mesh_data::Vertex]) -> (Vec<mesh_data::Vertex>, Vec<u32>) {
+    let mut vertices = vertices.to_vec();
+    let weld = Weld::of(&vertices);
+    let all: Vec<usize> = (0..vertices.len()).collect();
+    merge_coincident(&mut vertices, &all, weld);
+    let mut kept: HashMap<[u64; 3], u32> = HashMap::new();
+    let mut points = Vec::new();
+    let mut remap = Vec::with_capacity(vertices.len());
+    for vertex in &vertices {
+        // Adding zero turns -0.0 into 0.0, so the two are one point.
+        let key = [vertex.x, vertex.y, vertex.z].map(|value| (value + 0.0).to_bits());
+        remap.push(*kept.entry(key).or_insert_with(|| {
+            points.push(*vertex);
+            points.len() as u32 - 1
+        }));
+    }
+    (points, remap)
+}
+
 /// `faces` on only the points they use, kept in their own order.
-fn used_points(vertices: &[mesh_data::Vertex], faces: Vec<[u32; 3]>) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>) {
+pub(super) fn used_points(vertices: &[mesh_data::Vertex], faces: Vec<[u32; 3]>) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>) {
     let mut used = vec![false; vertices.len()];
     for index in faces.iter().flatten() {
         used[*index as usize] = true;
@@ -158,79 +180,175 @@ fn used_points(vertices: &[mesh_data::Vertex], faces: Vec<[u32; 3]>) -> (Vec<mes
     (kept, faces)
 }
 
+/// An edge only one face uses, run with that face on its left in plan.
+#[derive(Clone, Copy)]
+struct OpenEdge {
+    from: u32,
+    to: u32,
+    /// Whether the face runs it this way too.
+    forward: bool,
+}
+
 /// The patches that close the surface's flat holes, one per hole, and the
 /// holes left open. With `fill` false every hole is left open and listed.
+///
+/// Each open edge runs with its face on its left in plan, whichever way the
+/// face is wound, so an outer rim runs anticlockwise and a hole clockwise.
+/// At a point where rims meet, the walk turns into the gap it is tracing,
+/// so two holes that share a point are two holes, found the same way on
+/// every run. A hole with any of the surface inside it is never lidded.
 fn fill_holes(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]], fill: bool) -> (Vec<Vec<[u32; 3]>>, Vec<OpenHole>) {
-    // Each edge one face uses, as that face runs it with its third corner.
-    let mut uses: HashMap<(u32, u32), (u32, u32, u32, u32)> = HashMap::new();
-    for &[a, b, c] in faces {
-        for (from, to, third) in [(a, b, c), (b, c, a), (c, a, b)] {
-            if from == to {
-                continue;
+    // Every face's run of each of its edges, low and high corner first, then
+    // as the face runs it with its third corner: an edge one face runs alone
+    // is open.
+    let mut sides: Vec<[u32; 5]> = faces
+        .iter()
+        .flat_map(|&[a, b, c]| [(a, b, c), (b, c, a), (c, a, b)])
+        .filter(|(from, to, _)| from != to)
+        .map(|(from, to, third)| [from.min(to), from.max(to), from, to, third])
+        .collect();
+    sides.sort_unstable_by_key(|side| (side[0], side[1]));
+    let point = |index: u32| vertices[index as usize];
+    let up = |[a, b, c]: [mesh_data::Vertex; 3]| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    // How most faces are wound, for the faces whose own side cannot be told.
+    let clockwise = 2 * faces.iter().filter(|face| up(face.map(point)) < 0.0).count() > faces.len();
+    let open: Vec<OpenEdge> = sides
+        .chunk_by(|a, b| a[..2] == b[..2])
+        .filter(|run| run.len() == 1)
+        .map(|run| {
+            let [_, _, from, to, third] = run[0];
+            let (a, b) = (point(from), point(to));
+            let (bx, by) = (b.x - a.x, b.y - a.y);
+            let side = up([a, b, point(third)]);
+            // A face with next to no plan area says nothing of its side, so
+            // it is taken to lie the way most faces are wound.
+            let flip = if side.abs() > 1.0e-9 * (bx * bx + by * by) { side < 0.0 } else { clockwise };
+            if flip {
+                OpenEdge {
+                    from: to,
+                    to: from,
+                    forward: false,
+                }
+            } else {
+                OpenEdge { from, to, forward: true }
             }
-            uses.entry((from.min(to), from.max(to))).and_modify(|entry| entry.0 += 1).or_insert((1, from, to, third));
-        }
-    }
-    let open: Vec<(u32, u32, u32)> = uses.values().filter(|entry| entry.0 == 1).map(|&(_, from, to, third)| (from, to, third)).collect();
-    let mut outgoing: HashMap<u32, Vec<usize>> = HashMap::new();
-    for (index, &(from, _, _)) in open.iter().enumerate() {
-        outgoing.entry(from).or_default().push(index);
-    }
-    let mut starts: Vec<usize> = (0..open.len()).collect();
-    starts.sort_unstable_by_key(|&index| (open[index].0, open[index].1));
+        })
+        .collect();
+    let mut order: Vec<usize> = (0..open.len()).collect();
+    order.sort_unstable_by_key(|&edge| (open[edge].from, open[edge].to));
+    let leaving = |at: u32| {
+        let first = order.partition_point(|&edge| open[edge].from < at);
+        let last = order.partition_point(|&edge| open[edge].from <= at);
+        &order[first..last]
+    };
+    // Arriving along `edge`, the edge that turns least anticlockwise from
+    // the way back: the one bounding the gap on the walk's right.
+    let next = |edge: usize| -> Option<usize> {
+        let OpenEdge { from: back, to: at, .. } = open[edge];
+        let (here, back) = (point(at), point(back));
+        let behind = (back.y - here.y).atan2(back.x - here.x);
+        let turn = |edge: usize| {
+            let to = point(open[edge].to);
+            let turn = ((to.y - here.y).atan2(to.x - here.x) - behind).rem_euclid(std::f64::consts::TAU);
+            if turn > 0.0 { turn } else { std::f64::consts::TAU }
+        };
+        leaving(at).iter().copied().min_by(|&x, &y| turn(x).total_cmp(&turn(y)).then(open[x].to.cmp(&open[y].to)))
+    };
 
+    // Face middles in x order, to find what lies inside a hole; made only if
+    // a hole is ever looked into.
+    let mut middles: Option<Vec<(f64, f64)>> = None;
     let mut used = vec![false; open.len()];
     let (mut patches, mut left) = (Vec::new(), Vec::new());
-    for start in starts {
+    for &start in &order {
         if used[start] {
             continue;
         }
         used[start] = true;
-        let mut ring = vec![open[start].0];
         let mut ring_edges = vec![start];
-        let mut current = start;
         let closed = loop {
-            let at = open[current].1;
-            if at == open[start].0 {
-                break true;
-            }
-            let Some(&next) = outgoing.get(&at).into_iter().flatten().find(|&&edge| !used[edge]) else {
+            let Some(edge) = next(ring_edges[ring_edges.len() - 1]) else {
                 break false;
             };
-            used[next] = true;
-            ring.push(open[next].0);
-            ring_edges.push(next);
-            current = next;
+            if edge == start {
+                break true;
+            }
+            if used[edge] {
+                break false;
+            }
+            used[edge] = true;
+            ring_edges.push(edge);
         };
-        if !closed || ring.len() < 3 {
+        let rim: Vec<[mesh_data::Vertex; 2]> = ring_edges.iter().map(|&edge| [point(open[edge].from), point(open[edge].to)]).collect();
+        if !closed {
+            left.push(open_hole(&rim, HoleReason::Unclosed));
             continue;
         }
-        // The surface lies outside a hole's rim and inside its own outer one.
-        // The rim's face with the most plan area is judged at its centre: a
-        // corner can sit on the ring, where inside and outside are not told
-        // apart, and a sliver's centre is all but on it.
-        let polygon: Vec<mesh_data::Vertex> = ring.iter().map(|&index| vertices[index as usize]).collect();
-        let Some([a, b, c]) = ring_edges
-            .iter()
-            .map(|&edge| [open[edge].0, open[edge].1, open[edge].2].map(|index| vertices[index as usize]))
-            .max_by(|x, y| triangle_xy_area(*x).abs().total_cmp(&triangle_xy_area(*y).abs()))
-        else {
+        if ring_edges.len() < 3 {
             continue;
-        };
-        let centre = mesh_data::Vertex::new((a.x + b.x + c.x) / 3.0, (a.y + b.y + c.y) / 3.0, (a.z + b.z + c.z) / 3.0);
-        if ring_contains(&polygon, centre) {
+        }
+        let ring: Vec<u32> = ring_edges.iter().map(|&edge| open[edge].from).collect();
+        let polygon: Vec<mesh_data::Vertex> = ring.iter().map(|&index| point(index)).collect();
+        // Twice the signed area, taken from the first point so that nothing
+        // is lost far from the origin: an outer rim is anticlockwise.
+        let first = polygon[0];
+        let (area, perimeter) = polygon.iter().zip(polygon.iter().cycle().skip(1)).fold((0.0, 0.0), |(area, perimeter), (a, b)| {
+            let cross = (a.x - first.x) * (b.y - first.y) - (a.y - first.y) * (b.x - first.x);
+            (area + cross, perimeter + (b.x - a.x).hypot(b.y - a.y))
+        });
+        if area > 1.0e-12 * perimeter * perimeter {
             continue;
         }
         if !fill {
-            left.push(open_hole(&polygon, HoleReason::FacesLeftOut));
-        } else if !rim_is_flat(&polygon) {
-            left.push(open_hole(&polygon, HoleReason::NotFlat));
-        } else if ring.len() > FLAT_HOLE_POINTS {
-            left.push(open_hole(&polygon, HoleReason::TooManyPoints));
+            left.push(open_hole(&rim, HoleReason::FacesLeftOut));
+            continue;
+        }
+        if !rim_is_flat(&polygon) {
+            left.push(open_hole(&rim, HoleReason::NotFlat));
+            continue;
+        }
+        if ring.len() > FLAT_HOLE_POINTS {
+            left.push(open_hole(&rim, HoleReason::TooManyPoints));
+            continue;
+        }
+        // A rim through one point twice runs round a piece of the surface
+        // that touches it there.
+        let mut corners = ring.clone();
+        corners.sort_unstable();
+        let pinched = corners.windows(2).any(|pair| pair[0] == pair[1]);
+        let middles = middles.get_or_insert_with(|| {
+            let mut middles: Vec<(f64, f64)> = faces
+                .iter()
+                .map(|face| {
+                    let [a, b, c] = face.map(point);
+                    ((a.x + b.x + c.x) / 3.0, (a.y + b.y + c.y) / 3.0)
+                })
+                .collect();
+            middles.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+            middles
+        });
+        let (low, high) = polygon
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), vertex| (low.min(vertex.y), high.max(vertex.y)));
+        let (west, east) = polygon
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(west, east), vertex| (west.min(vertex.x), east.max(vertex.x)));
+        let from = middles.partition_point(|middle| middle.0 < west);
+        let holds_surface = pinched
+            || middles[from..]
+                .iter()
+                .take_while(|middle| middle.0 <= east)
+                .any(|&(x, y)| (low..=high).contains(&y) && ring_contains(&polygon, mesh_data::Vertex::new(x, y, 0.0)));
+        if holds_surface {
+            left.push(open_hole(&rim, HoleReason::Island));
         } else {
+            // The patch runs each rim edge against the face beside it, so it
+            // faces the way most of those faces do.
+            let forward = ring_edges.iter().filter(|&&edge| open[edge].forward).count();
+            let ring: Vec<u32> = if 2 * forward >= ring_edges.len() { ring } else { ring.into_iter().rev().collect() };
             let patch = fill_ring(vertices, &ring);
             if patch.is_empty() {
-                left.push(open_hole(&polygon, HoleReason::NotFlat));
+                left.push(open_hole(&rim, HoleReason::NotFlat));
             } else {
                 patches.push(patch);
             }
@@ -274,19 +392,32 @@ fn fill_ring(vertices: &[mesh_data::Vertex], ring: &[u32]) -> Vec<[u32; 3]> {
         .collect()
 }
 
-fn open_hole(polygon: &[mesh_data::Vertex], reason: HoleReason) -> OpenHole {
-    let edges: Vec<[mesh_data::Vertex; 2]> = polygon.iter().zip(polygon.iter().cycle().skip(1)).map(|(&a, &b)| [a, b]).collect();
+/// A hole left open, from its rim's edges.
+fn open_hole(rim: &[[mesh_data::Vertex; 2]], reason: HoleReason) -> OpenHole {
     let length = |[a, b]: &[mesh_data::Vertex; 2]| ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt();
-    let longest = edges.iter().max_by(|x, y| length(x).total_cmp(&length(y))).copied().unwrap_or([polygon[0]; 2]);
+    let longest = rim
+        .iter()
+        .max_by(|x, y| length(x).total_cmp(&length(y)))
+        .copied()
+        .unwrap_or([mesh_data::Vertex::new(0.0, 0.0, 0.0); 2]);
     OpenHole {
         reason,
-        edges: edges.len(),
-        length: edges.iter().map(length).sum(),
+        edges: rim.len(),
+        length: rim.iter().map(length).sum(),
         at: mesh_data::Vertex::new(
             (longest[0].x + longest[1].x) / 2.0,
             (longest[0].y + longest[1].y) / 2.0,
             (longest[0].z + longest[1].z) / 2.0,
         ),
+    }
+}
+
+/// What is logged when a clean leaves the surface as it was.
+fn unchanged_message(surface: &str, holes_left: usize) -> String {
+    if holes_left > 0 {
+        tr!("cmd-clean-surface-nothing-closed", surface = surface.to_string())
+    } else {
+        tr!("cmd-clean-surface-nothing-changed", surface = surface.to_string())
     }
 }
 
@@ -309,10 +440,13 @@ impl App<'_> {
             CleanFoldKeep::Lower => FoldLayer::Lowest,
         };
         // The holes left open travel beside the surface, to be logged once it
-        // is in.
+        // is in. A surface the clean leaves as it was makes no copy.
         let surface = source_name.clone();
-        let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<(GeneratedTriangulationLog, Vec<OpenHole>, usize)> {
+        let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<(Option<GeneratedTriangulationLog>, Vec<OpenHole>, usize)> {
             let CleanedSurface { vertices, faces, report } = clean_mesh(&mesh, layer, cancel, &progress.phase(0.0, 0.9))?;
+            if vertices == mesh.vertices() && faces.iter().copied().eq(mesh.face_indices()) {
+                return Ok((None, report.holes_left, report.vertical_faces_left_out));
+            }
             let generated = session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, |_| Vec::new())?.with_quality(quality);
             progress.set_fraction(0.95);
             let message = tr!(
@@ -324,15 +458,24 @@ impl App<'_> {
                 filled = report.holes_filled.to_string(),
                 left = report.holes_left.len().to_string()
             );
-            Ok((GeneratedTriangulationLog { generated, message }, report.holes_left, report.vertical_faces_left_out))
+            Ok((Some(GeneratedTriangulationLog { generated, message }), report.holes_left, report.vertical_faces_left_out))
         };
-        let apply = move |app: &mut App, result: Result<(GeneratedTriangulationLog, Vec<OpenHole>, usize)>| {
+        let apply = move |app: &mut App, result: Result<(Option<GeneratedTriangulationLog>, Vec<OpenHole>, usize)>| {
             let (result, holes, vertical) = match result {
-                Ok((log, holes, vertical)) => (Ok(log), holes, vertical),
-                Err(error) => (Err(error), Vec::new(), 0),
+                Ok((log, holes, vertical)) => (log.map(Ok), holes, vertical),
+                Err(error) => (Some(Err(error)), Vec::new(), 0),
             };
-            let made = result.is_ok();
-            app.apply_generated_triangulation_job(result, &[]);
+            let made = match result {
+                Some(result) => {
+                    let made = result.is_ok();
+                    app.apply_generated_triangulation_job(result, &[]);
+                    made
+                }
+                None => {
+                    userspace_log!("{}", unchanged_message(&surface, holes.len()));
+                    true
+                }
+            };
             if made {
                 if vertical > 0 {
                     userspace_warn!("{}", tr!("cmd-cuts-ignored-vertical-faces-of", surface = surface.clone(), count = vertical.to_string()));
@@ -352,6 +495,8 @@ impl App<'_> {
                             z = z
                         ),
                         HoleReason::FacesLeftOut => tr!("cmd-clean-surface-hole-faces-left-out", edges = edges, length = length, x = x, y = y, z = z),
+                        HoleReason::Island => tr!("cmd-clean-surface-hole-island", edges = edges, length = length, x = x, y = y, z = z),
+                        HoleReason::Unclosed => tr!("cmd-clean-surface-hole-unclosed", edges = edges, length = length, x = x, y = y, z = z),
                     };
                     userspace_log!("{}", message);
                 }

@@ -5210,6 +5210,10 @@ impl EditorState {
         self.hole_misfit_table = None;
         self.seam_surface_dialog = None;
         self.tri_cut_to_open = false;
+        self.tri_smooth_open = false;
+        self.tri_clean_open = false;
+        self.tri_difference_open = false;
+        self.tri_merge_open = false;
         self.tri_cut_to_seam = [None; 2];
         self.seam_table = None;
         self.seam_rename_dialog = None;

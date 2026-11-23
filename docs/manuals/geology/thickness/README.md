@@ -152,16 +152,19 @@ The seam's roof and floor are two grid surfaces on one grid, such as a reference
 | **Keep above** | **Surface**, none chosen | Nothing stays below this limit. Source **Surface**, **RL**, or **Depth below a surface**. Empty clips from above only. |
 | **Surface** | None | The limit surface. Choose it in the dialog or click it in the view. |
 | **RL (m)** | Empty | A level in metres; the limit is flat at that height. |
-| **Depth (m)** | The depth last used in this project | Metres below the surface chosen, for **Keep above**; kept with the project. |
+| **Depth (m)** | The depth of the last clip in this project that made surfaces | Metres below the surface chosen, for **Keep above**; kept with the project once a clip makes surfaces with it. A clip that changes nothing leaves the depth, and the project, as they were. |
 
 **Keep below** is applied first, then **Keep above**.
 ### What it refuses and why
 - **Clip** stays greyed until both seam slots are filled and one limit row is complete and none is half typed. Notes: "The RL must be a number of metres"; "The cut depth must be a number of metres above 0". Error alert: "Command failed: Choose Keep below, Keep above, or both".
+- **Clip** also stays greyed while a seam surface or a limit is a quality surface (a **Difference between Surfaces** result, say). Its hint gives the surface's name, then "is a quality surface", the quality, and ": its height is not an RL, and this tool takes RLs".
 - The seam's own surfaces are not offered as limits; clicking one in the view warns "A surface being clipped cannot also be its own limit".
 - Warning alerts: the surface's name, then "cannot be measured against: it is not one regular grid of square cells, as Build Surface makes", and "Triangulation operation failed: The roof and floor do not share a lattice: select a seam's roof and floor built on one grid". A floor from **Thickness Surfaces** shares its roof's grid.
 - Warning alert "Triangulation operation failed: Nothing of the seam is left between the limits, so nothing was made".
 - If every node already lies within the limits, the console gives the roof's and floor's names, then "not clipped: every node already lies within", the limits, and ", so no surface was made", for example "Roof and Floor not clipped: every node already lies within keep below RL 77, so no surface was made".
 - Warning alert with the roof's and floor's names and a count, for example "Roof and Floor: 12 node(s) have no limit surface under them and were left as they were": the limit surface does not cover the seam there; the alert lists the "Made ..." line with it.
+- Warning alert with the roof's and floor's names and a count, for example "Roof and Floor: 8 face(s) were left out, where the other seam surface has no node under a corner": one surface reaches past the other there, in either slot.
+- Warning alert with the roof's and floor's names and a count, for example "Roof and Floor: 4 face(s) were left out, where a corner lies off the grid's lattice, as along a trimmed edge": a corner is not a node of the grid, as where a grid was clipped by a polyline. A place trimmed alike in both surfaces is counted once.
 ### Related tools
 [Thickness Surfaces](#3-thickness-surfaces), [Build Surface](../surfaces/README.md#3-build-surface).
 

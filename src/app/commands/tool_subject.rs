@@ -194,7 +194,7 @@ impl App<'_> {
         let name = surface.name.clone();
         self.editor.tri_smooth_surface_id = Some(id);
         if self.editor.tri_smooth_name_auto {
-            self.editor.tri_smooth_name_input = crate::app::canvas::derived_triangulation_name(&name, &tr!("cmd-commands-smoothed"));
+            self.editor.tri_smooth_name_input = crate::app::canvas::derived_surface_name(&name, &tr!("cmd-commands-smoothed"));
         }
     }
 
@@ -215,7 +215,7 @@ impl App<'_> {
         let name = surface.name.clone();
         self.editor.tri_clean_surface_id = Some(id);
         if self.editor.tri_clean_name_auto {
-            self.editor.tri_clean_name_input = crate::app::canvas::derived_triangulation_name(&name, &tr!("cmd-commands-cleaned"));
+            self.editor.tri_clean_name_input = crate::app::canvas::derived_surface_name(&name, &tr!("cmd-commands-cleaned"));
         }
     }
 

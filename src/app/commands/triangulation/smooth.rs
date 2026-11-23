@@ -8,26 +8,17 @@ use crate::{
 /// were held.
 pub(super) type SmoothedSurface = (Vec<mesh_data::Vertex>, Vec<[u32; 3]>, usize, usize);
 
-/// Merge points at exactly the same position and remap the faces onto them,
-/// dropping any face left with two corners on one point.
+/// Merge points that coincide, to within a weld as Clean Surface takes it,
+/// and remap the faces onto them, dropping any face left with two corners on
+/// one point. Points no face uses are left out.
 fn weld_points(mesh: &mesh_data::Triangulation) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>) {
-    let mut kept: HashMap<[u64; 3], u32> = HashMap::new();
-    let mut points = Vec::new();
-    let mut remap = Vec::with_capacity(mesh.vertices().len());
-    for vertex in mesh.vertices() {
-        // Adding zero turns -0.0 into 0.0, so the two are one point.
-        let key = [vertex.x, vertex.y, vertex.z].map(|value| (value + 0.0).to_bits());
-        remap.push(*kept.entry(key).or_insert_with(|| {
-            points.push(*vertex);
-            points.len() as u32 - 1
-        }));
-    }
-    let faces = mesh
+    let (points, remap) = super::clean::welded_points(mesh.vertices());
+    let faces: Vec<[u32; 3]> = mesh
         .face_indices()
         .map(|face| face.map(|index| remap[index as usize]))
         .filter(|face| face[0] != face[1] && face[1] != face[2] && face[0] != face[2])
         .collect();
-    (points, faces)
+    super::clean::used_points(&points, faces)
 }
 
 // Taubin's two-step pass: a shrinking step then a slightly larger swelling
