@@ -256,6 +256,57 @@ fn stitch_on(
     accepted(solution, replay.ok_or(None)?)
 }
 
+/// `input` ending at interval `cut`: what a tail is screened over.
+fn capped_input(input: &BlendInput, cut: usize) -> BlendInput {
+    let mut capped = input.clone();
+    capped.intervals.truncate(cut);
+    for loader in &mut capped.loaders {
+        loader.rates.retain(|rate| rate.interval < cut);
+    }
+    for truck in &mut capped.trucks {
+        truck.hours.truncate(cut);
+    }
+    let end_h = capped.intervals.last().map_or(0.0, |interval| interval.end_h);
+    if let Some(chain) = capped.drill_blast.as_mut() {
+        for agent in &mut chain.agents {
+            agent.rates.truncate(cut);
+        }
+        if let Some(timeline) = chain.fixed.as_mut() {
+            uncleared_after(timeline, end_h);
+        }
+    }
+    capped
+}
+
+/// `timeline` as a horizon ending at `end_h` sees it: a blast cleared after
+/// then not started, nor worked, so the ground over it need not be dug first.
+fn uncleared_after(timeline: &mut DrillBlastTimeline, end_h: f64) {
+    let mut later = BTreeSet::new();
+    for (index, events) in timeline.blasts.iter_mut().enumerate() {
+        if events.cleared_h.is_some_and(|cleared| cleared > end_h) {
+            *events = Default::default();
+            later.insert(index);
+        }
+    }
+    timeline.work.retain(|work| !later.contains(&work.blast));
+}
+
+/// `best`'s value over `capped`'s intervals, its rows after them dropped;
+/// `None` when the replay refuses it there.
+fn capped_value(capped: &BlendInput, best: &Best, cancel: &AtomicBool) -> Option<f64> {
+    let cut = capped.intervals.len();
+    let mut solution = best.solution.clone();
+    solution.movements.retain(|row| row.interval < cut);
+    solution.durations.retain(|(interval, _), _| *interval < cut);
+    solution.chunks.retain(|row| row.interval < cut);
+    solution.parts.retain(|(interval, _)| *interval < cut);
+    if let Some(timeline) = solution.drill_blast.as_mut() {
+        uncleared_after(timeline, capped.intervals.last().map_or(0.0, |interval| interval.end_h));
+    }
+    let replay = replay_as_published(capped, &mut solution, cancel)?;
+    replay.is_valid().then(|| replay.ranked_objective())
+}
+
 /// The dispatch from interval `first` to the end, following `targets`, after
 /// `best`'s intervals before it.
 fn redispatch(input: &BlendInput, best: &Best, first: usize, targets: &PlanTargets, timing: &Timing, cancel: &AtomicBool) -> Tried {
@@ -300,6 +351,7 @@ fn chain_at(input: &BlendInput, best: &Best, first: usize) -> Option<ChainState>
         for (ground, tonnes) in rows {
             if let Some(slot) = left.get_mut(ground) {
                 *slot -= tonnes;
+                chain.dug(*ground);
             }
         }
     }
@@ -372,14 +424,24 @@ pub(crate) struct Progress {
 }
 
 impl Progress {
+    /// [`super::super::progress::relative_gap`], as every gap is read.
     pub(crate) fn gap(&self) -> Option<f64> {
-        self.bound.filter(|bound| *bound > 0.0).map(|bound| (bound - self.value).max(0.0) / bound)
+        super::super::progress::relative_gap(self.value, self.bound?)
     }
 }
 
 /// Target weights tried for each window, relative to the spread of values
 /// per tonne: (follow, overrun).
 const WEIGHTS: [(f64, f64); 3] = [(1.0, 0.0), (1.0, 1.0), (2.0, 2.0)];
+
+/// How many days past its window a tail is dispatched to be compared with
+/// the others and with the schedule it starts from. Only the best of them,
+/// and only where it is worth more than that schedule over the same days, is
+/// dispatched again to the end of the horizon. The days after a window
+/// change in every tail, but on a long horizon tails of years cost minutes
+/// each where these cost seconds; most windows find none worth more, and
+/// those that do dispatch one tail to the end rather than every one.
+const TAIL_SCREEN_DAYS: u32 = 30;
 
 /// How long the search waits for its background plan to stop.
 const BACKGROUND_GRACE: Duration = Duration::from_secs(2);
@@ -1266,6 +1328,22 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
             // search holds, or, when none of those improves, the tails with
             // the chain live.
             let incumbent = schedule_fingerprint(&best.solution);
+            // The horizon the tails are screened over, and the schedule
+            // they start from valued over it; none where that horizon
+            // reaches the end, or the schedule cannot be valued over it.
+            let screen = input
+                .intervals
+                .iter()
+                .position(|interval| interval.start_h >= f64::from((first_day + length + TAIL_SCREEN_DAYS) * 24) - 1e-9)
+                .and_then(|cut| {
+                    let fixed = capped_input(input, cut);
+                    let held = capped_value(&fixed, &best, cancel)?;
+                    let mut live = fixed.clone();
+                    if let Some(chain) = live.drill_blast.as_mut() {
+                        chain.fixed = None;
+                    }
+                    Some((fixed, live, held))
+                });
             let mut evaluate = |live_round: bool, tally: &mut Tally| {
                 if started.elapsed() >= search_budget() || cancel.load(Ordering::Relaxed) || (live_round && live.is_none()) {
                     return None;
@@ -1284,16 +1362,20 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                         if follow == 1.0 && overrun == 1.0 {
                             candidate.time_window(input, &timed, &covered);
                         }
-                        let found = if live_round {
-                            redispatch_live(input, live.as_ref()?, &best, from, opening.as_ref(), &candidate, timing, cancel)
-                        } else {
-                            redispatch(input, &best, from, &candidate, timing, cancel)
+                        let found = match (&screen, live_round) {
+                            (Some((fixed, live, _)), true) => redispatch_live(fixed, live, &best, from, opening.as_ref(), &candidate, timing, cancel),
+                            (Some((fixed, _, _)), false) => redispatch(fixed, &best, from, &candidate, timing, cancel),
+                            (None, true) => redispatch_live(input, live.as_ref()?, &best, from, opening.as_ref(), &candidate, timing, cancel),
+                            (None, false) => redispatch(input, &best, from, &candidate, timing, cancel),
                         };
                         let proposal = targets_fingerprint(&candidate);
                         Some((found.map(|found| (found, candidate)), proposal))
                     })
                     .collect();
                 tally.tails_s += dispatching.elapsed().as_secs_f64();
+                // A screened tail is measured against the schedule over the
+                // same days.
+                let value = screen.as_ref().map_or(value, |(_, _, held)| *held);
                 let found: Vec<_> = found
                     .into_iter()
                     .flatten()
@@ -1325,7 +1407,37 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                 if let Some((found, _)) = &chosen {
                     tally.follow(input, &bar, &planned, &found.solution, &covered);
                 }
-                chosen
+                if screen.is_none() {
+                    return chosen;
+                }
+                // The screened tail worth more than the schedule, dispatched
+                // to the end. One worth no more is returned as it is: valued
+                // over fewer days, it never passes for an improvement.
+                match chosen {
+                    Some((screened, candidate)) if screened.value() > value + 1e-7 * value.abs().max(1.0) => {
+                        let full = Instant::now();
+                        let found = if live_round {
+                            redispatch_live(input, live.as_ref()?, &best, from, opening.as_ref(), &candidate, &tally.timing, cancel)
+                        } else {
+                            redispatch(input, &best, from, &candidate, &tally.timing, cancel)
+                        };
+                        tally.tails_s += full.elapsed().as_secs_f64();
+                        tally.dispatched += 1;
+                        match found {
+                            Ok(found) => {
+                                tally.valid += 1;
+                                Some((found, candidate))
+                            }
+                            Err(reason) => {
+                                if let Some(reason) = reason {
+                                    *tally.rejected.entry(reason).or_default() += 1;
+                                }
+                                None
+                            }
+                        }
+                    }
+                    other => other,
+                }
             };
             // The chain goes live only when the held timeline takes none of
             // the tails. Where it takes one but values it lower, the live

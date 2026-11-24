@@ -461,7 +461,12 @@ impl crate::app::App<'_> {
                 let mut used: Vec<u64> = stored
                     .map(|entry| entry.blasts.iter().filter_map(|blast| blast.name.parse().ok()).collect())
                     .unwrap_or_default();
-                for face in faces {
+                // The grid's own edges, to be drawn as automatic.
+                let panel_edges = solid.blasting.bench_panels(bench_base).map(|size| {
+                    let plans: Vec<arrangement::Face> = faces.iter().map(|face| face.face.clone()).collect();
+                    arrangement::panel_edges(&plans, size)
+                });
+                for (index, face) in faces.iter().enumerate() {
                     let name = if solid.exclusions.blast_too_small(face.area) {
                         String::new()
                     } else {
@@ -494,6 +499,7 @@ impl crate::app::App<'_> {
                             .iter()
                             .map(|ring| ring.iter().map(|point| DVec3::new(point.x, point.y, face.bench.top)).collect())
                             .collect(),
+                        panel_edges: panel_edges.as_ref().map(|edges| edges[index].clone()).unwrap_or_default(),
                     });
                 }
             }

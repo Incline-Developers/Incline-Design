@@ -31,6 +31,10 @@ const BLAST_OUTLINE_WIDTH: f32 = 2.5;
 /// Ground taken out of mining: still outlined, so it can be picked and put
 /// back, but grey against the live outlines around it.
 const EXCLUDED_OUTLINE_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 0.9];
+/// The panel grid's edges: a darker shade of the blast outline, and thinner,
+/// so the automatic division reads apart from the cuts the planner drew.
+const PANEL_EDGE_COLOR: [f32; 4] = [0.15, 0.4, 0.55, 1.0];
+const PANEL_EDGE_WIDTH: f32 = 1.5;
 
 /// The Road Network's selected dig block, and the line to where it joins
 /// the roads: the selection orange the rest of the scene uses.
@@ -140,19 +144,45 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     for outline in editor.blasting_outlines.iter().filter(|_| editor.is_blasting_step()) {
         let selected = editor.selected_blast == Some(crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
         overlay.fade_size_m = if selected { 0.0 } else { plan_fade_size(&outline.rings) };
-        for ring in &outline.rings {
-            let verts: Vec<crate::model::PolyVertex> = ring.iter().map(|point| crate::model::PolyVertex::straight(*point)).collect();
-            tessellate_polyline_stroke(
-                &mut overlay,
-                &verts,
-                true,
-                if selected { BLAST_OUTLINE_WIDTH * 2.5 } else { BLAST_OUTLINE_WIDTH },
-                match (selected, outline.excluded) {
-                    (true, _) => [1.0, 0.7, 0.1, 1.0],
-                    (false, true) => EXCLUDED_OUTLINE_COLOR,
-                    (false, false) => PREVIEW_COLOR,
-                },
-            );
+        let width = if selected { BLAST_OUTLINE_WIDTH * 2.5 } else { BLAST_OUTLINE_WIDTH };
+        let color = match (selected, outline.excluded) {
+            (true, _) => [1.0, 0.7, 0.1, 1.0],
+            (false, true) => EXCLUDED_OUTLINE_COLOR,
+            (false, false) => PREVIEW_COLOR,
+        };
+        for (index, ring) in outline.rings.iter().enumerate() {
+            let panels = outline
+                .panel_edges
+                .get(index)
+                .filter(|edges| !selected && edges.len() == ring.len() && edges.iter().any(|edge| *edge));
+            let Some(panels) = panels else {
+                let verts: Vec<crate::model::PolyVertex> = ring.iter().map(|point| crate::model::PolyVertex::straight(*point)).collect();
+                tessellate_polyline_stroke(&mut overlay, &verts, true, width, color);
+                continue;
+            };
+            // The grid's edges thin and dark, every other run of edges as the
+            // outline is drawn, starting after a grid edge so no run wraps.
+            let start = panels.iter().position(|edge| *edge).map_or(0, |first| first + 1);
+            let mut run: Vec<crate::model::PolyVertex> = Vec::new();
+            for step in 0..ring.len() {
+                let edge = (start + step) % ring.len();
+                let (a, b) = (ring[edge], ring[(edge + 1) % ring.len()]);
+                if panels[edge] {
+                    if run.len() >= 2 {
+                        tessellate_polyline_stroke(&mut overlay, &run, false, width, color);
+                    }
+                    run.clear();
+                    draw_line(&mut overlay, a, b, PANEL_EDGE_WIDTH, PANEL_EDGE_COLOR);
+                } else {
+                    if run.is_empty() {
+                        run.push(crate::model::PolyVertex::straight(a));
+                    }
+                    run.push(crate::model::PolyVertex::straight(b));
+                }
+            }
+            if run.len() >= 2 {
+                tessellate_polyline_stroke(&mut overlay, &run, false, width, color);
+            }
         }
     }
 

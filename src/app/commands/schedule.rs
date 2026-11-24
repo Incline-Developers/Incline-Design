@@ -15,7 +15,7 @@ use crate::{
     i18n::tr,
     model::{
         Command, ReserveFieldId,
-        schedule::{BarId, LoaderAgentId, LoaderClassId, SchedulePlan, ScheduleResult},
+        schedule::{BarId, LoaderAgentId, LoaderClassId, SchedulePlan, ScheduleResult, scenario_cells::CellOverride},
     },
     ui::state::ScheduleEdit,
     userspace_warn,
@@ -112,7 +112,7 @@ impl crate::app::App<'_> {
                 Ok(())
             }),
             ScheduleEdit::MoveMachine { agent, before } => self.edit_schedule(|plan| plan.move_machine(agent, before)),
-            ScheduleEdit::SetCalendarCells { edits } => self.set_calendar_cells(edits),
+            ScheduleEdit::SetCalendarCells { edits } => self.set_mine_cells(edits.into_iter().map(CellOverride::Loader).collect()),
             ScheduleEdit::SetTonnageField(field) => self.set_tonnage_field(field),
             ScheduleEdit::SetUnmeasuredAsZero(zero) => self.edit_schedule(|plan| {
                 plan.set_unmeasured_as_zero(zero);
@@ -150,10 +150,12 @@ impl crate::app::App<'_> {
             ScheduleEdit::AddDestination { name, kind } => self.add_destination(name, kind),
             ScheduleEdit::RenameDestination { destination, name } => self.edit_routing(|routing| routing.rename_standalone(destination, &name)),
             ScheduleEdit::DeleteDestination(destination) => self.delete_destination(destination),
-            ScheduleEdit::SetGradeTargetCells { edits } => self.edit_schedule(|plan| plan.set_grade_target_cells(&edits)),
+            ScheduleEdit::SetGradeTargetCells { edits } => self.set_mine_cells(edits.into_iter().map(CellOverride::Grade).collect()),
             ScheduleEdit::SetDestinationCapacity { destination, capacity_t } => self.set_destination_capacity(destination, capacity_t),
-            ScheduleEdit::SetCrusherCells { edits } => self.edit_routing(|routing| routing.set_crusher_cells(&edits)),
-            ScheduleEdit::SetPileModeCells { edits } => self.edit_schedule(|plan| plan.set_pile_mode_cells(&edits)),
+            ScheduleEdit::SetCrusherCells { edits } => self.set_mine_cells(edits.into_iter().map(CellOverride::Crusher).collect()),
+            ScheduleEdit::SetPileModeCells { edits } => self.set_mine_cells(edits.into_iter().map(CellOverride::PileMode).collect()),
+            ScheduleEdit::SetScenarioCells(cells) => self.edit_schedule(|plan| plan.set_scenario_cells(&cells)),
+            ScheduleEdit::ResetScenarioCells(addresses) => self.edit_schedule(|plan| plan.reset_scenario_cells(&addresses)),
             ScheduleEdit::SetStockpileOperating {
                 destination,
                 simultaneous,
@@ -188,7 +190,7 @@ impl crate::app::App<'_> {
             } => self.edit_trucks(|trucks| trucks.set_class_haulage(class, speeds, maximum_speed_kph, maximum_grade, dump_time_s)),
             ScheduleEdit::SetDestinationDumpTime { destination, seconds } => self.edit_routing(|routing| routing.set_dump_time_s(destination, seconds)),
             ScheduleEdit::SetClassSpotTime { class, seconds } => self.edit_schedule(|plan| plan.set_class_spot_time(class, seconds)),
-            ScheduleEdit::SetTruckCells { edits } => self.edit_trucks(|trucks| trucks.set_truck_cells(&edits)),
+            ScheduleEdit::SetTruckCells { edits } => self.set_mine_cells(edits.into_iter().map(CellOverride::Truck).collect()),
             ScheduleEdit::AddTruckingRule { name, classes } => self.add_trucking_rule(name, classes),
             ScheduleEdit::DuplicateTruckingRule(rule) => self.duplicate_trucking_rule(rule),
             ScheduleEdit::DeleteTruckingRule(rule) => self.delete_trucking_rule(rule),
@@ -199,6 +201,30 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetTruckingRuleDestinations { rule, destinations } => self.edit_trucks(|trucks| trucks.set_rule_destinations(rule, destinations)),
             ScheduleEdit::SetTruckingRuleClasses { rule, classes } => self.edit_trucks(|trucks| trucks.set_rule_classes(rule, classes)),
             ScheduleEdit::AddCashflowRule { name } => self.add_cashflow_rule(name),
+            ScheduleEdit::AddDependency => {
+                let mut added = None;
+                self.edit_schedule(|plan| {
+                    added = Some(plan.dependencies_mut().add()?);
+                    Ok(())
+                });
+                if added.is_some() {
+                    self.editor.schedule_selected_dependency = added;
+                }
+            }
+            ScheduleEdit::SetDependency { id, ground, after } => self.edit_schedule(|plan| plan.dependencies_mut().set(id, ground, after)),
+            ScheduleEdit::DeleteDependency(id) => self.edit_schedule(|plan| plan.dependencies_mut().remove(id)),
+            ScheduleEdit::AddLoaderLimit => {
+                let mut added = None;
+                self.edit_schedule(|plan| {
+                    added = Some(plan.loader_limits_mut().add()?);
+                    Ok(())
+                });
+                if added.is_some() {
+                    self.editor.schedule_selected_loader_limit = added;
+                }
+            }
+            ScheduleEdit::SetLoaderLimit(changed) => self.edit_schedule(|plan| plan.loader_limits_mut().set(changed)),
+            ScheduleEdit::DeleteLoaderLimit(id) => self.edit_schedule(|plan| plan.loader_limits_mut().remove(id)),
             ScheduleEdit::DuplicateCashflowRule(rule) => self.duplicate_cashflow_rule(rule),
             ScheduleEdit::DeleteCashflowRule(rule) => self.delete_cashflow_rule(rule),
             ScheduleEdit::RenameCashflowRule { rule, name } => self.edit_cashflow(|cashflow| cashflow.rename_rule(rule, &name)),
@@ -264,6 +290,7 @@ impl crate::app::App<'_> {
                 insert_lane,
             } => self.add_reclaim_bar(name, agent, priority, window, sources, maximum_t, insert_lane),
             ScheduleEdit::SetReclaim { bar, sources, maximum_t } => self.set_reclaim(bar, sources, maximum_t),
+            ScheduleEdit::SetAutoSources { bar, sources } => self.edit_schedule(|plan| plan.set_auto_sources(bar, sources).map(|_| ())),
             ScheduleEdit::SetExperimentHorizon { end_day, interval_h } => self.edit_schedule(|plan| {
                 // One edit, both fields: a horizon and the resolution it is
                 // split at are typed together and are one undo step.
@@ -271,13 +298,41 @@ impl crate::app::App<'_> {
                 plan.experiment_mut().set_interval_h(interval_h)
             }),
             ScheduleEdit::SetStartDate(date) => self.edit_schedule(|plan| {
+                // A horizon of whole periods stays that many periods: months
+                // without a date are 28 days, and 120 of them read as 111
+                // calendar months once a date says where months start.
+                let before = plan.period_scale();
+                let end_day = plan.experiment().planning_end_day;
+                let periods = before.count(end_day);
+                let whole = before.first_day(periods) == end_day;
                 plan.set_start_date(date);
+                let after = plan.period_scale();
+                if whole && after != before {
+                    let day = after.first_day(periods);
+                    if day != end_day && day != u32::MAX {
+                        plan.experiment_mut().set_planning_end_day(day)?;
+                    }
+                }
                 Ok(())
             }),
-            ScheduleEdit::SetPeriodColors { periods, color } => self.edit_schedule(|plan| {
-                plan.set_period_colors(&periods, color);
+            ScheduleEdit::SetPeriodColors { days, color } => self.edit_schedule(|plan| {
+                plan.set_period_colors(&days, color);
                 Ok(())
             }),
+            ScheduleEdit::OpenScenario(id) => self.open_scenario(id),
+            ScheduleEdit::AddScenario { copy } => self.edit_schedule(|plan| {
+                let name = plan.next_scenario_name();
+                plan.add_scenario(&name, copy).map(|_| ())
+            }),
+            ScheduleEdit::RenameScenario { id, name } => self.edit_schedule(|plan| plan.rename_scenario(id, &name)),
+            ScheduleEdit::DeleteScenario(id) => self.edit_schedule(|plan| plan.delete_scenario(id)),
+            ScheduleEdit::SetScenarioBase { id, base } => self.edit_schedule(|plan| plan.set_scenario_base(id, base)),
+            ScheduleEdit::SetPeriodUnit(unit) => self.edit_schedule(|plan| {
+                plan.set_period_unit(unit);
+                Ok(())
+            }),
+            ScheduleEdit::SetDiscountRate(rate) => self.edit_schedule(|plan| plan.experiment_mut().set_discount_rate(rate)),
+            ScheduleEdit::SetPlanStop(stop) => self.edit_schedule(|plan| plan.experiment_mut().set_plan_stop(stop)),
             ScheduleEdit::SetExperimentSolveLimits { seconds, relative_gap } => self.edit_schedule(|plan| {
                 plan.experiment_mut().set_solve_seconds(seconds)?;
                 plan.experiment_mut().set_relative_gap(relative_gap)
@@ -297,6 +352,15 @@ impl crate::app::App<'_> {
                 leader,
                 insert_lane,
             } => self.add_follow_bar(agent, priority, window, leader, insert_lane),
+            ScheduleEdit::AddAutoBar {
+                agent,
+                priority,
+                window,
+                insert_lane,
+            } => self.add_auto_bar(agent, priority, window, insert_lane),
+            ScheduleEdit::ConvertAutoBar(bar) => self.convert_auto_bar(bar, None, None),
+            ScheduleEdit::ConvertAutoBarUntil { bar, at_h } => self.convert_auto_bar(bar, Some(at_h), None),
+            ScheduleEdit::FixAutoBarInScenario { bar, at_h, scenario } => self.convert_auto_bar(bar, Some(at_h), Some(scenario)),
             ScheduleEdit::SetFollowLeader { bar, leader } => self.edit_schedule(|plan| plan.set_follow_leader(bar, leader)),
             ScheduleEdit::AddDelayType { name, color } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.add_type(&name, color).map(|_| ()))),
             ScheduleEdit::RenameDelayType { kind, name } => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.rename_type(kind, &name))),
@@ -616,7 +680,7 @@ impl crate::app::App<'_> {
         };
         let before = document.schedule().clone();
         let mut after = before.clone();
-        if let Err(error) = edit(&mut after) {
+        if let Err(error) = after.on_mine(edit) {
             userspace_warn!("{}", error.message());
             return;
         }
@@ -627,6 +691,66 @@ impl crate::app::App<'_> {
             before: Box::new(before),
             after: Box::new(after),
         });
+    }
+
+    fn open_scenario(&mut self, id: crate::model::schedule::scenarios::ScenarioId) {
+        self.edit_schedule(|plan| plan.open_scenario(id));
+    }
+
+    /// The active project and the scenario open in it.
+    pub(crate) fn open_scenario_marker(&self) -> Option<(u32, crate::model::schedule::scenarios::ScenarioId)> {
+        self.workspace
+            .active_project()
+            .map(|project| (project.runtime_id, project.project.document.schedule().scenarios().open))
+    }
+
+    /// Follow the open scenario from where it was last followed, however it
+    /// changed - opened,
+    /// added, deleted, or an undo of any of those: the one left keeps its
+    /// result, to show again when it is opened, unless it was deleted, and
+    /// the opened one shows its own if one was kept, currentness deciding,
+    /// as for any held result, whether it still stands. What each was saved
+    /// with goes with it, as the file keeps it.
+    pub(crate) fn follow_open_scenario(&mut self) {
+        /// Results kept for scenarios not open, at most.
+        const KEPT: usize = 4;
+        let now = self.open_scenario_marker();
+        let before = std::mem::replace(&mut self.followed_scenario, now);
+        let (Some((runtime, leaving)), Some((now, opened))) = (before, now) else {
+            return;
+        };
+        if runtime != now || leaving == opened {
+            return;
+        }
+        let deleted = self
+            .workspace
+            .active_document()
+            .is_some_and(|document| document.schedule().scenarios().get(leaving).is_none());
+        if let Some(document) = self.workspace.active_document_mut() {
+            document.swap_saved_schedule(leaving, opened);
+        }
+        self.schedule_scenario_results.retain(|(at, scenario, _)| !(*at == runtime && *scenario == leaving));
+        let held = self.schedule_calculation.take();
+        match held {
+            Some(held) if !deleted => {
+                self.schedule_scenario_results.push((runtime, leaving, held));
+                if self.schedule_scenario_results.len() > KEPT {
+                    self.schedule_scenario_results.remove(0);
+                }
+            }
+            // A long schedule is too slow to free in a frame.
+            Some(held) => rayon::spawn(move || drop(held)),
+            None => {}
+        }
+        if let Some(position) = self.schedule_scenario_results.iter().position(|(at, scenario, _)| *at == runtime && *scenario == opened) {
+            let (_, _, kept) = self.schedule_scenario_results.remove(position);
+            self.hold_schedule(kept);
+        }
+        // What Auto last tried was the scenario left's: one opened with the
+        // same inputs - a new scenario starting from it, with no bars of its
+        // own - is calculated all the same.
+        self.schedule_auto_attempted = None;
+        self.redraw_requested = true;
     }
 
     fn set_schedule_name(&mut self, name: String) {
@@ -694,8 +818,9 @@ impl crate::app::App<'_> {
         }
     }
 
-    fn set_calendar_cells(&mut self, edits: Vec<crate::model::schedule::CalendarCellEdit>) {
-        self.edit_schedule(|plan| plan.set_calendar_cells(&edits));
+    /// Calendar cells set for every scenario.
+    fn set_mine_cells(&mut self, cells: Vec<CellOverride>) {
+        self.edit_schedule(|plan| plan.set_mine_cells(&cells));
     }
 
     /// Nominate the field read as tonnes.
@@ -797,6 +922,107 @@ impl crate::app::App<'_> {
         if let Some(id) = added {
             self.editor.schedule_selected_bars = std::iter::once(id).collect();
             self.editor.schedule_selected_member = None;
+        }
+    }
+
+    /// Add an automatic bar, and select it.
+    fn add_auto_bar(&mut self, agent: Option<LoaderAgentId>, priority: u32, window: crate::model::schedule::WorkWindow, insert_lane: bool) {
+        let mut added = None;
+        self.edit_schedule(|plan| {
+            // A lane of its own is opened first, so the bar never shares one.
+            if insert_lane {
+                plan.open_lane(agent, priority);
+            }
+            added = Some(plan.add_auto_bar(agent, priority, window)?);
+            Ok(())
+        });
+        if let Some(id) = added {
+            self.editor.schedule_selected_bars = std::iter::once(id).collect();
+            self.editor.schedule_selected_member = None;
+        }
+    }
+
+    /// Make an automatic bar a dig bar of the blocks the current schedule
+    /// dealt it, in the order it digs them.
+    /// Make an automatic bar a dig bar of the blocks the schedule gave it -
+    /// with `until`, only those it started before that hour, the rest of the
+    /// bar staying automatic.
+    /// Convert an automatic bar's ground into a dig sequence: all of it, or
+    /// what it started before `until`, in this scenario, or - with `into` -
+    /// as a dig bar of that scenario, one this starts from, leaving the
+    /// automatic bar to plan around it.
+    fn convert_auto_bar(&mut self, bar: crate::model::schedule::BarId, until: Option<f64>, into: Option<crate::model::schedule::scenarios::ScenarioId>) {
+        let blocks = self.editor.schedule_result.as_ref().and_then(|schedule| {
+            let blocks = schedule.blocks_of(bar)?;
+            let Some(until) = until else { return Some(blocks.to_vec()) };
+            // When the bar first dug each block.
+            let mut started: std::collections::HashMap<crate::model::DigBlockId, f64> = std::collections::HashMap::new();
+            for execution in schedule.executions.iter().filter(|execution| execution.bar == bar) {
+                if let crate::model::schedule::result::WorkSource::Block(block) = execution.source {
+                    let first = started.entry(block).or_insert(execution.start_h);
+                    *first = first.min(execution.start_h);
+                }
+            }
+            Some(blocks.iter().copied().filter(|block| started.get(block).is_some_and(|at| *at < until)).collect())
+        });
+        // The stockpiles it reclaims, which a full conversion keeps as a
+        // reclaim bar; a split leaves them to the automatic bar it keeps.
+        let stockpiles: Vec<_> = match (until, self.workspace.active_project()) {
+            (None, Some(project)) => {
+                let document = &project.project.document;
+                let plan = document.schedule();
+                match plan.bar(bar).and_then(|held| held.auto()).map(|auto| auto.sources.stockpiles()) {
+                    Some(Some(chosen)) => chosen,
+                    Some(None) => crate::model::schedule::destinations::available(document.solids(), plan.routing())
+                        .into_iter()
+                        .filter(|view| view.kind == crate::model::schedule::destinations::DestinationKind::Stockpile)
+                        .map(|view| view.id)
+                        .collect(),
+                    None => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        };
+        let digs = self
+            .workspace
+            .active_project()
+            .and_then(|project| project.project.document.schedule().bar(bar).and_then(|held| held.auto()).map(|auto| auto.sources.ground()))
+            .is_none_or(|ground| ground.is_none_or(|scopes| !scopes.is_empty()));
+        // A bar that only reclaims is a reclaim bar of its stockpiles.
+        if !digs && until.is_none() && !stockpiles.is_empty() {
+            self.edit_schedule(|plan| plan.convert_auto_bar(bar, Vec::new(), stockpiles));
+            return;
+        }
+        let Some(blocks) = blocks.filter(|blocks| !blocks.is_empty()) else {
+            userspace_warn!("{}", tr!("auto-bar-convert-needs-schedule"));
+            return;
+        };
+        let snapshot = match self.planning_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(reason) => {
+                userspace_warn!("{}", reason.describe());
+                return;
+            }
+        };
+        // Every block must be one the current Solids run holds: a schedule
+        // from an earlier run names ground that may no longer be cut that way.
+        let by_id: std::collections::HashMap<_, _> = snapshot.blocks.iter().map(|block| (block.id, block)).collect();
+        if blocks.iter().any(|id| !by_id.contains_key(id)) {
+            userspace_warn!("{}", tr!("auto-bar-convert-needs-schedule"));
+            return;
+        }
+        let members: Vec<_> = blocks.iter().filter_map(|id| by_id.get(id)).map(|block| self.dig_block_reference(block)).collect();
+        match (until, into) {
+            (Some(at_h), Some(scenario)) => self.edit_schedule(|plan| {
+                let held = plan.bar(bar).ok_or(crate::model::schedule::ScheduleError::UnknownBar)?;
+                let window = crate::model::schedule::WorkWindow {
+                    start_h: held.window.start_h,
+                    end_h: Some(at_h),
+                };
+                plan.fix_in_scenario(scenario, held.agent, window, members).map(|_| ())
+            }),
+            (Some(at_h), None) => self.edit_schedule(|plan| plan.split_auto_bar(bar, at_h, members).map(|_| ())),
+            (None, _) => self.edit_schedule(|plan| plan.convert_auto_bar(bar, members, stockpiles)),
         }
     }
 

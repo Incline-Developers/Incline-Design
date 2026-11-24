@@ -269,11 +269,16 @@ pub(crate) enum DayByDay {
 
 /// The hourly dispatch schedule (see [`greedy`]), replayed against the
 /// whole horizon.
-pub(crate) fn hourly_dispatch(out: &mut ScheduleCompletion, cancel: &CancelFlag) -> DayByDay {
+pub(crate) fn hourly_dispatch(out: &mut ScheduleCompletion, cancel: &CancelFlag, dispatched: Option<greedy::Dispatched>) -> DayByDay {
     let started = Instant::now();
     // The dispatcher replays what it returns, to choose between its
-    // schedules, so that time is counted as the solver's.
-    let (solution, checked) = match greedy::dispatch_cancellable(&out.input, &cancel.signal()) {
+    // schedules, so that time is counted as the solver's. One capture made
+    // already, of this same input, is not made again.
+    let found = match dispatched {
+        Some(found) => Ok(Some(found)),
+        None => greedy::dispatch_cancellable(&out.input, &cancel.signal()),
+    };
+    let (solution, checked) = match found {
         Ok(Some(found)) => (found.solution, found.replay),
         Ok(None) => return DayByDay::Stop(SolveTermination::Cancelled, crate::i18n::tr!("err-sched-cancelled-dispatch")),
         Err(reason) => return DayByDay::Failed(reason),
@@ -356,16 +361,7 @@ pub(crate) fn adopt_seed(out: &mut ScheduleCompletion, found: Seed, bound: Optio
     }
 }
 
-/// SCIP's own definition, so the figure reads the same as a solver gap.
-/// A schedule equal to its bound has no gap, a zero-valued one included;
-/// any other gap over zero has no relative size.
-pub(crate) fn relative_gap(raw: f64, bound: f64) -> Option<f64> {
-    if raw == bound && raw.is_finite() {
-        return Some(0.0);
-    }
-    let smaller = raw.abs().min(bound.abs());
-    (smaller > 0.0 && raw.signum() == bound.signum()).then(|| (bound - raw).abs() / smaller)
-}
+pub(crate) use crate::model::schedule::optimisation::progress::relative_gap;
 
 /// The relaxation bound, unless a replayed schedule is worth more than it.
 ///
@@ -775,6 +771,25 @@ pub(crate) fn restore_saved(
     Some(out)
 }
 
+/// `start`, a schedule of the captured input, on the reduced one it was
+/// reduced to, replayed there: what the run would otherwise dispatch to
+/// start from. `None` when the replay will not have it, and the run
+/// dispatches after all.
+fn resumed(input: &BlendInput, reduced: &Reduced, start: &BlendSolution, cancel: &CancelFlag) -> Option<greedy::Dispatched> {
+    let mut worked = input.clone();
+    if let (Some(chain), Some(timeline)) = (worked.drill_blast.as_mut(), start.drill_blast.as_ref()) {
+        chain.fixed = Some(timeline.clone());
+    }
+    let mut solution = reduced.compress(start);
+    let stop = AtomicBool::new(cancel.is_cancelled());
+    let replay = replay_as_published(&worked, &mut solution, &stop).filter(ReplayReport::is_valid);
+    if replay.is_none() {
+        log::info!("the schedule shown did not replay on the reduced model, so the run dispatched its own");
+    }
+    replay.map(|replay| greedy::Dispatched { solution, replay })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_schedule(
     input: Arc<BlendInput>,
     identity: ScheduleRunIdentity,
@@ -782,6 +797,8 @@ pub(crate) fn execute_schedule(
     cancel: &CancelFlag,
     activity: &ScheduleActivity,
     early: &dyn Fn(&ScheduleCompletion),
+    dispatched: Option<greedy::Dispatched>,
+    start: Option<Arc<crate::model::schedule::optimisation::blended::replay::BlendSolution>>,
 ) -> ScheduleCompletion {
     let mut out = ScheduleCompletion::new(identity, options, input);
     if cancel.is_cancelled() {
@@ -814,10 +831,24 @@ pub(crate) fn execute_schedule(
     let captured = Arc::clone(&out.input);
     let reduced = Reduced::new(&captured);
     out.input = Arc::new(reduced.input.clone());
-    let early = |shown: &ScheduleCompletion| early(&mapped_back(shown.clone(), &reduced, &captured));
     activity.set(3);
     activity.stage(ImproveStage::FirstSchedule);
-    let attempt = hourly_dispatch(&mut out, cancel);
+    // Improve from the schedule on screen starts from that same schedule,
+    // over the same model: showing it again would only take the time to map
+    // it back and replay it, which on a large mine is seconds of the budget.
+    let resumed = if dispatched.is_none() {
+        start.and_then(|start| resumed(&out.input, &reduced, &start, cancel))
+    } else {
+        None
+    };
+    let shown_already = resumed.is_some();
+    let dispatched = dispatched.or(resumed);
+    let early = |shown: &ScheduleCompletion| {
+        if !shown_already || shown.day_by_day.as_ref().is_none_or(|summary| summary.role != DayByDayRole::Early) {
+            early(&mapped_back(shown.clone(), &reduced, &captured));
+        }
+    };
+    let attempt = hourly_dispatch(&mut out, cancel, dispatched);
     if !options.first_schedule_only {
         let out = super::scip_blend::improve(out, attempt, budget_started, cancel, activity, &early);
         return mapped_back(out, &reduced, &captured);

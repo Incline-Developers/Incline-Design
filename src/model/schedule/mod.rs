@@ -17,14 +17,18 @@ pub(crate) mod calendar;
 pub(crate) mod calendar_views;
 pub(crate) mod cashflow;
 pub(crate) mod delays;
+pub(crate) mod dependencies;
 pub(crate) mod destinations;
 pub(crate) mod drill_blast;
 pub(crate) mod experiment;
 pub(crate) mod grade_targets;
 pub(crate) mod inventory;
+pub(crate) mod loader_limits;
 pub(crate) mod optimisation;
 pub(crate) mod periods;
 pub(crate) mod result;
+pub(crate) mod scenario_cells;
+pub(crate) mod scenarios;
 pub(crate) mod sequence;
 pub(crate) mod stockpile_operation;
 pub(crate) mod trucking;
@@ -137,6 +141,22 @@ pub(crate) enum BarWork {
     /// own open blast bar has next, its rate adding to whatever is working
     /// them. See [`drill_blast`].
     Follow(FollowWork),
+    /// Ground nobody has sequenced, dug in an order the schedule works out:
+    /// everything the loader's and the other loaders' dig bars leave. The
+    /// order is a result of each calculation, never stored here.
+    Auto(AutoWork),
+}
+
+/// An automatic bar's own settings.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AutoWork {
+    /// What it works: the ground of these pits, benches and flitches, and
+    /// these stockpiles, reclaimed while it has nothing to dig. Everything
+    /// by default, so a bar digs and reclaims; Pits alone only digs, and
+    /// Stockpiles alone only reclaims.
+    #[serde(default, skip_serializing_if = "destinations::MovementSourceSelection::is_all")]
+    pub(crate) sources: destinations::MovementSourceSelection,
 }
 
 /// A follow bar's own settings: the machine it follows, `None` once that
@@ -343,14 +363,14 @@ impl ScheduleBar {
     pub(crate) fn members(&self) -> &[DigBlockRef] {
         match &self.work {
             BarWork::Dig(order) => order.members(),
-            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => &[],
+            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => &[],
         }
     }
 
     pub(crate) fn dig_order(&self) -> Option<&DigOrder> {
         match &self.work {
             BarWork::Dig(order) => Some(order),
-            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => None,
+            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => None,
         }
     }
 
@@ -365,14 +385,27 @@ impl ScheduleBar {
     pub(crate) fn reclaim(&self) -> Option<&ReclaimWork> {
         match &self.work {
             BarWork::Reclaim(work) => Some(work),
-            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => None,
+            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => None,
         }
     }
 
     pub(crate) fn delay(&self) -> Option<&DelayWork> {
         match &self.work {
             BarWork::Delay(work) => Some(work),
-            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Blast(_) | BarWork::Follow(_) => None,
+            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => None,
+        }
+    }
+
+    /// Whether the schedule works out what this bar digs.
+    pub(crate) fn is_auto(&self) -> bool {
+        matches!(self.work, BarWork::Auto(_))
+    }
+
+    /// An automatic bar's settings, if this is one.
+    pub(crate) fn auto(&self) -> Option<&AutoWork> {
+        match &self.work {
+            BarWork::Auto(work) => Some(work),
+            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => None,
         }
     }
 
@@ -583,6 +616,12 @@ pub(crate) enum ScheduleError {
     InvalidValue,
     /// An id that names no cashflow rule in this plan.
     UnknownCashflowRule,
+    /// An id that names no dependency in this plan, or a side that is no
+    /// band at all.
+    UnknownDependency,
+    /// An id that names no loader limit in this plan, or a scope that is no
+    /// band at all.
+    UnknownLoaderLimit,
     InvalidGradeTarget,
     /// A summed coefficient or movement value no finite number can express.
     UnrepresentableValue,
@@ -644,6 +683,12 @@ pub(crate) enum ScheduleError {
     /// A class whose kind cannot change while machines of it hold bars of
     /// the old kind's work.
     KindInUse(Vec<String>),
+    /// An id that names no scenario in this plan.
+    UnknownScenario,
+    /// The only scenario: a project always has one.
+    LastScenario,
+    /// A scenario set to start from itself, or from one that starts from it.
+    ScenarioRing,
 }
 
 impl ScheduleError {
@@ -665,6 +710,9 @@ impl ScheduleError {
             Self::IdsExhausted => tr!("schedule-error-ids-exhausted"),
             Self::DuplicateId => tr!("schedule-error-duplicate-id"),
             Self::UnknownBar => tr!("schedule-error-unknown-bar"),
+            Self::UnknownScenario => tr!("schedule-error-unknown-scenario"),
+            Self::LastScenario => tr!("schedule-error-last-scenario"),
+            Self::ScenarioRing => tr!("schedule-error-scenario-ring"),
             Self::UnknownMember => tr!("schedule-error-unknown-member"),
             Self::DuplicateMember => tr!("schedule-error-duplicate-member"),
             Self::MalformedReference => tr!("schedule-error-malformed-reference"),
@@ -694,6 +742,8 @@ impl ScheduleError {
             Self::InvalidValue => tr!("cashflow-error-invalid-value"),
             Self::InvalidGradeTarget => tr!("grade-target-invalid"),
             Self::UnknownCashflowRule => tr!("cashflow-error-unknown-rule"),
+            Self::UnknownDependency => tr!("dependency-error-unknown"),
+            Self::UnknownLoaderLimit => tr!("loader-limit-error-unknown"),
             Self::UnrepresentableValue => tr!("cashflow-error-unrepresentable"),
             Self::InvalidLotTonnes => tr!("inventory-error-invalid-tonnes"),
             Self::InvalidLotValue => tr!("inventory-error-invalid-value"),
@@ -829,6 +879,15 @@ pub(crate) struct SchedulePlan {
     /// The Calendar's saved views; see [`calendar_views`].
     #[serde(default)]
     calendar_views: calendar_views::CalendarViews,
+    /// Ground that waits for other ground; see [`dependencies`].
+    #[serde(default, skip_serializing_if = "dependencies::Dependencies::is_pristine")]
+    dependencies: dependencies::Dependencies,
+    /// How many loaders may work in one area; see [`loader_limits`].
+    #[serde(default, skip_serializing_if = "loader_limits::LoaderLimits::is_pristine")]
+    loader_limits: loader_limits::LoaderLimits,
+    /// The project's other schedules, and which is open; see [`scenarios`].
+    #[serde(default, skip_serializing_if = "scenarios::Scenarios::is_empty")]
+    scenarios: scenarios::Scenarios,
 }
 
 /// The order the fleet is listed in: machine kinds as groups, and machines
@@ -912,6 +971,9 @@ impl Default for SchedulePlan {
             auto_run: AutoRun::default(),
             machine_order: MachineOrder::default(),
             calendar_views: calendar_views::CalendarViews::default(),
+            dependencies: dependencies::Dependencies::default(),
+            loader_limits: loader_limits::LoaderLimits::default(),
+            scenarios: scenarios::Scenarios::default(),
         }
     }
 }
@@ -924,6 +986,58 @@ impl Default for SchedulePlan {
 /// exactly what this refuses. Two names differing only outside ASCII -
 /// `Löffel` and `LÖFFEL` - are therefore two names. Widening that is a single
 /// change here plus the two UI comparisons that mirror it.
+/// Fold bars into a plan's saved-content fingerprint.
+fn hash_bars<H: std::hash::Hasher>(bars: &[ScheduleBar], hasher: &mut H) {
+    use std::hash::Hash;
+    for bar in bars {
+        bar.id.hash(hasher);
+        bar.name.hash(hasher);
+        match &bar.work {
+            BarWork::Dig(_) => 0u8.hash(hasher),
+            BarWork::Auto(work) => {
+                5u8.hash(hasher);
+                destinations::hash_selection(&work.sources, hasher);
+            }
+            BarWork::Reclaim(work) => {
+                1u8.hash(hasher);
+                work.sources.hash(hasher);
+                work.maximum_t.map(f64::to_bits).hash(hasher);
+            }
+            BarWork::Delay(work) => {
+                2u8.hash(hasher);
+                work.kind.hash(hasher);
+            }
+            BarWork::Blast(order) => {
+                3u8.hash(hasher);
+                for member in &order.members {
+                    member.solid.hash(hasher);
+                    member.bench.to_bits().hash(hasher);
+                    member.anchor.map(f64::to_bits).hash(hasher);
+                }
+            }
+            BarWork::Follow(work) => {
+                4u8.hash(hasher);
+                work.leader.hash(hasher);
+            }
+        }
+        bar.agent.hash(hasher);
+        bar.priority.hash(hasher);
+        bar.window.start_h.to_bits().hash(hasher);
+        bar.window.end_h.map(f64::to_bits).hash(hasher);
+        for member in bar.members() {
+            member.solid.hash(hasher);
+            member.source.hash(hasher);
+            member.flitch_base.to_bits().hash(hasher);
+            member.flitch_top.to_bits().hash(hasher);
+            member.anchor[0].to_bits().hash(hasher);
+            member.anchor[1].to_bits().hash(hasher);
+            member.plan_area.to_bits().hash(hasher);
+            member.footprint.hash(hasher);
+            member.volume.map(f64::to_bits).hash(hasher);
+        }
+    }
+}
+
 fn same_name(left: &str, right: &str) -> bool {
     left.trim().eq_ignore_ascii_case(right.trim())
 }
@@ -963,6 +1077,8 @@ impl SchedulePlan {
             && self.periods == periods::SchedulePeriods::default()
             && self.machine_order == MachineOrder::default()
             && self.calendar_views.is_empty()
+            && self.dependencies.is_empty()
+            && self.loader_limits.is_empty()
     }
 
     /// No visible content or retired identities to preserve in a save/import.
@@ -973,6 +1089,8 @@ impl SchedulePlan {
             && self.next_bar_id == 0
             && self.trucks.is_pristine()
             && self.cashflow.is_pristine()
+            && self.dependencies.is_pristine()
+            && self.loader_limits.is_pristine()
             && self.auto_run == AutoRun::default()
     }
 
@@ -995,6 +1113,9 @@ impl SchedulePlan {
         self.trucks.raise_allocator_to(&other.trucks);
         self.cashflow.raise_allocator_to(&other.cashflow);
         self.delays.raise_allocator_to(&other.delays);
+        self.dependencies.raise_allocator_to(&other.dependencies);
+        self.loader_limits.raise_allocator_to(&other.loader_limits);
+        self.scenarios.raise_allocator_to(&other.scenarios);
     }
 
     pub(crate) fn delays(&self) -> &DelayConfig {
@@ -1011,14 +1132,24 @@ impl SchedulePlan {
         self.periods.start_date = date;
     }
 
-    /// Mark `periods` with `color`, or clear their marks.
-    pub(crate) fn set_period_colors(&mut self, periods: &[u32], color: Option<[u8; 3]>) {
-        for period in periods {
+    /// Mark `days` (Day 1 is 0) with `color`, or clear their marks.
+    pub(crate) fn set_period_colors(&mut self, days: &[u32], color: Option<[u8; 3]>) {
+        for day in days {
             match color {
-                Some(color) => self.periods.colors.insert(*period, color),
-                None => self.periods.colors.remove(period),
+                Some(color) => self.periods.colors.insert(*day, color),
+                None => self.periods.colors.remove(day),
             };
         }
+    }
+
+    /// Which days each period of the open horizon covers.
+    pub(crate) fn period_scale(&self) -> periods::PeriodScale {
+        self.periods.scale()
+    }
+
+    /// Read the open horizon in days, weeks or months.
+    pub(crate) fn set_period_unit(&mut self, unit: periods::PeriodUnit) {
+        self.periods.unit = unit;
     }
 
     pub(crate) fn agent_ids(&self) -> Vec<LoaderAgentId> {
@@ -1027,9 +1158,17 @@ impl SchedulePlan {
 
     /// Delete a delay type, refused while any bar, list or roster is of it.
     pub(crate) fn remove_delay_type(&mut self, id: DelayTypeId) -> ScheduleResult {
+        // Bars of every scenario, whichever is open.
+        let stashed = self
+            .scenarios
+            .list
+            .iter()
+            .filter_map(|scenario| scenario.stash.as_ref())
+            .flat_map(|stash| stash.bars.iter());
         let mut users: Vec<String> = self
             .bars
             .iter()
+            .chain(stashed)
             .filter(|bar| bar.delay().is_some_and(|work| work.kind == Some(id)))
             .map(|bar| if bar.has_custom_name() { bar.name.clone() } else { tr!("delay-bar-unnamed") })
             .collect();
@@ -1177,6 +1316,22 @@ impl SchedulePlan {
 
     pub(crate) fn cashflow_mut(&mut self) -> &mut CashflowConfig {
         &mut self.cashflow
+    }
+
+    pub(crate) fn dependencies(&self) -> &dependencies::Dependencies {
+        &self.dependencies
+    }
+
+    pub(crate) fn dependencies_mut(&mut self) -> &mut dependencies::Dependencies {
+        &mut self.dependencies
+    }
+
+    pub(crate) fn loader_limits(&self) -> &loader_limits::LoaderLimits {
+        &self.loader_limits
+    }
+
+    pub(crate) fn loader_limits_mut(&mut self) -> &mut loader_limits::LoaderLimits {
+        &mut self.loader_limits
     }
 
     pub(crate) fn classes(&self) -> &[LoaderClass] {
@@ -1370,18 +1525,22 @@ impl SchedulePlan {
         self.agents.retain(|agent| agent.id != id);
         self.machine_order.machines.retain(|machine| *machine != id);
         self.delays.forget_agent(id);
-        for bar in &mut self.bars {
-            if bar.agent == Some(id) {
-                bar.agent = None;
+        // In every scenario, whichever is open.
+        self.each_scenario(|plan| {
+            for bar in &mut plan.bars {
+                if bar.agent == Some(id) {
+                    bar.agent = None;
+                }
+                if let BarWork::Follow(work) = &mut bar.work
+                    && work.leader == Some(id)
+                {
+                    work.leader = None;
+                }
             }
-            if let BarWork::Follow(work) = &mut bar.work
-                && work.leader == Some(id)
-            {
-                work.leader = None;
-            }
-        }
-        // Its bars join Unassigned, where they may overlap bars already there.
-        self.separate_lanes();
+            // Its bars join Unassigned, where they may overlap bars already there.
+            plan.separate_lanes();
+            Ok(())
+        })?;
         Ok(())
     }
 
@@ -1590,7 +1749,7 @@ impl SchedulePlan {
         }
         match &mut self.bar_mut(id)?.work {
             BarWork::Delay(work) => work.kind = kind,
-            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Blast(_) | BarWork::Follow(_) => return Err(ScheduleError::WrongActivity),
+            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => return Err(ScheduleError::WrongActivity),
         }
         Ok(())
     }
@@ -1645,7 +1804,7 @@ impl SchedulePlan {
                 work.sources = sources;
                 Ok(true)
             }
-            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => Err(ScheduleError::WrongActivity),
+            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => Err(ScheduleError::WrongActivity),
         }
     }
 
@@ -1657,9 +1816,30 @@ impl SchedulePlan {
         let bar = self.bar_mut(id)?;
         match &mut bar.work {
             BarWork::Reclaim(work) => work.maximum_t = maximum_t,
-            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => return Err(ScheduleError::WrongActivity),
+            BarWork::Dig(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => return Err(ScheduleError::WrongActivity),
         }
         Ok(())
+    }
+
+    /// Set what an automatic bar works: never an empty list, which would
+    /// leave it nothing to do and is not what All means.
+    pub(crate) fn set_auto_sources(&mut self, id: BarId, sources: destinations::MovementSourceSelection) -> ScheduleResult<bool> {
+        if let destinations::MovementSourceSelection::Only(scopes) = &sources
+            && (scopes.is_empty() || scopes.iter().any(|scope| !scope.is_valid()))
+        {
+            return Err(ScheduleError::EmptyRuleSelection);
+        }
+        let bar = self.bar_mut(id)?;
+        match &mut bar.work {
+            BarWork::Auto(work) => {
+                if work.sources == sources {
+                    return Ok(false);
+                }
+                work.sources = sources;
+                Ok(true)
+            }
+            BarWork::Dig(_) | BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => Err(ScheduleError::WrongActivity),
+        }
     }
 
     pub(crate) fn rename_bar(&mut self, id: BarId, name: &str) -> ScheduleResult {
@@ -1928,7 +2108,7 @@ impl SchedulePlan {
     fn dig_order_mut(&mut self, id: BarId) -> ScheduleResult<&mut DigOrder> {
         match &mut self.bar_mut(id)?.work {
             BarWork::Dig(order) => Ok(order),
-            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) => Err(ScheduleError::WrongActivity),
+            BarWork::Reclaim(_) | BarWork::Delay(_) | BarWork::Blast(_) | BarWork::Follow(_) | BarWork::Auto(_) => Err(ScheduleError::WrongActivity),
         }
     }
 
@@ -2165,6 +2345,115 @@ impl SchedulePlan {
         Ok(id)
     }
 
+    /// Add an automatic bar: while it is its machine's highest-priority open
+    /// bar with work, a loader digs the ground no dig bar has sequenced, and
+    /// a dozer, drill or MPU works the blasts that ground is in.
+    pub(crate) fn add_auto_bar(&mut self, agent: Option<LoaderAgentId>, priority: u32, window: WorkWindow) -> ScheduleResult<BarId> {
+        if let Some(agent) = agent {
+            self.agent_kind(agent).ok_or(ScheduleError::UnknownAgent)?;
+        }
+        if !window.is_valid() {
+            return Err(ScheduleError::InvalidWindow);
+        }
+        self.check_lane(None, agent, priority, window)?;
+        let id = self.allocate_bar_id()?;
+        self.bars.push(ScheduleBar {
+            id,
+            name: String::new(),
+            work: BarWork::Auto(AutoWork::default()),
+            agent,
+            priority,
+            window,
+        });
+        Ok(id)
+    }
+
+    /// Make an automatic bar a dig bar holding `members`, the order a
+    /// schedule worked out for it: from here on the ground is the planner's
+    /// to arrange, and no longer follows what the other bars leave.
+    pub(crate) fn convert_auto_bar(&mut self, id: BarId, members: Vec<DigBlockRef>, stockpiles: Vec<DestinationId>) -> ScheduleResult {
+        let bar = self.bar(id).ok_or(ScheduleError::UnknownBar)?;
+        if !bar.is_auto() {
+            return Err(ScheduleError::WrongActivity);
+        }
+        let (agent, priority, window) = (bar.agent, bar.priority, bar.window);
+        // What it reclaims becomes a reclaim bar of those stockpiles, over
+        // the same window: the bar itself when it dug nothing, else one in
+        // the lane below, behind its digging as its reclaim was.
+        let reclaim = if stockpiles.is_empty() {
+            None
+        } else {
+            Some(BarWork::Reclaim(ReclaimWork {
+                sources: self.checked_reclaim_sources(stockpiles)?,
+                maximum_t: None,
+            }))
+        };
+        if members.is_empty() {
+            self.bar_mut(id)?.work = reclaim.ok_or(ScheduleError::EmptyRuleSelection)?;
+            return Ok(());
+        }
+        let mut order = DigOrder::default();
+        for member in members {
+            order.insert(usize::MAX, member)?;
+        }
+        self.bar_mut(id)?.work = BarWork::Dig(order);
+        if let Some(work) = reclaim {
+            let lane = self.free_lane(None, agent, priority.saturating_add(1), window);
+            let reclaim_id = self.allocate_bar_id()?;
+            self.bars.push(ScheduleBar {
+                id: reclaim_id,
+                name: String::new(),
+                work,
+                agent,
+                priority: lane,
+                window,
+            });
+        }
+        Ok(())
+    }
+
+    /// Split an automatic bar at `at_h`: up to it, a dig bar holding
+    /// `members`, the blocks the schedule had it start before then; and over
+    /// the bar's whole window, a new automatic bar on the same machine in the
+    /// lane below. The machine digs the fixed sequence first and the
+    /// automatic ground whenever that has no work, as it did before; what
+    /// the dig bar leaves undug when its window closes is the automatic
+    /// bars' again, as any dig bar's is.
+    pub(crate) fn split_auto_bar(&mut self, id: BarId, at_h: f64, members: Vec<DigBlockRef>) -> ScheduleResult<BarId> {
+        let bar = self.bar(id).ok_or(ScheduleError::UnknownBar)?;
+        if !bar.is_auto() {
+            return Err(ScheduleError::WrongActivity);
+        }
+        let window = bar.window;
+        let (agent, priority) = (bar.agent, bar.priority);
+        // The rest works what the bar did.
+        let kept = bar.auto().cloned().unwrap_or_default();
+        if !at_h.is_finite() || at_h <= window.start_h + 1e-9 || window.end_h.is_some_and(|end| at_h >= end - 1e-9) {
+            return Err(ScheduleError::InvalidWindow);
+        }
+        let mut order = DigOrder::default();
+        for member in members {
+            order.insert(usize::MAX, member)?;
+        }
+        let rest = self.allocate_bar_id()?;
+        let frozen = self.bar_mut(id)?;
+        frozen.work = BarWork::Dig(order);
+        frozen.window = WorkWindow {
+            start_h: window.start_h,
+            end_h: Some(at_h),
+        };
+        let lane = self.free_lane(None, agent, priority.saturating_add(1), window);
+        self.bars.push(ScheduleBar {
+            id: rest,
+            name: String::new(),
+            work: BarWork::Auto(kept),
+            agent,
+            priority: lane,
+            window,
+        });
+        Ok(rest)
+    }
+
     /// Change which machine a follow bar follows.
     pub(crate) fn set_follow_leader(&mut self, id: BarId, leader: LoaderAgentId) -> ScheduleResult {
         self.agent_kind(leader).ok_or(ScheduleError::UnknownAgent)?;
@@ -2205,8 +2494,12 @@ impl SchedulePlan {
         if !self.bar_height.is_finite() || !(MIN_BAR_HEIGHT..=MAX_BAR_HEIGHT).contains(&self.bar_height) {
             return Err(ScheduleError::InvalidBarHeight);
         }
+        self.migrate_horizons();
         // Files from before bars in one lane were kept apart.
-        self.separate_lanes();
+        self.each_scenario(|plan| {
+            plan.separate_lanes();
+            Ok(())
+        })?;
         for agent in &mut self.agents {
             agent.calendar.canonicalize_percentages();
         }
@@ -2236,6 +2529,70 @@ impl SchedulePlan {
             agent.calendar.compile(class.default_dig_rate_tph)?;
             agent.calendar.compile_rate(RateKind::Reclaim, class.default_reclaim_rate_tph)?;
         }
+        self.each_scenario(|plan| plan.validate_loaded_bars())?;
+        self.validate_scenarios()?;
+        let agents = self.agent_ids();
+        self.delays.validate_loaded(&agents)?;
+        self.validate_loaded_rest()
+    }
+
+    /// The scenarios' own invariants once each has passed on its bars: one
+    /// open and the rest stashed, ids unique across every scenario's bars,
+    /// no ring of starting points.
+    fn validate_scenarios(&mut self) -> ScheduleResult {
+        if self.scenarios.is_empty() {
+            return Ok(());
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for (index, scenario) in self.scenarios.list.iter().enumerate() {
+            if self.scenarios.list[..index].iter().any(|earlier| earlier.id == scenario.id) {
+                return Err(ScheduleError::DuplicateId);
+            }
+            checked_name(&scenario.name)?;
+            if (scenario.id == self.scenarios.open) == scenario.stash.is_some() {
+                return Err(ScheduleError::UnknownScenario);
+            }
+            // A stored horizon holds what the horizon editor would accept:
+            // the scenarios starting from it step through it.
+            if let Some(stash) = &scenario.stash {
+                let mut check = self.experiment.clone();
+                check.set_planning_end_day(stash.horizon.end_day)?;
+                check.set_interval_h(stash.horizon.interval_h)?;
+            }
+            if scenario
+                .base
+                .is_some_and(|base| self.scenarios.get(base).is_none() || self.scenarios.bases(scenario.id).contains(&scenario.id))
+            {
+                return Err(ScheduleError::ScenarioRing);
+            }
+        }
+        if self.scenarios.open_scenario().is_none() {
+            return Err(ScheduleError::UnknownScenario);
+        }
+        let stashed = self
+            .scenarios
+            .list
+            .iter()
+            .filter_map(|scenario| scenario.stash.as_ref())
+            .flat_map(|stash| stash.bars.iter());
+        for bar in self.bars.iter().chain(stashed) {
+            if !ids.insert(bar.id) {
+                return Err(ScheduleError::DuplicateId);
+            }
+        }
+        let highest_bar = ids.last().map(|id| id.0);
+        let highest_scenario = self.scenarios.list.iter().map(|scenario| scenario.id.0).max();
+        if let Some(highest) = highest_bar {
+            self.next_bar_id = self.next_bar_id.max(highest.checked_add(1).ok_or(ScheduleError::IdsExhausted)?);
+        }
+        if let Some(highest) = highest_scenario {
+            self.scenarios.next_id = self.scenarios.next_id.max(highest.checked_add(1).ok_or(ScheduleError::IdsExhausted)?);
+        }
+        Ok(())
+    }
+
+    /// One scenario's bars, as [`Self::validate_loaded`] checks them.
+    fn validate_loaded_bars(&mut self) -> ScheduleResult {
         for (index, bar) in self.bars.iter().enumerate() {
             if self.bars[..index].iter().any(|earlier| earlier.id == bar.id) {
                 return Err(ScheduleError::DuplicateId);
@@ -2252,6 +2609,7 @@ impl SchedulePlan {
             self.check_fits(bar.id, bar.agent)?;
             match &bar.work {
                 BarWork::Dig(order) => order.check_loaded()?,
+                BarWork::Auto(_) => {}
                 // The sources are deliberately *not* required to resolve: a
                 // stockpile deleted or retyped since leaves the bar holding an
                 // unresolved reference, which the readiness report names. A file
@@ -2268,8 +2626,11 @@ impl SchedulePlan {
                 BarWork::Follow(_) => return Err(ScheduleError::UnknownAgent),
             }
         }
-        let agents = self.agent_ids();
-        self.delays.validate_loaded(&agents)?;
+        Ok(())
+    }
+
+    /// The rest of [`Self::validate_loaded`], after the bars.
+    fn validate_loaded_rest(&mut self) -> ScheduleResult {
         for (index, calendar) in self.crusher_grade_calendars.iter().enumerate() {
             calendar.validate()?;
             if self.crusher_grade_calendars[..index]
@@ -2289,6 +2650,8 @@ impl SchedulePlan {
         self.routing.validate_loaded()?;
         self.trucks.validate_loaded()?;
         self.cashflow.validate_loaded()?;
+        self.dependencies.validate_loaded()?;
+        self.loader_limits.validate_loaded()?;
         let highest_class = self.classes.iter().map(|class| class.id.0).max();
         let highest_agent = self.agents.iter().map(|agent| agent.id.0).max();
         let highest_bar = self.bars.iter().map(|bar| bar.id.0).max();
@@ -2362,49 +2725,19 @@ impl SchedulePlan {
         self.machine_order.hash(hasher);
         self.calendar_views.hash(hasher);
         self.drill_blast.hash_content(hasher);
-        for bar in &self.bars {
-            bar.id.hash(hasher);
-            bar.name.hash(hasher);
-            match &bar.work {
-                BarWork::Dig(_) => 0u8.hash(hasher),
-                BarWork::Reclaim(work) => {
-                    1u8.hash(hasher);
-                    work.sources.hash(hasher);
-                    work.maximum_t.map(f64::to_bits).hash(hasher);
-                }
-                BarWork::Delay(work) => {
-                    2u8.hash(hasher);
-                    work.kind.hash(hasher);
-                }
-                BarWork::Blast(order) => {
-                    3u8.hash(hasher);
-                    for member in &order.members {
-                        member.solid.hash(hasher);
-                        member.bench.to_bits().hash(hasher);
-                        member.anchor.map(f64::to_bits).hash(hasher);
-                    }
-                }
-                BarWork::Follow(work) => {
-                    4u8.hash(hasher);
-                    work.leader.hash(hasher);
-                }
-            }
-            bar.agent.hash(hasher);
-            bar.priority.hash(hasher);
-            bar.window.start_h.to_bits().hash(hasher);
-            bar.window.end_h.map(f64::to_bits).hash(hasher);
-            for member in bar.members() {
-                member.solid.hash(hasher);
-                member.source.hash(hasher);
-                member.flitch_base.to_bits().hash(hasher);
-                member.flitch_top.to_bits().hash(hasher);
-                member.anchor[0].to_bits().hash(hasher);
-                member.anchor[1].to_bits().hash(hasher);
-                member.plan_area.to_bits().hash(hasher);
-                member.footprint.hash(hasher);
-                member.volume.map(f64::to_bits).hash(hasher);
+        self.dependencies.hash_content(hasher);
+        self.loader_limits.hash_content(hasher);
+        hash_bars(&self.bars, hasher);
+        for scenario in &self.scenarios.list {
+            scenario.id.hash(hasher);
+            scenario.name.hash(hasher);
+            scenario.base.hash(hasher);
+            if let Some(stash) = &scenario.stash {
+                stash.horizon.hash(hasher);
+                hash_bars(&stash.bars, hasher);
             }
         }
+        self.scenarios.open.hash(hasher);
     }
 
     /// An estimate of what one snapshot of this plan costs the undo history.
@@ -2425,6 +2758,8 @@ impl SchedulePlan {
             + self.routing.estimated_bytes()
             + self.trucks.estimated_bytes()
             + self.cashflow.estimated_bytes()
+            + self.dependencies.estimated_bytes()
+            + self.loader_limits.estimated_bytes()
             + std::mem::size_of_val(self.crusher_grade_calendars.as_slice())
             + self
                 .crusher_grade_calendars
@@ -2445,7 +2780,7 @@ impl SchedulePlan {
 /// dozers, drills and MPUs work blasts, and any machine can stand.
 pub(crate) fn work_fits(work: &BarWork, kind: MachineKind) -> bool {
     match work {
-        BarWork::Delay(_) => true,
+        BarWork::Delay(_) | BarWork::Auto(_) => true,
         BarWork::Blast(_) | BarWork::Follow(_) => kind.is_drill_blast(),
         BarWork::Dig(_) | BarWork::Reclaim(_) => !kind.is_drill_blast(),
     }

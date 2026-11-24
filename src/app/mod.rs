@@ -541,6 +541,22 @@ pub(crate) struct App<'a> {
     /// can always say what was true when it was last run. Its indexes are
     /// built once, when it is published. See [`crate::app::schedule_run`].
     pub(crate) schedule_calculation: Option<std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>>,
+    /// The last result of each scenario that was left, by project runtime,
+    /// so opening it again shows it at once while it is still current.
+    pub(crate) schedule_scenario_results: Vec<(
+        u32,
+        crate::model::schedule::scenarios::ScenarioId,
+        std::sync::Arc<crate::model::schedule::result::CalculatedSchedule>,
+    )>,
+    /// The long-term plans this session's runs started from, newest last,
+    /// by project runtime: a run over the same problem as one of them - an
+    /// edit undone - deals its order again, so it calculates what it did.
+    pub(crate) schedule_plan_memories: Vec<(u32, std::sync::Arc<crate::model::schedule::optimisation::longterm::PlanMemory>)>,
+    /// A run asked for while a Setup step was still running, by project
+    /// runtime: started once none is.
+    pub(crate) schedule_run_waiting: Option<(u32, crate::app::schedule_run::ScheduleRunMode)>,
+    /// The project and scenario [`App::follow_open_scenario`] last saw open.
+    pub(crate) followed_scenario: Option<(u32, crate::model::schedule::scenarios::ScenarioId)>,
     /// Whether the held result reached the planning end when it was
     /// published. Such a schedule follows the end when it moves later; one
     /// run a period at a time stops where it was taken to.
@@ -579,11 +595,8 @@ pub(crate) struct App<'a> {
     /// was stopped) for, so one that cannot succeed is not retried until
     /// something changes. See [`Self::auto_recalculate_schedule`].
     pub(crate) schedule_auto_attempted: Option<u64>,
-    /// The inputs last seen while waiting for edits to settle, and since when.
-    pub(crate) schedule_auto_settle: Option<(u64, Instant)>,
-    /// When the settled inputs are due a recalculation, so the event loop
-    /// wakes for it with no further input.
-    pub(crate) schedule_auto_deadline: Option<Instant>,
+    /// The inputs a recalculation is due for, while one has yet to start.
+    pub(crate) schedule_auto_settle: Option<u64>,
     /// Whether the Schedule Setup run in progress was asked for, and so may
     /// bring the Solids run up to date - Reserving included. A recalculation
     /// Auto started may not: it only reports that Solids needs running.
@@ -785,6 +798,10 @@ impl<'a> Default for App<'a> {
             planning_entry_pending: false,
             planning_entry_step: None,
             schedule_calculation: None,
+            schedule_scenario_results: Vec::new(),
+            schedule_plan_memories: Vec::new(),
+            followed_scenario: None,
+            schedule_run_waiting: None,
             schedule_reached_end: false,
             dig_block_count: None,
             pending_schedule_run: None,
@@ -801,7 +818,6 @@ impl<'a> Default for App<'a> {
             schedule_run_serial: 0,
             schedule_auto_attempted: None,
             schedule_auto_settle: None,
-            schedule_auto_deadline: None,
             schedule_setup_runs_solids: false,
             planning_auto_attempted: None,
             planning_auto_settle: None,
@@ -2754,13 +2770,6 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         if resize_settle_deadline.is_some_and(|deadline| deadline <= now) {
             self.redraw_requested = true;
         }
-        // A schedule recalculation waits for edits to settle and then needs a
-        // frame to start in: asked for here, before the frame request below,
-        // or the loop goes back to sleep with the frame still owed.
-        if self.schedule_auto_deadline.is_some_and(|deadline| deadline <= now) {
-            self.schedule_auto_deadline = None;
-            self.redraw_requested = true;
-        }
         if self.planning_auto_deadline.is_some_and(|deadline| deadline <= now) {
             self.planning_auto_deadline = None;
             self.redraw_requested = true;
@@ -2812,7 +2821,6 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             .into_iter()
             .chain(self.slice_surface_retry_deadline)
             .chain(resize_settle_deadline)
-            .chain(self.schedule_auto_deadline)
             .chain(self.planning_auto_deadline)
             .chain(self.haulage_auto_deadline)
             .chain(self.scanned_model_kept_until)

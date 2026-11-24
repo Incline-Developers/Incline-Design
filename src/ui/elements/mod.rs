@@ -29,15 +29,18 @@ pub(crate) mod schedule_calendar;
 pub(crate) mod schedule_cashflow;
 pub(crate) mod schedule_charts;
 pub(crate) mod schedule_delays;
+pub(crate) mod schedule_dependencies;
 pub(crate) mod schedule_destinations;
 pub(crate) mod schedule_drill_blast;
 pub(crate) mod schedule_gantt;
 pub(crate) mod schedule_inspector;
+pub(crate) mod schedule_loader_limits;
 /// The schedule optimiser's settings: horizon, resolution, solve limits,
 /// grade units and stockpile representation.
 pub(crate) mod schedule_optimisation;
 pub(crate) mod schedule_periods;
 pub(crate) mod schedule_report;
+pub(crate) mod schedule_scenarios;
 pub(crate) mod schedule_setup;
 pub(crate) mod schedule_trucking;
 pub(crate) mod solids_view;

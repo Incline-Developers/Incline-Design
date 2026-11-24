@@ -163,6 +163,7 @@ pub(crate) fn draw_details(
     crate::ui::dialogs::schedule::draw_bar_name_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_bar_window_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_reclaim_bar_dialog(ui, editor, &plan, document, session, commands);
+    crate::ui::dialogs::schedule::draw_auto_bar_dialog(ui, editor, &plan, document, session, commands);
     crate::ui::dialogs::schedule::draw_blast_bar_dialog(ui, editor, project, document, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_blast_window_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::sequence_editor::draw_sequence_editor(ui, editor, project, document, &plan, session, commands);
@@ -447,6 +448,24 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent], bar_height: f32) -> V
         };
         row.lanes[lane].stacks[0].push(index);
     }
+    // A lane for each lane the bars of the scenarios this one starts from sit
+    // in, so they are drawn at their own height, as there.
+    for (_, bar) in plan.inherited_bars() {
+        let Some(row) = rows.iter_mut().find(|row| !row.blasting && row.agent.is_some() && row.agent == bar.agent) else {
+            continue;
+        };
+        if let Err(lane) = row.lanes.binary_search_by_key(&bar.priority, |lane| lane.priority) {
+            row.lanes.insert(
+                lane,
+                Lane {
+                    priority: bar.priority,
+                    stacks: vec![Vec::new()],
+                    offset: 0.0,
+                    height: 0.0,
+                },
+            );
+        }
+    }
     let mut top = 0.0;
     for row in &mut rows {
         if row.lanes.is_empty() {
@@ -499,7 +518,9 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     use crate::ui::elements::planning_setup::{CANCEL_TINT, IMPROVE_TINT, RUN_ALL_TINT, RUN_STEP_TINT};
 
     let working = editor.schedule_run_working;
-    let startable = !working;
+    // A check of the schedule saved with the project, which ends quietly
+    // when it is out of date, gives way to a run someone asks for.
+    let startable = !working || editor.schedule_run_restoring;
     // With Auto on, a current schedule is kept current on its own, so Run and
     // Run All are held. Without one - never run, blocked, or the last attempt
     // failed - they are what starts it, running the Setup steps it waits on.
@@ -805,6 +826,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // ruler, which paints its own surface.
     draw_period_colors(ui, egui::Rect::from_min_size(ruler.min, egui::vec2(ruler.width(), 3.0)), editor.gantt, plan);
     draw_rows(ui, header, body, stripe, editor, &layout.rows);
+    draw_inherited(ui, body, editor, plan, &layout.rows);
     draw_row_resize(ui, header, editor, plan, &layout.rows, session, commands);
     draw_grid(ui, body, editor.gantt);
     draw_calendar_delays(ui, body, editor.gantt, editor.gantt.row_scroll, plan, &layout.rows);
@@ -1304,6 +1326,49 @@ pub(super) fn ruler_fill(visuals: &egui::Visuals) -> egui::Color32 {
     crate::ui::widgets::shifted(visuals.panel_fill, if visuals.dark_mode { 7 } else { -9 })
 }
 
+/// The bars the open scenario starts from, behind its own in their
+/// machines' rows: faded spans the height of the row, named on hover, worked
+/// as they are and edited only in the scenario they belong to.
+fn draw_inherited(ui: &mut egui::Ui, body: egui::Rect, editor: &EditorState, plan: &SchedulePlan, rows: &[Row]) {
+    let inherited = plan.inherited_bars();
+    if inherited.is_empty() || !body.is_positive() {
+        return;
+    }
+    let scroll = editor.gantt.row_scroll;
+    let fill = ui.visuals().weak_text_color().gamma_multiply(0.16);
+    let edge = egui::Stroke::new(1.0, ui.visuals().weak_text_color().gamma_multiply(0.45));
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let text = ui.visuals().weak_text_color();
+    let painter = ui.painter_at(body);
+    for row in rows.iter().filter(|row| row.agent.is_some() && !row.blasting) {
+        let top = body.top() + row.top - scroll;
+        if top + row.height < body.top() || top > body.bottom() {
+            continue;
+        }
+        // In its own lane, which `layout_rows` made for it.
+        for (scenario, bar) in inherited.iter().filter(|(_, bar)| bar.agent == row.agent) {
+            let (left, right) = BarExtent::of(editor.gantt, bar.window, body).drawn(body);
+            if right < body.left() || left > body.right() {
+                continue;
+            }
+            let Some(lane) = row.lanes.iter().find(|lane| lane.priority == bar.priority) else {
+                continue;
+            };
+            let span = egui::Rect::from_min_max(egui::pos2(left, top + lane.offset + 1.0), egui::pos2(right, top + lane.offset + lane.height - 1.0));
+            painter.rect(span, GROUP_CORNER_RADIUS, fill, edge, egui::StrokeKind::Inside);
+            let report = editor.schedule_bar_reports.iter().find(|report| report.bar == bar.id);
+            let label = bar_label(bar, report, Some(plan));
+            let galley = painter.layout_no_wrap(label.clone(), font.clone(), text);
+            if galley.size().x + 8.0 < span.width() && galley.size().y + 2.0 <= span.height() {
+                painter.galley(egui::pos2(span.left() + 4.0, span.bottom() - galley.size().y - 2.0), galley, text);
+            }
+            let id = ui.scope_id().with(("gantt_inherited", bar.id.0));
+            ui.interact(span.intersect(body), id, egui::Sense::hover())
+                .hint(tr!("gantt-inherited-bar", bar = label, scenario = (*scenario).to_owned()));
+        }
+    }
+}
+
 /// The agent column and the row bands beside it, drawn together so a row's
 /// name and its lane cannot come apart.
 fn draw_rows(ui: &mut egui::Ui, header: egui::Rect, body: egui::Rect, stripe: egui::Color32, editor: &EditorState, rows: &[Row]) {
@@ -1450,6 +1515,15 @@ fn blast_bar_dialog(session: u32, bar: &ScheduleBar, order: &crate::model::sched
     }
 }
 
+/// The automatic bar dialog opened on a bar.
+fn auto_bar_dialog(bar: &ScheduleBar, work: &crate::model::schedule::AutoWork) -> crate::ui::state::AutoBarDialog {
+    crate::ui::state::AutoBarDialog {
+        target: bar.id,
+        sources: work.sources.clone(),
+        expanded: Vec::new(),
+    }
+}
+
 /// The reclaim editor opened on an existing reclaim bar.
 fn reclaim_bar_dialog(bar: &ScheduleBar, work: &crate::model::schedule::ReclaimWork) -> ReclaimBarDialog {
     ReclaimBarDialog {
@@ -1485,6 +1559,8 @@ pub(super) fn bar_label(bar: &ScheduleBar, report: Option<&ScheduleBarView>, pla
         report
             .map(|report| report.default_name.clone())
             .unwrap_or_else(|| tr!("reclaim-bar-default-name", stockpile = tr!("destination-unresolved")))
+    } else if bar.is_auto() {
+        tr!("auto-bar-default-name")
     } else if bar.blast_order().is_some() {
         format!("✹ {}", report.map(|report| report.default_name.clone()).unwrap_or_else(|| tr!("blast-bar-default-empty")))
     } else if let Some(work) = bar.follow() {
@@ -1594,6 +1670,8 @@ pub(super) const RECLAIM_COLOR: egui::Color32 = egui::Color32::from_rgb(0x3F, 0x
 /// band above the bar at a glance and at a small size. One colour whatever
 /// the reason; the reason is the hover's to say.
 pub(super) const IDLE_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE8, 0xC0, 0x4A);
+/// The palette chip that makes an automatic bar.
+const AUTO_COLOR: egui::Color32 = egui::Color32::from_rgb(0x8E, 0x7C, 0xD8);
 /// Drill and blast bars, and the palette chip that makes them.
 pub(super) const BLAST_COLOR: egui::Color32 = egui::Color32::from_rgb(0xC9, 0x7B, 0x4A);
 
@@ -1657,6 +1735,8 @@ pub(super) fn idle_reason_text(reason: Option<IdleReason>) -> (String, String) {
         Some(IdleReason::NoTrucks) => (tr!("idle-no-trucks"), tr!("idle-no-trucks-note")),
         Some(IdleReason::NotWorthIt) => (tr!("idle-not-worth-it"), tr!("idle-not-worth-it-note")),
         Some(IdleReason::WaitingOnBlast) => (tr!("idle-waiting-on-blast"), tr!("idle-waiting-on-blast-note")),
+        Some(IdleReason::WaitingOnGround) => (tr!("idle-waiting-on-ground"), tr!("idle-waiting-on-ground-note")),
+        Some(IdleReason::LoaderLimit) => (tr!("idle-loader-limit"), tr!("idle-loader-limit-note")),
         None => (tr!("schedule-dispatch-idle"), String::new()),
     }
 }
@@ -1792,6 +1872,7 @@ fn source_label(source: WorkSource, bar: &ScheduleBar, report: Option<&ScheduleB
     match source {
         WorkSource::Block(block) => member_of(schedule, bar, report, block)
             .and_then(|member| member.name.clone())
+            .or_else(|| schedule.block_names.get(&block).cloned())
             .unwrap_or_else(|| tr!("schedule-dispatch-block", block = block.0.to_string())),
         WorkSource::Stockpile(pile) => destination_label(pile, destinations),
     }
@@ -2138,6 +2219,7 @@ fn draw_bars(
     let mut open_window: Option<BarWindowDialog> = None;
     let mut open_editor: Option<crate::ui::state::SequenceDraft> = None;
     let mut open_reclaim: Option<ReclaimBarDialog> = None;
+    let mut open_auto: Option<crate::ui::state::AutoBarDialog> = None;
     let mut open_blast: Option<BlastBarDialog> = None;
 
     // A bar deleted - by an edit, by undo, or with the project it belonged
@@ -2341,7 +2423,7 @@ fn draw_bars(
                     // the band is simply not there. One hover for the whole
                     // band, answering for the instant under the pointer.
                     if let Some(schedule) = schedule
-                        && (bar.blast_order().is_some() || bar.follow().is_some())
+                        && (bar.blast_order().is_some() || bar.follow().is_some() || bar.is_auto())
                     {
                         draw_blast_band(ui, body, band, view, bar, schedule);
                     }
@@ -2405,6 +2487,8 @@ fn draw_bars(
                             open_blast = Some(blast_bar_dialog(session, bar, order));
                         } else if let Some(work) = bar.reclaim() {
                             open_reclaim = Some(reclaim_bar_dialog(bar, work));
+                        } else if let Some(work) = bar.auto() {
+                            open_auto = Some(auto_bar_dialog(bar, work));
                         }
                     }
                     // Primary only: the middle button pans the timeline and the
@@ -2479,6 +2563,73 @@ fn draw_bars(
                             && ContextMenuAction::new(tr!("blast-edit-bar")).show(ui).clicked()
                         {
                             open_blast = Some(blast_bar_dialog(session, bar, order));
+                            ui.close();
+                        }
+                        // Freezes the order the schedule worked out, so it can
+                        // be arranged by hand like any dig bar.
+                        if let Some(work) = bar.auto()
+                            && ContextMenuAction::new(tr!("auto-bar-sources-edit")).show(ui).clicked()
+                        {
+                            open_auto = Some(auto_bar_dialog(bar, work));
+                            ui.close();
+                        }
+                        // One that only reclaims becomes a reclaim bar of its
+                        // stockpiles, with no schedule needed.
+                        let only_reclaims = bar.auto().is_some_and(|work| work.sources.ground().is_some_and(|scopes| scopes.is_empty()));
+                        if only_reclaims && ContextMenuAction::new(tr!("auto-bar-convert-reclaim")).show(ui).clicked() {
+                            commands.push(UiCommand::schedule(session, ScheduleEdit::ConvertAutoBar(bar.id)));
+                            ui.close();
+                        }
+                        if bar.is_auto()
+                            && !only_reclaims
+                            && ContextMenuAction::new(tr!("auto-bar-convert"))
+                                .enabled(schedule.is_some_and(|schedule| schedule.blocks_of(bar.id).is_some_and(|blocks| !blocks.is_empty())))
+                                .show(ui)
+                                .clicked()
+                        {
+                            commands.push(UiCommand::schedule(session, ScheduleEdit::ConvertAutoBar(bar.id)));
+                            ui.close();
+                        }
+                        // Or only up to the time slider, the rest staying
+                        // automatic: the near term fixed, the far term free.
+                        let until = editor.schedule_time_h;
+                        if bar.is_auto()
+                            && !only_reclaims
+                            && until > bar.window.start_h + 1e-9
+                            && bar.window.end_h.is_none_or(|end| until < end - 1e-9)
+                            && ContextMenuAction::new(tr!("auto-bar-convert-until", time = super::schedule_periods::instant_label(until)))
+                                .enabled(schedule.is_some_and(|schedule| schedule.blocks_of(bar.id).is_some_and(|blocks| !blocks.is_empty())))
+                                .show(ui)
+                                .clicked()
+                        {
+                            commands.push(UiCommand::schedule(session, ScheduleEdit::ConvertAutoBarUntil { bar: bar.id, at_h: until }));
+                            ui.close();
+                        }
+                        // Or fixed in the scenario this one starts from, the
+                        // planner's, where it is worked first and this
+                        // scenario's automatic bars plan around it.
+                        // No further than that scenario reaches: it is not
+                        // calculated past its own horizon.
+                        let fix = plan.scenarios().open_scenario().and_then(|open| open.base).and_then(|base| {
+                            let row = plan.scenario_rows().into_iter().find(|row| row.id == base)?;
+                            Some((base, row.name, until.min(f64::from(row.horizon.end_day) * crate::model::schedule::SCHEDULE_PERIOD_H)))
+                        });
+                        if bar.is_auto()
+                            && let Some((base, name, until)) = fix
+                            && until > bar.window.start_h + 1e-9
+                            && ContextMenuAction::new(tr!("auto-bar-fix-in", scenario = name, time = super::schedule_periods::instant_label(until)))
+                                .enabled(schedule.is_some_and(|schedule| schedule.blocks_of(bar.id).is_some_and(|blocks| !blocks.is_empty())))
+                                .show(ui)
+                                .clicked()
+                        {
+                            commands.push(UiCommand::schedule(
+                                session,
+                                ScheduleEdit::FixAutoBarInScenario {
+                                    bar: bar.id,
+                                    at_h: until,
+                                    scenario: base,
+                                },
+                            ));
                             ui.close();
                         }
                         if let Some(work) = bar.reclaim()
@@ -2641,6 +2792,9 @@ fn draw_bars(
     if let Some(draft) = open_editor {
         editor.sequence_editor = Some(draft);
     }
+    if let Some(dialog) = open_auto {
+        editor.auto_bar_dialog = Some(dialog);
+    }
     if let Some(dialog) = open_reclaim {
         editor.reclaim_bar_dialog = Some(dialog);
     }
@@ -2655,9 +2809,10 @@ fn draw_bars(
 fn draw_blast_band(ui: &mut egui::Ui, body: egui::Rect, band: egui::Rect, view: GanttView, bar: &ScheduleBar, schedule: &CalculatedSchedule) {
     let Some(result) = schedule.drill_blast.as_ref() else { return };
     let blasts = schedule.bar_blasts(bar);
-    // A follow bar works whatever its leader has next, so all of its
-    // machine's work inside its window is its own.
-    let follows = bar.follow().is_some();
+    // A follow bar works whatever its leader has next, and an automatic bar
+    // whatever blasts its machine is given, so all of its machine's work
+    // inside its window is its own. On a loader there is none.
+    let follows = bar.follow().is_some() || bar.is_auto();
     let clip = band.intersect(body);
     let rows: Vec<&crate::model::schedule::result::PublishedBlastWork> = result
         .work
@@ -2915,7 +3070,7 @@ pub(super) fn centred_note(ui: &egui::Ui, rect: egui::Rect, text: String) {
 fn new_bar_end_h(plan: &SchedulePlan, item: GanttPaletteItem, start_h: f64) -> f64 {
     let period = crate::model::schedule::SCHEDULE_PERIOD_H;
     match item {
-        GanttPaletteItem::Dig | GanttPaletteItem::Reclaim | GanttPaletteItem::Blast | GanttPaletteItem::Follow => {
+        GanttPaletteItem::Dig | GanttPaletteItem::Reclaim | GanttPaletteItem::Blast | GanttPaletteItem::Follow | GanttPaletteItem::Auto => {
             (f64::from(plan.experiment().planning_end_day) * period).max(start_h + period)
         }
         GanttPaletteItem::Delay => start_h + 12.0,
@@ -2929,6 +3084,7 @@ fn palette_label(item: GanttPaletteItem) -> String {
         GanttPaletteItem::Delay => tr!("gantt-palette-delay"),
         GanttPaletteItem::Blast => tr!("gantt-palette-blast"),
         GanttPaletteItem::Follow => tr!("gantt-palette-follow"),
+        GanttPaletteItem::Auto => tr!("gantt-palette-auto"),
     }
 }
 
@@ -2939,6 +3095,7 @@ fn palette_color(item: GanttPaletteItem) -> egui::Color32 {
         GanttPaletteItem::Delay => super::schedule_delays::UNTYPED_DELAY_COLOR,
         GanttPaletteItem::Blast => BLAST_COLOR,
         GanttPaletteItem::Follow => BLAST_COLOR.gamma_multiply(0.6),
+        GanttPaletteItem::Auto => AUTO_COLOR,
     }
 }
 
@@ -2955,11 +3112,12 @@ fn draw_palette(ui: &mut egui::Ui, corner: egui::Rect, editor: &mut EditorState,
             GanttPaletteItem::Dig,
             GanttPaletteItem::Reclaim,
             GanttPaletteItem::Delay,
+            GanttPaletteItem::Auto,
             GanttPaletteItem::Blast,
             GanttPaletteItem::Follow,
         ]
     } else {
-        &[GanttPaletteItem::Dig, GanttPaletteItem::Reclaim, GanttPaletteItem::Delay]
+        &[GanttPaletteItem::Dig, GanttPaletteItem::Reclaim, GanttPaletteItem::Delay, GanttPaletteItem::Auto]
     };
     let inner = corner.shrink2(egui::vec2(6.0, 4.0));
     if !inner.is_positive() {
@@ -2980,9 +3138,10 @@ fn draw_palette(ui: &mut egui::Ui, corner: egui::Rect, editor: &mut EditorState,
     for (index, item) in items.iter().copied().enumerate() {
         let (column, row) = (index % COLUMNS, index / COLUMNS);
         let chip = egui::Rect::from_min_size(egui::pos2(inner.left() + column as f32 * (size.x + GAP), top + row as f32 * (size.y + GAP)), size);
-        let response = ui
-            .interact(chip, ui.scope_id().with(("gantt_palette", index)), egui::Sense::drag())
-            .hint(tr!("gantt-palette-hint", item = palette_label(item)));
+        let response = ui.interact(chip, ui.scope_id().with(("gantt_palette", index)), egui::Sense::drag()).hint(match item {
+            GanttPaletteItem::Auto => tr!("gantt-palette-auto-hint"),
+            _ => tr!("gantt-palette-hint", item = palette_label(item)),
+        });
         let carried = editor.gantt_palette_drag == Some(item);
         let painter = ui.painter_at(chip);
         painter.rect_filled(chip, GROUP_CORNER_RADIUS, if response.hovered() || carried { hot } else { rest });
@@ -3119,6 +3278,15 @@ fn draw_palette_drop(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorSta
                 pos,
             });
         }
+        GanttPaletteItem::Auto => commands.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::AddAutoBar {
+                agent: placement.agent,
+                priority: placement.priority,
+                window,
+                insert_lane: placement.insert,
+            },
+        )),
         GanttPaletteItem::Follow => {
             editor.gantt_follow_drop = Some(DelayDrop {
                 session,

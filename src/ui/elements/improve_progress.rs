@@ -119,8 +119,11 @@ fn draw_full(ui: &mut egui::Ui, editor: &mut EditorState, progress: &ImproveProg
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.label(egui::RichText::new(clock(elapsed)).font(bold_font(22.0)));
-            let limit = progress.time_limit_s.map_or_else(|| "-".to_owned(), clock);
-            ui.label(egui::RichText::new(tr!("improve-card-limit", limit = limit)).weak().small());
+            let limit = match progress.time_limit_s {
+                Some(limit) => tr!("improve-card-limit", limit = clock(limit)),
+                None => tr!("improve-card-no-limit"),
+            };
+            ui.label(egui::RichText::new(limit).weak().small());
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
             fold_button(ui, editor);

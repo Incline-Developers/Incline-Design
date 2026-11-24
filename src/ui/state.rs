@@ -260,10 +260,19 @@ impl EditorState {
     /// Whether the page on screen offers the ground and category values rules
     /// and opening chunks choose from.
     pub(crate) fn shows_routing_choices(&self) -> bool {
+        // An automatic bar's dialog lists the same ground, wherever it is open.
+        if self.auto_bar_dialog.is_some() {
+            return true;
+        }
         self.is_setup_group(SetupGroup::Schedule)
             && matches!(
                 self.schedule_setup_step,
-                ScheduleStep::Stockpiles | ScheduleStep::Destinations | ScheduleStep::TruckingRules | ScheduleStep::Cashflow
+                ScheduleStep::Stockpiles
+                    | ScheduleStep::Destinations
+                    | ScheduleStep::TruckingRules
+                    | ScheduleStep::Cashflow
+                    | ScheduleStep::Dependencies
+                    | ScheduleStep::LoaderLimits
             )
     }
 
@@ -588,6 +597,10 @@ pub(crate) struct BlastOutline {
     pub(crate) blast: Option<String>,
     /// Out of mining, on its own or with the bench or blast it lies in.
     pub(crate) excluded: bool,
+    /// Per ring, whether each edge (from each point to the next) is the
+    /// panel grid's rather than a drawn cut's or the ground's edge, so it is
+    /// drawn as automatic. Empty where the bench has no panels.
+    pub(crate) panel_edges: Vec<Vec<bool>>,
 }
 
 /// What the Blasting step borrows from the rest of the editor while it is
@@ -2161,6 +2174,14 @@ pub(crate) struct EditorState {
     /// Show the Inspector down the right of the Gantt and Charts pages, rather
     /// than the strip it collapses to. Per-session: open at every launch.
     pub(crate) show_schedule_inspector: bool,
+    /// Whether the Scenarios island is open on the Gantt, Charts and Calendar.
+    pub(crate) show_schedule_scenarios: bool,
+    /// Each scenario's last calculated value, where there is one: the open
+    /// one's current result and those kept for the others.
+    pub(crate) schedule_scenario_values: Vec<(crate::model::schedule::scenarios::ScenarioId, f64)>,
+    /// Whether the Calendar's edits set cells in the open scenario alone
+    /// rather than for every scenario. Off at every launch.
+    pub(crate) schedule_cells_scenario_only: bool,
     /// Which tab of the Borehole Inspector panel is showing. Transient: not
     /// persisted, always starts back on [`BoreholeInspectorTab::Data`].
     pub(crate) borehole_inspector_tab: BoreholeInspectorTab,
@@ -3132,6 +3153,10 @@ pub(crate) struct EditorState {
     pub(crate) schedule_truck_rule_draft: Option<ScheduleRuleNameDraft>,
     /// The selected cashflow rule and the cells being typed into its editor.
     pub(crate) schedule_selected_cashflow_rule: Option<crate::model::schedule::CashflowRuleId>,
+    /// The dependency the Dependencies step's editor shows.
+    pub(crate) schedule_selected_dependency: Option<crate::model::schedule::dependencies::DependencyId>,
+    /// The limit the Loader Limits step's editor shows.
+    pub(crate) schedule_selected_loader_limit: Option<crate::model::schedule::loader_limits::LoaderLimitId>,
     pub(crate) schedule_cashflow_draft: Option<ScheduleCashflowDraft>,
     /// The selected opening-inventory lot on the Stockpiles page, and the cells
     /// being typed into it. One selection, like the destination one: a lot
@@ -3176,6 +3201,8 @@ pub(crate) struct EditorState {
     /// Add or edit a reclaim bar. The draft stays outside the project until
     /// Apply, so a half-typed limit or cancelled dialog changes nothing.
     pub(crate) reclaim_bar_dialog: Option<ReclaimBarDialog>,
+    /// What an automatic bar works, while its dialog is open.
+    pub(crate) auto_bar_dialog: Option<AutoBarDialog>,
     /// The Add / Edit blast bar dialog, while open.
     pub(crate) blast_bar_dialog: Option<BlastBarDialog>,
     pub(crate) blast_window_dialog: Option<BlastWindowDialog>,
@@ -3238,6 +3265,9 @@ pub(crate) struct EditorState {
     pub(crate) schedule_run_improving: bool,
     /// Whether the run in flight is an Improve run, so its control shows it.
     pub(crate) schedule_run_improve: bool,
+    /// Whether the run in flight only checks the schedule saved with the
+    /// project, so Run stays offered and takes its place.
+    pub(crate) schedule_run_restoring: bool,
     /// The Improve run in flight, or the last one until its card is put
     /// away: what its progress card shows.
     pub(crate) improve_progress: Option<std::sync::Arc<crate::model::schedule::optimisation::progress::ImproveProgress>>,
@@ -3904,6 +3934,8 @@ impl EditorState {
         self.schedule_selected_truck_rule = None;
         self.schedule_truck_rule_draft = None;
         self.schedule_selected_cashflow_rule = None;
+        self.schedule_selected_dependency = None;
+        self.schedule_selected_loader_limit = None;
         self.schedule_cashflow_draft = None;
         self.schedule_selected_lot = None;
         self.schedule_lot_draft = None;
@@ -3933,6 +3965,7 @@ impl EditorState {
         self.schedule_run_working = false;
         self.schedule_run_improving = false;
         self.schedule_run_improve = false;
+        self.schedule_run_restoring = false;
         self.improve_progress = None;
         self.schedule_run_repair = None;
         self.close_sequence_editor();
@@ -4119,6 +4152,9 @@ impl EditorState {
             show_console: crate::app::io::default_show_console(),
             show_borehole_inspector: false,
             show_schedule_inspector: true,
+            show_schedule_scenarios: true,
+            schedule_cells_scenario_only: false,
+            schedule_scenario_values: Vec::new(),
             borehole_inspector_tab: BoreholeInspectorTab::default(),
             borehole_log_strat_field: None,
             well_log_style: Default::default(),
@@ -4607,6 +4643,8 @@ impl EditorState {
             schedule_selected_truck_rule: None,
             schedule_truck_rule_draft: None,
             schedule_selected_cashflow_rule: None,
+            schedule_selected_dependency: None,
+            schedule_selected_loader_limit: None,
             schedule_cashflow_draft: None,
             schedule_selected_lot: None,
             schedule_lot_draft: None,
@@ -4624,6 +4662,7 @@ impl EditorState {
             schedule_selected_member: None,
             bar_name_dialog: None,
             reclaim_bar_dialog: None,
+            auto_bar_dialog: None,
             blast_bar_dialog: None,
             blast_window_dialog: None,
             blast_sequence_generation: None,
@@ -4646,6 +4685,7 @@ impl EditorState {
             schedule_run_working: false,
             schedule_run_improving: false,
             schedule_run_improve: false,
+            schedule_run_restoring: false,
             improve_progress: None,
             improve_card_collapsed: false,
             improve_stop_after_stall_min: None,
@@ -6501,6 +6541,8 @@ impl UiCommand {
                 ScheduleEdit::SetCrusherCells { edits } => report(tr!("destination-crusher-edit"), tr!("schedule-calendar-cells-updated", count = edits.len())),
                 ScheduleEdit::SetStockpileOperating { .. } => report(tr!("pile-operating-edit"), String::new()),
                 ScheduleEdit::SetPileModeCells { edits } => report(tr!("pile-mode-edit"), tr!("schedule-calendar-cells-updated", count = edits.len())),
+                ScheduleEdit::SetScenarioCells(cells) => report(tr!("scenario-cells-edit"), tr!("schedule-calendar-cells-updated", count = cells.len())),
+                ScheduleEdit::ResetScenarioCells(addresses) => report(tr!("scenario-cells-reset"), tr!("schedule-calendar-cells-updated", count = addresses.len())),
                 ScheduleEdit::AddTruckClass { name } => report(tr!("truck-new-class"), name.clone()),
                 ScheduleEdit::DuplicateTruckClass(_) => report(tr!("truck-duplicate-class"), String::new()),
                 ScheduleEdit::DeleteTruckClass(_) => report(tr!("truck-delete-class"), String::new()),
@@ -6509,10 +6551,18 @@ impl UiCommand {
                 ScheduleEdit::DeleteTruckingRule(_) => report(tr!("truck-delete-rule"), String::new()),
                 ScheduleEdit::SetTruckCells { edits } => report(tr!("schedule-truck-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len())),
                 ScheduleEdit::AddCashflowRule { name } => report(tr!("cashflow-new-rule"), name.clone()),
+                ScheduleEdit::AddDependency => report(tr!("dependency-new"), String::new()),
+                ScheduleEdit::DeleteDependency(_) => report(tr!("dependency-delete"), String::new()),
+                ScheduleEdit::AddLoaderLimit => report(tr!("loader-limit-new"), String::new()),
+                ScheduleEdit::DeleteLoaderLimit(_) => report(tr!("loader-limit-delete"), String::new()),
                 ScheduleEdit::DuplicateCashflowRule(_) => report(tr!("cashflow-duplicate-rule"), String::new()),
                 ScheduleEdit::DeleteCashflowRule(_) => report(tr!("cashflow-delete-rule"), String::new()),
                 ScheduleEdit::AddDelayBar { .. } => report(tr!("delay-add-bar"), String::new()),
                 ScheduleEdit::AddFollowBar { .. } => report(tr!("schedule-add-follow-bar"), String::new()),
+                ScheduleEdit::AddAutoBar { .. } => report(tr!("schedule-add-auto-bar"), String::new()),
+                ScheduleEdit::ConvertAutoBar(_) => report(tr!("auto-bar-convert"), String::new()),
+                ScheduleEdit::ConvertAutoBarUntil { .. } => report(tr!("auto-bar-convert-until-report"), String::new()),
+                ScheduleEdit::FixAutoBarInScenario { .. } => report(tr!("auto-bar-fix-in-report"), String::new()),
                 ScheduleEdit::AddBlastBar { .. } => report(tr!("blast-add-bar"), String::new()),
                 ScheduleEdit::SetClassKind { .. }
                 | ScheduleEdit::SetClassLoaderType { .. }
@@ -6609,13 +6659,24 @@ impl UiCommand {
                 | ScheduleEdit::SetOpeningPortionTonnes { .. }
                 | ScheduleEdit::SetOpeningPortionValue { .. }
                 | ScheduleEdit::SetReclaim { .. }
+                | ScheduleEdit::SetAutoSources { .. }
                 // Experimental optimiser settings: the Optimisation section
                 // and the stockpile's own page show the result where it was
                 // typed.
                 | ScheduleEdit::SetExperimentHorizon { .. }
                 | ScheduleEdit::SetStartDate(_)
                 | ScheduleEdit::SetPeriodColors { .. }
+                | ScheduleEdit::OpenScenario(_)
+                | ScheduleEdit::AddScenario { .. }
+                | ScheduleEdit::RenameScenario { .. }
+                | ScheduleEdit::DeleteScenario(_)
+                | ScheduleEdit::SetScenarioBase { .. }
+                | ScheduleEdit::SetPeriodUnit(_)
                 | ScheduleEdit::SetExperimentSolveLimits { .. }
+                | ScheduleEdit::SetDiscountRate(_)
+                | ScheduleEdit::SetPlanStop(_)
+                | ScheduleEdit::SetDependency { .. }
+                | ScheduleEdit::SetLoaderLimit(_)
                 | ScheduleEdit::SetExperimentGradeUnit { .. }
                 | ScheduleEdit::SetStockpileRepresentation { .. }
                 | ScheduleEdit::SetStockpileChunkSize { .. }
@@ -8222,6 +8283,8 @@ pub(crate) enum GanttPaletteItem {
     Blast,
     /// A drill and blast bar working another machine's blasts.
     Follow,
+    /// A loader bar whose ground the schedule sequences.
+    Auto,
 }
 
 /// Where a delay or follow bar was dropped, held while its type or the
@@ -8257,6 +8320,10 @@ pub(crate) enum ScheduleStep {
     Delays,
     /// Drill and blast settings and each blast's starting stage.
     DrillBlast,
+    /// Ground that waits for other ground to be dug.
+    Dependencies,
+    /// How many loaders may work in one area at a time.
+    LoaderLimits,
     Stockpiles,
     Dumps,
     Crushers,
@@ -8284,13 +8351,15 @@ impl ScheduleStep {
     /// than the setup does, and a step's change retires every step after it.
     /// Haulage follows it: it checks that each destination and each pit's dig
     /// blocks reach the roads, so it needs both.
-    pub(crate) const ALL: [Self; 15] = [
+    pub(crate) const ALL: [Self; 17] = [
         Self::Configuration,
         Self::Periods,
         Self::LoaderClasses,
         Self::LoaderAgents,
         Self::Delays,
         Self::DrillBlast,
+        Self::Dependencies,
+        Self::LoaderLimits,
         Self::Stockpiles,
         Self::Dumps,
         Self::Crushers,
@@ -8314,6 +8383,8 @@ impl ScheduleStep {
             Self::LoaderAgents => tr!("schedule-loader-agents"),
             Self::Delays => tr!("delay-step"),
             Self::DrillBlast => tr!("drill-blast-step"),
+            Self::Dependencies => tr!("dependency-step"),
+            Self::LoaderLimits => tr!("loader-limit-step"),
             Self::Haulage => tr!("schedule-step-road-access"),
             Self::Stockpiles => tr!("planning-stockpiles"),
             Self::Dumps => tr!("planning-dumps"),
@@ -8334,6 +8405,8 @@ impl ScheduleStep {
             Self::LoaderAgents => "schedule_loader_agents",
             Self::Delays => "schedule_delays",
             Self::DrillBlast => "schedule_drill_blast",
+            Self::Dependencies => "schedule_dependencies",
+            Self::LoaderLimits => "schedule_loader_limits",
             Self::Haulage => "schedule_haulage",
             Self::Stockpiles => "schedule_stockpiles",
             Self::Dumps => "schedule_dumps",
@@ -8539,11 +8612,28 @@ pub(crate) struct ScheduleAgentDraft {
 /// so an edit elsewhere refreshes the fields.
 #[derive(Clone, Debug)]
 pub(crate) struct ScheduleExperimentDraft {
-    pub(crate) source: (u32, u64, u64, u64, Option<usize>),
+    pub(crate) source: (crate::model::schedule::periods::PeriodScale, u32, u64, u64, u64, Option<usize>),
     pub(crate) end_day: String,
     pub(crate) interval_h: String,
     pub(crate) solve_seconds: String,
     pub(crate) relative_gap: String,
+}
+
+impl ScheduleEdit {
+    /// A Calendar cell edit as one of the open scenario's own cells; any
+    /// other edit as it is.
+    pub(crate) fn for_open_scenario(self) -> Self {
+        use crate::model::schedule::scenario_cells::CellOverride;
+        let cells: Vec<CellOverride> = match self {
+            Self::SetCalendarCells { edits } => edits.into_iter().map(CellOverride::Loader).collect(),
+            Self::SetGradeTargetCells { edits } => edits.into_iter().map(CellOverride::Grade).collect(),
+            Self::SetCrusherCells { edits } => edits.into_iter().map(CellOverride::Crusher).collect(),
+            Self::SetPileModeCells { edits } => edits.into_iter().map(CellOverride::PileMode).collect(),
+            Self::SetTruckCells { edits } => edits.into_iter().map(CellOverride::Truck).collect(),
+            other => return other,
+        };
+        Self::SetScenarioCells(cells)
+    }
 }
 
 /// What one [`UiCommand::Schedule`] does to the fleet.
@@ -8746,6 +8836,10 @@ pub(crate) enum ScheduleEdit {
     SetPileModeCells {
         edits: Vec<crate::model::schedule::stockpile_operation::PileModeCellEdit>,
     },
+    /// Set Calendar cells in the open scenario alone, as one undo step.
+    SetScenarioCells(Vec<crate::model::schedule::scenario_cells::CellOverride>),
+    /// Stop the open scenario setting these cells: it reads the mine's again.
+    ResetScenarioCells(Vec<crate::model::schedule::scenario_cells::CellAddress>),
     /// Set whether a stockpile may build and reclaim at once, and how long
     /// new material rests before reclaim.
     SetStockpileOperating {
@@ -8865,6 +8959,20 @@ pub(crate) enum ScheduleEdit {
         rule: crate::model::schedule::TruckingRuleId,
         classes: Vec<crate::model::schedule::TruckClassId>,
     },
+    /// Add a dependency with neither side chosen.
+    AddDependency,
+    /// Choose both sides of a dependency at once.
+    SetDependency {
+        id: crate::model::schedule::dependencies::DependencyId,
+        ground: Option<crate::model::schedule::SourceScope>,
+        after: Option<crate::model::schedule::SourceScope>,
+    },
+    DeleteDependency(crate::model::schedule::dependencies::DependencyId),
+    /// Add a loader limit: one loader on each bench, its scope not chosen.
+    AddLoaderLimit,
+    /// Replace a loader limit's scope, area and count at once.
+    SetLoaderLimit(crate::model::schedule::loader_limits::LoaderLimit),
+    DeleteLoaderLimit(crate::model::schedule::loader_limits::LoaderLimitId),
     /// Add a cashflow rule worth nothing.
     AddCashflowRule {
         name: String,
@@ -8990,6 +9098,12 @@ pub(crate) enum ScheduleEdit {
         sources: Vec<crate::model::schedule::DestinationId>,
         maximum_t: Option<f64>,
     },
+    /// Set what an automatic bar works: which pits, benches and flitches it
+    /// digs and which stockpiles it reclaims.
+    SetAutoSources {
+        bar: crate::model::schedule::BarId,
+        sources: crate::model::schedule::destinations::MovementSourceSelection,
+    },
     /// Set what a machine class does: load, doze, drill or charge.
     SetClassKind {
         class: crate::model::schedule::LoaderClassId,
@@ -9035,13 +9149,38 @@ pub(crate) enum ScheduleEdit {
     /// The date of Day 1, or none. Display only; see
     /// [`crate::model::schedule::periods`].
     SetStartDate(Option<chrono::NaiveDate>),
-    /// Mark periods (Day 1 is 0) with a colour, or clear their marks.
+    /// Mark days (Day 1 is 0) with a colour, or clear their marks.
     SetPeriodColors {
-        periods: Vec<u32>,
+        days: Vec<u32>,
         color: Option<[u8; 3]>,
     },
+    /// Open a scenario: its bars and horizon in place of the open one's.
+    OpenScenario(crate::model::schedule::scenarios::ScenarioId),
+    /// Add a scenario and open it: a copy of the open one, or one with no
+    /// bars of its own that starts from it.
+    AddScenario {
+        copy: bool,
+    },
+    RenameScenario {
+        id: crate::model::schedule::scenarios::ScenarioId,
+        name: String,
+    },
+    DeleteScenario(crate::model::schedule::scenarios::ScenarioId),
+    /// What a scenario starts from: the scenario whose bars it works as
+    /// they are, or none.
+    SetScenarioBase {
+        id: crate::model::schedule::scenarios::ScenarioId,
+        base: Option<crate::model::schedule::scenarios::ScenarioId>,
+    },
+    /// Read the open horizon in days, weeks or months.
+    SetPeriodUnit(crate::model::schedule::periods::PeriodUnit),
+    /// The yearly rate, as a fraction, the long-term plan discounts at.
+    SetDiscountRate(f64),
+    /// When the long-term plan stops refining its order.
+    SetPlanStop(crate::model::schedule::experiment::PlanStop),
     SetExperimentSolveLimits {
-        seconds: f64,
+        /// None for no limit.
+        seconds: Option<f64>,
         relative_gap: f64,
     },
     SetExperimentGradeUnit {
@@ -9080,6 +9219,30 @@ pub(crate) enum ScheduleEdit {
         window: crate::model::schedule::WorkWindow,
         leader: crate::model::schedule::LoaderAgentId,
         insert_lane: bool,
+    },
+    /// Add an automatic bar: while it has priority the loader digs the
+    /// ground no dig bar has sequenced, in an order the schedule works out.
+    AddAutoBar {
+        agent: Option<crate::model::schedule::LoaderAgentId>,
+        priority: u32,
+        window: crate::model::schedule::WorkWindow,
+        insert_lane: bool,
+    },
+    /// Make an automatic bar a dig bar holding the order the current
+    /// schedule worked out for it.
+    ConvertAutoBar(crate::model::schedule::BarId),
+    /// Convert an automatic bar's work before an hour, leaving the rest of
+    /// the bar automatic.
+    ConvertAutoBarUntil {
+        bar: crate::model::schedule::BarId,
+        at_h: f64,
+    },
+    /// Fix what an automatic bar started before `at_h` as a dig bar of
+    /// `scenario`, one the open scenario starts from.
+    FixAutoBarInScenario {
+        bar: crate::model::schedule::BarId,
+        at_h: f64,
+        scenario: crate::model::schedule::scenarios::ScenarioId,
     },
     /// Change which machine a follow bar follows.
     SetFollowLeader {
@@ -9236,6 +9399,14 @@ pub(crate) struct BlastPatternDraft {
     pub(crate) source: crate::model::schedule::DrillPattern,
     /// Burden, spacing, subdrill.
     pub(crate) fields: [String; 3],
+}
+
+/// An automatic bar's sources as the dialog holds them until Apply.
+pub(crate) struct AutoBarDialog {
+    pub(crate) target: crate::model::schedule::BarId,
+    pub(crate) sources: crate::model::schedule::destinations::MovementSourceSelection,
+    /// The pits and benches unfolded in its list.
+    pub(crate) expanded: Vec<(u64, u64, u64)>,
 }
 
 pub(crate) struct ReclaimBarDialog {
@@ -9821,10 +9992,10 @@ impl GanttView {
     /// The span shown while there is no work to frame.
     pub(crate) const DEFAULT_SPAN_SECONDS: f64 = 7.0 * Self::DAY;
     /// Closest it zooms in, and furthest out. An hour is the finest window a
-    /// tonnes-per-hour schedule says anything useful over; a year is past the
-    /// point where a bar is a pixel.
+    /// tonnes-per-hour schedule says anything useful over; ten years is the
+    /// longest horizon a long-term schedule is calculated over.
     pub(crate) const MIN_SPAN_SECONDS: f64 = Self::HOUR;
-    pub(crate) const MAX_SPAN_SECONDS: f64 = 365.0 * Self::DAY;
+    pub(crate) const MAX_SPAN_SECONDS: f64 = 3650.0 * Self::DAY;
 
     /// The minor tick intervals the ruler steps through as it is zoomed,
     /// coarsest last. Hours, then days, then weeks - the scales a mine plan
@@ -9833,7 +10004,7 @@ impl GanttView {
     /// Whole weeks beyond a fortnight, counted from Day 1 like every tick, so
     /// a timeline zoomed out over a year keeps its columns rather than
     /// dropping to a single tick.
-    pub(crate) const TICK_LADDER: [f64; 12] = [
+    pub(crate) const TICK_LADDER: [f64; 14] = [
         Self::HOUR,
         3.0 * Self::HOUR,
         6.0 * Self::HOUR,
@@ -9846,6 +10017,8 @@ impl GanttView {
         56.0 * Self::DAY,
         91.0 * Self::DAY,
         182.0 * Self::DAY,
+        364.0 * Self::DAY,
+        728.0 * Self::DAY,
     ];
 
     /// Frame the timeline on the work it holds: from the start of the project

@@ -22,14 +22,19 @@ use crate::{
             calendar_views::{CalendarView, CalendarViewId, Owner, RowKind, RowSet, Section},
             destinations,
             grade_targets::{GradeTargetCellEdit, GradeTargetInput, GradeTargetValue},
+            periods::{PeriodScale, PeriodUnit},
             result::CalculatedSchedule,
+            scenario_cells::{CellAddress, CellOwner, CellRow},
             stockpile_operation::{PileMode, PileModeCellEdit},
         },
     },
     ui::{
         EditorState, UiProjectView, chrome,
         state::{CalendarCellAddress, CalendarCellDraft, CalendarOwner, CalendarRow, CalendarSelection, ScheduleEdit, ScheduleStep, UiCommand},
-        widgets::hint::Hint,
+        widgets::{
+            context_menu::{ContextMenuAction, context_menu_popup},
+            hint::Hint,
+        },
     },
 };
 
@@ -87,6 +92,12 @@ struct Figures<'a> {
     grades: Vec<String>,
     currency: String,
     field_names: Vec<(crate::model::ReserveFieldId, String)>,
+    /// Which days each period column covers.
+    scale: PeriodScale,
+    /// The cells the open scenario sets differently from the shared calendar.
+    scenario_cells: std::collections::HashMap<CellAddress, CellOwner>,
+    /// Whether any of those is the open scenario's own.
+    any_own_cell: bool,
 }
 
 impl Figures<'_> {
@@ -97,10 +108,26 @@ impl Figures<'_> {
             .map_or_else(|| field.0.to_string(), |(_, name)| name.clone())
     }
 
-    /// A loader's hours working and hours it had in one period: tonnes over
+    /// The days of a period column the calculation reaches, or `None` when
+    /// it reaches none of them.
+    fn covered_days(&self, period: u32) -> Option<std::ops::Range<u32>> {
+        let days = self.scale.days(period);
+        let end = days.end.min(self.result?.periods.covered_periods());
+        (days.start < end).then_some(days.start..end)
+    }
+
+    /// A loader's hours working and hours it had over `days`.
+    fn utilisation_hours(&self, agent: crate::model::schedule::LoaderAgentId, days: std::ops::Range<u32>) -> Option<(f64, f64)> {
+        let (worked, available) = days
+            .filter_map(|day| self.day_utilisation_hours(agent, day))
+            .fold((0.0, 0.0), |(worked, available), (w, a)| (worked + w, available + a));
+        (available > 0.0).then_some((worked, available))
+    }
+
+    /// A loader's hours working and hours it had in one day: tonnes over
     /// the rate it moves them at, and the covered hours its availability and
     /// utilisation leave. `None` outside the calculated horizon.
-    fn utilisation_hours(&self, agent: crate::model::schedule::LoaderAgentId, period: u32) -> Option<(f64, f64)> {
+    fn day_utilisation_hours(&self, agent: crate::model::schedule::LoaderAgentId, period: u32) -> Option<(f64, f64)> {
         use crate::model::schedule::RateKind;
         let periods = &self.result?.periods;
         let hours = periods.covered_hours(period)?;
@@ -117,7 +144,10 @@ impl Figures<'_> {
     /// The day's priced target behind a grade Actual cell, when it received tonnes.
     fn target_result(&self, address: CalendarCellAddress) -> Option<&crate::model::schedule::result::GradeTargetResult> {
         let CalendarRow::GradeActual(field) = address.row else { return None };
-        let CalendarCell::Period(CalendarPeriod(day)) = address.cell else { return None };
+        let CalendarCell::Period(CalendarPeriod(period)) = address.cell else { return None };
+        // A week or a month is priced day by day: no one band to show.
+        let days = self.scale.days(period);
+        let day = (days.len() == 1).then_some(days.start)?;
         let destination = address.destination()?;
         self.result?
             .grade_targets
@@ -131,63 +161,29 @@ impl Figures<'_> {
     /// column, which no calculation has an opinion about.
     fn figure(&self, address: CalendarCellAddress, kind: Option<DestinationKind>) -> Option<(f64, bool)> {
         let CalendarCell::Period(CalendarPeriod(period)) = address.cell else { return None };
-        let periods = &self.result?.periods;
-        let value = match address.row {
-            CalendarRow::DigTonnes => periods.dig(address.agent()?, period)?,
-            CalendarRow::ReclaimTonnes => periods.reclaim(address.agent()?, period)?,
-            // A machine with no productive hours that day has nothing to be a
-            // share of: blank, not 0% or a division by zero.
-            CalendarRow::ScheduledUtilisation => match self.utilisation_hours(address.agent()?, period)? {
-                (worked, available) if available > 0.0 => worked / available * 100.0,
-                _ => return None,
-            },
-            CalendarRow::TruckHours => periods.truck_hours(address.truck()?, period)?,
-            CalendarRow::TruckCycle => periods.truck_haul(address.truck()?, period)?.cycle_minutes(),
-            CalendarRow::TruckTonneKm => periods.truck_haul(address.truck()?, period)?.loaded_t_km,
-            CalendarRow::Received => periods.received(address.destination()?, period)?,
-            CalendarRow::Reclaimed => periods.reclaimed(address.destination()?, period)?,
-            CalendarRow::Cumulative => match kind {
-                Some(DestinationKind::Stockpile) => periods.closing(address.destination()?, period)?.0,
-                _ => periods.cumulative(address.destination()?, period)?,
-            },
-            CalendarRow::GradeActual(field) => {
-                let result = self.result?;
-                let grade = result.grades.iter().position(|(id, _)| *id == field)?;
-                periods.received_grade(address.destination()?, period, grade)?
-            }
-            CalendarRow::Value => periods.value(period)?,
-            CalendarRow::GradePenalty => {
-                periods.value(period)?;
-                self.result?
-                    .grade_targets
-                    .iter()
-                    .filter(|target| target.period == period)
-                    .map(|target| target.penalty)
-                    .sum()
-            }
-            CalendarRow::BlastWork => {
-                let day = f64::from(period) * crate::model::schedule::SCHEDULE_PERIOD_H;
-                self.result?
-                    .drill_blast
-                    .as_ref()?
-                    .worked(address.agent()?, day, day + crate::model::schedule::SCHEDULE_PERIOD_H)?
-            }
-            CalendarRow::Input(_) | CalendarRow::Truck(_) | CalendarRow::CrusherLimit | CalendarRow::PileMode | CalendarRow::GradeInput(..) => return None,
-        };
-        Some((value, periods.is_partial(period)))
+        let days = self.covered_days(period)?;
+        let partial = days.end < self.scale.days(period).end || self.result?.periods.is_partial(days.end - 1);
+        Some((self.over(address.owner, address.row, kind, days)?, partial))
     }
 
-    /// A calculated row's figure over the whole calculated schedule: flows
-    /// summed, a stock or a deposit at its end, a grade weighted by the
-    /// tonnes behind it. `None` for authored rows and with nothing calculated.
+    /// A calculated row's figure over the whole calculated schedule.
     fn total(&self, owner: CalendarOwner, row: CalendarRow, kind: Option<DestinationKind>) -> Option<f64> {
-        let result = self.result?;
-        let periods = &result.periods;
-        let covered = periods.covered_periods();
+        let covered = self.result?.periods.covered_periods();
         if covered == 0 {
             return None;
         }
-        let sum = |value: &dyn Fn(u32) -> Option<f64>| (0..covered).map(|period| value(period).unwrap_or(0.0)).sum::<f64>();
+        self.over(owner, row, kind, 0..covered)
+    }
+
+    /// A calculated row's figure over `days`, all of them calculated: flows
+    /// summed, a stock or a deposit at their end, a grade weighted by the
+    /// tonnes behind it, a share as hours over hours. `None` for authored
+    /// rows and where there is nothing to be a figure of.
+    fn over(&self, owner: CalendarOwner, row: CalendarRow, kind: Option<DestinationKind>, days: std::ops::Range<u32>) -> Option<f64> {
+        let result = self.result?;
+        let periods = &result.periods;
+        let last = days.end.checked_sub(1)?;
+        let sum = |value: &dyn Fn(u32) -> Option<f64>| days.clone().map(|period| value(period).unwrap_or(0.0)).sum::<f64>();
         let owner = CalendarCellAddress {
             owner,
             row,
@@ -196,19 +192,18 @@ impl Figures<'_> {
         Some(match row {
             CalendarRow::DigTonnes => sum(&|period| periods.dig(owner.agent()?, period)),
             CalendarRow::ReclaimTonnes => sum(&|period| periods.reclaim(owner.agent()?, period)),
-            // Hours worked over hours had, across the schedule - not an
-            // average of the days, which would weigh a part day as a whole one.
+            // Hours worked over hours had, across the days - not an average
+            // of them, which would weigh a part day as a whole one. A machine
+            // with no productive hours has nothing to be a share of: blank,
+            // not 0% or a division by zero.
             CalendarRow::ScheduledUtilisation => {
-                let agent = owner.agent()?;
-                let (worked, available) = (0..covered)
-                    .filter_map(|period| self.utilisation_hours(agent, period))
-                    .fold((0.0, 0.0), |(worked, available), (w, a)| (worked + w, available + a));
-                if available <= 0.0 {
-                    return None;
-                }
+                let (worked, available) = self.utilisation_hours(owner.agent()?, days)?;
                 worked / available * 100.0
             }
-            CalendarRow::BlastWork => result.drill_blast.as_ref()?.worked(owner.agent()?, 0.0, f64::INFINITY)?,
+            CalendarRow::BlastWork => result
+                .drill_blast
+                .as_ref()?
+                .worked(owner.agent()?, f64::from(days.start) * SCHEDULE_PERIOD_H, f64::from(days.end) * SCHEDULE_PERIOD_H)?,
             CalendarRow::TruckHours => sum(&|period| periods.truck_hours(owner.truck()?, period)),
             CalendarRow::TruckCycle => {
                 let truck = owner.truck()?;
@@ -235,8 +230,8 @@ impl Figures<'_> {
                 )
             }),
             CalendarRow::Cumulative => match kind {
-                Some(DestinationKind::Stockpile) => periods.closing(owner.destination()?, covered - 1)?.0,
-                _ => periods.cumulative(owner.destination()?, covered - 1)?,
+                Some(DestinationKind::Stockpile) => periods.closing(owner.destination()?, last)?.0,
+                _ => periods.cumulative(owner.destination()?, last)?,
             },
             CalendarRow::GradeActual(field) => {
                 let destination = owner.destination()?;
@@ -255,7 +250,7 @@ impl Figures<'_> {
     /// demand: a row per grade would bury the grid.
     fn closing_grades(&self, address: CalendarCellAddress) -> Option<String> {
         let CalendarCell::Period(CalendarPeriod(period)) = address.cell else { return None };
-        let (tonnes, contained) = self.result?.periods.closing(address.destination()?, period)?;
+        let (tonnes, contained) = self.result?.periods.closing(address.destination()?, self.covered_days(period)?.end - 1)?;
         if tonnes <= 1e-6 || contained.is_empty() || self.grades.is_empty() {
             return None;
         }
@@ -331,9 +326,16 @@ pub(crate) fn draw_details(
             .unwrap_or_default(),
         currency: crate::model::schedule::cashflow::currency_symbol(),
         field_names: document.reserve_fields().iter().map(|f| (f.id, f.name.clone())).collect(),
+        scale: plan.period_scale(),
+        scenario_cells: plan.scenario_cells(),
+        any_own_cell: false,
+    };
+    let figures = Figures {
+        any_own_cell: figures.scenario_cells.values().any(|owner| *owner == CellOwner::Open),
+        ..figures
     };
     let destinations = destination_rows(plan, document);
-    editor.schedule_calendar.visible_days = editor.schedule_calendar.visible_days.max(required_days(plan, figures.result));
+    editor.schedule_calendar.visible_days = editor.schedule_calendar.visible_days.max(required_columns(plan, figures.result));
     // The grid in an island of its own, with the rows it shows chosen in one
     // to its right; its run controls and its report are in the viewport bar.
     let mut layout = super::planning_setup::PlanningLayout::default();
@@ -355,6 +357,7 @@ pub(crate) fn draw_details(
             editor.schedule_calendar.show_rows = true;
         }
     }
+    let first_command = commands.len();
     let rect = egui::CentralPanel::default()
         .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
@@ -368,6 +371,15 @@ pub(crate) fn draw_details(
         })
         .response
         .rect;
+    // While the Calendar edits the open scenario alone, what the grid typed,
+    // cleared or pasted is set there rather than for every scenario.
+    if editor.schedule_cells_scenario_only && plan.scenarios().list.len() > 1 {
+        for command in &mut commands[first_command..] {
+            if let UiCommand::Schedule { edit, .. } = command {
+                *edit = std::mem::replace(edit, ScheduleEdit::SetScenarioCells(Vec::new())).for_open_scenario();
+            }
+        }
+    }
     layout.regions.push(rect);
     layout.rect = rect;
     layout
@@ -704,7 +716,7 @@ fn draw_empty(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState) {
     });
 }
 
-fn required_days(plan: &SchedulePlan, result: Option<&CalculatedSchedule>) -> u32 {
+fn required_columns(plan: &SchedulePlan, result: Option<&CalculatedSchedule>) -> u32 {
     let override_day = plan
         .agents()
         .iter()
@@ -727,7 +739,8 @@ fn required_days(plan: &SchedulePlan, result: Option<&CalculatedSchedule>) -> u3
     // Whatever the calculation answers for has to be reachable, or its own
     // figures would sit past the end of the grid.
     let calculated_day = result.map_or(0, |result| result.periods.covered_periods());
-    14_u32.max(override_day).max(bar_day).max(calculated_day)
+    // In columns: a fortnight of days, or the weeks or months that reach as far.
+    plan.period_scale().count(14_u32.max(override_day).max(bar_day).max(calculated_day))
 }
 
 /// The view the grid shows: changes to the Calendar's own not yet saved, a
@@ -967,21 +980,29 @@ fn draw_grid(
     for period in first_period..last_period {
         let x = period_left + period as f32 * PERIOD_W - editor.schedule_calendar.scroll_x;
         let cell = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(PERIOD_W, HEADER_H)).intersect(period_view);
-        // The day and, under it, its date, as a planner reads a roster; the
-        // hours it spans before the schedule has a start date.
-        let when = match crate::ui::elements::schedule_periods::clock_start().and_then(|start| start.checked_add_signed(chrono::Duration::days(i64::from(period)))) {
-            Some(date) => tr!(
+        // The period and, under it, when it is, as a planner reads a
+        // roster: a day's weekday and date, a week's first date, a month's
+        // name; the hours it spans before the schedule has a start date.
+        let scale = figures.scale;
+        let date = scale.date(period);
+        let when = match (scale.unit, date) {
+            (PeriodUnit::Day, Some(date)) => tr!(
                 "schedule-calendar-weekday-date",
                 weekday = crate::ui::elements::schedule_periods::weekday_text(date),
                 date = crate::model::schedule::periods::date_text(date)
             ),
-            None => tr!(
+            (_, Some(_)) => crate::ui::elements::schedule_periods::period_date(scale, period).unwrap_or_default(),
+            (PeriodUnit::Day, None) => tr!(
                 "schedule-calendar-hours",
-                start = format!("{:.0}", f64::from(period) * SCHEDULE_PERIOD_H),
-                end = format!("{:.0}", f64::from(period.saturating_add(1)) * SCHEDULE_PERIOD_H)
+                start = format!("{:.0}", scale.start_h(period)),
+                end = format!("{:.0}", scale.start_h(period.saturating_add(1)))
             ),
+            (_, None) => {
+                let days = scale.days(period);
+                tr!("schedule-calendar-days", first = (days.start + 1).to_string(), last = days.end.to_string())
+            }
         };
-        paint_day_header(ui, cell, tr!("schedule-calendar-day", day = period.saturating_add(1).to_string()), when);
+        paint_day_header(ui, cell, crate::ui::elements::schedule_periods::period_name(scale, period), when);
     }
 
     let first_row = ((editor.schedule_calendar.scroll_y / row_h).floor() as i32 - OVERSCAN).max(0) as usize;
@@ -1546,10 +1567,104 @@ fn draw_cell(
             color,
         );
     }
+    let set_here = scenario_cells_at(plan, figures, address);
+    if let Some((_, owner)) = set_here.iter().find(|(_, owner)| *owner == CellOwner::Open).or(set_here.first()) {
+        // A corner mark, as a spreadsheet marks a note: full for the open
+        // scenario's own cells, faint for those of one it starts from.
+        let color = match owner {
+            CellOwner::Open => ui.visuals().selection.stroke.color,
+            CellOwner::Base(_) => ui.visuals().weak_text_color(),
+        };
+        let corner = rect.right_top();
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![corner, corner + egui::vec2(0.0, SCENARIO_MARK), corner - egui::vec2(SCENARIO_MARK, 0.0)],
+            color,
+            egui::Stroke::NONE,
+        ));
+    }
     if editor.schedule_calendar.mode_menu == Some(address) {
         draw_mode_menu(ui, rect, address, editor, plan, session, commands);
-    } else if let Some(hover) = hover_text(plan, destinations, agent, figures, address) {
-        response.hint(hover);
+    } else {
+        let note = set_here
+            .iter()
+            .find(|(_, owner)| *owner == CellOwner::Open)
+            .or(set_here.first())
+            .map(|(_, owner)| match owner {
+                CellOwner::Open => tr!("calendar-cell-own"),
+                CellOwner::Base(base) => tr!(
+                    "calendar-cell-inherited",
+                    scenario = plan.scenarios().get(*base).map(|scenario| scenario.name.clone()).unwrap_or_default()
+                ),
+            });
+        match (hover_text(plan, destinations, agent, figures, address), note) {
+            (Some(hover), Some(note)) => {
+                response.clone().hint(format!("{hover}\n{note}"));
+            }
+            (Some(text), None) | (None, Some(text)) => {
+                response.clone().hint(text);
+            }
+            (None, None) => {}
+        }
+    }
+    // The open scenario's own cells, under the pointer or across the
+    // selection it is part of, can be given back to the shared calendar.
+    let own = |address| {
+        scenario_cells_at(plan, figures, address)
+            .into_iter()
+            .filter(|(_, owner)| *owner == CellOwner::Open)
+            .map(|(cell, _)| cell)
+    };
+    if figures.any_own_cell && (selected || own(address).next().is_some()) {
+        let editor: &EditorState = editor;
+        context_menu_popup(&response, tr!("scenario-cells"), |ui| {
+            // Gathered only while the menu is open.
+            let mut reset: Vec<CellAddress> = Vec::new();
+            match selection_bounds(editor, plan, destinations).filter(|_| selected) {
+                Some((r0, r1, c0, c1)) => {
+                    for row in r0..=r1 {
+                        for column in c0..=c1 {
+                            if let Some(address) = address_at(editor, plan, destinations, row, column) {
+                                reset.extend(own(address));
+                            }
+                        }
+                    }
+                }
+                None => reset.extend(own(address)),
+            }
+            if ContextMenuAction::new(tr!("calendar-use-shared")).enabled(!reset.is_empty()).show(ui).clicked() {
+                commands.push(UiCommand::schedule(session, ScheduleEdit::ResetScenarioCells(reset)));
+                ui.close();
+            }
+        });
+    }
+}
+
+/// How far along each edge a cell's scenario mark runs.
+const SCENARIO_MARK: f32 = 6.0;
+
+/// The shared calendar's row a Calendar row writes, when it is one a
+/// scenario can set.
+fn scenario_row(address: CalendarCellAddress) -> Option<CellRow> {
+    match (address.owner, address.row) {
+        (CalendarOwner::Loader(agent), CalendarRow::Input(field)) => Some(CellRow::Loader(agent, field)),
+        (CalendarOwner::Truck(class), CalendarRow::Truck(field)) => Some(CellRow::Truck(class, field)),
+        (CalendarOwner::Destination(DestinationId::Standalone(id)), CalendarRow::CrusherLimit) => Some(CellRow::Crusher(id)),
+        (CalendarOwner::Destination(destination), CalendarRow::GradeInput(field, input)) => Some(CellRow::Grade(destination, field, input)),
+        (CalendarOwner::Destination(destination), CalendarRow::PileMode) => Some(CellRow::PileMode(destination)),
+        _ => None,
+    }
+}
+
+/// The cells the open scenario sets of the days `address` covers, and whose each is.
+fn scenario_cells_at(plan: &SchedulePlan, figures: &Figures<'_>, address: CalendarCellAddress) -> Vec<(CellAddress, CellOwner)> {
+    if figures.scenario_cells.is_empty() {
+        return Vec::new();
+    }
+    let Some(row) = scenario_row(address) else { return Vec::new() };
+    let found = |cell: CalendarCell| figures.scenario_cells.get(&(row, cell)).map(|owner| ((row, cell), *owner));
+    match cell_days(plan, address.cell) {
+        None => found(CalendarCell::Default).into_iter().collect(),
+        Some(days) => days.filter_map(|day| found(CalendarCell::Period(CalendarPeriod(day)))).collect(),
     }
 }
 
@@ -1563,7 +1678,12 @@ fn draw_mode_menu(ui: &mut egui::Ui, rect: egui::Rect, address: CalendarCellAddr
     let operation = plan.stockpile_operation(destination);
     let current = match address.cell {
         CalendarCell::Default => Some(operation.default_mode),
-        CalendarCell::Period(day) => operation.periods.get(&day).copied(),
+        // A week or a month ticks a mode only when every day of it holds it.
+        CalendarCell::Period(_) => cell_days(plan, address.cell).and_then(|days| {
+            let on = |day: u32| operation.periods.get(&CalendarPeriod(day)).copied();
+            let first = on(days.start);
+            days.skip(1).all(|day| on(day) == first).then_some(first).flatten()
+        }),
     };
     let mut choices: Vec<(Option<PileMode>, String)> = PileMode::ALL.into_iter().map(|mode| (Some(mode), mode.label())).collect();
     if matches!(address.cell, CalendarCell::Period(_)) {
@@ -1588,11 +1708,14 @@ fn draw_mode_menu(ui: &mut egui::Ui, rect: egui::Rect, address: CalendarCellAddr
         commands.push(UiCommand::schedule(
             session,
             ScheduleEdit::SetPileModeCells {
-                edits: vec![PileModeCellEdit {
-                    destination,
-                    cell: address.cell,
-                    mode,
-                }],
+                edits: daily(
+                    plan,
+                    vec![PileModeCellEdit {
+                        destination,
+                        cell: address.cell,
+                        mode,
+                    }],
+                ),
             },
         ));
         editor.schedule_calendar.mode_menu = None;
@@ -1645,10 +1768,15 @@ fn raw_figure(row: CalendarRow, value: f64) -> String {
 /// calculated horizon, and marks a period the horizon stops part-way through.
 fn display_text(plan: &SchedulePlan, destinations: &[DestinationRow], agent: Option<&LoaderAgent>, figures: &Figures<'_>, address: CalendarCellAddress) -> String {
     match address.row {
-        CalendarRow::Input(_) => agent.map(|agent| cell_text(plan, agent, address)).unwrap_or_default(),
-        CalendarRow::Truck(field) => truck_text(plan, address, field),
-        CalendarRow::CrusherLimit => crusher_text(plan, address),
-        CalendarRow::PileMode | CalendarRow::GradeInput(..) => raw_cell_text(plan, address),
+        CalendarRow::Input(_) | CalendarRow::Truck(_) | CalendarRow::CrusherLimit | CalendarRow::PileMode | CalendarRow::GradeInput(..) => {
+            across_days(plan, address, |address| match address.row {
+                CalendarRow::Input(_) => agent.map(|agent| cell_text(plan, agent, address)).unwrap_or_default(),
+                CalendarRow::Truck(field) => truck_text(plan, address, field),
+                CalendarRow::CrusherLimit => crusher_text(plan, address),
+                _ => day_raw_cell_text(plan, address),
+            })
+            .unwrap_or_else(|| tr!("schedule-calendar-varies"))
+        }
         row => match figures.figure(address, destination_kind(destinations, address)) {
             Some((value, true)) => format!("{} *", format_figure(row, value)),
             Some((value, false)) => format_figure(row, value),
@@ -1658,6 +1786,13 @@ fn display_text(plan: &SchedulePlan, destinations: &[DestinationRow], agent: Opt
 }
 
 fn hover_text(plan: &SchedulePlan, destinations: &[DestinationRow], agent: Option<&LoaderAgent>, figures: &Figures<'_>, address: CalendarCellAddress) -> Option<String> {
+    // An authored cell over several days explains itself only when they agree.
+    let address = if address.row.is_calculated() {
+        address
+    } else {
+        across_days(plan, address, |address| day_raw_cell_text(plan, address))?;
+        first_day(plan, address)
+    };
     match address.row {
         CalendarRow::Input(_) => agent.map(|agent| resolved_hover(plan, agent, address)),
         CalendarRow::Truck(field) => Some(truck_hover(plan, address, field)),
@@ -1714,7 +1849,7 @@ fn hover_text(plan: &SchedulePlan, destinations: &[DestinationRow], agent: Optio
         // The hours behind the share, and what the share is of.
         CalendarRow::ScheduledUtilisation => {
             let CalendarCell::Period(CalendarPeriod(period)) = address.cell else { return None };
-            let (worked, available) = figures.utilisation_hours(address.agent()?, period)?;
+            let (worked, available) = figures.utilisation_hours(address.agent()?, figures.covered_days(period)?)?;
             Some(format!(
                 "{}\n{}",
                 tr!("schedule-calendar-utilisation-hours", worked = format_hours(worked), available = format_hours(available)),
@@ -1988,7 +2123,108 @@ fn raw_text(agent: &LoaderAgent, address: CalendarCellAddress) -> String {
 
 /// Plain digits for any cell: what an editor opens on and what the clipboard
 /// carries, whichever half of the grid the cell is in.
+/// The days a period cell covers; `None` for the Default column.
+fn cell_days(plan: &SchedulePlan, cell: CalendarCell) -> Option<std::ops::Range<u32>> {
+    match cell {
+        CalendarCell::Default => None,
+        CalendarCell::Period(CalendarPeriod(period)) => Some(plan.period_scale().days(period)),
+    }
+}
+
+/// `address` as its period's first day, which is where an authored cell
+/// over several days that agree is read from.
+fn first_day(plan: &SchedulePlan, address: CalendarCellAddress) -> CalendarCellAddress {
+    match cell_days(plan, address.cell) {
+        Some(days) => CalendarCellAddress {
+            cell: CalendarCell::Period(CalendarPeriod(days.start)),
+            ..address
+        },
+        None => address,
+    }
+}
+
+/// What an authored cell says, read from each day it covers: `text` is
+/// handed the cell as one day. `None` when the days disagree.
+fn across_days(plan: &SchedulePlan, address: CalendarCellAddress, text: impl Fn(CalendarCellAddress) -> String) -> Option<String> {
+    let Some(days) = cell_days(plan, address.cell) else { return Some(text(address)) };
+    let on = |day: u32| {
+        text(CalendarCellAddress {
+            cell: CalendarCell::Period(CalendarPeriod(day)),
+            ..address
+        })
+    };
+    let first = on(days.start);
+    days.skip(1).all(|day| on(day) == first).then_some(first)
+}
+
+/// A cell's own text as it is typed: blank where the days of a week or a
+/// month disagree, so typing replaces them all.
 fn raw_cell_text(plan: &SchedulePlan, address: CalendarCellAddress) -> String {
+    across_days(plan, address, |address| day_raw_cell_text(plan, address)).unwrap_or_default()
+}
+
+/// One edit for each day its cell covers.
+trait DailyEdit: Copy {
+    fn cell(&self) -> CalendarCell;
+    fn on(self, cell: CalendarCell) -> Self;
+}
+
+macro_rules! daily_edit {
+    ($($edit:ty),*) => {$(
+        impl DailyEdit for $edit {
+            fn cell(&self) -> CalendarCell {
+                self.cell
+            }
+            fn on(self, cell: CalendarCell) -> Self {
+                Self { cell, ..self }
+            }
+        }
+    )*};
+}
+daily_edit!(CalendarCellEdit, TruckCellEdit, PileModeCellEdit);
+
+impl DailyEdit for CrusherCellEdit {
+    fn cell(&self) -> CalendarCell {
+        match self.cell {
+            CrusherCell::Default => CalendarCell::Default,
+            CrusherCell::Period(period) => CalendarCell::Period(period),
+        }
+    }
+    fn on(self, cell: CalendarCell) -> Self {
+        Self { cell: crusher_cell(cell), ..self }
+    }
+}
+
+/// Edits addressed by period column as edits to days: every calendar is
+/// held per day, so a week's or a month's cell writes each day it covers.
+fn daily<E: DailyEdit>(plan: &SchedulePlan, edits: Vec<E>) -> Vec<E> {
+    let mut out = Vec::with_capacity(edits.len());
+    for edit in edits {
+        match cell_days(plan, edit.cell()) {
+            Some(days) => out.extend(days.map(|day| edit.on(CalendarCell::Period(CalendarPeriod(day))))),
+            None => out.push(edit),
+        }
+    }
+    out
+}
+
+/// [`daily`] for grade targets, whose edits are not `Copy`.
+fn daily_grades(plan: &SchedulePlan, edits: Vec<GradeTargetCellEdit>) -> Vec<GradeTargetCellEdit> {
+    let mut out = Vec::with_capacity(edits.len());
+    for edit in edits {
+        match cell_days(plan, edit.cell) {
+            Some(days) => out.extend(days.map(|day| GradeTargetCellEdit {
+                cell: CalendarCell::Period(CalendarPeriod(day)),
+                ..edit
+            })),
+            None => out.push(edit),
+        }
+    }
+    out
+}
+
+/// One day's cell, or the Default's, as it is typed.
+fn day_raw_cell_text(plan: &SchedulePlan, address: CalendarCellAddress) -> String {
     match address.row {
         CalendarRow::CrusherLimit => match (crusher_calendar(plan, address), address.cell) {
             (Some(calendar), CalendarCell::Default) => calendar.default_tpd.map(trimmed_number).unwrap_or_else(|| tr!("destination-unlimited")),
@@ -2290,7 +2526,7 @@ fn parse_grade_cell(_input: GradeTargetInput, text: &str) -> Result<Option<Grade
 
 fn validate_grade_edits(plan: &SchedulePlan, edits: &[GradeTargetCellEdit]) -> Result<(), String> {
     let mut trial = plan.clone();
-    trial.set_grade_target_cells(edits).map_err(|e| e.message())
+    trial.set_grade_target_cells(&daily_grades(plan, edits.to_vec())).map_err(|e| e.message())
 }
 
 fn commit_draft(editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) -> bool {
@@ -2310,7 +2546,7 @@ fn commit_draft(editor: &mut EditorState, plan: &SchedulePlan, session: u32, com
         });
         match result {
             Ok(edits) => {
-                commands.push(UiCommand::schedule(session, ScheduleEdit::SetGradeTargetCells { edits }));
+                commands.push(UiCommand::schedule(session, ScheduleEdit::SetGradeTargetCells { edits: daily_grades(plan, edits) }));
                 editor.schedule_calendar.draft = None;
                 editor.schedule_calendar.error = None;
                 return true;
@@ -2336,11 +2572,14 @@ fn commit_draft(editor: &mut EditorState, plan: &SchedulePlan, session: u32, com
                 commands.push(UiCommand::schedule(
                     session,
                     ScheduleEdit::SetPileModeCells {
-                        edits: vec![PileModeCellEdit {
-                            destination,
-                            cell: draft.address.cell,
-                            mode,
-                        }],
+                        edits: daily(
+                            plan,
+                            vec![PileModeCellEdit {
+                                destination,
+                                cell: draft.address.cell,
+                                mode,
+                            }],
+                        ),
                     },
                 ));
                 editor.schedule_calendar.draft = None;
@@ -2365,11 +2604,14 @@ fn commit_draft(editor: &mut EditorState, plan: &SchedulePlan, session: u32, com
                 commands.push(UiCommand::schedule(
                     session,
                     ScheduleEdit::SetCrusherCells {
-                        edits: vec![CrusherCellEdit {
-                            destination,
-                            cell: crusher_cell(draft.address.cell),
-                            value,
-                        }],
+                        edits: daily(
+                            plan,
+                            vec![CrusherCellEdit {
+                                destination,
+                                cell: crusher_cell(draft.address.cell),
+                                value,
+                            }],
+                        ),
                     },
                 ));
                 editor.schedule_calendar.draft = None;
@@ -2396,12 +2638,15 @@ fn commit_draft(editor: &mut EditorState, plan: &SchedulePlan, session: u32, com
                 commands.push(UiCommand::schedule(
                     session,
                     ScheduleEdit::SetTruckCells {
-                        edits: vec![TruckCellEdit {
-                            class,
-                            cell: draft.address.cell,
-                            field,
-                            value,
-                        }],
+                        edits: daily(
+                            plan,
+                            vec![TruckCellEdit {
+                                class,
+                                cell: draft.address.cell,
+                                field,
+                                value,
+                            }],
+                        ),
                     },
                 ));
                 editor.schedule_calendar.draft = None;
@@ -2427,12 +2672,15 @@ fn commit_draft(editor: &mut EditorState, plan: &SchedulePlan, session: u32, com
             commands.push(UiCommand::schedule(
                 session,
                 ScheduleEdit::SetCalendarCells {
-                    edits: vec![CalendarCellEdit {
-                        agent,
-                        cell: draft.address.cell,
-                        field,
-                        value,
-                    }],
+                    edits: daily(
+                        plan,
+                        vec![CalendarCellEdit {
+                            agent,
+                            cell: draft.address.cell,
+                            field,
+                            value,
+                        }],
+                    ),
                 },
             ));
             editor.schedule_calendar.draft = None;
@@ -2660,20 +2908,30 @@ fn clear_selection(editor: &mut EditorState, plan: &SchedulePlan, destinations: 
             editor.schedule_calendar.error = Some(error);
             return;
         }
-        commands.push(UiCommand::schedule(session, ScheduleEdit::SetGradeTargetCells { edits: grade_edits }));
+        commands.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::SetGradeTargetCells {
+                edits: daily_grades(plan, grade_edits),
+            },
+        ));
     }
     editor.schedule_calendar.error = None;
     if !edits.is_empty() {
-        commands.push(UiCommand::schedule(session, ScheduleEdit::SetCalendarCells { edits }));
+        commands.push(UiCommand::schedule(session, ScheduleEdit::SetCalendarCells { edits: daily(plan, edits) }));
     }
     if !crusher_edits.is_empty() {
-        commands.push(UiCommand::schedule(session, ScheduleEdit::SetCrusherCells { edits: crusher_edits }));
+        commands.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::SetCrusherCells {
+                edits: daily(plan, crusher_edits),
+            },
+        ));
     }
     if !truck_edits.is_empty() {
-        commands.push(UiCommand::schedule(session, ScheduleEdit::SetTruckCells { edits: truck_edits }));
+        commands.push(UiCommand::schedule(session, ScheduleEdit::SetTruckCells { edits: daily(plan, truck_edits) }));
     }
     if !mode_edits.is_empty() {
-        commands.push(UiCommand::schedule(session, ScheduleEdit::SetPileModeCells { edits: mode_edits }));
+        commands.push(UiCommand::schedule(session, ScheduleEdit::SetPileModeCells { edits: daily(plan, mode_edits) }));
     }
 }
 
@@ -2792,20 +3050,30 @@ fn paste(editor: &mut EditorState, plan: &SchedulePlan, destinations: &[Destinat
             editor.schedule_calendar.error = Some(error);
             return;
         }
-        commands.push(UiCommand::schedule(session, ScheduleEdit::SetGradeTargetCells { edits: grade_edits }));
+        commands.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::SetGradeTargetCells {
+                edits: daily_grades(plan, grade_edits),
+            },
+        ));
     }
     editor.schedule_calendar.error = None;
     if !edits.is_empty() {
-        commands.push(UiCommand::schedule(session, ScheduleEdit::SetCalendarCells { edits }));
+        commands.push(UiCommand::schedule(session, ScheduleEdit::SetCalendarCells { edits: daily(plan, edits) }));
     }
     if !crusher_edits.is_empty() {
-        commands.push(UiCommand::schedule(session, ScheduleEdit::SetCrusherCells { edits: crusher_edits }));
+        commands.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::SetCrusherCells {
+                edits: daily(plan, crusher_edits),
+            },
+        ));
     }
     if !truck_edits.is_empty() {
-        commands.push(UiCommand::schedule(session, ScheduleEdit::SetTruckCells { edits: truck_edits }));
+        commands.push(UiCommand::schedule(session, ScheduleEdit::SetTruckCells { edits: daily(plan, truck_edits) }));
     }
     if !mode_edits.is_empty() {
-        commands.push(UiCommand::schedule(session, ScheduleEdit::SetPileModeCells { edits: mode_edits }));
+        commands.push(UiCommand::schedule(session, ScheduleEdit::SetPileModeCells { edits: daily(plan, mode_edits) }));
     }
 }
 

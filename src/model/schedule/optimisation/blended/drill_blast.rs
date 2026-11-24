@@ -90,6 +90,12 @@ pub(crate) struct BlastJob {
     pub(crate) above: Vec<GroundId>,
     /// Ground above it that no bar digs stands for good, so it never clears.
     pub(crate) never_clear: bool,
+    /// A dependency rather than a blast: nothing to prep, drill or charge
+    /// and no window to wait for, so its ground is available the moment
+    /// the ground above it is dug. How ground the schedule sequences for
+    /// itself is kept from being dug out from under ground still standing.
+    #[serde(default)]
+    pub(crate) gate: bool,
 }
 
 /// A dozer, drill or MPU: what it does, and how much an hour in each
@@ -155,7 +161,7 @@ impl DrillBlastInput {
         self.blasts
             .iter()
             .enumerate()
-            .filter(|(_, blast)| !blast.releases.is_empty() && blast.stage < BlastStage::Fired)
+            .filter(|(_, blast)| !blast.gate && !blast.releases.is_empty() && blast.stage < BlastStage::Fired)
             .filter_map(|(index, blast)| {
                 BlastActivity::ALL
                     .into_iter()
@@ -190,6 +196,13 @@ impl DrillBlastInput {
     fn firing(&self, charged_h: f64) -> Option<f64> {
         let at = self.fires_at(charged_h);
         (at < NEVER).then_some(at)
+    }
+
+    /// When `blast`'s ground is available once its last step is done at
+    /// `charged_h`: the end of the window it fires in, or for a
+    /// [`BlastJob::gate`] that very hour.
+    pub(crate) fn released_after(&self, blast: &BlastJob, charged_h: f64) -> f64 {
+        if blast.gate { charged_h } else { self.fires_at(charged_h) }
     }
 
     /// When each blast's ground is available: what the dispatch found, or
@@ -235,7 +248,7 @@ impl DrillBlastInput {
                             break;
                         }
                     }
-                    if done >= NEVER { NEVER } else { self.fires_at(done) }
+                    if done >= NEVER { NEVER } else { self.released_after(blast, done) }
                 }
             };
             for ground in &blast.releases {
@@ -247,7 +260,7 @@ impl DrillBlastInput {
 
     /// When `quantity` of `activity` on `blast`, started at `from_h`, could
     /// be done by every machine able to work it, all at once.
-    fn earliest_done(&self, blast: usize, activity: BlastActivity, quantity: f64, from_h: f64, intervals: &[Interval]) -> f64 {
+    pub(crate) fn earliest_done(&self, blast: usize, activity: BlastActivity, quantity: f64, from_h: f64, intervals: &[Interval]) -> f64 {
         if quantity <= DONE {
             return from_h;
         }
@@ -448,6 +461,18 @@ pub(crate) struct Chain<'a> {
     work: Vec<BlastWork>,
     /// Which blast each ground belongs to.
     owner: BTreeMap<GroundId, usize>,
+    /// How much of the ground above each blast is known gone, in order:
+    /// ground once dug stays dug, so each is checked until it is gone.
+    gone_above: Vec<usize>,
+    /// The blasts still to clear, by the ground above them each waits on.
+    waiting: BTreeMap<GroundId, Vec<usize>>,
+    /// Ground dug since the last interval opened, from [`Self::dug`]; every
+    /// blast is checked as the first opens.
+    dug: Option<Vec<GroundId>>,
+    /// The blasts cleared with a step not yet done.
+    unfinished: Vec<usize>,
+    /// The blasts given a firing time since [`Self::take_fired`] last asked.
+    fired: Vec<usize>,
 }
 
 impl<'a> Chain<'a> {
@@ -491,7 +516,22 @@ impl<'a> Chain<'a> {
             .enumerate()
             .flat_map(|(index, blast)| blast.releases.iter().map(move |ground| (*ground, index)))
             .collect();
-        Self { input, left, events, work, owner }
+        let unfinished = (0..input.blasts.len())
+            .filter(|&blast| events[blast].cleared_h.is_some() && events[blast].done_h.iter().any(Option::is_none))
+            .collect();
+        let fired = (0..input.blasts.len()).filter(|&blast| events[blast].fired_h.is_some()).collect();
+        Self {
+            input,
+            left,
+            events,
+            work,
+            owner,
+            gone_above: vec![0; input.blasts.len()],
+            waiting: BTreeMap::new(),
+            dug: None,
+            unfinished,
+            fired,
+        }
     }
 
     /// Where the chain stands, to resume a later part of the horizon from.
@@ -511,6 +551,45 @@ impl<'a> Chain<'a> {
             .is_none_or(|&blast| self.events[blast].fired_h.is_some_and(|fired| fired <= at_h + 1e-9))
     }
 
+    /// The blasts given a firing time since this was last asked, from the
+    /// first, with those times and the ground each releases.
+    pub(crate) fn take_fired(&mut self) -> Vec<(usize, f64, &'a [GroundId])> {
+        let input = self.input;
+        std::mem::take(&mut self.fired)
+            .into_iter()
+            .filter_map(|blast| Some((blast, self.events[blast].fired_h?, input.blasts[blast].releases.as_slice())))
+            .collect()
+    }
+
+    /// Whether `blast` is clear: the ground above it gone.
+    pub(crate) fn cleared(&self, blast: usize) -> bool {
+        self.events[blast].cleared_h.is_some()
+    }
+
+    /// Clear the [`BlastJob::gate`]s in `blasts` at `at_h`, within an
+    /// interval: the ground above each was dug by then, so the ground it
+    /// holds is available from that hour. A blast that is not a gate, or
+    /// is clear already, is left as it is.
+    pub(crate) fn clear_gates(&mut self, at_h: f64, blasts: &[usize]) {
+        if self.input.fixed.is_some() {
+            return;
+        }
+        for &blast in blasts {
+            if self.events[blast].cleared_h.is_some() || !self.input.blasts[blast].gate {
+                continue;
+            }
+            self.events[blast].cleared_h = Some(at_h);
+            self.gone_above[blast] = self.input.blasts[blast].above.len();
+            self.unfinished.push(blast);
+        }
+        self.finish_empty_steps(at_h);
+    }
+
+    /// Whether `ground` belongs to a blast.
+    pub(crate) fn in_blast(&self, ground: GroundId) -> bool {
+        self.owner.contains_key(&ground)
+    }
+
     /// Whether a blast is ready for `activity` at `at_h`: clear for prep,
     /// the step before finished by then otherwise, and this step not done.
     fn ready(&self, blast: usize, activity: BlastActivity, at_h: f64) -> bool {
@@ -526,17 +605,47 @@ impl<'a> Chain<'a> {
         before.is_some_and(|done| done <= at_h + 1e-9)
     }
 
+    /// Note that `ground` may have been dug out, for the blasts below it to
+    /// be checked as the next interval opens.
+    pub(crate) fn dug(&mut self, ground: GroundId) {
+        if let Some(dug) = self.dug.as_mut() {
+            dug.push(ground);
+        }
+    }
+
     /// Work one interval. `standing` says whether ground still holds material
-    /// as the interval opens.
+    /// as the interval opens: ground once gone stays gone, and every ground
+    /// dug since the last interval opened has been passed to [`Self::dug`].
     pub(crate) fn advance(&mut self, interval: Interval, standing: impl Fn(GroundId) -> bool) {
         let input = self.input;
         if input.fixed.is_some() {
             return;
         }
         let now = interval.start_h;
-        for (index, blast) in input.blasts.iter().enumerate() {
-            if self.events[index].cleared_h.is_none() && !blast.never_clear && blast.above.iter().all(|ground| !standing(*ground)) {
-                self.events[index].cleared_h = Some(now);
+        let check: Vec<usize> = match self.dug.replace(Vec::new()) {
+            None => (0..input.blasts.len())
+                .filter(|&blast| self.events[blast].cleared_h.is_none() && !input.blasts[blast].never_clear)
+                .collect(),
+            Some(dug) => dug.iter().filter_map(|ground| self.waiting.remove(ground)).flatten().collect(),
+        };
+        for blast in check {
+            // Cleared already, as the ground above went within an interval.
+            if self.events[blast].cleared_h.is_some() {
+                continue;
+            }
+            let above = &input.blasts[blast].above;
+            let gone = &mut self.gone_above[blast];
+            while above.get(*gone).is_some_and(|ground| !standing(*ground)) {
+                *gone += 1;
+            }
+            match above.get(*gone) {
+                Some(ground) => self.waiting.entry(*ground).or_default().push(blast),
+                None => {
+                    self.events[blast].cleared_h = Some(now);
+                    if self.events[blast].done_h.iter().any(Option::is_none) {
+                        self.unfinished.push(blast);
+                    }
+                }
             }
         }
         // Every machine advances on the same clock. Reassign only at a bar
@@ -584,6 +693,9 @@ impl<'a> Chain<'a> {
                     self.events[blast].done_h[step] = Some(until);
                     if step == BlastActivity::Charge as usize {
                         self.events[blast].fired_h = input.firing(until);
+                        if self.events[blast].fired_h.is_some() {
+                            self.fired.push(blast);
+                        }
                     }
                 }
             }
@@ -633,18 +745,25 @@ impl<'a> Chain<'a> {
 
     /// Zero-quantity steps complete as soon as their predecessor does.
     fn finish_empty_steps(&mut self, at: f64) {
-        for blast in 0..self.input.blasts.len() {
+        let mut unfinished = std::mem::take(&mut self.unfinished);
+        for &blast in &unfinished {
             for activity in BlastActivity::ALL {
                 let step = activity as usize;
                 let before = if step == 0 { self.events[blast].cleared_h } else { self.events[blast].done_h[step - 1] };
                 if self.left[blast][step] <= DONE && self.events[blast].done_h[step].is_none() && before.is_some_and(|done| done <= at + 1e-9) {
                     self.events[blast].done_h[step] = Some(at);
                     if activity == BlastActivity::Charge {
-                        self.events[blast].fired_h = self.input.firing(at);
+                        let released = self.input.released_after(&self.input.blasts[blast], at);
+                        self.events[blast].fired_h = (released < NEVER).then_some(released);
+                        if released < NEVER {
+                            self.fired.push(blast);
+                        }
                     }
                 }
             }
         }
+        unfinished.retain(|&blast| self.events[blast].done_h.iter().any(Option::is_none));
+        self.unfinished = unfinished;
     }
 
     /// Add a stretch of work, joining it to the machine's last stretch on

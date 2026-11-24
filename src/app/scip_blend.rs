@@ -107,6 +107,22 @@ pub(crate) fn improve(
     let mut seed = None;
     let mut relaxation = None;
     let mut windows = None;
+    // Everything from here is sized by the switches within an interval the
+    // first schedule needed, and one more, not by the cap the dispatch
+    // worked under: on a ten-year mine the dispatch used three of 24, and
+    // every whole-horizon program carried all 24.
+    // Fewer switches only narrow the schedules the exact model holds, so its
+    // bounds then hold for those alone (see `conditional` below).
+    let mut capped = false;
+    if let DayByDay::Seed(found) = &attempt {
+        let needed = segments_in_use(&found.solution) + 1;
+        if needed < out.input.segments_per_interval {
+            let mut input = (*out.input).clone();
+            input.segments_per_interval = needed;
+            out.input = Arc::new(input);
+            capped = true;
+        }
+    }
     // Whether the whole-horizon model is small enough to build: past that,
     // neither SCIP nor its relaxation is attempted and the search has the
     // whole budget.
@@ -153,11 +169,13 @@ pub(crate) fn improve(
         relaxation = RelaxationJob::start(&out.input, options.time_limit, cancel, out.identity.run_id);
     }
     // The exact model and its relaxation hold the first schedule's blast
-    // timeline. Where blasts can still move, which the search may do, their
-    // bounds hold only for schedules on that timeline: they may stop the
-    // whole-horizon solve on it, but only the search's bound, which allows
-    // each blast its earliest release, is published or ends the run.
-    let conditional = out.input.drill_blast.as_ref().is_some_and(|chain| chain.fixed.is_some() && chain.movable());
+    // timeline, and as many switches an interval as it used and one more.
+    // Where blasts can still move, which the search may do, or a schedule
+    // could switch more often, their bounds hold only for the schedules they
+    // allow: they may stop the whole-horizon solve, but only the search's
+    // bound, which allows each blast its earliest release and reads no
+    // switches, is published or ends the run.
+    let conditional = capped || out.input.drill_blast.as_ref().is_some_and(|chain| chain.fixed.is_some() && chain.movable());
     match attempt {
         DayByDay::Seed(found) if options.first_schedule_only => {
             adopt_seed(&mut out, *found, None, None, DayByDayRole::Only);
@@ -258,7 +276,9 @@ pub(crate) fn improve(
         let left = budget.saturating_sub(started.elapsed());
         let closed = searched_bound
             .zip(options.relative_gap)
-            .is_some_and(|(bound, target)| gap_closed(replay.replayed_objective, bound, target));
+            // The bound is on what the search ranks by, the incentive with
+            // the money.
+            .is_some_and(|(bound, target)| gap_closed(replay.ranked_objective(), bound, target));
         if left >= CONTINUE_MINIMUM && !closed && !activity.finishing() && !cancel.is_cancelled() {
             let timeline = solution.drill_blast.clone();
             (solution, replay) = anytime::continue_from(&out.input, (solution, replay), left, &activity.finish, |progress| {
@@ -560,8 +580,9 @@ pub(crate) fn improve(
     let proved = global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound, conditional);
     let mut termination = classify_status(report.status, true);
     if conditional {
-        // SCIP's bound checked its incumbent on the timeline they share; it
-        // says nothing of schedules that move blasts.
+        // SCIP's bound checked its incumbent on the timeline and switches
+        // they share; it says nothing of schedules that move blasts or
+        // switch more often.
         out.primary_bound = None;
         out.primary_gap = None;
         if termination == SolveTermination::Optimal {
@@ -698,8 +719,10 @@ const SEARCH_SHARE: f64 = 0.5;
 /// continued: a continuation's first window needs about that.
 const CONTINUE_MINIMUM: Duration = Duration::from_secs(1);
 
-/// The search's time when the run has no limit.
-const SEARCH_WITHOUT_LIMIT: Duration = Duration::from_secs(600);
+/// The search's time when the run has no limit: the longest limit a run
+/// may set. It ends sooner, once it stops finding better schedules, or when
+/// stopped.
+const SEARCH_WITHOUT_LIMIT: Duration = Duration::from_secs(crate::model::schedule::experiment::MAX_SOLVE_SECONDS as u64);
 
 /// How far the relaxation's optimum is loosened before it is used as a bound:
 /// HiGHS solves the LP to feasibility and optimality tolerances of 1e-7, so
@@ -972,6 +995,17 @@ fn solve_day_by_day(
         replay: checked,
         summary,
     }))
+}
+
+/// How many segments of an interval `solution` works in at most.
+fn segments_in_use(solution: &crate::model::schedule::optimisation::blended::replay::BlendSolution) -> usize {
+    solution
+        .durations
+        .iter()
+        .filter(|(_, duration)| **duration > 0.0)
+        .map(|(&(_, segment), _)| segment + 1)
+        .max()
+        .unwrap_or(1)
 }
 
 /// The whole-horizon model's movement columns, as its formulation would

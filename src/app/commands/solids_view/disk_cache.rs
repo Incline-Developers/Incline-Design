@@ -983,6 +983,7 @@ fn read_outlines(
             Arc::new(FlitchOutlines {
                 strips: solid.blasting.drawing(base, true).map_or_else(Vec::new, |drawing| drawing.cuts.clone()),
                 bench_cuts: solid.blasting.bench(flitch.bench.base).map_or_else(Vec::new, |entry| entry.cuts.clone()),
+                panels_m: solid.blasting.bench_panels(flitch.bench.base),
                 faces,
                 plans,
             }),

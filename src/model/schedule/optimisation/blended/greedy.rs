@@ -29,12 +29,14 @@
 //!   hours, crusher day, dump and pile room, shared by all loaders. Trucks are
 //!   not allotted to loaders beforehand: the program shares them out.
 //!
-//! The objective is the interval's movement value plus, for each tonne moved,
+//! The objective is the interval's movement value plus, for each tonne dug,
 //! a production credit that covers negative value and the maximum marginal
-//! target penalty, keeping production preferable to standing.
+//! target penalty, keeping digging preferable to standing.
 //! An interval sees nothing after itself, so without the credit a block whose
 //! material is worth nothing until it is out of the way would never be dug,
-//! and the ore behind it never reached. With positive values and no soft
+//! and the ore behind it never reached. A reclaimed tonne uncovers nothing,
+//! so it is credited only its destination's marginal target penalty: a
+//! reclaim at a loss is never preferred to leaving the pile for later. With positive values and no soft
 //! targets, the credit is a tie-break of 1e-7 of the largest
 //! value per tonne, and so are authored routing preferences. Soft targets
 //! subtract the running destination-period penalty from that objective.
@@ -98,17 +100,30 @@ use std::{
 use super::{
     drill_blast::Chain,
     input::{
-        BlendGradeTarget, BlendInput, BlendPile, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, OutletIndex, REST_RECEIPT_T, attribute_reclaim, authored_tasks,
-        interval_rate, task_active, task_authorises,
+        BlendGradeTarget, BlendInput, BlendPile, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, LOOKAHEAD_DAYS, OutletIndex, REST_RECEIPT_T, attribute_reclaim,
+        authored_tasks, interval_rate, task_active, task_authorises,
     },
-    lp::{Col, LinearProgram, WarmStarts},
+    lp::{Col, LinearProgram, WarmRole, WarmStarts},
     plan::PlanTargets,
     replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow, ReplayReport, replay_cancellable},
 };
-use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MaterialId, SourceId, StockpileId, TaskKind, TruckClassId};
+use crate::model::schedule::optimisation::{
+    Activity, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MaterialId, MovementCandidate, SourceId, StockpileId, TaskKind, TruckClassId,
+};
 
 /// Remaining tonnes at or below which a block counts as finished.
 const FINISHED_T: f64 = 1e-9;
+/// What the lookahead counts as chosen for today: more than nothing.
+const POOL_T: f64 = 1e-3;
+/// The blocks of one automatic bar the lookahead considers, at most.
+const LOOKAHEAD_BLOCKS: usize = 400;
+/// What the lookahead takes off a day's worth for each day later: digging
+/// sooner is worth a little more, so each day is filled before the next.
+const DAY_DISCOUNT: f64 = 0.01;
+/// The lookahead's cost per tonne, as a share of the largest value per
+/// tonne, of each day of digging a block stands behind in its bar's order:
+/// the plan's order where nothing else decides.
+const ORDER_COST: f64 = 0.01;
 
 /// Below this a dig or a reclaim is not worth a movement row, and loader
 /// capacity left over does not open the next block.
@@ -344,6 +359,15 @@ struct State<'a> {
     /// What of each candidate's weight is not money: the production credit
     /// and the tie-breaks.
     credit: Vec<f64>,
+    /// The credit each candidate would carry as digging: what an automatic
+    /// loader's reclaim is weighed against, since it takes digging time.
+    dig_credit: Vec<f64>,
+    /// Money per tonne of each candidate, its weight less its credit, with
+    /// the largest of them in size and the largest credit: the lookahead
+    /// reads these each day, and none of them changes.
+    money: Vec<f64>,
+    money_largest: f64,
+    credit_largest: f64,
     /// Grade-conditional value earned by the rows so far.
     conditional: f64,
     /// Keyed (candidate, interval, segment).
@@ -364,8 +388,66 @@ struct State<'a> {
     /// Each dig bar's current block, by position in its sequence, as the
     /// latest interval opened: ground only goes down, so it only moves on.
     cursor: RefCell<BTreeMap<usize, usize>>,
+    /// Each automatic bar's ground for a day, as the lookahead chose it:
+    /// the day, the interval it was chosen in, and the blocks.
+    pools: RefCell<BTreeMap<usize, Pool>>,
+    /// Each automatic bar's blocks it could start as the latest interval
+    /// opened, read along its sequence as far as asked; see [`Self::walk_open`].
+    open: RefCell<BTreeMap<usize, OpenBlocks>>,
+    /// While the chain runs, each automatic bar's places in its sequence
+    /// holding standing ground the chain has released, so reading what it
+    /// could start passes over none of what waits on a blast; filled as
+    /// the first interval opens.
+    released_at: Option<BTreeMap<usize, BTreeSet<usize>>>,
+    /// Where in each automatic bar's sequence each block is.
+    places: BTreeMap<GroundId, Vec<(usize, usize)>>,
+    /// The ground of blasts fired but not yet released, by when it is.
+    firing: BTreeMap<u64, Vec<&'a [GroundId]>>,
+    /// Each gate (see `BlastJob::gate`) by the ground above it, for a gate
+    /// to be cleared within the interval its ground above is dug in.
+    gates_over: BTreeMap<GroundId, Vec<usize>>,
+    /// What the earlier parts of an interval solved in parts have sent to
+    /// each destination, and each pile's receipts less its draws: taken off
+    /// the room the later parts' programs see. Empty between intervals.
+    part_used: BTreeMap<DestinationId, f64>,
+    part_pile: BTreeMap<StockpileId, f64>,
+    /// The tonnes on each pile the parts walked as the interval opened: a
+    /// dig bar's readiness reads room as the interval opened, as the replay
+    /// does, however the parts before filled it.
+    pile_opening: BTreeMap<StockpileId, f64>,
+    /// What each pile released as each part of an interval solved in parts
+    /// opened, by part: the blend its reclaim in that part carried.
+    part_released: Vec<BTreeMap<StockpileId, Released>>,
+    /// (interval, segment): segments that begin a part; see `BlendSolution::parts`.
+    parts: BTreeSet<(usize, usize)>,
+    /// Where the lookahead's programs start from.
+    lookahead_warm: RefCell<WarmStarts>,
+    /// The loader areas each block is in, by position in
+    /// [`BlendInput::loader_areas`].
+    areas_of: BTreeMap<GroundId, Vec<usize>>,
+    /// The loaders that dug in each area in the interval before: they keep
+    /// their places as the next one opens.
+    last_in: Vec<BTreeSet<usize>>,
     cancel: &'a AtomicBool,
 }
+
+/// An automatic bar's ground for a day: the day, the interval it was
+/// chosen in, and the blocks.
+type Pool = (u32, usize, Vec<GroundId>);
+
+/// An automatic bar's blocks it could start as an interval opens, from its
+/// cursor on, each with its tonnes and those the crushers would take: what
+/// [`State::walk_open`] has read of its sequence so far.
+#[derive(Default)]
+struct OpenBlocks {
+    /// The interval and the cursor they were read at.
+    at: (usize, usize),
+    blocks: Vec<(GroundId, f64, f64)>,
+    /// Where in the sequence reading goes on.
+    next: usize,
+}
+/// A row's columns and their coefficients.
+type Terms = Vec<(Col, f64)>;
 
 // Days arrive in order. A route's latest delivery is today's total; its
 // completed days retain the original summation order without another tree.
@@ -482,6 +564,7 @@ struct Chunk {
 }
 
 /// What a pile releases to reclaim in an interval.
+#[derive(Clone)]
 struct Released {
     /// The chunk drawn, for a chunked pile.
     chunk: Option<usize>,
@@ -497,10 +580,12 @@ struct Bar {
     /// Dig bars only: the blocks it works in the segment, in authored order.
     /// Every block before the last is finished by the segment's end.
     blocks: Vec<GroundId>,
-    /// Reclaim bars only: the one pile it draws in the segment, once the
-    /// program has picked it from those the bar approves.
+    /// Reclaim bars, and dig bars that may also reclaim: the one pile it
+    /// draws in the segment, once the program has picked it from those the
+    /// bar approves.
     pile: Option<StockpileId>,
-    /// Reclaim bars only: piles the bar emptied in an earlier segment.
+    /// Reclaim bars only: piles the bar emptied in an earlier segment. A dig
+    /// bar that also reclaims keeps none: it has its digging to go on with.
     emptied: Vec<StockpileId>,
 }
 
@@ -511,6 +596,25 @@ struct Bar {
 /// no work left - every block of its sequence dug, or its cap spent - and
 /// that is written into the program, so the replay finds the same bar its
 /// highest-priority ready one segment by segment.
+/// What [`State::overlay`] changed, to be put back.
+#[derive(Default)]
+struct PartUndo {
+    ground: BTreeMap<GroundId, f64>,
+    piles: BTreeMap<StockpileId, (f64, Vec<f64>)>,
+    last_receipt: BTreeMap<StockpileId, Option<f64>>,
+    released_all: Option<BTreeMap<StockpileId, Released>>,
+    released: BTreeMap<StockpileId, f64>,
+    reclaimed: BTreeMap<usize, f64>,
+    utilisation: BTreeMap<(usize, u32), (f64, f64)>,
+    targets: BTreeMap<(usize, u32), (f64, f64)>,
+}
+
+/// A loader with no more than this share of a part to spare has not run out.
+const PART_SPARE: f64 = 0.25;
+/// No part is shorter than this share of what is left of the interval: a
+/// part is a whole program solved, so a short one costs as much as a long.
+const PART_LEAST: f64 = 0.25;
+
 #[derive(Clone)]
 struct Topology {
     segments: Vec<Vec<Bar>>,
@@ -613,14 +717,34 @@ impl<'a> State<'a> {
             *entry = entry.max(cost);
         }
         let target_credit: f64 = target_costs.values().sum();
+        let mut destination_credit = BTreeMap::<DestinationId, f64>::new();
+        for ((destination, _), cost) in &target_costs {
+            *destination_credit.entry(*destination).or_default() += cost;
+        }
         let credit = -worst.iter().copied().fold(0.0_f64, f64::min) + target_credit + tie;
         let latest = input.movements.iter().map(|candidate| candidate.routing_preference).max().unwrap_or(0);
+        let preference = |candidate: &MovementCandidate| tie * 0.5 * f64::from(candidate.routing_preference) / f64::from(latest + 1);
+        // Digging that loses money still uncovers what is under it, which
+        // an interval cannot see, so every dig carries the whole credit. A
+        // reclaim uncovers nothing: what it leaves stays on the pile for
+        // later, so it carries only what its destination's grade targets
+        // could cost it this day - the blend still to come the interval
+        // cannot see either - and the tie-breaks. A reclaim at a loss to a
+        // dump is never worth more than standing.
+        let dig_credit: Vec<f64> = input.movements.iter().map(|candidate| credit - preference(candidate)).collect();
         let credit: Vec<f64> = input
             .movements
             .iter()
-            .map(|candidate| credit - tie * 0.5 * f64::from(candidate.routing_preference) / f64::from(latest + 1))
+            .zip(&dig_credit)
+            .map(|(candidate, dig)| match candidate.activity {
+                Activity::Reclaim => destination_credit.get(&candidate.destination).copied().unwrap_or(0.0) + tie - preference(candidate),
+                _ => *dig,
+            })
             .collect();
-        let weight = values.iter().zip(&credit).map(|(value, credit)| value + credit).collect();
+        let weight: Vec<f64> = values.iter().zip(&credit).map(|(value, credit)| value + credit).collect();
+        let money: Vec<f64> = weight.iter().zip(&credit).map(|(weight, credit)| weight - credit).collect();
+        let money_largest = money.iter().map(|value| value.abs()).fold(1.0_f64, f64::max);
+        let credit_largest = credit.iter().copied().fold(0.0_f64, f64::max);
         Self {
             input,
             target_totals: input.target_opening.iter().map(|&(i, p, t, q)| ((i, p), (t, q))).collect(),
@@ -647,6 +771,10 @@ impl<'a> State<'a> {
             shared,
             weight,
             credit,
+            dig_credit,
+            money,
+            money_largest,
+            credit_largest,
             conditional: 0.0,
             rows: BTreeMap::new(),
             durations: BTreeMap::new(),
@@ -657,8 +785,464 @@ impl<'a> State<'a> {
             guidance: DailyGuidance::default(),
             warm: RefCell::default(),
             cursor: RefCell::default(),
+            pools: RefCell::default(),
+            open: RefCell::default(),
+            released_at: None,
+            places: BTreeMap::new(),
+            firing: BTreeMap::new(),
+            gates_over: {
+                let mut over: BTreeMap<GroundId, Vec<usize>> = BTreeMap::new();
+                for (index, blast) in input
+                    .drill_blast
+                    .iter()
+                    .filter(|chain| chain.fixed.is_none())
+                    .flat_map(|chain| chain.blasts.iter().enumerate())
+                {
+                    if blast.gate {
+                        for ground in &blast.above {
+                            over.entry(*ground).or_default().push(index);
+                        }
+                    }
+                }
+                over
+            },
+            part_used: BTreeMap::new(),
+            part_pile: BTreeMap::new(),
+            pile_opening: BTreeMap::new(),
+            part_released: Vec::new(),
+            parts: BTreeSet::new(),
+            lookahead_warm: RefCell::default(),
+            areas_of: {
+                let mut areas_of: BTreeMap<GroundId, Vec<usize>> = BTreeMap::new();
+                for (area, entry) in input.loader_areas.iter().enumerate() {
+                    for ground in &entry.ground {
+                        areas_of.entry(*ground).or_default().push(area);
+                    }
+                }
+                areas_of
+            },
+            last_in: vec![BTreeSet::new(); input.loader_areas.len()],
             cancel,
         }
+    }
+
+    /// Whether `loader` may dig `block` beside the loaders `occupied` holds
+    /// in each area: every area of the block has room for one more.
+    fn area_room(&self, loader: usize, block: GroundId, occupied: &[BTreeSet<usize>]) -> bool {
+        self.areas_of.get(&block).is_none_or(|areas| {
+            areas
+                .iter()
+                .all(|area| occupied[*area].iter().filter(|other| **other != loader).count() < self.input.loader_areas[*area].loaders as usize)
+        })
+    }
+
+    /// Whether `task` has ground `loader` may dig beside the loaders
+    /// `admitted` holds in each area: a dig bar's current block, or any
+    /// block of an automatic bar's reach, which need not start at the head
+    /// of its sequence.
+    fn has_room(&self, loader: usize, task: usize, interval: Interval, admitted: &[BTreeSet<usize>]) -> bool {
+        match self.reach(task, &BTreeSet::new(), interval) {
+            Some(reach) => reach.iter().any(|block| self.area_room(loader, *block, admitted)),
+            None => self.current_block(task).is_none_or(|block| self.area_room(loader, block, admitted)),
+        }
+    }
+
+    /// The loaders each area holds in `topology`, in any segment.
+    fn occupied_by(&self, topology: &Topology) -> Vec<BTreeSet<usize>> {
+        let mut occupied = vec![BTreeSet::new(); self.input.loader_areas.len()];
+        for bar in topology.segments.iter().flatten() {
+            for block in &bar.blocks {
+                for area in self.areas_of.get(block).into_iter().flatten() {
+                    occupied[*area].insert(bar.loader);
+                }
+            }
+        }
+        occupied
+    }
+
+    /// A dig bar's current block as the interval opens, once [`Self::ready`]
+    /// has moved its cursor past what is gone.
+    fn current_block(&self, task: usize) -> Option<GroundId> {
+        let TaskKind::Dig { sequence } = &self.input.tasks[task].kind else { return None };
+        sequence.get(self.cursor.borrow().get(&task).copied().unwrap_or(0)).copied()
+    }
+
+    /// An automatic bar's blocks within its reach as a segment opens, the
+    /// blocks in `done` gone: the blocks of its sequence it could start, in
+    /// order - released, and with somewhere to send all of it - while those
+    /// before each come to no more than its lookahead. `None` for a bar that
+    /// digs its blocks in order.
+    fn reach(&self, task: usize, done: &BTreeSet<GroundId>, interval: Interval) -> Option<Vec<GroundId>> {
+        let entry = &self.input.tasks[task];
+        let TaskKind::Dig { sequence } = &entry.kind else { return None };
+        if entry.lookahead_t <= 0.0 {
+            return None;
+        }
+        let start = {
+            let mut cursor = self.cursor.borrow_mut();
+            let at = cursor.entry(task).or_default();
+            while sequence.get(*at).is_some_and(|block| !self.ground.get(block).is_some_and(|left| *left > FINISHED_T)) {
+                *at += 1;
+            }
+            *at
+        };
+        if let Some(pool) = self.day_pool(task, done, interval) {
+            return Some(pool);
+        }
+        let (mut before, mut fed) = (0.0, 0.0);
+        let mut out = Vec::new();
+        self.walk_open(task, start, interval, |block, left, feed| {
+            if before > entry.lookahead_t && fed > entry.lookahead_feed_t {
+                return false;
+            }
+            if !done.contains(&block) {
+                out.push(block);
+                before += left;
+                fed += feed;
+            }
+            true
+        });
+        Some(out)
+    }
+
+    /// Bring [`Self::released_at`] to the interval opening at `now_h`: the
+    /// ground of every blast fired by then joins it.
+    fn release_places(&mut self) {
+        let Some(chain) = self.chain.as_mut() else { return };
+        let input = self.input;
+        let released = self.released_at.get_or_insert_with(|| {
+            let mut released: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+            for (task, entry) in input.tasks.iter().enumerate().filter(|(_, entry)| entry.lookahead_t > 0.0) {
+                let TaskKind::Dig { sequence } = &entry.kind else { continue };
+                let open = released.entry(task).or_default();
+                for (place, block) in sequence.iter().enumerate() {
+                    self.places.entry(*block).or_default().push((task, place));
+                    if !chain.in_blast(*block) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T) {
+                        open.insert(place);
+                    }
+                }
+            }
+            released
+        });
+        for (_, at, ground) in chain.take_fired() {
+            self.firing.entry(at.to_bits()).or_default().push(ground);
+        }
+        while let Some(entry) = self.firing.first_entry() {
+            if f64::from_bits(*entry.key()) > self.now_h + 1e-9 {
+                break;
+            }
+            for block in entry.remove().into_iter().flatten() {
+                if chain.available(*block, self.now_h) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T) {
+                    for (task, place) in self.places.get(block).into_iter().flatten() {
+                        released.entry(*task).or_default().insert(*place);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Hand `visit` the blocks of `task`'s sequence from `start` that it
+    /// could start as `interval` opens - standing, released, and with
+    /// somewhere to send all of it - in order, each with its tonnes and
+    /// those the crushers would take, until it returns false. None of that
+    /// changes within an interval, so what is read is kept for the next.
+    fn walk_open(&self, task: usize, start: usize, interval: Interval, mut visit: impl FnMut(GroundId, f64, f64) -> bool) {
+        let entry = &self.input.tasks[task];
+        let TaskKind::Dig { sequence } = &entry.kind else { return };
+        let start = start.min(sequence.len());
+        let mut open = self.open.borrow_mut();
+        let found = open.entry(task).or_default();
+        if found.at != (interval.index, start) || found.next < start {
+            *found = OpenBlocks {
+                at: (interval.index, start),
+                blocks: Vec::new(),
+                next: start,
+            };
+        }
+        let released = self.released_at.as_ref().map(|released| released.get(&task));
+        let mut index = 0;
+        loop {
+            while index == found.blocks.len() {
+                let place = match released {
+                    Some(places) => places.and_then(|places| places.range(found.next..).next().copied()),
+                    None => (found.next < sequence.len()).then_some(found.next),
+                };
+                let Some(place) = place else { break };
+                let block = sequence[place];
+                found.next = place + 1;
+                let left = self.ground.get(&block).copied().unwrap_or(0.0);
+                if left > FINISHED_T && self.blasted(block) && self.diggable(entry, block, interval) {
+                    found.blocks.push((block, left, left * self.outlets.feed_share(entry.loader, block)));
+                }
+            }
+            let Some(&(block, left, feed)) = found.blocks.get(index) else { return };
+            if !visit(block, left, feed) {
+                return;
+            }
+            index += 1;
+        }
+    }
+
+    /// An automatic bar's ground for the rest of the day, as the lookahead
+    /// chose it, less what is gone: chosen afresh as each day opens, and
+    /// once more when the day's choice is mostly dug. `None` when the
+    /// lookahead chose it nothing, or could not choose: the bar then works
+    /// its sequence's next day of ground.
+    fn day_pool(&self, task: usize, done: &BTreeSet<GroundId>, interval: Interval) -> Option<Vec<GroundId>> {
+        let entry = &self.input.tasks[task];
+        if !matches!(entry.kind, TaskKind::Dig { .. }) {
+            return None;
+        }
+        let day = interval.day();
+        // The blocks it may dig now: those with no more than the lookahead's
+        // days of released ground before them, as the replay checks.
+        let mut window = BTreeSet::new();
+        {
+            let start = self.cursor.borrow().get(&task).copied().unwrap_or(0);
+            let days = LOOKAHEAD_DAYS as f64;
+            let (mut before, mut fed) = (0.0, 0.0);
+            self.walk_open(task, start, interval, |block, left, feed| {
+                if before > days * entry.lookahead_t && fed > days * entry.lookahead_feed_t {
+                    return false;
+                }
+                if !done.contains(&block) {
+                    window.insert(block);
+                    before += left;
+                    fed += feed;
+                }
+                true
+            });
+        }
+        let live = |pool: &[GroundId]| -> (Vec<GroundId>, f64) {
+            let mut left_t = 0.0;
+            let blocks = pool
+                .iter()
+                .copied()
+                .filter(|block| {
+                    let left = self.ground.get(block).copied().unwrap_or(0.0);
+                    let keep = window.contains(block);
+                    if keep {
+                        left_t += left;
+                    }
+                    keep
+                })
+                .collect();
+            (blocks, left_t)
+        };
+        let day_left = ((f64::from(day) + 1.0) * 24.0 - interval.start_h).clamp(0.0, 24.0) / 24.0;
+        let held = self.pools.borrow().get(&task).filter(|(at, _, _)| *at == day).cloned();
+        if let Some((_, chosen_in, pool)) = held {
+            let (blocks, left_t) = live(&pool);
+            // Enough for half what the loader digs in the rest of the day,
+            // or chosen this interval already.
+            if chosen_in == interval.index || left_t >= 0.5 * entry.lookahead_t * day_left {
+                return (!blocks.is_empty()).then_some(blocks);
+            }
+        }
+        let chosen = match self.look_ahead(interval, day_left) {
+            Ok(chosen) => chosen,
+            Err(reason) => {
+                log::debug!("lookahead in interval {}: {reason}", interval.index);
+                BTreeMap::new()
+            }
+        };
+        let mut pools = self.pools.borrow_mut();
+        for (index, other) in self.input.tasks.iter().enumerate() {
+            if other.lookahead_t > 0.0 {
+                pools.insert(index, (day, interval.index, chosen.get(&index).cloned().unwrap_or_default()));
+            }
+        }
+        let (blocks, _) = live(chosen.get(&task)?);
+        (!blocks.is_empty()).then_some(blocks)
+    }
+
+    /// Which ground each automatic bar digs today, chosen looking
+    /// [`LOOKAHEAD_DAYS`] days ahead: the released blocks of each bar's
+    /// sequence within that many days of its digging are shared out over
+    /// the days by one program, each day's crusher receipts priced against
+    /// the day's grade targets as the hourly program prices them, within
+    /// each loader's day and each crusher's daily budget, and the plan's
+    /// order a tie-break. A day's blend then has the week's faces to come
+    /// from, and today does not take what the days after need.
+    fn look_ahead(&self, interval: Interval, day_left: f64) -> Result<BTreeMap<usize, Vec<GroundId>>, String> {
+        let input = self.input;
+        let day = interval.day();
+        let days = LOOKAHEAD_DAYS;
+        // Money per tonne, the production credit that has every loader dig
+        // its day, and a tie-break per day of the plan's order.
+        let credit = self.credit_largest;
+        let money = &self.money;
+        let largest = self.money_largest;
+        let order_cost = ORDER_COST * largest;
+        let later = |d: usize| (1.0 - DAY_DISCOUNT).powi(d as i32);
+        let crushers: Vec<usize> = input
+            .destinations
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.kind == DestinationKind::Crusher)
+            .map(|(i, _)| i)
+            .collect();
+        let mut problem = LinearProgram::default();
+        let mut taken: BTreeMap<GroundId, (f64, Vec<(Col, f64)>)> = BTreeMap::new();
+        let mut loader_days: BTreeMap<(usize, usize), (f64, Terms)> = BTreeMap::new();
+        let mut crusher_days: BTreeMap<(usize, usize), Vec<(Col, f64)>> = BTreeMap::new();
+        // (target, terms of fed tonnes and the grade they carry)
+        let mut receipts: BTreeMap<usize, Vec<(Col, f64, f64)>> = BTreeMap::new();
+        let mut today: Vec<(usize, GroundId, Col)> = Vec::new();
+        // Each loader's tonnes in each area with a loader limit, per day.
+        let mut in_area: BTreeMap<(usize, usize, usize), Vec<(Col, f64)>> = BTreeMap::new();
+        let ends_h = interval.start_h + days as f64 * 24.0;
+        for (task_index, task) in input.tasks.iter().enumerate() {
+            let TaskKind::Dig { sequence } = &task.kind else { continue };
+            if task.lookahead_t <= 0.0 || task.window_start_h > ends_h || task.window_end_h <= interval.start_h {
+                continue;
+            }
+            let Some(loader) = input.loaders.iter().position(|loader| loader.id == task.loader) else {
+                continue;
+            };
+            for d in 0..days {
+                let cap = task.lookahead_t * if d == 0 { day_left } else { 1.0 };
+                let entry = loader_days.entry((loader, d)).or_default();
+                entry.0 = entry.0.max(cap);
+            }
+            let start = self.cursor.borrow().get(&task_index).copied().unwrap_or(0);
+            let (mut before, mut fed, mut count) = (0.0, 0.0, 0);
+            for &block in &sequence[start.min(sequence.len())..] {
+                if (before > days as f64 * task.lookahead_t && fed > days as f64 * task.lookahead_feed_t) || count >= LOOKAHEAD_BLOCKS {
+                    break;
+                }
+                let left = self.ground.get(&block).copied().unwrap_or(0.0);
+                if left <= FINISHED_T || !self.blasted(block) || !self.diggable(task, block, interval) {
+                    continue;
+                }
+                let Some(source) = self.outlets.source(input, block) else { continue };
+                // What the block is worth sent anywhere but a crusher, and
+                // what each crusher gains on that, per tonne of the block,
+                // with the share of it the crusher can take and its grades.
+                let mut rest = 0.0;
+                let mut feeds: Vec<(usize, f64, f64, Vec<f64>)> = crushers.iter().map(|&k| (k, 0.0, 0.0, vec![0.0; input.grades.count()])).collect();
+                for share in source.material.iter().filter(|share| share.fraction > 0.0) {
+                    let routes = self.digs.get(&(loader, block, share.material.0)).map(Vec::as_slice).unwrap_or_default();
+                    let best = |keep: &dyn Fn(DestinationId) -> bool| {
+                        routes
+                            .iter()
+                            .filter(|&&index| keep(input.movements[index].destination))
+                            .map(|&index| money[index])
+                            .fold(None, |best: Option<f64>, value| Some(best.map_or(value, |best| best.max(value))))
+                    };
+                    let crushed = |destination: DestinationId| crushers.iter().any(|&k| input.destinations[k].id == destination);
+                    let Some(base) = best(&|destination| !crushed(destination)).or_else(|| best(&|_| true)) else {
+                        continue;
+                    };
+                    rest += share.fraction * base;
+                    for (k, fraction, gain, contained) in &mut feeds {
+                        let id = input.destinations[*k].id;
+                        if let Some(value) = best(&|destination| destination == id) {
+                            *fraction += share.fraction;
+                            *gain += share.fraction * (value - base);
+                            for (grade, held) in contained.iter_mut().enumerate() {
+                                *held += share.fraction * input.grades.fraction(share.material, grade).unwrap_or(0.0);
+                            }
+                        }
+                    }
+                }
+                let position = before / task.lookahead_t;
+                for d in 0..days {
+                    let x = problem.add_keyed_column(("dig", task_index, block, day + d as u32), (credit + rest) * later(d) - order_cost * position, 0.0..);
+                    if d == 0 {
+                        today.push((task_index, block, x));
+                    }
+                    let held = taken.entry(block).or_insert((left, Vec::new()));
+                    held.1.push((x, 1.0));
+                    loader_days.entry((loader, d)).or_default().1.push((x, 1.0));
+                    for area in self.areas_of.get(&block).into_iter().flatten() {
+                        in_area.entry((*area, d, loader)).or_default().push((x, 1.0));
+                    }
+                    let mut split = vec![(x, -1.0)];
+                    for (k, fraction, gain, contained) in feeds.iter().filter(|feed| feed.1 > 0.0) {
+                        let y = problem.add_keyed_column(("feed", task_index, block, day + d as u32, *k), gain * later(d), 0.0..);
+                        split.push((y, 1.0));
+                        crusher_days.entry((*k, d)).or_default().push((y, *fraction));
+                        let id = input.destinations[*k].id;
+                        for (target, spec) in input.grade_targets.iter().enumerate().filter(|(_, t)| t.destination == id && t.day == day + d as u32) {
+                            receipts.entry(target).or_default().push((y, *fraction, contained[spec.grade]));
+                        }
+                    }
+                    if split.len() > 1 {
+                        problem.add_row(..=0.0, split);
+                    }
+                }
+                before += left;
+                fed += left * self.outlets.feed_share(task.loader, block);
+                count += 1;
+            }
+        }
+        if today.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        for (left, terms) in taken.into_values() {
+            problem.add_row(..=left, terms);
+        }
+        // A loader limit as the hourly program cannot break it: each loader's
+        // tonnes in an area are its share of the day there, and the shares
+        // of the area's loaders come to no more than its limit.
+        let mut shares: BTreeMap<(usize, usize), Vec<(Col, f64)>> = BTreeMap::new();
+        for ((area, d, loader), mut terms) in in_area {
+            let cap = loader_days.get(&(loader, d)).map_or(0.0, |(cap, _)| *cap);
+            let share = problem.add_keyed_column(("share", area, day + d as u32, loader), 0.0, 0.0..=1.0);
+            terms.push((share, -cap));
+            problem.add_row(..=0.0, terms);
+            shares.entry((area, d)).or_default().push((share, 1.0));
+        }
+        for ((area, _), terms) in shares {
+            let limit = f64::from(input.loader_areas[area].loaders);
+            if terms.len() as f64 > limit {
+                problem.add_row(..=limit, terms);
+            }
+        }
+        for ((_, _), (cap, terms)) in loader_days {
+            if !terms.is_empty() {
+                problem.add_row(..=cap, terms);
+            }
+        }
+        for ((k, d), terms) in crusher_days {
+            let destination = &input.destinations[k];
+            let Some(budget) = destination.crusher_daily_t.get((day as usize) + d).copied().flatten() else {
+                continue;
+            };
+            let used = if d == 0 {
+                self.crushed.get(&(destination.id, day)).copied().unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            problem.add_row(..=(budget - used).max(0.0), terms);
+        }
+        for (target, terms) in receipts {
+            let spec = &input.grade_targets[target];
+            let d = spec.day.saturating_sub(day) as usize;
+            let (opening_t, opening_q) = if d == 0 {
+                self.target_totals.get(&(target, day)).copied().unwrap_or_default()
+            } else {
+                (0.0, 0.0)
+            };
+            for (hinge, (boundary, direction, slope)) in spec.specification.hinges().into_iter().enumerate() {
+                if slope == 0.0 {
+                    continue;
+                }
+                let slack = problem.add_keyed_column(("slack", target, hinge), -slope * later(d), 0.0..);
+                let mut row = vec![(slack, -1.0)];
+                row.extend(terms.iter().map(|&(y, fraction, contained)| (y, direction * (contained - boundary * fraction))));
+                problem.add_row(..=-direction * (opening_q - boundary * opening_t), row);
+            }
+        }
+        let solution = problem.maximise_from(&mut self.lookahead_warm.borrow_mut())?;
+        let mut chosen: BTreeMap<usize, Vec<GroundId>> = BTreeMap::new();
+        for (task, block, x) in today {
+            if solution[x.index()] > POOL_T {
+                chosen.entry(task).or_default().push(block);
+            }
+        }
+        Ok(chosen)
     }
 
     fn cancelled(&self) -> bool {
@@ -667,7 +1251,6 @@ impl<'a> State<'a> {
 
     fn work(&mut self, interval: Interval) -> Result<(), String> {
         let input = self.input;
-        let k = interval.index;
         if let Some(plan) = self.plan.filter(|plan| plan.planned.contains(&interval.day())) {
             self.guidance.open(input, plan, &self.followed, interval.day());
             self.guidance.interval.get_mut().reset();
@@ -682,26 +1265,66 @@ impl<'a> State<'a> {
         if let Some(chain) = self.chain.as_mut() {
             chain.advance(interval, |ground| self.ground.get(&ground).is_some_and(|left| *left > FINISHED_T));
         }
-        let first: Vec<Bar> = (0..input.loaders.len())
-            .filter_map(|loader| {
-                let rate = interval_rate(&input.loaders[loader], k)?;
-                let task = authored_tasks(input, loader)
-                    .into_iter()
-                    .find(|&task| self.ready(task, interval, rate.dig_tph, rate.reclaim_tph))?;
-                self.open_bar(loader, task, &BTreeSet::new())
-            })
-            .collect();
-        let mut topology = Topology {
+        self.release_places();
+        let first = self.select(interval, &[]);
+        let topology = Topology {
             segments: vec![first],
             pins: Vec::new(),
             spent: Vec::new(),
         };
+        self.after_selection(interval, topology)
+    }
 
+    /// Each loader's highest-priority bar with work as `interval` opens.
+    /// Where loader limits hold, a bar whose block is in an area already
+    /// holding its limit of other loaders has none: the loaders that dug in
+    /// an area last interval take their places first, then the rest in
+    /// loader order.
+    fn select(&self, interval: Interval, prior: &[BTreeSet<usize>]) -> Vec<Bar> {
+        let input = self.input;
+        let k = interval.index;
+        let mut order: Vec<usize> = (0..input.loaders.len()).collect();
+        order.sort_by_key(|loader| (!prior.iter().any(|held| held.contains(loader)), !self.last_in.iter().any(|held| held.contains(loader))));
+        let mut admitted: Vec<BTreeSet<usize>> = if prior.is_empty() {
+            vec![BTreeSet::new(); input.loader_areas.len()]
+        } else {
+            prior.to_vec()
+        };
+        let mut first: Vec<Bar> = Vec::new();
+        for loader in order {
+            let Some(rate) = interval_rate(&input.loaders[loader], k) else { continue };
+            let Some(task) = authored_tasks(input, loader)
+                .into_iter()
+                .find(|&task| self.ready(task, interval, rate.dig_tph, rate.reclaim_tph) && self.has_room(loader, task, interval, &admitted))
+            else {
+                continue;
+            };
+            let Some(mut bar) = self.open_bar(loader, task, &BTreeSet::new(), interval) else {
+                continue;
+            };
+            // An automatic bar's reach may run into several areas: blocks in
+            // one that is full are out of its reach this interval, and some
+            // block of it was checked to be in one with room.
+            bar.blocks.retain(|block| self.area_room(loader, *block, &admitted));
+            for block in &bar.blocks {
+                for area in self.areas_of.get(block).into_iter().flatten() {
+                    admitted[*area].insert(loader);
+                }
+            }
+            first.push(bar);
+        }
+        first.sort_by_key(|bar| bar.loader);
+        first
+    }
+
+    fn after_selection(&mut self, interval: Interval, mut topology: Topology) -> Result<(), String> {
+        let input = self.input;
         // A pile that may not build and reclaim at once gives the hour to
         // the reclaim bar drawing it. One that the bar then leaves untouched
         // is left to building instead, so the hour is not lost to nothing.
         self.blocked = self.exclusive_draws(&topology, interval);
         self.building.clear();
+        self.warm.borrow_mut().role = WarmRole::Opening;
         let plan = self.solve(interval, &topology)?;
         let plan = self.reopen_idle(interval, &topology, plan)?;
         let mut plan = self.settle(interval, &mut topology, plan)?;
@@ -745,6 +1368,11 @@ impl<'a> State<'a> {
                 _ => (self.blocked, self.building) = (blocked, building),
             }
         }
+        let (topology, plan) = if topology.segments.len() == 1 {
+            self.split(interval, topology, plan)?
+        } else {
+            (topology, plan)
+        };
         self.apply(interval, &topology, plan);
         Ok(())
     }
@@ -791,12 +1419,14 @@ impl<'a> State<'a> {
 
     /// A loader's bar as it opens in a segment, or `None` when it has no
     /// work there: a delay.
-    fn open_bar(&self, loader: usize, task: usize, done: &BTreeSet<GroundId>) -> Option<Bar> {
+    fn open_bar(&self, loader: usize, task: usize, done: &BTreeSet<GroundId>, interval: Interval) -> Option<Bar> {
         match &self.input.tasks[task].kind {
             TaskKind::Dig { sequence } => Some(Bar {
                 loader,
                 task,
-                blocks: self.next_block(task, sequence, None, done).into_iter().collect(),
+                blocks: self
+                    .reach(task, done, interval)
+                    .unwrap_or_else(|| self.next_block(task, sequence, None, done).into_iter().collect()),
                 pile: None,
                 emptied: Vec::new(),
             }),
@@ -810,6 +1440,27 @@ impl<'a> State<'a> {
             // The loader's highest-priority bar is a delay: it stands.
             TaskKind::Delay => None,
         }
+    }
+
+    /// The piles a dig bar may reclaim in the same hours, with what each
+    /// releases this interval: those it reclaims as the interval opens, not
+    /// emptied or left to building, narrowed to one once it drew several. A
+    /// pile that may not build and reclaim at once only while a reclaim bar
+    /// holds it this hour: digging leaves such a pile to building.
+    fn companion_piles(&self, bar: &Bar, interval: Interval) -> Vec<(StockpileId, &Released)> {
+        let input = self.input;
+        input.tasks[bar.task]
+            .reclaims
+            .iter()
+            .filter(|pile| bar.pile.is_none_or(|only| only == **pile) && !bar.emptied.contains(pile) && !self.building.contains(pile))
+            .filter(|pile| self.blocked.contains(pile) || !input.piles.iter().any(|entry| entry.id == **pile && entry.exclusive))
+            .filter_map(|pile| {
+                Some((
+                    *pile,
+                    self.released.get(pile).filter(|found| self.reclaims(*pile, interval) && found.tonnes > NEGLIGIBLE_T)?,
+                ))
+            })
+            .collect()
     }
 
     /// Exclusive piles the reclaim bars of `topology` draw this interval.
@@ -855,8 +1506,13 @@ impl<'a> State<'a> {
             }
             let mut grew = false;
             let duration = plan.durations.get(last).copied().unwrap_or(0.0);
+            let mut occupied = self.occupied_by(topology);
             for bar in &mut topology.segments[last] {
                 let TaskKind::Dig { sequence } = &input.tasks[bar.task].kind else { continue };
+                // An automatic bar opened with all it may reach.
+                if input.tasks[bar.task].lookahead_t > 0.0 {
+                    continue;
+                }
                 let Some(&end) = bar.blocks.last() else { continue };
                 let left = self.ground.get(&end).copied().unwrap_or(0.0);
                 let rate = interval_rate(&input.loaders[bar.loader], interval.index).map_or(0.0, |rate| rate.dig_tph);
@@ -865,7 +1521,14 @@ impl<'a> State<'a> {
                 if !finished || rate * duration - used <= NEGLIGIBLE_T || self.shared.get(&(bar.loader, end)).copied().unwrap_or(false) {
                     continue;
                 }
-                if let Some(next) = self.next_block(bar.task, sequence, Some(end), &done) {
+                // A loader does not move into an area full of others.
+                if let Some(next) = self
+                    .next_block(bar.task, sequence, Some(end), &done)
+                    .filter(|next| self.area_room(bar.loader, *next, &occupied))
+                {
+                    for area in self.areas_of.get(&next).into_iter().flatten() {
+                        occupied[*area].insert(bar.loader);
+                    }
                     bar.blocks.push(next);
                     grew = true;
                 }
@@ -907,7 +1570,13 @@ impl<'a> State<'a> {
                     .iter()
                     .filter(|other| other.loader != bar.loader)
                     .map(|other| Bar {
-                        blocks: other.blocks.last().copied().into_iter().collect(),
+                        // An automatic bar keeps all it reaches; one in
+                        // order, the block it ends on.
+                        blocks: if input.tasks[other.task].lookahead_t > 0.0 {
+                            other.blocks.clone()
+                        } else {
+                            other.blocks.last().copied().into_iter().collect()
+                        },
                         ..other.clone()
                     })
                     .collect(),
@@ -916,15 +1585,14 @@ impl<'a> State<'a> {
                 TaskKind::Dig { sequence } => {
                     // Every block of the sequence gone, by any loader.
                     let start = self.cursor.borrow().get(&bar.task).copied().unwrap_or(0).min(sequence.len());
-                    let remaining: Vec<GroundId> = sequence[start..]
+                    let remaining = sequence[start..]
                         .iter()
                         .copied()
-                        .filter(|block| !done.contains(block) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T))
-                        .collect();
-                    if remaining.iter().any(|block| plan.dug_by_all(*block) < self.ground[block] - SNAP_T) {
+                        .filter(|block| !done.contains(block) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T));
+                    if remaining.clone().any(|block| plan.dug_by_all(block) < self.ground[&block] - SNAP_T) {
                         continue;
                     }
-                    next.pins.extend(remaining.iter().map(|block| (*block, last)));
+                    next.pins.extend(remaining.map(|block| (block, last)));
                 }
                 TaskKind::Reclaim { maximum_t, approved_sources } => {
                     let drawn: f64 = plan
@@ -984,9 +1652,17 @@ impl<'a> State<'a> {
                 }
             }
             let Some(task) = following else { continue };
-            let Some(opened) = self.open_bar(bar.loader, task, &gone) else {
+            let Some(mut opened) = self.open_bar(bar.loader, task, &gone, interval) else {
                 continue;
             };
+            // A loader does not move into an area full of others: an
+            // automatic bar's reach keeps only the blocks in areas with room.
+            let occupied = self.occupied_by(topology);
+            if input.tasks[task].lookahead_t > 0.0 {
+                opened.blocks.retain(|block| self.area_room(bar.loader, *block, &occupied));
+            } else if opened.blocks.iter().any(|block| !self.area_room(bar.loader, *block, &occupied)) {
+                continue;
+            }
             if matches!(input.tasks[task].kind, TaskKind::Dig { .. }) && opened.blocks.is_empty() {
                 continue;
             }
@@ -994,6 +1670,404 @@ impl<'a> State<'a> {
             return Some(next);
         }
         None
+    }
+
+    /// The hours `loader` works in `plan`'s segment `segment`, at its rates in `interval`.
+    fn worked_hours(&self, loader: usize, plan: &Plan, segment: usize, interval: Interval) -> f64 {
+        let input = self.input;
+        let Some(rate) = interval_rate(&input.loaders[loader], interval.index) else {
+            return 0.0;
+        };
+        let mut hours = 0.0;
+        if rate.dig_tph > 0.0 {
+            hours += plan
+                .extracted
+                .iter()
+                .filter(|((by, _, at), _)| *by == loader && *at == segment)
+                .map(|(_, tonnes)| tonnes)
+                .sum::<f64>()
+                / rate.dig_tph;
+        }
+        if rate.reclaim_tph > 0.0 {
+            hours += plan
+                .rows
+                .iter()
+                .filter(|(index, at, _)| {
+                    *at == segment && input.movements[*index].activity == Activity::Reclaim && input_loader(input, input.movements[*index].loader) == Some(loader)
+                })
+                .map(|(_, _, tonnes)| tonnes)
+                .sum::<f64>()
+                / rate.reclaim_tph;
+        }
+        hours
+    }
+
+    /// When the first loader of a one-segment `plan` over `part` digs out
+    /// every block its dig bar holds with time to spare, and has more to do:
+    /// an automatic bar more of its sequence it could start, a dig bar more
+    /// of its sequence or another bar open. The interval is split there, and
+    /// the next part chooses its bar afresh.
+    fn runs_out(&self, part: Interval, topology: &Topology, plan: &Plan) -> Option<f64> {
+        let input = self.input;
+        let length = part.duration_h();
+        let mut earliest: Option<f64> = None;
+        for bar in &topology.segments[0] {
+            let task = &input.tasks[bar.task];
+            let TaskKind::Dig { sequence } = &task.kind else { continue };
+            if bar.blocks.is_empty() {
+                continue;
+            }
+            if !bar
+                .blocks
+                .iter()
+                .all(|block| plan.dug_by_all(*block) >= self.ground.get(block).copied().unwrap_or(0.0) - SNAP_T)
+            {
+                continue;
+            }
+            let hours = self.worked_hours(bar.loader, plan, 0, part);
+            if hours >= length * (1.0 - PART_SPARE) {
+                continue;
+            }
+            if task.lookahead_t <= 0.0 {
+                let last = bar.blocks.iter().filter_map(|block| sequence.iter().position(|at| at == block)).max();
+                let goes_on = last.is_some_and(|last| last + 1 < sequence.len());
+                let other = authored_tasks(input, bar.loader)
+                    .into_iter()
+                    .any(|other| other != bar.task && task_active(&input.tasks[other], part));
+                if goes_on || other {
+                    earliest = Some(earliest.map_or(hours, |at: f64| at.min(hours)));
+                }
+                continue;
+            }
+            let mut more = false;
+            let start = self.cursor.borrow().get(&bar.task).copied().unwrap_or(0);
+            self.walk_open(bar.task, start, part, |block, _, _| {
+                if !bar.blocks.contains(&block) {
+                    more = true;
+                    return false;
+                }
+                true
+            });
+            if more {
+                earliest = Some(earliest.map_or(hours, |at: f64| at.min(hours)));
+            }
+        }
+        earliest.map(|hours| part.start_h + hours.max(PART_LEAST * length)).filter(|end| *end < part.end_h - 1e-9)
+    }
+
+    /// Solve `interval` in parts, one after another, where loaders run out
+    /// of the ground they were given (see [`Self::runs_out`]): each part is solved
+    /// alone over its own hours, on the ground the parts before left, with
+    /// every loader's bar chosen afresh as it opens and the room the parts
+    /// before used taken off; gates whose ground above is gone are cleared
+    /// as a part ends. The parts become the interval's segments.
+    fn split(&mut self, interval: Interval, topology: Topology, plan: Plan) -> Result<(Topology, Plan), String> {
+        let input = self.input;
+        let budget = input.segments_per_interval.max(1);
+        let Some(first_end) = self.runs_out(interval, &topology, &plan) else {
+            return Ok((topology, plan));
+        };
+        let mut undo = PartUndo::default();
+        let mut combined_topology = Topology {
+            segments: Vec::new(),
+            pins: Vec::new(),
+            spent: Vec::new(),
+        };
+        let mut combined = Plan {
+            rows: Vec::new(),
+            extracted: BTreeMap::new(),
+            durations: Vec::new(),
+            objective: 0.0,
+            money: 0.0,
+        };
+        let mut start = interval.start_h;
+        let mut topo = topology;
+        let mut end = first_end;
+        let mut releases: Vec<BTreeMap<StockpileId, Released>> = Vec::new();
+        let result = loop {
+            let part_index = combined_topology.segments.len();
+            releases.push(self.released.clone());
+            let part = Interval {
+                start_h: start,
+                end_h: end,
+                ..interval
+            };
+            self.now_h = start;
+            // What a program over more hours than the part's pinned finished
+            // by their end, and the caps it spent, need not be by the part's:
+            // a dig bar digs its blocks in order, all but its last held
+            // finished, so it starts the part from its current block and
+            // opens the next as the part's own settle finds it dug.
+            topo.pins.clear();
+            topo.spent.clear();
+            for bar in topo.segments.iter_mut().flatten() {
+                if input.tasks[bar.task].lookahead_t <= 0.0 {
+                    bar.blocks.truncate(1);
+                }
+            }
+            self.warm.borrow_mut().role = WarmRole::Part;
+            let solved = match self
+                .solve(part, &topo)
+                .and_then(|found| self.reopen_idle(part, &topo, found))
+                .and_then(|found| self.settle(part, &mut topo, found))
+            {
+                Ok(found) => found,
+                Err(error) => break Err(error),
+            };
+            // Commit this part.
+            for (index, _, tonnes) in &solved.rows {
+                combined.rows.push((*index, part_index, *tonnes));
+            }
+            for ((loader, block, _), tonnes) in &solved.extracted {
+                *combined.extracted.entry((*loader, *block, part_index)).or_default() += tonnes;
+            }
+            combined.durations.push(end - start);
+            combined.objective += solved.objective;
+            combined.money += solved.money;
+            combined_topology.pins.extend(topo.pins.iter().map(|(block, _)| (*block, part_index)));
+            combined_topology.segments.push(topo.segments.swap_remove(0));
+            if end >= interval.end_h - 1e-9 {
+                break Ok(());
+            }
+            let freed = self.overlay(part, &solved, &mut undo);
+            // Gates whose ground above this part dug out clear as it ends.
+            let gates: Vec<usize> = match (input.drill_blast.as_ref(), self.chain.as_ref()) {
+                (Some(chain_input), Some(chain)) if !self.gates_over.is_empty() => {
+                    let standing = |block: &GroundId| self.ground.get(block).is_some_and(|left| *left > FINISHED_T);
+                    let gates: BTreeSet<usize> = freed
+                        .iter()
+                        .flat_map(|block| self.gates_over.get(block).into_iter().flatten().copied())
+                        .filter(|&gate| !chain.cleared(gate) && chain_input.blasts[gate].above.iter().all(|block| !standing(block)))
+                        .collect();
+                    gates.into_iter().collect()
+                }
+                _ => Vec::new(),
+            };
+            if !gates.is_empty() {
+                let chain_input = input.drill_blast.as_ref().expect("gates come from the chain");
+                if let Some(chain) = self.chain.as_mut() {
+                    chain.clear_gates(end, &gates);
+                }
+                if let Some(released) = self.released_at.as_mut() {
+                    for &gate in &gates {
+                        for block in &chain_input.blasts[gate].releases {
+                            if self.ground.get(block).is_some_and(|left| *left > FINISHED_T) {
+                                for (task, place) in self.places.get(block).into_iter().flatten() {
+                                    released.entry(*task).or_default().insert(*place);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            self.open.borrow_mut().clear();
+            // The rest of the interval, with every loader's bar chosen afresh.
+            start = end;
+            self.now_h = start;
+            // What fired in the parts before is released as this one opens,
+            // as the replay reads it.
+            self.release_places();
+            let rest = Interval { start_h: start, ..interval };
+            // The loaders that dug in each area so far this interval hold it.
+            let mut prior: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); input.loader_areas.len()];
+            for (&(loader, block, _), tonnes) in &combined.extracted {
+                if *tonnes > NEGLIGIBLE_T {
+                    for area in self.areas_of.get(&block).into_iter().flatten() {
+                        prior[*area].insert(loader);
+                    }
+                }
+            }
+            topo = Topology {
+                segments: vec![self.select(rest, &prior)],
+                pins: Vec::new(),
+                spent: Vec::new(),
+            };
+            self.warm.borrow_mut().role = WarmRole::Rest;
+            let probe = match self
+                .solve(rest, &topo)
+                .and_then(|found| self.reopen_idle(rest, &topo, found))
+                .and_then(|found| self.settle(rest, &mut topo, found))
+            {
+                Ok(found) => found,
+                Err(error) => break Err(error),
+            };
+            end = if combined_topology.segments.len() + 1 >= budget {
+                interval.end_h
+            } else {
+                self.runs_out(rest, &topo, &probe).unwrap_or(interval.end_h)
+            };
+            if end >= interval.end_h - 1e-9 {
+                // The probe is the last part as it stands.
+                releases.push(self.released.clone());
+                for (index, _, tonnes) in &probe.rows {
+                    combined.rows.push((*index, combined_topology.segments.len(), *tonnes));
+                }
+                let part_index = combined_topology.segments.len();
+                for ((loader, block, _), tonnes) in &probe.extracted {
+                    *combined.extracted.entry((*loader, *block, part_index)).or_default() += tonnes;
+                }
+                combined.durations.push(interval.end_h - start);
+                combined.objective += probe.objective;
+                combined.money += probe.money;
+                combined_topology.segments.push(topo.segments.swap_remove(0));
+                break Ok(());
+            }
+        };
+        self.undo(undo);
+        self.now_h = interval.start_h;
+        result?;
+        self.part_released = releases;
+        Ok((combined_topology, combined))
+    }
+
+    /// Lay what `plan` did over `part` onto the state the next part reads:
+    /// the ground it dug, the room it used, what it drew of each pile's
+    /// release, the reclaim caps it spent, the day's utilisation and the
+    /// grade targets' running totals. What changed is kept in `undo`.
+    /// Returns the blocks it dug out.
+    fn overlay(&mut self, part: Interval, plan: &Plan, undo: &mut PartUndo) -> BTreeSet<GroundId> {
+        let input = self.input;
+        undo.released_all.get_or_insert_with(|| self.released.clone());
+        let mut freed = BTreeSet::new();
+        // An unchunked pile that may build and reclaim at once is walked:
+        // what a part received is the next part's to reclaim, once rested.
+        let walked = |pile: StockpileId| input.piles.iter().any(|entry| entry.id == pile && entry.chunks.is_empty() && !entry.exclusive);
+        let mut pile_moves: BTreeMap<StockpileId, (f64, Vec<f64>, f64, Vec<f64>)> = BTreeMap::new();
+        for ((_, block, _), tonnes) in &plan.extracted {
+            if let Some(left) = self.ground.get_mut(block) {
+                undo.ground.entry(*block).or_insert(*left);
+                *left = (*left - tonnes).max(0.0);
+                if *left <= FINISHED_T {
+                    freed.insert(*block);
+                }
+            }
+        }
+        let grades = input.grades.count();
+        let missing = vec![0.0; grades];
+        let targets: Vec<(usize, &BlendGradeTarget)> = input.grade_targets.iter().enumerate().filter(|(_, t)| t.applies(part.start_h)).collect();
+        for (index, _, tonnes) in &plan.rows {
+            let candidate = &input.movements[*index];
+            let blend: Vec<f64> = match candidate.source {
+                SourceId::Stockpile(pile) => {
+                    let blend = self.released.get(&pile).map(|found| found.blend.clone()).unwrap_or_else(|| missing.clone());
+                    if walked(pile) {
+                        let entry = pile_moves.entry(pile).or_insert_with(|| (0.0, vec![0.0; grades], 0.0, vec![0.0; grades]));
+                        entry.0 += tonnes;
+                        for (q, fraction) in entry.1.iter_mut().zip(&blend) {
+                            *q += tonnes * fraction;
+                        }
+                    } else {
+                        if let Some(found) = self.released.get_mut(&pile) {
+                            undo.released.entry(pile).or_insert(found.tonnes);
+                            found.tonnes = (found.tonnes - tonnes).max(0.0);
+                        }
+                        *self.part_pile.entry(pile).or_default() -= tonnes;
+                    }
+                    for (task, share) in attribute_reclaim(input, candidate, part, *tonnes, &self.reclaimed) {
+                        let entry = self.reclaimed.entry(task).or_default();
+                        undo.reclaimed.entry(task).or_insert(*entry);
+                        *entry += share;
+                    }
+                    blend
+                }
+                _ => input.grades.fractions(candidate.material).map(<[f64]>::to_vec).unwrap_or_else(|| missing.clone()),
+            };
+            match input.destinations.iter().find(|entry| entry.id == candidate.destination).map(|entry| entry.kind) {
+                Some(DestinationKind::Stockpile(pile)) if walked(pile) => {
+                    let entry = pile_moves.entry(pile).or_insert_with(|| (0.0, vec![0.0; grades], 0.0, vec![0.0; grades]));
+                    entry.2 += tonnes;
+                    for (g, q) in entry.3.iter_mut().enumerate() {
+                        *q += tonnes * blend.get(g).copied().unwrap_or(0.0);
+                    }
+                }
+                Some(DestinationKind::Stockpile(pile)) => {
+                    *self.part_used.entry(candidate.destination).or_default() += tonnes;
+                    *self.part_pile.entry(pile).or_default() += tonnes;
+                }
+                _ => *self.part_used.entry(candidate.destination).or_default() += tonnes,
+            }
+            for &(i, target) in targets.iter().filter(|(_, t)| t.destination == candidate.destination) {
+                let key = (i, crate::model::schedule::grade_targets::target_day(part.start_h));
+                let entry = self.target_totals.entry(key).or_default();
+                undo.targets.entry(key).or_insert(*entry);
+                entry.0 += tonnes;
+                entry.1 += tonnes * blend.get(target.grade).copied().unwrap_or(0.0);
+            }
+        }
+        for (loader, entry) in input.loaders.iter().enumerate() {
+            if interval_rate(entry, part.index).is_none_or(|rate| rate.dig_tph <= 0.0 && rate.reclaim_tph <= 0.0) {
+                continue;
+            }
+            let worked = self.worked_hours(loader, plan, 0, part);
+            let key = (loader, part.day());
+            let entry = self.utilisation.entry(key).or_default();
+            undo.utilisation.entry(key).or_insert(*entry);
+            entry.0 += worked;
+            entry.1 += part.duration_h();
+        }
+        // The walked piles as the part ends, and what each releases next.
+        for (pile, (drawn_t, drawn_q, received_t, received_q)) in pile_moves {
+            if let Some((open_t, open_q)) = self.piles.get_mut(&pile) {
+                undo.piles.entry(pile).or_insert_with(|| (*open_t, open_q.clone()));
+                self.pile_opening.entry(pile).or_insert(*open_t);
+                *open_t = (*open_t - drawn_t + received_t).max(0.0);
+                for ((q, out), into) in open_q.iter_mut().zip(&drawn_q).zip(&received_q) {
+                    *q = (*q - out + into).max(0.0);
+                }
+            }
+            if received_t > REST_RECEIPT_T {
+                undo.last_receipt.entry(pile).or_insert(self.last_receipt_h.get(&pile).copied());
+                self.last_receipt_h.insert(pile, part.end_h);
+            }
+        }
+        let next = Interval { start_h: part.end_h, ..part };
+        for entry in input.piles.iter().filter(|entry| walked(entry.id)) {
+            match self.release(entry.id, next) {
+                Some(found) => {
+                    self.released.insert(entry.id, found);
+                }
+                None => {
+                    self.released.remove(&entry.id);
+                }
+            }
+        }
+        freed
+    }
+
+    /// Put back what [`Self::overlay`] changed, for the interval's one apply.
+    fn undo(&mut self, undo: PartUndo) {
+        for (block, left) in undo.ground {
+            self.ground.insert(block, left);
+        }
+        for (pile, state) in undo.piles {
+            self.piles.insert(pile, state);
+        }
+        for (pile, at) in undo.last_receipt {
+            match at {
+                Some(at) => self.last_receipt_h.insert(pile, at),
+                None => self.last_receipt_h.remove(&pile),
+            };
+        }
+        if let Some(released) = undo.released_all {
+            self.released = released;
+        }
+        for (pile, tonnes) in undo.released {
+            if let Some(found) = self.released.get_mut(&pile) {
+                found.tonnes = tonnes;
+            }
+        }
+        for (task, spent) in undo.reclaimed {
+            self.reclaimed.insert(task, spent);
+        }
+        for (key, value) in undo.utilisation {
+            self.utilisation.insert(key, value);
+        }
+        for (key, value) in undo.targets {
+            self.target_totals.insert(key, value);
+        }
+        self.part_used.clear();
+        self.pile_opening.clear();
+        self.part_pile.clear();
     }
 
     /// Whether `task` has work as a segment opens once the blocks in `gone`
@@ -1009,17 +2083,26 @@ impl<'a> State<'a> {
                 if dig_tph <= 0.0 {
                     return Some(false);
                 }
+                if let Some(open) = self.reach(task, gone, interval) {
+                    return if open.is_empty() {
+                        Some(false)
+                    } else if open.iter().any(|block| !worked.contains(block) && self.ground[block] > SURELY_HELD_T) {
+                        Some(true)
+                    } else {
+                        None
+                    };
+                }
                 // Blocks before the bar's current one as the interval opened
                 // are gone already.
                 let start = self.cursor.borrow().get(&task).copied().unwrap_or(0).min(sequence.len());
-                let left: Vec<GroundId> = sequence[start..]
+                let mut left = sequence[start..]
                     .iter()
                     .copied()
                     .filter(|block| !gone.contains(block) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T))
-                    .collect();
-                if left.is_empty() || !self.blasted(left[0]) || !self.diggable(entry, left[0], interval) {
+                    .peekable();
+                if left.peek().is_none_or(|&first| !self.blasted(first) || !self.diggable(entry, first, interval)) {
                     Some(false)
-                } else if left.iter().any(|block| !worked.contains(block) && self.ground[block] > SURELY_HELD_T) {
+                } else if left.any(|block| !worked.contains(&block) && self.ground[&block] > SURELY_HELD_T) {
                     Some(true)
                 } else {
                     None
@@ -1143,6 +2226,9 @@ impl<'a> State<'a> {
         problem.add_keyed_row("lengths", duration..=duration, lengths.iter().map(|col| (*col, 1.0)).collect());
         // (candidate, segment) and its column.
         let mut columns: Vec<(usize, usize, Col)> = Vec::new();
+        // Columns whose weight carries other than their candidate's
+        // production credit, by column: what it carries instead.
+        let mut credited: BTreeMap<usize, f64> = BTreeMap::new();
         let mut extractions: Vec<((usize, GroundId, usize), Col)> = Vec::new();
         let mut block_total: BTreeMap<GroundId, Vec<(Col, f64)>> = BTreeMap::new();
         let mut pile_draw: BTreeMap<StockpileId, Vec<(Col, f64)>> = BTreeMap::new();
@@ -1162,7 +2248,7 @@ impl<'a> State<'a> {
                             let Some(source) = self.outlets.source(input, block) else {
                                 continue;
                             };
-                            if position + 1 < bar.blocks.len() {
+                            if position + 1 < bar.blocks.len() && task.lookahead_t <= 0.0 {
                                 pins.push((block, segment));
                             }
                             let extract = problem.add_keyed_column(("extract", bar.loader, block, segment), 0.0, 0.0..=left);
@@ -1180,6 +2266,33 @@ impl<'a> State<'a> {
                                     portion.push((col, 1.0));
                                 }
                                 problem.add_keyed_row(("portion", bar.loader, block, segment, share.material.0), 0.0..=0.0, portion);
+                            }
+                        }
+                        // Piles it may reclaim in the same hours, each tonne
+                        // taking the loader's time at its reclaim rate. What
+                        // the digging it gives up is worth later the hour
+                        // cannot see; the long-term plan prices it, as a
+                        // tonne of the automatic loaders' digging in this
+                        // period. A reclaimed tonne earns the production
+                        // credit of the digging time it takes, less that
+                        // price: so the loader reclaims where the plan has
+                        // its digging worth less than the reclaim. Without a
+                        // plan the credit stays with the digging, and the
+                        // loader reclaims with the hours its digging leaves.
+                        if rate.dig_tph > 0.0 && rate.reclaim_tph > 0.0 {
+                            let hours = rate.dig_tph / rate.reclaim_tph;
+                            let price = (!input.dig_prices.is_empty()).then(|| input.dig_price(interval.start_h));
+                            for (pile, released) in self.companion_piles(bar, interval) {
+                                for index in self.reclaim_candidates(bar.loader, pile, bar.task, interval) {
+                                    let value = conditional_value(input, index, &released.blend, released.tonnes);
+                                    let credit = price.map_or(0.0, |price| hours * (self.dig_credit[index] - price).max(0.0));
+                                    let weight = self.money[index] + credit;
+                                    let col = problem.add_keyed_column(("movement", index, segment), weight + value, 0.0..);
+                                    credited.insert(col.index(), credit);
+                                    columns.push((index, segment, col));
+                                    loader_total.push((col, hours));
+                                    pile_draw.entry(pile).or_default().push((col, 1.0));
+                                }
                             }
                         }
                         rate.dig_tph
@@ -1269,8 +2382,11 @@ impl<'a> State<'a> {
         }
         for ((truck, segment), mut terms) in trucks {
             if let Some(hours) = input.trucks.iter().find(|entry| entry.id == truck).and_then(|entry| entry.hours.get(interval.index)) {
-                if duration > 0.0 {
-                    terms.push((lengths[segment], -hours / duration));
+                // The fleet's hours are the whole interval's; a part of it
+                // has them at the same rate.
+                let whole = input.intervals.get(interval.index).map_or(duration, |entry| entry.duration_h());
+                if whole > 0.0 {
+                    terms.push((lengths[segment], -hours / whole));
                     problem.add_keyed_row(("trucks", truck, segment), ..=0.0, terms);
                 } else {
                     problem.add_keyed_row(("trucks", truck, segment), ..=*hours, terms);
@@ -1289,7 +2405,7 @@ impl<'a> State<'a> {
         // back to back delivers unevenly, so the pile can peak inside it.
         for (pile, flows) in occupancy {
             let Some(entry) = input.piles.iter().find(|entry| entry.id == pile) else { continue };
-            let room = entry.capacity_t - self.piles.get(&pile).map_or(0.0, |(tonnes, _)| *tonnes);
+            let room = entry.capacity_t - self.piles.get(&pile).map_or(0.0, |(tonnes, _)| *tonnes) - self.part_pile.get(&pile).copied().unwrap_or(0.0);
             for segment in (0..segments).filter(|segment| flows.iter().any(|(at, _, sign)| at == segment && *sign > 0.0)) {
                 let terms: Vec<(Col, f64)> = flows
                     .iter()
@@ -1469,11 +2585,15 @@ impl<'a> State<'a> {
         let solution = problem
             .maximise_from(&mut self.warm.borrow_mut())
             .map_err(|reason| crate::i18n::tr!("err-sched-interval-failed", interval = interval.index.to_string(), reason = reason.to_string()))?;
-        let rows: Vec<(usize, usize, f64)> = columns.into_iter().map(|(index, segment, col)| (index, segment, solution[col.index()].max(0.0))).collect();
         let objective = problem.value(&solution);
         let steered: f64 = incentive.iter().map(|(col, per_hour)| per_hour * solution[col.index()].max(0.0)).sum();
+        let credits: f64 = columns
+            .iter()
+            .map(|(index, _, col)| credited.get(&col.index()).copied().unwrap_or(self.credit[*index]) * solution[col.index()].max(0.0))
+            .sum();
+        let rows: Vec<(usize, usize, f64)> = columns.into_iter().map(|(index, segment, col)| (index, segment, solution[col.index()].max(0.0))).collect();
         Ok(Plan {
-            money: objective - steered - rows.iter().map(|(index, _, tonnes)| self.credit[*index] * tonnes).sum::<f64>(),
+            money: objective - steered - credits,
             rows,
             extracted: extractions.into_iter().map(|(key, col)| (key, solution[col.index()].max(0.0))).collect(),
             durations: lengths.iter().map(|col| solution[col.index()].max(0.0)).collect(),
@@ -1488,6 +2608,18 @@ impl<'a> State<'a> {
     /// extraction.
     fn apply(&mut self, interval: Interval, topology: &Topology, plan: Plan) {
         let input = self.input;
+        if !input.loader_areas.is_empty() {
+            for held in &mut self.last_in {
+                held.clear();
+            }
+            for (&(loader, block, _), tonnes) in &plan.extracted {
+                if *tonnes > NEGLIGIBLE_T {
+                    for area in self.areas_of.get(&block).into_iter().flatten() {
+                        self.last_in[*area].insert(loader);
+                    }
+                }
+            }
+        }
         let k = interval.index;
         let duration = interval.duration_h();
         let filled: f64 = plan.durations.iter().sum();
@@ -1507,7 +2639,9 @@ impl<'a> State<'a> {
         let mut pins = topology.pins.clone();
         for (segment, bars) in topology.segments.iter().enumerate() {
             for bar in bars {
-                pins.extend(bar.blocks.iter().rev().skip(1).map(|block| (*block, segment)));
+                if input.tasks[bar.task].lookahead_t <= 0.0 {
+                    pins.extend(bar.blocks.iter().rev().skip(1).map(|block| (*block, segment)));
+                }
             }
         }
         let mut extracted = plan.extracted;
@@ -1550,7 +2684,17 @@ impl<'a> State<'a> {
             let fraction = self.outlets.share(block, MaterialId(material));
             let target = fraction * extracted.get(&(loader, block, segment)).copied().unwrap_or(0.0);
             let total: f64 = entries.iter().map(|(_, tonnes)| tonnes).sum();
-            if target <= 0.0 || total <= 0.0 {
+            if target <= 0.0 {
+                continue;
+            }
+            // A material the program sent nowhere, its share too small for
+            // the solver to tell from nothing, still leaves with the rest of
+            // the block: on its first route, so every share is dug in
+            // proportion.
+            if total <= 0.0 {
+                if target > FINISHED_T {
+                    rows.push((entries[0].0, segment, target));
+                }
                 continue;
             }
             rows.extend(
@@ -1563,16 +2707,30 @@ impl<'a> State<'a> {
         for ((_, block, _), tonnes) in extracted {
             if let Some(left) = self.ground.get_mut(&block) {
                 *left = (*left - tonnes).max(0.0);
+                if *left <= FINISHED_T
+                    && let Some(chain) = self.chain.as_mut()
+                {
+                    chain.dug(block);
+                    if let Some(released) = self.released_at.as_mut() {
+                        for (task, place) in self.places.get(&block).into_iter().flatten() {
+                            released.entry(*task).or_default().remove(place);
+                        }
+                    }
+                }
             }
         }
         // Earlier segments first, so reclaim is charged to bars in the order
         // they worked.
         rows.sort_by_key(|(index, segment, _)| (*segment, *index));
 
+        // What each part of an interval solved in parts released: its
+        // reclaim carried that blend.
+        let part_released = std::mem::take(&mut self.part_released);
+        let walked = |pile: StockpileId| !part_released.is_empty() && input.piles.iter().any(|entry| entry.id == pile && entry.chunks.is_empty() && !entry.exclusive);
         // A draw within [`SNAP_T`] of emptying what its pile released
         // empties it, so a drained chunk reads as empty to the order rules.
         let released = &self.released;
-        for (pile, found) in released {
+        for (pile, found) in released.iter().filter(|(pile, _)| !walked(**pile)) {
             let drawn: f64 = rows
                 .iter()
                 .filter(|(index, _, _)| input.movements[*index].source == SourceId::Stockpile(*pile))
@@ -1639,16 +2797,78 @@ impl<'a> State<'a> {
         // The grade targets on this interval's day, once rather than per row.
         let targets: Vec<(usize, &BlendGradeTarget)> = input.grade_targets.iter().enumerate().filter(|(_, t)| t.applies(interval.start_h)).collect();
         let missing = vec![0.0; grades];
+        // A walked pile's blend as each segment opens, from the rows as they
+        // are published - the receipts rescaled to what was dug - walked as
+        // the replay walks it: a segment draws at the blend standing as it
+        // opens, then its receipts join the pile.
+        let mut walk_blends: BTreeMap<(StockpileId, usize), Vec<f64>> = BTreeMap::new();
+        if !part_released.is_empty() {
+            let segments = rows.iter().map(|(_, segment, _)| segment + 1).max().unwrap_or(1).max(part_released.len());
+            self.parts.extend((1..part_released.len()).map(|segment| (k, segment)));
+            for entry in input.piles.iter().filter(|entry| walked(entry.id)) {
+                let Some((open_t, open_q)) = self.piles.get(&entry.id) else { continue };
+                let (mut state_t, mut state_q) = (*open_t, open_q.clone());
+                for segment in 0..segments {
+                    let blend: Vec<f64> = if state_t > 0.0 {
+                        state_q.iter().map(|q| q / state_t).collect()
+                    } else {
+                        vec![0.0; grades]
+                    };
+                    let mut out_t = 0.0;
+                    let (mut in_t, mut in_q) = (0.0, vec![0.0; grades]);
+                    for (index, at, tonnes) in rows.iter().filter(|(_, at, _)| *at == segment) {
+                        let candidate = &input.movements[*index];
+                        if candidate.source == SourceId::Stockpile(entry.id) {
+                            out_t += tonnes;
+                        }
+                        if input
+                            .destinations
+                            .iter()
+                            .any(|destination| destination.id == candidate.destination && destination.kind == DestinationKind::Stockpile(entry.id))
+                        {
+                            let carried: &[f64] = match candidate.source {
+                                SourceId::Stockpile(from) => walk_blends.get(&(from, *at)).map_or(&missing, Vec::as_slice),
+                                _ => input.grades.fractions(candidate.material).unwrap_or(&missing),
+                            };
+                            in_t += tonnes;
+                            for (q, fraction) in in_q.iter_mut().zip(carried) {
+                                *q += tonnes * fraction;
+                            }
+                        }
+                    }
+                    let out = out_t.min(state_t);
+                    for (q, fraction) in state_q.iter_mut().zip(&blend) {
+                        *q -= out * fraction;
+                    }
+                    state_t -= out;
+                    state_t += in_t;
+                    for (q, received) in state_q.iter_mut().zip(&in_q) {
+                        *q += received;
+                    }
+                    walk_blends.insert((entry.id, segment), blend);
+                }
+            }
+        }
+        // A walked pile's draws and receipts by segment, for its balance.
+        let mut by_segment: BTreeMap<(StockpileId, usize), (f64, f64, Vec<f64>)> = BTreeMap::new();
         for (index, segment, tonnes) in rows {
             let candidate = &input.movements[index];
             *self.rows.entry((index, k, segment)).or_default() += tonnes;
             let blend = match candidate.source {
                 SourceId::Stockpile(pile) => {
                     *drawn.entry(pile).or_default() += tonnes;
+                    if walked(pile) {
+                        by_segment.entry((pile, segment)).or_insert_with(|| (0.0, 0.0, vec![0.0; grades])).0 += tonnes;
+                    }
                     for (task, share) in attribute_reclaim(input, candidate, interval, tonnes, &self.reclaimed) {
                         *self.reclaimed.entry(task).or_default() += share;
                     }
-                    let blend = released.get(&pile).map(|found| found.blend.as_slice()).unwrap_or(&missing);
+                    let blend = walk_blends
+                        .get(&(pile, segment))
+                        .map(Vec::as_slice)
+                        .or_else(|| part_released.get(segment).and_then(|parts| parts.get(&pile)).map(|found| found.blend.as_slice()))
+                        .or_else(|| released.get(&pile).map(|found| found.blend.as_slice()))
+                        .unwrap_or(&missing);
                     self.conditional += tonnes * conditional_value(input, index, blend, pile_drawn.get(&pile).copied().unwrap_or(tonnes));
                     blend
                 }
@@ -1669,6 +2889,13 @@ impl<'a> State<'a> {
                 DestinationKind::Dump => *self.dumped.entry(destination.id).or_default() += tonnes,
                 DestinationKind::Crusher => *self.crushed.entry((destination.id, interval.day())).or_default() += tonnes,
                 DestinationKind::Stockpile(pile) => {
+                    if walked(pile) {
+                        let entry = by_segment.entry((pile, segment)).or_insert_with(|| (0.0, 0.0, vec![0.0; grades]));
+                        entry.1 += tonnes;
+                        for (q, fraction) in entry.2.iter_mut().zip(blend) {
+                            *q += tonnes * fraction;
+                        }
+                    }
                     receipts.entry(pile).or_default().push((index, tonnes));
                     let entry = received.entry(pile).or_insert_with(|| (0.0, vec![0.0; grades]));
                     entry.0 += tonnes;
@@ -1734,6 +2961,25 @@ impl<'a> State<'a> {
                 *receiving = entry.next_receiver(*receiving, |c| cells[c].held_t, FINISHED_T);
                 *open_t = cells.iter().map(|chunk| chunk.held_t).sum();
                 *open_q = (0..grades).map(|grade| cells.iter().map(|chunk| chunk.held_q[grade]).sum()).collect();
+                continue;
+            }
+            if walked(*pile) {
+                // Segment by segment: each draws at the blend standing as it
+                // opens, then what it received joins the pile.
+                for ((_, _), (out_t, in_t, in_q)) in by_segment.range((*pile, 0)..(*pile, usize::MAX)) {
+                    let out = out_t.min(*open_t);
+                    if out > 0.0 && *open_t > 0.0 {
+                        let share = out / *open_t;
+                        for contained in open_q.iter_mut() {
+                            *contained -= *contained * share;
+                        }
+                    }
+                    *open_t -= out;
+                    *open_t += in_t;
+                    for (contained, received) in open_q.iter_mut().zip(in_q) {
+                        *contained += received;
+                    }
+                }
                 continue;
             }
             let reclaimed = drawn.get(pile).copied().unwrap_or(0.0).min(*open_t);
@@ -1803,6 +3049,9 @@ impl<'a> State<'a> {
                 }
                 let current = sequence.get(*at).copied();
                 drop(cursor);
+                if let Some(reach) = self.reach(bar, &BTreeSet::new(), interval) {
+                    return !reach.is_empty();
+                }
                 current.is_some_and(|current| self.blasted(current) && self.diggable(task, current, interval))
             }
             TaskKind::Reclaim { approved_sources, maximum_t } => {
@@ -1853,9 +3102,16 @@ impl<'a> State<'a> {
             },
             DestinationKind::Stockpile(pile) => {
                 input.piles.iter().any(|entry| entry.id == pile && entry.builds(interval))
-                    && entry
-                        .capacity_t
-                        .is_none_or(|capacity| capacity - self.piles.get(&pile).map_or(0.0, |(open_t, _)| *open_t) > DIG_ROOM_T)
+                    && entry.capacity_t.is_none_or(|capacity| {
+                        capacity
+                            - self
+                                .pile_opening
+                                .get(&pile)
+                                .copied()
+                                .or_else(|| self.piles.get(&pile).map(|(open_t, _)| *open_t))
+                                .unwrap_or(0.0)
+                            > DIG_ROOM_T
+                    })
             }
         }
     }
@@ -1916,8 +3172,15 @@ impl<'a> State<'a> {
             .unwrap_or_default()
     }
 
-    /// What `destination` can still take in `interval`.
+    /// What `destination` can still take in `interval`, never less than
+    /// nothing: what the parts before took can round past its room, and a
+    /// limit below zero leaves the part no program at all.
     fn destination_room(&self, destination: DestinationId, interval: Interval) -> f64 {
+        let used = self.part_used.get(&destination).copied().unwrap_or(0.0);
+        (self.destination_room_opening(destination, interval) - used).max(0.0)
+    }
+
+    fn destination_room_opening(&self, destination: DestinationId, interval: Interval) -> f64 {
         let input = self.input;
         let Some(destination) = input.destinations.iter().find(|entry| entry.id == destination) else {
             return 0.0;
@@ -1973,6 +3236,7 @@ impl<'a> State<'a> {
             reported_objective: reported_objective + self.conditional - super::replay::target_penalty(input, &self.target_totals) + incentive,
             adjustments: ExtractionAdjustments::default(),
             drill_blast: self.chain.map(Chain::finish),
+            parts: self.parts,
         }
     }
 }
@@ -1983,7 +3247,10 @@ impl<'a> State<'a> {
 fn narrow(input: &BlendInput, topology: &mut Topology, plan: &Plan) -> bool {
     let mut narrowed = false;
     for (segment, bars) in topology.segments.iter_mut().enumerate() {
-        for bar in bars.iter_mut().filter(|bar| matches!(input.tasks[bar.task].kind, TaskKind::Reclaim { .. })) {
+        for bar in bars
+            .iter_mut()
+            .filter(|bar| matches!(input.tasks[bar.task].kind, TaskKind::Reclaim { .. }) || !input.tasks[bar.task].reclaims.is_empty())
+        {
             let mut drawn: BTreeMap<StockpileId, f64> = BTreeMap::new();
             for &(index, at, tonnes) in &plan.rows {
                 let candidate = &input.movements[index];

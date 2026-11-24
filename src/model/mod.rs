@@ -534,6 +534,10 @@ pub(crate) struct BlastingPlan {
     /// Flitch-owned strip drawing; derived dig blocks have no stored names.
     #[serde(default)]
     pub(crate) dig_strips: Vec<BenchBlasts>,
+    /// How far apart the panel grid's lines are, on every bench with panels
+    /// on; `None` for [`BlastingPlan::DEFAULT_PANEL_SIZE_M`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) panel_size_m: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -551,6 +555,11 @@ pub(crate) struct BenchBlasts {
     #[serde(default)]
     pub(crate) cuts: Vec<Object>,
     pub(crate) blasts: Vec<BlastShape>,
+    /// Whether a square grid of panels divides this bench's blasts further,
+    /// over and apart from the cuts drawn on it: each blast the cuts make is
+    /// split along the grid, unless it is out of mining.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) panels: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -585,6 +594,7 @@ impl BlastingPlan {
                     planning_layer: None,
                     cuts: Vec::new(),
                     blasts: Vec::new(),
+                    panels: false,
                 });
                 self.dig_strips.len() - 1
             });
@@ -595,6 +605,27 @@ impl BlastingPlan {
     /// come from the same arithmetic either side, so this only absorbs the
     /// round trip through the file.
     const BENCH_EPSILON: f64 = 1e-6;
+
+    pub(crate) const DEFAULT_PANEL_SIZE_M: f64 = 100.0;
+
+    /// How far apart the panel grid's lines are.
+    pub(crate) fn panel_size(&self) -> f64 {
+        self.panel_size_m.filter(|size| size.is_finite() && *size > 0.0).unwrap_or(Self::DEFAULT_PANEL_SIZE_M)
+    }
+
+    /// The panel size on the bench at `base`, when it has panels on.
+    pub(crate) fn bench_panels(&self, base: f64) -> Option<f64> {
+        self.bench(base).filter(|bench| bench.panels).map(|_| self.panel_size())
+    }
+
+    /// This plan with panels on or off on each bench of `bases`.
+    pub(crate) fn with_panels(&self, bases: impl IntoIterator<Item = f64>, on: bool) -> Self {
+        let mut next = self.clone();
+        for base in bases {
+            next.bench_mut(base).panels = on;
+        }
+        next
+    }
 
     pub(crate) fn bench(&self, base: f64) -> Option<&BenchBlasts> {
         self.benches.iter().find(|bench| (bench.base - base).abs() <= Self::BENCH_EPSILON)
@@ -610,6 +641,7 @@ impl BlastingPlan {
                     planning_layer: None,
                     cuts: Vec::new(),
                     blasts: Vec::new(),
+                    panels: false,
                 });
                 self.benches.last_mut().expect("just pushed")
             }
@@ -1426,6 +1458,10 @@ pub(crate) struct Document {
     /// and the one run that should says so itself.
     #[serde(skip)]
     saved_schedule: Option<std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>>,
+    /// The latest calculated schedule of each scenario that is not open,
+    /// kept with the project as the open one's is: opening one restores it.
+    #[serde(skip)]
+    scenario_saved_schedules: Vec<(schedule::scenarios::ScenarioId, std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>)>,
     #[serde(skip)]
     revision: u64,
     /// Document revision at which each object was last mutated. Lets the
@@ -1614,7 +1650,19 @@ impl Document {
     }
 
     fn object_position(&self, id: ObjectId) -> Option<usize> {
-        self.indexed_object_position(id).or_else(|| self.objects.iter().position(|object| object.id() == id))
+        self.indexed_object_position(id)
+            .or_else(|| self.scan_unindexed(id).then(|| self.objects.iter().position(|object| object.id() == id)).flatten())
+    }
+
+    /// Whether an object the index misses could still be in the list: only
+    /// when the index holds fewer entries than there are objects. Every
+    /// object is indexed as it is added, so scanning on every miss - each
+    /// object of an import is one, being new - made adding N objects to a
+    /// document of M cost N x M: minutes for a surveyed topography.
+    fn scan_unindexed(&self, id: ObjectId) -> bool {
+        let unindexed = self.object_index.len() < self.objects.len();
+        debug_assert!(!unindexed, "object_index out of sync for {id:?}");
+        unindexed
     }
 
     /// The design object's position by its index alone. Every design object
@@ -2043,6 +2091,30 @@ impl Document {
         self.saved_schedule = saved;
     }
 
+    /// The saved schedules of the scenarios that are not open, for the file.
+    pub(crate) fn scenario_saved_schedules(&self) -> &[(schedule::scenarios::ScenarioId, std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>)] {
+        &self.scenario_saved_schedules
+    }
+
+    pub(crate) fn set_scenario_saved_schedules(&mut self, saved: Vec<(schedule::scenarios::ScenarioId, std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>)>) {
+        self.scenario_saved_schedules = saved;
+    }
+
+    /// `leaving` is no longer open and `entering` is: the open scenario's
+    /// saved schedule waits with the others - or goes, when `leaving` was
+    /// deleted - and `entering`'s, if it has one, becomes the open one's.
+    pub(crate) fn swap_saved_schedule(&mut self, leaving: schedule::scenarios::ScenarioId, entering: schedule::scenarios::ScenarioId) {
+        self.scenario_saved_schedules.retain(|(scenario, _)| *scenario != leaving);
+        if let Some(saved) = self.saved_schedule.take()
+            && self.schedule.scenarios().get(leaving).is_some()
+        {
+            self.scenario_saved_schedules.push((leaving, saved));
+        }
+        if let Some(position) = self.scenario_saved_schedules.iter().position(|(scenario, _)| *scenario == entering) {
+            self.saved_schedule = Some(self.scenario_saved_schedules.remove(position).1);
+        }
+    }
+
     /// Swap in a whole schedule plan, as one undoable edit.
     ///
     /// The plan is small and edited a cell at a time, so a snapshot either
@@ -2079,6 +2151,9 @@ impl Document {
         }
         if self.saved_schedule.is_none() {
             self.saved_schedule.clone_from(&source.saved_schedule);
+        }
+        if self.scenario_saved_schedules.is_empty() {
+            self.scenario_saved_schedules.clone_from(&source.scenario_saved_schedules);
         }
     }
 
@@ -2451,10 +2526,10 @@ impl Document {
         if let Some(cut) = self.planning_benches().flat_map(|bench| &bench.cuts).find(|object| object.id() == id) {
             return Some(cut);
         }
-        let slow = self.objects.iter().find(|object| object.id() == id);
         // The linear scan finding an object the index missed means the index
         // is corrupt; surface that in debug builds instead of hiding it
         // behind O(N) lookups.
+        let slow = self.scan_unindexed(id).then(|| self.objects.iter().find(|object| object.id() == id)).flatten();
         debug_assert!(slow.is_none(), "object_index out of sync for {id:?}");
         slow
     }

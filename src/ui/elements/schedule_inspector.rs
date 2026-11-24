@@ -299,8 +299,6 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
         };
         let mut hover: Option<String> = None;
         if let Some(execution) = schedule.executions_at(hour).find(|execution| execution.agent == agent.id) {
-            let bar = plan.bar(execution.bar);
-            let report = editor.schedule_bar_reports.iter().find(|report| report.bar == execution.bar);
             entry.dot = Some(match execution.activity {
                 Activity::Dig => WORKING_COLOR,
                 Activity::Reclaim => RECLAIM_COLOR,
@@ -309,18 +307,34 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
                 "inspector-rate",
                 rate = format_tonnes(schedule.deliveries_at(hour).filter(|d| d.agent == agent.id).map(rate).sum::<f64>().round())
             );
-            let source = match bar {
-                Some(bar) => qualified_source_label(execution.source, bar, report, schedule, destinations),
-                None => String::new(),
-            };
-            let mut targets: Vec<String> = Vec::new();
-            for delivery in schedule.deliveries_at(hour).filter(|delivery| delivery.agent == agent.id) {
-                let name = destination_label(delivery.destination, destinations);
-                if !targets.contains(&name) {
-                    targets.push(name);
+            // Each piece of work this hour, where it went: one, or a block
+            // dug and a stockpile reclaimed between the same hours.
+            let mut lines: Vec<String> = Vec::new();
+            let mut seen: Vec<WorkSource> = Vec::new();
+            for execution in schedule.executions_at(hour).filter(|execution| execution.agent == agent.id) {
+                if seen.contains(&execution.source) {
+                    continue;
                 }
+                seen.push(execution.source);
+                let bar = plan.bar_with_inherited(execution.bar);
+                let report = editor.schedule_bar_reports.iter().find(|report| report.bar == execution.bar);
+                let source = match bar {
+                    Some(bar) => qualified_source_label(execution.source, bar, report, schedule, destinations),
+                    None => String::new(),
+                };
+                let mut targets: Vec<String> = Vec::new();
+                for delivery in schedule
+                    .deliveries_at(hour)
+                    .filter(|delivery| delivery.agent == agent.id && delivery.source == execution.source)
+                {
+                    let name = destination_label(delivery.destination, destinations);
+                    if !targets.contains(&name) {
+                        targets.push(name);
+                    }
+                }
+                lines.push(if targets.is_empty() { source } else { format!("{source} → {}", targets.join(", ")) });
             }
-            entry.detail = Some(if targets.is_empty() { source } else { format!("{source} → {}", targets.join(", ")) });
+            entry.detail = Some(lines.join("\n"));
         } else if let Some(span) = schedule.idle_at(agent.id, hour) {
             if span.reason == Some(IdleReason::Delayed) {
                 let (color, kind) = delay_at(plan, agent.id, hour).unwrap_or((IDLE_COLOR, None));
@@ -421,7 +435,7 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
         // Built only on hover, as on the Gantt: it scans the result.
         if response.hovered() {
             let tooltip = schedule.executions_at(hour).find(|execution| execution.agent == agent.id).and_then(|execution| {
-                let bar = plan.bar(execution.bar)?;
+                let bar = plan.bar_with_inherited(execution.bar)?;
                 let report = editor.schedule_bar_reports.iter().find(|report| report.bar == execution.bar);
                 Some(execution_tooltip(execution, bar, report, schedule, plan, destinations))
             });
@@ -719,8 +733,10 @@ fn fitted(ui: &egui::Ui, text: String, font: egui::FontId, color: egui::Color32,
 }
 
 fn draw_entry(ui: &mut egui::Ui, entry: &Entry) -> egui::Response {
-    let height =
-        NAME_ROW_H + entry.detail.as_ref().map_or(0.0, |_| DETAIL_ROW_H) + entry.warning.as_ref().map_or(0.0, |_| DETAIL_ROW_H) + entry.meter.map_or(0.0, |_| METER_H + 3.0) + 4.0;
+    // A detail may hold several lines - a block dug and a pile reclaimed in
+    // the same hour - each a row of its own.
+    let rows = |text: &Option<String>| text.as_ref().map_or(0, |text| text.lines().count()) as f32;
+    let height = NAME_ROW_H + (rows(&entry.detail) + rows(&entry.warning)) * DETAIL_ROW_H + entry.meter.map_or(0.0, |_| METER_H + 3.0) + 4.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
     let visuals = ui.visuals();
     if response.hovered() {
@@ -754,8 +770,8 @@ fn draw_entry(ui: &mut egui::Ui, entry: &Entry) -> egui::Response {
         y += METER_H + 3.0;
     }
     for (line, color) in [(&entry.detail, visuals.weak_text_color()), (&entry.warning, visuals.warn_fg_color)] {
-        if let Some(line) = line {
-            let galley = fitted(ui, line.clone(), small.clone(), color, rect.right() - left);
+        for line in line.iter().flat_map(|text| text.lines()) {
+            let galley = fitted(ui, line.to_owned(), small.clone(), color, rect.right() - left);
             ui.painter().galley(egui::pos2(left, y + (DETAIL_ROW_H - galley.size().y) / 2.0), galley, color);
             y += DETAIL_ROW_H;
         }

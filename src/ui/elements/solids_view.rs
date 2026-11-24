@@ -355,7 +355,7 @@ impl<'a> TreePass<'a> {
             }
         });
         if tree_adds_to_order(self.tree) {
-            row_menu(&heading.inner, &solid.name, editor, solid, None, Some((rows.clone(), None)), commands);
+            row_menu(&heading.inner, &solid.name, editor, solid, None, Some((rows.clone(), None)), None, commands);
         }
         if heading.inner.clicked() {
             self.clicked = Some((rows, None));
@@ -426,7 +426,20 @@ impl<'a> TreePass<'a> {
         };
         if tree.is_solids_page() {
             let add = tree_adds_to_order(tree).then(|| (group.clone(), None));
-            row_menu(&response, &text, editor, solid, Some(target), add, commands);
+            // Panels go on every bench of this solid that is picked, when this
+            // one is; otherwise on this one alone.
+            let picked: Vec<f64> = tree
+                .selection(editor)
+                .iter()
+                .filter(|picked| picked.solid == solid.id)
+                .filter_map(|picked| picked.band.filter(|band| !band.is_flitch).map(|band| band.base))
+                .collect();
+            let panels = if picked.iter().any(|base| (base - bench.base).abs() < 1e-6) {
+                picked
+            } else {
+                vec![bench.base]
+            };
+            row_menu(&response, &text, editor, solid, Some(target), add, Some(panels), commands);
         }
         if response.clicked() {
             self.clicked = Some((group, None));
@@ -484,7 +497,7 @@ impl<'a> TreePass<'a> {
                 let (response, visibility_clicked) = leaf_row(ui, id, flitch_icon(), label, flitch_selected, flitch_visible);
                 // A flitch is a level of a blast, which a blast order cannot name.
                 if tree_adds_to_order(tree) && editor.blast_bar_dialog.is_none() {
-                    row_menu(&response, &format_rl(flitch.base), editor, solid, None, Some((vec![row], Some(shape))), commands);
+                    row_menu(&response, &format_rl(flitch.base), editor, solid, None, Some((vec![row], Some(shape))), None, commands);
                 }
                 if response.clicked() {
                     self.clicked = Some((vec![row], tree.is_solids_page().then_some(shape)));
@@ -496,7 +509,7 @@ impl<'a> TreePass<'a> {
         });
         if tree.is_solids_page() {
             let add = tree_adds_to_order(tree).then(|| (bench_group.to_vec(), Some(shape)));
-            row_menu(&response, &text, editor, solid, Some(target), add, commands);
+            row_menu(&response, &text, editor, solid, Some(target), add, None, commands);
             if response.clicked() {
                 self.clicked = Some((bench_group.to_vec(), Some(shape)));
             }
@@ -882,6 +895,8 @@ fn tree_adds_to_order(tree: SolidsTree) -> bool {
 /// `add` puts everything under the row on the open sequence editor's order.
 /// What the tree has hidden stays out, and what is in the order stays put.
 /// `target` takes the row's ground out of mining, or puts it back.
+/// `panels` turns the panel grid on or off on these benches together.
+#[allow(clippy::too_many_arguments)]
 fn row_menu(
     response: &egui::Response,
     title: &str,
@@ -889,6 +904,7 @@ fn row_menu(
     solid: &crate::model::Solid,
     target: Option<crate::model::ExclusionTarget>,
     add: Option<(Vec<SolidsViewRow>, Option<BlastShapeRef>)>,
+    panels: Option<Vec<f64>>,
     commands: &mut Vec<UiCommand>,
 ) {
     context_menu_popup(response, title, |ui| {
@@ -902,6 +918,16 @@ fn row_menu(
                 commands.push(UiCommand::AddToSequence {
                     rows: rows.clone(),
                     blast: *blast,
+                });
+                ui.close();
+            }
+        }
+        if let Some(benches) = &panels {
+            let on = benches.iter().all(|base| solid.blasting.bench_panels(*base).is_some());
+            if ContextMenuAction::new(tr!("planning-panels")).checked(on).show(ui).clicked() {
+                commands.push(UiCommand::UpdateSolid {
+                    solid: solid.id,
+                    edit: crate::model::SolidEdit::Blasting(solid.blasting.with_panels(benches.iter().copied(), !on)),
                 });
                 ui.close();
             }

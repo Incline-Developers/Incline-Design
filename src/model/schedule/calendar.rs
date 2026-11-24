@@ -91,7 +91,8 @@ impl Default for LoaderCalendar {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum CalendarField {
     Availability,
     Utilisation,
@@ -125,13 +126,15 @@ pub(crate) enum RateKind {
     Reclaim,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum CalendarCell {
     Default,
     Period(CalendarPeriod),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CalendarCellEdit {
     pub(crate) agent: super::LoaderAgentId,
     pub(crate) cell: CalendarCell,

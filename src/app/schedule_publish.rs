@@ -583,6 +583,25 @@ pub(crate) fn publish(
         omitted_tonnes_t: omitted_tonnes_t + solution.adjustments.movement_total_t,
         notes: meta.notes,
     };
+    // Each automatic bar's blocks in the order they were finished, what it
+    // did not finish after in the order it was dealt: its loader works
+    // among the blocks within its reach as the hours suit, so this is the
+    // order it dug them in, and what Convert to Dig Sequence keeps.
+    let bar_blocks: Vec<(BarId, Vec<crate::model::DigBlockId>)> = {
+        let emptied: BTreeMap<crate::model::DigBlockId, f64> = ground.iter().filter_map(|balance| Some((balance.block, balance.emptied_h?))).collect();
+        identities
+            .bar_blocks
+            .iter()
+            .map(|(bar, blocks)| {
+                let mut blocks = blocks.clone();
+                blocks.sort_by(|a, b| {
+                    let at = |block| emptied.get(block).copied().unwrap_or(f64::INFINITY);
+                    at(a).total_cmp(&at(b))
+                });
+                (*bar, blocks)
+            })
+            .collect()
+    };
     let mut schedule = CalculatedSchedule::new(ScheduleParts {
         run: meta.run,
         semantic: meta.semantic,
@@ -593,7 +612,16 @@ pub(crate) fn publish(
         ground,
         piles,
         agents: identities.loaders.iter().map(|(_, agent, _)| *agent).collect(),
-        bar_blocks: identities.bar_blocks.clone(),
+        bar_blocks,
+        block_names: {
+            let held: std::collections::BTreeSet<_> = identities.bar_blocks.iter().flat_map(|(_, blocks)| blocks.iter().copied()).collect();
+            identities
+                .ground
+                .iter()
+                .filter_map(|(ground, name, _)| Some((*identities.ground_blocks.get(ground)?, name.clone())))
+                .filter(|(block, _)| held.contains(block))
+                .collect()
+        },
         reclaim_caps: identities.reclaim_caps.clone(),
         grades: identities.grades.iter().map(|(field, _, unit)| (*field, *unit)).collect(),
         grade_targets: replay
@@ -818,7 +846,9 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         _ => BTreeMap::new(),
     };
     // A loader waits on a blast when its highest-priority open bar is a dig
-    // whose next block has not been released.
+    // whose next block has not been released - and, for an automatic bar,
+    // nor has any other block left in its sequence: its reach counts only
+    // released ground, so it could start any of those instead.
     let waiting = |agent: LoaderAgentId, position: usize| -> Option<usize> {
         if releases.is_empty() {
             return None;
@@ -840,10 +870,116 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         for task in open {
             let TaskKind::Dig { sequence } = &task.kind else { return None };
             if let Some(ground) = next_in_sequence(task, sequence, start_h) {
-                return releases.get(&ground).filter(|(at, _)| *at > start_h + 1e-9).map(|(_, blast)| *blast);
+                let held = releases.get(&ground).filter(|(at, _)| *at > start_h + 1e-9).map(|(_, blast)| *blast);
+                if held.is_some() && task.lookahead_t > 0.0 {
+                    let from = sequence.iter().position(|at| *at == ground).unwrap_or(0);
+                    let open = sequence[from..].iter().any(|at| {
+                        let left = ground_by_id.get(at).map_or(0.0, |source| source.tonnes_t)
+                            - lookup
+                                .identities
+                                .ground_blocks
+                                .get(at)
+                                .map_or(0.0, |block| sum_within(dug.get(block), f64::NEG_INFINITY, start_h));
+                        left > IDLE_NEGLIGIBLE_T && releases.get(at).is_none_or(|(when, _)| *when <= start_h + 1e-9)
+                    });
+                    if open {
+                        return None;
+                    }
+                }
+                return held;
             }
         }
         None
+    };
+    // Loader limits: the loaders that dug in each area in each interval,
+    // and a loader whose highest-priority open dig bar's next block is in
+    // an area that many others dug in that interval was kept out of it.
+    let mut areas_of: BTreeMap<crate::model::schedule::optimisation::GroundId, Vec<usize>> = BTreeMap::new();
+    for (area, entry) in input.loader_areas.iter().enumerate() {
+        for ground in &entry.ground {
+            areas_of.entry(*ground).or_default().push(area);
+        }
+    }
+    let mut dug_in: BTreeMap<(usize, usize), std::collections::BTreeSet<crate::model::schedule::optimisation::LoaderId>> = BTreeMap::new();
+    if !areas_of.is_empty() {
+        for row in &solution.movements {
+            let Some(candidate) = input.movements.get(row.candidate) else { continue };
+            if let SourceId::Ground(ground) = candidate.source
+                && row.tonnes_t > IDLE_NEGLIGIBLE_T
+            {
+                for area in areas_of.get(&ground).into_iter().flatten() {
+                    dug_in.entry((row.interval, *area)).or_default().insert(candidate.loader);
+                }
+            }
+        }
+    }
+    let kept_out = |agent: LoaderAgentId, position: usize| -> bool {
+        if areas_of.is_empty() {
+            return false;
+        }
+        let Some(&loader) = loaders.get(&agent) else { return false };
+        let start_h = input.intervals[position].start_h;
+        let mut open: Vec<_> = tasks_of
+            .get(&loader)
+            .unwrap_or(&no_tasks)
+            .iter()
+            .copied()
+            .filter(|task| task.window_start_h <= start_h + 1e-9 && task.window_end_h > start_h + 1e-9)
+            .collect();
+        open.sort_by(|left, right| {
+            (left.priority, left.window_start_h, left.id)
+                .partial_cmp(&(right.priority, right.window_start_h, right.id))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let Some(task) = open.first() else { return false };
+        let TaskKind::Dig { sequence } = &task.kind else { return false };
+        let Some(ground) = next_in_sequence(task, sequence, start_h) else { return false };
+        areas_of.get(&ground).is_some_and(|areas| {
+            areas
+                .iter()
+                .any(|area| dug_in.get(&(position, *area)).map_or(0, |held| held.iter().filter(|other| **other != loader).count()) >= input.loader_areas[*area].loaders as usize)
+        })
+    };
+    // Automatic ground held by a blast: none of it is dealt to a bar while
+    // that blast never fires, so an automatic bar with nothing left to dig
+    // waits on it rather than having finished.
+    let sequenced: std::collections::HashSet<crate::model::schedule::optimisation::GroundId> = input
+        .tasks
+        .iter()
+        .filter_map(|task| match &task.kind {
+            TaskKind::Dig { sequence } => Some(sequence),
+            _ => None,
+        })
+        .flatten()
+        .copied()
+        .collect();
+    let held_auto: Vec<(crate::model::schedule::optimisation::GroundId, f64, usize)> = lookup
+        .identities
+        .auto_ground
+        .iter()
+        .filter(|ground| !sequenced.contains(*ground))
+        .filter_map(|ground| releases.get(ground).map(|(at, blast)| (*ground, *at, *blast)))
+        .filter(|(_, _, blast)| *blast < lookup.identities.blasts.len())
+        .collect();
+    let held_blast = |agent: LoaderAgentId, position: usize| -> Option<usize> {
+        if held_auto.is_empty() {
+            return None;
+        }
+        let loader = *loaders.get(&agent)?;
+        let start_h = input.intervals[position].start_h;
+        lookup
+            .identities
+            .auto_dig_tasks
+            .iter()
+            .filter(|(_, held, from, to)| *held == loader && *from <= start_h + 1e-9 && *to > start_h + 1e-9)
+            .flat_map(|(bar, ..)| {
+                let allowed = lookup.identities.auto_allowed.get(bar);
+                held_auto
+                    .iter()
+                    .filter(move |(ground, at, _)| *at > start_h + 1e-9 && allowed.is_none_or(|allowed| allowed.contains(ground)))
+                    .map(|(_, _, blast)| *blast)
+            })
+            .min()
     };
     let explain = |schedule: &CalculatedSchedule, agent: LoaderAgentId, position: usize| {
         use std::collections::HashSet;
@@ -919,7 +1055,34 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
                 // Ground is dug in order: what the machine could be on is the
                 // first block of the sequence that still holds any.
                 TaskKind::Dig { sequence } => {
-                    sources.extend(next_in_sequence(task, sequence, start_h).map(SourceId::Ground));
+                    let next = next_in_sequence(task, sequence, start_h);
+                    if task.lookahead_t > 0.0
+                        && let Some(first) = next
+                    {
+                        // An automatic bar could be on any released block
+                        // within the lookahead's days of its reach, which
+                        // counts only released ground.
+                        let from = sequence.iter().position(|at| *at == first).unwrap_or(0);
+                        let most = crate::model::schedule::optimisation::blended::input::LOOKAHEAD_DAYS as f64 * task.lookahead_t;
+                        let mut before = 0.0;
+                        for at in &sequence[from..] {
+                            if before > most {
+                                break;
+                            }
+                            let left = ground_by_id.get(at).map_or(0.0, |source| source.tonnes_t)
+                                - lookup
+                                    .identities
+                                    .ground_blocks
+                                    .get(at)
+                                    .map_or(0.0, |block| sum_within(dug.get(block), f64::NEG_INFINITY, start_h));
+                            if left > IDLE_NEGLIGIBLE_T && releases.get(at).is_none_or(|(when, _)| *when <= start_h + 1e-9) {
+                                sources.push(SourceId::Ground(*at));
+                                before += left;
+                            }
+                        }
+                    } else {
+                        sources.extend(next.map(SourceId::Ground));
+                    }
                 }
                 TaskKind::Reclaim { approved_sources, .. } => {
                     for pile in approved_sources {
@@ -1118,9 +1281,21 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
     };
     schedule.classify_idle(&intervals, |schedule, agent, position| {
         if let Some(blast) = waiting(agent, position) {
+            // A dependency past the real blasts: ground above, not a blast.
+            if blast >= lookup.identities.blasts.len() {
+                return (IdleReason::WaitingOnGround, Vec::new(), None);
+            }
             return (IdleReason::WaitingOnBlast, Vec::new(), Some(blast));
         }
+        if kept_out(agent, position) {
+            return (IdleReason::LoaderLimit, Vec::new(), None);
+        }
         let (reason, full) = explain(schedule, agent, position);
+        if reason == IdleReason::WorkFinished
+            && let Some(blast) = held_blast(agent, position)
+        {
+            return (IdleReason::WaitingOnBlast, Vec::new(), Some(blast));
+        }
         (reason, full, None)
     });
 }
@@ -1134,6 +1309,11 @@ fn published_drill_blast(
 ) -> Option<crate::model::schedule::result::DrillBlastResult> {
     use crate::model::schedule::result::{DrillBlastResult, PublishedBlast, PublishedBlastWork};
     let chain = input.drill_blast.as_ref()?;
+    // A chain holding only the dependencies of automatic bars' ground is
+    // not drill and blast: there is nothing of it to show.
+    if identities.blasts.is_empty() && identities.blast_agents.is_empty() {
+        return None;
+    }
     let timeline = solution.drill_blast.as_ref();
     // Which blast releases each piece of ground, so a blast can name the
     // blasts standing over it.
@@ -1141,6 +1321,7 @@ fn published_drill_blast(
         .blasts
         .iter()
         .enumerate()
+        .filter(|(_, blast)| !blast.gate)
         .flat_map(|(index, blast)| blast.releases.iter().map(move |ground| (*ground, index)))
         .collect();
     let unworked: BTreeMap<usize, _> = chain.unworked().into_iter().collect();

@@ -400,6 +400,7 @@ fn movements(
                 .and_then(|position| names.bar_views.iter().find(|view| view.bar == delivery.bar)?.members.get(position));
             member
                 .and_then(|member| member.area.clone().or_else(|| member.name.clone()))
+                .or_else(|| schedule.block_names.get(&block).cloned())
                 .unwrap_or_else(|| tr!("schedule-dispatch-block", block = block.0.to_string()))
         }
     };
@@ -500,7 +501,7 @@ fn movements(
 /// reclaiming, delayed, and idle by the reason the schedule gives. A machine
 /// the calculation never reached had no work for the whole period.
 fn loaders(schedule: &CalculatedSchedule, plan: &SchedulePlan, groups: &[Group], loader_name: &dyn Fn(LoaderAgentId) -> String) -> ReportTable {
-    const REASONS: [IdleReason; 9] = [
+    const REASONS: [IdleReason; 11] = [
         IdleReason::Unavailable,
         IdleReason::NoWork,
         IdleReason::WorkFinished,
@@ -510,6 +511,8 @@ fn loaders(schedule: &CalculatedSchedule, plan: &SchedulePlan, groups: &[Group],
         IdleReason::NoTrucks,
         IdleReason::NotWorthIt,
         IdleReason::WaitingOnBlast,
+        IdleReason::WaitingOnGround,
+        IdleReason::LoaderLimit,
     ];
     struct Time {
         dug: f64,

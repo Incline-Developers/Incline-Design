@@ -1161,7 +1161,86 @@ impl ReserveMappingSource {
 /// Whether a column's name says it is per cubic metre: a density.
 pub(crate) fn looks_like_density(column: &str) -> bool {
     let name = column.to_lowercase();
-    ["dens", "sg", "t_m3", "t/m3", "kg_m3"].iter().any(|hint| name.contains(hint))
+    ["dens", "sg", "t_m3", "t/m3", "kg_m3"].iter().any(|hint| name.contains(hint)) || reserve_name_key(column) == "density"
+}
+
+/// What a field or column name stands for, whatever the units or spelling
+/// it carries: "Cu %", `CU_PCT`, `cu_pct` and `CU` are all `cu`; `SG`, `BD`
+/// and `density` are all `density`. Block models from different sources
+/// name the same quantity differently, and the Field List maps onto each
+/// by this.
+pub(crate) fn reserve_name_key(name: &str) -> String {
+    const UNITS: [&str; 14] = ["pct", "percent", "ppm", "ppb", "gpt", "gt", "g", "t", "opt", "oz", "kg", "m3", "tm3", "kgm3"];
+    let lower = name.to_lowercase().replace('%', " pct ");
+    let tokens: Vec<&str> = lower.split(|ch: char| !ch.is_ascii_alphanumeric()).filter(|token| !token.is_empty()).collect();
+    // A unit alone is the name, not a unit of it: `t` for tonnes.
+    let kept: Vec<&str> = tokens.iter().copied().filter(|token| !UNITS.contains(token)).collect();
+    let key = if kept.is_empty() { tokens.concat() } else { kept.concat() };
+    match key.as_str() {
+        "copper" => "cu",
+        "gold" => "au",
+        "silver" => "ag",
+        "iron" => "fe",
+        "zinc" => "zn",
+        "lead" => "pb",
+        "nickel" => "ni",
+        "sulphur" | "sulfur" => "s",
+        "arsenic" => "as",
+        "silica" => "sio2",
+        "alumina" => "al2o3",
+        "phosphorus" => "p",
+        "sg" | "bd" | "dens" | "sd" | "bulkdensity" | "drybulkdensity" | "insitudensity" => "density",
+        "rocktype" | "lith" | "lithology" | "geology" | "geol" | "unit" | "rtype" => "rock",
+        "oxide" | "ox" | "oxidation" | "weath" | "redox" | "oxidationstate" => "weathering",
+        "tons" | "tonnage" | "t" | "mass" => "tonnes",
+        other => other,
+    }
+    .to_owned()
+}
+
+/// The unit a field or column name states, which [`reserve_name_key`]
+/// drops: `Cu %` is a percentage, `CU_PPM` parts per million, `density_kg_m3`
+/// kilograms a cubic metre. A name stating none takes its meaning's own, where
+/// it has one: tonnes for `tonnes`, tonnes a cubic metre for `density`;
+/// otherwise `None`, which any unit matches.
+pub(crate) fn reserve_name_unit(name: &str) -> Option<&'static str> {
+    let lower = name.to_lowercase().replace('%', " pct ");
+    let tokens: Vec<&str> = lower.split(|ch: char| !ch.is_ascii_alphanumeric()).filter(|token| !token.is_empty()).collect();
+    let has = |token: &str| tokens.contains(&token);
+    let stated = if has("pct") || has("percent") {
+        Some("%")
+    } else if has("ppm") {
+        Some("ppm")
+    } else if has("ppb") {
+        Some("ppb")
+    } else if has("kgm3") || (has("kg") && has("m3")) {
+        Some("kg/m3")
+    } else if has("tm3") || (has("t") && has("m3")) {
+        Some("t/m3")
+    } else if has("gpt") || has("gt") || (has("g") && has("t")) {
+        Some("g/t")
+    } else if has("opt") || (has("oz") && has("t")) {
+        Some("oz/t")
+    } else if has("kg") && tokens.len() > 1 {
+        Some("kg")
+    } else {
+        None
+    };
+    stated.or_else(|| match reserve_name_key(name).as_str() {
+        "tonnes" => Some("t"),
+        "density" => Some("t/m3"),
+        _ => None,
+    })
+}
+
+/// Whether a field and a column of the same meaning hold it in the same
+/// unit, as far as their names say: a column of another unit would be read
+/// at the wrong scale (10,000 ppm as 10,000 %).
+pub(crate) fn reserve_units_agree(field: &str, column: &str) -> bool {
+    match (reserve_name_unit(field), reserve_name_unit(column)) {
+        (Some(field), Some(column)) => field == column,
+        _ => true,
+    }
 }
 
 /// Each block's volume in cubic metres, which a volume-averaged field is
@@ -1318,12 +1397,16 @@ pub(crate) fn compute_reserve_totals(
             }
             stats.min = Some(stats.min.map_or(value, |min| min.min(value)));
             stats.max = Some(stats.max.map_or(value, |max| max.max(value)));
+            // A negative value is a model's blank (-99, typically) and reads
+            // as zero, as the solid reserves and the schedule read it; the
+            // minimum still shows the code.
+            let read = if value < 0.0 { 0.0 } else { value };
             if field.aggregation == ReserveAggregation::Sum {
-                sum += value;
+                sum += read;
             } else if let Some(weights) = &weights {
                 let weight = weights.at(index);
                 if weight.is_finite() && weight > 0.0 {
-                    sum += value * weight;
+                    sum += read * weight;
                     weight_sum += weight;
                 } else {
                     stats.unusable_weights += 1;

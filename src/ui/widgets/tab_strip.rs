@@ -29,7 +29,7 @@ const CLOSE_SIZE: f32 = 16.0;
 const CLOSE_GAP: f32 = 4.0;
 
 /// The raised tile under the open tab, at `rect`.
-fn paint_tile(painter: &egui::Painter, visuals: &egui::Visuals, rect: egui::Rect) {
+pub(crate) fn paint_tile(painter: &egui::Painter, visuals: &egui::Visuals, rect: egui::Rect) {
     let fill = shifted(visuals.panel_fill, if visuals.dark_mode { 22 } else { 12 });
     painter.rect(rect, GROUP_CORNER_RADIUS, fill, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 }

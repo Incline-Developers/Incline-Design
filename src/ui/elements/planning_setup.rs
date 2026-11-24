@@ -1208,7 +1208,13 @@ fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjec
         }
 
         let surfaces = triangulation_options(project);
-        let (_, cells) = grid_columns_row(ui, &FRACTIONS, &[&tr!("tri-type-open-surface"), ""], false);
+        // A pit's design may be a closed solid, which needs no topography.
+        let design_label = if solid.kind == crate::model::SolidKind::Pit {
+            tr!("solids-design-surface-or-solid")
+        } else {
+            tr!("tri-type-open-surface")
+        };
+        let (_, cells) = grid_columns_row(ui, &FRACTIONS, &[&design_label, ""], false);
         let mut surface = solid.surface;
         if grid_cell_combo(
             ui,
@@ -1917,6 +1923,22 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
             });
             central_island(ui, layout, |ui, rect| {
                 super::schedule_drill_blast::draw_settings(ui, rect, editor, &plan, session, commands)
+            });
+        }
+        ScheduleStep::Dependencies => {
+            island(ui, layout, "schedule_dependency_list_island", 380.0, |ui, rect| {
+                super::schedule_dependencies::draw_rule_list(ui, rect, editor, &plan, session, commands)
+            });
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_dependencies::draw_rule_editor(ui, rect, editor, &plan, session, commands)
+            });
+        }
+        ScheduleStep::LoaderLimits => {
+            island(ui, layout, "schedule_loader_limit_list_island", 380.0, |ui, rect| {
+                super::schedule_loader_limits::draw_rule_list(ui, rect, editor, &plan, session, commands)
+            });
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_loader_limits::draw_rule_editor(ui, rect, editor, &plan, session, commands)
             });
         }
         // The three destination pages share one shape: the list of that kind on

@@ -249,6 +249,13 @@ pub(crate) fn plan(input: &BlendInput, groups: &Groups, schedule: &BlendSolution
         return Reserve::default();
     };
     let held = Duration::from_secs_f64((2.0 * (2.1e-4 * columns - 8.0)).max(6.0) + REPLAY_S);
+    // The judgement has a margin, so one judged a little over may still
+    // finish in the time there is; one judged far over is not started:
+    // stopped at the deadline it keeps nothing, and on the largest worlds
+    // it held 18 GB doing so.
+    if held > 2 * most {
+        return Reserve::default();
+    }
     Reserve {
         time: held.min(most),
         program: Program::Held,
@@ -465,7 +472,22 @@ pub(crate) fn reroute(
         // With its total held, a block in one cell cannot move. Nor can
         // one filling every cell's loader capacity: extra columns and rows
         // there only ask the LP to rediscover the schedule's fixed tonnes.
-        movable.extend(room.into_iter().filter(|(_, (count, spare))| *count > 1 && *spare > 1e-3).map(|(block, _)| block));
+        // Nor an automatic bar's: how far ahead of its sequence it may dig
+        // is the replay's to judge, which this program does not see.
+        let automatic: BTreeSet<(LoaderId, SourceId)> = input
+            .tasks
+            .iter()
+            .filter(|task| task.lookahead_t > 0.0)
+            .flat_map(|task| match &task.kind {
+                TaskKind::Dig { sequence } => sequence.iter().map(|ground| (task.loader, SourceId::Ground(*ground))).collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        movable.extend(
+            room.into_iter()
+                .filter(|(block, (count, spare))| *count > 1 && *spare > 1e-3 && !automatic.contains(block))
+                .map(|(block, _)| block),
+        );
         for (interval, segment, tonnes, options) in dug.iter().filter(|group| digs_free(group.0)) {
             let Some(&first) = options.first() else { continue };
             let movement = &input.movements[first];
@@ -530,6 +552,10 @@ pub(crate) fn reroute(
             let total = block_t[&block];
             problem.add_row(total..=total, terms);
         }
+        let mut reclaimed_in: BTreeMap<(LoaderId, usize, usize), f64> = BTreeMap::new();
+        for row in fixed.iter().filter(|row| input.movements[row.candidate].activity == Activity::Reclaim) {
+            *reclaimed_in.entry((input.movements[row.candidate].loader, row.interval, row.segment)).or_default() += row.tonnes_t;
+        }
         for ((loader, interval, segment), terms) in by_cell {
             let Some(loader) = input.loaders.iter().find(|entry| entry.id == loader) else {
                 continue;
@@ -537,7 +563,11 @@ pub(crate) fn reroute(
             let Some(rate) = super::input::interval_rate(loader, interval) else { continue };
             let duration = schedule.durations.get(&(interval, segment)).copied().unwrap_or(0.0);
             let held = held_dig.get(&(loader.id, interval, segment)).copied().unwrap_or(0.0);
-            problem.add_row(..=rate.dig_tph * duration + SLACK_T - held, terms);
+            // The hours its reclaim there takes, which stays as it is while
+            // digging moves, are not the digging's.
+            let reclaimed = reclaimed_in.get(&(loader.id, interval, segment)).copied().unwrap_or(0.0);
+            let reclaim_h = if rate.reclaim_tph > 0.0 { reclaimed / rate.reclaim_tph } else { 0.0 };
+            problem.add_row(..=rate.dig_tph * (duration - reclaim_h).max(0.0) + SLACK_T - held, terms);
         }
     }
 
@@ -836,6 +866,12 @@ pub(crate) fn reroute(
                 reclaim_cells.insert((loader, row.interval, row.segment));
             }
         }
+        let mut dug_in: BTreeMap<(LoaderId, usize, usize), f64> = BTreeMap::new();
+        for (interval, segment, tonnes, options) in &dug {
+            if let Some(&first) = options.first() {
+                *dug_in.entry((input.movements[first].loader, *interval, *segment)).or_default() += tonnes;
+            }
+        }
         for &(loader, at, cell) in &reclaim_cells {
             let Some(rate) = super::input::interval_rate(&input.loaders[loader], at) else {
                 continue;
@@ -857,7 +893,12 @@ pub(crate) fn reroute(
                     .map(|&index| &fixed[index])
                     .filter_map(|row| by_loader(row).map(|_| row.tonnes_t))
                     .sum();
-                problem.add_row(..=(rate.reclaim_tph * duration + SLACK_T).max(held) - constant, terms);
+                // The hours its digging there takes, which stays where it is
+                // while reclaims move, are not the reclaim's.
+                let dug = dug_in.get(&(id, at, cell)).copied().unwrap_or(0.0);
+                let digging_h = if rate.dig_tph > 0.0 { dug / rate.dig_tph } else { 0.0 };
+                let room = rate.reclaim_tph * (duration - digging_h).max(0.0);
+                problem.add_row(..=(room + SLACK_T).max(held) - constant, terms);
             }
         }
     }
@@ -923,6 +964,11 @@ pub(crate) fn reroute(
     if free {
         truck_cells.extend(fixed.iter().zip(&share).filter(|(_, share)| share.is_some()).map(|(row, _)| (row.interval, row.segment)));
     }
+    let mut used_hours: BTreeMap<(TruckClassId, usize, usize), f64> = BTreeMap::new();
+    for row in &schedule.movements {
+        let movement = &input.movements[row.candidate];
+        *used_hours.entry((movement.truck, row.interval, row.segment)).or_default() += row.tonnes_t * movement.truck_hours_per_tonne;
+    }
     for truck in &input.trucks {
         for &(at, cell) in &truck_cells {
             let Some(hours) = truck.hours.get(at).copied() else { continue };
@@ -945,10 +991,12 @@ pub(crate) fn reroute(
             if terms.is_empty() {
                 continue;
             }
-            // Moved digging fills truck hours to the last digit, which the
-            // replay's rounding can take over: keep a hair back.
-            let margin = if digs_free(at) { -1e-4 } else { SLACK_T };
-            problem.add_row(..=available + margin - constant - reclaim_constant, terms);
+            // Moved material fills truck hours to the last digit, which the
+            // replay's rounding can take over: keep a hair back, but never
+            // short of what the schedule used, which is the program's
+            // starting point.
+            let used: f64 = used_hours.get(&(truck.id, at, cell)).copied().unwrap_or(0.0);
+            problem.add_row(..=(available - 1e-4).max(used) - constant - reclaim_constant, terms);
         }
     }
 
@@ -1094,6 +1142,78 @@ pub(crate) fn reroute(
             let slack = problem.add_column(-slope, 0.0..);
             let terms = vec![(slack, 1.0), (contained, -direction), (tonnes, direction * boundary)];
             problem.add_row(direction * (opening_q - boundary * opening_t).., terms);
+        }
+    }
+
+    // Where the schedule left a destination without room for digging - a
+    // pile or dump within `DIG_ROOM_T` of full, a crusher within it of its
+    // day's budget - the reroute leaves it without: what an automatic bar
+    // could reach and which bar a loader should have worked were judged by
+    // that room, and the replay judges them again by the rerouted one.
+    {
+        use super::input::DIG_ROOM_T;
+        let mut sent: BTreeMap<(DestinationId, usize), f64> = BTreeMap::new();
+        for row in &schedule.movements {
+            *sent.entry((input.movements[row.candidate].destination, row.interval)).or_default() += row.tonnes_t;
+        }
+        let sent_at = |destination: DestinationId, at: usize| sent.get(&(destination, at)).copied().unwrap_or(0.0);
+        for destination in &input.destinations {
+            let weight = |candidate: usize, _: usize, _: usize| (input.movements[candidate].destination == destination.id).then_some(1.0);
+            let to_it = |row: &MovementRow| (input.movements[row.candidate].destination == destination.id).then_some(1.0);
+            // At least `full` (or what the schedule held, if less) sent in
+            // `before`, from the hour it closed.
+            let hold_full = |problem: &mut LinearProgram, before: &[usize], full: f64| {
+                let (mut terms, constant) = expression(before, &weight);
+                let (reclaimed, reclaimed_constant) = held_moved(before, &to_it);
+                terms.extend(reclaimed);
+                if terms.is_empty() {
+                    return;
+                }
+                let held: f64 = before.iter().map(|at| sent_at(destination.id, *at)).sum();
+                problem.add_row((full - 0.5 * DIG_ROOM_T).min(held) - constant - reclaimed_constant.., terms);
+            };
+            match destination.kind {
+                DestinationKind::Crusher => {
+                    for (&day, at) in &day_intervals {
+                        let Some(Some(budget)) = destination.crusher_daily_t.get(day as usize) else { continue };
+                        let mut today = 0.0;
+                        let closes = at.iter().position(|k| {
+                            let closed = budget - today <= DIG_ROOM_T;
+                            today += sent_at(destination.id, *k);
+                            closed
+                        });
+                        if let Some(first) = closes.filter(|first| *first > 0) {
+                            hold_full(&mut problem, &at[..first], *budget);
+                        }
+                    }
+                }
+                DestinationKind::Dump => {
+                    let Some(capacity) = destination.capacity_t else { continue };
+                    let mut before = 0.0;
+                    let closes = (0..intervals).position(|k| {
+                        let closed = capacity - before <= DIG_ROOM_T;
+                        before += sent_at(destination.id, k);
+                        closed
+                    });
+                    if let Some(first) = closes.filter(|first| *first > 0) {
+                        hold_full(&mut problem, &all[..first], capacity);
+                    }
+                }
+                DestinationKind::Stockpile(pile) => {
+                    let (Some(capacity), Some(found), Some(states)) = (destination.capacity_t, input.piles.iter().find(|found| found.id == pile), tonnage.get(&pile)) else {
+                        continue;
+                    };
+                    for (at, &(col, offset)) in states.iter().enumerate().take(intervals) {
+                        let held = stock[&pile][at];
+                        if let Some(col) = col
+                            && found.builds(input.intervals[at])
+                            && capacity - held <= DIG_ROOM_T
+                        {
+                            problem.add_row((capacity - 0.5 * DIG_ROOM_T).min(held) - offset.., vec![(col, 1.0)]);
+                        }
+                    }
+                }
+            }
         }
     }
 

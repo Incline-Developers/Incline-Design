@@ -91,6 +91,9 @@ const META_SCHEDULE: &str = "incline:schedule";
 /// The latest calculated schedule's decisions: see
 /// [`crate::model::schedule::optimisation::blended::saved`].
 const META_SCHEDULE_RESULT: &str = "incline:schedule_result";
+/// The latest calculated schedule of each scenario that is not open, as
+/// `[{ "scenario": id, "result": ... }]`, each as [`META_SCHEDULE_RESULT`].
+const META_SCHEDULE_SCENARIO_RESULTS: &str = "incline:schedule_scenario_results";
 /// Payload version written into [`META_SCHEDULE`], and the only one this
 /// build reads.
 ///
@@ -135,6 +138,7 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_SOLIDS,
     META_SCHEDULE,
     META_SCHEDULE_RESULT,
+    META_SCHEDULE_SCENARIO_RESULTS,
     META_HAULAGE,
 ];
 #[cfg(not(target_arch = "wasm32"))]
@@ -760,6 +764,18 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
         );
         if let Some(saved) = document.saved_schedule() {
             put(&mut element, META_SCHEDULE_RESULT, saved.to_value()?);
+        }
+        // Only scenarios the plan still holds, and not the open one, whose
+        // is the one above.
+        let scenarios = schedule.scenarios();
+        let others: Vec<serde_json::Value> = document
+            .scenario_saved_schedules()
+            .iter()
+            .filter(|(scenario, _)| *scenario != scenarios.open && scenarios.get(*scenario).is_some())
+            .map(|(scenario, saved)| Ok(serde_json::json!({ "scenario": scenario.0, "result": saved.to_value()? })))
+            .collect::<serde_json::Result<_>>()?;
+        if !others.is_empty() {
+            put(&mut element, META_SCHEDULE_SCENARIO_RESULTS, serde_json::Value::Array(others));
         }
     }
     Ok(element)
@@ -2702,6 +2718,19 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         }
         if let Some(value) = element.metadata.get(META_SCHEDULE_RESULT).cloned() {
             document.set_saved_schedule(crate::model::schedule::optimisation::blended::saved::SavedSchedule::from_value(value).map(std::sync::Arc::new));
+        }
+        if let Some(serde_json::Value::Array(entries)) = element.metadata.get(META_SCHEDULE_SCENARIO_RESULTS).cloned() {
+            // One that cannot be read is recalculated when its scenario is
+            // opened, as a schedule never saved is.
+            let saved = entries
+                .into_iter()
+                .filter_map(|entry| {
+                    let scenario = crate::model::schedule::scenarios::ScenarioId(entry.get("scenario")?.as_u64()?);
+                    let result = crate::model::schedule::optimisation::blended::saved::SavedSchedule::from_value(entry.get("result")?.clone())?;
+                    Some((scenario, std::sync::Arc::new(result)))
+                })
+                .collect();
+            document.set_scenario_saved_schedules(saved);
         }
         // Files written before circles were their own variant store them as
         // closed two-vertex bulged polylines. Upgrade on load so no tool

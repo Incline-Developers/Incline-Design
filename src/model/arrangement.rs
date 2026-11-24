@@ -622,6 +622,73 @@ pub(crate) fn typical_spacing(lines: &[Vec<DVec2>]) -> f64 {
     median(&mut spacings).unwrap_or(0.0)
 }
 
+/// Most grid lines a panel grid draws each way; a size small enough to need
+/// more is refused rather than cutting a bench into dust.
+const MAX_PANEL_LINES: i64 = 2_000;
+
+/// A square grid of lines `size` apart over `rings`, on whole multiples of
+/// `size` so the grid over any part of a bench is the grid over all of it,
+/// and each line running a whole size past the rings' extent either side.
+pub(crate) fn panel_grid(rings: &[Vec<DVec2>], size: f64) -> Vec<Vec<DVec2>> {
+    let Some((min, max)) = rings.iter().flatten().fold(None, |bounds: Option<(DVec2, DVec2)>, point| {
+        Some(bounds.map_or((*point, *point), |(min, max)| (min.min(*point), max.max(*point))))
+    }) else {
+        return Vec::new();
+    };
+    if !size.is_finite() || size <= 0.0 {
+        return Vec::new();
+    }
+    // Lines strictly inside the extent: one along its edge divides nothing.
+    let span = |low: f64, high: f64| ((low / size).floor() as i64 + 1, (high / size).ceil() as i64);
+    let (x_first, x_end) = span(min.x, max.x);
+    let (y_first, y_end) = span(min.y, max.y);
+    if x_end - x_first > MAX_PANEL_LINES || y_end - y_first > MAX_PANEL_LINES {
+        return Vec::new();
+    }
+    let (low, high) = (min - DVec2::splat(size), max + DVec2::splat(size));
+    let columns = (x_first..x_end).map(|index| {
+        let x = index as f64 * size;
+        vec![DVec2::new(x, low.y), DVec2::new(x, high.y)]
+    });
+    let rows = (y_first..y_end).map(|index| {
+        let y = index as f64 * size;
+        vec![DVec2::new(low.x, y), DVec2::new(high.x, y)]
+    });
+    columns.chain(rows).collect()
+}
+
+/// Which edges of `faces`' rings are the panel grid's: those along a grid
+/// line `size` apart with some face on both sides, so neither the ground's
+/// own edge where it happens to fall on a grid line nor an edge of ground
+/// left out of `faces`. Per face, per ring, per edge from each point to the
+/// next.
+pub(crate) fn panel_edges(faces: &[Face], size: f64) -> Vec<Vec<Vec<bool>>> {
+    /// How near a grid line an edge must lie, and how far either side of it
+    /// the ground is looked for, in metres.
+    const ON_LINE_M: f64 = 1e-3;
+    const SIDE_M: f64 = 0.05;
+    let on_grid = |value: f64| ((value / size).round() * size - value).abs() < ON_LINE_M;
+    let covered = |point: DVec2| faces.iter().any(|face| point_in_face(face, point));
+    faces
+        .iter()
+        .map(|face| {
+            face.iter()
+                .map(|ring| {
+                    (0..ring.len())
+                        .map(|index| {
+                            let (a, b) = (ring[index], ring[(index + 1) % ring.len()]);
+                            let along = (a.x - b.x).abs() < ON_LINE_M && on_grid(a.x) && on_grid(b.x) || (a.y - b.y).abs() < ON_LINE_M && on_grid(a.y) && on_grid(b.y);
+                            let Some(normal) = (b - a).try_normalize().map(DVec2::perp) else { return false };
+                            let middle = (a + b) * 0.5;
+                            along && covered(middle + normal * SIDE_M) && covered(middle - normal * SIDE_M)
+                        })
+                        .collect()
+                })
+                .collect()
+        })
+        .collect()
+}
+
 pub(crate) fn cut_lines(objects: &[crate::model::Object]) -> Vec<Vec<DVec2>> {
     objects
         .iter()
