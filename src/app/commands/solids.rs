@@ -681,7 +681,15 @@ impl crate::app::App<'_> {
                 self.solid_preview = Some(SolidPreview::carrying(key, available, SolidPreviewStatus::WaitingForStage { previous }, carried));
             }
             // Both surfaces on hand: build the volume between them.
-            (Some((surface, _)), Some((topography, _))) => self.spawn_solid_preview_build(key, available, key.kind, surface, topography, previous, carried),
+            (Some((surface, _)), Some((topography, _))) => self.spawn_solid_preview_build(key, available, key.kind, surface, Some(topography), previous, carried),
+            // A pit's design with no topography named: a closed solid is
+            // the pit as it stands, and a sheet is shown as it is.
+            (Some(_), None) if key.topography.is_none() && key.kind == SolidKind::Pit && self.solid_envelope_job_pending(key.solid) => {
+                self.solid_preview = Some(SolidPreview::carrying(key, available, SolidPreviewStatus::WaitingForStage { previous }, carried));
+            }
+            (Some((surface, _)), None) if key.topography.is_none() && key.kind == SolidKind::Pit => {
+                self.spawn_solid_preview_build(key, available, key.kind, surface, None, previous, carried);
+            }
             // One of them: show it as it is. There is no volume to enclose
             // with a single sheet, and none is claimed for it.
             (Some((id, _)), None) | (None, Some((id, _))) => {
@@ -785,7 +793,7 @@ impl crate::app::App<'_> {
         built_from: BuiltFrom,
         kind: SolidKind,
         surface_id: TriangulationId,
-        topography_id: TriangulationId,
+        topography_id: Option<TriangulationId>,
         previous: Option<Box<OpenTriangulation>>,
         carried: CarriedBody,
     ) {
@@ -793,9 +801,15 @@ impl crate::app::App<'_> {
             self.solid_preview = None;
             return;
         };
-        let Some(topography) = self.triangulations.iter().find(|item| item.id == topography_id) else {
-            self.solid_preview = None;
-            return;
+        let topography = match topography_id {
+            Some(id) => match self.triangulations.iter().find(|item| item.id == id) {
+                Some(topography) => Some(topography.mesh.clone()),
+                None => {
+                    self.solid_preview = None;
+                    return;
+                }
+            },
+            None => None,
         };
         // A pit is the ground cut away below its design; a dump or stockpile
         // is the material placed above it. Which of the two volumes the pair
@@ -816,26 +830,39 @@ impl crate::app::App<'_> {
         let color = solid_color;
         let line_color = surface.line_color;
         let surface_mesh = surface.mesh.clone();
-        let topography_mesh = topography.mesh.clone();
+        // Shown as it is when it bounds nothing on its own.
+        let sheet = (surface.spatial.clone(), surface.edges.clone(), surface.surface_face_order.clone(), surface.color);
 
         self.solid_preview = Some(SolidPreview::carrying(key, built_from, SolidPreviewStatus::Building { previous }, carried));
 
         let failed_name = solid_name.clone();
-        let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> anyhow::Result<super::triangulation::solid_between::SolidMesh> {
-            let solid = super::triangulation::solid_between::build_solid_mesh(&surface_mesh, &topography_mesh, region, &solid_name, &progress.phase(0.0, 1.0))?;
-            if cancel.is_cancelled() {
-                anyhow::bail!(crate::app::jobs::Cancelled);
-            }
-            Ok(solid)
-        };
-        let apply = move |app: &mut crate::app::App, result: anyhow::Result<super::triangulation::solid_between::SolidMesh>| {
+        let compute =
+            move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> anyhow::Result<Option<super::triangulation::solid_between::SolidMesh>> {
+                if topography.is_none() && !super::triangulation::solid_between::is_closed_solid(&surface_mesh) {
+                    return Ok(None);
+                }
+                let solid = super::triangulation::solid_between::build_solid_mesh(&surface_mesh, topography.as_deref(), region, &solid_name, &progress.phase(0.0, 1.0))?;
+                if cancel.is_cancelled() {
+                    anyhow::bail!(crate::app::jobs::Cancelled);
+                }
+                Ok(Some(solid))
+            };
+        let sheet_mesh = surface.mesh.clone();
+        let apply = move |app: &mut crate::app::App, result: anyhow::Result<Option<super::triangulation::solid_between::SolidMesh>>| {
             // The selection may have moved on while the build ran; only the
             // preview this job was started for accepts its result.
             if app.solid_preview.as_ref().is_none_or(|preview| preview.key != key || preview.built_from != built_from) {
                 return;
             }
             let status = match result {
-                Ok(solid) => {
+                Ok(None) => {
+                    let (spatial, edges, order, sheet_color) = sheet;
+                    SolidPreviewStatus::Ready {
+                        mesh: Box::new(preview_triangulation(name, sheet_mesh, spatial, edges, order, sheet_color, line_color)),
+                        volume: None,
+                    }
+                }
+                Ok(Some(solid)) => {
                     let mut mesh = preview_triangulation(name, solid.mesh, solid.spatial, solid.edges, solid.surface_face_order, color, line_color);
                     // Crosshatched as Benching draws a flitch: in one flat
                     // colour the solid's faces run together.

@@ -1142,7 +1142,13 @@ impl crate::app::App<'_> {
                 },
             );
         }
-        let [Some(design), Some(topo)] = sources else {
+        // A pit may name no topography when its design is a closed solid:
+        // the solid as it stands, with no ground to cut it to.
+        let sources = match sources {
+            [Some(design), topo] if topo.is_some() || (solid.topography.is_none() && solid.kind == crate::model::SolidKind::Pit) => Some((design, topo)),
+            _ => None,
+        };
+        let Some((design, topo)) = sources else {
             // Unconfigured is a fault; still loading is not. Failing a run
             // because a surface has yet to come back would make a project with
             // deferred inputs impossible to run without visiting Setup first.
@@ -1152,7 +1158,7 @@ impl crate::app::App<'_> {
                 .filter(|id| self.triangulations.iter().any(|item| item.id == *id && item.mesh.face_count() == 0))
                 .map(crate::model::ItemRef::Triangulation)
                 .collect();
-            let unconfigured = ids.iter().any(Option::is_none);
+            let unconfigured = solid.surface.is_none() || (solid.topography.is_none() && solid.kind != crate::model::SolidKind::Pit);
             // A solid that names no surface at all is misconfigured, not
             // loading: there is nothing to wait for.
             let pending = !unconfigured && self.restore_solid_inputs(missing, attempted);
@@ -1192,7 +1198,7 @@ impl crate::app::App<'_> {
             crate::i18n::tr!("planning-building-view"),
             vec![artifact_job(id, SolidArtifact::Envelope, token)],
             move |cancel, progress| {
-                let (envelope, built_from) = build_solid_envelope(&snapshot, &design, &topo, cancel, progress)?;
+                let (envelope, built_from) = build_solid_envelope(&snapshot, &design, topo.as_deref(), cancel, progress)?;
                 Ok((envelope, disk_cache::chain_key(&snapshot, built_from)))
             },
             move |app, result| {
@@ -2266,11 +2272,12 @@ fn match_identity(band: f64, face: &[Vec<DVec2>], anchor: DVec2, previous: &[Dig
     }
 }
 
-/// The Solids stage: the closed body between a solid's two surfaces.
+/// The Solids stage: the closed body between a solid's two surfaces, or a
+/// pit's closed design on its own.
 fn build_solid_envelope(
     solid: &Solid,
     design: &Arc<Triangulation>,
-    topo: &Arc<Triangulation>,
+    topo: Option<&Triangulation>,
     cancel: &crate::app::jobs::CancelFlag,
     progress: &crate::model::progress::Progress,
 ) -> anyhow::Result<(OpenTriangulation, super::triangulation::solid_between::BuiltFrom)> {

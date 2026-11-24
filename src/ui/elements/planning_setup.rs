@@ -1208,7 +1208,13 @@ fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjec
         }
 
         let surfaces = triangulation_options(project);
-        let (_, cells) = grid_columns_row(ui, &FRACTIONS, &[&tr!("tri-type-open-surface"), ""], false);
+        // A pit's design may be a closed solid, which needs no topography.
+        let design_label = if solid.kind == crate::model::SolidKind::Pit {
+            tr!("solids-design-surface-or-solid")
+        } else {
+            tr!("tri-type-open-surface")
+        };
+        let (_, cells) = grid_columns_row(ui, &FRACTIONS, &[&design_label, ""], false);
         let mut surface = solid.surface;
         if grid_cell_combo(
             ui,

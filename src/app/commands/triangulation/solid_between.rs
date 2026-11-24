@@ -120,9 +120,12 @@ fn build_envelopes(design: &PreparedReferenceSurface, topography: &PreparedRefer
 ///
 /// `label` names what is being built, a solid's name, for the console notes
 /// about repaired surfaces; empty where there is nothing to call it.
+///
+/// With no topography the design must be a closed solid itself, and is the
+/// solid as it stands: there is no ground to cut it to.
 pub(crate) fn build_solid_mesh(
     design: &mesh_data::Triangulation,
-    topography: &mesh_data::Triangulation,
+    topography: Option<&mesh_data::Triangulation>,
     region: SolidRegion,
     label: &str,
     progress: &crate::model::progress::Phase,
@@ -132,7 +135,7 @@ pub(crate) fn build_solid_mesh(
     // every return to the solid - so a recent build of exactly these surfaces
     // is handed back rather than built again: the same mesh, not a copy, so
     // the two hold one solid between them.
-    let key = (mesh_fingerprint(design), mesh_fingerprint(topography), region == SolidRegion::Cut);
+    let key = (mesh_fingerprint(design), topography.map_or(0, mesh_fingerprint), region == SolidRegion::Cut);
     if let Some(built) = recent_builds().iter().find(|(recent, _)| *recent == key).map(|(_, built)| built.clone()) {
         progress.set_fraction(1.0);
         return Ok(built);
@@ -146,7 +149,10 @@ pub(crate) fn build_solid_mesh(
         return Ok(built);
     }
     let mut notes = Vec::new();
-    let (vertices, faces, volume) = build_solid_between_surfaces_uncached(design, topography, region, &progress.phase(0.0, 0.9), &mut notes)?;
+    let (vertices, faces, volume) = match topography {
+        Some(topography) => build_solid_between_surfaces_uncached(design, topography, region, &progress.phase(0.0, 0.9), &mut notes)?,
+        None => closed_design(design)?,
+    };
     anyhow::ensure!(!faces.is_empty(), crate::i18n::tr!("err-surf-solid-no-faces"));
     let mesh = std::sync::Arc::new(mesh_data::Triangulation::from_vertices_and_faces(vertices, faces)?);
     progress.set_fraction(1.0);
@@ -329,6 +335,42 @@ fn build_solid_between_surfaces_uncached(
         v.z += origin.z;
     }
     Ok((vertices, faces, volume))
+}
+
+/// A design that is a closed solid, as the solid: its faces wound outward,
+/// with the volume they enclose. One that does not close is refused - it
+/// bounds nothing without the ground to cut it to.
+fn closed_design(design: &mesh_data::Triangulation) -> Result<BuiltSolid> {
+    let vertices = design.vertices().to_vec();
+    let mut faces: Vec<[u32; 3]> = design.face_vertex_indices_iter().map(|face| face.map(|index| index as u32)).collect();
+    if let Some((count, _, _)) = open_edge_report(&vertices, &faces) {
+        anyhow::bail!(tr!("tri-solid-design-not-closed", count = count.to_string()));
+    }
+    // About a point of its own, so a mine's coordinates cost no precision.
+    let origin = design.bounds().min;
+    let volume: f64 = faces
+        .iter()
+        .map(|face| {
+            let [a, b, c] = face.map(|index| {
+                let vertex = vertices[index as usize];
+                glam::DVec3::new(vertex.x - origin.x, vertex.y - origin.y, vertex.z - origin.z)
+            });
+            a.dot(b.cross(c)) / 6.0
+        })
+        .sum();
+    if volume < 0.0 {
+        for face in &mut faces {
+            face.swap(1, 2);
+        }
+    }
+    anyhow::ensure!(volume.abs() > 0.0, tr!("tri-solid-design-no-volume"));
+    Ok((vertices, faces, volume.abs()))
+}
+
+/// Whether a mesh is a closed solid, which a pit needs no topography for.
+pub(crate) fn is_closed_solid(mesh: &mesh_data::Triangulation) -> bool {
+    let faces: Vec<[u32; 3]> = mesh.face_vertex_indices_iter().map(|face| face.map(|index| index as u32)).collect();
+    !faces.is_empty() && open_edge_report(mesh.vertices(), &faces).is_none()
 }
 
 /// How far past the design's faces in plan, in model units, the topography is
@@ -737,7 +779,7 @@ impl App<'_> {
         };
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulationLog> {
-            let solid = build_solid_mesh(&design_mesh, &topography_mesh, region, "", &progress.phase(0.0, 0.95))?;
+            let solid = build_solid_mesh(&design_mesh, Some(&topography_mesh), region, "", &progress.phase(0.0, 0.95))?;
             if cancel.is_cancelled() {
                 anyhow::bail!(crate::app::jobs::Cancelled);
             }
