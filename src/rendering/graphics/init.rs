@@ -606,6 +606,7 @@ impl<'a> Graphics<'a> {
         // Built now because the drill pipeline layout borrows its own.
         let drill_hole_gpu = DrillHoleGpuCache::new(&device);
         let document_style = DocumentStyleGpu::new(&device);
+        let prismoid_wire_styles = passes::PrismoidWireStyles::new(&device, &document_style.layout);
         let water = crate::rendering::water::WaterGpu::new(&device);
         // wgpu handles are not Send or Sync on wasm, where nothing crosses threads.
         let scene_pipelines = Shared::new(scene_pipelines::create_scene_pipelines(
@@ -772,6 +773,8 @@ impl<'a> Graphics<'a> {
         let stroke_gpu = Self::create_stream_buffer(&device, "Stroke Instance Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let overlay_stroke_gpu = Self::create_stream_buffer(&device, "Editor Overlay Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let section_surface_gpu = Self::create_stream_buffer(&device, "Section Surface Line Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
+        let section_cell_vertex_gpu = Self::create_stream_buffer(&device, "Section Cell Vertex Buffer", size_of::<Vertex>(), wgpu::BufferUsages::VERTEX);
+        let section_cell_index_gpu = Self::create_stream_buffer(&device, "Section Cell Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
         let dynamic_stroke_gpu = Self::create_stream_buffer(&device, "Dynamic Scene Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let flow_stroke_gpu = Self::create_stream_buffer(&device, "Haul Flow Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let text_vertex_gpu = Self::create_stream_buffer(&device, "Document Text Vertex Buffer", size_of::<Vertex>(), wgpu::BufferUsages::VERTEX);
@@ -809,6 +812,8 @@ impl<'a> Graphics<'a> {
             stroke_gpu,
             overlay_stroke_gpu,
             section_surface_gpu,
+            section_cell_vertex_gpu,
+            section_cell_index_gpu,
             dynamic_stroke_gpu,
             flow_stroke_gpu,
             text_vertex_gpu,
@@ -904,6 +909,9 @@ impl<'a> Graphics<'a> {
             cached_thin_preview: None,
             section_surface: Default::default(),
             section_surface_capacity: 1,
+            section_cells: Default::default(),
+            section_cell_vertex_capacity: 1,
+            section_cell_index_capacity: 1,
             pick_records: Vec::new(),
             text_pick_records: Vec::new(),
             document_draw_batches: Vec::new(),
@@ -920,6 +928,14 @@ impl<'a> Graphics<'a> {
             surface_render_stats: Default::default(),
             point_render_stats: Default::default(),
             chunk_bounds_outline: None,
+            model_envelope_outline: None,
+            cell_selection_outline: None,
+            masked_cell_outline: None,
+            section_cell_lines: None,
+            section_cell_rim: None,
+            prismoid_lattices: (None, Vec::new()),
+            prismoid_lattice_lines: Vec::new(),
+            prismoid_wire_styles,
             pending_screenshot: None,
             camera_lock: None,
             video_target: None,

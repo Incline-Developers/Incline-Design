@@ -46,7 +46,7 @@ impl<'a> App<'a> {
             let drawn = crate::app::events::drawn_surfaces(
                 &self.editor,
                 self.showing_solid_preview(),
-                &self.triangulations,
+                crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                 &self.solid_view_body,
                 &self.reserves_scene,
                 &self.schedule_animation,
@@ -279,7 +279,7 @@ impl<'a> App<'a> {
     /// of the config; no project is touched, so nothing turns dirty.
     pub(crate) fn note_recent_function(&mut self, row: crate::ui::elements::main_menu::MenuRow) -> anyhow::Result<()> {
         // Asked after the row's own command ran, which decided a tool's toggle.
-        if !row.was_used(&self.editor) || !note_recent(&mut self.editor.recent_functions, row) {
+        if !row.kept_as_recent(&self.editor, self.workspace.has_active_project()) || !note_recent(&mut self.editor.recent_functions, row) {
             return Ok(());
         }
         crate::app::io::save_config(&config_from(
@@ -341,7 +341,7 @@ impl<'a> App<'a> {
         crate::app::events::drawn_surfaces(
             &self.editor,
             self.showing_solid_preview(),
-            &self.triangulations,
+            crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
             &self.solid_view_body,
             &self.reserves_scene,
             &self.schedule_animation,

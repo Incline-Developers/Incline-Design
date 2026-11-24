@@ -6,7 +6,14 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 
-use crate::{app::App, i18n::tr, logging::CommandReportSpec, rendering::graphics::RenderSurfaceError, ui::state::ActiveTool, userspace_error, userspace_warn};
+use crate::{
+    app::{App, commands::prismoid_grid::with_prismoid_scene},
+    i18n::tr,
+    logging::CommandReportSpec,
+    rendering::graphics::RenderSurfaceError,
+    ui::state::ActiveTool,
+    userspace_error, userspace_warn,
+};
 
 /// Right-press-to-drag threshold, in logical points, scaled by the window's scale factor before use.
 const RIGHT_CLICK_DRAG_THRESHOLD_PT: f32 = 3.0;
@@ -71,7 +78,7 @@ impl<'a> App<'a> {
                 let drawn = drawn_surfaces(
                     &self.editor,
                     self.showing_solid_preview(),
-                    &self.triangulations,
+                    with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                     &self.solid_view_body,
                     &self.reserves_scene,
                     &self.schedule_animation,
@@ -287,6 +294,7 @@ impl<'a> App<'a> {
                     self.pick_entry_ground();
                     self.sync_solid_preview();
                     self.sync_schedule_animation();
+                    self.sync_prismoid_drawing();
                     self.drive_video_recording();
                     self.sync_reserve_setup_stats();
                     self.sync_blasting_view();
@@ -322,13 +330,15 @@ impl<'a> App<'a> {
                     }
                     // After `update`, which walks and turns the section.
                     self.refresh_section_surface_lines();
+                    self.refresh_section_prismoid_cells();
+                    self.poll_drape_waiting_elsewhere();
                     if let Some(graphics) = self.graphics.as_mut() {
                         self.editor.can_undo = self.history.can_undo();
                         self.editor.can_redo = self.history.can_redo();
                         let drawn = drawn_surfaces(
                             &self.editor,
                             showing_solid_preview,
-                            &self.triangulations,
+                            with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                             &self.solid_view_body,
                             &self.reserves_scene,
                             &self.schedule_animation,
@@ -346,7 +356,7 @@ impl<'a> App<'a> {
                             drill_holes: if project_shown { &self.drill_holes } else { &[] },
                             well_logs: &self.well_logs,
                             point_clouds: if project_shown { &self.point_clouds } else { &[] },
-                            rasters: &self.raster_textures,
+                            rasters: with_prismoid_scene(&self.raster_textures, &self.prismoid_rasters),
                             solid_preview: drawn.1,
                             retained_surfaces: &self.solid_view_retained,
                             project: &project,
@@ -398,7 +408,7 @@ impl<'a> App<'a> {
                                     graphics.request_slice_preview_redraw_if_scene_changed(
                                         &self.editor,
                                         &self.scene_document,
-                                        &self.triangulations,
+                                        with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                                         &self.block_models,
                                         &self.drill_holes,
                                         &self.point_clouds,
@@ -464,6 +474,7 @@ impl<'a> App<'a> {
                                     && self.editor.batter_berm_target_id.is_none()
                                     && !self.editor.tri_cut_poly_open
                                     && !self.editor.drill_pattern_open
+                                    && !self.editor.tri_prismoid_mask_open
                                 {
                                     self.editor.tool_highlight_id = None;
                                     self.invalidate_geometry();
@@ -968,7 +979,7 @@ impl<'a> App<'a> {
                 let result = self.graphics.as_mut().map(|graphics| {
                     graphics.render_slice_preview(
                         &self.scene_document,
-                        &self.triangulations,
+                        with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                         &self.block_models,
                         &self.drill_holes,
                         &self.point_clouds,
@@ -1235,7 +1246,7 @@ impl<'a> App<'a> {
         let found = graphics.snap_cursor(
             document,
             &self.snap_index,
-            &self.triangulations,
+            with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
             &self.editor.hidden_handles,
             &self.editor.pick_frozen,
             &self.editor.cursor_mode,
@@ -1368,14 +1379,15 @@ impl<'a> App<'a> {
                 let ring = self.editor.cursor_screen_px.and_then(|px| self.editor.string_ring_near(px, ring_radius));
                 let frozen = &self.editor.pick_frozen;
                 let picked = self.graphics.as_ref().filter(|_| ring.is_none()).and_then(|g| {
-                    g.pick_scene_entity_at_cursor(
+                    let pick = g.pick_scene_entity_at_cursor(
                         crate::app::PICK_THRESHOLD_PX,
-                        &self.triangulations,
+                        with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                         &self.drill_holes,
                         &self.editor.hidden_handles,
                         frozen,
                         self.editor.xray_enabled,
-                    )
+                    );
+                    self.with_section_cell_pick(g, pick, |_| true)
                 });
                 // On the Road Network a dig block under the cursor takes the
                 // menu, unless a road or node is nearer the click: it joins the
@@ -1564,7 +1576,7 @@ impl<'a> App<'a> {
         let drawn = drawn_surfaces(
             &self.editor,
             self.showing_solid_preview(),
-            &self.triangulations,
+            with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
             &self.solid_view_body,
             &self.reserves_scene,
             &self.schedule_animation,

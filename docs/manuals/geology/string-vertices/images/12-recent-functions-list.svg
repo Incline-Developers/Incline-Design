@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 140" width="540" height="140" role="img" aria-label="Geology workspace, the Recent functions list opened by a right click on empty space, with Reverse String Direction on top and Thin Strings under it.">
+  <rect x="80" y="10" width="380" height="110" stroke="#000" stroke-width="1" fill="#fff"/>
+  <line x1="80" y1="40" x2="460" y2="40" stroke="#000" stroke-width="1"/>
+  <rect x="86" y="46" width="368" height="30" stroke="#d9622b" stroke-width="3" fill="#fff"/>
+  <g font-family="sans-serif" fill="#000">
+    <text x="92" y="31" font-size="15">Recent functions</text>
+    <text x="96" y="66" font-size="13">Geology Design / Edit / Reverse String Direction</text>
+    <text x="96" y="100" font-size="13">Geology Design / Vertices / Thin Strings...</text>
+  </g>
+</svg>

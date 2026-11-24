@@ -12,16 +12,16 @@ use std::{
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
-use super::csv_geophysics::{Records, SAME_DEPTH, StreamControl, cell_text};
+use super::csv_geophysics::{SAME_DEPTH, StreamControl};
 use crate::{
     model::{
         drill_hole::{
-            Correction, CorrectionKind, CorrectionStatus, DrillHole, DrillHoleDataset, DrillInterval, DrillValue, HoleOrientation, OrientationSource, SurveyObservation,
-            TraceStation, direction_orientation, resolve_trace,
+            Correction, CorrectionKind, CorrectionStatus, DrillField, DrillFieldKind, DrillHole, DrillHoleDataset, DrillInterval, DrillValue, HoleOrientation, OrientationSource,
+            SurveyObservation, TraceStation, direction_orientation, resolve_trace,
         },
         formats::csv_records::{for_each_record, owned_fields},
     },
-    userspace_warn,
+    userspace_log, userspace_warn,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -126,24 +126,24 @@ pub(crate) fn preview(bytes: &[u8]) -> Result<CsvDrillPreview, CsvDrillError> {
     let mut head = &bytes[..bytes.len().min(PREVIEW_HEAD_BYTES)];
     // A head cut short of the file ends at its last whole line.
     if head.len() < bytes.len()
-        && let Some(end) = head.iter().rposition(|byte| *byte == b'\n')
+        && let Some(end) = head.iter().rposition(|byte| matches!(byte, b'\n' | b'\r'))
     {
         head = &head[..=end];
     }
     // Repaired as a whole, as an import would be, so a legacy encoding or a
     // binary file is refused here rather than shown cell by cell.
     let (text, _) = decode_text(head)?;
-    let mut records = Records::new(&text[..])?;
-    let mut rows = Vec::new();
-    let cells = |records: &Records<&[u8]>| (0..records.len()).map(|index| cell_text(records.cell(index)).into_owned()).collect::<Vec<_>>();
-    while rows.len() <= PREVIEW_ROWS && records.next()? {
-        rows.push(cells(&records));
-    }
-    // Read on for the sample; a fault past the shown rows ends it.
-    while rows.len() <= SAMPLE_ROWS && matches!(records.next(), Ok(true)) {
-        rows.push(cells(&records));
-    }
-    let mut rows = rows.into_iter();
+    // Read as the import reads it: blank lines skipped, a bare CR ends a
+    // record, and a row of empty cells below the header is not a row.
+    let mut records = Vec::new();
+    for_each_record::<CsvDrillError>(&text, None, |_, record| {
+        let row = owned_fields(record);
+        if records.is_empty() || row.iter().any(|cell| !cell.trim().is_empty()) {
+            records.push(row);
+        }
+        Ok(())
+    })?;
+    let mut rows = records.into_iter();
     let headers = rows.next().ok_or_else(|| CsvDrillError::Invalid(crate::i18n::tr!("csv-drill-hole-csv-file-empty")))?;
     if headers.is_empty() || headers.iter().all(|header| header.trim().is_empty()) {
         return Err(CsvDrillError::Invalid(crate::i18n::tr!("csv-drill-hole-csv-header-has-no-columns")));
@@ -155,21 +155,17 @@ pub(crate) fn preview(bytes: &[u8]) -> Result<CsvDrillPreview, CsvDrillError> {
             return Err(CsvDrillError::Invalid(crate::i18n::tr!("csv-drill-hole-csv-headers-must-nonblank-unique")));
         }
     }
-    let sample = rows.collect::<Vec<_>>();
-    let mut shape = infer_shape(&headers, &sample);
-    if sample.len() == SAMPLE_ROWS
+    let rows = rows.collect::<Vec<_>>();
+    let sample = &rows[..rows.len().min(SAMPLE_ROWS)];
+    let mut shape = infer_shape(&headers, sample);
+    if rows.len() > SAMPLE_ROWS
         && let Some(shape) = &mut shape
         && let Some(id) = shape.id_column
     {
-        let mut holes = sample.iter().map(|row| row.get(id).map_or("", |cell| cell.trim()).to_owned()).collect::<HashSet<_>>();
-        while matches!(records.next(), Ok(true)) {
-            if id < records.len() {
-                holes.insert(cell_text(records.cell(id)).trim().to_owned());
-            }
-        }
-        shape.holes = holes.len();
+        // The count of holes reaches past the sample, to the end of the head.
+        shape.holes = rows.iter().filter_map(|row| row.get(id)).map(|cell| cell.trim()).collect::<HashSet<_>>().len();
     }
-    let rows = sample.into_iter().take(PREVIEW_ROWS).collect();
+    let rows = rows.into_iter().take(PREVIEW_ROWS).collect();
     Ok(CsvDrillPreview { headers, rows, shape })
 }
 
@@ -179,7 +175,7 @@ pub(crate) fn preview(bytes: &[u8]) -> Result<CsvDrillPreview, CsvDrillError> {
 pub(crate) fn initial_mapping(path: PathBuf, preview: &CsvDrillPreview) -> CsvDrillFileMapping {
     let role = match &preview.shape {
         Some(shape) => shape.looks_like.unwrap_or(CsvDrillFileRole::Ignore),
-        None => guess_role(&preview.headers),
+        None => header_only_role(&preview.headers),
     };
     let columns = if matches!(role, CsvDrillFileRole::Unassigned | CsvDrillFileRole::Ignore) {
         vec![CsvDrillColumnRole::Ignore; preview.headers.len()]
@@ -306,6 +302,30 @@ pub(crate) fn guess_role(headers: &[String]) -> CsvDrillFileRole {
     }
 }
 
+/// The purpose of a file with no rows, from its headers alone: as
+/// [`guess_role`], and also a hole with from and to an interval file and a
+/// hole with depth and a direction a survey, so an exported set whose
+/// survey or interval file is empty reads back as it was written.
+fn header_only_role(headers: &[String]) -> CsvDrillFileRole {
+    let guessed = guess_role(headers);
+    if guessed != CsvDrillFileRole::Unassigned {
+        return guessed;
+    }
+    let named = named_columns(headers);
+    let has = |roles: &[CsvDrillColumnRole]| roles.iter().all(|role| named.contains_key(role));
+    if !has(&[CsvDrillColumnRole::Dhid]) {
+        CsvDrillFileRole::Unassigned
+    } else if has(&[CsvDrillColumnRole::From, CsvDrillColumnRole::To, CsvDrillColumnRole::StartEast, CsvDrillColumnRole::EndEast]) {
+        CsvDrillFileRole::ExplicitSegments
+    } else if has(&[CsvDrillColumnRole::From, CsvDrillColumnRole::To]) {
+        CsvDrillFileRole::Interval
+    } else if has(&[CsvDrillColumnRole::Depth, CsvDrillColumnRole::Azimuth]) && (has(&[CsvDrillColumnRole::Dip]) || has(&[CsvDrillColumnRole::Inclination])) {
+        CsvDrillFileRole::Survey
+    } else {
+        CsvDrillFileRole::Unassigned
+    }
+}
+
 /// Data rows read from a file's head to judge what it holds.
 const SAMPLE_ROWS: usize = 2000;
 
@@ -316,6 +336,15 @@ const SWEEP_STEP: f64 = 0.5;
 /// A projected easting or northing is at least this far from its origin;
 /// an elevation, depth or angle seldom is.
 const LARGE_COORDINATE: f64 = 1000.0;
+
+/// The step from which coordinates rounded to a tenth of a metre are allowed
+/// for when a station's move is compared with its depth step; a shorter step
+/// gets no slack.
+const STATION_STEP: f64 = 1.0;
+
+/// A station's hole falls at least this share of the depth step: 30 degrees
+/// below level. Most collars moved along a grid or beside a count fall less.
+const STATION_FALL: f64 = 0.5;
 
 /// What a file's first rows point to, judged once when it is picked.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -381,6 +410,17 @@ fn infer_shape(headers: &[String], rows: &[Vec<String>]) -> Option<FileShape> {
     let xyz = [Column::East, Column::North, Column::Elevation];
     let unique = holes == rows.len();
     let numbers = (0..headers.len()).filter(|&index| sample.is_number(index)).collect::<Vec<_>>();
+    // A collar file may repeat a hole: the import keeps the first row of each
+    // and refuses the file only when most of its rows are repeats. A column
+    // may be a depth when no header names it as a collar's and it never falls
+    // within a hole. Repeats are stations when, between the rows where that
+    // column changes, the position moves by the depth step and the hole falls.
+    let collar_columns = [Column::East, Column::North, Column::Elevation, Column::TotalDepth, Column::Diameter];
+    let stations = has(&xyz)
+        && numbers.iter().any(|&index| {
+            !collar_columns.iter().any(|role| named.get(role) == Some(&index)) && sample.rising(index) && sample.moves_along(index, xyz.each_ref().map(|role| named[role]))
+        });
+    let one_row_each = unique || holes * 2 > rows.len() && !has(&[Column::Depth]) && !stations;
     let depth = named
         .get(&Column::Depth)
         .copied()
@@ -404,7 +444,7 @@ fn infer_shape(headers: &[String], rows: &[Vec<String>]) -> Option<FileShape> {
         Some(CsvDrillFileRole::ExplicitSegments)
     } else if has(&[Column::From, Column::To]) {
         Some(CsvDrillFileRole::Interval)
-    } else if unique && (has(&xyz) || large >= 2 && numbers.len() >= 3) {
+    } else if one_row_each && (has(&xyz) || large >= 2 && numbers.len() >= 3) {
         Some(CsvDrillFileRole::Collar)
     } else if depth.is_some_and(|depth| sample.sweep(depth) && numbers.iter().any(|&index| index != depth)) {
         Some(CsvDrillFileRole::Geophysics)
@@ -524,6 +564,29 @@ impl Sample<'_> {
                 .is_none_or(|share| share >= 0.95)
     }
 
+    /// Whether a hole's next row is mostly the next station down it: deeper
+    /// by `depth`, moved about as far (a chord is at least nine tenths of its
+    /// arc; the slack takes coordinates rounded to a tenth of a metre, for
+    /// steps of `STATION_STEP` or more) and lower by `STATION_FALL` of the
+    /// step. A copied value is passed over. A shallow or up-going hole reads
+    /// as a corrected collar, whose second elevation or easting moves with it.
+    fn moves_along(&self, depth: usize, xyz: [usize; 3]) -> bool {
+        self.share(|above, below| {
+            let step = self.value(depth, below)? - self.value(depth, above)?;
+            if step.abs() <= SAME_DEPTH {
+                return None;
+            }
+            let fall = self.value(xyz[2], above)? - self.value(xyz[2], below)?;
+            let gap = xyz
+                .iter()
+                .try_fold(0.0, |sum, &axis| Some(sum + (self.value(axis, below)? - self.value(axis, above)?).powi(2)))?
+                .sqrt();
+            let slack = if step >= STATION_STEP - SAME_DEPTH { 0.2 } else { 0.0 };
+            Some(step > 0.0 && gap >= step * 0.9 && gap <= step * 1.02 + slack && fall >= step * STATION_FALL)
+        })
+        .is_some_and(|share| share >= 0.5)
+    }
+
     /// Adjacent columns read as from and to: never reversed, mostly apart.
     fn interval_pair(&self) -> Option<(usize, usize)> {
         (1..self.columns.len()).map(|to| (to - 1, to)).find(|&(from, to)| {
@@ -579,7 +642,7 @@ impl Sample<'_> {
 }
 
 /// Drops a repair marker's two hex digits, keeping the mark to show the damage.
-fn strip_repair_marks(text: &str) -> String {
+pub(crate) fn strip_repair_marks(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text.chars();
     while let Some(character) = rest.next() {
@@ -595,7 +658,7 @@ fn strip_repair_marks(text: &str) -> String {
 }
 
 /// The repair marker and its two hex digits are dropped as one unit.
-fn normalize_header(header: &str) -> String {
+pub(crate) fn normalize_header(header: &str) -> String {
     let mut out = String::with_capacity(header.len());
     let mut rest = header.chars();
     while let Some(character) = rest.next() {
@@ -931,11 +994,12 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
                     })
                     .filter_map(|(_, (_, row))| row.get(index).map(|value| value.trim()))
                     .filter(|value| !value.is_empty() && !file.damaged(value))
-                    .all(|value| finite_number(value).is_some())
+                    .all(|value| finite_number(value).is_some() && !is_padded_code(value))
             })
             .collect::<std::collections::HashSet<_>>();
         let mut row_count = 0usize;
         let mut depths_left_out = 0usize;
+        let mut depths_unusable = 0usize;
         let skipped_before = skipped;
         // The reason names its own file and row.
         let mut report_skip = |error: &CsvDrillError| {
@@ -978,7 +1042,7 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
                         _ => false,
                     };
                     if !consistent {
-                        return Err(CsvDrillError::Invalid(format!("inconsistent diameter for DHID '{dhid}'")));
+                        return Err(CsvDrillError::Invalid(crate::i18n::tr!("csv-drill-hole-row-inconsistent-diameter", dhid = dhid.clone())));
                     }
                 } else {
                     segment_diameters.insert(dhid.clone(), diameter);
@@ -1034,7 +1098,8 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
                                 dhid = entry.key().to_string()
                             ))),
                             Entry::Vacant(entry) => {
-                                depths_left_out += usize::from(collar.depth_left_out);
+                                depths_left_out += usize::from(collar.depth_not_recorded);
+                                depths_unusable += usize::from(collar.depth_unusable);
                                 entry.insert(collar);
                             }
                         },
@@ -1060,9 +1125,15 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
             )));
         }
         if depths_left_out > 0 {
-            userspace_warn!(
+            userspace_log!(
                 "{}",
                 crate::i18n::tr!("csv-drill-hole-total-depths-left-out", file = mapping.path.display().to_string(), count = depths_left_out)
+            );
+        }
+        if depths_unusable > 0 {
+            userspace_warn!(
+                "{}",
+                crate::i18n::tr!("csv-drill-hole-total-depths-unusable", file = mapping.path.display().to_string(), count = depths_unusable)
             );
         }
     }
@@ -1149,7 +1220,9 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
             userspace_warn!("{}", crate::i18n::tr!("csv-drill-hole-surveyed-below-total-depth", file = file(), count = surveyed_past));
         }
     }
-    Ok(DrillHoleDataset::new(holes))
+    let dataset = DrillHoleDataset::new(holes);
+    report_case_twin_codes(&dataset.fields);
+    Ok(dataset)
 }
 
 #[derive(Clone, Copy)]
@@ -1157,8 +1230,12 @@ struct Collar {
     position: DVec3,
     diameter: Option<f64>,
     total_depth: Option<f64>,
-    /// The file maps a total depth, but has no usable one for this collar.
-    depth_left_out: bool,
+    /// The file maps a total depth, but this collar's cell is blank or holds
+    /// a no-data value.
+    depth_not_recorded: bool,
+    /// The file maps a total depth, but this collar's cell holds zero, a
+    /// negative or non-numeric value, or damaged text.
+    depth_unusable: bool,
 }
 
 fn validate_roles(mapping: &CsvDrillFileMapping) -> Result<(), CsvDrillError> {
@@ -1344,6 +1421,13 @@ fn angle_at(file: &CsvFile<'_>, row: &[String], index: usize) -> Option<f64> {
     finite_number(value)
 }
 
+/// A code written with leading zeros, such as `007`: it is a name, and read
+/// as a number it would lose them.
+fn is_padded_code(text: &str) -> bool {
+    let digits = text.strip_prefix(['-', '+']).unwrap_or(text);
+    digits.len() > 1 && digits.starts_with('0') && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 /// A cell as a finite number, or `None` if it is blank or not one.
 pub(super) fn finite_number(text: &str) -> Option<f64> {
     text.trim().parse::<f64>().ok().filter(|number| number.is_finite())
@@ -1416,6 +1500,10 @@ fn collar_gate(file: &CsvFile<'_>, row: &[String], line: usize) -> Result<(Strin
         .filter(|value| !file.damaged(value))
         .and_then(finite_number)
         .and_then(crate::model::drill_hole::recorded_total_depth);
+    // A positive number that is not recorded is a no-data value, as is a blank.
+    let blank = given.is_some_and(|value| value.is_empty());
+    let no_data = given.filter(|value| !file.damaged(value)).and_then(finite_number).is_some_and(|number| number > 0.0);
+    let left_out = given.is_some() && total_depth.is_none();
     let collar = Collar {
         position: DVec3::new(
             required_number(file, row, &CsvDrillColumnRole::East, line)?,
@@ -1424,7 +1512,8 @@ fn collar_gate(file: &CsvFile<'_>, row: &[String], line: usize) -> Result<(Strin
         ),
         diameter: optional_number(file, row, &CsvDrillColumnRole::Diameter, line)?,
         total_depth,
-        depth_left_out: given.is_some() && total_depth.is_none(),
+        depth_not_recorded: left_out && (blank || no_data),
+        depth_unusable: left_out && !blank && !no_data,
     };
     validate_diameter(collar.diameter, &dhid)?;
     Ok((dhid, collar))
@@ -1463,12 +1552,12 @@ fn survey_gate(file: &CsvFile<'_>, row: &[String], line: usize, inclination_as_d
 /// A row is read by column index, so it must be as wide as its header.
 fn check_width(file: &CsvFile<'_>, row: &[String], line: usize) -> Result<(), CsvDrillError> {
     if row.len() != file.headers.len() {
-        return Err(CsvDrillError::Invalid(format!(
-            "{} row {} has {} columns; expected {}",
-            file.mapping.path.display(),
-            line,
-            row.len(),
-            file.headers.len()
+        return Err(CsvDrillError::Invalid(crate::i18n::tr!(
+            "csv-drill-hole-row-wrong-width",
+            file = file.mapping.path.display().to_string(),
+            row = line.to_string(),
+            found = row.len().to_string(),
+            expected = file.headers.len().to_string()
         )));
     }
     Ok(())
@@ -1589,6 +1678,63 @@ fn report_overlaps(intervals: &HashMap<String, Vec<DrillInterval>>) {
     );
 }
 
+/// The groups of codes in each categorical field that differ only by case,
+/// each group and the fields in a stable order. Nothing is merged: the codes
+/// stay as logged. A field with more codes than `WIDE_CATEGORY_FIELD_HINT` is
+/// likely free text, where such twins are routine, and is left out.
+fn case_twin_codes(fields: &[DrillField]) -> Vec<(String, Vec<Vec<String>>)> {
+    let mut found = Vec::new();
+    for field in fields {
+        let DrillFieldKind::Categorical { categories } = &field.kind else {
+            continue;
+        };
+        if categories.len() > crate::model::drill_hole::WIDE_CATEGORY_FIELD_HINT {
+            continue;
+        }
+        let mut by_lowercase: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for code in categories {
+            by_lowercase.entry(code.to_lowercase()).or_default().push(code.clone());
+        }
+        let mut groups = by_lowercase.into_values().filter(|group| group.len() > 1).collect::<Vec<_>>();
+        for group in &mut groups {
+            group.sort_unstable();
+        }
+        if !groups.is_empty() {
+            found.push((field.label.clone(), groups));
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Says which codes of each field differ only by case, as one warning. They
+/// stay separate codes: only the person who logged them knows if they are one.
+fn report_case_twin_codes(fields: &[DrillField]) {
+    let found = case_twin_codes(fields);
+    if found.is_empty() {
+        return;
+    }
+    let truncated = found.len() > SKIP_REPORT_LIMIT;
+    let mut summary = found
+        .iter()
+        .take(SKIP_REPORT_LIMIT)
+        .map(|(label, groups)| {
+            let codes = groups
+                .iter()
+                .take(SKIP_REPORT_LIMIT)
+                .map(|group| group.iter().map(|code| format!("'{code}'")).collect::<Vec<_>>().join(" / "))
+                .collect::<Vec<_>>()
+                .join(", ");
+            crate::i18n::tr!("csv-drill-hole-case-twin-field-summary", field = label.to_string(), codes = codes)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    if truncated {
+        summary.push_str(", …");
+    }
+    userspace_warn!("{}", crate::i18n::tr!("csv-drill-hole-codes-differ-only-by-case", summary = summary.to_string()));
+}
+
 /// One file as its rows are read: a mark is damage only if repair ran.
 struct CsvFile<'a> {
     mapping: &'a CsvDrillFileMapping,
@@ -1615,7 +1761,11 @@ fn required_text(file: &CsvFile<'_>, row: &[String], role: &CsvDrillColumnRole, 
             row = line.to_string()
         )))
     } else if value.is_empty() {
-        Err(CsvDrillError::Invalid(format!("{} row {} has a blank required value", file.mapping.path.display(), line)))
+        Err(CsvDrillError::Invalid(crate::i18n::tr!(
+            "csv-drill-hole-row-blank-required-value",
+            file = file.mapping.path.display().to_string(),
+            row = line.to_string()
+        )))
     } else {
         Ok(value.to_owned())
     }
@@ -1623,7 +1773,14 @@ fn required_text(file: &CsvFile<'_>, row: &[String], role: &CsvDrillColumnRole, 
 
 fn required_number(file: &CsvFile<'_>, row: &[String], role: &CsvDrillColumnRole, line: usize) -> Result<f64, CsvDrillError> {
     let value = required_text(file, row, role, line)?;
-    finite_number(&value).ok_or_else(|| CsvDrillError::Invalid(format!("{} row {} has invalid number '{value}'", file.mapping.path.display(), line)))
+    finite_number(&value).ok_or_else(|| {
+        CsvDrillError::Invalid(crate::i18n::tr!(
+            "csv-drill-hole-row-invalid-number",
+            file = file.mapping.path.display().to_string(),
+            row = line.to_string(),
+            value = value.to_string()
+        ))
+    })
 }
 
 fn optional_number(file: &CsvFile<'_>, row: &[String], role: &CsvDrillColumnRole, line: usize) -> Result<Option<f64>, CsvDrillError> {
@@ -1634,9 +1791,14 @@ fn optional_number(file: &CsvFile<'_>, row: &[String], role: &CsvDrillColumnRole
     if value.is_empty() || file.damaged(value) {
         return Ok(None);
     }
-    finite_number(value)
-        .map(Some)
-        .ok_or_else(|| CsvDrillError::Invalid(format!("{} row {} has invalid number '{value}'", file.mapping.path.display(), line)))
+    finite_number(value).map(Some).ok_or_else(|| {
+        CsvDrillError::Invalid(crate::i18n::tr!(
+            "csv-drill-hole-row-invalid-number",
+            file = file.mapping.path.display().to_string(),
+            row = line.to_string(),
+            value = value.to_string()
+        ))
+    })
 }
 
 fn optional_xyz(
@@ -1722,7 +1884,7 @@ pub(super) fn repair_utf8(bytes: &[u8], budget: usize) -> Option<(Vec<u8>, usize
 /// Old exports carry stray bytes from whatever encoding the logger used; one
 /// must not cost the file, so they are repaired, up to a tenth of the text:
 /// past that it is a legacy encoding, or not text at all.
-fn decode_text(bytes: &[u8]) -> Result<(std::borrow::Cow<'_, [u8]>, usize), CsvDrillError> {
+pub(crate) fn decode_text(bytes: &[u8]) -> Result<(std::borrow::Cow<'_, [u8]>, usize), CsvDrillError> {
     let bytes = decode_entry(bytes)?;
     if std::str::from_utf8(bytes).is_ok() {
         return Ok((std::borrow::Cow::Borrowed(bytes), 0));
@@ -1799,7 +1961,11 @@ pub(crate) fn write_bundle(dataset: &DrillHoleDataset) -> CsvDrillBundle {
         // Diameter and total depth are columns the reader takes, so a hole
         // that has one keeps it; a hole without leaves the cell empty rather
         // than inventing a value.
-        let diameter = hole.diameter.map(|value| value.to_string()).unwrap_or_default();
+        let diameter = hole
+            .diameter
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .map(|value| value.to_string())
+            .unwrap_or_default();
         let total_depth = hole.total_depth.map(|value| value.to_string()).unwrap_or_default();
         collars.push_str(&csv_row([
             hole.dhid.clone(),
@@ -1837,7 +2003,11 @@ pub(crate) fn write_bundle(dataset: &DrillHoleDataset) -> CsvDrillBundle {
 
         for interval in &hole.intervals {
             let mut row = vec![hole.dhid.clone(), interval.from.to_string(), interval.to.to_string()];
-            row.extend(dataset.fields.iter().map(|field| drill_value_text(interval.values.get(&field.key))));
+            row.extend(dataset.fields.iter().map(|field| match interval.values.get(&field.key) {
+                // A reading the importer would call text is left blank.
+                Some(DrillValue::Numeric(number)) if !number.is_finite() => String::new(),
+                value => drill_value_text(value),
+            }));
             intervals.push_str(&csv_row(row));
         }
     }

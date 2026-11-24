@@ -19,9 +19,9 @@ use crate::{
     model::{
         Command, LayerId, Object, ObjectId, PolyVertex, SceneEntityId,
         progress::Progress,
-        string_clean::{self, Change, ChangeKind, JOIN_ON_REQUEST, LayerClean, OddOneOut, Piece, Problem, ProblemKind},
+        string_clean::{self, Change, ChangeKind, JOIN_ON_REQUEST, LayerClean, Meeting, OddOneOut, Piece, Problem, ProblemKind},
     },
-    ui::state::{StringRing, StringRingKind},
+    ui::state::{RingMeeting, StringRing, StringRingKind},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -33,13 +33,13 @@ pub(crate) enum Skipped {
 }
 
 /// The open strings of one layer a run takes, in object id order, and the
-/// ones of that layer left as drawn.
+/// ones of that layer left as drawn, each with the number it goes by.
 #[derive(Debug)]
 pub(crate) struct LayerJob {
     pub(crate) name: String,
     pub(crate) ids: Vec<ObjectId>,
     pub(crate) objects: Vec<Object>,
-    pub(crate) skipped: Vec<(ObjectId, Skipped)>,
+    pub(crate) skipped: Vec<(ObjectId, Skipped, usize)>,
     /// The number, counting from zero, each string goes by in the report: by
     /// place in `ids` unless the strings were numbered by an earlier run.
     pub(crate) numbers: Vec<usize>,
@@ -62,9 +62,10 @@ fn polyline_positions(object: &Object) -> Vec<DVec3> {
 }
 
 /// Group open polylines by layer, each layer on its own, its strings in
-/// object id order. A string holding an arc or a non-finite coordinate is
-/// not taken: it is named as left as drawn. Closed polylines and other
-/// objects are ignored.
+/// object id order and numbered by their place among them. A string holding
+/// an arc or a non-finite coordinate is not taken: it is named as left as
+/// drawn and keeps its place. Closed polylines and other objects are
+/// ignored.
 pub(crate) fn group_layers(objects: Vec<Object>, layer_name: impl Fn(LayerId) -> String) -> Vec<LayerJob> {
     let mut by_layer: BTreeMap<u64, LayerJob> = BTreeMap::new();
     let mut objects: Vec<Object> = objects.into_iter().filter(|object| matches!(object, Object::Polyline { closed: false, .. })).collect();
@@ -82,22 +83,24 @@ pub(crate) fn group_layers(objects: Vec<Object>, layer_name: impl Fn(LayerId) ->
             numbers: Vec::new(),
             header_count: 0,
         });
+        let number = job.header_count;
+        job.header_count += 1;
         if verts.iter().any(|vertex| vertex.bulge != 0.0) {
-            job.skipped.push((object.id(), Skipped::Arcs));
+            job.skipped.push((object.id(), Skipped::Arcs, number));
         } else if verts.iter().any(|vertex| !vertex.pos.is_finite()) {
-            job.skipped.push((object.id(), Skipped::NotFinite));
+            job.skipped.push((object.id(), Skipped::NotFinite, number));
         } else {
-            job.numbers.push(job.ids.len());
+            job.numbers.push(number);
             job.ids.push(object.id());
             job.objects.push(object);
-            job.header_count = job.ids.len();
         }
     }
     by_layer.into_values().collect()
 }
 
-/// Number the strings of `job` as the run that ringed them did, by id in
-/// `known`; a string `known` lacks keeps its place. The header counts the
+/// Number the strings of `job`, those left as drawn too, as the run that
+/// ringed them did, by id in `known`; a string `known` lacks keeps its
+/// place. The header, never fewer than the job's own strings, counts the
 /// distinct numbers `known` gives the strings of the layer (`layer_ids`, the
 /// ids of every open string it holds), so a subset is never taken for the
 /// layer. Nothing changes when none of the job's strings is known.
@@ -106,8 +109,11 @@ pub(crate) fn number_as_ringed(job: &mut LayerJob, known: &HashMap<ObjectId, usi
         return;
     }
     job.numbers = job.ids.iter().enumerate().map(|(place, id)| known.get(id).copied().unwrap_or(place)).collect();
+    for (id, _, number) in &mut job.skipped {
+        *number = known.get(id).copied().unwrap_or(*number);
+    }
     let layer_numbers: HashSet<usize> = layer_ids.into_iter().filter_map(|id| known.get(&id).copied()).collect();
-    job.header_count = layer_numbers.len().max(job.ids.len());
+    job.header_count = layer_numbers.len().max(job.ids.len() + job.skipped.len());
 }
 
 /// What one layer's run gave, as the report reads it.
@@ -117,7 +123,7 @@ pub(crate) struct LayerReport<'a> {
     /// The number, from zero, each string goes by, by its place in the run's
     /// input; a place past the end goes by itself.
     pub(crate) numbers: &'a [usize],
-    pub(crate) skipped: &'a [(ObjectId, Skipped)],
+    pub(crate) skipped: &'a [(ObjectId, Skipped, usize)],
     pub(crate) pieces: &'a [Piece],
     pub(crate) changes: &'a [Change],
     pub(crate) problems: &'a [Problem],
@@ -125,9 +131,13 @@ pub(crate) struct LayerReport<'a> {
     /// The strings Build Surface would leave out of a build of the result,
     /// by place in `pieces`.
     pub(crate) left_out: &'a [usize],
+    /// Every place the result's strings meet, by place in `pieces`.
+    pub(crate) meetings: &'a [Meeting],
     /// Build Surface's checks on the result: `Some(None)` passes,
     /// `Some(Some(_))` refuses, `None` when the run did not run them.
     pub(crate) verdict: Option<&'a Option<String>>,
+    /// How many crossings the build's copy joins before those checks.
+    pub(crate) build_joins: usize,
 }
 
 /// The console text of one run: what changed, then what is left.
@@ -214,14 +224,16 @@ fn change_line(change: &Change, numbers: &[usize]) -> String {
     }
 }
 
-fn problem_line(problem: &Problem, pieces: &[Piece], numbers: &[usize]) -> String {
-    problem_line_named(problem, &|piece| pieces.get(piece).map(|piece| number_of(numbers, piece.source)))
+fn problem_line(problem: &Problem, pieces: &[Piece], numbers: &[usize], meetings: &[Meeting]) -> String {
+    problem_line_named(problem, &|piece| pieces.get(piece).map(|piece| number_of(numbers, piece.source)), meetings)
 }
 
 /// One problem's console line, each string named by `name` from its place
 /// in the strings checked (counting from zero, shown from one); a string
-/// `name` cannot place is left out.
-pub(crate) fn problem_line_named(problem: &Problem, name: &dyn Fn(usize) -> Option<usize>) -> String {
+/// `name` cannot place is left out. A crossing is for Join all at halfway
+/// when every string meeting there, by `meetings`, misses by
+/// [`JOIN_ON_REQUEST`] or less.
+pub(crate) fn problem_line_named(problem: &Problem, name: &dyn Fn(usize) -> Option<usize>, meetings: &[Meeting]) -> String {
     let strings = names_of(problem.sides.iter().filter_map(|side| name(side.piece)));
     let [x, y, _] = at_xyz(problem.at);
     match &problem.kind {
@@ -231,7 +243,9 @@ pub(crate) fn problem_line_named(problem: &Problem, name: &dyn Fn(usize) -> Opti
         ProblemKind::CrossesItself => tr!("cmd-string-clean-hand-crosses-itself", string = strings, x = x, y = y),
         ProblemKind::PointsDisagree { miss } => tr!("cmd-string-clean-hand-points-disagree", string = strings, miss = format!("{miss:.2}"), x = x, y = y),
         ProblemKind::Along => tr!("cmd-string-clean-hand-along", strings = strings, x = x, y = y),
-        ProblemKind::Crossing { miss } if *miss <= JOIN_ON_REQUEST => tr!("cmd-string-clean-join-all-crossing", strings = strings, miss = format!("{miss:.2}"), x = x, y = y),
+        ProblemKind::Crossing { miss } if string_clean::meeting_miss(meetings, problem, *miss) <= JOIN_ON_REQUEST => {
+            tr!("cmd-string-clean-join-all-crossing", strings = strings, miss = format!("{miss:.2}"), x = x, y = y)
+        }
         ProblemKind::Crossing { miss } => tr!("cmd-string-clean-hand-crossing", strings = strings, miss = format!("{miss:.2}"), x = x, y = y),
         ProblemKind::NearMiss { miss } => tr!("cmd-string-clean-hand-near-miss", strings = strings, miss = format!("{miss:.2}"), x = x, y = y),
         ProblemKind::BuildRefuses(refusal) => tr!("cmd-string-clean-hand-build-refuses", refusal = refusal.clone()),
@@ -293,10 +307,11 @@ fn crossing_miss(problem: &Problem) -> Option<f64> {
     }
 }
 
-fn skipped_line(id: ObjectId, why: Skipped) -> String {
+fn skipped_line(number: usize, why: Skipped) -> String {
+    let string = (number + 1).to_string();
     match why {
-        Skipped::Arcs => tr!("cmd-string-clean-left-arcs", string = id.0.to_string()),
-        Skipped::NotFinite => tr!("cmd-string-clean-left-not-finite", string = id.0.to_string()),
+        Skipped::Arcs => tr!("cmd-string-clean-left-arcs", string = string),
+        Skipped::NotFinite => tr!("cmd-string-clean-left-not-finite", string = string),
     }
 }
 
@@ -304,8 +319,9 @@ fn skipped_line(id: ObjectId, why: Skipped) -> String {
 /// under a line naming it. The strings left follow: crossings with the
 /// biggest miss first, then the rest, again by layer. A line per layer on
 /// whether Build Surface's checks pass ends the report, after the last
-/// message that exists.
-pub(crate) fn build_report(layers: &[LayerReport]) -> Report {
+/// message that exists. `checked` for a run that ran those checks: one
+/// that changed nothing and left nothing says so in one line.
+pub(crate) fn build_report(layers: &[LayerReport], checked: bool) -> Report {
     let mut report = Report::default();
     let mut verdicts: Vec<String> = Vec::new();
     for layer in layers {
@@ -324,16 +340,16 @@ pub(crate) fn build_report(layers: &[LayerReport]) -> Report {
             report.log.extend(lines);
         }
 
-        let mut left: Vec<String> = layer.skipped.iter().map(|&(id, why)| skipped_line(id, why)).collect();
+        let mut left: Vec<String> = layer.skipped.iter().map(|&(_, why, number)| skipped_line(number, why)).collect();
         let mut crossings: Vec<&Problem> = layer.problems.iter().filter(|problem| crossing_miss(problem).is_some()).collect();
         crossings.sort_by(|a, b| crossing_miss(b).unwrap_or(0.0).total_cmp(&crossing_miss(a).unwrap_or(0.0)));
-        left.extend(crossings.into_iter().map(|problem| problem_line(problem, layer.pieces, layer.numbers)));
+        left.extend(crossings.into_iter().map(|problem| problem_line(problem, layer.pieces, layer.numbers, layer.meetings)));
         left.extend(
             layer
                 .problems
                 .iter()
                 .filter(|problem| crossing_miss(problem).is_none())
-                .map(|problem| problem_line(problem, layer.pieces, layer.numbers)),
+                .map(|problem| problem_line(problem, layer.pieces, layer.numbers, layer.meetings)),
         );
         left.extend(
             layer
@@ -346,13 +362,13 @@ pub(crate) fn build_report(layers: &[LayerReport]) -> Report {
             report.warn.extend(left);
         }
 
+        let (name, joins, limit) = (layer.name.to_string(), layer.build_joins.to_string(), JOIN_ON_REQUEST.to_string());
+        let count = layer.problems.iter().filter(|problem| problem.placed()).count().to_string();
         match layer.verdict {
-            Some(None) => verdicts.push(tr!("cmd-string-clean-checks-pass", layer = layer.name.to_string())),
-            Some(Some(_)) => verdicts.push(tr!(
-                "cmd-string-clean-checks-refuse",
-                layer = layer.name.to_string(),
-                count = layer.problems.len().to_string()
-            )),
+            Some(None) if layer.build_joins > 0 => verdicts.push(tr!("cmd-string-clean-checks-pass-joined", layer = name, joins = joins, limit = limit)),
+            Some(None) => verdicts.push(tr!("cmd-string-clean-checks-pass", layer = name)),
+            Some(Some(_)) if layer.build_joins > 0 => verdicts.push(tr!("cmd-string-clean-checks-refuse-joined", layer = name, joins = joins, limit = limit, count = count)),
+            Some(Some(_)) => verdicts.push(tr!("cmd-string-clean-checks-refuse", layer = name, count = count)),
             None => {}
         }
         if !layer.left_out.is_empty() {
@@ -368,10 +384,29 @@ pub(crate) fn build_report(layers: &[LayerReport]) -> Report {
             ));
         }
     }
-    if report.log.is_empty() {
+    let any_refuses = layers.iter().any(|layer| matches!(layer.verdict, Some(Some(_))));
+    let plain_pass = layers.iter().all(|layer| layer.verdict.is_none_or(Option::is_none) && layer.build_joins == 0);
+    if report.log.is_empty() && checked && report.warn.is_empty() && !any_refuses && plain_pass {
+        // A run that checked one string alone names it: the layer's other
+        // strings were not checked.
+        let passed: Vec<&LayerReport> = layers.iter().filter(|layer| layer.verdict.is_some()).collect();
+        let line = match passed.as_slice() {
+            [only] if only.numbers.len() == 1 => tr!(
+                "cmd-string-clean-nothing-to-clean-pass-string",
+                string = (only.numbers[0] + 1).to_string(),
+                layer = only.name.to_string()
+            ),
+            _ => tr!(
+                "cmd-string-clean-nothing-to-clean-pass",
+                layers = word_list(&passed.iter().map(|layer| layer.name.to_string()).collect::<Vec<_>>())
+            ),
+        };
+        report.log.push(line);
+        return report;
+    }
+    if report.log.is_empty() && !(checked && (!report.warn.is_empty() || any_refuses)) {
         report.log.push(tr!("cmd-string-clean-nothing-to-clean"));
     }
-    let any_refuses = layers.iter().any(|layer| matches!(layer.verdict, Some(Some(_))));
     if report.warn.is_empty() && !any_refuses {
         report.log.extend(verdicts);
     } else {
@@ -446,12 +481,28 @@ fn layer_commands(job: &LayerJob, pieces: &[Piece], ids: &[ObjectId]) -> Vec<Com
 /// One ring per problem that has a place; the build's own refusal of what
 /// nothing else names has none and is only reported. `name` numbers the
 /// strings for a ring's menu header as the report does.
-fn rings_from<'a>(problems: &'a [Problem], ids: &'a [ObjectId], name: &'a dyn Fn(usize) -> Option<usize>) -> impl Iterator<Item = StringRing> + 'a {
-    problems.iter().filter(|problem| problem.at.is_finite()).map(move |problem| StringRing {
+fn rings_from<'a>(problems: &'a [Problem], ids: &'a [ObjectId], name: &'a dyn Fn(usize) -> Option<usize>, meetings: &'a [Meeting]) -> impl Iterator<Item = StringRing> + 'a {
+    problems.iter().filter(|problem| problem.placed()).map(move |problem| StringRing {
         at: problem.at,
         kind: StringRingKind::Left(problem.kind.clone()),
         sides: problem.sides.iter().filter_map(|side| ids.get(side.piece).map(|&id| (id, side.vertex))).collect(),
         title: ring_title(problem, name),
+        meeting: ring_meeting(problem, ids, meetings),
+    })
+}
+
+/// The meeting of a crossing problem, its strings by `ids` from their
+/// places; a Clean run is one layer, so the meeting is one layer's. `None`
+/// for any other problem or one no meeting holds.
+pub(crate) fn ring_meeting(problem: &Problem, ids: &[ObjectId], meetings: &[Meeting]) -> Option<RingMeeting> {
+    if !matches!(problem.kind, ProblemKind::Crossing { .. }) {
+        return None;
+    }
+    let meeting = string_clean::meeting_of(meetings, problem)?;
+    Some(RingMeeting {
+        strings: meeting.pieces.iter().filter_map(|&piece| ids.get(piece).copied()).collect(),
+        miss: meeting.miss,
+        one_layer: true,
     })
 }
 
@@ -469,7 +520,9 @@ fn no_layer_report<'a>(job: &'a LayerJob) -> LayerReport<'a> {
         problems: &[],
         odd_ones: &[],
         left_out: &[],
+        meetings: &[],
         verdict: None,
+        build_joins: 0,
     }
 }
 
@@ -509,7 +562,7 @@ pub(crate) fn assemble_clean(jobs: &[LayerJob], cleaned: &[Option<LayerClean>], 
             numbers.extend(clean.pieces.iter().zip(&ids).map(|(piece, &id)| (id, number_of(&job.numbers, piece.source))));
         }
         let name = |piece: usize| clean.pieces.get(piece).map(|piece| number_of(&job.numbers, piece.source));
-        plan.rings.extend(rings_from(&clean.problems, &ids, &name));
+        plan.rings.extend(rings_from(&clean.problems, &ids, &name, &clean.meetings));
         reports.push(LayerReport {
             name: &job.name,
             strings: job.header_count,
@@ -520,10 +573,12 @@ pub(crate) fn assemble_clean(jobs: &[LayerJob], cleaned: &[Option<LayerClean>], 
             problems: &clean.problems,
             odd_ones: &clean.odd_ones,
             left_out: &clean.left_out,
+            meetings: &clean.meetings,
             verdict: Some(&clean.refusal),
+            build_joins: clean.build_joins,
         });
     }
-    plan.report = build_report(&reports);
+    plan.report = build_report(&reports, true);
     plan
 }
 
@@ -558,7 +613,7 @@ pub(crate) fn assemble_join(jobs: &[JoinJob], joined: &[Option<string_clean::Lay
         plan.commands.extend(layer_commands(job, &join.pieces, &job.ids));
         plan.taken.extend(job.ids.iter().copied());
         let name = |piece: usize| join.pieces.get(piece).map(|piece| number_of(&job.numbers, piece.source));
-        plan.rings.extend(rings_from(&join.problems, &job.ids, &name));
+        plan.rings.extend(rings_from(&join.problems, &job.ids, &name, &join.meetings));
         reports.push(LayerReport {
             name: &job.name,
             strings: job.header_count,
@@ -569,10 +624,12 @@ pub(crate) fn assemble_join(jobs: &[JoinJob], joined: &[Option<string_clean::Lay
             problems: &join.problems,
             odd_ones: &join.odd_ones,
             left_out: &join.left_out,
+            meetings: &join.meetings,
             verdict: None,
+            build_joins: 0,
         });
     }
-    plan.report = build_report(&reports);
+    plan.report = build_report(&reports, false);
     plan
 }
 
@@ -581,6 +638,65 @@ pub(crate) fn assemble_join(jobs: &[JoinJob], joined: &[Option<string_clean::Lay
 pub(crate) fn replace_rings(rings: &mut Vec<StringRing>, taken: &[ObjectId], fresh: Vec<StringRing>) {
     rings.retain(|ring| ring.sides.is_empty() || !ring.sides.iter().all(|(id, _)| taken.contains(id)));
     rings.extend(fresh);
+}
+
+/// Take out of `rings` the ones the run leaves in place that name a vertex of
+/// a string it rewrote, each vertex found again on the string as `commands`
+/// leave it; a ring that no longer sits on it is dropped, as is any ring on
+/// a string the run deleted. Put the result back after [`replace_rings`].
+pub(crate) fn renumber_kept_rings(rings: &mut Vec<StringRing>, taken: &[ObjectId], commands: &[Command]) -> Vec<StringRing> {
+    /// Note each string `commands` replace (`Some` of its new vertices) or
+    /// delete (`None`); a later command overrides an earlier one.
+    fn rewritten<'a>(commands: &'a [Command], out: &mut HashMap<ObjectId, Option<&'a [PolyVertex]>>) {
+        for command in commands {
+            match command {
+                Command::Batch(inner) => rewritten(inner, out),
+                Command::Replace {
+                    after: Object::Polyline { id, verts, .. },
+                    ..
+                } => {
+                    out.insert(*id, Some(verts.as_slice()));
+                }
+                Command::DeleteObject { object, .. } => {
+                    out.insert(object.id(), None);
+                }
+                _ => {}
+            }
+        }
+    }
+    let taken: HashSet<ObjectId> = taken.iter().copied().collect();
+    let mut left = HashMap::new();
+    rewritten(commands, &mut left);
+    let renumbered = |ring: &StringRing| !ring.sides.iter().all(|(id, _)| taken.contains(id)) && ring.sides.iter().any(|(id, vertex)| vertex.is_some() && taken.contains(id));
+    rings.retain(|ring| !ring.sides.iter().any(|(id, _)| taken.contains(id) && matches!(left.get(id), Some(None))));
+    let (moved, kept): (Vec<StringRing>, Vec<StringRing>) = std::mem::take(rings).into_iter().partition(renumbered);
+    *rings = kept;
+    moved
+        .into_iter()
+        .filter_map(|mut ring| {
+            let at = ring.at;
+            for (id, vertex) in &mut ring.sides {
+                if vertex.is_some()
+                    && taken.contains(id)
+                    && let Some(new) = left.get(id)
+                {
+                    *vertex = Some(vertex_at((*new)?, at)?);
+                }
+            }
+            Some(ring)
+        })
+        .collect()
+}
+
+/// Every string `commands` replace or delete is one the canvas may edit by
+/// `edits`; a run is applied only then.
+pub(crate) fn run_edits_only(commands: &[Command], edits: impl Fn(ObjectId) -> bool + Copy) -> bool {
+    commands.iter().all(|command| match command {
+        Command::Batch(inner) => run_edits_only(inner, edits),
+        Command::Replace { after, .. } => edits(after.id()),
+        Command::DeleteObject { object, .. } => edits(object.id()),
+        _ => true,
+    })
 }
 
 /// After the rings are replaced: their old projections go, so the next frame
@@ -595,6 +711,38 @@ pub(crate) fn forget_ring_menu(editor: &mut crate::ui::state::EditorState) {
     }
 }
 
+/// What Clean Strings does with the selected `ids`.
+#[derive(Debug, PartialEq)]
+pub(crate) enum CleanChoice {
+    /// None is an open string: the viewport picks them first.
+    Pick,
+    /// Every open one is hidden or locked.
+    NoneEditable,
+    /// Clean `kept`; `left` open ones are hidden or locked.
+    Clean { kept: Vec<ObjectId>, left: usize },
+}
+
+/// Decide what Clean Strings does with `ids`, `open` telling an open string
+/// of the project and `edits` one the canvas may edit.
+pub(crate) fn strings_to_clean(ids: &[ObjectId], open: impl Fn(ObjectId) -> bool, edits: impl Fn(ObjectId) -> bool) -> CleanChoice {
+    let open: Vec<ObjectId> = ids.iter().copied().filter(|&id| open(id)).collect();
+    if open.is_empty() {
+        return CleanChoice::Pick;
+    }
+    match editable_strings(&open, edits) {
+        (kept, _) if kept.is_empty() => CleanChoice::NoneEditable,
+        (kept, left) => CleanChoice::Clean { kept, left },
+    }
+}
+
+/// The strings of `ids` the canvas may edit by `edits`, in order, and how
+/// many it may not.
+pub(crate) fn editable_strings(ids: &[ObjectId], edits: impl Fn(ObjectId) -> bool) -> (Vec<ObjectId>, usize) {
+    let kept: Vec<ObjectId> = ids.iter().copied().filter(|&id| edits(id)).collect();
+    let left = ids.len() - kept.len();
+    (kept, left)
+}
+
 /// The vertex of `verts` at `at`, within the build's merge distance in plan,
 /// counting from zero.
 pub(crate) fn vertex_at(verts: &[PolyVertex], at: DVec3) -> Option<usize> {
@@ -604,7 +752,9 @@ pub(crate) fn vertex_at(verts: &[PolyVertex], at: DVec3) -> Option<usize> {
 }
 
 impl<'a> App<'a> {
-    /// Clean the selected open polylines of the active project.
+    /// Clean the selected open polylines of the active project; hidden and
+    /// locked ones are left out and counted. With none selected the viewport
+    /// picks them first, and the pick's Done comes back here.
     pub(crate) fn clean_selected_strings(&mut self) {
         let ids: Vec<ObjectId> = self
             .editor
@@ -615,7 +765,20 @@ impl<'a> App<'a> {
                 _ => None,
             })
             .collect();
-        self.clean_strings(&ids);
+        // Read on the project's own document: the scene leaves hidden
+        // strings out, and those are to be counted, not picked again.
+        let document = self.active_document();
+        let open = |id: ObjectId| matches!(document.get_object(id), Some(Object::Polyline { closed: false, .. }));
+        match strings_to_clean(&ids, open, |id| self.editor.canvas_edits_object(document, id)) {
+            CleanChoice::Pick => self.begin_selection_pick(crate::ui::state::SelectionPickTool::CleanStrings),
+            CleanChoice::NoneEditable => userspace_warn!("{}", tr!("cmd-string-clean-no-strings-hidden-locked")),
+            CleanChoice::Clean { kept, left } => {
+                if left > 0 {
+                    userspace_log!("{}", tr!("cmd-string-clean-left-hidden-locked", count = left.to_string()));
+                }
+                self.clean_strings(&kept);
+            }
+        }
     }
 
     fn gather_layers(&self, ids: &[ObjectId]) -> Vec<LayerJob> {
@@ -653,10 +816,34 @@ impl<'a> App<'a> {
     /// Clean the open polylines in `ids` of the active project, layer by
     /// layer, on a worker; the batch lands as one undo step when it is done.
     pub(crate) fn clean_strings(&mut self, ids: &[ObjectId]) {
+        let jobs = self.gather_layers(ids);
+        self.spawn_clean(jobs);
+    }
+
+    /// Clean the ringed string `id` on its own, numbered as the run that
+    /// ringed it numbered it.
+    pub(crate) fn clean_ringed_string(&mut self, id: ObjectId) {
+        let mut jobs = self.gather_layers(&[id]);
+        self.number_as_ringed_jobs(&mut jobs);
+        self.spawn_clean(jobs);
+    }
+
+    /// Number the strings of each of `jobs` as [`number_as_ringed`] does,
+    /// against every ringed string of the job's layer.
+    fn number_as_ringed_jobs(&self, jobs: &mut [LayerJob]) {
+        let document = self.active_document();
+        let known = &self.editor.string_numbers;
+        let layer_of = |id: ObjectId| document.get_object(id).map(|object| object.layer().0);
+        for job in jobs {
+            let layer = job.ids.first().or(job.skipped.first().map(|(id, _, _)| id)).and_then(|&id| layer_of(id));
+            number_as_ringed(job, known, known.keys().copied().filter(|&id| layer_of(id) == layer));
+        }
+    }
+
+    fn spawn_clean(&mut self, jobs: Vec<LayerJob>) {
         let Some(key) = self.string_clean_key() else {
             return;
         };
-        let jobs = self.gather_layers(ids);
         if jobs.is_empty() {
             userspace_warn!("{}", tr!("cmd-string-clean-nothing-to-clean"));
             return;
@@ -665,20 +852,22 @@ impl<'a> App<'a> {
             return;
         };
         let label = tr!("cmd-string-clean-cleaning-strings");
-        self.begin_run(&label, jobs.iter().map(|job| job.ids.len()).sum(), jobs.len());
+        // The job's label trails off; the lines naming the run do not.
+        let run_label = label.trim_end_matches('\u{2026}').to_owned();
+        self.begin_run(&run_label, jobs.iter().map(|job| job.ids.len()).sum(), jobs.len());
         let compute = move |cancel: &CancelFlag, progress: &Progress| {
             let cleaned = compute_clean(&jobs, &|| cancel.is_cancelled(), &|done, total| progress.set_items(done as u64, total as u64))
-                .map_err(|_| anyhow::anyhow!("{}", tr!("common-cancelled")))?;
+                .map_err(|_| anyhow::Error::new(crate::app::jobs::Cancelled))?;
             Ok((jobs, cleaned))
         };
-        let run_label = label.clone();
         let apply = move |app: &mut App, result: anyhow::Result<(Vec<LayerJob>, Vec<Option<LayerClean>>)>| {
             let (jobs, cleaned) = match result {
                 Ok(done) => done,
-                Err(error) => {
+                Err(error) if !crate::app::jobs::is_cancelled(&error) => {
                     userspace_error!("{}: {error:#}", run_label);
                     return;
                 }
+                Err(_) => return,
             };
             let Some(project) = app.workspace.active_project_mut().filter(|project| project.runtime_id == runtime_id) else {
                 return;
@@ -698,21 +887,20 @@ impl<'a> App<'a> {
             return;
         };
         let rings: Vec<&StringRing> = indices.iter().filter_map(|&index| self.editor.string_rings.get(index)).collect();
-        let ids: Vec<ObjectId> = rings.iter().flat_map(|ring| ring.sides.iter().map(|&(id, _)| id)).collect();
-        let jobs = self.gather_layers(&ids);
+        let ids: Vec<ObjectId> = rings.iter().flat_map(|ring| ring.join_strings()).collect();
+        let mut jobs = self.gather_layers(&ids);
+        self.number_as_ringed_jobs(&mut jobs);
         let document = self.active_document();
-        let known = &self.editor.string_numbers;
         let layer_of = |id: ObjectId| document.get_object(id).map(|object| object.layer().0);
         let with_at: Vec<JoinJob> = jobs
             .into_iter()
-            .map(|mut job| {
-                let layer = job.ids.first().or(job.skipped.first().map(|(id, _)| id)).and_then(|&id| layer_of(id));
+            .map(|job| {
+                let layer = job.ids.first().or(job.skipped.first().map(|(id, _, _)| id)).and_then(|&id| layer_of(id));
                 let at = rings
                     .iter()
                     .filter(|ring| ring.sides.first().and_then(|&(id, _)| layer_of(id)) == layer)
                     .map(|ring| ring.at.truncate())
                     .collect();
-                number_as_ringed(&mut job, known, known.keys().copied().filter(|&id| layer_of(id) == layer));
                 (job, at)
             })
             .collect();
@@ -723,20 +911,22 @@ impl<'a> App<'a> {
             return;
         };
         let label = tr!("cmd-string-clean-joining-strings");
-        self.begin_run(&label, with_at.iter().map(|(job, _)| job.ids.len()).sum(), with_at.len());
+        // The job's label trails off; the lines naming the run do not.
+        let run_label = label.trim_end_matches('\u{2026}').to_owned();
+        self.begin_run(&run_label, with_at.iter().map(|(job, _)| job.ids.len()).sum(), with_at.len());
         let compute = move |cancel: &CancelFlag, progress: &Progress| {
             let joined = compute_join(&with_at, &|| cancel.is_cancelled(), &|done, total| progress.set_items(done as u64, total as u64))
-                .map_err(|_| anyhow::anyhow!("{}", tr!("common-cancelled")))?;
+                .map_err(|_| anyhow::Error::new(crate::app::jobs::Cancelled))?;
             Ok((with_at, joined))
         };
-        let run_label = label.clone();
         let apply = move |app: &mut App, result: anyhow::Result<(Vec<JoinJob>, Vec<Option<string_clean::LayerJoin>>)>| {
             let (with_at, joined) = match result {
                 Ok(done) => done,
-                Err(error) => {
+                Err(error) if !crate::app::jobs::is_cancelled(&error) => {
                     userspace_error!("{}: {error:#}", run_label);
                     return;
                 }
+                Err(_) => return,
             };
             if app.workspace.active_project().is_none_or(|project| project.runtime_id != runtime_id) {
                 return;
@@ -750,6 +940,12 @@ impl<'a> App<'a> {
     /// strings it took with the ones it leaves, and say what happened: the
     /// report, then one line on what the run came to.
     fn finish_run(&mut self, plan: RunPlan, label: &str) {
+        // A string locked or hidden while the run worked is not edited.
+        let document = self.active_document();
+        if !run_edits_only(&plan.commands, |id| self.editor.canvas_edits_object(document, id)) {
+            userspace_warn!("{}", tr!("cmd-string-clean-run-refused-locked"));
+            return;
+        }
         if !plan.report.log.is_empty() {
             userspace_log!("{}", plan.report.log.join("\n"));
         }
@@ -771,10 +967,12 @@ impl<'a> App<'a> {
             }
             self.editor.string_numbers.extend(numbers);
         }
+        let renumbered = renumber_kept_rings(&mut self.editor.string_rings, &plan.taken, &plan.commands);
         replace_rings(&mut self.editor.string_rings, &plan.taken, plan.rings);
+        self.editor.string_rings.extend(renumbered);
         forget_ring_menu(&mut self.editor);
         if !plan.commands.is_empty() {
-            self.execute_edit(Command::Batch(plan.commands));
+            self.execute_job_edit(Command::Batch(plan.commands));
         }
         self.invalidate_geometry();
         self.invalidate_overlay();
@@ -783,10 +981,16 @@ impl<'a> App<'a> {
 
     /// Delete the vertex a ring names through the canvas Delete Vertex's own
     /// path, one undo step, and update the rings; said and left alone when
-    /// the string is at its fewest vertices.
+    /// the vertex is gone, the string is locked or hidden, or it is at its
+    /// fewest vertices.
     pub(crate) fn delete_ring_vertex(&mut self, id: ObjectId, vertex: usize) {
+        if let Some(reason) = ring_vertex_refusal(&self.editor, self.active_document(), id, vertex) {
+            userspace_warn!("{}", reason);
+            return;
+        }
+        let closed = matches!(self.active_document().get_object(id), Some(Object::Polyline { closed: true, .. }));
         if self.delete_polyline_vertex(id, vertex) {
-            self.editor.forget_deleted_ring_vertex(id, vertex);
+            self.editor.forget_deleted_ring_vertex_of(id, vertex, closed);
             self.redraw_requested = true;
             return;
         }
@@ -797,4 +1001,19 @@ impl<'a> App<'a> {
             }
         }
     }
+}
+
+/// Why a ring's Delete Vertex is refused before the string is looked at for
+/// its fewest vertices: the vertex is gone, the string is locked, or hidden.
+fn ring_vertex_refusal(editor: &crate::ui::state::EditorState, document: &crate::model::Document, id: ObjectId, vertex: usize) -> Option<String> {
+    let handle = SceneEntityId::Object(id);
+    let layer = match document.get_object(id) {
+        Some(Object::Polyline { verts, layer, .. }) if vertex < verts.len() => *layer,
+        _ => return Some(tr!("object-edit-ring-vertex-gone")),
+    };
+    if editor.locked_layers.contains(&layer) || editor.frozen_handles.contains(&handle) {
+        return Some(tr!("object-edit-ring-string-locked"));
+    }
+    let shown = document.layer(layer).is_some_and(crate::model::Layer::is_visible) && !document.is_object_hidden(id) && !editor.hidden_handles.contains(&handle);
+    (!shown).then(|| tr!("object-edit-ring-string-hidden"))
 }

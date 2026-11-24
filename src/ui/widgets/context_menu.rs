@@ -222,9 +222,9 @@ pub(crate) struct ContextMenuAction {
     enabled: bool,
     submenu: bool,
     checked: Option<bool>,
-    disabled_hover: Option<egui::WidgetText>,
     strikethrough: bool,
     swatch: Option<egui::Color32>,
+    icon: Option<egui::ImageSource<'static>>,
 }
 
 impl ContextMenuAction {
@@ -235,9 +235,9 @@ impl ContextMenuAction {
             enabled: true,
             submenu: false,
             checked: None,
-            disabled_hover: None,
             strikethrough: false,
             swatch: None,
+            icon: None,
         }
     }
 
@@ -245,6 +245,13 @@ impl ContextMenuAction {
     /// choice between things known by their colour: a delay type, say.
     pub(crate) fn swatch(mut self, color: egui::Color32) -> Self {
         self.swatch = Some(color);
+        self
+    }
+
+    /// Show `icon` at the right end of the row, as tall as the row's text:
+    /// the picture of the toolbar cell that runs the same function.
+    pub(crate) fn icon(mut self, icon: egui::ImageSource<'static>) -> Self {
+        self.icon = Some(icon);
         self
     }
 
@@ -276,14 +283,6 @@ impl ContextMenuAction {
         self
     }
 
-    /// What hovering the row says while it is greyed out: usually what to
-    /// select first.
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
-    pub(crate) fn disabled_hover_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
-        self.disabled_hover = Some(text.into());
-        self
-    }
-
     pub(crate) fn submenu(mut self, submenu: bool) -> Self {
         self.submenu = submenu;
         self
@@ -296,9 +295,9 @@ impl ContextMenuAction {
             enabled,
             submenu,
             checked,
-            disabled_hover,
             strikethrough,
             swatch,
+            icon,
         } = self;
         ui.add_enabled_ui(enabled, |ui| {
             let font_id = egui::TextStyle::Button.resolve(ui.style());
@@ -317,7 +316,9 @@ impl ContextMenuAction {
             };
             let right_padding = if submenu { 14.0 } else { 4.0 };
             let shortcut_gap = if shortcut.is_some() { 16.0 } else { 0.0 };
-            let natural_width = text_left + label_width + shortcut_gap + shortcut_width + right_padding;
+            let icon_side = font_id.size;
+            let icon_width = if icon.is_some() { 16.0 + icon_side } else { 0.0 };
+            let natural_width = text_left + label_width + shortcut_gap + shortcut_width + icon_width + right_padding;
             super::menu::record_intrinsic_content_width(ui, natural_width);
             let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), egui::Sense::click());
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label.text()));
@@ -354,12 +355,17 @@ impl ContextMenuAction {
                 }
                 if let Some(shortcut) = shortcut {
                     painter.text(
-                        rect.right_center() - egui::vec2(right_padding, 0.0),
+                        rect.right_center() - egui::vec2(right_padding + icon_width, 0.0),
                         egui::Align2::RIGHT_CENTER,
                         shortcut.text(),
                         egui::TextStyle::Button.resolve(ui.style()),
                         ui.visuals().weak_text_color(),
                     );
+                }
+                if let Some(icon) = icon {
+                    let center = rect.right_center() - egui::vec2(right_padding + icon_side / 2.0, 0.0);
+                    let icon_rect = egui::Rect::from_center_size(center, egui::Vec2::splat(icon_side));
+                    egui::Image::new(icon).fit_to_exact_size(icon_rect.size()).paint_at(ui, icon_rect);
                 }
                 if submenu {
                     let center = rect.right_center() - egui::vec2(5.0, 0.0);
@@ -370,11 +376,7 @@ impl ContextMenuAction {
                     ));
                 }
             }
-            let response = if rect.width() + 0.5 < natural_width { response.hint(full_label) } else { response };
-            match disabled_hover {
-                Some(text) => response.disabled_hint(text),
-                None => response,
-            }
+            if rect.width() + 0.5 < natural_width { response.hint(full_label) } else { response }
         })
         .inner
     }

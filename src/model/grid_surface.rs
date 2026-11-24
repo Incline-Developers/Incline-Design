@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 
 use crate::model::{
     formats::mesh_data,
@@ -22,10 +22,10 @@ const WINDOW_HALF: i64 = 2;
 
 /// How far a coordinate may sit from a whole number of spacings and still
 /// be a node, as a fraction of the spacing.
-const NODE_TOLERANCE: f64 = 1e-6;
+pub(crate) const NODE_TOLERANCE: f64 = 1e-6;
 
 /// Heights two vertices at one node may differ by, in metres.
-const HEIGHT_TOLERANCE: f64 = 1e-6;
+pub(crate) const HEIGHT_TOLERANCE: f64 = 1e-6;
 
 /// Why a surface cannot be read as one regular grid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,25 +82,40 @@ impl GridSurface {
         if cells < 2 || cells * 4 < mesh.face_count() {
             return Err(NotAGrid::NoCells);
         }
-        let offset = DVec2::new(corner.x - spacing * (corner.x / spacing).floor(), corner.y - spacing * (corner.y / spacing).floor());
+        // The leg is only as exact as the coordinates, about a unit in the
+        // last place of the largest one, so counted from the corner a node
+        // may drift that much further off for every spacing.
+        let reach = vertices.iter().fold(0.0_f64, |reach, vertex| reach.max(vertex.x.abs()).max(vertex.y.abs()));
+        let drift = 4.0 * f64::EPSILON * reach / spacing;
         let index_of = |at: DVec2| -> Option<[i64; 2]> {
-            let local = (at - offset) / spacing;
+            let local = (at - corner) / spacing;
             let rounded = local.round();
-            ((local - rounded).abs().max_element() <= NODE_TOLERANCE).then_some([rounded.x as i64, rounded.y as i64])
+            let tolerance = (NODE_TOLERANCE + drift * (1.0 + rounded.abs().max_element())).min(0.1);
+            ((local - rounded).abs().max_element() <= tolerance).then_some([rounded.x as i64, rounded.y as i64])
         };
-        let found: Vec<([i64; 2], f64)> = vertices
+        let found: Vec<([i64; 2], DVec2, f64)> = vertices
             .iter()
-            .filter_map(|vertex| index_of(DVec2::new(vertex.x, vertex.y)).map(|index| (index, vertex.z)))
+            .filter_map(|vertex| {
+                let at = DVec2::new(vertex.x, vertex.y);
+                index_of(at).map(|index| (index, at - corner, vertex.z))
+            })
             .collect();
-        let low = found.iter().fold([i64::MAX; 2], |low, (index, _)| [low[0].min(index[0]), low[1].min(index[1])]);
-        let high = found.iter().fold([i64::MIN; 2], |high, (index, _)| [high[0].max(index[0]), high[1].max(index[1])]);
+        // The spacing made exact from the node furthest from the corner.
+        let spacing = found
+            .iter()
+            .flat_map(|&(index, along, _)| [(index[0], along.x), (index[1], along.y)])
+            .filter(|&(steps, _)| steps != 0)
+            .max_by_key(|&(steps, _)| steps.unsigned_abs())
+            .map_or(spacing, |(steps, along)| along / steps as f64);
+        let low = found.iter().fold([i64::MAX; 2], |low, (index, ..)| [low[0].min(index[0]), low[1].min(index[1])]);
+        let high = found.iter().fold([i64::MIN; 2], |high, (index, ..)| [high[0].max(index[0]), high[1].max(index[1])]);
         let columns = usize::try_from(high[0] - low[0] + 1).map_err(|_| NotAGrid::NoCells)?;
         let rows = usize::try_from(high[1] - low[1] + 1).map_err(|_| NotAGrid::NoCells)?;
         let count = columns.checked_mul(rows).filter(|&count| count <= NODE_BUDGET).ok_or(NotAGrid::TooLarge)?;
         let mut heights = Vec::new();
         heights.try_reserve_exact(count).map_err(|_| NotAGrid::TooLarge)?;
         heights.resize(count, f64::NAN);
-        for (index, z) in found {
+        for (index, _, z) in found {
             let slot = (index[1] - low[1]) as usize * columns + (index[0] - low[0]) as usize;
             let height = &mut heights[slot];
             if height.is_nan() {
@@ -110,7 +125,7 @@ impl GridSurface {
             }
         }
         Ok(Self {
-            origin: offset + DVec2::new(low[0] as f64, low[1] as f64) * spacing,
+            origin: corner + DVec2::new(low[0] as f64, low[1] as f64) * spacing,
             spacing,
             columns,
             rows,
@@ -122,6 +137,11 @@ impl GridSurface {
 
     pub(crate) fn spacing(&self) -> f64 {
         self.spacing
+    }
+
+    /// The first node, lowest x and y, and the node columns and rows.
+    pub(crate) fn lattice(&self) -> (DVec2, usize, usize) {
+        (self.origin, self.columns, self.rows)
     }
 
     pub(crate) fn mesh(&self) -> &mesh_data::Triangulation {
@@ -137,6 +157,9 @@ impl GridSurface {
 
     /// The column and row of the node at `at`, when `at` is one.
     pub(crate) fn node_at(&self, at: DVec2) -> Option<(usize, usize)> {
+        if !at.is_finite() {
+            return None;
+        }
         let local = (at - self.origin) / self.spacing;
         let rounded = local.round();
         if (local - rounded).abs().max_element() > NODE_TOLERANCE || rounded.min_element() < 0.0 {
@@ -167,7 +190,7 @@ impl GridSurface {
     /// Height at `at` read bilinearly off the four nodes of the lattice cell
     /// under it, when the surface has all four.
     pub(crate) fn bilinear(&self, at: DVec2) -> Option<f64> {
-        if self.columns < 2 || self.rows < 2 {
+        if self.columns < 2 || self.rows < 2 || !at.is_finite() {
             return None;
         }
         let local = (at - self.origin) / self.spacing;
@@ -274,6 +297,76 @@ impl GridSurface {
             }
         }
         None
+    }
+}
+
+/// The height of `mesh` at `point` where it gives one: `None` off its
+/// triangles and where sheets stacked there differ by more than
+/// `HEIGHT_TOLERANCE`. Faces upright in plan give none.
+pub(crate) fn surface_z_single(mesh: &mesh_data::Triangulation, spatial: &TriangleBvh, stack: &mut Vec<usize>, point: DVec2) -> Option<f64> {
+    let SurfaceAt::At(z) = surface_at(mesh, spatial, stack, point) else { return None };
+    Some(z)
+}
+
+/// What a surface gives at one point in plan.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum SurfaceAt {
+    /// No triangle of the surface lies over the point.
+    Beyond,
+    /// One height, sheets touching there within `HEIGHT_TOLERANCE`.
+    At(f64),
+    /// Two or more heights, the lowest and the highest: the surface folds
+    /// over itself or stands upright there.
+    Folded { lowest: f64, highest: f64 },
+}
+
+/// The surface at `point`, telling where it ends from where it folds.
+/// Faces upright in plan are passed over. Only the faces holding the point,
+/// edges and corners included, are compared, each on its own plane: a face
+/// beside a crease is not read on its plane carried past the edge. Where no
+/// face holds it, one height is read: at the nearest edge point of the faces
+/// within the plan tolerance, the face first in the mesh on a tie.
+pub(crate) fn surface_at(mesh: &mesh_data::Triangulation, spatial: &TriangleBvh, stack: &mut Vec<usize>, point: DVec2) -> SurfaceAt {
+    // The lowest and highest height of the faces holding the point; and of
+    // the faces only near it, the nearest point's squared distance, face and
+    // height.
+    let mut held: Option<(f64, f64)> = None;
+    let mut near: Option<(f64, usize, f64)> = None;
+    spatial.for_each_xy_bounds_candidate_index_with_stack(point, point, stack, |face| {
+        let Some(corners) = mesh.face_vertex_indices(face) else {
+            return;
+        };
+        let [a, b, c] = corners.map(|index| {
+            let vertex = mesh.vertices()[index];
+            DVec3::new(vertex.x, vertex.y, vertex.z)
+        });
+        let (along, across) = (b - a, c - a);
+        let normal = along.cross(across);
+        if normal.z.abs() <= f64::EPSILON * along.truncate().length() * across.truncate().length() {
+            return;
+        }
+        let plan = [a, b, c].map(DVec3::truncate);
+        let height = |at: DVec2| a.z - (normal.x * (at.x - a.x) + normal.y * (at.y - a.y)) / normal.z;
+        let sides = [0, 1, 2].map(|at| kernel::orient2d(plan[at], plan[(at + 1) % 3], point));
+        if sides.iter().all(|side| *side >= 0.0) || sides.iter().all(|side| *side <= 0.0) {
+            let z = height(point);
+            held = Some(held.map_or((z, z), |(lowest, highest)| (lowest.min(z), highest.max(z))));
+        } else if matches!(kernel::point_in_polyline(point, plan), PolyContainment::OnBoundary) {
+            let nearest = [0, 1, 2]
+                .map(|at| kernel::project_onto_segment(point, plan[at], plan[(at + 1) % 3]).0)
+                .into_iter()
+                .fold(plan[0], |best, edge| if edge.distance_squared(point) < best.distance_squared(point) { edge } else { best });
+            let distance = nearest.distance_squared(point);
+            if near.is_none_or(|(least, first, _)| (distance, face) < (least, first)) {
+                near = Some((distance, face, height(nearest)));
+            }
+        }
+    });
+    match (held, near) {
+        (Some((lowest, highest)), _) if highest - lowest <= HEIGHT_TOLERANCE => SurfaceAt::At(lowest),
+        (Some((lowest, highest)), _) => SurfaceAt::Folded { lowest, highest },
+        (None, Some((.., z))) => SurfaceAt::At(z),
+        (None, None) => SurfaceAt::Beyond,
     }
 }
 

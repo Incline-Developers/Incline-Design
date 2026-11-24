@@ -1,7 +1,8 @@
 //! Thickness points and thickness surfaces, the App side: the surface a run
 //! measures against, the seam, holes and measured pairs it reads, and the
 //! point layer, table, saved values and report it leaves; then the seam's
-//! other surface from the latest run.
+//! other surface from the latest run. Beside them, the misfit of a prismoid
+//! grid at the same picks.
 //!
 //! The reference surface is read off its own grid, so a surface from a
 //! saved project works as well as one built this session. The seam a
@@ -15,18 +16,29 @@ use anyhow::{Context, Result};
 use crate::{
     app::{
         App,
-        commands::triangulation::reference_surface::seam::{self, RunProblem, SeamGrid, ThicknessRunRecord, ThicknessSample},
+        commands::{
+            session_results::RunReads,
+            triangulation::{
+                CONTOUR_LABEL_HEIGHT,
+                reference_surface::seam::{self, HolesRead, RunProblem, SeamGrid, ThicknessRunRecord, ThicknessSample},
+                session::refuse_quality,
+            },
+        },
         jobs::CancelFlag,
     },
     i18n::tr,
     model::{
-        Command, LayerId, SceneEntityId,
+        Command, Document, ItemRef, Layer, LayerId, Object, ObjectColor, ObjectId, SceneEntityId, SectionKind,
         drill_hole::{DrillHoleId, DrillHoleRef, OpenDrillHoleDataset, ReferenceSide, ReferenceTarget},
         grid_surface::{GridSurface, NotAGrid},
-        thickness_points::{self, ColumnClash, Intercept, InterceptSource, LeftOut, LeftOutReason, PairsError, ThicknessRun},
-        triangulation::{GeneratedTriangulation, TriangulationId},
+        prismoid_grid::{PrismoidGrid, PrismoidGridId},
+        project::unique_item_name,
+        thickness_points::{self, ColumnClash, Intercept, InterceptSource, LeftOut, LeftOutReason, MisfitQuality, MisfitRow, PairsError, ThicknessRun},
+        triangulation::{GeneratedTriangulation, QualityMark, TriangulationId},
     },
-    ui::state::{GridCheck, PairsFile, SeamChoice, SeamSurfaceDraft, SeamTable, ThicknessPointsDraft, ThicknessTable, TriSurfaceType},
+    ui::state::{
+        GridCheck, HoleMisfitDraft, HoleMisfitTable, HoleMisfitUnit, PairsFile, SeamChoice, SeamSurfaceDraft, SeamTable, ThicknessPointsDraft, ThicknessTable, TriSurfaceType,
+    },
     userspace_log, userspace_warn,
 };
 
@@ -83,7 +95,7 @@ pub(crate) struct ReferenceSeam {
 /// the worker never sees the project.
 struct SurfaceRead {
     name: String,
-    revision: u64,
+    geometry: crate::model::triangulation::GeometryVersion,
     mesh: Arc<crate::model::formats::mesh_data::Triangulation>,
     spatial: Arc<crate::model::spatial::TriangleBvh>,
 }
@@ -107,6 +119,9 @@ struct Made {
     /// Holes that never hold the section.
     without: usize,
     saved: HoleValues,
+    /// What the run read of every dataset it read, whether its holes held
+    /// the section or not, taken when they were gathered.
+    read: Vec<(DrillHoleId, HolesRead)>,
 }
 
 /// The holes of one dataset gathered for a run: their intercepts, and those
@@ -115,6 +130,13 @@ struct DatasetIntercepts {
     id: DrillHoleId,
     intercepts: Vec<Intercept>,
     left_out: Vec<LeftOut>,
+}
+
+/// One hole's roof and floor of a seam, as `hole_intercept` finds them.
+pub(crate) struct HoleIntercept {
+    pub(crate) hole: DrillHoleRef,
+    pub(crate) dhid: String,
+    pub(crate) found: Option<std::result::Result<Intercept, LeftOut>>,
 }
 
 impl<'a> App<'a> {
@@ -139,36 +161,60 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Open the dialog on the one surface selected, with any holes selected
-    /// beside it, its seam prefilled when the surface was built this
-    /// session.
+    /// Open the dialog on the holes selected, and the one surface selected
+    /// if any; or point the open dialog at the holes, keeping its surface
+    /// and seam.
     pub(crate) fn open_thickness_points(&mut self) {
-        let Some(surface) = self.one_selected_surface() else {
-            return;
-        };
         let mut holes = Vec::new();
         self.for_each_reference_hole(|hole| holes.push(hole));
         holes.sort_unstable_by_key(|hole| (hole.dataset.0, hole.hole));
-        let seam = seam_prefill(self.session.surface_seams.get(&surface), self.editor.last_seam.as_ref());
+        if let Some(draft) = self.editor.thickness_points_dialog.as_mut() {
+            draft.holes = holes;
+            // Read from the holes, so read again.
+            draft.codes = None;
+            return;
+        }
         self.editor.thickness_points_dialog = Some(ThicknessPointsDraft {
-            surface,
-            surface_label: self.triangulation_name(surface),
+            surface: None,
             holes,
-            seam,
+            seam: seam_prefill(None, self.editor.last_seam.as_ref()),
             codes: None,
             pairs: None,
             then_surface: true,
             grid: GridCheck::Checking,
         });
+        if let Some(id) = super::tool_subject::only(&self.selected_triangulations()) {
+            self.set_thickness_surface(id);
+        }
+    }
+
+    /// The seam is prefilled when the surface was built this session, and
+    /// the surface is read as a grid afresh.
+    pub(super) fn set_thickness_surface(&mut self, surface: TriangulationId) {
+        if !self.triangulations.iter().any(|triangulation| triangulation.id == surface && triangulation.state.loaded) {
+            return;
+        }
+        let built_on = self.session.surface_seams.get(&surface).map(|source| seam_prefill(Some(source), None));
+        let Some(draft) = self.editor.thickness_points_dialog.as_mut() else {
+            return;
+        };
+        draft.surface = Some(surface);
+        draft.grid = GridCheck::Checking;
+        if let Some(seam) = built_on {
+            draft.seam = seam;
+        }
         self.check_grid(surface);
     }
 
     /// Read the surface as a grid in the background, so the open dialog can
     /// say whether it can be measured against before Make is pressed.
     fn check_grid(&mut self, surface: TriangulationId) {
-        let Some(read) = self.surface_read(surface) else {
-            self.set_grid_check(surface, GridCheck::Refused(tr!("cmd-thickness-points-surface-gone")));
-            return;
+        let read = match self.surface_read(surface) {
+            Ok(read) => read,
+            Err(reason) => {
+                self.set_grid_check(surface, GridCheck::Refused(reason));
+                return;
+            }
         };
         let key = crate::app::jobs::JobKey::Triangulation(surface);
         let compute = move |_: &CancelFlag| -> Result<GridCheck> {
@@ -185,20 +231,26 @@ impl<'a> App<'a> {
 
     /// Hand a grid check to whichever dialog is open on `surface`.
     fn set_grid_check(&mut self, surface: TriangulationId, check: GridCheck) {
-        if let Some(draft) = self.editor.thickness_points_dialog.as_mut().filter(|draft| draft.surface == surface) {
+        if let Some(draft) = self.editor.thickness_points_dialog.as_mut().filter(|draft| draft.surface == Some(surface)) {
             draft.grid = check.clone();
         }
-        if let Some(draft) = self.editor.seam_surface_dialog.as_mut().filter(|draft| draft.surface == surface) {
+        if let Some(draft) = self.editor.seam_surface_dialog.as_mut().filter(|draft| draft.surface == Some(surface)) {
             draft.grid = check;
         }
     }
 
-    /// The surface's name, revision and geometry, when it is loaded.
-    fn surface_read(&self, surface: TriangulationId) -> Option<SurfaceRead> {
-        let triangulation = self.triangulations.iter().find(|triangulation| triangulation.id == surface && triangulation.state.loaded)?;
-        Some(SurfaceRead {
+    /// The surface's name, geometry version and mesh, when it is loaded and
+    /// in RL; why not, otherwise.
+    fn surface_read(&self, surface: TriangulationId) -> std::result::Result<SurfaceRead, String> {
+        let triangulation = self
+            .triangulations
+            .iter()
+            .find(|triangulation| triangulation.id == surface && triangulation.state.loaded)
+            .ok_or_else(|| tr!("cmd-thickness-points-surface-gone"))?;
+        refuse_quality(&triangulation.name, triangulation.quality.as_ref()).map_err(|error| error.to_string())?;
+        Ok(SurfaceRead {
             name: triangulation.name.clone(),
-            revision: triangulation.state.revision(),
+            geometry: triangulation.geometry,
             mesh: Arc::clone(&triangulation.mesh),
             spatial: Arc::clone(&triangulation.spatial),
         })
@@ -253,43 +305,19 @@ impl<'a> App<'a> {
             runtime_id,
             document_revision: project.project.document.revision(),
         };
-        let read = self.surface_read(surface).with_context(|| tr!("cmd-thickness-points-surface-gone"))?;
-        let holes: Vec<DrillHoleRef> = if holes.is_empty() {
-            self.drill_holes
-                .iter()
-                .filter(|dataset| dataset.state.loaded)
-                .flat_map(|dataset| (0..dataset.dataset.holes.len()).map(|hole| DrillHoleRef { dataset: dataset.id, hole }))
-                .collect()
-        } else {
-            holes
-        };
+        let surface_read = self.surface_read(surface).map_err(anyhow::Error::msg)?;
+        let side = seam.side;
         // Gathered here: one pass over each hole's intervals, and the worker
         // never sees the datasets.
-        let mut involved: Vec<&OpenDrillHoleDataset> = Vec::new();
-        for reference in &holes {
-            if !involved.iter().any(|dataset| dataset.id == reference.dataset)
-                && let Some(dataset) = self.drill_holes.iter().find(|dataset| dataset.id == reference.dataset && dataset.state.loaded)
-            {
-                involved.push(dataset);
-            }
-        }
-        let (codes_by_dataset, _) = super::drill_hole::reference_codes(&involved, &seam.field, &seam.target);
+        let (gathered, missing) = self.hole_intercepts(holes, &seam.field, &seam.target);
+        let mut datasets: Vec<DrillHoleId> = Vec::new();
         let mut groups: Vec<DatasetIntercepts> = Vec::new();
-        let mut without = 0usize;
-        for reference in &holes {
-            let hole = involved
-                .iter()
-                .find(|dataset| dataset.id == reference.dataset)
-                .and_then(|dataset| dataset.dataset.holes.get(reference.hole));
-            let Some(hole) = hole else {
-                without += 1;
-                continue;
-            };
-            let codes = codes_by_dataset
-                .iter()
-                .find(|(id, _)| *id == reference.dataset)
-                .map_or(&[][..], |(_, codes)| codes.as_slice());
-            let Some(found) = thickness_points::hole_intercept(hole, &seam.field, codes) else {
+        let mut without = missing;
+        for HoleIntercept { hole: reference, found, .. } in gathered {
+            if !datasets.contains(&reference.dataset) {
+                datasets.push(reference.dataset);
+            }
+            let Some(found) = found else {
                 without += 1;
                 continue;
             };
@@ -310,15 +338,28 @@ impl<'a> App<'a> {
             }
         }
 
+        // What the run read of each dataset, those that held no section
+        // included: an edit to it while the run computes discards the run.
+        let read: Vec<(DrillHoleId, HolesRead)> = datasets
+            .into_iter()
+            .filter_map(|id| Some((id, self.holes_read_now(id, &seam.field, &seam.target)?)))
+            .collect();
+        let run_number = self.register_run_reads(&seam, &read);
+        let keys = vec![project_key];
         // Measured a dataset at a time, so each hole's value is found by its
         // name within its own dataset when it is saved.
-        let (mesh, spatial, revision, surface_name) = (Arc::clone(&read.mesh), Arc::clone(&read.spatial), read.revision, read.name.clone());
+        let (mesh, spatial, geometry, surface_name) = (
+            Arc::clone(&surface_read.mesh),
+            Arc::clone(&surface_read.spatial),
+            surface_read.geometry,
+            surface_read.name.clone(),
+        );
         let compute = move |cancel: &CancelFlag| -> Result<Made> {
             let fit = GridSurface::read(mesh, spatial).map_err(|problem| anyhow::anyhow!("{}", not_a_grid(&surface_name, problem)))?;
             let mut run = ThicknessRun::default();
             let mut saved = Vec::new();
             for group in groups {
-                let mut measured = thickness_points::thickness_points(group.intercepts, &fit, cancel)?;
+                let mut measured = thickness_points::thickness_points_on(group.intercepts, &fit, side, cancel)?;
                 measured.left_out.splice(0..0, group.left_out);
                 let mut values: Vec<(String, Option<f64>)> = Vec::new();
                 values.extend(
@@ -335,7 +376,7 @@ impl<'a> App<'a> {
             if let Some(file) = pairs {
                 let bytes = pairs_bytes(&file)?;
                 let (pairs, mut rows_left) = thickness_points::read_pairs(&bytes).map_err(|error| anyhow::anyhow!("{}", pairs_error(&file.name, error)))?;
-                let mut measured = thickness_points::thickness_points(pairs, &fit, cancel)?;
+                let mut measured = thickness_points::thickness_points_on(pairs, &fit, side, cancel)?;
                 measured.left_out.append(&mut rows_left);
                 measured.left_out.sort_by_key(|left| match left.source {
                     InterceptSource::Hole { .. } => 0,
@@ -344,31 +385,308 @@ impl<'a> App<'a> {
                 run.points.append(&mut measured.points);
                 run.left_out.append(&mut measured.left_out);
             }
-            Ok(Made { run, without, saved })
+            Ok(Made { run, without, saved, read })
         };
-        let against = (surface, revision);
-        let apply = move |app: &mut App, result: Result<Made>| match result {
-            Ok(made) => {
-                if app.finish_thickness_points(runtime_id, made, against, read.name, seam) && then_surface {
-                    // Only after a run that applied: the surface job reads it.
-                    if let Err(error) = app.make_seam_surface(against.0) {
-                        userspace_warn!("{}", format!("{error:#}"));
+        let against = (surface, geometry);
+        let apply = move |app: &mut App, result: Result<Made>| {
+            // What an unload meanwhile brought up to date replaces what was read.
+            let reads = app.take_run_reads(run_number);
+            let result = result.map(|mut made| {
+                if let Some(holes) = reads {
+                    made.read = holes;
+                }
+                made
+            });
+            match result {
+                Ok(made)
+                    if !made.read.iter().all(|(dataset, holes)| {
+                        (app.holes_in_memory(*dataset) || !made.saved.iter().any(|(saved, _)| saved == dataset)) && app.holes_as_read(*dataset, holes, &seam.field, &seam.target)
+                    }) =>
+                {
+                    userspace_log!("{}", tr!("jobs-discarded-stale-result", poll_label = tr!("cmd-thickness-points-making")));
+                }
+                Ok(made) => {
+                    if app.finish_thickness_points(runtime_id, made, against, surface_read.name, seam) && then_surface {
+                        // Only after a run that applied: the surface job reads it.
+                        if let Err(error) = app.make_seam_surface(against.0) {
+                            userspace_warn!("{}", format!("{error:#}"));
+                        }
                     }
                 }
+                Err(error) if !crate::app::jobs::is_cancelled(&error) => crate::userspace_error!("{}", tr!("cmd-thickness-points-failed", error = format!("{error:#}"))),
+                Err(_) => {}
             }
-            Err(error) => crate::userspace_error!("{}", tr!("cmd-thickness-points-failed", error = format!("{error:#}"))),
         };
-        self.spawn_job(tr!("cmd-thickness-points-making"), vec![project_key], compute, apply);
+        self.spawn_job(tr!("cmd-thickness-points-making"), keys, compute, apply);
         Ok(())
     }
 
-    /// Report a run, lay its points down as a new layer at their roofs with
+    /// Each of `holes` (none: every loaded hole) with the seam's roof and
+    /// floor on its trace, in order, and how many are no longer loaded.
+    pub(crate) fn hole_intercepts(&self, holes: Vec<DrillHoleRef>, field: &str, target: &ReferenceTarget) -> (Vec<HoleIntercept>, usize) {
+        let holes: Vec<DrillHoleRef> = if holes.is_empty() {
+            self.drill_holes
+                .iter()
+                .filter(|dataset| dataset.state.loaded)
+                .flat_map(|dataset| (0..dataset.dataset.holes.len()).map(|hole| DrillHoleRef { dataset: dataset.id, hole }))
+                .collect()
+        } else {
+            holes
+        };
+        let mut involved: Vec<&OpenDrillHoleDataset> = Vec::new();
+        for reference in &holes {
+            if !involved.iter().any(|dataset| dataset.id == reference.dataset)
+                && let Some(dataset) = self.drill_holes.iter().find(|dataset| dataset.id == reference.dataset && dataset.state.loaded)
+            {
+                involved.push(dataset);
+            }
+        }
+        let (codes_by_dataset, _) = super::drill_hole::reference_codes(&involved, field, target);
+        let mut gathered = Vec::new();
+        let mut missing = 0;
+        for reference in holes {
+            let Some(hole) = crate::ui::dialogs::reference_points::hole_of(&involved, reference) else {
+                missing += 1;
+                continue;
+            };
+            let codes = codes_by_dataset
+                .iter()
+                .find(|(id, _)| *id == reference.dataset)
+                .map_or(&[][..], |(_, codes)| codes.as_slice());
+            gathered.push(HoleIntercept {
+                hole: reference,
+                dhid: hole.dhid.clone(),
+                found: thickness_points::hole_intercept(hole, field, codes),
+            });
+        }
+        (gathered, missing)
+    }
+
+    /// Open Misfit at Holes on the holes and quality points selected, and
+    /// the one prismoid grid selected if any; or point the open dialog at
+    /// the holes and points, keeping its grid and seam.
+    pub(crate) fn open_hole_misfit(&mut self) {
+        let mut holes = Vec::new();
+        self.for_each_reference_hole(|hole| holes.push(hole));
+        holes.sort_unstable_by_key(|hole| (hole.dataset.0, hole.hole));
+        let (quality_points, layers) = self.selected_quality_points();
+        let qualities_label = if layers.is_empty() {
+            tr!("hole-misfit-qualities-none")
+        } else {
+            let layer = |(_, name, count): &(LayerId, String, usize)| tr!("hole-misfit-qualities-layer", layer = name.clone(), count = count.to_string());
+            layers.iter().map(layer).collect::<Vec<_>>().join(", ")
+        };
+        if let Some(draft) = self.editor.hole_misfit_dialog.as_mut() {
+            draft.holes = holes;
+            draft.quality_points = quality_points;
+            draft.qualities_label = qualities_label;
+            // Read from the holes, so read again.
+            draft.codes = None;
+            return;
+        }
+        self.editor.hole_misfit_dialog = Some(HoleMisfitDraft {
+            grid: None,
+            holes,
+            quality_points,
+            qualities_label,
+            seam: SeamChoice::default(),
+            codes: None,
+        });
+        if let Some(id) = super::tool_subject::only(&self.selected_prismoid_grids()) {
+            self.set_misfit_grid(id);
+        }
+    }
+
+    /// The seam is offered afresh from the grid's name.
+    pub(super) fn set_misfit_grid(&mut self, id: PrismoidGridId) {
+        let Some(category) = self
+            .prismoid_grids
+            .iter()
+            .find(|item| item.id == id && item.state.loaded)
+            .map(|item| item.category().to_owned())
+        else {
+            return;
+        };
+        let holes = self.editor.hole_misfit_dialog.as_ref().map(|draft| draft.holes.clone()).unwrap_or_default();
+        let seam = self.misfit_seam(&category, &holes);
+        if let Some(draft) = self.editor.hole_misfit_dialog.as_mut() {
+            draft.grid = Some(id);
+            draft.seam = seam;
+            draft.codes = None;
+        }
+    }
+
+    /// The selected points on quality-marked layers, and each such layer
+    /// with its name and how many of them it holds, in document order.
+    fn selected_quality_points(&self) -> (Vec<ObjectId>, Vec<(LayerId, String, usize)>) {
+        quality_points_in(&self.scene_document, &self.editor.selected_handles)
+    }
+
+    /// The seam a grid named `category` models, set only where that name is
+    /// exactly a working section or a code the holes log in one field alone;
+    /// else none.
+    fn misfit_seam(&self, category: &str, holes: &[DrillHoleRef]) -> SeamChoice {
+        use crate::ui::dialogs::reference_points::{categorical_fields, hole_of, logged_codes, logged_sections, seam_preset};
+        let involved: Vec<&OpenDrillHoleDataset> = self
+            .drill_holes
+            .iter()
+            .filter(|dataset| dataset.state.loaded && (holes.is_empty() || holes.iter().any(|hole| hole.dataset == dataset.id)))
+            .collect();
+        let mut found = categorical_fields(&involved).into_iter().filter_map(|field| {
+            let codes = if holes.is_empty() {
+                logged_codes(involved.iter().flat_map(|dataset| dataset.dataset.holes.iter()), &field.key)
+            } else {
+                logged_codes(holes.iter().filter_map(|reference| hole_of(&involved, *reference)), &field.key)
+            };
+            let target = seam_preset(category, &logged_sections(&involved, &field.key, &codes), &codes)?;
+            Some((field.key.clone(), target))
+        });
+        // The name in two fields does not say which is the seam's.
+        match (found.next(), found.next()) {
+            (Some((field, target)), None) => SeamChoice {
+                field: Some(field),
+                value: Some(target),
+                side: ReferenceSide::default(),
+            },
+            _ => SeamChoice::default(),
+        }
+    }
+
+    /// List `grid` less the seam's picks at `holes` and less the values of
+    /// `quality_points`, and show the table. Without a seam no hole is read.
+    pub(crate) fn misfit_at_holes(&mut self, grid: PrismoidGridId, holes: Vec<DrillHoleRef>, quality_points: &[ObjectId], seam: Option<&(String, ReferenceTarget)>) -> Result<()> {
+        let (source, grid_name) = self
+            .prismoid_grids
+            .iter()
+            .find(|item| item.id == grid && item.state.loaded)
+            .map(|item| (Arc::clone(&item.grid), item.name.clone()))
+            .with_context(|| tr!("cmd-hole-misfit-grid-gone"))?;
+        let (gathered, gone_holes) = seam.map_or_else(|| (Vec::new(), 0), |(field, target)| self.hole_intercepts(holes, field, target));
+        let hole_count = gathered.len();
+        let holes = gathered.into_iter().map(|hole| (hole.dhid, hole.found)).collect();
+        let (qualities, gone_points) = self.misfit_qualities(quality_points);
+        let rows = thickness_points::misfit_at_holes(&source, holes, &qualities, &CancelFlag::default())?;
+        let totals = thickness_points::misfit_totals(&rows, qualities.len());
+        let units = misfit_units(&source, &grid_name, &qualities);
+        let seam = crate::ui::state::misfit_seam_label(seam.map(|(_, target)| target));
+        let compared = rows.iter().filter(|row| row.result.is_ok()).count();
+        userspace_log!(
+            "{}",
+            tr!(
+                "cmd-hole-misfit-made",
+                grid = grid_name.clone(),
+                seam = seam.clone(),
+                holes = hole_count.to_string(),
+                compared = compared.to_string(),
+                not = (rows.len() - compared).to_string()
+            )
+        );
+        for total in totals.iter().filter(|total| total.compared > 0) {
+            let (Some(mean), Some((largest, row))) = (total.mean, total.largest) else {
+                continue;
+            };
+            let unit = &units[total.measure.slot()];
+            userspace_log!(
+                "{}",
+                tr!(
+                    "cmd-hole-misfit-measure",
+                    measure = unit.total_name.clone(),
+                    count = total.compared.to_string(),
+                    mean = with_unit(mean, &unit.unit),
+                    largest = with_unit(largest, &unit.unit),
+                    source = rows[row].source.clone()
+                )
+            );
+        }
+        if compared == 0 {
+            userspace_log!("{}", tr!("cmd-hole-misfit-none", grid = grid_name.clone()));
+        }
+        let not_read = (gone_holes + gone_points > 0).then(|| tr!("cmd-hole-misfit-not-read", holes = gone_holes.to_string(), points = gone_points.to_string()));
+        if let Some(not_read) = &not_read {
+            userspace_log!("{}", not_read);
+        }
+        let fingerprint = misfit_fingerprint(&rows, &units);
+        let table = Arc::new(HoleMisfitTable {
+            grid: grid_name,
+            seam,
+            rows,
+            totals,
+            units,
+            not_read,
+            fingerprint,
+        });
+        self.map_misfit(&table);
+        self.editor.hole_misfit_table = Some(table);
+        Ok(())
+    }
+
+    /// Lay a run's compared rows down as labelled point layers in one undo
+    /// step, each layer keyed to the run's table for the session.
+    fn map_misfit(&mut self, table: &Arc<HoleMisfitTable>) {
+        let Some(project) = self.workspace.active_project_mut() else {
+            return;
+        };
+        let runtime_id = project.runtime_id;
+        let (commands, made) = misfit_layers(&mut project.project.document, table);
+        if commands.is_empty() {
+            return;
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.invalidate_geometry();
+        for (layer, _) in &made {
+            self.session.misfit_tables.insert((runtime_id, *layer), Arc::clone(table));
+        }
+        let layers = made.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>().join(", ");
+        userspace_log!("{}", tr!("cmd-hole-misfit-layers-made", count = made.len().to_string(), layers = layers));
+    }
+
+    /// The quality points named, one entry per layer in document order, and
+    /// how many are gone or on a layer that lost its mark.
+    fn misfit_qualities(&self, ids: &[ObjectId]) -> (Vec<MisfitQuality>, usize) {
+        let wanted: std::collections::HashSet<ObjectId> = ids.iter().copied().collect();
+        let document = &self.scene_document;
+        let mut read = 0;
+        let mut qualities: Vec<(LayerId, MisfitQuality)> = Vec::new();
+        for object in document.objects() {
+            let Object::Point { id, layer, pos, .. } = object else {
+                continue;
+            };
+            if !wanted.contains(id) {
+                continue;
+            }
+            let Some((name, mark)) = document.layer(*layer).and_then(|marked| Some((marked.name.clone(), marked.quality.clone()?))) else {
+                continue;
+            };
+            read += 1;
+            match qualities.iter_mut().find(|(seen, _)| seen == layer) {
+                Some((_, quality)) => quality.points.push(*pos),
+                None => qualities.push((
+                    *layer,
+                    MisfitQuality {
+                        layer: name,
+                        mark,
+                        points: vec![*pos],
+                    },
+                )),
+            }
+        }
+        (qualities.into_iter().map(|(_, quality)| quality).collect(), wanted.len().saturating_sub(read))
+    }
+
+    /// Report a run, lay its points down as a new layer on the chosen side with
     /// their table kept beside it, and save each hole's value to its dataset,
     /// all as one undo step. The points are kept as the surface's latest run,
-    /// with the revision they were measured against, for its thickness grid.
+    /// with the geometry they were measured against, for its thickness grid.
     /// Whether the run made any points.
-    fn finish_thickness_points(&mut self, runtime_id: u32, made: Made, against: (TriangulationId, u64), surface: String, chosen: ReferenceSeam) -> bool {
-        let Made { run, without, saved } = made;
+    fn finish_thickness_points(
+        &mut self,
+        runtime_id: u32,
+        made: Made,
+        against: (TriangulationId, crate::model::triangulation::GeometryVersion),
+        surface: String,
+        chosen: ReferenceSeam,
+    ) -> bool {
+        let Made { run, without, saved, read } = made;
         let (seam, field, target) = (chosen.target.name(), chosen.field.as_str(), &chosen.target);
         if self.workspace.active_project().is_none_or(|project| project.runtime_id != runtime_id) {
             userspace_warn!("{}", tr!("cmd-thickness-points-project-changed"));
@@ -395,6 +713,7 @@ impl<'a> App<'a> {
                 elevation: 0.0,
                 folder: None,
                 section: crate::model::SectionKind::Designs,
+                quality: None,
             };
             let objects: Vec<crate::model::Object> = run
                 .points
@@ -402,15 +721,29 @@ impl<'a> App<'a> {
                 .map(|point| crate::model::Object::Point {
                     id: document.allocate_object_id(),
                     layer: layer_id,
-                    pos: point.roof,
+                    pos: thickness_points::picked(point.roof, point.floor, chosen.side),
                     color: crate::model::ObjectColor::ByLayer,
                 })
                 .collect();
             commands.insert(0, Command::AddLayerSnapshot { layer, objects });
         }
         if !commands.is_empty() {
+            let before = self.dataset_epochs(saved.iter().map(|(id, _)| *id));
             self.execute_edit(Command::Batch(commands));
             self.invalidate_geometry();
+            // This save only writes the thickness column, which no run reads,
+            // so runs current before it stay current while their sets are
+            // unloaded too.
+            let after = self.dataset_epochs(saved.iter().map(|(id, _)| *id));
+            for record in self.session.thickness_runs.values_mut() {
+                for (dataset, holes) in &mut record.holes {
+                    if let (Some(old), Some(new)) = (before.iter().find(|(id, _)| id == dataset), after.iter().find(|(id, _)| id == dataset))
+                        && holes.epoch == old.1
+                    {
+                        holes.epoch = new.1;
+                    }
+                }
+            }
         }
         userspace_log!(
             "{}",
@@ -445,7 +778,18 @@ impl<'a> App<'a> {
                 Err(line) => userspace_warn!("{}", line),
             }
         }
-        self.session.thickness_runs.insert(against.0, run_record(against.1, name.clone(), &chosen, &run.points));
+        let mut record = run_record(against.1, name.clone(), &chosen, &run.points);
+        // After the save above, which is this run's own edit of the datasets;
+        // a set unloaded meanwhile took no column, and keeps what was read of it.
+        record.holes = read
+            .into_iter()
+            .map(|(id, gathered)| (id, self.holes_read_now(id, field, target).unwrap_or(gathered)))
+            .collect();
+        self.session.thickness_runs.insert(against.0, record);
+        // A Thickness Surfaces dialog open on the surface reads its run anew.
+        if self.editor.seam_surface_dialog.as_ref().is_some_and(|draft| draft.surface == Some(against.0)) {
+            self.set_seam_surface(against.0);
+        }
         // The surface stays the selection, so Thickness Surfaces is ready.
         self.select_only([SceneEntityId::Triangulation(against.0)]);
         let Some(layer) = made_layer else {
@@ -459,6 +803,81 @@ impl<'a> App<'a> {
         });
         self.session.thickness_tables.insert((runtime_id, layer), table);
         true
+    }
+
+    /// The epoch of each of `datasets` that is still open.
+    fn dataset_epochs(&self, datasets: impl Iterator<Item = DrillHoleId>) -> Vec<(DrillHoleId, u64)> {
+        datasets.filter_map(|id| Some((id, self.project_item_state(ItemRef::DrillHole(id))?.epoch()))).collect()
+    }
+
+    /// What a run of `target` in `field` reads of `dataset` as it stands;
+    /// `None` when it is gone, or its holes are not in memory to read.
+    fn holes_read_now(&self, dataset: DrillHoleId, field: &str, target: &ReferenceTarget) -> Option<HolesRead> {
+        let open = self.drill_holes.iter().find(|open| open.id == dataset && open.state.deferred.is_none())?;
+        Some(HolesRead {
+            stamp: holes_stamp(open, field, target),
+            epoch: open.state.epoch(),
+        })
+    }
+
+    /// Whether set `dataset` is loaded with its holes in memory, so a run's
+    /// values can be saved to it.
+    fn holes_in_memory(&self, dataset: DrillHoleId) -> bool {
+        self.drill_holes.iter().any(|open| open.id == dataset && open.state.loaded && open.state.deferred.is_none())
+    }
+
+    /// Whether `dataset` still holds what a run of `target` in `field` read
+    /// of it: its stamp read again while its holes are in memory, else its
+    /// epoch, which loading and unloading do not move.
+    fn holes_as_read(&self, dataset: DrillHoleId, read: &HolesRead, field: &str, target: &ReferenceTarget) -> bool {
+        self.drill_holes.iter().find(|open| open.id == dataset).is_some_and(|open| match open.state.deferred {
+            None => holes_stamp(open, field, target) == read.stamp,
+            Some(_) => open.state.epoch() == read.epoch,
+        })
+    }
+
+    /// Note what a run starting now read, under a number of its own.
+    fn register_run_reads(&mut self, seam: &ReferenceSeam, read: &[(DrillHoleId, HolesRead)]) -> u64 {
+        let number = self.session.thickness_run_count;
+        self.session.thickness_run_count += 1;
+        let reads = RunReads {
+            field: seam.field.clone(),
+            target: seam.target.clone(),
+            holes: read.to_vec(),
+        };
+        self.session.thickness_reads_in_flight.insert(number, reads);
+        number
+    }
+
+    /// The reads of run `number` as they stand now, which the run no longer
+    /// needs noted.
+    fn take_run_reads(&mut self, number: u64) -> Option<Vec<(DrillHoleId, HolesRead)>> {
+        self.session.thickness_reads_in_flight.remove(&number).map(|reads| reads.holes)
+    }
+
+    /// As set `id` is unloaded, while its holes are still in memory: each run,
+    /// finished or still computing, that read it and still matches them takes
+    /// the set's epoch now, so colours or the eye changed since the run do not
+    /// count against it while the set stays unloaded.
+    pub(crate) fn keep_thickness_runs_through_unload(&mut self, id: DrillHoleId) {
+        let Some(open) = self.drill_holes.iter().find(|open| open.id == id && open.state.deferred.is_none()) else {
+            return;
+        };
+        let epoch = open.state.epoch();
+        for record in self.session.thickness_runs.values_mut() {
+            for (dataset, read) in &mut record.holes {
+                if *dataset == id && holes_stamp(open, &record.field, &record.target) == read.stamp {
+                    read.epoch = epoch;
+                }
+            }
+        }
+        for run in self.session.thickness_reads_in_flight.values_mut() {
+            for (dataset, read) in &mut run.holes {
+                if *dataset == id && holes_stamp(open, &run.field, &run.target) == read.stamp {
+                    read.epoch = epoch;
+                }
+            }
+        }
     }
 
     /// The edits saving a run's hole values to each dataset's true thickness
@@ -507,11 +926,14 @@ impl<'a> App<'a> {
     /// The surface as read, the name of the surface it makes and the
     /// thickness run to grid, or the reason there is none.
     fn seam_surface_input(&self, surface: TriangulationId) -> std::result::Result<SeamInput, String> {
-        let read = self.surface_read(surface).ok_or_else(|| tr!("cmd-thickness-points-surface-gone"))?;
-        let run = seam::current_run(read.revision, self.session.thickness_runs.get(&surface)).map_err(|problem| match problem {
-            RunProblem::Missing => tr!("cmd-seam-surface-no-run", name = read.name.clone()),
-            RunProblem::Stale => tr!("cmd-seam-surface-stale-run", name = read.name.clone()),
-        })?;
+        let read = self.surface_read(surface)?;
+        let run = seam::current_run(read.geometry, self.session.thickness_runs.get(&surface))
+            .and_then(|run| self.holes_as_run_left_them(run).map(|()| run))
+            .map_err(|problem| match problem {
+                RunProblem::Missing => tr!("cmd-seam-surface-no-run", name = read.name.clone()),
+                RunProblem::Stale => tr!("cmd-seam-surface-stale-run", name = read.name.clone()),
+                RunProblem::HolesChanged => tr!("cmd-seam-surface-holes-changed", name = read.name.clone()),
+            })?;
         Ok(SeamInput {
             output: seam_names::surface(&run.seam, seam_names::other(run.side)),
             run: run.name.clone(),
@@ -521,24 +943,73 @@ impl<'a> App<'a> {
         })
     }
 
-    /// Open the thickness surfaces dialog on the one surface selected, or
-    /// say why it cannot make one.
+    /// Whether every dataset of holes `run` read still holds what the run read
+    /// of it, as [`Self::holes_as_read`] judges.
+    fn holes_as_run_left_them(&self, run: &ThicknessRunRecord) -> std::result::Result<(), RunProblem> {
+        seam::current_holes(run, |dataset, read| self.holes_as_read(dataset, read, &run.field, &run.target))
+    }
+
+    /// Whether the open Thickness Surfaces dialog has a surface chosen and
+    /// shows no problem with it.
+    pub(crate) fn seam_surface_dialog_ready(&self) -> bool {
+        self.editor
+            .seam_surface_dialog
+            .as_ref()
+            .is_some_and(|draft| draft.surface.is_some() && draft.problem.is_none())
+    }
+
+    /// After an applied edit, an open Thickness Surfaces dialog that shows why
+    /// it cannot make reads its run anew: the edit may have put the holes or
+    /// the surface back. With `ready`, one that showed none reads it too, as
+    /// the edit may have changed the holes the run read.
+    pub(crate) fn refresh_seam_surface_dialog(&mut self, ready: bool) {
+        if let Some(surface) = self
+            .editor
+            .seam_surface_dialog
+            .as_ref()
+            .filter(|draft| ready || draft.problem.is_some())
+            .and_then(|draft| draft.surface)
+        {
+            self.set_seam_surface(surface);
+        }
+    }
+
+    /// Open the thickness surfaces dialog, on the one surface selected if
+    /// any.
     pub(crate) fn open_seam_surface(&mut self) {
-        let Some(surface) = self.one_selected_surface() else {
+        self.editor.seam_surface_dialog = Some(SeamSurfaceDraft {
+            surface: None,
+            run_label: String::new(),
+            output_label: String::new(),
+            grid: GridCheck::Checking,
+            problem: None,
+        });
+        if let Some(id) = super::tool_subject::only(&self.selected_triangulations()) {
+            self.set_seam_surface(id);
+        }
+    }
+
+    /// The run and the surface made follow the surface chosen, or the
+    /// dialog says why it cannot make one.
+    pub(super) fn set_seam_surface(&mut self, surface: TriangulationId) {
+        let input = self.seam_surface_input(surface);
+        let Some(draft) = self.editor.seam_surface_dialog.as_mut() else {
             return;
         };
-        match self.seam_surface_input(surface) {
+        draft.surface = Some(surface);
+        draft.grid = GridCheck::Checking;
+        match input {
             Ok(input) => {
-                self.editor.seam_surface_dialog = Some(SeamSurfaceDraft {
-                    surface,
-                    surface_label: input.surface.name,
-                    run_label: tr!("cmd-seam-surface-run", name = input.run, count = input.samples.len().to_string()),
-                    output_label: input.output,
-                    grid: GridCheck::Checking,
-                });
+                draft.run_label = tr!("cmd-seam-surface-run", name = input.run, count = input.samples.len().to_string());
+                draft.output_label = input.output;
+                draft.problem = None;
                 self.check_grid(surface);
             }
-            Err(reason) => userspace_warn!("{}", reason),
+            Err(reason) => {
+                draft.run_label.clear();
+                draft.output_label.clear();
+                draft.problem = Some(reason);
+            }
         }
     }
 
@@ -565,8 +1036,7 @@ impl<'a> App<'a> {
             let mut grid = seam::seam_grid(&fit, side, &samples, cancel, progress)?;
             let spacing = fit.spacing();
             let (vertices, faces) = (std::mem::take(&mut grid.vertices), std::mem::take(&mut grid.faces));
-            let generated =
-                super::triangulation::session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
+            let generated = super::triangulation::session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, |_| Vec::new())?;
             Ok((generated, grid, spacing))
         };
         let apply = move |app: &mut App, result: Result<(GeneratedTriangulation, SeamGrid, f64)>| match result {
@@ -603,27 +1073,11 @@ impl<'a> App<'a> {
                     app.session.seam_tables.insert(id, table);
                 }
             }
-            Err(error) => crate::userspace_error!("{}", tr!("cmd-seam-surface-failed", error = format!("{error:#}"))),
+            Err(error) if !crate::app::jobs::is_cancelled(&error) => crate::userspace_error!("{}", tr!("cmd-seam-surface-failed", error = format!("{error:#}"))),
+            Err(_) => {}
         };
         self.spawn_job_reporting_progress(tr!("cmd-seam-surface-making"), vec![project_key], compute, apply);
         Ok(())
-    }
-
-    /// The one loaded surface selected, or `None` with the count said.
-    fn one_selected_surface(&self) -> Option<TriangulationId> {
-        let selected: Vec<TriangulationId> = self
-            .triangulations
-            .iter()
-            .filter(|triangulation| triangulation.state.loaded && self.editor.selected_handles.contains(&SceneEntityId::Triangulation(triangulation.id)))
-            .map(|triangulation| triangulation.id)
-            .collect();
-        match selected[..] {
-            [surface] => Some(surface),
-            _ => {
-                userspace_warn!("{}", tr!("cmd-thickness-points-select-one-surface", count = selected.len().to_string()));
-                None
-            }
-        }
     }
 
     pub(super) fn triangulation_name(&self, id: TriangulationId) -> String {
@@ -649,10 +1103,41 @@ fn seam_prefill(surface: Option<&ReferenceSource>, last: Option<&SeamChoice>) ->
     }
 }
 
+/// A stamp of what a run of `target` in `field` reads of `dataset`: each
+/// hole's name, collar and trace, its intervals with their values in
+/// `field`, and the codes a section of that name stands for there. Colours,
+/// the explorer eye and loading leave it as it was, and an edit undone puts
+/// it back.
+fn holes_stamp(dataset: &OpenDrillHoleDataset, field: &str, target: &ReferenceTarget) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for hole in &dataset.dataset.holes {
+        hole.dhid.hash(&mut hasher);
+        hole.collar.to_array().map(f64::to_bits).hash(&mut hasher);
+        for station in &hole.trace {
+            [station.depth, station.position.x, station.position.y, station.position.z]
+                .map(f64::to_bits)
+                .hash(&mut hasher);
+        }
+        for interval in &hole.intervals {
+            [interval.from, interval.to].map(f64::to_bits).hash(&mut hasher);
+            match interval.values.get(field) {
+                Some(crate::model::drill_hole::DrillValue::Category(code)) => code.hash(&mut hasher),
+                Some(crate::model::drill_hole::DrillValue::Numeric(value)) => value.to_bits().hash(&mut hasher),
+                None => {}
+            }
+        }
+    }
+    if let ReferenceTarget::Section(name) = target {
+        dataset.color.working_section_named(field, name).map(|section| &section.codes).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// A run as its thickness grid takes it: every point's place and true
 /// thickness, the seam, and the side the reference surface passes through,
 /// which decides whether the grid hangs a floor or stacks a roof.
-fn run_record(revision: u64, name: String, chosen: &ReferenceSeam, points: &[thickness_points::ThicknessPoint]) -> ThicknessRunRecord {
+fn run_record(geometry: crate::model::triangulation::GeometryVersion, name: String, chosen: &ReferenceSeam, points: &[thickness_points::ThicknessPoint]) -> ThicknessRunRecord {
     let samples = points
         .iter()
         .map(|point| ThicknessSample {
@@ -660,16 +1145,198 @@ fn run_record(revision: u64, name: String, chosen: &ReferenceSeam, points: &[thi
                 InterceptSource::Hole { dhid, .. } => dhid.clone(),
                 InterceptSource::Measured { id, .. } => id.clone(),
             },
-            at: point.roof.truncate(),
+            at: thickness_points::picked(point.roof, point.floor, chosen.side).truncate(),
             thickness: point.true_thickness,
         })
         .collect();
     ThicknessRunRecord {
-        revision,
+        geometry,
         name,
         seam: chosen.target.name().to_owned(),
         side: chosen.side,
         samples,
+        field: chosen.field.clone(),
+        target: chosen.target.clone(),
+        holes: Vec::new(),
+    }
+}
+
+/// Each misfit measure's names and unit, by slot: metres for the holes,
+/// the grid's unit for a quality it holds, else the points'.
+fn misfit_units(grid: &PrismoidGrid, grid_name: &str, qualities: &[MisfitQuality]) -> Vec<HoleMisfitUnit> {
+    let metres = |name: String| HoleMisfitUnit {
+        total_name: name.clone(),
+        name,
+        unit: tr!("common-m"),
+        note: None,
+    };
+    let mut units = vec![
+        metres(tr!("hole-misfit-measure-roof")),
+        metres(tr!("hole-misfit-measure-floor")),
+        metres(tr!("thickness-points-column-vertical")),
+        metres(tr!("thickness-points-column-true")),
+    ];
+    units.extend(qualities.iter().map(|quality| {
+        // A blank unit on the grid says nothing: the points' own stands.
+        let held = thickness_points::held_quality(grid, &quality.mark.name)
+            .map(|index| grid.cell_values[index].unit.trim().to_owned())
+            .filter(|held| !held.is_empty());
+        let points_unit = quality.mark.unit.trim().to_owned();
+        let note = held.as_ref().filter(|held| !points_unit.is_empty() && **held != points_unit).map(|held| {
+            tr!(
+                "hole-misfit-unit-differs",
+                unit = points_unit.clone(),
+                grid = grid_name.to_owned(),
+                grid_unit = held.clone()
+            )
+        });
+        HoleMisfitUnit {
+            name: quality.mark.name.clone(),
+            total_name: quality.layer.clone(),
+            unit: held.unwrap_or(points_unit),
+            note,
+        }
+    }));
+    units
+}
+
+/// A figure to three places with its unit, or alone where it has none.
+fn with_unit(value: f64, unit: &str) -> String {
+    let number = thickness_points::three_places(value);
+    if unit.is_empty() { number } else { format!("{number} {unit}") }
+}
+
+/// Whether a quality mark is one a misfit map wrote: the mark's own form,
+/// split where the measure goes.
+fn misfit_map_mark() -> impl Fn(&str) -> bool {
+    let form = tr!("hole-misfit-mark", measure = "\u{1}".to_string());
+    let (before, after) = form.split_once('\u{1}').unwrap_or((form.as_str(), ""));
+    let (before, after) = (before.to_owned(), after.to_owned());
+    move |name: &str| name.len() > before.len() + after.len() && name.starts_with(&before) && name.ends_with(&after)
+}
+
+/// How many of `selected` are the quality points [`quality_points_in`]
+/// takes, walking the selection rather than the document.
+pub(super) fn quality_point_count(document: &Document, selected: &std::collections::HashSet<SceneEntityId>) -> usize {
+    let mapped = misfit_map_mark();
+    let marked = |layer: LayerId| document.layer(layer).is_some_and(|layer| layer.quality.as_ref().is_some_and(|mark| !mapped(&mark.name)));
+    selected
+        .iter()
+        .filter(|handle| match handle {
+            SceneEntityId::Object(id) => matches!(document.get_object(*id), Some(Object::Point { layer, .. }) if marked(*layer)),
+            _ => false,
+        })
+        .count()
+}
+
+/// The `selected` points on quality-marked layers, less the layers a misfit
+/// map wrote, and each layer read with its name and count, in document
+/// order.
+fn quality_points_in(document: &Document, selected: &std::collections::HashSet<SceneEntityId>) -> (Vec<ObjectId>, Vec<(LayerId, String, usize)>) {
+    let mapped = misfit_map_mark();
+    let mut points = Vec::new();
+    let mut layers: Vec<(LayerId, String, usize)> = Vec::new();
+    for object in document.objects() {
+        let Object::Point { id, layer, .. } = object else {
+            continue;
+        };
+        if !selected.contains(&SceneEntityId::Object(*id)) {
+            continue;
+        }
+        let Some(marked) = document.layer(*layer).filter(|marked| marked.quality.as_ref().is_some_and(|mark| !mapped(&mark.name))) else {
+            continue;
+        };
+        points.push(*id);
+        match layers.iter_mut().find(|(seen, ..)| seen == layer) {
+            Some((_, _, count)) => *count += 1,
+            None => layers.push((*layer, marked.name.clone(), 1)),
+        }
+    }
+    (points, layers)
+}
+
+/// A number that moves when a run's rows or units show something else.
+fn misfit_fingerprint(rows: &[MisfitRow], units: &[HoleMisfitUnit]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let bits = |value: Option<f64>| value.map(f64::to_bits);
+    for row in rows {
+        let at = row.at.map(|at| (at.x.to_bits(), at.y.to_bits()));
+        (&row.source, row.measure.slot(), at, bits(row.picked), bits(row.model), row.result.map(f64::to_bits)).hash(&mut hasher);
+    }
+    for unit in units {
+        (&unit.name, &unit.unit, &unit.note).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// One Designs layer per measure that compared anything, in slot order: at
+/// each compared row a point at z the difference and that difference as
+/// signed text, set down one text height per slot so the labels at one
+/// hole stand in a column. Quality-marked, so RL tools refuse a surface
+/// built from it.
+pub(crate) fn misfit_layers(document: &mut Document, table: &HoleMisfitTable) -> (Vec<Command>, Vec<(LayerId, String)>) {
+    let mut commands = Vec::new();
+    let mut made: Vec<(LayerId, String)> = Vec::new();
+    for total in table.totals.iter().filter(|total| total.compared > 0) {
+        let slot = total.measure.slot();
+        let Some(unit) = table.units.get(slot) else {
+            continue;
+        };
+        let requested = tr!("cmd-hole-misfit-layer", grid = table.grid.clone(), measure = unit.total_name.clone());
+        let taken = document.layers().iter().map(|layer| layer.name.as_str()).chain(made.iter().map(|(_, name)| name.as_str()));
+        let name = unique_item_name(requested, taken);
+        let id = document.allocate_layer_id();
+        let mut objects = Vec::new();
+        for row in table.rows.iter().filter(|row| row.measure == total.measure) {
+            let (Some(at), Ok(difference)) = (row.at, row.result) else {
+                continue;
+            };
+            let pos = at.extend(difference);
+            objects.push(Object::Point {
+                id: document.allocate_object_id(),
+                layer: id,
+                pos,
+                color: ObjectColor::ByLayer,
+            });
+            objects.push(Object::Text {
+                id: document.allocate_object_id(),
+                layer: id,
+                pos: pos - glam::DVec3::Y * (slot as f64 * CONTOUR_LABEL_HEIGHT),
+                content: signed_label(difference),
+                height: CONTOUR_LABEL_HEIGHT,
+                rotation: 0.0,
+                color: ObjectColor::ByLayer,
+            });
+        }
+        let layer = Layer {
+            id,
+            name: name.clone(),
+            color_index: None,
+            color: [1.0, 1.0, 1.0, 1.0],
+            loaded: true,
+            hidden: false,
+            elevation: 0.0,
+            folder: None,
+            section: SectionKind::Designs,
+            quality: Some(QualityMark {
+                name: tr!("hole-misfit-mark", measure = unit.name.clone()),
+                unit: unit.unit.clone(),
+            }),
+        };
+        commands.push(Command::AddLayerSnapshot { layer, objects });
+        made.push((id, name));
+    }
+    (commands, made)
+}
+
+/// A difference to two places with its sign, and "0.00" when it rounds to
+/// nothing.
+fn signed_label(difference: f64) -> String {
+    let text = format!("{difference:+.2}");
+    match text.strip_prefix(['+', '-']) {
+        Some(unsigned) if unsigned.chars().all(|c| c == '0' || c == '.') => unsigned.to_owned(),
+        _ => text,
     }
 }
 
@@ -693,12 +1360,16 @@ fn pairs_bytes(file: &PairsFile) -> Result<Arc<[u8]>> {
 
 /// Why `name` cannot be read as one regular grid, in words.
 pub(super) fn not_a_grid(name: &str, problem: NotAGrid) -> String {
-    let reason = match problem {
+    tr!("cmd-thickness-not-a-grid", name = name.to_owned(), reason = not_a_grid_reason(problem))
+}
+
+/// Why a surface is not a grid, in words that follow a surface's name.
+pub(super) fn not_a_grid_reason(problem: NotAGrid) -> String {
+    match problem {
         NotAGrid::NoCells => tr!("cmd-thickness-not-a-grid-cells"),
         NotAGrid::TwoHeights => tr!("cmd-thickness-not-a-grid-heights"),
         NotAGrid::TooLarge => tr!("cmd-thickness-not-a-grid-large", budget = crate::model::rbf::NODE_BUDGET.to_string()),
-    };
-    tr!("cmd-thickness-not-a-grid", name = name.to_owned(), reason = reason)
+    }
 }
 
 fn pairs_error(name: &str, error: PairsError) -> String {

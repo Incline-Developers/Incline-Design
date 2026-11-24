@@ -3,9 +3,15 @@
 use glam::{DVec2, DVec3};
 
 use crate::{
-    app::App,
+    app::{App, BackgroundTaskTicket, jobs::JobKey},
     i18n::tr,
-    model::{Command, Document, FillStyle, Layer, Object, ObjectColor, PolyVertex, SectionKind, kernel::XY_TOL, project::unique_item_name, triangulation::OpenTriangulation},
+    model::{
+        Command, Document, FillStyle, Layer, Object, ObjectColor, PolyVertex, SectionKind,
+        kernel::XY_TOL,
+        project::unique_item_name,
+        spatial::TriangleBvh,
+        triangulation::{OpenTriangulation, TriangulationId},
+    },
     rendering::{camera::SectionSlab, scene::section_surface_lines::SurfaceLines},
     ui::state::{ActiveTool, EditorState},
     userspace_log, userspace_warn,
@@ -150,7 +156,7 @@ impl<'a> App<'a> {
             // Squared up first, so the fit measures the section as it will be seen.
             graphics.zoom_to_extents(
                 &self.scene_document,
-                &self.triangulations,
+                crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,
@@ -205,6 +211,10 @@ impl<'a> App<'a> {
         // What is saved is what is drawn: bring the drawn lines up to date,
         // which cuts only if the plane or a surface changed, then save them.
         self.refresh_section_surface_lines();
+        if self.section_surface_lines_waiting() {
+            userspace_warn!("{}", tr!("cmd-slice-surface-lines-still-preparing"));
+            return;
+        }
         let Some(graphics) = self.graphics.as_ref() else {
             return;
         };
@@ -233,16 +243,20 @@ impl<'a> App<'a> {
     /// costs a hash a frame, not a pass over every triangle. A colour change
     /// recolours the cached lines without cutting.
     pub(crate) fn refresh_section_surface_lines(&mut self) {
+        if self.index_surfaces_for_section_lines() {
+            return;
+        }
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
         let slab = graphics.section_slab();
-        let key = section_surface_lines_key(&self.editor, slab, &self.triangulations);
+        let scene = crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene);
+        let key = section_surface_lines_key(&self.editor, slab, scene);
         if key != self.section_surface_lines_key {
             self.section_surface_lines_key = key;
             let mut surfaces = Vec::new();
             if let (Some(_), Some(slab)) = (key, slab) {
-                for triangulation in shown_surfaces(&self.editor, &self.triangulations) {
+                for triangulation in shown_surfaces(&self.editor, scene) {
                     let lines = crate::app::commands::triangulation::section_surface_lines(&triangulation.mesh, &triangulation.spatial, &slab);
                     surfaces.push(SurfaceLines {
                         lines,
@@ -253,11 +267,115 @@ impl<'a> App<'a> {
             self.section_surface_colors = surfaces.iter().map(|surface| surface.color).collect();
             graphics.set_section_surface_lines(surfaces);
         } else if key.is_some() {
-            let shown = || shown_surfaces(&self.editor, &self.triangulations).map(surface_line_color);
+            let shown = || shown_surfaces(&self.editor, scene).map(surface_line_color);
             if !shown().eq(self.section_surface_colors.iter().copied()) {
                 self.section_surface_colors = shown().collect();
                 graphics.recolor_section_surface_lines(self.section_surface_colors.iter().copied());
             }
+        }
+    }
+
+    /// Whether a shown surface of a section that wants lines still has no
+    /// tree to cut with.
+    fn section_surface_lines_waiting(&self) -> bool {
+        let Some(graphics) = self.graphics.as_ref() else {
+            return false;
+        };
+        let scene = crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene);
+        !surfaces_awaiting_tree(&self.editor, graphics.section_slab(), scene).is_empty()
+    }
+
+    /// A big surface has no tree until asked, and building one here would
+    /// hold the frame. When the lines are due a cut and a shown surface has
+    /// none, build them in the background instead, one job a surface, and
+    /// draw nothing until they are there; the finished job asks for a redraw
+    /// and the next refresh cuts. A tree someone else is building is waited
+    /// for, and a status row says so while the frames keep coming. True while
+    /// it waits.
+    fn index_surfaces_for_section_lines(&mut self) -> bool {
+        let Some(graphics) = self.graphics.as_ref() else {
+            self.show_section_lines_wait(&[]);
+            return false;
+        };
+        let scene = crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene);
+        let key = section_surface_lines_key(&self.editor, graphics.section_slab(), scene);
+        if key.is_none() || key == self.section_surface_lines_key {
+            self.show_section_lines_wait(&[]);
+            return false;
+        }
+        let waiting = surfaces_awaiting_tree(&self.editor, graphics.section_slab(), scene);
+        if waiting.is_empty() {
+            self.show_section_lines_wait(&[]);
+            return false;
+        }
+        let waiting_ids: Vec<_> = waiting.iter().map(|(id, _)| *id).collect();
+        self.spawn_surface_index_jobs(waiting);
+        self.show_section_lines_wait(&waiting_ids);
+        // Whatever was drawn belongs to another plane: clear it once, and
+        // forget its key so the same cut asked for later is made again.
+        self.section_surface_lines_key = None;
+        if let Some(graphics) = self.graphics.as_mut()
+            && !graphics.section_surface_lines().is_empty()
+        {
+            self.section_surface_colors.clear();
+            graphics.set_section_surface_lines(Vec::new());
+        }
+        true
+    }
+
+    /// Keeps a status row up while `waiting` holds: begins one when the wait
+    /// starts, ends it when the wait is over, and returns what is shown now.
+    /// The row is withdrawn, not finished: the build it waited on is not ours.
+    pub(crate) fn show_build_wait(&mut self, shown: Option<BackgroundTaskTicket>, waiting: bool, label: impl FnOnce() -> String) -> Option<BackgroundTaskTicket> {
+        match (shown, waiting) {
+            (None, true) => Some(self.begin_reported_task(label()).0),
+            (Some(ticket), false) => {
+                self.cancel_background_task(ticket);
+                None
+            }
+            (shown, _) => shown,
+        }
+    }
+
+    /// Shows the wait in the status bar while a surface in `waiting` has a
+    /// tree a query is building in the background, which has no job row of
+    /// its own.
+    fn show_section_lines_wait(&mut self, waiting: &[TriangulationId]) {
+        if waiting.is_empty() && self.section_lines_wait_shown.is_none() {
+            return;
+        }
+        let quiet = self
+            .triangulations
+            .iter()
+            .any(|surface| waiting.contains(&surface.id) && !surface.spatial.is_built() && !self.job_pending(&JobKey::Triangulation(surface.id)));
+        let shown = self.section_lines_wait_shown.take();
+        self.section_lines_wait_shown = self.show_build_wait(shown, quiet, || tr!("cmd-slice-indexing-surfaces-section-lines"));
+    }
+
+    /// One background build for each surface whose tree no one is building yet.
+    /// A tree another job or a query is already building is waited for, not
+    /// built twice, and another tool's job on a surface does not hold up its
+    /// tree.
+    fn spawn_surface_index_jobs(&mut self, waiting: Vec<(TriangulationId, TriangleBvh)>) {
+        for (id, spatial) in waiting {
+            let Some(claim) = spatial.claim_build() else {
+                continue;
+            };
+            self.spawn_job(
+                tr!("cmd-slice-indexing-surfaces-section-lines"),
+                vec![JobKey::Triangulation(id)],
+                move |_cancel| {
+                    spatial.ensure_built();
+                    drop(claim);
+                    Ok(())
+                },
+                |app, result| {
+                    if let Err(error) = result {
+                        userspace_warn!("{error}");
+                    }
+                    app.redraw_requested = true;
+                },
+            );
         }
     }
 
@@ -288,6 +406,18 @@ impl<'a> App<'a> {
             self.invalidate_overlay();
         }
     }
+}
+
+/// The shown surfaces whose tree is not built yet, with a handle on it, while
+/// the section wants lines drawn: what a cut would otherwise have to build.
+fn surfaces_awaiting_tree(editor: &EditorState, slab: Option<SectionSlab>, triangulations: &[OpenTriangulation]) -> Vec<(TriangulationId, TriangleBvh)> {
+    if section_surface_lines_key(editor, slab, triangulations).is_none() {
+        return Vec::new();
+    }
+    shown_surfaces(editor, triangulations)
+        .filter(|surface| !surface.spatial.is_built())
+        .map(|surface| (surface.id, (*surface.spatial).clone()))
+        .collect()
 }
 
 /// The surfaces a section draws: loaded and not hidden.
@@ -321,6 +451,7 @@ fn section_lines_layer(document: &mut Document, surfaces: &[SurfaceLines]) -> Op
         elevation: 0.0,
         folder: None,
         section: SectionKind::natural_layer(),
+        quality: None,
     };
     let objects = surfaces
         .iter()
@@ -345,8 +476,10 @@ fn section_lines_layer(document: &mut Document, surfaces: &[SurfaceLines]) -> Op
 /// plane. A line that comes back to its start is a ring: saved closed,
 /// without the repeated point.
 fn section_line_string(line: &[DVec3]) -> (Vec<PolyVertex>, bool) {
-    let closed = line.len() >= 4 && line.first().zip(line.last()).is_some_and(|(first, last)| (*first - *last).abs().max_element() < XY_TOL);
-    let points = if closed { &line[..line.len() - 1] } else { line };
+    let returns = line.first().zip(line.last()).is_some_and(|(first, last)| (*first - *last).abs().max_element() < XY_TOL);
+    let closed = line.len() >= 4 && returns;
+    // A line that goes out and straight back is the one segment it covers.
+    let points = if closed || (line.len() == 3 && returns) { &line[..line.len() - 1] } else { line };
     (points.iter().copied().map(PolyVertex::straight).collect(), closed)
 }
 
@@ -361,16 +494,22 @@ pub(crate) fn section_surface_lines_key(editor: &EditorState, slab: Option<Secti
     }
     let slab = slab?;
     let mut hasher = DefaultHasher::new();
-    for value in slab.normal.to_array() {
-        value.to_bits().hash(&mut hasher);
-    }
-    // Where the plane lies, to the micrometre, not where on it the section is
-    // centred: a pan along the plane keeps the lines.
-    ((slab.point.dot(slab.normal) * 1.0e6).round() as i64).hash(&mut hasher);
+    hash_section_plane(&slab, &mut hasher);
     for triangulation in shown_surfaces(editor, triangulations) {
         triangulation.id.hash(&mut hasher);
         triangulation.state.revision().hash(&mut hasher);
         (std::sync::Arc::as_ptr(&triangulation.mesh) as usize).hash(&mut hasher);
     }
     Some(hasher.finish())
+}
+
+/// The section's plane into `hasher`: its normal, and where it lies to the
+/// micrometre, not where on it the section is centred, so a pan along the
+/// plane keeps what was cut.
+pub(crate) fn hash_section_plane(slab: &SectionSlab, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    for value in slab.normal.to_array() {
+        value.to_bits().hash(hasher);
+    }
+    ((slab.point.dot(slab.normal) * 1.0e6).round() as i64).hash(hasher);
 }

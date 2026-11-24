@@ -15,7 +15,7 @@ use crate::{
             WorkingSection, field_codes, offered_codes, section_color_key,
         },
         geophysics::{HoleView, LinkState},
-        strat_order::{FlagKind, FlagLevel, HoleFlag, is_repeat_code},
+        strat_order::{FlagKind, FlagLevel, HoleFlag, flagged_holes, is_repeat_code},
     },
     ui::{
         EditorState,
@@ -192,6 +192,7 @@ fn draw_body(
                 .curves(curve_choice_for(editor, dataset.id, curve_names.unwrap_or_default()))
                 .well_log_style(editor.well_log_style)
                 .guide_depth(guide)
+                .previewing(preview.as_ref().map(|_| hole))
                 .corrections_locked(editor.correction_dialog_open())
                 .show(ui);
             if let Some(style) = output.saved {
@@ -265,13 +266,6 @@ fn current_strat_check<'a>(editor: &'a EditorState, dataset: &OpenDrillHoleDatas
     let report = editor.strat_check(dataset.id, &field.key);
     let current = report.is_some_and(|report| std::ptr::eq(report.checked.as_ptr(), std::sync::Arc::as_ptr(&dataset.dataset)));
     (report, current)
-}
-
-/// How many holes `flags` name; they come sorted by hole.
-fn flagged_holes(flags: &[HoleFlag]) -> usize {
-    let mut holes = flags.iter().map(|flag| flag.hole).collect::<Vec<_>>();
-    holes.dedup();
-    holes.len()
 }
 
 /// The Check section: the button, what the last check found, and when the
@@ -499,6 +493,8 @@ fn draw_strat_column(
         DrillFieldKind::Categorical { categories } => categories,
         _ => &[],
     };
+    let in_set: std::collections::HashSet<&str> = codes.iter().map(String::as_str).collect();
+    let in_column: std::collections::HashSet<&str> = column.iter().map(String::as_str).collect();
     // The runs the log draws, over the whole hole.
     let finite = || hole.intervals.iter().filter(|interval| interval.from.is_finite() && interval.to.is_finite());
     let top = finite().map(|interval| interval.from).fold(f64::INFINITY, f64::min);
@@ -571,7 +567,7 @@ fn draw_strat_column(
                         ui.painter()
                             .rect_filled(swatch, GROUP_CORNER_RADIUS, crate::rendering::color::rgba_to_color32([red, green, blue, 1.0]));
                         let text = format!("{}  {code}", place + 1);
-                        if codes.contains(code) {
+                        if in_set.contains(code.as_str()) {
                             ui.add(egui::Label::new(text).truncate());
                         } else {
                             // Listed by the geologist but held by no interval
@@ -633,10 +629,10 @@ fn draw_strat_column(
     }
     // A repeat (a code with a trailing R beside the code it repeats) and UNK
     // are never offered: the column is the abstract stack.
-    let present = |base: &str| codes.iter().chain(column).any(|code| code == base);
+    let present = |base: &str| in_set.contains(base) || in_column.contains(base);
     let mut missing = codes
         .iter()
-        .filter(|code| !column.contains(code) && code.as_str() != crate::model::drill_hole::UNKNOWN_NAME && !crate::model::strat_order::is_repeat_code(code, present))
+        .filter(|code| !in_column.contains(code.as_str()) && code.as_str() != crate::model::drill_hole::UNKNOWN_NAME && !crate::model::strat_order::is_repeat_code(code, present))
         .collect::<Vec<_>>();
     missing.sort_by(|a, b| crate::natural_sort::natural_cmp(a, b));
     CollapsibleSection::new(
@@ -656,15 +652,21 @@ fn draw_strat_column(
             codes.extend(missing.iter().map(|code| (*code).clone()));
             edited = Some(codes);
         }
-        for code in &missing {
-            MenuField::new(code.as_str()).show(ui, |ui, _, _| {
-                if ui.add(MenuButton::new(tr!("borehole-inspector-add-to-column"))).clicked() {
-                    let mut codes = column.to_vec();
-                    codes.push((*code).clone());
-                    edited = Some(codes);
+        egui::ScrollArea::vertical()
+            .id_salt(("borehole_inspector_missing_scroll", dataset.id))
+            .max_height(FLAG_LIST_HEIGHT)
+            .auto_shrink([false, true])
+            .show_rows(ui, COLUMN_ROW_HEIGHT, missing.len(), |ui, range| {
+                for code in &missing[range] {
+                    MenuField::new(code.as_str()).show(ui, |ui, _, _| {
+                        if ui.add(MenuButton::new(tr!("borehole-inspector-add-to-column"))).clicked() {
+                            let mut codes = column.to_vec();
+                            codes.push((*code).clone());
+                            edited = Some(codes);
+                        }
+                    });
                 }
             });
-        }
     });
     if let Some(codes) = edited {
         commands.push(UiCommand::SetStratColumn {
@@ -897,10 +899,10 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState) {
 /// The strat field chosen for this dataset: the two conditions the log itself
 /// applies, so the picker never names a column the log is not reading.
 fn strat_choice_for(editor: &EditorState, dataset: &OpenDrillHoleDataset) -> Option<String> {
-    let (id, key) = editor.borehole_log_strat_field.as_ref()?;
-    (*id == dataset.id)
-        .then(|| dataset.dataset.field(key))
-        .flatten()
+    let key = editor.borehole_log_strat_field.get(&dataset.id)?;
+    dataset
+        .dataset
+        .field(key)
         .filter(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }))
         .map(|field| field.key.clone())
 }
@@ -937,7 +939,7 @@ fn draw_log_field_pickers(ui: &mut egui::Ui, editor: &mut EditorState, dataset: 
 fn curve_choice_for<'d>(editor: &EditorState, id: DrillHoleId, names: &'d [String]) -> [crate::ui::widgets::log_traces::ColumnCurve<&'d str>; 2] {
     use crate::ui::widgets::log_traces::ColumnCurve;
     let defaults = ColumnCurve::defaults();
-    let Some((_, chosen)) = editor.borehole_log_curves.as_ref().filter(|(chosen_for, _)| *chosen_for == id) else {
+    let Some(chosen) = editor.borehole_log_curves.get(&id) else {
         return defaults;
     };
     let resolve = |chosen: &ColumnCurve<String>, default| match chosen {
@@ -1001,7 +1003,7 @@ fn draw_curve_pickers(ui: &mut egui::Ui, editor: &mut EditorState, id: DrillHole
             .changed();
     }
     if changed {
-        editor.borehole_log_curves = Some((id, chosen.map(|curve| curve.map(str::to_owned))));
+        editor.borehole_log_curves.insert(id, chosen.map(|curve| curve.map(str::to_owned)));
     }
 }
 
@@ -1019,16 +1021,18 @@ fn draw_strat_field_picker(ui: &mut egui::Ui, editor: &mut EditorState, dataset:
         fields
             .iter()
             .filter(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }))
-            .map(|field| (Some((dataset.id, field.key.clone())), field.label.clone().into())),
+            .map(|field| (Some(field.key.clone()), field.label.clone().into())),
     );
-    MenuFieldCombo::new(
-        ("borehole_log_strat_field", dataset.id),
-        tr!("borehole-inspector-strat"),
-        &mut editor.borehole_log_strat_field,
-        selected,
-        options,
-    )
-    .show(ui);
+    let mut chosen = strat_choice_for(editor, dataset);
+    if MenuFieldCombo::new(("borehole_log_strat_field", dataset.id), tr!("borehole-inspector-strat"), &mut chosen, selected, options)
+        .show(ui)
+        .changed()
+    {
+        match chosen {
+            Some(key) => editor.borehole_log_strat_field.insert(dataset.id, key),
+            None => editor.borehole_log_strat_field.remove(&dataset.id),
+        };
+    }
 }
 
 /// A short note above the log for the states between a link existing and its
@@ -1112,7 +1116,7 @@ fn boundary_move_draft(dataset: &OpenDrillHoleDataset, hole_index: usize, pick: 
         },
         above: above.map(describe),
         below: below.map(describe),
-        end: hole.end_depth(),
+        end: data.end_of(hole),
         preview: None,
         previewed: None,
         reason: String::new(),

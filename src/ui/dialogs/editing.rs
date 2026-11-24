@@ -73,6 +73,7 @@ fn canvas_context_menu_title(editor: &EditorState, document: &Document) -> Strin
             SceneEntityId::DrillHole(_) => (tr!("edit-drill-hole"), false),
             SceneEntityId::PointCloud(_) => (tr!("ws-menubar-point-cloud"), false),
             SceneEntityId::Raster(_) => (tr!("ws-menubar-raster"), false),
+            SceneEntityId::PrismoidGrid(_) => (tr!("common-prismoid-grid"), false),
             SceneEntityId::HaulRoad(_) => (tr!("haul-road"), false),
             SceneEntityId::HaulNode(_) => (tr!("haul-node"), false),
         };
@@ -178,7 +179,19 @@ pub(crate) fn draw_right_click_context(
             && let Some(ring) = editor.string_rings.get(index).cloned()
         {
             let editable = |id| editor.ringed_string_editable(id);
-            if ring.joinable() && ring.sides.iter().all(|&(id, _)| editable(id)) && ContextMenuAction::new(tr!("cmd-string-clean-join-here-at-halfway")).show(ui).clicked() {
+            let joined = ring.join_strings();
+            // Where more than two strings meet, the row names every one.
+            let join_label = match ring.join_numbers(&editor.string_numbers) {
+                Some(numbers) => {
+                    let numbers: Vec<String> = numbers.iter().map(usize::to_string).collect();
+                    tr!(
+                        "cmd-string-clean-join-strings-here-at-halfway",
+                        strings = crate::app::commands::string_clean::word_list(&numbers)
+                    )
+                }
+                None => tr!("cmd-string-clean-join-here-at-halfway"),
+            };
+            if ring.joinable() && joined.iter().all(|&id| editable(id)) && ContextMenuAction::new(join_label).show(ui).clicked() {
                 commands.push(UiCommand::JoinHereAtHalfway(index));
                 commands.push(UiCommand::CloseCanvasContextMenu);
             }
@@ -187,11 +200,21 @@ pub(crate) fn draw_right_click_context(
                     continue;
                 };
                 let number = (vertex + 1).to_string();
-                if editable(id) && ContextMenuAction::new(tr!("edit-delete-vertex-number", number = number.clone())).show(ui).clicked() {
+                let (delete, show) = match ring.side_number(&editor.string_numbers, id) {
+                    Some(string) => (
+                        tr!("edit-delete-string-vertex-number", number = number.clone(), string = string.to_string()),
+                        tr!("edit-show-string-vertex-number-in-table", number = number, string = string.to_string()),
+                    ),
+                    None => (
+                        tr!("edit-delete-vertex-number", number = number.clone()),
+                        tr!("edit-show-vertex-number-in-table", number = number),
+                    ),
+                };
+                if editable(id) && ContextMenuAction::new(delete).show(ui).clicked() {
                     commands.push(UiCommand::DeleteRingVertex { id, vertex });
                     commands.push(UiCommand::CloseCanvasContextMenu);
                 }
-                if ContextMenuAction::new(tr!("edit-show-vertex-number-in-table", number = number)).show(ui).clicked() {
+                if ContextMenuAction::new(show).show(ui).clicked() {
                     commands.push(UiCommand::ShowObjectVertex { id, row: vertex });
                     commands.push(UiCommand::CloseCanvasContextMenu);
                 }
@@ -318,6 +341,9 @@ fn draw_recent_function_rows(ui: &mut egui::Ui, editor: &EditorState, project: &
         let mut action = ContextMenuAction::new(row.path()).enabled(row.enabled(project) && row.ready(editor));
         if let Some(checked) = row.checked(editor) {
             action = action.checked(checked);
+        }
+        if let Some(icon) = row.icon(ui) {
+            action = action.icon(icon);
         }
         if action.show(ui).clicked() {
             commands.push(row.command());
@@ -537,6 +563,10 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
 /// Thin Strings: a tolerance typed or slid, the strings as they would be
 /// drawn over the scene, Apply to keep it. Nothing changes until Apply.
 pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(dialog) = editor.thin_strings_dialog.as_mut() else {
         return;
     };
@@ -552,6 +582,15 @@ pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
         .min_width(280.0)
         .max_width(320.0)
         .show(ui.ctx(), |ui| {
+            if menu::picked_selection_field(
+                ui,
+                tr!("context-polylines"),
+                tr!("ui-selected-polylines", count = object_count.to_string()),
+                tr!("edit-thin-polylines-help"),
+                PICKED_FIELD_WIDTH,
+            ) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::Thin));
+            }
             MenuFieldF64::new(tr!("edit-thin-tolerance"), &mut tolerance, 0.0..=f64::MAX)
                 .help_text(tr!("edit-thin-tolerance-help"))
                 .speed(0.01)
@@ -587,7 +626,6 @@ pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                     close = true;
                 }
             });
-            ui.label(tr!("ui-selected-polylines", count = object_count));
         });
 
     if tolerance.is_finite() && tolerance != dialog.tolerance {
@@ -606,6 +644,10 @@ pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
 }
 
 pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(dialog) = editor.insert_point_at_spacing_dialog.as_mut() else {
         return;
     };
@@ -621,6 +663,15 @@ pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mu
         .min_width(280.0)
         .max_width(300.0)
         .show(ui.ctx(), |ui| {
+            if menu::picked_selection_field(
+                ui,
+                tr!("context-polylines"),
+                tr!("ui-selected-polylines", count = object_count.to_string()),
+                tr!("pick-selection-polylines-help"),
+                PICKED_FIELD_WIDTH,
+            ) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::InsertAtSpacing));
+            }
             MenuFieldF64::new(tr!("edit-spacing"), &mut dialog.spacing, 0.001..=f64::MAX)
                 .help_text(tr!("edit-spacing-help"))
                 .width(120.0)
@@ -639,7 +690,6 @@ pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mu
                     close = true;
                 }
             });
-            ui.label(tr!("ui-selected-polylines", count = object_count.to_string()));
         });
 
     // The run closes the dialog only when it succeeds, so a refused spacing
@@ -656,6 +706,10 @@ pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mu
 
 /// Smooth Strings: a tolerance typed, Apply to round the corners.
 pub(crate) fn draw_smooth_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Hidden while its Pick has the viewport.
+    if editor.selection_pick.is_some() {
+        return;
+    }
     let Some(dialog) = editor.smooth_strings_dialog.as_mut() else {
         return;
     };
@@ -671,6 +725,15 @@ pub(crate) fn draw_smooth_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorS
         .min_width(280.0)
         .max_width(300.0)
         .show(ui.ctx(), |ui| {
+            if menu::picked_selection_field(
+                ui,
+                tr!("context-polylines"),
+                tr!("ui-selected-polylines", count = object_count.to_string()),
+                tr!("edit-smooth-polylines-help"),
+                PICKED_FIELD_WIDTH,
+            ) {
+                commands.push(UiCommand::BeginSelectionPick(SelectionPickTool::Smooth));
+            }
             MenuFieldF64::new(tr!("edit-smooth-tolerance"), &mut dialog.tolerance, 0.001..=f64::MAX)
                 .help_text(tr!("edit-smooth-tolerance-help"))
                 .width(120.0)
@@ -689,7 +752,6 @@ pub(crate) fn draw_smooth_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                     close = true;
                 }
             });
-            ui.label(tr!("ui-selected-polylines", count = object_count.to_string()));
         });
 
     // The run closes the dialog only when it succeeds, so a refused
@@ -1800,15 +1862,27 @@ pub(crate) fn draw_fill_segment_panel(ui: &mut egui::Ui, editor: &EditorState, s
 /// Draw the Next Vertex panel beside a string being drawn: a point to add as
 /// typed, and a step from the last vertex by bearing, level distance and dip.
 /// Enter in a field adds from that part; it never finishes the string.
-pub(crate) fn draw_next_vertex_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
+pub(crate) fn draw_next_vertex_panel(ui: &mut egui::Ui, editor: &mut EditorState, has_layer: bool, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
+    use crate::{
+        app::commands::drawing::next_vertex::{along_bearing, next_vertex_blocker, typed_vertex_blocker, wrapped_bearing},
+        ui::widgets::hint::Hint,
+    };
+
     // The panel goes down with the tool that drew it.
     if !matches!(editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly) || !editor.active_workspace.has_drawing_aids() {
         editor.next_vertex_panel = None;
         return;
     }
     let on_section = editor.slice_mode_enabled && editor.active_workspace.edits_in_slice_view();
-    let can_add = !editor.poly_finish_dialog;
-    let can_step = can_add && !editor.pending_stroke.is_empty();
+    // The buttons grey with their reason, from the panel as the last frame
+    // left it. `has_layer`: the active layer exists and draws.
+    let Some((point, bearing, distance, dip)) = editor.next_vertex_panel.as_ref().map(|panel| (panel.point, panel.bearing, panel.distance, panel.dip)) else {
+        return;
+    };
+    let section = editor.next_vertex_panel.as_ref().and_then(|panel| panel.section).filter(|_| on_section);
+    let add_blocker = typed_vertex_blocker(editor, !editor.fly_mode_enabled, has_layer, glam::DVec3::from(point), section.as_ref());
+    let step_to = editor.pending_stroke.last().map(|&last| along_bearing(last, wrapped_bearing(bearing), distance, dip));
+    let step_blocker = next_vertex_blocker(editor, !editor.fly_mode_enabled, has_layer, step_to);
     let Some(panel) = editor.next_vertex_panel.as_mut() else {
         return;
     };
@@ -1829,9 +1903,13 @@ pub(crate) fn draw_next_vertex_panel(ui: &mut egui::Ui, editor: &mut EditorState
             }
             ui.add_space(4.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                add_point |= ui.add(MenuButton::new(tr!("edit-next-vertex-add")).primary().enabled(can_add)).clicked();
+                let mut add = ui.add(MenuButton::new(tr!("edit-next-vertex-add")).primary().enabled(add_blocker.is_none()));
+                if let Some(blocker) = add_blocker {
+                    add = add.hint(blocker.reason());
+                }
+                add_point |= add.clicked();
             });
-            if add_point && can_add {
+            if add_point && add_blocker.is_none() {
                 commands.push(UiCommand::AddTypedStrokeVertex(glam::DVec3::from(panel.point)));
             }
 
@@ -1840,10 +1918,14 @@ pub(crate) fn draw_next_vertex_panel(ui: &mut egui::Ui, editor: &mut EditorState
             if on_section {
                 ui.label(tr!("edit-next-vertex-section-bearing"));
             } else {
-                let response = MenuFieldF64::new(tr!("edit-next-vertex-bearing"), &mut panel.bearing, 0.0..=360.0)
+                let response = MenuFieldF64::new(tr!("edit-next-vertex-bearing"), &mut panel.bearing, f64::MIN..=f64::MAX)
                     .help_text(tr!("edit-next-vertex-bearing-help"))
                     .speed(0.25)
                     .show(ui);
+                // Left alone while it is being typed or dragged.
+                if !response.has_focus() && !response.dragged() {
+                    panel.bearing = wrapped_bearing(panel.bearing);
+                }
                 add_step |= submitted(ui, &response);
             }
             let response = MenuFieldF64::new(tr!("edit-distance"), &mut panel.distance, f64::MIN..=f64::MAX)
@@ -1862,9 +1944,13 @@ pub(crate) fn draw_next_vertex_panel(ui: &mut egui::Ui, editor: &mut EditorState
                 if ui.add(MenuButton::new(tr!("common-close"))).clicked() {
                     close = true;
                 }
-                add_step |= ui.add(MenuButton::new(tr!("edit-next-vertex-add")).primary().enabled(can_step)).clicked();
+                let mut add = ui.add(MenuButton::new(tr!("edit-next-vertex-add")).primary().enabled(step_blocker.is_none()));
+                if let Some(blocker) = step_blocker {
+                    add = add.hint(blocker.reason());
+                }
+                add_step |= add.clicked();
             });
-            if add_step && can_step {
+            if add_step && step_blocker.is_none() {
                 commands.push(UiCommand::AddStrokeVertexAlongBearing {
                     bearing: panel.bearing,
                     distance: panel.distance,

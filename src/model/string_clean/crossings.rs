@@ -40,6 +40,44 @@ struct Cluster {
     mean: f64,
 }
 
+/// One place strings meet as [`share_crossings`] clusters them: where the
+/// shared vertex goes, the contacts there, the pieces meeting in piece
+/// order, and how far apart their heights are, highest minus lowest.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Meeting {
+    pub(crate) at: DVec2,
+    pub(crate) contacts: Vec<DVec2>,
+    pub(crate) pieces: Vec<usize>,
+    pub(crate) miss: f64,
+}
+
+impl Meeting {
+    /// A join asked for at `at` joins this meeting.
+    pub(crate) fn holds(&self, at: DVec2) -> bool {
+        at.distance(self.at) <= MERGE_DISTANCE || self.contacts.iter().any(|&contact| at.distance(contact) <= MERGE_DISTANCE)
+    }
+}
+
+/// Every place two strings or more meet, nothing changed. `Err` once
+/// `cancelled` says so.
+pub(super) fn meetings(pieces: &[Piece], cancelled: &dyn Fn() -> bool) -> Result<Vec<Meeting>, Cancelled> {
+    let contacts = find_contacts(pieces, cancelled)?;
+    let groups = group_contacts(pieces, &contacts);
+    stop_if(cancelled)?;
+    Ok(groups
+        .into_iter()
+        .map(|group| {
+            let cluster = build_cluster(pieces, &contacts, group);
+            Meeting {
+                at: cluster.at,
+                contacts: cluster.contacts.iter().map(|&index| contacts[index].point).collect(),
+                pieces: cluster.heights.iter().map(|&(piece, _)| piece).collect(),
+                miss: cluster.miss,
+            }
+        })
+        .collect())
+}
+
 /// A vertex one piece gets for one cluster.
 enum Op {
     /// The piece's own vertex at the place, moved onto it in plan.
@@ -170,17 +208,20 @@ fn find_contacts(pieces: &[Piece], cancelled: &dyn Fn() -> bool) -> Result<Vec<C
 /// vertex are one too.
 fn group_contacts(pieces: &[Piece], contacts: &[Contact]) -> Vec<Vec<usize>> {
     let mut parent: Vec<usize> = (0..contacts.len()).collect();
-    let mut by_x: Vec<usize> = (0..contacts.len()).collect();
-    by_x.sort_by(|&one, &two| contacts[one].point.x.total_cmp(&contacts[two].point.x));
-    for (position, &one) in by_x.iter().enumerate() {
-        for &two in &by_x[position + 1..] {
-            if contacts[two].point.x - contacts[one].point.x >= MERGE_DISTANCE {
-                break;
-            }
-            if contacts[one].point.distance(contacts[two].point) < MERGE_DISTANCE {
-                join(&mut parent, one, two);
+    // Contacts filed by merge-distance cell: a pair within the distance lies
+    // in one cell or two neighbours, however many share a column.
+    let cell = |at: DVec2| ((at.x / MERGE_DISTANCE).floor() as i64, (at.y / MERGE_DISTANCE).floor() as i64);
+    let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for one in 0..contacts.len() {
+        let (column, row) = cell(contacts[one].point);
+        for neighbour in (column.saturating_sub(1)..=column.saturating_add(1)).flat_map(|column| (row.saturating_sub(1)..=row.saturating_add(1)).map(move |row| (column, row))) {
+            for &two in cells.get(&neighbour).into_iter().flatten() {
+                if contacts[one].point.distance(contacts[two].point) < MERGE_DISTANCE {
+                    join(&mut parent, two, one);
+                }
             }
         }
+        cells.entry((column, row)).or_default().push(one);
     }
     let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for index in 0..contacts.len() {

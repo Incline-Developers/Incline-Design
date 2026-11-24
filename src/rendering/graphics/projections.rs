@@ -790,6 +790,12 @@ impl<'a> Graphics<'a> {
             editor.tri_create_diagnostic_segments_screen_px.clear();
         }
 
+        // The Next Vertex panel tests a typed point where it would land on
+        // the section.
+        if let Some(panel) = editor.next_vertex_panel.as_mut() {
+            panel.section = self.section_slab();
+        }
+
         // Rings follow the edits of their strings and their strings' hiding
         // before they are drawn, then are projected again only when the view
         // or the rings changed: thousands of them must not cost a frame.

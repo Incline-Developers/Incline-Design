@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
-use glam::DVec3;
+use glam::{DMat3, DVec3};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::app::file_name;
@@ -20,8 +20,12 @@ use crate::{
             mesh_data,
         },
         kriging::{KrigingGrid, KrigingSample, OrdinaryKrigingOptions, ordinary_kriging},
+        prismoid_grid::{
+            CORNER_HEIGHT_COLUMNS, CellValueRole, CellValues, OpenPrismoidGrid, PrismoidGrid, PrismoidGridId, RegularRefusal, ValueSlots, regular_boxes, stacked_overlaps,
+        },
+        project::ModelEnvelope,
     },
-    ui::state::{OreFilterMode, TriSurfaceType},
+    ui::state::{OreFilterMode, RegularBlockGrid, TriSurfaceType},
     userspace_log, userspace_warn,
 };
 
@@ -554,6 +558,180 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    /// Create one block model from the prismoid grids `grid_ids`, one block
+    /// per active prismoid. One grid names it; several are stacked in the
+    /// order their categories take codes, named by [`stack_name`].
+    pub(crate) fn create_block_model_from_prismoid_grids(&mut self, grid_ids: Vec<PrismoidGridId>) -> Result<()> {
+        let mut items = Vec::with_capacity(grid_ids.len());
+        for id in &grid_ids {
+            let item = self.prismoid_grids.iter().find(|item| item.id == *id && item.state.loaded).with_context(|| {
+                let named = self.prismoid_grids.iter().find(|item| item.id == *id).map(|item| item.name.clone());
+                tr!("cmd-prismoid-grid-block-model-not-loaded", grid = named.unwrap_or_default())
+            })?;
+            items.push(item);
+        }
+        let items = regular_order(items);
+        let name = match &items[..] {
+            [item] => tr!("cmd-prismoid-grid-block-model-name", grid = item.name.clone()),
+            _ => stack_name(&items),
+        };
+        let grid_names: Vec<String> = items.iter().map(|item| item.name.clone()).collect();
+        let grids: Vec<(std::sync::Arc<PrismoidGrid>, String, String)> = items
+            .iter()
+            .map(|item| (std::sync::Arc::clone(&item.grid), item.name.clone(), item.category().to_owned()))
+            .collect();
+        let mut carried: Vec<String> = Vec::new();
+        for (grid, _, _) in &grids {
+            if let Some(line) = carried_line(grid)
+                && !carried.contains(&line)
+            {
+                carried.push(line);
+            }
+        }
+        let envelope = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
+        // The grids as read, so one replaced while the job runs is seen at apply.
+        let sources: Vec<(PrismoidGridId, std::sync::Arc<PrismoidGrid>, String)> =
+            items.iter().map(|item| (item.id, std::sync::Arc::clone(&item.grid), item.name.clone())).collect();
+        let compute = move |cancel: &crate::app::jobs::CancelFlag, _: &crate::model::progress::Progress| -> Result<(LoadedBlockModel, StackCounts)> {
+            if cancel.is_cancelled() {
+                anyhow::bail!(crate::app::jobs::Cancelled);
+            }
+            let grids: Vec<(&PrismoidGrid, &str, &str)> = grids.iter().map(|(grid, name, category)| (grid.as_ref(), name.as_str(), category.as_str())).collect();
+            match grids[..] {
+                [(grid, grid_name, category)] => prismoid_block_model(grid, grid_name, category, name, envelope.as_ref()).map(|loaded| (loaded, StackCounts::default())),
+                _ => stacked_prismoid_block_model(&grids, name, envelope.as_ref()),
+            }
+        };
+        let apply = move |app: &mut App, result: Result<(LoadedBlockModel, StackCounts)>| match result {
+            Ok((loaded, counts)) => {
+                let now = app.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
+                if let Some(changed) = block_model_inputs_changed(&sources, &app.prismoid_grids, envelope, now) {
+                    userspace_warn!("{changed}");
+                    return;
+                }
+                for line in created_lines(&loaded, &grid_names, counts).into_iter().chain(carried) {
+                    userspace_log!("{line}");
+                }
+                app.add_loaded_block_model(loaded);
+            }
+            Err(error) if !crate::app::jobs::is_cancelled(&error) => {
+                userspace_warn!("{}", tr!("cmd-block-model-could-not-create-block-model", error = format!("{error:#}")))
+            }
+            Err(_) => {}
+        };
+        let label = match grid_ids.len() {
+            1 => tr!("cmd-prismoid-grid-creating-block-model"),
+            _ => tr!("cmd-prismoid-grid-creating-block-model-grids"),
+        };
+        self.spawn_job_reporting_progress(label, grid_ids.into_iter().map(crate::app::jobs::JobKey::PrismoidGrid).collect(), compute, apply);
+        Ok(())
+    }
+
+    /// Create a regular block model of cubes of side `size` across the model
+    /// envelope from the prismoid grids `grid_ids`, named `name`, once the
+    /// entry rules hold.
+    pub(crate) fn create_regular_block_model_from_prismoid_grids(&mut self, grid_ids: Vec<PrismoidGridId>, size: f64, name: String) -> Result<()> {
+        let envelope = self
+            .workspace
+            .active_project()
+            .and_then(|project| project.project.metadata.modelling.envelope)
+            .with_context(|| tr!("block-model-regular-no-envelope"))?;
+        let mut items = Vec::with_capacity(grid_ids.len());
+        for id in &grid_ids {
+            let item = self.prismoid_grids.iter().find(|item| item.id == *id && item.state.loaded).with_context(|| {
+                // Named from the project; a grid gone from it has no name.
+                match self.prismoid_grids.iter().find(|item| item.id == *id) {
+                    Some(item) => tr!("cmd-prismoid-grid-regular-not-loaded", grid = item.name.clone()),
+                    None => tr!("cmd-commands-select-one-loaded-prismoid-grid"),
+                }
+            })?;
+            items.push(item);
+        }
+        let rows: Vec<RegularBlockGrid> = items.iter().copied().map(regular_block_grid).collect();
+        regular_block_issue(Some(&envelope), &rows, size).map_err(anyhow::Error::msg)?;
+        let ordered = regular_order(items);
+        // The grids as read, so a grid changed in place while the job runs
+        // is seen at apply.
+        let sources: Vec<(PrismoidGridId, std::sync::Arc<PrismoidGrid>, String)> =
+            ordered.iter().map(|item| (item.id, std::sync::Arc::clone(&item.grid), item.name.clone())).collect();
+        let grids: Vec<(std::sync::Arc<PrismoidGrid>, String, String)> = ordered
+            .into_iter()
+            .map(|item| (std::sync::Arc::clone(&item.grid), item.name.clone(), item.category().to_owned()))
+            .collect();
+        let mut carried: Vec<String> = Vec::new();
+        for (grid, _, _) in &grids {
+            if let Some(line) = carried_line(grid)
+                && !carried.contains(&line)
+            {
+                carried.push(line);
+            }
+        }
+        let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<(LoadedBlockModel, RegularCounts)> {
+            let grids: Vec<(&PrismoidGrid, &str, &str)> = grids.iter().map(|(grid, name, category)| (grid.as_ref(), name.as_str(), category.as_str())).collect();
+            regular_block_model(&grids, &envelope, size, name, cancel, &progress.phase(0.0, 1.0))
+        };
+        let apply = move |app: &mut App, result: Result<(LoadedBlockModel, RegularCounts)>| match result {
+            Ok((loaded, counts)) => {
+                let now = app.workspace.active_project().and_then(|project| project.project.metadata.modelling.envelope);
+                if let Some(changed) = regular_inputs_changed(&sources, &app.prismoid_grids, envelope, now) {
+                    userspace_warn!("{changed}");
+                    return;
+                }
+                let volume: f64 = loaded.model.shared_numeric_values("volume").map_or(0.0, |volumes| volumes.iter().sum());
+                userspace_log!(
+                    "{}",
+                    tr!(
+                        "cmd-prismoid-grid-created-regular-block-model",
+                        name = loaded.name.clone(),
+                        blocks = loaded.model.metadata.n_blocks.to_string(),
+                        boxes = counts.boxes.to_string(),
+                        volume = format!("{volume:.2}")
+                    )
+                );
+                if counts.mixed > 0 {
+                    userspace_log!("{}", tr!("cmd-prismoid-grid-regular-mixed", count = counts.mixed.to_string()));
+                }
+                if counts.overlap > 0 {
+                    userspace_log!("{}", tr!("cmd-prismoid-grid-regular-overlap", count = counts.overlap.to_string()));
+                }
+                for line in carried {
+                    userspace_log!("{line}");
+                }
+                app.add_loaded_block_model(loaded);
+                if counts.no_density > 0 {
+                    userspace_warn!("{}", tr!("cmd-prismoid-grid-regular-no-density", count = counts.no_density.to_string()));
+                }
+            }
+            Err(error) if !crate::app::jobs::is_cancelled(&error) => {
+                userspace_warn!("{}", tr!("cmd-block-model-could-not-create-block-model", error = format!("{error:#}")))
+            }
+            Err(_) => {}
+        };
+        self.spawn_job_reporting_progress(
+            tr!("cmd-prismoid-grid-creating-regular-block-model"),
+            grid_ids.into_iter().map(crate::app::jobs::JobKey::PrismoidGrid).collect(),
+            compute,
+            apply,
+        );
+        Ok(())
+    }
+
+    /// Open Create Regular Block Model from Prismoid Grids with the loaded
+    /// grids in the selection ticked.
+    pub(crate) fn open_create_regular_block_model(&mut self) {
+        self.editor.regular_block_model_open = true;
+        self.editor.regular_block_model_size_auto = true;
+        self.editor.regular_block_model_name_auto = true;
+        self.editor.regular_block_model_name_input.clear();
+        self.set_regular_block_grids(self.selected_prismoid_grids());
+    }
+
+    /// Tick the loaded grids of `ids` in the regular block model's dialog.
+    pub(crate) fn set_regular_block_grids(&mut self, ids: Vec<PrismoidGridId>) {
+        let items = regular_order(self.prismoid_grids.iter().filter(|item| item.state.loaded && ids.contains(&item.id)).collect());
+        follow_regular_ticks(&mut self.editor, &items);
+    }
+
     /// Make one block model the whole selection.
     ///
     /// The explorer's properties panel shows a block model's colours and slice
@@ -654,6 +832,806 @@ fn collect_kriging_samples(dataset: &DrillHoleDataset, holes: Option<&[usize]>, 
             })
         })
         .collect()
+}
+
+/// The smallest cell side a block model is made from a prismoid grid at.
+pub(super) const LEAST_PRISMOID_BLOCK_SIZE: f64 = 5.0;
+
+/// The most blocks a regular block model may lay across the model envelope.
+pub(crate) const REGULAR_BLOCK_BUDGET: usize = 2_000_000;
+
+/// A prismoid grid's smallest cell side, when it is under
+/// [`LEAST_PRISMOID_BLOCK_SIZE`] to the centimetre the refusal prints it at.
+pub(super) fn prismoid_cells_too_fine(grid: &PrismoidGrid) -> Option<f64> {
+    let size = grid.lattice.least_size();
+    ((size * 100.0).round() < LEAST_PRISMOID_BLOCK_SIZE * 100.0).then_some(size)
+}
+
+/// The refusal of one block model from grids holding `active` prismoids
+/// each, when they hold more than [`REGULAR_BLOCK_BUDGET`] in all.
+pub(crate) fn stacked_over_budget(active: &[usize]) -> Option<String> {
+    let count = active.iter().fold(0usize, |count, cells| count.saturating_add(*cells));
+    (count > REGULAR_BLOCK_BUDGET).then(|| {
+        tr!(
+            "cmd-prismoid-grid-block-model-over-budget",
+            count = count.to_string(),
+            budget = REGULAR_BLOCK_BUDGET.to_string()
+        )
+    })
+}
+
+/// What one block model from several grids `items`, in order, is named
+/// after: the strata's name when every grid is of one, else the first
+/// grid's.
+fn stack_source<'a>(items: &[&'a OpenPrismoidGrid]) -> &'a str {
+    let strata = items.first().and_then(|item| item.stratum.as_ref()).map(|stratum| stratum.strata.as_str());
+    strata
+        .filter(|strata| items.iter().all(|item| item.stratum.as_ref().is_some_and(|stratum| stratum.strata == *strata)))
+        .or_else(|| items.first().map(|item| item.name.as_str()))
+        .unwrap_or_default()
+}
+
+/// The name of one block model from several grids `items`, in order, after
+/// [`stack_source`].
+fn stack_name(items: &[&OpenPrismoidGrid]) -> String {
+    tr!("cmd-prismoid-grid-block-model-name", grid = stack_source(items).to_owned())
+}
+
+/// The lines saying what `loaded` was made from the grids `grid_names`, in
+/// order, and what its `counts` found: for one grid its created line only.
+fn created_lines(loaded: &LoadedBlockModel, grid_names: &[String], counts: StackCounts) -> Vec<String> {
+    let volume: f64 = loaded.model.shared_numeric_values("volume").map_or(0.0, |volumes| volumes.iter().sum());
+    let blocks = loaded.model.metadata.n_blocks.to_string();
+    if let [grid] = grid_names {
+        return vec![tr!(
+            "cmd-prismoid-grid-created-block-model",
+            name = loaded.name.clone(),
+            grid = grid.clone(),
+            blocks = blocks,
+            volume = format!("{volume:.2}")
+        )];
+    }
+    let mut lines = vec![tr!(
+        "cmd-prismoid-grid-created-block-model-grids",
+        name = loaded.name.clone(),
+        grids = grid_names.len().to_string(),
+        blocks = blocks,
+        volume = format!("{volume:.2}"),
+        no_density = counts.no_density.to_string()
+    )];
+    for index in counts.empty {
+        lines.push(tr!("cmd-prismoid-grid-block-model-grid-empty", grid = grid_names[index].clone()));
+    }
+    if counts.overlap > 0 {
+        lines.push(tr!("cmd-prismoid-grid-block-model-overlap", count = counts.overlap.to_string()));
+    }
+    if !counts.blank.is_empty() {
+        lines.push(tr!("cmd-prismoid-grid-block-model-left-blank", columns = counts.blank.join(", ")));
+    }
+    lines
+}
+
+/// A block model of one box per active prismoid, from
+/// [`PrismoidGrid::blocks`] in the lattice's frame: each block's volume and
+/// vertical thickness, each cell value (the density as `density`, NaN where a
+/// cell has none), and its `category` (the interval in a strata, else the
+/// grid's name), then its prismoid's corner RLs as [`CORNER_HEIGHT_COLUMNS`];
+/// `grid_name` names the grid in refusals.
+/// With an `envelope` the frame and extent are the envelope's, from its
+/// corner at the base RL, so every model of the project shares them.
+fn prismoid_block_model(grid: &PrismoidGrid, grid_name: &str, category: &str, name: String, envelope: Option<&ModelEnvelope>) -> Result<LoadedBlockModel> {
+    stacked_prismoid_block_model(&[(grid, grid_name, category)], name, envelope).map(|(loaded, _)| loaded)
+}
+
+/// What the created lines of a block model of several prismoid grids
+/// count beside its blocks.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct StackCounts {
+    /// Blocks reaching into ground a block below them in their cell holds.
+    overlap: usize,
+    /// Blocks without a density: every block where no grid has one.
+    no_density: usize,
+    /// The grids, by position, that gave no block.
+    empty: Vec<usize>,
+    /// Value columns some grid giving blocks lacks, left blank on its
+    /// blocks; `density` too when no grid has one.
+    blank: Vec<String>,
+}
+
+/// One block model of every active prismoid of `grids`, each with its name
+/// (for refusals) and category, in the order the categories take codes,
+/// built as [`prismoid_block_model`] builds one grid's: per block its
+/// volume and vertical thickness, each value column as first met over the
+/// grids in order (qualities merged by name, every density as `density`,
+/// NaN on the blocks of a grid without it), `prismoid_grid` coding the
+/// categories of the grids giving blocks, then its own prismoid's corner
+/// RLs. Two or more grids must share one lattice; without an `envelope`
+/// the frame is the first grid's lattice. Overlaps are counted, not
+/// clipped.
+fn stacked_prismoid_block_model(grids: &[(&PrismoidGrid, &str, &str)], name: String, envelope: Option<&ModelEnvelope>) -> Result<(LoadedBlockModel, StackCounts)> {
+    let Some((first, first_name, _)) = grids.first() else {
+        anyhow::bail!("{}", tr!("cmd-prismoid-grid-block-model-grids-empty"));
+    };
+    let mut slots = ValueSlots::default();
+    // The value columns in the order first met, a density as `None`.
+    let mut order: Vec<Option<usize>> = Vec::new();
+    // Per grid: its offset in the first grid's cells, its values by slot
+    // and its boxes.
+    let mut sources = Vec::with_capacity(grids.len());
+    for (index, (grid, grid_name, _)) in grids.iter().enumerate() {
+        let lattice = &grid.lattice;
+        if let Some(envelope) = envelope {
+            if (lattice.u, lattice.v) != (glam::DVec2::X, glam::DVec2::Y) {
+                anyhow::bail!("{}", tr!("cmd-prismoid-grid-block-model-off-envelope-axes", grid = (*grid_name).to_owned()));
+            }
+            if !grid.fits(envelope) {
+                anyhow::bail!(
+                    "{}",
+                    tr!(
+                        "cmd-prismoid-grid-block-model-outside-envelope",
+                        grid = (*grid_name).to_owned(),
+                        envelope = envelope.summary()
+                    )
+                );
+            }
+        }
+        let offset = match index {
+            0 => (0, 0),
+            _ => lattice.offset_to(&first.lattice).with_context(|| {
+                tr!(
+                    "cmd-prismoid-grid-block-model-not-one-lattice",
+                    grid = (*first_name).to_owned(),
+                    size = plan_cell_size(first),
+                    other = (*grid_name).to_owned(),
+                    other_size = plan_cell_size(grid)
+                )
+            })?,
+        };
+        let mut held = Vec::with_capacity(grid.cell_values.len());
+        for values in &grid.cell_values {
+            let slot = slots.slot(values, index).map_err(|refusal| regular_refusal(refusal, grids))?;
+            if !order.contains(&slot) {
+                order.push(slot);
+            }
+            held.push((slot, values));
+        }
+        let mut blocks = grid.model_blocks(envelope);
+        // Without an envelope each grid moves into the first one's frame by
+        // its whole cells.
+        if envelope.is_none() && offset != (0, 0) {
+            let shift = DVec3::new(offset.0 as f64 * lattice.u_sizes[0], offset.1 as f64 * lattice.v_sizes[0], 0.0);
+            for (_, block) in &mut blocks {
+                (block.lower, block.upper) = (block.lower + shift, block.upper + shift);
+            }
+        }
+        sources.push((offset, held, blocks));
+    }
+    let mut labels: Vec<&str> = Vec::new();
+    let mut codes = vec![0.0; grids.len()];
+    let mut counts = StackCounts::default();
+    for (index, ((_, _, category), (_, _, blocks))) in grids.iter().zip(&sources).enumerate() {
+        if blocks.is_empty() {
+            counts.empty.push(index);
+            continue;
+        }
+        let code = labels.iter().position(|label| label == category).unwrap_or_else(|| {
+            labels.push(*category);
+            labels.len() - 1
+        });
+        codes[index] = code as f64;
+    }
+    if labels.is_empty() {
+        anyhow::bail!("{}", tr!("cmd-prismoid-grid-block-model-grids-empty"));
+    }
+    // Every block's grid and cell, grids in order.
+    let placed: Vec<(usize, usize)> = sources
+        .iter()
+        .enumerate()
+        .flat_map(|(index, (_, _, blocks))| blocks.iter().map(move |(cell, _)| (index, *cell)))
+        .collect();
+    let bounds: Vec<BlockBounds> = sources.iter().flat_map(|(_, _, blocks)| blocks.iter().map(|(_, block)| *block)).collect();
+    let lattice = &first.lattice;
+    let (lower, upper, origin, rotation) = match envelope {
+        Some(envelope) => (DVec3::ZERO, DVec3::from_array(envelope.size), envelope.lower(), DMat3::IDENTITY),
+        None => {
+            let (lower, upper) = bounds.iter().fold((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)), |(lower, upper), block| {
+                (lower.min(block.lower), upper.max(block.upper))
+            });
+            let rotation = DMat3::from_cols(lattice.u.extend(0.0), lattice.v.extend(0.0), DVec3::Z);
+            (lower, upper, lattice.origin.extend(0.0), rotation)
+        }
+    };
+    // The expression `block_volumes` measures each block with, on the boxes
+    // the model holds.
+    let stretch = rotation.determinant().abs();
+    let numeric = |name: &str, values: Vec<f64>| BlockModelColumn {
+        name: name.to_owned(),
+        values: std::sync::Arc::new(crate::model::formats::block_column::BlockColumn::from_values(&values)),
+        categories: None,
+        category_colors: std::collections::BTreeMap::new(),
+    };
+    let mut columns = vec![
+        numeric("volume", bounds.iter().map(|block| (block.upper - block.lower).element_product() * stretch).collect()),
+        numeric("vertical_thickness", bounds.iter().map(|block| block.upper.z - block.lower.z).collect()),
+    ];
+    let quality_names = slots.quality_names();
+    for slot in &order {
+        let name = slot.map_or("density", |slot| quality_names[slot].as_str());
+        let lacking = sources.iter().any(|(_, values, blocks)| !blocks.is_empty() && !values.iter().any(|(held, _)| held == slot));
+        if lacking {
+            counts.blank.push(name.to_owned());
+        }
+        let values = placed
+            .iter()
+            .map(|(index, cell)| {
+                let found = sources[*index].1.iter().find(|(held, _)| held == slot);
+                found.and_then(|(_, values)| values.values[*cell]).unwrap_or(f64::NAN)
+            })
+            .collect::<Vec<f64>>();
+        if slot.is_none() {
+            counts.no_density = values.iter().filter(|value| value.is_nan()).count();
+        }
+        columns.push(numeric(name, values));
+    }
+    // No grid has a density: every block is without one.
+    if !order.contains(&None) {
+        counts.no_density = placed.len();
+        counts.blank.push("density".to_owned());
+    }
+    columns.push(BlockModelColumn {
+        name: "prismoid_grid".to_owned(),
+        values: std::sync::Arc::new(crate::model::formats::block_column::BlockColumn::from_values(
+            &placed.iter().map(|(index, _)| codes[*index]).collect::<Vec<f64>>(),
+        )),
+        categories: Some(labels.iter().enumerate().map(|(code, label)| (code as u32, (*label).to_owned())).collect()),
+        category_colors: std::collections::BTreeMap::new(),
+    });
+    for (corner, name) in CORNER_HEIGHT_COLUMNS.into_iter().enumerate() {
+        columns.push(numeric(
+            name,
+            placed.iter().map(|(index, cell)| grids[*index].0.cell_corner_heights(*cell)[corner]).collect(),
+        ));
+    }
+    counts.overlap = stacked_overlaps(
+        placed
+            .iter()
+            .zip(&bounds)
+            .map(|((index, cell), block)| {
+                let (columns, (column_offset, row_offset)) = (grids[*index].0.lattice.columns(), sources[*index].0);
+                (
+                    [(cell % columns) as i64 + column_offset, (cell / columns) as i64 + row_offset],
+                    block.lower.z,
+                    block.upper.z,
+                )
+            })
+            .collect(),
+    );
+    let mut geometry = crate::model::block_model::BlockGeometryBuilder::default();
+    geometry.extend(&bounds);
+    let geometry = geometry.finish();
+    let retained_geometry_bytes = geometry.heap_bytes();
+    let model = BlockModelData::from_columns(bounds.len(), lower, upper, columns, retained_geometry_bytes)?.with_transform(origin, rotation)?;
+    let blocks = std::sync::Arc::new(BlockBoundsSource::Explicit(geometry));
+    let renderable_block_indices = std::sync::Arc::new(RenderableBlockIndices::All(blocks.len()));
+    let uniform_grid = blocks.uniform_grid();
+    let opaque_surface_blocks = uniform_grid.as_ref().map_or_else(
+        || crate::model::block_model::opaque_irregular_surface_block_count(&blocks, &renderable_block_indices),
+        |grid| crate::model::block_model::opaque_surface_block_count(&blocks, &renderable_block_indices, grid),
+    );
+    let world_bounds = compute_world_bounds(&model, &blocks, &renderable_block_indices);
+    let active_color_variable = Some("vertical_thickness".to_owned());
+    let active_values_cache = OpenBlockModel::prepare_active_values_cache(&model, &renderable_block_indices, active_color_variable.as_deref());
+    let generated_id = uuid::Uuid::new_v4();
+    let loaded = LoadedBlockModel {
+        name,
+        source: BlockModelSource {
+            path: std::path::PathBuf::from(format!("generated/{generated_id}.blockmodel")),
+            csv_columns: None,
+        },
+        model,
+        blocks,
+        renderable_block_indices,
+        uniform_grid,
+        opaque_surface_blocks,
+        world_bounds,
+        active_color_variable,
+        active_values_cache,
+    };
+    Ok((loaded, counts))
+}
+
+/// What a derived model does to the grid's values, units dropped and the
+/// density renamed; `None` when it does neither.
+fn carried_line(grid: &PrismoidGrid) -> Option<String> {
+    let values = &grid.cell_values;
+    if !values.iter().any(|values| values.role == CellValueRole::Density || !values.unit.is_empty()) {
+        return None;
+    }
+    let names: Vec<String> = values
+        .iter()
+        .map(|values| match column_name(values) {
+            renamed if renamed != values.name => tr!("cmd-prismoid-grid-block-model-density-as", name = values.name.clone()),
+            same => same.to_owned(),
+        })
+        .collect();
+    Some(tr!("cmd-prismoid-grid-block-model-units", columns = names.join(", ")))
+}
+
+/// The block column a grid's values become: one name for every grid's
+/// density, so one Field List maps them all.
+fn column_name(values: &CellValues) -> &str {
+    match values.role {
+        CellValueRole::Density => "density",
+        CellValueRole::Quality => &values.name,
+    }
+}
+
+/// A grid as [`regular_order`] sorts it: by the strata it is an interval of.
+pub(crate) trait InStrata {
+    fn stratum(&self) -> Option<&crate::model::prismoid_grid::Stratum>;
+}
+
+impl InStrata for OpenPrismoidGrid {
+    fn stratum(&self) -> Option<&crate::model::prismoid_grid::Stratum> {
+        self.stratum.as_ref()
+    }
+}
+
+impl InStrata for crate::ui::state::UiPrismoidGridEntry {
+    fn stratum(&self) -> Option<&crate::model::prismoid_grid::Stratum> {
+        self.stratum.as_ref()
+    }
+}
+
+/// The grids in the order their categories take codes and the dialog lists
+/// them: each strata in the order its first grid is given, its intervals
+/// top first, then the grids in no strata as given.
+pub(crate) fn regular_order<T: InStrata + ?Sized>(mut items: Vec<&T>) -> Vec<&T> {
+    let mut strata: Vec<String> = Vec::new();
+    for item in &items {
+        if let Some(stratum) = item.stratum()
+            && !strata.contains(&stratum.strata)
+        {
+            strata.push(stratum.strata.clone());
+        }
+    }
+    items.sort_by_key(|item| match item.stratum() {
+        Some(stratum) => (0, strata.iter().position(|name| *name == stratum.strata).unwrap_or(0), stratum.index),
+        None => (1, 0, 0),
+    });
+    items
+}
+
+/// Write the ticked `items`, in list order, into the regular block model's
+/// dialog. Until typed over, the block size takes the coarsest cell side of
+/// any of them and the name the strata when every one is of it, else the
+/// first grid; with nothing ticked the size stays and the name empties.
+fn follow_regular_ticks(editor: &mut crate::ui::state::EditorState, items: &[&OpenPrismoidGrid]) {
+    editor.regular_block_model_grids = items.iter().copied().map(regular_block_grid).collect();
+    if editor.regular_block_model_size_auto && !items.is_empty() {
+        let coarsest = editor.regular_block_model_grids.iter().flat_map(|grid| grid.cell).fold(0.0, f64::max);
+        editor.regular_block_model_size = coarsest;
+    }
+    if editor.regular_block_model_name_auto {
+        editor.regular_block_model_name_input = match items {
+            [] => String::new(),
+            _ => tr!("cmd-prismoid-grid-regular-block-model-name", source = stack_source(items).to_owned()),
+        };
+    }
+}
+
+/// An input a model was made from that no longer stands.
+enum InputChanged {
+    /// A grid, by name, removed or changed in place.
+    Grid(String),
+    /// The model envelope moved.
+    Envelope,
+}
+
+/// Which input of a model made from `sources` across `envelope` no longer
+/// stands for the project's `grids` and envelope `now`, if any.
+fn changed_input(
+    sources: &[(PrismoidGridId, std::sync::Arc<PrismoidGrid>, String)],
+    grids: &[OpenPrismoidGrid],
+    envelope: impl Into<Option<ModelEnvelope>>,
+    now: Option<ModelEnvelope>,
+) -> Option<InputChanged> {
+    let changed = sources
+        .iter()
+        .find(|(id, grid, _)| !grids.iter().any(|item| item.id == *id && std::sync::Arc::ptr_eq(&item.grid, grid)));
+    if let Some((_, _, name)) = changed {
+        return Some(InputChanged::Grid(name.clone()));
+    }
+    (now != envelope.into()).then_some(InputChanged::Envelope)
+}
+
+/// Why a regular block model measured from `sources` across `envelope` no
+/// longer stands for the project's `grids` and envelope `now`: a grid
+/// removed or changed in place while it was made, or the envelope moved.
+fn regular_inputs_changed(
+    sources: &[(PrismoidGridId, std::sync::Arc<PrismoidGrid>, String)],
+    grids: &[OpenPrismoidGrid],
+    envelope: impl Into<Option<ModelEnvelope>>,
+    now: Option<ModelEnvelope>,
+) -> Option<String> {
+    changed_input(sources, grids, envelope, now).map(|changed| match changed {
+        InputChanged::Grid(grid) => tr!("cmd-prismoid-grid-regular-changed", grid = grid),
+        InputChanged::Envelope => tr!("cmd-prismoid-grid-regular-envelope-changed"),
+    })
+}
+
+/// As [`regular_inputs_changed`], worded for Create Block Model from Prismoid
+/// Grid, which makes one block per prismoid.
+fn block_model_inputs_changed(
+    sources: &[(PrismoidGridId, std::sync::Arc<PrismoidGrid>, String)],
+    grids: &[OpenPrismoidGrid],
+    envelope: impl Into<Option<ModelEnvelope>>,
+    now: Option<ModelEnvelope>,
+) -> Option<String> {
+    changed_input(sources, grids, envelope, now).map(|changed| match changed {
+        InputChanged::Grid(grid) => tr!("cmd-prismoid-grid-block-model-changed", grid = grid),
+        InputChanged::Envelope => tr!("cmd-prismoid-grid-block-model-envelope-changed"),
+    })
+}
+
+/// Boxes of the regular frame where two grids hold the same ground in height
+/// at a cell centre of either lying in the box; overlap between such points
+/// can be missed. Cells that are not ground in their own grid add no point.
+fn regular_height_overlaps(
+    grids: &[(&PrismoidGrid, &str, &str)],
+    envelope: &ModelEnvelope,
+    size: f64,
+    cancel: &crate::app::jobs::CancelFlag,
+    progress: &crate::model::progress::Phase,
+) -> anyhow::Result<usize> {
+    use rayon::prelude::*;
+    if grids.len() < 2 {
+        return Ok(0);
+    }
+    let (lower, upper) = crate::model::prismoid_grid::regular_frame(envelope, size);
+    let Ok([columns, rows, layers]) = (crate::model::kriging::KrigingGrid {
+        lower,
+        upper,
+        cell: glam::DVec3::splat(size),
+    })
+    .dimensions() else {
+        return Ok(0);
+    };
+    let tolerance = 1e-9 * size;
+    let edges: Vec<_> = grids.iter().map(|(grid, _, _)| grid.plan_edges()).collect();
+    let mut found: std::collections::HashSet<[usize; 3]> = std::collections::HashSet::new();
+    let counter = progress.counter(grids.iter().map(|(grid, _, _)| grid.ground_centres().count()).sum());
+    for (grid, _, _) in grids {
+        let centres: Vec<glam::DVec2> = grid.ground_centres().collect();
+        let boxes = centres
+            .par_iter()
+            .fold(std::collections::HashSet::new, |mut found: std::collections::HashSet<[usize; 3]>, centre| {
+                if cancel.is_cancelled() {
+                    return found;
+                }
+                counter.advance_by(1);
+                let at = (*centre - lower.truncate()) / size;
+                let (column, row) = (at.x.floor(), at.y.floor());
+                if column < 0.0 || row < 0.0 || column >= columns as f64 || row >= rows as f64 {
+                    return found;
+                }
+                let heights: Vec<(f64, f64)> = grids
+                    .iter()
+                    .zip(&edges)
+                    .filter_map(|((other, _, _), (u_edges, v_edges))| other.heights_in(*centre, u_edges, v_edges).ok())
+                    .collect();
+                for (index, (roof_a, floor_a)) in heights.iter().enumerate() {
+                    for (roof_b, floor_b) in &heights[index + 1..] {
+                        let (top, bottom) = (roof_a.min(*roof_b), floor_a.max(*floor_b));
+                        if top - bottom <= tolerance {
+                            continue;
+                        }
+                        let first = ((bottom - lower.z) / size).floor().max(0.0) as usize;
+                        let last = (((top - lower.z) / size).ceil().max(0.0) as usize).min(layers);
+                        for layer in first..last {
+                            let slab = lower.z + layer as f64 * size;
+                            if top.min(slab + size) - bottom.max(slab) > tolerance {
+                                found.insert([column as usize, row as usize, layer]);
+                            }
+                        }
+                    }
+                }
+                found
+            })
+            .reduce(std::collections::HashSet::new, |mut all, part| {
+                all.extend(part);
+                all
+            });
+        if cancel.is_cancelled() {
+            anyhow::bail!(crate::app::jobs::Cancelled);
+        }
+        found.extend(boxes);
+    }
+    progress.finish();
+    Ok(found.len())
+}
+
+/// What a regular block model's created lines count beside its blocks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RegularCounts {
+    /// Boxes in the envelope's lattice, written or not.
+    boxes: usize,
+    /// Blocks holding ground without a density: every block where no grid
+    /// has one.
+    no_density: usize,
+    /// Blocks where two grids hold the same ground in height.
+    overlap: usize,
+    /// Blocks holding ground of more than one category.
+    mixed: usize,
+}
+
+/// A grid's plan cell size for a refusal: one number for a square cell.
+fn plan_cell_size(grid: &PrismoidGrid) -> String {
+    let size = |sizes: &[f64]| sizes.first().map_or_else(String::new, |size| super::prismoid_grid::cell_size(*size));
+    let (x, y) = (size(&grid.lattice.u_sizes), size(&grid.lattice.v_sizes));
+    if x == y { x } else { format!("{x} × {y}") }
+}
+
+/// A grid as Create Regular Block Model from Prismoid Grids lists it.
+fn regular_block_grid(item: &OpenPrismoidGrid) -> RegularBlockGrid {
+    let lattice = &item.grid.lattice;
+    let first = |sizes: &[f64]| sizes.first().copied().unwrap_or(f64::NAN);
+    RegularBlockGrid {
+        id: item.id,
+        name: item.name.clone(),
+        category: item.category().to_owned(),
+        cell: [first(&lattice.u_sizes), first(&lattice.v_sizes)],
+        cell_label: plan_cell_size(&item.grid),
+    }
+}
+
+/// The box lattice's dims for cubes of side `size` across `envelope` from
+/// `grids`, or the first entry rule broken, in words: an envelope set, a
+/// size above 0, at least [`LEAST_PRISMOID_BLOCK_SIZE`] and a whole
+/// multiple of every grid's cells, and at most [`REGULAR_BLOCK_BUDGET`]
+/// blocks in the frame [`regular_frame`] cuts from RL 0.
+///
+/// [`regular_frame`]: crate::model::prismoid_grid::regular_frame
+pub(crate) fn regular_block_issue(envelope: Option<&ModelEnvelope>, grids: &[RegularBlockGrid], size: f64) -> std::result::Result<[usize; 3], String> {
+    let Some(envelope) = envelope else {
+        return Err(tr!("block-model-regular-no-envelope"));
+    };
+    if !(size.is_finite() && size > 0.0) {
+        return Err(tr!("cmd-prismoid-grid-regular-no-grid"));
+    }
+    if (size * 100.0).round() < LEAST_PRISMOID_BLOCK_SIZE * 100.0 {
+        return Err(tr!("block-model-regular-too-small", least = super::prismoid_grid::cell_size(LEAST_PRISMOID_BLOCK_SIZE)));
+    }
+    let whole = |ratio: f64| ratio.round() >= 1.0 && (ratio - ratio.round()).abs() <= crate::model::grid_surface::NODE_TOLERANCE;
+    if !grids.iter().all(|grid| whole(size / grid.cell[0]) && whole(size / grid.cell[1])) {
+        let mut sizes: Vec<&str> = Vec::new();
+        for grid in grids {
+            if !sizes.contains(&grid.cell_label.as_str()) {
+                sizes.push(&grid.cell_label);
+            }
+        }
+        return Err(tr!("block-model-regular-not-multiple", sizes = sizes.join(", ")));
+    }
+    // Counted in f64 by Leo's round-up before his grid is asked for, whose
+    // count overflows a 32-bit usize in the browser past 4.29e9 blocks.
+    let (lower, upper) = crate::model::prismoid_grid::regular_frame(envelope, size);
+    let spans = ((upper - lower) / size).ceil();
+    let count = spans.x * spans.y * spans.z;
+    if count > REGULAR_BLOCK_BUDGET as f64 {
+        return Err(tr!(
+            "block-model-regular-over-budget",
+            count = format!("{count:.0}"),
+            budget = REGULAR_BLOCK_BUDGET.to_string()
+        ));
+    }
+    KrigingGrid {
+        lower,
+        upper,
+        cell: DVec3::splat(size),
+    }
+    .dimensions()
+    .map_err(|_| tr!("cmd-prismoid-grid-regular-no-grid"))
+}
+
+/// A refusal of [`regular_boxes`] or [`ValueSlots`] in words, naming
+/// `grids` by position.
+fn regular_refusal(refusal: RegularRefusal, grids: &[(&PrismoidGrid, &str, &str)]) -> anyhow::Error {
+    match refusal {
+        RegularRefusal::Grid => anyhow::anyhow!("{}", tr!("cmd-prismoid-grid-regular-no-grid")),
+        RegularRefusal::OffLattice(index) => anyhow::anyhow!("{}", tr!("cmd-prismoid-grid-regular-off-envelope-lattice", grid = grids[index].1.to_owned())),
+        RegularRefusal::NotMultiple(index) => anyhow::anyhow!("{}", tr!("block-model-regular-not-multiple", sizes = plan_cell_size(grids[index].0))),
+        RegularRefusal::UnitsDiffer {
+            quality,
+            first,
+            first_grid,
+            second,
+            second_grid,
+        } => anyhow::anyhow!(
+            "{}",
+            tr!(
+                "cmd-prismoid-grid-regular-units-differ",
+                quality = quality,
+                unit = first,
+                grid = grids[first_grid].1.to_owned(),
+                other_unit = second,
+                other = grids[second_grid].1.to_owned()
+            )
+        ),
+        RegularRefusal::Cancelled => anyhow::Error::new(crate::app::jobs::Cancelled),
+    }
+}
+
+/// A regular block model of `size` cubes across `envelope`, measured by
+/// [`regular_boxes`] from `grids`, each with its name and category, in the
+/// order the categories take codes. Per block: the modelled `volume`,
+/// `fill` (that over the box), each quality, `density` (mass over the
+/// whole box) where any grid has one, `prismoid_grid` (the label with the
+/// most volume, the earlier on a tie), `share <label>` for each label (its
+/// volume over the box), and the box's top and bottom RL as
+/// [`CORNER_HEIGHT_COLUMNS`]. Blocks follow Leo's regular order, x fastest,
+/// then y, then z; the frame is the envelope's plan corner at the lowest
+/// cut of [`regular_frame`], and the extent the boxes' lattice.
+///
+/// [`regular_frame`]: crate::model::prismoid_grid::regular_frame
+fn regular_block_model(
+    grids: &[(&PrismoidGrid, &str, &str)],
+    envelope: &ModelEnvelope,
+    size: f64,
+    name: String,
+    cancel: &crate::app::jobs::CancelFlag,
+    progress: &crate::model::progress::Phase,
+) -> Result<(LoadedBlockModel, RegularCounts)> {
+    for (grid, grid_name, _) in grids {
+        if (grid.lattice.u, grid.lattice.v) != (glam::DVec2::X, glam::DVec2::Y) {
+            anyhow::bail!("{}", tr!("cmd-prismoid-grid-block-model-off-envelope-axes", grid = (*grid_name).to_owned()));
+        }
+        if !grid.fits(envelope) {
+            anyhow::bail!(
+                "{}",
+                tr!(
+                    "cmd-prismoid-grid-block-model-outside-envelope",
+                    grid = (*grid_name).to_owned(),
+                    envelope = envelope.summary()
+                )
+            );
+        }
+    }
+    // A quality may not take the name of one of the model's own columns.
+    let mut own: Vec<String> = ["volume", "fill", "density", "prismoid_grid"]
+        .into_iter()
+        .chain(CORNER_HEIGHT_COLUMNS)
+        .map(str::to_owned)
+        .collect();
+    own.extend(grids.iter().map(|(_, _, category)| format!("share {category}")));
+    for (grid, grid_name, _) in grids {
+        for values in grid.cell_values.iter().filter(|values| values.role == CellValueRole::Quality) {
+            if let Some(column) = own.iter().find(|column| crate::model::triangulation::same_quality_name(column, &values.name)) {
+                anyhow::bail!(
+                    "{}",
+                    tr!(
+                        "cmd-prismoid-grid-regular-name-taken",
+                        quality = values.name.clone(),
+                        grid = (*grid_name).to_owned(),
+                        column = column.clone()
+                    )
+                );
+            }
+        }
+    }
+    let measured: Vec<(&PrismoidGrid, &str)> = grids.iter().map(|(grid, _, category)| (*grid, *category)).collect();
+    // Two or more grids add an overlap pass after the boxes: share the bar.
+    let (boxes_bar, overlap_bar) = if grids.len() > 1 {
+        (progress.phase(0.0, 0.5), progress.phase(0.5, 1.0))
+    } else {
+        (progress.clone(), progress.clone())
+    };
+    let boxes = regular_boxes(&measured, envelope, size, cancel, &boxes_bar).map_err(|refusal| regular_refusal(refusal, grids))?;
+    if boxes.at.is_empty() {
+        anyhow::bail!("{}", tr!("cmd-prismoid-grid-regular-empty"));
+    }
+    let whole = size.powi(3);
+    let (origin, _) = crate::model::prismoid_grid::regular_frame(envelope, size);
+    let base = origin.z;
+    // The measure gives rows outermost; Leo's regular models run x fastest,
+    // then y, then z.
+    let mut order: Vec<usize> = (0..boxes.at.len()).collect();
+    order.sort_unstable_by_key(|index| {
+        let [column, row, layer] = boxes.at[*index];
+        (layer, row, column)
+    });
+    let bounds: Vec<BlockBounds> = order
+        .iter()
+        .map(|index| {
+            let [column, row, layer] = boxes.at[*index].map(|at| at as f64);
+            BlockBounds {
+                lower: DVec3::new(column, row, layer) * size,
+                upper: DVec3::new(column + 1.0, row + 1.0, layer + 1.0) * size,
+            }
+        })
+        .collect();
+    let each = |value: &dyn Fn(usize) -> f64| order.iter().map(|index| value(*index)).collect::<Vec<f64>>();
+    let numeric = |name: String, values: Vec<f64>| BlockModelColumn {
+        name,
+        values: std::sync::Arc::new(crate::model::formats::block_column::BlockColumn::from_values(&values)),
+        categories: None,
+        category_colors: std::collections::BTreeMap::new(),
+    };
+    let mut columns = vec![
+        numeric("volume".to_owned(), each(&|index| boxes.volume(index))),
+        numeric("fill".to_owned(), each(&|index| boxes.volume(index) / whole)),
+    ];
+    for (quality, quality_name) in boxes.qualities.iter().enumerate() {
+        columns.push(numeric(quality_name.clone(), each(&|index| boxes.quality_means(index)[quality])));
+    }
+    let has_density = grids.iter().any(|(grid, _, _)| grid.cell_values.iter().any(|values| values.role == CellValueRole::Density));
+    if has_density {
+        columns.push(numeric("density".to_owned(), each(&|index| boxes.mass(index) / whole)));
+    }
+    let majority = |index: usize| {
+        let volumes = boxes.label_volumes(index);
+        let mut most = 0;
+        for (label, volume) in volumes.iter().enumerate() {
+            if *volume > volumes[most] {
+                most = label;
+            }
+        }
+        most as f64
+    };
+    columns.push(BlockModelColumn {
+        name: "prismoid_grid".to_owned(),
+        values: std::sync::Arc::new(crate::model::formats::block_column::BlockColumn::from_values(&each(&majority))),
+        categories: Some(boxes.labels.iter().enumerate().map(|(code, label)| (code as u32, label.clone())).collect()),
+        category_colors: std::collections::BTreeMap::new(),
+    });
+    for (label, label_name) in boxes.labels.iter().enumerate() {
+        columns.push(numeric(format!("share {label_name}"), each(&|index| boxes.label_volumes(index)[label] / whole)));
+    }
+    for (corner, corner_name) in CORNER_HEIGHT_COLUMNS.into_iter().enumerate() {
+        let height = |block: &BlockBounds| base + if corner < 4 { block.upper.z } else { block.lower.z };
+        columns.push(numeric(corner_name.to_owned(), bounds.iter().map(height).collect()));
+    }
+    let counts = RegularCounts {
+        boxes: boxes.dims.iter().product(),
+        no_density: order.iter().filter(|index| boxes.mass(**index).is_nan()).count(),
+        overlap: regular_height_overlaps(grids, envelope, size, cancel, &overlap_bar)?,
+        mixed: order
+            .iter()
+            .filter(|index| boxes.label_volumes(**index).iter().filter(|volume| **volume > 1e-9 * whole).count() > 1)
+            .count(),
+    };
+    let extent = DVec3::from_array(boxes.dims.map(|dim| dim as f64)) * size;
+    let mut geometry = crate::model::block_model::BlockGeometryBuilder::default();
+    geometry.extend(&bounds);
+    let geometry = geometry.finish();
+    let retained_geometry_bytes = geometry.heap_bytes();
+    let model = BlockModelData::from_columns(bounds.len(), DVec3::ZERO, extent, columns, retained_geometry_bytes)?.with_transform(origin, DMat3::IDENTITY)?;
+    let blocks = std::sync::Arc::new(BlockBoundsSource::Explicit(geometry));
+    let renderable_block_indices = std::sync::Arc::new(RenderableBlockIndices::All(blocks.len()));
+    let uniform_grid = blocks.uniform_grid();
+    let opaque_surface_blocks = uniform_grid.as_ref().map_or_else(
+        || crate::model::block_model::opaque_irregular_surface_block_count(&blocks, &renderable_block_indices),
+        |grid| crate::model::block_model::opaque_surface_block_count(&blocks, &renderable_block_indices, grid),
+    );
+    let world_bounds = compute_world_bounds(&model, &blocks, &renderable_block_indices);
+    let active_color_variable = Some("fill".to_owned());
+    let active_values_cache = OpenBlockModel::prepare_active_values_cache(&model, &renderable_block_indices, active_color_variable.as_deref());
+    let generated_id = uuid::Uuid::new_v4();
+    let loaded = LoadedBlockModel {
+        name,
+        source: BlockModelSource {
+            path: std::path::PathBuf::from(format!("generated/{generated_id}.blockmodel")),
+            csv_columns: None,
+        },
+        model,
+        blocks,
+        renderable_block_indices,
+        uniform_grid,
+        opaque_surface_blocks,
+        world_bounds,
+        active_color_variable,
+        active_values_cache,
+    };
+    Ok((loaded, counts))
 }
 
 fn ore_block_indices(values: &[f64], renderable_block_indices: &RenderableBlockIndices, default: Option<f64>, mode: OreFilterMode, min: f64, max: f64) -> Vec<usize> {

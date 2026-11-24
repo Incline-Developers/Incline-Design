@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 340" width="540" height="340" role="img" aria-label="Geology workspace, plan view, string 1 from (1000, 1100, 79.0) to (1200, 1100, 77.0) cut into two strings at its crossing with string 2, the new vertices at (1100, 1100, 78.0).">
+  <line x1="100" y1="170" x2="380" y2="170" stroke="#888" stroke-width="1" stroke-dasharray="4 3"/>
+  <line x1="240" y1="30" x2="240" y2="310" stroke="#000" stroke-width="1"/>
+  <line x1="100" y1="170" x2="238" y2="170" stroke="#d9622b" stroke-width="3"/>
+  <line x1="242" y1="170" x2="380" y2="170" stroke="#d9622b" stroke-width="3"/>
+  <g fill="#000"><circle cx="100" cy="170" r="3"/><circle cx="238" cy="170" r="3"/><circle cx="242" cy="170" r="3"/><circle cx="380" cy="170" r="3"/></g>
+  <g font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">
+    <text x="100" y="196">(1000, 1100, 79.0)</text><text x="380" y="196">(1200, 1100, 77.0)</text>
+    <text x="250" y="150" text-anchor="start">(1100, 1100, 78.0)</text>
+    <text x="240" y="326">string 2</text><text x="170" y="150">string 1</text>
+  </g>
+  <line x1="505" y1="52" x2="505" y2="24" stroke="#000" stroke-width="1"/>
+  <path d="M505 23 l-3 6 l6 0 z" fill="#000"/>
+  <text x="505" y="16" font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">N</text>
+</svg>

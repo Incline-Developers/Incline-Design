@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::{
     cuts::{lerp_at_z, point_in_triangle_bary_z},
@@ -6,7 +6,7 @@ use super::{
 };
 
 /// Standard text height in world units, independent of the viewport zoom.
-const CONTOUR_LABEL_HEIGHT: f64 = 15.0;
+pub(crate) const CONTOUR_LABEL_HEIGHT: f64 = 15.0;
 
 impl<'a> App<'a> {
     /// Generate contour polylines from a triangulation and store them in a new
@@ -179,6 +179,7 @@ impl<'a> App<'a> {
                     elevation: 0.0,
                     folder: None,
                     section: SectionKind::natural_layer(),
+                    quality: None,
                 };
                 crate::model::Command::AddLayerSnapshot { layer, objects }
             } else {
@@ -291,13 +292,18 @@ pub(crate) fn section_surface_lines(
         slab.signed_distance(glam::DVec3::new(vertex.x, vertex.y, vertex.z))
     };
     let mut segments = Vec::new();
+    // An edge in the plane is given by both triangles that share it when they
+    // lie on its positive side: chained, it would double back on itself.
+    let mut taken = HashSet::new();
     spatial.for_each_vertical_plane_candidate_index(slab.point, slab.normal, |face_index| {
         let Some(face) = mesh.face_vertex_indices(face_index) else {
             return;
         };
         let distance = face.map(distance_of);
         if let Some(segment) = triangle_section_segment(face.map(|index| vertices[index]), distance)
-            && contour_point_key(segment[0]) != contour_point_key(segment[1])
+            && let (first, second) = (contour_point_key(segment[0]), contour_point_key(segment[1]))
+            && first != second
+            && taken.insert((first.min(second), first.max(second)))
         {
             segments.push(segment);
         }
@@ -340,12 +346,12 @@ fn is_major_contour(z_level: f64, major_interval: f64) -> bool {
 /// Quantized endpoint key. Both triangles adjacent to a mesh edge interpolate
 /// the crossing from the same two vertices, so matching endpoints agree to
 /// float noise; quantizing at the kernel tolerance makes them hash-equal.
-fn contour_point_key(p: glam::DVec3) -> (i64, i64, i64) {
+pub(crate) fn contour_point_key(p: glam::DVec3) -> (i64, i64, i64) {
     let q = crate::model::kernel::XY_TOL;
     ((p.x / q).round() as i64, (p.y / q).round() as i64, (p.z / q).round() as i64)
 }
 
-fn chain_contour_segments(segments: Vec<[glam::DVec3; 2]>) -> Vec<Vec<glam::DVec3>> {
+pub(crate) fn chain_contour_segments(segments: Vec<[glam::DVec3; 2]>) -> Vec<Vec<glam::DVec3>> {
     // Endpoint key -> segments touching that point, for O(1) chain extension.
     let mut by_endpoint: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
     for (index, segment) in segments.iter().enumerate() {

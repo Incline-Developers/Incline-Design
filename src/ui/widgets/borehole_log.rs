@@ -5,6 +5,7 @@
 use std::{fmt::Debug, hash::Hash};
 
 use super::{
+    data_table::measured_rows,
     hint::Hint,
     viewport::{Outline, format_grade, outlined_galley, trim_decimal_zeros},
 };
@@ -120,17 +121,48 @@ impl<'a> DrillHoleProperties<'a> {
     }
 
     /// What the table's columns were measured from; a change re-measures.
+    /// The depths, values and logged copy of the rows the table measures, as
+    /// any of them can widen a column.
     fn fingerprint(&self) -> u64 {
-        use std::hash::Hasher;
+        use std::hash::{Hash, Hasher};
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.hole
-            .intervals
-            .last()
-            .map(|interval| (interval.from.to_bits(), interval.to.to_bits()))
-            .hash(&mut hasher);
+        for field in self.fields {
+            field.label.hash(&mut hasher);
+        }
+        let own = self.hole.intervals.len();
+        for row in measured_rows(own + self.deleted.len(), self.deleted.len()) {
+            hash_interval(self.hole.intervals.get(row).unwrap_or_else(|| self.deleted[row - own]), &mut hasher);
+        }
         self.deleted.len().hash(&mut hasher);
         hasher.finish()
+    }
+}
+
+/// Feed what an interval's row is written from into `hasher`.
+fn hash_interval(interval: &crate::model::drill_hole::DrillInterval, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+
+    (interval.from.to_bits(), interval.to.to_bits()).hash(hasher);
+    hash_values(&interval.values, hasher);
+    if let Some(logged) = &interval.logged {
+        (logged.from.to_bits(), logged.to.to_bits(), logged.never_logged).hash(hasher);
+        hash_values(&logged.values, hasher);
+    }
+}
+
+/// Feed an interval's field values into `hasher`.
+fn hash_values(values: &std::collections::BTreeMap<String, crate::model::drill_hole::DrillValue>, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+
+    use crate::model::drill_hole::DrillValue;
+
+    for (key, value) in values {
+        key.hash(hasher);
+        match value {
+            DrillValue::Numeric(number) => (0u8, number.to_bits()).hash(hasher),
+            DrillValue::Category(category) => (1u8, category).hash(hasher),
+        }
     }
 }
 
@@ -173,7 +205,13 @@ fn drill_table_row(interval: &crate::model::drill_hole::DrillInterval, fields: &
     let (logged_from, logged_to, logged_values) = interval.logged();
     let never_logged = !raw && interval.is_never_logged();
     let corrected = !raw && interval.is_corrected();
-    let beside = |corrected: bool, shown: String, logged: String| if corrected && shown != logged { format!("{shown} ({logged})") } else { shown };
+    let beside = |corrected: bool, moved: bool, shown: String, logged: String| {
+        if corrected && (moved || shown != logged) {
+            format!("{shown} ({logged})")
+        } else {
+            shown
+        }
+    };
     let depth = |depth: f64| if raw { depth.to_string() } else { format!("{depth:.2}") };
     let value = |value: Option<&crate::model::drill_hole::DrillValue>| match value {
         Some(crate::model::drill_hole::DrillValue::Numeric(number)) => {
@@ -187,18 +225,17 @@ fn drill_table_row(interval: &crate::model::drill_hole::DrillInterval, fields: &
         None => String::new(),
     };
     let mut row = Vec::with_capacity(fields.len() + 2);
-    let from = beside(corrected, depth(interval.from), depth(logged_from));
+    let from = beside(corrected, interval.from != logged_from, depth(interval.from), depth(logged_from));
     row.push(if never_logged {
         format!("{from} ({})", tr!("drill-hole-interval-not-logged"))
     } else {
         from
     });
-    row.push(beside(corrected, depth(interval.to), depth(logged_to)));
-    row.extend(
-        fields
-            .iter()
-            .map(|field| beside(corrected && !never_logged, value(interval.values.get(&field.key)), value(logged_values.get(&field.key)))),
-    );
+    row.push(beside(corrected, interval.to != logged_to, depth(interval.to), depth(logged_to)));
+    row.extend(fields.iter().map(|field| {
+        let (shown, logged) = (interval.values.get(&field.key), logged_values.get(&field.key));
+        beside(corrected && !never_logged, shown != logged, value(shown), value(logged))
+    }));
     row
 }
 
@@ -313,6 +350,8 @@ pub(crate) struct BoreholeLog<'a> {
     guide: Option<f64>,
     /// See [`Self::corrections_locked`].
     corrections_locked: bool,
+    /// See [`Self::previewing`].
+    previewing: Option<&'a crate::model::drill_hole::DrillHole>,
 }
 
 /// The depth window a log keeps from frame to frame and hole to hole.
@@ -369,6 +408,7 @@ impl<'a> BoreholeLog<'a> {
             well_log_style: WellLogStyle::default(),
             guide: None,
             corrections_locked: false,
+            previewing: None,
         }
     }
 
@@ -415,6 +455,13 @@ impl<'a> BoreholeLog<'a> {
     /// trace included, to line a boundary being moved up with the curves.
     pub(crate) fn guide_depth(mut self, depth: Option<f64>) -> Self {
         self.guide = depth;
+        self
+    }
+
+    /// The hole the drawn one previews a change to: the log reaches at least
+    /// as deep as that hole does, as the change once made will.
+    pub(crate) fn previewing(mut self, hole: Option<&'a crate::model::drill_hole::DrillHole>) -> Self {
+        self.previewing = hole;
         self
     }
 
@@ -927,11 +974,12 @@ impl<'a> BoreholeLog<'a> {
         reset
     }
 
-    /// The depths the log spans: the hole to its end depth, widened to cover
-    /// any well log past it: the index's depths while the hole is read, the
-    /// traces' once they are shown. The index holds only the drawn curves'
-    /// depths, so a chosen curve running past them widens the log as it
-    /// lands.
+    /// The depths the log spans: the hole to its end as corrections see it
+    /// (`end_of`), or the hole it previews if that goes deeper, widened to
+    /// cover any well log past it: the index's depths while the hole is
+    /// read, the traces' once they are shown. The index holds only the drawn
+    /// curves' depths, so a chosen curve running past them widens the log as
+    /// it lands.
     fn depth_range(&self) -> Option<(f64, f64)> {
         let first = self.hole.trace.first()?.depth;
         let logs = || {
@@ -951,7 +999,9 @@ impl<'a> BoreholeLog<'a> {
             ]
         });
         let first = first.min(shallowest);
-        let deepest = self.hole.end_depth().max(deepest);
+        let ends = self.dataset.dataset.end_of(self.hole);
+        let ends = self.previewing.map_or(ends, |hole| ends.max(self.dataset.dataset.end_of(hole)));
+        let deepest = ends.max(deepest);
         (deepest > first).then_some((first, deepest))
     }
 

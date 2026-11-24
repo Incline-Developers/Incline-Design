@@ -15,18 +15,33 @@ use crate::{
     userspace_log, userspace_warn,
 };
 
+/// Why nothing was reversed, given how many of the selected strings may be
+/// edited: none means hiding or locking, else each reads the same reversed.
+fn no_reversal_reason(editable: usize) -> String {
+    match editable {
+        0 => tr!("cmd-object-edit-no-strings-reverse"),
+        _ => tr!("cmd-object-edit-strings-read-same-reversed"),
+    }
+}
+
 impl<'a> App<'a> {
     /// Reverse every selected string as one undoable batch, the way the
     /// dialog's Reverse does one; hidden and locked strings are left alone.
+    /// With none selected the viewport picks them first, and the pick's Done
+    /// comes back here.
     pub(crate) fn reverse_selected_strings(&mut self) {
         let selected = self.selected_polylines();
+        if selected.is_empty() {
+            self.begin_selection_pick(crate::ui::state::SelectionPickTool::Reverse);
+            return;
+        }
         let Some(document) = self.workspace.active_document() else {
             return;
         };
-        let replacements: Vec<Command> = selected
-            .into_iter()
-            .filter(|&id| self.editor.canvas_edits_object(document, id))
-            .filter_map(|id| {
+        let editable: Vec<ObjectId> = selected.into_iter().filter(|&id| self.editor.canvas_edits_object(document, id)).collect();
+        let replacements: Vec<Command> = editable
+            .iter()
+            .filter_map(|&id| {
                 let before = document.get_object(id)?.clone();
                 let mut after = before.clone();
                 let Object::Polyline { verts, closed, .. } = &mut after else {
@@ -37,11 +52,13 @@ impl<'a> App<'a> {
             })
             .collect();
         if replacements.is_empty() {
-            userspace_warn!("{}", tr!("cmd-object-edit-no-strings-reverse"));
+            userspace_warn!("{}", no_reversal_reason(editable.len()));
             return;
         }
         let count = replacements.len();
         self.execute_edit(Command::Batch(replacements));
+        // A Copy Along pick waiting on one of them now marks another vertex.
+        self.refresh_copy_along_pick();
         userspace_log!("{}", tr!("cmd-object-edit-reversed-strings", count = count.to_string()));
         self.invalidate_geometry();
     }

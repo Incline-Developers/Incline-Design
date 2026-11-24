@@ -17,19 +17,18 @@ use crate::{
 pub(crate) const DEFAULT_THIN_TOLERANCE: f64 = 0.1;
 
 impl<'a> App<'a> {
-    /// Open Thin Strings on every selected string the canvas may edit.
+    /// Open Thin Strings on every selected string the canvas may edit, or
+    /// on none for its Pick to fill; or point the open dialog at them,
+    /// keeping its tolerance.
     pub(crate) fn open_thin_strings_dialog(&mut self) {
         let object_ids: Vec<ObjectId> = self.editable_polyline_sources(self.selected_polylines()).into_iter().map(|(id, _, _)| id).collect();
-        if object_ids.is_empty() {
-            userspace_warn!("{}", tr!("cmd-thin-select-strings"));
-            return;
-        }
         // Carried on from a dialog this one replaces, so the overlay still
         // sees a new preview.
-        let preview_generation = self.editor.thin_strings_dialog.as_ref().map_or(0, |dialog| dialog.preview_generation);
+        let held = self.editor.thin_strings_dialog.as_ref().map(|dialog| (dialog.preview_generation, dialog.tolerance));
+        let (preview_generation, tolerance) = held.unwrap_or((0, self.editor.thin_tolerance));
         self.editor.thin_strings_dialog = Some(ThinStringsDialog {
             object_ids,
-            tolerance: self.editor.thin_tolerance,
+            tolerance,
             slider_max: 0.0,
             before: 0,
             after: 0,
