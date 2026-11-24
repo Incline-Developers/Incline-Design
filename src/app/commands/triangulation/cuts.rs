@@ -457,7 +457,7 @@ impl<'a> App<'a> {
             let outcome = match result {
                 Ok(outcome) => outcome,
                 Err(error) if !crate::app::jobs::is_cancelled(&error) => {
-                    crate::userspace_error!("{}", tr!("cmd-session-triangulation-failed", message = format!("{error:#}")));
+                    crate::userspace_warn!("{}", tr!("cmd-session-triangulation-failed", message = format!("{error:#}")));
                     return;
                 }
                 Err(_) => return,

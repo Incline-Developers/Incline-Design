@@ -9,8 +9,8 @@ use super::{
 use crate::{
     i18n::tr,
     model::{
-        drill_hole::OpenDrillHoleDataset,
-        thickness_points::{InterceptSource, MisfitRow, ThicknessPoint, three_places},
+        drill_hole::{OpenDrillHoleDataset, ReferenceSide},
+        thickness_points::{self, InterceptSource, MisfitRow, ThicknessPoint, three_places},
     },
     ui::{
         state::{EditorState, GridCheck, HoleMisfitTable, SelectionPickTool, ToolSubject, TriangulationPickTarget, UiCommand, UiProjectView},
@@ -198,8 +198,8 @@ pub(crate) fn draw_thickness_table(ui: &mut egui::Ui, editor: &mut EditorState) 
         egui::Align::Max,
         egui::Align::Max,
     ];
-    let shown = |row: usize| table.points.get(row).map_or_else(Vec::new, |point| cells(point, true));
-    let copied = |row: usize| table.points.get(row).map_or_else(Vec::new, |point| cells(point, false));
+    let shown = |row: usize| table.points.get(row).map_or_else(Vec::new, |point| cells(point, table.side, true));
+    let copied = |row: usize| table.points.get(row).map_or_else(Vec::new, |point| cells(point, table.side, false));
     DragableMenu::new("thickness_points_table", tr!("thickness-points-table-title", name = table.name.clone()))
         .open(&mut open)
         .min_width(520.0)
@@ -227,17 +227,19 @@ pub(crate) fn draw_thickness_table(ui: &mut egui::Ui, editor: &mut EditorState) 
 }
 
 /// A point's row: rounded for the eye, or whole for a copy. Depths stand
-/// for a hole's roof and floor, surveyed heights for a measured pair's.
-fn cells(point: &ThicknessPoint, rounded: bool) -> Vec<String> {
+/// for a hole's roof and floor, surveyed heights for a measured pair's. X and
+/// Y are where the point stands, at the pick of `side`.
+fn cells(point: &ThicknessPoint, side: ReferenceSide, rounded: bool) -> Vec<String> {
     let number = |value: f64, places: usize| if rounded { format!("{value:.places$}") } else { value.to_string() };
     let (source, roof, floor) = match &point.source {
         InterceptSource::Hole { dhid, roof_depth, floor_depth } => (dhid.clone(), number(*roof_depth, 3), floor_depth.map_or_else(String::new, |depth| number(depth, 3))),
         InterceptSource::Measured { id, .. } => (id.clone(), number(point.roof.z, 3), number(point.floor.z, 3)),
     };
+    let place = thickness_points::picked(point.roof, point.floor, side);
     vec![
         source,
-        number(point.roof.x, 3),
-        number(point.roof.y, 3),
+        number(place.x, 3),
+        number(place.y, 3),
         number(point.true_thickness, 3),
         number(point.vertical_thickness, 3),
         number(point.along_hole, 3),

@@ -12303,6 +12303,9 @@ pub(crate) struct PairsFile {
 pub(crate) struct ThicknessTable {
     pub(crate) name: String,
     pub(crate) surface: String,
+    /// The side of the seam the surface was built on, whose pick each
+    /// point stands at.
+    pub(crate) side: crate::model::drill_hole::ReferenceSide,
     pub(crate) points: Vec<crate::model::thickness_points::ThicknessPoint>,
 }
 
