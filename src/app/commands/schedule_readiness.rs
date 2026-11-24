@@ -1521,17 +1521,27 @@ pub(crate) fn block_tonnes_for_stage(block: &DigBlockRecord, field: ReserveField
 /// Solids step lets the planner choose. A partial or invalid figure is still
 /// refused: those are measurements, and wrong ones.
 fn block_tonnes(block: &DigBlockRecord, field: ReserveFieldId, zero: bool) -> Result<f64, ReadinessProblem> {
+    material_tonnes(&block.name, &block.material, field, zero)
+}
+
+/// Whether a block of a measured solid holds nothing a schedule digs: no
+/// tonnes, or none measured. Such ground is not there to a schedule -
+/// nothing digs it and nothing under it waits for it - so it is not drawn
+/// as standing either. A dump or stockpile's capacity-only solid is not
+/// ground at all, and is left as it is.
+pub(crate) fn empty_ground(material: &MaterialState, field: ReserveFieldId, zero: bool) -> bool {
+    matches!(material, MaterialState::Measured(_) | MaterialState::Unavailable) && !material_tonnes("", material, field, zero).is_ok_and(|tonnes| tonnes > 0.0)
+}
+
+fn material_tonnes(name: &str, material: &MaterialState, field: ReserveFieldId, zero: bool) -> Result<f64, ReadinessProblem> {
     let unmeasured = |reason: String| {
         if zero {
             Ok(0.0)
         } else {
-            Err(ReadinessProblem::Unmeasured {
-                block: block.name.clone(),
-                reason,
-            })
+            Err(ReadinessProblem::Unmeasured { block: name.to_owned(), reason })
         }
     };
-    let totals: &ReserveTotals = match &block.material {
+    let totals: &ReserveTotals = match material {
         MaterialState::Measured(totals) => totals,
         MaterialState::CapacityOnly => return unmeasured(tr!("sequence-material-capacity-only")),
         MaterialState::NoSchema => return unmeasured(tr!("sequence-material-no-schema")),
@@ -1541,20 +1551,20 @@ fn block_tonnes(block: &DigBlockRecord, field: ReserveFieldId, zero: bool) -> Re
         return unmeasured(tr!("sequence-material-unmapped"));
     };
     if total.is_partial() {
-        return Err(ReadinessProblem::Partial { block: block.name.clone() });
+        return Err(ReadinessProblem::Partial { block: name.to_owned() });
     }
     match total.value(ReserveAggregation::Sum) {
         // A measured zero stays a zero: it is an answer, not an absence.
         Some(tonnes) if tonnes >= 0.0 => Ok(tonnes),
         Some(tonnes) => Err(ReadinessProblem::InvalidTonnes {
-            block: block.name.clone(),
+            block: name.to_owned(),
             value: tonnes,
         }),
         // `value` rejects non-finite sums; reaching here with contributions
         // means finite parts summed to something this build cannot treat as
         // tonnes. Nothing contributed means nothing maps onto the field.
         None if total.contributions > 0 => Err(ReadinessProblem::InvalidTonnes {
-            block: block.name.clone(),
+            block: name.to_owned(),
             value: f64::INFINITY,
         }),
         None => unmeasured(tr!("sequence-material-unmapped")),

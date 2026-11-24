@@ -966,14 +966,18 @@ impl crate::app::App<'_> {
             self.schedule_animation.body_generation = self.schedule_animation.body_generation.wrapping_add(1);
             return;
         };
+        let tonnage = document.schedule().tonnage_field();
+        let zero = document.schedule().unmeasured_as_zero();
         for solid in document.solids() {
             let Some(cache) = self.solid_view_cache.get(&solid.id) else { continue };
             let Some(parts) = cache.finished_partition() else { continue };
-            for part in parts {
+            for (slot, part) in parts.iter().enumerate() {
                 let Some(block) = &part.block else { continue };
                 // Ground out of mining is never dug, and is not drawn as
                 // standing ground either: it is gone, as on the Solids pages.
-                if cache.excludes(solid, part) {
+                // So is ground holding no tonnes, which no schedule digs or
+                // waits for: drawn, it stands alone once all round it is dug.
+                if cache.excludes(solid, part) || tonnage.is_some_and(|field| super::commands::schedule_readiness::empty_ground(&cache.material_state(slot), field, zero)) {
                     continue;
                 }
                 let mut mesh = part.mesh.clone();

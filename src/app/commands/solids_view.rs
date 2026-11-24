@@ -585,6 +585,21 @@ impl ViewSolid {
     /// the blast it lies in, or the dig block itself. Read off the parts
     /// rather than cut out of them, so the dig blocks still add back up to
     /// the benches they came from.
+    /// What the finished reserves say of the dig block at `slot` of the
+    /// partition.
+    pub(crate) fn material_state(&self, slot: usize) -> MaterialState {
+        let product = self.reserves.product();
+        match product.map(|product| product.availability) {
+            Some(ReserveAvailability::CapacityOnly) => MaterialState::CapacityOnly,
+            Some(ReserveAvailability::NoSchema) => MaterialState::NoSchema,
+            Some(ReserveAvailability::Measured) => match product.and_then(|product| product.totals.get(slot)) {
+                Some(totals) => MaterialState::Measured(totals.clone()),
+                None => MaterialState::Unavailable,
+            },
+            None => MaterialState::Unavailable,
+        }
+    }
+
     pub(crate) fn excludes(&self, solid: &Solid, part: &SolidPart) -> bool {
         let exclusions = &solid.exclusions;
         if exclusions.is_empty() {
@@ -3757,7 +3772,6 @@ impl crate::app::App<'_> {
             let Some(blocks) = cache.finished_partition() else {
                 return Err(PlanningNotReady::Incomplete { solid: solid.name.clone() });
             };
-            let totals = cache.reserves.product().map(|product| &product.totals);
             for (slot, part) in blocks.iter().enumerate() {
                 let Some(block) = &part.block else { continue };
                 records.push(DigBlockRecord {
@@ -3783,15 +3797,7 @@ impl crate::app::App<'_> {
                         .product()
                         .and_then(|product| product.material.clone())
                         .map(|capture| BlockPortions { capture, slot }),
-                    material: match cache.reserves.product().map(|product| product.availability) {
-                        Some(ReserveAvailability::CapacityOnly) => MaterialState::CapacityOnly,
-                        Some(ReserveAvailability::NoSchema) => MaterialState::NoSchema,
-                        Some(ReserveAvailability::Measured) => match totals.and_then(|totals| totals.get(slot)) {
-                            Some(totals) => MaterialState::Measured(totals.clone()),
-                            None => MaterialState::Unavailable,
-                        },
-                        None => MaterialState::Unavailable,
-                    },
+                    material: cache.material_state(slot),
                 });
             }
         }
