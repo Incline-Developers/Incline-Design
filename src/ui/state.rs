@@ -8109,7 +8109,6 @@ impl UiCommand {
             | Self::SetDrillHoleWorkingSections { .. }
             | Self::CheckStratColumn { .. }
             | Self::OpenDrillHoleColorDialog(_)
-            | Self::LinkGeophysics(_)
             | Self::ReadHoleGeophysics { .. }
             | Self::OpenReferencePoints
             | Self::OpenReferenceSurface
@@ -8488,6 +8487,7 @@ impl UiCommand {
             Self::RemovePrismoidGrid(_) => report(tr!("state-remove-prismoid-grid"), String::new()),
             Self::SetBlockModelColorVariable { variable, .. } => report(tr!("state-set-block-model-variable"), variable.clone()),
             Self::ImportDrillHole(source) => report(tr!("state-import-drillholes"), source.display_name()),
+            Self::LinkGeophysics(_) => report(tr!("state-link-geophysics"), tr!("state-choose-one-more-files")),
             Self::CreateDrillPattern { name, collars, .. } => report(
                 tr!("common-create-drill-pattern"),
                 tr!("state-name-count-holes", name = name.to_string(), count = collars.len().to_string()),

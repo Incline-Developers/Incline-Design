@@ -60,13 +60,19 @@ impl<'a> App<'a> {
     /// either hold them for an already-known link or index them as a new one.
     pub(crate) fn link_geophysics_files(&mut self, id: DrillHoleId, files: Vec<web_sys::File>) {
         let Some(proxy) = self.web_event_loop_proxy.clone() else { return };
+        // What the handler logs joins the pick's own console row.
+        let report = crate::logging::retain_current_report();
         wasm_bindgen_futures::spawn_local(async move {
             let mut identified = Vec::with_capacity(files.len());
             for file in files {
                 let identity = identify_browser_file(&file).await;
                 identified.push((file, identity));
             }
-            let _ = proxy.send_event(crate::app::AppEvent::GeophysicsFileIdentified { dataset: id, files: identified });
+            let _ = proxy.send_event(crate::app::AppEvent::GeophysicsFileIdentified {
+                dataset: id,
+                files: identified,
+                report,
+            });
         });
     }
 

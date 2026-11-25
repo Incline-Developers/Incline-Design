@@ -56,7 +56,10 @@ impl Indexed {
                 indexed.file
             }
             #[cfg(not(target_arch = "wasm32"))]
-            Indexed::Kept(file) => file,
+            Indexed::Kept(file) => {
+                crate::userspace_log!("{}", tr!("geophysics-file-unchanged-kept", file = file.identity.name.clone()));
+                file
+            }
         }
     }
 }
@@ -361,6 +364,11 @@ mod native {
             let Some(current) = self.drill_holes.iter().find(|item| item.id == id).map(|item| item.geophysics.clone()) else {
                 return;
             };
+            // The dataset may have been unloaded while the file window was open.
+            if self.known_holes(id).is_none() {
+                crate::userspace_warn!("{}", tr!("common-load-drillholes-before-linking-geophysics"));
+                return;
+            }
             let previous = current.as_ref().and_then(|link| link.files.first()).map(|file| file.columns.clone());
             // Only a one-file link is kept whole: a pick replaces them all.
             let mut reuse = (paths.len() == 1)

@@ -1422,7 +1422,7 @@ csv-drill-hole-holes-hole-s-carry-overlapping = mashimo { $holes } yana vipindi 
 csv-drill-hole-skipped-row-reason = Safu imerukwa: { $reason }
 csv-drill-hole-row-attribute-not-number = { $file } safu { $row } ina '{ $value }' katika safu wima ya namba
 csv-drill-hole-row-repeats-dhid = { $file } safu { $row } inarudia DHID '{ $dhid }'
-csv-drill-hole-most-rows-unreadable = { $file }: safu { $skipped } kati ya { $count } hazikuweza kusomwa; sababu ziko kwenye konsoli
+csv-drill-hole-most-rows-unreadable = { $file }: safu { $skipped } kati ya { $count } hazikuweza kusomwa
 csv-drill-hole-file-maps-dip-column-twice = { $file } inapanga safu wima ya mteremko au mwinamo mara mbili
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } inapanga safu wima ya kina cha jumla mara mbili
 csv-drill-hole-total-depths-left-out =
@@ -1478,7 +1478,7 @@ csv-geophysics-row-column-count = { $file } safu { $row } ina safu wima { $found
 csv-geophysics-row-negative-depth = { $file } safu { $row } ina kina hasi
 csv-geophysics-row-no-depth = { $file } safu { $row } haina kina kinachosomeka
 csv-geophysics-file-s-path-not-valid = njia ya faili si UTF-8 halali, jambo ambalo mradi hauwezi kuhifadhi: badilisha jina la faili au folda yake kisha uiunganishe tena
-csv-geophysics-rows-skipped = { $file }: safu { $skipped } kati ya { $rows } hazikuweza kusomwa; sababu ziko kwenye dashibodi
+csv-geophysics-rows-skipped = { $file }: safu { $skipped } kati ya { $rows } hazikuweza kusomwa
 csv-geophysics-runs-not-grouped = Jiofizikia ya mashimo { $count } inakuja katika zaidi ya mfululizo mmoja, haijapangwa kwa shimo; kila mfululizo unaofuata huongeza kina ambacho shimo lake halina usomaji pekee: { $holes }
 csv-geophysics-linked-downhole-geophysics-from-file = Umeunganisha jiofizikia ya ndani ya shimo kutoka { $file }: mashimo { $holes }, mikunjo { $curves }; safu { $rows } zimesomwa, { $skipped } zimerukwa. Usomaji unabaki kwenye faili na husomwa shimo moja kwa wakati
 csv-geophysics-no-readings = hakuna usomaji
@@ -1529,7 +1529,11 @@ drill-hole-preset = Mpangilio
 drill-hole-px = px
 drill-hole-rainbow = Upinde wa mvua
 drill-hole-rename-out-of-sequence-hole = Kubadilisha jina { $from } kuwa { $to } kunaiweka nje ya mpangilio wa safu wima ya stratigrafia kwenye shimo hili.
-drill-hole-rename-out-of-sequence-holes = Kubadilisha jina { $from } kuwa { $to } kunaiweka nje ya mpangilio wa safu wima ya stratigrafia kwenye mashimo { $count }.
+drill-hole-rename-out-of-sequence-holes =
+    { $count ->
+        [one] Kubadilisha jina { $from } kuwa { $to } kunaiweka nje ya mpangilio wa safu wima ya stratigrafia kwenye shimo { $count }.
+       *[other] Kubadilisha jina { $from } kuwa { $to } kunaiweka nje ya mpangilio wa safu wima ya stratigrafia kwenye mashimo { $count }.
+    }
 drill-hole-rename-out-of-sequence-note = Tabaka zilizopinduliwa au kurudiwa ziko nje ya mpangilio, kwa hivyo kubadilisha jina hakuzuiwi. Sawa hubadilisha jina hata hivyo; Ghairi hurudi kwenye kubadilisha jina.
 drill-hole-rename-out-of-sequence-title = Nje ya Mpangilio
 drill-hole-rename-seam-every-hole-of = Kila shimo la
@@ -1918,6 +1922,7 @@ files-xy-grid-options = Chaguzi za Gridi ya XY
 geophysics-checking-geophysics-files = Inakagua faili za jiofizikia
 geophysics-downhole-geophysics-name-could-not = Jiofizikia ya ndani ya shimo ya '{ $name }' haikuweza kuunganishwa: { $error }
 geophysics-file-changed = Faili ya jiofizikia imebadilika tangu kielezo chake kilipotengenezwa
+geophysics-file-unchanged-kept = { $file } haijabadilika tangu ilipoorodheshwa; faharasa yake inahifadhiwa
 geophysics-file-cannot-be-opened = { $file } haiwezi kufunguliwa: { $error }
 geophysics-file-unreadable = Faili ya jiofizikia iliyounganishwa na '{ $name }' haiwezi kusomwa kwenye { $path } ({ $error }); iunganishe tena kutoka menyu ya kubofya kulia ya seti ya data
 geophysics-linked-changed-rereading = Jiofizikia iliyounganishwa na '{ $name }' imebadilika tangu kielezo chake kilipotengenezwa; inaisoma tena
@@ -2466,6 +2471,7 @@ state-keep-outside = Weka nje
 state-kriged-block-model = Mfano wa Vitalu wa Kriging
 state-load-block-model = Pakia Mfano wa Vitalu
 state-load-drillholes = Pakia Mashimo ya Uchimbaji
+state-link-geophysics = Unganisha Jiofizikia
 state-load-layer = Pakia Tabaka
 state-load-point-cloud = Pakia Wingu la Vidokezo
 state-load-raster = Pakia Rasta

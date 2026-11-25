@@ -3367,7 +3367,7 @@ csv-drill-hole-holes-hole-s-carry-overlapping = { $holes } hole(s) carry overlap
 csv-drill-hole-skipped-row-reason = Skipped a row: { $reason }
 csv-drill-hole-row-attribute-not-number = { $file } row { $row } has '{ $value }' in a numeric column
 csv-drill-hole-row-repeats-dhid = { $file } row { $row } repeats DHID '{ $dhid }'
-csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } of { $count } rows could not be read; the reasons are in the console
+csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } of { $count } rows could not be read
 csv-drill-hole-file-maps-dip-column-twice = { $file } maps a dip or inclination column twice
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } maps a total depth column twice
 csv-drill-hole-total-depths-left-out =
@@ -3423,7 +3423,7 @@ csv-geophysics-row-column-count = { $file } row { $row } has { $found } columns;
 csv-geophysics-row-negative-depth = { $file } row { $row } has a negative depth
 csv-geophysics-row-no-depth = { $file } row { $row } has no readable depth
 csv-geophysics-file-s-path-not-valid = the file's path is not valid UTF-8, which a project cannot save: rename the file or its folder and link it again
-csv-geophysics-rows-skipped = { $file }: { $skipped } of { $rows } rows could not be read; the reasons are in the console
+csv-geophysics-rows-skipped = { $file }: { $skipped } of { $rows } rows could not be read
 csv-geophysics-runs-not-grouped = Geophysics for { $count } hole(s) comes in more than one run, not grouped by hole; each later run adds only depths its hole has no reading at: { $holes }
 csv-geophysics-linked-downhole-geophysics-from-file = Linked downhole geophysics from { $file }: { $holes } hole(s), curves { $curves }; { $rows } row(s) read, { $skipped } skipped. The readings stay in the file and are read a hole at a time
 csv-geophysics-no-readings = no readings
@@ -3480,7 +3480,11 @@ drill-hole-preset = Preset
 drill-hole-px = px
 drill-hole-rainbow = Rainbow
 drill-hole-rename-out-of-sequence-hole = Renaming { $from } to { $to } puts it out of the strat column's order in this hole.
-drill-hole-rename-out-of-sequence-holes = Renaming { $from } to { $to } puts it out of the strat column's order in { $count } holes.
+drill-hole-rename-out-of-sequence-holes =
+    { $count ->
+        [one] Renaming { $from } to { $to } puts it out of the strat column's order in { $count } hole.
+       *[other] Renaming { $from } to { $to } puts it out of the strat column's order in { $count } holes.
+    }
 drill-hole-rename-out-of-sequence-note = Overturned or repeated strata sit out of order, so the rename is not blocked. OK renames anyway; Cancel goes back to the rename.
 drill-hole-rename-out-of-sequence-title = Out of Sequence
 drill-hole-rename-seam-every-hole-of = Every hole of
@@ -3893,6 +3897,7 @@ files-xy-grid-options = XY Grid Options
 geophysics-checking-geophysics-files = Checking geophysics files
 geophysics-downhole-geophysics-name-could-not = Downhole geophysics for '{ $name }' could not be linked: { $error }
 geophysics-file-changed = The geophysics file changed since it was indexed
+geophysics-file-unchanged-kept = { $file } has not changed since it was indexed; its index is kept
 geophysics-file-cannot-be-opened = { $file } cannot be opened: { $error }
 geophysics-file-unreadable = The geophysics file linked to '{ $name }' cannot be read at { $path } ({ $error }); link it again from the dataset's right-click menu
 geophysics-linked-changed-rereading = The geophysics linked to '{ $name }' changed since it was indexed; reading it again
@@ -4482,6 +4487,7 @@ state-keep-outside = Keep outside
 state-kriged-block-model = Kriged Block Model
 state-load-block-model = Load Block Model
 state-load-drillholes = Load Drillholes
+state-link-geophysics = Link Geophysics
 state-load-layer = Load Layer
 state-load-point-cloud = Load Point Cloud
 state-load-raster = Load Raster

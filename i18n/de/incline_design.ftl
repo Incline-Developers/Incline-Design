@@ -1439,7 +1439,7 @@ csv-drill-hole-holes-hole-s-carry-overlapping = { $holes } Bohrloch/-löcher ent
 csv-drill-hole-skipped-row-reason = Zeile übersprungen: { $reason }
 csv-drill-hole-row-attribute-not-number = { $file } Zeile { $row } enthält '{ $value }' in einer numerischen Spalte
 csv-drill-hole-row-repeats-dhid = { $file } Zeile { $row } wiederholt DHID '{ $dhid }'
-csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } von { $count } Zeilen konnten nicht gelesen werden; die Gründe stehen in der Konsole
+csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } von { $count } Zeilen konnten nicht gelesen werden
 csv-drill-hole-file-maps-dip-column-twice = { $file } ordnet eine Fallen- oder Neigungsspalte doppelt zu
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } ordnet eine Endteufenspalte doppelt zu
 csv-drill-hole-total-depths-left-out =
@@ -1495,7 +1495,7 @@ csv-geophysics-row-column-count = { $file } Zeile { $row } hat { $found } Spalte
 csv-geophysics-row-negative-depth = { $file } Zeile { $row } hat eine negative Tiefe
 csv-geophysics-row-no-depth = { $file } Zeile { $row } hat keine lesbare Tiefe
 csv-geophysics-file-s-path-not-valid = Der Pfad der Datei ist kein gültiges UTF-8, was ein Projekt nicht speichern kann: Benennen Sie die Datei oder ihren Ordner um und verknüpfen Sie sie erneut
-csv-geophysics-rows-skipped = { $file }: { $skipped } von { $rows } Zeilen konnten nicht gelesen werden; die Gründe stehen in der Konsole
+csv-geophysics-rows-skipped = { $file }: { $skipped } von { $rows } Zeilen konnten nicht gelesen werden
 csv-geophysics-runs-not-grouped = Die Geophysik für { $count } Bohrloch/-löcher liegt in mehr als einem Abschnitt vor, nicht nach Bohrloch gruppiert; jeder spätere Abschnitt ergänzt nur Tiefen, für die das Bohrloch keinen Messwert hat: { $holes }
 csv-geophysics-linked-downhole-geophysics-from-file = Bohrlochgeophysik aus { $file } verknüpft: { $holes } Bohrloch/-löcher, Kurven { $curves }; { $rows } Zeile(n) gelesen, { $skipped } übersprungen. Die Messwerte verbleiben in der Datei und werden bohrlochweise gelesen
 csv-geophysics-no-readings = keine Messwerte
@@ -1546,7 +1546,11 @@ drill-hole-preset = Voreinstellung
 drill-hole-px = px
 drill-hole-rainbow = Regenbogen
 drill-hole-rename-out-of-sequence-hole = Die Umbenennung von { $from } in { $to } bringt es in diesem Bohrloch aus der Reihenfolge der Strat-Säule.
-drill-hole-rename-out-of-sequence-holes = Die Umbenennung von { $from } in { $to } bringt es in { $count } Bohrlöchern aus der Reihenfolge der Strat-Säule.
+drill-hole-rename-out-of-sequence-holes =
+    { $count ->
+        [one] Die Umbenennung von { $from } in { $to } bringt es in { $count } Bohrloch aus der Reihenfolge der Strat-Säule.
+       *[other] Die Umbenennung von { $from } in { $to } bringt es in { $count } Bohrlöchern aus der Reihenfolge der Strat-Säule.
+    }
 drill-hole-rename-out-of-sequence-note = Überkippte oder wiederholte Schichten liegen außerhalb der Reihenfolge, daher wird die Umbenennung nicht blockiert. OK benennt trotzdem um; Abbrechen kehrt zur Umbenennung zurück.
 drill-hole-rename-out-of-sequence-title = Außerhalb der Reihenfolge
 drill-hole-rename-seam-every-hole-of = Jedes Bohrloch von
@@ -1935,6 +1939,7 @@ files-xy-grid-options = XY-Raster-Optionen
 geophysics-checking-geophysics-files = Geophysikdateien werden geprüft
 geophysics-downhole-geophysics-name-could-not = Die Bohrlochgeophysik für '{ $name }' konnte nicht verknüpft werden: { $error }
 geophysics-file-changed = Die Geophysikdatei hat sich seit der Indizierung geändert
+geophysics-file-unchanged-kept = { $file } hat sich seit der Indizierung nicht geändert; sein Index bleibt erhalten
 geophysics-file-cannot-be-opened = { $file } kann nicht geöffnet werden: { $error }
 geophysics-file-unreadable = Die mit '{ $name }' verknüpfte Geophysikdatei kann unter { $path } nicht gelesen werden ({ $error }); verknüpfen Sie sie erneut über das Kontextmenü des Datensatzes
 geophysics-linked-changed-rereading = Die mit '{ $name }' verknüpfte Geophysik hat sich seit der Indizierung geändert; sie wird erneut gelesen
@@ -2483,6 +2488,7 @@ state-keep-outside = Außenbereich behalten
 state-kriged-block-model = Gekrigtes Blockmodell
 state-load-block-model = Blockmodell laden
 state-load-drillholes = Bohrlöcher laden
+state-link-geophysics = Geophysik verknüpfen
 state-load-layer = Ebene laden
 state-load-point-cloud = Punktwolke laden
 state-load-raster = Raster laden

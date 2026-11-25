@@ -95,7 +95,7 @@ Holes coloured by seam code show where each seam sits across the area. The same 
 ### Where it is
 Any workspace: right-click a loaded dataset in the explorer, or right-click a hole in the viewport, then **Appearance...**
 ### Before you start
-A drill hole dataset is loaded: the explorer does not offer **Appearance...** on a dataset that is not loaded. The viewport entry acts on the whole dataset of the hole you click.
+A drill hole dataset is loaded: neither the explorer nor the viewport offers **Appearance...** on a dataset that is not loaded, and the window closes if its dataset is unloaded. The viewport entry acts on the whole dataset of the hole you click.
 ### Steps
 1. Right-click the dataset in the explorer, or a hole in the viewport, and choose **Appearance...** The title reads **Drillhole Appearance:** and the dataset's name.
 2. Under **Field** choose the field to colour by. For a coded field the **Colour scale** card lists each code with its colour, under a note that counts the codes, for example "2 codes. An interval with no logged value stays white."
@@ -260,7 +260,7 @@ Seams logged in the intervals are read against the geophysics of the same hole. 
 ### Where it is
 Any workspace: right-click a loaded dataset in the explorer, or right-click a hole in the viewport, then **Link Geophysics...**
 ### Before you start
-A drill hole dataset is loaded: the explorer does not offer **Link Geophysics...** on a dataset that is not loaded. The file is a CSV saved as UTF-8 text with one header row: a hole id column, a depth column and one column per curve, with the dataset's hole ids. Keep each hole's rows together; within a hole the depths may come in any order. For example:
+A drill hole dataset is loaded: neither the explorer nor the viewport offers **Link Geophysics...** or **Appearance** on a dataset that is not loaded. The file is a CSV saved as UTF-8 text with one header row: a hole id column, a depth column and one column per curve, with the dataset's hole ids. Keep each hole's rows together; within a hole the depths may come in any order. For example:
 ```
 HOLEID,DEPTH,GAMMA,LSD,RES
 H1,10.0,85,2.45,40
@@ -269,7 +269,7 @@ H2,24.5,28,1.42,550
 ```
 ### Steps
 1. Right-click the dataset in the explorer, or a hole in the viewport, and choose **Link Geophysics...** Pick the file in the file window, filtered to "Downhole geophysics CSV". Several files can be picked together. They are linked in name order and replace any link the dataset had.
-2. When indexing finishes the console reports, for each file, "Linked downhole geophysics from" with the file's name, the count of holes, the curves kept and the counts of rows read and skipped, then "The readings stay in the file and are read a hole at a time".
+2. When indexing finishes the console row **Link Geophysics** reports, for each file, "Linked downhole geophysics from" with the file's name, the count of holes, the curves kept and the counts of rows read and skipped, then "The readings stay in the file and are read a hole at a time". Picking the same file again, unchanged, keeps its index: the desktop says "has not changed since it was indexed; its index is kept", a browser "is used for this session's downhole geophysics".
 3. Check the curves the console names. Headers are read by name, any case, spaces and punctuation ignored. The depth is `DEPTH`, also `DEP` or `MD`. The gamma curve is `GAMMA`, also `GAM`, `GR`, `GRDE` or `GAMM`. The long density is `LSD`, also `DENL`, `LongDensity` or `LongSpacedDensity`. The short density is `SSD`, also `DENB`, `ShortDensity` or `ShortSpacedDensity`. Any other column whose cells are mostly numbers is kept as a further curve. See [Log Curves](#6-log-curves).
 
 ![Any workspace, right-click menu on the dataset with Link Geophysics... chosen, and the console line reporting the linked file.](images/10-link-geophysics-menu.svg)

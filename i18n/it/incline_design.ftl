@@ -1440,7 +1440,7 @@ csv-drill-hole-holes-hole-s-carry-overlapping = { $holes } foro/i hanno interval
 csv-drill-hole-skipped-row-reason = Riga saltata: { $reason }
 csv-drill-hole-row-attribute-not-number = { $file } riga { $row } contiene '{ $value }' in una colonna numerica
 csv-drill-hole-row-repeats-dhid = { $file } riga { $row } ripete il DHID '{ $dhid }'
-csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } righe su { $count } non sono leggibili; i motivi sono nella console
+csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } righe su { $count } non sono leggibili
 csv-drill-hole-file-maps-dip-column-twice = { $file } assegna due volte una colonna di immersione o inclinazione
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } assegna due volte una colonna di profondità totale
 csv-drill-hole-total-depths-left-out =
@@ -1496,7 +1496,7 @@ csv-geophysics-row-column-count = La riga { $row } di { $file } ha { $found } co
 csv-geophysics-row-negative-depth = La riga { $row } di { $file } ha una profondità negativa
 csv-geophysics-row-no-depth = La riga { $row } di { $file } non ha una profondità leggibile
 csv-geophysics-file-s-path-not-valid = il percorso del file non è UTF-8 valido, e un progetto non può salvarlo: rinomina il file o la sua cartella e collegalo di nuovo
-csv-geophysics-rows-skipped = { $file }: { $skipped } righe su { $rows } non hanno potuto essere lette; i motivi sono nella console
+csv-geophysics-rows-skipped = { $file }: { $skipped } righe su { $rows } non hanno potuto essere lette
 csv-geophysics-runs-not-grouped = La geofisica di { $count } foro/i arriva in più di un tratto, non raggruppata per foro; ogni tratto successivo aggiunge solo le profondità in cui il foro non ha letture: { $holes }
 csv-geophysics-linked-downhole-geophysics-from-file = Collegata la geofisica in foro da { $file }: { $holes } foro/i, curve { $curves }; { $rows } riga/righe lette, { $skipped } saltate. Le letture restano nel file e vengono lette un foro alla volta
 csv-geophysics-no-readings = nessuna lettura
@@ -1547,7 +1547,11 @@ drill-hole-preset = Preimpostazione
 drill-hole-px = px
 drill-hole-rainbow = Arcobaleno
 drill-hole-rename-out-of-sequence-hole = Rinominare { $from } in { $to } lo mette fuori dall'ordine della colonna stratigrafica in questo foro.
-drill-hole-rename-out-of-sequence-holes = Rinominare { $from } in { $to } lo mette fuori dall'ordine della colonna stratigrafica in { $count } fori.
+drill-hole-rename-out-of-sequence-holes =
+    { $count ->
+        [one] Rinominare { $from } in { $to } lo mette fuori dall'ordine della colonna stratigrafica in { $count } foro.
+       *[other] Rinominare { $from } in { $to } lo mette fuori dall'ordine della colonna stratigrafica in { $count } fori.
+    }
 drill-hole-rename-out-of-sequence-note = Gli strati rovesciati o ripetuti stanno fuori ordine, quindi la rinomina non è bloccata. OK rinomina comunque; Annulla torna alla rinomina.
 drill-hole-rename-out-of-sequence-title = Fuori sequenza
 drill-hole-rename-seam-every-hole-of = Ogni foro di
@@ -1936,6 +1940,7 @@ files-xy-grid-options = Opzioni griglia XY
 geophysics-checking-geophysics-files = Verifica dei file di geofisica
 geophysics-downhole-geophysics-name-could-not = Impossibile collegare la geofisica in foro per '{ $name }': { $error }
 geophysics-file-changed = Il file di geofisica è cambiato dopo l'indicizzazione
+geophysics-file-unchanged-kept = { $file } non è cambiato da quando è stato indicizzato; il suo indice viene mantenuto
 geophysics-file-cannot-be-opened = { $file } non può essere aperto: { $error }
 geophysics-file-unreadable = Il file di geofisica collegato a '{ $name }' non può essere letto in { $path } ({ $error }); collegalo di nuovo dal menu contestuale del dataset
 geophysics-linked-changed-rereading = La geofisica collegata a '{ $name }' è cambiata dopo l'indicizzazione; lettura ripetuta
@@ -2484,6 +2489,7 @@ state-keep-outside = Mantieni esterno
 state-kriged-block-model = Modello a blocchi krigato
 state-load-block-model = Carica modello a blocchi
 state-load-drillholes = Carica fori di sondaggio
+state-link-geophysics = Collega geofisica
 state-load-layer = Carica livello
 state-load-point-cloud = Carica nuvola di punti
 state-load-raster = Carica raster

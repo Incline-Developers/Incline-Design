@@ -1402,7 +1402,7 @@ csv-drill-hole-holes-hole-s-carry-overlapping = { $holes } ثقب تحمل فو�
 csv-drill-hole-skipped-row-reason = تم تخطي صف: { $reason }
 csv-drill-hole-row-attribute-not-number = { $file } الصف { $row } يحتوي على '{ $value }' في عمود رقمي
 csv-drill-hole-row-repeats-dhid = { $file } الصف { $row } يكرر DHID '{ $dhid }'
-csv-drill-hole-most-rows-unreadable = { $file }: تعذرت قراءة { $skipped } من { $count } صفوف؛ الأسباب في وحدة التحكم
+csv-drill-hole-most-rows-unreadable = { $file }: تعذرت قراءة { $skipped } من { $count } صفوف
 csv-drill-hole-file-maps-dip-column-twice = { $file } يربط عمود الميل أو الانحدار مرتين
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } يربط عمود العمق الكلي مرتين
 csv-drill-hole-total-depths-left-out =
@@ -1458,7 +1458,7 @@ csv-geophysics-row-column-count = الصف { $row } في { $file } يحتوي ع
 csv-geophysics-row-negative-depth = الصف { $row } في { $file } له عمق سالب
 csv-geophysics-row-no-depth = الصف { $row } في { $file } ليس له عمق قابل للقراءة
 csv-geophysics-file-s-path-not-valid = مسار الملف ليس بترميز UTF-8 صالح، ولا يمكن للمشروع حفظه: أعد تسمية الملف أو مجلده ثم اربطه مرة أخرى
-csv-geophysics-rows-skipped = { $file }: تعذرت قراءة { $skipped } من أصل { $rows } صفًا؛ الأسباب في وحدة التحكم
+csv-geophysics-rows-skipped = { $file }: تعذرت قراءة { $skipped } من أصل { $rows } صفًا
 csv-geophysics-runs-not-grouped = جيوفيزياء { $count } ثقب تأتي في أكثر من مقطع، غير مجمّعة حسب الثقب؛ يضيف كل مقطع لاحق الأعماق التي ليس للثقب قراءة عندها فقط: { $holes }
 csv-geophysics-linked-downhole-geophysics-from-file = تم ربط الجيوفيزياء داخل الثقب من { $file }: { $holes } ثقب، المنحنيات { $curves }؛ قُرئ { $rows } صف وتُخطي { $skipped }. تبقى القراءات في الملف وتُقرأ ثقبًا ثقبًا
 csv-geophysics-no-readings = لا توجد قراءات
@@ -1509,7 +1509,11 @@ drill-hole-preset = إعداد مسبق
 drill-hole-px = بكسل
 drill-hole-rainbow = قوس قزح
 drill-hole-rename-out-of-sequence-hole = إعادة تسمية { $from } إلى { $to } تضعه خارج ترتيب عمود الطبقات في هذا الثقب.
-drill-hole-rename-out-of-sequence-holes = إعادة تسمية { $from } إلى { $to } تضعه خارج ترتيب عمود الطبقات في { $count } ثقبًا.
+drill-hole-rename-out-of-sequence-holes =
+    { $count ->
+        [one] إعادة تسمية { $from } إلى { $to } تضعه خارج ترتيب عمود الطبقات في ثقب واحد.
+       *[other] إعادة تسمية { $from } إلى { $to } تضعه خارج ترتيب عمود الطبقات في { $count } ثقبًا.
+    }
 drill-hole-rename-out-of-sequence-note = الطبقات المقلوبة أو المكررة تقع خارج الترتيب، لذا لا تُمنع إعادة التسمية. موافق يعيد التسمية على أي حال؛ وإلغاء يعود إلى إعادة التسمية.
 drill-hole-rename-out-of-sequence-title = خارج التسلسل
 drill-hole-rename-seam-every-hole-of = كل ثقب من
@@ -1898,6 +1902,7 @@ files-xy-grid-options = خيارات شبكة XY
 geophysics-checking-geophysics-files = جارٍ فحص ملفات الجيوفيزياء
 geophysics-downhole-geophysics-name-could-not = تعذر ربط الجيوفيزياء داخل الثقب لـ «{ $name }»: { $error }
 geophysics-file-changed = تغيّر ملف الجيوفيزياء منذ فهرسته
+geophysics-file-unchanged-kept = { $file } لم يتغير منذ فهرسته؛ يُحتفظ بفهرسه
 geophysics-file-cannot-be-opened = تعذّر فتح { $file }: { $error }
 geophysics-file-unreadable = تعذرت قراءة ملف الجيوفيزياء المرتبط بـ «{ $name }» في { $path } ({ $error })؛ اربطه مرة أخرى من قائمة النقر بزر الماوس الأيمن لمجموعة البيانات
 geophysics-linked-changed-rereading = تغيّرت الجيوفيزياء المرتبطة بـ «{ $name }» منذ فهرستها؛ جارٍ قراءتها مرة أخرى
@@ -2446,6 +2451,7 @@ state-keep-outside = الإبقاء في الخارج
 state-kriged-block-model = نموذج كتل مقدّر بكريغنغ
 state-load-block-model = تحميل نموذج الكتل
 state-load-drillholes = تحميل ثقوب الحفر
+state-link-geophysics = ربط الجيوفيزياء
 state-load-layer = تحميل الطبقة
 state-load-point-cloud = تحميل سحابة نقطية
 state-load-raster = تحميل البيانات النقطية

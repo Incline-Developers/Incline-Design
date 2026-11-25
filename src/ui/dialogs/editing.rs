@@ -234,7 +234,7 @@ pub(crate) fn draw_right_click_context(
             .selected_handles
             .iter()
             .find_map(|&h| match h {
-                crate::model::SceneEntityId::DrillHole(id) => Some(id),
+                crate::model::SceneEntityId::DrillHole(id) if project.drill_holes.iter().any(|entry| entry.id == id && entry.is_loaded) => Some(id),
                 _ => None,
             })
             .or_else(|| editor.canvas_context_menu_hole.map(|hole| hole.dataset))

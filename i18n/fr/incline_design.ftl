@@ -1398,7 +1398,7 @@ csv-drill-hole-holes-hole-s-carry-overlapping = { $holes } trou(s) portent des i
 csv-drill-hole-skipped-row-reason = Ligne ignorée : { $reason }
 csv-drill-hole-row-attribute-not-number = { $file } ligne { $row } contient '{ $value }' dans une colonne numérique
 csv-drill-hole-row-repeats-dhid = { $file } ligne { $row } répète le DHID '{ $dhid }'
-csv-drill-hole-most-rows-unreadable = { $file } : { $skipped } lignes sur { $count } n'ont pas pu être lues ; les raisons sont dans la console
+csv-drill-hole-most-rows-unreadable = { $file } : { $skipped } lignes sur { $count } n'ont pas pu être lues
 csv-drill-hole-file-maps-dip-column-twice = { $file } associe deux fois une colonne de pendage ou d'inclinaison
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } associe deux fois une colonne de profondeur totale
 csv-drill-hole-total-depths-left-out =
@@ -1454,7 +1454,7 @@ csv-geophysics-row-column-count = La ligne { $row } de { $file } a { $found } co
 csv-geophysics-row-negative-depth = La ligne { $row } de { $file } a une profondeur négative
 csv-geophysics-row-no-depth = La ligne { $row } de { $file } n’a aucune profondeur lisible
 csv-geophysics-file-s-path-not-valid = le chemin du fichier n’est pas de l’UTF-8 valide, ce qu’un projet ne peut pas enregistrer : renommez le fichier ou son dossier et liez-le à nouveau
-csv-geophysics-rows-skipped = { $file } : { $skipped } lignes sur { $rows } n’ont pas pu être lues ; les raisons figurent dans la console
+csv-geophysics-rows-skipped = { $file } : { $skipped } lignes sur { $rows } n’ont pas pu être lues
 csv-geophysics-runs-not-grouped = La géophysique de { $count } trou(s) arrive en plusieurs séries, non regroupées par trou ; chaque série suivante n’ajoute que les profondeurs où son trou n’a aucune mesure : { $holes }
 csv-geophysics-linked-downhole-geophysics-from-file = Géophysique en forage liée depuis { $file } : { $holes } trou(s), courbes { $curves } ; { $rows } ligne(s) lue(s), { $skipped } ignorée(s). Les mesures restent dans le fichier et sont lues trou par trou
 csv-geophysics-no-readings = aucune mesure
@@ -1505,7 +1505,11 @@ drill-hole-preset = Préréglage
 drill-hole-px = px
 drill-hole-rainbow = Arc-en-ciel
 drill-hole-rename-out-of-sequence-hole = Renommer { $from } en { $to } le place hors de l’ordre de la colonne stratigraphique dans ce trou.
-drill-hole-rename-out-of-sequence-holes = Renommer { $from } en { $to } le place hors de l’ordre de la colonne stratigraphique dans { $count } trous.
+drill-hole-rename-out-of-sequence-holes =
+    { $count ->
+        [one] Renommer { $from } en { $to } le place hors de l’ordre de la colonne stratigraphique dans { $count } trou.
+       *[other] Renommer { $from } en { $to } le place hors de l’ordre de la colonne stratigraphique dans { $count } trous.
+    }
 drill-hole-rename-out-of-sequence-note = Les strates renversées ou répétées sont hors d’ordre, le renommage n’est donc pas bloqué. OK renomme malgré tout ; Annuler revient au renommage.
 drill-hole-rename-out-of-sequence-title = Hors séquence
 drill-hole-rename-seam-every-hole-of = Chaque trou de
@@ -1894,6 +1898,7 @@ files-xy-grid-options = Options de la grille XY
 geophysics-checking-geophysics-files = Vérification des fichiers de géophysique
 geophysics-downhole-geophysics-name-could-not = La géophysique en forage de « { $name } » n’a pas pu être liée : { $error }
 geophysics-file-changed = Le fichier de géophysique a changé depuis son indexation
+geophysics-file-unchanged-kept = { $file } n’a pas changé depuis son indexation ; son index est conservé
 geophysics-file-cannot-be-opened = { $file } ne peut pas être ouvert : { $error }
 geophysics-file-unreadable = Le fichier de géophysique lié à « { $name } » est illisible à l’emplacement { $path } ({ $error }) ; liez-le à nouveau depuis le menu contextuel du jeu de données
 geophysics-linked-changed-rereading = La géophysique liée à « { $name } » a changé depuis son indexation ; nouvelle lecture
@@ -2442,6 +2447,7 @@ state-keep-outside = Garder à l'extérieur
 state-kriged-block-model = Modèle de blocs krigé
 state-load-block-model = Charger le modèle de blocs
 state-load-drillholes = Charger les trous de forage
+state-link-geophysics = Lier la géophysique
 state-load-layer = Charger le calque
 state-load-point-cloud = Charger le nuage de points
 state-load-raster = Charger le raster
