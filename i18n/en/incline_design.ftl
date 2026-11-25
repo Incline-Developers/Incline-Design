@@ -1565,23 +1565,61 @@ cmd-next-vertex-copied-vertices = Copied { $count } vertices along the string
 cmd-string-rework-closed = A closed string has no end to carry on from
 cmd-string-rework-changed = The string changed, pick it again
 cmd-string-rework-dropped = The carry on or redraw ended when the workspace changed; its { $count } drawn point(s) were not saved
-cmd-string-rework-redrew = Redrew { $count } vertices
+cmd-string-rework-redrew =
+    Redrew the run: { $removed ->
+        [one] { $removed } vertex
+       *[other] { $removed } vertices
+    } taken out, { $count ->
+        [one] { $count } point
+       *[other] { $count } points
+    } drawn in
 cmd-string-fill-short = The segment is no longer than the spacing
-cmd-string-fill-added = Filled the segment with { $count } new vertices
+cmd-string-fill-added =
+    { $count ->
+        [one] Filled the segment with { $count } new vertex
+       *[other] Filled the segment with { $count } new vertices
+    }
 cmd-string-fill-too-many = That would add { $count } vertices; the most is { $most }. Use a larger spacing, or split the segment with Insert Point and fill each part
 cmd-string-split-into = Split into { $count } strings
 cmd-string-split-opened = Opened the ring where the string crosses it
 cmd-string-split-no-crossing = No crossing on that string
 cmd-string-trim-removed = Removed a piece between crossings
+cmd-string-click-missed = No shown, unlocked string under the cursor
+cmd-string-click-missed-vertex = No vertex of a shown, unlocked string under the cursor
+cmd-string-click-by-vertex = Too close to a vertex: click the segment away from its ends
+cmd-string-nudge-locked = The held vertex is on a hidden or locked string, so it stays where it is
 cmd-object-edit-edited-kind = Edited { $kind }
 cmd-object-edit-edited-kind-count-vertices = Edited { $kind } ({ $count } vertices)
 cmd-object-edit-no-changes-apply = No changes to apply
 cmd-object-edit-object-changed-since-editor-opened = This object changed since the editor opened; reopen it to edit the current version
 cmd-object-edit-target-changed = Object edit target changed; discarding the edit
 cmd-object-edit-object-no-longer-exists-document = That object no longer exists in the document
-cmd-object-edit-no-strings-reverse = No selected string can be reversed (hidden or locked)
-cmd-object-edit-strings-read-same-reversed = Every selected string reads the same reversed, so nothing changed
-cmd-object-edit-reversed-strings = Reversed { $count } string(s)
+cmd-object-edit-no-strings-reverse = No selected string was reversed
+cmd-object-edit-strings-read-same-reversed =
+    { $count ->
+        [one] Left { $count } string as it was: it reads the same reversed
+       *[other] Left { $count } strings as they were: they read the same reversed
+    }
+cmd-object-edit-reversed-strings =
+    { $count ->
+        [one] Reversed { $count } string
+       *[other] Reversed { $count } strings
+    }
+cmd-object-edit-reverse-left-layer-locked =
+    { $count ->
+        [one] Left { $count } string on a locked layer as it was
+       *[other] Left { $count } strings on locked layers as they were
+    }
+cmd-object-edit-reverse-left-locked =
+    { $count ->
+        [one] Left { $count } locked string as it was
+       *[other] Left { $count } locked strings as they were
+    }
+cmd-object-edit-reverse-left-hidden =
+    { $count ->
+        [one] Left { $count } hidden string as it was
+       *[other] Left { $count } hidden strings as they were
+    }
 cmd-object-edit-select-single-design-object-edit = Select a single design object to edit
 cmd-object-edit-unassigned = Unassigned
 cmd-offset-create-offset = Create Offset
@@ -2050,8 +2088,22 @@ cmd-text-edit-finished = Finished text edit for object { $object_id }
 cmd-text-updated = Updated text on object { $object_id }
 cmd-thin-nothing-removed = No vertex is within { $tolerance } m; nothing thinned
 cmd-thin-thin-strings = Thin Strings
-cmd-thin-count-removed = { $removed } vertices from { $count } string(s)
-cmd-thin-thinned-count = Thinned { $count } string(s), { $removed } vertices removed
+cmd-thin-count-removed =
+    { $removed ->
+        [one] { $removed } vertex
+       *[other] { $removed } vertices
+    } from { $count ->
+        [one] { $count } string
+       *[other] { $count } strings
+    }
+cmd-thin-thinned-count =
+    Thinned { $count ->
+        [one] { $count } string
+       *[other] { $count } strings
+    }, { $removed ->
+        [one] { $removed } vertex
+       *[other] { $removed } vertices
+    } removed
 cmd-thickness-not-a-grid = { $name } cannot be measured against: { $reason }
 cmd-thickness-not-a-grid-cells = it is not one regular grid of square cells, as Build Surface makes
 cmd-thickness-not-a-grid-heights = two of its vertices share a grid node at different heights

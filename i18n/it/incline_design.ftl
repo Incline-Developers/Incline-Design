@@ -723,23 +723,61 @@ cmd-next-vertex-copied-vertices = Copiati { $count } vertici lungo la stringa
 cmd-string-rework-closed = Una stringa chiusa non ha un’estremità da cui continuare
 cmd-string-rework-changed = La stringa è cambiata, selezionala di nuovo
 cmd-string-rework-dropped = Il proseguimento o il ridisegno è terminato al cambio di area di lavoro; i suoi { $count } punti disegnati non sono stati salvati
-cmd-string-rework-redrew = Ridisegnati { $count } vertici
+cmd-string-rework-redrew =
+    Tratto ridisegnato: { $removed ->
+        [one] { $removed } vertice tolto
+       *[other] { $removed } vertici tolti
+    }, { $count ->
+        [one] { $count } punto tracciato
+       *[other] { $count } punti tracciati
+    }
 cmd-string-fill-short = Il segmento non è più lungo della spaziatura
-cmd-string-fill-added = Il segmento è stato riempito con { $count } nuovi vertici
+cmd-string-fill-added =
+    { $count ->
+        [one] Il segmento è stato riempito con { $count } nuovo vertice
+       *[other] Il segmento è stato riempito con { $count } nuovi vertici
+    }
 cmd-string-fill-too-many = Verrebbero aggiunti { $count } vertici; il massimo è { $most }. Usa una spaziatura maggiore, oppure dividi il segmento con Inserisci punto e riempi ogni parte
 cmd-string-split-into = Divisa in { $count } stringhe
 cmd-string-split-opened = L’anello è stato aperto dove la stringa lo incrocia
 cmd-string-split-no-crossing = Nessun incrocio su quella stringa
 cmd-string-trim-removed = Rimosso un tratto tra incroci
+cmd-string-click-missed = Nessuna stringa visibile e sbloccata sotto il cursore
+cmd-string-click-missed-vertex = Nessun vertice di una stringa visibile e sbloccata sotto il cursore
+cmd-string-click-by-vertex = Troppo vicino a un vertice: fai clic sul segmento lontano dalle sue estremità
+cmd-string-nudge-locked = Il vertice trattenuto è su una stringa nascosta o bloccata, quindi resta dov'è
 cmd-object-edit-edited-kind = { $kind } modificato
 cmd-object-edit-edited-kind-count-vertices = { $kind } modificato ({ $count } vertici)
 cmd-object-edit-no-changes-apply = Nessuna modifica da applicare
 cmd-object-edit-object-changed-since-editor-opened = Questo oggetto è cambiato da quando l'editor è stato aperto; riaprilo per modificare la versione attuale
 cmd-object-edit-target-changed = L'oggetto in modifica è cambiato; modifica scartata
 cmd-object-edit-object-no-longer-exists-document = Questo oggetto non esiste più nel documento
-cmd-object-edit-no-strings-reverse = Nessuna stringa selezionata può essere invertita (nascosta o bloccata)
-cmd-object-edit-strings-read-same-reversed = Ogni stringa selezionata si legge uguale al contrario, quindi nulla è cambiato
-cmd-object-edit-reversed-strings = { $count } stringa/e invertita/e
+cmd-object-edit-no-strings-reverse = Nessuna stringa selezionata è stata invertita
+cmd-object-edit-strings-read-same-reversed =
+    { $count ->
+        [one] { $count } stringa lasciata com'era: si legge uguale al contrario
+       *[other] { $count } stringhe lasciate com'erano: si leggono uguali al contrario
+    }
+cmd-object-edit-reversed-strings =
+    { $count ->
+        [one] { $count } stringa invertita
+       *[other] { $count } stringhe invertite
+    }
+cmd-object-edit-reverse-left-layer-locked =
+    { $count ->
+        [one] { $count } stringa su un layer bloccato lasciata com'era
+       *[other] { $count } stringhe su layer bloccati lasciate com'erano
+    }
+cmd-object-edit-reverse-left-locked =
+    { $count ->
+        [one] { $count } stringa bloccata lasciata com'era
+       *[other] { $count } stringhe bloccate lasciate com'erano
+    }
+cmd-object-edit-reverse-left-hidden =
+    { $count ->
+        [one] { $count } stringa nascosta lasciata com'era
+       *[other] { $count } stringhe nascoste lasciate com'erano
+    }
 cmd-object-edit-select-single-design-object-edit = Seleziona un singolo oggetto di progetto da modificare
 cmd-object-edit-unassigned = Non assegnato
 cmd-offset-create-offset = Crea offset
@@ -1173,8 +1211,22 @@ cmd-text-edit-finished = Modifica del testo completata per l'oggetto { $object_i
 cmd-text-updated = Testo aggiornato sull'oggetto { $object_id }
 cmd-thin-nothing-removed = Nessun vertice è entro { $tolerance } m; nulla semplificato
 cmd-thin-thin-strings = Semplifica stringhe
-cmd-thin-count-removed = { $removed } vertici da { $count } stringa/e
-cmd-thin-thinned-count = { $count } stringa/e semplificata/e, { $removed } vertici rimossi
+cmd-thin-count-removed =
+    { $removed ->
+        [one] { $removed } vertice
+       *[other] { $removed } vertici
+    } da { $count ->
+        [one] { $count } stringa
+       *[other] { $count } stringhe
+    }
+cmd-thin-thinned-count =
+    { $count ->
+        [one] { $count } stringa semplificata
+       *[other] { $count } stringhe semplificate
+    }, { $removed ->
+        [one] { $removed } vertice rimosso
+       *[other] { $removed } vertici rimossi
+    }
 cmd-thickness-not-a-grid = Impossibile misurare rispetto a { $name }: { $reason }
 cmd-thickness-not-a-grid-cells = non è un'unica griglia regolare di celle quadrate, come quella creata da Costruisci superficie
 cmd-thickness-not-a-grid-heights = due suoi vertici condividono un nodo della griglia a quote diverse

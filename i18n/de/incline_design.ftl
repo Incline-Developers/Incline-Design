@@ -722,23 +722,61 @@ cmd-next-vertex-copied-vertices = { $count } Eckpunkte entlang der Linie kopiert
 cmd-string-rework-closed = Eine geschlossene Linie hat kein Ende zum Fortsetzen
 cmd-string-rework-changed = Die Linie hat sich geändert, bitte erneut wählen
 cmd-string-rework-dropped = Das Fortsetzen oder Neuzeichnen der Linie endete mit dem Wechsel des Arbeitsbereichs; { $count } gezeichnete Punkte wurden nicht gespeichert
-cmd-string-rework-redrew = { $count } Eckpunkte neu gezeichnet
+cmd-string-rework-redrew =
+    Abschnitt neu gezeichnet: { $removed ->
+        [one] { $removed } Eckpunkt
+       *[other] { $removed } Eckpunkte
+    } entfernt, { $count ->
+        [one] { $count } Punkt
+       *[other] { $count } Punkte
+    } eingezeichnet
 cmd-string-fill-short = Das Segment ist nicht länger als der Abstand
-cmd-string-fill-added = Das Segment wurde mit { $count } neuen Eckpunkten gefüllt
+cmd-string-fill-added =
+    { $count ->
+        [one] Das Segment wurde mit { $count } neuem Eckpunkt gefüllt
+       *[other] Das Segment wurde mit { $count } neuen Eckpunkten gefüllt
+    }
 cmd-string-fill-too-many = Das würde { $count } Eckpunkte hinzufügen; höchstens { $most } sind erlaubt. Wähle einen größeren Abstand oder teile das Segment mit Punkt einfügen und fülle jeden Teil
 cmd-string-split-into = In { $count } Linien geteilt
 cmd-string-split-opened = Der Ring wurde dort geöffnet, wo die Linie ihn kreuzt
 cmd-string-split-no-crossing = Keine Kreuzung auf dieser Linie
 cmd-string-trim-removed = Ein Stück zwischen Kreuzungen wurde entfernt
+cmd-string-click-missed = Keine sichtbare, nicht gesperrte Linie unter dem Cursor
+cmd-string-click-missed-vertex = Kein Eckpunkt einer sichtbaren, nicht gesperrten Linie unter dem Cursor
+cmd-string-click-by-vertex = Zu nah an einem Eckpunkt: auf das Segment abseits seiner Enden klicken
+cmd-string-nudge-locked = Der gehaltene Eckpunkt liegt auf einer ausgeblendeten oder gesperrten Linie und bleibt deshalb, wo er ist
 cmd-object-edit-edited-kind = { $kind } bearbeitet
 cmd-object-edit-edited-kind-count-vertices = { $kind } bearbeitet ({ $count } Scheitelpunkte)
 cmd-object-edit-no-changes-apply = Keine Änderungen anzuwenden
 cmd-object-edit-object-changed-since-editor-opened = Dieses Objekt hat sich geändert, seit der Editor geöffnet wurde; erneut öffnen, um die aktuelle Version zu bearbeiten
 cmd-object-edit-target-changed = Bearbeitetes Objekt hat sich geändert; Bearbeitung wird verworfen
 cmd-object-edit-object-no-longer-exists-document = Dieses Objekt existiert im Dokument nicht mehr
-cmd-object-edit-no-strings-reverse = Keine ausgewählte Linie kann umgekehrt werden (ausgeblendet oder gesperrt)
-cmd-object-edit-strings-read-same-reversed = Jede ausgewählte Linie liest sich umgekehrt gleich, daher hat sich nichts geändert
-cmd-object-edit-reversed-strings = { $count } Linie(n) umgekehrt
+cmd-object-edit-no-strings-reverse = Keine ausgewählte Linie wurde umgekehrt
+cmd-object-edit-strings-read-same-reversed =
+    { $count ->
+        [one] { $count } Linie blieb unverändert: Sie liest sich umgekehrt gleich
+       *[other] { $count } Linien blieben unverändert: Sie lesen sich umgekehrt gleich
+    }
+cmd-object-edit-reversed-strings =
+    { $count ->
+        [one] { $count } Linie umgekehrt
+       *[other] { $count } Linien umgekehrt
+    }
+cmd-object-edit-reverse-left-layer-locked =
+    { $count ->
+        [one] { $count } Linie auf einer gesperrten Ebene blieb unverändert
+       *[other] { $count } Linien auf gesperrten Ebenen blieben unverändert
+    }
+cmd-object-edit-reverse-left-locked =
+    { $count ->
+        [one] { $count } gesperrte Linie blieb unverändert
+       *[other] { $count } gesperrte Linien blieben unverändert
+    }
+cmd-object-edit-reverse-left-hidden =
+    { $count ->
+        [one] { $count } ausgeblendete Linie blieb unverändert
+       *[other] { $count } ausgeblendete Linien blieben unverändert
+    }
 cmd-object-edit-select-single-design-object-edit = Ein einzelnes Design-Objekt zum Bearbeiten auswählen
 cmd-object-edit-unassigned = Nicht zugewiesen
 cmd-offset-create-offset = Versatz erstellen
@@ -1172,8 +1210,22 @@ cmd-text-edit-finished = Textbearbeitung für Objekt { $object_id } abgeschlosse
 cmd-text-updated = Text auf Objekt { $object_id } aktualisiert
 cmd-thin-nothing-removed = Kein Stützpunkt liegt innerhalb von { $tolerance } m; nichts ausgedünnt
 cmd-thin-thin-strings = Linien ausdünnen
-cmd-thin-count-removed = { $removed } Stützpunkte aus { $count } Linie(n)
-cmd-thin-thinned-count = { $count } Linie(n) ausgedünnt, { $removed } Stützpunkte entfernt
+cmd-thin-count-removed =
+    { $removed ->
+        [one] { $removed } Stützpunkt
+       *[other] { $removed } Stützpunkte
+    } aus { $count ->
+        [one] { $count } Linie
+       *[other] { $count } Linien
+    }
+cmd-thin-thinned-count =
+    { $count ->
+        [one] { $count } Linie
+       *[other] { $count } Linien
+    } ausgedünnt, { $removed ->
+        [one] { $removed } Stützpunkt
+       *[other] { $removed } Stützpunkte
+    } entfernt
 cmd-thickness-not-a-grid = { $name } kann nicht als Bezug dienen: { $reason }
 cmd-thickness-not-a-grid-cells = sie ist kein einzelnes regelmäßiges Raster aus quadratischen Zellen, wie es Oberfläche erstellen erzeugt
 cmd-thickness-not-a-grid-heights = zwei ihrer Eckpunkte teilen einen Rasterknoten in unterschiedlicher Höhe

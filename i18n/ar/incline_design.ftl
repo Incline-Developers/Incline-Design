@@ -681,23 +681,93 @@ cmd-next-vertex-copied-vertices = تم نسخ الرؤوس ({ $count }) على �
 cmd-string-rework-closed = الخط المغلق ليس له طرف للمتابعة منه
 cmd-string-rework-changed = تغير الخط، اختره مرة أخرى
 cmd-string-rework-dropped = انتهت متابعة الخط أو إعادة الرسم عند تغيير مساحة العمل؛ لم يتم حفظ { $count } من النقاط المرسومة
-cmd-string-rework-redrew = أُعيد رسم الرؤوس ({ $count })
+cmd-string-rework-redrew =
+    أُعيد رسم المقطع: أُزيل { $removed ->
+        [zero] لا رؤوس
+        [one] رأس واحد
+        [two] رأسان
+        [few] { $removed } رؤوس
+        [many] { $removed } رأسًا
+       *[other] { $removed } رأس
+    }، ورُسمت { $count ->
+        [zero] لا نقاط
+        [one] نقطة واحدة
+        [two] نقطتان
+        [few] { $count } نقاط
+        [many] { $count } نقطةً
+       *[other] { $count } نقطة
+    }
 cmd-string-fill-short = المقطع ليس أطول من التباعد
-cmd-string-fill-added = تم ملء المقطع بـ { $count } رأسًا جديدًا
+cmd-string-fill-added =
+    { $count ->
+        [zero] لم يُملأ المقطع بأي رأس جديد
+        [one] تم ملء المقطع برأس جديد واحد
+        [two] تم ملء المقطع برأسين جديدين
+        [few] تم ملء المقطع بـ { $count } رؤوس جديدة
+        [many] تم ملء المقطع بـ { $count } رأسًا جديدًا
+       *[other] تم ملء المقطع بـ { $count } رأس جديد
+    }
 cmd-string-fill-too-many = سيضيف ذلك { $count } رأسًا؛ والحد الأقصى { $most }. استخدم تباعدًا أكبر، أو قسّم المقطع بـ إدراج نقطة واملأ كل جزء
 cmd-string-split-into = تم التقسيم إلى { $count } خطوط
 cmd-string-split-opened = تم فتح الحلقة عند تقاطع الخط معها
 cmd-string-split-no-crossing = لا يوجد تقاطع على هذا الخط
 cmd-string-trim-removed = تمت إزالة قطعة بين التقاطعات
+cmd-string-click-missed = لا يوجد خط ظاهر وغير مقفل تحت المؤشر
+cmd-string-click-missed-vertex = لا يوجد رأس لخط ظاهر وغير مقفل تحت المؤشر
+cmd-string-click-by-vertex = قريب جدًا من رأس: انقر على المقطع بعيدًا عن طرفيه
+cmd-string-nudge-locked = الرأس الممسوك على خط مخفي أو مقفل، لذا يبقى في مكانه
 cmd-object-edit-edited-kind = تم تعديل { $kind }
 cmd-object-edit-edited-kind-count-vertices = تم تعديل { $kind } ({ $count } رؤوس)
 cmd-object-edit-no-changes-apply = لا توجد تغييرات لتطبيقها
 cmd-object-edit-object-changed-since-editor-opened = تغيّر هذا الكائن منذ فتح المحرر؛ أعد فتحه لتعديل النسخة الحالية
 cmd-object-edit-target-changed = تغيّر الكائن قيد التعديل؛ سيتم تجاهل التعديل
 cmd-object-edit-object-no-longer-exists-document = هذا الكائن لم يعد موجودًا في المستند
-cmd-object-edit-no-strings-reverse = لا يمكن عكس أي خط محدد (مخفي أو مقفل)
-cmd-object-edit-strings-read-same-reversed = كل خط محدد يقرأ بالشكل نفسه معكوسا، لذا لم يتغير شيء
-cmd-object-edit-reversed-strings = تم عكس { $count } خط
+cmd-object-edit-no-strings-reverse = لم يُعكس أي خط محدد
+cmd-object-edit-strings-read-same-reversed =
+    { $count ->
+        [zero] لم يُترك أي خط كما هو
+        [one] تُرك { $count } خط كما هو: يُقرأ بالشكل نفسه معكوسًا
+        [two] تُرك خطان كما هما: يُقرآن بالشكل نفسه معكوسين
+        [few] تُركت { $count } خطوط كما هي: تُقرأ بالشكل نفسه معكوسة
+        [many] تُرك { $count } خطًا كما هو: يُقرأ بالشكل نفسه معكوسًا
+       *[other] تُرك { $count } خط كما هو: يُقرأ بالشكل نفسه معكوسًا
+    }
+cmd-object-edit-reversed-strings =
+    { $count ->
+        [zero] لم يُعكس أي خط
+        [one] تم عكس { $count } خط
+        [two] تم عكس خطين
+        [few] تم عكس { $count } خطوط
+        [many] تم عكس { $count } خطًا
+       *[other] تم عكس { $count } خط
+    }
+cmd-object-edit-reverse-left-layer-locked =
+    { $count ->
+        [zero] لم يُترك أي خط على طبقة مقفلة كما هو
+        [one] تُرك { $count } خط على طبقة مقفلة كما هو
+        [two] تُرك خطان على طبقة مقفلة كما هما
+        [few] تُركت { $count } خطوط على طبقات مقفلة كما هي
+        [many] تُرك { $count } خطًا على طبقة مقفلة كما هو
+       *[other] تُرك { $count } خط على طبقة مقفلة كما هو
+    }
+cmd-object-edit-reverse-left-locked =
+    { $count ->
+        [zero] لم يُترك أي خط مقفل كما هو
+        [one] تُرك { $count } خط مقفل كما هو
+        [two] تُرك خطان مقفلان كما هما
+        [few] تُركت { $count } خطوط مقفلة كما هي
+        [many] تُرك { $count } خطًا مقفلًا كما هو
+       *[other] تُرك { $count } خط مقفل كما هو
+    }
+cmd-object-edit-reverse-left-hidden =
+    { $count ->
+        [zero] لم يُترك أي خط مخفي كما هو
+        [one] تُرك { $count } خط مخفي كما هو
+        [two] تُرك خطان مخفيان كما هما
+        [few] تُركت { $count } خطوط مخفية كما هي
+        [many] تُرك { $count } خطًا مخفيًا كما هو
+       *[other] تُرك { $count } خط مخفي كما هو
+    }
 cmd-object-edit-select-single-design-object-edit = اختر كائن تصميم واحدًا للتعديل
 cmd-object-edit-unassigned = غير معيّن
 cmd-offset-create-offset = إنشاء إزاحة
@@ -1135,8 +1205,38 @@ cmd-text-edit-finished = انتهى تحرير نص الكائن { $object_id }
 cmd-text-updated = تم تحديث النص على الكائن { $object_id }
 cmd-thin-nothing-removed = لا يوجد رأس ضمن { $tolerance } m؛ لم يتم التبسيط
 cmd-thin-thin-strings = تبسيط الخطوط
-cmd-thin-count-removed = { $removed } رأس من { $count } خط
-cmd-thin-thinned-count = تم تبسيط { $count } خط، وإزالة { $removed } رأس
+cmd-thin-count-removed =
+    { $removed ->
+        [zero] لا رؤوس
+        [one] رأس واحد
+        [two] رأسان
+        [few] { $removed } رؤوس
+        [many] { $removed } رأسًا
+       *[other] { $removed } رأس
+    } من { $count ->
+        [zero] لا خطوط
+        [one] خط واحد
+        [two] خطين
+        [few] { $count } خطوط
+        [many] { $count } خطًا
+       *[other] { $count } خط
+    }
+cmd-thin-thinned-count =
+    تم تبسيط { $count ->
+        [zero] لا خطوط
+        [one] خط واحد
+        [two] خطين
+        [few] { $count } خطوط
+        [many] { $count } خطًا
+       *[other] { $count } خط
+    }، وإزالة { $removed ->
+        [zero] لا رؤوس
+        [one] رأس واحد
+        [two] رأسين
+        [few] { $removed } رؤوس
+        [many] { $removed } رأسًا
+       *[other] { $removed } رأس
+    }
 cmd-thickness-not-a-grid = لا يمكن القياس بالنسبة إلى { $name }: { $reason }
 cmd-thickness-not-a-grid-cells = ليس شبكة منتظمة واحدة من خلايا مربعة كالتي ينشئها إنشاء سطح
 cmd-thickness-not-a-grid-heights = اثنان من رؤوسه يتشاركان عقدة شبكة على ارتفاعين مختلفين

@@ -679,23 +679,61 @@ cmd-next-vertex-copied-vertices = Copiados { $count } vértices ao longo da cade
 cmd-string-rework-closed = Uma cadeia fechada não tem extremidade a partir da qual continuar
 cmd-string-rework-changed = A cadeia mudou, selecione-a novamente
 cmd-string-rework-dropped = A continuação ou o redesenho terminou quando o espaço de trabalho mudou; os seus { $count } pontos desenhados não foram guardados
-cmd-string-rework-redrew = Redesenhados { $count } vértices
+cmd-string-rework-redrew =
+    Trecho redesenhado: { $removed ->
+        [one] { $removed } vértice removido
+       *[other] { $removed } vértices removidos
+    }, { $count ->
+        [one] { $count } ponto desenhado
+       *[other] { $count } pontos desenhados
+    }
 cmd-string-fill-short = O segmento não é mais longo que o espaçamento
-cmd-string-fill-added = O segmento foi preenchido com { $count } novos vértices
+cmd-string-fill-added =
+    { $count ->
+        [one] O segmento foi preenchido com { $count } novo vértice
+       *[other] O segmento foi preenchido com { $count } novos vértices
+    }
 cmd-string-fill-too-many = Isso adicionaria { $count } vértices; o máximo é { $most }. Use um espaçamento maior, ou divida o segmento com Inserir ponto e preencha cada parte
 cmd-string-split-into = Dividida em { $count } cadeias
 cmd-string-split-opened = O anel foi aberto onde a cadeia o cruza
 cmd-string-split-no-crossing = Não há cruzamento nessa cadeia
 cmd-string-trim-removed = Foi removido um trecho entre cruzamentos
+cmd-string-click-missed = Nenhuma linha visível e desbloqueada sob o cursor
+cmd-string-click-missed-vertex = Nenhum vértice de linha visível e desbloqueada sob o cursor
+cmd-string-click-by-vertex = Muito perto de um vértice: clique no segmento longe das extremidades
+cmd-string-nudge-locked = O vértice retido está numa linha oculta ou bloqueada, por isso fica onde está
 cmd-object-edit-edited-kind = { $kind } editado
 cmd-object-edit-edited-kind-count-vertices = { $kind } editado ({ $count } vértices)
 cmd-object-edit-no-changes-apply = Sem alterações a aplicar
 cmd-object-edit-object-changed-since-editor-opened = Este objeto mudou desde que o editor foi aberto; reabra-o para editar a versão atual
 cmd-object-edit-target-changed = O objeto em edição mudou; a edição foi descartada
 cmd-object-edit-object-no-longer-exists-document = Esse objeto já não existe no documento
-cmd-object-edit-no-strings-reverse = Nenhuma linha selecionada pode ser invertida (oculta ou bloqueada)
-cmd-object-edit-strings-read-same-reversed = Cada linha selecionada se lê igual ao contrário, então nada mudou
-cmd-object-edit-reversed-strings = { $count } linha(s) invertida(s)
+cmd-object-edit-no-strings-reverse = Nenhuma linha selecionada foi invertida
+cmd-object-edit-strings-read-same-reversed =
+    { $count ->
+        [one] { $count } linha mantida como estava: lida ao contrário, é igual
+       *[other] { $count } linhas mantidas como estavam: lidas ao contrário, são iguais
+    }
+cmd-object-edit-reversed-strings =
+    { $count ->
+        [one] { $count } linha invertida
+       *[other] { $count } linhas invertidas
+    }
+cmd-object-edit-reverse-left-layer-locked =
+    { $count ->
+        [one] { $count } linha numa camada bloqueada mantida como estava
+       *[other] { $count } linhas em camadas bloqueadas mantidas como estavam
+    }
+cmd-object-edit-reverse-left-locked =
+    { $count ->
+        [one] { $count } linha bloqueada mantida como estava
+       *[other] { $count } linhas bloqueadas mantidas como estavam
+    }
+cmd-object-edit-reverse-left-hidden =
+    { $count ->
+        [one] { $count } linha oculta mantida como estava
+       *[other] { $count } linhas ocultas mantidas como estavam
+    }
 cmd-object-edit-select-single-design-object-edit = Selecione um único objeto de desenho para editar
 cmd-object-edit-unassigned = Não atribuído
 cmd-offset-create-offset = Criar deslocamento
@@ -1129,8 +1167,22 @@ cmd-text-edit-finished = Edição de texto concluída no objeto { $object_id }
 cmd-text-updated = Texto atualizado no objeto { $object_id }
 cmd-thin-nothing-removed = Nenhum vértice está dentro de { $tolerance } m; nada foi simplificado
 cmd-thin-thin-strings = Simplificar linhas
-cmd-thin-count-removed = { $removed } vértices de { $count } linha(s)
-cmd-thin-thinned-count = { $count } linha(s) simplificada(s), { $removed } vértices removidos
+cmd-thin-count-removed =
+    { $removed ->
+        [one] { $removed } vértice
+       *[other] { $removed } vértices
+    } de { $count ->
+        [one] { $count } linha
+       *[other] { $count } linhas
+    }
+cmd-thin-thinned-count =
+    { $count ->
+        [one] { $count } linha simplificada
+       *[other] { $count } linhas simplificadas
+    }, { $removed ->
+        [one] { $removed } vértice removido
+       *[other] { $removed } vértices removidos
+    }
 cmd-thickness-not-a-grid = Não é possível medir em relação a { $name }: { $reason }
 cmd-thickness-not-a-grid-cells = não é uma única grelha regular de células quadradas, como a que Construir superfície cria
 cmd-thickness-not-a-grid-heights = dois dos seus vértices partilham um nó da grelha a alturas diferentes

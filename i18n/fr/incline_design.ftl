@@ -681,23 +681,61 @@ cmd-next-vertex-copied-vertices = { $count } sommets copiés le long de la chaî
 cmd-string-rework-closed = Une chaîne fermée n’a pas d’extrémité à prolonger
 cmd-string-rework-changed = La chaîne a changé, sélectionnez-la à nouveau
 cmd-string-rework-dropped = Le prolongement ou le redessin s'est terminé au changement d'espace de travail ; ses { $count } points dessinés n'ont pas été enregistrés
-cmd-string-rework-redrew = { $count } sommets redessinés
+cmd-string-rework-redrew =
+    Tronçon redessiné : { $removed ->
+        [one] { $removed } sommet retiré
+       *[other] { $removed } sommets retirés
+    }, { $count ->
+        [one] { $count } point tracé
+       *[other] { $count } points tracés
+    }
 cmd-string-fill-short = Le segment n’est pas plus long que l’espacement
-cmd-string-fill-added = Le segment a été rempli avec { $count } nouveaux sommets
+cmd-string-fill-added =
+    { $count ->
+        [one] Le segment a été rempli avec { $count } nouveau sommet
+       *[other] Le segment a été rempli avec { $count } nouveaux sommets
+    }
 cmd-string-fill-too-many = Cela ajouterait { $count } sommets ; le maximum est { $most }. Utilisez un espacement plus grand, ou découpez le segment avec Insérer un point et remplissez chaque partie
 cmd-string-split-into = Scindée en { $count } chaînes
 cmd-string-split-opened = L’anneau a été ouvert là où la chaîne le croise
 cmd-string-split-no-crossing = Aucun croisement sur cette chaîne
 cmd-string-trim-removed = Un tronçon entre croisements a été supprimé
+cmd-string-click-missed = Aucune polyligne visible et déverrouillée sous le curseur
+cmd-string-click-missed-vertex = Aucun sommet d'une polyligne visible et déverrouillée sous le curseur
+cmd-string-click-by-vertex = Trop près d'un sommet : cliquez sur le segment loin de ses extrémités
+cmd-string-nudge-locked = Le sommet tenu est sur une polyligne masquée ou verrouillée, il reste donc où il est
 cmd-object-edit-edited-kind = { $kind } modifié
 cmd-object-edit-edited-kind-count-vertices = { $kind } modifié ({ $count } sommets)
 cmd-object-edit-no-changes-apply = Aucune modification à appliquer
 cmd-object-edit-object-changed-since-editor-opened = Cet objet a changé depuis l'ouverture de l'éditeur ; rouvrez-le pour modifier la version actuelle
 cmd-object-edit-target-changed = L'objet en cours d'édition a changé ; modification abandonnée
 cmd-object-edit-object-no-longer-exists-document = Cet objet n'existe plus dans le document
-cmd-object-edit-no-strings-reverse = Aucune polyligne sélectionnée ne peut être inversée (masquée ou verrouillée)
-cmd-object-edit-strings-read-same-reversed = Chaque polyligne sélectionnée se lit pareil à l'envers, rien n'a donc changé
-cmd-object-edit-reversed-strings = { $count } polyligne(s) inversée(s)
+cmd-object-edit-no-strings-reverse = Aucune polyligne sélectionnée n'a été inversée
+cmd-object-edit-strings-read-same-reversed =
+    { $count ->
+        [one] { $count } polyligne laissée telle quelle : elle se lit pareil à l'envers
+       *[other] { $count } polylignes laissées telles quelles : elles se lisent pareil à l'envers
+    }
+cmd-object-edit-reversed-strings =
+    { $count ->
+        [one] { $count } polyligne inversée
+       *[other] { $count } polylignes inversées
+    }
+cmd-object-edit-reverse-left-layer-locked =
+    { $count ->
+        [one] { $count } polyligne sur un calque verrouillé laissée telle quelle
+       *[other] { $count } polylignes sur des calques verrouillés laissées telles quelles
+    }
+cmd-object-edit-reverse-left-locked =
+    { $count ->
+        [one] { $count } polyligne verrouillée laissée telle quelle
+       *[other] { $count } polylignes verrouillées laissées telles quelles
+    }
+cmd-object-edit-reverse-left-hidden =
+    { $count ->
+        [one] { $count } polyligne masquée laissée telle quelle
+       *[other] { $count } polylignes masquées laissées telles quelles
+    }
 cmd-object-edit-select-single-design-object-edit = Sélectionnez un seul objet de conception à modifier
 cmd-object-edit-unassigned = Non assigné
 cmd-offset-create-offset = Créer un décalage
@@ -1131,8 +1169,22 @@ cmd-text-edit-finished = Modification du texte terminée pour l’objet { $objec
 cmd-text-updated = Texte mis à jour sur l’objet { $object_id }
 cmd-thin-nothing-removed = Aucun sommet n'est à moins de { $tolerance } m; rien n'a été simplifié
 cmd-thin-thin-strings = Simplifier les polylignes
-cmd-thin-count-removed = { $removed } sommets sur { $count } polyligne(s)
-cmd-thin-thinned-count = { $count } polyligne(s) simplifiée(s), { $removed } sommets supprimés
+cmd-thin-count-removed =
+    { $removed ->
+        [one] { $removed } sommet
+       *[other] { $removed } sommets
+    } sur { $count ->
+        [one] { $count } polyligne
+       *[other] { $count } polylignes
+    }
+cmd-thin-thinned-count =
+    { $count ->
+        [one] { $count } polyligne simplifiée
+       *[other] { $count } polylignes simplifiées
+    }, { $removed ->
+        [one] { $removed } sommet supprimé
+       *[other] { $removed } sommets supprimés
+    }
 cmd-thickness-not-a-grid = { $name } ne peut pas servir de référence : { $reason }
 cmd-thickness-not-a-grid-cells = ce n'est pas une grille régulière unique de cellules carrées, comme celle que crée Construire une surface
 cmd-thickness-not-a-grid-heights = deux de ses sommets partagent un nœud de la grille à des hauteurs différentes

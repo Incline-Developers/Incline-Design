@@ -713,23 +713,61 @@ cmd-next-vertex-copied-vertices = Vipeo { $count } vimenakiliwa kando ya mfuatan
 cmd-string-rework-closed = Mfuatano uliofungwa hauna mwisho wa kuendeleza
 cmd-string-rework-changed = Mfuatano umebadilika, uchague tena
 cmd-string-rework-dropped = Kuendeleza au kuchora upya kulimalizika nafasi ya kazi ilipobadilika; pointi { $count } zilizochorwa hazikuhifadhiwa
-cmd-string-rework-redrew = Vipeo { $count } vimechorwa upya
+cmd-string-rework-redrew =
+    Sehemu imechorwa upya: { $removed ->
+        [one] kipeo { $removed } kimeondolewa
+       *[other] vipeo { $removed } vimeondolewa
+    }, { $count ->
+        [one] nukta { $count } imechorwa
+       *[other] nukta { $count } zimechorwa
+    }
 cmd-string-fill-short = Sehemu si ndefu kuliko nafasi
-cmd-string-fill-added = Sehemu imejazwa kwa vipeo vipya { $count }
+cmd-string-fill-added =
+    { $count ->
+        [one] Sehemu imejazwa kwa kipeo kipya { $count }
+       *[other] Sehemu imejazwa kwa vipeo vipya { $count }
+    }
 cmd-string-fill-too-many = Hilo lingeongeza vipeo { $count }; kiwango cha juu ni { $most }. Tumia nafasi kubwa zaidi, au gawanya sehemu kwa Ingiza Nukta kisha jaza kila sehemu
 cmd-string-split-into = Imegawanywa kuwa mifuatano { $count }
 cmd-string-split-opened = Pete imefunguliwa mahali mfuatano unapoikatiza
 cmd-string-split-no-crossing = Hakuna makutano kwenye mfuatano huo
 cmd-string-trim-removed = Kipande kati ya makutano kimeondolewa
+cmd-string-click-missed = Hakuna mstari unaoonekana usiofungwa chini ya kielekezi
+cmd-string-click-missed-vertex = Hakuna kipeo cha mstari unaoonekana usiofungwa chini ya kielekezi
+cmd-string-click-by-vertex = Karibu mno na kipeo: bofya sehemu mbali na ncha zake
+cmd-string-nudge-locked = Kipeo kilichoshikiliwa kiko kwenye mstari uliofichwa au uliofungwa, kwa hiyo kinabaki mahali kilipo
 cmd-object-edit-edited-kind = { $kind } imehaririwa
 cmd-object-edit-edited-kind-count-vertices = { $kind } imehaririwa (vipeo { $count })
 cmd-object-edit-no-changes-apply = Hakuna mabadiliko ya kutumia
 cmd-object-edit-object-changed-since-editor-opened = Kitu hiki kimebadilika tangu kihariri kufunguliwa; kifungue tena ili kuhariri toleo la sasa
 cmd-object-edit-target-changed = Lengo la uhariri wa kitu limebadilika; uhariri unaondolewa
 cmd-object-edit-object-no-longer-exists-document = Kitu hicho hakipo tena kwenye hati
-cmd-object-edit-no-strings-reverse = Hakuna mstari uliochaguliwa unaoweza kugeuzwa (umefichwa au umefungwa)
-cmd-object-edit-strings-read-same-reversed = Kila mstari uliochaguliwa husomeka sawa ukigeuzwa, kwa hiyo hakuna kilichobadilika
-cmd-object-edit-reversed-strings = Mistari { $count } imegeuzwa
+cmd-object-edit-no-strings-reverse = Hakuna mstari uliochaguliwa uliogeuzwa
+cmd-object-edit-strings-read-same-reversed =
+    { $count ->
+        [one] Mstari { $count } umeachwa kama ulivyo: husomeka sawa ukigeuzwa
+       *[other] Mistari { $count } imeachwa kama ilivyo: husomeka sawa ikigeuzwa
+    }
+cmd-object-edit-reversed-strings =
+    { $count ->
+        [one] Mstari { $count } umegeuzwa
+       *[other] Mistari { $count } imegeuzwa
+    }
+cmd-object-edit-reverse-left-layer-locked =
+    { $count ->
+        [one] Mstari { $count } kwenye safu iliyofungwa umeachwa kama ulivyo
+       *[other] Mistari { $count } kwenye safu zilizofungwa imeachwa kama ilivyo
+    }
+cmd-object-edit-reverse-left-locked =
+    { $count ->
+        [one] Mstari { $count } uliofungwa umeachwa kama ulivyo
+       *[other] Mistari { $count } iliyofungwa imeachwa kama ilivyo
+    }
+cmd-object-edit-reverse-left-hidden =
+    { $count ->
+        [one] Mstari { $count } uliofichwa umeachwa kama ulivyo
+       *[other] Mistari { $count } iliyofichwa imeachwa kama ilivyo
+    }
 cmd-object-edit-select-single-design-object-edit = Chagua kitu kimoja cha muundo ili kukihariri
 cmd-object-edit-unassigned = Haijawekwa
 cmd-offset-create-offset = Unda Mkabala
@@ -1155,8 +1193,22 @@ cmd-text-edit-finished = Umemaliza kuhariri maandishi ya kitu { $object_id }
 cmd-text-updated = Umesasisha maandishi kwenye kitu { $object_id }
 cmd-thin-nothing-removed = Hakuna kipeo ndani ya { $tolerance } m; hakuna kilichopunguzwa
 cmd-thin-thin-strings = Punguza Mistari
-cmd-thin-count-removed = Vipeo { $removed } kutoka mistari { $count }
-cmd-thin-thinned-count = Mistari { $count } imepunguzwa, vipeo { $removed } vimeondolewa
+cmd-thin-count-removed =
+    { $removed ->
+        [one] Kipeo { $removed }
+       *[other] Vipeo { $removed }
+    } kutoka { $count ->
+        [one] mstari { $count }
+       *[other] mistari { $count }
+    }
+cmd-thin-thinned-count =
+    { $count ->
+        [one] Mstari { $count } umepunguzwa
+       *[other] Mistari { $count } imepunguzwa
+    }, { $removed ->
+        [one] kipeo { $removed } kimeondolewa
+       *[other] vipeo { $removed } vimeondolewa
+    }
 cmd-thickness-not-a-grid = Haiwezi kupimwa dhidi ya { $name }: { $reason }
 cmd-thickness-not-a-grid-cells = si gridi moja ya kawaida ya seli za mraba, kama Jenga Uso inavyotengeneza
 cmd-thickness-not-a-grid-heights = vipeo vyake viwili vinashiriki kifundo kimoja cha gridi kwa urefu tofauti

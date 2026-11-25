@@ -48,7 +48,7 @@ Cut at a crossing, each piece of a string ends exactly on the other string, and 
 ### Where it is
 Geology workspace: **Geology Design > Join and Split > Split at Crossings**.
 ### Before you start
-Select a string first if you like, and the tool takes it as the string to cut. Otherwise you click it. Both strings must be shown, and the string to cut must not be on a locked layer. The string that cuts may be on a locked layer, but not frozen.
+Select a string first if you like, and the tool takes it as the string to cut. Otherwise you click it. Both strings must be shown, not frozen and not on a locked layer.
 ### Steps
 1. Choose **Geology Design > Join and Split > Split at Crossings**. The banner reads "Click the string to split", with "Esc cancels". Click the string to cut, unless you selected it first. The banner now reads "Click the string that crosses it".
 2. Click the string that crosses it. The first string is cut at every place the second crosses it, a vertex included, and is replaced by open pieces that each end on the crossing string. An open string crossed at one place gives two pieces. Each new vertex takes its height along the segment of the cut string it lies on; the height of the crossing string is not used. The crossing string is not changed. The console says "Split into", with the number of strings, for example "Split into 2 strings".
@@ -60,7 +60,8 @@ None.
 ### What it refuses and why
 - Console "No crossing on that string": the second string does not cross the first, or only meets an open string at its end. Nothing changes and the banner still asks for the crossing string.
 - Console "The string changed, pick it again": the first string was edited after you picked it. Nothing is cut and the banner asks for the string to split again.
-- A locked, hidden or frozen string cannot be picked to be cut, and the click does nothing.
+- Console "No shown, unlocked string under the cursor": the click found no string it may cut; locked, hidden and frozen strings are passed over. Nothing changes, and a string already picked stays picked.
+- Console "Click the string that crosses it": the second click was on the string being cut. Nothing changes.
 ### Related tools
 [Remove Between Crossings](#3-remove-between-crossings), [Clean Strings](../control-strings/README.md#2-clean-strings)
 
@@ -85,7 +86,7 @@ Every string that is shown cuts, locked ones too. A hidden string does not. The 
 None.
 ### What it refuses and why
 - Console "No crossing on that string": nothing crosses the string you clicked, or it is a closed string crossed only once. No piece is drawn and nothing changes.
-- A locked, hidden or frozen string is not taken, and the click does nothing. No piece shows while the cursor is on it.
+- Console "No shown, unlocked string under the cursor": the click found no string it may edit; locked, hidden and frozen strings are passed over, and no piece shows while the cursor is on one. Nothing changes.
 ### Related tools
 [Split at Crossings](#2-split-at-crossings), [Clean Strings](../control-strings/README.md#2-clean-strings)
 
@@ -109,7 +110,8 @@ Click the string once the tool is armed. It must be shown and not on a locked la
 ### Options and defaults
 None.
 ### What it refuses and why
-- A locked, hidden or frozen string, a circle, or anything that is not a polyline: the click does nothing, says nothing and the tool stays armed.
+- Console "No shown, unlocked string under the cursor": what was clicked is a point. Nothing changes and the tool stays armed.
+- A click on nothing, a circle, or a locked, hidden or frozen string does nothing, says nothing and the tool stays armed.
 - A bulge on an arc gives no point, only its vertices do. A vertex that sits exactly on the one before it gives no second point, nor does a closed string's last vertex when it repeats its first.
 ### Related tools
 [Build Surface](../surfaces/README.md#3-build-surface), [Split at Crossings](#2-split-at-crossings)
@@ -134,8 +136,7 @@ Open a project with a string on a layer that is visible and not locked. Nothing 
 ### Options and defaults
 None.
 ### What it refuses and why
-- A click with no vertex of a string near it does nothing, and says nothing.
-- A string on a hidden or locked layer is not picked, so its vertices cannot be opened this way.
+- Console "No vertex of a shown, unlocked string under the cursor": no vertex of a string is near the click, or the string is hidden or locked, so its vertices cannot be opened this way. The tool stays armed.
 ### Related tools
 [Insert Point](#6-insert-point), [Drag a Vertex](#9-drag-a-vertex), [Nudge RL](#10-nudge-rl)
 
@@ -159,8 +160,8 @@ Open a project with a string on a layer that is visible and not locked. Nothing 
 ### Options and defaults
 None.
 ### What it refuses and why
-- A click off a string, or close to a vertex that is already there, does nothing, and says nothing.
-- A string on a hidden or locked layer is not picked.
+- Console "No shown, unlocked string under the cursor": the click is off a string, or on a hidden or locked one. Nothing is added.
+- Console "Too close to a vertex: click the segment away from its ends": the click is on a string but close to a vertex that is already there. Nothing is added.
 ### Related tools
 [Fill Segment](#7-fill-segment), [Insert Points at Spacing](#8-insert-points-at-spacing)
 
@@ -187,7 +188,8 @@ Open a project with a string on a layer that is visible and not locked. Nothing 
 | --- | --- | --- |
 | **Spacing** | 5 m | The most the new vertices are apart, in metres, measured in 3D. The least is 0.001 m. It is kept and saved with the project, and changing it marks the project unsaved and is not an undo step. |
 ### What it refuses and why
-- "The segment is no longer than the spacing": nothing is added. A click off a string, or close to a vertex, does nothing and says nothing.
+- "The segment is no longer than the spacing": nothing is added.
+- "No shown, unlocked string under the cursor" for a click off a string or on a hidden or locked one, and "Too close to a vertex: click the segment away from its ends" for a click close to a vertex: nothing is added.
 - "That would add", the number of vertices, then "vertices; the most is 1000. Use a larger spacing, or split the segment with Insert Point and fill each part": the spacing would add more than 1000 vertices to the segment. Nothing is added, and the hover shows no markers.
 ### Related tools
 [Insert Point](#6-insert-point), [Insert Points at Spacing](#8-insert-points-at-spacing)
@@ -240,7 +242,7 @@ Open a project with a string on a layer that is visible and not locked. Nothing 
 None.
 ### What it refuses and why
 - A press that is not on a vertex is an ordinary click or selection, and nothing is dragged. A press that does not move leaves the string as it was.
-- A string on a hidden or locked layer is not dragged.
+- A string on a hidden or locked layer is not dragged. Where one is picked even so, for example in a second open project, the console says "No shown, unlocked string under the cursor".
 ### Related tools
 [Nudge RL](#10-nudge-rl), [Edit Vertex](#5-edit-vertex)
 
@@ -268,7 +270,8 @@ A project must be open with a string on screen. You click the vertex, so no sele
 | **Step** | 0.1, then the last step used | How far one press of **Raise** or **Lower** moves the vertex, in metres, from 0.001 to 1000. The Up and Down arrows use it while the panel is open. |
 ### What it refuses and why
 - **Raise** and **Lower** are greyed, and the panel says "Click a vertex to nudge it", until a vertex is held.
-- A vertex of a hidden or locked string is not picked, so it cannot be nudged. Nothing is said.
+- With no vertex held, the Up and Down arrows do nothing and the console says "Click a vertex to nudge it".
+- A vertex of a hidden or locked string is not picked, so it cannot be nudged. If its string is hidden or locked after it was held, a nudge leaves it where it is and the console says "The held vertex is on a hidden or locked string, so it stays where it is".
 ### Related tools
 [Drag a Vertex](#9-drag-a-vertex), [Edit Vertex](#5-edit-vertex)
 
@@ -287,7 +290,7 @@ The entry is always enabled. The button is greyed while no project is open or **
 1. Select the strings, or leave the selection empty and use **Pick** in the dialog.
 2. Choose **Geology Design > Vertices > Thin Strings...**, or click the **Thin Strings** button. The dialog gives the vertex count of the strings now and after thinning, for example "Vertices: 5 now, 4 after". The strings are drawn over the scene as they would be left, their kept vertices marked.
 3. Set **Tolerance**. The count after and the drawing follow it. Opening the dialog again, or **Done** after **Pick**, keeps the tolerance typed.
-4. Click **Apply**. The console says "Thinned", the number of strings, "string(s),", then the number of vertices removed and "vertices removed", for example "Thinned 1 string(s), 1 vertices removed". The dialog closes. Ctrl+Z brings the vertices back.
+4. Click **Apply**. The console says "Thinned", the number of strings, then the number of vertices removed, for example "Thinned 1 string, 1 vertex removed" or "Thinned 2 strings, 5 vertices removed". The dialog closes. Ctrl+Z brings the vertices back.
 
 ![Geology workspace, section view along the string, five vertices before thinning in grey and the four vertices left after Thin Strings at Tolerance 0.1 m in orange.](images/10-thin-strings-section.svg)
 ### Options and defaults
@@ -366,7 +369,7 @@ Geology workspace: **Geology Design > Measure Distance**, on the menu itself aft
 A string must be on screen. No selection is needed. Every other workspace shows the distance only.
 ### Steps
 1. Choose **Geology Design > Measure Distance** and do not click. Move the cursor onto a segment of a string. The segment is drawn over in amber and the message gives its length in 3D, its plan length, rise, bearing, and grade in degrees and per cent, for example "200.010 metres · 200.000 m plan · -2.000 m rise · 090.00° bearing · -0.57° grade (-1.0%)".
-2. Rise and grade are positive uphill, taken in the order the string's vertices run, and the bearing is clockwise from grid north. After **Reverse String Direction** the same segment reads the rise and grade with the other sign and the bearing turned by 180°: the segment in the example would read +2.000 m rise, 270.00° bearing and +0.57° grade (1.0%). A segment straight up or down reads "vertical" in place of plan length and bearing, with no per cent. Two clicks read the line between your two points in the same form.
+2. Rise and grade are positive uphill, taken in the order the string's vertices run, and the bearing is clockwise from grid north. After **Reverse String Direction** the same segment reads the rise and grade with the other sign and the bearing turned by 180°: the segment in the example would read +2.000 m rise, 270.00° bearing and +0.57° grade (+1.0%). A segment straight up or down reads "vertical" in place of plan length and bearing, with no per cent. Two clicks read the line between your two points in the same form.
 
 ![Geology workspace, plan view, Measure Distance armed over string 1 of layer Seam A roof, the segment under the cursor lit orange and the readout message in the banner at the top of the view.](images/13-measure-distance-readout.svg)
 ### Options and defaults

@@ -159,11 +159,12 @@ impl<'a> App<'a> {
             return;
         }
         let Some((id, ..)) = self.insert_point_hit() else {
+            self.report_segment_miss();
             return;
         };
         // Picking refuses hidden and locked strings; the string is read
         // again from its own project, not from the last frame's scene.
-        if !self.activate_project_for_object(id) || !self.editor.canvas_edits_object(self.active_document(), id) {
+        if !self.clicked_string_editable(id) {
             return;
         }
         let Some(Object::Polyline { verts, closed, .. }) = self.active_document().get_object(id) else {
@@ -187,12 +188,13 @@ impl<'a> App<'a> {
             return;
         }
         let Some((id, _)) = self.fill_segment_hit() else {
+            self.report_segment_miss();
             return;
         };
         // Taken before the pick can switch projects: the spacing previewed.
         let spacing = self.fill_spacing();
         // As Insert Point: the string is read again from its own project.
-        if !self.activate_project_for_object(id) || !self.editor.canvas_edits_object(self.active_document(), id) {
+        if !self.clicked_string_editable(id) {
             return;
         }
         let Some(Object::Polyline { verts, closed, .. }) = self.active_document().get_object(id) else {
@@ -221,7 +223,7 @@ impl<'a> App<'a> {
             return;
         };
         self.execute_edit(Command::Batch(commands));
-        userspace_log!("{}", tr!("cmd-string-fill-added", count = added.to_string()));
+        userspace_log!("{}", tr!("cmd-string-fill-added", count = added));
         self.invalidate_geometry();
         // The spacing used goes with the string's own project too.
         self.set_fill_segment_spacing(spacing);
@@ -291,6 +293,35 @@ impl<'a> App<'a> {
         self.editor.removable_piece.clear();
         if shown {
             self.invalidate_overlay();
+        }
+    }
+
+    /// Activate the project of string `id`, which a click picked, and say
+    /// whether the canvas may edit it there; if not, the console is told no
+    /// shown, unlocked string is under the cursor.
+    pub(crate) fn clicked_string_editable(&mut self, id: ObjectId) -> bool {
+        let editable = self.activate_project_for_object(id)
+            && self.editor.canvas_edits_object(self.active_document(), id)
+            && matches!(self.active_document().get_object(id), Some(Object::Polyline { .. }));
+        if !editable {
+            userspace_log!("{}", tr!("cmd-string-click-missed"));
+        }
+        editable
+    }
+
+    /// Say why a click found no segment to work on: beside a vertex of a
+    /// string the canvas may edit, or on no such string.
+    fn report_segment_miss(&self) {
+        let on_string = match self.pick_under_cursor() {
+            Some((SceneEntityId::Object(id), _)) => {
+                self.editor.canvas_edits_object(&self.scene_document, id) && matches!(self.scene_document.get_object(id), Some(Object::Polyline { .. }))
+            }
+            _ => false,
+        };
+        if on_string {
+            userspace_log!("{}", tr!("cmd-string-click-by-vertex"));
+        } else {
+            userspace_log!("{}", tr!("cmd-string-click-missed"));
         }
     }
 

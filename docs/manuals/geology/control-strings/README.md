@@ -225,7 +225,7 @@ Pick a vertex of a string on an unlocked layer. Closed strings are taken too, an
 ### Steps
 1. Choose **Geology Design > Draw > Redraw Between Vertices**. The banner reads "Click the vertex where the redraw starts". Click the vertex of the string where the new part starts.
 2. The banner reads "Draw the new part, then click the vertex where it ends". Place the new points by clicking, or with **Geology Design > Draw > Next Vertex...**
-3. Click the vertex of the same string where the new part ends. The vertices between the two clicked vertices go, and the points you drew take their place; the two clicked vertices stay. The console gives the count of points drawn, for example "Redrew 1 vertices". One undo puts the string back.
+3. Click the vertex of the same string where the new part ends. The vertices between the two clicked vertices go, and the points you drew take their place; the two clicked vertices stay. The console gives the vertices taken out and the points drawn in, for example "Redrew the run: 1 vertex taken out, 1 point drawn in". One undo puts the string back.
 
 ![Geology workspace, plan view, a string redrawn between vertices 2 and 4: the former run through (1200, 1100) replaced by a run through (1200, 1150, 78).](images/07-redraw-run-plan.svg)
 ### Options and defaults
@@ -251,14 +251,14 @@ Select one or more strings, open or closed, and the tool runs at once. The entry
 ### Steps
 1. Select the strings and choose **Geology Design > Edit > Reverse String Direction**, or click the toolbar button.
 2. Open the vertex table. The rows run the other way: the former last vertex is row 1 and the former first vertex is the last row. The line on the canvas has not moved.
-3. Read the console: "Reversed" with the count of strings turned round, for example "Reversed 2 string(s)". The run is one undo step, however many strings were selected.
+3. Read the console: "Reversed" with the count of strings turned round, for example "Reversed 2 strings". The run is one undo step, however many strings were selected.
 
 ![Geology workspace, plan view, one string from (1000, 1100, 79.0) to (1200, 1100, 77.0): vertex numbers 1, 2, 3 run from the west end before, and from the east end after Reverse String Direction.](images/08-reverse-string-direction-plan.svg)
 ### Options and defaults
 None.
 ### What it refuses and why
-- With no polyline selected, the **Pick from View** prompt opens and **Done** stays disabled until one is picked.
-- Console "No selected string can be reversed (hidden or locked)": every selected string was hidden, locked or frozen. Nothing changes.
+- With no polyline selected, the **Pick from View** prompt opens and **Done** stays disabled until one is picked. Strings selected and then hidden are counted as hidden, not picked again.
+- Console "No selected string was reversed", followed by a line for each reason: on a locked layer, locked (frozen strings included), hidden, or reads the same reversed, for example "Left 1 locked string as it was". Nothing changes. A mixed selection reverses the rest and lists the strings it left out the same way.
 ### Related tools
 [Clean Strings](#2-clean-strings), [Carry On a String](#6-carry-on-a-string)
 

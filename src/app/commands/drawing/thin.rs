@@ -107,11 +107,8 @@ impl<'a> App<'a> {
         self.editor.thin_tolerance = tolerance;
         self.execute_edit(Command::Batch(commands));
         crate::logging::report_completed_action(
-            CommandReportSpec::new(
-                tr!("cmd-thin-thin-strings"),
-                tr!("cmd-thin-count-removed", removed = removed.to_string(), count = count.to_string()),
-            ),
-            tr!("cmd-thin-thinned-count", count = count.to_string(), removed = removed.to_string()),
+            CommandReportSpec::new(tr!("cmd-thin-thin-strings"), tr!("cmd-thin-count-removed", removed = removed, count = count)),
+            tr!("cmd-thin-thinned-count", count = count, removed = removed),
         );
         self.invalidate_geometry();
     }

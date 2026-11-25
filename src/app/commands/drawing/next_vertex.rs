@@ -396,18 +396,19 @@ impl<'a> App<'a> {
         let Object::Polyline { verts, closed, .. } = &before else {
             return;
         };
-        // Counted against the run drawn as one straight segment.
-        let (Some(new), Some(chord)) = (redrawn(verts, *closed, start, end, &drawn), redrawn(verts, *closed, start, end, &[])) else {
+        let Some(new) = redrawn(verts, *closed, start, end, &drawn) else {
             return;
         };
-        let count = new.len() - chord.len();
+        let Some((removed, count)) = redraw_counts_of(verts, end, &drawn, &new) else {
+            return;
+        };
         let mut after = before.clone();
         if let Object::Polyline { verts, .. } = &mut after {
             *verts = new;
         }
         if after != before {
             self.execute_edit(Command::Replace { before, after });
-            userspace_log!("{}", tr!("cmd-string-rework-redrew", count = count.to_string()));
+            userspace_log!("{}", tr!("cmd-string-rework-redrew", removed = removed, count = count));
         }
     }
 
@@ -660,12 +661,7 @@ pub(crate) fn redrawn(verts: &[PolyVertex], closed: bool, first: usize, last: us
         true => choose_closed_span(verts, first, last, false),
         false => (first.min(last), first.max(last)),
     };
-    let mut drawn = drawn.to_vec();
-    // A point drawn last on the end vertex, by a copy along, is not doubled.
-    let end_at = verts.get(last)?.pos;
-    while drawn.last().is_some_and(|point| (end_at - *point).length_squared() <= 1.0e-16) {
-        drawn.pop();
-    }
+    let mut drawn = drawn_in(drawn, verts.get(last)?.pos).to_vec();
     if start != first {
         drawn.reverse();
     }
@@ -675,6 +671,20 @@ pub(crate) fn redrawn(verts: &[PolyVertex], closed: bool, first: usize, last: us
     let at = if start < end { start + 1 } else { start - end + 1 };
     verts.splice(at..at, drawn.into_iter().map(PolyVertex::straight));
     Some(verts)
+}
+
+/// The points of `drawn` a redraw ending on `end_at` puts in: a point drawn
+/// last on the end vertex, by a copy along, is not doubled.
+fn drawn_in(drawn: &[DVec3], end_at: DVec3) -> &[DVec3] {
+    let kept = drawn.iter().rposition(|point| (end_at - *point).length_squared() > 1.0e-16).map_or(0, |at| at + 1);
+    &drawn[..kept]
+}
+
+/// What the redraw that gave `new` did to `verts`, ending on vertex `last`
+/// with `drawn`: the vertices it took out and the points it drew in.
+pub(crate) fn redraw_counts_of(verts: &[PolyVertex], last: usize, drawn: &[DVec3], new: &[PolyVertex]) -> Option<(usize, usize)> {
+    let count = drawn_in(drawn, verts.get(last)?.pos).len();
+    Some(((verts.len() + count).saturating_sub(new.len()), count))
 }
 
 /// Where Copy Along's first pick now is on a string: `first` when that

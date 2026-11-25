@@ -4465,6 +4465,15 @@ impl OmfExportSelection {
     }
 }
 
+/// Why the canvas may not edit an object ([`EditorState::canvas_refusal`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CanvasRefusal {
+    Gone,
+    LayerLocked,
+    Locked,
+    Hidden,
+}
+
 impl EditorState {
     /// The cursor sits on the first vertex of the polyline being drawn, so a
     /// click there closes it.
@@ -4893,13 +4902,24 @@ impl EditorState {
     /// project's: it is there, shown, and not locked, which is what picking
     /// asks of anything it hands a tool.
     pub(crate) fn canvas_edits_object(&self, document: &crate::model::Document, id: ObjectId) -> bool {
+        self.canvas_refusal(document, id).is_none()
+    }
+
+    /// Why the canvas may not edit object `id` of `document`, or None when
+    /// it may. A layer lock is told first: it is mirrored onto the objects.
+    pub(crate) fn canvas_refusal(&self, document: &crate::model::Document, id: ObjectId) -> Option<CanvasRefusal> {
         let handle = SceneEntityId::Object(id);
-        document
-            .get_object(id)
-            .is_some_and(|object| document.layer(object.layer()).is_some_and(crate::model::Layer::is_visible) && !self.locked_layers.contains(&object.layer()))
-            && !document.is_object_hidden(id)
-            && !self.hidden_handles.contains(&handle)
-            && !self.frozen_handles.contains(&handle)
+        let Some(object) = document.get_object(id) else {
+            return Some(CanvasRefusal::Gone);
+        };
+        if self.locked_layers.contains(&object.layer()) {
+            return Some(CanvasRefusal::LayerLocked);
+        }
+        if self.frozen_handles.contains(&handle) {
+            return Some(CanvasRefusal::Locked);
+        }
+        let shown = document.layer(object.layer()).is_some_and(crate::model::Layer::is_visible) && !document.is_object_hidden(id) && !self.hidden_handles.contains(&handle);
+        (!shown).then_some(CanvasRefusal::Hidden)
     }
 
     /// The index of the ring drawn nearest `px` (physical px) within
