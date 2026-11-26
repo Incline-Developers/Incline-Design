@@ -21,7 +21,7 @@ use crate::{
 /// macOS, in points: as far as they sit down from its top on a bar of the
 /// system's own height.
 #[cfg(target_os = "macos")]
-const MAC_BUTTONS_LEFT: f64 = 9.0;
+pub(super) const MAC_BUTTONS_LEFT: f64 = 9.0;
 /// Frames drawn after the window enters or leaves fullscreen on macOS, with
 /// nothing else asking for them: AppKit lays its title bar out again once the
 /// change is done, which puts its buttons back where it keeps them.
@@ -32,11 +32,11 @@ const FULLSCREEN_SETTLE_FRAMES: u8 = 3;
 /// logical pixels: Breeze's, so the window sits among KDE's own. This is the
 /// one radius not `GROUP_CORNER_RADIUS`, being the desktop's rather than the
 /// layout's.
-const WINDOW_CORNER_RADIUS: f32 = 6.0;
+pub(super) const WINDOW_CORNER_RADIUS: f32 = 6.0;
 
 /// Whether nothing but Incline frames the window, so it draws its own border.
 /// Windows' compositor and macOS frame theirs.
-const DRAWS_OWN_BORDER: bool = cfg!(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")));
+pub(super) const DRAWS_OWN_BORDER: bool = cfg!(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")));
 
 /// The main window's attributes, without the system's title bar.
 ///

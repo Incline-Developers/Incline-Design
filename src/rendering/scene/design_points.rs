@@ -229,7 +229,7 @@ fn collect_design_point_positions(document: &Document, hidden: &HashSet<SceneEnt
             // A circle's one editable point is its centre; the two
             // semicircle endpoints of its geometry view are not handles.
             Object::Circle { center, .. } => push(*center),
-            Object::Polyline { verts, .. } => verts.iter().for_each(|vertex| push(vertex.pos)),
+            Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => verts.iter().for_each(|vertex| push(vertex.pos)),
             Object::Text { .. } => {}
         }
     }

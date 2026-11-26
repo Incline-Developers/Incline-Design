@@ -350,6 +350,7 @@ pub(crate) struct PreferencesDraft {
     pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
     pub(crate) dark_mode: bool,
     pub(crate) show_console: bool,
+    pub(crate) popped_out: PoppedOutPanels,
     pub(crate) ui_size_percent: f64,
     pub(crate) snap_poll_rate: u32,
     pub(crate) vsync_enabled: bool,
@@ -389,6 +390,7 @@ impl Default for PreferencesDraft {
             well_log_style: crate::ui::widgets::log_traces::WellLogStyle::default(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
+            popped_out: PoppedOutPanels::default(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
             vsync_enabled: crate::app::io::default_vsync_enabled(),
@@ -679,6 +681,14 @@ impl EditorState {
         self.task_history.truncate(TASK_HISTORY_LEN);
     }
 
+    /// The active pattern and the holes selected in it, in order.
+    pub(crate) fn selected_pattern_holes(&self) -> Option<(crate::model::drill_hole::DrillHoleId, Vec<usize>)> {
+        let id = self.active_drill_hole?;
+        let mut holes: Vec<usize> = self.selected_drill_holes.iter().filter(|hole| hole.dataset == id).map(|hole| hole.hole).collect();
+        holes.sort_unstable();
+        Some((id, holes))
+    }
+
     /// Drop everything selected, in every workspace's terms: whole scene
     /// entities and the individual drill holes Drill & Blast picks.
     pub(crate) fn clear_scene_selection(&mut self) {
@@ -734,6 +744,7 @@ impl EditorState {
             || self.is_water_run()
             || self.point_cloud_tin_open
             || self.point_cloud_join_open
+            || self.tri_join_open
             || self.point_cloud_classify_open
             || self.block_model_create_open
             || self.ore_triangulation_open
@@ -1517,6 +1528,9 @@ pub(crate) struct SelectionCounts {
     pub(crate) objects: usize,
     /// Selected polylines; circles are not among them.
     pub(crate) polylines: usize,
+    /// Selected pit designs, and closed polylines that could become one:
+    /// what the Pit Design tool opens.
+    pub(crate) pit_designable: usize,
     /// Selected design objects able to contribute an edge to a triangulation.
     pub(crate) triangulation_sources: usize,
     /// Selected design points and open-string vertices, which a surface can
@@ -1883,31 +1897,6 @@ pub(crate) struct TriCreateFailure {
 pub(crate) struct TriCreateDiagnostic {
     pub(crate) markers_world: Vec<DVec3>,
     pub(crate) segments_world: Vec<[DVec3; 2]>,
-}
-
-/// Whether the Batter Berm tool is generating a pit or a stockpile. Combined
-/// with [`BatterBermPreviewKey::direction_up`] this picks the horizontal
-/// offset side: Pit + Up and Stockpile + Down step outward; Pit + Down and
-/// Stockpile + Up step inward. The Direction selector alone sets the vertical
-/// step (Up rises, Down falls).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum BatterBermMode {
-    Pit,
-    Stockpile,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct BatterBermPreviewKey {
-    pub(crate) target_id: ObjectId,
-    pub(crate) document_revision: u64,
-    pub(crate) width: f64,
-    pub(crate) angle: f64,
-    pub(crate) bench_height: f64,
-    pub(crate) benches: u32,
-    pub(crate) mode: BatterBermMode,
-    /// `true` = each bench rises (Direction: Up); `false` = each bench falls
-    /// (Direction: Down).
-    pub(crate) direction_up: bool,
 }
 
 /// Which sub-mode the Relimit Line tool is operating in.
@@ -2826,8 +2815,8 @@ pub(crate) struct EditorState {
     /// Draw contour bands on all topology meshes, at an interval that
     /// follows zoom, in the wireframe's colour.
     pub(crate) topology_contours_enabled: bool,
-    /// Show every vertex of all visible design objects. These are kept in a
-    /// persistent GPU instance cache rather than a decimated UI overlay.
+    /// Show a dot at every vertex of polylines and pit designs, in their own
+    /// colours, drawn with the lines.
     pub(crate) show_points: bool,
     /// The UI language in force, which the status bar's picker changes live.
     /// Read only to tick the running language in that picker - what the strings
@@ -2901,6 +2890,14 @@ pub(crate) struct EditorState {
     pub(crate) memory_usage: Option<crate::app::memory_usage::MemoryUsage>,
     /// The window the UI is drawn in. See [`WindowFrame`].
     pub(crate) window_frame: WindowFrame,
+    /// Which panels are popped out into windows of their own. A preference.
+    pub(crate) popped_out: PoppedOutPanels,
+    /// The MCP server. See [`McpState`].
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) mcp: McpState,
+    /// The popped-out panels' windows, as their title bars need them.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) panel_frames: PanelWindowFrames,
     /// Each processor core's load, `0.0..=1.0`, refreshed by `App` every
     /// `memory_usage::CPU_SAMPLE_PERIOD`. Empty until the first reading, and
     /// always on the web, where a browser does not say.
@@ -3165,6 +3162,30 @@ pub(crate) struct EditorState {
     pub(crate) smooth_strings_dialog: Option<crate::ui::dialogs::SmoothStringsDialog>,
     /// Last tolerance applied by Smooth Strings, offered on reopening.
     pub(crate) smooth_tolerance: f64,
+    /// Pit Design, open while it holds its settings and preview.
+    pub(crate) pit_design: Option<crate::ui::dialogs::pit_design::PitDesignDraft>,
+    /// Pit design objects whose benches are being worked out again in the
+    /// background, by what they are worked out from; and what the active
+    /// project looked like when last checked for any that need it.
+    pub(crate) pit_refreshes: std::collections::HashMap<ObjectId, u64>,
+    pub(crate) pit_refresh_checked: Option<u64>,
+    /// The cursor mode Pit Design put aside while it is up, to give back
+    /// when it is put down: its strings are drawn level, so it snaps to
+    /// nothing.
+    pub(crate) pit_held_cursor_mode: Option<CursorMode>,
+    /// The same for measuring them.
+    pub(crate) pit_evaluations: std::collections::HashMap<ObjectId, u64>,
+    pub(crate) pit_evaluation_checked: Option<u64>,
+    /// Whether the string drawn with Pit Design has its corners rounded to
+    /// arcs of `pit_corner_radius` when it closes.
+    pub(crate) pit_round_corners: bool,
+    pub(crate) pit_corner_radius: f64,
+    /// While a pit's string is drawn: the topography's RL under the pointer,
+    /// `Some(None)` off it, and `None` with no topography to read.
+    pub(crate) pit_ground_under_cursor: Option<Option<f64>>,
+    /// The settings of the pit last edited, which the next one drawn starts
+    /// with.
+    pub(crate) pit_last_settings: Option<crate::model::pit_design::settings::PitDesignSettings>,
     /// The "Edit Object" dialog, holding a working copy of one design object
     /// until Apply or OK hands it back to the document.
     pub(crate) object_edit_dialog: Option<crate::ui::dialogs::object_edit::ObjectEditDialog>,
@@ -3190,6 +3211,10 @@ pub(crate) struct EditorState {
     pub(crate) slice_preview_detached: bool,
     /// GPU texture rendered with the normal shaded plan-view scene pass.
     pub(crate) slice_preview_texture: Option<egui::TextureId>,
+    /// The same picture, as the section preview's own window knows it while
+    /// it is popped out (`app/panel_windows.rs`).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) slice_preview_window_texture: Option<egui::TextureId>,
     /// Offscreen image of the solid being inspected on the Solids Setup page,
     /// the frame size it is asked to fill, and how it is being orbited.
     pub(crate) solid_preview_texture: Option<egui::TextureId>,
@@ -3759,6 +3784,14 @@ pub(crate) struct EditorState {
     pub(crate) tri_merge_name_auto: bool,
     pub(crate) tri_merge_unload_source: bool,
 
+    // Join Surfaces
+    pub(crate) tri_join_open: bool,
+    /// The surfaces ticked, in the order ticked.
+    pub(crate) tri_join_sources: Vec<TriangulationId>,
+    pub(crate) tri_join_name_input: String,
+    /// Unload the surfaces joined once the joined one is in.
+    pub(crate) tri_join_unload_sources: bool,
+
     // Contour Generation
     pub(crate) tri_contour_open: bool,
     pub(crate) tri_contour_tri_id: Option<TriangulationId>,
@@ -3882,37 +3915,6 @@ pub(crate) struct EditorState {
     pub(crate) ore_min_input: f64,
     pub(crate) ore_max_input: f64,
     pub(crate) ore_name_input: String,
-
-    // Batter Berm tool
-    pub(crate) batter_berm_dialog_open: bool,
-    pub(crate) batter_berm_target_id: Option<ObjectId>,
-    pub(crate) batter_berm_width: f64,
-    pub(crate) batter_berm_angle: f64,
-    pub(crate) batter_berm_bench_height: f64,
-    pub(crate) batter_berm_benches: u32,
-    /// Maximum number of complete, compliant batter-and-berm levels for the
-    /// current boundary and design parameters.
-    pub(crate) batter_berm_max_benches: u32,
-    pub(crate) batter_berm_mode: BatterBermMode,
-    /// Direction selector: `true` = each bench rises (Up), `false` = each bench
-    /// falls (Down). Together with [`Self::batter_berm_mode`] this decides
-    /// whether the rings step inward or outward - see [`BatterBermMode`].
-    pub(crate) batter_berm_direction_up: bool,
-    /// All iteration rings in world coords: [toe_ring_0, berm_ring_0, toe_ring_1, berm_ring_1, …]
-    pub(crate) batter_berm_rings_world: Vec<Vec<DVec3>>,
-    /// Centre and radius per ring, parallel to [`Self::batter_berm_rings_world`],
-    /// when the source is a circle. Benching a circle yields concentric
-    /// circles, so the commit writes those rather than the flattened rings the
-    /// preview draws. `None` for every other source.
-    pub(crate) batter_berm_ring_circles: Option<Vec<(DVec3, f64)>>,
-    pub(crate) batter_berm_source_world: Vec<DVec3>,
-    /// Screen projections preserve one entry per world vertex. `None` means
-    /// that vertex is outside the camera depth range, so adjacent vertices
-    /// must not be joined across the gap.
-    pub(crate) batter_berm_rings_screen_px: Vec<Vec<OptionalScreenPointPx>>,
-    pub(crate) batter_berm_source_screen_px: Vec<OptionalScreenPointPx>,
-    pub(crate) batter_berm_preview_closed: bool,
-    pub(crate) batter_berm_preview_key: Option<BatterBermPreviewKey>,
 
     // Bezier tool
     pub(crate) bezier_poly_id: Option<ObjectId>,
@@ -4475,10 +4477,21 @@ pub(crate) enum CanvasRefusal {
 }
 
 impl EditorState {
+    /// Pit Design is drawing the string of a new pit, rather than editing
+    /// one in its panel.
+    pub(crate) fn pit_drawing(&self) -> bool {
+        self.active_tool == ActiveTool::PitDesign && self.pit_design.as_ref().is_none_or(|draft| draft.object_id().is_none())
+    }
+
+    /// A closed string is being drawn: a polyline, or a pit's toe or crest.
+    pub(crate) fn draws_closed_stroke(&self) -> bool {
+        self.active_tool == ActiveTool::MakePoly || self.pit_drawing()
+    }
+
     /// The cursor sits on the first vertex of the polyline being drawn, so a
     /// click there closes it.
     pub(crate) fn poly_close_hovered(&self) -> bool {
-        self.active_tool == ActiveTool::MakePoly
+        self.draws_closed_stroke()
             && !self.poly_finish_dialog
             && self.pending_stroke.len() >= 2
             // Carrying on or redrawing a string, the first vertex is the
@@ -4553,6 +4566,12 @@ impl EditorState {
     /// Whether a snap mode is up. The section snaps as the plan does: its
     /// targets are the ones inside the slab, and off them the cursor falls
     /// back to the section plane like any unsnapped pick.
+    /// Whether the cursor modes are held at Regular: while Pit Design is up,
+    /// which draws its strings level at their RL.
+    pub(crate) fn cursor_modes_held(&self) -> bool {
+        self.active_tool == ActiveTool::PitDesign
+    }
+
     pub(crate) fn snapping_active(&self) -> bool {
         self.cursor_mode.snaps()
     }
@@ -4677,6 +4696,7 @@ impl EditorState {
             || self.tri_strata_open
             || self.tri_cut_pitshell_open
             || self.tri_include_solid_open
+            || self.tri_join_open
             || self.tri_contour_open
             || self.tri_smooth_open
             || self.tri_clean_open
@@ -5047,6 +5067,7 @@ impl EditorState {
         self.thin_strings_dialog = None;
         self.insert_point_at_spacing_dialog = None;
         self.smooth_strings_dialog = None;
+        self.pit_design = None;
         self.object_edit_dialog = None;
         self.measurement_start = None;
         self.measurement_end = None;
@@ -5187,15 +5208,6 @@ impl EditorState {
         self.rotate_preview_active = false;
         self.tool_highlight_id = None;
 
-        self.batter_berm_dialog_open = false;
-        self.batter_berm_target_id = None;
-        self.batter_berm_rings_world.clear();
-        self.batter_berm_ring_circles = None;
-        self.batter_berm_source_world.clear();
-        self.batter_berm_rings_screen_px.clear();
-        self.batter_berm_source_screen_px.clear();
-        self.batter_berm_preview_key = None;
-
         self.bezier_poly_id = None;
         self.bezier_poly_closed = false;
         self.bezier_selected_verts = [None, None];
@@ -5261,12 +5273,38 @@ impl EditorState {
         self.interval_delete_dialog = None;
     }
 
+    /// Whether `kind` is showing at all, docked or not.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn panel_shown(&self, kind: PanelKind) -> bool {
+        match kind {
+            PanelKind::Console => self.show_console,
+            PanelKind::SectionPreview => self.slice_mode_enabled,
+        }
+    }
+
+    /// Whether `kind` is in a window of its own rather than docked. Never in
+    /// the browser, which has one window.
+    pub(crate) fn is_popped_out(&self, kind: PanelKind) -> bool {
+        cfg!(not(target_arch = "wasm32"))
+            && match kind {
+                PanelKind::Console => self.popped_out.console,
+                PanelKind::SectionPreview => self.slice_preview_detached,
+            }
+    }
+
+    /// Whether `kind` wants a window of its own now: showing, and popped out.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn wants_panel_window(&self, kind: PanelKind) -> bool {
+        self.panel_shown(kind) && self.is_popped_out(kind)
+    }
+
     pub(crate) fn current_preferences(&self) -> PreferencesDraft {
         PreferencesDraft {
             language: self.language,
             well_log_style: self.well_log_style,
             dark_mode: self.dark_mode,
             show_console: self.show_console,
+            popped_out: self.popped_out,
             ui_size_percent: self.ui_size_percent,
             snap_poll_rate: self.snap_poll_rate,
             vsync_enabled: self.vsync_enabled,
@@ -5327,6 +5365,7 @@ impl EditorState {
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
+            popped_out: PoppedOutPanels::default(),
             show_borehole_inspector: false,
             show_schedule_inspector: true,
             borehole_inspector_tab: BoreholeInspectorTab::default(),
@@ -5350,6 +5389,8 @@ impl EditorState {
             measured_fps: None,
             memory_usage: None,
             window_frame: WindowFrame::default(),
+            panel_frames: PanelWindowFrames::default(),
+            mcp: McpState::default(),
             cpu_usage: Vec::new(),
             frame_rate_window: (0, 0.0),
             debug_surface_chunks: false,
@@ -5480,6 +5521,16 @@ impl EditorState {
             insert_point_spacing: 10.0,
             smooth_strings_dialog: None,
             smooth_tolerance: 0.5,
+            pit_design: None,
+            pit_refreshes: std::collections::HashMap::new(),
+            pit_refresh_checked: None,
+            pit_held_cursor_mode: None,
+            pit_evaluations: std::collections::HashMap::new(),
+            pit_evaluation_checked: None,
+            pit_round_corners: true,
+            pit_corner_radius: 15.0,
+            pit_ground_under_cursor: None,
+            pit_last_settings: None,
             object_edit_dialog: None,
             xray_enabled: false,
             cinematic_enabled: false,
@@ -5491,6 +5542,7 @@ impl EditorState {
             slice_mode_enabled: false,
             slice_preview_detached: false,
             slice_preview_texture: None,
+            slice_preview_window_texture: None,
             solid_preview_texture: None,
             solid_preview_size_px: [420, 420],
             solid_preview_view: SolidPreviewView::default(),
@@ -5785,6 +5837,10 @@ impl EditorState {
             tri_merge_name_input: String::new(),
             tri_merge_name_auto: true,
             tri_merge_unload_source: true,
+            tri_join_open: false,
+            tri_join_sources: Vec::new(),
+            tri_join_name_input: String::new(),
+            tri_join_unload_sources: true,
             tri_contour_open: false,
             tri_contour_tri_id: None,
             tri_contour_major_interval_input: 10.0,
@@ -5862,23 +5918,6 @@ impl EditorState {
             ore_min_input: 0.0,
             ore_max_input: 1.0,
             ore_name_input: String::new(),
-            batter_berm_dialog_open: false,
-            batter_berm_target_id: None,
-            batter_berm_width: 8.0,
-            batter_berm_angle: 60.0,
-            batter_berm_bench_height: 12.0,
-            batter_berm_benches: 1,
-            batter_berm_max_benches: 0,
-            batter_berm_mode: BatterBermMode::Pit,
-            // Down keeps the historical default (Pit + Down = inward + down).
-            batter_berm_direction_up: false,
-            batter_berm_rings_world: Vec::new(),
-            batter_berm_ring_circles: None,
-            batter_berm_source_world: Vec::new(),
-            batter_berm_rings_screen_px: Vec::new(),
-            batter_berm_source_screen_px: Vec::new(),
-            batter_berm_preview_closed: false,
-            batter_berm_preview_key: None,
             bezier_poly_id: None,
             bezier_poly_closed: false,
             bezier_selected_verts: [None; 2],
@@ -6321,7 +6360,9 @@ pub(crate) enum ActiveTool {
     /// One click fixes the centre both views orbit about.
     PickRotationCentre,
     Chamfer,
-    BatterBermOffset,
+    /// Click a closed polyline to make it a pit design, or a pit design to
+    /// edit it in the docked panel.
+    PitDesign,
     Bezier,
     VerticalSlice,
     /// Open the vertex sheet of the string under the cursor at the vertex
@@ -6369,7 +6410,7 @@ impl ActiveTool {
             Self::ChargeHoles => tr!("common-charge-holes"),
             Self::PickRotationCentre => tr!("viewport-bar-fix-centre-rotation"),
             Self::Chamfer => tr!("toolbars-chamfer-polyline-corners"),
-            Self::BatterBermOffset => tr!("toolbars-auto-bench"),
+            Self::PitDesign => tr!("pit-design-title"),
             Self::Bezier => tr!("toolbars-bezier-polyline"),
             Self::VerticalSlice => tr!("viewport-bar-vertical-slice-view"),
             Self::EditVertex => tr!("toolbars-edit-vertex"),
@@ -6387,7 +6428,7 @@ impl ActiveTool {
     pub(crate) fn requires_active_layer(self) -> bool {
         matches!(
             self,
-            Self::MakePoint | Self::MakeLine | Self::MakePoly | Self::MakeCircle | Self::MakeText | Self::FuseIntoPolyline
+            Self::MakePoint | Self::MakeLine | Self::MakePoly | Self::MakeCircle | Self::MakeText | Self::FuseIntoPolyline | Self::PitDesign
         )
     }
 
@@ -6432,6 +6473,7 @@ impl ActiveTool {
                 | Self::MakePoly
                 | Self::MakeCircle
                 | Self::MakeText
+                | Self::PitDesign
                 | Self::MeasureDistance
                 | Self::MeasureBatterAngle
                 | Self::VerticalSlice
@@ -6446,9 +6488,9 @@ impl ActiveTool {
         )
     }
 
-    /// The bench tool and the distance measure, which only production carries.
+    /// Pit Design and the distance measure, which only production carries.
     pub(crate) fn designs_pit(self) -> bool {
-        matches!(self, Self::BatterBermOffset | Self::MeasureDistance)
+        matches!(self, Self::PitDesign | Self::MeasureDistance)
     }
 
     /// The editing tools that keep a string on its section.
@@ -6694,6 +6736,82 @@ pub(crate) struct WindowFrame {
     pub(crate) buttons_centre_y: f32,
 }
 
+/// A panel that can leave the main window for a window of its own, on the
+/// desktop: popped out with the button in its corner, and docked again by
+/// closing that window. See `app/panel_windows.rs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PanelKind {
+    Console,
+    /// The section view's top-down preview.
+    SectionPreview,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PanelKind {
+    pub(crate) const ALL: [Self; 2] = [Self::Console, Self::SectionPreview];
+
+    /// The name its window goes by.
+    pub(crate) fn title(self) -> String {
+        match self {
+            Self::Console => tr!("panel-console"),
+            Self::SectionPreview => tr!("panel-section-preview"),
+        }
+    }
+}
+
+/// Which panels are popped out into windows of their own. Saved with the
+/// preferences, so they come back where they were left. The section
+/// preview's is not: it goes with the section view, which is not saved
+/// either (`EditorState::slice_preview_detached`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct PoppedOutPanels {
+    pub(crate) console: bool,
+}
+
+/// One popped-out panel's window, as its title bar needs it: mirrored in as
+/// the main window's is into [`EditorState::window_frame`].
+#[derive(Clone, Debug, Default)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) struct PanelWindowFrames {
+    pub(crate) console: WindowFrame,
+    pub(crate) section_preview: WindowFrame,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PanelWindowFrames {
+    pub(crate) fn get_mut(&mut self, kind: PanelKind) -> &mut WindowFrame {
+        match kind {
+            PanelKind::Console => &mut self.console,
+            PanelKind::SectionPreview => &mut self.section_preview,
+        }
+    }
+}
+
+/// The MCP server (`mcp`), as Preferences > MCP shows it. `App` keeps it in step with the server (`app/mcp.rs`). The browser
+/// cannot run one, and leaves it off.
+#[derive(Clone, Debug, Default)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) struct McpState {
+    pub(crate) enabled: bool,
+    pub(crate) port: u16,
+    /// What a client must send as its bearer token.
+    pub(crate) token: String,
+    pub(crate) status: McpStatus,
+}
+
+/// Whether the MCP server is running.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) enum McpStatus {
+    #[default]
+    Off,
+    Running,
+    /// It was switched on but could not start, for this reason (the port in
+    /// use, most often).
+    Failed(String),
+}
+
 /// Something the title bar asks of the window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum WindowAction {
@@ -6764,8 +6882,6 @@ pub(crate) enum UiCommand {
     CopyCutsTo(Vec<(crate::model::SolidId, BenchSelection)>),
     SetFlyModeEnabled(bool),
     SetSliceModeEnabled(bool),
-    #[cfg(not(target_arch = "wasm32"))]
-    SetSlicePreviewDetached(bool),
     NewProject,
     /// Save a never-saved browser project under `name`, from the dialog its
     /// first Save opened.
@@ -7017,9 +7133,11 @@ pub(crate) enum UiCommand {
         reload: bool,
     },
     DeleteBlastLibraryItem(BlastLibraryItem),
-    /// Load the selected holes of the active dataset with the named rule, or
-    /// unload them with `None`.
-    ChargeSelectedHoles {
+    /// Load holes of a dataset with the named rule, or unload them with
+    /// `None`.
+    ChargeHoles {
+        dataset: crate::model::drill_hole::DrillHoleId,
+        holes: Vec<usize>,
         rule: Option<String>,
     },
     FinishPolyClose,
@@ -7077,7 +7195,12 @@ pub(crate) enum UiCommand {
     FocusScheduleAnimationSolid(crate::model::SolidId),
     OpenSurveyDefinitions,
     OpenSurveyTransform,
-    TransformSurveySelection,
+    /// Move items and design objects from one coordinate system to another.
+    TransformSurvey {
+        entities: Vec<SceneEntityId>,
+        from: Option<String>,
+        to: Option<String>,
+    },
     /// Write one coordinate system to the config, replacing `target` if it
     /// names an existing system and adding one otherwise. The edit travels
     /// with the command so switching rows mid-edit cannot drop it.
@@ -7105,6 +7228,14 @@ pub(crate) enum UiCommand {
     /// current value rather than the UI sending one, so the row and the
     /// Interface tab cannot disagree about what is being toggled.
     ToggleViewOption(ViewToggle),
+    /// Pop a panel out into a window of its own (`true`), or dock it back.
+    SetPanelPoppedOut(PanelKind, bool),
+    /// Switch the MCP server on or off.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    SetMcpEnabled(bool),
+    /// Move the MCP server to another port.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    SetMcpPort(u16),
     SaveProject,
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs(u32),
@@ -7604,23 +7735,41 @@ pub(crate) enum UiCommand {
     /// Triggers the app to select the first valid line from the selection and open the relimit
     /// dialog.
     OpenRelimitDialog,
-    /// Triggers the app to select the first valid polyline and open the batter berm dialog.
-    OpenBatterBermDialog,
-    /// Dialog "Apply" pressed - commit all batter berm rings using the current panel state.
-    CommitBatterBerm,
-    CancelBatterBerm,
     /// Open the Create Triangulation main dialog.
     OpenCreateTriangulation,
     /// Open the Move to dialog that sets one axis of every selected object.
     OpenMoveToAxisDialog(Axis),
-    /// Insert vertices at every plan-view crossing between selected polylines.
+    /// Insert vertices at every plan-view crossing between selected polylines,
+    /// or start picking them when fewer than two are selected.
     InsertPointsAtIntersections,
     /// Reverse the direction of every selected polyline.
     ReverseSelectedStrings,
     /// Arm Drape so that strings follow the surface between their vertices.
     ArmDrapeAlongTriangles,
+    /// Insert vertices at every plan-view crossing between these polylines:
+    /// the MCP server's, where the window works on its selection.
+    #[cfg(not(target_arch = "wasm32"))]
+    InsertPointsAtCrossings {
+        object_ids: Vec<ObjectId>,
+    },
     /// Open the elevation input for inserting vertices into selected polylines.
     OpenInsertPointAtElevationDialog,
+    /// Take up the Pit Design tool: on the pit design selected, or on a
+    /// closed polyline selected, which becomes one.
+    OpenPitDesign,
+    /// Done with the pit in Pit Design's panel: the tool is put down.
+    FinishPitDesign,
+    /// Turn a pit design object into polylines.
+    ExplodePitDesign(ObjectId),
+    /// Wait for a click on a closed polyline, a new Pit Design slope
+    /// region's outline.
+    BeginPitRegionPick,
+    /// What the pointer rests on in Pit Design's checks and bench table,
+    /// for the viewport to pick out.
+    PitDesignHover(crate::ui::dialogs::pit_design::PitHover),
+    /// Turn the view to one of Pit Design's flags, by its place in the
+    /// preview's design.
+    FramePitFlag(usize),
     /// Insert vertices where selected polylines cross an elevation.
     InsertPointsAtElevation {
         object_ids: Vec<ObjectId>,
@@ -7890,6 +8039,15 @@ pub(crate) enum UiCommand {
         save_as_two: bool,
         hide_old: bool,
     },
+    /// Open the Join Surfaces dialog on the selected surfaces.
+    OpenJoinSurfaces,
+    /// Join surfaces into one new surface, sharing the points where they meet.
+    ExecuteJoinSurfaces {
+        surface_ids: Vec<TriangulationId>,
+        name: String,
+        /// Unload the surfaces joined, in the same undo step.
+        unload_sources: bool,
+    },
     /// Open the "Generate Contour Lines" dialog.
     OpenContourTriangulation,
     /// Open the "Smooth Surface" dialog.
@@ -8033,10 +8191,13 @@ impl UiCommand {
             | Self::DeleteSurveyDefinition(_)
             | Self::SetSurveyLocalSystem(_)
             | Self::SelectExplorerRow(_)
-            | Self::TransformSurveySelection
+            | Self::TransformSurvey { .. }
             | Self::ToggleViewOption(_)
+            | Self::SetPanelPoppedOut(..)
+            | Self::SetMcpEnabled(_)
+            | Self::SetMcpPort(_)
             | Self::SetInitiation { .. }
-            | Self::ChargeSelectedHoles { .. }
+            | Self::ChargeHoles { .. }
             | Self::BeginRenameItem(_)
             | Self::PreviewMoveDelta(_)
             | Self::PreviewCollarRotation(_)
@@ -8086,8 +8247,6 @@ impl UiCommand {
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
             | Self::OpenRelimitDialog
-            | Self::OpenBatterBermDialog
-            | Self::CancelBatterBerm
             | Self::OpenCreateTriangulation
             | Self::OpenMoveToAxisDialog(_)
             | Self::OpenInsertPointAtElevationDialog
@@ -8095,6 +8254,11 @@ impl UiCommand {
             | Self::SetThinTolerance(_)
             | Self::OpenInsertPointAtSpacingDialog
             | Self::OpenSmoothStringsDialog
+            | Self::OpenPitDesign
+            | Self::FinishPitDesign
+            | Self::BeginPitRegionPick
+            | Self::PitDesignHover(_)
+            | Self::FramePitFlag(_)
             | Self::OpenObjectEditDialog(_)
             | Self::ShowObjectVertex { .. }
             | Self::ArmDrapeAlongTriangles
@@ -8117,6 +8281,7 @@ impl UiCommand {
             | Self::OpenCreateRegularBlockModel
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
+            | Self::OpenJoinSurfaces
             | Self::OpenContourTriangulation
             | Self::OpenSmoothSurface
             | Self::OpenCleanSurface
@@ -8190,8 +8355,6 @@ impl UiCommand {
             Self::SetLanguage(choice) => report(tr!("status-language"), choice.endonym().to_owned()),
             Self::SetFlyModeEnabled(enabled) => report(tr!("common-fly-mode"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
             Self::SetSliceModeEnabled(enabled) => report(tr!("state-slice-mode"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::SetSlicePreviewDetached(detached) => report(tr!("state-slice-preview"), if *detached { tr!("state-detached") } else { tr!("state-docked") }),
             Self::NewProject => report(tr!("state-create-project"), tr!("state-untitled-project")),
             #[cfg(target_arch = "wasm32")]
             #[cfg(target_arch = "wasm32")]
@@ -8605,9 +8768,11 @@ impl UiCommand {
             Self::ZoomToExtents => report(tr!("common-zoom-extents"), tr!("state-preserve-view-angle")),
             Self::BeginOffsetPick { object_ids, .. } => report(tr!("common-offset"), tr!("common-count-object-s", count = object_ids.len().to_string())),
             Self::RelimitLineResize { .. } => report(tr!("common-relimit-line"), String::new()),
-            Self::CommitBatterBerm => report(tr!("common-create-batter-berm"), tr!("state-apply-generated-rings")),
+            Self::ExplodePitDesign(_) => report(tr!("pit-design-title"), tr!("pit-design-report-explode")),
             Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
             Self::ReverseSelectedStrings => report(tr!("toolbars-reverse-strings"), tr!("state-selected-polylines")),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::InsertPointsAtCrossings { object_ids } => report(tr!("state-insert-intersection-points"), tr!("common-count-object-s", count = object_ids.len().to_string())),
             Self::ApplyObjectEdit { object, .. } => report(tr!("common-edit-object"), object.kind_name()),
             Self::CleanStrings => report(tr!("cmd-string-clean-clean-strings"), tr!("state-selected-polylines")),
             Self::CleanString(_) => report(tr!("cmd-string-clean-clean-this-string"), String::new()),
@@ -8672,6 +8837,10 @@ impl UiCommand {
             Self::SetPrismoidGridShaded { shaded, .. } => report(tr!("state-set-prismoid-grid-shaded"), if *shaded { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),
             Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!("common-merge-shell-into-topology"), name.clone()),
+            Self::ExecuteJoinSurfaces { surface_ids, name, .. } => report(
+                tr!("tri-join-surfaces"),
+                tr!("state-name-count-surfaces", name = name.to_string(), count = surface_ids.len().to_string()),
+            ),
             Self::RunWaterSimulation { settings, .. } => report(
                 tr!("water-simulate"),
                 tr!("water-run-summary", rain = settings.rain_mm.to_string(), hours = settings.rain_hours.to_string()),
@@ -9530,6 +9699,10 @@ pub(crate) struct OptimizationState {
     pub(crate) schedules_after_run: HashMap<u64, Vec<u64>>,
     /// Each schedule's last run in full, for the session (stage 3 reads it).
     pub(crate) schedule_results: HashMap<u64, std::sync::Arc<crate::model::npv_schedule_run::NpvScheduleResult>>,
+    /// Why each scenario's last run could not start, by scenario id, until it
+    /// is asked to run again: the activity log says it to the user, and this
+    /// lets whoever asked for the run be told the same.
+    pub(crate) run_failures: HashMap<u64, Vec<String>>,
 }
 
 /// Inputs of an optimization that are unloaded, and what to do once they are
@@ -12210,6 +12383,8 @@ pub(crate) enum PropertyTab {
     Interface,
     Camera,
     Performance,
+    /// The MCP server that lets AI tools work with Incline (`mcp`).
+    Mcp,
     Developer,
     Modelling,
 }

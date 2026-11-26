@@ -101,6 +101,12 @@ impl WaterRuns {
         &self.scene
     }
 
+    /// The runs' ids, oldest first: for the MCP server.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn ids(&self) -> impl Iterator<Item = u64> + '_ {
+        self.runs.iter().map(|run| run.id)
+    }
+
     pub(crate) fn has(&self, id: u64) -> bool {
         self.runs.iter().any(|run| run.id == id)
     }

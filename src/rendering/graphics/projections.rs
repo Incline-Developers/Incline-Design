@@ -403,7 +403,7 @@ impl<'a> Graphics<'a> {
             center,
             self.camera.forward(),
             self.camera.up(),
-            (GIZMO_LENGTH_POINTS * self.window.scale_factor()) as f32,
+            (GIZMO_LENGTH_POINTS * self.scale_factor()) as f32,
             // The gizmo is a foreground overlay sized to constant screen space,
             // so its arms reach furthest in world units exactly when the camera
             // is zoomed in and the scene-fitted depth slab is thinnest - project
@@ -421,7 +421,7 @@ impl<'a> Graphics<'a> {
             azimuth_degrees,
             self.camera.forward(),
             self.camera.up(),
-            (GIZMO_LENGTH_POINTS * self.window.scale_factor()) as f32,
+            (GIZMO_LENGTH_POINTS * self.scale_factor()) as f32,
             // Sized to constant screen space like the Move gizmo, so it wants
             // the same freedom from the scene-fitted depth slab.
             |world| self.world_to_window_px_unclipped_depth(&view_proj, world),
@@ -437,7 +437,7 @@ impl<'a> Graphics<'a> {
         let half_length = slice_visible_half_length(self.projection.zoom, screen);
         let half_height = self.projection.zoom;
         let world_per_pixel = 2.0 * self.projection.zoom / f64::from(screen.1.max(1.0));
-        let points_per_pixel = 1.0 / self.window.scale_factor();
+        let points_per_pixel = 1.0 / self.scale_factor();
         let strike_pt = 2.0 * half_length / world_per_pixel * points_per_pixel;
         let height_pt = 2.0 * half_height / world_per_pixel * points_per_pixel;
         let axis = section_grid::upright_axis(slice.direction);
@@ -609,8 +609,356 @@ impl<'a> Graphics<'a> {
         editor.animation_flows = flows;
     }
 
+    /// Pit Design's handles and flags where they stand on screen: each
+    /// ramp's arrow and width handle at its foot, and each flag of the
+    /// design shown.
+    fn project_pit_design(&self, editor: &mut EditorState, document: &Document) {
+        use crate::model::pit_design::{StringKind, object::base_points, ring};
+        let Some(draft) = editor.pit_design.as_mut() else {
+            return;
+        };
+        draft.gizmos.clear();
+        draft.wall_gizmo = None;
+        draft.switch_spots.clear();
+        let view_proj = self.view_proj();
+        let project = |world: DVec3| self.world_to_window_px(&view_proj, world);
+        let design = draft.preview.as_ref().and_then(|preview| preview.design.as_ref().ok());
+        draft.flag_px = design.map_or_else(Vec::new, |design| design.flags.iter().map(|flag| project(flag.at)).collect());
+        // Where a press on the string would add a ramp, and while one is
+        // added, the way it climbs from its foot.
+        draft.string_hover_px = draft.string_hover.and_then(project);
+        draft.adding_arrow = draft.adding_ramp.filter(|adding| adding.dragged).and_then(|adding| {
+            let centre = project(adding.foot)?;
+            let scale = gizmo_screen_scale(adding.foot, centre, self.camera.forward(), self.camera.up(), &project)?;
+            let reach = 1.6 * CLIMB_ARROW_POINTS * self.scale_factor() / scale.px_per_world;
+            let way = adding.way.extend(0.0);
+            let across = DVec3::new(-adding.way.y, adding.way.x, 0.0);
+            let (tip, back) = (adding.foot + way * reach, adding.foot + way * (reach * 0.7));
+            Some([centre, project(tip)?, project(back + across * (reach * 0.18))?, project(back - across * (reach * 0.18))?])
+        });
+        // While a start is moved, a ramp added or a region chosen, the
+        // ramps' handles stand down; the walls' stay where they are.
+        let placing = draft.placing_ramp() || draft.picking_region;
+        let (Some(id), Some(working), Some(preview), Some(design)) = (draft.object_id(), draft.working.as_ref(), draft.preview.as_ref(), design) else {
+            return;
+        };
+        let Some(Object::PitDesign { verts, .. }) = document.get_object(id) else {
+            return;
+        };
+        let ring: Vec<glam::DVec2> = base_points(verts).iter().map(|point| point.truncate()).collect();
+        let count = ring.len();
+        if count < 3 {
+            return;
+        }
+        let centrelines: Vec<&[DVec3]> = design
+            .strings
+            .iter()
+            .filter(|string| string.kind == StringKind::RampCentreline)
+            .map(|string| string.points.as_slice())
+            .collect();
+        let mut gizmos = Vec::new();
+        let mut spots = Vec::new();
+        for (index, (ramp, foot)) in working.settings.ramps.iter().zip(&preview.ramp_starts).enumerate().filter(|_| !placing) {
+            let at = foot.truncate();
+            let edge = (ring::nearest(&ring, at).0.floor() as usize).min(count - 1);
+            let Some(tangent) = (ring[(edge + 1) % count] - ring[edge]).try_normalize() else {
+                continue;
+            };
+            let normal = glam::DVec2::new(tangent.y, -tangent.x);
+            // The road's own way from its foot, and its side of the string:
+            // as its centreline leaves, whichever way the design is built.
+            let Some((leaving, ahead, line)) = centrelines
+                .iter()
+                .filter_map(|line| {
+                    let (first, last) = (line.first()?.truncate(), line.last()?.truncate());
+                    let (end, next) = if first.distance(at) <= last.distance(at) {
+                        (first, line.get(line.len().min(4) - 1)?.truncate())
+                    } else {
+                        (last, line.get(line.len().saturating_sub(4))?.truncate())
+                    };
+                    Some((end.distance(at), end, next, *line))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, end, next, line)| (end, next, line))
+            else {
+                continue;
+            };
+            // The RLs turns were asked at that some bench made, there or
+            // further on.
+            let made: Vec<f64> = design
+                .report
+                .iter()
+                .filter_map(|bench| {
+                    let road = bench.ramps.iter().find(|road| road.ramp == index && road.switchback && road.turn_at.is_some())?;
+                    Some(road.turn_moved_from.unwrap_or(bench.elevation))
+                })
+                .collect();
+            let near = |a: f64, b: f64| (a - b).abs() < 1.0e-6;
+            // Where it can switch back: each bench's stretch where it begins,
+            // but its first, which it starts on; where it turns, the turn.
+            for bench in design.report.iter().filter(|bench| bench.ramps.iter().any(|road| road.ramp == index)).skip(1) {
+                let Some(road) = bench.ramps.iter().find(|road| road.ramp == index) else {
+                    continue;
+                };
+                let (rl, place, turn) = match road.turn_at.filter(|_| road.switchback) {
+                    Some(turn_at) => (road.turn_moved_from.unwrap_or(bench.elevation), Some(turn_at), true),
+                    // Where the road reaches the bench's RL: a graded turn
+                    // or a flat can leave no point at it exactly.
+                    None => (bench.elevation, at_rl(line, bench.elevation), false),
+                };
+                let refused = !turn && ramp.turns_at.iter().any(|asked| near(*asked, rl)) && !made.iter().any(|done| near(*done, rl));
+                if let Some(at) = place.and_then(project) {
+                    spots.push(crate::ui::dialogs::pit_design::SwitchSpot {
+                        ramp: index,
+                        rl,
+                        at,
+                        turn,
+                        refused,
+                    });
+                }
+            }
+            let goes = tangent * (next_sign(ahead - leaving, tangent));
+            let across = normal * next_sign(leaving - at, normal);
+            if let Some(gizmo) = self.ramp_gizmo(index, *foot, (goes, across), (ramp.gradient, ramp.width), &project) {
+                gizmos.push(gizmo);
+            }
+        }
+        // The walls' handles and the ramps' are up together: each stands
+        // where it sets what it sets.
+        let (clear_view, kept) = (draft.clear_view, draft.wall_place);
+        let (wall, place) = self.wall_gizmo(working, design, &ring, (&preview.ramp_starts, clear_view, kept), &project);
+        draft.wall_place = place;
+        draft.wall_gizmo = wall;
+        draft.gizmos = gizmos;
+        draft.switch_spots = spots;
+    }
+
+    /// The walls' gizmo: the first two benches' section as the settings cut
+    /// them, standing upright on the pit's string at their true size, so its
+    /// corners lie on the design's rings. It stays where it was put on the string (its
+    /// foot is dragged to move it), so turning the view walks round it; it
+    /// is put somewhere else only when it has no place yet, or a ramp now
+    /// starts on it. Gone from the view while its foot is out of it, when
+    /// the panel sets what it sets.
+    fn wall_gizmo(
+        &self,
+        working: &crate::model::pit_design::object::PitObject,
+        design: &crate::model::pit_design::Design,
+        ring: &[glam::DVec2],
+        (ramp_starts, clear_view, kept): (&[DVec3], Option<[f32; 4]>, Option<glam::DVec2>),
+        project: &impl Fn(DVec3) -> Option<(f32, f32)>,
+    ) -> (Option<crate::ui::dialogs::pit_design::WallGizmo>, Option<glam::DVec2>) {
+        use crate::model::pit_design::ring as rings;
+        let count = ring.len();
+        let (Some(&base), Some(&top)) = (design.levels.first(), design.levels.get(1)) else {
+            return (None, kept);
+        };
+        let margin = (WALL_GIZMO_MARGIN * self.scale_factor()) as f32;
+        let shown = |place: glam::DVec2| {
+            clear_view.is_none_or(|[left, top, right, bottom]| {
+                project(place.extend(base)).is_some_and(|(x, y)| x > left + margin && x < right - margin && y > top + margin && y < bottom - margin)
+            })
+        };
+        let clear_of_ramps = |place: glam::DVec2| ramp_starts.iter().map(|start| start.truncate().distance(place)).fold(f64::INFINITY, f64::min);
+        // Where it was put, on the string as it is now, unless a ramp starts
+        // on it; or else the place clear of the ramps nearest the middle of
+        // what the panel leaves of the view, or failing any in view, the one
+        // furthest from the ramps.
+        let kept = kept
+            .map(|place| rings::point_at(ring, rings::nearest(ring, place).0))
+            .filter(|place| clear_of_ramps(*place) >= WALL_GIZMO_RAMP_ON);
+        let at = kept.or_else(|| {
+            let places: Vec<(glam::DVec2, f64)> = (0..count)
+                .flat_map(|edge| {
+                    let (a, b) = (ring[edge], ring[(edge + 1) % count]);
+                    let steps = (a.distance(b) / WALL_GIZMO_STEP).ceil().max(1.0) as usize;
+                    (0..steps).map(move |step| a.lerp(b, (step as f64 + 0.5) / steps as f64))
+                })
+                .map(|place| (place, clear_of_ramps(place)))
+                .collect();
+            // Clear of the ramps' gizmos on screen, as they are seen now.
+            let feet: Vec<(f32, f32)> = ramp_starts.iter().filter_map(|start| project(*start)).collect();
+            let wanted = (WALL_GIZMO_CLEAR_POINTS * self.scale_factor()) as f32;
+            let clear_on_screen = |(x, y): (f32, f32)| feet.iter().map(|foot| (foot.0 - x).hypot(foot.1 - y)).fold(f32::INFINITY, f32::min);
+            clear_view
+                .and_then(|[left, top, right, bottom]| {
+                    let (middle_x, middle_y) = ((left + right) * 0.5, (top + bottom) * 0.5);
+                    let in_view: Vec<(glam::DVec2, f32, f32)> = places
+                        .iter()
+                        .filter(|(place, clear)| *clear >= WALL_GIZMO_RAMP_ON && shown(*place))
+                        .filter_map(|(place, _)| {
+                            let at = project(place.extend(base))?;
+                            Some((*place, (at.0 - middle_x).hypot(at.1 - middle_y), clear_on_screen(at)))
+                        })
+                        .collect();
+                    // Nearest the middle of the view among those clear of the
+                    // ramps; or failing any, the clearest.
+                    in_view
+                        .iter()
+                        .filter(|(_, _, clear)| *clear >= wanted)
+                        .min_by(|a, b| a.1.total_cmp(&b.1))
+                        .or_else(|| in_view.iter().max_by(|a, b| a.2.total_cmp(&b.2)))
+                        .map(|(place, ..)| *place)
+                })
+                .or_else(|| places.iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|(place, _)| *place))
+        });
+        let Some(at) = at else {
+            return (None, None);
+        };
+        if !shown(at) {
+            return (None, Some(at));
+        }
+        (self.bench_section(working, design, ring, at, (base, top), project), Some(at))
+    }
+
+    /// [`Self::wall_gizmo`]'s section, standing on the string at `at`.
+    fn bench_section(
+        &self,
+        working: &crate::model::pit_design::object::PitObject,
+        design: &crate::model::pit_design::Design,
+        ring: &[glam::DVec2],
+        at: glam::DVec2,
+        (base, top): (f64, f64),
+        project: &impl Fn(DVec3) -> Option<(f32, f32)>,
+    ) -> Option<crate::ui::dialogs::pit_design::WallGizmo> {
+        use crate::{model::pit_design::ring as rings, ui::dialogs::pit_design::WallGizmo};
+        let count = ring.len();
+        // Out across the bench: the way to its end ring there.
+        let crest_ring: Vec<glam::DVec2> = design
+            .strings
+            .iter()
+            .find(|string| string.closed && string.points.first().is_some_and(|point| (point.z - top).abs() < 1.0e-6))?
+            .points
+            .iter()
+            .map(|point| point.truncate())
+            .collect();
+        // Square to the string there, to the side its bench ends on.
+        let edge = (rings::nearest(ring, at).0.floor() as usize).min(count - 1);
+        let tangent = (ring[(edge + 1) % count] - ring[edge]).try_normalize()?;
+        let normal = glam::DVec2::new(tangent.y, -tangent.x);
+        let out = normal * next_sign(rings::point_at(&crest_ring, rings::nearest(&crest_ring, at).0) - at, normal);
+        let toe = at.extend(base);
+        let forward = self.camera.forward();
+        let centre = project(toe)?;
+        let scale = gizmo_screen_scale(toe, centre, forward, self.camera.up(), project)?;
+        // At its true size, up the way the design is built: its corners lie
+        // on the design's own rings, as the settings cut them. Its marks are
+        // a size on screen, short of the bench they mark.
+        let out3 = out.extend(0.0);
+        let up3 = DVec3::Z * (top - base).signum();
+        let settings = &working.settings;
+        let (height, berm) = (settings.bench_height, settings.berm_width);
+        let angle = settings.face_angle.to_radians();
+        let run = height / angle.tan();
+        let section = |x: f64, y: f64| project(toe + out3 * x + up3 * y);
+        let points = |points: f64| points * self.scale_factor() / scale.px_per_world;
+        let gap = points(HEIGHT_MARK_POINTS).min(height * 0.6);
+        let arc = points(ANGLE_ARC_POINTS).min(0.45 * height / angle.sin());
+        // The pixels a metre takes up and out, from a reach a size on screen.
+        let probe = points(SECTION_PROBE_POINTS);
+        let unit_px = |to: (f32, f32)| {
+            let length = (to.0 - centre.0).hypot(to.1 - centre.1);
+            (length > 1.0e-3).then_some(((to.0 - centre.0) / length, (to.1 - centre.1) / length, length / probe as f32))
+        };
+        // Seen down a way, it has none on screen: what moves along it fades.
+        let (up_x, up_y, up_px) = unit_px(section(0.0, probe)?).unwrap_or((0.0, -1.0, 1.0e-3));
+        let (out_x, out_y, out_px) = unit_px(section(probe, 0.0)?).unwrap_or((1.0, 0.0, 1.0e-3));
+        let along = project(toe + tangent.extend(0.0) * probe).and_then(unit_px).map_or((1.0, 0.0), |(x, y, _)| (x, y));
+        let seen = |way: DVec3| (1.0 - way.dot(forward).powi(2)).max(0.0).sqrt() as f32;
+        Some(WallGizmo {
+            height_fade: fade_ramp(seen(up3), GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL),
+            arc_fade: fade_ramp(out3.cross(up3).dot(forward).abs() as f32, ROTATE_RING_FADE_MIN, ROTATE_RING_FADE_FULL),
+            out_fade: fade_ramp(seen(out3), GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL),
+            toe: centre,
+            crest: section(run, height)?,
+            berm_end: section(run + berm, height)?,
+            next_top: section(run + berm + run, height * 2.0)?,
+            floor_back: section(-points(FLOOR_STUB_POINTS).min(height), 0.0)?,
+            height_from: section(-gap, 0.0)?,
+            height_tip: section(-gap, height)?,
+            angle_arc: (0..=ANGLE_ARC_STEPS)
+                .map(|step| {
+                    let turn = angle * step as f64 / ANGLE_ARC_STEPS as f64;
+                    section(arc * turn.cos(), arc * turn.sin())
+                })
+                .collect::<Option<_>>()?,
+            up: (up_x, up_y),
+            out: (out_x, out_y),
+            along,
+            pixels_per_metre_up: up_px,
+            pixels_per_metre_out: out_px,
+        })
+    }
+
+    /// A ramp's gizmo at its foot: its grade ring standing upright on the
+    /// road's line, faded out as it goes edge on, and arrows along the string
+    /// the way it leaves its foot and the other way, a fixed size on screen;
+    /// and its width arrow across the road at its true width.
+    fn ramp_gizmo(
+        &self,
+        ramp: usize,
+        foot: DVec3,
+        (goes, across): (glam::DVec2, glam::DVec2),
+        (gradient, width): (f64, f64),
+        project: &impl Fn(DVec3) -> Option<(f32, f32)>,
+    ) -> Option<crate::ui::dialogs::pit_design::RampGizmo> {
+        use crate::ui::dialogs::pit_design::{RING_STEPS, RampGizmo};
+        let centre = project(foot)?;
+        let forward = self.camera.forward();
+        let scale = gizmo_screen_scale(foot, centre, forward, self.camera.up(), project)?;
+        let length = GIZMO_LENGTH_POINTS * self.scale_factor();
+        let radius = length * ROTATE_RING_RATIO / scale.px_per_world;
+        let goes3 = goes.extend(0.0);
+        let across3 = across.extend(0.0);
+        // Seen edge on, from straight above, as a Blender rotate ring, it
+        // fades out; its value stays in its card.
+        let ring_fade = fade_ramp(goes3.cross(DVec3::Z).dot(forward).abs() as f32, ROTATE_RING_FADE_MIN, ROTATE_RING_FADE_FULL);
+        let on_ring = |angle: f64| foot + (goes3 * angle.cos() + DVec3::Z * angle.sin()) * radius;
+        let ring: Vec<(f32, f32)> = (0..RING_STEPS)
+            .map(|step| project(on_ring(std::f64::consts::TAU * step as f64 / RING_STEPS as f64)))
+            .collect::<Option<_>>()?;
+        // Drawn exaggerated, as a long section is: a road's grade is a few
+        // degrees, too little to see or turn on a ring at its true angle.
+        let grade = (gradient / 100.0 * crate::ui::dialogs::pit_design::GRADE_EXAGGERATION).atan();
+        let steps = ((grade / GRADE_ARC_STEP).ceil() as usize).max(1);
+        let grade_arc: Vec<(f32, f32)> = (0..=steps).filter_map(|step| project(on_ring(grade * step as f64 / steps as f64))).collect();
+        // From the foot, the ring's centre, across the road at its true
+        // width: its tip on the road's far edge.
+        let width_from = centre;
+        let width_tip = project(foot + across3 * width)?;
+        let run = (width_tip.0 - width_from.0).hypot(width_tip.1 - width_from.1).max(1.0e-3);
+        // Pointing at the camera, as a Blender axis arrow, it fades out.
+        let width_fade = fade_ramp((1.0 - across3.dot(forward).powi(2)).max(0.0).sqrt() as f32, GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL);
+        // The way it climbs, along the string from the foot, and the way
+        // it would the other way round: arrows a click turns it by.
+        // Clear of the start's marker, which a press there drags.
+        let chevron = |way: f64| -> Option<[(f32, f32); 3]> {
+            let reach = CLIMB_ARROW_POINTS * self.scale_factor() / scale.px_per_world;
+            let tip = foot + goes3 * (way * reach);
+            let back = foot + goes3 * (way * reach * 0.7);
+            let wing = across3 * (reach * 0.17);
+            Some([project(back + wing)?, project(tip)?, project(back - wing)?])
+        };
+        Some(RampGizmo {
+            ramp,
+            ring_fade,
+            width_fade,
+            centre,
+            ring,
+            grade_arc,
+            grade_handle: project(on_ring(grade)).unwrap_or(centre),
+            climbs: chevron(1.0)?,
+            climbs_back: chevron(-1.0)?,
+            width_from,
+            width_tip,
+            across: ((width_tip.0 - width_from.0) / run, (width_tip.1 - width_from.1) / run),
+            pixels_per_metre: run / (width as f32).max(1.0e-3),
+        })
+    }
+
     pub(super) fn update_tool_projections(&self, editor: &mut EditorState, document: &Document, drill_holes: &[OpenDrillHoleDataset]) {
         self.project_haul_flows(editor);
+        self.project_pit_design(editor, document);
         editor.haul_pins = if editor.shows_haul_network() {
             document
                 .haulage()
@@ -804,7 +1152,7 @@ impl<'a> Graphics<'a> {
             use std::hash::{Hash, Hasher};
             let vp = self.view_proj();
             let slab = self.section_slab();
-            let pixels_per_point = self.window.scale_factor() as f32 * (editor.ui_size_percent as f32 / 100.0);
+            let pixels_per_point = self.scale_factor() as f32 * (editor.ui_size_percent as f32 / 100.0);
             let ring_px = crate::ui::state::STRING_RING_RADIUS * pixels_per_point;
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             vp.to_cols_array().map(f64::to_bits).hash(&mut hasher);
@@ -836,19 +1184,6 @@ impl<'a> Graphics<'a> {
         } else {
             editor.offset_preview_screen_px.clear();
             editor.offset_preview_ranges.clear();
-        }
-
-        if editor.batter_berm_dialog_open && !editor.batter_berm_rings_world.is_empty() {
-            let vp = self.view_proj();
-            editor.batter_berm_source_screen_px = editor.batter_berm_source_world.iter().map(|&p| self.world_to_window_px_unclipped_depth(&vp, p)).collect();
-            editor.batter_berm_rings_screen_px = editor
-                .batter_berm_rings_world
-                .iter()
-                .map(|ring| ring.iter().map(|&p| self.world_to_window_px_unclipped_depth(&vp, p)).collect())
-                .collect();
-        } else {
-            editor.batter_berm_source_screen_px.clear();
-            editor.batter_berm_rings_screen_px.clear();
         }
 
         if editor.slice_grid_enabled {
@@ -884,7 +1219,7 @@ impl<'a> Graphics<'a> {
             if let Some((target_id, point)) = editor.move_vertex_target {
                 if let Some(obj) = document.get_object(target_id) {
                     match (obj, point) {
-                        (Object::Polyline { verts, .. }, crate::model::ObjectPoint::Vertex(vertex_index)) => {
+                        (Object::Polyline { verts, .. } | Object::PitDesign { verts, .. }, crate::model::ObjectPoint::Vertex(vertex_index)) => {
                             if let Some(vertex) = verts.get(vertex_index) {
                                 sum += vertex.pos;
                                 count += 1;
@@ -907,7 +1242,7 @@ impl<'a> Graphics<'a> {
                         && let Some(obj) = document.get_object(id)
                     {
                         match obj {
-                            Object::Polyline { verts, .. } => {
+                            Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => {
                                 for vertex in verts {
                                     sum += vertex.pos;
                                     count += 1;
@@ -1170,7 +1505,55 @@ impl Graphics<'_> {
         if px_per_world <= 0.0 || !px_per_world.is_finite() {
             return None;
         }
-        let wanted = CONTOUR_LABEL_SPACING_POINTS * self.window.scale_factor() / px_per_world;
+        let wanted = CONTOUR_LABEL_SPACING_POINTS * self.scale_factor() / px_per_world;
         Some(2f64.powf(wanted.log2().ceil()))
     }
+}
+
+/// The angle between the points of a ramp's grade sector.
+const GRADE_ARC_STEP: f64 = 0.02;
+
+/// How far apart the places the walls' gizmo may stand are tried along the
+/// string, how far from any ramp's start they must be, in metres, and how
+/// far inside the clear view, in logical points.
+const WALL_GIZMO_STEP: f64 = 5.0;
+const WALL_GIZMO_MARGIN: f64 = 130.0;
+
+/// How far on screen the walls' gizmo is put from the ramps' feet, when it is
+/// put somewhere, in logical points: clear of their gizmos.
+pub(crate) const WALL_GIZMO_CLEAR_POINTS: f64 = 170.0;
+
+/// How near a ramp's start the walls' gizmo may stand before it is put
+/// somewhere else, in metres: on it, the two would cover each other.
+const WALL_GIZMO_RAMP_ON: f64 = 15.0;
+
+/// The walls' section's marks, in logical points: how far off its face the
+/// mark of its height stands, the radius of the arc of its face's angle, and
+/// how far the floor is drawn behind its toe, each no more than the bench
+/// it marks allows; the reach a metre's pixels are measured over; and the
+/// arc's steps.
+const HEIGHT_MARK_POINTS: f64 = 18.0;
+const ANGLE_ARC_POINTS: f64 = 30.0;
+const FLOOR_STUB_POINTS: f64 = 30.0;
+const SECTION_PROBE_POINTS: f64 = 50.0;
+const ANGLE_ARC_STEPS: usize = 24;
+
+/// How far along the string from a ramp's foot the arrow saying which way
+/// it climbs reaches, in logical points.
+const CLIMB_ARROW_POINTS: f64 = 46.0;
+
+/// Which way along `axis` a vector points: 1 or -1.
+fn next_sign(vector: glam::DVec2, axis: glam::DVec2) -> f64 {
+    if vector.dot(axis) < 0.0 { -1.0 } else { 1.0 }
+}
+
+/// Where a ramp's centreline first reaches `rl`: at a point of it, or
+/// between two that straddle it.
+fn at_rl(line: &[DVec3], rl: f64) -> Option<DVec3> {
+    line.iter().find(|point| (point.z - rl).abs() < 1.0e-3).copied().or_else(|| {
+        line.windows(2).find_map(|pair| {
+            let (a, b) = (pair[0], pair[1]);
+            ((a.z - rl) * (b.z - rl) < 0.0).then(|| a.lerp(b, (rl - a.z) / (b.z - a.z)))
+        })
+    })
 }

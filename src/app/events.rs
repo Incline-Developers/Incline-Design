@@ -54,8 +54,9 @@ impl<'a> App<'a> {
     }
 
     fn route_window_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, window_id: winit::window::WindowId, event: WindowEvent) {
-        if self.graphics.as_ref().and_then(|graphics| graphics.slice_preview_window_id()) == Some(window_id) {
-            self.handle_slice_preview_event(event);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(kind) = self.panel_window_kind(window_id) {
+            self.handle_panel_window_event(kind, event);
             return;
         }
         // A dropped secondary window can still have a final queued event.
@@ -173,8 +174,10 @@ impl<'a> App<'a> {
         }
 
         if !gui_consumed {
-            let canvas_pick_mode_active =
-                self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick;
+            let canvas_pick_mode_active = self.editor.triangulation_pick_target.is_some()
+                || self.editor.optimization.start_pick.is_some()
+                || self.editor.drill_pattern_awaiting_shape_pick
+                || self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp.is_some() || draft.picking_region);
             let suppress_view_mode_canvas_click = self.editor.view_mode_owns_canvas_click() && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
             if !suppress_view_mode_canvas_click || canvas_pick_mode_active {
                 self.handle_mouse_press(&event);
@@ -238,21 +241,7 @@ impl<'a> App<'a> {
                     self.redraw_requested = true;
                 }
                 WindowEvent::RedrawRequested => {
-                    self.poll_triangulation_loads();
-                    self.poll_block_model_loads();
-                    self.poll_point_cloud_loads();
-                    self.poll_raster_loads();
-                    self.poll_saves();
-                    self.poll_jobs();
-                    self.reconcile_optimization_runs();
-                    self.refresh_status_message();
-                    if let Some(usage) = self.memory_sampler.poll() {
-                        self.editor.memory_usage = Some(usage);
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    if let Some(cores) = self.cpu_sampler.poll() {
-                        self.editor.cpu_usage = cores;
-                    }
+                    self.poll_background_work();
                     let now = Instant::now();
                     let frame_interval = self.frame_interval();
                     if self.last_render_time.is_some_and(|last_render| now.duration_since(last_render) < frame_interval) {
@@ -276,38 +265,7 @@ impl<'a> App<'a> {
                     self.sync_window_frame(&project);
                     #[cfg(target_os = "macos")]
                     crate::mac::sync_menu_state(&self.editor, &project);
-                    // The Solids Setup page's inspection mesh is rebuilt before
-                    // the frame that shows it, and borrowed straight into the
-                    // render input - it is never a project item.
-                    // Invalidation first: the edits made since the last frame
-                    // decide which stages are still current, and so what a run
-                    // in flight is allowed to schedule. Doing this after the
-                    // geometry sync would let one frame's work start against a
-                    // demand that the same frame's edit had already retired.
-                    self.sync_auto_run();
-                    self.sync_planning_pipeline();
-                    self.auto_run_planning();
-                    self.auto_run_haulage();
-                    self.auto_recalculate_schedule();
-                    self.release_pipeline_residency();
-                    self.sync_improve_progress();
-                    self.pick_entry_ground();
-                    self.sync_solid_preview();
-                    self.sync_schedule_animation();
-                    self.sync_prismoid_drawing();
-                    self.drive_video_recording();
-                    self.sync_reserve_setup_stats();
-                    self.sync_blasting_view();
-                    self.sync_blasting_bench();
-                    self.sync_blasting_outlines();
-                    self.sync_dig_blocks();
-                    self.refresh_solid_view_retained();
-                    self.refresh_reserves_scene();
-                    self.sync_blasting_frame();
-                    self.sync_haulage_frame();
-                    self.sync_animation_frame();
-                    self.sync_water();
-                    self.sync_page_locks();
+                    self.advance_project();
                     let showing_solid_preview = self.showing_solid_preview();
                     let completing_topology_load = self.topology_uploads_pending();
                     let applied_resize = self.take_resize_to_apply(now);
@@ -364,7 +322,7 @@ impl<'a> App<'a> {
                             Ok(ui_output) => {
                                 // The video export's frame, drawn from the
                                 // geometry this frame just uploaded.
-                                if let Some((size, clock_s, labels)) = self.video_recording.as_mut().and_then(|recording| recording.take_render_request()) {
+                                if let Some(frame) = self.video_recording.as_mut().and_then(|recording| recording.take_render_request()) {
                                     graphics.render_video_frame(crate::rendering::graphics::video_capture::VideoFrameInput {
                                         editor: &mut self.editor,
                                         document: &self.scene_document,
@@ -374,9 +332,14 @@ impl<'a> App<'a> {
                                         point_clouds: &self.point_clouds,
                                         rasters: &self.raster_textures,
                                         project: &project,
-                                        size,
-                                        clock_s,
-                                        labels,
+                                        size: frame.size,
+                                        clock_s: frame.clock_s,
+                                        labels: frame.labels,
+                                        #[cfg(not(target_arch = "wasm32"))]
+                                        view: frame.view,
+                                        #[cfg(not(target_arch = "wasm32"))]
+                                        hidden: frame.hidden,
+                                        sync: false,
                                     });
                                     if let Some(next) = self.video_recording.as_ref().and_then(|recording| recording.upcoming_time()) {
                                         self.editor.schedule_time_h = next;
@@ -403,18 +366,7 @@ impl<'a> App<'a> {
                                 self.place_window_frame();
                                 self.collect_video_frames();
                                 self.handle_ui_commands(ui_output.commands);
-                                self.sync_slice_preview_window(event_loop);
-                                if let Some(graphics) = self.graphics.as_mut() {
-                                    graphics.request_slice_preview_redraw_if_scene_changed(
-                                        &self.editor,
-                                        &self.scene_document,
-                                        with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
-                                        &self.block_models,
-                                        &self.drill_holes,
-                                        &self.point_clouds,
-                                        &self.raster_textures,
-                                    );
-                                }
+                                self.sync_panel_windows(event_loop);
                                 // Keep move panel preview in sync - apply whenever the panel delta
                                 // differs from the last applied preview (catches typed values that
                                 // don't always trigger changed() on every frame).
@@ -471,7 +423,6 @@ impl<'a> App<'a> {
                                 if !hover_highlight_active
                                     && self.editor.tool_highlight_id.is_some()
                                     && self.editor.offset_target_ids.is_empty()
-                                    && self.editor.batter_berm_target_id.is_none()
                                     && !self.editor.tri_cut_poly_open
                                     && !self.editor.drill_pattern_open
                                     && !self.editor.tri_prismoid_mask_open
@@ -479,13 +430,20 @@ impl<'a> App<'a> {
                                     self.editor.tool_highlight_id = None;
                                     self.invalidate_geometry();
                                 }
-                                // Update batter berm preview every frame while dialog is open.
-                                if self.editor.batter_berm_dialog_open {
-                                    self.update_batter_berm_preview();
-                                    self.invalidate_overlay();
+                                // Pit Design rebuilds its preview, in the
+                                // background, when its settings change.
+                                // Put down some other way than its own, the tool
+                                // still closes its pit as it does.
+                                if self.editor.pit_design.is_some() && self.editor.active_tool != ActiveTool::PitDesign {
+                                    self.close_pit_design();
+                                }
+                                if self.editor.pit_design.is_some() {
+                                    self.update_pit_design_preview();
+                                    self.note_pit_preview_cover();
                                 }
                                 // Clear in-progress stroke when switching away from drawing tools.
-                                if !matches!(self.editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly) && !self.editor.pending_stroke.is_empty() {
+                                if !matches!(self.editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly | ActiveTool::PitDesign) && !self.editor.pending_stroke.is_empty()
+                                {
                                     self.editor.pending_stroke.clear();
                                     self.invalidate_overlay();
                                 }
@@ -686,7 +644,8 @@ impl<'a> App<'a> {
                             || self.editor.relimit_confirming_end
                             || self.editor.triangulation_pick_target.is_some()
                             || self.editor.optimization.start_pick.is_some()
-                            || self.editor.drill_pattern_awaiting_shape_pick);
+                            || self.editor.drill_pattern_awaiting_shape_pick
+                            || self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region));
                     if hover_pick_due {
                         self.last_snap_poll_instant = Some(now);
                     }
@@ -810,7 +769,23 @@ impl<'a> App<'a> {
                     if matches!(self.editor.active_tool, ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints) && hover_pick_due {
                         self.update_explode_hover();
                     }
-                    if (self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick)
+                    if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp.is_some()) {
+                        self.update_pit_ramp_hover();
+                    }
+                    if self.editor.pit_design.is_some() {
+                        self.update_pit_flag_hover();
+                        self.update_pit_gizmo();
+                        self.update_pit_ramp_marker_hover();
+                        self.update_pit_adding_ramp();
+                        self.update_pit_string_hover();
+                    }
+                    if self.editor.active_tool == ActiveTool::PitDesign {
+                        self.update_pit_ground_under_cursor();
+                    }
+                    if (self.editor.triangulation_pick_target.is_some()
+                        || self.editor.optimization.start_pick.is_some()
+                        || self.editor.drill_pattern_awaiting_shape_pick
+                        || self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region))
                         && hover_pick_due
                     {
                         self.update_viewport_field_pick_hover();
@@ -841,174 +816,6 @@ impl<'a> App<'a> {
             }
         }
     }
-
-    fn handle_slice_preview_event(&mut self, event: WindowEvent) {
-        match event {
-            WindowEvent::ModifiersChanged(modifiers) => {
-                self.modifiers = modifiers.state();
-            }
-            WindowEvent::Focused(false) => {
-                if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.release_slice_keys();
-                }
-                self.slice_preview_middle_down = false;
-                self.redraw_requested = true;
-            }
-            WindowEvent::CloseRequested => {
-                if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.close_slice_preview();
-                }
-                self.editor.slice_preview_detached = false;
-                self.slice_preview_cursor_px = None;
-                self.slice_preview_middle_down = false;
-                self.redraw_requested = true;
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                let next = (position.x, position.y);
-                let viewport = self.graphics.as_ref().and_then(|graphics| graphics.slice_preview_viewport());
-                let changed = if self.slice_preview_middle_down
-                    && let Some(previous) = self.slice_preview_cursor_px
-                    && let Some((size, scale_factor)) = viewport
-                {
-                    let fitted_zoom = crate::ui::state::fitted_slice_preview_zoom(self.editor.slice_half_length, size.height, scale_factor);
-                    let current_zoom = fitted_zoom * self.editor.slice_preview_navigation.zoom_multiplier();
-                    self.editor
-                        .slice_preview_navigation
-                        .pan_by_pixels([next.0 - previous.0, next.1 - previous.1], current_zoom, f64::from(size.height))
-                } else {
-                    false
-                };
-                self.slice_preview_cursor_px = Some(next);
-                if changed && let Some(graphics) = self.graphics.as_ref() {
-                    graphics.request_slice_preview_redraw();
-                }
-            }
-            WindowEvent::CursorLeft { .. } => {
-                self.slice_preview_cursor_px = None;
-                self.slice_preview_middle_down = false;
-            }
-            WindowEvent::MouseInput {
-                state,
-                button: MouseButton::Middle,
-                ..
-            } => {
-                self.slice_preview_middle_down = state == ElementState::Pressed;
-            }
-            WindowEvent::MouseWheel { delta, .. } => {
-                // Only a notch the section walk leaves alone reaches the zoom below.
-                if self.slice_walk_scroll(&event) {
-                    if let Some(graphics) = self.graphics.as_ref() {
-                        graphics.request_slice_preview_redraw();
-                    }
-                } else {
-                    let scroll = crate::rendering::graphics::scroll_pixels(&delta);
-                    let changed = self
-                        .graphics
-                        .as_ref()
-                        .and_then(|graphics| graphics.slice_preview_viewport())
-                        .is_some_and(|(size, scale_factor)| {
-                            let cursor = self.slice_preview_cursor_px.unwrap_or((f64::from(size.width) * 0.5, f64::from(size.height) * 0.5));
-                            let fitted_zoom = crate::ui::state::fitted_slice_preview_zoom(self.editor.slice_half_length, size.height, scale_factor);
-                            self.editor
-                                .slice_preview_navigation
-                                .zoom_at_pixel(scroll, [cursor.0, cursor.1], [f64::from(size.width), f64::from(size.height)], fitted_zoom)
-                        });
-                    if changed && let Some(graphics) = self.graphics.as_ref() {
-                        graphics.request_slice_preview_redraw();
-                    }
-                }
-            }
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        state: ElementState::Pressed,
-                        physical_key: PhysicalKey::Code(KeyCode::KeyF | KeyCode::Home),
-                        ..
-                    },
-                ..
-            } => {
-                self.editor.slice_preview_navigation.reset();
-                if let Some(graphics) = self.graphics.as_ref() {
-                    graphics.request_slice_preview_redraw();
-                }
-            }
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        state: ElementState::Pressed,
-                        physical_key: PhysicalKey::Code(KeyCode::Escape),
-                        ..
-                    },
-                ..
-            } => {
-                if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.close_slice_preview();
-                }
-                self.editor.slice_preview_detached = false;
-                self.slice_preview_cursor_px = None;
-                self.slice_preview_middle_down = false;
-                self.redraw_requested = true;
-            }
-            // Same W/S/Q/E handling as the main window, via the shared `slice_key`.
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        state,
-                        physical_key: PhysicalKey::Code(key @ (KeyCode::KeyW | KeyCode::KeyS | KeyCode::KeyQ | KeyCode::KeyE)),
-                        ..
-                    },
-                ..
-            } if !self.modifiers.control_key() && !(cfg!(target_os = "macos") && self.modifiers.super_key()) => {
-                if self.slice_key(key, state) {
-                    if let Some(graphics) = self.graphics.as_ref() {
-                        graphics.request_slice_preview_redraw();
-                    }
-                    self.redraw_requested = true;
-                }
-            }
-            WindowEvent::Resized(size) => {
-                if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.resize_slice_preview(size);
-                }
-            }
-            WindowEvent::RedrawRequested => {
-                if self.slice_surface_retry_deadline.is_some_and(|deadline| Instant::now() < deadline) {
-                    return;
-                }
-                self.slice_surface_retry_deadline = None;
-                let result = self.graphics.as_mut().map(|graphics| {
-                    graphics.render_slice_preview(
-                        &self.scene_document,
-                        with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
-                        &self.block_models,
-                        &self.drill_holes,
-                        &self.point_clouds,
-                        &self.raster_textures,
-                        &self.editor,
-                    )
-                });
-                match result {
-                    Some(Err(RenderSurfaceError::Lost | RenderSurfaceError::Outdated)) => {
-                        if let Some(graphics) = self.graphics.as_mut() {
-                            graphics.reconfigure_slice_preview();
-                        }
-                        self.slice_surface_retry_deadline = Some(Instant::now() + Duration::from_millis(250));
-                    }
-                    Some(Err(RenderSurfaceError::Timeout | RenderSurfaceError::Occluded)) => {
-                        self.slice_surface_retry_deadline = Some(Instant::now() + Duration::from_millis(250));
-                    }
-                    Some(Err(RenderSurfaceError::Validation)) => {
-                        if let Some(graphics) = self.graphics.as_mut() {
-                            graphics.close_slice_preview();
-                        }
-                        self.editor.slice_preview_detached = false;
-                    }
-                    Some(Ok(())) | None => {}
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 impl<'a> App<'a> {
@@ -1022,6 +829,9 @@ impl<'a> App<'a> {
             return false;
         };
 
+        if self.editor.cursor_modes_held() {
+            return false;
+        }
         self.editor.cursor_mode = match button {
             MouseButton::Forward => self.editor.cursor_mode.next(),
             MouseButton::Back => self.editor.cursor_mode.previous(),
@@ -1049,6 +859,16 @@ impl<'a> App<'a> {
             ..
         } = event
         {
+            if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp.is_some()) {
+                self.editor.canvas_context_menu_open = false;
+                self.pick_pit_ramp_start_at_cursor();
+                return;
+            }
+            if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region) {
+                self.editor.canvas_context_menu_open = false;
+                self.pick_pit_region_at_cursor();
+                return;
+            }
             if self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick {
                 self.editor.canvas_context_menu_open = false;
                 self.begin_select_or_drag();
@@ -1180,9 +1000,8 @@ impl<'a> App<'a> {
                     }
                 }
                 ActiveTool::DrapeToTopology => self.begin_select_or_drag(),
-                ActiveTool::BatterBermOffset if !self.editor.batter_berm_dialog_open => {
-                    self.pick_batter_berm_target();
-                }
+                ActiveTool::PitDesign if self.editor.pit_drawing() => self.place_stroke_point(),
+                ActiveTool::PitDesign => self.press_pit_design(),
                 _ => {}
             }
         }
@@ -1197,6 +1016,7 @@ impl<'a> App<'a> {
     fn finish_left_button_interactions(&mut self) {
         // Before the box selection: a drag that moved a node is not a click.
         self.finish_haul_drag();
+        self.release_pit_design();
         self.finish_box_selection();
         self.finish_drag();
         if self.vertex_drag.is_some() {
@@ -1220,7 +1040,7 @@ impl<'a> App<'a> {
 
     /// Routes one of the section's W/S/Q/E keys to the slice camera. Shared by
     /// the main window and the detached section preview.
-    fn slice_key(&mut self, key: KeyCode, state: ElementState) -> bool {
+    pub(super) fn slice_key(&mut self, key: KeyCode, state: ElementState) -> bool {
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.slice_process_key(key, state == ElementState::Pressed);
         }
@@ -1366,7 +1186,12 @@ impl<'a> App<'a> {
                 // put the run down, without the canvas menu over the pattern.
                 self.end_tie_chain();
                 self.redraw_requested = true;
-            } else if is_quick_press && matches!(self.editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly | ActiveTool::MakeCircle) {
+            } else if is_quick_press
+                && matches!(
+                    self.editor.active_tool,
+                    ActiveTool::MakeLine | ActiveTool::MakePoly | ActiveTool::MakeCircle | ActiveTool::PitDesign
+                )
+            {
                 self.try_finish_tool();
                 self.redraw_requested = true;
             } else if is_quick_press && self.editor.active_tool != ActiveTool::None {
@@ -1586,21 +1411,28 @@ impl<'a> App<'a> {
         // The Layout's blocks are flat fills in the scene, not surfaces; their
         // pick surface stands in so an orbit pivots on the block it starts on.
         let overlay = if self.editor.is_haulage_page() { &self.haul_block_surface[..] } else { drawn.1 };
+        // A bench design open in its tool is seen through the ground: begun
+        // over it, the orbit turns about it, not the ground above it.
+        let pit_pivot = self.editor.rotation_centre.is_none().then(|| self.pit_orbit_pivot(press)).flatten();
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
-        graphics.begin_orbit_at_surface(
-            drawn.0,
-            overlay,
-            &self.drill_holes,
-            &self.editor.hidden_handles,
-            &self.editor.orbit_frozen,
-            &self.scene_document,
-            &self.snap_index,
-            self.editor.z_level,
-            self.editor.rotation_centre,
-            self.editor.xray_enabled,
-        );
+        if let Some(pivot) = pit_pivot {
+            graphics.begin_orbit_about(pivot);
+        } else {
+            graphics.begin_orbit_at_surface(
+                drawn.0,
+                overlay,
+                &self.drill_holes,
+                &self.editor.hidden_handles,
+                &self.editor.orbit_frozen,
+                &self.scene_document,
+                &self.snap_index,
+                self.editor.z_level,
+                self.editor.rotation_centre,
+                self.editor.xray_enabled,
+            );
+        }
         graphics.begin_right_orbit_drag();
         self.right_orbit_active = true;
         self.redraw_requested = true;
@@ -1741,6 +1573,14 @@ impl<'a> App<'a> {
                     self.redraw_requested = true;
                 } else if self.editor.text_editing_enabled {
                     self.cancel_text_edit();
+                } else if self.dragging_pit_gizmo() {
+                    self.cancel_pit_gizmo_drag();
+                } else if self.adding_pit_ramp() {
+                    self.cancel_pit_adding_ramp();
+                } else if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp.is_some()) {
+                    self.cancel_pit_ramp_start_pick();
+                } else if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region) {
+                    self.cancel_pit_region_pick();
                 } else if self.editor.optimization.start_pick.is_some() {
                     self.cancel_shell_start_pick();
                 } else if self.editor.triangulation_pick_target.is_some() {
@@ -1805,8 +1645,8 @@ impl<'a> App<'a> {
                     self.editor.tool_highlight_id = None;
                     self.editor.active_tool = ActiveTool::None;
                     self.invalidate_geometry();
-                } else if self.editor.active_tool == ActiveTool::BatterBermOffset || self.editor.batter_berm_dialog_open || self.editor.batter_berm_target_id.is_some() {
-                    self.cancel_batter_berm();
+                } else if self.editor.active_tool == ActiveTool::PitDesign {
+                    self.escape_pit_design();
                 } else if self.editor.active_tool == ActiveTool::MakeCircle {
                     if self.editor.circle_draft.as_ref().is_some_and(|draft| !draft.radius_text.is_empty()) {
                         if let Some(draft) = self.editor.circle_draft.as_mut() {
@@ -1927,6 +1767,11 @@ impl<'a> App<'a> {
                 self.invalidate_overlay();
             }
             KeyCode::Delete | KeyCode::Backspace if !self.editor.text_editing_enabled && self.editor.object_edit_dialog.is_none() => {
+                // A bench design's ramp under the pointer is taken off it,
+                // whatever else is selected.
+                if self.remove_pit_ramp_under_cursor() {
+                    return;
+                }
                 // The Gantt shows no scene objects, so Delete there is for the
                 // selected bars only - never a prompt to delete objects
                 // selected out of sight. Not while a bar's editor is open over it.
@@ -1996,8 +1841,8 @@ impl<'a> App<'a> {
             self.cancel_chamfer();
         } else if self.editor.active_tool == ActiveTool::Bezier {
             self.cancel_bezier();
-        } else if self.editor.active_tool == ActiveTool::BatterBermOffset || self.editor.batter_berm_dialog_open || self.editor.batter_berm_target_id.is_some() {
-            self.cancel_batter_berm();
+        } else if self.editor.active_tool == ActiveTool::PitDesign {
+            self.escape_pit_design();
         } else if self.editor.active_tool == ActiveTool::MeasureBatterAngle {
             self.editor.batter_angle_points.clear();
             self.editor.active_tool = ActiveTool::None;
@@ -2045,8 +1890,11 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr!("events-tool-not-available-section-view"));
             return;
         }
+        // Pit Design on a selected pit, or a closed polyline that could be
+        // one, opens it, and needs no layer to draw on.
+        let opens_pit = tool == ActiveTool::PitDesign && self.editor.selection_counts.pit_designable > 0;
         if tool != self.editor.active_tool
-            && ((tool.requires_active_layer() && self.active_layer().is_none())
+            && ((tool.requires_active_layer() && self.active_layer().is_none() && !opens_pit)
                 || (matches!(tool, ActiveTool::TieHoles | ActiveTool::SetInitiationPoint | ActiveTool::ChargeHoles)
                     && !self
                         .editor
@@ -2080,8 +1928,8 @@ impl<'a> App<'a> {
             ActiveTool::RelimitLine if next_tool != ActiveTool::RelimitLine => {
                 self.cancel_relimit();
             }
-            ActiveTool::BatterBermOffset if next_tool != ActiveTool::BatterBermOffset => {
-                self.cancel_batter_berm();
+            ActiveTool::PitDesign if next_tool != ActiveTool::PitDesign => {
+                self.close_pit_design();
             }
             ActiveTool::Bezier if next_tool != ActiveTool::Bezier => {
                 self.cancel_bezier();
@@ -2144,6 +1992,9 @@ impl<'a> App<'a> {
             self.editor.measurement_end = None;
             self.editor.measure_segment_hover = None;
             self.editor.batter_angle_points.clear();
+        }
+        if next_tool == ActiveTool::PitDesign && previous_tool != ActiveTool::PitDesign {
+            self.open_selected_pit();
         }
     }
 
@@ -2394,4 +2245,67 @@ fn point_in_convex_quad(point: (f32, f32), quad: &[(f32, f32); 4]) -> bool {
         }
     }
     orientation != 0.0
+}
+
+impl App<'_> {
+    /// Take in what background work has finished: loads, saves and jobs.
+    /// Each frame of the window, or each turn of the loop with no window.
+    pub(crate) fn poll_background_work(&mut self) {
+        self.poll_triangulation_loads();
+        self.poll_block_model_loads();
+        self.poll_point_cloud_loads();
+        self.poll_raster_loads();
+        self.poll_saves();
+        self.poll_jobs();
+        self.reconcile_optimization_runs();
+        self.refresh_status_message();
+        if let Some(usage) = self.memory_sampler.poll() {
+            self.editor.memory_usage = Some(usage);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(cores) = self.cpu_sampler.poll() {
+            self.editor.cpu_usage = cores;
+        }
+    }
+
+    /// The project's own work for one step, whether or not a window draws
+    /// it: the planning, haulage and schedule runs it keeps current, and the
+    /// scenes the pages show built for them.
+    pub(crate) fn advance_project(&mut self) {
+        // The Solids Setup page's inspection mesh is rebuilt before
+        // the frame that shows it, and borrowed straight into the
+        // render input - it is never a project item.
+        // Invalidation first: the edits made since the last frame
+        // decide which stages are still current, and so what a run
+        // in flight is allowed to schedule. Doing this after the
+        // geometry sync would let one frame's work start against a
+        // demand that the same frame's edit had already retired.
+        self.sync_auto_run();
+        self.sync_planning_pipeline();
+        self.auto_run_planning();
+        self.auto_run_haulage();
+        self.auto_recalculate_schedule();
+        self.release_pipeline_residency();
+        self.sync_improve_progress();
+        self.pick_entry_ground();
+        self.sync_solid_preview();
+        self.sync_schedule_animation();
+        self.sync_prismoid_drawing();
+        self.drive_video_recording();
+        self.sync_reserve_setup_stats();
+        self.sync_blasting_view();
+        self.sync_blasting_bench();
+        self.sync_blasting_outlines();
+        self.sync_dig_blocks();
+        self.refresh_solid_view_retained();
+        self.refresh_reserves_scene();
+        self.sync_blasting_frame();
+        self.sync_haulage_frame();
+        self.sync_animation_frame();
+        self.sync_water();
+        self.sync_page_locks();
+        self.hold_pit_cursor_mode();
+        self.refresh_pit_designs();
+        self.refresh_pit_evaluations();
+    }
 }

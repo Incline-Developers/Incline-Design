@@ -22,7 +22,7 @@ use crate::{
     model::{Document, FillStyle, LayerId, Object, ObjectId, SceneEntityId},
     rendering::{
         StrokeInstance, Vertex,
-        geometry::{DrawContext, tessellate_polyline_stroke},
+        geometry::{DrawContext, draw_vertex_dots, tessellate_polyline_stroke},
         pick::{PickRecord, StrokeBlocks, world_bounds_from_local_positions},
         scene::document_style::DocumentStyleSlots,
     },
@@ -94,6 +94,8 @@ pub(crate) struct StaticStrokeCache {
     claimed_key: u64,
     cached_scene_origin: DVec3,
     cached_scale_factor: f32,
+    /// Whether the members' vertices are drawn as dots.
+    cached_show_points: bool,
 }
 
 /// Everything the cache bakes into vertices besides the object's own data.
@@ -158,9 +160,9 @@ fn estimate_stroke(object: &Object) -> Option<usize> {
     }
     let segments = verts.len().saturating_sub(1).saturating_add(usize::from(*closed && verts.len() >= 2));
     let joins = if *closed && verts.len() >= 2 { verts.len() } else { verts.len().saturating_sub(2) };
-    // A segment and a round join are one instance each. Degenerate and
-    // nearly collinear geometry only reduces the count.
-    Some(segments.saturating_add(joins))
+    // A segment, a round join and a vertex's dot are one instance each.
+    // Degenerate and nearly collinear geometry only reduces the count.
+    Some(segments.saturating_add(joins).saturating_add(verts.len()))
 }
 
 fn can_append(current: usize, next: usize, limit: usize) -> bool {
@@ -198,12 +200,14 @@ impl StaticStrokeCache {
         scale_factor: f32,
     ) {
         let limits = StaticStrokeLimits::from_device(device);
-        // Origin and scale factor are baked into every instance.
-        if scene_origin != self.cached_scene_origin || (scale_factor - self.cached_scale_factor).abs() > f32::EPSILON {
+        // Origin, scale factor and the vertices' dots are baked into every
+        // instance.
+        if scene_origin != self.cached_scene_origin || (scale_factor - self.cached_scale_factor).abs() > f32::EPSILON || editor.show_points != self.cached_show_points {
             self.chunks.clear();
             self.object_chunk.clear();
             self.cached_scene_origin = scene_origin;
             self.cached_scale_factor = scale_factor;
+            self.cached_show_points = editor.show_points;
         }
 
         self.claimed.clear();
@@ -324,6 +328,7 @@ impl StaticStrokeCache {
         scale_factor: f32,
         limits: StaticStrokeLimits,
     ) {
+        let show_points = self.cached_show_points;
         let chunk = &mut self.chunks[chunk_index];
         chunk.strokes.clear();
         chunk.records.clear();
@@ -346,6 +351,9 @@ impl StaticStrokeCache {
                 let mut draw_ctx = DrawContext::unstyled(&mut chunk.strokes, &mut unused_fill_vertices, &mut unused_fill_indices, scene_origin, scale_factor);
                 draw_ctx.style = slots.slot(id);
                 tessellate_polyline_stroke(&mut draw_ctx, verts, *closed, *line_weight, rgba);
+                if show_points {
+                    draw_vertex_dots(&mut draw_ctx, verts, *line_weight, rgba);
+                }
             }
             let stroke_end = chunk.strokes.len() as u32;
             if stroke_end > stroke_start

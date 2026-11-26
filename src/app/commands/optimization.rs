@@ -53,7 +53,7 @@ impl<'a> App<'a> {
     /// Read the project's scenarios once per opened project, before anything
     /// that shows or writes them - a write before the read would replace the
     /// saved scenarios with an empty list.
-    pub(super) fn ensure_optimization_scenarios_loaded(&mut self) {
+    pub(crate) fn ensure_optimization_scenarios_loaded(&mut self) {
         if !self.editor.optimization.loaded_from_file {
             self.editor.optimization.loaded_from_file = true;
             self.load_saved_optimization_scenarios();
@@ -74,6 +74,14 @@ impl<'a> App<'a> {
     /// Start a scenario in the editor. The list steps aside rather than staying
     /// open behind it: the editor is the only window of the pair at a time.
     pub(crate) fn add_optimization_scenario(&mut self) {
+        let scenario = self.new_optimization_scenario();
+        self.editor.optimization.draft = Some(ScenarioDraft::new(scenario, true));
+        self.editor.optimization.list_open = false;
+    }
+
+    /// A new scenario as Add makes one: a fresh id, the next free name, the
+    /// project's constants and a shell prefix of its own. Not yet in the list.
+    pub(crate) fn new_optimization_scenario(&mut self) -> OptimizationScenario {
         let id = self.editor.optimization.fresh_id();
         let name = unique_name(
             self.editor.optimization.scenarios.iter().map(|scenario| scenario.name.as_str()),
@@ -83,8 +91,7 @@ impl<'a> App<'a> {
         scenario.constants = self.editor.optimization.constants.clone();
         // Each scenario names its shells with its own prefix.
         scenario.output.shell_layer_name = unique_shell_prefix(&self.editor.optimization.scenarios, &scenario.output.shell_layer_name);
-        self.editor.optimization.draft = Some(ScenarioDraft::new(scenario, true));
-        self.editor.optimization.list_open = false;
+        scenario
     }
 
     pub(crate) fn edit_optimization_scenario(&mut self, id: u64) {
@@ -629,6 +636,7 @@ impl<'a> App<'a> {
         for issue in issues {
             userspace_error!("{}", tr!("opt-run-issue", issue = issue.clone()));
         }
+        self.editor.optimization.run_failures.insert(id, issues.to_vec());
         self.editor.optimization.runs.remove(&id);
         self.editor.optimization.awaiting_restore.remove(&id);
         self.after_scenario_run(id, false);

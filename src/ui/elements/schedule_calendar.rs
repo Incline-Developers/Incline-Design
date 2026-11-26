@@ -616,46 +616,58 @@ fn draw_row_kinds(
     egui::Rect::from_min_max(egui::pos2(ui.max_rect().left(), top), egui::pos2(ui.max_rect().right(), ui.cursor().top()))
 }
 
+/// The schedule report as the export menu writes it: its file name, and its
+/// tables as text with `separator` between the columns. `None` until a
+/// schedule has been calculated.
+pub(crate) fn schedule_report_text(
+    editor: &EditorState,
+    plan: &SchedulePlan,
+    document: &Document,
+    grouping: super::schedule_report::ReportGrouping,
+    separator: char,
+) -> Option<(String, String)> {
+    use super::schedule_report::{ReportNames, build, to_text};
+
+    let schedule = editor.schedule_result.as_deref()?;
+    let destinations = destinations::available(document.solids(), plan.routing())
+        .into_iter()
+        .map(|view| (view.id, view.name, view.kind))
+        .collect();
+    let grades = schedule
+        .grades
+        .iter()
+        .map(|(field, _)| {
+            document
+                .reserve_fields()
+                .iter()
+                .find(|entry| entry.id == *field)
+                .map_or_else(|| field.0.to_string(), |entry| entry.name.clone())
+        })
+        .collect();
+    let names = ReportNames {
+        destinations,
+        grades,
+        bar_views: &editor.schedule_bar_reports,
+    };
+    let tables = build(schedule, plan, &names, grouping);
+    let heading = tr!(
+        "report-heading",
+        grouping = grouping.label(),
+        end = super::schedule_gantt::instant_label(schedule.requested_end_h * crate::ui::state::GanttView::HOUR)
+    );
+    Some((tr!("report-file-name", grouping = grouping.label()), to_text(&tables, &heading, separator)))
+}
+
 /// The report export: how to group the rows, then copy or save. Built from
 /// the held result when asked, never per frame.
 pub(crate) fn draw_report_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, commands: &mut Vec<UiCommand>) {
-    use super::schedule_report::{ReportGrouping, ReportNames, build, to_text};
+    use super::schedule_report::ReportGrouping;
     let ready = editor.schedule_result.is_some();
     let button = ui
         .add(crate::ui::widgets::menu::MenuButton::new(tr!("report-export")).enabled(ready))
         .hint(tr!("report-export-help"))
         .disabled_hint(tr!("report-export-unavailable"));
-    let text = |editor: &EditorState, separator: char| -> Option<(String, String)> {
-        let schedule = editor.schedule_result.as_deref()?;
-        let destinations = destinations::available(document.solids(), plan.routing())
-            .into_iter()
-            .map(|view| (view.id, view.name, view.kind))
-            .collect();
-        let grades = schedule
-            .grades
-            .iter()
-            .map(|(field, _)| {
-                document
-                    .reserve_fields()
-                    .iter()
-                    .find(|entry| entry.id == *field)
-                    .map_or_else(|| field.0.to_string(), |entry| entry.name.clone())
-            })
-            .collect();
-        let names = ReportNames {
-            destinations,
-            grades,
-            bar_views: &editor.schedule_bar_reports,
-        };
-        let grouping = editor.schedule_report_grouping;
-        let tables = build(schedule, plan, &names, grouping);
-        let heading = tr!(
-            "report-heading",
-            grouping = grouping.label(),
-            end = super::schedule_gantt::instant_label(schedule.requested_end_h * crate::ui::state::GanttView::HOUR)
-        );
-        Some((tr!("report-file-name", grouping = grouping.label()), to_text(&tables, &heading, separator)))
-    };
+    let text = |editor: &EditorState, separator: char| schedule_report_text(editor, plan, document, editor.schedule_report_grouping, separator);
     // Stays open while the grouping is chosen; closes on Copy, Save or a
     // click outside.
     use crate::ui::widgets::context_menu::{ContextMenuAction, checklist_popup, context_menu_fields, context_menu_separator};

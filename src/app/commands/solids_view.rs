@@ -2246,7 +2246,13 @@ fn build_solid_envelope(
 ) -> anyhow::Result<(OpenTriangulation, super::triangulation::solid_between::BuiltFrom)> {
     // The same mesh as the Setup page's preview of this solid, when it has
     // built one, rather than a copy of it.
-    let built = super::triangulation::solid_between::build_solid_mesh(design, topo, crate::ui::state::SolidRegion::of_solid(solid.kind), &solid.name, &progress.phase(0.0, 1.0))?;
+    let built = super::triangulation::solid_between::build_solid_mesh(
+        design,
+        topo,
+        crate::ui::state::SolidRegion::of_solid(solid.kind),
+        super::triangulation::solid_between::BuiltFor::Solid(&solid.name),
+        &progress.phase(0.0, 1.0),
+    )?;
     anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
     let envelope = preview_triangulation(
         solid.name.clone(),

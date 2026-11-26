@@ -31,6 +31,7 @@ pub(crate) mod numbers;
 pub(crate) mod object_edit;
 pub(crate) mod optimization;
 pub(crate) mod optimization_run;
+pub(crate) mod pit_design;
 pub(crate) mod point_cloud;
 pub(crate) mod point_features;
 pub(crate) mod prismoid_grid;
@@ -1024,18 +1025,29 @@ pub(crate) enum Object {
         rotation: f64,
         color: ObjectColor,
     },
+    /// A pit designed from a closed string: `verts` is the string, always
+    /// closed, and `pit` what it is designed with and what that came to. It
+    /// draws as its string and its benches; see [`pit_design::object`].
+    PitDesign {
+        id: ObjectId,
+        layer: LayerId,
+        verts: Vec<PolyVertex>,
+        color: ObjectColor,
+        line_weight: f32,
+        pit: Box<pit_design::object::PitObject>,
+    },
 }
 
 impl Object {
     pub(crate) fn id(&self) -> ObjectId {
         match self {
-            Object::Point { id, .. } | Object::Polyline { id, .. } | Object::Circle { id, .. } | Object::Text { id, .. } => *id,
+            Object::Point { id, .. } | Object::Polyline { id, .. } | Object::Circle { id, .. } | Object::Text { id, .. } | Object::PitDesign { id, .. } => *id,
         }
     }
 
     pub(crate) fn layer(&self) -> LayerId {
         match self {
-            Object::Point { layer, .. } | Object::Polyline { layer, .. } | Object::Circle { layer, .. } | Object::Text { layer, .. } => *layer,
+            Object::Point { layer, .. } | Object::Polyline { layer, .. } | Object::Circle { layer, .. } | Object::Text { layer, .. } | Object::PitDesign { layer, .. } => *layer,
         }
     }
 
@@ -1048,12 +1060,13 @@ impl Object {
             Object::Polyline { .. } => crate::i18n::tr!("common-polyline"),
             Object::Circle { .. } => crate::i18n::tr!("common-circle"),
             Object::Text { .. } => crate::i18n::tr!("common-text"),
+            Object::PitDesign { .. } => crate::i18n::tr!("pit-design-kind"),
         }
     }
 
     pub(crate) fn color(&self) -> ObjectColor {
         match self {
-            Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Circle { color, .. } | Object::Text { color, .. } => *color,
+            Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Circle { color, .. } | Object::Text { color, .. } | Object::PitDesign { color, .. } => *color,
         }
     }
 
@@ -1138,6 +1151,15 @@ impl Object {
                 rotation.to_bits().hash(&mut hasher);
                 hash_color(&mut hasher, *color);
             }
+            Object::PitDesign {
+                verts, color, line_weight, pit, ..
+            } => {
+                4u8.hash(&mut hasher);
+                hash_verts(&mut hasher, verts);
+                hash_color(&mut hasher, *color);
+                line_weight.to_bits().hash(&mut hasher);
+                serde_json::to_vec(pit).unwrap_or_default().hash(&mut hasher);
+            }
         }
         hasher.finish()
     }
@@ -1192,6 +1214,15 @@ impl Object {
                     return Err(crate::i18n::tr!("err-bm-circle-bad-line-weight"));
                 }
             }
+            Object::PitDesign { verts, line_weight, .. } => {
+                require_finite_verts(verts, &crate::i18n::tr!("pit-design-kind"))?;
+                if verts.len() < 3 {
+                    return Err(crate::i18n::tr!("err-bm-closed-polyline-min-vertices"));
+                }
+                if !line_weight.is_finite() || *line_weight < 0.0 {
+                    return Err(crate::i18n::tr!("err-bm-polyline-bad-line-weight"));
+                }
+            }
             Object::Text { pos, height, rotation, .. } => {
                 if !pos.is_finite() {
                     return Err(crate::i18n::tr!("err-bm-text-bad-position"));
@@ -1216,6 +1247,12 @@ impl Object {
                     vertex.pos += delta;
                 }
             }
+            Object::PitDesign { verts, pit, .. } => {
+                for vertex in verts.iter_mut() {
+                    vertex.pos += delta;
+                }
+                pit.translate(delta, verts);
+            }
         }
     }
 
@@ -1224,7 +1261,7 @@ impl Object {
         let pos = match self {
             Object::Point { pos, .. } | Object::Text { pos, .. } => *pos,
             Object::Circle { center, .. } => *center,
-            Object::Polyline { verts, .. } => verts.first().map_or(DVec3::ZERO, |vertex| vertex.pos),
+            Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => verts.first().map_or(DVec3::ZERO, |vertex| vertex.pos),
         };
         match axis {
             Axis::X => pos.x,
@@ -1242,7 +1279,7 @@ impl Object {
         match self {
             Object::Point { pos, .. } | Object::Text { pos, .. } => set(pos),
             Object::Circle { center, .. } => set(center),
-            Object::Polyline { verts, .. } => {
+            Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => {
                 for vertex in verts {
                     set(&mut vertex.pos);
                 }
@@ -1306,6 +1343,16 @@ impl Object {
                 rotation: *rotation,
                 color: *color,
             },
+            Object::PitDesign {
+                verts, color, line_weight, pit, ..
+            } => Object::PitDesign {
+                id,
+                layer,
+                verts: verts.clone(),
+                color: *color,
+                line_weight: *line_weight,
+                pit: pit.clone(),
+            },
         }
     }
 
@@ -1327,6 +1374,9 @@ impl Object {
     pub(crate) fn string_geometry(&self) -> Option<(Cow<'_, [PolyVertex]>, bool)> {
         match self {
             Object::Polyline { verts, closed, .. } => Some((Cow::Borrowed(verts.as_slice()), *closed)),
+            // The string the pit is designed from; its benches are drawn
+            // strings of their own ([`Self::pit_strings`]).
+            Object::PitDesign { verts, .. } => Some((Cow::Borrowed(verts.as_slice()), true)),
             Object::Circle { center, radius, .. } => {
                 let verts = geometry::circle_polyline_vertices(*center, *radius, glam::DVec2::X)?;
                 Some((Cow::Owned(verts.to_vec()), true))
@@ -1364,12 +1414,87 @@ impl Object {
         }
     }
 
-    /// Stroke width, for the two variants that carry one.
+    /// Stroke width, for the variants that carry one.
     pub(crate) fn line_weight(&self) -> Option<f32> {
         match self {
-            Object::Polyline { line_weight, .. } | Object::Circle { line_weight, .. } => Some(*line_weight),
+            Object::Polyline { line_weight, .. } | Object::Circle { line_weight, .. } | Object::PitDesign { line_weight, .. } => Some(*line_weight),
             _ => None,
         }
+    }
+
+    /// A pit design's benches and ramp as worked out, each string with its
+    /// role: the string it is designed from is not among them (it is the
+    /// object's own, [`Self::string_geometry`]). Empty for anything else, and
+    /// for a design not worked out yet.
+    pub(crate) fn pit_strings(&self) -> impl Iterator<Item = &pit_design::DesignString> + Clone {
+        let (designed, daylight, rehab) = match self {
+            // The design's first string is the starting ring, which the
+            // object's own string stands for.
+            Object::PitDesign { pit, .. } => (
+                pit.design().map_or(&[][..], |design| design.strings.get(1..).unwrap_or_default()),
+                pit.daylight(),
+                pit.rehab_strings(),
+            ),
+            _ => (&[][..], &[][..], &[][..]),
+        };
+        designed.iter().chain(daylight).chain(rehab)
+    }
+
+    /// A pit design as plain polylines, all with its id and layer: its
+    /// string first, then each of its benches' and ramp's strings and its
+    /// daylight line in their colours, and each ramp's road outline. Nothing
+    /// for anything else.
+    pub(crate) fn pit_polylines(&self) -> Vec<Object> {
+        self.pit_polylines_by_role().into_iter().map(|(_, polyline)| polyline).collect()
+    }
+
+    /// [`Self::pit_polylines`], each with what it is: none for the string
+    /// the design is drawn from, a road's outline as one of its edges.
+    pub(crate) fn pit_polylines_by_role(&self) -> Vec<(Option<pit_design::StringKind>, Object)> {
+        let Object::PitDesign {
+            id,
+            layer,
+            verts,
+            color,
+            line_weight,
+            ..
+        } = self
+        else {
+            return Vec::new();
+        };
+        let polyline = |points: &[DVec3], closed: bool, kind: pit_design::StringKind| {
+            (
+                Some(kind),
+                Object::Polyline {
+                    id: *id,
+                    layer: *layer,
+                    verts: points.iter().copied().map(PolyVertex::straight).collect(),
+                    closed,
+                    color: ObjectColor::Fixed(kind.colour()),
+                    fill: FillStyle::Clear,
+                    line_weight: *line_weight,
+                },
+            )
+        };
+        let mut polylines = vec![(
+            None,
+            Object::Polyline {
+                id: *id,
+                layer: *layer,
+                verts: verts.clone(),
+                closed: true,
+                color: *color,
+                fill: FillStyle::Clear,
+                line_weight: *line_weight,
+            },
+        )];
+        polylines.extend(self.pit_strings().map(|string| polyline(&string.points, string.closed, string.kind)));
+        if let Object::PitDesign { pit, .. } = self
+            && let Some(design) = pit.design()
+        {
+            polylines.extend(design.road_outlines().iter().map(|outline| polyline(outline, true, pit_design::StringKind::RampEdge)));
+        }
+        polylines
     }
 }
 
@@ -3732,6 +3857,9 @@ impl Command {
             size_of::<Object>()
                 + match object {
                     Object::Polyline { verts, .. } => verts.len().saturating_mul(size_of::<PolyVertex>()),
+                    Object::PitDesign { verts, .. } => {
+                        verts.len().saturating_mul(size_of::<PolyVertex>()) + object.pit_strings().map(|string| string.points.len() * size_of::<DVec3>()).sum::<usize>()
+                    }
                     Object::Text { content, .. } => content.len(),
                     Object::Point { .. } | Object::Circle { .. } => 0,
                 }
@@ -4395,6 +4523,28 @@ pub(crate) struct History {
     /// gesture ends, which is what stops two separate drags of the same
     /// colour picker collapsing into one undo step.
     open_run: bool,
+    /// How many times steps have been dropped from the bottom of the undo
+    /// history, by a clear or to keep it within its memory budget. A mark
+    /// taken on an empty history is reachable only while this is unchanged.
+    dropped: u64,
+}
+
+/// A point in the undo history to come back to: see [`History::route_to`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HistoryMark {
+    /// The newest undo step when it was taken, by sequence.
+    newest: Option<u64>,
+    dropped: u64,
+}
+
+/// How to get back to a [`HistoryMark`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HistoryRoute {
+    Here,
+    /// This many undos.
+    Undo(usize),
+    /// This many redos, for a mark already undone past.
+    Redo(usize),
 }
 
 impl Default for History {
@@ -4408,6 +4558,7 @@ impl Default for History {
             // long session cannot retain unbounded cloned meshes forever.
             max_retained_bytes: 1024 * 1024 * 1024,
             open_run: false,
+            dropped: 0,
         }
     }
 }
@@ -4441,7 +4592,39 @@ impl History {
         self.clear();
     }
 
+    /// Where the history stands now, to come back to.
+    pub(crate) fn mark(&self) -> HistoryMark {
+        HistoryMark {
+            newest: self.project.undo.last().map(|entry| entry.sequence),
+            dropped: self.dropped,
+        }
+    }
+
+    /// How to get from here back to `mark`, or `None` if the history no
+    /// longer reaches it: it was cleared (a save clears it), the step was
+    /// dropped to keep within the memory budget, or a new edit replaced the
+    /// steps undone past it.
+    pub(crate) fn route_to(&self, mark: HistoryMark) -> Option<HistoryRoute> {
+        let undo = &self.project.undo;
+        let redo = &self.project.redo;
+        let Some(sequence) = mark.newest else {
+            // The mark is the bottom of the history, reachable while nothing
+            // has been dropped from it since.
+            return (self.dropped == mark.dropped).then_some(if undo.is_empty() { HistoryRoute::Here } else { HistoryRoute::Undo(undo.len()) });
+        };
+        if let Some(index) = undo.iter().rposition(|entry| entry.sequence == sequence) {
+            let steps = undo.len() - 1 - index;
+            return Some(if steps == 0 { HistoryRoute::Here } else { HistoryRoute::Undo(steps) });
+        }
+        // Undone past: redo until it is the newest undo step again. The next
+        // redo is the last entry.
+        redo.iter()
+            .rposition(|entry| entry.sequence == sequence)
+            .map(|index| HistoryRoute::Redo(redo.len() - index))
+    }
+
     pub(crate) fn clear(&mut self) {
+        self.dropped = self.dropped.wrapping_add(1);
         self.archive_revision = self.archive_revision.wrapping_add(1);
         self.retained_bytes = 0;
         self.open_run = false;
@@ -4663,6 +4846,7 @@ impl History {
                 break;
             };
             if from_undo {
+                self.dropped = self.dropped.wrapping_add(1);
                 let entry = self.project.undo.remove(index);
                 self.retained_bytes = self.retained_bytes.saturating_sub(entry.estimated_bytes);
             } else {

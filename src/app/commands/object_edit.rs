@@ -208,7 +208,7 @@ impl<'a> App<'a> {
             dialog.baseline = stored.unwrap_or_else(|| object.clone());
         }
         let vertex_count = match &object {
-            Object::Polyline { verts, .. } => Some(verts.len()),
+            Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => Some(verts.len()),
             Object::Point { .. } | Object::Circle { .. } | Object::Text { .. } => None,
         };
         match vertex_count {

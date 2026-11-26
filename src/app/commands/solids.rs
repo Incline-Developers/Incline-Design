@@ -824,7 +824,13 @@ impl crate::app::App<'_> {
 
         let failed_name = solid_name.clone();
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> anyhow::Result<super::triangulation::solid_between::SolidMesh> {
-            let solid = super::triangulation::solid_between::build_solid_mesh(&surface_mesh, &topography_mesh, region, &solid_name, &progress.phase(0.0, 1.0))?;
+            let solid = super::triangulation::solid_between::build_solid_mesh(
+                &surface_mesh,
+                &topography_mesh,
+                region,
+                super::triangulation::solid_between::BuiltFor::Solid(&solid_name),
+                &progress.phase(0.0, 1.0),
+            )?;
             if cancel.is_cancelled() {
                 anyhow::bail!(crate::app::jobs::Cancelled);
             }

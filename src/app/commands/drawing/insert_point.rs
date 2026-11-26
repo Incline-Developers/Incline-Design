@@ -106,8 +106,14 @@ impl<'a> App<'a> {
             self.begin_selection_pick(SelectionPickTool::InsertAtIntersection);
             return;
         }
+        self.insert_points_at_crossings(selected);
+    }
 
-        let source = self.polyline_sources(selected);
+    /// Insert a vertex into each of `object_ids`' polylines wherever it
+    /// crosses another of them in plan, as one undo step. Ids that are not
+    /// polylines are passed over.
+    pub(crate) fn insert_points_at_crossings(&mut self, object_ids: Vec<ObjectId>) {
+        let source = self.polyline_sources(object_ids);
         let shapes: Vec<(Vec<PolyVertex>, bool)> = source.iter().map(|(_, verts, closed)| (verts.clone(), *closed)).collect();
         let updated = insert_at_intersections(&shapes);
         self.commit_inserted_vertices(&source, updated, &tr!("cmd-insert-point-intersection"));

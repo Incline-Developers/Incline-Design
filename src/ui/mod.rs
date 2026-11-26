@@ -10,6 +10,8 @@ pub(crate) mod dialogs;
 pub(crate) mod elements;
 pub(crate) mod fonts;
 mod scaling;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod secondary;
 pub(crate) mod state;
 pub(crate) mod widgets;
 
@@ -80,28 +82,35 @@ fn surface_screen_rect(window_rect: egui::Rect, window_width: u32, screen_size: 
     })
 }
 
+/// Set a window's context up the way every Incline window has it: its
+/// fonts, image loaders, spacing and hint timing, and the light theme until
+/// the editor's own is applied.
+fn configure_context(ctx: &egui::Context) {
+    ctx.options_mut(|options| {
+        options.zoom_with_keyboard = false;
+        options.zoom_factor = scaling::zoom_factor(100.0);
+    });
+    setup_custom_fonts(ctx);
+    egui_extras::install_image_loaders(ctx);
+    ctx.all_styles_mut(|style| {
+        // Tooltips wait out a deliberate hover rather than firing the moment the pointer
+        // crosses a widget, but the grace time keeps them instant while sweeping along a
+        // row of toolbar buttons that are already showing one.
+        style.interaction.show_tooltips_only_when_still = false;
+        style.interaction.tooltip_delay = 0.5;
+        style.interaction.tooltip_grace_time = 0.2;
+        // egui 0.37 made stock buttons roomier (8x2 padding, 20pt rows);
+        // the panels are laid out for the tighter 0.36 spacing.
+        style.spacing.button_padding = egui::vec2(4.0, 1.0);
+        style.spacing.interact_size.y = 18.0;
+    });
+    ctx.set_visuals(theme_visuals(false, SELECTION_COLOR));
+}
+
 impl Gui {
     pub(crate) fn new(window: &Window, device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         let ctx = egui::Context::default();
-        ctx.options_mut(|options| {
-            options.zoom_with_keyboard = false;
-            options.zoom_factor = scaling::zoom_factor(100.0);
-        });
-        setup_custom_fonts(&ctx);
-        egui_extras::install_image_loaders(&ctx);
-        ctx.all_styles_mut(|style| {
-            // Tooltips wait out a deliberate hover rather than firing the moment the pointer
-            // crosses a widget, but the grace time keeps them instant while sweeping along a
-            // row of toolbar buttons that are already showing one.
-            style.interaction.show_tooltips_only_when_still = false;
-            style.interaction.tooltip_delay = 0.5;
-            style.interaction.tooltip_grace_time = 0.2;
-            // egui 0.37 made stock buttons roomier (8x2 padding, 20pt rows);
-            // the panels are laid out for the tighter 0.36 spacing.
-            style.spacing.button_padding = egui::vec2(4.0, 1.0);
-            style.spacing.interact_size.y = 18.0;
-        });
-        ctx.set_visuals(theme_visuals(false, SELECTION_COLOR));
+        configure_context(&ctx);
 
         let state = egui_winit::State::new(ctx.clone(), egui::ViewportId::ROOT, window, Some(window.scale_factor() as f32), window.theme(), None);
         let renderer = egui_wgpu::Renderer::new(device, surface_format, egui_wgpu::RendererOptions::default());
@@ -357,39 +366,54 @@ impl Gui {
     /// Paint what [`Self::layout`] laid out over `target_view`, which holds
     /// the frame's scene.
     pub(crate) fn paint(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, target_view: &wgpu::TextureView, paint: UiPaint) {
-        for (id, image_deltas) in &paint.textures.set {
-            for image_delta in image_deltas {
-                self.renderer.update_texture(device, queue, *id, image_delta);
-            }
-        }
-        let extra_command_buffers = self.renderer.update_buffers(device, queue, encoder, &paint.jobs, &paint.screen);
-        for command_buffer in extra_command_buffers {
-            queue.submit(std::iter::once(command_buffer));
-        }
+        paint_ui(&mut self.renderer, device, queue, encoder, target_view, paint, wgpu::LoadOp::Load);
+    }
+}
 
-        {
-            let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("egui Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.renderer.render(&mut render_pass.forget_lifetime(), &paint.jobs, &paint.screen);
+/// Upload what a frame's UI needs and paint it over `target_view`, loading
+/// what is there as `load` says: the scene under the main window's UI, or a
+/// clear for a window that has nothing under it.
+fn paint_ui(
+    renderer: &mut egui_wgpu::Renderer,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    target_view: &wgpu::TextureView,
+    paint: UiPaint,
+    load: wgpu::LoadOp<wgpu::Color>,
+) {
+    for (id, image_deltas) in &paint.textures.set {
+        for image_delta in image_deltas {
+            renderer.update_texture(device, queue, *id, image_delta);
         }
+    }
+    let extra_command_buffers = renderer.update_buffers(device, queue, encoder, &paint.jobs, &paint.screen);
+    for command_buffer in extra_command_buffers {
+        queue.submit(std::iter::once(command_buffer));
+    }
 
-        for id in &paint.textures.free {
-            self.renderer.free_texture(id);
-        }
+    {
+        let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("egui Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        renderer.render(&mut render_pass.forget_lifetime(), &paint.jobs, &paint.screen);
+    }
+
+    for id in &paint.textures.free {
+        renderer.free_texture(id);
     }
 }
 
@@ -537,6 +561,22 @@ struct UiFrameContext<'a> {
 /// to, the way out, why it is being asked - goes in `minor` rather than being
 /// punctuated onto the end, so the banner can dim it. See [`ViewportMessage`].
 fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
+    if editor
+        .pit_design
+        .as_ref()
+        .is_some_and(|draft| draft.widening.is_some() || draft.grading.is_some() || draft.wall_drag.is_some())
+    {
+        return Some(ViewportMessage::text(tr!("pit-design-gizmo-dragging")).minor(tr!("pit-design-gizmo-fine")));
+    }
+    if editor.pit_design.as_ref().is_some_and(|draft| draft.adding_ramp.is_some()) {
+        return Some(ViewportMessage::text(tr!("pit-design-ramp-add-prompt")).minor(tr!("ui-esc-cancels")));
+    }
+    if editor.pit_design.as_ref().is_some_and(|draft| draft.dragging_ramp.is_some()) {
+        return Some(ViewportMessage::text(tr!("pit-design-ramp-drag-prompt")).minor(tr!("ui-esc-cancels")));
+    }
+    if editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region) {
+        return Some(ViewportMessage::text(tr!("pit-design-region-prompt")).minor(tr!("ui-esc-cancels")));
+    }
     if editor.optimization.start_pick.is_some() {
         return Some(ViewportMessage::text(tr!("opt-pick-prompt")).minor(tr!("ui-esc-cancels")));
     }
@@ -701,7 +741,10 @@ fn tool_prompt(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::Bezier if editor.bezier_selected_verts[0].is_none() => ViewportMessage::text(tr!("ui-click-first-vertex")),
         ActiveTool::Bezier if editor.bezier_selected_verts[1].is_none() => ViewportMessage::text(tr!("ui-click-second-vertex")),
         ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints => ViewportMessage::text(tr!("ui-select-polyline")),
-        ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline")),
+        ActiveTool::PitDesign if editor.pit_drawing() && editor.pending_stroke.len() >= 3 => {
+            ViewportMessage::text(tr!("pit-design-draw-close")).minor(tr!("pit-design-draw-close-minor"))
+        }
+        ActiveTool::PitDesign if editor.pit_drawing() => ViewportMessage::text(tr!("pit-design-draw-prompt")),
         ActiveTool::DeletePoints => ViewportMessage::text(tr!("ui-select-point")),
         ActiveTool::EditVertex => ViewportMessage::text(tr!("ui-select-polyline-vertex")),
         ActiveTool::InsertPoint => ViewportMessage::text(tr!("ui-click-string-insert-point")).minor(tr!("ui-esc-cancels")),
@@ -716,6 +759,31 @@ fn tool_prompt(editor: &EditorState) -> Option<ViewportMessage> {
 }
 
 /// Draw the compact MakeCircle radius editor beside (but never under) the cursor.
+/// How a value box floating in the viewport is drawn: at rest, picked out
+/// (its handle hovered or dragged), or holding what cannot be taken.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ViewportInputState {
+    Idle,
+    Lit,
+    Invalid,
+}
+
+/// The frame of a value box floating in the viewport, as every tool's is
+/// (Make Circle's radius, Pit Design's gizmo values): the panel's fill with
+/// a thin outline, the value's field and its unit inside.
+pub(crate) fn viewport_input_frame(ui: &egui::Ui, state: ViewportInputState) -> egui::Frame {
+    let stroke = match state {
+        ViewportInputState::Idle => egui::Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color),
+        ViewportInputState::Lit => egui::Stroke::new(1.5, ui.visuals().selection.stroke.color),
+        ViewportInputState::Invalid => egui::Stroke::new(1.5, egui::Color32::from_rgb(220, 70, 70)),
+    };
+    egui::Frame::new()
+        .fill(ui.visuals().panel_fill)
+        .stroke(stroke)
+        .corner_radius(egui::CornerRadius::same(4))
+        .inner_margin(egui::Margin::symmetric(6, 4))
+}
+
 fn draw_circle_radius_input(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) -> bool {
     if editor.active_tool != ActiveTool::MakeCircle {
         return false;
@@ -756,55 +824,45 @@ fn draw_circle_radius_input(ui: &mut egui::Ui, editor: &mut EditorState, command
         .order(egui::Order::Foreground)
         .fixed_pos(egui::pos2(x, y))
         .show(ui.ctx(), |ui| {
-            let stroke_color = if typed_invalid {
-                egui::Color32::from_rgb(220, 70, 70)
-            } else {
-                ui.visuals().widgets.inactive.bg_stroke.color
-            };
-            egui::Frame::new()
-                .fill(ui.visuals().panel_fill)
-                .stroke(egui::Stroke::new(if typed_invalid { 1.5 } else { 1.0 }, stroke_color))
-                .corner_radius(egui::CornerRadius::same(4))
-                .inner_margin(egui::Margin::symmetric(6, 4))
-                .show(ui, |ui| {
-                    let draft = editor.circle_draft.as_mut().expect("circle draft checked before drawing radius input");
-                    let was_empty = draft.radius_text.is_empty();
-                    ui.horizontal_centered(|ui| {
-                        let response = ui.add_sized(
-                            [94.0, 22.0],
-                            egui::TextEdit::singleline(&mut draft.radius_text)
-                                .id_source("make_circle_radius_text")
-                                .hint_text(live_mouse_radius.as_str())
-                                .char_limit(32),
-                        );
-                        ui.label(tr!("common-m"));
+            viewport_input_frame(ui, if typed_invalid { ViewportInputState::Invalid } else { ViewportInputState::Idle }).show(ui, |ui| {
+                let draft = editor.circle_draft.as_mut().expect("circle draft checked before drawing radius input");
+                let was_empty = draft.radius_text.is_empty();
+                ui.horizontal_centered(|ui| {
+                    let response = ui.add_sized(
+                        [94.0, 22.0],
+                        egui::TextEdit::singleline(&mut draft.radius_text)
+                            .id_source("make_circle_radius_text")
+                            .hint_text(live_mouse_radius.as_str())
+                            .char_limit(32),
+                    );
+                    ui.label(tr!("common-m"));
 
-                        if draft.focus_requested || !response.has_focus() {
-                            response.request_focus();
-                            draft.focus_requested = false;
-                        }
-                        if response.changed() {
-                            draft.note_radius_text_changed(was_empty, cursor_screen_px);
+                    if draft.focus_requested || !response.has_focus() {
+                        response.request_focus();
+                        draft.focus_requested = false;
+                    }
+                    if response.changed() {
+                        draft.note_radius_text_changed(was_empty, cursor_screen_px);
+                        changed = true;
+                    }
+
+                    let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                    let escape_pressed = ui.input(|input| input.key_pressed(egui::Key::Escape));
+                    if response.has_focus() && enter_pressed && draft.typed_radius().is_some() {
+                        commit_typed_radius = true;
+                    }
+                    if response.has_focus() && escape_pressed {
+                        if draft.radius_text.is_empty() {
+                            cancel_center = true;
+                        } else {
+                            draft.radius_text.clear();
+                            draft.typing_origin_screen_px = None;
+                            draft.focus_requested = true;
                             changed = true;
                         }
-
-                        let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
-                        let escape_pressed = ui.input(|input| input.key_pressed(egui::Key::Escape));
-                        if response.has_focus() && enter_pressed && draft.typed_radius().is_some() {
-                            commit_typed_radius = true;
-                        }
-                        if response.has_focus() && escape_pressed {
-                            if draft.radius_text.is_empty() {
-                                cancel_center = true;
-                            } else {
-                                draft.radius_text.clear();
-                                draft.typing_origin_screen_px = None;
-                                draft.focus_requested = true;
-                                changed = true;
-                            }
-                        }
-                    });
+                    }
                 });
+            });
         });
 
     if cancel_center {
@@ -895,11 +953,11 @@ fn draw_ui(
         } else {
             elements::explorer::draw_explorer(root_ui, editor, project, document, commands)
         };
-        let console_rect = editor.show_console.then(|| {
+        let console_rect = (editor.show_console && !editor.is_popped_out(state::PanelKind::Console)).then(|| {
             let available_height = root_ui.available_height();
             let toolbar_height = elements::toolbars::bottom_toolbar_height();
             let (console_min, console_max) = chrome::panel_size_limits(available_height - toolbar_height);
-            elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
+            elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot, commands)
         });
         let console = console_rect.unwrap_or(egui::Rect::NOTHING);
         let setup_group = editor.setup_group;
@@ -982,11 +1040,11 @@ fn draw_ui(
     // The console belongs below the bottom toolbar. Reserve the toolbar's height
     // before showing the console so dragging it to its maximum cannot starve the
     // toolbar (or the side panels drawn afterward) of layout space.
-    let console_rect = editor.show_console.then(|| {
+    let console_rect = (editor.show_console && !editor.is_popped_out(state::PanelKind::Console)).then(|| {
         let available_height = root_ui.available_height();
         let toolbar_height = elements::toolbars::bottom_toolbar_height();
         let (console_min, console_max) = chrome::panel_size_limits(available_height - toolbar_height);
-        elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
+        elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot, commands)
     });
     if console_rect.is_none() {
         // `Panel::show` creates one direct child of `root_ui`. Keep the root
@@ -1525,12 +1583,9 @@ fn draw_ui(
             .below_gizmo(elements::cursors::orientation_gizmo_rect(canvas_rect))
             .show(root_ui.ctx(), editor, commands);
     }
-    // Batter Berm
-    if editor.active_tool == ActiveTool::BatterBermOffset && !editor.batter_berm_dialog_open {
-        commands.push(UiCommand::OpenBatterBermDialog);
-    }
-    if editor.batter_berm_dialog_open {
-        dialogs::editing::draw_batter_berm_dialog(root_ui, commands, editor, canvas_rect);
+    // Pit Design
+    if editor.active_tool == ActiveTool::PitDesign {
+        dialogs::pit_design::draw_pit_design_panel(root_ui, editor, project, commands, canvas_rect);
     }
     // Relimit Line
     if editor.active_tool == ActiveTool::RelimitLine
@@ -1625,6 +1680,7 @@ fn draw_ui(
     draw_machine_icons(root_ui, editor, canvas_rect);
     draw_machine_labels(root_ui, editor, &project.schedule, canvas_rect, &mut space);
     draw_haul_flows(root_ui, editor, canvas_rect);
+    dialogs::pit_design::draw_pit_ground_tag(root_ui, editor, canvas_rect);
     if editor.is_schedule_animation()
         && let Some(frame) = editor.video_export_frame
     {
@@ -1986,6 +2042,10 @@ fn draw_global_dialogs(
         dialogs::triangulation::draw_smooth_surface_dialog(root_ui, editor, project, commands);
     }
 
+    if editor.tri_join_open {
+        dialogs::triangulation::draw_join_surfaces_dialog(root_ui, editor, project, commands);
+    }
+
     if editor.tri_contour_open {
         dialogs::triangulation::draw_contour_dialog(root_ui, editor, project, commands);
     }
@@ -2077,11 +2137,11 @@ const GIZMO_AXIS_COLORS: [egui::Color32; 3] = [
     egui::Color32::from_rgb(46, 138, 248),
 ];
 /// Opacity of an idle handle; a hovered or dragged one goes fully opaque.
-const GIZMO_IDLE_ALPHA: f32 = 0.6;
-const GIZMO_HEAD_LENGTH: f32 = 13.0;
-const GIZMO_HEAD_HALF_WIDTH: f32 = 4.5;
+pub(crate) const GIZMO_IDLE_ALPHA: f32 = 0.6;
+pub(crate) const GIZMO_HEAD_LENGTH: f32 = 13.0;
+pub(crate) const GIZMO_HEAD_HALF_WIDTH: f32 = 4.5;
 
-fn gizmo_color(color: egui::Color32, alpha: f32) -> egui::Color32 {
+pub(crate) fn gizmo_color(color: egui::Color32, alpha: f32) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), (alpha.clamp(0.0, 1.0) * 255.0) as u8)
 }
 
@@ -2173,7 +2233,7 @@ fn draw_move_gizmo(root_ui: &egui::Ui, editor: &EditorState) {
 /// what it changes is a bearing on the flat. Dip takes amber rather than an
 /// axis colour: the axis it turns about is not a world axis at all - it swings
 /// with the bearing - so naming it after one would be a lie.
-const ROTATE_RING_COLORS: [egui::Color32; 2] = [GIZMO_AXIS_COLORS[2], egui::Color32::from_rgb(247, 168, 34)];
+pub(crate) const ROTATE_RING_COLORS: [egui::Color32; 2] = [GIZMO_AXIS_COLORS[2], egui::Color32::from_rgb(247, 168, 34)];
 
 /// Draw the Rotate Collar gizmo: an azimuth ring lying flat and a dip ring
 /// standing in the vertical plane the holes point along, with a dot at the
@@ -2225,6 +2285,12 @@ pub(crate) fn scene_background_color(dark_mode: bool) -> [f32; 4] {
     let fill = theme_visuals(dark_mode, SELECTION_COLOR).panel_fill;
     let linear = crate::rendering::color::byte_to_linear_rgba;
     [linear(fill.r()), linear(fill.g()), linear(fill.b()), 1.0]
+}
+
+/// The look a window has before any preference changes it, for a surface
+/// drawn with no window to match.
+pub(crate) fn default_visuals() -> egui::Visuals {
+    theme_visuals(false, SELECTION_COLOR)
 }
 
 fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visuals {

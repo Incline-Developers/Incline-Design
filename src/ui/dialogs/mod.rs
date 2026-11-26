@@ -19,6 +19,7 @@ pub(crate) mod npv_schedule_results;
 pub(crate) mod object_edit;
 pub(crate) mod optimization;
 pub(crate) mod optimization_results;
+pub(crate) mod pit_design;
 pub(crate) mod point_cloud;
 pub(crate) mod products;
 pub(crate) mod reference_points;

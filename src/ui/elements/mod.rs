@@ -20,6 +20,8 @@ pub(crate) mod haulage;
 /// The Improve run's floating progress card.
 pub(crate) mod improve_progress;
 pub(crate) mod main_menu;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod panel_window;
 pub(crate) mod planning_setup;
 pub(crate) mod planning_tabs;
 pub(crate) mod prismoid_inspector;

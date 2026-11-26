@@ -7,7 +7,7 @@ use crate::{
     i18n::tr,
     logging::CommandReportSpec,
     model::{
-        Command, Object, PolyVertex, SceneEntityId,
+        Command, Object, ObjectId, PolyVertex, SceneEntityId,
         formats::mesh_data::Triangulation,
         kernel::{self, SegSeg},
         spatial::TriangleBvh,
@@ -228,31 +228,16 @@ impl<'a> App<'a> {
         if along_triangles && self.index_surfaces_for_drape(&selected_ids) {
             return;
         }
-        let surfaces: Vec<_> = self.triangulations.iter().filter(|topology| selected_ids.contains(&topology.id)).collect();
-        let mut intersected_vertices = 0usize;
-        let mut changed_vertices = 0usize;
-        let meshes: Vec<_> = surfaces.iter().map(|surface| (&*surface.mesh, &*surface.spatial)).collect();
-        let replacements: Vec<_> = self
-            .editor
-            .drape_object_ids
-            .iter()
-            .filter_map(|id| {
-                let before = self.active_document().get_object(*id)?.clone();
-                let mut after = before.clone();
-                if along_triangles && let Object::Polyline { verts, closed, .. } = &mut after {
-                    *verts = with_triangle_edge_vertices(verts, *closed, &meshes);
-                }
-                let (intersected, changed) = drape_object(&mut after, &surfaces);
-                intersected_vertices += intersected;
-                changed_vertices += changed;
-                (before != after).then_some(Command::Replace { before, after })
-            })
-            .collect();
-        let changed_objects = replacements.len();
-
-        if !replacements.is_empty() {
-            self.execute_edit(Command::Batch(replacements));
-        }
+        let object_ids = self.editor.drape_object_ids.clone();
+        let draped = if along_triangles {
+            self.drape_objects_following(&object_ids, topology_ids, true)
+        } else {
+            self.drape_objects(&object_ids, topology_ids)
+        };
+        let Some((changed_objects, intersected_vertices, changed_vertices)) = draped else {
+            userspace_warn!("{}", tr!("cmd-drape-selected-topologies-no-longer-loaded"));
+            return;
+        };
 
         let selected_objects = self.editor.drape_object_ids.clone();
         self.editor.selected_handles = selected_objects.iter().copied().map(SceneEntityId::Object).collect();
@@ -281,6 +266,50 @@ impl<'a> App<'a> {
                 ),
             );
         }
+    }
+
+    /// Drape `object_ids` onto the uppermost of `topology_ids` as one undo
+    /// step: the objects changed, the vertices that met a surface and the
+    /// vertices that moved. `None` if none of the surfaces is loaded.
+    pub(crate) fn drape_objects(&mut self, object_ids: &[ObjectId], topology_ids: &[TriangulationId]) -> Option<(usize, usize, usize)> {
+        self.drape_objects_following(object_ids, topology_ids, false)
+    }
+
+    /// [`App::drape_objects`], and with `along_triangles` each polyline also
+    /// gets a vertex wherever a span crosses a triangle edge, so it follows
+    /// the surface between its vertices. The surfaces' trees must be built
+    /// first (see `index_surfaces_for_drape`) or the crossings are found the
+    /// slow way.
+    fn drape_objects_following(&mut self, object_ids: &[ObjectId], topology_ids: &[TriangulationId], along_triangles: bool) -> Option<(usize, usize, usize)> {
+        let selected_ids: HashSet<_> = topology_ids.iter().copied().collect();
+        let surfaces: Vec<_> = self.triangulations.iter().filter(|topology| selected_ids.contains(&topology.id)).collect();
+        if surfaces.is_empty() {
+            return None;
+        }
+
+        let mut intersected_vertices = 0usize;
+        let mut changed_vertices = 0usize;
+        let meshes: Vec<_> = surfaces.iter().map(|surface| (&*surface.mesh, &*surface.spatial)).collect();
+        let replacements: Vec<_> = object_ids
+            .iter()
+            .filter_map(|id| {
+                let before = self.active_document().get_object(*id)?.clone();
+                let mut after = before.clone();
+                if along_triangles && let Object::Polyline { verts, closed, .. } = &mut after {
+                    *verts = with_triangle_edge_vertices(verts, *closed, &meshes);
+                }
+                let (intersected, changed) = drape_object(&mut after, &surfaces);
+                intersected_vertices += intersected;
+                changed_vertices += changed;
+                (before != after).then_some(Command::Replace { before, after })
+            })
+            .collect();
+        let changed_objects = replacements.len();
+
+        if !replacements.is_empty() {
+            self.execute_edit(Command::Batch(replacements));
+        }
+        Some((changed_objects, intersected_vertices, changed_vertices))
     }
 }
 
@@ -358,7 +387,7 @@ fn drape_object(object: &mut Object, surfaces: &[&OpenTriangulation]) -> (usize,
         // Refused before it gets here; a circle has no vertices to drape and
         // draping its centre alone would move the shape, not lay it down.
         Object::Circle { .. } => {}
-        Object::Polyline { verts, .. } => {
+        Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => {
             for vertex in verts {
                 drape_point(&mut vertex.pos);
             }
@@ -367,7 +396,7 @@ fn drape_object(object: &mut Object, surfaces: &[&OpenTriangulation]) -> (usize,
     (intersected, changed)
 }
 
-fn uppermost_topology_z(point: DVec3, surfaces: &[&OpenTriangulation]) -> Option<f64> {
+pub(crate) fn uppermost_topology_z(point: DVec3, surfaces: &[&OpenTriangulation]) -> Option<f64> {
     surfaces
         .iter()
         .filter_map(|surface| {

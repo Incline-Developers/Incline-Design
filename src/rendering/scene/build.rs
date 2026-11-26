@@ -12,7 +12,7 @@ use crate::{
     },
     rendering::{
         StrokeInstance, Vertex,
-        geometry::{DrawContext, draw_line, draw_round_join, draw_screen_cross, draw_screen_point_marker_sized, tessellate_polyline_stroke},
+        geometry::{DrawContext, draw_line, draw_round_join, draw_screen_cross, draw_screen_point_marker_sized, draw_vertex_dots, tessellate_polyline_stroke},
         graphics::{DOC_LINE_WIDTH, DOC_TEXT_FONT_SIZE, TEXT_EDIT_INDICATOR_COLOR, text_bounds_corners_with_layout_width},
         pick::{PickRecord, TextPickRecord, world_bounds_from_local_positions},
         scene::{
@@ -80,6 +80,11 @@ pub(crate) fn document_scene_key(document: &Document, editor: &EditorState, stat
         acc ^ hasher.finish()
     });
     hidden.hash(&mut hasher);
+    // The pit design open in Pit Design is seen through the ground, and
+    // gives way to its preview.
+    editor.pit_design.as_ref().and_then(|draft| Some((draft.object_id()?, draft.covering))).hash(&mut hasher);
+    // Vertices are drawn as dots, or not.
+    editor.show_points.hash(&mut hasher);
     editor.editing_labels_id.hash(&mut hasher);
     if editor.editing_labels_id.is_some() {
         editor.pending_text.hash(&mut hasher);
@@ -254,6 +259,11 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                 let geometry = object.string_geometry();
                 let (verts, closed) = geometry.as_ref().map_or((&[][..], false), |(verts, closed)| (verts.as_ref(), *closed));
                 tessellate_polyline_stroke(&mut draw_ctx, verts, closed, *line_weight, line_rgba);
+                // A polyline shows its vertices where points are shown; a
+                // circle has none of its own.
+                if editor.show_points && matches!(object, Object::Polyline { .. }) {
+                    draw_vertex_dots(&mut draw_ctx, verts, *line_weight, line_rgba);
+                }
                 if closed
                     && verts.len() >= 2
                     && *fill != crate::model::FillStyle::Clear
@@ -279,6 +289,31 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                             }
                         }
                         crate::model::FillStyle::Clear => {}
+                    }
+                }
+            }
+            // Its string in its own colour, and its benches and ramp in the
+            // colours of what each is: all one object, picked and selected
+            // whole.
+            Object::PitDesign { verts, line_weight, .. } => {
+                tessellate_polyline_stroke(&mut draw_ctx, verts, true, *line_weight, rgba);
+                // Its strings show their vertices where points are shown, as
+                // a polyline's do.
+                if editor.show_points {
+                    draw_vertex_dots(&mut draw_ctx, verts, *line_weight, rgba);
+                }
+                // Open in the tool with a preview drawn in its place, only its
+                // string: two designs over each other read as neither.
+                let covered = editor.pit_design.as_ref().is_some_and(|draft| draft.covering && draft.object_id() == Some(object.id()));
+                for string in object.pit_strings().filter(|_| !covered) {
+                    let points: Vec<crate::model::PolyVertex> = string.points.iter().copied().map(crate::model::PolyVertex::straight).collect();
+                    let weight = match string.kind {
+                        crate::model::pit_design::StringKind::RampEdge => *line_weight * 1.5,
+                        _ => *line_weight,
+                    };
+                    tessellate_polyline_stroke(&mut draw_ctx, &points, string.closed, weight, string.kind.colour());
+                    if editor.show_points {
+                        draw_vertex_dots(&mut draw_ctx, &points, weight, string.kind.colour());
                     }
                 }
             }
@@ -504,7 +539,14 @@ pub(crate) fn restyle_document_scene(
 ) {
     batches.clear();
     for object in objects {
-        let always_visible = editor.editing_labels_id.is_some_and(|id| object.entity == SceneEntityId::Object(id));
+        // Text being typed, and the pit open in Pit Design, whose benches
+        // mostly lie under the ground it is cut into: seen through it.
+        let always_visible = editor.editing_labels_id.is_some_and(|id| object.entity == SceneEntityId::Object(id))
+            || editor
+                .pit_design
+                .as_ref()
+                .and_then(crate::ui::dialogs::pit_design::PitDesignDraft::object_id)
+                .is_some_and(|id| object.entity == SceneEntityId::Object(id));
         let overlay = is_highlighted(editor, object.entity);
         // Frozen objects are never restyled, translucency included.
         let alpha_scale = if editor.translucent_handles.contains(&object.entity) && !editor.frozen_handles.contains(&object.entity) {
@@ -536,7 +578,7 @@ fn object_center(object: &Object) -> DVec3 {
     match object {
         Object::Point { pos, .. } | Object::Text { pos, .. } => *pos,
         Object::Circle { center, .. } => *center,
-        Object::Polyline { verts, .. } => average_positions(verts.iter().map(|vertex| vertex.pos)),
+        Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => average_positions(verts.iter().map(|vertex| vertex.pos)),
     }
 }
 
@@ -654,18 +696,34 @@ pub(crate) fn rebuild_dynamic_scene(input: DynamicSceneBuildInput<'_>) {
     let mut unused_fill_indices: Vec<u32> = Vec::new();
     let mut draw_ctx = DrawContext::unstyled(dynamic_strokes, &mut unused_fill_vertices, &mut unused_fill_indices, scene_origin, scale_factor);
 
-    if editor.batter_berm_dialog_open {
-        const BATTER_BERM_PREVIEW_COLOR: [f32; 4] = [1.0, 0.86, 0.0, 1.0];
-
-        for ring in &editor.batter_berm_rings_world {
-            for pair in ring.windows(2) {
-                draw_line(&mut draw_ctx, pair[0], pair[1], 2.0, BATTER_BERM_PREVIEW_COLOR);
+    // Pit Design's preview, while it shows what the object does not yet:
+    // its rings, and its ramp's edges and centreline.
+    if let Some(design) = editor
+        .pit_design
+        .as_ref()
+        .filter(|draft| draft.shows_preview())
+        .and_then(|draft| draft.preview.as_ref())
+        .and_then(|preview| preview.design.as_ref().ok())
+    {
+        use crate::model::pit_design::StringKind;
+        for string in &design.strings {
+            let colour = string.kind.colour();
+            let weight = match string.kind {
+                StringKind::RampEdge => 2.5,
+                StringKind::RampCentreline => 1.0,
+                StringKind::Toe | StringKind::Crest | StringKind::Daylight | StringKind::Rehab => 1.5,
+            };
+            for pair in string.points.windows(2) {
+                draw_line(&mut draw_ctx, pair[0], pair[1], weight, colour);
             }
-            if editor.batter_berm_preview_closed
-                && ring.len() >= 2
-                && let (Some(&first), Some(&last)) = (ring.first(), ring.last())
+            if editor.show_points {
+                let points: Vec<crate::model::PolyVertex> = string.points.iter().copied().map(crate::model::PolyVertex::straight).collect();
+                draw_vertex_dots(&mut draw_ctx, &points, weight, colour);
+            }
+            if string.closed
+                && let (Some(&first), Some(&last)) = (string.points.first(), string.points.last())
             {
-                draw_line(&mut draw_ctx, last, first, 2.0, BATTER_BERM_PREVIEW_COLOR);
+                draw_line(&mut draw_ctx, last, first, weight, colour);
             }
         }
     }

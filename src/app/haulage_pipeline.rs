@@ -275,6 +275,8 @@ impl crate::app::App<'_> {
         };
         let trucks = document.schedule().trucks();
         let mut diagnostics = Vec::new();
+        // Not blocking here, where only roads may be being drawn; a schedule
+        // that hauls is refused at capture, and this says so beforehand.
         if trucks.classes.is_empty() {
             diagnostics.push(StageDiagnostic {
                 entity: None,

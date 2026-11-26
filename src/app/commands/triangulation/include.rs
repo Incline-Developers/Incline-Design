@@ -69,6 +69,10 @@ impl<'a> App<'a> {
                     }
                 }
 
+                // The fragments either side of the cut each carry their own
+                // points: shared again, each part is one surface.
+                let (vertices, faces) = crate::model::triangulation::shared_cut_mesh(vertices, faces);
+                let (shape_vertices, shape_faces) = crate::model::triangulation::shared_cut_mesh(shape_vertices, shape_faces);
                 let topology_edges = triangle_edge_list(&faces);
                 let topology = session::build_generated_triangulation(component_name(&name, &tr!("tri-topology")), vertices, faces, TriSurfaceType::Surface, |_| topology_edges)?;
                 let shape_edges = triangle_edge_list(&shape_faces);
@@ -81,6 +85,9 @@ impl<'a> App<'a> {
                 )?;
                 vec![topology, shape]
             } else {
+                // The topography, its fragments and the shape meet point for
+                // point along the seam; shared, they are one surface.
+                let (vertices, faces) = crate::model::triangulation::shared_cut_mesh(vertices, faces);
                 let edges = triangle_edge_list(&faces);
                 vec![session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, |_| edges)?]
             };
@@ -147,6 +154,22 @@ struct IncludeJobOutput {
     shape_name: String,
     retained: usize,
     skipped: usize,
+}
+
+/// `topography` with the closed `solid` set into it, as one landform: the
+/// pit or dump in place of the ground it covers. For a landform worked with
+/// rather than added to the project: a pit design's or a shell's, to set one
+/// against the other.
+pub(crate) fn landform_with(
+    topography: &mesh_data::Triangulation,
+    spatial: &crate::model::spatial::TriangleBvh,
+    solid: &mesh_data::Triangulation,
+    progress: &crate::model::progress::Phase,
+) -> Result<mesh_data::Triangulation> {
+    let included = include_shape_mesh_in_topology_with_spatial(topography, spatial, solid, progress)?;
+    anyhow::ensure!(!included.faces.is_empty(), crate::i18n::tr!("err-surf-include-combined-no-faces"));
+    let (vertices, faces) = crate::model::triangulation::shared_cut_mesh(included.vertices, included.faces);
+    Ok(mesh_data::Triangulation::from_vertices_and_faces(vertices, faces)?)
 }
 
 pub(super) struct IncludedShapeMesh {

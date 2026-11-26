@@ -28,9 +28,16 @@ impl<'a> App<'a> {
         self.editor.tool_highlight_id = None;
         if self.editor.active_tool == ActiveTool::ExplodePolylineToPoints {
             self.explode_polyline_to_points(object_id);
-        } else {
-            self.explode_polyline(object_id);
+            return;
         }
+        // A pit design explodes into the polylines it draws.
+        if matches!(self.active_document().get_object(object_id), Some(Object::PitDesign { .. })) {
+            if let Err(error) = self.explode_pit_design(object_id) {
+                crate::userspace_error!("{error:#}");
+            }
+            return;
+        }
+        self.explode_polyline(object_id);
     }
 
     /// Update the hover highlight for the Explode tool on cursor move.
@@ -42,7 +49,7 @@ impl<'a> App<'a> {
                     .workspace
                     .active_document()
                     .and_then(|document| document.get_object(id))
-                    .is_some_and(|object| matches!(object, Object::Polyline { .. })) =>
+                    .is_some_and(|object| matches!(object, Object::Polyline { .. } | Object::PitDesign { .. })) =>
             {
                 Some(id)
             }
@@ -58,50 +65,11 @@ impl<'a> App<'a> {
         if !self.activate_project_for_object(object_id) {
             return;
         }
-        let source = match self.active_document().get_object(object_id) {
-            Some(obj @ Object::Polyline { .. }) => obj.clone(),
-            _ => {
-                return;
-            }
-        };
-        let (verts, layer, color, line_weight, closed) = match &source {
-            Object::Polyline {
-                verts,
-                layer,
-                color,
-                line_weight,
-                closed,
-                ..
-            } => (verts.clone(), *layer, *color, *line_weight, *closed),
-            _ => return,
-        };
-
-        if verts.len() < 2 {
+        let Some((commands, lines)) = self.exploded_polyline(object_id) else {
             return;
-        }
-
-        // Build edge segments.
-        let edge_count = if closed { verts.len() } else { verts.len() - 1 };
-        let mut batch_cmds = vec![Command::delete_object(source)];
-
-        if let Some(project) = self.workspace.active_project_mut() {
-            let doc = &mut project.project.document;
-            for i in 0..edge_count {
-                let a = verts[i];
-                let b = verts[(i + 1) % verts.len()];
-                let id = doc.allocate_object_id();
-                batch_cmds.push(Command::AddObject(Object::Polyline {
-                    id,
-                    layer,
-                    verts: vec![a, b],
-                    closed: false,
-                    color,
-                    fill: crate::model::FillStyle::Clear,
-                    line_weight,
-                }));
-            }
-            self.execute_edit(Command::Batch(batch_cmds));
-        }
+        };
+        let edge_count = lines.len();
+        self.execute_edit(Command::Batch(commands));
 
         self.editor.selected_handles.remove(&SceneEntityId::Object(object_id));
         self.editor.active_tool = ActiveTool::None;
@@ -114,6 +82,50 @@ impl<'a> App<'a> {
             crate::i18n::tr!("cmd-explode-exploded-polyline-into-count-line", count = edge_count.to_string()),
         );
         self.invalidate_geometry();
+    }
+
+    /// The edit that breaks polyline `object_id` into its separate
+    /// two-vertex lines in the active project, and the lines' ids: the
+    /// polyline deleted and a line added for each of its edges. `None` for
+    /// anything else, or a polyline of fewer than two vertices.
+    pub(crate) fn exploded_polyline(&mut self, object_id: ObjectId) -> Option<(Vec<Command>, Vec<ObjectId>)> {
+        let source = match self.active_document().get_object(object_id) {
+            Some(obj @ Object::Polyline { .. }) => obj.clone(),
+            _ => return None,
+        };
+        let Object::Polyline {
+            verts,
+            layer,
+            color,
+            line_weight,
+            closed,
+            ..
+        } = &source
+        else {
+            return None;
+        };
+        let (verts, layer, color, line_weight, closed) = (verts.clone(), *layer, *color, *line_weight, *closed);
+        if verts.len() < 2 {
+            return None;
+        }
+        let edge_count = if closed { verts.len() } else { verts.len() - 1 };
+        let document = &mut self.workspace.active_project_mut()?.project.document;
+        let mut commands = vec![Command::delete_object(source)];
+        let mut lines = Vec::with_capacity(edge_count);
+        for i in 0..edge_count {
+            let id = document.allocate_object_id();
+            lines.push(id);
+            commands.push(Command::AddObject(Object::Polyline {
+                id,
+                layer,
+                verts: vec![verts[i], verts[(i + 1) % verts.len()]],
+                closed: false,
+                color,
+                fill: crate::model::FillStyle::Clear,
+                line_weight,
+            }));
+        }
+        Some((commands, lines))
     }
 
     /// Explode to Points: the string goes and a point object takes each of

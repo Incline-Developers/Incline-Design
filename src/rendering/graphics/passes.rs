@@ -727,7 +727,7 @@ impl<'a> Graphics<'a> {
             &mut unused_fill_vertices,
             &mut unused_fill_indices,
             self.scene_origin,
-            self.window.scale_factor() as f32,
+            self.scale_factor() as f32,
         );
         for triangulation in triangulations {
             if !triangulation.state.loaded || editor.hidden_handles.contains(&triangulation.entity_id()) {
@@ -882,7 +882,8 @@ impl<'a> Graphics<'a> {
     /// whether it is selected, hidden or in a 2D section: those only change
     /// how, or whether, the draw runs.
     fn rebuild_prismoid_lattice_lines(&mut self) {
-        self.prismoid_wire_styles.set_scale(&self.queue, self.window.scale_factor() as f32);
+        let scale_factor = self.scale_factor() as f32;
+        self.prismoid_wire_styles.set_scale(&self.queue, scale_factor);
         let held = std::mem::take(&mut self.prismoid_lattice_lines);
         let keys = self
             .prismoid_lattices
@@ -915,7 +916,7 @@ impl<'a> Graphics<'a> {
     fn stroke_key(&self, key: impl std::hash::Hash) -> u64 {
         use std::hash::{DefaultHasher, Hash, Hasher};
         let mut hasher = DefaultHasher::new();
-        (key, self.scene_origin.to_array().map(f64::to_bits), (self.window.scale_factor() as f32).to_bits()).hash(&mut hasher);
+        (key, self.scene_origin.to_array().map(f64::to_bits), (self.scale_factor() as f32).to_bits()).hash(&mut hasher);
         hasher.finish()
     }
 
@@ -945,7 +946,7 @@ impl<'a> Graphics<'a> {
         label: &str,
     ) -> (u64, Vec<ChunkBoundsOutline>) {
         const TARGET_CHUNK_BYTES: usize = 64 * 1024 * 1024;
-        let scale_factor = self.window.scale_factor() as f32;
+        let scale_factor = self.scale_factor() as f32;
         let key = self.stroke_key(key);
         if let Some(held) = held.filter(|(built, _)| *built == key) {
             return held;
@@ -1718,7 +1719,10 @@ impl<'a> Graphics<'a> {
         }
 
         if !self.dynamic_strokes.is_empty() {
-            render_pass.set_pipeline(if editor.xray_enabled || editor.tying_holes() {
+            // Pit Design's preview, like the pit it stands in for, is seen
+            // through the ground.
+            let pit_preview = editor.pit_design.as_ref().is_some_and(|draft| draft.object_id().is_some());
+            render_pass.set_pipeline(if editor.xray_enabled || editor.tying_holes() || pit_preview {
                 &self.pipes().overlay_render_pipeline
             } else {
                 &self.pipes().stroke_render_pipeline
